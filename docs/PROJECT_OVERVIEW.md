@@ -3,7 +3,7 @@
 ## Purpose
 Vibe Social Sync lets a logged-in user upload media (primarily videos, but also photos where required) + caption once and post it to multiple social platforms (TikTok, YouTube, X, LinkedIn, Instagram, Google Business Profile for Maps photos) using that user’s own connected accounts.
 
-Initial goal: deliver a thin, maintainable vertical slice for **one real platform (Google Business Profile / Google Maps photos)** end-to-end, with scaffolding for all others.
+Initial goal: deliver a thin, maintainable vertical slice for **one real platform (Google Business Profile / Google Maps photos)** end-to-end, with scaffolding for all others. A second slice is now being built for **TikTok** (Sandbox first) using the Content Posting API.
 
 ## Tech Stack (V1)
 - **Language:** TypeScript
@@ -18,7 +18,8 @@ Initial goal: deliver a thin, maintainable vertical slice for **one real platfor
   - Later extension: add Google Sign-In using the same Google Cloud project used for Google Photos, if desired.
 - **Social OAuth & APIs:**
   - First implemented platform: **Google Business Profile (GBP)**, posting photos that appear on Google Maps for a specific business location.
-  - Scaffolding modules for: TikTok, YouTube, X, LinkedIn, Instagram.
+  - Second implemented platform (in progress, Sandbox first): **TikTok**, uploading videos via TikTok’s Content Posting API.
+  - Remaining scaffolded modules for future implementation: YouTube, X, LinkedIn, Instagram.
 - **Tooling:**
   - ESLint + Prettier (Next.js defaults).
   - Prisma migrations.

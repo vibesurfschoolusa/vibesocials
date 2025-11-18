@@ -88,3 +88,37 @@
      - Verify that the Google Business Profile result row shows **success** and that the photo appears on the business’s Maps listing.
   5. If any errors remain, capture the `[GBP] ...` log lines and update these notes with the new status.
 
+
+## Session: 2025-11-17 (Deployment & TikTok Sandbox)
+
+- **Summary of changes**
+  - Fixed Next.js 16 route handler typing issues for several API routes so the app builds successfully on Vercel (notably `/api/connections/[platform]` and `/api/posts/[postJobId]`).
+  - Deployed the Next.js app to Vercel (project `vibesocials`) and confirmed the production site loads at:
+    - `https://vibesocials.vercel.app`
+    - `https://vibesocials.wtf` (custom domain, primary user-facing URL).
+  - Configured the `vibesocials.wtf` domain in Vercel and verified it with TikTok via a TXT DNS record.
+
+- **TikTok Sandbox configuration**
+  - Created and configured a TikTok for Developers app in **Sandbox** environment.
+  - Set URLs to point at the Vercel deployment:
+    - Web/Desktop URL: `https://vibesocials.wtf/`
+    - Terms of Service URL: `https://vibesocials.wtf/terms`
+    - Privacy Policy URL: `https://vibesocials.wtf/privacy`
+    - Redirect URI (Web): `https://vibesocials.wtf/api/auth/tiktok/callback`
+  - Enabled products and scopes:
+    - Products: **Login Kit**, **Content Posting API**.
+    - Scopes: `user.info.basic`, `video.upload`.
+
+- **Current status**
+  - Domain + HTTPS endpoints are ready for TikTok OAuth in Sandbox.
+  - TikTok app remains in Sandbox; Production app review (written explanation + demo video) is not yet submitted.
+  - Google Business Profile integration is still blocked by Google Business Profile API approval / quota (0 QPM) as described in the previous session.
+
+- **Next steps for upcoming sessions**
+  1. Provision a hosted PostgreSQL database (e.g., Neon or Supabase) and configure a production `DATABASE_URL` for the Vercel project.
+  2. Configure remaining Vercel environment variables for production:
+     - `NEXTAUTH_URL`, `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `TIKTOK_REDIRECT_URI`, etc.
+  3. Test the full TikTok flow in Sandbox on `https://vibesocials.wtf`:
+     - Log in, connect TikTok on `/connections`, create a video post on `/posts/new`, and confirm the upload reaches TikTok via the Content Posting API.
+  4. Once the TikTok flow is stable, record a demo video and fill out the TikTok **App review** section to prepare for Production.
+  5. After Google approves the Business Profile APIs and raises quotas, re-test the GBP location picker and photo posting as outlined above.
