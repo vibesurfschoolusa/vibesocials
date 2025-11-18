@@ -1,0 +1,106 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Platform {
+  tiktok
+  youtube
+  x
+  linkedin
+  instagram
+  google_business_profile
+}
+
+enum PostJobStatus {
+  pending
+  in_progress
+  completed
+  failed
+}
+
+enum PostJobResultStatus {
+  pending
+  success
+  failed
+}
+
+model User {
+  id            String             @id @default(cuid())
+  email         String             @unique
+  name          String?
+  passwordHash  String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  socialConnections SocialConnection[]
+  mediaItems        MediaItem[]
+  postJobs          PostJob[]
+}
+
+model SocialConnection {
+  id               String             @id @default(cuid())
+  userId           String
+  platform         Platform
+  accessToken      String
+  refreshToken     String?
+  expiresAt        DateTime?
+  accountIdentifier String
+  scopes           Json?
+  metadata         Json?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  postJobResults  PostJobResult[]
+
+  @@unique([userId, platform], name: "userId_platform")
+}
+
+model MediaItem {
+  id                   String    @id @default(cuid())
+  userId               String
+  storageLocation      String
+  originalFilename     String
+  mimeType             String
+  sizeBytes            Int
+  baseCaption          String
+  perPlatformOverrides Json?
+  createdAt            DateTime  @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  postJobs  PostJob[]
+}
+
+model PostJob {
+  id          String          @id @default(cuid())
+  userId      String
+  mediaItemId String
+  status      PostJobStatus   @default(pending)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mediaItem MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  results   PostJobResult[]
+}
+
+model PostJobResult {
+  id                 String               @id @default(cuid())
+  postJobId          String
+  platform           Platform
+  socialConnectionId String
+  status             PostJobResultStatus  @default(pending)
+  externalPostId     String?
+  errorCode          String?
+  errorMessage       String?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  postJob          PostJob          @relation(fields: [postJobId], references: [id], onDelete: Cascade)
+  socialConnection SocialConnection @relation(fields: [socialConnectionId], references: [id], onDelete: Cascade)
+}
