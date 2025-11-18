@@ -21,21 +21,21 @@ export default async function ConnectionsPage() {
 
   if (!user) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-50">
-        <div className="w-full max-w-md rounded-lg bg-white p-8 shadow">
-          <p className="text-sm text-zinc-700">
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50">
+        <div className="w-full max-w-md rounded-2xl bg-white p-10 shadow-xl border border-gray-100">
+          <p className="text-base text-gray-700">
             You need to be logged in to manage connections.
           </p>
           <div className="mt-4 flex gap-3">
             <Link
               href="/login"
-              className="flex-1 rounded bg-black px-4 py-2 text-center text-sm font-medium text-white hover:bg-zinc-800"
+              className="flex-1 rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2.5 text-center text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-md hover:shadow-lg"
             >
               Log in
             </Link>
             <Link
               href="/register"
-              className="flex-1 rounded border border-zinc-300 px-4 py-2 text-center text-sm font-medium text-zinc-900 hover:bg-zinc-50"
+              className="flex-1 rounded-lg border-2 border-blue-200 px-4 py-2.5 text-center text-sm font-semibold text-blue-700 hover:bg-blue-50 transition-all"
             >
               Create account
             </Link>
@@ -50,15 +50,15 @@ export default async function ConnectionsPage() {
   });
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50">
-      <div className="w-full max-w-2xl rounded-lg bg-white p-8 shadow">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 py-12 px-4">
+      <div className="mx-auto w-full max-w-3xl rounded-2xl bg-white p-10 shadow-xl border border-gray-100">
         <div className="mb-4 flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Connections</h1>
-          <Link href="/" className="text-xs text-zinc-600 underline">
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-teal-600 bg-clip-text text-transparent">Connections</h1>
+          <Link href="/" className="text-sm text-gray-600 hover:text-blue-600 underline transition-colors">
             Back to dashboard
           </Link>
         </div>
-        <p className="mb-6 text-sm text-zinc-700">
+        <p className="mb-8 text-base text-gray-700 leading-relaxed">
           Connect your social accounts so Vibe Social Sync can publish on your behalf.
         </p>
         <div className="space-y-4">
@@ -74,12 +74,12 @@ export default async function ConnectionsPage() {
             return (
               <div
                 key={platform}
-                className="flex flex-col gap-2 rounded border border-zinc-200 px-4 py-3"
+                className="flex flex-col gap-3 rounded-xl border-2 border-gray-200 px-5 py-4 hover:border-blue-200 transition-all bg-gradient-to-r from-white to-gray-50"
               >
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-sm font-medium">{label}</div>
-                    <div className="text-xs text-zinc-600">
+                    <div className="text-base font-semibold text-gray-900">{label}</div>
+                    <div className="text-sm text-gray-600">
                       {connection
                         ? `Connected as ${connection.accountIdentifier}`
                         : isGoogleBusinessProfile
@@ -99,21 +99,21 @@ export default async function ConnectionsPage() {
                     ) : isGoogleBusinessProfile ? (
                       <Link
                         href="/api/auth/google_business_profile/start"
-                        className="rounded bg-black px-3 py-1 text-xs font-medium text-white hover:bg-zinc-800"
+                        className="rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm hover:shadow-md"
                       >
                         Connect
                       </Link>
                     ) : isTikTok ? (
                       <Link
                         href="/api/auth/tiktok/start"
-                        className="rounded bg-black px-3 py-1 text-xs font-medium text-white hover:bg-zinc-800"
+                        className="rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm hover:shadow-md"
                       >
                         Connect
                       </Link>
                     ) : (
                       <button
                         type="button"
-                        className="rounded bg-zinc-200 px-3 py-1 text-xs font-medium text-zinc-700"
+                        className="rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-500"
                         disabled
                       >
                         Coming soon
