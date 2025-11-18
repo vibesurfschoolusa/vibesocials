@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
 import { verifyOAuthState } from "@/lib/oauthState";
@@ -15,11 +15,7 @@ interface TokenResponse {
   scope?: string;
 }
 
-interface RouteContext {
-  params: Record<string, string>;
-}
-
-export async function GET(request: Request, _context: RouteContext) {
+export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
