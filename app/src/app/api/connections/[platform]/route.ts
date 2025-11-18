@@ -1,16 +1,10 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { Platform } from "@prisma/client";
 
-interface RouteContext {
-  params: {
-    platform: string;
-  };
-}
-
-export async function DELETE(_request: Request, context: RouteContext) {
+export async function DELETE(_request: NextRequest, context: any) {
   const user = await getCurrentUser();
 
   if (!user) {
