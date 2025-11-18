@@ -1,15 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
-interface RouteContext {
-  params: {
-    postJobId: string;
-  };
-}
-
-export async function GET(_request: Request, context: RouteContext) {
+export async function GET(_request: NextRequest, context: any) {
   const user = await getCurrentUser();
 
   if (!user) {
