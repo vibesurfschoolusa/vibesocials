@@ -4,7 +4,7 @@ const TIKTOK_API_BASE = "https://open.tiktokapis.com";
 
 export const tiktokClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
-    const { socialConnection, mediaItem } = ctx;
+    const { socialConnection, mediaItem, caption } = ctx;
 
     const accessToken = socialConnection.accessToken;
     if (!accessToken) {
@@ -46,6 +46,14 @@ export const tiktokClient: PlatformClient = {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          post_info: {
+            title: caption || "Video posted via Vibe Social Sync",
+            privacy_level: "SELF_ONLY", // Sandbox requires SELF_ONLY
+            disable_comment: false,
+            disable_duet: false,
+            disable_stitch: false,
+            video_cover_timestamp_ms: 1000,
+          },
           source_info: {
             source: "FILE_UPLOAD",
             video_size: size,

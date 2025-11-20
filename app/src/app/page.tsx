@@ -50,6 +50,12 @@ export default function Home() {
               >
                 Create post
               </Link>
+              <Link
+                href="/settings"
+                className="flex-1 rounded-lg border-2 border-gray-200 px-4 py-2.5 text-center text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-all"
+              >
+                Settings
+              </Link>
             </div>
             <button
               type="button"

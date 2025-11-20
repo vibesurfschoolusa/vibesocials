@@ -1,7 +1,21 @@
-import type { MediaItem, Platform, PostJob, PostJobResult } from "@prisma/client";
+import type { MediaItem, Platform, PostJob, PostJobResult, User } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getPlatformClient } from "@/server/platforms";
 import type { SavedFileInfo } from "@/server/storage";
+
+function buildCaptionWithFooter(baseCaption: string, user: User): string {
+  const parts = [baseCaption.trim()];
+  
+  if (user.companyWebsite?.trim()) {
+    parts.push(`For more info visit ${user.companyWebsite.trim()}`);
+  }
+  
+  if (user.defaultHashtags?.trim()) {
+    parts.push(user.defaultHashtags.trim());
+  }
+  
+  return parts.join('\n\n');
+}
 
 export interface CreatePostJobParams {
   userId: string;
@@ -30,6 +44,15 @@ async function runPostJobForMediaItem(params: {
 }): Promise<PostJobWithResults> {
   const { userId, mediaItem, baseCaption, perPlatformOverrides } = params;
 
+  // Fetch user to get caption footer settings
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+  });
+
+  if (!user) {
+    throw new Error("USER_NOT_FOUND");
+  }
+
   const socialConnections = await prisma.socialConnection.findMany({
     where: { userId },
   });
@@ -37,6 +60,9 @@ async function runPostJobForMediaItem(params: {
   if (socialConnections.length === 0) {
     throw new Error("NO_CONNECTIONS");
   }
+
+  // Build caption with company website and hashtags footer
+  const fullBaseCaption = buildCaptionWithFooter(baseCaption, user);
 
   const postJob = await prisma.postJob.create({
     data: {
@@ -59,7 +85,9 @@ async function runPostJobForMediaItem(params: {
 
   for (const connection of socialConnections) {
     const captionOverride = overrides?.[connection.platform] ?? null;
-    const caption = captionOverride ?? baseCaption;
+    const caption = captionOverride 
+      ? buildCaptionWithFooter(captionOverride, user)
+      : fullBaseCaption;
 
     const resultRecord = await prisma.postJobResult.create({
       data: {
