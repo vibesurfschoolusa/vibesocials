@@ -31,6 +31,12 @@ export const tiktokClient: PlatformClient = {
     const fileBytes = Buffer.from(await videoResponse.arrayBuffer());
     const size = fileBytes.byteLength;
 
+    console.log('[TikTok] Initializing upload', {
+      videoSize: size,
+      hasAccessToken: !!accessToken,
+      accessTokenLength: accessToken?.length,
+    });
+
     const initRes = await fetch(
       `${TIKTOK_API_BASE}/v2/post/publish/inbox/video/init/`,
       {
@@ -51,11 +57,13 @@ export const tiktokClient: PlatformClient = {
     );
 
     if (!initRes.ok) {
+      const errorBody = await initRes.text().catch(() => "Unable to read error body");
       console.error("[TikTok] video init failed", {
         status: initRes.status,
         statusText: initRes.statusText,
+        errorBody,
       });
-      const error = new Error("Failed to start TikTok video upload");
+      const error = new Error(`Failed to start TikTok video upload: ${errorBody}`);
       (error as any).code = "TIKTOK_INIT_FAILED";
       throw error;
     }
