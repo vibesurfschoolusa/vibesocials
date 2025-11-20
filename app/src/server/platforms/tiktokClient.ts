@@ -1,5 +1,3 @@
-import fs from "fs/promises";
-
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
 const TIKTOK_API_BASE = "https://open.tiktokapis.com";
@@ -21,8 +19,16 @@ export const tiktokClient: PlatformClient = {
       throw error;
     }
 
-    const filePath = mediaItem.storageLocation;
-    const fileBytes = await fs.readFile(filePath);
+    // Fetch the video file from Vercel Blob (storageLocation is now a URL)
+    const videoUrl = mediaItem.storageLocation;
+    const videoResponse = await fetch(videoUrl);
+    if (!videoResponse.ok) {
+      const error = new Error("Failed to fetch video from storage");
+      (error as any).code = "TIKTOK_FETCH_VIDEO_FAILED";
+      throw error;
+    }
+    
+    const fileBytes = Buffer.from(await videoResponse.arrayBuffer());
     const size = fileBytes.byteLength;
 
     const initRes = await fetch(

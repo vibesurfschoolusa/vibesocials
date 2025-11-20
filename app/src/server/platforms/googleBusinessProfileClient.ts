@@ -1,5 +1,3 @@
-import fs from "fs/promises";
-
 import type { SocialConnection } from "@prisma/client";
 
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
@@ -59,10 +57,18 @@ export const googleBusinessProfileClient: PlatformClient = {
       throw error;
     }
 
-    // 2. Upload the media bytes using the upload endpoint.
-    const filePath = mediaItem.storageLocation;
-    const fileBytes = await fs.readFile(filePath);
+    // 2. Fetch the media file from Vercel Blob (storageLocation is now a URL)
+    const mediaUrl = mediaItem.storageLocation;
+    const mediaResponse = await fetch(mediaUrl);
+    if (!mediaResponse.ok) {
+      const error = new Error("Failed to fetch media from storage");
+      (error as any).code = "GBP_FETCH_MEDIA_FAILED";
+      throw error;
+    }
+    
+    const fileBytes = Buffer.from(await mediaResponse.arrayBuffer());
 
+    // 3. Upload the media bytes using the upload endpoint.
     const uploadRes = await fetch(
       `${apiBase}/upload/v1/media/${encodeURIComponent(dataRefResourceName)}?upload_type=media`,
       {
@@ -85,7 +91,7 @@ export const googleBusinessProfileClient: PlatformClient = {
       throw error;
     }
 
-    // 3. Create the media item for the location.
+    // 4. Create the media item for the location.
     const isPhoto = mediaItem.mimeType?.startsWith("image/") ?? true;
     const mediaFormat = isPhoto ? "PHOTO" : "VIDEO";
     const category = isPhoto ? "COVER" : "ADDITIONAL";
