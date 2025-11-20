@@ -36,18 +36,25 @@ export async function saveUploadedFile(
   const buffer = Buffer.from(arrayBuffer);
 
   // Determine mime type from file.type or fallback to file extension
-  const mimeType = file.type || getMimeTypeFromFilename(originalFilename);
+  const detectedMimeType = file.type || getMimeTypeFromFilename(originalFilename);
+  
+  console.log('[Blob Storage] Upload details:', {
+    originalFilename,
+    browserFileType: file.type,
+    detectedMimeType,
+    sizeBytes: buffer.byteLength
+  });
 
   // Upload to Vercel Blob
   const blob = await put(filename, buffer, {
     access: "public",
-    contentType: mimeType,
+    contentType: detectedMimeType,
   });
 
   return {
     storageLocation: blob.url, // Public URL from Vercel Blob
     originalFilename,
-    mimeType,
+    mimeType: detectedMimeType,
     sizeBytes: buffer.byteLength,
   };
 }
