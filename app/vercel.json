@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "src/app/api/posts/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/media/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}

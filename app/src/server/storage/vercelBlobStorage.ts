@@ -7,6 +7,22 @@ export interface SavedFileInfo {
   sizeBytes: number;
 }
 
+function getMimeTypeFromFilename(filename: string): string {
+  const ext = filename.toLowerCase().split('.').pop();
+  const mimeTypes: Record<string, string> = {
+    'mp4': 'video/mp4',
+    'mov': 'video/quicktime',
+    'avi': 'video/x-msvideo',
+    'webm': 'video/webm',
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'png': 'image/png',
+    'gif': 'image/gif',
+    'webp': 'image/webp',
+  };
+  return mimeTypes[ext || ''] || 'application/octet-stream';
+}
+
 export async function saveUploadedFile(
   userId: string,
   file: File
@@ -19,16 +35,19 @@ export async function saveUploadedFile(
   const arrayBuffer = await file.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
 
+  // Determine mime type from file.type or fallback to file extension
+  const mimeType = file.type || getMimeTypeFromFilename(originalFilename);
+
   // Upload to Vercel Blob
   const blob = await put(filename, buffer, {
     access: "public",
-    contentType: file.type || "application/octet-stream",
+    contentType: mimeType,
   });
 
   return {
     storageLocation: blob.url, // Public URL from Vercel Blob
     originalFilename,
-    mimeType: file.type || "application/octet-stream",
+    mimeType,
     sizeBytes: buffer.byteLength,
   };
 }
