@@ -115,10 +115,100 @@
   - Google Business Profile integration is still blocked by Google Business Profile API approval / quota (0 QPM) as described in the previous session.
 
 - **Next steps for upcoming sessions**
-  1. Provision a hosted PostgreSQL database (e.g., Neon or Supabase) and configure a production `DATABASE_URL` for the Vercel project.
-  2. Configure remaining Vercel environment variables for production:
-     - `NEXTAUTH_URL`, `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `TIKTOK_REDIRECT_URI`, etc.
-  3. Test the full TikTok flow in Sandbox on `https://vibesocials.wtf`:
-     - Log in, connect TikTok on `/connections`, create a video post on `/posts/new`, and confirm the upload reaches TikTok via the Content Posting API.
+  1. ✅ Provision a hosted PostgreSQL database (Neon) and configure production `DATABASE_URL` for the Vercel project.
+  2. ✅ Configure remaining Vercel environment variables for production.
+  3. ✅ Test the full TikTok flow in Sandbox on `https://vibesocials.wtf`.
   4. Once the TikTok flow is stable, record a demo video and fill out the TikTok **App review** section to prepare for Production.
   5. After Google approves the Business Profile APIs and raises quotas, re-test the GBP location picker and photo posting as outlined above.
+
+
+## Session: 2025-11-19 (Vercel Blob Storage & TikTok Implementation)
+
+- **Summary of changes**
+  - **Replaced local filesystem with Vercel Blob Storage** for media uploads to work in Vercel's serverless environment:
+    - Created `vercelBlobStorage.ts` that uses `@vercel/blob` SDK to upload files to Vercel Blob.
+    - Added mime type detection from file extensions as fallback when browser doesn't provide `file.type`.
+    - Updated platform clients (TikTok and Google Business Profile) to fetch media from Blob URLs instead of reading from filesystem.
+  - **Implemented TikTok video posting integration** (Sandbox mode):
+    - OAuth flow for TikTok authentication working end-to-end.
+    - Content Posting API v2 implementation with video upload to Creator Portal inbox.
+    - Added caption support with `post_info` metadata (title, privacy_level, etc.).
+    - Privacy set to `SELF_ONLY` as required by Sandbox mode.
+    - Videos upload successfully but require manual approval in TikTok Creator Portal.
+  - **Added automatic caption footer feature**:
+    - Added `companyWebsite` and `defaultHashtags` fields to User model.
+    - Created `/settings` page where users can configure their default caption footer.
+    - Implemented `buildCaptionWithFooter()` function that automatically appends:
+      - "For more info visit [website]"
+      - User's default hashtags
+    - Footer is applied to all captions before posting to any platform.
+  - **Database migrations**:
+    - Migration: `20051549_add_user_caption_settings` - added `companyWebsite` and `defaultHashtags` to User table.
+  - **Fixed deployment issues**:
+    - Configured Vercel function timeouts for media operations.
+    - Resolved 413 Content Too Large errors by documenting 4.5MB limit.
+    - Added detailed error logging for TikTok API responses.
+
+- **Technical details**
+  - **Vercel Blob Storage:**
+    - Uploads use `put()` from `@vercel/blob` package.
+    - Files stored with path: `{userId}/{timestamp}-{safeName}`.
+    - Returns public URL that is stored in `MediaItem.storageLocation`.
+    - Access requires `BLOB_READ_WRITE_TOKEN` environment variable (auto-configured by Vercel).
+  - **TikTok API Integration:**
+    - Endpoint: `https://open.tiktokapis.com/v2/post/publish/inbox/video/init/`
+    - Upload flow:
+      1. Initialize upload with video metadata and caption
+      2. Receive `upload_url` and `publish_id`
+      3. PUT video bytes to upload URL
+      4. Video appears in Creator Portal inbox
+    - Caption goes in `post_info.title` field.
+    - Sandbox limitations: `privacy_level: "SELF_ONLY"` required, manual approval needed.
+  - **Caption Footer Logic:**
+    - `buildCaptionWithFooter()` in `src/server/jobs/posting.ts`
+    - Joins user caption + website + hashtags with double line breaks.
+    - Applied to both base captions and platform-specific overrides.
+
+- **Encountered Issues & Resolutions**
+  - ❌ **Issue:** `ENOENT: no such file or directory` when creating posts on Vercel.
+    - **Cause:** Trying to write to local filesystem in serverless environment.
+    - **Solution:** Migrated to Vercel Blob Storage.
+  
+  - ❌ **Issue:** `TIKTOK_MEDIA_NOT_VIDEO` error despite uploading MP4 file.
+    - **Cause:** Browser not providing correct mime type; saved as `application/octet-stream`.
+    - **Solution:** Added `getMimeTypeFromFilename()` function to detect mime type from file extension.
+  
+  - ❌ **Issue:** TikTok API 400 error: `spam_risk_too_many_pending_share`.
+    - **Cause:** Too many pending videos in Creator Portal inbox.
+    - **Solution:** User must clear pending videos from TikTok Creator Portal before uploading more.
+  
+  - ❌ **Issue:** Caption not appearing in TikTok posts.
+    - **Cause:** Caption not included in API request.
+    - **Solution:** Added `post_info` object with `title` field containing the caption.
+
+- **Current Status**
+  - ✅ **TikTok Integration:** Fully functional in Sandbox mode
+    - OAuth working
+    - Video uploads successful
+    - Captions working with automatic footer
+    - Videos appear in Creator Portal inbox for manual approval
+  - ✅ **Vercel Blob Storage:** Fully operational for both images and videos
+  - ✅ **Caption Footer:** Implemented and working
+  - ⏳ **Google Business Profile:** Still blocked by API quota (0 QPM), awaiting Google approval
+  - 🔄 **TikTok Production:** Sandbox only, needs app review for public posting
+
+- **Next Steps**
+  1. **TikTok Production Approval:**
+     - Record demo video showing the integration working
+     - Submit TikTok app for Production review
+     - Once approved, update `privacy_level` to allow public posts
+  2. **File Size Optimization:**
+     - Consider implementing client-side compression for videos >4MB
+     - Or implement direct client-to-Blob uploads to bypass serverless function limits
+  3. **Google Business Profile:**
+     - Continue waiting for Google API approval
+     - Test location picker and photo posting once quota is raised
+  4. **Additional Features:**
+     - Add media library management (delete, edit captions)
+     - Implement scheduling for posts
+     - Add analytics/insights from social platforms

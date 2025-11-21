@@ -75,7 +75,7 @@ export function SettingsForm({ user }: SettingsFormProps) {
             placeholder="www.example.com"
             value={companyWebsite}
             onChange={(e) => setCompanyWebsite(e.target.value)}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           <p className="mt-1 text-sm text-gray-500">
             This will be appended to all your captions as: "For more info visit [your website]"
@@ -92,7 +92,7 @@ export function SettingsForm({ user }: SettingsFormProps) {
             value={defaultHashtags}
             onChange={(e) => setDefaultHashtags(e.target.value)}
             rows={3}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           <p className="mt-1 text-sm text-gray-500">
             These hashtags will be added on a new line after your website

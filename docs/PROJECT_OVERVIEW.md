@@ -3,7 +3,7 @@
 ## Purpose
 Vibe Social Sync lets a logged-in user upload media (primarily videos, but also photos where required) + caption once and post it to multiple social platforms (TikTok, YouTube, X, LinkedIn, Instagram, Google Business Profile for Maps photos) using that user’s own connected accounts.
 
-Initial goal: deliver a thin, maintainable vertical slice for **one real platform (Google Business Profile / Google Maps photos)** end-to-end, with scaffolding for all others. A second slice is now being built for **TikTok** (Sandbox first) using the Content Posting API.
+Initial goal: deliver a thin, maintainable vertical slice for **one real platform (Google Business Profile / Google Maps photos)** end-to-end, with scaffolding for all others. **TikTok** integration is now fully working in Sandbox mode using the Content Posting API v2 (video uploads to Creator Portal inbox).
 
 ## Tech Stack (V1)
 - **Language:** TypeScript
@@ -11,9 +11,11 @@ Initial goal: deliver a thin, maintainable vertical slice for **one real platfor
 - **Web framework:** Next.js (App Router, React, TypeScript)
 - **Frontend:** Next.js pages/routes, React components, Tailwind CSS for simple responsive UI.
 - **Backend:** Next.js server routes (API routes) for auth, OAuth callbacks, posting jobs, and status.
-- **Database:** PostgreSQL (via Prisma ORM).
-- **Storage:** Local filesystem in the project (e.g. `storage/uploads/`) for uploaded videos in development.
-  - Extension point: replace with S3 or other object storage in production; keep paths abstracted via a storage service module.
+- **Database:** PostgreSQL (via Prisma ORM) - Neon hosted database for production.
+- **Storage:** 
+  - **Production:** Vercel Blob Storage for media uploads (images and videos).
+  - **Development:** Local filesystem fallback with abstraction layer.
+  - Storage abstraction (`src/server/storage`) detects mime types from file extensions and handles uploads to Vercel Blob.
 - **Auth for app users:** NextAuth (Auth.js) using an email+password credentials provider (initially).
   - Later extension: add Google Sign-In using the same Google Cloud project used for Google Photos, if desired.
 - **Social OAuth & APIs:**
@@ -35,16 +37,23 @@ Initial goal: deliver a thin, maintainable vertical slice for **one real platfor
 ### Main Components
 - **`/app` (Next.js App Router)**
   - UI routes:
-    - `/login`, `/register` (if using credentials auth).
+    - `/login`, `/register` (credentials auth).
     - `/connections` – list and manage per-platform social connections.
+    - `/settings` – configure company website and default hashtags for caption footer.
     - `/posts/new` – create post (upload video + captions).
     - `/posts/[id]` – view posting status (per platform).
+    - `/media` – view media library.
 - **`/app/api` routes**
   - **Auth for Vibe Social Sync users**
     - NextAuth route (e.g. `/api/auth/[...nextauth]`) for app sessions.
   - **Social OAuth:** for each platform
     - `GET /api/auth/{platform}/start`
     - `GET /api/auth/{platform}/callback`
+  - **Settings:**
+    - `POST /api/settings` – update user's company website and default hashtags.
+  - **Media:**
+    - `GET /api/media` – list user's uploaded media items.
+    - `POST /api/media` – upload media to Vercel Blob and create MediaItem.
   - **Posting flow:**
     - `POST /api/posts` – upload video + captions, create `MediaItem` + `PostJob` + `PostJobResults`, and fan out to platform clients (synchronously for V1).
     - `GET /api/posts/{postJobId}` – read combined job + results status.
@@ -84,6 +93,8 @@ Backed by Prisma models mapped to PostgreSQL tables.
   - `email` (unique)
   - `name` (optional)
   - `passwordHash` (for credentials auth)
+  - `companyWebsite` (optional, for caption footer)
+  - `defaultHashtags` (optional, for caption footer)
   - `createdAt`, `updatedAt`
 
 - **SocialConnections**
@@ -101,13 +112,15 @@ Backed by Prisma models mapped to PostgreSQL tables.
 - **MediaItems**
   - `id` (PK)
   - `userId` (FK → Users)
-  - `storageLocation` (local path or object storage key)
+  - `storageLocation` (Vercel Blob URL or local path)
   - `originalFilename`
-  - `mimeType`
+  - `mimeType` (auto-detected from file extension as fallback)
   - `sizeBytes`
-  - `baseCaption` (text)
+  - `baseCaption` (text, user-provided caption before footer)
   - `perPlatformOverrides` (jsonb: partial map of platform → caption override)
   - `createdAt`
+  
+  **Note:** All captions are automatically appended with user's `companyWebsite` and `defaultHashtags` before posting.
 
 - **PostJobs**
   - `id` (PK)
@@ -159,9 +172,27 @@ Where:
     - Entering the **store code** from GBP Advanced settings; the backend resolves store code → location via Account Management + Business Information APIs.
     - Clicking **Fetch locations from Google** to call `/api/connections/google_business_profile/locations`, list all accessible locations, and picking one from a dropdown. The selected location’s full resource name is stored in `metadata.locationName`.
 
+### Second Platform: TikTok (Sandbox - Implemented)
+
+- **Status:** Fully working in Sandbox mode
+- **Implementation:**
+  - OAuth start/callback endpoints for TikTok authentication
+  - Content Posting API v2 integration (`/v2/post/publish/inbox/video/init/`)
+  - Video uploads with captions to TikTok Creator Portal inbox
+  - Videos require manual approval/publish in Sandbox mode (privacy: `SELF_ONLY`)
+  - Supports video files only (MP4, MOV, WebM) - images not supported by TikTok
+- **Environment Variables:**
+  - `TIKTOK_CLIENT_KEY`
+  - `TIKTOK_CLIENT_SECRET`
+  - `TIKTOK_REDIRECT_URI`
+- **Limitations:**
+  - Sandbox mode requires videos to be manually approved in TikTok Creator Portal
+  - Videos are private (`SELF_ONLY`) until Production approval
+  - Rate limits: "spam_risk_too_many_pending_share" error if too many pending videos
+
 ### Other Platforms (Scaffolded)
 
-For TikTok, YouTube, X, LinkedIn, Instagram:
+For YouTube, X, LinkedIn, Instagram:
 - Create client modules with the shared interface.
 - Implement placeholder `publishVideo` that throws a structured "NotImplemented" error.
 - Document required env vars and scopes in comments and in this file as they are added.

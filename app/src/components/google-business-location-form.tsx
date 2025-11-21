@@ -111,7 +111,7 @@ export function GoogleBusinessLocationForm({ initialLocationName }: Props) {
         id="gbp-location"
         name="locationName"
         type="text"
-        className="w-full rounded border border-zinc-300 px-2 py-1 text-[11px] font-mono focus:outline-none focus:ring-1 focus:ring-zinc-900"
+        className="w-full rounded border border-zinc-300 px-2 py-1 text-[11px] font-mono text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-zinc-900"
         placeholder="Store code from Advanced settings, or accounts/{accountId}/locations/{locationId}"
         value={locationName}
         onChange={(event) => setLocationName(event.target.value)}
@@ -136,7 +136,7 @@ export function GoogleBusinessLocationForm({ initialLocationName }: Props) {
           </label>
           <select
             id="gbp-location-select"
-            className="mt-1 w-full rounded border border-zinc-300 px-2 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-zinc-900"
+            className="mt-1 w-full rounded border border-zinc-300 px-2 py-1 text-[11px] text-gray-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
             defaultValue=""
             onChange={handleSelectLocation}
           >
