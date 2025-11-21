@@ -11,11 +11,23 @@ export async function DELETE(_request: NextRequest, context: any) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const platformParam = context.params.platform;
-
+  // In Next.js 15+, params might be a Promise
+  const params = await Promise.resolve(context.params);
+  const platformParam = params.platform;
   const allPlatforms = Object.values(Platform) as string[];
+
+  console.log('[DELETE /api/connections/[platform]]', {
+    platformParam,
+    allPlatforms,
+    isValid: allPlatforms.includes(platformParam),
+  });
+
   if (!allPlatforms.includes(platformParam)) {
-    return NextResponse.json({ error: "Unknown platform" }, { status: 400 });
+    return NextResponse.json({ 
+      error: "Unknown platform",
+      received: platformParam,
+      expected: allPlatforms,
+    }, { status: 400 });
   }
 
   const platform = platformParam as Platform;
