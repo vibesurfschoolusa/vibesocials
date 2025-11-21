@@ -19,6 +19,15 @@ export const googleBusinessProfileClient: PlatformClient = {
       throw error;
     }
 
+    // Google Business Profile primarily supports photos
+    // Videos may not be supported or may require different permissions
+    if (mediaItem.mimeType && !mediaItem.mimeType.startsWith("image/")) {
+      console.warn("[GBP] Attempting to upload non-image media", {
+        mimeType: mediaItem.mimeType,
+        originalFilename: mediaItem.originalFilename,
+      });
+    }
+
     const { locationName } = await ensureLocationName(socialConnection, accessToken);
 
     const apiBase = "https://mybusiness.googleapis.com";
@@ -40,11 +49,14 @@ export const googleBusinessProfileClient: PlatformClient = {
     );
 
     if (!startUploadRes.ok) {
+      const errorBody = await startUploadRes.text().catch(() => "Unable to read error body");
       console.error("[GBP] media:startUpload failed", {
         status: startUploadRes.status,
         statusText: startUploadRes.statusText,
+        locationName,
+        errorBody,
       });
-      const error = new Error("Failed to start Google Business Profile upload");
+      const error = new Error(`Failed to start Google Business Profile upload: ${errorBody}`);
       (error as any).code = "GBP_START_UPLOAD_FAILED";
       throw error;
     }
