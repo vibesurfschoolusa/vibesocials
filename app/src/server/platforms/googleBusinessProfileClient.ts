@@ -106,7 +106,8 @@ export const googleBusinessProfileClient: PlatformClient = {
     // Use Google My Business API v4 to create media with the Vercel Blob public URL
     const isPhoto = mediaItem.mimeType?.startsWith("image/") ?? true;
     const mediaFormat = isPhoto ? "PHOTO" : "VIDEO";
-    const category = isPhoto ? "COVER" : "ADDITIONAL";
+    // Use ADDITIONAL instead of COVER to avoid strict aspect ratio requirements
+    const category = "ADDITIONAL";
 
     // Try creating media by providing the sourceUrl directly in the request
     const createRes = await fetch(
