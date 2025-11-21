@@ -118,21 +118,26 @@ export const googleBusinessProfileClient: PlatformClient = {
     const mediaFormat = isPhoto ? "PHOTO" : "VIDEO";
     const category = isPhoto ? "COVER" : "ADDITIONAL";
 
+    const createPayload = {
+      mediaFormat,
+      sourceUrl: `https://mybusiness.googleapis.com/upload/v1/media/${encodeURIComponent(dataRefResourceName)}`,
+      locationAssociation: {
+        category,
+      },
+    };
+
+    console.log("[GBP] Creating media item with payload", {
+      locationName,
+      payload: createPayload,
+    });
+
     const createRes = await fetch(`${apiBase}/v4/${locationName}/media`, {
       method: "POST",
       headers: {
         ...commonAuthHeaders,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        mediaFormat,
-        locationAssociation: {
-          category,
-        },
-        dataRef: {
-          resourceName: dataRefResourceName,
-        },
-      }),
+      body: JSON.stringify(createPayload),
     });
 
     if (!createRes.ok) {
