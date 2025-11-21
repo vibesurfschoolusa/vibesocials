@@ -20,7 +20,6 @@ export const googleBusinessProfileClient: PlatformClient = {
     }
 
     // Google Business Profile primarily supports photos
-    // Videos may not be supported or may require different permissions
     if (mediaItem.mimeType && !mediaItem.mimeType.startsWith("image/")) {
       console.warn("[GBP] Attempting to upload non-image media", {
         mimeType: mediaItem.mimeType,
@@ -30,115 +29,30 @@ export const googleBusinessProfileClient: PlatformClient = {
 
     const { locationName } = await ensureLocationName(socialConnection, accessToken);
 
-    const apiBase = "https://mybusiness.googleapis.com";
-    const commonAuthHeaders = {
-      Authorization: `Bearer ${accessToken}`,
-    } as const;
-
-    // 1. Start upload to get a MediaItemDataRef resourceName.
-    const startUploadRes = await fetch(
-      `${apiBase}/v4/${locationName}/media:startUpload`,
-      {
-        method: "POST",
-        headers: {
-          ...commonAuthHeaders,
-          "Content-Type": "application/json",
-        },
-        body: "{}",
-      },
-    );
-
-    if (!startUploadRes.ok) {
-      const errorBody = await startUploadRes.text().catch(() => "Unable to read error body");
-      console.error("[GBP] media:startUpload failed", {
-        status: startUploadRes.status,
-        statusText: startUploadRes.statusText,
-        locationName,
-        errorBody,
-      });
-      const error = new Error(`Failed to start Google Business Profile upload: ${errorBody}`);
-      (error as any).code = "GBP_START_UPLOAD_FAILED";
-      throw error;
-    }
-
-    const startUploadJson = (await startUploadRes.json()) as { resourceName?: string };
-    const dataRefResourceName = startUploadJson.resourceName;
-    if (!dataRefResourceName) {
-      const error = new Error("Google Business Profile did not return a media resourceName");
-      (error as any).code = "GBP_NO_MEDIA_RESOURCE_NAME";
-      throw error;
-    }
-
-    // 2. Fetch the media file from Vercel Blob (storageLocation is now a URL)
-    const mediaUrl = mediaItem.storageLocation;
-    const mediaResponse = await fetch(mediaUrl);
-    if (!mediaResponse.ok) {
-      const error = new Error("Failed to fetch media from storage");
-      (error as any).code = "GBP_FETCH_MEDIA_FAILED";
-      throw error;
-    }
-    
-    const fileBytes = Buffer.from(await mediaResponse.arrayBuffer());
-
-    // 3. Upload the media bytes using the upload endpoint.
-    const uploadRes = await fetch(
-      `${apiBase}/upload/v1/media/${encodeURIComponent(dataRefResourceName)}?upload_type=media`,
-      {
-        method: "POST",
-        headers: {
-          ...commonAuthHeaders,
-          "Content-Type": mediaItem.mimeType || "application/octet-stream",
-        },
-        body: fileBytes,
-      },
-    );
-
-    if (!uploadRes.ok) {
-      const errorBody = await uploadRes.text().catch(() => "Unable to read error body");
-      console.error("[GBP] media bytes upload failed", {
-        status: uploadRes.status,
-        statusText: uploadRes.statusText,
-        dataRefResourceName,
-        mimeType: mediaItem.mimeType,
-        fileSize: fileBytes.byteLength,
-        errorBody,
-      });
-      const error = new Error(`Failed to upload media bytes to Google Business Profile: ${errorBody}`);
-      (error as any).code = "GBP_UPLOAD_FAILED";
-      throw error;
-    }
-
-    console.log("[GBP] Media bytes uploaded successfully", {
-      dataRefResourceName,
-      fileSize: fileBytes.byteLength,
+    console.log("[GBP] Creating media with public Vercel Blob URL", {
+      locationName,
+      storageLocation: mediaItem.storageLocation,
+      mimeType: mediaItem.mimeType,
     });
 
-    // 4. Create the media item for the location.
+    // Use the Business Information API to create media with a public URL
     const isPhoto = mediaItem.mimeType?.startsWith("image/") ?? true;
     const mediaFormat = isPhoto ? "PHOTO" : "VIDEO";
-    const category = isPhoto ? "COVER" : "ADDITIONAL";
 
-    const createPayload = {
-      mediaFormat,
-      sourceUrl: `https://mybusiness.googleapis.com/upload/v1/media/${encodeURIComponent(dataRefResourceName)}`,
-      locationAssociation: {
-        category,
+    const createRes = await fetch(
+      `https://mybusinessbusinessinformation.googleapis.com/v1/${locationName}/media`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          mediaFormat,
+          sourceUrl: mediaItem.storageLocation, // Public Vercel Blob URL
+        }),
       },
-    };
-
-    console.log("[GBP] Creating media item with payload", {
-      locationName,
-      payload: createPayload,
-    });
-
-    const createRes = await fetch(`${apiBase}/v4/${locationName}/media`, {
-      method: "POST",
-      headers: {
-        ...commonAuthHeaders,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(createPayload),
-    });
+    );
 
     if (!createRes.ok) {
       const errorBody = await createRes.text().catch(() => "Unable to read error body");
@@ -146,8 +60,7 @@ export const googleBusinessProfileClient: PlatformClient = {
         status: createRes.status,
         statusText: createRes.statusText,
         mediaFormat,
-        category,
-        dataRefResourceName,
+        sourceUrl: mediaItem.storageLocation,
         errorBody,
       });
       const error = new Error(`Failed to create media item in Google Business Profile: ${errorBody}`);
@@ -157,6 +70,10 @@ export const googleBusinessProfileClient: PlatformClient = {
 
     const created = (await createRes.json()) as { name?: string };
     const externalPostId = created.name ?? null;
+
+    console.log("[GBP] Media created successfully", {
+      externalPostId,
+    });
 
     return {
       externalPostId,
