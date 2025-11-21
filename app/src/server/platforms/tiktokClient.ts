@@ -13,8 +13,14 @@ export const tiktokClient: PlatformClient = {
       throw error;
     }
 
+    console.log('[TikTok] Media item details:', {
+      mimeType: mediaItem.mimeType,
+      originalFilename: mediaItem.originalFilename,
+      storageLocation: mediaItem.storageLocation,
+    });
+
     if (!mediaItem.mimeType || !mediaItem.mimeType.startsWith("video/")) {
-      const error = new Error("TikTok publishing currently supports video files only.");
+      const error = new Error(`TikTok requires video files. Current mime type: ${mediaItem.mimeType || 'undefined'}`);
       (error as any).code = "TIKTOK_MEDIA_NOT_VIDEO";
       throw error;
     }
