@@ -212,3 +212,128 @@
      - Add media library management (delete, edit captions)
      - Implement scheduling for posts
      - Add analytics/insights from social platforms
+
+
+## Session: 2025-11-20 (Google Business Profile Launch & Bug Fixes)
+
+- **Summary of changes**
+  - **Google Business Profile photo posting is now FULLY WORKING** ✅
+    - Fixed 403 Unauthorized errors by implementing automatic token refresh
+    - Resolved API endpoint issues by using correct My Business API v4 format
+    - Fixed aspect ratio validation by using `ADDITIONAL` category instead of `COVER`
+    - Photos now successfully appear on Google Maps business listing
+  - **Fixed disconnect button for all platforms:**
+    - Updated route handler to handle Next.js 15+ Promise-based params
+    - Disconnect now works correctly for TikTok and Google Business Profile
+  - **Enhanced error logging across all integrations:**
+    - Added detailed logging for Google Business Profile API calls
+    - Improved TikTok error messages with full error body
+    - Better debugging information for mime type detection
+
+- **Technical Details**
+  - **Google Business Profile Token Refresh:**
+    - Implemented `refreshAccessToken()` helper function
+    - Checks `expiresAt` before each API call
+    - Automatically refreshes using refresh token and OAuth credentials
+    - Updates database with new access token and expiry
+    - Function extracted to avoid circular dependency issues
+  
+  - **Google Business Profile Media Creation:**
+    - Uses Google My Business API v4: `https://mybusiness.googleapis.com/v4/{locationName}/media`
+    - Simplified to single-step creation with public Vercel Blob URL
+    - Removed complex 3-step upload flow (startUpload → upload bytes → create)
+    - Uses `sourceUrl` field pointing to Vercel Blob public URL
+    - Category: `ADDITIONAL` to support any aspect ratio (COVER requires strict 16:9)
+  
+  - **Next.js 15+ Route Handler Fix:**
+    - In Next.js 15+, `context.params` is now a Promise
+    - Updated disconnect route: `const params = await Promise.resolve(context.params);`
+    - Added logging to debug platform parameter validation
+    - Fixed TypeScript errors with proper Promise handling
+
+- **Issues Encountered & Resolutions**
+
+  1. **TikTok `spam_risk_too_many_pending_share` Error**
+     - **Symptom:** TikTok rejects uploads with spam detection error
+     - **Cause:** Too many pending videos in Creator Portal inbox (Sandbox limitation)
+     - **Current Status:** No pending videos visible in Creator Portal
+     - **Solutions Attempted:**
+       - Checked Creator Portal for pending videos (none found)
+       - Attempted disconnect/reconnect (was blocked by params bug)
+     - **Recommended Actions:**
+       - Wait 30-60 minutes for rate limit to reset
+       - Disconnect and reconnect TikTok with fresh OAuth token
+       - Monitor Creator Portal for auto-rejected videos
+
+  2. **Google Business Profile 403 Forbidden**
+     - **Cause:** Access token expired (Google tokens last ~1 hour)
+     - **Solution:** Implemented automatic token refresh before API calls
+     - **Result:** ✅ Fixed - tokens now refresh automatically
+
+  3. **Google Business Profile API Not Found (404)**
+     - **Cause:** Attempted to use Business Information API v1 which doesn't have media endpoint
+     - **Solution:** Switched to My Business API v4 with correct endpoint
+     - **Result:** ✅ Fixed - using correct API now
+
+  4. **Google Business Profile Invalid Argument (400) - Aspect Ratio**
+     - **Symptom:** "Invalid aspect ratio. Got: 1079x809 (1.333745), valid ratio 1.777778"
+     - **Cause:** COVER photos require strict 16:9 aspect ratio
+     - **Solution:** Changed category from `COVER` to `ADDITIONAL`
+     - **Result:** ✅ Fixed - photos upload successfully with any aspect ratio
+
+  5. **Disconnect Button Returning "Unknown platform"**
+     - **Cause:** Next.js 15+ changed params to Promises, but route used synchronous access
+     - **Solution:** Added `await Promise.resolve(context.params)`
+     - **Result:** ✅ Fixed - disconnect works for all platforms
+
+- **Current Status**
+  - ✅ **Google Business Profile:** FULLY OPERATIONAL
+    - OAuth working
+    - Automatic token refresh implemented
+    - Photo uploads successful
+    - Photos appearing on Google Maps listing
+    - Location configuration working (manual, store code, picker)
+  
+  - 🟡 **TikTok:** Working but rate limited
+    - OAuth working
+    - Video uploads functional
+    - Mime type detection working
+    - Currently blocked by `spam_risk_too_many_pending_share`
+    - Requires waiting period or reconnection to reset
+  
+  - ✅ **Platform Infrastructure:**
+    - Vercel Blob Storage operational
+    - Caption footer feature working
+    - Disconnect/reconnect flows fixed
+    - Input text color fixed (dark text, readable)
+    - Comprehensive error logging in place
+
+- **Testing Completed**
+  - ✅ Google Business Profile photo upload with automatic token refresh
+  - ✅ Photo successfully appears on Google Maps
+  - ✅ Disconnect button for all platforms
+  - ✅ Mime type detection for images (JPEG)
+  - ✅ Caption footer appending
+
+- **Next Steps**
+  1. **TikTok Rate Limit Resolution:**
+     - Wait 30-60 minutes and retry TikTok upload
+     - Or disconnect/reconnect TikTok for fresh session
+     - Monitor for `spam_risk` error patterns
+  
+  2. **Production Readiness:**
+     - Google Business Profile is production-ready ✅
+     - TikTok needs Production app approval for public posting
+     - Consider implementing request queuing to avoid rate limits
+  
+  3. **Future Enhancements:**
+     - Add image aspect ratio validation/cropping for COVER photos
+     - Implement retry logic for temporary API failures
+     - Add user-facing status messages for rate limits
+     - Consider batch processing to manage API quotas
+
+- **Deployment Status**
+  - All fixes deployed to Vercel production
+  - Live at https://vibesocials.wtf
+  - Database migrations applied
+  - Environment variables configured

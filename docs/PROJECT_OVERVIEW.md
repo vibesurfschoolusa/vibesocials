@@ -3,7 +3,7 @@
 ## Purpose
 Vibe Social Sync lets a logged-in user upload media (primarily videos, but also photos where required) + caption once and post it to multiple social platforms (TikTok, YouTube, X, LinkedIn, Instagram, Google Business Profile for Maps photos) using that user’s own connected accounts.
 
-Initial goal: deliver a thin, maintainable vertical slice for **one real platform (Google Business Profile / Google Maps photos)** end-to-end, with scaffolding for all others. **TikTok** integration is now fully working in Sandbox mode using the Content Posting API v2 (video uploads to Creator Portal inbox).
+Initial goal: deliver a thin, maintainable vertical slice for **one real platform (Google Business Profile / Google Maps photos)** end-to-end, with scaffolding for all others. **Google Business Profile** is now fully operational with automatic token refresh and photo uploads. **TikTok** integration is fully working in Sandbox mode using the Content Posting API v2 (video uploads to Creator Portal inbox).
 
 ## Tech Stack (V1)
 - **Language:** TypeScript
@@ -158,19 +158,29 @@ Where:
 - `PublishResult` includes:
   - `externalPostId?`
 
-### First Platform: Google Business Profile (Google Maps photos) (V1)
+### First Platform: Google Business Profile (Google Maps photos) - ✅ FULLY WORKING
 
-- Implement real OAuth start/callback endpoints for the `google_business_profile` platform.
-- Implement a Google Business Profile platform client that:
-  - Uses Google Business Profile APIs to upload **photos** to a specific business `locationName` so they appear on Google Maps.
-  - Stores the chosen business location identifier (e.g. `accounts/{accountId}/locations/{locationId}`) in `SocialConnections.metadata`.
-- Use Google OAuth credentials from environment variables (no secrets in code).
-- **Location configuration UX (Connections page):**
-  - Users connect GBP via the **Connect** button, which runs the OAuth flow and persists tokens.
-  - Once connected, the **Maps business location** form allows:
-    - Entering the full location resource: `accounts/{accountId}/locations/{locationId}`.
-    - Entering the **store code** from GBP Advanced settings; the backend resolves store code → location via Account Management + Business Information APIs.
-    - Clicking **Fetch locations from Google** to call `/api/connections/google_business_profile/locations`, list all accessible locations, and picking one from a dropdown. The selected location’s full resource name is stored in `metadata.locationName`.
+- **Status:** Production ready with automatic token refresh
+- **Implementation:**
+  - OAuth start/callback endpoints for `google_business_profile` platform
+  - Automatic access token refresh using refresh tokens when expired
+  - Photo uploads using Google My Business API v4 with public Vercel Blob URLs
+  - Photos posted with `ADDITIONAL` category (flexible aspect ratios)
+  - Location configuration with three options:
+    - Manual entry of full resource: `accounts/{accountId}/locations/{locationId}`
+    - Store code from GBP Advanced settings (auto-resolved via APIs)
+    - Location picker fetching all accessible locations from Google
+- **Technical details:**
+  - API: `https://mybusiness.googleapis.com/v4/{locationName}/media`
+  - Scope: `https://www.googleapis.com/auth/business.manage`
+  - Token refresh: Automatic before API calls when `expiresAt < now()`
+  - Media format: Uses `sourceUrl` field pointing to Vercel Blob public URL
+  - Category: `ADDITIONAL` to support any aspect ratio (COVER requires 16:9)
+- **Required APIs enabled in Google Cloud:**
+  - Google My Business API
+  - Business Profile API
+  - My Business Account Management API
+  - My Business Business Information API
 
 ### Second Platform: TikTok (Sandbox - Implemented)
 
@@ -181,6 +191,7 @@ Where:
   - Video uploads with captions to TikTok Creator Portal inbox
   - Videos require manual approval/publish in Sandbox mode (privacy: `SELF_ONLY`)
   - Supports video files only (MP4, MOV, WebM) - images not supported by TikTok
+  - Automatic mime type detection from file extensions
 - **Environment Variables:**
   - `TIKTOK_CLIENT_KEY`
   - `TIKTOK_CLIENT_SECRET`
@@ -188,7 +199,10 @@ Where:
 - **Limitations:**
   - Sandbox mode requires videos to be manually approved in TikTok Creator Portal
   - Videos are private (`SELF_ONLY`) until Production approval
-  - Rate limits: "spam_risk_too_many_pending_share" error if too many pending videos
+  - Rate limits: `spam_risk_too_many_pending_share` error if too many pending videos in inbox
+    - **Solution:** Clear pending videos from Creator Portal before uploading more
+    - Alternatively: wait 30-60 minutes for rate limit to reset
+  - Disconnect/reconnect may help reset rate limits
 
 ### Other Platforms (Scaffolded)
 
@@ -252,12 +266,16 @@ For YouTube, X, LinkedIn, Instagram:
 
 ## Extension Points / Future Work
 
-- Replace local file storage with S3 or another object store via the storage abstraction.
+- ✅ ~~Replace local file storage with object store~~ - **DONE: Using Vercel Blob Storage**
+- ✅ ~~Implement Google Business Profile photo posting~~ - **DONE: Fully working**
+- ✅ ~~Implement TikTok video posting~~ - **DONE: Working in Sandbox**
 - Add background job processing (e.g., queues) instead of synchronous posting.
 - Add more auth options (Sign in with Google, etc.).
 - Expand multi-tenancy (teams, roles, billing) as needed.
-- Implement full platform integrations for TikTok, YouTube, X, LinkedIn, and Instagram following the GBP pattern.
-- Once the Google Cloud project is **approved for Business Profile APIs** (see official Prerequisites and GBP API contact form), re-verify that:
-  - Business Profile-related APIs (Business Profile API, Account Management, Business Information) show **non-zero (e.g. 300 QPM)** quotas.
-  - The location picker and store-code resolution work end-to-end without `401`/`429` errors.
+- Implement full platform integrations for YouTube, X, LinkedIn, and Instagram following the GBP pattern.
+- Submit TikTok app for Production approval to enable public posting.
+- Add client-side video compression or direct-to-Blob uploads for files >4MB.
+- Implement media library management (delete, edit captions).
+- Add post scheduling functionality.
+- Integrate analytics/insights from social platforms.
 
