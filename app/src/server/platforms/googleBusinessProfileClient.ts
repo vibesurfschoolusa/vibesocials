@@ -94,14 +94,24 @@ export const googleBusinessProfileClient: PlatformClient = {
     );
 
     if (!uploadRes.ok) {
+      const errorBody = await uploadRes.text().catch(() => "Unable to read error body");
       console.error("[GBP] media bytes upload failed", {
         status: uploadRes.status,
         statusText: uploadRes.statusText,
+        dataRefResourceName,
+        mimeType: mediaItem.mimeType,
+        fileSize: fileBytes.byteLength,
+        errorBody,
       });
-      const error = new Error("Failed to upload media bytes to Google Business Profile");
+      const error = new Error(`Failed to upload media bytes to Google Business Profile: ${errorBody}`);
       (error as any).code = "GBP_UPLOAD_FAILED";
       throw error;
     }
+
+    console.log("[GBP] Media bytes uploaded successfully", {
+      dataRefResourceName,
+      fileSize: fileBytes.byteLength,
+    });
 
     // 4. Create the media item for the location.
     const isPhoto = mediaItem.mimeType?.startsWith("image/") ?? true;
@@ -126,11 +136,16 @@ export const googleBusinessProfileClient: PlatformClient = {
     });
 
     if (!createRes.ok) {
+      const errorBody = await createRes.text().catch(() => "Unable to read error body");
       console.error("[GBP] media create failed", {
         status: createRes.status,
         statusText: createRes.statusText,
+        mediaFormat,
+        category,
+        dataRefResourceName,
+        errorBody,
       });
-      const error = new Error("Failed to create media item in Google Business Profile");
+      const error = new Error(`Failed to create media item in Google Business Profile: ${errorBody}`);
       (error as any).code = "GBP_CREATE_MEDIA_FAILED";
       throw error;
     }
