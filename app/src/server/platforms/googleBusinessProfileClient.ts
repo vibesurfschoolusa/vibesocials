@@ -29,18 +29,20 @@ export const googleBusinessProfileClient: PlatformClient = {
 
     const { locationName } = await ensureLocationName(socialConnection, accessToken);
 
-    console.log("[GBP] Creating media with public Vercel Blob URL", {
+    console.log("[GBP] Starting media creation", {
       locationName,
       storageLocation: mediaItem.storageLocation,
       mimeType: mediaItem.mimeType,
     });
 
-    // Use the Business Information API to create media with a public URL
+    // Use Google My Business API v4 to create media with the Vercel Blob public URL
     const isPhoto = mediaItem.mimeType?.startsWith("image/") ?? true;
     const mediaFormat = isPhoto ? "PHOTO" : "VIDEO";
+    const category = isPhoto ? "COVER" : "ADDITIONAL";
 
+    // Try creating media by providing the sourceUrl directly in the request
     const createRes = await fetch(
-      `https://mybusinessbusinessinformation.googleapis.com/v1/${locationName}/media`,
+      `https://mybusiness.googleapis.com/v4/${locationName}/media`,
       {
         method: "POST",
         headers: {
@@ -50,6 +52,9 @@ export const googleBusinessProfileClient: PlatformClient = {
         body: JSON.stringify({
           mediaFormat,
           sourceUrl: mediaItem.storageLocation, // Public Vercel Blob URL
+          locationAssociation: {
+            category,
+          },
         }),
       },
     );
@@ -60,6 +65,7 @@ export const googleBusinessProfileClient: PlatformClient = {
         status: createRes.status,
         statusText: createRes.statusText,
         mediaFormat,
+        category,
         sourceUrl: mediaItem.storageLocation,
         errorBody,
       });
