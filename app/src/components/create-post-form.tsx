@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { LocationAutocomplete } from "./location-autocomplete";
 
 type Mode = "upload" | "existing";
 
@@ -236,15 +237,14 @@ export function CreatePostForm() {
             <label className="block text-sm font-medium text-zinc-900">
               Location <span className="text-xs text-zinc-500">(optional)</span>
             </label>
-            <input
-              type="text"
+            <LocationAutocomplete
               value={uploadLocation}
-              onChange={(event) => setUploadLocation(event.target.value)}
+              onChange={setUploadLocation}
+              placeholder="Start typing a location..."
               className="mt-1 w-full rounded border border-zinc-300 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-zinc-900"
-              placeholder="e.g., Miami Beach, FL or 25.7617,-80.1918"
             />
             <p className="mt-1 text-xs text-zinc-500">
-              Enter name (Instagram/TikTok/X) or coordinates as <code className="text-xs bg-gray-100 px-1 rounded">latitude,longitude</code> (YouTube)
+              Type to search for locations. Coordinates will be added automatically for YouTube.
             </p>
           </div>
           <div className="flex items-center justify-between text-xs">
@@ -308,15 +308,14 @@ export function CreatePostForm() {
             <label className="block text-sm font-medium text-zinc-900">
               Location <span className="text-xs text-zinc-500">(optional)</span>
             </label>
-            <input
-              type="text"
+            <LocationAutocomplete
               value={existingLocation}
-              onChange={(event) => setExistingLocation(event.target.value)}
+              onChange={setExistingLocation}
+              placeholder="Start typing a location..."
               className="mt-1 w-full rounded border border-zinc-300 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-zinc-900"
-              placeholder="e.g., Miami Beach, FL or 25.7617,-80.1918"
             />
             <p className="mt-1 text-xs text-zinc-500">
-              Enter name (Instagram/TikTok/X) or coordinates as <code className="text-xs bg-gray-100 px-1 rounded">latitude,longitude</code> (YouTube)
+              Type to search for locations. Coordinates will be added automatically for YouTube.
             </p>
           </div>
           <div className="flex items-center justify-between text-xs">
