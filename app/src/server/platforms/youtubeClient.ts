@@ -118,8 +118,15 @@ export const youtubeClient: PlatformClient = {
     const locationMetadata = (mediaItem.metadata as any)?.location;
     let locationData: { latitude?: number; longitude?: number; description?: string } | null = null;
     
+    console.log("[YouTube] Raw metadata from mediaItem:", {
+      metadata: mediaItem.metadata,
+      locationMetadata,
+    });
+    
     if (locationMetadata?.description) {
       const locStr = locationMetadata.description.trim();
+      
+      console.log("[YouTube] Parsing location string:", locStr);
       
       // Try to extract coordinates from the string (format: "lat,lng" or "description (lat,lng)")
       const coordMatch = locStr.match(/(-?\d+\.?\d*),\s*(-?\d+\.?\d*)/);
@@ -127,6 +134,8 @@ export const youtubeClient: PlatformClient = {
       if (coordMatch) {
         const lat = parseFloat(coordMatch[1]);
         const lng = parseFloat(coordMatch[2]);
+        
+        console.log("[YouTube] Found coordinates:", { lat, lng, valid: !isNaN(lat) && !isNaN(lng) });
         
         if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
           locationData = {
@@ -139,12 +148,16 @@ export const youtubeClient: PlatformClient = {
           if (descOnly && descOnly !== locStr) {
             locationData.description = descOnly;
           }
+          
+          console.log("[YouTube] Parsed location data:", locationData);
         }
       } else {
         // No coordinates found, store as description only for other platforms
         // YouTube won't get location without coordinates
         console.log("[YouTube] Location text provided but no coordinates, skipping location for YouTube:", locStr);
       }
+    } else {
+      console.log("[YouTube] No location metadata found");
     }
 
     // YouTube video metadata
@@ -192,6 +205,8 @@ export const youtubeClient: PlatformClient = {
     // Create multipart upload
     const boundary = "----VibeSocialsYouTubeBoundary";
     const metadataBody = JSON.stringify(metadata);
+    
+    console.log("[YouTube] Full metadata being sent to API:", metadataBody);
 
     const parts = [
       `--${boundary}\r\n`,
