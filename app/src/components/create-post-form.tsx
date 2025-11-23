@@ -37,6 +37,7 @@ export function CreatePostForm() {
 
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadCaption, setUploadCaption] = useState("");
+  const [uploadLocation, setUploadLocation] = useState("");
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
@@ -45,6 +46,7 @@ export function CreatePostForm() {
   const [existingError, setExistingError] = useState<string | null>(null);
   const [selectedMediaId, setSelectedMediaId] = useState<string>("");
   const [existingCaption, setExistingCaption] = useState("");
+  const [existingLocation, setExistingLocation] = useState("");
   const [existingPosting, setExistingPosting] = useState(false);
   const [existingPostError, setExistingPostError] = useState<string | null>(null);
 
@@ -95,6 +97,9 @@ export function CreatePostForm() {
       const formData = new FormData();
       formData.append("file", uploadFile);
       formData.append("baseCaption", uploadCaption);
+      if (uploadLocation.trim()) {
+        formData.append("location", uploadLocation.trim());
+      }
 
       const response = await fetch("/api/posts", {
         method: "POST",
@@ -116,6 +121,7 @@ export function CreatePostForm() {
       setSuccessMessage(`Post created (job ${jobId}).`);
       setUploadFile(null);
       setUploadCaption("");
+      setUploadLocation("");
       setUploadLoading(false);
     } catch (_err) {
       setUploadError("Unexpected error while creating post.");
@@ -149,6 +155,7 @@ export function CreatePostForm() {
         body: JSON.stringify({
           mediaItemId: selectedMediaId,
           baseCaption: existingCaption,
+          location: existingLocation.trim() || undefined,
         }),
       });
 
@@ -167,6 +174,7 @@ export function CreatePostForm() {
       setSuccessMessage(`Post created (job ${jobId}).`);
       setExistingPosting(false);
       setExistingCaption("");
+      setExistingLocation("");
       setSelectedMediaId("");
     } catch (_err) {
       setExistingPostError("Unexpected error while creating post.");
@@ -224,6 +232,19 @@ export function CreatePostForm() {
               placeholder="What do you want to say with this post?"
             />
           </div>
+          <div>
+            <label className="block text-sm font-medium text-zinc-900">
+              Location <span className="text-xs text-zinc-500">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={uploadLocation}
+              onChange={(event) => setUploadLocation(event.target.value)}
+              className="mt-1 w-full rounded border border-zinc-300 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+              placeholder="e.g., Miami Beach, FL"
+            />
+            <p className="mt-1 text-xs text-zinc-500">Will be added to YouTube, Instagram, TikTok, and X posts</p>
+          </div>
           <div className="flex items-center justify-between text-xs">
             <button
               type="submit"
@@ -280,6 +301,19 @@ export function CreatePostForm() {
               className="mt-1 w-full rounded border border-zinc-300 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-zinc-900"
               placeholder="What do you want to say with this post?"
             />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-zinc-900">
+              Location <span className="text-xs text-zinc-500">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={existingLocation}
+              onChange={(event) => setExistingLocation(event.target.value)}
+              className="mt-1 w-full rounded border border-zinc-300 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+              placeholder="e.g., Miami Beach, FL"
+            />
+            <p className="mt-1 text-xs text-zinc-500">Will be added to YouTube, Instagram, TikTok, and X posts</p>
           </div>
           <div className="flex items-center justify-between text-xs">
             <button

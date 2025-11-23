@@ -21,6 +21,7 @@ export interface CreatePostJobParams {
   userId: string;
   media: SavedFileInfo;
   baseCaption: string;
+  location?: string;
   perPlatformOverrides?: Partial<Record<Platform, string>> | null;
 }
 
@@ -28,6 +29,7 @@ export interface CreatePostJobFromExistingMediaParams {
   userId: string;
   mediaItemId: string;
   baseCaption: string;
+  location?: string;
   perPlatformOverrides?: Partial<Record<Platform, string>> | null;
 }
 
@@ -40,9 +42,10 @@ async function runPostJobForMediaItem(params: {
   userId: string;
   mediaItem: MediaItem;
   baseCaption: string;
+  location?: string;
   perPlatformOverrides?: Partial<Record<Platform, string>> | null;
 }): Promise<PostJobWithResults> {
-  const { userId, mediaItem, baseCaption, perPlatformOverrides } = params;
+  const { userId, mediaItem, baseCaption, location, perPlatformOverrides } = params;
 
   // Fetch user to get caption footer settings
   const user = await prisma.user.findUnique({
@@ -165,7 +168,12 @@ async function runPostJobForMediaItem(params: {
 export async function createAndRunPostJob(
   params: CreatePostJobParams,
 ): Promise<PostJobWithResults> {
-  const { userId, media, baseCaption, perPlatformOverrides } = params;
+  const { userId, media, baseCaption, location, perPlatformOverrides } = params;
+
+  const metadata: any = {};
+  if (location) {
+    metadata.location = { description: location };
+  }
 
   const mediaItem = await prisma.mediaItem.create({
     data: {
@@ -175,6 +183,7 @@ export async function createAndRunPostJob(
       mimeType: media.mimeType,
       sizeBytes: media.sizeBytes,
       baseCaption,
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
       perPlatformOverrides: perPlatformOverrides
         ? (perPlatformOverrides as unknown as Record<string, string>)
         : undefined,
@@ -185,6 +194,7 @@ export async function createAndRunPostJob(
     userId,
     mediaItem,
     baseCaption,
+    location,
     perPlatformOverrides,
   });
 }
@@ -192,9 +202,9 @@ export async function createAndRunPostJob(
 export async function createAndRunPostJobForExistingMedia(
   params: CreatePostJobFromExistingMediaParams,
 ): Promise<PostJobWithResults> {
-  const { userId, mediaItemId, baseCaption, perPlatformOverrides } = params;
+  const { userId, mediaItemId, baseCaption, location, perPlatformOverrides } = params;
 
-  const mediaItem = await prisma.mediaItem.findFirst({
+  let mediaItem = await prisma.mediaItem.findFirst({
     where: {
       id: mediaItemId,
       userId,
@@ -205,10 +215,25 @@ export async function createAndRunPostJobForExistingMedia(
     throw new Error("MEDIA_ITEM_NOT_FOUND");
   }
 
+  // Update location if provided
+  if (location) {
+    const existingMetadata = (mediaItem.metadata as any) || {};
+    mediaItem = await prisma.mediaItem.update({
+      where: { id: mediaItemId },
+      data: {
+        metadata: {
+          ...existingMetadata,
+          location: { description: location },
+        },
+      },
+    });
+  }
+
   return runPostJobForMediaItem({
     userId,
     mediaItem,
     baseCaption,
+    location,
     perPlatformOverrides,
   });
 }

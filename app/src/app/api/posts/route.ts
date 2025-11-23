@@ -28,6 +28,7 @@ export async function POST(request: Request) {
 
     const mediaItemIdRaw = body?.mediaItemId;
     const baseCaptionRaw = body?.baseCaption;
+    const locationRaw = body?.location;
     const overridesRaw = body?.perPlatformOverrides;
 
     if (typeof mediaItemIdRaw !== "string" || !mediaItemIdRaw.trim()) {
@@ -55,11 +56,14 @@ export async function POST(request: Request) {
       perPlatformOverrides = overridesRaw as Partial<Record<Platform, string>>;
     }
 
+    const location = typeof locationRaw === "string" && locationRaw.trim() ? locationRaw.trim() : undefined;
+
     try {
       const { postJob, results } = await createAndRunPostJobForExistingMedia({
         userId: user.id,
         mediaItemId: mediaItemIdRaw.trim(),
         baseCaption: baseCaptionRaw,
+        location,
         perPlatformOverrides: perPlatformOverrides ?? null,
       });
 
@@ -101,6 +105,7 @@ export async function POST(request: Request) {
 
   const file = formData.get("file");
   const baseCaption = formData.get("baseCaption");
+  const locationFormData = formData.get("location");
   const overridesRaw = formData.get("perPlatformOverrides");
 
   if (!(file instanceof File)) {
@@ -127,6 +132,8 @@ export async function POST(request: Request) {
     }
   }
 
+  const location = typeof locationFormData === "string" && locationFormData.trim() ? locationFormData.trim() : undefined;
+
   try {
     const saved = await saveUploadedFile(user.id, file);
 
@@ -134,6 +141,7 @@ export async function POST(request: Request) {
       userId: user.id,
       media: saved,
       baseCaption,
+      location,
       perPlatformOverrides: perPlatformOverrides ?? null,
     });
 

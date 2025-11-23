@@ -109,21 +109,49 @@ export const youtubeClient: PlatformClient = {
 
     const videoBytes = Buffer.from(await mediaResponse.arrayBuffer());
 
+    // Extract hashtags from caption for tags (YouTube supports up to 500 chars of tags)
+    const hashtagMatches = caption.match(/#[\w]+/g) || [];
+    const tags = hashtagMatches.map(tag => tag.substring(1)); // Remove # prefix
+
+    // Get location from metadata if available
+    const locationData = (mediaItem.metadata as any)?.location;
+
     // YouTube video metadata
-    const metadata = {
+    // Use baseCaption for title (no footer), full caption for description (with footer)
+    const title = (mediaItem.baseCaption || caption).substring(0, 100); // YouTube title max 100 chars
+    const metadata: any = {
       snippet: {
-        title: caption.substring(0, 100), // YouTube title max 100 chars
-        description: caption, // Full caption in description
+        title,
+        description: caption, // Full caption with footer
         categoryId: "22", // People & Blogs (default category)
+        tags: tags.length > 0 ? tags : undefined, // Add extracted hashtags as tags
       },
       status: {
         privacyStatus: "public", // Options: public, private, unlisted
+        selfDeclaredMadeForKids: false, // Not made for kids
       },
     };
 
+    // Add location/recording details if available
+    if (locationData?.latitude && locationData?.longitude) {
+      metadata.recordingDetails = {
+        location: {
+          latitude: locationData.latitude,
+          longitude: locationData.longitude,
+        },
+      };
+      if (locationData.description) {
+        metadata.recordingDetails.locationDescription = locationData.description;
+      }
+    }
+
     console.log("[YouTube] Uploading with metadata", {
       title: metadata.snippet.title,
+      descriptionLength: caption.length,
+      tags: tags,
+      hasLocation: !!locationData,
       privacyStatus: metadata.status.privacyStatus,
+      madeForKids: false,
     });
 
     // Create multipart upload
@@ -144,8 +172,10 @@ export const youtubeClient: PlatformClient = {
     const body = Buffer.concat([...partBuffers, videoBytes, endBoundary]);
 
     // Upload to YouTube
+    // Include recordingDetails in parts if location is provided
+    const apiParts = locationData ? "snippet,status,recordingDetails" : "snippet,status";
     const uploadResponse = await fetch(
-      "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=snippet,status",
+      `https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=${apiParts}`,
       {
         method: "POST",
         headers: {
