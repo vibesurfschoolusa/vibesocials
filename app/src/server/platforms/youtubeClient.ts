@@ -264,16 +264,61 @@ export const youtubeClient: PlatformClient = {
       throw error;
     }
 
-    const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const uploadData = result;
 
     console.log("[YouTube] Video uploaded successfully", {
-      videoId,
-      videoUrl,
-      title: result.snippet?.title,
+      videoId: uploadData.id,
+      videoUrl: `https://www.youtube.com/watch?v=${uploadData.id}`,
+      title: uploadData.snippet?.title,
     });
 
+    // If we have location data, update the video with recordingDetails
+    // YouTube doesn't always accept recordingDetails during initial upload
+    if (locationData?.latitude && locationData?.longitude) {
+      console.log("[YouTube] Updating video with location data...");
+      
+      try {
+        const updateResponse = await fetch(
+          `https://www.googleapis.com/youtube/v3/videos?part=recordingDetails`,
+          {
+            method: "PUT",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              id: uploadData.id,
+              recordingDetails: {
+                location: {
+                  latitude: locationData.latitude,
+                  longitude: locationData.longitude,
+                },
+                locationDescription: locationData.description || undefined,
+              },
+            }),
+          },
+        );
+
+        if (updateResponse.ok) {
+          const updateData = await updateResponse.json();
+          console.log("[YouTube] Location updated successfully", {
+            recordingDetails: updateData.recordingDetails,
+          });
+        } else {
+          const errorText = await updateResponse.text();
+          console.error("[YouTube] Failed to update location", {
+            status: updateResponse.status,
+            error: errorText,
+          });
+        }
+      } catch (error) {
+        console.error("[YouTube] Error updating location", error);
+        // Don't fail the whole upload if location update fails
+      }
+    }
+
     return {
-      externalPostId: videoId,
+      externalPostId: uploadData.id,
     };
   },
 
