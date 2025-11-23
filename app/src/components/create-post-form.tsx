@@ -244,7 +244,7 @@ export function CreatePostForm() {
               className="mt-1 w-full rounded border border-zinc-300 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-zinc-900"
             />
             <p className="mt-1 text-xs text-zinc-500">
-              Type to search for locations. Coordinates will be added automatically for YouTube.
+              Type to search for locations. Will be added to Instagram, TikTok, and X posts. (YouTube requires manual location setting via Studio)
             </p>
           </div>
           <div className="flex items-center justify-between text-xs">
@@ -315,7 +315,7 @@ export function CreatePostForm() {
               className="mt-1 w-full rounded border border-zinc-300 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-zinc-900"
             />
             <p className="mt-1 text-xs text-zinc-500">
-              Type to search for locations. Coordinates will be added automatically for YouTube.
+              Type to search for locations. Will be added to Instagram, TikTok, and X posts. (YouTube requires manual location setting via Studio)
             </p>
           </div>
           <div className="flex items-center justify-between text-xs">
