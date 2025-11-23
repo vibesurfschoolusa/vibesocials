@@ -68,6 +68,7 @@ export default async function ConnectionsPage() {
 
             const isGoogleBusinessProfile = platform === "google_business_profile";
             const isTikTok = platform === "tiktok";
+            const isYouTube = platform === "youtube";
 
             const locationName = (connection?.metadata as any)?.locationName ?? null;
 
@@ -86,6 +87,8 @@ export default async function ConnectionsPage() {
                         ? "Connect your Google Business Profile so new photos appear on your Maps listing."
                         : isTikTok
                         ? "Connect your TikTok account so Vibe Social Sync can upload videos to your inbox."
+                        : isYouTube
+                        ? "Connect your YouTube channel to upload videos directly."
                         : "Not connected yet (scaffolded; implementation pending)."}
                     </div>
                   </div>
@@ -106,6 +109,13 @@ export default async function ConnectionsPage() {
                     ) : isTikTok ? (
                       <Link
                         href="/api/auth/tiktok/start"
+                        className="rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm hover:shadow-md"
+                      >
+                        Connect
+                      </Link>
+                    ) : isYouTube ? (
+                      <Link
+                        href="/api/auth/youtube/start"
                         className="rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm hover:shadow-md"
                       >
                         Connect
