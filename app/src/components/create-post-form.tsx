@@ -241,9 +241,11 @@ export function CreatePostForm() {
               value={uploadLocation}
               onChange={(event) => setUploadLocation(event.target.value)}
               className="mt-1 w-full rounded border border-zinc-300 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-zinc-900"
-              placeholder="e.g., Miami Beach, FL"
+              placeholder="e.g., Miami Beach, FL or 25.7617,-80.1918"
             />
-            <p className="mt-1 text-xs text-zinc-500">Will be added to YouTube, Instagram, TikTok, and X posts</p>
+            <p className="mt-1 text-xs text-zinc-500">
+              Enter name (Instagram/TikTok/X) or coordinates as <code className="text-xs bg-gray-100 px-1 rounded">latitude,longitude</code> (YouTube)
+            </p>
           </div>
           <div className="flex items-center justify-between text-xs">
             <button
@@ -311,9 +313,11 @@ export function CreatePostForm() {
               value={existingLocation}
               onChange={(event) => setExistingLocation(event.target.value)}
               className="mt-1 w-full rounded border border-zinc-300 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-zinc-900"
-              placeholder="e.g., Miami Beach, FL"
+              placeholder="e.g., Miami Beach, FL or 25.7617,-80.1918"
             />
-            <p className="mt-1 text-xs text-zinc-500">Will be added to YouTube, Instagram, TikTok, and X posts</p>
+            <p className="mt-1 text-xs text-zinc-500">
+              Enter name (Instagram/TikTok/X) or coordinates as <code className="text-xs bg-gray-100 px-1 rounded">latitude,longitude</code> (YouTube)
+            </p>
           </div>
           <div className="flex items-center justify-between text-xs">
             <button

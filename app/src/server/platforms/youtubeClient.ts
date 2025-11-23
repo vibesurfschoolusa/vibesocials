@@ -113,8 +113,39 @@ export const youtubeClient: PlatformClient = {
     const hashtagMatches = caption.match(/#[\w]+/g) || [];
     const tags = hashtagMatches.map(tag => tag.substring(1)); // Remove # prefix
 
-    // Get location from metadata if available
-    const locationData = (mediaItem.metadata as any)?.location;
+    // Parse location from metadata if available
+    // Supports formats: "lat,lng" or "description" or both
+    const locationMetadata = (mediaItem.metadata as any)?.location;
+    let locationData: { latitude?: number; longitude?: number; description?: string } | null = null;
+    
+    if (locationMetadata?.description) {
+      const locStr = locationMetadata.description.trim();
+      
+      // Try to extract coordinates from the string (format: "lat,lng" or "description (lat,lng)")
+      const coordMatch = locStr.match(/(-?\d+\.?\d*),\s*(-?\d+\.?\d*)/);
+      
+      if (coordMatch) {
+        const lat = parseFloat(coordMatch[1]);
+        const lng = parseFloat(coordMatch[2]);
+        
+        if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+          locationData = {
+            latitude: lat,
+            longitude: lng,
+          };
+          
+          // Extract description if it's not just coordinates
+          const descOnly = locStr.replace(/\s*\(?\s*-?\d+\.?\d*,\s*-?\d+\.?\d*\s*\)?/, '').trim();
+          if (descOnly && descOnly !== locStr) {
+            locationData.description = descOnly;
+          }
+        }
+      } else {
+        // No coordinates found, store as description only for other platforms
+        // YouTube won't get location without coordinates
+        console.log("[YouTube] Location text provided but no coordinates, skipping location for YouTube:", locStr);
+      }
+    }
 
     // YouTube video metadata
     // Use baseCaption for title (no footer), full caption for description (with footer)
@@ -149,7 +180,11 @@ export const youtubeClient: PlatformClient = {
       title: metadata.snippet.title,
       descriptionLength: caption.length,
       tags: tags,
-      hasLocation: !!locationData,
+      location: locationData ? {
+        lat: locationData.latitude,
+        lng: locationData.longitude,
+        description: locationData.description,
+      } : null,
       privacyStatus: metadata.status.privacyStatus,
       madeForKids: false,
     });
