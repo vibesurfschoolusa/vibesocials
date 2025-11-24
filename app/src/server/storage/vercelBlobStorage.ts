@@ -32,21 +32,19 @@ export async function saveUploadedFile(
   const timestamp = Date.now();
   const filename = `${userId}/${timestamp}-${safeName}`;
 
-  const arrayBuffer = await file.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-
   // Determine mime type from file.type or fallback to file extension
   const detectedMimeType = file.type || getMimeTypeFromFilename(originalFilename);
+  const sizeBytes = file.size;
   
   console.log('[Blob Storage] Upload details:', {
     originalFilename,
     browserFileType: file.type,
     detectedMimeType,
-    sizeBytes: buffer.byteLength
+    sizeBytes
   });
 
-  // Upload to Vercel Blob
-  const blob = await put(filename, buffer, {
+  // Upload to Vercel Blob using streaming for better performance with large files
+  const blob = await put(filename, file, {
     access: "public",
     contentType: detectedMimeType,
   });
@@ -55,6 +53,6 @@ export async function saveUploadedFile(
     storageLocation: blob.url, // Public URL from Vercel Blob
     originalFilename,
     mimeType: detectedMimeType,
-    sizeBytes: buffer.byteLength,
+    sizeBytes,
   };
 }
