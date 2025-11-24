@@ -69,8 +69,10 @@ export default async function ConnectionsPage() {
             const isGoogleBusinessProfile = platform === "google_business_profile";
             const isTikTok = platform === "tiktok";
             const isYouTube = platform === "youtube";
+            const isInstagram = platform === "instagram";
 
             const locationName = (connection?.metadata as any)?.locationName ?? null;
+            const username = (connection?.metadata as any)?.username ?? connection?.accountIdentifier;
 
             return (
               <div
@@ -82,13 +84,15 @@ export default async function ConnectionsPage() {
                     <div className="text-base font-semibold text-gray-900">{label}</div>
                     <div className="text-sm text-gray-600">
                       {connection
-                        ? `Connected as ${connection.accountIdentifier}`
+                        ? `Connected as ${username}`
                         : isGoogleBusinessProfile
                         ? "Connect your Google Business Profile so new photos appear on your Maps listing."
                         : isTikTok
                         ? "Connect your TikTok account so Vibe Social Sync can upload videos to your inbox."
                         : isYouTube
                         ? "Connect your YouTube channel to upload videos directly."
+                        : isInstagram
+                        ? "Connect your Instagram Business account to post photos and videos."
                         : "Not connected yet (scaffolded; implementation pending)."}
                     </div>
                   </div>
@@ -116,6 +120,13 @@ export default async function ConnectionsPage() {
                     ) : isYouTube ? (
                       <Link
                         href="/api/auth/youtube/start"
+                        className="rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm hover:shadow-md"
+                      >
+                        Connect
+                      </Link>
+                    ) : isInstagram ? (
+                      <Link
+                        href="/api/auth/instagram/start"
                         className="rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm hover:shadow-md"
                       >
                         Connect
