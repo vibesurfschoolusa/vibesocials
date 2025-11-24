@@ -113,7 +113,7 @@ export const instagramClient: PlatformClient = {
 
       console.log("[Instagram] Container created", { containerId });
 
-      // Step 2: For videos, wait for processing
+      // Step 2: Wait for media processing
       if (isVideo) {
         console.log("[Instagram] Waiting for video processing...");
         
@@ -155,6 +155,10 @@ export const instagramClient: PlatformClient = {
         }
 
         console.log("[Instagram] Video processing complete");
+      } else {
+        // For images, wait a brief moment for Instagram to process
+        console.log("[Instagram] Waiting for image processing...");
+        await new Promise((resolve) => setTimeout(resolve, 3000)); // Wait 3 seconds
       }
 
       // Step 3: Publish the container
