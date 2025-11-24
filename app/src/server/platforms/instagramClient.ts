@@ -71,7 +71,8 @@ export const instagramClient: PlatformClient = {
       };
 
       if (isVideo) {
-        containerParams.media_type = "VIDEO";
+        // Instagram now requires REELS for video posts (VIDEO is deprecated)
+        containerParams.media_type = "REELS";
         containerParams.video_url = mediaUrl;
       } else {
         containerParams.image_url = mediaUrl;
@@ -86,7 +87,7 @@ export const instagramClient: PlatformClient = {
       });
 
       console.log("[Instagram] Creating media container", {
-        mediaType: isVideo ? "VIDEO" : "IMAGE",
+        mediaType: isVideo ? "REELS" : "IMAGE",
         hasLocation: !!locationId,
       });
 
