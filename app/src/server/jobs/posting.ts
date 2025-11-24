@@ -159,6 +159,23 @@ async function runPostJobForMediaItem(params: {
     data: { status: finalStatus },
   });
 
+  if (finalStatus === "completed") {
+    try {
+      const { del } = await import("@vercel/blob");
+      await del(mediaItem.storageLocation);
+      console.log("[PostJob] Deleted media from blob storage", {
+        mediaItemId: mediaItem.id,
+        storageLocation: mediaItem.storageLocation,
+      });
+    } catch (error) {
+      console.error("[PostJob] Failed to delete media from blob storage", {
+        mediaItemId: mediaItem.id,
+        error,
+      });
+      // Don't fail the job if cleanup fails
+    }
+  }
+
   return {
     postJob: updatedJob,
     results,

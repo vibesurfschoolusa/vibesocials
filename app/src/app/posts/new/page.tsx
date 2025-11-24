@@ -37,9 +37,9 @@ export default async function NewPostPage() {
       <div className="mx-auto w-full max-w-4xl rounded-2xl bg-white p-10 shadow-xl border border-gray-100">
         <div className="mb-4 flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-teal-600 bg-clip-text text-transparent">Create post</h1>
-            <p className="mt-2 text-base text-gray-700">
-              Upload a new image or video, or reuse something from your media library, then post to your connected platforms.
+            <h1 className="text-2xl font-bold text-zinc-900">Create post</h1>
+            <p className="mt-1 text-sm text-zinc-600">
+              Upload a new image or video, then post to your connected platforms.
             </p>
           </div>
           <Link href="/" className="text-sm text-gray-600 hover:text-blue-600 underline transition-colors">
