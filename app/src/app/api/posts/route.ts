@@ -26,6 +26,75 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     }
 
+    // Check if this is a blob upload request
+    if (body?.blobUrl) {
+      const blobUrl = body.blobUrl;
+      const filename = body.filename || "upload";
+      const mimeType = body.mimeType || "application/octet-stream";
+      const sizeBytes = body.sizeBytes || 0;
+      const baseCaptionRaw = body?.baseCaption;
+      const locationRaw = body?.location;
+      const overridesRaw = body?.perPlatformOverrides;
+
+      if (typeof baseCaptionRaw !== "string" || !baseCaptionRaw.trim()) {
+        return NextResponse.json(
+          { error: "baseCaption is required" },
+          { status: 400 },
+        );
+      }
+
+      let perPlatformOverrides: Partial<Record<Platform, string>> | undefined;
+      if (overridesRaw != null) {
+        if (typeof overridesRaw !== "object") {
+          return NextResponse.json(
+            { error: "perPlatformOverrides must be an object if provided" },
+            { status: 400 },
+          );
+        }
+        perPlatformOverrides = overridesRaw as Partial<Record<Platform, string>>;
+      }
+
+      const location = typeof locationRaw === "string" && locationRaw.trim() ? locationRaw.trim() : undefined;
+
+      try {
+        const { postJob, results } = await createAndRunPostJob({
+          userId: user.id,
+          media: {
+            storageLocation: blobUrl,
+            originalFilename: filename,
+            mimeType,
+            sizeBytes,
+          },
+          baseCaption: baseCaptionRaw,
+          location,
+          perPlatformOverrides,
+        });
+
+        return NextResponse.json({
+          postJob,
+          results,
+        });
+      } catch (error: unknown) {
+        if (error instanceof Error && error.message === "NO_CONNECTIONS") {
+          return NextResponse.json(
+            {
+              error: "No connected platforms",
+              code: "NO_CONNECTIONS",
+              message: "Connect at least one platform before creating a post.",
+            },
+            { status: 400 },
+          );
+        }
+
+        console.error("[POST /api/posts] Unexpected error (blob upload)", { error });
+        return NextResponse.json(
+          { error: "Failed to create post" },
+          { status: 500 },
+        );
+      }
+    }
+
+    // Existing media item flow
     const mediaItemIdRaw = body?.mediaItemId;
     const baseCaptionRaw = body?.baseCaption;
     const locationRaw = body?.location;
@@ -33,7 +102,7 @@ export async function POST(request: Request) {
 
     if (typeof mediaItemIdRaw !== "string" || !mediaItemIdRaw.trim()) {
       return NextResponse.json(
-        { error: "mediaItemId is required" },
+        { error: "mediaItemId or blobUrl is required" },
         { status: 400 },
       );
     }
