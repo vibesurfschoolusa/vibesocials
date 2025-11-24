@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { upload } from '@vercel/blob/client';
 import { LocationAutocomplete } from "./location-autocomplete";
 
 interface PostResponse {
@@ -45,16 +46,34 @@ export function CreatePostForm() {
     setUploadLoading(true);
 
     try {
-      const formData = new FormData();
-      formData.append("file", uploadFile);
-      formData.append("baseCaption", uploadCaption);
-      if (uploadLocation.trim()) {
-        formData.append("location", uploadLocation.trim());
-      }
+      console.log('[Upload] Starting client-side upload to Vercel Blob', {
+        filename: uploadFile.name,
+        size: uploadFile.size,
+        type: uploadFile.type,
+      });
 
+      // Step 1: Upload directly to Vercel Blob from browser (bypasses 4.5MB limit!)
+      const newBlob = await upload(uploadFile.name, uploadFile, {
+        access: 'public',
+        handleUploadUrl: '/api/upload',
+      });
+
+      console.log('[Upload] Blob uploaded successfully', { url: newBlob.url });
+
+      // Step 2: Create post using the blob URL
       const response = await fetch("/api/posts", {
         method: "POST",
-        body: formData,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          blobUrl: newBlob.url,
+          filename: uploadFile.name,
+          mimeType: uploadFile.type,
+          sizeBytes: uploadFile.size,
+          baseCaption: uploadCaption,
+          location: uploadLocation.trim() || undefined,
+        }),
       });
 
       const data = (await response.json().catch(() => null)) as
