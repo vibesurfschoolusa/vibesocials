@@ -163,6 +163,7 @@ export async function POST(request: Request) {
     }
   }
 
+  // Handle multipart/form-data uploads
   if (!contentType.includes("multipart/form-data")) {
     return NextResponse.json(
       { error: "Content-Type must be multipart/form-data or application/json" },
