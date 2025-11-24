@@ -3,7 +3,7 @@
 ## Purpose
 Vibe Social Sync lets a logged-in user upload media (primarily videos, but also photos where required) + caption once and post it to multiple social platforms (TikTok, YouTube, X, LinkedIn, Instagram, Google Business Profile for Maps photos) using that user’s own connected accounts.
 
-Initial goal: deliver a thin, maintainable vertical slice for **one real platform (Google Business Profile / Google Maps photos)** end-to-end, with scaffolding for all others. **Google Business Profile** is now fully operational with automatic token refresh and photo uploads. **TikTok** integration is fully working in Sandbox mode using the Content Posting API v2 (video uploads to Creator Portal inbox).
+Initial goal: deliver a thin, maintainable vertical slice for **one real platform (Google Business Profile / Google Maps photos)** end-to-end, with scaffolding for all others. **Google Business Profile** is now fully operational with automatic token refresh and photo uploads. **TikTok** integration is fully working in Sandbox mode using the Content Posting API v2 (video uploads to Creator Portal inbox). **Instagram** integration is fully working with Reels posting via Facebook Graph API.
 
 ## Tech Stack (V1)
 - **Language:** TypeScript
@@ -14,14 +14,17 @@ Initial goal: deliver a thin, maintainable vertical slice for **one real platfor
 - **Database:** PostgreSQL (via Prisma ORM) - Neon hosted database for production.
 - **Storage:** 
   - **Production:** Vercel Blob Storage for media uploads (images and videos).
+  - **Client-side direct upload:** Files upload directly from browser to Vercel Blob using `@vercel/blob/client`, bypassing the 4.5MB serverless function limit.
   - **Development:** Local filesystem fallback with abstraction layer.
-  - Storage abstraction (`src/server/storage`) detects mime types from file extensions and handles uploads to Vercel Blob.
+  - Storage abstraction (`src/server/storage`) detects mime types from file extensions and handles server-side uploads to Vercel Blob.
+  - **No size limit:** Direct client uploads support files of any size (up to Vercel Blob's ~500MB limit).
 - **Auth for app users:** NextAuth (Auth.js) using an email+password credentials provider (initially).
   - Later extension: add Google Sign-In using the same Google Cloud project used for Google Photos, if desired.
 - **Social OAuth & APIs:**
   - First implemented platform: **Google Business Profile (GBP)**, posting photos that appear on Google Maps for a specific business location.
-  - Second implemented platform (in progress, Sandbox first): **TikTok**, uploading videos via TikTok’s Content Posting API.
-  - Remaining scaffolded modules for future implementation: YouTube, X, LinkedIn, Instagram.
+  - Second implemented platform: **TikTok**, uploading videos via TikTok's Content Posting API (Sandbox mode).
+  - Third implemented platform: **Instagram**, posting photos and videos as Reels via Facebook Graph API.
+  - Remaining scaffolded modules for future implementation: YouTube, X, LinkedIn.
 - **Tooling:**
   - ESLint + Prettier (Next.js defaults).
   - Prisma migrations.
@@ -54,8 +57,13 @@ Initial goal: deliver a thin, maintainable vertical slice for **one real platfor
   - **Media:**
     - `GET /api/media` – list user's uploaded media items.
     - `POST /api/media` – upload media to Vercel Blob and create MediaItem.
+  - **Upload:**
+    - `POST /api/upload` – generate secure upload token for client-side direct upload to Vercel Blob.
   - **Posting flow:**
-    - `POST /api/posts` – upload video + captions, create `MediaItem` + `PostJob` + `PostJobResults`, and fan out to platform clients (synchronously for V1).
+    - `POST /api/posts` – accepts either:
+      - `multipart/form-data` with file upload (< 4.5MB, legacy)
+      - `application/json` with pre-uploaded blob URL (unlimited size, preferred)
+    - Creates `MediaItem` + `PostJob` + `PostJobResults`, and fans out to platform clients (synchronously for V1).
     - `GET /api/posts/{postJobId}` – read combined job + results status.
 
 - **Domain/Service Layer** (under `src/server` or similar):
@@ -204,9 +212,49 @@ Where:
     - Alternatively: wait 30-60 minutes for rate limit to reset
   - Disconnect/reconnect may help reset rate limits
 
+### Third Platform: Instagram (Production - Fully Working)
+
+- **Status:** Production ready, posting to Instagram Business Accounts
+- **Implementation:**
+  - OAuth via Facebook Login with Instagram-specific scopes
+  - Posts images and videos (as Reels) using Facebook Graph API v21.0
+  - Supports captions and location coordinates
+  - Video processing with polling for completion before publishing
+  - Image publishing with 3-second processing delay
+  - Requires Instagram Business Account connected to Facebook Page
+- **Environment Variables:**
+  - `FACEBOOK_APP_ID` – Facebook App ID (used for Instagram OAuth)
+  - `FACEBOOK_APP_SECRET` – Facebook App Secret
+  - `INSTAGRAM_REDIRECT_URI` – OAuth redirect URI
+- **Required Scopes:**
+  - `instagram_basic` – Basic Instagram account access
+  - `instagram_content_publish` – Create and publish posts
+  - `pages_show_list` – List Facebook Pages
+  - `pages_read_engagement` – Read Page data
+  - `business_management` – Access to business assets
+- **Prerequisites:**
+  - Instagram account must be converted to Business or Creator account
+  - Instagram must be connected to a Facebook Page
+  - User must be admin of the Facebook Page
+- **Media Types:**
+  - **Images:** Post directly to feed with `image_url` parameter
+  - **Videos:** Post as Reels (required by Instagram API as of 2024)
+    - Uses `media_type: "REELS"` (deprecated: `"VIDEO"`)
+    - Includes video processing polling (checks `status_code` until `FINISHED`)
+    - Max wait time: 2.5 minutes (30 attempts × 5 seconds)
+- **Location Support:**
+  - Extracts coordinates from location string
+  - Coordinates passed to Instagram (Place ID lookup not yet implemented)
+- **Technical Details:**
+  - API: Facebook Graph API v21.0
+  - Endpoint: `https://graph.facebook.com/v21.0/{ig-user-id}/media`
+  - Publishing: Two-step process (create container → publish container)
+  - Token exchange: Short-lived → Long-lived (60-day expiry)
+  - Account discovery: Fetches Pages → Finds Instagram Business Account
+
 ### Other Platforms (Scaffolded)
 
-For YouTube, X, LinkedIn, Instagram:
+For YouTube, X, LinkedIn:
 - Create client modules with the shared interface.
 - Implement placeholder `publishVideo` that throws a structured "NotImplemented" error.
 - Document required env vars and scopes in comments and in this file as they are added.
@@ -229,24 +277,31 @@ For YouTube, X, LinkedIn, Instagram:
 8. User is redirected back to `/connections` with a success or error message.
 9. On the Connections page, the user configures the GBP target location using the location form (manual resource, store code, or picker), which updates `metadata.locationName`.
 
-### 3. Upload + Post
-1. User opens `/posts/new` and selects a video file + base caption and optional per-platform captions.
-2. Frontend sends `POST /api/posts` with `multipart/form-data`:
-   - `file` (video)
+### 3. Upload + Post (Client-Side Upload)
+1. User opens `/posts/new` and selects a media file + base caption and optional per-platform captions.
+2. Frontend uploads file directly to Vercel Blob:
+   - Calls `upload(filename, file, { handleUploadUrl: '/api/upload' })` from `@vercel/blob/client`
+   - File streams directly from browser to Vercel Blob (bypasses API route size limit)
+   - Upload API route only generates secure token (no file data passes through)
+   - Supports unlimited file sizes (up to Vercel Blob's ~500MB limit)
+3. Frontend sends `POST /api/posts` with `application/json`:
+   - `blobUrl` (from step 2)
+   - `filename`, `mimeType`, `sizeBytes`
    - `baseCaption`
-   - optional overrides (JSON or separate fields).
-3. Backend:
+   - `location` (optional)
+   - optional overrides (JSON).
+4. Backend:
    - Authenticates user via session.
-   - Stores file via storage abstraction (local path for V1).
-   - Creates `MediaItem` row.
+   - Creates `MediaItem` row with blob URL as `storageLocation`.
    - Creates `PostJob` (`status='pending'`).
    - Looks up all `SocialConnections` for the user.
    - For each connection:
      - Creates `PostJobResult` row (`status='pending'`).
-     - Immediately runs `publishVideo` for that platform (synchronous v1, simple job orchestrator).
+     - Immediately runs `publishVideo` (or `publishImage`) for that platform (synchronous v1).
      - On success/failure, updates `PostJobResult` status + `externalPostId`/error details.
+   - Deletes uploaded media from Vercel Blob after successful posting (saves storage).
    - Updates `PostJob.status` based on per-platform outcomes.
-4. Backend returns initial `PostJob` + `PostJobResults` in the response.
+5. Backend returns initial `PostJob` + `PostJobResults` in the response.
 
 ### 4. Status Reporting
 - Frontend may:
@@ -269,13 +324,16 @@ For YouTube, X, LinkedIn, Instagram:
 - ✅ ~~Replace local file storage with object store~~ - **DONE: Using Vercel Blob Storage**
 - ✅ ~~Implement Google Business Profile photo posting~~ - **DONE: Fully working**
 - ✅ ~~Implement TikTok video posting~~ - **DONE: Working in Sandbox**
+- ✅ ~~Implement Instagram photo and video posting~~ - **DONE: Fully working**
+- ✅ ~~Add client-side direct-to-Blob uploads for files >4MB~~ - **DONE: Unlimited file sizes supported**
 - Add background job processing (e.g., queues) instead of synchronous posting.
 - Add more auth options (Sign in with Google, etc.).
 - Expand multi-tenancy (teams, roles, billing) as needed.
-- Implement full platform integrations for YouTube, X, LinkedIn, and Instagram following the GBP pattern.
+- Implement full platform integrations for YouTube, X, and LinkedIn following the GBP/Instagram pattern.
 - Submit TikTok app for Production approval to enable public posting.
-- Add client-side video compression or direct-to-Blob uploads for files >4MB.
+- Implement Instagram Place ID lookup for proper location tagging.
 - Implement media library management (delete, edit captions).
 - Add post scheduling functionality.
 - Integrate analytics/insights from social platforms.
+- Add YouTube OAuth and video upload integration.
 

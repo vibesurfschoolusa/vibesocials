@@ -337,3 +337,133 @@
   - Live at https://vibesocials.wtf
   - Database migrations applied
   - Environment variables configured
+
+## Session: 2025-11-23
+
+- **Summary of changes**
+  - **Instagram Integration - FULLY IMPLEMENTED ✅**
+    - Implemented complete Instagram OAuth via Facebook Login
+    - Added support for posting photos and videos (as Reels)
+    - Implemented two-step publishing process (create container → publish)
+    - Added video processing polling with status checking
+    - Support for captions and location coordinates
+  
+  - **Client-Side Upload System - COMPLETELY REDESIGNED ✅**
+    - Implemented true client-side direct upload to Vercel Blob
+    - Bypasses 4.5MB serverless function body limit
+    - Supports unlimited file sizes (up to Vercel Blob's ~500MB limit)
+    - File streams directly from browser to Vercel Blob storage
+    - Upload API route only generates secure tokens (no file data passes through)
+  
+  - **Technical Implementations:**
+    - Created `/api/auth/instagram/start` and `/api/auth/instagram/callback` routes
+    - Implemented `instagramClient.ts` with full media container workflow
+    - Added `@vercel/blob/client` integration for direct browser uploads
+    - Created `/api/upload` route for secure token generation
+    - Updated `create-post-form.tsx` to use client-side upload flow
+
+- **Decisions / Rationale**
+  - **Instagram via Facebook:** Instagram Graph API requires Facebook OAuth and Business accounts
+  - **REELS for videos:** Instagram deprecated `VIDEO` media type; all videos must use `REELS` as of 2024
+  - **Client-side upload:** Vercel's 4.5MB serverless limit required architectural change
+  - **Direct-to-Blob:** Most efficient solution - file never touches API routes
+  - **Token-based security:** Upload tokens ensure only authenticated users can upload
+  - **Video processing wait:** Instagram requires polling until video is FINISHED before publishing
+
+- **Instagram Setup Requirements**
+  - Instagram account converted to Business or Creator account
+  - Instagram connected to a Facebook Page
+  - User must be admin of the Facebook Page
+  - Facebook App with required scopes:
+    - `instagram_basic` - Basic account access
+    - `instagram_content_publish` - Create and publish posts
+    - `pages_show_list` - List Facebook Pages
+    - `pages_read_engagement` - Read Page data
+    - `business_management` - Access to business assets
+
+- **Environment Variables Added**
+  - `FACEBOOK_APP_ID` - Facebook App ID (for Instagram OAuth)
+  - `FACEBOOK_APP_SECRET` - Facebook App Secret
+  - `INSTAGRAM_REDIRECT_URI` - OAuth callback URL
+  - `BLOB_READ_WRITE_TOKEN` - Already configured for Vercel Blob
+
+- **Upload Flow (New Architecture)**
+  1. User selects file in browser
+  2. Frontend calls `upload(file, { handleUploadUrl: '/api/upload' })`
+  3. `/api/upload` validates user, generates secure upload token
+  4. `@vercel/blob/client` uploads file directly from browser to Vercel Blob
+  5. Frontend receives blob URL
+  6. Frontend sends blob URL + metadata to `/api/posts` (small JSON payload)
+  7. Backend creates post job and publishes to platforms
+  8. After successful posting, blob is deleted to save storage
+
+- **Instagram Publishing Flow**
+  1. Create media container with `image_url` or `video_url`
+  2. For videos:
+     - Poll container status every 5 seconds
+     - Wait for `status_code: "FINISHED"`
+     - Max 30 attempts (2.5 minutes)
+  3. For images:
+     - Wait 3 seconds for processing
+  4. Publish container to Instagram feed
+  5. Return external post ID
+
+- **Bugs Fixed**
+  - ✅ OAuth token validation errors (invalid App Secret in env vars)
+  - ✅ Invalid App ID error (was using Instagram Account ID instead of Facebook App ID)
+  - ✅ "No Instagram Business Account found" (account setup verified)
+  - ✅ Invalid scope `pages_manage_metadata` (removed, not needed)
+  - ✅ HTTP 413 "Content Too Large" for files >4.5MB (implemented client-side upload)
+  - ✅ HTTP 411 "Length Required" errors (switched from memory buffer to streaming)
+  - ✅ Deprecated VIDEO media type (changed to REELS)
+  - ✅ "Media is not ready for publishing" for images (added 3-second wait)
+
+- **Platform Status Summary**
+  - ✅ **Google Business Profile:** Production ready
+  - 🟡 **TikTok:** Sandbox mode (requires Production approval)
+  - ✅ **Instagram:** Production ready (images and videos as Reels)
+  - ⏸️ **YouTube, X, LinkedIn:** Scaffolded, not yet implemented
+
+- **Testing Completed**
+  - ✅ Instagram OAuth connection flow
+  - ✅ Facebook Page discovery and Instagram Business Account linking
+  - ✅ Image posting to Instagram feed
+  - ✅ Video posting as Instagram Reels
+  - ✅ Client-side upload of 5MB+ video files
+  - ✅ Caption and location support
+  - ✅ Video processing polling (status: IN_PROGRESS → FINISHED)
+  - ✅ Automatic media cleanup after successful posting
+
+- **Known Limitations**
+  - Instagram location: Coordinates extracted but Place ID lookup not yet implemented
+  - Videos always post as Reels (Instagram API requirement, not a bug)
+  - Video processing can take 30-120 seconds before publishing
+  - Long-lived tokens expire after 60 days (no auto-refresh implemented yet)
+
+- **Next Steps**
+  1. **Instagram Enhancements:**
+     - Implement Place ID lookup for proper location tagging
+     - Add Instagram long-lived token refresh logic
+     - Consider carousel/album post support
+  
+  2. **YouTube Integration:**
+     - Implement YouTube OAuth
+     - Add YouTube video upload support
+     - Handle YouTube-specific requirements (thumbnails, playlists, etc.)
+  
+  3. **Platform Expansion:**
+     - X (Twitter) API integration
+     - LinkedIn video posting
+  
+  4. **Infrastructure:**
+     - Consider background job processing for long-running uploads
+     - Add upload progress tracking UI
+     - Implement post scheduling functionality
+
+- **Deployment Status**
+  - All Instagram features deployed to production
+  - Client-side upload system live
+  - Environment variables configured in Vercel
+  - Blob storage token connected
+  - Live at https://vibesocials.wtf
+  - Tested and verified working with production data
