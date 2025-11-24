@@ -117,6 +117,8 @@ export async function GET(request: NextRequest) {
       }>;
     };
 
+    console.log("[Instagram OAuth] Pages data:", JSON.stringify(pagesData, null, 2));
+
     // Find the first page with an Instagram Business Account
     const pageWithInstagram = pagesData.data.find(
       (page) => page.instagram_business_account,
