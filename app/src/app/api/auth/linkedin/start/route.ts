@@ -32,12 +32,10 @@ export async function GET() {
   authUrl.searchParams.set("client_id", clientId);
   authUrl.searchParams.set("redirect_uri", redirectUri);
   authUrl.searchParams.set("state", state);
-  // Note: Organization scopes require "Marketing Developer Platform" or "Community Management API" products
-  // For now, using member scopes only (personal profile posting)
-  // Add "w_organization_social r_organization_social" after enabling those products in LinkedIn
+  // Using Community Management API for organization posting
   authUrl.searchParams.set(
     "scope",
-    "openid profile email w_member_social"
+    "openid profile email w_member_social w_organization_social r_organization_social"
   );
 
   console.log("[LinkedIn OAuth] Redirecting to LinkedIn authorization", {
