@@ -3,7 +3,7 @@
 ## Purpose
 Vibe Socials lets a logged-in user upload media (primarily videos, but also photos where required) + caption once and post it to multiple social platforms (TikTok, YouTube, X, LinkedIn, Instagram, Google Business Profile for Maps photos) using that user’s own connected accounts.
 
-Initial goal: deliver a thin, maintainable vertical slice for **one real platform (Google Business Profile / Google Maps photos)** end-to-end, with scaffolding for all others. **Google Business Profile** is now fully operational with automatic token refresh and photo uploads. **TikTok** integration is fully working in Sandbox mode using the Content Posting API v2 (video uploads to Creator Portal inbox). **Instagram** integration is fully working with Reels posting via Facebook Graph API. **LinkedIn** integration is complete with OAuth and UGC Post API v2 for organization posting (awaiting Community Management API approval from LinkedIn).
+Initial goal: deliver a thin, maintainable vertical slice for **one real platform (Google Business Profile / Google Maps photos)** end-to-end, with scaffolding for all others. **Google Business Profile** is now fully operational with automatic token refresh and photo uploads. **TikTok** integration is fully working in Sandbox mode using the Content Posting API v2 (video uploads to Creator Portal inbox). **Instagram** integration is fully working with Reels posting via Facebook Graph API. **LinkedIn** integration is complete with OAuth and UGC Post API v2 for organization posting (awaiting Community Management API approval from LinkedIn). **YouTube** integration is fully operational with video uploads via Google OAuth and YouTube Data API v3.
 
 ## Tech Stack (V1)
 - **Language:** TypeScript
@@ -25,7 +25,8 @@ Initial goal: deliver a thin, maintainable vertical slice for **one real platfor
   - Second implemented platform: **TikTok**, uploading videos via TikTok's Content Posting API (Sandbox mode).
   - Third implemented platform: **Instagram**, posting photos and videos as Reels via Facebook Graph API.
   - Fourth implemented platform: **LinkedIn**, posting images and videos to company pages via UGC Post API v2 (requires Community Management API approval for production use).
-  - Remaining scaffolded modules for future implementation: YouTube, X.
+  - Fifth implemented platform: **YouTube**, uploading videos via YouTube Data API v3 with full metadata support.
+  - Remaining scaffolded module for future implementation: X (Twitter).
 - **Tooling:**
   - ESLint + Prettier (Next.js defaults).
   - Prisma migrations.
@@ -295,11 +296,57 @@ Where:
   - Development mode works for app admin only
   - Only supports first organization (if user administers multiple company pages)
 
+### Fifth Platform: YouTube (Production - Fully Working)
+
+- **Status:** Production ready, uploading videos to YouTube channels
+- **Implementation:**
+  - OAuth via Google OAuth 2.0 (same as Google Business Profile)
+  - Uploads videos using YouTube Data API v3 with multipart upload
+  - Supports full video metadata (title, description, tags, location)
+  - Automatic token refresh when expired
+  - Extracts hashtags from caption for video tags
+  - Location/coordinates support for recording details
+- **Environment Variables:**
+  - `GOOGLE_GBP_CLIENT_ID` – Google OAuth client ID (shared with GBP)
+  - `GOOGLE_GBP_CLIENT_SECRET` – Google OAuth client secret (shared with GBP)
+  - `YOUTUBE_REDIRECT_URI` – OAuth redirect URI for YouTube
+- **Required Scopes:**
+  - `https://www.googleapis.com/auth/youtube.force-ssl` – Upload and manage YouTube videos
+  - `https://www.googleapis.com/auth/youtube.readonly` – Read YouTube channel data
+- **Prerequisites:**
+  - User must have a YouTube channel
+  - Google Cloud project with YouTube Data API v3 enabled
+- **Media Types:**
+  - **Videos only:** MP4, MOV, AVI formats supported
+  - No maximum file size (limited by Vercel Blob's ~500MB)
+  - Images not supported (YouTube is video-only platform)
+- **Technical Details:**
+  - API: YouTube Data API v3
+  - Upload endpoint: `https://www.googleapis.com/upload/youtube/v3/videos`
+  - Upload type: Multipart upload with JSON metadata + video binary
+  - Title max: 100 characters (extracted from caption)
+  - Description: Full caption with footer
+  - Tags: Extracted from hashtags in caption
+  - Privacy: Configurable (public/private/unlisted) - currently set to public
+  - Category: Default to "People & Blogs" (ID: 22)
+  - Kids content: Marked as not made for kids
+- **Location Support:**
+  - Parses coordinates from location string format: "lat,lng"
+  - Supports optional description: "Place Name (lat,lng)"
+  - Sets `recordingDetails.location` with latitude/longitude
+  - Note: Location can also be set manually via YouTube Studio
+- **Limitations:**
+  - Videos only (no images)
+  - Initial upload is public (privacy can be changed in YouTube Studio)
+  - Processing time depends on video length and quality
+  - YouTube may take time to process video after upload
+
 ### Other Platforms (Scaffolded)
 
-For YouTube, X:
-- Create client modules with the shared interface.
-- Implement placeholder `publishVideo` that throws a structured "NotImplemented" error.
+For X (Twitter):
+- Create client module with the shared interface.
+- Implement OAuth 2.0 with PKCE flow
+- Implement Post API v2 for tweets with media
 - Document required env vars and scopes in comments and in this file as they are added.
 
 ## Data Flow Summary
@@ -370,7 +417,8 @@ For YouTube, X:
 - ✅ ~~Implement Instagram photo and video posting~~ - **DONE: Fully working**
 - ✅ ~~Add client-side direct-to-Blob uploads for files >4MB~~ - **DONE: Unlimited file sizes supported**
 - ✅ ~~Implement LinkedIn company page posting~~ - **DONE: Awaiting Community Management API approval**
-- **NEXT:** Implement X (Twitter) OAuth and posting integration
+- ✅ ~~Implement YouTube video uploads~~ - **DONE: Fully working with metadata support**
+- **NEXT:** Implement X (Twitter) OAuth and posting integration (ONLY remaining platform)
 - Add background job processing (e.g., queues) instead of synchronous posting.
 - Add more auth options (Sign in with Google, etc.).
 - Expand multi-tenancy (teams, roles, billing) as needed.
@@ -379,5 +427,4 @@ For YouTube, X:
 - Implement media library management (delete, edit captions).
 - Add post scheduling functionality.
 - Integrate analytics/insights from social platforms.
-- Add YouTube OAuth and video upload integration.
 
