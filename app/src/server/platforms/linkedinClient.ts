@@ -36,7 +36,7 @@ interface LinkedInVideoUploadResponse {
 
 async function uploadImage(
   accessToken: string,
-  personUrn: string,
+  ownerUrn: string,
   imageUrl: string
 ): Promise<string> {
   console.log("[LinkedIn] Starting image upload", { imageUrl });
@@ -54,7 +54,7 @@ async function uploadImage(
       body: JSON.stringify({
         registerUploadRequest: {
           recipes: ["urn:li:digitalmediaRecipe:feedshare-image"],
-          owner: personUrn,
+          owner: ownerUrn,
           serviceRelationships: [
             {
               relationshipType: "OWNER",
@@ -115,7 +115,7 @@ async function uploadImage(
 
 async function uploadVideo(
   accessToken: string,
-  personUrn: string,
+  ownerUrn: string,
   videoUrl: string,
   filename: string
 ): Promise<string> {
@@ -143,7 +143,7 @@ async function uploadVideo(
       },
       body: JSON.stringify({
         initializeUploadRequest: {
-          owner: personUrn,
+          owner: ownerUrn,
           fileSizeBytes: videoSize,
           uploadCaptions: false,
           uploadThumbnail: false,
@@ -235,19 +235,19 @@ async function uploadVideo(
 
 async function createPost(
   accessToken: string,
-  personUrn: string,
+  authorUrn: string,
   caption: string,
   mediaUrn?: string,
   isVideo: boolean = false
 ): Promise<string> {
   console.log("[LinkedIn] Creating post", {
-    personUrn,
+    authorUrn,
     hasMedia: !!mediaUrn,
     isVideo,
   });
 
   const postBody: any = {
-    author: personUrn,
+    author: authorUrn,
     lifecycleState: "PUBLISHED",
     specificContent: {
       "com.linkedin.ugc.ShareContent": {
@@ -313,7 +313,24 @@ export const linkedinClient: PlatformClient = {
       throw error;
     }
 
-    const personUrn = `urn:li:person:${socialConnection.accountIdentifier}`;
+    // Check if user has organizations/company pages
+    const metadata = (socialConnection.metadata as any) || {};
+    const organizations = metadata.organizations || [];
+    
+    // Use first organization if available, otherwise use personal profile
+    let authorUrn: string;
+    if (organizations.length > 0) {
+      const orgId = organizations[0].id;
+      authorUrn = `urn:li:organization:${orgId}`;
+      console.log("[LinkedIn] Posting as organization", {
+        orgId,
+        orgName: organizations[0].name,
+      });
+    } else {
+      authorUrn = `urn:li:person:${socialConnection.accountIdentifier}`;
+      console.log("[LinkedIn] Posting as personal profile (no organizations found)");
+    }
+
     const mediaUrl = mediaItem.storageLocation;
     const isVideo = mediaItem.mimeType.startsWith("video/");
 
@@ -322,6 +339,7 @@ export const linkedinClient: PlatformClient = {
       mimeType: mediaItem.mimeType,
       isVideo,
       filename: mediaItem.originalFilename,
+      authorUrn,
     });
 
     try {
@@ -331,18 +349,18 @@ export const linkedinClient: PlatformClient = {
       if (isVideo) {
         mediaUrn = await uploadVideo(
           accessToken,
-          personUrn,
+          authorUrn,
           mediaUrl,
           mediaItem.originalFilename
         );
       } else if (mediaItem.mimeType.startsWith("image/")) {
-        mediaUrn = await uploadImage(accessToken, personUrn, mediaUrl);
+        mediaUrn = await uploadImage(accessToken, authorUrn, mediaUrl);
       }
 
       // Create the post
       const postId = await createPost(
         accessToken,
-        personUrn,
+        authorUrn,
         caption,
         mediaUrn,
         isVideo

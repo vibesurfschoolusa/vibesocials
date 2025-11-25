@@ -34,7 +34,7 @@ export async function GET() {
   authUrl.searchParams.set("state", state);
   authUrl.searchParams.set(
     "scope",
-    "openid profile email w_member_social"
+    "openid profile email w_member_social w_organization_social r_organization_social"
   );
 
   console.log("[LinkedIn OAuth] Redirecting to LinkedIn authorization", {
