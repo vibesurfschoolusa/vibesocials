@@ -317,19 +317,23 @@ export const linkedinClient: PlatformClient = {
     const metadata = (socialConnection.metadata as any) || {};
     const organizations = metadata.organizations || [];
     
-    // Use first organization if available, otherwise use personal profile
-    let authorUrn: string;
-    if (organizations.length > 0) {
-      const orgId = organizations[0].id;
-      authorUrn = `urn:li:organization:${orgId}`;
-      console.log("[LinkedIn] Posting as organization", {
-        orgId,
-        orgName: organizations[0].name,
-      });
-    } else {
-      authorUrn = `urn:li:person:${socialConnection.accountIdentifier}`;
-      console.log("[LinkedIn] Posting as personal profile (no organizations found)");
+    // REQUIRE organization - never post to personal profile
+    if (organizations.length === 0) {
+      const error = new Error(
+        "No LinkedIn company pages found. This app only posts to company pages, not personal profiles. " +
+        "Please ensure you are an administrator of a LinkedIn Company Page and that the Community Management API is enabled."
+      );
+      (error as any).code = "LINKEDIN_NO_ORGANIZATION";
+      throw error;
     }
+    
+    // Use first organization
+    const orgId = organizations[0].id;
+    const authorUrn = `urn:li:organization:${orgId}`;
+    console.log("[LinkedIn] Posting as organization", {
+      orgId,
+      orgName: organizations[0].name,
+    });
 
     const mediaUrl = mediaItem.storageLocation;
     const isVideo = mediaItem.mimeType.startsWith("video/");
