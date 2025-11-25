@@ -3,7 +3,7 @@
 ## Purpose
 Vibe Socials lets a logged-in user upload media (primarily videos, but also photos where required) + caption once and post it to multiple social platforms (TikTok, YouTube, X, LinkedIn, Instagram, Google Business Profile for Maps photos) using that user’s own connected accounts.
 
-Initial goal: deliver a thin, maintainable vertical slice for **one real platform (Google Business Profile / Google Maps photos)** end-to-end, with scaffolding for all others. **Google Business Profile** is now fully operational with automatic token refresh and photo uploads. **TikTok** integration is fully working in Sandbox mode using the Content Posting API v2 (video uploads to Creator Portal inbox). **Instagram** integration is fully working with Reels posting via Facebook Graph API.
+Initial goal: deliver a thin, maintainable vertical slice for **one real platform (Google Business Profile / Google Maps photos)** end-to-end, with scaffolding for all others. **Google Business Profile** is now fully operational with automatic token refresh and photo uploads. **TikTok** integration is fully working in Sandbox mode using the Content Posting API v2 (video uploads to Creator Portal inbox). **Instagram** integration is fully working with Reels posting via Facebook Graph API. **LinkedIn** integration is complete with OAuth and UGC Post API v2 for organization posting (awaiting Community Management API approval from LinkedIn).
 
 ## Tech Stack (V1)
 - **Language:** TypeScript
@@ -24,7 +24,8 @@ Initial goal: deliver a thin, maintainable vertical slice for **one real platfor
   - First implemented platform: **Google Business Profile (GBP)**, posting photos that appear on Google Maps for a specific business location.
   - Second implemented platform: **TikTok**, uploading videos via TikTok's Content Posting API (Sandbox mode).
   - Third implemented platform: **Instagram**, posting photos and videos as Reels via Facebook Graph API.
-  - Remaining scaffolded modules for future implementation: YouTube, X, LinkedIn.
+  - Fourth implemented platform: **LinkedIn**, posting images and videos to company pages via UGC Post API v2 (requires Community Management API approval for production use).
+  - Remaining scaffolded modules for future implementation: YouTube, X.
 - **Tooling:**
   - ESLint + Prettier (Next.js defaults).
   - Prisma migrations.
@@ -252,9 +253,51 @@ Where:
   - Token exchange: Short-lived → Long-lived (60-day expiry)
   - Account discovery: Fetches Pages → Finds Instagram Business Account
 
+### Fourth Platform: LinkedIn (Development - Awaiting Production Approval)
+
+- **Status:** Development ready, awaiting Community Management API approval from LinkedIn (~10-14 business days)
+- **Implementation:**
+  - OAuth via LinkedIn OAuth 2.0 with OpenID Connect
+  - Posts images and videos to LinkedIn Company Pages using UGC Post API v2
+  - Chunked video upload for large files (up to 200MB)
+  - Image upload with asset registration
+  - Organization detection - fetches user's administered company pages
+  - **Safety: Only posts to company pages, never personal profiles**
+- **Environment Variables:**
+  - `LINKEDIN_CLIENT_ID` – LinkedIn app client ID
+  - `LINKEDIN_CLIENT_SECRET` – LinkedIn app client secret
+  - `LINKEDIN_REDIRECT_URI` – OAuth redirect URI
+- **Required Scopes:**
+  - `openid` – OpenID Connect authentication
+  - `profile` – Basic profile information
+  - `email` – Email address
+  - `w_member_social` – Post content on behalf of user (personal profile)
+  - `w_organization_social` – Post content on behalf of organization (company page)
+  - `r_organization_social` – Read organization data
+- **Required Products (LinkedIn Developer Portal):**
+  - "Sign In with LinkedIn using OpenID Connect" – For authentication
+  - "Share on LinkedIn" – For personal profile posting
+  - "Community Management API" – For organization/company page posting (REQUIRED - awaiting approval)
+- **Prerequisites:**
+  - User must be an administrator of a LinkedIn Company Page
+  - LinkedIn app must have Community Management API enabled (Development Tier or approved for Production)
+- **Media Types:**
+  - **Images:** Up to 10MB, JPG/PNG/GIF formats
+  - **Videos:** Up to 200MB, MP4 format, chunked upload for reliability
+- **Technical Details:**
+  - API: LinkedIn UGC Post API v2
+  - Organization detection: Fetches all organizations where user is administrator
+  - Video upload: Multi-step process (initialize → upload chunks → finalize → create post)
+  - Image upload: Register asset → upload to LinkedIn CDN → create post
+  - Posts always use first organization found, never falls back to personal profile
+- **Limitations:**
+  - Requires LinkedIn Community Management API approval for production use
+  - Development mode works for app admin only
+  - Only supports first organization (if user administers multiple company pages)
+
 ### Other Platforms (Scaffolded)
 
-For YouTube, X, LinkedIn:
+For YouTube, X:
 - Create client modules with the shared interface.
 - Implement placeholder `publishVideo` that throws a structured "NotImplemented" error.
 - Document required env vars and scopes in comments and in this file as they are added.
@@ -326,10 +369,11 @@ For YouTube, X, LinkedIn:
 - ✅ ~~Implement TikTok video posting~~ - **DONE: Working in Sandbox**
 - ✅ ~~Implement Instagram photo and video posting~~ - **DONE: Fully working**
 - ✅ ~~Add client-side direct-to-Blob uploads for files >4MB~~ - **DONE: Unlimited file sizes supported**
+- ✅ ~~Implement LinkedIn company page posting~~ - **DONE: Awaiting Community Management API approval**
+- **NEXT:** Implement X (Twitter) OAuth and posting integration
 - Add background job processing (e.g., queues) instead of synchronous posting.
 - Add more auth options (Sign in with Google, etc.).
 - Expand multi-tenancy (teams, roles, billing) as needed.
-- Implement full platform integrations for YouTube, X, and LinkedIn following the GBP/Instagram pattern.
 - Submit TikTok app for Production approval to enable public posting.
 - Implement Instagram Place ID lookup for proper location tagging.
 - Implement media library management (delete, edit captions).
