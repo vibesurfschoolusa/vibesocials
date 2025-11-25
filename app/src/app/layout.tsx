@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Vibe Social Sync | Multi-Platform Social Media Management",
+  title: "Vibe Socials | Multi-Platform Social Media Management",
   description: "Upload once, post everywhere. Manage and sync your social media content across TikTok, YouTube, Instagram, Google Business Profile, and more.",
 };
 

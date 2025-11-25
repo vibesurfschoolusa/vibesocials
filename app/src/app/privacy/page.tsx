@@ -7,11 +7,11 @@ export default function PrivacyPage() {
         <div className="mb-4 flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Privacy Policy</h1>
           <Link href="/" className="text-xs text-zinc-600 underline">
-            Back to Vibe Social Sync
+            Back to Vibe Socials
           </Link>
         </div>
         <p className="mb-4 text-sm text-zinc-700">
-          This Privacy Policy describes how Vibe Social Sync (the "Service") handles information
+          This Privacy Policy describes how Vibe Socials (the "Service") handles information
           about you. This is an early-stage tool intended for limited use by the owner and invited
           testers.
         </p>
@@ -85,7 +85,7 @@ export default function PrivacyPage() {
             <h2 className="mb-1 text-sm font-semibold text-zinc-900">7. Contact</h2>
             <p>
               If you have questions about this Privacy Policy, please contact the developer or owner
-              of this project through the channels where you obtained access to Vibe Social Sync.
+              of this project through the channels where you obtained access to Vibe Socials.
             </p>
           </section>
         </div>

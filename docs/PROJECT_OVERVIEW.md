@@ -1,7 +1,7 @@
-# Vibe Social Sync – Project Overview
+# Vibe Socials – Project Overview
 
 ## Purpose
-Vibe Social Sync lets a logged-in user upload media (primarily videos, but also photos where required) + caption once and post it to multiple social platforms (TikTok, YouTube, X, LinkedIn, Instagram, Google Business Profile for Maps photos) using that user’s own connected accounts.
+Vibe Socials lets a logged-in user upload media (primarily videos, but also photos where required) + caption once and post it to multiple social platforms (TikTok, YouTube, X, LinkedIn, Instagram, Google Business Profile for Maps photos) using that user’s own connected accounts.
 
 Initial goal: deliver a thin, maintainable vertical slice for **one real platform (Google Business Profile / Google Maps photos)** end-to-end, with scaffolding for all others. **Google Business Profile** is now fully operational with automatic token refresh and photo uploads. **TikTok** integration is fully working in Sandbox mode using the Content Posting API v2 (video uploads to Creator Portal inbox). **Instagram** integration is fully working with Reels posting via Facebook Graph API.
 
@@ -47,7 +47,7 @@ Initial goal: deliver a thin, maintainable vertical slice for **one real platfor
     - `/posts/[id]` – view posting status (per platform).
     - `/media` – view media library.
 - **`/app/api` routes**
-  - **Auth for Vibe Social Sync users**
+  - **Auth for Vibe Socials users**
     - NextAuth route (e.g. `/api/auth/[...nextauth]`) for app sessions.
   - **Social OAuth:** for each platform
     - `GET /api/auth/{platform}/start`
@@ -76,7 +76,7 @@ Initial goal: deliver a thin, maintainable vertical slice for **one real platfor
 ## Authentication Model
 
 ### App Users
-- Users authenticate to Vibe Social Sync via **NextAuth** using a **Credentials Provider**:
+- Users authenticate to Vibe Socials via **NextAuth** using a **Credentials Provider**:
   - `email` + `password` at registration.
   - Passwords stored as `passwordHash` (e.g. bcrypt) in the `User` table.
 - NextAuth sessions expose the authenticated user ID in `session.user.id`.

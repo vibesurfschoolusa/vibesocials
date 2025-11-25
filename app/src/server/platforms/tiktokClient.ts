@@ -53,7 +53,7 @@ export const tiktokClient: PlatformClient = {
         },
         body: JSON.stringify({
           post_info: {
-            title: caption || "Video posted via Vibe Social Sync",
+            title: caption || "Video posted via Vibe Socials",
             privacy_level: "SELF_ONLY", // Sandbox requires SELF_ONLY
             disable_comment: false,
             disable_duet: false,

@@ -1,9 +1,9 @@
-# Dev Session Notes – Vibe Social Sync
+# Dev Session Notes – Vibe Socials
 
 ## Session: 2025-11-15
 
 - **Summary of changes**
-  - Initialized high-level architecture and stack decisions for Vibe Social Sync.
+  - Initialized high-level architecture and stack decisions for Vibe Socials.
   - Created `docs/PROJECT_OVERVIEW.md` with:
     - Purpose and scope of the app.
     - Chosen tech stack (Next.js + TypeScript + Prisma + PostgreSQL, local storage, NextAuth).

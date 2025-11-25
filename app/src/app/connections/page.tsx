@@ -59,7 +59,7 @@ export default async function ConnectionsPage() {
           </Link>
         </div>
         <p className="mb-8 text-base text-gray-700 leading-relaxed">
-          Connect your social accounts so Vibe Social Sync can publish on your behalf.
+          Connect your social accounts so Vibe Socials can publish on your behalf.
         </p>
         <div className="space-y-4">
           {(Object.keys(PLATFORM_LABELS) as PlatformKey[]).map((platform) => {
@@ -89,7 +89,7 @@ export default async function ConnectionsPage() {
                         : isGoogleBusinessProfile
                         ? "Connect your Google Business Profile so new photos appear on your Maps listing."
                         : isTikTok
-                        ? "Connect your TikTok account so Vibe Social Sync can upload videos to your inbox."
+                        ? "Connect your TikTok account so Vibe Socials can upload videos to your inbox."
                         : isYouTube
                         ? "Connect your YouTube channel to upload videos directly."
                         : isInstagram

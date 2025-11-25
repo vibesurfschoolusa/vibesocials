@@ -9,7 +9,7 @@ You need a LinkedIn Developer account and an app to use the LinkedIn integration
 1. Go to [LinkedIn Developers](https://www.linkedin.com/developers/apps)
 2. Click **"Create app"**
 3. Fill in the required information:
-   - **App name**: Vibe Social Sync
+   - **App name**: Vibe Socials
    - **LinkedIn Page**: Select your company's LinkedIn Page (required)
    - **Privacy policy URL**: Your privacy policy URL
    - **App logo**: Upload a logo (optional but recommended)

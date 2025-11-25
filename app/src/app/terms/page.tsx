@@ -7,18 +7,18 @@ export default function TermsPage() {
         <div className="mb-4 flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Terms of Service</h1>
           <Link href="/" className="text-xs text-zinc-600 underline">
-            Back to Vibe Social Sync
+            Back to Vibe Socials
           </Link>
         </div>
         <p className="mb-4 text-sm text-zinc-700">
-          These Terms of Service ("Terms") govern your use of Vibe Social Sync (the "Service").
+          These Terms of Service ("Terms") govern your use of Vibe Socials (the "Service").
           By accessing or using the Service, you agree to be bound by these Terms.
         </p>
         <div className="space-y-3 text-sm text-zinc-700">
           <section>
             <h2 className="mb-1 text-sm font-semibold text-zinc-900">1. Purpose of the Service</h2>
             <p>
-              Vibe Social Sync helps you upload media and manage social posting workflows across
+              Vibe Socials helps you upload media and manage social posting workflows across
               supported third-party platforms (such as TikTok and Google Business Profile).
             </p>
           </section>
@@ -74,7 +74,7 @@ export default function TermsPage() {
             <h2 className="mb-1 text-sm font-semibold text-zinc-900">7. Contact</h2>
             <p>
               If you have questions about these Terms, please contact the developer or owner of
-              this project through the channels where you obtained access to Vibe Social Sync.
+              this project through the channels where you obtained access to Vibe Socials.
             </p>
           </section>
         </div>

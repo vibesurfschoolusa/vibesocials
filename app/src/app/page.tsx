@@ -10,7 +10,7 @@ export default function Home() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50">
       <main className="w-full max-w-xl rounded-2xl bg-white p-10 shadow-xl border border-gray-100">
-        <h1 className="mb-2 text-4xl font-bold bg-gradient-to-r from-blue-600 to-teal-600 bg-clip-text text-transparent">Vibe Social Sync</h1>
+        <h1 className="mb-2 text-4xl font-bold bg-gradient-to-r from-blue-600 to-teal-600 bg-clip-text text-transparent">Vibe Socials</h1>
         <p className="mb-6 text-sm text-gray-600">Upload once, post everywhere.</p>
         {!session ? (
           <div className="space-y-4">

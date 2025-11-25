@@ -36,7 +36,7 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50">
       <div className="w-full max-w-md rounded-2xl bg-white p-10 shadow-xl border border-gray-100">
         <h1 className="mb-2 text-3xl font-bold bg-gradient-to-r from-blue-600 to-teal-600 bg-clip-text text-transparent">Log in</h1>
-        <p className="mb-6 text-sm text-gray-600">Welcome back to Vibe Social Sync</p>
+        <p className="mb-6 text-sm text-gray-600">Welcome back to Vibe Socials</p>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="mb-1 block text-sm font-semibold text-gray-700" htmlFor="email">
