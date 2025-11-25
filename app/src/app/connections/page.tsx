@@ -70,6 +70,7 @@ export default async function ConnectionsPage() {
             const isTikTok = platform === "tiktok";
             const isYouTube = platform === "youtube";
             const isInstagram = platform === "instagram";
+            const isLinkedIn = platform === "linkedin";
 
             const locationName = (connection?.metadata as any)?.locationName ?? null;
             const username = (connection?.metadata as any)?.username ?? connection?.accountIdentifier;
@@ -93,6 +94,8 @@ export default async function ConnectionsPage() {
                         ? "Connect your YouTube channel to upload videos directly."
                         : isInstagram
                         ? "Connect your Instagram Business account to post photos and videos."
+                        : isLinkedIn
+                        ? "Connect your LinkedIn profile to share posts with your network."
                         : "Not connected yet (scaffolded; implementation pending)."}
                     </div>
                   </div>
@@ -127,6 +130,13 @@ export default async function ConnectionsPage() {
                     ) : isInstagram ? (
                       <Link
                         href="/api/auth/instagram/start"
+                        className="rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm hover:shadow-md"
+                      >
+                        Connect
+                      </Link>
+                    ) : isLinkedIn ? (
+                      <Link
+                        href="/api/auth/linkedin/start"
                         className="rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm hover:shadow-md"
                       >
                         Connect
