@@ -105,37 +105,10 @@ export async function GET(request: Request) {
       email: profile.email,
     });
 
-    // Fetch user's organizations/company pages
-    const orgsResponse = await fetch(
-      "https://api.linkedin.com/v2/organizationalEntityAcls?q=roleAssignee&role=ADMINISTRATOR&projection=(elements*(organizationalTarget~(id,localizedName,vanityName)))",
-      {
-        headers: {
-          Authorization: `Bearer ${tokenData.access_token}`,
-          "X-Restli-Protocol-Version": "2.0.0",
-        },
-      }
-    );
-
-    let organizations: any[] = [];
-    if (orgsResponse.ok) {
-      const orgsData = await orgsResponse.json();
-      organizations = orgsData.elements
-        ?.map((element: any) => ({
-          id: element["organizationalTarget~"]?.id,
-          name: element["organizationalTarget~"]?.localizedName,
-          vanityName: element["organizationalTarget~"]?.vanityName,
-        }))
-        .filter((org: any) => org.id && org.name) || [];
-      
-      console.log("[LinkedIn OAuth] Organizations fetched", {
-        count: organizations.length,
-        orgs: organizations,
-      });
-    } else {
-      console.warn("[LinkedIn OAuth] Failed to fetch organizations", {
-        status: orgsResponse.status,
-      });
-    }
+    // Organization fetching disabled until LinkedIn app has required products
+    // Requires: "Marketing Developer Platform" or "Community Management API"
+    // TODO: Enable after LinkedIn approves organization posting products
+    const organizations: any[] = [];
 
     // Calculate token expiry
     const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
@@ -155,7 +128,7 @@ export async function GET(request: Request) {
         refreshToken: tokenData.refresh_token || null,
         expiresAt,
         accountIdentifier: profile.sub,
-        scopes: tokenData.scope || "openid profile email w_member_social w_organization_social r_organization_social",
+        scopes: tokenData.scope || "openid profile email w_member_social",
         metadata: {
           name: profile.name,
           email: profile.email,
@@ -167,7 +140,7 @@ export async function GET(request: Request) {
         accessToken: tokenData.access_token,
         refreshToken: tokenData.refresh_token || null,
         expiresAt,
-        scopes: tokenData.scope || "openid profile email w_member_social w_organization_social r_organization_social",
+        scopes: tokenData.scope || "openid profile email w_member_social",
         metadata: {
           name: profile.name,
           email: profile.email,
