@@ -56,11 +56,16 @@ async function uploadMedia(
 
   const uploadUrl = "https://upload.twitter.com/1.1/media/upload.json";
   
-  // Generate OAuth authorization header
-  const authHeader = oauth.toHeader(oauth.authorize(
-    { url: uploadUrl, method: "POST" },
-    token
-  ));
+  const requestData = {
+    url: uploadUrl,
+    method: "POST",
+    data: {
+      media_data: mediaBase64,
+    },
+  };
+
+  // Generate OAuth authorization header (includes body params in signature)
+  const authHeader = oauth.toHeader(oauth.authorize(requestData, token));
 
   const uploadResponse = await fetch(uploadUrl, {
     method: "POST",
