@@ -71,7 +71,7 @@ async function uploadMedia(
 
   // Upload media using Media Upload API (v1.1 endpoint) with OAuth 1.0a
   const timestamp = Math.floor(Date.now() / 1000).toString();
-  const nonce = Math.random().toString(36).substring(2);
+  const nonce = Math.random().toString(36).substring(2, 18); // Generate 16-char nonce
 
   const oauthParams: Record<string, string> = {
     oauth_consumer_key: consumerKey,
@@ -87,6 +87,13 @@ async function uploadMedia(
   const signature = generateOAuthSignature("POST", uploadUrl, oauthParams, consumerSecret, accessTokenSecret);
 
   oauthParams.oauth_signature = signature;
+
+  // Debug logging
+  console.log("[X OAuth 1.0a] OAuth params for media upload", {
+    timestamp,
+    nonce,
+    signature: signature.substring(0, 20) + "...",
+  });
 
   const authHeader =
     "OAuth " +
@@ -134,6 +141,15 @@ export const xClient: PlatformClient = {
     const accessTokenSecret = socialConnection.refreshToken; // Stored as refreshToken
     const consumerKey = process.env.X_CONSUMER_KEY;
     const consumerSecret = process.env.X_CONSUMER_SECRET;
+
+    console.log("[X OAuth 1.0a] Credentials check", {
+      hasAccessToken: !!accessToken,
+      hasAccessTokenSecret: !!accessTokenSecret,
+      hasConsumerKey: !!consumerKey,
+      hasConsumerSecret: !!consumerSecret,
+      accessTokenLength: accessToken?.length,
+      accessTokenSecretLength: accessTokenSecret?.length,
+    });
 
     if (!accessToken || !accessTokenSecret) {
       const error = new Error("Missing access token for X");
