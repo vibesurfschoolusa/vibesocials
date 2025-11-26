@@ -33,7 +33,6 @@ async function uploadMedia(
   }
 
   const mediaBuffer = Buffer.from(await mediaResponse.arrayBuffer());
-  const mediaBase64 = mediaBuffer.toString("base64");
 
   console.log("[X OAuth 1.0a] Media downloaded", {
     sizeBytes: mediaBuffer.length,
@@ -55,7 +54,15 @@ async function uploadMedia(
   };
 
   const uploadUrl = "https://upload.twitter.com/1.1/media/upload.json";
-  
+  const isVideo = mimeType.startsWith("video/");
+
+  // Videos require chunked upload (INIT -> APPEND -> FINALIZE)
+  if (isVideo) {
+    return await uploadVideoChunked(oauth, token, uploadUrl, mediaBuffer, mimeType);
+  }
+
+  // Images can use simple base64 upload
+  const mediaBase64 = mediaBuffer.toString("base64");
   const requestData = {
     url: uploadUrl,
     method: "POST",
@@ -64,7 +71,6 @@ async function uploadMedia(
     },
   };
 
-  // Generate OAuth authorization header (includes body params in signature)
   const authHeader = oauth.toHeader(oauth.authorize(requestData, token));
 
   const uploadResponse = await fetch(uploadUrl, {
@@ -96,6 +102,161 @@ async function uploadMedia(
   });
 
   return uploadResult.media_id_string;
+}
+
+/**
+ * Upload video using chunked upload (INIT -> APPEND -> FINALIZE)
+ */
+async function uploadVideoChunked(
+  oauth: OAuth,
+  token: { key: string; secret: string },
+  uploadUrl: string,
+  mediaBuffer: Buffer,
+  mimeType: string
+): Promise<string> {
+  const totalBytes = mediaBuffer.length;
+  const chunkSize = 5 * 1024 * 1024; // 5MB chunks
+
+  console.log("[X OAuth 1.0a] Starting chunked video upload", {
+    totalBytes,
+    chunkSize,
+    chunks: Math.ceil(totalBytes / chunkSize),
+  });
+
+  // INIT
+  const initData = {
+    url: uploadUrl,
+    method: "POST",
+    data: {
+      command: "INIT",
+      total_bytes: totalBytes.toString(),
+      media_type: mimeType,
+      media_category: "tweet_video",
+    },
+  };
+
+  const initAuthHeader = oauth.toHeader(oauth.authorize(initData, token));
+  const initResponse = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      ...initAuthHeader,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams(initData.data),
+  });
+
+  if (!initResponse.ok) {
+    const errorBody = await initResponse.text().catch(() => "Unable to read error");
+    console.error("[X OAuth 1.0a] Video INIT failed", {
+      status: initResponse.status,
+      errorBody,
+    });
+    throw new Error(`X video INIT failed: ${errorBody}`);
+  }
+
+  const initResult = (await initResponse.json()) as { media_id_string: string };
+  const mediaId = initResult.media_id_string;
+
+  console.log("[X OAuth 1.0a] Video INIT successful", { mediaId });
+
+  // APPEND chunks
+  let segmentIndex = 0;
+  for (let i = 0; i < totalBytes; i += chunkSize) {
+    const chunk = mediaBuffer.subarray(i, Math.min(i + chunkSize, totalBytes));
+    const chunkBase64 = chunk.toString("base64");
+
+    console.log("[X OAuth 1.0a] Uploading chunk", {
+      segmentIndex,
+      chunkSize: chunk.length,
+      progress: `${Math.min(i + chunkSize, totalBytes)}/${totalBytes}`,
+    });
+
+    const appendData = {
+      url: uploadUrl,
+      method: "POST",
+      data: {
+        command: "APPEND",
+        media_id: mediaId,
+        segment_index: segmentIndex.toString(),
+        media_data: chunkBase64,
+      },
+    };
+
+    const appendAuthHeader = oauth.toHeader(oauth.authorize(appendData, token));
+    const appendResponse = await fetch(uploadUrl, {
+      method: "POST",
+      headers: {
+        ...appendAuthHeader,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams(appendData.data),
+    });
+
+    if (!appendResponse.ok) {
+      const errorBody = await appendResponse.text().catch(() => "Unable to read error");
+      console.error("[X OAuth 1.0a] Video APPEND failed", {
+        segmentIndex,
+        status: appendResponse.status,
+        errorBody,
+      });
+      throw new Error(`X video APPEND failed: ${errorBody}`);
+    }
+
+    segmentIndex++;
+  }
+
+  console.log("[X OAuth 1.0a] All chunks uploaded, finalizing...");
+
+  // FINALIZE
+  const finalizeData = {
+    url: uploadUrl,
+    method: "POST",
+    data: {
+      command: "FINALIZE",
+      media_id: mediaId,
+    },
+  };
+
+  const finalizeAuthHeader = oauth.toHeader(oauth.authorize(finalizeData, token));
+  const finalizeResponse = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      ...finalizeAuthHeader,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams(finalizeData.data),
+  });
+
+  if (!finalizeResponse.ok) {
+    const errorBody = await finalizeResponse.text().catch(() => "Unable to read error");
+    console.error("[X OAuth 1.0a] Video FINALIZE failed", {
+      status: finalizeResponse.status,
+      errorBody,
+    });
+    throw new Error(`X video FINALIZE failed: ${errorBody}`);
+  }
+
+  const finalizeResult = (await finalizeResponse.json()) as {
+    media_id_string: string;
+    processing_info?: {
+      state: string;
+      check_after_secs?: number;
+    };
+  };
+
+  console.log("[X OAuth 1.0a] Video upload finalized", {
+    mediaId: finalizeResult.media_id_string,
+    processingInfo: finalizeResult.processing_info,
+  });
+
+  // If video is still processing, wait for it
+  if (finalizeResult.processing_info?.state === "pending" || finalizeResult.processing_info?.state === "in_progress") {
+    const checkAfter = finalizeResult.processing_info.check_after_secs || 5;
+    console.log(`[X OAuth 1.0a] Video processing, waiting ${checkAfter}s...`);
+    await new Promise((resolve) => setTimeout(resolve, checkAfter * 1000));
+  }
+
+  return finalizeResult.media_id_string;
 }
 
 export const xClient: PlatformClient = {
