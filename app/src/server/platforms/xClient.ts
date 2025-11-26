@@ -25,6 +25,14 @@ function generateOAuthSignature(
 
   const signingKey = `${encodeURIComponent(consumerSecret)}&${encodeURIComponent(tokenSecret)}`;
 
+  console.log("[X OAuth 1.0a] Signature generation", {
+    method: method.toUpperCase(),
+    url,
+    paramCount: Object.keys(params).length,
+    signatureBasePreview: signatureBase.substring(0, 150) + "...",
+    signingKeyLength: signingKey.length,
+  });
+
   const signature = createHmac("sha1", signingKey)
     .update(signatureBase)
     .digest("base64");
