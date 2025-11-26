@@ -165,8 +165,8 @@ export const xClient: PlatformClient = {
       console.log("[X OAuth 1.0a] Caption truncated to 280 characters");
     }
 
-    // Create tweet with media using API v1.1 (OAuth 1.0a uses v1.1 endpoints)
-    console.log("[X OAuth 1.0a] Creating tweet", {
+    // Create tweet with media using API v2 (Free tier has access to v2 endpoints)
+    console.log("[X OAuth 1.0a] Creating tweet with v2 API", {
       textLength: tweetText.length,
       mediaId,
     });
@@ -185,14 +185,18 @@ export const xClient: PlatformClient = {
       secret: accessTokenSecret,
     };
 
-    const tweetUrl = "https://api.twitter.com/1.1/statuses/update.json";
+    // Use X API v2 endpoint for tweet creation (Free tier compatible)
+    const tweetUrl = "https://api.twitter.com/2/tweets";
+    const tweetPayload = {
+      text: tweetText,
+      media: {
+        media_ids: [mediaId],
+      },
+    };
+
     const requestData = {
       url: tweetUrl,
       method: "POST",
-      data: {
-        status: tweetText,
-        media_ids: mediaId,
-      },
     };
 
     // Generate OAuth authorization header
@@ -202,12 +206,9 @@ export const xClient: PlatformClient = {
       method: "POST",
       headers: {
         ...authHeader,
-        "Content-Type": "application/x-www-form-urlencoded",
+        "Content-Type": "application/json",
       },
-      body: new URLSearchParams({
-        status: tweetText,
-        media_ids: mediaId,
-      }),
+      body: JSON.stringify(tweetPayload),
     });
 
     if (!tweetResponse.ok) {
@@ -222,17 +223,19 @@ export const xClient: PlatformClient = {
     }
 
     const tweetResult = (await tweetResponse.json()) as {
-      id_str: string;
-      text: string;
+      data: {
+        id: string;
+        text: string;
+      };
     };
 
     console.log("[X OAuth 1.0a] Tweet created successfully", {
-      tweetId: tweetResult.id_str,
-      tweetUrl: `https://twitter.com/i/web/status/${tweetResult.id_str}`,
+      tweetId: tweetResult.data.id,
+      tweetUrl: `https://twitter.com/i/web/status/${tweetResult.data.id}`,
     });
 
     return {
-      externalPostId: tweetResult.id_str,
+      externalPostId: tweetResult.data.id,
     };
   },
 
