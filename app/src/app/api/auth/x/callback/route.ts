@@ -1,80 +1,120 @@
 import { NextResponse } from "next/server";
+import { createHmac } from "crypto";
 import { prisma } from "@/lib/db";
+import { cookies } from "next/headers";
+
+/**
+ * OAuth 1.0a signature generation
+ */
+function generateOAuthSignature(
+  method: string,
+  url: string,
+  params: Record<string, string>,
+  consumerSecret: string,
+  tokenSecret: string = ""
+): string {
+  const sortedParams = Object.keys(params)
+    .sort()
+    .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
+    .join("&");
+
+  const signatureBase = [
+    method.toUpperCase(),
+    encodeURIComponent(url),
+    encodeURIComponent(sortedParams),
+  ].join("&");
+
+  const signingKey = `${encodeURIComponent(consumerSecret)}&${encodeURIComponent(tokenSecret)}`;
+
+  const signature = createHmac("sha1", signingKey)
+    .update(signatureBase)
+    .digest("base64");
+
+  return signature;
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const code = searchParams.get("code");
-  const state = searchParams.get("state");
-  const error = searchParams.get("error");
+  const oauthToken = searchParams.get("oauth_token");
+  const oauthVerifier = searchParams.get("oauth_verifier");
+  const denied = searchParams.get("denied");
 
-  if (error) {
-    console.error("[X OAuth] Authorization error:", error);
+  if (denied) {
+    console.error("[X OAuth 1.0a] Authorization denied");
     return NextResponse.redirect(
-      new URL(`/connections?error=x_auth_failed`, process.env.NEXTAUTH_URL!)
+      new URL(`/connections?error=x_auth_denied`, process.env.NEXTAUTH_URL!)
     );
   }
 
-  if (!code || !state) {
-    console.error("[X OAuth] Missing code or state");
+  if (!oauthToken || !oauthVerifier) {
+    console.error("[X OAuth 1.0a] Missing oauth_token or oauth_verifier");
     return NextResponse.redirect(
       new URL("/connections?error=x_missing_params", process.env.NEXTAUTH_URL!)
     );
   }
 
-  // Decode and validate state
-  let stateData: { userId: string; codeVerifier: string; timestamp: number };
-  try {
-    stateData = JSON.parse(Buffer.from(state, "base64url").toString());
-    
-    // Check state is recent (within 10 minutes)
-    if (Date.now() - stateData.timestamp > 10 * 60 * 1000) {
-      throw new Error("State expired");
-    }
-  } catch (err) {
-    console.error("[X OAuth] Invalid state:", err);
+  // Get stored data from cookies
+  const cookieStore = await cookies();
+  const oauthTokenSecret = cookieStore.get("x_oauth_token_secret")?.value;
+  const userId = cookieStore.get("x_user_id")?.value;
+
+  if (!oauthTokenSecret || !userId) {
+    console.error("[X OAuth 1.0a] Missing stored token secret or user ID");
     return NextResponse.redirect(
-      new URL("/connections?error=x_invalid_state", process.env.NEXTAUTH_URL!)
+      new URL("/connections?error=x_session_expired", process.env.NEXTAUTH_URL!)
     );
   }
 
-  const userId = stateData.userId;
-  const codeVerifier = stateData.codeVerifier;
-  const clientId = process.env.X_CLIENT_ID;
-  const clientSecret = process.env.X_CLIENT_SECRET;
-  const redirectUri = process.env.X_REDIRECT_URI;
+  const consumerKey = process.env.X_CONSUMER_KEY;
+  const consumerSecret = process.env.X_CONSUMER_SECRET;
 
-  if (!clientId || !clientSecret || !redirectUri) {
-    console.error("[X OAuth] Missing environment variables");
+  if (!consumerKey || !consumerSecret) {
+    console.error("[X OAuth 1.0a] Missing environment variables");
     return NextResponse.redirect(
       new URL("/connections?error=x_config_missing", process.env.NEXTAUTH_URL!)
     );
   }
 
   try {
-    // Exchange authorization code for access token using PKCE
-    console.log("[X OAuth] Exchanging code for token", { userId });
-    
-    // X uses Basic Auth for token endpoint
-    const authHeader = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-    
-    const tokenResponse = await fetch("https://api.twitter.com/2/oauth2/token", {
+    // Step 3: Exchange request token + verifier for access token
+    console.log("[X OAuth 1.0a] Exchanging for access token", { userId });
+
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const nonce = Math.random().toString(36).substring(2);
+
+    const oauthParams: Record<string, string> = {
+      oauth_consumer_key: consumerKey,
+      oauth_nonce: nonce,
+      oauth_signature_method: "HMAC-SHA1",
+      oauth_timestamp: timestamp,
+      oauth_token: oauthToken,
+      oauth_verifier: oauthVerifier,
+      oauth_version: "1.0",
+    };
+
+    const accessTokenUrl = "https://api.twitter.com/oauth/access_token";
+    const signature = generateOAuthSignature("POST", accessTokenUrl, oauthParams, consumerSecret, oauthTokenSecret);
+
+    oauthParams.oauth_signature = signature;
+
+    const authHeader =
+      "OAuth " +
+      Object.keys(oauthParams)
+        .sort()
+        .map((key) => `${key}="${encodeURIComponent(oauthParams[key])}"`)
+        .join(", ");
+
+    const response = await fetch(accessTokenUrl, {
       method: "POST",
       headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Authorization: `Basic ${authHeader}`,
+        Authorization: authHeader,
       },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: redirectUri,
-        code_verifier: codeVerifier,
-      }),
     });
 
-    if (!tokenResponse.ok) {
-      const errorText = await tokenResponse.text();
-      console.error("[X OAuth] Token exchange failed", {
-        status: tokenResponse.status,
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("[X OAuth 1.0a] Access token exchange failed", {
+        status: response.status,
         error: errorText,
       });
       return NextResponse.redirect(
@@ -82,44 +122,24 @@ export async function GET(request: Request) {
       );
     }
 
-    const tokenData = await tokenResponse.json();
-    console.log("[X OAuth] Token received", {
-      expiresIn: tokenData.expires_in,
-      scope: tokenData.scope,
-      hasRefreshToken: !!tokenData.refresh_token,
-    });
+    const responseText = await response.text();
+    const params = new URLSearchParams(responseText);
+    const accessToken = params.get("oauth_token");
+    const accessTokenSecret = params.get("oauth_token_secret");
+    const screenName = params.get("screen_name");
+    const userIdFromX = params.get("user_id");
 
-    // Get user profile information
-    const profileResponse = await fetch("https://api.twitter.com/2/users/me", {
-      headers: {
-        Authorization: `Bearer ${tokenData.access_token}`,
-      },
-    });
-
-    if (!profileResponse.ok) {
-      const errorText = await profileResponse.text();
-      console.error("[X OAuth] Failed to fetch profile", {
-        status: profileResponse.status,
-        error: errorText,
-      });
+    if (!accessToken || !accessTokenSecret) {
+      console.error("[X OAuth 1.0a] Invalid access token response");
       return NextResponse.redirect(
-        new URL("/connections?error=x_profile_failed", process.env.NEXTAUTH_URL!)
+        new URL("/connections?error=x_invalid_token_response", process.env.NEXTAUTH_URL!)
       );
     }
 
-    const profileData = await profileResponse.json();
-    const profile = profileData.data;
-    
-    console.log("[X OAuth] Profile fetched", {
-      id: profile.id,
-      username: profile.username,
-      name: profile.name,
+    console.log("[X OAuth 1.0a] Access token received", {
+      screenName,
+      userIdFromX,
     });
-
-    // Calculate token expiration
-    const expiresAt = tokenData.expires_in
-      ? new Date(Date.now() + tokenData.expires_in * 1000)
-      : null;
 
     // Store or update social connection
     const existingConnection = await prisma.socialConnection.findFirst({
@@ -134,43 +154,48 @@ export async function GET(request: Request) {
       await prisma.socialConnection.update({
         where: { id: existingConnection.id },
         data: {
-          accountIdentifier: profile.id,
-          accessToken: tokenData.access_token,
-          refreshToken: tokenData.refresh_token || existingConnection.refreshToken,
-          expiresAt,
-          scopes: tokenData.scope || "tweet.read tweet.write users.read offline.access",
+          accountIdentifier: userIdFromX || screenName || "",
+          accessToken: accessToken,
+          refreshToken: accessTokenSecret, // Store token secret as refreshToken
+          expiresAt: null, // OAuth 1.0a tokens don't expire
+          scopes: "read write", // OAuth 1.0a doesn't have explicit scopes
           metadata: {
-            username: profile.username,
-            name: profile.name,
+            username: screenName,
+            user_id: userIdFromX,
           },
         },
       });
-      console.log("[X OAuth] Connection updated", { connectionId: existingConnection.id });
+      console.log("[X OAuth 1.0a] Connection updated", { connectionId: existingConnection.id });
     } else {
       // Create new connection
       await prisma.socialConnection.create({
         data: {
           userId,
           platform: "x",
-          accountIdentifier: profile.id,
-          accessToken: tokenData.access_token,
-          refreshToken: tokenData.refresh_token,
-          expiresAt,
-          scopes: tokenData.scope || "tweet.read tweet.write users.read offline.access",
+          accountIdentifier: userIdFromX || screenName || "",
+          accessToken: accessToken,
+          refreshToken: accessTokenSecret, // Store token secret as refreshToken
+          expiresAt: null, // OAuth 1.0a tokens don't expire
+          scopes: "read write",
           metadata: {
-            username: profile.username,
-            name: profile.name,
+            username: screenName,
+            user_id: userIdFromX,
           },
         },
       });
-      console.log("[X OAuth] Connection created");
+      console.log("[X OAuth 1.0a] Connection created");
     }
 
-    return NextResponse.redirect(
+    // Clear cookies
+    const redirectResponse = NextResponse.redirect(
       new URL("/connections?success=x_connected", process.env.NEXTAUTH_URL!)
     );
+    redirectResponse.cookies.delete("x_oauth_token_secret");
+    redirectResponse.cookies.delete("x_user_id");
+
+    return redirectResponse;
   } catch (err) {
-    console.error("[X OAuth] Unexpected error:", err);
+    console.error("[X OAuth 1.0a] Unexpected error:", err);
     return NextResponse.redirect(
       new URL("/connections?error=x_unexpected_error", process.env.NEXTAUTH_URL!)
     );

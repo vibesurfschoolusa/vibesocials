@@ -1,84 +1,59 @@
 import type { SocialConnection } from "@prisma/client";
+import { createHmac } from "crypto";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
 /**
- * Refresh X (Twitter) access token using refresh token
+ * OAuth 1.0a signature generation for API requests
  */
-async function refreshAccessToken(connection: SocialConnection): Promise<SocialConnection> {
-  const refreshToken = connection.refreshToken;
-  if (!refreshToken) {
-    throw new Error("No refresh token available for X");
-  }
+function generateOAuthSignature(
+  method: string,
+  url: string,
+  params: Record<string, string>,
+  consumerSecret: string,
+  tokenSecret: string = ""
+): string {
+  const sortedParams = Object.keys(params)
+    .sort()
+    .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
+    .join("&");
 
-  const clientId = process.env.X_CLIENT_ID;
-  const clientSecret = process.env.X_CLIENT_SECRET;
+  const signatureBase = [
+    method.toUpperCase(),
+    encodeURIComponent(url),
+    encodeURIComponent(sortedParams),
+  ].join("&");
 
-  if (!clientId || !clientSecret) {
-    throw new Error("Missing X OAuth credentials");
-  }
+  const signingKey = `${encodeURIComponent(consumerSecret)}&${encodeURIComponent(tokenSecret)}`;
 
-  console.log("[X] Refreshing access token");
+  const signature = createHmac("sha1", signingKey)
+    .update(signatureBase)
+    .digest("base64");
 
-  // X uses Basic Auth for token endpoint
-  const authHeader = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-
-  const response = await fetch("https://api.twitter.com/2/oauth2/token", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Authorization: `Basic ${authHeader}`,
-    },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-    }),
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "Unable to read error");
-    console.error("[X] Token refresh failed", {
-      status: response.status,
-      errorBody,
-    });
-    throw new Error("Failed to refresh X access token");
-  }
-
-  const tokenData = (await response.json()) as {
-    access_token: string;
-    refresh_token: string;
-    expires_in: number;
-    scope?: string;
-    token_type: string;
-  };
-
-  const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
-
-  // Update connection in database
-  const { prisma } = await import("@/lib/db");
-  const updated = await prisma.socialConnection.update({
-    where: { id: connection.id },
-    data: {
-      accessToken: tokenData.access_token,
-      refreshToken: tokenData.refresh_token,
-      expiresAt,
-    },
-  });
-
-  console.log("[X] Access token refreshed successfully");
-
-  return updated;
+  return signature;
 }
 
 /**
- * Upload media to X (Twitter) using Media Upload API v1.1
+ * OAuth 1.0a tokens don't expire, no refresh needed
+ */
+async function refreshAccessToken(connection: SocialConnection): Promise<SocialConnection> {
+  // OAuth 1.0a tokens don't expire
+  console.log("[X OAuth 1.0a] Tokens don't expire, no refresh needed");
+  return connection;
+}
+
+/**
+ * Upload media to X (Twitter) using Media Upload API v1.1 with OAuth 1.0a
  * Returns media_id_string for use in tweet creation
  */
 async function uploadMedia(
+  consumerKey: string,
+  consumerSecret: string,
   accessToken: string,
+  accessTokenSecret: string,
   mediaUrl: string,
   mimeType: string
 ): Promise<string> {
-  console.log("[X] Starting media upload", { mediaUrl, mimeType });
+  console.log("[X OAuth 1.0a] Starting media upload", { mediaUrl, mimeType });
 
   // Download media from Vercel Blob
   const mediaResponse = await fetch(mediaUrl);
@@ -89,31 +64,51 @@ async function uploadMedia(
   const mediaBuffer = Buffer.from(await mediaResponse.arrayBuffer());
   const mediaBase64 = mediaBuffer.toString("base64");
 
-  console.log("[X] Media downloaded", {
+  console.log("[X OAuth 1.0a] Media downloaded", {
     sizeBytes: mediaBuffer.length,
     sizeMB: (mediaBuffer.length / 1024 / 1024).toFixed(2),
   });
 
-  // Upload media using Media Upload API (v1.1 endpoint)
-  // X supports INIT -> APPEND -> FINALIZE for large files, but for simplicity
-  // we'll use simple upload for files < 5MB
-  const uploadResponse = await fetch(
-    "https://upload.twitter.com/1.1/media/upload.json",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({
-        media_data: mediaBase64,
-      }),
-    }
-  );
+  // Upload media using Media Upload API (v1.1 endpoint) with OAuth 1.0a
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const nonce = Math.random().toString(36).substring(2);
+
+  const oauthParams: Record<string, string> = {
+    oauth_consumer_key: consumerKey,
+    oauth_nonce: nonce,
+    oauth_signature_method: "HMAC-SHA1",
+    oauth_timestamp: timestamp,
+    oauth_token: accessToken,
+    oauth_version: "1.0",
+  };
+
+  // For media upload, body params are not included in signature
+  const uploadUrl = "https://upload.twitter.com/1.1/media/upload.json";
+  const signature = generateOAuthSignature("POST", uploadUrl, oauthParams, consumerSecret, accessTokenSecret);
+
+  oauthParams.oauth_signature = signature;
+
+  const authHeader =
+    "OAuth " +
+    Object.keys(oauthParams)
+      .sort()
+      .map((key) => `${key}="${encodeURIComponent(oauthParams[key])}"`)
+      .join(", ");
+
+  const uploadResponse = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      Authorization: authHeader,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      media_data: mediaBase64,
+    }),
+  });
 
   if (!uploadResponse.ok) {
     const errorBody = await uploadResponse.text().catch(() => "Unable to read error");
-    console.error("[X] Media upload failed", {
+    console.error("[X OAuth 1.0a] Media upload failed", {
       status: uploadResponse.status,
       errorBody,
     });
@@ -124,7 +119,7 @@ async function uploadMedia(
     media_id_string: string;
   };
 
-  console.log("[X] Media uploaded successfully", {
+  console.log("[X OAuth 1.0a] Media uploaded successfully", {
     mediaId: uploadResult.media_id_string,
   });
 
@@ -133,19 +128,22 @@ async function uploadMedia(
 
 export const xClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
-    let { socialConnection } = ctx;
-    const { mediaItem, caption } = ctx;
-
-    // Check if token needs refresh
-    if (socialConnection.expiresAt && socialConnection.expiresAt < new Date()) {
-      console.log("[X] Access token expired, refreshing...");
-      socialConnection = await refreshAccessToken(socialConnection);
-    }
+    const { socialConnection, mediaItem, caption } = ctx;
 
     const accessToken = socialConnection.accessToken;
-    if (!accessToken) {
+    const accessTokenSecret = socialConnection.refreshToken; // Stored as refreshToken
+    const consumerKey = process.env.X_CONSUMER_KEY;
+    const consumerSecret = process.env.X_CONSUMER_SECRET;
+
+    if (!accessToken || !accessTokenSecret) {
       const error = new Error("Missing access token for X");
       (error as any).code = "X_NO_ACCESS_TOKEN";
+      throw error;
+    }
+
+    if (!consumerKey || !consumerSecret) {
+      const error = new Error("Missing X consumer credentials");
+      (error as any).code = "X_NO_CONSUMER_KEYS";
       throw error;
     }
 
@@ -159,7 +157,7 @@ export const xClient: PlatformClient = {
       throw error;
     }
 
-    console.log("[X] Starting post creation", {
+    console.log("[X OAuth 1.0a] Starting post creation", {
       mimeType: mediaItem.mimeType,
       sizeBytes: mediaItem.sizeBytes,
       originalFilename: mediaItem.originalFilename,
@@ -169,41 +167,78 @@ export const xClient: PlatformClient = {
 
     // Upload media first
     const mediaUrl = mediaItem.storageLocation;
-    const mediaId = await uploadMedia(accessToken, mediaUrl, mediaItem.mimeType || "");
+    const mediaId = await uploadMedia(
+      consumerKey,
+      consumerSecret,
+      accessToken,
+      accessTokenSecret,
+      mediaUrl,
+      mediaItem.mimeType || ""
+    );
 
     // X tweet character limit is 280
     // If caption is longer, we'll truncate with ellipsis
     let tweetText = caption;
     if (tweetText.length > 280) {
       tweetText = tweetText.substring(0, 277) + "...";
-      console.log("[X] Caption truncated to 280 characters");
+      console.log("[X OAuth 1.0a] Caption truncated to 280 characters");
     }
 
-    // Create tweet with media using API v2
-    const tweetPayload = {
-      text: tweetText,
-      media: {
-        media_ids: [mediaId],
-      },
-    };
-
-    console.log("[X] Creating tweet", {
+    // Create tweet with media using API v1.1 (OAuth 1.0a uses v1.1 endpoints)
+    console.log("[X OAuth 1.0a] Creating tweet", {
       textLength: tweetText.length,
       mediaId,
     });
 
-    const tweetResponse = await fetch("https://api.twitter.com/2/tweets", {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const nonce = Math.random().toString(36).substring(2);
+
+    const tweetParams: Record<string, string> = {
+      oauth_consumer_key: consumerKey,
+      oauth_nonce: nonce,
+      oauth_signature_method: "HMAC-SHA1",
+      oauth_timestamp: timestamp,
+      oauth_token: accessToken,
+      oauth_version: "1.0",
+      status: tweetText,
+      media_ids: mediaId,
+    };
+
+    const tweetUrl = "https://api.twitter.com/1.1/statuses/update.json";
+    const signature = generateOAuthSignature("POST", tweetUrl, tweetParams, consumerSecret, accessTokenSecret);
+
+    const oauthParams = {
+      oauth_consumer_key: consumerKey,
+      oauth_nonce: nonce,
+      oauth_signature: signature,
+      oauth_signature_method: "HMAC-SHA1",
+      oauth_timestamp: timestamp,
+      oauth_token: accessToken,
+      oauth_version: "1.0",
+    };
+
+    const authHeader =
+      "OAuth " +
+      Object.keys(oauthParams)
+        .sort()
+        .map((key) => `${key}="${encodeURIComponent((oauthParams as any)[key])}"`)
+        .join(", ");
+
+    const tweetResponse = await fetch(tweetUrl, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+        Authorization: authHeader,
+        "Content-Type": "application/x-www-form-urlencoded",
       },
-      body: JSON.stringify(tweetPayload),
+      body: new URLSearchParams({
+        status: tweetText,
+        media_ids: mediaId,
+      }),
     });
 
     if (!tweetResponse.ok) {
       const errorBody = await tweetResponse.text().catch(() => "Unable to read error");
-      console.error("[X] Tweet creation failed", {
+      console.error("[X OAuth 1.0a] Tweet creation failed", {
         status: tweetResponse.status,
         errorBody,
       });
@@ -213,19 +248,17 @@ export const xClient: PlatformClient = {
     }
 
     const tweetResult = (await tweetResponse.json()) as {
-      data: {
-        id: string;
-        text: string;
-      };
+      id_str: string;
+      text: string;
     };
 
-    console.log("[X] Tweet created successfully", {
-      tweetId: tweetResult.data.id,
-      tweetUrl: `https://twitter.com/i/web/status/${tweetResult.data.id}`,
+    console.log("[X OAuth 1.0a] Tweet created successfully", {
+      tweetId: tweetResult.id_str,
+      tweetUrl: `https://twitter.com/i/web/status/${tweetResult.id_str}`,
     });
 
     return {
-      externalPostId: tweetResult.data.id,
+      externalPostId: tweetResult.id_str,
     };
   },
 

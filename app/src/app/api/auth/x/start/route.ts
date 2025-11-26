@@ -1,6 +1,41 @@
 import { NextResponse } from "next/server";
-import { randomBytes, createHash } from "crypto";
+import { createHmac } from "crypto";
 import { getCurrentUser } from "@/lib/auth";
+
+/**
+ * OAuth 1.0a signature generation
+ * Uses HMAC-SHA1 to sign the request
+ */
+function generateOAuthSignature(
+  method: string,
+  url: string,
+  params: Record<string, string>,
+  consumerSecret: string,
+  tokenSecret: string = ""
+): string {
+  // Sort parameters alphabetically
+  const sortedParams = Object.keys(params)
+    .sort()
+    .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
+    .join("&");
+
+  // Create signature base string
+  const signatureBase = [
+    method.toUpperCase(),
+    encodeURIComponent(url),
+    encodeURIComponent(sortedParams),
+  ].join("&");
+
+  // Create signing key
+  const signingKey = `${encodeURIComponent(consumerSecret)}&${encodeURIComponent(tokenSecret)}`;
+
+  // Generate signature
+  const signature = createHmac("sha1", signingKey)
+    .update(signatureBase)
+    .digest("base64");
+
+  return signature;
+}
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -9,59 +44,113 @@ export async function GET() {
     return NextResponse.redirect(new URL("/login", process.env.NEXTAUTH_URL));
   }
 
-  const clientId = process.env.X_CLIENT_ID;
-  const redirectUri = process.env.X_REDIRECT_URI;
+  const consumerKey = process.env.X_CONSUMER_KEY; // API Key
+  const consumerSecret = process.env.X_CONSUMER_SECRET; // API Secret
+  const callbackUrl = process.env.X_CALLBACK_URL;
 
-  if (!clientId || !redirectUri) {
-    console.error("[X OAuth] Missing environment variables");
+  if (!consumerKey || !consumerSecret || !callbackUrl) {
+    console.error("[X OAuth 1.0a] Missing environment variables");
     return NextResponse.redirect(
       new URL("/connections?error=x_config_missing", process.env.NEXTAUTH_URL)
     );
   }
 
-  // Generate PKCE code verifier and challenge
-  // Code verifier: random string 43-128 characters
-  const codeVerifier = randomBytes(32).toString("base64url");
-  
-  // Code challenge: base64url(sha256(code_verifier))
-  const codeChallenge = createHash("sha256")
-    .update(codeVerifier)
-    .digest("base64url");
+  try {
+    // Step 1: Request a request token
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const nonce = Math.random().toString(36).substring(2);
 
-  // Store code verifier and state for validation in callback
-  // In production, you'd store this in Redis or a database
-  // For now, we'll encode it in the state parameter
-  const state = Buffer.from(
-    JSON.stringify({
+    const oauthParams: Record<string, string> = {
+      oauth_callback: callbackUrl,
+      oauth_consumer_key: consumerKey,
+      oauth_nonce: nonce,
+      oauth_signature_method: "HMAC-SHA1",
+      oauth_timestamp: timestamp,
+      oauth_version: "1.0",
+    };
+
+    const requestTokenUrl = "https://api.twitter.com/oauth/request_token";
+    const signature = generateOAuthSignature("POST", requestTokenUrl, oauthParams, consumerSecret);
+
+    oauthParams.oauth_signature = signature;
+
+    // Build Authorization header
+    const authHeader =
+      "OAuth " +
+      Object.keys(oauthParams)
+        .sort()
+        .map((key) => `${key}="${encodeURIComponent(oauthParams[key])}"`)
+        .join(", ");
+
+    console.log("[X OAuth 1.0a] Requesting request token", {
       userId: user.id,
-      codeVerifier,
-      timestamp: Date.now(),
-    })
-  ).toString("base64url");
+      callbackUrl,
+    });
 
-  // Build X authorization URL
-  const authUrl = new URL("https://twitter.com/i/oauth2/authorize");
-  authUrl.searchParams.set("response_type", "code");
-  authUrl.searchParams.set("client_id", clientId);
-  authUrl.searchParams.set("redirect_uri", redirectUri);
-  authUrl.searchParams.set("state", state);
-  authUrl.searchParams.set("code_challenge", codeChallenge);
-  authUrl.searchParams.set("code_challenge_method", "S256");
-  
-  // Scopes for X API v2
-  // tweet.read: Read tweets
-  // tweet.write: Create tweets
-  // users.read: Read user profile
-  // offline.access: Refresh token for long-lived access
-  authUrl.searchParams.set(
-    "scope",
-    "tweet.read tweet.write users.read offline.access"
-  );
+    const response = await fetch(requestTokenUrl, {
+      method: "POST",
+      headers: {
+        Authorization: authHeader,
+      },
+    });
 
-  console.log("[X OAuth] Redirecting to X authorization", {
-    userId: user.id,
-    redirectUri,
-  });
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("[X OAuth 1.0a] Request token failed", {
+        status: response.status,
+        error: errorText,
+      });
+      return NextResponse.redirect(
+        new URL("/connections?error=x_request_token_failed", process.env.NEXTAUTH_URL)
+      );
+    }
 
-  return NextResponse.redirect(authUrl.toString());
+    const responseText = await response.text();
+    const params = new URLSearchParams(responseText);
+    const oauthToken = params.get("oauth_token");
+    const oauthTokenSecret = params.get("oauth_token_secret");
+
+    if (!oauthToken || !oauthTokenSecret) {
+      console.error("[X OAuth 1.0a] Invalid request token response");
+      return NextResponse.redirect(
+        new URL("/connections?error=x_invalid_token_response", process.env.NEXTAUTH_URL)
+      );
+    }
+
+    // Store oauth_token_secret temporarily (in production, use Redis or database)
+    // For now, we'll encode it in a cookie or state parameter
+    // Note: This is a security consideration - in production, use server-side storage
+
+    console.log("[X OAuth 1.0a] Request token received", {
+      userId: user.id,
+      oauthToken,
+    });
+
+    // Step 2: Redirect user to authorization URL
+    const authorizeUrl = new URL("https://api.twitter.com/oauth/authorize");
+    authorizeUrl.searchParams.set("oauth_token", oauthToken);
+
+    // Store user ID and token secret for callback
+    // In production, store this in Redis with oauth_token as key
+    const response2 = NextResponse.redirect(authorizeUrl.toString());
+    response2.cookies.set("x_oauth_token_secret", oauthTokenSecret, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 600, // 10 minutes
+    });
+    response2.cookies.set("x_user_id", user.id, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 600,
+    });
+
+    return response2;
+  } catch (error) {
+    console.error("[X OAuth 1.0a] Unexpected error:", error);
+    return NextResponse.redirect(
+      new URL("/connections?error=x_unexpected_error", process.env.NEXTAUTH_URL)
+    );
+  }
 }
