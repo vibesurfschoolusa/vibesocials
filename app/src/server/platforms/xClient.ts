@@ -249,14 +249,106 @@ async function uploadVideoChunked(
     processingInfo: finalizeResult.processing_info,
   });
 
-  // If video is still processing, wait for it
-  if (finalizeResult.processing_info?.state === "pending" || finalizeResult.processing_info?.state === "in_progress") {
-    const checkAfter = finalizeResult.processing_info.check_after_secs || 5;
-    console.log(`[X OAuth 1.0a] Video processing, waiting ${checkAfter}s...`);
-    await new Promise((resolve) => setTimeout(resolve, checkAfter * 1000));
+  // If video is still processing, poll STATUS until complete
+  if (finalizeResult.processing_info) {
+    await waitForVideoProcessing(oauth, token, uploadUrl, mediaId, finalizeResult.processing_info);
   }
 
   return finalizeResult.media_id_string;
+}
+
+/**
+ * Poll STATUS endpoint until video processing is complete
+ */
+async function waitForVideoProcessing(
+  oauth: OAuth,
+  token: { key: string; secret: string },
+  uploadUrl: string,
+  mediaId: string,
+  initialProcessingInfo: { state: string; check_after_secs?: number }
+): Promise<void> {
+  let processingInfo: {
+    state: string;
+    check_after_secs?: number;
+    progress_percent?: number;
+    error?: { message: string; code: number };
+  } = initialProcessingInfo;
+  let attempts = 0;
+  const maxAttempts = 60; // Max 5 minutes (60 * 5s average)
+
+  while (
+    (processingInfo.state === "pending" || processingInfo.state === "in_progress") &&
+    attempts < maxAttempts
+  ) {
+    const checkAfter = processingInfo.check_after_secs || 5;
+    console.log(`[X OAuth 1.0a] Video processing (${processingInfo.state}), waiting ${checkAfter}s... (attempt ${attempts + 1}/${maxAttempts})`);
+    await new Promise((resolve) => setTimeout(resolve, checkAfter * 1000));
+
+    // Check STATUS
+    const statusData = {
+      url: uploadUrl,
+      method: "GET",
+      data: {
+        command: "STATUS",
+        media_id: mediaId,
+      },
+    };
+
+    const statusAuthHeader = oauth.toHeader(oauth.authorize(statusData, token));
+    const statusUrl = `${uploadUrl}?${new URLSearchParams(statusData.data)}`;
+    
+    const statusResponse = await fetch(statusUrl, {
+      method: "GET",
+      headers: {
+        ...statusAuthHeader,
+      },
+    });
+
+    if (!statusResponse.ok) {
+      const errorBody = await statusResponse.text().catch(() => "Unable to read error");
+      console.error("[X OAuth 1.0a] Video STATUS check failed", {
+        status: statusResponse.status,
+        errorBody,
+      });
+      throw new Error(`X video STATUS check failed: ${errorBody}`);
+    }
+
+    const statusResult = (await statusResponse.json()) as {
+      processing_info?: {
+        state: string;
+        check_after_secs?: number;
+        progress_percent?: number;
+        error?: { message: string; code: number };
+      };
+    };
+
+    if (!statusResult.processing_info) {
+      // No processing info means it's ready
+      console.log("[X OAuth 1.0a] Video processing complete!");
+      return;
+    }
+
+    processingInfo = statusResult.processing_info;
+
+    if (processingInfo.error) {
+      throw new Error(`Video processing failed: ${processingInfo.error.message}`);
+    }
+
+    if (processingInfo.state === "succeeded") {
+      console.log("[X OAuth 1.0a] Video processing succeeded!");
+      return;
+    }
+
+    if (processingInfo.progress_percent !== undefined) {
+      console.log(`[X OAuth 1.0a] Video processing progress: ${processingInfo.progress_percent}%`);
+    }
+
+    attempts++;
+  }
+
+  if (attempts >= maxAttempts) {
+    throw new Error("Video processing timed out after 5 minutes");
+  }
 }
 
 export const xClient: PlatformClient = {
