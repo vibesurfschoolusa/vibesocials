@@ -1,44 +1,7 @@
 import type { SocialConnection } from "@prisma/client";
-import { createHmac } from "crypto";
+import OAuth from "oauth-1.0a";
+import crypto from "crypto";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
-
-/**
- * OAuth 1.0a signature generation for API requests
- */
-function generateOAuthSignature(
-  method: string,
-  url: string,
-  params: Record<string, string>,
-  consumerSecret: string,
-  tokenSecret: string = ""
-): string {
-  const sortedParams = Object.keys(params)
-    .sort()
-    .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
-    .join("&");
-
-  const signatureBase = [
-    method.toUpperCase(),
-    encodeURIComponent(url),
-    encodeURIComponent(sortedParams),
-  ].join("&");
-
-  const signingKey = `${encodeURIComponent(consumerSecret)}&${encodeURIComponent(tokenSecret)}`;
-
-  console.log("[X OAuth 1.0a] Signature generation", {
-    method: method.toUpperCase(),
-    url,
-    paramCount: Object.keys(params).length,
-    signatureBasePreview: signatureBase.substring(0, 150) + "...",
-    signingKeyLength: signingKey.length,
-  });
-
-  const signature = createHmac("sha1", signingKey)
-    .update(signatureBase)
-    .digest("base64");
-
-  return signature;
-}
 
 /**
  * OAuth 1.0a tokens don't expire, no refresh needed
@@ -77,43 +40,32 @@ async function uploadMedia(
     sizeMB: (mediaBuffer.length / 1024 / 1024).toFixed(2),
   });
 
-  // Upload media using Media Upload API (v1.1 endpoint) with OAuth 1.0a
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const nonce = Math.random().toString(36).substring(2, 18); // Generate 16-char nonce
-
-  const oauthParams: Record<string, string> = {
-    oauth_consumer_key: consumerKey,
-    oauth_nonce: nonce,
-    oauth_signature_method: "HMAC-SHA1",
-    oauth_timestamp: timestamp,
-    oauth_token: accessToken,
-    oauth_version: "1.0",
-  };
-
-  // For media upload, body params are not included in signature
-  const uploadUrl = "https://upload.twitter.com/1.1/media/upload.json";
-  const signature = generateOAuthSignature("POST", uploadUrl, oauthParams, consumerSecret, accessTokenSecret);
-
-  oauthParams.oauth_signature = signature;
-
-  // Debug logging
-  console.log("[X OAuth 1.0a] OAuth params for media upload", {
-    timestamp,
-    nonce,
-    signature: signature.substring(0, 20) + "...",
+  // Create OAuth client
+  const oauth = new OAuth({
+    consumer: { key: consumerKey, secret: consumerSecret },
+    signature_method: "HMAC-SHA1",
+    hash_function(base_string, key) {
+      return crypto.createHmac("sha1", key).update(base_string).digest("base64");
+    },
   });
 
-  const authHeader =
-    "OAuth " +
-    Object.keys(oauthParams)
-      .sort()
-      .map((key) => `${key}="${encodeURIComponent(oauthParams[key])}"`)
-      .join(", ");
+  const token = {
+    key: accessToken,
+    secret: accessTokenSecret,
+  };
+
+  const uploadUrl = "https://upload.twitter.com/1.1/media/upload.json";
+  
+  // Generate OAuth authorization header
+  const authHeader = oauth.toHeader(oauth.authorize(
+    { url: uploadUrl, method: "POST" },
+    token
+  ));
 
   const uploadResponse = await fetch(uploadUrl, {
     method: "POST",
     headers: {
-      Authorization: authHeader,
+      ...authHeader,
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: new URLSearchParams({
@@ -214,44 +166,37 @@ export const xClient: PlatformClient = {
       mediaId,
     });
 
-    const timestamp = Math.floor(Date.now() / 1000).toString();
-    const nonce = Math.random().toString(36).substring(2);
+    // Create OAuth client
+    const oauth = new OAuth({
+      consumer: { key: consumerKey, secret: consumerSecret },
+      signature_method: "HMAC-SHA1",
+      hash_function(base_string, key) {
+        return crypto.createHmac("sha1", key).update(base_string).digest("base64");
+      },
+    });
 
-    const tweetParams: Record<string, string> = {
-      oauth_consumer_key: consumerKey,
-      oauth_nonce: nonce,
-      oauth_signature_method: "HMAC-SHA1",
-      oauth_timestamp: timestamp,
-      oauth_token: accessToken,
-      oauth_version: "1.0",
-      status: tweetText,
-      media_ids: mediaId,
+    const token = {
+      key: accessToken,
+      secret: accessTokenSecret,
     };
 
     const tweetUrl = "https://api.twitter.com/1.1/statuses/update.json";
-    const signature = generateOAuthSignature("POST", tweetUrl, tweetParams, consumerSecret, accessTokenSecret);
-
-    const oauthParams = {
-      oauth_consumer_key: consumerKey,
-      oauth_nonce: nonce,
-      oauth_signature: signature,
-      oauth_signature_method: "HMAC-SHA1",
-      oauth_timestamp: timestamp,
-      oauth_token: accessToken,
-      oauth_version: "1.0",
+    const requestData = {
+      url: tweetUrl,
+      method: "POST",
+      data: {
+        status: tweetText,
+        media_ids: mediaId,
+      },
     };
 
-    const authHeader =
-      "OAuth " +
-      Object.keys(oauthParams)
-        .sort()
-        .map((key) => `${key}="${encodeURIComponent((oauthParams as any)[key])}"`)
-        .join(", ");
+    // Generate OAuth authorization header
+    const authHeader = oauth.toHeader(oauth.authorize(requestData, token));
 
     const tweetResponse = await fetch(tweetUrl, {
       method: "POST",
       headers: {
-        Authorization: authHeader,
+        ...authHeader,
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams({
