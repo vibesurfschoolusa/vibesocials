@@ -215,7 +215,7 @@ async function resolveLocationName(
 ): Promise<string> {
   const trimmed = locationName.trim();
 
-  // If it's already a full resource name, return it
+  // If it's already a full resource name (accounts/.../locations/...), return it
   if (trimmed.startsWith("accounts/")) {
     return trimmed;
   }

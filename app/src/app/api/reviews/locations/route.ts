@@ -105,8 +105,20 @@ export async function GET() {
         const locations = locationsData.locations || [];
 
         for (const location of locations) {
+          // Ensure we have the full resource name (accounts/.../locations/...)
+          // The API might return just "locations/..." so we need to construct the full path
+          let fullName = location.name;
+          if (fullName && fullName.startsWith("locations/") && !fullName.includes("accounts/")) {
+            console.log("[GBP Locations] Constructing full path", {
+              original: fullName,
+              accountName,
+              constructed: `${accountName}/${fullName}`,
+            });
+            fullName = `${accountName}/${fullName}`;
+          }
+
           allLocations.push({
-            name: location.name, // Full resource name
+            name: fullName, // Full resource name: accounts/.../locations/...
             locationName: location.locationName || location.title || "Unknown Location",
             title: location.title || location.locationName || "Unknown Location",
             storeCode: location.storeCode,
