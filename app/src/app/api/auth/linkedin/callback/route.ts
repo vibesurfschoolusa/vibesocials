@@ -84,8 +84,9 @@ export async function GET(request: Request) {
       scope: tokenData.scope,
     });
 
-    // Get user profile information
-    const profileResponse = await fetch("https://api.linkedin.com/v2/userinfo", {
+    // Get user profile information using OAuth 2.0 endpoints (not OpenID Connect)
+    // Fetch basic profile
+    const profileResponse = await fetch("https://api.linkedin.com/v2/me", {
       headers: {
         Authorization: `Bearer ${tokenData.access_token}`,
       },
@@ -98,7 +99,32 @@ export async function GET(request: Request) {
       );
     }
 
-    const profile = await profileResponse.json();
+    const profileData = await profileResponse.json();
+    
+    // Fetch email address
+    const emailResponse = await fetch(
+      "https://api.linkedin.com/v2/emailAddress?q=members&projection=(elements*(handle~))",
+      {
+        headers: {
+          Authorization: `Bearer ${tokenData.access_token}`,
+        },
+      }
+    );
+
+    let email = "";
+    if (emailResponse.ok) {
+      const emailData = await emailResponse.json();
+      email = emailData.elements?.[0]?.["handle~"]?.emailAddress || "";
+    }
+
+    // Construct profile object compatible with our database schema
+    const profile = {
+      sub: profileData.id, // LinkedIn member ID
+      name: `${profileData.localizedFirstName || ""} ${profileData.localizedLastName || ""}`.trim(),
+      email: email,
+      picture: null, // Can fetch from profile picture API if needed
+    };
+
     console.log("[LinkedIn OAuth] Profile fetched", {
       sub: profile.sub,
       name: profile.name,
@@ -157,7 +183,7 @@ export async function GET(request: Request) {
         refreshToken: tokenData.refresh_token || null,
         expiresAt,
         accountIdentifier: profile.sub,
-        scopes: tokenData.scope || "profile email w_member_social w_organization_social r_organization_social",
+        scopes: tokenData.scope || "r_basicprofile r_emailaddress w_member_social w_organization_social r_organization_social",
         metadata: {
           name: profile.name,
           email: profile.email,
@@ -169,7 +195,7 @@ export async function GET(request: Request) {
         accessToken: tokenData.access_token,
         refreshToken: tokenData.refresh_token || null,
         expiresAt,
-        scopes: tokenData.scope || "profile email w_member_social w_organization_social r_organization_social",
+        scopes: tokenData.scope || "r_basicprofile r_emailaddress w_member_social w_organization_social r_organization_social",
         metadata: {
           name: profile.name,
           email: profile.email,
