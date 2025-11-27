@@ -16,6 +16,7 @@
     "@vercel/blob": "^2.0.0",
     "bcryptjs": "^3.0.3",
     "crypto-js": "^4.2.0",
+    "lucide-react": "^0.555.0",
     "next": "16.0.3",
     "next-auth": "^4.24.13",
     "oauth-1.0a": "^2.2.6",

@@ -37,25 +37,35 @@ export default function Home() {
             <p className="text-sm text-gray-700">
               Signed in as <span className="font-semibold text-blue-600">{userEmail}</span>
             </p>
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <Link
-                href="/connections"
-                className="flex-1 rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2.5 text-center text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-md hover:shadow-lg"
-              >
-                Connections
-              </Link>
-              <Link
-                href="/posts/new"
-                className="flex-1 rounded-lg border-2 border-blue-200 px-4 py-2.5 text-center text-sm font-semibold text-blue-700 hover:bg-blue-50 transition-all"
-              >
-                Create post
-              </Link>
-              <Link
-                href="/settings"
-                className="flex-1 rounded-lg border-2 border-gray-200 px-4 py-2.5 text-center text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-all"
-              >
-                Settings
-              </Link>
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <Link
+                  href="/connections"
+                  className="flex-1 rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2.5 text-center text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-md hover:shadow-lg"
+                >
+                  Connections
+                </Link>
+                <Link
+                  href="/posts/new"
+                  className="flex-1 rounded-lg border-2 border-blue-200 px-4 py-2.5 text-center text-sm font-semibold text-blue-700 hover:bg-blue-50 transition-all"
+                >
+                  Create post
+                </Link>
+              </div>
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <Link
+                  href="/reviews"
+                  className="flex-1 rounded-lg border-2 border-green-200 px-4 py-2.5 text-center text-sm font-semibold text-green-700 hover:bg-green-50 transition-all"
+                >
+                  Google Reviews
+                </Link>
+                <Link
+                  href="/settings"
+                  className="flex-1 rounded-lg border-2 border-gray-200 px-4 py-2.5 text-center text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-all"
+                >
+                  Settings
+                </Link>
+              </div>
             </div>
             <button
               type="button"
