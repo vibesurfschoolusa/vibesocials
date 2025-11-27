@@ -90,7 +90,9 @@ export async function GET(request: NextRequest) {
     };
 
     const accessToken = longLivedData.access_token;
-    const expiresIn = longLivedData.expires_in; // Usually 60 days
+    // Facebook long-lived tokens last 60 days (5184000 seconds)
+    // Default to 60 days if expires_in is not provided
+    const expiresIn = longLivedData.expires_in || 5184000; // 60 days in seconds
 
     // 3. Get user's Facebook Pages
     const pagesUrl = new URL("https://graph.facebook.com/v21.0/me/accounts");
