@@ -37,6 +37,7 @@ export default function ReviewsPage() {
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState<string | null>(null);
+  const [generatingAI, setGeneratingAI] = useState<string | null>(null);
 
   useEffect(() => {
     fetchReviews();
@@ -113,6 +114,49 @@ export default function ReviewsPage() {
       alert(err.message || "Failed to post reply");
     } finally {
       setSubmitting(null);
+    }
+  };
+
+  const handleDraftAI = async (review: GoogleReview) => {
+    try {
+      setGeneratingAI(review.reviewId);
+
+      const response = await fetch("/api/reviews/draft-response", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          reviewerName: review.reviewer.displayName,
+          starRating: review.starRating,
+          comment: review.comment || "",
+          businessName: "", // Can be configured later
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to generate AI response");
+      }
+
+      const data = await response.json();
+      const draftResponse = data.draftResponse;
+
+      // Populate the reply text box with AI-generated response
+      setReplyText((prev) => ({
+        ...prev,
+        [review.reviewId]: draftResponse,
+      }));
+
+      // Open the reply box if not already open
+      if (replyingTo !== review.reviewId) {
+        setReplyingTo(review.reviewId);
+      }
+    } catch (err: any) {
+      console.error("Error generating AI response:", err);
+      alert(err.message || "Failed to generate AI response");
+    } finally {
+      setGeneratingAI(null);
     }
   };
 
@@ -245,6 +289,8 @@ export default function ReviewsPage() {
                       setReplyText={setReplyText}
                       submitting={submitting}
                       handleReply={handleReply}
+                      handleDraftAI={handleDraftAI}
+                      generatingAI={generatingAI}
                       renderStars={renderStars}
                       formatDate={formatDate}
                       needsReply={true}
@@ -271,6 +317,8 @@ export default function ReviewsPage() {
                       setReplyText={setReplyText}
                       submitting={submitting}
                       handleReply={handleReply}
+                      handleDraftAI={handleDraftAI}
+                      generatingAI={generatingAI}
                       renderStars={renderStars}
                       formatDate={formatDate}
                       needsReply={false}
@@ -294,6 +342,8 @@ interface ReviewCardProps {
   setReplyText: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   submitting: string | null;
   handleReply: (reviewId: string) => void;
+  handleDraftAI: (review: GoogleReview) => void;
+  generatingAI: string | null;
   renderStars: (rating: keyof typeof STAR_RATINGS) => React.JSX.Element;
   formatDate: (date: string) => string;
   needsReply: boolean;
@@ -307,6 +357,8 @@ function ReviewCard({
   setReplyText,
   submitting,
   handleReply,
+  handleDraftAI,
+  generatingAI,
   renderStars,
   formatDate,
   needsReply,
@@ -377,6 +429,26 @@ function ReviewCard({
             <div className="mt-4">
               {replyingTo === review.reviewId ? (
                 <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium text-gray-700">Your Reply</label>
+                    <button
+                      onClick={() => handleDraftAI(review)}
+                      disabled={generatingAI === review.reviewId}
+                      className="inline-flex items-center gap-2 rounded-lg border border-purple-200 bg-purple-50 px-3 py-1.5 text-xs font-semibold text-purple-700 hover:bg-purple-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {generatingAI === review.reviewId ? (
+                        <>
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Generating...
+                        </>
+                      ) : (
+                        <>
+                          <Star className="h-3 w-3 fill-purple-600" />
+                          Draft AI Response
+                        </>
+                      )}
+                    </button>
+                  </div>
                   <textarea
                     value={replyText[review.reviewId] || ""}
                     onChange={(e) =>
@@ -385,7 +457,7 @@ function ReviewCard({
                         [review.reviewId]: e.target.value,
                       }))
                     }
-                    placeholder="Write your reply..."
+                    placeholder="Write your reply or use AI to draft one..."
                     rows={4}
                     className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none resize-none"
                   />
@@ -414,13 +486,32 @@ function ReviewCard({
                   </div>
                 </div>
               ) : (
-                <button
-                  onClick={() => setReplyingTo(review.reviewId)}
-                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 transition-colors"
-                >
-                  <MessageSquare className="h-4 w-4" />
-                  Reply to Review
-                </button>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setReplyingTo(review.reviewId)}
+                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 transition-colors"
+                  >
+                    <MessageSquare className="h-4 w-4" />
+                    Reply to Review
+                  </button>
+                  <button
+                    onClick={() => handleDraftAI(review)}
+                    disabled={generatingAI === review.reviewId}
+                    className="inline-flex items-center gap-2 rounded-lg border-2 border-purple-200 px-4 py-2 text-sm font-semibold text-purple-700 hover:bg-purple-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {generatingAI === review.reviewId ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Generating...
+                      </>
+                    ) : (
+                      <>
+                        <Star className="h-4 w-4 fill-purple-600" />
+                        Draft AI Response
+                      </>
+                    )}
+                  </button>
+                </div>
               )}
             </div>
           )}
