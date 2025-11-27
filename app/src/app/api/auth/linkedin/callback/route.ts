@@ -84,8 +84,9 @@ export async function GET(request: Request) {
       scope: tokenData.scope,
     });
 
-    // Get user profile information using OpenID Connect userinfo endpoint
-    const profileResponse = await fetch("https://api.linkedin.com/v2/userinfo", {
+    // Get user profile information using LinkedIn v2 API (NOT OpenID Connect)
+    // Using r_liteprofile scope which provides basic profile info
+    const profileResponse = await fetch("https://api.linkedin.com/v2/me", {
       headers: {
         Authorization: `Bearer ${tokenData.access_token}`,
       },
@@ -98,18 +99,71 @@ export async function GET(request: Request) {
       );
     }
 
-    const profile = await profileResponse.json();
+    const profileData = await profileResponse.json();
+    
+    // Get email address using r_emailaddress scope
+    const emailResponse = await fetch(
+      "https://api.linkedin.com/v2/emailAddress?q=members&projection=(elements*(handle~))",
+      {
+        headers: {
+          Authorization: `Bearer ${tokenData.access_token}`,
+        },
+      }
+    );
+
+    let email = "";
+    if (emailResponse.ok) {
+      const emailData = await emailResponse.json();
+      email = emailData.elements?.[0]?.["handle~"]?.emailAddress || "";
+    }
+
+    // Construct profile object
+    const profile = {
+      sub: profileData.id, // LinkedIn member ID
+      name: `${profileData.localizedFirstName || ""} ${profileData.localizedLastName || ""}`.trim(),
+      email: email,
+      picture: null,
+    };
+
     console.log("[LinkedIn OAuth] Profile fetched", {
       sub: profile.sub,
       name: profile.name,
       email: profile.email,
     });
 
-    // TODO: Fetch user's organizations/company pages using Community Management API
-    // Temporarily disabled to test basic OpenID Connect flow
-    // Will re-enable after confirming basic OAuth works
+    // Fetch user's organizations/company pages using Community Management API
+    const orgsResponse = await fetch(
+      "https://api.linkedin.com/v2/organizationalEntityAcls?q=roleAssignee&role=ADMINISTRATOR&projection=(elements*(organizationalTarget~(id,localizedName,vanityName)))",
+      {
+        headers: {
+          Authorization: `Bearer ${tokenData.access_token}`,
+          "X-Restli-Protocol-Version": "2.0.0",
+        },
+      }
+    );
+
     let organizations: any[] = [];
-    console.log("[LinkedIn OAuth] Skipping organization fetch (testing basic OAuth)");
+    if (orgsResponse.ok) {
+      const orgsData = await orgsResponse.json();
+      organizations = orgsData.elements
+        ?.map((element: any) => ({
+          id: element["organizationalTarget~"]?.id,
+          name: element["organizationalTarget~"]?.localizedName,
+          vanityName: element["organizationalTarget~"]?.vanityName,
+        }))
+        .filter((org: any) => org.id && org.name) || [];
+      
+      console.log("[LinkedIn OAuth] Organizations fetched", {
+        count: organizations.length,
+        orgs: organizations,
+      });
+    } else {
+      const errorText = await orgsResponse.text();
+      console.warn("[LinkedIn OAuth] Failed to fetch organizations", {
+        status: orgsResponse.status,
+        error: errorText,
+      });
+    }
 
     // Calculate token expiry
     const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
@@ -129,7 +183,7 @@ export async function GET(request: Request) {
         refreshToken: tokenData.refresh_token || null,
         expiresAt,
         accountIdentifier: profile.sub,
-        scopes: tokenData.scope || "openid profile email",
+        scopes: tokenData.scope || "r_liteprofile r_emailaddress w_member_social w_organization_social r_organization_social",
         metadata: {
           name: profile.name,
           email: profile.email,
@@ -141,7 +195,7 @@ export async function GET(request: Request) {
         accessToken: tokenData.access_token,
         refreshToken: tokenData.refresh_token || null,
         expiresAt,
-        scopes: tokenData.scope || "openid profile email",
+        scopes: tokenData.scope || "r_liteprofile r_emailaddress w_member_social w_organization_social r_organization_social",
         metadata: {
           name: profile.name,
           email: profile.email,

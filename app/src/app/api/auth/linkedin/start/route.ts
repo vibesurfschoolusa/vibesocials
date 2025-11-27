@@ -32,14 +32,13 @@ export async function GET() {
   authUrl.searchParams.set("client_id", clientId);
   authUrl.searchParams.set("redirect_uri", redirectUri);
   authUrl.searchParams.set("state", state);
-  // Using OpenID Connect + Community Management API for company page posting
-  // IMPORTANT: Requires both "Sign In with LinkedIn using OpenID Connect" 
-  // and "Community Management API" products enabled in LinkedIn Developer Portal
-  // Testing with minimal OpenID Connect scopes first
-  // If this works, we'll add organization scopes incrementally
+  // Using ONLY Community Management API scopes (NOT OpenID Connect)
+  // IMPORTANT: OpenID Connect and Community Management API are mutually exclusive
+  // Cannot be on the same LinkedIn app due to LinkedIn security restrictions
+  // Using member and organization scopes available with Community Management API
   authUrl.searchParams.set(
     "scope",
-    "openid profile email"
+    "r_liteprofile r_emailaddress w_member_social w_organization_social r_organization_social"
   );
 
   console.log("[LinkedIn OAuth] Redirecting to LinkedIn authorization", {
