@@ -459,7 +459,7 @@ function ReviewCard({
                     }
                     placeholder="Write your reply or use AI to draft one..."
                     rows={4}
-                    className="w-full rounded-lg border border-gray-300 px-4 py-2 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none resize-none"
+                    className="w-full rounded-lg border border-gray-300 px-4 py-2 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none resize-none"
                   />
                   <div className="flex gap-3">
                     <button
