@@ -48,19 +48,26 @@ export async function GET() {
       accessToken = refreshedConnection.accessToken!;
     }
 
+    // Use the newer Google Business Profile API endpoints
+    const accountManagementBase =
+      "https://mybusinessaccountmanagement.googleapis.com/v1";
+    const businessInfoBase =
+      "https://mybusinessbusinessinformation.googleapis.com/v1";
+
     // Fetch all accounts
-    const accountsResponse = await fetch(
-      "https://mybusiness.googleapis.com/v4/accounts",
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      }
-    );
+    const accountsResponse = await fetch(`${accountManagementBase}/accounts`, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
 
     if (!accountsResponse.ok) {
-      const errorData = await accountsResponse.json();
-      console.error("[GBP Locations] Failed to fetch accounts:", errorData);
+      const errorText = await accountsResponse.text();
+      console.error("[GBP Locations] Failed to fetch accounts:", {
+        status: accountsResponse.status,
+        statusText: accountsResponse.statusText,
+        body: errorText.substring(0, 500),
+      });
       throw new Error("Failed to fetch Google Business Profile accounts");
     }
 
@@ -80,14 +87,18 @@ export async function GET() {
     }> = [];
 
     for (const account of accounts) {
-      const locationsResponse = await fetch(
-        `https://mybusiness.googleapis.com/v4/${account.name}/locations`,
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-          },
-        }
-      );
+      const accountName = account.name;
+      if (!accountName) continue;
+
+      // Use the business information API with readMask to get location details
+      const url = new URL(`${businessInfoBase}/${accountName}/locations`);
+      url.searchParams.set("readMask", "name,storeCode,title");
+
+      const locationsResponse = await fetch(url.toString(), {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
 
       if (locationsResponse.ok) {
         const locationsData = await locationsResponse.json();
@@ -101,6 +112,11 @@ export async function GET() {
             storeCode: location.storeCode,
           });
         }
+      } else {
+        console.error("[GBP Locations] Failed to fetch locations for account", {
+          accountName,
+          status: locationsResponse.status,
+        });
       }
     }
 
