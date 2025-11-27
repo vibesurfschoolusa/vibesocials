@@ -157,7 +157,7 @@ export async function GET(request: Request) {
         refreshToken: tokenData.refresh_token || null,
         expiresAt,
         accountIdentifier: profile.sub,
-        scopes: tokenData.scope || "openid profile email w_member_social w_organization_social r_organization_social",
+        scopes: tokenData.scope || "profile email w_member_social w_organization_social r_organization_social",
         metadata: {
           name: profile.name,
           email: profile.email,
@@ -169,7 +169,7 @@ export async function GET(request: Request) {
         accessToken: tokenData.access_token,
         refreshToken: tokenData.refresh_token || null,
         expiresAt,
-        scopes: tokenData.scope || "openid profile email w_member_social w_organization_social r_organization_social",
+        scopes: tokenData.scope || "profile email w_member_social w_organization_social r_organization_social",
         metadata: {
           name: profile.name,
           email: profile.email,

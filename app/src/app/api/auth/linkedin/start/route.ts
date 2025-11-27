@@ -33,9 +33,10 @@ export async function GET() {
   authUrl.searchParams.set("redirect_uri", redirectUri);
   authUrl.searchParams.set("state", state);
   // Using Community Management API for organization posting
+  // Note: Using OAuth 2.0 scopes (not OpenID) - openid requires special LinkedIn approval
   authUrl.searchParams.set(
     "scope",
-    "openid profile email w_member_social w_organization_social r_organization_social"
+    "profile email w_member_social w_organization_social r_organization_social"
   );
 
   console.log("[LinkedIn OAuth] Redirecting to LinkedIn authorization", {
