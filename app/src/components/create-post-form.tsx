@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { upload } from '@vercel/blob/client';
 import { LocationAutocomplete } from "./location-autocomplete";
+import { Sparkles, Loader2 } from "lucide-react";
 
 interface PostResponse {
   postJob: {
@@ -27,6 +28,7 @@ export function CreatePostForm() {
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [enhancingCaption, setEnhancingCaption] = useState(false);
 
   async function handleUploadSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -99,6 +101,44 @@ export function CreatePostForm() {
     }
   }
 
+  async function handleEnhanceCaption() {
+    if (!uploadCaption.trim()) {
+      setUploadError("Please enter some text first to enhance.");
+      return;
+    }
+
+    try {
+      setEnhancingCaption(true);
+      setUploadError(null);
+
+      const response = await fetch("/api/posts/enhance-caption", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          caption: uploadCaption,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to enhance caption");
+      }
+
+      const data = await response.json();
+      const enhancedCaption = data.enhancedCaption;
+
+      // Set the enhanced caption in the textarea
+      setUploadCaption(enhancedCaption);
+    } catch (err: any) {
+      console.error("Error enhancing caption:", err);
+      setUploadError(err.message || "Failed to enhance caption");
+    } finally {
+      setEnhancingCaption(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       {successMessage && (
@@ -123,9 +163,29 @@ export function CreatePostForm() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-zinc-900">
-              Caption
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-sm font-medium text-zinc-900">
+                Caption
+              </label>
+              <button
+                type="button"
+                onClick={handleEnhanceCaption}
+                disabled={enhancingCaption || !uploadCaption.trim()}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-purple-200 bg-purple-50 px-3 py-1 text-xs font-semibold text-purple-700 hover:bg-purple-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {enhancingCaption ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Enhancing...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-3 w-3 fill-purple-600" />
+                    AI Enhance Caption
+                  </>
+                )}
+              </button>
+            </div>
             <textarea
               value={uploadCaption}
               onChange={(event) => setUploadCaption(event.target.value)}
