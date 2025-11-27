@@ -32,13 +32,13 @@ export async function GET() {
   authUrl.searchParams.set("client_id", clientId);
   authUrl.searchParams.set("redirect_uri", redirectUri);
   authUrl.searchParams.set("state", state);
-  // Using ONLY Community Management API scopes (NOT OpenID Connect)
+  // Using ONLY Community Management API organization scopes
   // IMPORTANT: OpenID Connect and Community Management API are mutually exclusive
-  // Cannot be on the same LinkedIn app due to LinkedIn security restrictions
-  // Using member and organization scopes available with Community Management API
+  // Development Tier may only support organization scopes, not member profile scopes
+  // Testing with minimal org scopes that Community Management API explicitly provides
   authUrl.searchParams.set(
     "scope",
-    "r_liteprofile r_emailaddress w_member_social w_organization_social r_organization_social"
+    "w_organization_social r_organization_social"
   );
 
   console.log("[LinkedIn OAuth] Redirecting to LinkedIn authorization", {

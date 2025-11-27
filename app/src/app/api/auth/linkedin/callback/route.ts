@@ -84,51 +84,46 @@ export async function GET(request: Request) {
       scope: tokenData.scope,
     });
 
-    // Get user profile information using LinkedIn v2 API (NOT OpenID Connect)
-    // Using r_liteprofile scope which provides basic profile info
-    const profileResponse = await fetch("https://api.linkedin.com/v2/me", {
-      headers: {
-        Authorization: `Bearer ${tokenData.access_token}`,
-      },
-    });
-
-    if (!profileResponse.ok) {
-      console.error("[LinkedIn OAuth] Failed to fetch profile");
-      return NextResponse.redirect(
-        new URL("/connections?error=linkedin_profile_failed", process.env.NEXTAUTH_URL!)
-      );
-    }
-
-    const profileData = await profileResponse.json();
+    // Note: We're using ONLY organization scopes (no profile/email scopes)
+    // Development Tier Community Management API may not support member profile scopes
+    // We'll use a minimal profile based on what's available or use organization info
     
-    // Get email address using r_emailaddress scope
-    const emailResponse = await fetch(
-      "https://api.linkedin.com/v2/emailAddress?q=members&projection=(elements*(handle~))",
-      {
+    // Try to fetch basic profile (may fail without profile scopes)
+    let profile: any = null;
+    try {
+      const profileResponse = await fetch("https://api.linkedin.com/v2/me", {
         headers: {
           Authorization: `Bearer ${tokenData.access_token}`,
         },
-      }
-    );
+      });
 
-    let email = "";
-    if (emailResponse.ok) {
-      const emailData = await emailResponse.json();
-      email = emailData.elements?.[0]?.["handle~"]?.emailAddress || "";
+      if (profileResponse.ok) {
+        const profileData = await profileResponse.json();
+        profile = {
+          sub: profileData.id,
+          name: `${profileData.localizedFirstName || ""} ${profileData.localizedLastName || ""}`.trim(),
+          email: null, // No email scope
+          picture: null,
+        };
+      }
+    } catch (error) {
+      console.warn("[LinkedIn OAuth] Could not fetch profile (no profile scopes)");
     }
 
-    // Construct profile object
-    const profile = {
-      sub: profileData.id, // LinkedIn member ID
-      name: `${profileData.localizedFirstName || ""} ${profileData.localizedLastName || ""}`.trim(),
-      email: email,
-      picture: null,
-    };
+    // If we couldn't get profile, use minimal placeholder
+    if (!profile) {
+      profile = {
+        sub: `linkedin_${Date.now()}`, // Temporary ID, will be updated when we fetch orgs
+        name: "LinkedIn User",
+        email: null,
+        picture: null,
+      };
+    }
 
-    console.log("[LinkedIn OAuth] Profile fetched", {
+    console.log("[LinkedIn OAuth] Profile data", {
       sub: profile.sub,
       name: profile.name,
-      email: profile.email,
+      hasEmail: !!profile.email,
     });
 
     // Fetch user's organizations/company pages using Community Management API
@@ -183,7 +178,7 @@ export async function GET(request: Request) {
         refreshToken: tokenData.refresh_token || null,
         expiresAt,
         accountIdentifier: profile.sub,
-        scopes: tokenData.scope || "r_liteprofile r_emailaddress w_member_social w_organization_social r_organization_social",
+        scopes: tokenData.scope || "w_organization_social r_organization_social",
         metadata: {
           name: profile.name,
           email: profile.email,
@@ -195,7 +190,7 @@ export async function GET(request: Request) {
         accessToken: tokenData.access_token,
         refreshToken: tokenData.refresh_token || null,
         expiresAt,
-        scopes: tokenData.scope || "r_liteprofile r_emailaddress w_member_social w_organization_social r_organization_social",
+        scopes: tokenData.scope || "w_organization_social r_organization_social",
         metadata: {
           name: profile.name,
           email: profile.email,
