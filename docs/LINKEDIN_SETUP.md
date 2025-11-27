@@ -2,7 +2,15 @@
 
 ## Prerequisites
 
-You need a LinkedIn Developer account and an app to use the LinkedIn integration.
+**IMPORTANT: This integration posts to LinkedIn Company Pages ONLY, not personal profiles.**
+
+Before you begin, you need:
+
+1. **LinkedIn Developer Account** - Free to create
+2. **LinkedIn Company Page** - You must be an administrator of a company page
+3. **Administrator Access** - You must have admin rights on the company page you want to post to
+
+**Why?** Vibe Socials is designed for business/company page posting only. If you don't have a company page, create one first at [linkedin.com/company/setup/new](https://www.linkedin.com/company/setup/new/).
 
 ## Step 1: Create a LinkedIn App
 
@@ -26,12 +34,19 @@ You need a LinkedIn Developer account and an app to use the LinkedIn integration
 
 ## Step 3: Request API Access
 
-1. Go to the **"Products"** tab
-2. Request access to:
-   - **Share on LinkedIn** - For posting content
-   - **Sign In with LinkedIn using OpenID Connect** - For authentication
+**CRITICAL: You MUST enable the Community Management API product for this integration to work!**
 
-Note: These products require review for production use, but you can test in development mode immediately.
+1. Go to the **"Products"** tab
+2. Request access to these products:
+   - ✅ **Community Management API** - **REQUIRED** for posting to company pages
+   - ✅ **Share on LinkedIn** - For basic posting capabilities
+   - ✅ **Sign In with LinkedIn using OpenID Connect** - For authentication
+
+**Important Notes:**
+- **Community Management API is REQUIRED** - Without this, you'll get "unauthorized_scope_error"
+- In Development Mode, you can test immediately after requesting access
+- For Production Mode, these products require LinkedIn review (1-2 weeks)
+- The app posts ONLY to company pages, never to personal profiles
 
 ## Step 4: Get Your Credentials
 
@@ -73,18 +88,23 @@ LINKEDIN_REDIRECT_URI=http://localhost:3000/api/auth/linkedin/callback
 
 ## API Scopes Used
 
-- `openid` - Required for OpenID Connect
 - `profile` - Access to basic profile information
 - `email` - Access to email address
-- `w_member_social` - Post content on behalf of the user
+- `w_member_social` - Post content on behalf of the user (fallback, not used for company pages)
+- `w_organization_social` - **REQUIRED** - Post content to company pages
+- `r_organization_social` - **REQUIRED** - Read organization/company page data
+
+**Important:** The `w_organization_social` and `r_organization_social` scopes require the **Community Management API** product to be enabled in your LinkedIn app.
 
 ## Supported Features
 
+- ✅ **Company Page Posting** - Posts to LinkedIn business profiles/company pages
 - ✅ **Image Posts** - Upload and share images
-- ✅ **Video Posts** - Upload and share videos (with chunked upload)
+- ✅ **Video Posts** - Upload and share videos (with chunked upload up to 200MB)
 - ✅ **Captions** - Add text commentary to posts
-- ✅ **Public Visibility** - Posts are visible to your network
-- ❌ **Company Pages** - Not yet supported (personal profiles only)
+- ✅ **Public Visibility** - Posts are visible to company page followers
+- ✅ **Organization Detection** - Automatically detects your administered company pages
+- ❌ **Personal Profile Posting** - Intentionally disabled (company pages only)
 - ❌ **Article Sharing** - Not yet supported
 
 ## Media Requirements
@@ -101,6 +121,22 @@ LINKEDIN_REDIRECT_URI=http://localhost:3000/api/auth/linkedin/callback
 - **Recommended dimensions**: 1280 x 720 pixels or higher
 
 ## Troubleshooting
+
+### "unauthorized_scope_error" - MOST COMMON ISSUE
+**This is the error you're seeing!**
+
+**Cause:** The Community Management API product is not enabled in your LinkedIn app.
+
+**Solution:**
+1. Go to [LinkedIn Developers](https://www.linkedin.com/developers/apps)
+2. Select your app
+3. Click the **"Products"** tab
+4. Find **"Community Management API"**
+5. Click **"Request access"** or **"Add to app"**
+6. In Development Mode, access is granted immediately
+7. Try connecting again - it should work now!
+
+**Why this happens:** The scopes `w_organization_social` and `r_organization_social` require this specific API product. Without it, LinkedIn rejects the authorization request.
 
 ### "Invalid client_id" error
 - Verify your `LINKEDIN_CLIENT_ID` is correct

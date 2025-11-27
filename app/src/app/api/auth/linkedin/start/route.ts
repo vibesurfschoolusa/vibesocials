@@ -32,12 +32,13 @@ export async function GET() {
   authUrl.searchParams.set("client_id", clientId);
   authUrl.searchParams.set("redirect_uri", redirectUri);
   authUrl.searchParams.set("state", state);
-  // Using basic LinkedIn scopes that all apps have access to
-  // Note: Organization posting (w_organization_social) requires Community Management API product
-  // which needs to be explicitly enabled in LinkedIn Developer Portal
+  // Using LinkedIn Community Management API for company page posting
+  // IMPORTANT: These scopes require "Community Management API" product to be enabled
+  // in LinkedIn Developer Portal under "Products" tab
+  // The app will ONLY post to company pages, never to personal profiles
   authUrl.searchParams.set(
     "scope",
-    "profile email w_member_social"
+    "profile email w_member_social w_organization_social r_organization_social"
   );
 
   console.log("[LinkedIn OAuth] Redirecting to LinkedIn authorization", {
