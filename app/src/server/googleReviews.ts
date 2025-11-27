@@ -159,22 +159,16 @@ export async function fetchReviews(
  */
 export async function replyToReview(
   accessToken: string,
-  locationName: string,
-  reviewId: string,
+  reviewName: string,
   comment: string
 ): Promise<{ comment: string; updateTime: string }> {
-  console.log("[GBP Reviews] Replying to review", { reviewId });
-
-  // Resolve location name if it's a store code
-  const resolvedLocationName = await resolveLocationName(
-    accessToken,
-    locationName
-  );
+  console.log("[GBP Reviews] Replying to review", { reviewName });
 
   // Use Google My Business API v4 to reply to review
   // API: https://developers.google.com/my-business/reference/rest/v4/accounts.locations.reviews/updateReply
+  // reviewName should be the full path: "accounts/.../locations/.../reviews/..."
   const response = await fetch(
-    `https://mybusiness.googleapis.com/v4/${resolvedLocationName}/reviews/${reviewId}/reply`,
+    `https://mybusiness.googleapis.com/v4/${reviewName}/reply`,
     {
       method: "PUT",
       headers: {

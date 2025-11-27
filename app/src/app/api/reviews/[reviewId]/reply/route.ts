@@ -20,11 +20,18 @@ export async function POST(
 
     const { reviewId } = await params;
     const body = await request.json();
-    const { comment } = body;
+    const { comment, reviewName } = body;
 
     if (!comment || typeof comment !== "string" || comment.trim().length === 0) {
       return NextResponse.json(
         { error: "Reply comment is required" },
+        { status: 400 }
+      );
+    }
+
+    if (!reviewName || typeof reviewName !== "string") {
+      return NextResponse.json(
+        { error: "Review name is required" },
         { status: 400 }
       );
     }
@@ -60,26 +67,11 @@ export async function POST(
       );
     }
 
-    // Get location name from metadata
-    const metadata = (connection.metadata as any) ?? {};
-    const locationName = metadata.locationName;
-
-    if (!locationName) {
-      return NextResponse.json(
-        {
-          error:
-            "Location not configured. Please set it in the Connections page.",
-        },
-        { status: 400 }
-      );
-    }
-
-    // Post reply to Google Business Profile API
+    // Post reply to Google Business Profile API using full review name
     const { replyToReview } = await import("@/server/googleReviews");
     const result = await replyToReview(
       accessToken,
-      locationName,
-      reviewId,
+      reviewName,
       comment.trim()
     );
 

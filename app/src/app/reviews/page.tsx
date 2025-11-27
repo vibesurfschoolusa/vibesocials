@@ -111,8 +111,8 @@ export default function ReviewsPage() {
     }
   };
 
-  const handleReply = async (reviewId: string) => {
-    const comment = replyText[reviewId]?.trim();
+  const handleReply = async (review: GoogleReview) => {
+    const comment = replyText[review.reviewId]?.trim();
 
     if (!comment) {
       alert("Please enter a reply message");
@@ -120,14 +120,17 @@ export default function ReviewsPage() {
     }
 
     try {
-      setSubmitting(reviewId);
+      setSubmitting(review.reviewId);
 
-      const response = await fetch(`/api/reviews/${reviewId}/reply`, {
+      const response = await fetch(`/api/reviews/${review.reviewId}/reply`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ comment }),
+        body: JSON.stringify({ 
+          comment,
+          reviewName: review.name, // Pass full review name for API
+        }),
       });
 
       if (!response.ok) {
@@ -137,21 +140,21 @@ export default function ReviewsPage() {
 
       // Update the review in the list
       setReviews((prevReviews) =>
-        prevReviews.map((review) =>
-          review.reviewId === reviewId
+        prevReviews.map((r) =>
+          r.reviewId === review.reviewId
             ? {
-                ...review,
+                ...r,
                 reviewReply: {
                   comment,
                   updateTime: new Date().toISOString(),
                 },
               }
-            : review
+            : r
         )
       );
 
       // Clear reply text and close reply box
-      setReplyText((prev) => ({ ...prev, [reviewId]: "" }));
+      setReplyText((prev) => ({ ...prev, [review.reviewId]: "" }));
       setReplyingTo(null);
 
       alert("Reply posted successfully!");
@@ -384,7 +387,7 @@ interface ReviewCardProps {
   replyText: Record<string, string>;
   setReplyText: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   submitting: string | null;
-  handleReply: (reviewId: string) => void;
+  handleReply: (review: GoogleReview) => void;
   handleDraftAI: (review: GoogleReview) => void;
   generatingAI: string | null;
   renderStars: (rating: keyof typeof STAR_RATINGS) => React.JSX.Element;
@@ -506,7 +509,7 @@ function ReviewCard({
                   />
                   <div className="flex gap-3">
                     <button
-                      onClick={() => handleReply(review.reviewId)}
+                      onClick={() => handleReply(review)}
                       disabled={submitting === review.reviewId}
                       className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
