@@ -30,9 +30,19 @@ const STAR_RATINGS = {
   FIVE: 5,
 };
 
+interface Location {
+  name: string;
+  locationName: string;
+  title: string;
+  storeCode?: string;
+}
+
 export default function ReviewsPage() {
   const [reviews, setReviews] = useState<GoogleReview[]>([]);
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingLocations, setLoadingLocations] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState<Record<string, string>>({});
@@ -40,15 +50,51 @@ export default function ReviewsPage() {
   const [generatingAI, setGeneratingAI] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchReviews();
+    fetchLocations();
   }, []);
 
+  useEffect(() => {
+    if (selectedLocation) {
+      fetchReviews();
+    }
+  }, [selectedLocation]);
+
+  const fetchLocations = async () => {
+    try {
+      setLoadingLocations(true);
+      const response = await fetch("/api/reviews/locations");
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to fetch locations");
+      }
+
+      const data = await response.json();
+      const locs = data.locations || [];
+      setLocations(locs);
+
+      // Auto-select first location if only one exists
+      if (locs.length === 1) {
+        setSelectedLocation(locs[0].name);
+      }
+    } catch (err: any) {
+      console.error("Error fetching locations:", err);
+      setError(err.message || "Failed to load locations");
+    } finally {
+      setLoadingLocations(false);
+    }
+  };
+
   const fetchReviews = async () => {
+    if (!selectedLocation) return;
+
     try {
       setLoading(true);
       setError(null);
 
-      const response = await fetch("/api/reviews");
+      const response = await fetch(
+        `/api/reviews?location=${encodeURIComponent(selectedLocation)}`
+      );
 
       if (!response.ok) {
         const errorData = await response.json();
@@ -190,7 +236,7 @@ export default function ReviewsPage() {
   const needsReply = reviews.filter((r) => !r.reviewReply);
   const hasReplies = reviews.filter((r) => r.reviewReply);
 
-  if (loading) {
+  if (loadingLocations) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
         <div className="container mx-auto max-w-6xl px-4 py-8">
@@ -246,94 +292,84 @@ export default function ReviewsPage() {
           </p>
         </div>
 
-        {/* Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-            <div className="text-sm font-medium text-gray-600">Total Reviews</div>
-            <div className="mt-2 text-3xl font-bold text-gray-900">
-              {reviews.length}
+        {/* Location Selector */}
+        {locations.length > 1 && (
+          <div className="mb-8">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Select Location
+            </label>
+            <select
+              value={selectedLocation || ""}
+              onChange={(e) => setSelectedLocation(e.target.value)}
+              className="w-full max-w-md rounded-lg border border-gray-300 px-4 py-2 text-gray-900 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none"
+            >
+              <option value="">Choose a location...</option>
+              {locations.map((loc) => (
+                <option key={loc.name} value={loc.name}>
+                  {loc.title}
+                  {loc.storeCode && ` (${loc.storeCode})`}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Summary Card - Only Needs Reply */}
+        {selectedLocation && (
+          <div className="mb-8">
+            <div className="rounded-xl border border-orange-200 bg-orange-50 p-6 shadow-sm max-w-sm">
+              <div className="text-sm font-medium text-orange-900">
+                Reviews Needing Reply
+              </div>
+              <div className="mt-2 text-4xl font-bold text-orange-600">
+                {needsReply.length}
+              </div>
             </div>
           </div>
-          <div className="rounded-xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
-            <div className="text-sm font-medium text-orange-900">Need Reply</div>
-            <div className="mt-2 text-3xl font-bold text-orange-600">
-              {needsReply.length}
-            </div>
-          </div>
-          <div className="rounded-xl border border-green-200 bg-green-50 p-6 shadow-sm">
-            <div className="text-sm font-medium text-green-900">Replied</div>
-            <div className="mt-2 text-3xl font-bold text-green-600">
-              {hasReplies.length}
-            </div>
-          </div>
-        </div>
+        )}
 
         {/* Reviews List */}
-        {reviews.length === 0 ? (
+        {!selectedLocation ? (
           <div className="rounded-xl border border-gray-200 bg-white p-12 text-center">
             <MessageSquare className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-gray-900">No Reviews Yet</h3>
+            <h3 className="text-lg font-semibold text-gray-900">Select a Location</h3>
             <p className="mt-2 text-gray-600">
-              Your Google Business Profile reviews will appear here
+              {locations.length === 0
+                ? "No locations found. Please connect your Google Business Profile."
+                : "Choose a location above to view and reply to reviews"}
+            </p>
+          </div>
+        ) : loading ? (
+          <div className="flex items-center justify-center py-20">
+            <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+          </div>
+        ) : needsReply.length === 0 ? (
+          <div className="rounded-xl border border-green-200 bg-green-50 p-12 text-center">
+            <MessageSquare className="h-12 w-12 text-green-600 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-green-900">All Caught Up!</h3>
+            <p className="mt-2 text-green-700">
+              No reviews need replies at this location. Great job!
             </p>
           </div>
         ) : (
-          <div className="space-y-6">
-            {/* Reviews Needing Reply */}
-            {needsReply.length > 0 && (
-              <div>
-                <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                  Needs Reply ({needsReply.length})
-                </h2>
-                <div className="space-y-4">
-                  {needsReply.map((review) => (
-                    <ReviewCard
-                      key={review.reviewId}
-                      review={review}
-                      replyingTo={replyingTo}
-                      setReplyingTo={setReplyingTo}
-                      replyText={replyText}
-                      setReplyText={setReplyText}
-                      submitting={submitting}
-                      handleReply={handleReply}
-                      handleDraftAI={handleDraftAI}
-                      generatingAI={generatingAI}
-                      renderStars={renderStars}
-                      formatDate={formatDate}
-                      needsReply={true}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Reviews With Replies */}
-            {hasReplies.length > 0 && (
-              <div>
-                <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                  Replied ({hasReplies.length})
-                </h2>
-                <div className="space-y-4">
-                  {hasReplies.map((review) => (
-                    <ReviewCard
-                      key={review.reviewId}
-                      review={review}
-                      replyingTo={replyingTo}
-                      setReplyingTo={setReplyingTo}
-                      replyText={replyText}
-                      setReplyText={setReplyText}
-                      submitting={submitting}
-                      handleReply={handleReply}
-                      handleDraftAI={handleDraftAI}
-                      generatingAI={generatingAI}
-                      renderStars={renderStars}
-                      formatDate={formatDate}
-                      needsReply={false}
-                    />
-                  ))}
-                </div>
-              </div>
-            )}
+          <div className="space-y-4">
+            {needsReply.map((review) => (
+              <ReviewCard
+                key={review.reviewId}
+                review={review}
+                replyingTo={replyingTo}
+                setReplyingTo={setReplyingTo}
+                replyText={replyText}
+                setReplyText={setReplyText}
+                submitting={submitting}
+                handleReply={handleReply}
+                handleDraftAI={handleDraftAI}
+                generatingAI={generatingAI}
+                renderStars={renderStars}
+                formatDate={formatDate}
+                needsReply={true}
+              />
+            ))}
           </div>
         )}
       </div>

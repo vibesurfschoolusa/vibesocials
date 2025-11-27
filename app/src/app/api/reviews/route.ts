@@ -5,15 +5,19 @@ import { prisma } from "@/lib/db";
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/reviews - Fetch Google Business Profile reviews
+ * GET /api/reviews?location=... - Fetch Google Business Profile reviews for a specific location
  */
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const user = await getCurrentUser();
 
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    // Get location from query params
+    const { searchParams } = new URL(request.url);
+    const locationParam = searchParams.get("location");
 
     // Get the user's Google Business Profile connection
     const connection = await prisma.socialConnection.findFirst({
@@ -46,15 +50,15 @@ export async function GET() {
       );
     }
 
-    // Get location name from metadata
+    // Get location name from query param or metadata
     const metadata = (connection.metadata as any) ?? {};
-    const locationName = metadata.locationName;
+    const locationName = locationParam || metadata.locationName;
 
     if (!locationName) {
       return NextResponse.json(
         {
           error:
-            "Location not configured. Please set it in the Connections page.",
+            "Please select a location to view reviews.",
         },
         { status: 400 }
       );
