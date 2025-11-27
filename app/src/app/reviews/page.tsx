@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Star, MessageSquare, AlertCircle, Loader2 } from "lucide-react";
+import { Star, MessageSquare, AlertCircle, Loader2, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 
 interface GoogleReview {
@@ -233,6 +233,13 @@ export default function ReviewsPage() {
       <div className="container mx-auto max-w-6xl px-4 py-8">
         {/* Header */}
         <div className="mb-8">
+          <Link
+            href="/"
+            className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 mb-4 transition-colors"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to Dashboard
+          </Link>
           <h1 className="text-3xl font-bold text-gray-900">Google Reviews</h1>
           <p className="mt-2 text-gray-600">
             Manage and reply to your Google Business Profile reviews
