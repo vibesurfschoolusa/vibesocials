@@ -127,38 +127,48 @@ export async function GET(request: Request) {
     });
 
     // Fetch user's organizations/company pages using Community Management API
-    const orgsResponse = await fetch(
-      "https://api.linkedin.com/v2/organizationalEntityAcls?q=roleAssignee&role=ADMINISTRATOR&projection=(elements*(organizationalTarget~(id,localizedName,vanityName)))",
-      {
-        headers: {
-          Authorization: `Bearer ${tokenData.access_token}`,
-          "X-Restli-Protocol-Version": "2.0.0",
-        },
-      }
-    );
-
+    // Try multiple approaches to find organizations
     let organizations: any[] = [];
-    if (orgsResponse.ok) {
-      const orgsData = await orgsResponse.json();
-      organizations = orgsData.elements
-        ?.map((element: any) => ({
-          id: element["organizationalTarget~"]?.id,
-          name: element["organizationalTarget~"]?.localizedName,
-          vanityName: element["organizationalTarget~"]?.vanityName,
-        }))
-        .filter((org: any) => org.id && org.name) || [];
-      
-      console.log("[LinkedIn OAuth] Organizations fetched", {
-        count: organizations.length,
-        orgs: organizations,
-      });
-    } else {
-      const errorText = await orgsResponse.text();
-      console.warn("[LinkedIn OAuth] Failed to fetch organizations", {
-        status: orgsResponse.status,
-        error: errorText,
-      });
+    
+    // Approach 1: Try without role filter (more permissive)
+    try {
+      const orgsResponse = await fetch(
+        "https://api.linkedin.com/v2/organizationalEntityAcls?q=roleAssignee&projection=(elements*(organizationalTarget~(id,localizedName,vanityName)))",
+        {
+          headers: {
+            Authorization: `Bearer ${tokenData.access_token}`,
+            "X-Restli-Protocol-Version": "2.0.0",
+          },
+        }
+      );
+
+      if (orgsResponse.ok) {
+        const orgsData = await orgsResponse.json();
+        organizations = orgsData.elements
+          ?.map((element: any) => ({
+            id: element["organizationalTarget~"]?.id,
+            name: element["organizationalTarget~"]?.localizedName,
+            vanityName: element["organizationalTarget~"]?.vanityName,
+          }))
+          .filter((org: any) => org.id && org.name) || [];
+        
+        console.log("[LinkedIn OAuth] Organizations fetched", {
+          count: organizations.length,
+          orgs: organizations,
+        });
+      } else {
+        const errorText = await orgsResponse.text();
+        console.warn("[LinkedIn OAuth] Failed to fetch organizations (will allow manual config)", {
+          status: orgsResponse.status,
+          error: errorText,
+        });
+      }
+    } catch (error) {
+      console.error("[LinkedIn OAuth] Error fetching organizations", { error });
     }
+    
+    // Note: If no organizations found, user will need to manually configure organization ID
+    // or the LinkedIn app needs to be granted proper permissions
 
     // Calculate token expiry
     const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
