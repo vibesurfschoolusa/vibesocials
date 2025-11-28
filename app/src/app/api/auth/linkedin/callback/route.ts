@@ -239,40 +239,74 @@ export async function GET(request: Request) {
     if (organizations.length === 0) {
       console.log("[LinkedIn OAuth] Checking for organization in state/session");
       
-      // Check if user provided vanity name in the authorization state
+      // Check if user provided vanity name/ID in the authorization state
       // This will be set if user came from the setup page
       const stateData = JSON.parse(Buffer.from(state || "", "base64url").toString());
       const vanityName = stateData.linkedinVanityName;
       
       if (vanityName) {
-        console.log("[LinkedIn OAuth] Attempting to lookup organization by vanity name:", vanityName);
-        try {
-          const orgLookup = await fetch(
-            `https://api.linkedin.com/v2/organizations?q=vanityName&vanityName=${encodeURIComponent(vanityName)}`,
-            {
-              headers: {
-                Authorization: `Bearer ${tokenData.access_token}`,
-                "X-Restli-Protocol-Version": "2.0.0",
-              },
-            }
-          );
+        // Check if it's a numeric ID or a vanity name
+        const isNumericId = /^\d+$/.test(vanityName);
+        
+        if (isNumericId) {
+          // Strategy 4a: Direct lookup by numeric organization ID
+          console.log("[LinkedIn OAuth] Attempting to lookup organization by ID:", vanityName);
+          try {
+            const orgLookup = await fetch(
+              `https://api.linkedin.com/v2/organizations/${vanityName}`,
+              {
+                headers: {
+                  Authorization: `Bearer ${tokenData.access_token}`,
+                  "X-Restli-Protocol-Version": "2.0.0",
+                },
+              }
+            );
 
-          if (orgLookup.ok) {
-            const lookupData = await orgLookup.json();
-            const org = lookupData.elements?.[0];
-            if (org) {
+            if (orgLookup.ok) {
+              const org = await orgLookup.json();
               organizations = [{
                 id: org.id,
                 name: org.localizedName || org.name,
-                vanityName: org.vanityName,
+                vanityName: org.vanityName || null,
               }];
-              console.log("[LinkedIn OAuth] Organization found by vanity name!", organizations[0]);
+              console.log("[LinkedIn OAuth] Organization found by ID!", organizations[0]);
+            } else {
+              console.log("[LinkedIn OAuth] ID lookup failed:", orgLookup.status);
             }
-          } else {
-            console.log("[LinkedIn OAuth] Vanity name lookup failed:", orgLookup.status);
+          } catch (error) {
+            console.log("[LinkedIn OAuth] ID lookup error:", error);
           }
-        } catch (error) {
-          console.log("[LinkedIn OAuth] Vanity name lookup error:", error);
+        } else {
+          // Strategy 4b: Lookup by vanity name
+          console.log("[LinkedIn OAuth] Attempting to lookup organization by vanity name:", vanityName);
+          try {
+            const orgLookup = await fetch(
+              `https://api.linkedin.com/v2/organizations?q=vanityName&vanityName=${encodeURIComponent(vanityName)}`,
+              {
+                headers: {
+                  Authorization: `Bearer ${tokenData.access_token}`,
+                  "X-Restli-Protocol-Version": "2.0.0",
+                },
+              }
+            );
+
+            if (orgLookup.ok) {
+              const lookupData = await orgLookup.json();
+              const org = lookupData.elements?.[0];
+              if (org) {
+                organizations = [{
+                  id: org.id,
+                  name: org.localizedName || org.name,
+                  vanityName: org.vanityName,
+                }];
+                console.log("[LinkedIn OAuth] Organization found by vanity name!", organizations[0]);
+              }
+            } else {
+              console.log("[LinkedIn OAuth] Vanity name lookup failed:", orgLookup.status);
+            }
+          } catch (error) {
+            console.log("[LinkedIn OAuth] Vanity name lookup error:", error);
+          }
         }
       }
     }

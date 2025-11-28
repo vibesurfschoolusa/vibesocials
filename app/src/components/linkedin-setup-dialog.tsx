@@ -19,28 +19,40 @@ export function LinkedInSetupDialog() {
       return;
     }
 
-    // Extract vanity name from full URL if user pasted the whole URL
+    // Extract vanity name/ID from full URL if user pasted the whole URL
     let cleanVanityName = vanityName.trim();
     
     // Handle various URL formats:
     // https://www.linkedin.com/company/vibe-surf-school-usa/
+    // https://www.linkedin.com/company/82188987/
     // https://linkedin.com/company/vibe-surf-school-usa
-    // linkedin.com/company/vibe-surf-school-usa
+    // linkedin.com/company/82188987
     // vibe-surf-school-usa
+    // 82188987
     
     if (cleanVanityName.includes("linkedin.com/company/")) {
-      const match = cleanVanityName.match(/linkedin\.com\/company\/([^/]+)/);
+      const match = cleanVanityName.match(/linkedin\.com\/company\/([^/?#]+)/);
       if (match) {
         cleanVanityName = match[1];
       }
     }
 
-    // Remove any trailing slashes or extra characters
-    cleanVanityName = cleanVanityName.replace(/\/$/, "").toLowerCase();
+    // Remove any trailing slashes
+    cleanVanityName = cleanVanityName.replace(/\/$/, "");
+    
+    // Only lowercase if it's NOT a numeric ID (preserve case for numeric IDs)
+    const isNumericId = /^\d+$/.test(cleanVanityName);
+    if (!isNumericId) {
+      cleanVanityName = cleanVanityName.toLowerCase();
+      // Replace spaces with hyphens for vanity names
+      cleanVanityName = cleanVanityName.replace(/\s+/g, "-");
+    }
+    
+    console.log("[LinkedIn Setup] Extracted identifier:", cleanVanityName, "isNumeric:", isNumericId);
     
     setIsConnecting(true);
     
-    // Redirect to LinkedIn OAuth start with vanity name as query parameter
+    // Redirect to LinkedIn OAuth start with vanity name/ID as query parameter
     window.location.href = `/api/auth/linkedin/start?vanity_name=${encodeURIComponent(cleanVanityName)}`;
   };
 
@@ -84,11 +96,11 @@ export function LinkedInSetupDialog() {
             value={vanityName}
             onChange={(e) => setVanityName(e.target.value)}
             placeholder="e.g., https://www.linkedin.com/company/vibe-surf-school-usa"
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm"
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all text-sm text-gray-900 placeholder:text-gray-400"
             disabled={isConnecting}
           />
           <p className="mt-2 text-xs text-gray-500">
-            You can paste the full URL or just the vanity name (e.g., "vibe-surf-school-usa")
+            You can paste the full URL (with name or number), e.g., "https://www.linkedin.com/company/82188987"
           </p>
         </div>
 
