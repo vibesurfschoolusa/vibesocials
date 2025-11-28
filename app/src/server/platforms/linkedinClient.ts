@@ -316,43 +316,28 @@ export const linkedinClient: PlatformClient = {
     // Check if user has organizations/company pages
     const metadata = (socialConnection.metadata as any) || {};
     const organizations = metadata.organizations || [];
-    let orgId: string | null = null;
-    let orgName: string = "Unknown";
-    
-    // Try to get organization from metadata
-    if (organizations.length > 0) {
-      // Use first organization from OAuth metadata
-      orgId = organizations[0].id;
-      orgName = organizations[0].name || "Unknown";
-    } else if (metadata.manualOrganizationId) {
-      // Allow manual configuration via metadata
-      orgId = metadata.manualOrganizationId;
-      orgName = metadata.manualOrganizationName || "Manually Configured";
-      console.log("[LinkedIn] Using manually configured organization", { orgId, orgName });
-    }
     
     // REQUIRE organization - never post to personal profile
-    if (!orgId) {
+    if (organizations.length === 0) {
       const error = new Error(
-        "No LinkedIn company pages found. This app only posts to company pages, not personal profiles.\n\n" +
+        "No LinkedIn company pages configured. This app only posts to company pages, not personal profiles.\n\n" +
         "To fix this:\n" +
-        "1. Ensure you are an administrator of a LinkedIn Company Page\n" +
-        "2. Grant proper permissions in LinkedIn Developer Portal\n" +
-        "3. OR manually add your organization ID to the connection metadata\n\n" +
-        "To find your organization ID:\n" +
-        "- Go to your LinkedIn company page\n" +
-        "- Click 'Admin tools' → 'Page admin center'\n" +
-        "- Check the URL: linkedin.com/company/YOUR_ORG_ID/admin/\n" +
-        "- Contact support to add this ID to your connection"
+        "1. Ensure you are an ADMINISTRATOR of a LinkedIn Company Page\n" +
+        "2. Go to Settings → Connections\n" +
+        "3. Disconnect and reconnect your LinkedIn account\n" +
+        "4. The app will automatically detect your company pages\n\n" +
+        "If this still fails, contact support with error code: LINKEDIN_NO_ORGANIZATION"
       );
       (error as any).code = "LINKEDIN_NO_ORGANIZATION";
       throw error;
     }
     
+    // Use first organization
+    const orgId = organizations[0].id;
     const authorUrn = `urn:li:organization:${orgId}`;
     console.log("[LinkedIn] Posting as organization", {
       orgId,
-      orgName,
+      orgName: organizations[0].name,
     });
 
     const mediaUrl = mediaItem.storageLocation;
