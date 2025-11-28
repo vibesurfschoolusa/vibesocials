@@ -10,14 +10,14 @@ export async function GET(request: Request) {
   if (error) {
     console.error("[LinkedIn OAuth] Authorization error:", error);
     return NextResponse.redirect(
-      new URL(`/connections?error=linkedin_auth_failed`, process.env.NEXTAUTH_URL!)
+      new URL(`/settings?error=linkedin_auth_failed`, process.env.NEXTAUTH_URL!)
     );
   }
 
   if (!code || !state) {
     console.error("[LinkedIn OAuth] Missing code or state");
     return NextResponse.redirect(
-      new URL("/connections?error=linkedin_missing_params", process.env.NEXTAUTH_URL!)
+      new URL("/settings?error=linkedin_missing_params", process.env.NEXTAUTH_URL!)
     );
   }
 
@@ -33,7 +33,7 @@ export async function GET(request: Request) {
   } catch (err) {
     console.error("[LinkedIn OAuth] Invalid state:", err);
     return NextResponse.redirect(
-      new URL("/connections?error=linkedin_invalid_state", process.env.NEXTAUTH_URL!)
+      new URL("/settings?error=linkedin_invalid_state", process.env.NEXTAUTH_URL!)
     );
   }
 
@@ -45,7 +45,7 @@ export async function GET(request: Request) {
   if (!clientId || !clientSecret || !redirectUri) {
     console.error("[LinkedIn OAuth] Missing environment variables");
     return NextResponse.redirect(
-      new URL("/connections?error=linkedin_config_missing", process.env.NEXTAUTH_URL!)
+      new URL("/settings?error=linkedin_config_missing", process.env.NEXTAUTH_URL!)
     );
   }
 
@@ -74,7 +74,7 @@ export async function GET(request: Request) {
         error: errorText,
       });
       return NextResponse.redirect(
-        new URL("/connections?error=linkedin_token_exchange_failed", process.env.NEXTAUTH_URL!)
+        new URL("/settings?error=linkedin_token_exchange_failed", process.env.NEXTAUTH_URL!)
       );
     }
 
@@ -300,7 +300,7 @@ export async function GET(request: Request) {
     if (organizations.length === 0) {
       console.warn("[LinkedIn OAuth] No organizations found - redirecting to setup");
       return NextResponse.redirect(
-        new URL(`/connections?linkedin_setup=true&user_id=${userId}`, process.env.NEXTAUTH_URL!)
+        new URL(`/settings?linkedin_setup=true`, process.env.NEXTAUTH_URL!)
       );
     }
 
@@ -352,12 +352,12 @@ export async function GET(request: Request) {
     console.log("[LinkedIn OAuth] Connection saved successfully", { userId });
 
     return NextResponse.redirect(
-      new URL("/connections?success=linkedin_connected", process.env.NEXTAUTH_URL!)
+      new URL("/settings?success=linkedin_connected", process.env.NEXTAUTH_URL!)
     );
   } catch (error) {
     console.error("[LinkedIn OAuth] Unexpected error:", error);
     return NextResponse.redirect(
-      new URL("/connections?error=linkedin_unexpected_error", process.env.NEXTAUTH_URL!)
+      new URL("/settings?error=linkedin_unexpected_error", process.env.NEXTAUTH_URL!)
     );
   }
 }

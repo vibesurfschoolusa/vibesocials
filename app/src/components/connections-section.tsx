@@ -5,6 +5,7 @@ import type { SocialConnection } from "@prisma/client";
 import { GoogleBusinessLocationForm } from "./google-business-location-form";
 import { ConnectionActions } from "./connection-actions";
 import { LinkedInSetupDialog } from "./linkedin-setup-dialog";
+import { Suspense } from "react";
 
 const PLATFORM_LABELS = {
   tiktok: "TikTok",
@@ -24,7 +25,9 @@ interface ConnectionsSectionProps {
 export function ConnectionsSection({ connections }: ConnectionsSectionProps) {
   return (
     <>
-      <LinkedInSetupDialog />
+      <Suspense fallback={null}>
+        <LinkedInSetupDialog />
+      </Suspense>
       <div className="bg-white rounded-lg shadow-lg p-6">
       <div className="space-y-4">
         {(Object.keys(PLATFORM_LABELS) as PlatformKey[]).map((platform) => {

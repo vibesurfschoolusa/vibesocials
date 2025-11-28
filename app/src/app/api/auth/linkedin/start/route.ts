@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
   if (!clientId || !redirectUri) {
     console.error("[LinkedIn OAuth] Missing environment variables");
     return NextResponse.redirect(
-      new URL("/connections?error=linkedin_config_missing", process.env.NEXTAUTH_URL)
+      new URL("/settings?error=linkedin_config_missing", process.env.NEXTAUTH_URL)
     );
   }
 
