@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { SocialConnection } from "@prisma/client";
 import { GoogleBusinessLocationForm } from "./google-business-location-form";
 import { ConnectionActions } from "./connection-actions";
+import { LinkedInSetupDialog } from "./linkedin-setup-dialog";
 
 const PLATFORM_LABELS = {
   tiktok: "TikTok",
@@ -22,7 +23,9 @@ interface ConnectionsSectionProps {
 
 export function ConnectionsSection({ connections }: ConnectionsSectionProps) {
   return (
-    <div className="bg-white rounded-lg shadow-lg p-6">
+    <>
+      <LinkedInSetupDialog />
+      <div className="bg-white rounded-lg shadow-lg p-6">
       <div className="space-y-4">
         {(Object.keys(PLATFORM_LABELS) as PlatformKey[]).map((platform) => {
           const label = PLATFORM_LABELS[platform];
@@ -132,5 +135,6 @@ export function ConnectionsSection({ connections }: ConnectionsSectionProps) {
         })}
       </div>
     </div>
+    </>
   );
 }

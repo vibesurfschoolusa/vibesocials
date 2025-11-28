@@ -235,9 +235,51 @@ export async function GET(request: Request) {
       }
     }
 
-    // Strategy 4: Manual configuration fallback
+    // Strategy 4: Check if organization was provided in the state
     if (organizations.length === 0) {
-      console.log("[LinkedIn OAuth] All API strategies failed, checking environment variables");
+      console.log("[LinkedIn OAuth] Checking for organization in state/session");
+      
+      // Check if user provided vanity name in the authorization state
+      // This will be set if user came from the setup page
+      const stateData = JSON.parse(Buffer.from(state || "", "base64url").toString());
+      const vanityName = stateData.linkedinVanityName;
+      
+      if (vanityName) {
+        console.log("[LinkedIn OAuth] Attempting to lookup organization by vanity name:", vanityName);
+        try {
+          const orgLookup = await fetch(
+            `https://api.linkedin.com/v2/organizations?q=vanityName&vanityName=${encodeURIComponent(vanityName)}`,
+            {
+              headers: {
+                Authorization: `Bearer ${tokenData.access_token}`,
+                "X-Restli-Protocol-Version": "2.0.0",
+              },
+            }
+          );
+
+          if (orgLookup.ok) {
+            const lookupData = await orgLookup.json();
+            const org = lookupData.elements?.[0];
+            if (org) {
+              organizations = [{
+                id: org.id,
+                name: org.localizedName || org.name,
+                vanityName: org.vanityName,
+              }];
+              console.log("[LinkedIn OAuth] Organization found by vanity name!", organizations[0]);
+            }
+          } else {
+            console.log("[LinkedIn OAuth] Vanity name lookup failed:", orgLookup.status);
+          }
+        } catch (error) {
+          console.log("[LinkedIn OAuth] Vanity name lookup error:", error);
+        }
+      }
+    }
+
+    // Strategy 5: Fallback to environment variable
+    if (organizations.length === 0) {
+      console.log("[LinkedIn OAuth] Checking environment variables");
       const linkedinOrgId = process.env.LINKEDIN_ORGANIZATION_ID;
       const linkedinOrgName = process.env.LINKEDIN_ORGANIZATION_NAME || "Company Page";
       
@@ -251,12 +293,15 @@ export async function GET(request: Request) {
           id: linkedinOrgId,
           name: linkedinOrgName,
         });
-      } else {
-        console.warn(
-          "[LinkedIn OAuth] CRITICAL: No organizations found via API and no manual configuration. " +
-          "User will need to configure LINKEDIN_ORGANIZATION_ID in environment variables."
-        );
       }
+    }
+
+    // If still no organization, redirect to setup page
+    if (organizations.length === 0) {
+      console.warn("[LinkedIn OAuth] No organizations found - redirecting to setup");
+      return NextResponse.redirect(
+        new URL(`/connections?linkedin_setup=true&user_id=${userId}`, process.env.NEXTAUTH_URL!)
+      );
     }
 
     console.log("[LinkedIn OAuth] Final organizations result", {

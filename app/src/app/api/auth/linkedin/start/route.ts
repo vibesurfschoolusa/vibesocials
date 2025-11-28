@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server";
+import { NextResponse, NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
 
   if (!user) {
@@ -18,13 +18,22 @@ export async function GET() {
     );
   }
 
-  // Generate random state for CSRF protection
-  const state = Buffer.from(
-    JSON.stringify({
-      userId: user.id,
-      timestamp: Date.now(),
-    })
-  ).toString("base64url");
+  // Check if user provided a vanity name for organization lookup
+  const searchParams = request.nextUrl.searchParams;
+  const vanityName = searchParams.get("vanity_name");
+
+  // Generate random state for CSRF protection (include vanity name if provided)
+  const stateData: any = {
+    userId: user.id,
+    timestamp: Date.now(),
+  };
+
+  if (vanityName) {
+    stateData.linkedinVanityName = vanityName;
+    console.log("[LinkedIn OAuth] Including vanity name in state:", vanityName);
+  }
+
+  const state = Buffer.from(JSON.stringify(stateData)).toString("base64url");
 
   // Build LinkedIn authorization URL
   const authUrl = new URL("https://www.linkedin.com/oauth/v2/authorization");
