@@ -251,8 +251,19 @@ async function uploadVideo(
     throw new Error(`LinkedIn video finalization failed: ${errorText}`);
   }
 
-  const finalizeData = await finalizeResponse.json();
-  console.log("[LinkedIn] Full finalization response:", JSON.stringify(finalizeData, null, 2));
+  // LinkedIn may return empty response (204 No Content) for successful finalization
+  const responseText = await finalizeResponse.text();
+  if (responseText) {
+    try {
+      const finalizeData = JSON.parse(responseText);
+      console.log("[LinkedIn] Full finalization response:", JSON.stringify(finalizeData, null, 2));
+    } catch (e) {
+      console.log("[LinkedIn] Finalization response (non-JSON):", responseText);
+    }
+  } else {
+    console.log("[LinkedIn] Finalization returned empty response (success)");
+  }
+  
   console.log("[LinkedIn] Video upload completed", { videoUrn });
   
   // Poll video status to ensure it's ready and ownership is processed
