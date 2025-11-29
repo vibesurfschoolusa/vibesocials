@@ -250,7 +250,77 @@ async function uploadVideo(
   }
 
   console.log("[LinkedIn] Video upload completed", { videoUrn });
+  
+  // Poll video status to ensure it's ready and ownership is processed
+  await waitForVideoReady(accessToken, videoUrn, ownerUrn);
+  
   return videoUrn;
+}
+
+async function waitForVideoReady(
+  accessToken: string,
+  videoUrn: string,
+  expectedOwner: string,
+  maxAttempts: number = 10,
+  delayMs: number = 2000
+): Promise<void> {
+  console.log("[LinkedIn] Waiting for video to be ready", { videoUrn, expectedOwner });
+  
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      // Check video status
+      const statusResponse = await fetch(
+        `https://api.linkedin.com/v2/videos/${encodeURIComponent(videoUrn)}`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "X-Restli-Protocol-Version": "2.0.0",
+          },
+        }
+      );
+      
+      if (statusResponse.ok) {
+        const videoData = await statusResponse.json();
+        const status = videoData.status;
+        const owner = videoData.owner;
+        
+        console.log(`[LinkedIn] Video status check (attempt ${attempt}/${maxAttempts})`, {
+          status,
+          owner,
+          expectedOwner,
+          ownerMatch: owner === expectedOwner,
+        });
+        
+        // Check if video is ready and owned by the correct entity
+        if (status === "AVAILABLE" && owner === expectedOwner) {
+          console.log("[LinkedIn] Video is ready and ownership confirmed!");
+          return;
+        }
+        
+        // If status is failed or processing is stuck, throw error
+        if (status === "FAILED" || status === "PROCESSING_FAILED") {
+          throw new Error(`LinkedIn video processing failed with status: ${status}`);
+        }
+      } else {
+        console.log(`[LinkedIn] Video status check failed (attempt ${attempt}/${maxAttempts})`, {
+          status: statusResponse.status,
+        });
+      }
+      
+      // Wait before next attempt (unless it's the last one)
+      if (attempt < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    } catch (error) {
+      console.log(`[LinkedIn] Error checking video status (attempt ${attempt}/${maxAttempts})`, error);
+      if (attempt < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  
+  // If we've exhausted attempts, log warning but continue (fallback to delay-based approach)
+  console.warn("[LinkedIn] Could not confirm video ready status, proceeding anyway after max attempts");
 }
 
 async function createPost(
@@ -389,16 +459,13 @@ export const linkedinClient: PlatformClient = {
 
       // Upload media if present
       if (isVideo) {
+        // uploadVideo now includes status polling to wait for ownership
         mediaUrn = await uploadVideo(
           accessToken,
           authorUrn,
           mediaUrl,
           mediaItem.originalFilename
         );
-        
-        // Wait for LinkedIn to process video ownership (LinkedIn requires time to associate video with owner)
-        console.log("[LinkedIn] Waiting 3 seconds for video ownership to be processed...");
-        await new Promise(resolve => setTimeout(resolve, 3000));
       } else if (mediaItem.mimeType.startsWith("image/")) {
         mediaUrn = await uploadImage(accessToken, authorUrn, mediaUrl);
       }
