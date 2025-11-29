@@ -358,17 +358,39 @@ async function createPost(
 
   // Add media if provided
   if (mediaUrn) {
-    postBody.specificContent["com.linkedin.ugc.ShareContent"].media = [
-      {
-        status: "READY",
-        media: mediaUrn,
-      },
-    ];
+    if (isVideo) {
+      // Videos require a different structure with title
+      postBody.specificContent["com.linkedin.ugc.ShareContent"].media = [
+        {
+          status: "READY",
+          description: {
+            text: caption || "Video"
+          },
+          media: mediaUrn,
+          title: {
+            text: "Video"
+          }
+        },
+      ];
+    } else {
+      // Images use simpler structure
+      postBody.specificContent["com.linkedin.ugc.ShareContent"].media = [
+        {
+          status: "READY",
+          description: {
+            text: caption || "Image"
+          },
+          media: mediaUrn,
+        },
+      ];
+    }
     
     console.log("[LinkedIn] Post body includes media", {
       mediaUrn,
       mediaType: isVideo ? "VIDEO" : "IMAGE",
       author: authorUrn,
+      hasTitle: isVideo,
+      hasDescription: true,
     });
   }
 
@@ -378,6 +400,9 @@ async function createPost(
     mediaCategory: postBody.specificContent["com.linkedin.ugc.ShareContent"].shareMediaCategory,
     hasMedia: !!mediaUrn,
   });
+  
+  // Log full post body for debugging
+  console.log("[LinkedIn] Full post body:", JSON.stringify(postBody, null, 2));
 
   const response = await fetch("https://api.linkedin.com/v2/ugcPosts", {
     method: "POST",
