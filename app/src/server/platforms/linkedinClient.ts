@@ -132,6 +132,11 @@ async function uploadVideo(
   console.log("[LinkedIn] Video downloaded", { sizeBytes: videoSize });
 
   // Step 2: Initialize video upload
+  console.log("[LinkedIn] Initializing video with owner", { 
+    ownerUrn,
+    fileSizeBytes: videoSize,
+  });
+  
   const initResponse = await fetch(
     "https://api.linkedin.com/v2/videos?action=initializeUpload",
     {
@@ -286,10 +291,23 @@ async function createPost(
     postBody.specificContent["com.linkedin.ugc.ShareContent"].media = [
       {
         status: "READY",
-        [isVideo ? "media" : "media"]: mediaUrn,
+        media: mediaUrn,
       },
     ];
+    
+    console.log("[LinkedIn] Post body includes media", {
+      mediaUrn,
+      mediaType: isVideo ? "VIDEO" : "IMAGE",
+      author: authorUrn,
+    });
   }
+
+  console.log("[LinkedIn] Sending post to API", {
+    endpoint: "https://api.linkedin.com/v2/ugcPosts",
+    author: postBody.author,
+    mediaCategory: postBody.specificContent["com.linkedin.ugc.ShareContent"].shareMediaCategory,
+    hasMedia: !!mediaUrn,
+  });
 
   const response = await fetch("https://api.linkedin.com/v2/ugcPosts", {
     method: "POST",
@@ -377,11 +395,21 @@ export const linkedinClient: PlatformClient = {
           mediaUrl,
           mediaItem.originalFilename
         );
+        
+        // Wait for LinkedIn to process video ownership (LinkedIn requires time to associate video with owner)
+        console.log("[LinkedIn] Waiting 3 seconds for video ownership to be processed...");
+        await new Promise(resolve => setTimeout(resolve, 3000));
       } else if (mediaItem.mimeType.startsWith("image/")) {
         mediaUrn = await uploadImage(accessToken, authorUrn, mediaUrl);
       }
 
       // Create the post
+      console.log("[LinkedIn] Creating post with URNs", {
+        authorUrn,
+        mediaUrn,
+        match: mediaUrn ? `Video owner and post author both use: ${authorUrn}` : "No media",
+      });
+      
       const postId = await createPost(
         accessToken,
         authorUrn,
