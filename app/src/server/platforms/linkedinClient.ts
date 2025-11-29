@@ -167,6 +167,8 @@ async function uploadVideo(
   }
 
   const initData: LinkedInVideoUploadResponse = await initResponse.json();
+  console.log("[LinkedIn] Full video init response:", JSON.stringify(initData, null, 2));
+  
   const videoUrn = initData.value.video;
   const uploadInstructions = initData.value.uploadInstructions;
 
@@ -249,6 +251,8 @@ async function uploadVideo(
     throw new Error(`LinkedIn video finalization failed: ${errorText}`);
   }
 
+  const finalizeData = await finalizeResponse.json();
+  console.log("[LinkedIn] Full finalization response:", JSON.stringify(finalizeData, null, 2));
   console.log("[LinkedIn] Video upload completed", { videoUrn });
   
   // Poll video status to ensure it's ready and ownership is processed
@@ -283,6 +287,11 @@ async function waitForVideoReady(
         const videoData = await statusResponse.json();
         const status = videoData.status;
         const owner = videoData.owner;
+        
+        // Log full video data on first successful check
+        if (attempt === 1 || status === "AVAILABLE") {
+          console.log(`[LinkedIn] Full video status response (attempt ${attempt}):`, JSON.stringify(videoData, null, 2));
+        }
         
         console.log(`[LinkedIn] Video status check (attempt ${attempt}/${maxAttempts})`, {
           status,
