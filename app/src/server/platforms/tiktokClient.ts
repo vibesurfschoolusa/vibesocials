@@ -43,11 +43,11 @@ export const tiktokClient: PlatformClient = {
       ? (caption.length > 2200 ? caption.substring(0, 2200) : caption)
       : "Video posted via Vibe Socials";
 
-    // TikTok chunking logic:
-    // - For videos < 10MB: upload as single chunk (TikTok may not support multi-chunk for small videos)
-    // - For videos >= 10MB: use 10MB chunks as per TikTok examples
-    const CHUNK_SIZE = size < 10 * 1024 * 1024 ? size : 10 * 1024 * 1024;
-    const totalChunks = Math.ceil(size / CHUNK_SIZE);
+    // Use single chunk upload first to verify API works
+    // TikTok's chunking validation is strict - let's get captions working first
+    // For 9.6MB video, single chunk should complete within 60s
+    const CHUNK_SIZE = size; // Use video size as chunk size (single chunk)
+    const totalChunks = 1;
 
     console.log('[TikTok] Initializing upload with FILE_UPLOAD (chunked)', {
       videoSize: size,
