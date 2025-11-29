@@ -22,22 +22,22 @@ export async function GET(request: NextRequest) {
   const state = url.searchParams.get("state");
   const errorParam = url.searchParams.get("error");
 
-  const connectionsUrl = new URL("/connections", url.origin);
+  const settingsUrl = new URL("/settings", url.origin);
 
   if (errorParam) {
-    connectionsUrl.searchParams.set("error", errorParam);
-    return NextResponse.redirect(connectionsUrl);
+    settingsUrl.searchParams.set("error", errorParam);
+    return NextResponse.redirect(settingsUrl);
   }
 
   if (!code || !state) {
-    connectionsUrl.searchParams.set("error", "tiktok_missing_code_or_state");
-    return NextResponse.redirect(connectionsUrl);
+    settingsUrl.searchParams.set("error", "tiktok_missing_code_or_state");
+    return NextResponse.redirect(settingsUrl);
   }
 
   const stateCheck = verifyOAuthState(state);
   if (!stateCheck.valid || !stateCheck.userId) {
-    connectionsUrl.searchParams.set("error", "tiktok_invalid_state");
-    return NextResponse.redirect(connectionsUrl);
+    settingsUrl.searchParams.set("error", "tiktok_invalid_state");
+    return NextResponse.redirect(settingsUrl);
   }
 
   const userId = stateCheck.userId;
@@ -47,8 +47,8 @@ export async function GET(request: NextRequest) {
   const redirectUri = process.env.TIKTOK_REDIRECT_URI;
 
   if (!clientKey || !clientSecret || !redirectUri) {
-    connectionsUrl.searchParams.set("error", "tiktok_not_configured");
-    return NextResponse.redirect(connectionsUrl);
+    settingsUrl.searchParams.set("error", "tiktok_not_configured");
+    return NextResponse.redirect(settingsUrl);
   }
 
   try {
@@ -71,8 +71,8 @@ export async function GET(request: NextRequest) {
         status: tokenResponse.status,
         statusText: tokenResponse.statusText,
       });
-      connectionsUrl.searchParams.set("error", "tiktok_token_exchange_failed");
-      return NextResponse.redirect(connectionsUrl);
+      settingsUrl.searchParams.set("error", "tiktok_token_exchange_failed");
+      return NextResponse.redirect(settingsUrl);
     }
 
     const tokenJson = (await tokenResponse.json()) as TikTokTokenResponse;
@@ -115,11 +115,11 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    connectionsUrl.searchParams.set("connected", "tiktok");
-    return NextResponse.redirect(connectionsUrl);
+    settingsUrl.searchParams.set("success", "tiktok_connected");
+    return NextResponse.redirect(settingsUrl);
   } catch (error) {
     console.error("[TikTok OAuth] Unexpected error", { error });
-    connectionsUrl.searchParams.set("error", "tiktok_unexpected_error");
-    return NextResponse.redirect(connectionsUrl);
+    settingsUrl.searchParams.set("error", "tiktok_unexpected_error");
+    return NextResponse.redirect(settingsUrl);
   }
 }

@@ -20,13 +20,13 @@ export async function GET(request: NextRequest) {
   if (error) {
     console.error("[YouTube OAuth] User denied access or error:", error);
     return NextResponse.redirect(
-      new URL(`/connections?error=youtube_oauth_denied`, request.url),
+      new URL(`/settings?error=youtube_oauth_denied`, request.url),
     );
   }
 
   if (!code || !encodedState) {
     return NextResponse.redirect(
-      new URL(`/connections?error=youtube_oauth_missing_params`, request.url),
+      new URL(`/settings?error=youtube_oauth_missing_params`, request.url),
     );
   }
 
@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
   } catch (err) {
     console.error("[YouTube OAuth] Invalid state parameter", err);
     return NextResponse.redirect(
-      new URL(`/connections?error=youtube_oauth_invalid_state`, request.url),
+      new URL(`/settings?error=youtube_oauth_invalid_state`, request.url),
     );
   }
 
@@ -50,7 +50,7 @@ export async function GET(request: NextRequest) {
   if (!clientId || !clientSecret || !redirectUri) {
     console.error("[YouTube OAuth] Missing OAuth configuration");
     return NextResponse.redirect(
-      new URL(`/connections?error=youtube_oauth_config`, request.url),
+      new URL(`/settings?error=youtube_oauth_config`, request.url),
     );
   }
 
@@ -76,7 +76,7 @@ export async function GET(request: NextRequest) {
       await tokenResponse.text(),
     );
     return NextResponse.redirect(
-      new URL(`/connections?error=youtube_oauth_token_failed`, request.url),
+      new URL(`/settings?error=youtube_oauth_token_failed`, request.url),
     );
   }
 
@@ -98,7 +98,7 @@ export async function GET(request: NextRequest) {
       channelResponse.status,
     );
     return NextResponse.redirect(
-      new URL(`/connections?error=youtube_channel_fetch_failed`, request.url),
+      new URL(`/settings?error=youtube_channel_fetch_failed`, request.url),
     );
   }
 
@@ -115,7 +115,7 @@ export async function GET(request: NextRequest) {
   if (!channel?.id) {
     console.error("[YouTube OAuth] No channel found for user");
     return NextResponse.redirect(
-      new URL(`/connections?error=youtube_no_channel`, request.url),
+      new URL(`/settings?error=youtube_no_channel`, request.url),
     );
   }
 
@@ -158,12 +158,12 @@ export async function GET(request: NextRequest) {
     console.log("[YouTube OAuth] Successfully connected channel:", accountIdentifier);
 
     return NextResponse.redirect(
-      new URL("/connections?success=youtube_connected", request.url),
+      new URL("/settings?success=youtube_connected", request.url),
     );
   } catch (err) {
     console.error("[YouTube OAuth] Database error", err);
     return NextResponse.redirect(
-      new URL(`/connections?error=youtube_db_error`, request.url),
+      new URL(`/settings?error=youtube_db_error`, request.url),
     );
   }
 }

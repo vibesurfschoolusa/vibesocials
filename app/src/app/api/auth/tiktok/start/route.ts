@@ -20,7 +20,7 @@ export async function GET(request: Request) {
 
   if (!clientKey || !redirectUriEnv) {
     const url = new URL(request.url);
-    url.pathname = "/connections";
+    url.pathname = "/settings";
     url.searchParams.set("error", "tiktok_not_configured");
     return NextResponse.redirect(url);
   }

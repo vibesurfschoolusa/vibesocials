@@ -42,14 +42,14 @@ export async function GET(request: Request) {
   if (denied) {
     console.error("[X OAuth 1.0a] Authorization denied");
     return NextResponse.redirect(
-      new URL(`/connections?error=x_auth_denied`, process.env.NEXTAUTH_URL!)
+      new URL(`/settings?error=x_auth_denied`, process.env.NEXTAUTH_URL!)
     );
   }
 
   if (!oauthToken || !oauthVerifier) {
     console.error("[X OAuth 1.0a] Missing oauth_token or oauth_verifier");
     return NextResponse.redirect(
-      new URL("/connections?error=x_missing_params", process.env.NEXTAUTH_URL!)
+      new URL("/settings?error=x_missing_params", process.env.NEXTAUTH_URL!)
     );
   }
 
@@ -61,7 +61,7 @@ export async function GET(request: Request) {
   if (!oauthTokenSecret || !userId) {
     console.error("[X OAuth 1.0a] Missing stored token secret or user ID");
     return NextResponse.redirect(
-      new URL("/connections?error=x_session_expired", process.env.NEXTAUTH_URL!)
+      new URL("/settings?error=x_session_expired", process.env.NEXTAUTH_URL!)
     );
   }
 
@@ -71,7 +71,7 @@ export async function GET(request: Request) {
   if (!consumerKey || !consumerSecret) {
     console.error("[X OAuth 1.0a] Missing environment variables");
     return NextResponse.redirect(
-      new URL("/connections?error=x_config_missing", process.env.NEXTAUTH_URL!)
+      new URL("/settings?error=x_config_missing", process.env.NEXTAUTH_URL!)
     );
   }
 
@@ -118,7 +118,7 @@ export async function GET(request: Request) {
         error: errorText,
       });
       return NextResponse.redirect(
-        new URL("/connections?error=x_token_exchange_failed", process.env.NEXTAUTH_URL!)
+        new URL("/settings?error=x_token_exchange_failed", process.env.NEXTAUTH_URL!)
       );
     }
 
@@ -132,7 +132,7 @@ export async function GET(request: Request) {
     if (!accessToken || !accessTokenSecret) {
       console.error("[X OAuth 1.0a] Invalid access token response");
       return NextResponse.redirect(
-        new URL("/connections?error=x_invalid_token_response", process.env.NEXTAUTH_URL!)
+        new URL("/settings?error=x_invalid_token_response", process.env.NEXTAUTH_URL!)
       );
     }
 
@@ -188,7 +188,7 @@ export async function GET(request: Request) {
 
     // Clear cookies
     const redirectResponse = NextResponse.redirect(
-      new URL("/connections?success=x_connected", process.env.NEXTAUTH_URL!)
+      new URL("/settings?success=x_connected", process.env.NEXTAUTH_URL!)
     );
     redirectResponse.cookies.delete("x_oauth_token_secret");
     redirectResponse.cookies.delete("x_user_id");
@@ -197,7 +197,7 @@ export async function GET(request: Request) {
   } catch (err) {
     console.error("[X OAuth 1.0a] Unexpected error:", err);
     return NextResponse.redirect(
-      new URL("/connections?error=x_unexpected_error", process.env.NEXTAUTH_URL!)
+      new URL("/settings?error=x_unexpected_error", process.env.NEXTAUTH_URL!)
     );
   }
 }

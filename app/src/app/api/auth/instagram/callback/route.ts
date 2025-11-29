@@ -11,13 +11,13 @@ export async function GET(request: NextRequest) {
   if (error) {
     console.error("[Instagram OAuth] Error from provider:", error);
     return NextResponse.redirect(
-      new URL(`/connections?error=${encodeURIComponent(error)}`, request.url),
+      new URL(`/settings?error=${encodeURIComponent(error)}`, request.url),
     );
   }
 
   if (!code || !state) {
     return NextResponse.redirect(
-      new URL("/connections?error=missing_code_or_state", request.url),
+      new URL("/settings?error=missing_code_or_state", request.url),
     );
   }
 
@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
     userId = stateData.userId;
   } catch {
     return NextResponse.redirect(
-      new URL("/connections?error=invalid_state", request.url),
+      new URL("/settings?error=invalid_state", request.url),
     );
   }
 
@@ -198,12 +198,12 @@ export async function GET(request: NextRequest) {
     });
 
     return NextResponse.redirect(
-      new URL("/connections?success=instagram_connected", request.url),
+      new URL("/settings?success=instagram_connected", request.url),
     );
   } catch (error) {
     console.error("[Instagram OAuth] Unexpected error:", error);
     return NextResponse.redirect(
-      new URL("/connections?error=unexpected_error", request.url),
+      new URL("/settings?error=unexpected_error", request.url),
     );
   }
 }

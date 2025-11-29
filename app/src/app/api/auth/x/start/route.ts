@@ -51,7 +51,7 @@ export async function GET() {
   if (!consumerKey || !consumerSecret || !callbackUrl) {
     console.error("[X OAuth 1.0a] Missing environment variables");
     return NextResponse.redirect(
-      new URL("/connections?error=x_config_missing", process.env.NEXTAUTH_URL)
+      new URL("/settings?error=x_config_missing", process.env.NEXTAUTH_URL)
     );
   }
 
@@ -101,7 +101,7 @@ export async function GET() {
         error: errorText,
       });
       return NextResponse.redirect(
-        new URL("/connections?error=x_request_token_failed", process.env.NEXTAUTH_URL)
+        new URL("/settings?error=x_request_token_failed", process.env.NEXTAUTH_URL)
       );
     }
 
@@ -113,7 +113,7 @@ export async function GET() {
     if (!oauthToken || !oauthTokenSecret) {
       console.error("[X OAuth 1.0a] Invalid request token response");
       return NextResponse.redirect(
-        new URL("/connections?error=x_invalid_token_response", process.env.NEXTAUTH_URL)
+        new URL("/settings?error=x_invalid_token_response", process.env.NEXTAUTH_URL)
       );
     }
 
@@ -150,7 +150,7 @@ export async function GET() {
   } catch (error) {
     console.error("[X OAuth 1.0a] Unexpected error:", error);
     return NextResponse.redirect(
-      new URL("/connections?error=x_unexpected_error", process.env.NEXTAUTH_URL)
+      new URL("/settings?error=x_unexpected_error", process.env.NEXTAUTH_URL)
     );
   }
 }

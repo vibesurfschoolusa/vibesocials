@@ -20,7 +20,7 @@ export async function GET(request: Request) {
 
   if (!clientId || !redirectUriEnv) {
     const url = new URL(request.url);
-    url.pathname = "/connections";
+    url.pathname = "/settings";
     url.searchParams.set("error", "google_business_profile_not_configured");
     return NextResponse.redirect(url);
   }
