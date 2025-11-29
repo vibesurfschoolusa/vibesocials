@@ -31,9 +31,10 @@ export async function GET(request: Request) {
   authUrl.searchParams.set("client_key", clientKey);
   authUrl.searchParams.set("redirect_uri", redirectUriEnv);
   authUrl.searchParams.set("response_type", "code");
-  // video.publish scope required for Direct Post API (posting with captions)
-  // video.upload scope is for Inbox API (draft uploads only)
-  authUrl.searchParams.set("scope", "user.info.basic,video.publish");
+  // video.upload scope for Inbox API (upload drafts to Creator Portal)
+  // Note: Direct Post API (video.publish) requires URL ownership verification
+  // which is not feasible with Vercel Blob Storage URLs
+  authUrl.searchParams.set("scope", "user.info.basic,video.upload");
   authUrl.searchParams.set("state", state);
 
   return NextResponse.redirect(authUrl.toString());
