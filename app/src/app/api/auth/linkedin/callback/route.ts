@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { Platform } from "@prisma/client";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -235,7 +236,64 @@ export async function GET(request: Request) {
       }
     }
 
-    // Strategy 4: Check if organization was provided in the state
+    // Strategy 4: Check if user has a previous LinkedIn connection with organization data
+    if (organizations.length === 0) {
+      console.log("[LinkedIn OAuth] Checking for existing LinkedIn connection");
+      
+      try {
+        const existingConnection = await prisma.socialConnection.findUnique({
+          where: {
+            userId_platform: {
+              userId,
+              platform: "linkedin" as Platform,
+            },
+          },
+        });
+        
+        if (existingConnection?.metadata) {
+          const metadata = existingConnection.metadata as any;
+          const previousOrgs = metadata.organizations || [];
+          
+          if (previousOrgs.length > 0) {
+            console.log("[LinkedIn OAuth] Found organization from previous connection", {
+              orgId: previousOrgs[0].id,
+              orgName: previousOrgs[0].name,
+            });
+            
+            // Verify the organization is still accessible with new token
+            try {
+              const orgVerify = await fetch(
+                `https://api.linkedin.com/v2/organizations/${previousOrgs[0].id}`,
+                {
+                  headers: {
+                    Authorization: `Bearer ${tokenData.access_token}`,
+                    "X-Restli-Protocol-Version": "2.0.0",
+                  },
+                }
+              );
+              
+              if (orgVerify.ok) {
+                const org = await orgVerify.json();
+                organizations = [{
+                  id: org.id,
+                  name: org.localizedName || org.name || previousOrgs[0].name,
+                  vanityName: org.vanityName || previousOrgs[0].vanityName || null,
+                }];
+                console.log("[LinkedIn OAuth] Previous organization verified and reused!", organizations[0]);
+              } else {
+                console.log("[LinkedIn OAuth] Previous organization verification failed:", orgVerify.status);
+              }
+            } catch (error) {
+              console.log("[LinkedIn OAuth] Previous organization verification error:", error);
+            }
+          }
+        }
+      } catch (error) {
+        console.log("[LinkedIn OAuth] Error checking previous connection:", error);
+      }
+    }
+
+    // Strategy 5: Check if organization was provided in the state
     if (organizations.length === 0) {
       console.log("[LinkedIn OAuth] Checking for organization in state/session");
       
@@ -249,7 +307,7 @@ export async function GET(request: Request) {
         const isNumericId = /^\d+$/.test(vanityName);
         
         if (isNumericId) {
-          // Strategy 4a: Direct lookup by numeric organization ID
+          // Strategy 5a: Direct lookup by numeric organization ID
           console.log("[LinkedIn OAuth] Attempting to lookup organization by ID:", vanityName);
           try {
             const orgLookup = await fetch(
@@ -277,7 +335,7 @@ export async function GET(request: Request) {
             console.log("[LinkedIn OAuth] ID lookup error:", error);
           }
         } else {
-          // Strategy 4b: Lookup by vanity name
+          // Strategy 5b: Lookup by vanity name
           console.log("[LinkedIn OAuth] Attempting to lookup organization by vanity name:", vanityName);
           try {
             const orgLookup = await fetch(
@@ -311,7 +369,7 @@ export async function GET(request: Request) {
       }
     }
 
-    // Strategy 5: Fallback to environment variable
+    // Strategy 6: Fallback to environment variable
     if (organizations.length === 0) {
       console.log("[LinkedIn OAuth] Checking environment variables");
       const linkedinOrgId = process.env.LINKEDIN_ORGANIZATION_ID;
