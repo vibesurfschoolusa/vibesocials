@@ -152,6 +152,7 @@ async function uploadVideo(
           fileSizeBytes: videoSize,
           uploadCaptions: false,
           uploadThumbnail: false,
+          purpose: "ORGANIC_VIDEO",
         },
       }),
     }
