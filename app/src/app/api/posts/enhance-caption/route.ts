@@ -40,14 +40,14 @@ export async function POST(request: Request) {
     // Build the prompt for SEO-optimized social media caption
     const systemPrompt = `You are a social media expert specializing in creating engaging, SEO-optimized captions for social media posts. Your captions should be:
 - Short and concise (1-2 sentences, max 150 characters)
-- Include relevant hashtags (2-4)
+- Use plain text only with NO hashtags (no '#' characters at all)
 - Be engaging and call-to-action oriented
 - SEO-friendly with keywords naturally integrated
 - Suitable for platforms like Instagram, TikTok, YouTube, and X (Twitter)
 - Professional yet approachable tone
 - Include emojis where appropriate (but don't overdo it)
 
-IMPORTANT: Write ONLY the enhanced caption. Do NOT include:
+IMPORTANT: Write ONLY the enhanced caption as plain text without any hashtags. Do NOT include:
 - Any meta-commentary
 - Explanations or notes
 - Just the caption text itself`;
@@ -89,8 +89,11 @@ Create an enhanced version that's perfect for social media.`;
     }
 
     const openaiData = await openaiResponse.json();
-    const enhancedCaption =
+    let enhancedCaption =
       openaiData.choices?.[0]?.message?.content?.trim() || "";
+
+    // Safety net: strip any '#' characters in case the model still emits hashtags
+    enhancedCaption = enhancedCaption.replace(/#/g, "").trim();
 
     if (!enhancedCaption) {
       return NextResponse.json(
