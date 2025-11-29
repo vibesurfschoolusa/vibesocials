@@ -43,17 +43,30 @@ export const tiktokClient: PlatformClient = {
       ? (caption.length > 2200 ? caption.substring(0, 2200) : caption)
       : "Video posted via Vibe Socials";
 
-    console.log('[TikTok] Initializing upload with FILE_UPLOAD', {
+    // Chunk the video to avoid timeout (TikTok recommends ~10MB chunks)
+    const CHUNK_SIZE = 3 * 1024 * 1024; // 3MB chunks to stay well under 60s timeout
+    const totalChunks = Math.ceil(size / CHUNK_SIZE);
+
+    console.log('[TikTok] Initializing upload with FILE_UPLOAD (chunked)', {
       videoSize: size,
+      chunkSize: CHUNK_SIZE,
+      totalChunks,
       hasAccessToken: !!accessToken,
-      accessTokenLength: accessToken?.length,
       captionPreview: tiktokCaption.substring(0, 100) + (tiktokCaption.length > 100 ? '...' : ''),
     });
 
-    // Use Inbox API - Direct Post API requires URL ownership verification
-    // Inbox workflow: Upload → Video goes to Creator Portal inbox → Manual caption/publish
+    const postInfo = {
+      title: tiktokCaption,
+      privacy_level: "SELF_ONLY", // Sandbox mode restriction
+      disable_comment: false,
+      disable_duet: false,
+      disable_stitch: false,
+      video_cover_timestamp_ms: 1000,
+    };
+
+    // Use Direct Post API with FILE_UPLOAD and captions
     const initRes = await fetch(
-      `${TIKTOK_API_BASE}/v2/post/publish/inbox/video/init/`,
+      `${TIKTOK_API_BASE}/v2/post/publish/video/init/`,
       {
         method: "POST",
         headers: {
@@ -61,11 +74,12 @@ export const tiktokClient: PlatformClient = {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          post_info: postInfo,
           source_info: {
             source: "FILE_UPLOAD",
             video_size: size,
-            chunk_size: size,
-            total_chunk_count: 1,
+            chunk_size: CHUNK_SIZE,
+            total_chunk_count: totalChunks,
           },
         }),
       },
@@ -102,33 +116,49 @@ export const tiktokClient: PlatformClient = {
       throw error;
     }
 
-    console.log('[TikTok] Got upload URL, uploading video bytes...');
-
-    const endByte = size > 0 ? size - 1 : 0;
-
-    const uploadRes = await fetch(uploadUrl, {
-      method: "PUT",
-      headers: {
-        "Content-Range": `bytes 0-${endByte}/${size}`,
-        "Content-Type": mediaItem.mimeType,
-      },
-      body: fileBytes,
+    console.log('[TikTok] Got upload URL, uploading video in chunks...', {
+      totalChunks,
+      chunkSize: CHUNK_SIZE,
     });
 
-    if (!uploadRes.ok) {
-      console.error("[TikTok] video upload failed", {
-        status: uploadRes.status,
-        statusText: uploadRes.statusText,
+    // Upload video in chunks
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+      const start = chunkIndex * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, size);
+      const chunk = fileBytes.slice(start, end);
+      
+      console.log(`[TikTok] Uploading chunk ${chunkIndex + 1}/${totalChunks}`, {
+        bytes: `${start}-${end-1}/${size}`,
       });
-      const error = new Error("Failed to upload video bytes to TikTok");
-      (error as any).code = "TIKTOK_UPLOAD_FAILED";
-      throw error;
+
+      const uploadRes = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Range": `bytes ${start}-${end-1}/${size}`,
+          "Content-Type": mediaItem.mimeType,
+        },
+        body: chunk,
+      });
+
+      if (!uploadRes.ok) {
+        console.error("[TikTok] chunk upload failed", {
+          chunkIndex,
+          status: uploadRes.status,
+          statusText: uploadRes.statusText,
+        });
+        const error = new Error(`Failed to upload chunk ${chunkIndex + 1}/${totalChunks} to TikTok`);
+        (error as any).code = "TIKTOK_UPLOAD_FAILED";
+        throw error;
+      }
+      
+      console.log(`[TikTok] Chunk ${chunkIndex + 1}/${totalChunks} uploaded successfully`);
     }
 
-    console.log('[TikTok] Video uploaded successfully to Creator Portal inbox', {
+    console.log('[TikTok] Video uploaded successfully with Direct Post API', {
       publishId,
-      note: 'Video is in your TikTok Creator Portal inbox. You can add captions and publish manually from the TikTok app. Caption sent: ' + tiktokCaption.substring(0, 100) + '...',
-      workflow: 'Inbox API (upload draft for manual editing)',
+      captionIncluded: true,
+      captionSent: tiktokCaption.substring(0, 100) + (tiktokCaption.length > 100 ? '...' : ''),
+      note: 'Using Direct Post API with captions. In sandbox mode (privacy_level: SELF_ONLY), videos post with full captions but are only visible to you for testing.',
     });
 
     return {
