@@ -25,17 +25,9 @@ export const tiktokClient: PlatformClient = {
       throw error;
     }
 
-    // Fetch the video file from Vercel Blob (storageLocation is now a URL)
+    // Use PULL_FROM_URL to let TikTok fetch the video directly from our blob storage
+    // This avoids timeout issues with FILE_UPLOAD for large videos
     const videoUrl = mediaItem.storageLocation;
-    const videoResponse = await fetch(videoUrl);
-    if (!videoResponse.ok) {
-      const error = new Error("Failed to fetch video from storage");
-      (error as any).code = "TIKTOK_FETCH_VIDEO_FAILED";
-      throw error;
-    }
-    
-    const fileBytes = Buffer.from(await videoResponse.arrayBuffer());
-    const size = fileBytes.byteLength;
 
     // TikTok title has a 2200 character limit, but captions are typically shorter
     // Truncate if needed to avoid API rejection
@@ -43,8 +35,8 @@ export const tiktokClient: PlatformClient = {
       ? (caption.length > 2200 ? caption.substring(0, 2200) : caption)
       : "Video posted via Vibe Socials";
 
-    console.log('[TikTok] Initializing upload', {
-      videoSize: size,
+    console.log('[TikTok] Initializing upload with PULL_FROM_URL', {
+      videoUrl,
       hasAccessToken: !!accessToken,
       accessTokenLength: accessToken?.length,
       captionLength: tiktokCaption.length,
@@ -83,10 +75,8 @@ export const tiktokClient: PlatformClient = {
         body: JSON.stringify({
           post_info: postInfo,
           source_info: {
-            source: "FILE_UPLOAD",
-            video_size: size,
-            chunk_size: size,
-            total_chunk_count: 1,
+            source: "PULL_FROM_URL",
+            video_url: videoUrl,
           },
         }),
       },
@@ -113,40 +103,21 @@ export const tiktokClient: PlatformClient = {
       throw error;
     }
 
-    const uploadUrl = initJson?.data?.upload_url as string | undefined;
+    // With PULL_FROM_URL, we only need publish_id (no upload_url needed)
     const publishId = initJson?.data?.publish_id as string | undefined;
 
-    if (!uploadUrl || !publishId) {
-      console.error("[TikTok] video init missing upload_url or publish_id", initJson);
-      const error = new Error("TikTok did not return upload_url or publish_id");
+    if (!publishId) {
+      console.error("[TikTok] video init missing publish_id", initJson);
+      const error = new Error("TikTok did not return publish_id");
       (error as any).code = "TIKTOK_INIT_MISSING_FIELDS";
       throw error;
     }
 
-    const endByte = size > 0 ? size - 1 : 0;
-
-    const uploadRes = await fetch(uploadUrl, {
-      method: "PUT",
-      headers: {
-        "Content-Range": `bytes 0-${endByte}/${size}`,
-        "Content-Type": mediaItem.mimeType,
-      },
-      body: fileBytes,
-    });
-
-    if (!uploadRes.ok) {
-      console.error("[TikTok] video upload failed", {
-        status: uploadRes.status,
-        statusText: uploadRes.statusText,
-      });
-      const error = new Error("Failed to upload video bytes to TikTok");
-      (error as any).code = "TIKTOK_UPLOAD_FAILED";
-      throw error;
-    }
-
-    console.log('[TikTok] Video uploaded successfully', {
+    // TikTok will fetch the video from our URL asynchronously
+    console.log('[TikTok] Video post initiated successfully', {
       publishId,
-      note: 'Using Direct Post API. In sandbox/developer mode (privacy_level: SELF_ONLY), videos post with captions but are only visible to the creator for testing.',
+      method: 'PULL_FROM_URL',
+      note: 'TikTok is fetching the video from Vercel Blob Storage. Using Direct Post API with captions. In sandbox/developer mode (privacy_level: SELF_ONLY), videos post with captions but are only visible to the creator for testing.',
       captionIncluded: true,
       captionSent: tiktokCaption.substring(0, 150) + (tiktokCaption.length > 150 ? '...' : ''),
     });
