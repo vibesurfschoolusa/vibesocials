@@ -37,10 +37,36 @@ export const tiktokClient: PlatformClient = {
     const fileBytes = Buffer.from(await videoResponse.arrayBuffer());
     const size = fileBytes.byteLength;
 
+    // TikTok title has a 2200 character limit, but captions are typically shorter
+    // Truncate if needed to avoid API rejection
+    const tiktokCaption = caption 
+      ? (caption.length > 2200 ? caption.substring(0, 2200) : caption)
+      : "Video posted via Vibe Socials";
+
     console.log('[TikTok] Initializing upload', {
       videoSize: size,
       hasAccessToken: !!accessToken,
       accessTokenLength: accessToken?.length,
+      captionLength: tiktokCaption.length,
+      originalCaptionLength: caption?.length,
+    });
+
+    const postInfo = {
+      title: tiktokCaption,
+      privacy_level: "SELF_ONLY", // Sandbox requires SELF_ONLY
+      disable_comment: false,
+      disable_duet: false,
+      disable_stitch: false,
+      video_cover_timestamp_ms: 1000,
+      // Enable auto-captions if available (TikTok generates captions from audio)
+      auto_add_music: false, // Don't auto-add music to preserve original audio
+    };
+
+    console.log('[TikTok] Post settings', {
+      title: tiktokCaption.substring(0, 100) + (tiktokCaption.length > 100 ? '...' : ''),
+      privacy_level: postInfo.privacy_level,
+      disable_comment: postInfo.disable_comment,
+      auto_add_music: postInfo.auto_add_music,
     });
 
     const initRes = await fetch(
@@ -52,14 +78,7 @@ export const tiktokClient: PlatformClient = {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          post_info: {
-            title: caption || "Video posted via Vibe Socials",
-            privacy_level: "SELF_ONLY", // Sandbox requires SELF_ONLY
-            disable_comment: false,
-            disable_duet: false,
-            disable_stitch: false,
-            video_cover_timestamp_ms: 1000,
-          },
+          post_info: postInfo,
           source_info: {
             source: "FILE_UPLOAD",
             video_size: size,
@@ -121,6 +140,12 @@ export const tiktokClient: PlatformClient = {
       (error as any).code = "TIKTOK_UPLOAD_FAILED";
       throw error;
     }
+
+    console.log('[TikTok] Video uploaded successfully', {
+      publishId,
+      note: 'In developer mode, video goes to Creator Portal inbox for manual review and publishing. Caption and settings can be edited there before publishing.',
+      captionSent: tiktokCaption.substring(0, 150) + (tiktokCaption.length > 150 ? '...' : ''),
+    });
 
     return {
       externalPostId: publishId,
