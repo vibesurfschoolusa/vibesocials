@@ -2,15 +2,17 @@ import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
 /**
  * LinkedIn API client for posting images and videos
- * Uses LinkedIn UGC Post API (v2)
+ * Uses LinkedIn UGC Post API (v2) and Assets API for media upload
  * 
  * Documentation:
  * - UGC Posts: https://learn.microsoft.com/en-us/linkedin/marketing/integrations/community-management/shares/ugc-post-api
- * - Images: https://learn.microsoft.com/en-us/linkedin/marketing/integrations/community-management/shares/images-api
- * - Videos: https://learn.microsoft.com/en-us/linkedin/marketing/integrations/community-management/shares/videos-api
+ * - Assets API: https://learn.microsoft.com/en-us/linkedin/marketing/integrations/community-management/shares/images-api
+ * 
+ * Note: Both images and videos use the Assets API with UGC service relationships
+ * to ensure they can be used in organic posts (not just advertising).
  */
 
-interface LinkedInImageUploadResponse {
+interface LinkedInAssetUploadResponse {
   value: {
     uploadMechanism: {
       "com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest": {
@@ -20,17 +22,6 @@ interface LinkedInImageUploadResponse {
     };
     asset: string;
     mediaArtifact: string;
-  };
-}
-
-interface LinkedInVideoUploadResponse {
-  value: {
-    uploadInstructions: Array<{
-      uploadUrl: string;
-      lastByte: number;
-      firstByte: number;
-    }>;
-    video: string;
   };
 }
 
@@ -75,7 +66,7 @@ async function uploadImage(
     throw new Error(`LinkedIn image registration failed: ${errorText}`);
   }
 
-  const registerData: LinkedInImageUploadResponse = await registerResponse.json();
+  const registerData: LinkedInAssetUploadResponse = await registerResponse.json();
   const uploadUrl =
     registerData.value.uploadMechanism[
       "com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"
@@ -131,14 +122,14 @@ async function uploadVideo(
 
   console.log("[LinkedIn] Video downloaded", { sizeBytes: videoSize });
 
-  // Step 2: Initialize video upload
-  console.log("[LinkedIn] Initializing video with owner", { 
+  // Step 2: Register video upload using Assets API (for UGC, not ads)
+  console.log("[LinkedIn] Registering video with owner", { 
     ownerUrn,
     fileSizeBytes: videoSize,
   });
   
-  const initResponse = await fetch(
-    "https://api.linkedin.com/v2/videos?action=initializeUpload",
+  const registerResponse = await fetch(
+    "https://api.linkedin.com/v2/assets?action=registerUpload",
     {
       method: "POST",
       headers: {
@@ -147,202 +138,61 @@ async function uploadVideo(
         "X-Restli-Protocol-Version": "2.0.0",
       },
       body: JSON.stringify({
-        initializeUploadRequest: {
+        registerUploadRequest: {
+          recipes: ["urn:li:digitalmediaRecipe:feedshare-video"],
           owner: ownerUrn,
-          fileSizeBytes: videoSize,
-          uploadCaptions: false,
-          uploadThumbnail: false,
-          // Note: purpose field not supported in initialization
-          // Video purpose is determined by how it's used (in UGC posts vs ads)
+          serviceRelationships: [
+            {
+              relationshipType: "OWNER",
+              identifier: "urn:li:userGeneratedContent",
+            },
+          ],
         },
       }),
     }
   );
 
-  if (!initResponse.ok) {
-    const errorText = await initResponse.text();
-    console.error("[LinkedIn] Video initialization failed", {
-      status: initResponse.status,
+  if (!registerResponse.ok) {
+    const errorText = await registerResponse.text();
+    console.error("[LinkedIn] Video registration failed", {
+      status: registerResponse.status,
       error: errorText,
     });
-    throw new Error(`LinkedIn video initialization failed: ${errorText}`);
+    throw new Error(`LinkedIn video registration failed: ${errorText}`);
   }
 
-  const initData: LinkedInVideoUploadResponse = await initResponse.json();
-  console.log("[LinkedIn] Full video init response:", JSON.stringify(initData, null, 2));
+  const registerData = await registerResponse.json();
+  console.log("[LinkedIn] Full video registration response:", JSON.stringify(registerData, null, 2));
   
-  const videoUrn = initData.value.video;
-  const uploadInstructions = initData.value.uploadInstructions;
-
-  console.log("[LinkedIn] Video initialized", {
-    videoUrn,
-    chunks: uploadInstructions.length,
-  });
-
-  // Step 3: Upload video in chunks and collect ETags
-  const uploadedPartIds: string[] = [];
+  const uploadUrl = registerData.value?.uploadMechanism?.["com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"]?.uploadUrl;
+  const assetUrn = registerData.value?.asset;
   
-  for (const instruction of uploadInstructions) {
-    const chunk = videoBuffer.slice(instruction.firstByte, instruction.lastByte + 1);
-
-    const chunkResponse = await fetch(instruction.uploadUrl, {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/octet-stream",
-      },
-      body: chunk,
-    });
-
-    if (!chunkResponse.ok) {
-      const errorText = await chunkResponse.text();
-      console.error("[LinkedIn] Video chunk upload failed", {
-        status: chunkResponse.status,
-        error: errorText,
-        firstByte: instruction.firstByte,
-        lastByte: instruction.lastByte,
-      });
-      throw new Error(`LinkedIn video chunk upload failed: ${errorText}`);
-    }
-
-    // Capture ETag from response headers (required for finalization)
-    const etag = chunkResponse.headers.get("ETag");
-    if (etag) {
-      // Remove quotes from ETag if present
-      uploadedPartIds.push(etag.replace(/"/g, ""));
-    }
-
-    console.log("[LinkedIn] Chunk uploaded", {
-      firstByte: instruction.firstByte,
-      lastByte: instruction.lastByte,
-      etag,
-    });
+  if (!uploadUrl || !assetUrn) {
+    throw new Error("LinkedIn video registration did not return upload URL or asset URN");
   }
 
-  console.log("[LinkedIn] All chunks uploaded", {
-    totalChunks: uploadInstructions.length,
-    etagsCollected: uploadedPartIds.length,
+  console.log("[LinkedIn] Video registered", { assetUrn });
+
+  // Step 3: Upload video to LinkedIn
+  const uploadResponse = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: videoBuffer,
   });
 
-  // Step 4: Finalize video upload with ETags
-  const finalizeResponse = await fetch(
-    `https://api.linkedin.com/v2/videos?action=finalizeUpload`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-        "X-Restli-Protocol-Version": "2.0.0",
-      },
-      body: JSON.stringify({
-        finalizeUploadRequest: {
-          video: videoUrn,
-          uploadToken: "",
-          uploadedPartIds,
-        },
-      }),
-    }
-  );
-
-  if (!finalizeResponse.ok) {
-    const errorText = await finalizeResponse.text();
-    console.error("[LinkedIn] Video finalization failed", {
-      status: finalizeResponse.status,
+  if (!uploadResponse.ok) {
+    const errorText = await uploadResponse.text();
+    console.error("[LinkedIn] Video upload failed", {
+      status: uploadResponse.status,
       error: errorText,
     });
-    throw new Error(`LinkedIn video finalization failed: ${errorText}`);
+    throw new Error(`LinkedIn video upload failed: ${errorText}`);
   }
 
-  // LinkedIn may return empty response (204 No Content) for successful finalization
-  const responseText = await finalizeResponse.text();
-  if (responseText) {
-    try {
-      const finalizeData = JSON.parse(responseText);
-      console.log("[LinkedIn] Full finalization response:", JSON.stringify(finalizeData, null, 2));
-    } catch (e) {
-      console.log("[LinkedIn] Finalization response (non-JSON):", responseText);
-    }
-  } else {
-    console.log("[LinkedIn] Finalization returned empty response (success)");
-  }
-  
-  console.log("[LinkedIn] Video upload completed", { videoUrn });
-  
-  // Poll video status to ensure it's ready and ownership is processed
-  await waitForVideoReady(accessToken, videoUrn, ownerUrn);
-  
-  return videoUrn;
-}
-
-async function waitForVideoReady(
-  accessToken: string,
-  videoUrn: string,
-  expectedOwner: string,
-  maxAttempts: number = 10,
-  delayMs: number = 2000
-): Promise<void> {
-  console.log("[LinkedIn] Waiting for video to be ready", { videoUrn, expectedOwner });
-  
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      // Check video status
-      const statusResponse = await fetch(
-        `https://api.linkedin.com/v2/videos/${encodeURIComponent(videoUrn)}`,
-        {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "X-Restli-Protocol-Version": "2.0.0",
-          },
-        }
-      );
-      
-      if (statusResponse.ok) {
-        const videoData = await statusResponse.json();
-        const status = videoData.status;
-        const owner = videoData.owner;
-        
-        // Log full video data on first successful check
-        if (attempt === 1 || status === "AVAILABLE") {
-          console.log(`[LinkedIn] Full video status response (attempt ${attempt}):`, JSON.stringify(videoData, null, 2));
-        }
-        
-        console.log(`[LinkedIn] Video status check (attempt ${attempt}/${maxAttempts})`, {
-          status,
-          owner,
-          expectedOwner,
-          ownerMatch: owner === expectedOwner,
-        });
-        
-        // Check if video is ready and owned by the correct entity
-        if (status === "AVAILABLE" && owner === expectedOwner) {
-          console.log("[LinkedIn] Video is ready and ownership confirmed!");
-          return;
-        }
-        
-        // If status is failed or processing is stuck, throw error
-        if (status === "FAILED" || status === "PROCESSING_FAILED") {
-          throw new Error(`LinkedIn video processing failed with status: ${status}`);
-        }
-      } else {
-        console.log(`[LinkedIn] Video status check failed (attempt ${attempt}/${maxAttempts})`, {
-          status: statusResponse.status,
-        });
-      }
-      
-      // Wait before next attempt (unless it's the last one)
-      if (attempt < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-      }
-    } catch (error) {
-      console.log(`[LinkedIn] Error checking video status (attempt ${attempt}/${maxAttempts})`, error);
-      if (attempt < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-      }
-    }
-  }
-  
-  // If we've exhausted attempts, log warning but continue (fallback to delay-based approach)
-  console.warn("[LinkedIn] Could not confirm video ready status, proceeding anyway after max attempts");
+  console.log("[LinkedIn] Video uploaded successfully", { assetUrn });
+  return assetUrn;
 }
 
 async function createPost(
@@ -506,7 +356,7 @@ export const linkedinClient: PlatformClient = {
 
       // Upload media if present
       if (isVideo) {
-        // uploadVideo now includes status polling to wait for ownership
+        // uploadVideo now uses Assets API with UGC service relationship (like images)
         mediaUrn = await uploadVideo(
           accessToken,
           authorUrn,
