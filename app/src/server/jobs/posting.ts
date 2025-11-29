@@ -75,8 +75,6 @@ async function runPostJobForMediaItem(params: {
     },
   });
 
-  const results: PostJobResult[] = [];
-
   let overrides: Partial<Record<Platform, string>> | null = null;
   if (perPlatformOverrides && Object.keys(perPlatformOverrides).length > 0) {
     overrides = perPlatformOverrides;
@@ -86,64 +84,73 @@ async function runPostJobForMediaItem(params: {
     >;
   }
 
-  for (const connection of socialConnections) {
-    const captionOverride = overrides?.[connection.platform] ?? null;
-    const caption = captionOverride 
-      ? buildCaptionWithFooter(captionOverride, user)
-      : fullBaseCaption;
-
-    const resultRecord = await prisma.postJobResult.create({
-      data: {
-        postJobId: postJob.id,
-        platform: connection.platform,
-        socialConnectionId: connection.id,
-        status: "pending",
-      },
-    });
-
-    const client = getPlatformClient(connection.platform);
-
-    if (!client) {
-      const failed = await prisma.postJobResult.update({
-        where: { id: resultRecord.id },
+  // Create result records for all platforms first
+  const resultRecords = await Promise.all(
+    socialConnections.map(connection =>
+      prisma.postJobResult.create({
         data: {
-          status: "failed",
-          errorCode: "CLIENT_NOT_FOUND",
-          errorMessage: "No client configured for this platform.",
+          postJobId: postJob.id,
+          platform: connection.platform,
+          socialConnectionId: connection.id,
+          status: "pending",
         },
-      });
-      results.push(failed);
-      continue;
-    }
+      })
+    )
+  );
 
-    try {
-      const publishResult = await client.publishVideo({
-        user: { id: userId } as any,
-        socialConnection: connection,
-        mediaItem,
-        caption,
-      });
+  console.log(`[PostJob] Publishing to ${socialConnections.length} platforms in parallel`);
 
-      const success = await prisma.postJobResult.update({
-        where: { id: resultRecord.id },
-        data: {
-          status: "success",
-          externalPostId: publishResult.externalPostId ?? null,
-        },
-      });
-      results.push(success);
-    } catch (error: any) {
-      const failed = await prisma.postJobResult.update({
-        where: { id: resultRecord.id },
-        data: {
-          status: "failed",
-          errorCode: error?.code ?? "PUBLISH_FAILED",
-          errorMessage: "Failed to publish to platform.",
-        },
-      });
-      results.push(failed);
-    }
-  }
+  // Run all platform uploads in parallel to avoid timeouts
+  const results = await Promise.all(
+    socialConnections.map(async (connection, index) => {
+      const resultRecord = resultRecords[index];
+      
+      const captionOverride = overrides?.[connection.platform] ?? null;
+      const caption = captionOverride 
+        ? buildCaptionWithFooter(captionOverride, user)
+        : fullBaseCaption;
+
+      const client = getPlatformClient(connection.platform);
+
+      if (!client) {
+        return await prisma.postJobResult.update({
+          where: { id: resultRecord.id },
+          data: {
+            status: "failed",
+            errorCode: "CLIENT_NOT_FOUND",
+            errorMessage: "No client configured for this platform.",
+          },
+        });
+      }
+
+      try {
+        const publishResult = await client.publishVideo({
+          user: { id: userId } as any,
+          socialConnection: connection,
+          mediaItem,
+          caption,
+        });
+
+        return await prisma.postJobResult.update({
+          where: { id: resultRecord.id },
+          data: {
+            status: "success",
+            externalPostId: publishResult.externalPostId ?? null,
+          },
+        });
+      } catch (error: any) {
+        console.error(`[PostJob] Platform ${connection.platform} failed:`, error);
+        return await prisma.postJobResult.update({
+          where: { id: resultRecord.id },
+          data: {
+            status: "failed",
+            errorCode: error?.code ?? "PUBLISH_FAILED",
+            errorMessage: error?.message || "Failed to publish to platform.",
+          },
+        });
+      }
+    })
+  );
 
   const hasSuccess = results.some((r) => r.status === "success");
   const hasPending = results.some((r) => r.status === "pending");
