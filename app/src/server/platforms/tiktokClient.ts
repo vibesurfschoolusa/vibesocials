@@ -43,8 +43,10 @@ export const tiktokClient: PlatformClient = {
       ? (caption.length > 2200 ? caption.substring(0, 2200) : caption)
       : "Video posted via Vibe Socials";
 
-    // Chunk the video to avoid timeout (TikTok recommends ~10MB chunks)
-    const CHUNK_SIZE = 3 * 1024 * 1024; // 3MB chunks to stay well under 60s timeout
+    // Chunk the video to avoid timeout
+    // Use 5MB chunks: 9.6MB video = 2 chunks, prevents 60s timeout
+    // TikTok's examples show 10MB chunks, but we need smaller for reliable upload
+    const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB chunks
     const totalChunks = Math.ceil(size / CHUNK_SIZE);
 
     console.log('[TikTok] Initializing upload with FILE_UPLOAD (chunked)', {
