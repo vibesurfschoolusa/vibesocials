@@ -120,6 +120,44 @@ LINKEDIN_REDIRECT_URI=http://localhost:3000/api/auth/linkedin/callback
 - **Max duration**: 10 minutes
 - **Recommended dimensions**: 1280 x 720 pixels or higher
 
+## Technical Implementation (Videos)
+
+**Important:** LinkedIn has two different APIs for video uploads:
+
+| API | Endpoint | Purpose | Use Case |
+|-----|----------|---------|----------|
+| **Videos API** | `/v2/videos` | LinkedIn Ads | ❌ Not for organic posts |
+| **Assets API** | `/v2/assets` | Organic content | ✅ Used by Vibe Socials |
+
+### Why Assets API?
+
+The Videos API (`/v2/videos`) defaults to `purpose: "VIDEO_AD"` which causes ownership errors when trying to create organic UGC posts. The Assets API with UGC service relationships is the correct approach:
+
+```typescript
+// Register video with Assets API
+POST /v2/assets?action=registerUpload
+{
+  registerUploadRequest: {
+    recipes: ["urn:li:digitalmediaRecipe:feedshare-video"],
+    owner: "urn:li:organization:12345678",
+    serviceRelationships: [{
+      relationshipType: "OWNER",
+      identifier: "urn:li:userGeneratedContent"  // Key for organic posts!
+    }]
+  }
+}
+```
+
+This ensures videos are treated as **user-generated content** (organic posts) rather than advertising content.
+
+### Upload Flow
+
+1. **Register Upload** - Get upload URL and asset URN from Assets API
+2. **Upload Video** - Single PUT request with video bytes
+3. **Create Post** - Use asset URN in UGC Posts API
+
+No chunking or status polling required - the Assets API handles everything.
+
 ## Troubleshooting
 
 ### "unauthorized_scope_error" - MOST COMMON ISSUE
@@ -156,6 +194,12 @@ LINKEDIN_REDIRECT_URI=http://localhost:3000/api/auth/linkedin/callback
 - Check file size limits
 - Verify the file format is supported
 - Ensure the blob storage URL is publicly accessible
+
+### "INVALID_CONTENT_OWNERSHIP" / "One or more of the contents is not owned by the author"
+
+**Cause:** Video was uploaded using the Videos API (`/v2/videos`) which creates advertising content.
+
+**Solution:** This has been fixed in Vibe Socials. Videos now use the Assets API (`/v2/assets`) with UGC service relationships, which properly marks them as organic content owned by the organization.
 
 ## Development vs Production
 

@@ -942,3 +942,164 @@ Vibe Socials now supports posting to all 6 major social media platforms:
 **Lines of code:** Thousands across OAuth routes, platform clients, and UI
 **APIs integrated:** 6 different social media APIs with unique authentication flows
 **Unique challenge:** First OAuth 1.0a implementation with chunked video uploads
+
+---
+
+## Session: 2025-11-29 (LinkedIn Video Fix & TikTok Caption Fix)
+
+### Summary of Changes
+
+This session focused on fixing two critical issues:
+1. **LinkedIn Video Posting** - Videos were failing with "INVALID_CONTENT_OWNERSHIP" error
+2. **TikTok Caption Posting** - Captions were not being carried over to posts
+
+### LinkedIn Video Fix
+
+**Problem:** LinkedIn video uploads were failing with the error:
+```
+"One or more of the contents is not owned by the author"
+```
+
+**Root Cause:** The code was using LinkedIn's **Videos API** (`/v2/videos`) which defaults to `purpose: "VIDEO_AD"` (advertising). This caused ownership errors when trying to create organic posts.
+
+**Solution:** Switched from Videos API to **Assets API** (`/v2/assets`) with UGC service relationships:
+
+```typescript
+// Before (Videos API - for advertising)
+POST /v2/videos?action=initializeUpload
+// Videos created with VIDEO_AD purpose by default
+
+// After (Assets API - for organic posts)
+POST /v2/assets?action=registerUpload
+{
+  registerUploadRequest: {
+    recipes: ["urn:li:digitalmediaRecipe:feedshare-video"],
+    owner: ownerUrn,
+    serviceRelationships: [{
+      relationshipType: "OWNER",
+      identifier: "urn:li:userGeneratedContent"  // ← Key for organic posts
+    }]
+  }
+}
+```
+
+**Files Modified:**
+- `app/src/server/platforms/linkedinClient.ts` - Complete video upload rewrite
+  - Removed chunked upload logic (not needed with Assets API)
+  - Removed video status polling (not needed)
+  - Simplified to single-upload flow like images
+  - Updated interfaces and documentation
+
+**Technical Notes:**
+- Videos API (`/v2/videos`) = For LinkedIn Ads (VIDEO_AD purpose)
+- Assets API (`/v2/assets`) = For organic UGC posts (works with UGC Posts API)
+- Both images and videos now use the same Assets API approach
+- Upload is simpler: register → single PUT → get asset URN → create post
+
+### TikTok Caption Fix
+
+**Problem:** TikTok videos were being uploaded but captions were not appearing - only showing "#VibeSocials" or no caption at all.
+
+**Investigation Journey:**
+
+1. **Initial State:** Code was using **Inbox API** (`/v2/post/publish/inbox/video/init/`)
+   - Inbox API ignores `post_info` field (captions)
+   - Videos go to Creator Portal inbox for manual editing
+
+2. **Attempt 1: Direct Post API with PULL_FROM_URL**
+   - Switched to Direct Post API which supports `post_info` (captions)
+   - Used `PULL_FROM_URL` to let TikTok fetch video from Vercel Blob Storage
+   - **Failed:** `"url_ownership_unverified"` - TikTok requires domain verification for PULL_FROM_URL
+
+3. **Attempt 2: Direct Post API with FILE_UPLOAD (chunked)**
+   - Tried chunking the 9.6MB video into smaller pieces
+   - **Failed:** Various chunk size/count validation errors from TikTok
+
+4. **Final Solution: Direct Post API with FILE_UPLOAD (single chunk)**
+   - Use single chunk upload (`chunk_size = video_size`, `total_chunk_count = 1`)
+   - Include `post_info` with full caption in the title field
+   - Upload completes in ~1 second (no timeout!)
+
+**Final Implementation:**
+```typescript
+// Direct Post API with FILE_UPLOAD and captions
+POST /v2/post/publish/video/init/
+{
+  post_info: {
+    title: "Full caption with hashtags...",  // ✅ CAPTION INCLUDED
+    privacy_level: "SELF_ONLY",  // Sandbox mode restriction
+    disable_comment: false,
+    disable_duet: false,
+    disable_stitch: false,
+    video_cover_timestamp_ms: 1000
+  },
+  source_info: {
+    source: "FILE_UPLOAD",
+    video_size: 9652098,
+    chunk_size: 9652098,      // Same as video size (single chunk)
+    total_chunk_count: 1
+  }
+}
+```
+
+**OAuth Scope Change:**
+- Changed from `video.upload` (Inbox API) to `video.publish` (Direct Post API)
+- Users must reconnect TikTok to get the new scope
+
+**Files Modified:**
+- `app/src/server/platforms/tiktokClient.ts` - Direct Post API with captions
+- `app/src/app/api/auth/tiktok/start/route.ts` - Updated OAuth scope to `video.publish`
+
+### TikTok Sandbox Mode Requirements
+
+**IMPORTANT:** For the TikTok integration to work in sandbox/developer mode:
+
+1. **TikTok Account Must Be PRIVATE**
+   - Unaudited clients can only post to private accounts
+   - Go to TikTok app → Settings → Privacy → Private Account → ON
+
+2. **Privacy Level: SELF_ONLY**
+   - Sandbox mode requires `privacy_level: "SELF_ONLY"`
+   - Videos are only visible to the account owner
+
+3. **Direct Post Enabled**
+   - In TikTok Developer Portal → Your App → Sandbox Settings
+   - Enable "Direct Post" toggle
+
+4. **video.publish Scope**
+   - User must authorize with `video.publish` scope (not `video.upload`)
+   - Reconnect TikTok if previously connected with old scope
+
+### Testing Results
+
+✅ **LinkedIn Video Upload** - Successfully uploads videos using Assets API
+✅ **LinkedIn Video Post** - Videos appear on company page with correct caption
+✅ **TikTok Video Upload** - Successfully uploads via Direct Post API
+✅ **TikTok Captions** - Full captions now appear on TikTok posts
+✅ **No Timeout Issues** - Single chunk upload completes in ~1 second
+
+### API Documentation References
+
+**LinkedIn:**
+- Assets API: https://learn.microsoft.com/en-us/linkedin/marketing/integrations/community-management/shares/images-api
+- UGC Posts API: https://learn.microsoft.com/en-us/linkedin/marketing/integrations/community-management/shares/ugc-post-api
+
+**TikTok:**
+- Content Posting API: https://developers.tiktok.com/doc/content-posting-api-get-started
+- Direct Post Guide: https://developers.tiktok.com/doc/content-posting-api-reference-direct-post
+
+### Deployment Status
+
+- ✅ Code pushed to GitHub (main branch)
+- ✅ Auto-deployed to Vercel
+- ✅ LinkedIn video posting working
+- ✅ TikTok video posting with captions working
+- ✅ Production testing successful
+
+### Key Learnings
+
+1. **LinkedIn has two video APIs** - Videos API (ads) vs Assets API (organic)
+2. **TikTok has two posting APIs** - Inbox API (drafts) vs Direct Post API (captions)
+3. **TikTok PULL_FROM_URL requires domain verification** - Not feasible with Vercel Blob Storage
+4. **TikTok chunking validation is strict** - Single chunk upload is simpler and works
+5. **Sandbox mode has restrictions** - Private account required, SELF_ONLY visibility
