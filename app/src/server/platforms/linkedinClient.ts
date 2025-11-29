@@ -152,7 +152,8 @@ async function uploadVideo(
           fileSizeBytes: videoSize,
           uploadCaptions: false,
           uploadThumbnail: false,
-          purpose: "ORGANIC_VIDEO",
+          // Note: purpose field not supported in initialization
+          // Video purpose is determined by how it's used (in UGC posts vs ads)
         },
       }),
     }
