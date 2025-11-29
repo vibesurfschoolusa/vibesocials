@@ -170,7 +170,9 @@ async function uploadVideo(
     chunks: uploadInstructions.length,
   });
 
-  // Step 3: Upload video in chunks
+  // Step 3: Upload video in chunks and collect ETags
+  const uploadedPartIds: string[] = [];
+  
   for (const instruction of uploadInstructions) {
     const chunk = videoBuffer.slice(instruction.firstByte, instruction.lastByte + 1);
 
@@ -194,13 +196,26 @@ async function uploadVideo(
       throw new Error(`LinkedIn video chunk upload failed: ${errorText}`);
     }
 
+    // Capture ETag from response headers (required for finalization)
+    const etag = chunkResponse.headers.get("ETag");
+    if (etag) {
+      // Remove quotes from ETag if present
+      uploadedPartIds.push(etag.replace(/"/g, ""));
+    }
+
     console.log("[LinkedIn] Chunk uploaded", {
       firstByte: instruction.firstByte,
       lastByte: instruction.lastByte,
+      etag,
     });
   }
 
-  // Step 4: Finalize video upload
+  console.log("[LinkedIn] All chunks uploaded", {
+    totalChunks: uploadInstructions.length,
+    etagsCollected: uploadedPartIds.length,
+  });
+
+  // Step 4: Finalize video upload with ETags
   const finalizeResponse = await fetch(
     `https://api.linkedin.com/v2/videos?action=finalizeUpload`,
     {
@@ -214,7 +229,7 @@ async function uploadVideo(
         finalizeUploadRequest: {
           video: videoUrn,
           uploadToken: "",
-          uploadedPartIds: [],
+          uploadedPartIds,
         },
       }),
     }
