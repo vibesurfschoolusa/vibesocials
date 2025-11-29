@@ -69,8 +69,11 @@ export const tiktokClient: PlatformClient = {
       auto_add_music: postInfo.auto_add_music,
     });
 
+    // Use Direct Post API (not Inbox API) to support captions
+    // Direct Post: /v2/post/publish/video/init/ (supports post_info)
+    // Inbox API: /v2/post/publish/inbox/video/init/ (ignores post_info, manual editing only)
     const initRes = await fetch(
-      `${TIKTOK_API_BASE}/v2/post/publish/inbox/video/init/`,
+      `${TIKTOK_API_BASE}/v2/post/publish/video/init/`,
       {
         method: "POST",
         headers: {
@@ -143,7 +146,8 @@ export const tiktokClient: PlatformClient = {
 
     console.log('[TikTok] Video uploaded successfully', {
       publishId,
-      note: 'In developer mode, video goes to Creator Portal inbox for manual review and publishing. Caption and settings can be edited there before publishing.',
+      note: 'Using Direct Post API. In sandbox/developer mode (privacy_level: SELF_ONLY), videos post with captions but are only visible to the creator for testing.',
+      captionIncluded: true,
       captionSent: tiktokCaption.substring(0, 150) + (tiktokCaption.length > 150 ? '...' : ''),
     });
 
