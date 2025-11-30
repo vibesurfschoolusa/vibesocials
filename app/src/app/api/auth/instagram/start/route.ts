@@ -35,6 +35,7 @@ export async function GET(request: NextRequest) {
       "instagram_content_publish",
       // Needed for reading and moderating comments via the Instagram Graph API
       "instagram_manage_comments",
+      "instagram_manage_messages",
       "pages_show_list",
       "pages_read_engagement",
       "business_management",

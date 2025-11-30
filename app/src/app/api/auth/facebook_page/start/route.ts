@@ -36,6 +36,7 @@ export async function GET(request: NextRequest) {
       "pages_read_engagement",
       // Helpful for replying to comments and managing comment interactions
       "pages_manage_engagement",
+      "pages_messaging",
     ].join(","),
   );
 
