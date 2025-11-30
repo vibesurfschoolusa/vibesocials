@@ -12,6 +12,13 @@ interface PostResponse {
   };
 }
 
+interface UploadedBlobInfo {
+  url: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
   const k = 1024;
@@ -29,6 +36,67 @@ export function CreatePostForm() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [enhancingCaption, setEnhancingCaption] = useState(false);
+
+  const [autoCaptionEnabled, setAutoCaptionEnabled] = useState(true);
+  const [autoCaptionLoading, setAutoCaptionLoading] = useState(false);
+  const [uploadedBlob, setUploadedBlob] = useState<UploadedBlobInfo | null>(null);
+
+  async function runAutoCaptionFromMedia(options: {
+    overwrite: boolean;
+    blobOverride?: UploadedBlobInfo;
+  }) {
+    const blob = options.blobOverride ?? uploadedBlob;
+
+    if (!blob) {
+      setUploadError(
+        "Please upload a media file first before generating a caption.",
+      );
+      return;
+    }
+
+    try {
+      setAutoCaptionLoading(true);
+      setUploadError(null);
+
+      const response = await fetch("/api/posts/auto-caption", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          blobUrl: blob.url,
+          mimeType: blob.mimeType,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        const message =
+          (errorData as any)?.error ||
+          "Failed to generate caption from media";
+        throw new Error(message);
+      }
+
+      const data = await response.json();
+      const caption = (data as any)?.caption;
+
+      if (typeof caption !== "string" || !caption.trim()) {
+        throw new Error("AI returned an empty caption from media");
+      }
+
+      setUploadCaption((prev) => {
+        if (!options.overwrite && prev.trim()) {
+          return prev;
+        }
+        return caption;
+      });
+    } catch (err: any) {
+      console.error("Error generating caption from media:", err);
+      setUploadError(err.message || "Failed to generate caption from media");
+    } finally {
+      setAutoCaptionLoading(false);
+    }
+  }
 
   async function handleUploadSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -48,31 +116,44 @@ export function CreatePostForm() {
     setUploadLoading(true);
 
     try {
-      console.log('[Upload] Starting client-side upload to Vercel Blob', {
-        filename: uploadFile.name,
-        size: uploadFile.size,
-        type: uploadFile.type,
-      });
+      let blob: UploadedBlobInfo | null = uploadedBlob;
 
-      // Step 1: Upload directly to Vercel Blob from browser (bypasses 4.5MB limit!)
-      const newBlob = await upload(uploadFile.name, uploadFile, {
-        access: 'public',
-        handleUploadUrl: '/api/upload',
-      });
+      if (!blob) {
+        console.log("[Upload] Starting client-side upload to Vercel Blob", {
+          filename: uploadFile.name,
+          size: uploadFile.size,
+          type: uploadFile.type,
+        });
 
-      console.log('[Upload] Blob uploaded successfully', { url: newBlob.url });
+        const newBlob = await upload(uploadFile.name, uploadFile, {
+          access: "public",
+          handleUploadUrl: "/api/upload",
+        });
 
-      // Step 2: Create post using the blob URL
-      const response = await fetch("/api/posts", {
-        method: "POST",
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          blobUrl: newBlob.url,
+        console.log("[Upload] Blob uploaded successfully", {
+          url: newBlob.url,
+        });
+
+        blob = {
+          url: newBlob.url,
           filename: uploadFile.name,
           mimeType: uploadFile.type,
           sizeBytes: uploadFile.size,
+        };
+
+        setUploadedBlob(blob);
+      }
+
+      const response = await fetch("/api/posts", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          blobUrl: blob.url,
+          filename: blob.filename,
+          mimeType: blob.mimeType,
+          sizeBytes: blob.sizeBytes,
           baseCaption: uploadCaption,
           location: uploadLocation.trim() || undefined,
         }),
@@ -94,6 +175,7 @@ export function CreatePostForm() {
       setUploadFile(null);
       setUploadCaption("");
       setUploadLocation("");
+      setUploadedBlob(null);
       setUploadLoading(false);
     } catch (_err) {
       setUploadError("Unexpected error while creating post.");
@@ -155,36 +237,113 @@ export function CreatePostForm() {
             <input
               type="file"
               accept="video/*,image/*"
-              onChange={(event) => {
+              onChange={async (event) => {
                 const nextFile = event.target.files?.[0] ?? null;
                 setUploadFile(nextFile);
+                setUploadedBlob(null);
+
+                if (!nextFile) {
+                  return;
+                }
+
+                try {
+                  setAutoCaptionLoading(true);
+                  setUploadError(null);
+
+                  const newBlob = await upload(nextFile.name, nextFile, {
+                    access: "public",
+                    handleUploadUrl: "/api/upload",
+                  });
+
+                  const blobInfo: UploadedBlobInfo = {
+                    url: newBlob.url,
+                    filename: nextFile.name,
+                    mimeType: nextFile.type,
+                    sizeBytes: nextFile.size,
+                  };
+
+                  setUploadedBlob(blobInfo);
+
+                  if (autoCaptionEnabled) {
+                    await runAutoCaptionFromMedia({
+                      overwrite: false,
+                      blobOverride: blobInfo,
+                    });
+                  }
+                } catch (err: any) {
+                  console.error(
+                    "Error uploading media for auto-caption:",
+                    err,
+                  );
+                  setUploadError(
+                    err.message ||
+                      "Failed to prepare media for posting. Please try again.",
+                  );
+                } finally {
+                  setAutoCaptionLoading(false);
+                }
               }}
               className="mt-1 block w-full text-sm text-zinc-900 file:mr-3 file:rounded file:border-0 file:bg-zinc-900 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-zinc-800"
             />
           </div>
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label className="block text-sm font-medium text-zinc-900">
-                Caption
-              </label>
-              <button
-                type="button"
-                onClick={handleEnhanceCaption}
-                disabled={enhancingCaption || !uploadCaption.trim()}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-purple-200 bg-purple-50 px-3 py-1 text-xs font-semibold text-purple-700 hover:bg-purple-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {enhancingCaption ? (
-                  <>
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    Enhancing...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="h-3 w-3 fill-purple-600" />
-                    AI Enhance Caption
-                  </>
-                )}
-              </button>
+              <div className="flex flex-col gap-1">
+                <label className="block text-sm font-medium text-zinc-900">
+                  Caption
+                </label>
+                <label className="inline-flex items-center gap-1 text-xs text-zinc-600">
+                  <input
+                    type="checkbox"
+                    className="h-3 w-3"
+                    checked={autoCaptionEnabled}
+                    onChange={(event) =>
+                      setAutoCaptionEnabled(event.target.checked)
+                    }
+                  />
+                  <span>Auto-caption from media (on attach)</span>
+                </label>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    runAutoCaptionFromMedia({ overwrite: true })
+                  }
+                  disabled={autoCaptionLoading || !uploadedBlob}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {autoCaptionLoading ? (
+                    <>
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Auto caption...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="h-3 w-3 fill-blue-600" />
+                      Auto Caption
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleEnhanceCaption}
+                  disabled={enhancingCaption || !uploadCaption.trim()}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-purple-200 bg-purple-50 px-3 py-1 text-xs font-semibold text-purple-700 hover:bg-purple-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {enhancingCaption ? (
+                    <>
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Enhancing...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="h-3 w-3 fill-purple-600" />
+                      AI Enhance Caption
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
             <textarea
               value={uploadCaption}
