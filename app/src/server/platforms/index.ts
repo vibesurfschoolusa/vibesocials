@@ -6,6 +6,7 @@ import { linkedinClient } from "./linkedinClient";
 import { tiktokClient } from "./tiktokClient";
 import { xClient } from "./xClient";
 import { youtubeClient } from "./youtubeClient";
+import { facebookPageClient } from "./facebookPageClient";
 import type { PlatformClient } from "./types";
 
 const platformClients: Record<Platform, PlatformClient> = {
@@ -15,6 +16,7 @@ const platformClients: Record<Platform, PlatformClient> = {
   linkedin: linkedinClient,
   instagram: instagramClient,
   google_business_profile: googleBusinessProfileClient,
+  facebook_page: facebookPageClient,
 };
 
 export function getPlatformClient(platform: Platform): PlatformClient | null {

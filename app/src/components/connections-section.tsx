@@ -14,6 +14,7 @@ const PLATFORM_LABELS = {
   linkedin: "LinkedIn",
   instagram: "Instagram",
   google_business_profile: "Google Business Profile (Maps)",
+  facebook_page: "Facebook Page",
 } as const;
 
 type PlatformKey = keyof typeof PLATFORM_LABELS;
@@ -40,6 +41,7 @@ export function ConnectionsSection({ connections }: ConnectionsSectionProps) {
           const isInstagram = platform === "instagram";
           const isLinkedIn = platform === "linkedin";
           const isX = platform === "x";
+          const isFacebookPage = platform === "facebook_page";
 
           const locationName = (connection?.metadata as any)?.locationName ?? null;
           const username = (connection?.metadata as any)?.username ?? connection?.accountIdentifier;
@@ -67,6 +69,8 @@ export function ConnectionsSection({ connections }: ConnectionsSectionProps) {
                       ? "Connect your LinkedIn profile to share posts with your network."
                       : isX
                       ? "Connect your X (Twitter) account to post tweets with media."
+                      : isFacebookPage
+                      ? "Connect your Facebook Page so Vibe Socials can post photos directly to your page."
                       : "Not connected yet (scaffolded; implementation pending)."}
                   </div>
                 </div>
@@ -115,6 +119,13 @@ export function ConnectionsSection({ connections }: ConnectionsSectionProps) {
                   ) : isX ? (
                     <Link
                       href="/api/auth/x/start"
+                      className="rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm hover:shadow-md"
+                    >
+                      Connect
+                    </Link>
+                  ) : isFacebookPage ? (
+                    <Link
+                      href="/api/auth/facebook_page/start"
                       className="rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm hover:shadow-md"
                     >
                       Connect
