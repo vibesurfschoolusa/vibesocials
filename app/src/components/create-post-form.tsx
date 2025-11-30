@@ -28,6 +28,12 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${sizes[i]}`;
 }
 
+function generateBlobKey(file: File): string {
+  const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
+  const random = Math.random().toString(36).slice(2, 10);
+  return `${Date.now()}-${random}-${safeName}`;
+}
+
 export function CreatePostForm() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadCaption, setUploadCaption] = useState("");
@@ -125,7 +131,9 @@ export function CreatePostForm() {
           type: uploadFile.type,
         });
 
-        const newBlob = await upload(uploadFile.name, uploadFile, {
+        const uploadKey = generateBlobKey(uploadFile);
+
+        const newBlob = await upload(uploadKey, uploadFile, {
           access: "public",
           handleUploadUrl: "/api/upload",
         });
@@ -250,7 +258,9 @@ export function CreatePostForm() {
                   setAutoCaptionLoading(true);
                   setUploadError(null);
 
-                  const newBlob = await upload(nextFile.name, nextFile, {
+                  const uploadKey = generateBlobKey(nextFile);
+
+                  const newBlob = await upload(uploadKey, nextFile, {
                     access: "public",
                     handleUploadUrl: "/api/upload",
                   });
