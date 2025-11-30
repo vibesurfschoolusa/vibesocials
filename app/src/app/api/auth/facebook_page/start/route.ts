@@ -32,6 +32,10 @@ export async function GET(request: NextRequest) {
     [
       "pages_show_list", // list pages user manages
       "pages_manage_posts", // publish to pages
+      // Required for reading engagement (comments, reactions, etc.)
+      "pages_read_engagement",
+      // Helpful for replying to comments and managing comment interactions
+      "pages_manage_engagement",
     ].join(","),
   );
 

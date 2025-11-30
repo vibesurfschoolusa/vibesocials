@@ -85,7 +85,9 @@ export async function POST(request: Request) {
     });
 
     if (!response.ok) {
-      const errorBody = await response.text().catch(() => "Unable to read error body");
+      const errorBody = await response
+        .text()
+        .catch(() => "Unable to read error body");
       console.error("[Engagement] Failed to post comment reply", {
         platform,
         commentId,
@@ -93,13 +95,15 @@ export async function POST(request: Request) {
         errorBody,
       });
 
-      const status = response.status === 400 || response.status === 403 ? 400 : 500;
+      const status =
+        response.status === 400 || response.status === 403 ? 400 : 500;
 
       return NextResponse.json(
         {
           error: "Failed to post reply to comment",
           details:
             "The social platform API rejected the reply. Additional permissions such as instagram_manage_comments or pages_manage_engagement may be required.",
+          raw: errorBody,
         },
         { status },
       );
