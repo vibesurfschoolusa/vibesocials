@@ -1,6 +1,4 @@
 import { NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/auth";
-import { prisma } from "@/lib/db";
 import type { SocialConnection } from "@prisma/client";
 
 export const dynamic = "force-dynamic";
@@ -252,44 +250,8 @@ async function fetchFacebookPageComments(
 }
 
 export async function GET() {
-  const user = await getCurrentUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const since = new Date(Date.now() - THIRTY_DAYS_MS);
-
-  const connections = await prisma.socialConnection.findMany({
-    where: {
-      userId: user.id,
-      // Use string literals here; the Prisma client types may lag behind the
-      // schema enum that includes facebook_page.
-      platform: {
-        in: ["instagram", "facebook_page"] as any,
-      },
-    },
-  });
-
-  const instagramConnection = connections.find(
-    (c) => (c.platform as any) === "instagram",
+  return NextResponse.json(
+    { error: "Engagement comments have been removed from this application." },
+    { status: 410 },
   );
-  const facebookPageConnection = connections.find(
-    (c) => (c.platform as any) === "facebook_page",
-  );
-
-  const [instagramComments, facebookComments] = await Promise.all([
-    instagramConnection
-      ? fetchInstagramComments(instagramConnection, since)
-      : Promise.resolve([]),
-    facebookPageConnection
-      ? fetchFacebookPageComments(facebookPageConnection, since)
-      : Promise.resolve([]),
-  ]);
-
-  const comments: CommentItem[] = [...instagramComments, ...facebookComments].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
-  );
-
-  return NextResponse.json({ comments });
 }

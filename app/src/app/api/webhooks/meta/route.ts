@@ -25,10 +25,6 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({ error: "Verification failed" }, { status: 403 });
 }
 
-export async function POST(request: NextRequest) {
-  const body = await request.json().catch(() => null);
-
-  console.log("[Meta Webhook] Event", body);
-
+export async function POST() {
   return NextResponse.json({ received: true });
 }

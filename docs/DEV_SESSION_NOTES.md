@@ -374,11 +374,10 @@
   - Instagram account converted to Business or Creator account
   - Instagram connected to a Facebook Page
   - User must be admin of the Facebook Page
-  - Facebook App with required scopes:
+  - Facebook App with required **publish-only** scopes (no DM or comment management):
     - `instagram_basic` - Basic account access
     - `instagram_content_publish` - Create and publish posts
     - `pages_show_list` - List Facebook Pages
-    - `pages_read_engagement` - Read Page data
     - `business_management` - Access to business assets
 
 - **Environment Variables Added**
@@ -1103,3 +1102,27 @@ POST /v2/post/publish/video/init/
 3. **TikTok PULL_FROM_URL requires domain verification** - Not feasible with Vercel Blob Storage
 4. **TikTok chunking validation is strict** - Single chunk upload is simpler and works
 5. **Sandbox mode has restrictions** - Private account required, SELF_ONLY visibility
+
+## Session: 2025-11-30 (Engagement Removal – DMs & Comments)
+
+- **Summary of changes**
+  - Removed the Engagement navigation entry from the main dashboard.
+  - Simplified `/engagement` page to a static message indicating it is no longer used for monitoring direct messages or comments.
+  - Fully disabled backend engagement APIs:
+    - `GET /api/engagement/dms` now returns HTTP 410 with an explanatory message and no longer calls Meta Graph APIs or Prisma.
+    - `GET /api/engagement/comments` now returns HTTP 410 and no longer fetches comments from Instagram or Facebook.
+    - `POST /api/engagement/comments/reply` now returns HTTP 410 and no longer posts replies via Graph API.
+  - Neutralized the Meta webhook handler so POST requests simply acknowledge receipt without inspecting DM/comment payloads.
+
+- **Scope & product decisions**
+  - Vibe Socials is now a **publish-only** tool: it focuses on uploading media and captions to platforms (TikTok, YouTube, X, LinkedIn, Instagram, Google Business Profile, Facebook Page).
+  - The app no longer provides an in-app inbox or comment moderation experience.
+  - Instagram documentation and internal notes were updated so required scopes are limited to publishing and basic page discovery; engagement-specific scopes (DMs/comments) are no longer part of the intended configuration.
+
+- **Rationale**
+  - Maintaining a cross-platform engagement inbox (DMs and comments) added significant ongoing API, review, and product complexity.
+  - The primary value of Vibe Socials is efficient multi-platform posting; monitoring and replying to DMs/comments will be handled directly in each native app.
+
+- **Implications / cleanup**
+  - Any future references to an "Engagement" tab, DM inbox, or comment reply UI should be treated as historical and not part of the current product.
+  - Meta App Review submissions should describe Vibe Socials purely as a content publishing integration, without claiming DM or comment management features.

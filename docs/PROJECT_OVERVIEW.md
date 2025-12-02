@@ -229,11 +229,10 @@ Where:
   - `FACEBOOK_APP_ID` – Facebook App ID (used for Instagram OAuth)
   - `FACEBOOK_APP_SECRET` – Facebook App Secret
   - `INSTAGRAM_REDIRECT_URI` – OAuth redirect URI
-- **Required Scopes:**
+- **Required Scopes (publish-only, no DM or comment management):**
   - `instagram_basic` – Basic Instagram account access
   - `instagram_content_publish` – Create and publish posts
   - `pages_show_list` – List Facebook Pages
-  - `pages_read_engagement` – Read Page data
   - `business_management` – Access to business assets
 - **Prerequisites:**
   - Instagram account must be converted to Business or Creator account

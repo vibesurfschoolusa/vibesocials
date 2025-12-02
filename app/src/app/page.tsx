@@ -54,12 +54,6 @@ export default function Home() {
               </div>
               <div className="flex flex-col gap-3 sm:flex-row">
                 <Link
-                  href="/engagement"
-                  className="flex-1 rounded-lg border-2 border-indigo-200 px-4 py-2.5 text-center text-sm font-semibold text-indigo-700 hover:bg-indigo-50 transition-all"
-                >
-                  Engagement
-                </Link>
-                <Link
                   href="/reviews"
                   className="flex-1 rounded-lg border-2 border-green-200 px-4 py-2.5 text-center text-sm font-semibold text-green-700 hover:bg-green-50 transition-all"
                 >

@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
 import type { SocialConnection } from "@prisma/client";
 
-import { getCurrentUser } from "@/lib/auth";
-import { prisma } from "@/lib/db";
-
 export const dynamic = "force-dynamic";
 
 interface DMItem {
@@ -282,44 +279,8 @@ async function fetchFacebookPageDms(
 }
 
 export async function GET() {
-  const user = await getCurrentUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const since = new Date(Date.now() - THIRTY_DAYS_MS);
-
-  const connections = await prisma.socialConnection.findMany({
-    where: {
-      userId: user.id,
-      platform: {
-        in: ["instagram", "facebook_page"] as any,
-      },
-    },
-  });
-
-  const instagramConnection = connections.find(
-    (c) => (c.platform as any) === "instagram",
+  return NextResponse.json(
+    { error: "Engagement DMs have been removed from this application." },
+    { status: 410 },
   );
-  const facebookPageConnection = connections.find(
-    (c) => (c.platform as any) === "facebook_page",
-  );
-
-  const [instagramDms, facebookDms] = await Promise.all([
-    instagramConnection
-      ? fetchInstagramDms(instagramConnection, since)
-      : Promise.resolve([]),
-    facebookPageConnection
-      ? fetchFacebookPageDms(facebookPageConnection, since)
-      : Promise.resolve([]),
-  ]);
-
-  const dms: DMItem[] = [...instagramDms, ...facebookDms].sort((a, b) => {
-    const aTime = new Date(a.lastMessageAt).getTime();
-    const bTime = new Date(b.lastMessageAt).getTime();
-    return bTime - aTime;
-  });
-
-  return NextResponse.json({ dms });
 }
