@@ -28,6 +28,10 @@ Initial goal: deliver a thin, maintainable vertical slice for **one real platfor
   - Fifth implemented platform: **YouTube**, uploading videos via YouTube Data API v3 with full metadata support.
   - Sixth implemented platform: **X (Twitter)**, posting tweets with images and videos via X API v2 with OAuth 2.0 PKCE.
   - **All platforms complete!** 🎉
+- **Background Jobs:** Inngest (free tier) for async video uploads that exceed Vercel's 60s timeout.
+  - Handles large video uploads to X (chunked), Instagram (processing polling), TikTok, etc.
+  - Connected via Vercel integration (auto-configures `INNGEST_SIGNING_KEY`, `INNGEST_EVENT_KEY`).
+  - Dashboard: https://app.inngest.com
 - **Tooling:**
   - ESLint + Prettier (Next.js defaults).
   - Prisma migrations.
@@ -66,8 +70,10 @@ Initial goal: deliver a thin, maintainable vertical slice for **one real platfor
     - `POST /api/posts` – accepts either:
       - `multipart/form-data` with file upload (< 4.5MB, legacy)
       - `application/json` with pre-uploaded blob URL (unlimited size, preferred)
-    - Creates `MediaItem` + `PostJob` + `PostJobResults`, and fans out to platform clients (synchronously for V1).
+    - Creates `MediaItem` + `PostJob` + `PostJobResults`, triggers Inngest background job, returns immediately.
     - `GET /api/posts/{postJobId}` – read combined job + results status.
+  - **Background Jobs:**
+    - `POST /api/inngest` – Inngest webhook endpoint for receiving and executing background functions.
 
 - **Domain/Service Layer** (under `src/server` or similar):
   - `auth` – helpers for getting the current user (`getCurrentUser()`) using NextAuth sessions in server contexts.
