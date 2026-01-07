@@ -45,9 +45,11 @@ export const tiktokClient: PlatformClient = {
 
     // TikTok requires chunk sizes between 5MB and 64MB for FILE_UPLOAD
     // Use 10MB chunks for reliable uploads of large videos
+    // IMPORTANT: total_chunk_count must be rounded DOWN per TikTok docs
+    // The final chunk can be larger (up to 128MB) to accommodate trailing bytes
     const MAX_CHUNK_SIZE = 10 * 1024 * 1024; // 10MB
     const CHUNK_SIZE = Math.min(size, MAX_CHUNK_SIZE);
-    const totalChunks = Math.ceil(size / CHUNK_SIZE);
+    const totalChunks = size <= MAX_CHUNK_SIZE ? 1 : Math.floor(size / CHUNK_SIZE);
 
     console.log('[TikTok] Initializing upload with FILE_UPLOAD (chunked)', {
       videoSize: size,
