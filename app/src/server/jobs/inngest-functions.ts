@@ -1,9 +1,48 @@
 import { inngest } from "@/lib/inngest";
 import { prisma } from "@/lib/db";
 import { getPlatformClient } from "@/server/platforms";
-import type { Platform, User } from "@prisma/client";
+import type { Platform } from "@prisma/client";
 
-function buildCaptionWithFooter(baseCaption: string, user: User): string {
+// Simplified types for serialized data from step.run()
+interface SerializedUser {
+  id: string;
+  companyWebsite: string | null;
+  defaultHashtags: string | null;
+}
+
+interface SerializedMediaItem {
+  id: string;
+  createdAt: string;
+  userId: string;
+  storageLocation: string;
+  originalFilename: string;
+  mimeType: string;
+  sizeBytes: number;
+  baseCaption: string;
+  metadata: unknown;
+  perPlatformOverrides: unknown;
+}
+
+interface SerializedConnection {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  platform: Platform;
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt: string | null;
+  accountIdentifier: string;
+  scopes: unknown;
+  metadata: unknown;
+  userId: string;
+}
+
+interface SerializedResultRecord {
+  id: string;
+  platform: Platform;
+}
+
+function buildCaptionWithFooter(baseCaption: string, user: SerializedUser): string {
   const parts = [baseCaption.trim()];
   
   if (user.companyWebsite?.trim()) {
@@ -17,6 +56,61 @@ function buildCaptionWithFooter(baseCaption: string, user: User): string {
   return parts.join('\n\n');
 }
 
+// Helper to publish to a single platform
+async function publishToPlatform(
+  connection: SerializedConnection,
+  mediaItem: SerializedMediaItem,
+  caption: string,
+  userId: string,
+  resultRecordId: string
+): Promise<{ platform: Platform; status: string; error?: string }> {
+  const client = getPlatformClient(connection.platform);
+
+  if (!client) {
+    await prisma.postJobResult.update({
+      where: { id: resultRecordId },
+      data: {
+        status: "failed",
+        errorCode: "CLIENT_NOT_FOUND",
+        errorMessage: "No client configured for this platform.",
+      },
+    });
+    return { platform: connection.platform, status: "failed", error: "No client" };
+  }
+
+  try {
+    console.log(`[Inngest] Publishing to ${connection.platform}...`);
+    // Cast to any - serialized data from step.run() has string dates but works at runtime
+    const publishResult = await client.publishVideo({
+      user: { id: userId } as any,
+      socialConnection: connection as any,
+      mediaItem: mediaItem as any,
+      caption,
+    });
+
+    console.log(`[Inngest] ${connection.platform} success`, { externalPostId: publishResult.externalPostId });
+    await prisma.postJobResult.update({
+      where: { id: resultRecordId },
+      data: {
+        status: "success",
+        externalPostId: publishResult.externalPostId ?? null,
+      },
+    });
+    return { platform: connection.platform, status: "success" };
+  } catch (error: any) {
+    console.error(`[Inngest] Platform ${connection.platform} failed:`, error.message);
+    await prisma.postJobResult.update({
+      where: { id: resultRecordId },
+      data: {
+        status: "failed",
+        errorCode: error?.code ?? "PUBLISH_FAILED",
+        errorMessage: error?.message || "Failed to publish to platform.",
+      },
+    });
+    return { platform: connection.platform, status: "failed", error: error.message };
+  }
+}
+
 export const publishToAllPlatforms = inngest.createFunction(
   { 
     id: "publish-to-all-platforms",
@@ -25,126 +119,109 @@ export const publishToAllPlatforms = inngest.createFunction(
   },
   { event: "post/publish.requested" },
   async ({ event, step }) => {
-    const { postJobId, userId, mediaItemId, baseCaption, location, perPlatformOverrides } = event.data;
+    const { postJobId, userId, mediaItemId, baseCaption, perPlatformOverrides } = event.data;
 
     console.log("[Inngest] Starting background publish job", { postJobId, mediaItemId });
 
-    // Fetch all required data
-    const [user, mediaItem, socialConnections, postJob] = await Promise.all([
-      prisma.user.findUnique({ where: { id: userId } }),
-      prisma.mediaItem.findUnique({ where: { id: mediaItemId } }),
-      prisma.socialConnection.findMany({ where: { userId } }),
-      prisma.postJob.findUnique({ where: { id: postJobId } }),
-    ]);
+    // Step 1: Fetch all required data
+    const setupData = await step.run("fetch-data", async () => {
+      const [user, mediaItem, socialConnections, postJob] = await Promise.all([
+        prisma.user.findUnique({ where: { id: userId } }),
+        prisma.mediaItem.findUnique({ where: { id: mediaItemId } }),
+        prisma.socialConnection.findMany({ where: { userId } }),
+        prisma.postJob.findUnique({ where: { id: postJobId } }),
+      ]);
 
-    if (!user || !mediaItem || !postJob) {
-      console.error("[Inngest] Missing required data", { user: !!user, mediaItem: !!mediaItem, postJob: !!postJob });
-      return { error: "Missing required data" };
-    }
+      if (!user || !mediaItem || !postJob) {
+        throw new Error("Missing required data");
+      }
 
-    if (socialConnections.length === 0) {
-      await prisma.postJob.update({
-        where: { id: postJobId },
-        data: { status: "failed" },
+      const resultRecords = await prisma.postJobResult.findMany({
+        where: { postJobId },
+      });
+
+      return {
+        user,
+        mediaItem,
+        socialConnections,
+        resultRecords,
+      };
+    });
+
+    if (!setupData.socialConnections.length) {
+      await step.run("mark-failed-no-connections", async () => {
+        await prisma.postJob.update({
+          where: { id: postJobId },
+          data: { status: "failed" },
+        });
       });
       return { error: "No connections" };
     }
 
-    const fullBaseCaption = buildCaptionWithFooter(baseCaption, user);
+    const fullBaseCaption = buildCaptionWithFooter(baseCaption, setupData.user);
     const overrides = perPlatformOverrides as Partial<Record<Platform, string>> | null;
 
-    // Get existing result records
-    const resultRecords = await prisma.postJobResult.findMany({
-      where: { postJobId },
-    });
+    console.log(`[Inngest] Publishing to ${setupData.socialConnections.length} platforms`);
 
-    console.log(`[Inngest] Publishing to ${socialConnections.length} platforms`);
+    // Process each platform as a separate step (allows longer execution per platform)
+    const results: { platform: Platform; status: string; error?: string }[] = [];
 
-    // Process each platform - Inngest handles the timeout
-    const results = await Promise.all(
-      socialConnections.map(async (connection) => {
-        const resultRecord = resultRecords.find(r => r.platform === connection.platform);
-        if (!resultRecord) {
-          console.error(`[Inngest] No result record for ${connection.platform}`);
-          return null;
-        }
-
-        const captionOverride = overrides?.[connection.platform] ?? null;
-        const caption = captionOverride 
-          ? buildCaptionWithFooter(captionOverride, user)
-          : fullBaseCaption;
-
-        const client = getPlatformClient(connection.platform);
-
-        if (!client) {
-          return await prisma.postJobResult.update({
-            where: { id: resultRecord.id },
-            data: {
-              status: "failed",
-              errorCode: "CLIENT_NOT_FOUND",
-              errorMessage: "No client configured for this platform.",
-            },
-          });
-        }
-
-        try {
-          console.log(`[Inngest] Publishing to ${connection.platform}...`);
-          const publishResult = await client.publishVideo({
-            user: { id: userId } as any,
-            socialConnection: connection,
-            mediaItem,
-            caption,
-          });
-
-          console.log(`[Inngest] ${connection.platform} success`, { externalPostId: publishResult.externalPostId });
-          return await prisma.postJobResult.update({
-            where: { id: resultRecord.id },
-            data: {
-              status: "success",
-              externalPostId: publishResult.externalPostId ?? null,
-            },
-          });
-        } catch (error: any) {
-          console.error(`[Inngest] Platform ${connection.platform} failed:`, error.message);
-          return await prisma.postJobResult.update({
-            where: { id: resultRecord.id },
-            data: {
-              status: "failed",
-              errorCode: error?.code ?? "PUBLISH_FAILED",
-              errorMessage: error?.message || "Failed to publish to platform.",
-            },
-          });
-        }
-      })
-    );
-
-    const validResults = results.filter(Boolean);
-    const hasSuccess = validResults.some((r) => r?.status === "success");
-
-    const finalStatus = hasSuccess ? "completed" : "failed";
-
-    await prisma.postJob.update({
-      where: { id: postJobId },
-      data: { status: finalStatus },
-    });
-
-    // Clean up blob storage if completed
-    if (finalStatus === "completed") {
-      try {
-        const { del } = await import("@vercel/blob");
-        await del(mediaItem.storageLocation);
-        console.log("[Inngest] Deleted media from blob storage", { mediaItemId });
-      } catch (error) {
-        console.error("[Inngest] Failed to delete media from blob storage", error);
+    for (const connection of setupData.socialConnections) {
+      const resultRecord = setupData.resultRecords.find(r => r.platform === connection.platform);
+      if (!resultRecord) {
+        console.error(`[Inngest] No result record for ${connection.platform}`);
+        continue;
       }
+
+      const captionOverride = overrides?.[connection.platform] ?? null;
+      const caption = captionOverride 
+        ? buildCaptionWithFooter(captionOverride, setupData.user)
+        : fullBaseCaption;
+
+      // Each platform upload is a separate step - this allows checkpointing
+      const result = await step.run(`publish-to-${connection.platform}`, async () => {
+        return publishToPlatform(
+          connection,
+          setupData.mediaItem,
+          caption,
+          userId,
+          resultRecord.id
+        );
+      });
+
+      results.push(result);
     }
 
-    console.log("[Inngest] Job completed", { postJobId, finalStatus, successCount: validResults.filter(r => r?.status === "success").length });
+    // Final step: Update job status and cleanup
+    const finalResult = await step.run("finalize-job", async () => {
+      const hasSuccess = results.some((r) => r.status === "success");
+      const finalStatus = hasSuccess ? "completed" : "failed";
+
+      await prisma.postJob.update({
+        where: { id: postJobId },
+        data: { status: finalStatus },
+      });
+
+      // Clean up blob storage if completed
+      if (finalStatus === "completed") {
+        try {
+          const { del } = await import("@vercel/blob");
+          await del(setupData.mediaItem.storageLocation);
+          console.log("[Inngest] Deleted media from blob storage", { mediaItemId });
+        } catch (error) {
+          console.error("[Inngest] Failed to delete media from blob storage", error);
+        }
+      }
+
+      return { finalStatus, successCount: results.filter(r => r.status === "success").length };
+    });
+
+    console.log("[Inngest] Job completed", { postJobId, ...finalResult });
 
     return { 
       postJobId, 
-      status: finalStatus,
-      results: validResults.map(r => ({ platform: r?.platform, status: r?.status })),
+      status: finalResult.finalStatus,
+      results,
     };
   }
 );

@@ -2,8 +2,16 @@ import { serve } from "inngest/next";
 import { inngest } from "@/lib/inngest";
 import { inngestFunctions } from "@/server/jobs/inngest-functions";
 
-export const { GET, POST, PUT } = serve({
+// Force production URL for Inngest sync
+const serveHandler = serve({
   client: inngest,
   functions: inngestFunctions,
-  serveHost: process.env.INNGEST_SERVE_HOST || "https://vibesocials.wtf",
 });
+
+export const GET = serveHandler.GET;
+export const POST = serveHandler.POST;
+export const PUT = serveHandler.PUT;
+
+// Override the registration URL by setting headers
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
