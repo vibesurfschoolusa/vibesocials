@@ -438,7 +438,51 @@ export const xClient: PlatformClient = {
       secret: accessTokenSecret,
     };
 
-    // Use X API v2 endpoint for tweet creation (Free tier compatible)
+    // Try v1.1 API first (more reliable with OAuth 1.0a), fallback to v2
+    // v1.1 statuses/update uses form data, v2 uses JSON
+    const v1Url = "https://api.twitter.com/1.1/statuses/update.json";
+    const v1Params = {
+      status: tweetText,
+      media_ids: mediaId,
+    };
+
+    const v1RequestData = {
+      url: v1Url,
+      method: "POST",
+      data: v1Params,
+    };
+
+    // Generate OAuth authorization header with params included in signature
+    const v1AuthHeader = oauth.toHeader(oauth.authorize(v1RequestData, token));
+
+    console.log("[X OAuth 1.0a] Trying v1.1 statuses/update endpoint");
+
+    const v1Response = await fetch(v1Url, {
+      method: "POST",
+      headers: {
+        ...v1AuthHeader,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams(v1Params),
+    });
+
+    if (v1Response.ok) {
+      const v1Result = (await v1Response.json()) as { id_str: string };
+      console.log("[X OAuth 1.0a] Tweet created successfully via v1.1", {
+        tweetId: v1Result.id_str,
+      });
+      return {
+        externalPostId: v1Result.id_str,
+      };
+    }
+
+    // If v1.1 fails, try v2 API
+    const v1ErrorBody = await v1Response.text().catch(() => "");
+    console.log("[X OAuth 1.0a] v1.1 failed, trying v2 API", {
+      status: v1Response.status,
+      error: v1ErrorBody,
+    });
+
     const tweetUrl = "https://api.twitter.com/2/tweets";
     const tweetPayload = {
       text: tweetText,
@@ -466,8 +510,9 @@ export const xClient: PlatformClient = {
 
     if (!tweetResponse.ok) {
       const errorBody = await tweetResponse.text().catch(() => "Unable to read error");
-      console.error("[X OAuth 1.0a] Tweet creation failed", {
-        status: tweetResponse.status,
+      console.error("[X OAuth 1.0a] Tweet creation failed (both v1.1 and v2)", {
+        v1Status: v1Response.status,
+        v2Status: tweetResponse.status,
         errorBody,
       });
       const error = new Error(`X tweet creation failed: ${errorBody}`);
