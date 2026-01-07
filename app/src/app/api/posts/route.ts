@@ -5,9 +5,11 @@ import type { Platform } from "@prisma/client";
 import {
   createAndRunPostJob,
   createAndRunPostJobForExistingMedia,
+  createPostJobOnly,
 } from "@/server/jobs/posting";
 import { saveUploadedFile } from "@/server/storage";
 import { prisma } from "@/lib/db";
+import { inngest } from "@/lib/inngest";
 
 export async function POST(request: Request) {
   const user = await getCurrentUser();
@@ -57,7 +59,8 @@ export async function POST(request: Request) {
       const location = typeof locationRaw === "string" && locationRaw.trim() ? locationRaw.trim() : undefined;
 
       try {
-        const { postJob, results } = await createAndRunPostJob({
+        // Create job records without executing (for background processing)
+        const { postJobId, mediaItemId } = await createPostJobOnly({
           userId: user.id,
           media: {
             storageLocation: blobUrl,
@@ -70,9 +73,31 @@ export async function POST(request: Request) {
           perPlatformOverrides,
         });
 
+        // Trigger background job via Inngest
+        await inngest.send({
+          name: "post/publish.requested",
+          data: {
+            postJobId,
+            userId: user.id,
+            mediaItemId,
+            baseCaption: baseCaptionRaw,
+            location,
+            perPlatformOverrides,
+          },
+        });
+
+        // Return immediately - job runs in background
+        const postJob = await prisma.postJob.findUnique({
+          where: { id: postJobId },
+        });
+        const results = await prisma.postJobResult.findMany({
+          where: { postJobId },
+        });
+
         return NextResponse.json({
           postJob,
           results,
+          message: "Publishing in progress. Large videos may take a few minutes.",
         });
       } catch (error: unknown) {
         if (error instanceof Error && error.message === "NO_CONNECTIONS") {
@@ -207,7 +232,8 @@ export async function POST(request: Request) {
   try {
     const saved = await saveUploadedFile(user.id, file);
 
-    const { postJob, results } = await createAndRunPostJob({
+    // Create job records without executing (for background processing)
+    const { postJobId, mediaItemId } = await createPostJobOnly({
       userId: user.id,
       media: saved,
       baseCaption,
@@ -215,7 +241,32 @@ export async function POST(request: Request) {
       perPlatformOverrides: perPlatformOverrides ?? null,
     });
 
-    return NextResponse.json({ postJob, results }, { status: 201 });
+    // Trigger background job via Inngest
+    await inngest.send({
+      name: "post/publish.requested",
+      data: {
+        postJobId,
+        userId: user.id,
+        mediaItemId,
+        baseCaption,
+        location,
+        perPlatformOverrides,
+      },
+    });
+
+    // Return immediately - job runs in background
+    const postJob = await prisma.postJob.findUnique({
+      where: { id: postJobId },
+    });
+    const results = await prisma.postJobResult.findMany({
+      where: { postJobId },
+    });
+
+    return NextResponse.json({
+      postJob,
+      results,
+      message: "Publishing in progress. Large videos may take a few minutes.",
+    }, { status: 201 });
   } catch (error: any) {
     if (error instanceof Error && error.message === "NO_CONNECTIONS") {
       return NextResponse.json(
