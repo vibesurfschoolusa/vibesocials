@@ -51,7 +51,7 @@ export function ConnectionActions({
 
   return (
     <div className="flex flex-col items-end gap-1 text-[11px]">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <span className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700">
           Connected
         </span>

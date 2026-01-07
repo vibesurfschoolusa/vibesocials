@@ -51,10 +51,10 @@ export function ConnectionsSection({ connections }: ConnectionsSectionProps) {
               key={platform}
               className="flex flex-col gap-3 rounded-xl border-2 border-gray-200 px-5 py-4 hover:border-blue-200 transition-all bg-gradient-to-r from-white to-gray-50"
             >
-              <div className="flex items-center justify-between">
-                <div>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="min-w-0 flex-1">
                   <div className="text-base font-semibold text-gray-900">{label}</div>
-                  <div className="text-sm text-gray-600">
+                  <div className="text-sm text-gray-600 break-words">
                     {connection
                       ? `Connected as ${username}`
                       : isGoogleBusinessProfile
@@ -74,7 +74,7 @@ export function ConnectionsSection({ connections }: ConnectionsSectionProps) {
                       : "Not connected yet (scaffolded; implementation pending)."}
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   {connection ? (
                     <ConnectionActions
                       platform={platform}
