@@ -56,6 +56,46 @@ export function ConnectionActions({
   async function handleSwitchAccount() {
     console.log('[Switch Account] Button clicked', { platform });
     setError(null);
+    
+    // Special handling for TikTok - requires manual logout first
+    if (platform === 'tiktok') {
+      const confirmed = window.confirm(
+        "To switch TikTok accounts:\n\n" +
+        "1. Click OK to disconnect\n" +
+        "2. Log out of TikTok in another tab (tiktok.com)\n" +
+        "3. Come back and click Connect to sign in with a different account\n\n" +
+        "Continue?"
+      );
+      
+      if (!confirmed) {
+        console.log('[Switch Account] User canceled');
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const response = await fetch(`/api/connections/${platform}`, {
+          method: "DELETE",
+        });
+        
+        if (!response.ok) {
+          setError("Failed to disconnect.");
+          setLoading(false);
+          return;
+        }
+
+        // For TikTok, just reload the page and show instructions
+        alert("TikTok disconnected!\n\nNow:\n1. Open tiktok.com in a new tab\n2. Log out of your current account\n3. Come back here and click Connect\n4. Sign in with your private TikTok account");
+        window.location.reload();
+      } catch (err) {
+        console.error('[Switch Account] Error:', err);
+        setError("Unexpected error.");
+        setLoading(false);
+      }
+      return;
+    }
+    
+    // Standard flow for other platforms
     const confirmed = window.confirm(
       "This will disconnect your current account and let you connect a different one. Continue?",
     );
@@ -68,7 +108,6 @@ export function ConnectionActions({
     console.log('[Switch Account] Starting disconnect...');
     setLoading(true);
     try {
-      // First disconnect the current account
       const response = await fetch(`/api/connections/${platform}`, {
         method: "DELETE",
       });
@@ -81,7 +120,6 @@ export function ConnectionActions({
         return;
       }
 
-      // Redirect to OAuth start to connect new account
       const authUrl = PLATFORM_AUTH_URLS[platform];
       console.log('[Switch Account] Redirecting to:', authUrl);
       
