@@ -215,12 +215,67 @@ export const tiktokClient: PlatformClient = {
       console.log(`[TikTok] Chunk ${chunkIndex + 1}/${totalChunks} uploaded successfully`);
     }
 
-    console.log('[TikTok] Video uploaded successfully with Direct Post API', {
-      publishId,
-      captionIncluded: true,
-      captionSent: tiktokCaption.substring(0, 100) + (tiktokCaption.length > 100 ? '...' : ''),
-      note: 'Using Direct Post API with captions. In sandbox mode (privacy_level: SELF_ONLY), videos post with full captions but are only visible to you for testing.',
-    });
+    console.log('[TikTok] Video chunks uploaded, checking publish status...', { publishId });
+
+    // Poll publish status to verify TikTok processed the video
+    // TikTok requires checking status after upload completes
+    let statusCheckAttempts = 0;
+    const maxAttempts = 10;
+    let publishStatus = null;
+
+    while (statusCheckAttempts < maxAttempts) {
+      await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3 seconds between checks
+      
+      try {
+        const statusRes = await fetch(
+          `${TIKTOK_API_BASE}/v2/post/publish/status/fetch/`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ publish_id: publishId }),
+          }
+        );
+
+        if (statusRes.ok) {
+          const statusJson = await statusRes.json();
+          publishStatus = statusJson?.data?.status;
+          
+          console.log(`[TikTok] Status check ${statusCheckAttempts + 1}/${maxAttempts}:`, {
+            status: publishStatus,
+            publishId,
+          });
+
+          // Status values: "processing_upload", "processing_download", "publish_complete", "failed"
+          if (publishStatus === "publish_complete") {
+            console.log('[TikTok] Video published successfully', {
+              publishId,
+              privacyLevel: postInfo.privacy_level,
+              note: 'In sandbox mode, videos are forced to SELF_ONLY (private) visibility. Check your private posts in TikTok.',
+            });
+            break;
+          } else if (publishStatus === "failed") {
+            const error = new Error("TikTok failed to process the video");
+            (error as any).code = "TIKTOK_PUBLISH_FAILED";
+            throw error;
+          }
+        }
+      } catch (statusError: any) {
+        console.warn(`[TikTok] Status check ${statusCheckAttempts + 1} failed:`, statusError.message);
+      }
+
+      statusCheckAttempts++;
+    }
+
+    if (publishStatus !== "publish_complete") {
+      console.warn('[TikTok] Video upload completed but publish status unclear', {
+        publishId,
+        lastStatus: publishStatus,
+        note: 'Video may still be processing. Check TikTok in a few minutes.',
+      });
+    }
 
     return {
       externalPostId: publishId,
