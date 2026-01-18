@@ -77,6 +77,22 @@ export async function GET(request: NextRequest) {
 
     const tokenJson = (await tokenResponse.json()) as TikTokTokenResponse;
 
+    console.log("[TikTok OAuth] Token response received:", {
+      hasAccessToken: !!tokenJson.access_token,
+      hasRefreshToken: !!tokenJson.refresh_token,
+      hasOpenId: !!tokenJson.open_id,
+      expiresIn: tokenJson.expires_in,
+      scope: tokenJson.scope,
+      tokenType: tokenJson.token_type,
+      fullResponse: JSON.stringify(tokenJson),
+    });
+
+    if (!tokenJson.access_token) {
+      console.error("[TikTok OAuth] Missing access_token in response", { tokenJson });
+      settingsUrl.searchParams.set("error", "tiktok_missing_access_token");
+      return NextResponse.redirect(settingsUrl);
+    }
+
     const now = Date.now();
     const expiresAt = tokenJson.expires_in
       ? new Date(now + tokenJson.expires_in * 1000)
