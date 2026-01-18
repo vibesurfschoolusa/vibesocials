@@ -211,15 +211,18 @@ export const publishToAllPlatforms = inngest.createFunction(
         data: { status: finalStatus },
       });
 
-      // Clean up blob storage if completed
-      if (finalStatus === "completed") {
-        try {
-          const { del } = await import("@vercel/blob");
-          await del(setupData.mediaItem.storageLocation);
-          console.log("[Inngest] Deleted media from blob storage", { mediaItemId });
-        } catch (error) {
-          console.error("[Inngest] Failed to delete media from blob storage", error);
-        }
+      // Clean up blob storage after job completes (success or failure)
+      // This prevents storage quota issues from failed posts
+      try {
+        const { del } = await import("@vercel/blob");
+        await del(setupData.mediaItem.storageLocation);
+        console.log("[Inngest] Deleted media from blob storage", { 
+          mediaItemId, 
+          finalStatus,
+          note: "Blob deleted regardless of post status to free storage"
+        });
+      } catch (error) {
+        console.error("[Inngest] Failed to delete media from blob storage", error);
       }
 
       return { finalStatus, successCount: results.filter(r => r.status === "success").length };
