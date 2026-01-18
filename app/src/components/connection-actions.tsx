@@ -54,18 +54,26 @@ export function ConnectionActions({
   }
 
   async function handleSwitchAccount() {
+    console.log('[Switch Account] Button clicked', { platform });
     setError(null);
     const confirmed = window.confirm(
       "This will disconnect your current account and let you connect a different one. Continue?",
     );
-    if (!confirmed) return;
+    
+    if (!confirmed) {
+      console.log('[Switch Account] User canceled');
+      return;
+    }
 
+    console.log('[Switch Account] Starting disconnect...');
     setLoading(true);
     try {
       // First disconnect the current account
       const response = await fetch(`/api/connections/${platform}`, {
         method: "DELETE",
       });
+      
+      console.log('[Switch Account] Disconnect response:', response.status);
       
       if (!response.ok) {
         setError("Failed to disconnect current account.");
@@ -75,12 +83,16 @@ export function ConnectionActions({
 
       // Redirect to OAuth start to connect new account
       const authUrl = PLATFORM_AUTH_URLS[platform];
+      console.log('[Switch Account] Redirecting to:', authUrl);
+      
       if (authUrl) {
         window.location.href = authUrl;
       } else {
+        console.log('[Switch Account] No auth URL found, reloading page');
         window.location.reload();
       }
-    } catch (_err) {
+    } catch (err) {
+      console.error('[Switch Account] Error:', err);
       setError("Unexpected error while switching accounts.");
       setLoading(false);
     }
