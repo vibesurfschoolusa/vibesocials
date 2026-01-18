@@ -55,6 +55,28 @@ export const tiktokClient: PlatformClient = {
       throw error;
     }
 
+    // REQUIRED: Call creator_info API before posting to verify account status
+    // This is mandatory per TikTok Developer Guidelines
+    console.log('[TikTok] Fetching creator info to verify account status...');
+    try {
+      const creatorInfo = await getTikTokCreatorInfo(accessToken);
+      console.log('[TikTok] Creator info retrieved:', {
+        username: creatorInfo.creatorUsername,
+        privacyOptions: creatorInfo.privacyLevelOptions,
+        maxDuration: creatorInfo.maxVideoPostDurationSec,
+      });
+      
+      // Verify the account has the required privacy options for sandbox mode
+      if (!creatorInfo.privacyLevelOptions.includes('SELF_ONLY')) {
+        console.warn('[TikTok] Account may not support SELF_ONLY privacy level', {
+          availableOptions: creatorInfo.privacyLevelOptions,
+        });
+      }
+    } catch (creatorInfoError: any) {
+      console.error('[TikTok] Failed to fetch creator info:', creatorInfoError);
+      throw new Error(`TikTok creator_info check failed: ${creatorInfoError.message}`);
+    }
+
     console.log('[TikTok] Media item details:', {
       mimeType: mediaItem.mimeType,
       originalFilename: mediaItem.originalFilename,
