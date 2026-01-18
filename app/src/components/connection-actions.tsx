@@ -61,9 +61,11 @@ export function ConnectionActions({
     if (platform === 'tiktok') {
       const confirmed = window.confirm(
         "To switch TikTok accounts:\n\n" +
-        "1. Click OK to disconnect\n" +
-        "2. Log out of TikTok in another tab (tiktok.com)\n" +
-        "3. Come back and click Connect to sign in with a different account\n\n" +
+        "1. Click OK to disconnect from Vibe Socials\n" +
+        "2. You'll be taken to TikTok to log out\n" +
+        "3. Log out of your current TikTok account\n" +
+        "4. Come back here and click Connect\n" +
+        "5. Sign in with your PRIVATE TikTok account\n\n" +
         "Continue?"
       );
       
@@ -84,9 +86,21 @@ export function ConnectionActions({
           return;
         }
 
-        // For TikTok, just reload the page and show instructions
-        alert("TikTok disconnected!\n\nNow:\n1. Open tiktok.com in a new tab\n2. Log out of your current account\n3. Come back here and click Connect\n4. Sign in with your private TikTok account");
-        window.location.reload();
+        // Open TikTok logout page in new tab, then reload this page
+        window.open('https://www.tiktok.com/logout', '_blank');
+        
+        setTimeout(() => {
+          alert(
+            "TikTok disconnected!\n\n" +
+            "IMPORTANT:\n" +
+            "1. Go to the TikTok tab that just opened\n" +
+            "2. Confirm you're logged out\n" +
+            "3. Come back here and click Connect\n" +
+            "4. Sign in with your PRIVATE TikTok account\n\n" +
+            "Your account MUST be set to Private in TikTok settings!"
+          );
+          window.location.reload();
+        }, 1000);
       } catch (err) {
         console.error('[Switch Account] Error:', err);
         setError("Unexpected error.");
