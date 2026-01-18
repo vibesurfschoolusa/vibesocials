@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { upload } from '@vercel/blob/client';
 import { LocationAutocomplete } from "./location-autocomplete";
+import { TikTokPostSettings } from "./tiktok-post-settings";
 import { Sparkles, Loader2 } from "lucide-react";
+import type { TikTokPostMetadata } from "@/server/platforms/types";
 
 interface PostResponse {
   postJob: {
@@ -46,6 +48,27 @@ export function CreatePostForm() {
   const [autoCaptionEnabled, setAutoCaptionEnabled] = useState(true);
   const [autoCaptionLoading, setAutoCaptionLoading] = useState(false);
   const [uploadedBlob, setUploadedBlob] = useState<UploadedBlobInfo | null>(null);
+  
+  const [hasTikTokConnection, setHasTikTokConnection] = useState(false);
+  const [tiktokMetadata, setTiktokMetadata] = useState<TikTokPostMetadata>({
+    privacyLevel: "",
+    disableComment: true,
+    disableDuet: true,
+    disableStitch: true,
+  });
+
+  useEffect(() => {
+    checkTikTokConnection();
+  }, []);
+
+  async function checkTikTokConnection() {
+    try {
+      const response = await fetch("/api/tiktok/creator-info");
+      setHasTikTokConnection(response.ok);
+    } catch {
+      setHasTikTokConnection(false);
+    }
+  }
 
   async function runAutoCaptionFromMedia(options: {
     overwrite: boolean;
@@ -152,19 +175,31 @@ export function CreatePostForm() {
         setUploadedBlob(blob);
       }
 
+      const postData: any = {
+        blobUrl: blob.url,
+        filename: blob.filename,
+        mimeType: blob.mimeType,
+        sizeBytes: blob.sizeBytes,
+        baseCaption: uploadCaption,
+        location: uploadLocation.trim() || undefined,
+      };
+
+      // Add TikTok-specific metadata if TikTok is connected
+      if (hasTikTokConnection) {
+        if (!tiktokMetadata.privacyLevel) {
+          setUploadError("Please select a privacy level for TikTok");
+          setUploadLoading(false);
+          return;
+        }
+        postData.tiktokMetadata = tiktokMetadata;
+      }
+
       const response = await fetch("/api/posts", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          blobUrl: blob.url,
-          filename: blob.filename,
-          mimeType: blob.mimeType,
-          sizeBytes: blob.sizeBytes,
-          baseCaption: uploadCaption,
-          location: uploadLocation.trim() || undefined,
-        }),
+        body: JSON.stringify(postData),
       });
 
       const data = (await response.json().catch(() => null)) as
@@ -184,6 +219,12 @@ export function CreatePostForm() {
       setUploadCaption("");
       setUploadLocation("");
       setUploadedBlob(null);
+      setTiktokMetadata({
+        privacyLevel: "",
+        disableComment: true,
+        disableDuet: true,
+        disableStitch: true,
+      });
       setUploadLoading(false);
     } catch (_err) {
       setUploadError("Unexpected error while creating post.");
@@ -377,6 +418,13 @@ export function CreatePostForm() {
               Type to search for locations. Will be added to Instagram, TikTok, and X posts. (YouTube requires manual location setting via Studio)
             </p>
           </div>
+          {hasTikTokConnection && uploadFile && (
+            <TikTokPostSettings
+              metadata={tiktokMetadata}
+              onChange={setTiktokMetadata}
+              isVideo={uploadFile.type.startsWith("video/")}
+            />
+          )}
           <div className="flex items-center justify-between text-xs">
             <button
               type="submit"

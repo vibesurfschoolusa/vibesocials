@@ -37,6 +37,7 @@ export async function POST(request: Request) {
       const baseCaptionRaw = body?.baseCaption;
       const locationRaw = body?.location;
       const overridesRaw = body?.perPlatformOverrides;
+      const tiktokMetadataRaw = body?.tiktokMetadata;
 
       if (typeof baseCaptionRaw !== "string" || !baseCaptionRaw.trim()) {
         return NextResponse.json(
@@ -83,6 +84,7 @@ export async function POST(request: Request) {
             baseCaption: baseCaptionRaw,
             location,
             perPlatformOverrides,
+            tiktokMetadata: tiktokMetadataRaw,
           },
         });
 

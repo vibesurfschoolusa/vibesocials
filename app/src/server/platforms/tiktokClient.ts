@@ -1,6 +1,48 @@
-import type { PlatformClient, PublishContext, PublishResult } from "./types";
+import type { PlatformClient, PublishContext, PublishResult, TikTokCreatorInfo } from "./types";
 
 const TIKTOK_API_BASE = "https://open.tiktokapis.com";
+
+/**
+ * Fetch TikTok creator info - REQUIRED by TikTok Developer Guidelines
+ * Must be called before posting to get privacy options, interaction settings, and posting limits
+ */
+export async function getTikTokCreatorInfo(accessToken: string): Promise<TikTokCreatorInfo> {
+  const response = await fetch(`${TIKTOK_API_BASE}/v2/post/publish/creator_info/query/`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({}),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => "Unable to read error body");
+    console.error("[TikTok] creator_info failed", {
+      status: response.status,
+      statusText: response.statusText,
+      errorBody,
+    });
+    throw new Error(`Failed to fetch TikTok creator info: ${errorBody}`);
+  }
+
+  const json = await response.json() as any;
+  const data = json?.data;
+
+  if (!data) {
+    throw new Error("TikTok creator_info returned no data");
+  }
+
+  return {
+    creatorUsername: data.creator_username || "Unknown",
+    creatorAvatarUrl: data.creator_avatar_url || "",
+    privacyLevelOptions: data.privacy_level_options || ["SELF_ONLY"],
+    commentDisabled: data.comment_disabled || false,
+    duetDisabled: data.duet_disabled || false,
+    stitchDisabled: data.stitch_disabled || false,
+    maxVideoPostDurationSec: data.max_video_post_duration_sec || 60,
+  };
+}
 
 export const tiktokClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
@@ -59,14 +101,29 @@ export const tiktokClient: PlatformClient = {
       captionPreview: tiktokCaption.substring(0, 100) + (tiktokCaption.length > 100 ? '...' : ''),
     });
 
-    const postInfo = {
+    // Use metadata from user's form selections, or defaults for sandbox mode
+    const tiktokMeta = ctx.tiktokMetadata;
+    const postInfo: any = {
       title: tiktokCaption,
-      privacy_level: "SELF_ONLY", // Sandbox mode restriction
-      disable_comment: false,
-      disable_duet: false,
-      disable_stitch: false,
+      privacy_level: tiktokMeta?.privacyLevel || "SELF_ONLY",
+      disable_comment: tiktokMeta?.disableComment ?? false,
+      disable_duet: tiktokMeta?.disableDuet ?? false,
+      disable_stitch: tiktokMeta?.disableStitch ?? false,
       video_cover_timestamp_ms: 1000,
     };
+
+    // Add commercial content disclosure if specified
+    if (tiktokMeta?.brandedContent || tiktokMeta?.brandOrganic) {
+      postInfo.disclosure_settings = {
+        disclosure_type: "BRANDED_CONTENT",
+      };
+      if (tiktokMeta.brandOrganic) {
+        postInfo.brand_organic_type = "CREATOR_BRAND";
+      }
+      if (tiktokMeta.brandedContent) {
+        postInfo.brand_content_type = "BRANDED_CONTENT";
+      }
+    }
 
     // Use Direct Post API with FILE_UPLOAD and captions
     const initRes = await fetch(

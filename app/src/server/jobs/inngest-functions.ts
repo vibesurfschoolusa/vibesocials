@@ -62,7 +62,8 @@ async function publishToPlatform(
   mediaItem: SerializedMediaItem,
   caption: string,
   userId: string,
-  resultRecordId: string
+  resultRecordId: string,
+  tiktokMetadata?: any
 ): Promise<{ platform: Platform; status: string; error?: string }> {
   const client = getPlatformClient(connection.platform);
 
@@ -81,12 +82,19 @@ async function publishToPlatform(
   try {
     console.log(`[Inngest] Publishing to ${connection.platform}...`);
     // Cast to any - serialized data from step.run() has string dates but works at runtime
-    const publishResult = await client.publishVideo({
+    const publishContext: any = {
       user: { id: userId } as any,
       socialConnection: connection as any,
       mediaItem: mediaItem as any,
       caption,
-    });
+    };
+
+    // Add TikTok metadata if publishing to TikTok
+    if (connection.platform === "tiktok" && tiktokMetadata) {
+      publishContext.tiktokMetadata = tiktokMetadata;
+    }
+
+    const publishResult = await client.publishVideo(publishContext);
 
     console.log(`[Inngest] ${connection.platform} success`, { externalPostId: publishResult.externalPostId });
     await prisma.postJobResult.update({
@@ -119,7 +127,7 @@ export const publishToAllPlatforms = inngest.createFunction(
   },
   { event: "post/publish.requested" },
   async ({ event, step }) => {
-    const { postJobId, userId, mediaItemId, baseCaption, perPlatformOverrides } = event.data;
+    const { postJobId, userId, mediaItemId, baseCaption, perPlatformOverrides, tiktokMetadata } = event.data;
 
     console.log("[Inngest] Starting background publish job", { postJobId, mediaItemId });
 
@@ -185,7 +193,8 @@ export const publishToAllPlatforms = inngest.createFunction(
           setupData.mediaItem,
           caption,
           userId,
-          resultRecord.id
+          resultRecord.id,
+          tiktokMetadata
         );
       });
 
