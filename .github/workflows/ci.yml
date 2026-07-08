@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # eslint reports 134 pre-existing errors at the time this workflow was
+      # added. Phase 4 of the remediation program (HLT-5) drives them to zero
+      # and removes continue-on-error so lint becomes a blocking gate.
+      - name: Lint (non-blocking until eslint baseline is green)
+        run: npx eslint .
+        continue-on-error: true
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm run test --if-present
