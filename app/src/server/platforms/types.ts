@@ -19,12 +19,17 @@ export interface TikTokCreatorInfo {
   maxVideoPostDurationSec: number;
 }
 
+export interface YouTubePostMetadata {
+  privacyStatus: "public" | "unlisted" | "private";
+}
+
 export interface PublishContext {
   user: User;
   socialConnection: SocialConnection;
   mediaItem: MediaItem;
   caption: string;
   tiktokMetadata?: TikTokPostMetadata;
+  youtubeMetadata?: YouTubePostMetadata;
 }
 
 export interface PublishResult {

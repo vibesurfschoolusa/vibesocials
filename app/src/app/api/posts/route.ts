@@ -10,6 +10,9 @@ import {
 import { saveUploadedFile } from "@/server/storage";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
+import type { YouTubePostMetadata } from "@/server/platforms/types";
+
+const YOUTUBE_PRIVACY_STATUSES = ["public", "unlisted", "private"] as const;
 
 export async function POST(request: Request) {
   const user = await getCurrentUser();
@@ -38,6 +41,7 @@ export async function POST(request: Request) {
       const locationRaw = body?.location;
       const overridesRaw = body?.perPlatformOverrides;
       const tiktokMetadataRaw = body?.tiktokMetadata;
+      const youtubeMetadataRaw = body?.youtubeMetadata;
 
       if (typeof baseCaptionRaw !== "string" || !baseCaptionRaw.trim()) {
         return NextResponse.json(
@@ -55,6 +59,23 @@ export async function POST(request: Request) {
           );
         }
         perPlatformOverrides = overridesRaw as Partial<Record<Platform, string>>;
+      }
+
+      let youtubeMetadata: YouTubePostMetadata | undefined;
+      if (youtubeMetadataRaw != null) {
+        if (
+          typeof youtubeMetadataRaw !== "object" ||
+          !YOUTUBE_PRIVACY_STATUSES.includes(youtubeMetadataRaw.privacyStatus)
+        ) {
+          return NextResponse.json(
+            {
+              error:
+                "youtubeMetadata.privacyStatus must be one of: public, unlisted, private",
+            },
+            { status: 400 },
+          );
+        }
+        youtubeMetadata = { privacyStatus: youtubeMetadataRaw.privacyStatus };
       }
 
       const location = typeof locationRaw === "string" && locationRaw.trim() ? locationRaw.trim() : undefined;
@@ -85,6 +106,7 @@ export async function POST(request: Request) {
             location,
             perPlatformOverrides,
             tiktokMetadata: tiktokMetadataRaw,
+            youtubeMetadata,
           },
         });
 

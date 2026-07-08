@@ -3,6 +3,16 @@ import OAuth from "oauth-1.0a";
 import crypto from "crypto";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
+import { assertOk } from "@/lib/assertOk";
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+
+// COR-2/COR-3: xClient uses oauth-1.0a request signing (see `oauth.authorize`
+// calls below). fetchWithTimeout passes `init` through unchanged except for
+// `signal` (see its docstring), so migrating `fetch(url, init)` calls here to
+// `fetchWithTimeout(url, init, timeoutMs)` preserves the exact URL/method/
+// headers/body the signature was computed over — only a composed abort
+// signal is added, which the signature does not cover.
+
 /**
  * OAuth 1.0a tokens don't expire, no refresh needed
  */
@@ -26,11 +36,19 @@ async function uploadMedia(
 ): Promise<string> {
   console.log("[X OAuth 1.0a] Starting media upload", { mediaUrl, mimeType });
 
-  // Download media from Vercel Blob
-  const mediaResponse = await fetch(mediaUrl);
-  if (!mediaResponse.ok) {
-    throw new Error("Failed to fetch media from storage");
-  }
+  // Download media from Vercel Blob.
+  // fetchWithTimeout's own timeoutMs only bounds the connection + response
+  // headers; pass AbortSignal.timeout as init.signal to also bound the
+  // arrayBuffer() body transfer (see the fetchWithTimeout docstring).
+  const mediaResponse = await fetchWithTimeout(
+    mediaUrl,
+    { signal: AbortSignal.timeout(120_000) },
+    120_000,
+  );
+  await assertOk(mediaResponse, {
+    code: "X_MEDIA_DOWNLOAD_FAILED",
+    prefix: "Failed to fetch media from storage",
+  });
 
   const mediaBuffer = Buffer.from(await mediaResponse.arrayBuffer());
 
@@ -73,25 +91,25 @@ async function uploadMedia(
 
   const authHeader = oauth.toHeader(oauth.authorize(requestData, token));
 
-  const uploadResponse = await fetch(uploadUrl, {
-    method: "POST",
-    headers: {
-      ...authHeader,
-      "Content-Type": "application/x-www-form-urlencoded",
+  const uploadResponse = await fetchWithTimeout(
+    uploadUrl,
+    {
+      method: "POST",
+      headers: {
+        ...authHeader,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        media_data: mediaBase64,
+      }),
     },
-    body: new URLSearchParams({
-      media_data: mediaBase64,
-    }),
-  });
+    120_000,
+  );
 
-  if (!uploadResponse.ok) {
-    const errorBody = await uploadResponse.text().catch(() => "Unable to read error");
-    console.error("[X OAuth 1.0a] Media upload failed", {
-      status: uploadResponse.status,
-      errorBody,
-    });
-    throw new Error(`X media upload failed: ${errorBody}`);
-  }
+  await assertOk(uploadResponse, {
+    code: "X_IMAGE_UPLOAD_FAILED",
+    prefix: "X media upload failed",
+  });
 
   const uploadResult = (await uploadResponse.json()) as {
     media_id_string: string;
@@ -136,7 +154,7 @@ async function uploadVideoChunked(
   };
 
   const initAuthHeader = oauth.toHeader(oauth.authorize(initData, token));
-  const initResponse = await fetch(uploadUrl, {
+  const initResponse = await fetchWithTimeout(uploadUrl, {
     method: "POST",
     headers: {
       ...initAuthHeader,
@@ -145,14 +163,10 @@ async function uploadVideoChunked(
     body: new URLSearchParams(initData.data),
   });
 
-  if (!initResponse.ok) {
-    const errorBody = await initResponse.text().catch(() => "Unable to read error");
-    console.error("[X OAuth 1.0a] Video INIT failed", {
-      status: initResponse.status,
-      errorBody,
-    });
-    throw new Error(`X video INIT failed: ${errorBody}`);
-  }
+  await assertOk(initResponse, {
+    code: "X_VIDEO_INIT_FAILED",
+    prefix: "X video upload initialization failed",
+  });
 
   const initResult = (await initResponse.json()) as { media_id_string: string };
   const mediaId = initResult.media_id_string;
@@ -183,24 +197,23 @@ async function uploadVideoChunked(
     };
 
     const appendAuthHeader = oauth.toHeader(oauth.authorize(appendData, token));
-    const appendResponse = await fetch(uploadUrl, {
-      method: "POST",
-      headers: {
-        ...appendAuthHeader,
-        "Content-Type": "application/x-www-form-urlencoded",
+    const appendResponse = await fetchWithTimeout(
+      uploadUrl,
+      {
+        method: "POST",
+        headers: {
+          ...appendAuthHeader,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams(appendData.data),
       },
-      body: new URLSearchParams(appendData.data),
-    });
+      120_000,
+    );
 
-    if (!appendResponse.ok) {
-      const errorBody = await appendResponse.text().catch(() => "Unable to read error");
-      console.error("[X OAuth 1.0a] Video APPEND failed", {
-        segmentIndex,
-        status: appendResponse.status,
-        errorBody,
-      });
-      throw new Error(`X video APPEND failed: ${errorBody}`);
-    }
+    await assertOk(appendResponse, {
+      code: "X_VIDEO_APPEND_FAILED",
+      prefix: `X video APPEND failed (segment ${segmentIndex})`,
+    });
 
     segmentIndex++;
   }
@@ -218,7 +231,7 @@ async function uploadVideoChunked(
   };
 
   const finalizeAuthHeader = oauth.toHeader(oauth.authorize(finalizeData, token));
-  const finalizeResponse = await fetch(uploadUrl, {
+  const finalizeResponse = await fetchWithTimeout(uploadUrl, {
     method: "POST",
     headers: {
       ...finalizeAuthHeader,
@@ -227,14 +240,10 @@ async function uploadVideoChunked(
     body: new URLSearchParams(finalizeData.data),
   });
 
-  if (!finalizeResponse.ok) {
-    const errorBody = await finalizeResponse.text().catch(() => "Unable to read error");
-    console.error("[X OAuth 1.0a] Video FINALIZE failed", {
-      status: finalizeResponse.status,
-      errorBody,
-    });
-    throw new Error(`X video FINALIZE failed: ${errorBody}`);
-  }
+  await assertOk(finalizeResponse, {
+    code: "X_VIDEO_FINALIZE_FAILED",
+    prefix: "X video upload finalization failed",
+  });
 
   const finalizeResult = (await finalizeResponse.json()) as {
     media_id_string: string;
@@ -297,21 +306,17 @@ async function waitForVideoProcessing(
     const statusAuthHeader = oauth.toHeader(oauth.authorize(statusData, token));
     const statusUrl = `${uploadUrl}?${new URLSearchParams(statusData.data)}`;
     
-    const statusResponse = await fetch(statusUrl, {
+    const statusResponse = await fetchWithTimeout(statusUrl, {
       method: "GET",
       headers: {
         ...statusAuthHeader,
       },
     });
 
-    if (!statusResponse.ok) {
-      const errorBody = await statusResponse.text().catch(() => "Unable to read error");
-      console.error("[X OAuth 1.0a] Video STATUS check failed", {
-        status: statusResponse.status,
-        errorBody,
-      });
-      throw new Error(`X video STATUS check failed: ${errorBody}`);
-    }
+    await assertOk(statusResponse, {
+      code: "X_VIDEO_STATUS_CHECK_FAILED",
+      prefix: "X video processing status check failed",
+    });
 
     const statusResult = (await statusResponse.json()) as {
       processing_info?: {
@@ -331,7 +336,16 @@ async function waitForVideoProcessing(
     processingInfo = statusResult.processing_info;
 
     if (processingInfo.error) {
-      throw new Error(`Video processing failed: ${processingInfo.error.message}`);
+      // COR-3: processingInfo.error.message is upstream-controlled content;
+      // log it server-side but never surface it via PostJobResult.errorMessage.
+      console.error("[X OAuth 1.0a] Video processing reported an error", {
+        processingError: processingInfo.error,
+      });
+      const error = new Error(
+        "X reported an error while processing the uploaded video",
+      ) as Error & { code: string };
+      error.code = "X_VIDEO_PROCESSING_FAILED";
+      throw error;
     }
 
     if (processingInfo.state === "succeeded") {
@@ -457,7 +471,9 @@ export const xClient: PlatformClient = {
 
     console.log("[X OAuth 1.0a] Trying v1.1 statuses/update endpoint");
 
-    const v1Response = await fetch(v1Url, {
+    // No assertOk here: a !ok v1 response is an intentional fallback signal
+    // (try the v2 endpoint next), not a terminal failure — see below.
+    const v1Response = await fetchWithTimeout(v1Url, {
       method: "POST",
       headers: {
         ...v1AuthHeader,
@@ -499,7 +515,7 @@ export const xClient: PlatformClient = {
     // Generate OAuth authorization header
     const authHeader = oauth.toHeader(oauth.authorize(requestData, token));
 
-    const tweetResponse = await fetch(tweetUrl, {
+    const tweetResponse = await fetchWithTimeout(tweetUrl, {
       method: "POST",
       headers: {
         ...authHeader,
@@ -508,17 +524,12 @@ export const xClient: PlatformClient = {
       body: JSON.stringify(tweetPayload),
     });
 
-    if (!tweetResponse.ok) {
-      const errorBody = await tweetResponse.text().catch(() => "Unable to read error");
-      console.error("[X OAuth 1.0a] Tweet creation failed (both v1.1 and v2)", {
-        v1Status: v1Response.status,
-        v2Status: tweetResponse.status,
-        errorBody,
-      });
-      const error = new Error(`X tweet creation failed: ${errorBody}`);
-      (error as any).code = "X_TWEET_FAILED";
-      throw error;
-    }
+    // v1Response's status/body are already logged above (line ~495); assertOk
+    // additionally logs tweetResponse's own status + body server-side.
+    await assertOk(tweetResponse, {
+      code: "X_TWEET_FAILED",
+      prefix: "X tweet creation failed",
+    });
 
     const tweetResult = (await tweetResponse.json()) as {
       data: {

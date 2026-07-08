@@ -2,6 +2,7 @@ import { inngest } from "@/lib/inngest";
 import { prisma } from "@/lib/db";
 import { getPlatformClient } from "@/server/platforms";
 import type { Platform } from "@prisma/client";
+import type { YouTubePostMetadata } from "@/server/platforms/types";
 
 // Simplified types for serialized data from step.run()
 interface SerializedUser {
@@ -63,7 +64,8 @@ async function publishToPlatform(
   caption: string,
   userId: string,
   resultRecordId: string,
-  tiktokMetadata?: any
+  tiktokMetadata?: any,
+  youtubeMetadata?: YouTubePostMetadata
 ): Promise<{ platform: Platform; status: string; error?: string }> {
   const client = getPlatformClient(connection.platform);
 
@@ -92,6 +94,11 @@ async function publishToPlatform(
     // Add TikTok metadata if publishing to TikTok
     if (connection.platform === "tiktok" && tiktokMetadata) {
       publishContext.tiktokMetadata = tiktokMetadata;
+    }
+
+    // Add YouTube metadata if publishing to YouTube
+    if (connection.platform === "youtube" && youtubeMetadata) {
+      publishContext.youtubeMetadata = youtubeMetadata;
     }
 
     const publishResult = await client.publishVideo(publishContext);
@@ -127,7 +134,7 @@ export const publishToAllPlatforms = inngest.createFunction(
   },
   { event: "post/publish.requested" },
   async ({ event, step }) => {
-    const { postJobId, userId, mediaItemId, baseCaption, perPlatformOverrides, tiktokMetadata } = event.data;
+    const { postJobId, userId, mediaItemId, baseCaption, perPlatformOverrides, tiktokMetadata, youtubeMetadata } = event.data;
 
     console.log("[Inngest] Starting background publish job", { postJobId, mediaItemId });
 
@@ -194,7 +201,8 @@ export const publishToAllPlatforms = inngest.createFunction(
           caption,
           userId,
           resultRecord.id,
-          tiktokMetadata
+          tiktokMetadata,
+          youtubeMetadata
         );
       });
 

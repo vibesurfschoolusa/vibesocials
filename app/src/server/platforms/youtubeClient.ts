@@ -1,5 +1,8 @@
 import type { SocialConnection } from "@prisma/client";
 
+import { assertOk } from "@/lib/assertOk";
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+
 import { refreshGoogleToken } from "./googleTokens";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
@@ -38,14 +41,20 @@ export const youtubeClient: PlatformClient = {
       originalFilename: mediaItem.originalFilename,
     });
 
-    // Fetch the video from Vercel Blob
+    // Fetch the video from Vercel Blob.
+    // fetchWithTimeout's own timeoutMs only bounds the connection + response
+    // headers; pass AbortSignal.timeout as init.signal to also bound the
+    // arrayBuffer() body transfer (see the fetchWithTimeout docstring).
     const mediaUrl = mediaItem.storageLocation;
-    const mediaResponse = await fetch(mediaUrl);
-    if (!mediaResponse.ok) {
-      const error = new Error("Failed to fetch media from storage");
-      (error as any).code = "YOUTUBE_FETCH_MEDIA_FAILED";
-      throw error;
-    }
+    const mediaResponse = await fetchWithTimeout(
+      mediaUrl,
+      { signal: AbortSignal.timeout(120_000) },
+      120_000,
+    );
+    await assertOk(mediaResponse, {
+      code: "YOUTUBE_FETCH_MEDIA_FAILED",
+      prefix: "Failed to fetch media from storage",
+    });
 
     const videoBytes = Buffer.from(await mediaResponse.arrayBuffer());
 
@@ -111,7 +120,7 @@ export const youtubeClient: PlatformClient = {
         tags: tags.length > 0 ? tags : undefined, // Add extracted hashtags as tags
       },
       status: {
-        privacyStatus: "public", // Options: public, private, unlisted
+        privacyStatus: ctx.youtubeMetadata?.privacyStatus ?? "unlisted", // User-selected; defaults to unlisted, never auto-public
         selfDeclaredMadeForKids: false, // Not made for kids
       },
     };
@@ -164,7 +173,7 @@ export const youtubeClient: PlatformClient = {
     // Upload to YouTube
     // Include recordingDetails in parts if location is provided
     const apiParts = locationData ? "snippet,status,recordingDetails" : "snippet,status";
-    const uploadResponse = await fetch(
+    const uploadResponse = await fetchWithTimeout(
       `https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=${apiParts}`,
       {
         method: "POST",
@@ -175,19 +184,13 @@ export const youtubeClient: PlatformClient = {
         },
         body,
       },
+      120_000,
     );
 
-    if (!uploadResponse.ok) {
-      const errorBody = await uploadResponse.text().catch(() => "Unable to read error body");
-      console.error("[YouTube] Upload failed", {
-        status: uploadResponse.status,
-        statusText: uploadResponse.statusText,
-        errorBody,
-      });
-      const error = new Error(`YouTube upload failed: ${errorBody}`);
-      (error as any).code = "YOUTUBE_UPLOAD_FAILED";
-      throw error;
-    }
+    await assertOk(uploadResponse, {
+      code: "YOUTUBE_UPLOAD_FAILED",
+      prefix: "YouTube upload failed",
+    });
 
     const result = (await uploadResponse.json()) as {
       id?: string;

@@ -1,13 +1,89 @@
+import { assertOk } from "@/lib/assertOk";
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+
 import type { PlatformClient, PublishContext, PublishResult, TikTokCreatorInfo } from "./types";
 
 const TIKTOK_API_BASE = "https://open.tiktokapis.com";
+
+/** Max bytes per TikTok FILE_UPLOAD chunk (TikTok allows 5MB to 64MB; we use 10MB). */
+export const TIKTOK_MAX_CHUNK_SIZE = 10 * 1024 * 1024; // 10MB
+
+/**
+ * TikTok's hard cap on the FINAL (merged) chunk. With a 10MB base chunk the
+ * final chunk is always under 20MB, so this is only a sanity bound.
+ */
+export const TIKTOK_MAX_FINAL_CHUNK_SIZE = 128 * 1024 * 1024; // 128MB
+
+/** A half-open byte range [start, end) for one uploaded chunk. */
+export interface ChunkRange {
+  /** Inclusive start byte offset. */
+  start: number;
+  /** Exclusive end byte offset (the last byte sent is end - 1). */
+  end: number;
+}
+
+export interface ChunkPlan {
+  /** Value sent as source_info.chunk_size. */
+  chunkSize: number;
+  /** Value sent as source_info.total_chunk_count (TikTok's floor rule). */
+  totalChunks: number;
+  /** Contiguous byte ranges to PUT; ranges.length === totalChunks. */
+  ranges: ChunkRange[];
+}
+
+/**
+ * Compute the TikTok FILE_UPLOAD chunk plan for a video of `size` bytes.
+ *
+ * TikTok's contract: chunk_size is capped (10MB here), total_chunk_count is
+ * floor(size / chunk_size), every chunk except the last is exactly chunk_size
+ * bytes, and the FINAL chunk absorbs the trailing size % chunk_size bytes (so
+ * it may be up to nearly 2x chunk_size, but never above TikTok's 128MB
+ * final-chunk cap for chunk sizes at or below 64MB). A file at or below
+ * chunk_size uploads as a single whole-file chunk.
+ *
+ * This is the fix for the trailing-byte data loss: the final range ends at
+ * `size`, not `start + chunkSize`.
+ */
+export function computeChunkPlan(
+  size: number,
+  maxChunkSize: number = TIKTOK_MAX_CHUNK_SIZE,
+): ChunkPlan {
+  const chunkSize = Math.min(size, maxChunkSize);
+  const totalChunks = size <= maxChunkSize ? 1 : Math.floor(size / chunkSize);
+
+  const ranges: ChunkRange[] = [];
+  for (let index = 0; index < totalChunks; index++) {
+    const start = index * chunkSize;
+    // The final chunk extends to `size`, absorbing any trailing bytes that a
+    // fixed `start + chunkSize` cap would otherwise drop.
+    const end = index === totalChunks - 1 ? size : start + chunkSize;
+    ranges.push({ start, end });
+  }
+
+  return { chunkSize, totalChunks, ranges };
+}
+
+/** Terminal/transient classification of a single TikTok publish-status poll. */
+export type PollOutcome = "complete" | "failed" | "pending";
+
+/**
+ * Pure decision for one publish-status poll result. Only "publish_complete" is
+ * success and only "failed" is terminal; every other status
+ * ("processing_upload", "processing_download", unknown, or missing) is still
+ * pending, so the caller should keep polling.
+ */
+export function decidePollOutcome(status: string | null | undefined): PollOutcome {
+  if (status === "publish_complete") return "complete";
+  if (status === "failed") return "failed";
+  return "pending";
+}
 
 /**
  * Fetch TikTok creator info - REQUIRED by TikTok Developer Guidelines
  * Must be called before posting to get privacy options, interaction settings, and posting limits
  */
 export async function getTikTokCreatorInfo(accessToken: string): Promise<TikTokCreatorInfo> {
-  const response = await fetch(`${TIKTOK_API_BASE}/v2/post/publish/creator_info/query/`, {
+  const response = await fetchWithTimeout(`${TIKTOK_API_BASE}/v2/post/publish/creator_info/query/`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -16,15 +92,10 @@ export async function getTikTokCreatorInfo(accessToken: string): Promise<TikTokC
     body: JSON.stringify({}),
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "Unable to read error body");
-    console.error("[TikTok] creator_info failed", {
-      status: response.status,
-      statusText: response.statusText,
-      errorBody,
-    });
-    throw new Error(`Failed to fetch TikTok creator info: ${errorBody}`);
-  }
+  await assertOk(response, {
+    code: "TIKTOK_CREATOR_INFO_FAILED",
+    prefix: "Failed to fetch TikTok creator info",
+  });
 
   const json = await response.json() as any;
   const data = json?.data;
@@ -74,7 +145,11 @@ export const tiktokClient: PlatformClient = {
       }
     } catch (creatorInfoError: any) {
       console.error('[TikTok] Failed to fetch creator info:', creatorInfoError);
-      throw new Error(`TikTok creator_info check failed: ${creatorInfoError.message}`);
+      const error = new Error(
+        `TikTok creator_info check failed: ${creatorInfoError.message}`,
+      ) as Error & { code: string };
+      error.code = creatorInfoError?.code ?? "TIKTOK_CREATOR_INFO_FAILED";
+      throw error;
     }
 
     console.log('[TikTok] Media item details:', {
@@ -89,15 +164,21 @@ export const tiktokClient: PlatformClient = {
       throw error;
     }
 
-    // Download video from Vercel Blob Storage
+    // Download video from Vercel Blob Storage.
+    // fetchWithTimeout's own timeoutMs only bounds the connection + response
+    // headers; pass AbortSignal.timeout as init.signal to also bound the
+    // arrayBuffer() body transfer (see the fetchWithTimeout docstring).
     const videoUrl = mediaItem.storageLocation;
-    const videoResponse = await fetch(videoUrl);
-    if (!videoResponse.ok) {
-      const error = new Error("Failed to fetch video from storage");
-      (error as any).code = "TIKTOK_FETCH_VIDEO_FAILED";
-      throw error;
-    }
-    
+    const videoResponse = await fetchWithTimeout(
+      videoUrl,
+      { signal: AbortSignal.timeout(120_000) },
+      120_000,
+    );
+    await assertOk(videoResponse, {
+      code: "TIKTOK_FETCH_VIDEO_FAILED",
+      prefix: "Failed to fetch video from storage",
+    });
+
     const fileBytes = Buffer.from(await videoResponse.arrayBuffer());
     const size = fileBytes.byteLength;
 
@@ -107,13 +188,10 @@ export const tiktokClient: PlatformClient = {
       ? (caption.length > 2200 ? caption.substring(0, 2200) : caption)
       : "Video posted via Vibe Socials";
 
-    // TikTok requires chunk sizes between 5MB and 64MB for FILE_UPLOAD
-    // Use 10MB chunks for reliable uploads of large videos
-    // IMPORTANT: total_chunk_count must be rounded DOWN per TikTok docs
-    // The final chunk can be larger (up to 128MB) to accommodate trailing bytes
-    const MAX_CHUNK_SIZE = 10 * 1024 * 1024; // 10MB
-    const CHUNK_SIZE = Math.min(size, MAX_CHUNK_SIZE);
-    const totalChunks = size <= MAX_CHUNK_SIZE ? 1 : Math.floor(size / CHUNK_SIZE);
+    // TikTok FILE_UPLOAD chunking (see computeChunkPlan): chunk_size is capped at
+    // 10MB, total_chunk_count is floor(size / chunk_size), and the FINAL chunk
+    // absorbs the trailing bytes so the entire file is uploaded.
+    const { chunkSize: CHUNK_SIZE, totalChunks, ranges } = computeChunkPlan(size);
 
     console.log('[TikTok] Initializing upload with FILE_UPLOAD (chunked)', {
       videoSize: size,
@@ -148,7 +226,7 @@ export const tiktokClient: PlatformClient = {
     }
 
     // Use Direct Post API with FILE_UPLOAD and captions
-    const initRes = await fetch(
+    const initRes = await fetchWithTimeout(
       `${TIKTOK_API_BASE}/v2/post/publish/video/init/`,
       {
         method: "POST",
@@ -166,19 +244,13 @@ export const tiktokClient: PlatformClient = {
           },
         }),
       },
+      30_000,
     );
 
-    if (!initRes.ok) {
-      const errorBody = await initRes.text().catch(() => "Unable to read error body");
-      console.error("[TikTok] video init failed", {
-        status: initRes.status,
-        statusText: initRes.statusText,
-        errorBody,
-      });
-      const error = new Error(`Failed to start TikTok video upload: ${errorBody}`);
-      (error as any).code = "TIKTOK_INIT_FAILED";
-      throw error;
-    }
+    await assertOk(initRes, {
+      code: "TIKTOK_INIT_FAILED",
+      prefix: "Failed to start TikTok video upload",
+    });
 
     const initJson = (await initRes.json().catch(() => null)) as any;
     const initErrorCode = initJson?.error?.code;
@@ -204,52 +276,53 @@ export const tiktokClient: PlatformClient = {
       chunkSize: CHUNK_SIZE,
     });
 
-    // Upload video in chunks
-    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-      const start = chunkIndex * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, size);
-      const chunk = fileBytes.slice(start, end);
-      
+    // Upload video in chunks. Each PUT's Content-Range reflects the ACTUAL bytes
+    // sent; the final range ends at `size`, so no trailing bytes are dropped.
+    for (const [chunkIndex, { start, end }] of ranges.entries()) {
+      const chunk = fileBytes.subarray(start, end);
+
       console.log(`[TikTok] Uploading chunk ${chunkIndex + 1}/${totalChunks}`, {
-        bytes: `${start}-${end-1}/${size}`,
+        bytes: `${start}-${end - 1}/${size}`,
       });
 
-      const uploadRes = await fetch(uploadUrl, {
-        method: "PUT",
-        headers: {
-          "Content-Range": `bytes ${start}-${end-1}/${size}`,
-          "Content-Type": mediaItem.mimeType,
+      const uploadRes = await fetchWithTimeout(
+        uploadUrl,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Range": `bytes ${start}-${end - 1}/${size}`,
+            "Content-Type": mediaItem.mimeType,
+          },
+          body: chunk,
         },
-        body: chunk,
+        120_000,
+      );
+
+      await assertOk(uploadRes, {
+        code: "TIKTOK_UPLOAD_FAILED",
+        prefix: `Failed to upload chunk ${chunkIndex + 1}/${totalChunks} to TikTok`,
       });
 
-      if (!uploadRes.ok) {
-        console.error("[TikTok] chunk upload failed", {
-          chunkIndex,
-          status: uploadRes.status,
-          statusText: uploadRes.statusText,
-        });
-        const error = new Error(`Failed to upload chunk ${chunkIndex + 1}/${totalChunks} to TikTok`);
-        (error as any).code = "TIKTOK_UPLOAD_FAILED";
-        throw error;
-      }
-      
       console.log(`[TikTok] Chunk ${chunkIndex + 1}/${totalChunks} uploaded successfully`);
     }
 
     console.log('[TikTok] Video chunks uploaded, checking publish status...', { publishId });
 
-    // Poll publish status to verify TikTok processed the video
-    // TikTok requires checking status after upload completes
-    let statusCheckAttempts = 0;
+    // Poll publish status to verify TikTok processed the video.
+    // Terminal outcomes MUST escape this loop: a "failed" status or exhausting
+    // every attempt without "publish_complete" throws (so the job records a
+    // failure) - only a real "publish_complete" returns success. Transient
+    // fetch/parse errors within a single iteration are logged and retried; they
+    // must NOT be mistaken for a terminal outcome.
     const maxAttempts = 10;
-    let publishStatus = null;
+    let completed = false;
 
-    while (statusCheckAttempts < maxAttempts) {
-      await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3 seconds between checks
-      
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 3000)); // Wait 3s between checks
+
+      let publishStatus: string | undefined;
       try {
-        const statusRes = await fetch(
+        const statusRes = await fetchWithTimeout(
           `${TIKTOK_API_BASE}/v2/post/publish/status/fetch/`,
           {
             method: "POST",
@@ -258,45 +331,67 @@ export const tiktokClient: PlatformClient = {
               "Content-Type": "application/json",
             },
             body: JSON.stringify({ publish_id: publishId }),
-          }
+          },
+          30_000,
         );
 
-        if (statusRes.ok) {
-          const statusJson = await statusRes.json();
-          publishStatus = statusJson?.data?.status;
-          
-          console.log(`[TikTok] Status check ${statusCheckAttempts + 1}/${maxAttempts}:`, {
-            status: publishStatus,
-            publishId,
-          });
-
-          // Status values: "processing_upload", "processing_download", "publish_complete", "failed"
-          if (publishStatus === "publish_complete") {
-            console.log('[TikTok] Video published successfully', {
-              publishId,
-              privacyLevel: postInfo.privacy_level,
-              note: 'In sandbox mode, videos are forced to SELF_ONLY (private) visibility. Check your private posts in TikTok.',
-            });
-            break;
-          } else if (publishStatus === "failed") {
-            const error = new Error("TikTok failed to process the video");
-            (error as any).code = "TIKTOK_PUBLISH_FAILED";
-            throw error;
-          }
+        if (!statusRes.ok) {
+          // Transient HTTP error: log and retry on the next iteration.
+          console.warn(`[TikTok] Status check ${attempt + 1}/${maxAttempts} HTTP ${statusRes.status}`);
+          continue;
         }
-      } catch (statusError: any) {
-        console.warn(`[TikTok] Status check ${statusCheckAttempts + 1} failed:`, statusError.message);
+
+        const statusJson = (await statusRes.json()) as {
+          data?: { status?: string };
+        };
+        publishStatus = statusJson?.data?.status;
+      } catch (statusError) {
+        // Transient fetch/parse error: log and retry on the next iteration.
+        const message =
+          statusError instanceof Error ? statusError.message : String(statusError);
+        console.warn(`[TikTok] Status check ${attempt + 1} failed:`, message);
+        continue;
       }
 
-      statusCheckAttempts++;
+      // Decide OUTSIDE the try/catch above so terminal outcomes are not
+      // swallowed by the transient-error handler.
+      const decision = decidePollOutcome(publishStatus);
+      if (decision === "complete") {
+        console.log('[TikTok] Video published successfully', {
+          publishId,
+          privacyLevel: postInfo.privacy_level,
+          note: 'In sandbox mode, videos are forced to SELF_ONLY (private) visibility. Check your private posts in TikTok.',
+        });
+        completed = true;
+        break;
+      }
+      if (decision === "failed") {
+        const error = new Error("TikTok failed to process the video") as Error & {
+          code: string;
+        };
+        error.code = "TIKTOK_PUBLISH_FAILED";
+        throw error;
+      }
+
+      // Still pending ("processing_upload" / "processing_download" / unknown).
+      console.log(`[TikTok] Status check ${attempt + 1}/${maxAttempts}:`, {
+        status: publishStatus ?? "unknown",
+        publishId,
+      });
     }
 
-    if (publishStatus !== "publish_complete") {
-      console.warn('[TikTok] Video upload completed but publish status unclear', {
+    if (!completed) {
+      // Poll exhausted without a terminal "publish_complete": treat as failure
+      // rather than silently returning success for a video we never confirmed.
+      console.warn('[TikTok] Publish status not confirmed before timeout', {
         publishId,
-        lastStatus: publishStatus,
-        note: 'Video may still be processing. Check TikTok in a few minutes.',
+        note: 'Video may still be processing on TikTok.',
       });
+      const error = new Error(
+        "TikTok did not confirm publish completion in time; the video may still be processing",
+      ) as Error & { code: string };
+      error.code = "TIKTOK_PUBLISH_TIMEOUT";
+      throw error;
     }
 
     return {

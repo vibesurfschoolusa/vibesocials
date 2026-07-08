@@ -1,13 +1,54 @@
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { SocialConnection } from "@prisma/client";
-import { prisma } from "@/lib/db";
 
-async function refreshAccessToken(
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+
+// COR-5: Instagram token expiry handling.
+//
+// Token-material reality (see app/src/app/api/auth/instagram/callback/route.ts):
+// the connection's `accessToken` is a long-lived Facebook PAGE access token
+// (minted from a long-lived user token during OAuth) and `refreshToken` is
+// stored as null. Page tokens derived from a long-lived user token carry no
+// refresh token and generally do not expire on a fixed clock, but they CAN be
+// invalidated (the user revokes access / changes password, or the parent
+// long-lived user token lapses). The stored `expiresAt` mirrors that user
+// token's ~60-day window and is used here as a conservative "time to prompt
+// reconnect" signal.
+//
+// There is deliberately NO refresh call: `fb_exchange_token` re-extends USER
+// tokens, not page tokens, and no user token is stored — so the only real
+// recovery is to reconnect. The fix is therefore an expiry check on the token
+// actually used for publishing, surfaced as a clean, coded reconnect error.
+
+const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // treat tokens within 5 min of expiry as expired
+
+function isExpiredOrExpiringSoon(expiresAt: Date | null | undefined): boolean {
+  if (!expiresAt) return false; // no expiry recorded -> cannot judge; let publish proceed
+  return new Date(expiresAt).getTime() - Date.now() <= TOKEN_EXPIRY_BUFFER_MS;
+}
+
+function instagramReconnectRequiredError(cause?: unknown): Error & { code: string } {
+  const error = new Error(
+    "Your Instagram connection has expired — please reconnect it in Settings.",
+  ) as Error & { code: string };
+  error.code = "INSTAGRAM_RECONNECT_REQUIRED";
+  if (cause !== undefined) error.cause = cause;
+  return error;
+}
+
+/**
+ * Guard the token before hitting the Graph API. Instagram cannot refresh (see
+ * file header), so an expired/near-expired token becomes a clean, actionable
+ * reconnect error instead of a raw OAuth failure surfaced to the user via
+ * PostJobResult.errorMessage. Returns the connection unchanged when usable.
+ * Exported for unit tests.
+ */
+export function ensureFreshInstagramToken(
   connection: SocialConnection,
-): Promise<SocialConnection> {
-  // Instagram uses Facebook long-lived tokens (60 days)
-  // These don't have a refresh token, they just expire
-  console.log("[Instagram] Token refresh not implemented - using long-lived token");
+): SocialConnection {
+  if (isExpiredOrExpiringSoon(connection.expiresAt)) {
+    throw instagramReconnectRequiredError();
+  }
   return connection;
 }
 
@@ -15,6 +56,10 @@ export const instagramClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
     let { socialConnection } = ctx;
     const { mediaItem, caption } = ctx;
+
+    // COR-5: fail fast with a clear reconnect error if the page token has
+    // aged out, rather than letting the Graph API return a cryptic OAuth error.
+    socialConnection = ensureFreshInstagramToken(socialConnection);
 
     const accessToken = socialConnection.accessToken;
     if (!accessToken) {
@@ -91,18 +136,26 @@ export const instagramClient: PlatformClient = {
         hasLocation: !!locationId,
       });
 
-      const containerResponse = await fetch(containerUrl.toString(), {
+      const containerResponse = await fetchWithTimeout(containerUrl.toString(), {
         method: "POST",
       });
 
       if (!containerResponse.ok) {
-        const errorBody = await containerResponse.text();
+        const errorBody = await containerResponse.text().catch(() => "Unable to read error body");
         console.error("[Instagram] Container creation failed", {
           status: containerResponse.status,
           error: errorBody,
         });
-        const error = new Error(`Instagram container creation failed: ${errorBody}`);
-        (error as any).code = "INSTAGRAM_CONTAINER_FAILED";
+        // COR-5: a 401 here means the page token is no longer accepted — map it
+        // to the actionable reconnect error instead of leaking the raw body.
+        if (containerResponse.status === 401) {
+          throw instagramReconnectRequiredError();
+        }
+        // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
+        const error = new Error(
+          `Instagram container creation failed (status ${containerResponse.status})`,
+        ) as Error & { code: string };
+        error.code = "INSTAGRAM_CONTAINER_FAILED";
         throw error;
       }
 
@@ -129,7 +182,7 @@ export const instagramClient: PlatformClient = {
           statusUrl.searchParams.set("fields", "status_code");
           statusUrl.searchParams.set("access_token", accessToken);
 
-          const statusResponse = await fetch(statusUrl.toString());
+          const statusResponse = await fetchWithTimeout(statusUrl.toString());
           if (statusResponse.ok) {
             const statusData = (await statusResponse.json()) as {
               status_code?: string;
@@ -169,18 +222,25 @@ export const instagramClient: PlatformClient = {
 
       console.log("[Instagram] Publishing media container");
 
-      const publishResponse = await fetch(publishUrl.toString(), {
+      const publishResponse = await fetchWithTimeout(publishUrl.toString(), {
         method: "POST",
       });
 
       if (!publishResponse.ok) {
-        const errorBody = await publishResponse.text();
+        const errorBody = await publishResponse.text().catch(() => "Unable to read error body");
         console.error("[Instagram] Publish failed", {
           status: publishResponse.status,
           error: errorBody,
         });
-        const error = new Error(`Instagram publish failed: ${errorBody}`);
-        (error as any).code = "INSTAGRAM_PUBLISH_FAILED";
+        // COR-5: 401 on publish -> token no longer valid; ask for reconnect.
+        if (publishResponse.status === 401) {
+          throw instagramReconnectRequiredError();
+        }
+        // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
+        const error = new Error(
+          `Instagram publish failed (status ${publishResponse.status})`,
+        ) as Error & { code: string };
+        error.code = "INSTAGRAM_PUBLISH_FAILED";
         throw error;
       }
 
@@ -205,6 +265,10 @@ export const instagramClient: PlatformClient = {
   },
 
   async refreshToken(connection: SocialConnection): Promise<SocialConnection> {
-    return refreshAccessToken(connection);
+    // Instagram page tokens cannot be refreshed (see file header). Delegate to
+    // the same guard used at publish time so any future caller gets correct
+    // behavior — a fresh connection or a coded reconnect error — not a silent
+    // no-op that hides an expired token.
+    return ensureFreshInstagramToken(connection);
   },
 };
