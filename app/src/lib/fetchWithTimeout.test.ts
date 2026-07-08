@@ -89,4 +89,61 @@ describe("fetchWithTimeout", () => {
     // FETCH_TIMEOUT_CODE — assert against that string tag specifically.
     expect(error?.code).not.toBe(FETCH_TIMEOUT_CODE);
   });
+
+  it("lets a caller signal that fires AFTER headers arrive abort the in-flight body read", async () => {
+    // Pins the AbortSignal.any composition: a caller-supplied `init.signal`
+    // must keep covering the request past headers, all the way through body
+    // streaming — not just the connection/headers phase our own timeout
+    // covers.
+    const controller = new AbortController();
+    let sawSignal: AbortSignal | undefined;
+
+    const fetchMock = vi.fn((_url: string | URL, init?: RequestInit) => {
+      sawSignal = init?.signal ?? undefined;
+      // A body stream that never enqueues/closes on its own (simulating a
+      // slow/never-ending response), but — like undici's real fetch —
+      // wired to reject the in-flight read as soon as the passed signal
+      // fires, whenever that happens.
+      const body = new ReadableStream<Uint8Array>({
+        start(streamController) {
+          const signal = init?.signal;
+          if (!signal) return;
+          if (signal.aborted) {
+            streamController.error(signal.reason);
+            return;
+          }
+          signal.addEventListener(
+            "abort",
+            () => streamController.error(signal.reason),
+            { once: true },
+          );
+        },
+        pull() {
+          return new Promise<void>(() => {}); // never resolves
+        },
+        cancel() {
+          // No-op: mirrors the body stream's cancel contract.
+        },
+      });
+      return Promise.resolve(new Response(body, { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await fetchWithTimeout(
+      "https://example.test/stream",
+      { signal: controller.signal },
+      10_000,
+    );
+
+    // Headers arrived: our own timeout has already been cleared, but the
+    // composite signal handed to fetch is still alive and not aborted.
+    expect(sawSignal).toBeInstanceOf(AbortSignal);
+    expect(sawSignal?.aborted).toBe(false);
+
+    const readPromise = response.text();
+    controller.abort();
+
+    await expect(readPromise).rejects.toMatchObject({ name: "AbortError" });
+    expect(sawSignal?.aborted).toBe(true);
+  });
 });

@@ -107,7 +107,9 @@ describe("refreshGoogleToken", () => {
 
     const connection = makeConnection({ id: "conn-99", refreshToken: "refresh-xyz" });
 
+    const before = Date.now();
     await refreshGoogleToken(connection);
+    const after = Date.now();
 
     expect(updateMock).toHaveBeenCalledTimes(1);
     const arg = updateMock.mock.calls[0][0] as {
@@ -115,9 +117,13 @@ describe("refreshGoogleToken", () => {
       data: Record<string, unknown>;
     };
 
+    // Fallback magnitude: pin it to exactly Google's standard 3600s
+    // access-token TTL (same before/after bounds pattern as the primary
+    // expiry test above), not just "some time in the future".
     const expiresAt = arg.data.expiresAt as Date;
     expect(expiresAt instanceof Date && !isNaN(expiresAt.getTime())).toBe(true);
-    expect(expiresAt.getTime()).toBeGreaterThan(Date.now());
+    expect(expiresAt.getTime()).toBeGreaterThanOrEqual(before + 3_600_000);
+    expect(expiresAt.getTime()).toBeLessThanOrEqual(after + 3_600_000);
     expect(arg.data).not.toHaveProperty("refreshToken");
   });
 
