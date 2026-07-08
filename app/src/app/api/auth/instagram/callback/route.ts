@@ -118,8 +118,8 @@ export async function GET(request: NextRequest) {
     };
 
     console.log("[Instagram OAuth] Pages fetched:", {
-      count: pagesData.data.length,
-      pages: pagesData.data.map((page) => ({ id: page.id, name: page.name })),
+      count: pagesData.data?.length ?? 0,
+      pages: pagesData.data?.map((page) => ({ id: page.id, name: page.name })) ?? [],
     });
 
     // Find the first page with an Instagram Business Account
