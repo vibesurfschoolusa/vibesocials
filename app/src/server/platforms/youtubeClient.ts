@@ -111,7 +111,7 @@ export const youtubeClient: PlatformClient = {
         tags: tags.length > 0 ? tags : undefined, // Add extracted hashtags as tags
       },
       status: {
-        privacyStatus: "public", // Options: public, private, unlisted
+        privacyStatus: ctx.youtubeMetadata?.privacyStatus ?? "unlisted", // User-selected; defaults to unlisted, never auto-public
         selfDeclaredMadeForKids: false, // Not made for kids
       },
     };

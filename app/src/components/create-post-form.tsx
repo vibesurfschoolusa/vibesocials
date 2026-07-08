@@ -4,8 +4,9 @@ import { useState, useEffect } from "react";
 import { upload } from '@vercel/blob/client';
 import { LocationAutocomplete } from "./location-autocomplete";
 import { TikTokPostSettings } from "./tiktok-post-settings";
+import { YouTubePostSettings } from "./youtube-post-settings";
 import { Sparkles, Loader2 } from "lucide-react";
-import type { TikTokPostMetadata } from "@/server/platforms/types";
+import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
 
 interface PostResponse {
   postJob: {
@@ -57,8 +58,14 @@ export function CreatePostForm() {
     disableStitch: true,
   });
 
+  const [hasYouTubeConnection, setHasYouTubeConnection] = useState(false);
+  const [youtubeMetadata, setYoutubeMetadata] = useState<YouTubePostMetadata>({
+    privacyStatus: "unlisted",
+  });
+
   useEffect(() => {
     checkTikTokConnection();
+    checkYouTubeConnection();
   }, []);
 
   async function checkTikTokConnection() {
@@ -67,6 +74,20 @@ export function CreatePostForm() {
       setHasTikTokConnection(response.ok);
     } catch {
       setHasTikTokConnection(false);
+    }
+  }
+
+  async function checkYouTubeConnection() {
+    try {
+      const response = await fetch("/api/connections/youtube");
+      if (!response.ok) {
+        setHasYouTubeConnection(false);
+        return;
+      }
+      const data = (await response.json().catch(() => null)) as { connected?: boolean } | null;
+      setHasYouTubeConnection(Boolean(data?.connected));
+    } catch {
+      setHasYouTubeConnection(false);
     }
   }
 
@@ -194,6 +215,11 @@ export function CreatePostForm() {
         postData.tiktokMetadata = tiktokMetadata;
       }
 
+      // Add YouTube-specific metadata if YouTube is connected
+      if (hasYouTubeConnection) {
+        postData.youtubeMetadata = youtubeMetadata;
+      }
+
       const response = await fetch("/api/posts", {
         method: "POST",
         headers: {
@@ -225,6 +251,7 @@ export function CreatePostForm() {
         disableDuet: true,
         disableStitch: true,
       });
+      setYoutubeMetadata({ privacyStatus: "unlisted" });
       setUploadLoading(false);
     } catch (_err) {
       setUploadError("Unexpected error while creating post.");
@@ -423,6 +450,12 @@ export function CreatePostForm() {
               metadata={tiktokMetadata}
               onChange={setTiktokMetadata}
               isVideo={uploadFile.type.startsWith("video/")}
+            />
+          )}
+          {hasYouTubeConnection && uploadFile && (
+            <YouTubePostSettings
+              metadata={youtubeMetadata}
+              onChange={setYoutubeMetadata}
             />
           )}
           <div className="flex items-center justify-between text-xs">

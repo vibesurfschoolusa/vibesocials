@@ -4,6 +4,58 @@ import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { Platform } from "@prisma/client";
 
+interface PlatformRouteContext {
+  params: Promise<{ platform: string }> | { platform: string };
+}
+
+/**
+ * GET /api/connections/[platform]
+ * Reports whether the authenticated user has a connection for the given platform.
+ * Used by post-creation UI to conditionally show per-platform settings.
+ */
+export async function GET(_request: NextRequest, context: PlatformRouteContext) {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // In Next.js 15+, params might be a Promise
+  const params = await Promise.resolve(context.params);
+  const platformParam = params.platform;
+  const allPlatforms = Object.values(Platform) as string[];
+
+  if (!allPlatforms.includes(platformParam)) {
+    return NextResponse.json({
+      error: "Unknown platform",
+      received: platformParam,
+      expected: allPlatforms,
+    }, { status: 400 });
+  }
+
+  const platform = platformParam as Platform;
+
+  try {
+    const connection = await prisma.socialConnection.findFirst({
+      where: {
+        userId: user.id,
+        platform,
+      },
+      select: { id: true },
+    });
+
+    return NextResponse.json({ connected: Boolean(connection) });
+  } catch (error) {
+    console.error("[GET /api/connections/[platform]] Unexpected error", {
+      error,
+    });
+    return NextResponse.json(
+      { error: "Failed to check connection status" },
+      { status: 500 },
+    );
+  }
+}
+
 export async function DELETE(_request: NextRequest, context: any) {
   const user = await getCurrentUser();
 
