@@ -1,4 +1,8 @@
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
+import type { SocialConnection } from "@prisma/client";
+
+import { assertOk } from "@/lib/assertOk";
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
 /**
  * LinkedIn API client for posting images and videos
@@ -23,6 +27,150 @@ interface LinkedInAssetUploadResponse {
     asset: string;
     mediaArtifact: string;
   };
+}
+
+// COR-5: LinkedIn token expiry handling.
+//
+// Token-material reality (see app/src/app/api/auth/linkedin/callback/route.ts):
+// the connection stores a ~60-day `accessToken` and a `refreshToken` ONLY when
+// LinkedIn actually returns one. Programmatic refresh tokens are issued solely
+// to approved LinkedIn partner programs; standard / dev-tier apps (this app)
+// receive a 60-day access token with NO refresh_token. So the correct behavior
+// for the common case is a clean, coded "reconnect" failure — NOT a fabricated
+// refresh. When a refresh_token IS present (partner apps) we run the standard
+// refresh_token grant under the same persist discipline as googleTokens.ts:
+// write ONLY accessToken + expiresAt, never refreshToken or metadata wholesale.
+//
+// Caveat: LinkedIn may rotate the refresh_token on refresh. Per the program-wide
+// discipline (never overwrite a stored refreshToken in an update) we do not
+// persist a rotated token; if rotation invalidates the stored one, the next
+// cycle surfaces LINKEDIN_RECONNECT_REQUIRED — the correct user action.
+
+const LINKEDIN_TOKEN_ENDPOINT = "https://www.linkedin.com/oauth/v2/accessToken";
+const LINKEDIN_DEFAULT_TOKEN_TTL_SECONDS = 5_184_000; // LinkedIn access tokens last ~60 days
+const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // treat tokens within 5 min of expiry as expired
+
+function isExpiredOrExpiringSoon(expiresAt: Date | null | undefined): boolean {
+  if (!expiresAt) return false; // no expiry recorded -> cannot judge; let publish proceed
+  return new Date(expiresAt).getTime() - Date.now() <= TOKEN_EXPIRY_BUFFER_MS;
+}
+
+function linkedinReconnectRequiredError(cause?: unknown): Error & { code: string } {
+  const error = new Error(
+    "Your LinkedIn connection has expired — please reconnect it in Settings.",
+  ) as Error & { code: string };
+  error.code = "LINKEDIN_RECONNECT_REQUIRED";
+  if (cause !== undefined) error.cause = cause;
+  return error;
+}
+
+/**
+ * Refresh a LinkedIn access token using a stored refresh_token (partner apps
+ * only). Persists ONLY accessToken + expiresAt — never refreshToken or metadata
+ * — mirroring the discipline pinned by googleTokens.ts. Exported for unit tests.
+ *
+ * Throws (with `error.code`):
+ * - `LINKEDIN_NO_REFRESH_TOKEN` if the connection has no stored refresh token.
+ * - `LINKEDIN_MISSING_OAUTH_CREDENTIALS` if the OAuth client env vars are absent.
+ * - `LINKEDIN_TOKEN_REFRESH_FAILED` (sanitized, via assertOk) on a non-2xx; the
+ *   upstream body is logged server-side but never surfaced to the user.
+ */
+export async function refreshLinkedInToken(
+  connection: SocialConnection,
+): Promise<SocialConnection> {
+  const refreshToken = connection.refreshToken;
+  if (!refreshToken) {
+    const error = new Error(
+      "No refresh token available for this LinkedIn connection",
+    ) as Error & { code: string };
+    error.code = "LINKEDIN_NO_REFRESH_TOKEN";
+    throw error;
+  }
+
+  const clientId = process.env.LINKEDIN_CLIENT_ID;
+  const clientSecret = process.env.LINKEDIN_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    const error = new Error(
+      "Missing LinkedIn OAuth credentials",
+    ) as Error & { code: string };
+    error.code = "LINKEDIN_MISSING_OAUTH_CREDENTIALS";
+    throw error;
+  }
+
+  console.log("[LinkedIn] Refreshing access token", { connectionId: connection.id });
+
+  const response = await fetchWithTimeout(LINKEDIN_TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: clientId,
+      client_secret: clientSecret,
+    }),
+  });
+
+  await assertOk(response, {
+    code: "LINKEDIN_TOKEN_REFRESH_FAILED",
+    prefix: "Failed to refresh LinkedIn access token",
+  });
+
+  const tokenData = (await response.json()) as {
+    access_token: string;
+    expires_in?: number;
+  };
+
+  // Guard: fall back to LinkedIn's standard ~60-day TTL if expires_in is
+  // missing/non-finite, rather than persisting an Invalid Date.
+  const expiresInSeconds =
+    typeof tokenData.expires_in === "number" && Number.isFinite(tokenData.expires_in)
+      ? tokenData.expires_in
+      : LINKEDIN_DEFAULT_TOKEN_TTL_SECONDS;
+  const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
+
+  // Update ONLY accessToken + expiresAt. Never refreshToken or metadata. (See header.)
+  const { prisma } = await import("@/lib/db");
+  const updated = await prisma.socialConnection.update({
+    where: { id: connection.id },
+    data: {
+      accessToken: tokenData.access_token,
+      expiresAt,
+    },
+  });
+
+  console.log("[LinkedIn] Access token refreshed successfully", {
+    connectionId: connection.id,
+  });
+
+  return updated;
+}
+
+/**
+ * Ensure the connection's access token is usable before publishing. If it is
+ * expired/near-expiry: refresh it when a refresh_token is stored (partner apps),
+ * otherwise throw LINKEDIN_RECONNECT_REQUIRED. Any refresh failure is likewise
+ * surfaced as LINKEDIN_RECONNECT_REQUIRED (the actionable outcome), preserving
+ * the original error as `cause` for server logs. Returns the (possibly
+ * refreshed) connection. Exported for unit tests.
+ */
+export async function ensureFreshLinkedInToken(
+  connection: SocialConnection,
+): Promise<SocialConnection> {
+  if (!isExpiredOrExpiringSoon(connection.expiresAt)) {
+    return connection;
+  }
+
+  if (connection.refreshToken) {
+    try {
+      return await refreshLinkedInToken(connection);
+    } catch (error) {
+      throw linkedinReconnectRequiredError(error);
+    }
+  }
+
+  throw linkedinReconnectRequiredError();
 }
 
 async function uploadImage(
@@ -63,6 +211,10 @@ async function uploadImage(
       status: registerResponse.status,
       error: errorText,
     });
+    // COR-5: 401 means the access token is no longer valid -> reconnect.
+    if (registerResponse.status === 401) {
+      throw linkedinReconnectRequiredError();
+    }
     throw new Error(`LinkedIn image registration failed: ${errorText}`);
   }
 
@@ -158,6 +310,10 @@ async function uploadVideo(
       status: registerResponse.status,
       error: errorText,
     });
+    // COR-5: 401 means the access token is no longer valid -> reconnect.
+    if (registerResponse.status === 401) {
+      throw linkedinReconnectRequiredError();
+    }
     throw new Error(`LinkedIn video registration failed: ${errorText}`);
   }
 
@@ -292,6 +448,10 @@ async function createPost(
       status: response.status,
       error: errorText,
     });
+    // COR-5: 401 means the access token is no longer valid -> reconnect.
+    if (response.status === 401) {
+      throw linkedinReconnectRequiredError();
+    }
     throw new Error(`LinkedIn post creation failed: ${errorText}`);
   }
 
@@ -304,12 +464,19 @@ async function createPost(
 
 export const linkedinClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
-    const { socialConnection, mediaItem, caption } = ctx;
+    let { socialConnection } = ctx;
+    const { mediaItem, caption } = ctx;
+
+    // COR-5: refresh the token when a refresh_token is stored (partner apps),
+    // otherwise fail with a clear reconnect error — before we use the token.
+    socialConnection = await ensureFreshLinkedInToken(socialConnection);
 
     const accessToken = socialConnection.accessToken;
     if (!accessToken) {
-      const error = new Error("Missing access token for LinkedIn");
-      (error as any).code = "LINKEDIN_NO_ACCESS_TOKEN";
+      const error = new Error("Missing access token for LinkedIn") as Error & {
+        code: string;
+      };
+      error.code = "LINKEDIN_NO_ACCESS_TOKEN";
       throw error;
     }
 
