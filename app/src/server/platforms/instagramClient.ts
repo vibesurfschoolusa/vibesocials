@@ -1,6 +1,8 @@
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { SocialConnection } from "@prisma/client";
 
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+
 // COR-5: Instagram token expiry handling.
 //
 // Token-material reality (see app/src/app/api/auth/instagram/callback/route.ts):
@@ -134,12 +136,12 @@ export const instagramClient: PlatformClient = {
         hasLocation: !!locationId,
       });
 
-      const containerResponse = await fetch(containerUrl.toString(), {
+      const containerResponse = await fetchWithTimeout(containerUrl.toString(), {
         method: "POST",
       });
 
       if (!containerResponse.ok) {
-        const errorBody = await containerResponse.text();
+        const errorBody = await containerResponse.text().catch(() => "Unable to read error body");
         console.error("[Instagram] Container creation failed", {
           status: containerResponse.status,
           error: errorBody,
@@ -149,8 +151,11 @@ export const instagramClient: PlatformClient = {
         if (containerResponse.status === 401) {
           throw instagramReconnectRequiredError();
         }
-        const error = new Error(`Instagram container creation failed: ${errorBody}`);
-        (error as any).code = "INSTAGRAM_CONTAINER_FAILED";
+        // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
+        const error = new Error(
+          `Instagram container creation failed (status ${containerResponse.status})`,
+        ) as Error & { code: string };
+        error.code = "INSTAGRAM_CONTAINER_FAILED";
         throw error;
       }
 
@@ -177,7 +182,7 @@ export const instagramClient: PlatformClient = {
           statusUrl.searchParams.set("fields", "status_code");
           statusUrl.searchParams.set("access_token", accessToken);
 
-          const statusResponse = await fetch(statusUrl.toString());
+          const statusResponse = await fetchWithTimeout(statusUrl.toString());
           if (statusResponse.ok) {
             const statusData = (await statusResponse.json()) as {
               status_code?: string;
@@ -217,12 +222,12 @@ export const instagramClient: PlatformClient = {
 
       console.log("[Instagram] Publishing media container");
 
-      const publishResponse = await fetch(publishUrl.toString(), {
+      const publishResponse = await fetchWithTimeout(publishUrl.toString(), {
         method: "POST",
       });
 
       if (!publishResponse.ok) {
-        const errorBody = await publishResponse.text();
+        const errorBody = await publishResponse.text().catch(() => "Unable to read error body");
         console.error("[Instagram] Publish failed", {
           status: publishResponse.status,
           error: errorBody,
@@ -231,8 +236,11 @@ export const instagramClient: PlatformClient = {
         if (publishResponse.status === 401) {
           throw instagramReconnectRequiredError();
         }
-        const error = new Error(`Instagram publish failed: ${errorBody}`);
-        (error as any).code = "INSTAGRAM_PUBLISH_FAILED";
+        // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
+        const error = new Error(
+          `Instagram publish failed (status ${publishResponse.status})`,
+        ) as Error & { code: string };
+        error.code = "INSTAGRAM_PUBLISH_FAILED";
         throw error;
       }
 

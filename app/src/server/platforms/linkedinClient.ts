@@ -181,7 +181,7 @@ async function uploadImage(
   console.log("[LinkedIn] Starting image upload", { imageUrl });
 
   // Step 1: Register image upload
-  const registerResponse = await fetch(
+  const registerResponse = await fetchWithTimeout(
     "https://api.linkedin.com/v2/assets?action=registerUpload",
     {
       method: "POST",
@@ -206,7 +206,7 @@ async function uploadImage(
   );
 
   if (!registerResponse.ok) {
-    const errorText = await registerResponse.text();
+    const errorText = await registerResponse.text().catch(() => "Unable to read error");
     console.error("[LinkedIn] Image registration failed", {
       status: registerResponse.status,
       error: errorText,
@@ -215,7 +215,12 @@ async function uploadImage(
     if (registerResponse.status === 401) {
       throw linkedinReconnectRequiredError();
     }
-    throw new Error(`LinkedIn image registration failed: ${errorText}`);
+    // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
+    const error = new Error(
+      `LinkedIn image registration failed (status ${registerResponse.status})`,
+    ) as Error & { code: string };
+    error.code = "LINKEDIN_IMAGE_REGISTRATION_FAILED";
+    throw error;
   }
 
   const registerData: LinkedInAssetUploadResponse = await registerResponse.json();
@@ -227,30 +232,38 @@ async function uploadImage(
 
   console.log("[LinkedIn] Image registered", { assetUrn });
 
-  // Step 2: Download image from blob storage
-  const imageResponse = await fetch(imageUrl);
-  if (!imageResponse.ok) {
-    throw new Error(`Failed to fetch image from ${imageUrl}`);
-  }
+  // Step 2: Download image from blob storage.
+  // fetchWithTimeout's own timeoutMs only bounds the connection + response
+  // headers; pass AbortSignal.timeout as init.signal to also bound the
+  // arrayBuffer() body transfer (see the fetchWithTimeout docstring).
+  const imageResponse = await fetchWithTimeout(
+    imageUrl,
+    { signal: AbortSignal.timeout(120_000) },
+    120_000,
+  );
+  await assertOk(imageResponse, {
+    code: "LINKEDIN_IMAGE_DOWNLOAD_FAILED",
+    prefix: "Failed to download image from storage",
+  });
   const imageBuffer = await imageResponse.arrayBuffer();
 
   // Step 3: Upload image to LinkedIn
-  const uploadResponse = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
+  const uploadResponse = await fetchWithTimeout(
+    uploadUrl,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: imageBuffer,
     },
-    body: imageBuffer,
-  });
+    120_000,
+  );
 
-  if (!uploadResponse.ok) {
-    const errorText = await uploadResponse.text();
-    console.error("[LinkedIn] Image upload failed", {
-      status: uploadResponse.status,
-      error: errorText,
-    });
-    throw new Error(`LinkedIn image upload failed: ${errorText}`);
-  }
+  await assertOk(uploadResponse, {
+    code: "LINKEDIN_IMAGE_UPLOAD_FAILED",
+    prefix: "LinkedIn image upload failed",
+  });
 
   console.log("[LinkedIn] Image uploaded successfully", { assetUrn });
   return assetUrn;
@@ -264,11 +277,19 @@ async function uploadVideo(
 ): Promise<string> {
   console.log("[LinkedIn] Starting video upload", { videoUrl, filename });
 
-  // Step 1: Download video from blob storage
-  const videoResponse = await fetch(videoUrl);
-  if (!videoResponse.ok) {
-    throw new Error(`Failed to fetch video from ${videoUrl}`);
-  }
+  // Step 1: Download video from blob storage.
+  // fetchWithTimeout's own timeoutMs only bounds the connection + response
+  // headers; pass AbortSignal.timeout as init.signal to also bound the
+  // arrayBuffer() body transfer (see the fetchWithTimeout docstring).
+  const videoResponse = await fetchWithTimeout(
+    videoUrl,
+    { signal: AbortSignal.timeout(120_000) },
+    120_000,
+  );
+  await assertOk(videoResponse, {
+    code: "LINKEDIN_VIDEO_DOWNLOAD_FAILED",
+    prefix: "Failed to download video from storage",
+  });
   const videoBuffer = Buffer.from(await videoResponse.arrayBuffer());
   const videoSize = videoBuffer.length;
 
@@ -280,7 +301,7 @@ async function uploadVideo(
     fileSizeBytes: videoSize,
   });
   
-  const registerResponse = await fetch(
+  const registerResponse = await fetchWithTimeout(
     "https://api.linkedin.com/v2/assets?action=registerUpload",
     {
       method: "POST",
@@ -305,7 +326,7 @@ async function uploadVideo(
   );
 
   if (!registerResponse.ok) {
-    const errorText = await registerResponse.text();
+    const errorText = await registerResponse.text().catch(() => "Unable to read error");
     console.error("[LinkedIn] Video registration failed", {
       status: registerResponse.status,
       error: errorText,
@@ -314,7 +335,12 @@ async function uploadVideo(
     if (registerResponse.status === 401) {
       throw linkedinReconnectRequiredError();
     }
-    throw new Error(`LinkedIn video registration failed: ${errorText}`);
+    // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
+    const error = new Error(
+      `LinkedIn video registration failed (status ${registerResponse.status})`,
+    ) as Error & { code: string };
+    error.code = "LINKEDIN_VIDEO_REGISTRATION_FAILED";
+    throw error;
   }
 
   const registerData = await registerResponse.json();
@@ -330,22 +356,22 @@ async function uploadVideo(
   console.log("[LinkedIn] Video registered", { assetUrn });
 
   // Step 3: Upload video to LinkedIn
-  const uploadResponse = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
+  const uploadResponse = await fetchWithTimeout(
+    uploadUrl,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: videoBuffer,
     },
-    body: videoBuffer,
-  });
+    120_000,
+  );
 
-  if (!uploadResponse.ok) {
-    const errorText = await uploadResponse.text();
-    console.error("[LinkedIn] Video upload failed", {
-      status: uploadResponse.status,
-      error: errorText,
-    });
-    throw new Error(`LinkedIn video upload failed: ${errorText}`);
-  }
+  await assertOk(uploadResponse, {
+    code: "LINKEDIN_VIDEO_UPLOAD_FAILED",
+    prefix: "LinkedIn video upload failed",
+  });
 
   console.log("[LinkedIn] Video uploaded successfully", { assetUrn });
   return assetUrn;
@@ -432,7 +458,7 @@ async function createPost(
   // Log full post body for debugging
   console.log("[LinkedIn] Full post body:", JSON.stringify(postBody, null, 2));
 
-  const response = await fetch("https://api.linkedin.com/v2/ugcPosts", {
+  const response = await fetchWithTimeout("https://api.linkedin.com/v2/ugcPosts", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -443,7 +469,7 @@ async function createPost(
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
+    const errorText = await response.text().catch(() => "Unable to read error");
     console.error("[LinkedIn] Post creation failed", {
       status: response.status,
       error: errorText,
@@ -452,7 +478,12 @@ async function createPost(
     if (response.status === 401) {
       throw linkedinReconnectRequiredError();
     }
-    throw new Error(`LinkedIn post creation failed: ${errorText}`);
+    // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
+    const error = new Error(
+      `LinkedIn post creation failed (status ${response.status})`,
+    ) as Error & { code: string };
+    error.code = "LINKEDIN_POST_CREATION_FAILED";
+    throw error;
   }
 
   const responseData = await response.json();

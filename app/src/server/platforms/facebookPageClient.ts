@@ -1,6 +1,9 @@
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { SocialConnection } from "@prisma/client";
 
+import { assertOk } from "@/lib/assertOk";
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+
 async function refreshAccessToken(
   connection: SocialConnection,
 ): Promise<SocialConnection> {
@@ -50,7 +53,7 @@ export const facebookPageClient: PlatformClient = {
       access_token: accessToken,
     });
 
-    const response = await fetch(endpoint.toString(), {
+    const response = await fetchWithTimeout(endpoint.toString(), {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -58,17 +61,10 @@ export const facebookPageClient: PlatformClient = {
       body,
     });
 
-    if (!response.ok) {
-      const errorBody = await response.text().catch(() => "Unable to read error body");
-      console.error("[FacebookPage] Photo publish failed", {
-        status: response.status,
-        statusText: response.statusText,
-        errorBody,
-      });
-      const error = new Error(`Facebook Page photo publish failed: ${errorBody}`);
-      (error as any).code = "FACEBOOK_PAGE_PUBLISH_FAILED";
-      throw error;
-    }
+    await assertOk(response, {
+      code: "FACEBOOK_PAGE_PUBLISH_FAILED",
+      prefix: "Facebook Page photo publish failed",
+    });
 
     const data = (await response.json()) as { id?: string };
     const externalPostId = data.id ?? null;

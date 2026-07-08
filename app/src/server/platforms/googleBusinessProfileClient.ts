@@ -1,5 +1,8 @@
 import type { SocialConnection } from "@prisma/client";
 
+import { assertOk } from "@/lib/assertOk";
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+
 import { resolveGbpLocationName } from "./gbpLocation";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
@@ -24,7 +27,7 @@ async function refreshAccessToken(connection: SocialConnection): Promise<SocialC
 
   console.log("[GBP] Refreshing access token");
 
-  const response = await fetch("https://oauth2.googleapis.com/token", {
+  const response = await fetchWithTimeout("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -37,14 +40,10 @@ async function refreshAccessToken(connection: SocialConnection): Promise<SocialC
     }),
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "Unable to read error");
-    console.error("[GBP] Token refresh failed", {
-      status: response.status,
-      errorBody,
-    });
-    throw new Error("Failed to refresh Google Business Profile access token");
-  }
+  await assertOk(response, {
+    code: "GBP_TOKEN_REFRESH_FAILED",
+    prefix: "Failed to refresh Google Business Profile access token",
+  });
 
   const tokenData = (await response.json()) as {
     access_token: string;
@@ -111,7 +110,7 @@ export const googleBusinessProfileClient: PlatformClient = {
     const category = "ADDITIONAL";
 
     // Try creating media by providing the sourceUrl directly in the request
-    const createRes = await fetch(
+    const createRes = await fetchWithTimeout(
       `https://mybusiness.googleapis.com/v4/${locationName}/media`,
       {
         method: "POST",
@@ -129,20 +128,10 @@ export const googleBusinessProfileClient: PlatformClient = {
       },
     );
 
-    if (!createRes.ok) {
-      const errorBody = await createRes.text().catch(() => "Unable to read error body");
-      console.error("[GBP] media create failed", {
-        status: createRes.status,
-        statusText: createRes.statusText,
-        mediaFormat,
-        category,
-        sourceUrl: mediaItem.storageLocation,
-        errorBody,
-      });
-      const error = new Error(`Failed to create media item in Google Business Profile: ${errorBody}`);
-      (error as any).code = "GBP_CREATE_MEDIA_FAILED";
-      throw error;
-    }
+    await assertOk(createRes, {
+      code: "GBP_CREATE_MEDIA_FAILED",
+      prefix: "Failed to create media item in Google Business Profile",
+    });
 
     const created = (await createRes.json()) as { name?: string };
     const externalPostId = created.name ?? null;

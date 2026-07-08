@@ -83,7 +83,7 @@ export function decidePollOutcome(status: string | null | undefined): PollOutcom
  * Must be called before posting to get privacy options, interaction settings, and posting limits
  */
 export async function getTikTokCreatorInfo(accessToken: string): Promise<TikTokCreatorInfo> {
-  const response = await fetch(`${TIKTOK_API_BASE}/v2/post/publish/creator_info/query/`, {
+  const response = await fetchWithTimeout(`${TIKTOK_API_BASE}/v2/post/publish/creator_info/query/`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -92,15 +92,10 @@ export async function getTikTokCreatorInfo(accessToken: string): Promise<TikTokC
     body: JSON.stringify({}),
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "Unable to read error body");
-    console.error("[TikTok] creator_info failed", {
-      status: response.status,
-      statusText: response.statusText,
-      errorBody,
-    });
-    throw new Error(`Failed to fetch TikTok creator info: ${errorBody}`);
-  }
+  await assertOk(response, {
+    code: "TIKTOK_CREATOR_INFO_FAILED",
+    prefix: "Failed to fetch TikTok creator info",
+  });
 
   const json = await response.json() as any;
   const data = json?.data;

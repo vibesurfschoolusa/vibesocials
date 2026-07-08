@@ -1,5 +1,8 @@
 import type { SocialConnection } from "@prisma/client";
 
+import { assertOk } from "@/lib/assertOk";
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+
 /**
  * Google Business Profile Review type
  */
@@ -41,7 +44,7 @@ export async function refreshAccessToken(
 
   console.log("[GBP Reviews] Refreshing access token");
 
-  const response = await fetch("https://oauth2.googleapis.com/token", {
+  const response = await fetchWithTimeout("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -54,14 +57,10 @@ export async function refreshAccessToken(
     }),
   });
 
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "Unable to read error");
-    console.error("[GBP Reviews] Token refresh failed", {
-      status: response.status,
-      errorBody,
-    });
-    throw new Error("Failed to refresh Google Business Profile access token");
-  }
+  await assertOk(response, {
+    code: "GBP_REVIEWS_TOKEN_REFRESH_FAILED",
+    prefix: "Failed to refresh Google Business Profile access token",
+  });
 
   const tokenData = (await response.json()) as {
     access_token: string;
@@ -104,7 +103,7 @@ export async function fetchReviews(
 
   // Use Google My Business API v4 to fetch reviews
   // API: https://developers.google.com/my-business/reference/rest/v4/accounts.locations.reviews/list
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `https://mybusiness.googleapis.com/v4/${resolvedLocationName}/reviews`,
     {
       headers: {
@@ -113,14 +112,10 @@ export async function fetchReviews(
     }
   );
 
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "Unable to read error");
-    console.error("[GBP Reviews] Fetch reviews failed", {
-      status: response.status,
-      errorBody,
-    });
-    throw new Error(`Failed to fetch reviews: ${errorBody}`);
-  }
+  await assertOk(response, {
+    code: "GBP_REVIEWS_FETCH_FAILED",
+    prefix: "Failed to fetch Google Business Profile reviews",
+  });
 
   const data = (await response.json()) as {
     reviews?: Array<{
@@ -167,7 +162,7 @@ export async function replyToReview(
   // Use Google My Business API v4 to reply to review
   // API: https://developers.google.com/my-business/reference/rest/v4/accounts.locations.reviews/updateReply
   // reviewName should be the full path: "accounts/.../locations/.../reviews/..."
-  const response = await fetch(
+  const response = await fetchWithTimeout(
     `https://mybusiness.googleapis.com/v4/${reviewName}/reply`,
     {
       method: "PUT",
@@ -181,14 +176,10 @@ export async function replyToReview(
     }
   );
 
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "Unable to read error");
-    console.error("[GBP Reviews] Reply failed", {
-      status: response.status,
-      errorBody,
-    });
-    throw new Error(`Failed to post reply: ${errorBody}`);
-  }
+  await assertOk(response, {
+    code: "GBP_REVIEWS_REPLY_FAILED",
+    prefix: "Failed to post Google Business Profile review reply",
+  });
 
   const data = (await response.json()) as {
     comment: string;
@@ -236,19 +227,15 @@ async function resolveLocationNameFromStoreCode(
     "https://mybusinessbusinessinformation.googleapis.com/v1";
 
   // 1. List all accounts the user has access to.
-  const accountsRes = await fetch(`${accountManagementBase}/accounts`, {
+  const accountsRes = await fetchWithTimeout(`${accountManagementBase}/accounts`, {
     headers: authHeaders,
   });
 
-  if (!accountsRes.ok) {
-    console.error("[GBP Reviews] accounts.list failed while resolving store code", {
-      status: accountsRes.status,
-      statusText: accountsRes.statusText,
-    });
-    throw new Error(
-      "Failed to list Google Business Profile accounts while resolving location."
-    );
-  }
+  await assertOk(accountsRes, {
+    code: "GBP_REVIEWS_ACCOUNTS_LIST_FAILED",
+    prefix:
+      "Failed to list Google Business Profile accounts while resolving location",
+  });
 
   const accountsJson = (await accountsRes.json()) as {
     accounts?: { name?: string }[];
@@ -266,7 +253,7 @@ async function resolveLocationNameFromStoreCode(
     url.searchParams.set("readMask", "name,storeCode,title");
     url.searchParams.set("filter", `storeCode="${identifier}"`);
 
-    const locationsRes = await fetch(url.toString(), {
+    const locationsRes = await fetchWithTimeout(url.toString(), {
       headers: authHeaders,
     });
 

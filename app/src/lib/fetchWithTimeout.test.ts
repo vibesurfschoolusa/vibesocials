@@ -59,6 +59,43 @@ describe("fetchWithTimeout", () => {
     expect(error?.message).toContain("1000ms");
   });
 
+  it("rejects with the caller's reason (not a timeout) when the caller signal is already aborted at call time", async () => {
+    // Pins: if the caller passes a signal that is ALREADY aborted before
+    // fetchWithTimeout is even called, AbortSignal.any([...]) produces an
+    // already-aborted composite signal before fetch() is invoked at all — no
+    // 'abort' event will ever fire for a listener to catch. The rejection
+    // must still surface as the caller's own abort (name "AbortError"), never
+    // relabeled as our FETCH_TIMEOUT_CODE.
+    const controller = new AbortController();
+    controller.abort();
+
+    const fetchMock = vi.fn((_url: string | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (signal?.aborted) {
+        return Promise.reject(signal.reason);
+      }
+      // Not expected to be reached: the composite signal is already aborted
+      // before fetch() is ever called.
+      return new Promise<Response>(() => {});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const promise = fetchWithTimeout(
+      "https://example.test/already-aborted",
+      { signal: controller.signal },
+      10_000,
+    );
+    const settled = promise
+      .then(() => null)
+      .catch((error: unknown) => error as Error & { code?: string });
+
+    const error = await settled;
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error?.name).toBe("AbortError");
+    expect(error?.code).not.toBe(FETCH_TIMEOUT_CODE);
+  });
+
   it("propagates a caller-supplied signal abort without tagging it as a timeout", async () => {
     const fetchMock = vi.fn((_url: string | URL, init?: RequestInit) => {
       return new Promise<Response>((_resolve, reject) => {
