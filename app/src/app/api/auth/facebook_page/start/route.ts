@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
+import { createOAuthState } from "@/lib/oauthState";
 
 export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
@@ -19,8 +20,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const stateData = JSON.stringify({ userId: user.id });
-  const encodedState = Buffer.from(stateData).toString("base64url");
+  const encodedState = createOAuthState(user.id);
 
   const authUrl = new URL("https://www.facebook.com/v21.0/dialog/oauth");
   authUrl.searchParams.set("client_id", clientId);

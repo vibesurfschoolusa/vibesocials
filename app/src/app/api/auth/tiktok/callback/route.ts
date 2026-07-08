@@ -84,11 +84,19 @@ export async function GET(request: NextRequest) {
       expiresIn: tokenJson.expires_in,
       scope: tokenJson.scope,
       tokenType: tokenJson.token_type,
-      fullResponse: JSON.stringify(tokenJson),
     });
 
     if (!tokenJson.access_token) {
-      console.error("[TikTok OAuth] Missing access_token in response", { tokenJson });
+      const errorDetails = tokenJson as unknown as {
+        error?: string;
+        error_description?: string;
+        log_id?: string;
+      };
+      console.error("[TikTok OAuth] Missing access_token in response", {
+        error: errorDetails.error,
+        errorDescription: errorDetails.error_description,
+        logId: errorDetails.log_id,
+      });
       settingsUrl.searchParams.set("error", "tiktok_missing_access_token");
       return NextResponse.redirect(settingsUrl);
     }
