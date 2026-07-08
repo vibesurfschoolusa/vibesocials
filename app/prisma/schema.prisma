@@ -108,3 +108,14 @@ model PostJobResult {
   postJob          PostJob          @relation(fields: [postJobId], references: [id], onDelete: Cascade)
   socialConnection SocialConnection @relation(fields: [socialConnectionId], references: [id], onDelete: Cascade)
 }
+
+// Fixed-window rate-limit counters (see src/lib/rateLimit.ts).
+// `key` encodes userId + route + time-window bucket; the limiter fails open,
+// so a missing table or any store error must never break the guarded routes.
+model RateLimitEntry {
+  key       String   @id
+  count     Int      @default(1)
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
