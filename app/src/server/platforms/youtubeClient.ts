@@ -1,67 +1,7 @@
 import type { SocialConnection } from "@prisma/client";
 
+import { refreshGoogleToken } from "./googleTokens";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
-
-async function refreshAccessToken(connection: SocialConnection): Promise<SocialConnection> {
-  const refreshToken = connection.refreshToken;
-  if (!refreshToken) {
-    throw new Error("No refresh token available for YouTube");
-  }
-
-  const clientId = process.env.GOOGLE_GBP_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_GBP_CLIENT_SECRET;
-
-  if (!clientId || !clientSecret) {
-    throw new Error("Missing YouTube OAuth credentials");
-  }
-
-  console.log("[YouTube] Refreshing access token");
-
-  const response = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: "refresh_token",
-    }),
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text().catch(() => "Unable to read error");
-    console.error("[YouTube] Token refresh failed", {
-      status: response.status,
-      errorBody,
-    });
-    throw new Error("Failed to refresh YouTube access token");
-  }
-
-  const tokenData = (await response.json()) as {
-    access_token: string;
-    expires_in: number;
-    scope?: string;
-    token_type: string;
-  };
-
-  const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
-
-  // Update connection in database
-  const { prisma } = await import("@/lib/db");
-  const updated = await prisma.socialConnection.update({
-    where: { id: connection.id },
-    data: {
-      accessToken: tokenData.access_token,
-      expiresAt,
-    },
-  });
-
-  console.log("[YouTube] Access token refreshed successfully");
-
-  return updated;
-}
 
 export const youtubeClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
@@ -71,7 +11,7 @@ export const youtubeClient: PlatformClient = {
     // Check if token needs refresh
     if (socialConnection.expiresAt && socialConnection.expiresAt < new Date()) {
       console.log("[YouTube] Access token expired, refreshing...");
-      socialConnection = await refreshAccessToken(socialConnection);
+      socialConnection = await refreshGoogleToken(socialConnection);
     }
 
     const accessToken = socialConnection.accessToken;
@@ -288,6 +228,6 @@ export const youtubeClient: PlatformClient = {
   },
 
   async refreshToken(connection: SocialConnection): Promise<SocialConnection> {
-    return refreshAccessToken(connection);
+    return refreshGoogleToken(connection);
   },
 };

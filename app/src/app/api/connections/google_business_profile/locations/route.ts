@@ -24,6 +24,15 @@ interface GbpLocation {
   } | null;
 }
 
+// NOTE: intentionally NOT migrated to the shared `refreshGoogleToken` helper
+// (src/server/platforms/googleTokens.ts) yet — different contract: this
+// function returns `null` on failure instead of throwing, and the 401-retry
+// in GET below depends on that to do an opportunistic retry. Expiry handling
+// also differs: this copy sets `expiresAt` to `null` when `expires_in` is
+// absent, whereas the helper throws on failure and falls back to a 3600s
+// expiry when `expires_in` is missing. Any future migration (Phase 4, HLT-2)
+// must wrap `refreshGoogleToken` in try/catch -> null rather than
+// blind-swapping it in here.
 async function refreshAccessToken(
   connection: SocialConnection,
 ): Promise<SocialConnection | null> {

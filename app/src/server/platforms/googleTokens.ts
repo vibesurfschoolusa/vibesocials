@@ -1,0 +1,103 @@
+import type { SocialConnection } from "@prisma/client";
+
+import { assertOk } from "@/lib/assertOk";
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+
+// Server-only: touches prisma and Google OAuth client secrets.
+//
+// Consolidated Google OAuth token refresh. Replaces three byte-for-byte
+// identical copies (youtubeClient.ts, googleBusinessProfileClient.ts,
+// googleReviews.ts) that differed only in log prefix and the platform name
+// embedded in error strings.
+//
+// PROGRAM-LEVEL HARD CONSTRAINT (pinned by googleTokens.test.ts):
+// the database update writes ONLY `accessToken` and `expiresAt`. It must NEVER
+// write `refreshToken` — Google does not always return a new refresh token on
+// refresh, and overwriting the stored one would permanently break the account.
+
+const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
+
+/**
+ * Refresh the Google OAuth access token for a connection and persist the new
+ * access token + expiry. Returns the updated {@link SocialConnection}.
+ *
+ * Throws (with `error.code` tags):
+ * - `GOOGLE_NO_REFRESH_TOKEN` if the connection has no stored refresh token.
+ * - `GOOGLE_MISSING_OAUTH_CREDENTIALS` if OAuth client env vars are absent.
+ * - `GOOGLE_TOKEN_REFRESH_FAILED` if the token endpoint returns a non-2xx (via
+ *   {@link assertOk}; the upstream body is logged server-side but not surfaced).
+ */
+export async function refreshGoogleToken(
+  connection: SocialConnection,
+): Promise<SocialConnection> {
+  const refreshToken = connection.refreshToken;
+  if (!refreshToken) {
+    const error = new Error(
+      "No refresh token available for this Google connection",
+    ) as Error & { code: string };
+    error.code = "GOOGLE_NO_REFRESH_TOKEN";
+    throw error;
+  }
+
+  const clientId = process.env.GOOGLE_GBP_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_GBP_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    const error = new Error(
+      "Missing Google OAuth credentials",
+    ) as Error & { code: string };
+    error.code = "GOOGLE_MISSING_OAUTH_CREDENTIALS";
+    throw error;
+  }
+
+  console.log("[GoogleTokens] Refreshing access token", {
+    connectionId: connection.id,
+  });
+
+  const response = await fetchWithTimeout(GOOGLE_TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+    }),
+  });
+
+  await assertOk(response, {
+    code: "GOOGLE_TOKEN_REFRESH_FAILED",
+    prefix: "Failed to refresh Google access token",
+  });
+
+  const tokenData = (await response.json()) as {
+    access_token: string;
+    expires_in?: number;
+    scope?: string;
+    token_type: string;
+  };
+
+  // Guard: fall back to Google's standard 3600s access-token TTL if expires_in is missing/non-finite, rather than persisting an Invalid Date.
+  const expiresInSeconds =
+    typeof tokenData.expires_in === "number" && Number.isFinite(tokenData.expires_in)
+      ? tokenData.expires_in
+      : 3600;
+  const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
+
+  // Update ONLY accessToken + expiresAt. Never refreshToken. (See file header.)
+  const { prisma } = await import("@/lib/db");
+  const updated = await prisma.socialConnection.update({
+    where: { id: connection.id },
+    data: {
+      accessToken: tokenData.access_token,
+      expiresAt,
+    },
+  });
+
+  console.log("[GoogleTokens] Access token refreshed successfully", {
+    connectionId: connection.id,
+  });
+
+  return updated;
+}
