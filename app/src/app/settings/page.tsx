@@ -5,6 +5,8 @@ import { ConnectionsSection } from "@/components/connections-section";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { prisma } from "@/lib/db";
+import type { ConnectionSummary } from "@/lib/connectionSummary";
+import type { UserSettings } from "@/lib/userSettings";
 
 export default async function SettingsPage() {
   const user = await getCurrentUser();
@@ -13,9 +15,35 @@ export default async function SettingsPage() {
     redirect("/login");
   }
 
-  // Fetch user connections
-  const connections = await prisma.socialConnection.findMany({
+  // SEC-1: project only browser-safe fields so passwordHash/email never reach
+  // the client component payload. See lib/userSettings.ts.
+  const settings: UserSettings = {
+    companyWebsite: user.companyWebsite,
+    defaultHashtags: user.defaultHashtags,
+  };
+
+  // Fetch user connections. SEC-1: select only browser-safe columns and map to
+  // ConnectionSummary so OAuth tokens (accessToken/refreshToken) and the raw
+  // metadata JSON (which holds page access tokens) never reach the client.
+  const rows = await prisma.socialConnection.findMany({
     where: { userId: user.id },
+    select: {
+      platform: true,
+      accountIdentifier: true,
+      metadata: true,
+    },
+  });
+
+  const connections: ConnectionSummary[] = rows.map((row) => {
+    const metadata = row.metadata as unknown as
+      | { username?: string | null; locationName?: string | null }
+      | null;
+    return {
+      platform: row.platform,
+      accountIdentifier: row.accountIdentifier,
+      username: metadata?.username ?? null,
+      locationName: metadata?.locationName ?? null,
+    };
   });
 
   return (
@@ -41,7 +69,7 @@ export default async function SettingsPage() {
           <p className="text-sm text-gray-600 mb-4">
             Configure your default caption footer for all posts
           </p>
-          <SettingsForm user={user} />
+          <SettingsForm settings={settings} />
         </div>
 
         {/* Connections Settings Section */}

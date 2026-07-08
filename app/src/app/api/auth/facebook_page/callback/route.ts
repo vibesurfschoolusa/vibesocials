@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { verifyOAuthState } from "@/lib/oauthState";
 import { Platform } from "@prisma/client";
 
 export async function GET(request: NextRequest) {
@@ -21,17 +22,14 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  let userId: string;
-  try {
-    const stateData = JSON.parse(
-      Buffer.from(state, "base64url").toString("utf-8"),
-    );
-    userId = stateData.userId;
-  } catch {
+  const stateCheck = verifyOAuthState(state);
+  if (!stateCheck.valid || !stateCheck.userId) {
     return NextResponse.redirect(
       new URL("/settings?error=facebook_page_invalid_state", request.url),
     );
   }
+
+  const userId = stateCheck.userId;
 
   const clientId = process.env.FACEBOOK_APP_ID;
   const clientSecret = process.env.FACEBOOK_APP_SECRET;
@@ -117,7 +115,10 @@ export async function GET(request: NextRequest) {
       }>;
     };
 
-    console.log("[FacebookPage OAuth] Pages data:", JSON.stringify(pagesData, null, 2));
+    console.log("[FacebookPage OAuth] Pages fetched:", {
+      count: pagesData.data?.length ?? 0,
+      pages: pagesData.data?.map((page) => ({ id: page.id, name: page.name })) ?? [],
+    });
 
     if (!pagesData.data || pagesData.data.length === 0) {
       console.error("[FacebookPage OAuth] No Facebook Pages found");

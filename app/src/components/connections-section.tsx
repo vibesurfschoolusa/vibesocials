@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { SocialConnection } from "@prisma/client";
+import type { ConnectionSummary } from "@/lib/connectionSummary";
 import { GoogleBusinessLocationForm } from "./google-business-location-form";
 import { ConnectionActions } from "./connection-actions";
 import { LinkedInSetupDialog } from "./linkedin-setup-dialog";
@@ -20,7 +20,7 @@ const PLATFORM_LABELS = {
 type PlatformKey = keyof typeof PLATFORM_LABELS;
 
 interface ConnectionsSectionProps {
-  connections: SocialConnection[];
+  connections: ConnectionSummary[];
 }
 
 export function ConnectionsSection({ connections }: ConnectionsSectionProps) {
@@ -43,8 +43,8 @@ export function ConnectionsSection({ connections }: ConnectionsSectionProps) {
           const isX = platform === "x";
           const isFacebookPage = platform === "facebook_page";
 
-          const locationName = (connection?.metadata as any)?.locationName ?? null;
-          const username = (connection?.metadata as any)?.username ?? connection?.accountIdentifier;
+          const locationName = connection?.locationName ?? null;
+          const username = connection?.username ?? connection?.accountIdentifier;
 
           return (
             <div

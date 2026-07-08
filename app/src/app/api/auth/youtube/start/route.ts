@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { randomBytes } from "crypto";
 
 import { getCurrentUser } from "@/lib/auth";
+import { createOAuthState } from "@/lib/oauthState";
 
 export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
@@ -20,12 +20,8 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const state = randomBytes(16).toString("hex");
-
-  // Store state in session or database to verify on callback
-  // For simplicity, we're including the userId in the state
-  const stateData = JSON.stringify({ state, userId: user.id });
-  const encodedState = Buffer.from(stateData).toString("base64url");
+  // Sign the state with the canonical HMAC helper so the callback can trust userId.
+  const encodedState = createOAuthState(user.id);
 
   const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   authUrl.searchParams.set("client_id", clientId);

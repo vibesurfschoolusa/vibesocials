@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
+import { verifyOAuthState } from "@/lib/oauthState";
 
 interface GoogleTokenResponse {
   access_token: string;
@@ -30,18 +31,15 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  let userId: string;
-  try {
-    const stateData = JSON.parse(
-      Buffer.from(encodedState, "base64url").toString(),
-    );
-    userId = stateData.userId;
-  } catch (err) {
-    console.error("[YouTube OAuth] Invalid state parameter", err);
+  const stateCheck = verifyOAuthState(encodedState);
+  if (!stateCheck.valid || !stateCheck.userId) {
+    console.error("[YouTube OAuth] Invalid state parameter");
     return NextResponse.redirect(
       new URL(`/settings?error=youtube_oauth_invalid_state`, request.url),
     );
   }
+
+  const userId = stateCheck.userId;
 
   const clientId = process.env.GOOGLE_GBP_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_GBP_CLIENT_SECRET;

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { randomBytes } from "crypto";
 
 import { getCurrentUser } from "@/lib/auth";
+import { createOAuthState } from "@/lib/oauthState";
 
 export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
@@ -20,9 +20,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const state = randomBytes(16).toString("hex");
-  const stateData = JSON.stringify({ state, userId: user.id });
-  const encodedState = Buffer.from(stateData).toString("base64url");
+  const encodedState = createOAuthState(user.id);
 
   // Instagram uses Facebook OAuth with specific scopes
   const authUrl = new URL("https://www.facebook.com/v21.0/dialog/oauth");

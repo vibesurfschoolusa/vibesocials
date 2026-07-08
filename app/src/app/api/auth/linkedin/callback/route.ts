@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { verifyOAuthState } from "@/lib/oauthState";
 import { Platform } from "@prisma/client";
 
 export async function GET(request: Request) {
@@ -22,23 +23,19 @@ export async function GET(request: Request) {
     );
   }
 
-  // Decode and validate state
-  let stateData: { userId: string; timestamp: number };
-  try {
-    stateData = JSON.parse(Buffer.from(state, "base64url").toString());
-    
-    // Check state is recent (within 10 minutes)
-    if (Date.now() - stateData.timestamp > 10 * 60 * 1000) {
-      throw new Error("State expired");
-    }
-  } catch (err) {
-    console.error("[LinkedIn OAuth] Invalid state:", err);
+  // Verify the signed state. userId must come only from the verified HMAC state.
+  // An optional vanity-name hint may be appended after a "." separator (unsigned;
+  // used only as an organization lookup fallback, never as a source of identity).
+  const [signedState, encodedVanityName] = state.split(".");
+  const stateCheck = verifyOAuthState(signedState);
+  if (!stateCheck.valid || !stateCheck.userId) {
+    console.error("[LinkedIn OAuth] Invalid state");
     return NextResponse.redirect(
       new URL("/settings?error=linkedin_invalid_state", process.env.NEXTAUTH_URL!)
     );
   }
 
-  const userId = stateData.userId;
+  const userId = stateCheck.userId;
   const clientId = process.env.LINKEDIN_CLIENT_ID;
   const clientSecret = process.env.LINKEDIN_CLIENT_SECRET;
   const redirectUri = process.env.LINKEDIN_REDIRECT_URI;
@@ -298,9 +295,10 @@ export async function GET(request: Request) {
       console.log("[LinkedIn OAuth] Checking for organization in state/session");
       
       // Check if user provided vanity name/ID in the authorization state
-      // This will be set if user came from the setup page
-      const stateData = JSON.parse(Buffer.from(state || "", "base64url").toString());
-      const vanityName = stateData.linkedinVanityName;
+      // This will be set if user came from the setup page (appended, unsigned segment)
+      const vanityName = encodedVanityName
+        ? Buffer.from(encodedVanityName, "base64url").toString("utf8")
+        : undefined;
       
       if (vanityName) {
         // Check if it's a numeric ID or a vanity name

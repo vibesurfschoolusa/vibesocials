@@ -1,5 +1,6 @@
 import { NextResponse, NextRequest } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { createOAuthState } from "@/lib/oauthState";
 
 export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
@@ -22,18 +23,15 @@ export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const vanityName = searchParams.get("vanity_name");
 
-  // Generate random state for CSRF protection (include vanity name if provided)
-  const stateData: any = {
-    userId: user.id,
-    timestamp: Date.now(),
-  };
+  // Sign the state with the canonical HMAC helper (userId is signed, tamper-proof).
+  // An optional vanity-name hint is appended as a separate, non-sensitive segment;
+  // it is only used as a lookup fallback and never as a source of identity.
+  let state = createOAuthState(user.id);
 
   if (vanityName) {
-    stateData.linkedinVanityName = vanityName;
+    state = `${state}.${Buffer.from(vanityName, "utf8").toString("base64url")}`;
     console.log("[LinkedIn OAuth] Including vanity name in state:", vanityName);
   }
-
-  const state = Buffer.from(JSON.stringify(stateData)).toString("base64url");
 
   // Build LinkedIn authorization URL
   const authUrl = new URL("https://www.linkedin.com/oauth/v2/authorization");

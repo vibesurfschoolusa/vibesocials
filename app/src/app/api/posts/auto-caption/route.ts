@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
+import { checkRateLimit } from "@/lib/rateLimit";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,27 @@ export async function POST(request: Request) {
 
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Throttle per user: vision calls are the most expensive, so keep this tight.
+    const rateLimit = await checkRateLimit({
+      userId: user.id,
+      route: "posts/auto-caption",
+      limit: 10,
+      windowMs: 5 * 60 * 1000,
+    });
+
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        {
+          error: "Too many requests, slow down.",
+          retryAfterSeconds: rateLimit.retryAfterSeconds,
+        },
+        {
+          status: 429,
+          headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) },
+        },
+      );
     }
 
     let body: AutoCaptionRequestBody;
@@ -46,6 +68,30 @@ export async function POST(request: Request) {
 
     const trimmedBlobUrl = blobUrl.trim();
     const trimmedMimeType = mimeType.trim().toLowerCase();
+
+    // SSRF guard: the image path hands blobUrl to OpenAI to fetch as an
+    // image_url. Only allow our own Vercel Blob host (public URLs are
+    // https://<store-id>.public.blob.vercel-storage.com/...), so an attacker
+    // cannot make OpenAI fetch an arbitrary/internal URL on our behalf.
+    let parsedBlobUrl: URL;
+    try {
+      parsedBlobUrl = new URL(trimmedBlobUrl);
+    } catch {
+      return NextResponse.json(
+        { error: "blobUrl must be a valid URL" },
+        { status: 400 },
+      );
+    }
+
+    if (
+      parsedBlobUrl.protocol !== "https:" ||
+      !parsedBlobUrl.hostname.endsWith(".public.blob.vercel-storage.com")
+    ) {
+      return NextResponse.json(
+        { error: "blobUrl must be a Vercel Blob URL" },
+        { status: 400 },
+      );
+    }
 
     const isImage = trimmedMimeType.startsWith("image/");
     const isVideo = trimmedMimeType.startsWith("video/");

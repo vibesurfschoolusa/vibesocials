@@ -2,16 +2,16 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import type { User } from "@prisma/client";
+import type { UserSettings } from "@/lib/userSettings";
 
 interface SettingsFormProps {
-  user: User;
+  settings: UserSettings;
 }
 
-export function SettingsForm({ user }: SettingsFormProps) {
+export function SettingsForm({ settings }: SettingsFormProps) {
   const router = useRouter();
-  const [companyWebsite, setCompanyWebsite] = useState(user.companyWebsite || "");
-  const [defaultHashtags, setDefaultHashtags] = useState(user.defaultHashtags || "");
+  const [companyWebsite, setCompanyWebsite] = useState(settings.companyWebsite || "");
+  const [defaultHashtags, setDefaultHashtags] = useState(settings.defaultHashtags || "");
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState("");
 
