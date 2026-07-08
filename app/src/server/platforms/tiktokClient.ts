@@ -145,7 +145,11 @@ export const tiktokClient: PlatformClient = {
       }
     } catch (creatorInfoError: any) {
       console.error('[TikTok] Failed to fetch creator info:', creatorInfoError);
-      throw new Error(`TikTok creator_info check failed: ${creatorInfoError.message}`);
+      const error = new Error(
+        `TikTok creator_info check failed: ${creatorInfoError.message}`,
+      ) as Error & { code: string };
+      error.code = creatorInfoError?.code ?? "TIKTOK_CREATOR_INFO_FAILED";
+      throw error;
     }
 
     console.log('[TikTok] Media item details:', {
