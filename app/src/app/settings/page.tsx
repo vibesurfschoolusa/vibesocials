@@ -5,6 +5,7 @@ import { ConnectionsSection } from "@/components/connections-section";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { prisma } from "@/lib/db";
+import type { ConnectionSummary } from "@/lib/connectionSummary";
 
 export default async function SettingsPage() {
   const user = await getCurrentUser();
@@ -13,9 +14,28 @@ export default async function SettingsPage() {
     redirect("/login");
   }
 
-  // Fetch user connections
-  const connections = await prisma.socialConnection.findMany({
+  // Fetch user connections. SEC-1: select only browser-safe columns and map to
+  // ConnectionSummary so OAuth tokens (accessToken/refreshToken) and the raw
+  // metadata JSON (which holds page access tokens) never reach the client.
+  const rows = await prisma.socialConnection.findMany({
     where: { userId: user.id },
+    select: {
+      platform: true,
+      accountIdentifier: true,
+      metadata: true,
+    },
+  });
+
+  const connections: ConnectionSummary[] = rows.map((row) => {
+    const metadata = row.metadata as unknown as
+      | { username?: string | null; locationName?: string | null }
+      | null;
+    return {
+      platform: row.platform,
+      accountIdentifier: row.accountIdentifier,
+      username: metadata?.username ?? null,
+      locationName: metadata?.locationName ?? null,
+    };
   });
 
   return (
