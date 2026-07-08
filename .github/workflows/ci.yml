@@ -9,9 +9,13 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: app
@@ -27,6 +31,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build
+        run: npm run build
+
+      # Runs after Build so generated declarations (next-env.d.ts,
+      # .next/types) exist if the app ever starts depending on them.
       - name: Typecheck
         run: npx tsc --noEmit
 
@@ -36,9 +45,6 @@ jobs:
       - name: Lint (non-blocking until eslint baseline is green)
         run: npx eslint .
         continue-on-error: true
-
-      - name: Build
-        run: npm run build
 
       - name: Test
         run: npm run test --if-present
