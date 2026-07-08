@@ -11,6 +11,8 @@ describe("assertOk", () => {
     const response = new Response("body", { status: 200 });
     const result = await assertOk(response, { code: "X", prefix: "Should not throw" });
     expect(result).toBe(response);
+    // The ok path must not consume the body — it must still be readable by the caller.
+    expect(await result.text()).toBe("body");
   });
 
   it("throws a sanitized error that omits the upstream body but logs it server-side", async () => {

@@ -64,9 +64,7 @@ describe("fetchWithTimeout", () => {
       return new Promise<Response>((_resolve, reject) => {
         const signal = init?.signal;
         signal?.addEventListener("abort", () => {
-          const abortError = new Error("aborted by caller");
-          abortError.name = "AbortError";
-          reject(abortError);
+          reject(new DOMException("The operation was aborted.", "AbortError"));
         });
       });
     });
@@ -85,7 +83,10 @@ describe("fetchWithTimeout", () => {
 
     const error = await settled;
     expect(error).toBeInstanceOf(Error);
-    // Not our timeout — no FETCH_TIMEOUT code.
-    expect(error?.code).toBeUndefined();
+    expect((error as Error)?.name).toBe("AbortError");
+    // Not our timeout: a real DOMException carries a legacy numeric `.code`
+    // (20 for AbortError per the WHATWG spec), never our string-tagged
+    // FETCH_TIMEOUT_CODE — assert against that string tag specifically.
+    expect(error?.code).not.toBe(FETCH_TIMEOUT_CODE);
   });
 });

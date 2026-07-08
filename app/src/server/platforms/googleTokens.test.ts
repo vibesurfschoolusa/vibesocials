@@ -95,6 +95,32 @@ describe("refreshGoogleToken", () => {
     expect(expiresMs).toBeLessThanOrEqual(after + expiresIn * 1000);
   });
 
+  it("falls back to a 3600s default expiry when expires_in is missing from the token response, and still omits refreshToken", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      tokenResponse({
+        access_token: "new-access-token",
+        token_type: "Bearer",
+        // expires_in intentionally omitted.
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const connection = makeConnection({ id: "conn-99", refreshToken: "refresh-xyz" });
+
+    await refreshGoogleToken(connection);
+
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    const arg = updateMock.mock.calls[0][0] as {
+      where: { id: string };
+      data: Record<string, unknown>;
+    };
+
+    const expiresAt = arg.data.expiresAt as Date;
+    expect(expiresAt instanceof Date && !isNaN(expiresAt.getTime())).toBe(true);
+    expect(expiresAt.getTime()).toBeGreaterThan(Date.now());
+    expect(arg.data).not.toHaveProperty("refreshToken");
+  });
+
   it("throws GOOGLE_NO_REFRESH_TOKEN and never touches the database when no refresh token", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

@@ -13,6 +13,18 @@ export const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
  * `fetch` wrapper that aborts the request after `timeoutMs` and throws a
  * distinguishable timeout error (`error.code === FETCH_TIMEOUT_CODE`).
  *
+ * Timeout scope — IMPORTANT: `timeoutMs` covers the connection + response
+ * headers phase ONLY. The internal timer is cleared (and the caller-signal
+ * listener removed) in a `finally` that runs as soon as the underlying
+ * `fetch()` call settles, i.e. once headers arrive — BEFORE the response body
+ * is read. Consuming the body afterward (`res.json()`, `res.text()`,
+ * `res.arrayBuffer()`, streaming `res.body`, etc.) is NOT bounded by this
+ * timeout. Callers that read large/slow bodies (e.g. a future
+ * `downloadToBuffer`, media downloads) MUST apply their own bound around body
+ * consumption — e.g. an `AbortSignal.timeout(ms)` kept live until the body is
+ * fully read — since this function's own protection has already ended by the
+ * time body consumption starts.
+ *
  * Composition rules:
  * - The caller's `init` is passed through unchanged except for `signal`, which
  *   is replaced by an internal composite signal.

@@ -73,12 +73,17 @@ export async function refreshGoogleToken(
 
   const tokenData = (await response.json()) as {
     access_token: string;
-    expires_in: number;
+    expires_in?: number;
     scope?: string;
     token_type: string;
   };
 
-  const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
+  // Guard: fall back to Google's standard 3600s access-token TTL if expires_in is missing/non-finite, rather than persisting an Invalid Date.
+  const expiresInSeconds =
+    typeof tokenData.expires_in === "number" && Number.isFinite(tokenData.expires_in)
+      ? tokenData.expires_in
+      : 3600;
+  const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
 
   // Update ONLY accessToken + expiresAt. Never refreshToken. (See file header.)
   const { prisma } = await import("@/lib/db");
