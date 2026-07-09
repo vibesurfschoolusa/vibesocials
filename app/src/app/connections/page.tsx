@@ -1,9 +1,6 @@
 import Link from "next/link";
 
-import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
-import { GoogleBusinessLocationForm } from "@/components/google-business-location-form";
-import { ConnectionActions } from "@/components/connection-actions";
 
 const PLATFORM_LABELS = {
   tiktok: "TikTok",
