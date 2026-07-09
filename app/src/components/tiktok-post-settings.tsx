@@ -218,7 +218,7 @@ export function TikTokPostSettings({ metadata, onChange, isVideo }: TikTokPostSe
                 </p>
                 {metadata.brandOrganic && (
                   <p className="text-xs text-blue-700 mt-1 font-medium">
-                    ✓ Your video will be labeled as "Promotional content"
+                    ✓ Your video will be labeled as &quot;Promotional content&quot;
                   </p>
                 )}
               </div>
@@ -244,7 +244,7 @@ export function TikTokPostSettings({ metadata, onChange, isVideo }: TikTokPostSe
                 )}
                 {metadata.brandedContent && (
                   <p className="text-xs text-blue-700 mt-1 font-medium">
-                    ✓ Your video will be labeled as "Paid partnership"
+                    ✓ Your video will be labeled as &quot;Paid partnership&quot;
                   </p>
                 )}
               </div>
@@ -269,9 +269,9 @@ export function TikTokPostSettings({ metadata, onChange, isVideo }: TikTokPostSe
           <div className="text-xs text-blue-900">
             <p className="font-medium">By posting, you agree to:</p>
             <ul className="mt-1 space-y-0.5 list-disc list-inside">
-              <li>TikTok's Music Usage Confirmation</li>
+              <li>TikTok&apos;s Music Usage Confirmation</li>
               {(metadata.brandedContent || metadata.brandOrganic) && (
-                <li>TikTok's Branded Content Policy</li>
+                <li>TikTok&apos;s Branded Content Policy</li>
               )}
             </ul>
           </div>
