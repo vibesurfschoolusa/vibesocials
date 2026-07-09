@@ -9,6 +9,20 @@ import type { YouTubePostMetadata } from "@/server/platforms/types";
 
 const YOUTUBE_PRIVACY_STATUSES = ["public", "unlisted", "private"] as const;
 
+// Shape of the JSON POST body. Fields the handler validates at runtime are
+// typed `unknown` (narrowed at use); the rest reflect their consumed types.
+interface CreatePostBody {
+  blobUrl?: string;
+  filename?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  baseCaption?: unknown;
+  location?: unknown;
+  perPlatformOverrides?: unknown;
+  tiktokMetadata?: unknown;
+  youtubeMetadata?: { privacyStatus?: unknown };
+}
+
 export async function POST(request: Request) {
   const user = await getCurrentUser();
 
@@ -25,7 +39,7 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: any;
+  let body: CreatePostBody;
   try {
     body = await request.json();
   } catch {
@@ -71,7 +85,9 @@ export async function POST(request: Request) {
   if (youtubeMetadataRaw != null) {
     if (
       typeof youtubeMetadataRaw !== "object" ||
-      !YOUTUBE_PRIVACY_STATUSES.includes(youtubeMetadataRaw.privacyStatus)
+      !YOUTUBE_PRIVACY_STATUSES.includes(
+        youtubeMetadataRaw.privacyStatus as YouTubePostMetadata["privacyStatus"],
+      )
     ) {
       return NextResponse.json(
         {
@@ -81,7 +97,9 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
-    youtubeMetadata = { privacyStatus: youtubeMetadataRaw.privacyStatus };
+    youtubeMetadata = {
+      privacyStatus: youtubeMetadataRaw.privacyStatus as YouTubePostMetadata["privacyStatus"],
+    };
   }
 
   const location = typeof locationRaw === "string" && locationRaw.trim() ? locationRaw.trim() : undefined;

@@ -19,23 +19,23 @@ export const facebookPageClient: PlatformClient = {
 
     const accessToken = socialConnection.accessToken;
     if (!accessToken) {
-      const error = new Error("Missing access token for Facebook Page");
-      (error as any).code = "FACEBOOK_PAGE_NO_ACCESS_TOKEN";
+      const error = new Error("Missing access token for Facebook Page") as Error & { code: string };
+      error.code = "FACEBOOK_PAGE_NO_ACCESS_TOKEN";
       throw error;
     }
 
     const pageId = socialConnection.accountIdentifier;
     if (!pageId) {
-      const error = new Error("Missing Facebook Page ID");
-      (error as any).code = "FACEBOOK_PAGE_NO_ID";
+      const error = new Error("Missing Facebook Page ID") as Error & { code: string };
+      error.code = "FACEBOOK_PAGE_NO_ID";
       throw error;
     }
 
     if (!mediaItem.mimeType || !mediaItem.mimeType.startsWith("image/")) {
       const error = new Error(
         "Facebook Page posting currently supports images only. Please upload an image.",
-      );
-      (error as any).code = "FACEBOOK_PAGE_UNSUPPORTED_MEDIA_TYPE";
+      ) as Error & { code: string };
+      error.code = "FACEBOOK_PAGE_UNSUPPORTED_MEDIA_TYPE";
       throw error;
     }
 

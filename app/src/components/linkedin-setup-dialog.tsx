@@ -100,7 +100,7 @@ export function LinkedInSetupDialog() {
             disabled={isConnecting}
           />
           <p className="mt-2 text-xs text-gray-500">
-            You can paste the full URL (with name or number), e.g., "https://www.linkedin.com/company/82188987"
+            You can paste the full URL (with name or number), e.g., &quot;https://www.linkedin.com/company/82188987&quot;
           </p>
         </div>
 
@@ -110,7 +110,7 @@ export function LinkedInSetupDialog() {
           </h3>
           <ol className="text-sm text-gray-700 space-y-1 list-decimal list-inside">
             <li>Go to LinkedIn and visit your company page</li>
-            <li>Copy the URL from your browser's address bar</li>
+            <li>Copy the URL from your browser&apos;s address bar</li>
             <li>Paste it here (e.g., linkedin.com/company/your-company-name)</li>
           </ol>
         </div>

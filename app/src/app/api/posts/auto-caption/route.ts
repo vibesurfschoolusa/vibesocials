@@ -155,7 +155,13 @@ ${languageText}
 ${toneText}
 ${lengthText}`.trim();
 
-    let messages: any[];
+    type ChatMessage = {
+      role: string;
+      content:
+        | string
+        | Array<{ type: string; text?: string; image_url?: { url: string } }>;
+    };
+    let messages: ChatMessage[];
 
     if (isImage) {
       messages = [
@@ -238,10 +244,10 @@ The media is a short social media video. You do not have direct access to the vi
     });
 
     return NextResponse.json({ caption });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[Auto Caption] Error:", error);
     return NextResponse.json(
-      { error: error.message || "Failed to generate caption from media" },
+      { error: (error as Error).message || "Failed to generate caption from media" },
       { status: 500 },
     );
   }

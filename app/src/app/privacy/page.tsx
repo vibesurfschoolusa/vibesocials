@@ -11,7 +11,7 @@ export default function PrivacyPage() {
           </Link>
         </div>
         <p className="mb-4 text-sm text-zinc-700">
-          This Privacy Policy describes how Vibe Socials (the "Service") handles information
+          This Privacy Policy describes how Vibe Socials (the &quot;Service&quot;) handles information
           about you. This is an early-stage tool intended for limited use by the owner and invited
           testers.
         </p>

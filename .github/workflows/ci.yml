@@ -39,12 +39,11 @@ jobs:
       - name: Typecheck
         run: npx tsc --noEmit
 
-      # eslint reports 134 pre-existing errors at the time this workflow was
-      # added. Phase 4 of the remediation program (HLT-5) drives them to zero
-      # and removes continue-on-error so lint becomes a blocking gate.
-      - name: Lint (non-blocking until eslint baseline is green)
+      # eslint is a blocking gate: Phase 4 (HLT-5) drove the error count to
+      # zero. `eslint .` exits non-zero on any error (warnings do not fail it),
+      # so new errors now break CI.
+      - name: Lint
         run: npx eslint .
-        continue-on-error: true
 
       - name: Test
         run: npm run test --if-present

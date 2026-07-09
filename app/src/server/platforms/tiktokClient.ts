@@ -3,6 +3,38 @@ import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
 import type { PlatformClient, PublishContext, PublishResult, TikTokCreatorInfo } from "./types";
 
+/** Minimal shape of TikTok's creator_info response (only the fields we read). */
+interface TikTokCreatorInfoResponse {
+  data?: {
+    creator_username?: string;
+    creator_avatar_url?: string;
+    privacy_level_options?: string[];
+    comment_disabled?: boolean;
+    duet_disabled?: boolean;
+    stitch_disabled?: boolean;
+    max_video_post_duration_sec?: number;
+  };
+}
+
+/** post_info payload sent to TikTok's video/init endpoint. */
+interface TikTokPostInfo {
+  title: string;
+  privacy_level: string;
+  disable_comment: boolean;
+  disable_duet: boolean;
+  disable_stitch: boolean;
+  video_cover_timestamp_ms: number;
+  disclosure_settings?: { disclosure_type: string };
+  brand_organic_type?: string;
+  brand_content_type?: string;
+}
+
+/** Minimal shape of TikTok's video/init response (only the fields we read). */
+interface TikTokInitResponse {
+  data?: { publish_id?: string; upload_url?: string };
+  error?: { code?: string };
+}
+
 const TIKTOK_API_BASE = "https://open.tiktokapis.com";
 
 /** Max bytes per TikTok FILE_UPLOAD chunk (TikTok allows 5MB to 64MB; we use 10MB). */
@@ -97,7 +129,7 @@ export async function getTikTokCreatorInfo(accessToken: string): Promise<TikTokC
     prefix: "Failed to fetch TikTok creator info",
   });
 
-  const json = await response.json() as any;
+  const json = await response.json() as TikTokCreatorInfoResponse;
   const data = json?.data;
 
   if (!data) {
@@ -121,8 +153,8 @@ export const tiktokClient: PlatformClient = {
 
     const accessToken = socialConnection.accessToken;
     if (!accessToken) {
-      const error = new Error("Missing access token for TikTok");
-      (error as any).code = "TIKTOK_NO_ACCESS_TOKEN";
+      const error = new Error("Missing access token for TikTok") as Error & { code: string };
+      error.code = "TIKTOK_NO_ACCESS_TOKEN";
       throw error;
     }
 
@@ -143,12 +175,13 @@ export const tiktokClient: PlatformClient = {
           availableOptions: creatorInfo.privacyLevelOptions,
         });
       }
-    } catch (creatorInfoError: any) {
+    } catch (creatorInfoError: unknown) {
       console.error('[TikTok] Failed to fetch creator info:', creatorInfoError);
+      const cause = creatorInfoError as Error & { code?: string };
       const error = new Error(
-        `TikTok creator_info check failed: ${creatorInfoError.message}`,
+        `TikTok creator_info check failed: ${cause.message}`,
       ) as Error & { code: string };
-      error.code = creatorInfoError?.code ?? "TIKTOK_CREATOR_INFO_FAILED";
+      error.code = cause.code ?? "TIKTOK_CREATOR_INFO_FAILED";
       throw error;
     }
 
@@ -159,8 +192,8 @@ export const tiktokClient: PlatformClient = {
     });
 
     if (!mediaItem.mimeType || !mediaItem.mimeType.startsWith("video/")) {
-      const error = new Error(`TikTok requires video files. Current mime type: ${mediaItem.mimeType || 'undefined'}`);
-      (error as any).code = "TIKTOK_MEDIA_NOT_VIDEO";
+      const error = new Error(`TikTok requires video files. Current mime type: ${mediaItem.mimeType || 'undefined'}`) as Error & { code: string };
+      error.code = "TIKTOK_MEDIA_NOT_VIDEO";
       throw error;
     }
 
@@ -203,7 +236,7 @@ export const tiktokClient: PlatformClient = {
 
     // Use metadata from user's form selections, or defaults for sandbox mode
     const tiktokMeta = ctx.tiktokMetadata;
-    const postInfo: any = {
+    const postInfo: TikTokPostInfo = {
       title: tiktokCaption,
       privacy_level: tiktokMeta?.privacyLevel || "SELF_ONLY",
       disable_comment: tiktokMeta?.disableComment ?? false,
@@ -252,12 +285,12 @@ export const tiktokClient: PlatformClient = {
       prefix: "Failed to start TikTok video upload",
     });
 
-    const initJson = (await initRes.json().catch(() => null)) as any;
+    const initJson = (await initRes.json().catch(() => null)) as TikTokInitResponse | null;
     const initErrorCode = initJson?.error?.code;
     if (initErrorCode && initErrorCode !== "ok") {
       console.error("[TikTok] video init error payload", initJson);
-      const error = new Error("TikTok video init returned an error");
-      (error as any).code = "TIKTOK_INIT_ERROR";
+      const error = new Error("TikTok video init returned an error") as Error & { code: string };
+      error.code = "TIKTOK_INIT_ERROR";
       throw error;
     }
 
@@ -266,8 +299,8 @@ export const tiktokClient: PlatformClient = {
 
     if (!uploadUrl || !publishId) {
       console.error("[TikTok] video init missing upload_url or publish_id", initJson);
-      const error = new Error("TikTok did not return upload_url or publish_id");
-      (error as any).code = "TIKTOK_INIT_MISSING_FIELDS";
+      const error = new Error("TikTok did not return upload_url or publish_id") as Error & { code: string };
+      error.code = "TIKTOK_INIT_MISSING_FIELDS";
       throw error;
     }
 

@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 
+// Minimal shape of a Google Geocoding API result (only the fields we read).
+interface GeocodeResult {
+  formatted_address: string;
+  geometry: { location: { lat: number; lng: number } };
+  place_id: string;
+}
+
 export async function GET(request: NextRequest) {
   const user = await getCurrentUser();
 
@@ -53,7 +60,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Format results for frontend
-    const suggestions = (data.results || []).slice(0, 5).map((result: any) => ({
+    const suggestions = (data.results || []).slice(0, 5).map((result: GeocodeResult) => ({
       description: result.formatted_address,
       latitude: result.geometry.location.lat,
       longitude: result.geometry.location.lng,

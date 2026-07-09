@@ -137,10 +137,10 @@ export async function GET() {
     return NextResponse.json({
       locations: allLocations,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[GBP Locations] Error:", error);
     return NextResponse.json(
-      { error: error.message || "Failed to fetch locations" },
+      { error: (error as Error).message || "Failed to fetch locations" },
       { status: 500 }
     );
   }

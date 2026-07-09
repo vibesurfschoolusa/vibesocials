@@ -63,17 +63,17 @@ export const instagramClient: PlatformClient = {
 
     const accessToken = socialConnection.accessToken;
     if (!accessToken) {
-      const error = new Error("Missing access token for Instagram");
-      (error as any).code = "INSTAGRAM_NO_ACCESS_TOKEN";
+      const error = new Error("Missing access token for Instagram") as Error & { code: string };
+      error.code = "INSTAGRAM_NO_ACCESS_TOKEN";
       throw error;
     }
 
-    const metadata = (socialConnection.metadata as any) || {};
+    const metadata = (socialConnection.metadata as { username?: string } | null) || {};
     const igAccountId = socialConnection.accountIdentifier;
 
     if (!igAccountId) {
-      const error = new Error("Missing Instagram account ID");
-      (error as any).code = "INSTAGRAM_NO_ACCOUNT_ID";
+      const error = new Error("Missing Instagram account ID") as Error & { code: string };
+      error.code = "INSTAGRAM_NO_ACCOUNT_ID";
       throw error;
     }
 
@@ -88,7 +88,7 @@ export const instagramClient: PlatformClient = {
     const isVideo = mediaItem.mimeType?.startsWith("video/");
 
     // Parse location from metadata if available
-    const locationMetadata = (mediaItem.metadata as any)?.location;
+    const locationMetadata = (mediaItem.metadata as { location?: { description?: string } } | null)?.location;
     let locationId: string | undefined;
 
     if (locationMetadata?.description) {
@@ -193,8 +193,8 @@ export const instagramClient: PlatformClient = {
             if (statusData.status_code === "FINISHED") {
               isReady = true;
             } else if (statusData.status_code === "ERROR") {
-              const error = new Error("Instagram video processing failed");
-              (error as any).code = "INSTAGRAM_VIDEO_PROCESSING_ERROR";
+              const error = new Error("Instagram video processing failed") as Error & { code: string };
+              error.code = "INSTAGRAM_VIDEO_PROCESSING_ERROR";
               throw error;
             }
           }
@@ -203,8 +203,8 @@ export const instagramClient: PlatformClient = {
         }
 
         if (!isReady) {
-          const error = new Error("Instagram video processing timeout");
-          (error as any).code = "INSTAGRAM_VIDEO_TIMEOUT";
+          const error = new Error("Instagram video processing timeout") as Error & { code: string };
+          error.code = "INSTAGRAM_VIDEO_TIMEOUT";
           throw error;
         }
 
@@ -258,7 +258,7 @@ export const instagramClient: PlatformClient = {
       return {
         externalPostId: mediaId,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("[Instagram] Publish error", error);
       throw error;
     }

@@ -11,7 +11,7 @@ export default function TermsPage() {
           </Link>
         </div>
         <p className="mb-4 text-sm text-zinc-700">
-          These Terms of Service ("Terms") govern your use of Vibe Socials (the "Service").
+          These Terms of Service (&quot;Terms&quot;) govern your use of Vibe Socials (the &quot;Service&quot;).
           By accessing or using the Service, you agree to be bound by these Terms.
         </p>
         <div className="space-y-3 text-sm text-zinc-700">
@@ -48,7 +48,7 @@ export default function TermsPage() {
           <section>
             <h2 className="mb-1 text-sm font-semibold text-zinc-900">4. No guarantee of availability</h2>
             <p>
-              The Service is provided on an experimental and "as-is" basis. We do not guarantee
+              The Service is provided on an experimental and &quot;as-is&quot; basis. We do not guarantee
               uninterrupted availability, error-free operation, or long-term storage of any
               content. You should always keep your own backups of important media and captions.
             </p>

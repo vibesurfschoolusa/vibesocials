@@ -2,17 +2,6 @@ import Link from "next/link";
 
 import { getCurrentUser } from "@/lib/auth";
 
-const PLATFORM_LABELS = {
-  tiktok: "TikTok",
-  youtube: "YouTube",
-  x: "X (Twitter)",
-  linkedin: "LinkedIn",
-  instagram: "Instagram",
-  google_business_profile: "Google Business Profile (Maps)",
-} as const;
-
-type PlatformKey = keyof typeof PLATFORM_LABELS;
-
 export default async function ConnectionsPage() {
   const user = await getCurrentUser();
 

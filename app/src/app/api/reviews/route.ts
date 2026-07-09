@@ -51,7 +51,7 @@ export async function GET(request: Request) {
     }
 
     // Get location name from query param or metadata
-    const metadata = (connection.metadata as any) ?? {};
+    const metadata = (connection.metadata as { locationName?: string } | null) ?? {};
     const locationName = locationParam || metadata.locationName;
 
     if (!locationName) {
@@ -69,10 +69,10 @@ export async function GET(request: Request) {
     const reviews = await fetchReviews(accessToken, locationName);
 
     return NextResponse.json({ reviews });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[Reviews API] Error:", error);
     return NextResponse.json(
-      { error: error.message || "Failed to fetch reviews" },
+      { error: (error as Error).message || "Failed to fetch reviews" },
       { status: 500 }
     );
   }

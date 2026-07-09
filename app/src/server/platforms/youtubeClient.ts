@@ -6,6 +6,25 @@ import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { refreshGoogleToken } from "./googleTokens";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
+// Minimal shape of the YouTube `videos.insert` request body we construct.
+// recordingDetails is added conditionally when location data is present.
+interface YouTubeVideoResource {
+  snippet: {
+    title: string;
+    description: string;
+    categoryId: string;
+    tags?: string[];
+  };
+  status: {
+    privacyStatus: string;
+    selfDeclaredMadeForKids: boolean;
+  };
+  recordingDetails?: {
+    location: { latitude: number; longitude: number };
+    locationDescription?: string;
+  };
+}
+
 export const youtubeClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
     let { socialConnection } = ctx;
@@ -19,8 +38,8 @@ export const youtubeClient: PlatformClient = {
 
     const accessToken = socialConnection.accessToken;
     if (!accessToken) {
-      const error = new Error("Missing access token for YouTube");
-      (error as any).code = "YOUTUBE_NO_ACCESS_TOKEN";
+      const error = new Error("Missing access token for YouTube") as Error & { code: string };
+      error.code = "YOUTUBE_NO_ACCESS_TOKEN";
       throw error;
     }
 
@@ -30,8 +49,8 @@ export const youtubeClient: PlatformClient = {
         mimeType: mediaItem.mimeType,
         originalFilename: mediaItem.originalFilename,
       });
-      const error = new Error("YouTube only supports video uploads");
-      (error as any).code = "YOUTUBE_MEDIA_NOT_VIDEO";
+      const error = new Error("YouTube only supports video uploads") as Error & { code: string };
+      error.code = "YOUTUBE_MEDIA_NOT_VIDEO";
       throw error;
     }
 
@@ -64,7 +83,7 @@ export const youtubeClient: PlatformClient = {
 
     // Parse location from metadata if available
     // Supports formats: "lat,lng" or "description" or both
-    const locationMetadata = (mediaItem.metadata as any)?.location;
+    const locationMetadata = (mediaItem.metadata as { location?: { description?: string } } | null)?.location;
     let locationData: { latitude?: number; longitude?: number; description?: string } | null = null;
     
     console.log("[YouTube] Raw metadata from mediaItem:", {
@@ -112,7 +131,7 @@ export const youtubeClient: PlatformClient = {
     // YouTube video metadata
     // Use baseCaption for title (no footer), full caption for description (with footer)
     const title = (mediaItem.baseCaption || caption).substring(0, 100); // YouTube title max 100 chars
-    const metadata: any = {
+    const metadata: YouTubeVideoResource = {
       snippet: {
         title,
         description: caption, // Full caption with footer
@@ -202,8 +221,8 @@ export const youtubeClient: PlatformClient = {
     const videoId = result.id;
     if (!videoId) {
       console.error("[YouTube] No video ID in response", result);
-      const error = new Error("YouTube did not return a video ID");
-      (error as any).code = "YOUTUBE_NO_VIDEO_ID";
+      const error = new Error("YouTube did not return a video ID") as Error & { code: string };
+      error.code = "YOUTUBE_NO_VIDEO_ID";
       throw error;
     }
 
