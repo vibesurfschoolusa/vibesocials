@@ -2,12 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import type { Platform } from "@prisma/client";
-import {
-  createAndRunPostJob,
-  createAndRunPostJobForExistingMedia,
-  createPostJobOnly,
-} from "@/server/jobs/posting";
-import { saveUploadedFile } from "@/server/storage";
+import { createPostJobOnly } from "@/server/jobs/posting";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import type { YouTubePostMetadata } from "@/server/platforms/types";
@@ -23,215 +18,38 @@ export async function POST(request: Request) {
 
   const contentType = request.headers.get("content-type") || "";
 
-  if (contentType.includes("application/json")) {
-    let body: any;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
-    }
-
-    // Check if this is a blob upload request
-    if (body?.blobUrl) {
-      const blobUrl = body.blobUrl;
-      const filename = body.filename || "upload";
-      const mimeType = body.mimeType || "application/octet-stream";
-      const sizeBytes = body.sizeBytes || 0;
-      const baseCaptionRaw = body?.baseCaption;
-      const locationRaw = body?.location;
-      const overridesRaw = body?.perPlatformOverrides;
-      const tiktokMetadataRaw = body?.tiktokMetadata;
-      const youtubeMetadataRaw = body?.youtubeMetadata;
-
-      if (typeof baseCaptionRaw !== "string" || !baseCaptionRaw.trim()) {
-        return NextResponse.json(
-          { error: "baseCaption is required" },
-          { status: 400 },
-        );
-      }
-
-      let perPlatformOverrides: Partial<Record<Platform, string>> | undefined;
-      if (overridesRaw != null) {
-        if (typeof overridesRaw !== "object") {
-          return NextResponse.json(
-            { error: "perPlatformOverrides must be an object if provided" },
-            { status: 400 },
-          );
-        }
-        perPlatformOverrides = overridesRaw as Partial<Record<Platform, string>>;
-      }
-
-      let youtubeMetadata: YouTubePostMetadata | undefined;
-      if (youtubeMetadataRaw != null) {
-        if (
-          typeof youtubeMetadataRaw !== "object" ||
-          !YOUTUBE_PRIVACY_STATUSES.includes(youtubeMetadataRaw.privacyStatus)
-        ) {
-          return NextResponse.json(
-            {
-              error:
-                "youtubeMetadata.privacyStatus must be one of: public, unlisted, private",
-            },
-            { status: 400 },
-          );
-        }
-        youtubeMetadata = { privacyStatus: youtubeMetadataRaw.privacyStatus };
-      }
-
-      const location = typeof locationRaw === "string" && locationRaw.trim() ? locationRaw.trim() : undefined;
-
-      try {
-        // Create job records without executing (for background processing)
-        const { postJobId, mediaItemId } = await createPostJobOnly({
-          userId: user.id,
-          media: {
-            storageLocation: blobUrl,
-            originalFilename: filename,
-            mimeType,
-            sizeBytes,
-          },
-          baseCaption: baseCaptionRaw,
-          location,
-          perPlatformOverrides,
-        });
-
-        // Trigger background job via Inngest
-        await inngest.send({
-          name: "post/publish.requested",
-          data: {
-            postJobId,
-            userId: user.id,
-            mediaItemId,
-            baseCaption: baseCaptionRaw,
-            location,
-            perPlatformOverrides,
-            tiktokMetadata: tiktokMetadataRaw,
-            youtubeMetadata,
-          },
-        });
-
-        // Return immediately - job runs in background
-        const postJob = await prisma.postJob.findUnique({
-          where: { id: postJobId },
-        });
-        const results = await prisma.postJobResult.findMany({
-          where: { postJobId },
-        });
-
-        return NextResponse.json({
-          postJob,
-          results,
-          message: "Publishing in progress. Large videos may take a few minutes.",
-        });
-      } catch (error: unknown) {
-        if (error instanceof Error && error.message === "NO_CONNECTIONS") {
-          return NextResponse.json(
-            {
-              error: "No connected platforms",
-              code: "NO_CONNECTIONS",
-              message: "Connect at least one platform before creating a post.",
-            },
-            { status: 400 },
-          );
-        }
-
-        console.error("[POST /api/posts] Unexpected error (blob upload)", { error });
-        return NextResponse.json(
-          { error: "Failed to create post" },
-          { status: 500 },
-        );
-      }
-    }
-
-    // Existing media item flow
-    const mediaItemIdRaw = body?.mediaItemId;
-    const baseCaptionRaw = body?.baseCaption;
-    const locationRaw = body?.location;
-    const overridesRaw = body?.perPlatformOverrides;
-
-    if (typeof mediaItemIdRaw !== "string" || !mediaItemIdRaw.trim()) {
-      return NextResponse.json(
-        { error: "mediaItemId or blobUrl is required" },
-        { status: 400 },
-      );
-    }
-
-    if (typeof baseCaptionRaw !== "string" || !baseCaptionRaw.trim()) {
-      return NextResponse.json(
-        { error: "baseCaption is required" },
-        { status: 400 },
-      );
-    }
-
-    let perPlatformOverrides: Partial<Record<Platform, string>> | undefined;
-    if (overridesRaw != null) {
-      if (typeof overridesRaw !== "object") {
-        return NextResponse.json(
-          { error: "perPlatformOverrides must be an object if provided" },
-          { status: 400 },
-        );
-      }
-      perPlatformOverrides = overridesRaw as Partial<Record<Platform, string>>;
-    }
-
-    const location = typeof locationRaw === "string" && locationRaw.trim() ? locationRaw.trim() : undefined;
-
-    try {
-      const { postJob, results } = await createAndRunPostJobForExistingMedia({
-        userId: user.id,
-        mediaItemId: mediaItemIdRaw.trim(),
-        baseCaption: baseCaptionRaw,
-        location,
-        perPlatformOverrides: perPlatformOverrides ?? null,
-      });
-
-      return NextResponse.json({ postJob, results }, { status: 201 });
-    } catch (error: any) {
-      if (error instanceof Error && error.message === "MEDIA_ITEM_NOT_FOUND") {
-        return NextResponse.json(
-          { error: "Media item not found" },
-          { status: 404 },
-        );
-      }
-      if (error instanceof Error && error.message === "NO_CONNECTIONS") {
-        return NextResponse.json(
-          {
-            error: "No connected platforms",
-            code: "NO_CONNECTIONS",
-            message: "Connect at least one platform before creating a post.",
-          },
-          { status: 400 },
-        );
-      }
-
-      console.error("[POST /api/posts] Unexpected error (JSON)", { error });
-      return NextResponse.json(
-        { error: "Failed to create post" },
-        { status: 500 },
-      );
-    }
-  }
-
-  // Handle multipart/form-data uploads
-  if (!contentType.includes("multipart/form-data")) {
+  if (!contentType.includes("application/json")) {
     return NextResponse.json(
-      { error: "Content-Type must be multipart/form-data or application/json" },
+      { error: "Content-Type must be application/json" },
       { status: 400 },
     );
   }
 
-  const formData = await request.formData();
-
-  const file = formData.get("file");
-  const baseCaption = formData.get("baseCaption");
-  const locationFormData = formData.get("location");
-  const overridesRaw = formData.get("perPlatformOverrides");
-
-  if (!(file instanceof File)) {
-    return NextResponse.json({ error: "file is required" }, { status: 400 });
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  if (typeof baseCaption !== "string" || !baseCaption.trim()) {
+  if (!body?.blobUrl) {
+    return NextResponse.json(
+      { error: "blobUrl is required" },
+      { status: 400 },
+    );
+  }
+
+  const blobUrl = body.blobUrl;
+  const filename = body.filename || "upload";
+  const mimeType = body.mimeType || "application/octet-stream";
+  const sizeBytes = body.sizeBytes || 0;
+  const baseCaptionRaw = body?.baseCaption;
+  const locationRaw = body?.location;
+  const overridesRaw = body?.perPlatformOverrides;
+  const tiktokMetadataRaw = body?.tiktokMetadata;
+  const youtubeMetadataRaw = body?.youtubeMetadata;
+
+  if (typeof baseCaptionRaw !== "string" || !baseCaptionRaw.trim()) {
     return NextResponse.json(
       { error: "baseCaption is required" },
       { status: 400 },
@@ -239,30 +57,48 @@ export async function POST(request: Request) {
   }
 
   let perPlatformOverrides: Partial<Record<Platform, string>> | undefined;
-  if (typeof overridesRaw === "string" && overridesRaw.trim()) {
-    try {
-      const parsed = JSON.parse(overridesRaw) as Record<string, string>;
-      perPlatformOverrides = parsed as Partial<Record<Platform, string>>;
-    } catch {
+  if (overridesRaw != null) {
+    if (typeof overridesRaw !== "object") {
       return NextResponse.json(
-        { error: "Invalid perPlatformOverrides JSON" },
+        { error: "perPlatformOverrides must be an object if provided" },
         { status: 400 },
       );
     }
+    perPlatformOverrides = overridesRaw as Partial<Record<Platform, string>>;
   }
 
-  const location = typeof locationFormData === "string" && locationFormData.trim() ? locationFormData.trim() : undefined;
+  let youtubeMetadata: YouTubePostMetadata | undefined;
+  if (youtubeMetadataRaw != null) {
+    if (
+      typeof youtubeMetadataRaw !== "object" ||
+      !YOUTUBE_PRIVACY_STATUSES.includes(youtubeMetadataRaw.privacyStatus)
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "youtubeMetadata.privacyStatus must be one of: public, unlisted, private",
+        },
+        { status: 400 },
+      );
+    }
+    youtubeMetadata = { privacyStatus: youtubeMetadataRaw.privacyStatus };
+  }
+
+  const location = typeof locationRaw === "string" && locationRaw.trim() ? locationRaw.trim() : undefined;
 
   try {
-    const saved = await saveUploadedFile(user.id, file);
-
     // Create job records without executing (for background processing)
     const { postJobId, mediaItemId } = await createPostJobOnly({
       userId: user.id,
-      media: saved,
-      baseCaption,
+      media: {
+        storageLocation: blobUrl,
+        originalFilename: filename,
+        mimeType,
+        sizeBytes,
+      },
+      baseCaption: baseCaptionRaw,
       location,
-      perPlatformOverrides: perPlatformOverrides ?? null,
+      perPlatformOverrides,
     });
 
     // Trigger background job via Inngest
@@ -272,9 +108,11 @@ export async function POST(request: Request) {
         postJobId,
         userId: user.id,
         mediaItemId,
-        baseCaption,
+        baseCaption: baseCaptionRaw,
         location,
         perPlatformOverrides,
+        tiktokMetadata: tiktokMetadataRaw,
+        youtubeMetadata,
       },
     });
 
@@ -290,8 +128,8 @@ export async function POST(request: Request) {
       postJob,
       results,
       message: "Publishing in progress. Large videos may take a few minutes.",
-    }, { status: 201 });
-  } catch (error: any) {
+    });
+  } catch (error: unknown) {
     if (error instanceof Error && error.message === "NO_CONNECTIONS") {
       return NextResponse.json(
         {
@@ -303,7 +141,7 @@ export async function POST(request: Request) {
       );
     }
 
-    console.error("[POST /api/posts] Unexpected error (multipart)", { error });
+    console.error("[POST /api/posts] Unexpected error (blob upload)", { error });
     return NextResponse.json(
       { error: "Failed to create post" },
       { status: 500 },
