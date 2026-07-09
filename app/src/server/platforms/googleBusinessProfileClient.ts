@@ -4,6 +4,7 @@ import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
 import { resolveGbpLocationName } from "./gbpLocation";
+import { refreshGoogleToken } from "./googleTokens";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
 // Google Business Profile client (photos that appear on Google Maps)
@@ -11,63 +12,13 @@ import type { PlatformClient, PublishContext, PublishResult } from "./types";
 // This client uses the Google Business Profile API to create media for a
 // specific business location (locationName in SocialConnection.metadata) so
 // photos appear on Google Maps.
-
-async function refreshAccessToken(connection: SocialConnection): Promise<SocialConnection> {
-  const refreshToken = connection.refreshToken;
-  if (!refreshToken) {
-    throw new Error("No refresh token available for Google Business Profile");
-  }
-
-  const clientId = process.env.GOOGLE_GBP_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_GBP_CLIENT_SECRET;
-
-  if (!clientId || !clientSecret) {
-    throw new Error("Missing Google Business Profile OAuth credentials");
-  }
-
-  console.log("[GBP] Refreshing access token");
-
-  const response = await fetchWithTimeout("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: "refresh_token",
-    }),
-  });
-
-  await assertOk(response, {
-    code: "GBP_TOKEN_REFRESH_FAILED",
-    prefix: "Failed to refresh Google Business Profile access token",
-  });
-
-  const tokenData = (await response.json()) as {
-    access_token: string;
-    expires_in: number;
-    scope?: string;
-    token_type: string;
-  };
-
-  const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
-
-  // Update connection in database
-  const { prisma } = await import("@/lib/db");
-  const updated = await prisma.socialConnection.update({
-    where: { id: connection.id },
-    data: {
-      accessToken: tokenData.access_token,
-      expiresAt,
-    },
-  });
-
-  console.log("[GBP] Access token refreshed successfully");
-
-  return updated;
-}
+//
+// Token refresh is delegated to the shared `refreshGoogleToken` helper
+// (src/server/platforms/googleTokens.ts), which updates ONLY accessToken +
+// expiresAt (never refreshToken). It throws `GOOGLE_TOKEN_REFRESH_FAILED` on a
+// non-2xx from the token endpoint (previously `GBP_TOKEN_REFRESH_FAILED`); no
+// caller branches on that code — the job runner records whatever `error.code`
+// is present for per-platform failure isolation.
 
 export const googleBusinessProfileClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
@@ -77,7 +28,7 @@ export const googleBusinessProfileClient: PlatformClient = {
     // Check if token needs refresh
     if (socialConnection.expiresAt && socialConnection.expiresAt < new Date()) {
       console.log("[GBP] Access token expired, refreshing...");
-      socialConnection = await refreshAccessToken(socialConnection);
+      socialConnection = await refreshGoogleToken(socialConnection);
     }
 
     const accessToken = socialConnection.accessToken;
@@ -146,7 +97,7 @@ export const googleBusinessProfileClient: PlatformClient = {
   },
 
   async refreshToken(connection: SocialConnection): Promise<SocialConnection> {
-    return refreshAccessToken(connection);
+    return refreshGoogleToken(connection);
   },
 };
 

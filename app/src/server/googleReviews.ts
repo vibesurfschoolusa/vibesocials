@@ -3,6 +3,9 @@ import type { SocialConnection } from "@prisma/client";
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
+import { resolveGbpLocationName } from "./platforms/gbpLocation";
+import { refreshGoogleToken } from "./platforms/googleTokens";
+
 /**
  * Google Business Profile Review type
  */
@@ -25,65 +28,20 @@ export interface GoogleReview {
 }
 
 /**
- * Refresh Google Business Profile access token
+ * Refresh Google Business Profile access token.
+ *
+ * Thin wrapper over the shared `refreshGoogleToken` helper
+ * (src/server/platforms/googleTokens.ts). The exported signature is preserved
+ * because the reviews API routes import this by name. The helper updates ONLY
+ * accessToken + expiresAt (never refreshToken) and throws
+ * `GOOGLE_TOKEN_REFRESH_FAILED` on a non-2xx (previously
+ * `GBP_REVIEWS_TOKEN_REFRESH_FAILED`); the reviews routes surface
+ * `error.message`, not `.code`, so the code change is non-breaking.
  */
 export async function refreshAccessToken(
   connection: SocialConnection
 ): Promise<SocialConnection> {
-  const refreshToken = connection.refreshToken;
-  if (!refreshToken) {
-    throw new Error("No refresh token available for Google Business Profile");
-  }
-
-  const clientId = process.env.GOOGLE_GBP_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_GBP_CLIENT_SECRET;
-
-  if (!clientId || !clientSecret) {
-    throw new Error("Missing Google Business Profile OAuth credentials");
-  }
-
-  console.log("[GBP Reviews] Refreshing access token");
-
-  const response = await fetchWithTimeout("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: "refresh_token",
-    }),
-  });
-
-  await assertOk(response, {
-    code: "GBP_REVIEWS_TOKEN_REFRESH_FAILED",
-    prefix: "Failed to refresh Google Business Profile access token",
-  });
-
-  const tokenData = (await response.json()) as {
-    access_token: string;
-    expires_in: number;
-    scope?: string;
-    token_type: string;
-  };
-
-  const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
-
-  // Update connection in database
-  const { prisma } = await import("@/lib/db");
-  const updated = await prisma.socialConnection.update({
-    where: { id: connection.id },
-    data: {
-      accessToken: tokenData.access_token,
-      expiresAt,
-    },
-  });
-
-  console.log("[GBP Reviews] Access token refreshed successfully");
-
-  return updated;
+  return refreshGoogleToken(connection);
 }
 
 /**
@@ -95,8 +53,10 @@ export async function fetchReviews(
 ): Promise<GoogleReview[]> {
   console.log("[GBP Reviews] Fetching reviews", { locationName });
 
-  // Resolve location name if it's a store code
-  const resolvedLocationName = await resolveLocationName(
+  // Resolve location name if it's a store code. The shared helper returns a
+  // full "accounts/.../locations/..." resource name as-is and resolves a Store
+  // code via the account/location listing.
+  const resolvedLocationName = await resolveGbpLocationName(
     accessToken,
     locationName
   );
@@ -189,113 +149,4 @@ export async function replyToReview(
   console.log("[GBP Reviews] Reply posted successfully");
 
   return data;
-}
-
-/**
- * Resolve location name (handle both full resource names and store codes)
- */
-async function resolveLocationName(
-  accessToken: string,
-  locationName: string
-): Promise<string> {
-  const trimmed = locationName.trim();
-
-  // If it's already a full resource name (accounts/.../locations/...), return it
-  if (trimmed.startsWith("accounts/")) {
-    return trimmed;
-  }
-
-  // Otherwise, resolve it from store code using the existing logic
-  return resolveLocationNameFromStoreCode(accessToken, trimmed);
-}
-
-/**
- * Resolve location name from store code
- * (Copied from googleBusinessProfileClient.ts)
- */
-async function resolveLocationNameFromStoreCode(
-  accessToken: string,
-  identifier: string
-): Promise<string> {
-  const authHeaders = {
-    Authorization: `Bearer ${accessToken}`,
-  } as const;
-
-  const accountManagementBase =
-    "https://mybusinessaccountmanagement.googleapis.com/v1";
-  const businessInfoBase =
-    "https://mybusinessbusinessinformation.googleapis.com/v1";
-
-  // 1. List all accounts the user has access to.
-  const accountsRes = await fetchWithTimeout(`${accountManagementBase}/accounts`, {
-    headers: authHeaders,
-  });
-
-  await assertOk(accountsRes, {
-    code: "GBP_REVIEWS_ACCOUNTS_LIST_FAILED",
-    prefix:
-      "Failed to list Google Business Profile accounts while resolving location",
-  });
-
-  const accountsJson = (await accountsRes.json()) as {
-    accounts?: { name?: string }[];
-  };
-
-  const accounts = accountsJson.accounts ?? [];
-  const candidates: string[] = [];
-
-  // 2. For each account, search locations by storeCode.
-  for (const account of accounts) {
-    const accountName = account.name;
-    if (!accountName) continue;
-
-    const url = new URL(`${businessInfoBase}/${accountName}/locations`);
-    url.searchParams.set("readMask", "name,storeCode,title");
-    url.searchParams.set("filter", `storeCode="${identifier}"`);
-
-    const locationsRes = await fetchWithTimeout(url.toString(), {
-      headers: authHeaders,
-    });
-
-    if (!locationsRes.ok) {
-      console.error("[GBP Reviews] accounts.locations.list failed for account", {
-        accountName,
-        status: locationsRes.status,
-        statusText: locationsRes.statusText,
-      });
-      continue;
-    }
-
-    const locationsJson = (await locationsRes.json()) as {
-      locations?: { name?: string; storeCode?: string }[];
-    };
-
-    const locations = locationsJson.locations ?? [];
-    for (const loc of locations) {
-      if (!loc.name) continue;
-      if (loc.storeCode !== identifier) continue;
-
-      const locationId = loc.name.startsWith("locations/")
-        ? loc.name.slice("locations/".length)
-        : loc.name;
-      const [, accountId] = accountName.split("/");
-      if (!accountId) continue;
-
-      candidates.push(`accounts/${accountId}/locations/${locationId}`);
-    }
-  }
-
-  if (candidates.length === 0) {
-    throw new Error(
-      "Could not find a Google Business Profile location for the given store code."
-    );
-  }
-
-  if (candidates.length > 1) {
-    throw new Error(
-      "Store code matched multiple Google Business Profile locations. Please specify a more precise identifier."
-    );
-  }
-
-  return candidates[0];
 }
