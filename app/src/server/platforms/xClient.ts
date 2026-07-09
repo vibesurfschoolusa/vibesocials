@@ -384,14 +384,14 @@ export const xClient: PlatformClient = {
     });
 
     if (!accessToken || !accessTokenSecret) {
-      const error = new Error("Missing access token for X");
-      (error as any).code = "X_NO_ACCESS_TOKEN";
+      const error = new Error("Missing access token for X") as Error & { code: string };
+      error.code = "X_NO_ACCESS_TOKEN";
       throw error;
     }
 
     if (!consumerKey || !consumerSecret) {
-      const error = new Error("Missing X consumer credentials");
-      (error as any).code = "X_NO_CONSUMER_KEYS";
+      const error = new Error("Missing X consumer credentials") as Error & { code: string };
+      error.code = "X_NO_CONSUMER_KEYS";
       throw error;
     }
 
@@ -400,8 +400,8 @@ export const xClient: PlatformClient = {
     const isImage = mediaItem.mimeType?.startsWith("image/");
 
     if (!isVideo && !isImage) {
-      const error = new Error("X only supports image and video uploads");
-      (error as any).code = "X_INVALID_MEDIA_TYPE";
+      const error = new Error("X only supports image and video uploads") as Error & { code: string };
+      error.code = "X_INVALID_MEDIA_TYPE";
       throw error;
     }
 

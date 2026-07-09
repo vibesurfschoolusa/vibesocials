@@ -33,8 +33,8 @@ export const googleBusinessProfileClient: PlatformClient = {
 
     const accessToken = socialConnection.accessToken;
     if (!accessToken) {
-      const error = new Error("Missing access token for Google Business Profile");
-      (error as any).code = "GBP_NO_ACCESS_TOKEN";
+      const error = new Error("Missing access token for Google Business Profile") as Error & { code: string };
+      error.code = "GBP_NO_ACCESS_TOKEN";
       throw error;
     }
 
@@ -105,14 +105,14 @@ async function ensureLocationName(
   socialConnection: SocialConnection,
   accessToken: string,
 ): Promise<{ locationName: string }> {
-  const metadata = (socialConnection.metadata as any) ?? {};
+  const metadata = (socialConnection.metadata as { locationName?: unknown } | null) ?? {};
   const raw = metadata.locationName;
 
   if (typeof raw !== "string" || !raw.trim()) {
     const error = new Error(
       "Google Business Profile location is not configured. Set it from the Connections page.",
-    );
-    (error as any).code = "GBP_NO_LOCATION_NAME";
+    ) as Error & { code: string };
+    error.code = "GBP_NO_LOCATION_NAME";
     throw error;
   }
 

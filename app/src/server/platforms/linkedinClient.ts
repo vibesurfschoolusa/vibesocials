@@ -377,6 +377,30 @@ async function uploadVideo(
   return assetUrn;
 }
 
+// Minimal shape of the LinkedIn UGC post body we construct. `media` is added
+// conditionally when a media URN is present.
+interface LinkedInShareContent {
+  shareCommentary: { text: string };
+  shareMediaCategory: string;
+  media?: Array<{
+    status: string;
+    description: { text: string };
+    media: string;
+    title?: { text: string };
+  }>;
+}
+
+interface LinkedInUgcPost {
+  author: string;
+  lifecycleState: string;
+  specificContent: {
+    "com.linkedin.ugc.ShareContent": LinkedInShareContent;
+  };
+  visibility: {
+    "com.linkedin.ugc.MemberNetworkVisibility": string;
+  };
+}
+
 async function createPost(
   accessToken: string,
   authorUrn: string,
@@ -390,7 +414,7 @@ async function createPost(
     isVideo,
   });
 
-  const postBody: any = {
+  const postBody: LinkedInUgcPost = {
     author: authorUrn,
     lifecycleState: "PUBLISHED",
     specificContent: {
@@ -512,7 +536,7 @@ export const linkedinClient: PlatformClient = {
     }
 
     // Check if user has organizations/company pages
-    const metadata = (socialConnection.metadata as any) || {};
+    const metadata = (socialConnection.metadata as { organizations?: Array<{ id: string; name?: string }> } | null) || {};
     const organizations = metadata.organizations || [];
     
     // REQUIRE organization - never post to personal profile
@@ -525,8 +549,8 @@ export const linkedinClient: PlatformClient = {
         "3. Disconnect and reconnect your LinkedIn account\n" +
         "4. The app will automatically detect your company pages\n\n" +
         "If this still fails, contact support with error code: LINKEDIN_NO_ORGANIZATION"
-      );
-      (error as any).code = "LINKEDIN_NO_ORGANIZATION";
+      ) as Error & { code: string };
+      error.code = "LINKEDIN_NO_ORGANIZATION";
       throw error;
     }
     
