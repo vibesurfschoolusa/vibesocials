@@ -46,13 +46,13 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
-        token.id = (user as any).id;
+        token.id = (user as { id: string }).id;
       }
       return token;
     },
     async session({ session, token }) {
       if (session.user && token?.id) {
-        (session.user as any).id = token.id as string;
+        (session.user as { id?: string }).id = token.id as string;
       }
       return session;
     },
@@ -61,11 +61,11 @@ export const authOptions: NextAuthOptions = {
 
 export async function getCurrentUser() {
   const session = await getServerSession(authOptions);
-  if (!session?.user || !(session.user as any).id) {
+  if (!session?.user || !(session.user as { id?: string }).id) {
     return null;
   }
 
-  const userId = (session.user as any).id as string;
+  const userId = (session.user as { id?: string }).id as string;
 
   const user = await prisma.user.findUnique({
     where: { id: userId },

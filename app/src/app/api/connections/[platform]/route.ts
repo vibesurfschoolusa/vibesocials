@@ -56,7 +56,7 @@ export async function GET(_request: NextRequest, context: PlatformRouteContext) 
   }
 }
 
-export async function DELETE(_request: NextRequest, context: any) {
+export async function DELETE(_request: NextRequest, context: PlatformRouteContext) {
   const user = await getCurrentUser();
 
   if (!user) {

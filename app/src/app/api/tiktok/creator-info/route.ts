@@ -41,10 +41,10 @@ export async function GET(req: NextRequest) {
     const creatorInfo = await getTikTokCreatorInfo(tiktokConnection.accessToken);
 
     return NextResponse.json(creatorInfo);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[API] Failed to fetch TikTok creator info:", error);
     return NextResponse.json(
-      { error: error.message || "Failed to fetch TikTok creator info" },
+      { error: (error as Error).message || "Failed to fetch TikTok creator info" },
       { status: 500 }
     );
   }

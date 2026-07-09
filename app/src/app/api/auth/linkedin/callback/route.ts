@@ -1,7 +1,38 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { verifyOAuthState } from "@/lib/oauthState";
-import { Platform } from "@prisma/client";
+import { Platform, Prisma } from "@prisma/client";
+
+// Minimal shapes for the LinkedIn responses this handler reads. Only the fields
+// actually used are modeled; everything else is ignored.
+interface LinkedInProfile {
+  sub: string;
+  name: string;
+  email: string | null;
+  picture: string | null;
+}
+
+interface LinkedInOrganization {
+  id?: string;
+  name?: string;
+  vanityName?: string | null;
+}
+
+interface LinkedInAclElement {
+  "organizationalTarget~"?: {
+    id?: string;
+    localizedName?: string;
+    vanityName?: string;
+  };
+}
+
+interface LinkedInOrgElement {
+  id?: string;
+  organizationId?: string;
+  localizedName?: string;
+  name?: string;
+  vanityName?: string;
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -87,7 +118,7 @@ export async function GET(request: Request) {
     // We'll use a minimal profile based on what's available or use organization info
     
     // Try to fetch basic profile (may fail without profile scopes)
-    let profile: any = null;
+    let profile: LinkedInProfile | null = null;
     try {
       const profileResponse = await fetch("https://api.linkedin.com/v2/me", {
         headers: {
@@ -125,7 +156,7 @@ export async function GET(request: Request) {
     });
 
     // Try multiple endpoints to fetch organizations (Community Management API limitations)
-    let organizations: any[] = [];
+    let organizations: LinkedInOrganization[] = [];
     
     // Strategy 1: Try organizationalEntityAcls endpoint (requires specific permissions)
     console.log("[LinkedIn OAuth] Attempting to fetch organizations - Strategy 1: organizationalEntityAcls");
@@ -141,14 +172,14 @@ export async function GET(request: Request) {
       );
 
       if (acls.ok) {
-        const aclsData = await acls.json();
+        const aclsData = await acls.json() as { elements?: LinkedInAclElement[] };
         organizations = aclsData.elements
-          ?.map((element: any) => ({
+          ?.map((element) => ({
             id: element["organizationalTarget~"]?.id,
             name: element["organizationalTarget~"]?.localizedName,
             vanityName: element["organizationalTarget~"]?.vanityName,
           }))
-          .filter((org: any) => org.id && org.name) || [];
+          .filter((org) => org.id && org.name) || [];
         
         console.log("[LinkedIn OAuth] Strategy 1 SUCCESS", {
           count: organizations.length,
@@ -176,14 +207,14 @@ export async function GET(request: Request) {
         );
 
         if (orgsLookup.ok) {
-          const lookupData = await orgsLookup.json();
+          const lookupData = await orgsLookup.json() as { elements?: LinkedInOrgElement[] };
           organizations = lookupData.elements
-            ?.map((org: any) => ({
+            ?.map((org) => ({
               id: org.id,
               name: org.localizedName,
               vanityName: org.vanityName,
             }))
-            .filter((org: any) => org.id && org.name) || [];
+            .filter((org) => org.id && org.name) || [];
           
           console.log("[LinkedIn OAuth] Strategy 2 SUCCESS", {
             count: organizations.length,
@@ -212,14 +243,14 @@ export async function GET(request: Request) {
         );
 
         if (restOrgs.ok) {
-          const restData = await restOrgs.json();
+          const restData = await restOrgs.json() as { elements?: LinkedInOrgElement[] };
           organizations = restData.elements
-            ?.map((org: any) => ({
+            ?.map((org) => ({
               id: org.id || org.organizationId,
               name: org.localizedName || org.name,
               vanityName: org.vanityName,
             }))
-            .filter((org: any) => org.id && org.name) || [];
+            .filter((org) => org.id && org.name) || [];
           
           console.log("[LinkedIn OAuth] Strategy 3 SUCCESS", {
             count: organizations.length,
@@ -248,7 +279,7 @@ export async function GET(request: Request) {
         });
         
         if (existingConnection?.metadata) {
-          const metadata = existingConnection.metadata as any;
+          const metadata = existingConnection.metadata as { organizations?: LinkedInOrganization[] };
           const previousOrgs = metadata.organizations || [];
           
           if (previousOrgs.length > 0) {
@@ -423,7 +454,7 @@ export async function GET(request: Request) {
           email: profile.email,
           picture: profile.picture,
           organizations,
-        },
+        } as unknown as Prisma.InputJsonValue,
       },
       update: {
         accessToken: tokenData.access_token,
@@ -435,7 +466,7 @@ export async function GET(request: Request) {
           email: profile.email,
           picture: profile.picture,
           organizations,
-        },
+        } as unknown as Prisma.InputJsonValue,
       },
     });
 

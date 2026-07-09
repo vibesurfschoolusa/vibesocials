@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { Platform } from "@prisma/client";
+import { Platform, Prisma } from "@prisma/client";
 
 export const runtime = "nodejs";
 
@@ -15,7 +15,7 @@ export async function POST(request: Request) {
 
   const contentType = request.headers.get("content-type") || "";
 
-  let locationNameRaw: any;
+  let locationNameRaw: unknown;
   if (contentType.includes("application/json")) {
     try {
       const body = await request.json();
@@ -50,7 +50,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const existingMetadata = (connection.metadata as any) ?? {};
+  const existingMetadata = (connection.metadata as Record<string, unknown> | null) ?? {};
 
   const updated = await prisma.socialConnection.update({
     where: { id: connection.id },
@@ -58,7 +58,7 @@ export async function POST(request: Request) {
       metadata: {
         ...existingMetadata,
         locationName,
-      },
+      } as Prisma.InputJsonObject,
     },
   });
 

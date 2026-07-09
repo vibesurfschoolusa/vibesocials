@@ -154,10 +154,10 @@ Generate a professional, warm response to this review.`;
     return NextResponse.json({
       draftResponse,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[Draft Response] Error:", error);
     return NextResponse.json(
-      { error: error.message || "Failed to generate response" },
+      { error: (error as Error).message || "Failed to generate response" },
       { status: 500 }
     );
   }

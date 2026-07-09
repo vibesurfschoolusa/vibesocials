@@ -35,8 +35,8 @@ export async function DELETE() {
           freedBytes += blob.size;
           console.log(`[Cleanup] Deleted blob: ${blob.pathname} (${blob.size} bytes)`);
         }
-      } catch (error: any) {
-        errors.push(`Failed to delete ${blob.pathname}: ${error.message}`);
+      } catch (error: unknown) {
+        errors.push(`Failed to delete ${blob.pathname}: ${(error as Error).message}`);
       }
     }
 
@@ -48,10 +48,10 @@ export async function DELETE() {
       remainingBlobs: blobs.length - deletedCount,
       errors: errors.length > 0 ? errors : undefined,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[Cleanup] Failed to cleanup blobs:", error);
     return NextResponse.json(
-      { error: error.message || "Failed to cleanup blobs" },
+      { error: (error as Error).message || "Failed to cleanup blobs" },
       { status: 500 }
     );
   }

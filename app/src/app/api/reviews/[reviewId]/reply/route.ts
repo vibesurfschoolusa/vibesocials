@@ -79,10 +79,10 @@ export async function POST(
       success: true,
       reply: result,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[Reviews API] Reply error:", error);
     return NextResponse.json(
-      { error: error.message || "Failed to post reply" },
+      { error: (error as Error).message || "Failed to post reply" },
       { status: 500 }
     );
   }
