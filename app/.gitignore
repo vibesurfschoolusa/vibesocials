@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local media uploads (legacy local-disk storage; production uses Vercel Blob)
+storage/uploads/

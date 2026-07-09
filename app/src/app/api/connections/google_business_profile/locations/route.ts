@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { refreshGoogleToken } from "@/server/platforms/googleTokens";
 import { Platform, type SocialConnection } from "@prisma/client";
 
 export const runtime = "nodejs";
@@ -24,74 +25,26 @@ interface GbpLocation {
   } | null;
 }
 
-// NOTE: intentionally NOT migrated to the shared `refreshGoogleToken` helper
-// (src/server/platforms/googleTokens.ts) yet — different contract: this
-// function returns `null` on failure instead of throwing, and the 401-retry
-// in GET below depends on that to do an opportunistic retry. Expiry handling
-// also differs: this copy sets `expiresAt` to `null` when `expires_in` is
-// absent, whereas the helper throws on failure and falls back to a 3600s
-// expiry when `expires_in` is missing. Any future migration (Phase 4, HLT-2)
-// must wrap `refreshGoogleToken` in try/catch -> null rather than
-// blind-swapping it in here.
+// Migrated to the shared `refreshGoogleToken` helper
+// (src/server/platforms/googleTokens.ts) per Phase 4 / HLT-2, following the
+// "wrap-don't-swap" rule the original NOTE required. The helper THROWS on
+// failure, but this route's 401-retry in GET depends on a `null`-returning
+// contract for its opportunistic retry, so we wrap the helper in
+// try/catch -> null to preserve that contract exactly.
+//
+// Behavioural note: the helper updates ONLY accessToken + expiresAt (never
+// refreshToken) and, when `expires_in` is absent, falls back to Google's
+// standard 3600s expiry rather than persisting `expiresAt = null` as the old
+// inline copy did. The GET caller only reads `refreshed.accessToken` (never
+// `expiresAt`) and does not distinguish an expiry-null from a failure-null, so
+// wrapping does not change its observable behaviour.
 async function refreshAccessToken(
   connection: SocialConnection,
 ): Promise<SocialConnection | null> {
-  const refreshToken = connection.refreshToken;
-  const clientId = process.env.GOOGLE_GBP_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_GBP_CLIENT_SECRET;
-
-  if (!refreshToken || !clientId || !clientSecret) {
-    return null;
-  }
-
   try {
-    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({
-        refresh_token: refreshToken,
-        client_id: clientId,
-        client_secret: clientSecret,
-        grant_type: "refresh_token",
-      }),
-    });
-
-    if (!tokenRes.ok) {
-      console.error("[GBP] Failed to refresh access token", {
-        status: tokenRes.status,
-        statusText: tokenRes.statusText,
-      });
-      return null;
-    }
-
-    const tokenJson = (await tokenRes.json()) as {
-      access_token?: string;
-      expires_in?: number;
-    };
-
-    if (!tokenJson.access_token) {
-      console.error("[GBP] Refresh response missing access_token");
-      return null;
-    }
-
-    const now = Date.now();
-    const expiresAt = tokenJson.expires_in
-      ? new Date(now + tokenJson.expires_in * 1000)
-      : null;
-
-    const updated = await prisma.socialConnection.update({
-      where: { id: connection.id },
-      data: {
-        accessToken: tokenJson.access_token,
-        expiresAt,
-      },
-    });
-
-    return updated;
+    return await refreshGoogleToken(connection);
   } catch (error) {
-    console.error("[GBP] Unexpected error while refreshing access token", { error });
+    console.error("[GBP] Failed to refresh access token", { error });
     return null;
   }
 }
