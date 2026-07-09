@@ -39,30 +39,30 @@ export function MediaLibrary() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
 
-  async function loadItems() {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const response = await fetch("/api/media");
-      const data = (await response.json().catch(() => null)) as ListResponse | null;
-
-      if (!response.ok) {
-        setError((data as any)?.error ?? "Failed to load media items.");
-        setLoading(false);
-        return;
-      }
-
-      const list = Array.isArray(data?.items) ? data!.items : [];
-      setItems(list);
-      setLoading(false);
-    } catch (_err) {
-      setError("Unexpected error while loading media items.");
-      setLoading(false);
-    }
-  }
-
   useEffect(() => {
+    // Load once on mount. `loading` already starts `true` and `error` `null`, so the
+    // first state update happens only after the await below (never synchronously in
+    // the effect body, which would trip react-hooks/set-state-in-effect).
+    async function loadItems() {
+      try {
+        const response = await fetch("/api/media");
+        const data = (await response.json().catch(() => null)) as ListResponse | null;
+
+        if (!response.ok) {
+          setError((data as { error?: string } | null)?.error ?? "Failed to load media items.");
+          setLoading(false);
+          return;
+        }
+
+        const list = Array.isArray(data?.items) ? data!.items : [];
+        setItems(list);
+        setLoading(false);
+      } catch (_err) {
+        setError("Unexpected error while loading media items.");
+        setLoading(false);
+      }
+    }
+
     void loadItems();
   }, []);
 
@@ -94,7 +94,7 @@ export function MediaLibrary() {
         | null;
 
       if (!response.ok) {
-        setUploadError((data as any)?.error ?? "Failed to upload media.");
+        setUploadError((data as { error?: string } | null)?.error ?? "Failed to upload media.");
         setUploading(false);
         return;
       }
