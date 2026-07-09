@@ -22,6 +22,19 @@ interface UploadedBlobInfo {
   sizeBytes: number;
 }
 
+// Request body posted to /api/posts. Metadata fields are added conditionally
+// based on which platforms are connected.
+interface CreatePostRequest {
+  blobUrl: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  baseCaption: string;
+  location?: string;
+  tiktokMetadata?: TikTokPostMetadata;
+  youtubeMetadata?: YouTubePostMetadata;
+}
+
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
   const k = 1024;
@@ -122,13 +135,13 @@ export function CreatePostForm() {
       if (!response.ok) {
         const errorData = await response.json().catch(() => null);
         const message =
-          (errorData as any)?.error ||
+          (errorData as { error?: string } | null)?.error ||
           "Failed to generate caption from media";
         throw new Error(message);
       }
 
       const data = await response.json();
-      const caption = (data as any)?.caption;
+      const caption = (data as { caption?: string })?.caption;
 
       if (typeof caption !== "string" || !caption.trim()) {
         throw new Error("AI returned an empty caption from media");
@@ -140,9 +153,9 @@ export function CreatePostForm() {
         }
         return caption;
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error generating caption from media:", err);
-      setUploadError(err.message || "Failed to generate caption from media");
+      setUploadError((err as Error).message || "Failed to generate caption from media");
     } finally {
       setAutoCaptionLoading(false);
     }
@@ -196,7 +209,7 @@ export function CreatePostForm() {
         setUploadedBlob(blob);
       }
 
-      const postData: any = {
+      const postData: CreatePostRequest = {
         blobUrl: blob.url,
         filename: blob.filename,
         mimeType: blob.mimeType,
@@ -234,7 +247,7 @@ export function CreatePostForm() {
         | null;
 
       if (!response.ok) {
-        setUploadError((data as any)?.error ?? "Failed to create post.");
+        setUploadError((data as { error?: string } | null)?.error ?? "Failed to create post.");
         setUploadLoading(false);
         return;
       }
@@ -289,9 +302,9 @@ export function CreatePostForm() {
 
       // Set the enhanced caption in the textarea
       setUploadCaption(enhancedCaption);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error enhancing caption:", err);
-      setUploadError(err.message || "Failed to enhance caption");
+      setUploadError((err as Error).message || "Failed to enhance caption");
     } finally {
       setEnhancingCaption(false);
     }
@@ -348,13 +361,13 @@ export function CreatePostForm() {
                       blobOverride: blobInfo,
                     });
                   }
-                } catch (err: any) {
+                } catch (err: unknown) {
                   console.error(
                     "Error uploading media for auto-caption:",
                     err,
                   );
                   setUploadError(
-                    err.message ||
+                    (err as Error).message ||
                       "Failed to prepare media for posting. Please try again.",
                   );
                 } finally {

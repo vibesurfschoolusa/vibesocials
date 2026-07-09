@@ -41,7 +41,7 @@ export function ConnectionActions({
       const data = await response.json().catch(() => null);
 
       if (!response.ok) {
-        setError((data as any)?.error ?? "Failed to disconnect.");
+        setError((data as { error?: string } | null)?.error ?? "Failed to disconnect.");
         setLoading(false);
         return;
       }

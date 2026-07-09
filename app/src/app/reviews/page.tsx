@@ -77,9 +77,9 @@ export default function ReviewsPage() {
       if (locs.length === 1) {
         setSelectedLocation(locs[0].name);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error fetching locations:", err);
-      setError(err.message || "Failed to load locations");
+      setError((err as Error).message || "Failed to load locations");
     } finally {
       setLoadingLocations(false);
     }
@@ -103,9 +103,9 @@ export default function ReviewsPage() {
 
       const data = await response.json();
       setReviews(data.reviews || []);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error fetching reviews:", err);
-      setError(err.message || "Failed to load reviews");
+      setError((err as Error).message || "Failed to load reviews");
     } finally {
       setLoading(false);
     }
@@ -158,9 +158,9 @@ export default function ReviewsPage() {
       setReplyingTo(null);
 
       alert("Reply posted successfully!");
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error posting reply:", err);
-      alert(err.message || "Failed to post reply");
+      alert((err as Error).message || "Failed to post reply");
     } finally {
       setSubmitting(null);
     }
@@ -201,9 +201,9 @@ export default function ReviewsPage() {
       if (replyingTo !== review.reviewId) {
         setReplyingTo(review.reviewId);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error generating AI response:", err);
-      alert(err.message || "Failed to generate AI response");
+      alert((err as Error).message || "Failed to generate AI response");
     } finally {
       setGeneratingAI(null);
     }

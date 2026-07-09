@@ -33,9 +33,9 @@ export function TikTokPostSettings({ metadata, onChange, isVideo }: TikTokPostSe
 
       const data = await response.json();
       setCreatorInfo(data);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Failed to fetch TikTok creator info:", err);
-      setError(err.message || "Failed to load TikTok settings");
+      setError((err as Error).message || "Failed to load TikTok settings");
     } finally {
       setLoading(false);
     }
