@@ -29,7 +29,7 @@ export async function createPostJobOnly(
     throw new Error("NO_CONNECTIONS");
   }
 
-  const metadata: any = {};
+  const metadata: { location?: { description: string } } = {};
   if (location) {
     metadata.location = { description: location };
   }

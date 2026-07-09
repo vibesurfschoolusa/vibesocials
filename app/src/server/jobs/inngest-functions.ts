@@ -2,8 +2,12 @@ import { inngest } from "@/lib/inngest";
 import { prisma } from "@/lib/db";
 import { getPlatformClient } from "@/server/platforms";
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
-import type { Platform } from "@prisma/client";
-import type { YouTubePostMetadata } from "@/server/platforms/types";
+import type { MediaItem, Platform, SocialConnection, User } from "@prisma/client";
+import type {
+  PublishContext,
+  TikTokPostMetadata,
+  YouTubePostMetadata,
+} from "@/server/platforms/types";
 
 // Simplified types for serialized data from step.run()
 interface SerializedMediaItem {
@@ -33,11 +37,6 @@ interface SerializedConnection {
   userId: string;
 }
 
-interface SerializedResultRecord {
-  id: string;
-  platform: Platform;
-}
-
 // Helper to publish to a single platform
 async function publishToPlatform(
   connection: SerializedConnection,
@@ -45,7 +44,7 @@ async function publishToPlatform(
   caption: string,
   userId: string,
   resultRecordId: string,
-  tiktokMetadata?: any,
+  tiktokMetadata?: TikTokPostMetadata,
   youtubeMetadata?: YouTubePostMetadata
 ): Promise<{ platform: Platform; status: string; error?: string }> {
   const client = getPlatformClient(connection.platform);
@@ -64,11 +63,14 @@ async function publishToPlatform(
 
   try {
     console.log(`[Inngest] Publishing to ${connection.platform}...`);
-    // Cast to any - serialized data from step.run() has string dates but works at runtime
-    const publishContext: any = {
-      user: { id: userId } as any,
-      socialConnection: connection as any,
-      mediaItem: mediaItem as any,
+    // step.run() serializes Dates to strings, so these records don't structurally
+    // match the Prisma types PublishContext expects. The platform clients only read
+    // fields present on both the serialized and Prisma shapes (and nothing reads
+    // `user` beyond `id`), so assert through `unknown` at this boundary.
+    const publishContext: PublishContext = {
+      user: { id: userId } as unknown as User,
+      socialConnection: connection as unknown as SocialConnection,
+      mediaItem: mediaItem as unknown as MediaItem,
       caption,
     };
 
@@ -93,17 +95,18 @@ async function publishToPlatform(
       },
     });
     return { platform: connection.platform, status: "success" };
-  } catch (error: any) {
-    console.error(`[Inngest] Platform ${connection.platform} failed:`, error.message);
+  } catch (error: unknown) {
+    const err = error as Error & { code?: string };
+    console.error(`[Inngest] Platform ${connection.platform} failed:`, err.message);
     await prisma.postJobResult.update({
       where: { id: resultRecordId },
       data: {
         status: "failed",
-        errorCode: error?.code ?? "PUBLISH_FAILED",
-        errorMessage: error?.message || "Failed to publish to platform.",
+        errorCode: err.code ?? "PUBLISH_FAILED",
+        errorMessage: err.message || "Failed to publish to platform.",
       },
     });
-    return { platform: connection.platform, status: "failed", error: error.message };
+    return { platform: connection.platform, status: "failed", error: err.message };
   }
 }
 
