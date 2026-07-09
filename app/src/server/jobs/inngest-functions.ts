@@ -1,16 +1,11 @@
 import { inngest } from "@/lib/inngest";
 import { prisma } from "@/lib/db";
 import { getPlatformClient } from "@/server/platforms";
+import { buildCaptionWithFooter } from "@/lib/captionFooter";
 import type { Platform } from "@prisma/client";
 import type { YouTubePostMetadata } from "@/server/platforms/types";
 
 // Simplified types for serialized data from step.run()
-interface SerializedUser {
-  id: string;
-  companyWebsite: string | null;
-  defaultHashtags: string | null;
-}
-
 interface SerializedMediaItem {
   id: string;
   createdAt: string;
@@ -41,20 +36,6 @@ interface SerializedConnection {
 interface SerializedResultRecord {
   id: string;
   platform: Platform;
-}
-
-function buildCaptionWithFooter(baseCaption: string, user: SerializedUser): string {
-  const parts = [baseCaption.trim()];
-  
-  if (user.companyWebsite?.trim()) {
-    parts.push(`For more info visit ${user.companyWebsite.trim()}`);
-  }
-  
-  if (user.defaultHashtags?.trim()) {
-    parts.push(user.defaultHashtags.trim());
-  }
-  
-  return parts.join('\n\n');
 }
 
 // Helper to publish to a single platform
