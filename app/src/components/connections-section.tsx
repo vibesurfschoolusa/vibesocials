@@ -1,23 +1,89 @@
 "use client";
 
-import Link from "next/link";
+import { Suspense } from "react";
+import {
+  Facebook,
+  Instagram,
+  Linkedin,
+  MapPin,
+  Music2,
+  Twitter,
+  Youtube,
+  type LucideIcon,
+} from "lucide-react";
+
 import type { ConnectionSummary } from "@/lib/connectionSummary";
+import { Button, ButtonLink } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { GoogleBusinessLocationForm } from "./google-business-location-form";
 import { ConnectionActions } from "./connection-actions";
 import { LinkedInSetupDialog } from "./linkedin-setup-dialog";
-import { Suspense } from "react";
 
-const PLATFORM_LABELS = {
-  tiktok: "TikTok",
-  youtube: "YouTube",
-  x: "X (Twitter)",
-  linkedin: "LinkedIn",
-  instagram: "Instagram",
-  google_business_profile: "Google Business Profile (Maps)",
-  facebook_page: "Facebook Page",
-} as const;
+interface PlatformConfig {
+  key: string;
+  label: string;
+  /** OAuth start route. Absent for not-yet-implemented platforms ("Coming soon"). */
+  href?: string;
+  icon: LucideIcon;
+  description: string;
+}
 
-type PlatformKey = keyof typeof PLATFORM_LABELS;
+// Single source of truth for the connect list — the 7 rows used to be
+// copy-pasted. Each platform's OAuth start route is `/api/auth/{key}/start`.
+const PLATFORMS: PlatformConfig[] = [
+  {
+    key: "tiktok",
+    label: "TikTok",
+    href: "/api/auth/tiktok/start",
+    icon: Music2,
+    description:
+      "Connect your TikTok account so Vibe Socials can upload videos to your inbox.",
+  },
+  {
+    key: "youtube",
+    label: "YouTube",
+    href: "/api/auth/youtube/start",
+    icon: Youtube,
+    description: "Connect your YouTube channel to upload videos directly.",
+  },
+  {
+    key: "x",
+    label: "X (Twitter)",
+    href: "/api/auth/x/start",
+    icon: Twitter,
+    description: "Connect your X (Twitter) account to post tweets with media.",
+  },
+  {
+    key: "linkedin",
+    label: "LinkedIn",
+    href: "/api/auth/linkedin/start",
+    icon: Linkedin,
+    description: "Connect your LinkedIn profile to share posts with your network.",
+  },
+  {
+    key: "instagram",
+    label: "Instagram",
+    href: "/api/auth/instagram/start",
+    icon: Instagram,
+    description: "Connect your Instagram Business account to post photos and videos.",
+  },
+  {
+    key: "google_business_profile",
+    label: "Google Business Profile (Maps)",
+    href: "/api/auth/google_business_profile/start",
+    icon: MapPin,
+    description:
+      "Connect your Google Business Profile so new photos appear on your Maps listing.",
+  },
+  {
+    key: "facebook_page",
+    label: "Facebook Page",
+    href: "/api/auth/facebook_page/start",
+    icon: Facebook,
+    description:
+      "Connect your Facebook Page so Vibe Socials can post photos directly to your page.",
+  },
+];
 
 interface ConnectionsSectionProps {
   connections: ConnectionSummary[];
@@ -29,126 +95,56 @@ export function ConnectionsSection({ connections }: ConnectionsSectionProps) {
       <Suspense fallback={null}>
         <LinkedInSetupDialog />
       </Suspense>
-      <div className="bg-white rounded-lg shadow-lg p-6">
-      <div className="space-y-4">
-        {(Object.keys(PLATFORM_LABELS) as PlatformKey[]).map((platform) => {
-          const label = PLATFORM_LABELS[platform];
-          const connection = connections.find((c) => c.platform === platform);
 
-          const isGoogleBusinessProfile = platform === "google_business_profile";
-          const isTikTok = platform === "tiktok";
-          const isYouTube = platform === "youtube";
-          const isInstagram = platform === "instagram";
-          const isLinkedIn = platform === "linkedin";
-          const isX = platform === "x";
-          const isFacebookPage = platform === "facebook_page";
-
-          const locationName = connection?.locationName ?? null;
+      <div className="flex flex-col gap-3">
+        {PLATFORMS.map(({ key, label, href, icon: Icon, description }) => {
+          const connection = connections.find((c) => c.platform === key);
+          const isGoogleBusinessProfile = key === "google_business_profile";
           const username = connection?.username ?? connection?.accountIdentifier;
+          const locationName = connection?.locationName ?? null;
 
           return (
-            <div
-              key={platform}
-              className="flex flex-col gap-3 rounded-xl border-2 border-gray-200 px-5 py-4 hover:border-blue-200 transition-all bg-gradient-to-r from-white to-gray-50"
-            >
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="text-base font-semibold text-gray-900">{label}</div>
-                  <div className="text-sm text-gray-600 break-words">
-                    {connection
-                      ? `Connected as ${username}`
-                      : isGoogleBusinessProfile
-                      ? "Connect your Google Business Profile so new photos appear on your Maps listing."
-                      : isTikTok
-                      ? "Connect your TikTok account so Vibe Socials can upload videos to your inbox."
-                      : isYouTube
-                      ? "Connect your YouTube channel to upload videos directly."
-                      : isInstagram
-                      ? "Connect your Instagram Business account to post photos and videos."
-                      : isLinkedIn
-                      ? "Connect your LinkedIn profile to share posts with your network."
-                      : isX
-                      ? "Connect your X (Twitter) account to post tweets with media."
-                      : isFacebookPage
-                      ? "Connect your Facebook Page so Vibe Socials can post photos directly to your page."
-                      : "Not connected yet (scaffolded; implementation pending)."}
+            <Card key={key} className="p-4 sm:p-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 flex-1 items-start gap-3">
+                  <span
+                    aria-hidden
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius)] bg-muted text-muted-foreground"
+                  >
+                    <Icon className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="text-base font-semibold text-foreground">{label}</div>
+                    <p className="mt-0.5 break-words text-sm text-muted-foreground">
+                      {connection ? `Connected as ${username}` : description}
+                    </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 flex-wrap">
+
+                <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
                   {connection ? (
-                    <ConnectionActions
-                      platform={platform}
-                      isConnected={true}
-                      isGoogleBusinessProfile={isGoogleBusinessProfile}
-                    />
-                  ) : isGoogleBusinessProfile ? (
-                    <Link
-                      href="/api/auth/google_business_profile/start"
-                      className="rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm hover:shadow-md"
-                    >
+                    <ConnectionActions platform={key} isConnected />
+                  ) : href ? (
+                    <ButtonLink href={href} variant="outline" size="sm">
                       Connect
-                    </Link>
-                  ) : isTikTok ? (
-                    <Link
-                      href="/api/auth/tiktok/start"
-                      className="rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm hover:shadow-md"
-                    >
-                      Connect
-                    </Link>
-                  ) : isYouTube ? (
-                    <Link
-                      href="/api/auth/youtube/start"
-                      className="rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm hover:shadow-md"
-                    >
-                      Connect
-                    </Link>
-                  ) : isInstagram ? (
-                    <Link
-                      href="/api/auth/instagram/start"
-                      className="rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm hover:shadow-md"
-                    >
-                      Connect
-                    </Link>
-                  ) : isLinkedIn ? (
-                    <Link
-                      href="/api/auth/linkedin/start"
-                      className="rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm hover:shadow-md"
-                    >
-                      Connect
-                    </Link>
-                  ) : isX ? (
-                    <Link
-                      href="/api/auth/x/start"
-                      className="rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm hover:shadow-md"
-                    >
-                      Connect
-                    </Link>
-                  ) : isFacebookPage ? (
-                    <Link
-                      href="/api/auth/facebook_page/start"
-                      className="rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2 text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-sm hover:shadow-md"
-                    >
-                      Connect
-                    </Link>
+                    </ButtonLink>
                   ) : (
-                    <button
-                      type="button"
-                      className="rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-500"
-                      disabled
-                    >
+                    <Button size="sm" variant="secondary" disabled>
                       Coming soon
-                    </button>
+                    </Button>
                   )}
                 </div>
               </div>
-              {isGoogleBusinessProfile && connection && (
-                <GoogleBusinessLocationForm initialLocationName={locationName} />
-              )}
-            </div>
+
+              {isGoogleBusinessProfile && connection ? (
+                <div className="mt-4 border-t border-border pt-4">
+                  <GoogleBusinessLocationForm initialLocationName={locationName} />
+                </div>
+              ) : null}
+            </Card>
           );
         })}
       </div>
-    </div>
     </>
   );
 }

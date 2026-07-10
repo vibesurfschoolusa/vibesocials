@@ -2,6 +2,12 @@
 
 import { useState } from "react";
 
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
+import { useToast } from "@/components/ui/toast";
+
 interface Props {
   initialLocationName?: string | null;
 }
@@ -15,22 +21,18 @@ interface RemoteLocation {
 }
 
 export function GoogleBusinessLocationForm({ initialLocationName }: Props) {
+  const toast = useToast();
   const [locationName, setLocationName] = useState(initialLocationName ?? "");
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [locations, setLocations] = useState<RemoteLocation[] | null>(null);
   const [loadingLocations, setLoadingLocations] = useState(false);
-  const [locationsError, setLocationsError] = useState<string | null>(null);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    setMessage(null);
-    setError(null);
 
     const trimmed = locationName.trim();
     if (!trimmed) {
-      setError("Location or store code is required.");
+      toast.error("Enter a location resource name or store code.");
       return;
     }
 
@@ -45,48 +47,48 @@ export function GoogleBusinessLocationForm({ initialLocationName }: Props) {
         body: JSON.stringify({ locationName: trimmed }),
       });
 
-      const data = await response.json().catch(() => null);
+      const data = (await response.json().catch(() => null)) as { error?: string } | null;
 
       if (!response.ok) {
-        setError(data?.error ?? "Failed to save location.");
+        toast.error(data?.error ?? "Failed to save location.");
         setSaving(false);
         return;
       }
 
-      setMessage("Saved. Future posts will use this Maps location.");
+      toast.success("Saved. Future posts will use this Maps location.");
       setSaving(false);
-    } catch (_err) {
-      setError("Unexpected error while saving location.");
+    } catch {
+      toast.error("Unexpected error while saving location.");
       setSaving(false);
     }
   }
 
   async function handleFetchLocations() {
-    setLocationsError(null);
-    setMessage(null);
-    setError(null);
     setLoadingLocations(true);
 
     try {
       const response = await fetch("/api/connections/google_business_profile/locations");
-      const data = await response.json().catch(() => null);
+      const data = (await response.json().catch(() => null)) as
+        | { locations?: RemoteLocation[]; error?: string }
+        | null;
 
       if (!response.ok) {
         setLocations(null);
-        setLocationsError(data?.error ?? "Failed to load locations from Google.");
+        toast.error(data?.error ?? "Failed to load locations from Google.");
         setLoadingLocations(false);
         return;
       }
 
-      const list = Array.isArray(data?.locations) ? (data.locations as RemoteLocation[]) : [];
+      const list: RemoteLocation[] =
+        data && Array.isArray(data.locations) ? data.locations : [];
       setLocations(list);
       if (list.length === 0) {
-        setLocationsError("No locations found for this Google account.");
+        toast.info("No locations found for this Google account.");
       }
       setLoadingLocations(false);
-    } catch (_err) {
+    } catch {
       setLocations(null);
-      setLocationsError("Unexpected error while loading locations.");
+      toast.error("Unexpected error while loading locations.");
       setLoadingLocations(false);
     }
   }
@@ -96,80 +98,77 @@ export function GoogleBusinessLocationForm({ initialLocationName }: Props) {
     if (!value) {
       return;
     }
-
     setLocationName(value);
-    setMessage(null);
-    setError(null);
   }
 
   return (
-    <form onSubmit={handleSubmit} className="mt-2 space-y-1 text-xs">
-      <label htmlFor="gbp-location" className="block font-medium">
-        Maps business location (resource or store code)
-      </label>
-      <input
-        id="gbp-location"
-        name="locationName"
-        type="text"
-        className="w-full rounded border border-zinc-300 px-2 py-1 text-[11px] font-mono text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-zinc-900"
-        placeholder="Store code from Advanced settings, or accounts/{accountId}/locations/{locationId}"
-        value={locationName}
-        onChange={(event) => setLocationName(event.target.value)}
-      />
-      <div className="flex items-center justify-between pt-1">
-        <button
-          type="button"
-          disabled={loadingLocations}
-          onClick={handleFetchLocations}
-          className="rounded border border-zinc-300 px-2 py-1 text-[11px] font-medium text-zinc-900 hover:bg-zinc-50 disabled:opacity-70"
-        >
-          {loadingLocations ? "Loading locations..." : "Fetch locations from Google"}
-        </button>
-        {locationsError && (
-          <span className="text-[11px] text-red-600">{locationsError}</span>
-        )}
-      </div>
-      {locations && locations.length > 0 && (
-        <div className="pt-1">
-          <label htmlFor="gbp-location-select" className="block text-[11px] font-medium">
-            Or pick a location
-          </label>
-          <select
-            id="gbp-location-select"
-            className="mt-1 w-full rounded border border-zinc-300 px-2 py-1 text-[11px] text-gray-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
-            defaultValue=""
-            onChange={handleSelectLocation}
+    <div className="flex flex-col gap-4">
+      {/* Primary flow: pull the account's locations from Google and pick one. */}
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-foreground">Maps business location</p>
+            <p className="text-sm text-muted-foreground">
+              Load your locations from Google and choose the one to post to.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={handleFetchLocations}
+            loading={loadingLocations}
+            className="shrink-0"
           >
-            <option value="">Select a location</option>
-            {locations.map((loc) => {
-              const parts: string[] = [];
-              if (loc.title) parts.push(loc.title);
-              if (loc.address) parts.push(loc.address);
-              if (loc.storeCode) parts.push(`Store code: ${loc.storeCode}`);
-              if (loc.accountName) parts.push(`Account: ${loc.accountName}`);
-              const label = parts.join(" · ");
-
-              return (
-                <option key={loc.resourceName} value={loc.resourceName}>
-                  {label || loc.resourceName}
-                </option>
-              );
-            })}
-          </select>
+            {loadingLocations ? "Loading…" : "Fetch locations from Google"}
+          </Button>
         </div>
-      )}
-      <div className="flex items-center justify-between">
-        <button
-          type="submit"
-          disabled={saving}
-          className="rounded bg-black px-2 py-1 text-[11px] font-medium text-white hover:bg-zinc-800 disabled:opacity-70"
-        >
-          {saving ? "Saving..." : "Save location"}
-        </button>
-        {message && <span className="text-[11px] text-emerald-700">{message}</span>}
-        {error && <span className="text-[11px] text-red-600">{error}</span>}
+
+        {locations && locations.length > 0 ? (
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="gbp-location-select">Choose a location</Label>
+            <Select id="gbp-location-select" defaultValue="" onChange={handleSelectLocation}>
+              <option value="">Select a location</option>
+              {locations.map((loc) => {
+                const parts: string[] = [];
+                if (loc.title) parts.push(loc.title);
+                if (loc.address) parts.push(loc.address);
+                if (loc.storeCode) parts.push(`Store code: ${loc.storeCode}`);
+                if (loc.accountName) parts.push(`Account: ${loc.accountName}`);
+                const label = parts.join(" · ");
+
+                return (
+                  <option key={loc.resourceName} value={loc.resourceName}>
+                    {label || loc.resourceName}
+                  </option>
+                );
+              })}
+            </Select>
+          </div>
+        ) : null}
       </div>
-    </form>
+
+      {/* Secondary/advanced: paste a resource name or store code directly. */}
+      <form onSubmit={handleSubmit} className="flex flex-col gap-1.5 border-t border-border pt-4">
+        <Label htmlFor="gbp-location">Advanced: resource name or store code</Label>
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Input
+            id="gbp-location"
+            name="locationName"
+            className="font-mono text-xs"
+            placeholder="accounts/{accountId}/locations/{locationId}, or a store code"
+            value={locationName}
+            onChange={(event) => setLocationName(event.target.value)}
+          />
+          <Button type="submit" size="sm" loading={saving} className="shrink-0 sm:w-auto">
+            {saving ? "Saving…" : "Save location"}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Picking a location above fills this in automatically. You can also paste a store code
+          from Advanced settings.
+        </p>
+      </form>
+    </div>
   );
 }
-
