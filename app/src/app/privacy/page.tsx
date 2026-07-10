@@ -2,22 +2,25 @@ import Link from "next/link";
 
 export default function PrivacyPage() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50">
-      <div className="w-full max-w-3xl rounded-lg bg-white p-8 shadow">
+    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground">
+      <div className="w-full max-w-3xl rounded-[calc(var(--radius)+0.125rem)] border border-border bg-card p-8 text-card-foreground shadow-sm">
         <div className="mb-4 flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">Privacy Policy</h1>
-          <Link href="/" className="text-xs text-zinc-600 underline">
+          <h1 className="text-2xl font-semibold text-foreground">Privacy Policy</h1>
+          <Link
+            href="/"
+            className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          >
             Back to Vibe Socials
           </Link>
         </div>
-        <p className="mb-4 text-sm text-zinc-700">
+        <p className="mb-4 text-sm text-muted-foreground">
           This Privacy Policy describes how Vibe Socials (the &quot;Service&quot;) handles information
           about you. This is an early-stage tool intended for limited use by the owner and invited
           testers.
         </p>
-        <div className="space-y-3 text-sm text-zinc-700">
+        <div className="space-y-3 text-sm text-muted-foreground">
           <section>
-            <h2 className="mb-1 text-sm font-semibold text-zinc-900">1. Information we store</h2>
+            <h2 className="mb-1 text-sm font-semibold text-foreground">1. Information we store</h2>
             <ul className="list-disc space-y-1 pl-5">
               <li>Account information such as your email address and a hashed password.</li>
               <li>
@@ -35,7 +38,7 @@ export default function PrivacyPage() {
             </ul>
           </section>
           <section>
-            <h2 className="mb-1 text-sm font-semibold text-zinc-900">2. How we use this information</h2>
+            <h2 className="mb-1 text-sm font-semibold text-foreground">2. How we use this information</h2>
             <p>We use the information described above to:</p>
             <ul className="list-disc space-y-1 pl-5">
               <li>Authenticate you and manage your account.</li>
@@ -50,7 +53,7 @@ export default function PrivacyPage() {
             </ul>
           </section>
           <section>
-            <h2 className="mb-1 text-sm font-semibold text-zinc-900">3. Third-party services</h2>
+            <h2 className="mb-1 text-sm font-semibold text-foreground">3. Third-party services</h2>
             <p>
               When you connect a social account, access tokens are stored on the server side and
               used only to call that platform&apos;s APIs on your behalf. Your use of each platform is
@@ -59,7 +62,7 @@ export default function PrivacyPage() {
             </p>
           </section>
           <section>
-            <h2 className="mb-1 text-sm font-semibold text-zinc-900">4. Data retention</h2>
+            <h2 className="mb-1 text-sm font-semibold text-foreground">4. Data retention</h2>
             <p>
               Data is stored for as long as your account exists or as needed to operate the Service.
               You can request removal of your account and associated data by contacting the owner of
@@ -67,7 +70,7 @@ export default function PrivacyPage() {
             </p>
           </section>
           <section>
-            <h2 className="mb-1 text-sm font-semibold text-zinc-900">5. Security</h2>
+            <h2 className="mb-1 text-sm font-semibold text-foreground">5. Security</h2>
             <p>
               This is a development-stage project and does not claim production-grade security.
               Reasonable measures are taken to restrict access to stored data, but there is always
@@ -75,14 +78,14 @@ export default function PrivacyPage() {
             </p>
           </section>
           <section>
-            <h2 className="mb-1 text-sm font-semibold text-zinc-900">6. Changes</h2>
+            <h2 className="mb-1 text-sm font-semibold text-foreground">6. Changes</h2>
             <p>
               This policy may be updated over time. If you continue using the Service after changes
               are made, you accept the updated policy.
             </p>
           </section>
           <section>
-            <h2 className="mb-1 text-sm font-semibold text-zinc-900">7. Contact</h2>
+            <h2 className="mb-1 text-sm font-semibold text-foreground">7. Contact</h2>
             <p>
               If you have questions about this Privacy Policy, please contact the developer or owner
               of this project through the channels where you obtained access to Vibe Socials.

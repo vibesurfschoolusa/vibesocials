@@ -1,153 +1,96 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  ConfirmDialog,
+  Dialog,
+  DialogBody,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { useToast } from "@/components/ui/toast";
 
 interface Props {
   platform: string;
   isConnected: boolean;
-  isGoogleBusinessProfile: boolean;
 }
 
-const PLATFORM_AUTH_URLS: Record<string, string> = {
-  tiktok: "/api/auth/tiktok/start",
-  youtube: "/api/auth/youtube/start",
-  x: "/api/auth/x/start",
-  linkedin: "/api/auth/linkedin/start",
-  instagram: "/api/auth/instagram/start",
-  google_business_profile: "/api/auth/google_business_profile/start",
-  facebook_page: "/api/auth/facebook_page/start",
-};
+const TIKTOK_LOGOUT_URL = "https://www.tiktok.com/logout";
 
-export function ConnectionActions({
-  platform,
-  isConnected,
-  isGoogleBusinessProfile,
-}: Props) {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export function ConnectionActions({ platform, isConnected }: Props) {
+  const router = useRouter();
+  const toast = useToast();
 
-  async function handleDisconnect() {
-    setError(null);
-    const confirmed = window.confirm(
-      "Are you sure you want to disconnect this account? Future posts will no longer use it.",
-    );
-    if (!confirmed) return;
+  const [disconnectOpen, setDisconnectOpen] = useState(false);
+  const [switchOpen, setSwitchOpen] = useState(false);
+  const [switching, setSwitching] = useState(false);
 
-    setLoading(true);
-    try {
-      const response = await fetch(`/api/connections/${platform}`, {
-        method: "DELETE",
-      });
-      const data = await response.json().catch(() => null);
+  const isTikTok = platform === "tiktok";
+  const authUrl = `/api/auth/${platform}/start`;
 
-      if (!response.ok) {
-        setError((data as { error?: string } | null)?.error ?? "Failed to disconnect.");
-        setLoading(false);
-        return;
-      }
-
-      window.location.reload();
-    } catch (_err) {
-      setError("Unexpected error while disconnecting.");
-      setLoading(false);
+  // Shared disconnect call. Throws on failure so callers can decide whether to
+  // keep a dialog open (ConfirmDialog) or reset local state (TikTok flow).
+  async function disconnect() {
+    const response = await fetch(`/api/connections/${platform}`, { method: "DELETE" });
+    const data = (await response.json().catch(() => null)) as { error?: string } | null;
+    if (!response.ok) {
+      throw new Error(data?.error ?? "Failed to disconnect.");
     }
   }
 
-  async function handleSwitchAccount() {
-    console.log('[Switch Account] Button clicked', { platform });
-    setError(null);
-    
-    // Special handling for TikTok - requires manual logout first
-    if (platform === 'tiktok') {
-      const confirmed = window.confirm(
-        "To switch TikTok accounts:\n\n" +
-        "1. Click OK to disconnect from Vibe Socials\n" +
-        "2. You'll be taken to TikTok to log out\n" +
-        "3. Log out of your current TikTok account\n" +
-        "4. Come back here and click Connect\n" +
-        "5. Sign in with your PRIVATE TikTok account\n\n" +
-        "Continue?"
-      );
-      
-      if (!confirmed) {
-        console.log('[Switch Account] User canceled');
-        return;
-      }
-
-      setLoading(true);
-      try {
-        const response = await fetch(`/api/connections/${platform}`, {
-          method: "DELETE",
-        });
-        
-        if (!response.ok) {
-          setError("Failed to disconnect.");
-          setLoading(false);
-          return;
-        }
-
-        // Open TikTok logout page in new tab, then reload this page
-        window.open('https://www.tiktok.com/logout', '_blank');
-        
-        setTimeout(() => {
-          alert(
-            "TikTok disconnected!\n\n" +
-            "IMPORTANT:\n" +
-            "1. Go to the TikTok tab that just opened\n" +
-            "2. Confirm you're logged out\n" +
-            "3. Come back here and click Connect\n" +
-            "4. Sign in with your PRIVATE TikTok account\n\n" +
-            "Your account MUST be set to Private in TikTok settings!"
-          );
-          window.location.reload();
-        }, 1000);
-      } catch (err) {
-        console.error('[Switch Account] Error:', err);
-        setError("Unexpected error.");
-        setLoading(false);
-      }
-      return;
-    }
-    
-    // Standard flow for other platforms
-    const confirmed = window.confirm(
-      "This will disconnect your current account and let you connect a different one. Continue?",
-    );
-    
-    if (!confirmed) {
-      console.log('[Switch Account] User canceled');
-      return;
-    }
-
-    console.log('[Switch Account] Starting disconnect...');
-    setLoading(true);
+  // Disconnect: replaces the native confirm(). On error we re-throw so the
+  // ConfirmDialog stays open for a retry, surfacing the reason via toast.
+  async function handleDisconnect() {
     try {
-      const response = await fetch(`/api/connections/${platform}`, {
-        method: "DELETE",
-      });
-      
-      console.log('[Switch Account] Disconnect response:', response.status);
-      
-      if (!response.ok) {
-        setError("Failed to disconnect current account.");
-        setLoading(false);
-        return;
-      }
-
-      const authUrl = PLATFORM_AUTH_URLS[platform];
-      console.log('[Switch Account] Redirecting to:', authUrl);
-      
-      if (authUrl) {
-        window.location.href = authUrl;
-      } else {
-        console.log('[Switch Account] No auth URL found, reloading page');
-        window.location.reload();
-      }
+      await disconnect();
     } catch (err) {
-      console.error('[Switch Account] Error:', err);
-      setError("Unexpected error while switching accounts.");
-      setLoading(false);
+      console.error("[Disconnect] Error:", err);
+      toast.error(err instanceof Error ? err.message : "Failed to disconnect.");
+      throw err;
     }
+    toast.success("Account disconnected.");
+    router.refresh();
+  }
+
+  // Standard switch: disconnect the current account, then redirect to the
+  // platform's OAuth start so a different account can be connected. Same flow as
+  // before, minus the native confirm().
+  async function handleStandardSwitch() {
+    try {
+      await disconnect();
+    } catch (err) {
+      console.error("[Switch Account] Error:", err);
+      toast.error(err instanceof Error ? err.message : "Failed to disconnect current account.");
+      throw err;
+    }
+    window.location.href = authUrl;
+  }
+
+  // TikTok switch: TikTok keeps the user signed in, so switching means
+  // disconnecting here, then logging out of tiktok.com in a new tab before
+  // reconnecting. Same underlying behavior as the old confirm()/window.open()/
+  // setTimeout()/alert() chain, now presented in an accessible dialog.
+  async function handleTikTokSwitch() {
+    setSwitching(true);
+    try {
+      await disconnect();
+    } catch (err) {
+      console.error("[Switch Account] Error:", err);
+      toast.error(err instanceof Error ? err.message : "Unexpected error.");
+      setSwitching(false);
+      return;
+    }
+    window.open(TIKTOK_LOGOUT_URL, "_blank", "noopener,noreferrer");
+    setSwitching(false);
+    setSwitchOpen(false);
+    toast.success("TikTok disconnected. Log out in the new tab, then click Connect.");
+    router.refresh();
   }
 
   if (!isConnected) {
@@ -155,29 +98,78 @@ export function ConnectionActions({
   }
 
   return (
-    <div className="flex flex-col items-end gap-1 text-[11px]">
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700">
-          Connected
-        </span>
-        <button
-          type="button"
-          onClick={handleSwitchAccount}
-          disabled={loading}
-          className="rounded border border-blue-200 px-2 py-1 text-[11px] font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-70"
+    <>
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="success">Connected</Badge>
+        <Button size="sm" variant="outline" onClick={() => setSwitchOpen(true)}>
+          Switch account
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+          onClick={() => setDisconnectOpen(true)}
         >
-          {loading ? "Switching..." : "Switch Account"}
-        </button>
-        <button
-          type="button"
-          onClick={handleDisconnect}
-          disabled={loading}
-          className="rounded border border-red-200 px-2 py-1 text-[11px] font-medium text-red-700 hover:bg-red-50 disabled:opacity-70"
-        >
-          {loading ? "Disconnecting..." : "Disconnect"}
-        </button>
+          Disconnect
+        </Button>
       </div>
-      {error && <span className="text-[11px] text-red-600">{error}</span>}
-    </div>
+
+      <ConfirmDialog
+        open={disconnectOpen}
+        onOpenChange={setDisconnectOpen}
+        destructive
+        title="Disconnect this account?"
+        description="Future posts will no longer use it. You can reconnect at any time."
+        confirmText="Disconnect"
+        onConfirm={handleDisconnect}
+      />
+
+      {isTikTok ? (
+        <Dialog
+          open={switchOpen}
+          onOpenChange={switching ? () => undefined : setSwitchOpen}
+        >
+          <DialogHeader>
+            <DialogTitle>Switch TikTok account</DialogTitle>
+            <DialogDescription>
+              TikTok keeps you signed in, so switching accounts takes a few manual steps.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogBody>
+            <ol className="list-decimal space-y-1.5 pl-5 text-sm text-muted-foreground">
+              <li>We disconnect this account and open TikTok logout in a new tab.</li>
+              <li>Log out of your current TikTok account in that tab.</li>
+              <li>
+                Come back here and click{" "}
+                <span className="font-medium text-foreground">Connect</span>.
+              </li>
+              <li>Sign in with your private TikTok account.</li>
+            </ol>
+            <p className="mt-3 text-sm text-muted-foreground">
+              Your account must be set to{" "}
+              <span className="font-medium text-foreground">Private</span> in TikTok
+              settings.
+            </p>
+          </DialogBody>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSwitchOpen(false)} disabled={switching}>
+              Cancel
+            </Button>
+            <Button onClick={handleTikTokSwitch} loading={switching}>
+              Disconnect &amp; open TikTok logout
+            </Button>
+          </DialogFooter>
+        </Dialog>
+      ) : (
+        <ConfirmDialog
+          open={switchOpen}
+          onOpenChange={setSwitchOpen}
+          title="Switch account?"
+          description="This disconnects your current account and sends you to reconnect a different one."
+          confirmText="Continue"
+          onConfirm={handleStandardSwitch}
+        />
+      )}
+    </>
   );
 }

@@ -1,22 +1,180 @@
 @import "tailwindcss";
 
+/* ==========================================================================
+   Vibe Socials design tokens
+   --------------------------------------------------------------------------
+   Semantic color roles are declared as CSS variables so components style with
+   `bg-background` / `text-foreground` / `bg-primary` etc. and get light + dark
+   for free — no per-component `dark:` classes required.
+
+   Theme resolution:
+     :root                                  -> light (default)
+     @media (prefers-color-scheme: dark)    -> dark, unless `.light` forces light
+       :root:not(.light)
+     :root.dark                             -> dark, always (manual override)
+     :root.light                            -> light, always (manual override)
+
+   Neutral ramp = slate. Accent = indigo. Status colors invert between themes so
+   they stay AA-legible both as solid fills (pair the bg utility with its
+   matching -foreground) and as tinted text (colored text on a 10-percent tint).
+   ========================================================================== */
+
 :root {
+  /* Base radius; sm/lg are derived in-component via calc() so they never
+     collide with Tailwind's built-in rounded-* scale. */
+  --radius: 0.625rem;
+
+  /* Surfaces & text */
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #0f172a; /* slate-900 */
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --surface: #ffffff;
+  --surface-foreground: #0f172a;
+
+  /* Muted / secondary / accent (subtle fills + hover surfaces) */
+  --muted: #f1f5f9; /* slate-100 */
+  --muted-foreground: #64748b; /* slate-500 — 4.7:1 on white */
+  --secondary: #f1f5f9;
+  --secondary-foreground: #0f172a;
+  --accent: #f1f5f9;
+  --accent-foreground: #0f172a;
+
+  /* Lines & focus */
+  --border: #e2e8f0; /* slate-200 */
+  --input: #8794a8; /* ~slate-450 — control borders, 3.07:1 on white for WCAG 1.4.11 */
+  --ring: #6366f1; /* indigo-500 */
+
+  /* Brand accent */
+  --primary: #4f46e5; /* indigo-600 — white text = 6.3:1 */
+  --primary-foreground: #ffffff;
+
+  /* Status: solid = bg token + its -foreground; subtle = colored text on tint. */
+  --success: #15803d; /* green-700 */
+  --success-foreground: #ffffff;
+  --warning: #b45309; /* amber-700 */
+  --warning-foreground: #ffffff;
+  --destructive: #dc2626; /* red-600 — white text = 4.8:1 */
+  --destructive-foreground: #ffffff;
+
+  /* Tinted-pill text (badge.tsx): darker in light for AA on the 10-percent
+     tint. success 6.2:1, warning 6.2:1, danger 5.5:1, neutral 6.9:1. */
+  --success-ontint: #166534; /* green-800 */
+  --warning-ontint: #92400e; /* amber-800 */
+  --danger-ontint: #b91c1c; /* red-700 */
+  --neutral-ontint: #475569; /* slate-600 */
 }
 
+/* Dark palette — declared once, shared by the system-default and manual paths. */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --background: #0b0f19;
+    --foreground: #e2e8f0; /* slate-200 */
+    --card: #131a2b;
+    --card-foreground: #e2e8f0;
+    --surface: #131a2b;
+    --surface-foreground: #e2e8f0;
+
+    --muted: #1e293b; /* slate-800 */
+    --muted-foreground: #94a3b8; /* slate-400 */
+    --secondary: #1e293b;
+    --secondary-foreground: #e2e8f0;
+    --accent: #1e293b;
+    --accent-foreground: #e2e8f0;
+
+    --border: #26324a;
+    --input: #5a6a8a; /* ~slate-550 — 3.19:1 on --card for WCAG 1.4.11 */
+    --ring: #818cf8; /* indigo-400 */
+
+    --primary: #818cf8; /* indigo-400 — dark text for AA on the light fill */
+    --primary-foreground: #1e1b4b; /* indigo-950 */
+
+    --success: #4ade80; /* green-400 */
+    --success-foreground: #052e16; /* green-950 */
+    --warning: #fbbf24; /* amber-400 */
+    --warning-foreground: #451a03; /* amber-950 */
+    --destructive: #f87171; /* red-400 */
+    --destructive-foreground: #450a0a; /* red-950 */
+
+    --success-ontint: #4ade80;
+    --warning-ontint: #fbbf24;
+    --danger-ontint: #f87171;
+    --neutral-ontint: #cbd5e1;
+  }
+}
+
+:root.dark {
+  --background: #0b0f19;
+  --foreground: #e2e8f0;
+  --card: #131a2b;
+  --card-foreground: #e2e8f0;
+  --surface: #131a2b;
+  --surface-foreground: #e2e8f0;
+
+  --muted: #1e293b;
+  --muted-foreground: #94a3b8;
+  --secondary: #1e293b;
+  --secondary-foreground: #e2e8f0;
+  --accent: #1e293b;
+  --accent-foreground: #e2e8f0;
+
+  --border: #26324a;
+  --input: #5a6a8a; /* ~slate-550 — 3.19:1 on --card for WCAG 1.4.11 */
+  --ring: #818cf8;
+
+  --primary: #818cf8;
+  --primary-foreground: #1e1b4b;
+
+  --success: #4ade80;
+  --success-foreground: #052e16;
+  --warning: #fbbf24;
+  --warning-foreground: #451a03;
+  --destructive: #f87171;
+  --destructive-foreground: #450a0a;
+
+  --success-ontint: #4ade80;
+  --warning-ontint: #fbbf24;
+  --danger-ontint: #f87171;
+  --neutral-ontint: #cbd5e1;
+}
+
+/* Expose the semantic variables to Tailwind v4 so bg-, text-, border-, ring-
+   and their alpha variants resolve to them. `inline` keeps the utilities
+   pointing at the live var() so a `.dark` toggle re-themes everything. */
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-surface: var(--surface);
+  --color-surface-foreground: var(--surface-foreground);
+
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success-ontint: var(--success-ontint);
+  --color-warning-ontint: var(--warning-ontint);
+  --color-danger-ontint: var(--danger-ontint);
+  --color-neutral-ontint: var(--neutral-ontint);
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {

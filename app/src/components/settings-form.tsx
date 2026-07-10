@@ -2,6 +2,13 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/components/ui/toast";
 import type { UserSettings } from "@/lib/userSettings";
 
 interface SettingsFormProps {
@@ -10,15 +17,14 @@ interface SettingsFormProps {
 
 export function SettingsForm({ settings }: SettingsFormProps) {
   const router = useRouter();
+  const toast = useToast();
   const [companyWebsite, setCompanyWebsite] = useState(settings.companyWebsite || "");
   const [defaultHashtags, setDefaultHashtags] = useState(settings.defaultHashtags || "");
   const [isLoading, setIsLoading] = useState(false);
-  const [message, setMessage] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    setMessage("");
 
     try {
       const response = await fetch("/api/settings", {
@@ -34,10 +40,10 @@ export function SettingsForm({ settings }: SettingsFormProps) {
         throw new Error("Failed to update settings");
       }
 
-      setMessage("Settings saved successfully!");
+      toast.success("Settings saved successfully!");
       router.refresh();
-    } catch (error) {
-      setMessage("Failed to save settings. Please try again.");
+    } catch {
+      toast.error("Failed to save settings. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -45,88 +51,67 @@ export function SettingsForm({ settings }: SettingsFormProps) {
 
   const previewCaption = () => {
     const sampleCaption = "Check out this amazing content!";
-    const footer = [];
-    
+    const footer: string[] = [];
+
     if (companyWebsite.trim()) {
       footer.push(`For more info visit ${companyWebsite.trim()}`);
     }
-    
+
     if (defaultHashtags.trim()) {
       footer.push(defaultHashtags.trim());
     }
-    
+
     if (footer.length === 0) {
       return sampleCaption;
     }
-    
-    return `${sampleCaption}\n\n${footer.join('\n')}`;
+
+    return `${sampleCaption}\n\n${footer.join("\n")}`;
   };
 
   return (
-    <div className="bg-white rounded-lg shadow-lg p-6">
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <div>
-          <label htmlFor="companyWebsite" className="block text-sm font-medium text-gray-700 mb-2">
-            Company Website
-          </label>
-          <input
-            type="text"
+    <Card className="p-6">
+      <form onSubmit={handleSubmit} className="flex flex-col gap-6">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="companyWebsite">Company website</Label>
+          <Input
             id="companyWebsite"
             placeholder="www.example.com"
             value={companyWebsite}
             onChange={(e) => setCompanyWebsite(e.target.value)}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-          <p className="mt-1 text-sm text-gray-500">
-            This will be appended to all your captions as: &quot;For more info visit [your website]&quot;
+          <p className="text-sm text-muted-foreground">
+            Appended to every caption as: &quot;For more info visit [your website]&quot;.
           </p>
         </div>
 
-        <div>
-          <label htmlFor="defaultHashtags" className="block text-sm font-medium text-gray-700 mb-2">
-            Default Hashtags
-          </label>
-          <textarea
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="defaultHashtags">Default hashtags</Label>
+          <Textarea
             id="defaultHashtags"
             placeholder="#YourBrand #YourIndustry #YourLocation"
             value={defaultHashtags}
             onChange={(e) => setDefaultHashtags(e.target.value)}
             rows={3}
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-          <p className="mt-1 text-sm text-gray-500">
-            These hashtags will be added on a new line after your website
+          <p className="text-sm text-muted-foreground">
+            Added on a new line after your website.
           </p>
         </div>
 
-        {/* Preview */}
-        <div className="bg-gray-50 rounded-lg p-4">
-          <h3 className="text-sm font-medium text-gray-700 mb-2">Preview</h3>
-          <div className="text-sm text-gray-600 whitespace-pre-wrap border-l-4 border-blue-500 pl-4">
+        {/* Live preview of the caption footer. */}
+        <div className="rounded-[var(--radius)] border border-border bg-muted/50 p-4">
+          <h3 className="text-sm font-medium text-foreground">Preview</h3>
+          <div className="mt-2 whitespace-pre-wrap border-l-2 border-primary pl-3 text-sm text-muted-foreground">
             {previewCaption()}
           </div>
         </div>
 
-        {message && (
-          <div
-            className={`p-4 rounded-lg ${
-              message.includes("success")
-                ? "bg-green-50 text-green-800"
-                : "bg-red-50 text-red-800"
-            }`}
-          >
-            {message}
-          </div>
-        )}
-
-        <button
-          type="submit"
-          disabled={isLoading}
-          className="w-full py-3 px-4 bg-gradient-to-r from-blue-600 to-teal-600 text-white font-semibold rounded-lg hover:from-blue-700 hover:to-teal-700 transition disabled:opacity-50"
-        >
-          {isLoading ? "Saving..." : "Save Settings"}
-        </button>
+        <div>
+          <Button type="submit" loading={isLoading} className="w-full sm:w-auto">
+            {isLoading ? "Saving…" : "Save settings"}
+          </Button>
+        </div>
       </form>
-    </div>
+    </Card>
   );
 }

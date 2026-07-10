@@ -1,5 +1,8 @@
 "use client";
 
+import { Card } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import type { YouTubePostMetadata } from "@/server/platforms/types";
 
 interface YouTubePostSettingsProps {
@@ -9,16 +12,15 @@ interface YouTubePostSettingsProps {
 
 export function YouTubePostSettings({ metadata, onChange }: YouTubePostSettingsProps) {
   return (
-    <div className="space-y-2 rounded-lg border border-zinc-200 bg-white p-4">
-      <div className="pb-2 border-b border-zinc-200">
-        <h3 className="text-sm font-semibold text-zinc-900">YouTube Post Settings</h3>
+    <Card className="space-y-3 p-4">
+      <div className="border-b border-border pb-2">
+        <h3 className="text-sm font-semibold text-foreground">YouTube Post Settings</h3>
       </div>
 
-      <div>
-        <label className="block text-sm font-medium text-zinc-900 mb-2">
-          Privacy
-        </label>
-        <select
+      <div className="space-y-1.5">
+        <Label htmlFor="youtube-privacy">Privacy</Label>
+        <Select
+          id="youtube-privacy"
           value={metadata.privacyStatus}
           onChange={(e) =>
             onChange({
@@ -26,16 +28,15 @@ export function YouTubePostSettings({ metadata, onChange }: YouTubePostSettingsP
               privacyStatus: e.target.value as YouTubePostMetadata["privacyStatus"],
             })
           }
-          className="w-full rounded border border-zinc-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-1 focus:ring-zinc-900"
         >
           <option value="public">Public</option>
           <option value="unlisted">Unlisted</option>
           <option value="private">Private</option>
-        </select>
-        <p className="mt-1 text-xs text-zinc-500">
-          Unlisted: only people with the link can view — recommended.
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          Unlisted: only people with the link can view &mdash; recommended.
         </p>
       </div>
-    </div>
+    </Card>
   );
 }

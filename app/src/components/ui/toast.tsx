@@ -101,16 +101,16 @@ const VARIANT_STYLES: Record<
   { container: string; icon: ReactNode }
 > = {
   success: {
-    container: "border-green-200 bg-green-50 text-green-900",
-    icon: <CheckCircle2 className="h-5 w-5 flex-shrink-0 text-green-600" />,
+    container: "border-success/25 bg-success/10 text-foreground",
+    icon: <CheckCircle2 className="h-5 w-5 flex-shrink-0 text-success" />,
   },
   error: {
-    container: "border-red-200 bg-red-50 text-red-900",
-    icon: <AlertCircle className="h-5 w-5 flex-shrink-0 text-red-600" />,
+    container: "border-destructive/25 bg-destructive/10 text-foreground",
+    icon: <AlertCircle className="h-5 w-5 flex-shrink-0 text-destructive" />,
   },
   info: {
-    container: "border-blue-200 bg-blue-50 text-blue-900",
-    icon: <Info className="h-5 w-5 flex-shrink-0 text-blue-600" />,
+    container: "border-primary/25 bg-primary/10 text-foreground",
+    icon: <Info className="h-5 w-5 flex-shrink-0 text-primary" />,
   },
 };
 
@@ -141,7 +141,7 @@ function Toaster({
               type="button"
               onClick={() => onDismiss(toast.id)}
               aria-label="Dismiss notification"
-              className="flex-shrink-0 rounded p-0.5 opacity-70 hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-gray-400/50 transition-opacity"
+              className="flex-shrink-0 rounded p-0.5 opacity-70 hover:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-opacity"
             >
               <X className="h-4 w-4" />
             </button>

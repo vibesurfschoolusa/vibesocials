@@ -6,8 +6,74 @@ import { createPostJobOnly } from "@/server/jobs/posting";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import type { YouTubePostMetadata } from "@/server/platforms/types";
+import type { PostsResponse } from "@/lib/postsDto";
 
 const YOUTUBE_PRIVACY_STATUSES = ["public", "unlisted", "private"] as const;
+
+/** How many recent jobs the activity views load. */
+const POSTS_PAGE_SIZE = 50;
+
+/**
+ * GET /api/posts
+ *
+ * Additive, read-only list endpoint powering the dashboard "recent activity"
+ * and the /activity view. Returns the authenticated user's most recent post
+ * jobs with their per-platform results, projected to display-safe fields only
+ * (SEC-1 discipline — no tokens, secrets, or raw connection metadata).
+ */
+export async function GET() {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const jobs = await prisma.postJob.findMany({
+      where: { userId: user.id },
+      orderBy: { createdAt: "desc" },
+      take: POSTS_PAGE_SIZE,
+      select: {
+        id: true,
+        status: true,
+        createdAt: true,
+        mediaItem: { select: { baseCaption: true } },
+        results: {
+          select: {
+            platform: true,
+            status: true,
+            externalPostId: true,
+            errorMessage: true,
+          },
+          orderBy: { platform: "asc" },
+        },
+      },
+    });
+
+    const payload: PostsResponse = {
+      jobs: jobs.map((job) => ({
+        id: job.id,
+        status: job.status,
+        createdAt: job.createdAt.toISOString(),
+        caption: job.mediaItem?.baseCaption ?? null,
+        results: job.results.map((result) => ({
+          platform: result.platform,
+          status: result.status,
+          externalPostId: result.externalPostId,
+          errorMessage: result.errorMessage,
+        })),
+      })),
+    };
+
+    return NextResponse.json(payload);
+  } catch (error: unknown) {
+    console.error("[GET /api/posts] Unexpected error", { error });
+    return NextResponse.json(
+      { error: "Failed to load posts" },
+      { status: 500 },
+    );
+  }
+}
 
 // Shape of the JSON POST body. Fields the handler validates at runtime are
 // typed `unknown` (narrowed at use); the rest reflect their consumed types.

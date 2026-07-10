@@ -1,5 +1,10 @@
 import Image from "next/image";
-import { Loader2, MessageSquare, Star } from "lucide-react";
+import { MessageSquare, Star } from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { cn } from "@/lib/cn";
 import type { GoogleReview } from "./types";
 import { StarRating } from "./star-rating";
 import { ReplyForm } from "./reply-form";
@@ -45,13 +50,7 @@ export function ReviewCard({
   onDraftAI,
 }: ReviewCardProps) {
   return (
-    <div
-      className={`rounded-xl border ${
-        needsReply
-          ? "border-orange-200 bg-orange-50/50"
-          : "border-gray-200 bg-white"
-      } p-6 shadow-sm`}
-    >
+    <Card className={cn("p-6", needsReply && "border-warning/30 bg-warning/5")}>
       {/* Reviewer Info */}
       <div className="flex items-start gap-4">
         {review.reviewer.profilePhotoUrl ? (
@@ -64,7 +63,7 @@ export function ReviewCard({
             className="h-12 w-12 rounded-full object-cover"
           />
         ) : (
-          <div className="h-12 w-12 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-semibold">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary font-semibold text-primary-foreground">
             {review.reviewer.displayName[0]?.toUpperCase()}
           </div>
         )}
@@ -72,41 +71,37 @@ export function ReviewCard({
         <div className="flex-1">
           <div className="flex items-center justify-between">
             <div>
-              <div className="font-semibold text-gray-900">
+              <div className="font-semibold text-foreground">
                 {review.reviewer.displayName}
               </div>
-              <div className="flex items-center gap-2 mt-1">
+              <div className="mt-1 flex items-center gap-2">
                 <StarRating rating={review.starRating} />
-                <span className="text-sm text-gray-500">
+                <span className="text-sm text-muted-foreground">
                   {formatDate(review.createTime)}
                 </span>
               </div>
             </div>
-            {needsReply && (
-              <span className="px-3 py-1 rounded-full bg-orange-100 text-orange-700 text-xs font-medium">
-                Needs Reply
-              </span>
-            )}
+            {needsReply && <Badge variant="warning">Needs Reply</Badge>}
           </div>
 
           {/* Review Comment */}
           {review.comment && (
-            <p className="mt-3 text-gray-700">{review.comment}</p>
+            <p className="mt-3 text-foreground">{review.comment}</p>
           )}
 
           {/* Existing Reply */}
           {review.reviewReply && (
-            <div className="mt-4 rounded-lg border border-gray-200 bg-white p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <MessageSquare className="h-4 w-4 text-blue-600" />
-                <span className="text-sm font-medium text-gray-900">
+            <div className="mt-4 rounded-[var(--radius)] border border-border bg-muted/40 p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <MessageSquare aria-hidden className="h-4 w-4 text-primary" />
+                <span className="text-sm font-medium text-foreground">
                   Your Reply
                 </span>
-                <span className="text-xs text-gray-500">
+                <span className="text-xs text-muted-foreground">
                   {formatDate(review.reviewReply.updateTime)}
                 </span>
               </div>
-              <p className="text-sm text-gray-700">
+              <p className="text-sm text-foreground">
                 {review.reviewReply.comment}
               </p>
             </div>
@@ -127,38 +122,25 @@ export function ReviewCard({
                 />
               ) : (
                 <div className="flex gap-3">
-                  <button
-                    type="button"
-                    onClick={onOpenReply}
-                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 transition-colors"
-                  >
-                    <MessageSquare className="h-4 w-4" />
+                  <Button type="button" onClick={onOpenReply}>
+                    <MessageSquare aria-hidden className="h-4 w-4" />
                     Reply to Review
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
+                    variant="secondary"
                     onClick={onDraftAI}
-                    disabled={isGeneratingAI}
-                    className="inline-flex items-center gap-2 rounded-lg border-2 border-purple-200 px-4 py-2 text-sm font-semibold text-purple-700 hover:bg-purple-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    loading={isGeneratingAI}
                   >
-                    {isGeneratingAI ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Generating...
-                      </>
-                    ) : (
-                      <>
-                        <Star className="h-4 w-4 fill-purple-600" />
-                        Draft AI Response
-                      </>
-                    )}
-                  </button>
+                    {!isGeneratingAI && <Star aria-hidden className="h-4 w-4" />}
+                    {isGeneratingAI ? "Generating..." : "Draft AI Response"}
+                  </Button>
                 </div>
               )}
             </div>
           )}
         </div>
       </div>
-    </div>
+    </Card>
   );
 }

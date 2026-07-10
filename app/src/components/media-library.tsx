@@ -1,6 +1,29 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import Image from "next/image";
+import { useCallback, useEffect, useState } from "react";
+import {
+  File as FileIcon,
+  ImageOff,
+  Images,
+  PlayCircle,
+} from "lucide-react";
+
+import { Alert } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/components/ui/toast";
 
 interface MediaItemDto {
   id: string;
@@ -8,6 +31,7 @@ interface MediaItemDto {
   mimeType: string;
   sizeBytes: number;
   baseCaption: string;
+  storageLocation: string;
   createdAt: string;
 }
 
@@ -28,7 +52,89 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${sizes[i]}`;
 }
 
+/** Thumbnail for a single item: image preview, video frame + play affordance,
+ * or a generic file icon fallback. Opens the stored file in a new tab (the
+ * existing public storage URL — no new endpoint required). */
+function MediaThumbnail({ item }: { item: MediaItemDto }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const isImage = item.mimeType.startsWith("image/");
+  const isVideo = item.mimeType.startsWith("video/");
+
+  return (
+    <a
+      href={item.storageLocation}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={`Open ${item.originalFilename}`}
+      className="relative block aspect-square w-full overflow-hidden bg-muted outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+    >
+      {isImage && !imageFailed ? (
+        <Image
+          src={item.storageLocation}
+          alt=""
+          fill
+          unoptimized
+          sizes="(min-width: 1024px) 25vw, (min-width: 640px) 33vw, 50vw"
+          className="object-cover"
+          onError={() => setImageFailed(true)}
+        />
+      ) : isVideo ? (
+        <>
+          <video
+            src={item.storageLocation}
+            muted
+            playsInline
+            preload="metadata"
+            tabIndex={-1}
+            aria-hidden
+            className="h-full w-full object-cover"
+          />
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 flex items-center justify-center bg-slate-950/15"
+          >
+            <PlayCircle className="h-10 w-10 text-white drop-shadow-md" />
+          </div>
+        </>
+      ) : (
+        <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+          {isImage ? (
+            <ImageOff aria-hidden className="h-8 w-8" />
+          ) : (
+            <FileIcon aria-hidden className="h-8 w-8" />
+          )}
+        </div>
+      )}
+    </a>
+  );
+}
+
+function MediaCard({ item }: { item: MediaItemDto }) {
+  return (
+    <Card className="overflow-hidden">
+      <MediaThumbnail item={item} />
+      <div className="space-y-0.5 p-3">
+        <p
+          className="truncate text-sm font-medium text-foreground"
+          title={item.originalFilename}
+        >
+          {item.originalFilename}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {formatBytes(item.sizeBytes)}
+          {" · "}
+          <time dateTime={item.createdAt}>
+            {new Date(item.createdAt).toLocaleDateString()}
+          </time>
+        </p>
+      </div>
+    </Card>
+  );
+}
+
 export function MediaLibrary() {
+  const toast = useToast();
+
   const [items, setItems] = useState<MediaItemDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -36,43 +142,51 @@ export function MediaLibrary() {
   const [file, setFile] = useState<File | null>(null);
   const [baseCaption, setBaseCaption] = useState("");
   const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [fileInputKey, setFileInputKey] = useState(0);
+
+  // Does the actual fetch/parse. Deliberately does NOT reset `loading`/`error`
+  // at the top: `loading`/`error` already start `true`/`null` from useState,
+  // so the mount-time effect below never calls setState synchronously within
+  // the effect body itself (that would trip react-hooks/set-state-in-effect)
+  // — the first state update happens only after the `await` below. The
+  // Retry button (a normal event handler, not an effect) resets the state
+  // itself before calling this. `setLoading(false)` lives in `finally` (a
+  // single call site) so every exit path — success, handled error, thrown
+  // error — clears it the same way.
+  const fetchItems = useCallback(async () => {
+    try {
+      const response = await fetch("/api/media");
+      const data = (await response.json().catch(() => null)) as ListResponse | null;
+
+      if (!response.ok) {
+        setError((data as { error?: string } | null)?.error ?? "Failed to load media items.");
+        return;
+      }
+
+      const list = Array.isArray(data?.items) ? data!.items : [];
+      setItems(list);
+    } catch (_err) {
+      setError("Unexpected error while loading media items.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    // Load once on mount. `loading` already starts `true` and `error` `null`, so the
-    // first state update happens only after the await below (never synchronously in
-    // the effect body, which would trip react-hooks/set-state-in-effect).
-    async function loadItems() {
-      try {
-        const response = await fetch("/api/media");
-        const data = (await response.json().catch(() => null)) as ListResponse | null;
+    void fetchItems();
+  }, [fetchItems]);
 
-        if (!response.ok) {
-          setError((data as { error?: string } | null)?.error ?? "Failed to load media items.");
-          setLoading(false);
-          return;
-        }
-
-        const list = Array.isArray(data?.items) ? data!.items : [];
-        setItems(list);
-        setLoading(false);
-      } catch (_err) {
-        setError("Unexpected error while loading media items.");
-        setLoading(false);
-      }
-    }
-
-    void loadItems();
-  }, []);
+  const handleRetry = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    void fetchItems();
+  }, [fetchItems]);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    setUploadError(null);
-    setUploadMessage(null);
 
     if (!file) {
-      setUploadError("Please choose a file to upload.");
+      toast.error("Please choose a file to upload.");
       return;
     }
 
@@ -94,7 +208,7 @@ export function MediaLibrary() {
         | null;
 
       if (!response.ok) {
-        setUploadError((data as { error?: string } | null)?.error ?? "Failed to upload media.");
+        toast.error((data as { error?: string } | null)?.error ?? "Failed to upload media.");
         setUploading(false);
         return;
       }
@@ -103,102 +217,98 @@ export function MediaLibrary() {
       setItems((prev) => [created, ...prev]);
       setFile(null);
       setBaseCaption("");
-      setUploadMessage("Media uploaded successfully.");
+      setFileInputKey((key) => key + 1);
+      toast.success("Media uploaded successfully.");
       setUploading(false);
     } catch (_err) {
-      setUploadError("Unexpected error while uploading media.");
+      toast.error("Unexpected error while uploading media.");
       setUploading(false);
     }
   }
 
   return (
-    <div className="space-y-6">
-      <form onSubmit={handleSubmit} className="space-y-3">
-        <div>
-          <label className="block text-sm font-medium text-zinc-900">
-            Upload new media
-          </label>
-          <input
-            type="file"
-            accept="video/*,image/*"
-            onChange={(event) => {
-              const nextFile = event.target.files?.[0] ?? null;
-              setFile(nextFile);
-            }}
-            className="mt-1 block w-full text-sm text-zinc-900 file:mr-3 file:rounded file:border-0 file:bg-zinc-900 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-zinc-800"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-zinc-900">
-            Base caption
-          </label>
-          <textarea
-            value={baseCaption}
-            onChange={(event) => setBaseCaption(event.target.value)}
-            rows={3}
-            className="mt-1 w-full rounded border border-zinc-300 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-zinc-900"
-            placeholder="Optional base caption to reuse across posts"
-          />
-        </div>
-        <div className="flex items-center justify-between text-xs">
-          <button
-            type="submit"
-            disabled={uploading}
-            className="rounded bg-black px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-70"
-          >
-            {uploading ? "Uploading..." : "Upload"}
-          </button>
-          <div className="flex items-center gap-3">
-            {uploadMessage && (
-              <span className="text-xs text-emerald-700">{uploadMessage}</span>
-            )}
-            {uploadError && (
-              <span className="text-xs text-red-600">{uploadError}</span>
-            )}
-          </div>
-        </div>
-      </form>
+    <div className="space-y-8">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Upload new media</CardTitle>
+          <CardDescription>
+            Add a video or image once, then reuse it across posts and platforms.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="media-file">File</Label>
+              <Input
+                key={fileInputKey}
+                id="media-file"
+                type="file"
+                accept="video/*,image/*"
+                onChange={(event) => {
+                  const nextFile = event.target.files?.[0] ?? null;
+                  setFile(nextFile);
+                }}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="media-caption">Base caption</Label>
+              <Textarea
+                id="media-caption"
+                value={baseCaption}
+                onChange={(event) => setBaseCaption(event.target.value)}
+                rows={3}
+                placeholder="Optional base caption to reuse across posts"
+              />
+            </div>
+            <div className="flex justify-end">
+              <Button type="submit" loading={uploading}>
+                Upload
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
 
-      <div className="border-t border-zinc-200 pt-4">
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-zinc-900">Your media</h2>
-          {loading && <span className="text-xs text-zinc-500">Loading...</span>}
-        </div>
-        {error && <p className="text-xs text-red-600">{error}</p>}
-        {!loading && !error && items.length === 0 && (
-          <p className="text-xs text-zinc-600">
-            No media uploaded yet. Use the form above to add your first file.
-          </p>
-        )}
-        {!loading && !error && items.length > 0 && (
-          <ul className="divide-y divide-zinc-100">
-            {items.map((item) => (
-              <li key={item.id} className="py-2 text-xs">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="font-medium text-zinc-900">
-                      {item.originalFilename}
-                    </div>
-                    <div className="text-[11px] text-zinc-600">
-                      {item.mimeType} · {formatBytes(item.sizeBytes)}
-                    </div>
-                    {item.baseCaption && (
-                      <div className="mt-1 text-[11px] text-zinc-700">
-                        {item.baseCaption}
-                      </div>
-                    )}
-                  </div>
-                  <div className="text-right">
-                    <div className="text-[11px] text-zinc-500">
-                      {new Date(item.createdAt).toLocaleString()}
-                    </div>
-                  </div>
-                </div>
-              </li>
+      <section aria-labelledby="your-media-heading">
+        <h2
+          id="your-media-heading"
+          className="mb-4 text-lg font-semibold text-foreground"
+        >
+          Your media
+        </h2>
+
+        {loading ? (
+          <div
+            className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4"
+            aria-hidden
+          >
+            {Array.from({ length: 8 }).map((_, index) => (
+              <Skeleton key={index} className="aspect-square w-full" />
             ))}
-          </ul>
+          </div>
+        ) : error ? (
+          <Alert variant="danger" title="Couldn't load your media">
+            <div className="flex flex-col items-start gap-3">
+              <p>{error}</p>
+              <Button size="sm" variant="outline" onClick={handleRetry}>
+                Retry
+              </Button>
+            </div>
+          </Alert>
+        ) : items.length === 0 ? (
+          <EmptyState
+            icon={<Images />}
+            title="No media yet"
+            description="Upload from Create post, or use the form above, to build your library."
+          />
+        ) : (
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+            {items.map((item) => (
+              <MediaCard key={item.id} item={item} />
+            ))}
+          </div>
         )}
-      </div>
+      </section>
     </div>
   );
 }

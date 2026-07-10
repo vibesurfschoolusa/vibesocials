@@ -1,21 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, Loader2, MessageSquare } from "lucide-react";
-import Link from "next/link";
+import { CheckCircle2, MessageSquare } from "lucide-react";
 
-import { ToastProvider, useToast } from "@/components/ui/toast";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Spinner } from "@/components/ui/spinner";
+import { useToast } from "@/components/ui/toast";
 import { ErrorState } from "@/components/reviews/error-state";
 import { LocationPicker } from "@/components/reviews/location-picker";
 import { ReviewCard } from "@/components/reviews/review-card";
 import type { GoogleReview, Location } from "@/components/reviews/types";
 
+// Toasts are provided app-wide by the shell's ToastProvider (see
+// components/shell/app-shell.tsx), so this page no longer wraps its own.
 export default function ReviewsPage() {
-  return (
-    <ToastProvider>
-      <ReviewsPageContent />
-    </ToastProvider>
-  );
+  return <ReviewsPageContent />;
 }
 
 function ReviewsPageContent() {
@@ -206,11 +206,9 @@ function ReviewsPageContent() {
 
   if (loadingLocations) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
-        <div className="container mx-auto max-w-6xl px-4 py-8">
-          <div className="flex items-center justify-center py-20">
-            <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
-          </div>
+      <div className="mx-auto max-w-6xl px-4 py-8 md:px-6 lg:px-8">
+        <div className="flex items-center justify-center py-20">
+          <Spinner size="lg" label="Loading reviews" />
         </div>
       </div>
     );
@@ -218,118 +216,110 @@ function ReviewsPageContent() {
 
   if (locationsError) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
-        <div className="container mx-auto max-w-6xl px-4 py-8">
-          <ErrorState
-            title="Error Loading Reviews"
-            message={locationsError}
-            onRetry={loadLocations}
-          />
-        </div>
+      <div className="mx-auto max-w-6xl px-4 py-8 md:px-6 lg:px-8">
+        <ErrorState
+          title="Error Loading Reviews"
+          message={locationsError}
+          onRetry={loadLocations}
+        />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
-      <div className="container mx-auto max-w-6xl px-4 py-8">
-        {/* Header */}
+    <div className="mx-auto max-w-6xl px-4 py-8 md:px-6 lg:px-8">
+      {/* Header */}
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold tracking-tight text-foreground">Google Reviews</h1>
+        <p className="mt-2 text-muted-foreground">
+          Manage and reply to your Google Business Profile reviews
+        </p>
+      </div>
+
+      {/* Location Selector */}
+      {locations.length > 1 && (
+        <LocationPicker
+          locations={locations}
+          selectedLocation={selectedLocation}
+          onChange={setSelectedLocation}
+        />
+      )}
+
+      {/* Summary Card - Only Needs Reply */}
+      {selectedLocation && !reviewsError && (
         <div className="mb-8">
-          <Link
-            href="/"
-            className="inline-flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 mb-4 transition-colors"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back to Dashboard
-          </Link>
-          <h1 className="text-3xl font-bold text-gray-900">Google Reviews</h1>
-          <p className="mt-2 text-gray-600">
-            Manage and reply to your Google Business Profile reviews
-          </p>
-        </div>
-
-        {/* Location Selector */}
-        {locations.length > 1 && (
-          <LocationPicker
-            locations={locations}
-            selectedLocation={selectedLocation}
-            onChange={setSelectedLocation}
-          />
-        )}
-
-        {/* Summary Card - Only Needs Reply */}
-        {selectedLocation && !reviewsError && (
-          <div className="mb-8">
-            <div className="rounded-xl border border-orange-200 bg-orange-50 p-6 shadow-sm max-w-sm">
-              <div className="text-sm font-medium text-orange-900">
-                Reviews Needing Reply
-              </div>
-              <div className="mt-2 text-4xl font-bold text-orange-600">
-                {needsReplyReviews.length}
-              </div>
+          <Card className="max-w-sm p-6">
+            <div className="text-sm font-medium text-muted-foreground">
+              Reviews Needing Reply
             </div>
-          </div>
-        )}
+            <div className="mt-2 text-4xl font-bold text-warning">
+              {needsReplyReviews.length}
+            </div>
+          </Card>
+        </div>
+      )}
 
-        {/* Reviews List */}
-        {!selectedLocation ? (
-          <div className="rounded-xl border border-gray-200 bg-white p-12 text-center">
-            <MessageSquare className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-gray-900">
-              Select a Location
-            </h3>
-            <p className="mt-2 text-gray-600">
-              {locations.length === 0
-                ? "No locations found. Please connect your Google Business Profile."
-                : "Choose a location above to view and reply to reviews"}
-            </p>
+      {/* Reviews List */}
+      {!selectedLocation ? (
+        <EmptyState
+          icon={<MessageSquare />}
+          title="Select a Location"
+          description={
+            locations.length === 0
+              ? "No locations found. Please connect your Google Business Profile."
+              : "Choose a location above to view and reply to reviews"
+          }
+        />
+      ) : reviewsError ? (
+        <ErrorState
+          title="Error Loading Reviews"
+          message={reviewsError}
+          onRetry={loadReviews}
+        />
+      ) : loading ? (
+        <div className="flex items-center justify-center py-20">
+          <Spinner size="lg" label="Loading reviews" />
+        </div>
+      ) : needsReplyReviews.length === 0 ? (
+        <Card className="flex flex-col items-center gap-3 border-success/30 bg-success/5 px-6 py-12 text-center">
+          <div
+            aria-hidden
+            className="flex h-12 w-12 items-center justify-center rounded-full bg-success/15 text-success"
+          >
+            <CheckCircle2 className="h-6 w-6" />
           </div>
-        ) : reviewsError ? (
-          <ErrorState
-            title="Error Loading Reviews"
-            message={reviewsError}
-            onRetry={loadReviews}
-          />
-        ) : loading ? (
-          <div className="flex items-center justify-center py-20">
-            <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
-          </div>
-        ) : needsReplyReviews.length === 0 ? (
-          <div className="rounded-xl border border-green-200 bg-green-50 p-12 text-center">
-            <MessageSquare className="h-12 w-12 text-green-600 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-green-900">
-              All Caught Up!
-            </h3>
-            <p className="mt-2 text-green-700">
+          <div className="flex flex-col gap-1">
+            <h3 className="text-base font-semibold text-foreground">All Caught Up!</h3>
+            <p className="mx-auto max-w-sm text-sm text-muted-foreground">
               No reviews need replies at this location. Great job!
             </p>
           </div>
-        ) : (
-          <div className="space-y-4">
-            {needsReplyReviews.map((review) => (
-              <ReviewCard
-                key={review.reviewId}
-                review={review}
-                needsReply
-                isReplyOpen={replyingTo === review.reviewId}
-                isSubmitting={submitting === review.reviewId}
-                isGeneratingAI={generatingAI === review.reviewId}
-                replyValue={replyText[review.reviewId] || ""}
-                onOpenReply={() => setReplyingTo(review.reviewId)}
-                onCloseReply={() => setReplyingTo(null)}
-                onChangeReply={(value) =>
-                  setReplyText((prev) => ({
-                    ...prev,
-                    [review.reviewId]: value,
-                  }))
-                }
-                onSubmitReply={() => requestReply(review)}
-                onDraftAI={() => handleDraftAI(review)}
-              />
-            ))}
-          </div>
-        )}
-      </div>
+        </Card>
+      ) : (
+        <div className="space-y-4">
+          {needsReplyReviews.map((review) => (
+            <ReviewCard
+              key={review.reviewId}
+              review={review}
+              needsReply
+              isReplyOpen={replyingTo === review.reviewId}
+              isSubmitting={submitting === review.reviewId}
+              isGeneratingAI={generatingAI === review.reviewId}
+              replyValue={replyText[review.reviewId] || ""}
+              onOpenReply={() => setReplyingTo(review.reviewId)}
+              onCloseReply={() => setReplyingTo(null)}
+              onChangeReply={(value) =>
+                setReplyText((prev) => ({
+                  ...prev,
+                  [review.reviewId]: value,
+                }))
+              }
+              onSubmitReply={() => requestReply(review)}
+              onDraftAI={() => handleDraftAI(review)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
