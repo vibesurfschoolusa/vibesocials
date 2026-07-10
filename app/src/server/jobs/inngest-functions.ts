@@ -516,12 +516,20 @@ export const retryPlatforms = inngest.createFunction(
           ? buildCaptionWithFooter(captionOverride, user)
           : fullBaseCaption;
 
+        // Per-post TikTok/YouTube metadata isn't persisted, so a retry can't
+        // recover the user's original privacy choice. Use each platform's SAFEST
+        // value so a retry is never MORE public than the user picked: TikTok ->
+        // its SELF_ONLY default (arg omitted), YouTube -> explicit "private"
+        // (the client's own default "unlisted" is MORE public than a user's
+        // "private", which would be a silent privacy escalation).
         return publishToPlatform(
           connection,
           mediaItem,
           caption,
           userId,
           resultRecord.id,
+          undefined,
+          platform === "youtube" ? { privacyStatus: "private" } : undefined,
         );
       });
 

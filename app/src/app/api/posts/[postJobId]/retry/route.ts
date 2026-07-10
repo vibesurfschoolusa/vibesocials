@@ -194,7 +194,14 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   // IDEMPOTENCY GUARD: atomically claim each candidate (failed -> pending).
   // Only rows still in `failed` flip; a concurrent/duplicate retry that already
   // claimed a platform sees `count === 0` for it and it's dropped — so the same
-  // platform can never be published twice.
+  // platform can never be published twice by OUR retries.
+  //
+  // KNOWN LIMITATION (accepted for v1): this cannot stop a provider false
+  // negative — if a platform actually published but we recorded `failed`
+  // (notably TikTok's TIKTOK_PUBLISH_TIMEOUT, where the video "may still be
+  // processing"), a retry creates a second live post. No provider exposes an
+  // idempotency key here. A future guard could warn on retrying a timeout-coded
+  // failure or persist provider post-ids to dedupe.
   const claims = await Promise.all(
     candidates.map(async (platform) => {
       const { count } = await prisma.postJobResult.updateMany({
@@ -219,17 +226,37 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     );
   }
 
-  // Parent job re-enters the running state while the retried platforms publish.
-  await prisma.postJob.update({
-    where: { id: postJobId },
-    data: { status: "in_progress" },
-  });
+  // The claim above flipped these rows failed -> pending. If we now fail to move
+  // the job to in_progress or to enqueue the retry run, those rows would be stuck
+  // `pending` forever with no run to terminalize them — and un-retryable (the
+  // claim requires `failed`). So revert them to `failed` on any error here.
+  try {
+    // Parent job re-enters the running state while the retried platforms publish.
+    await prisma.postJob.update({
+      where: { id: postJobId },
+      data: { status: "in_progress" },
+    });
 
-  // Hand off to the background retry function for exactly the claimed platforms.
-  await inngest.send({
-    name: "post/retry.requested",
-    data: { postJobId, userId: user.id, platforms: eligible },
-  });
+    // Hand off to the background retry function for exactly the claimed platforms.
+    await inngest.send({
+      name: "post/retry.requested",
+      data: { postJobId, userId: user.id, platforms: eligible },
+    });
+  } catch (error) {
+    console.error("[retry] failed to enqueue retry run; reverting claim", error);
+    await prisma.postJobResult.updateMany({
+      where: { postJobId, platform: { in: eligible }, status: "pending" },
+      data: {
+        status: "failed",
+        errorCode: "RETRY_ENQUEUE_FAILED",
+        errorMessage: "Couldn't start the retry. Please try again.",
+      },
+    });
+    return NextResponse.json(
+      { error: "Couldn't start the retry. Please try again.", code: "RETRY_ENQUEUE_FAILED" },
+      { status: 500 },
+    );
+  }
 
   return NextResponse.json({ ok: true, retrying: eligible }, { status: 202 });
 }
