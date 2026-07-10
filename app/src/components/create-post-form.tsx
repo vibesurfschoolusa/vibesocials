@@ -1,11 +1,20 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import Link from "next/link";
 import { upload } from '@vercel/blob/client';
+import { Sparkles } from "lucide-react";
 import { LocationAutocomplete } from "./location-autocomplete";
 import { TikTokPostSettings } from "./tiktok-post-settings";
 import { YouTubePostSettings } from "./youtube-post-settings";
-import { Sparkles, Loader2 } from "lucide-react";
+import { Alert } from "@/components/ui/alert";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { fieldBaseClasses } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/components/ui/toast";
+import { cn } from "@/lib/cn";
 import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
 
 interface PostResponse {
@@ -51,17 +60,26 @@ function generateBlobKey(file: File): string {
 }
 
 export function CreatePostForm() {
+  const toast = useToast();
+
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadCaption, setUploadCaption] = useState("");
   const [uploadLocation, setUploadLocation] = useState("");
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [showSuccess, setShowSuccess] = useState(false);
   const [enhancingCaption, setEnhancingCaption] = useState(false);
 
   const [autoCaptionEnabled, setAutoCaptionEnabled] = useState(true);
   const [autoCaptionLoading, setAutoCaptionLoading] = useState(false);
   const [uploadedBlob, setUploadedBlob] = useState<UploadedBlobInfo | null>(null);
+
+  // Local object-URL preview for the currently attached file. Created/revoked
+  // by the effect below so we never leak object URLs.
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  // 0-100 while a Blob upload is in flight for the active file; null when idle.
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
 
   // Tracks the in-flight/most recent Blob upload for the CURRENT file, keyed
   // by File identity. This guarantees a given file is uploaded to Vercel
@@ -82,6 +100,7 @@ export function CreatePostForm() {
     disableDuet: true,
     disableStitch: true,
   });
+  const [tiktokPrivacyError, setTiktokPrivacyError] = useState<string | null>(null);
 
   const [hasYouTubeConnection, setHasYouTubeConnection] = useState(false);
   const [youtubeMetadata, setYoutubeMetadata] = useState<YouTubePostMetadata>({
@@ -92,6 +111,25 @@ export function CreatePostForm() {
     checkTikTokConnection();
     checkYouTubeConnection();
   }, []);
+
+  // Build (and clean up) an object URL for the attached file so we can render
+  // an inline media preview without touching the upload flow.
+  useEffect(() => {
+    if (!uploadFile) {
+      setPreviewUrl(null);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(uploadFile);
+    setPreviewUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [uploadFile]);
+
+  // Clear the inline TikTok privacy validation once a level is chosen.
+  useEffect(() => {
+    if (tiktokMetadata.privacyLevel) {
+      setTiktokPrivacyError(null);
+    }
+  }, [tiktokMetadata.privacyLevel]);
 
   async function checkTikTokConnection() {
     try {
@@ -129,9 +167,18 @@ export function CreatePostForm() {
 
     const uploadKey = generateBlobKey(file);
 
+    setUploadProgress(0);
+
     const promise = upload(uploadKey, file, {
       access: "public",
       handleUploadUrl: "/api/upload",
+      // Progress feedback only; does not change upload semantics. Guarded so a
+      // stale in-flight upload for a swapped-out file never moves the bar.
+      onUploadProgress: (event) => {
+        if (activeUploadRef.current?.file === file) {
+          setUploadProgress(event.percentage);
+        }
+      },
     }).then(
       (newBlob) => {
         const blobInfo: UploadedBlobInfo = {
@@ -146,6 +193,7 @@ export function CreatePostForm() {
         // while this upload was in flight).
         if (activeUploadRef.current?.file === file) {
           setUploadedBlob(blobInfo);
+          setUploadProgress(null);
         }
 
         return blobInfo;
@@ -153,6 +201,7 @@ export function CreatePostForm() {
       (err: unknown) => {
         if (activeUploadRef.current?.file === file) {
           activeUploadRef.current = null;
+          setUploadProgress(null);
         }
         throw err;
       },
@@ -214,7 +263,7 @@ export function CreatePostForm() {
       });
     } catch (err: unknown) {
       console.error("Error generating caption from media:", err);
-      setUploadError((err as Error).message || "Failed to generate caption from media");
+      toast.error((err as Error).message || "Failed to generate caption from media");
     } finally {
       setAutoCaptionLoading(false);
     }
@@ -223,7 +272,7 @@ export function CreatePostForm() {
   async function handleUploadSubmit(event: React.FormEvent) {
     event.preventDefault();
     setUploadError(null);
-    setSuccessMessage(null);
+    setShowSuccess(false);
 
     if (!uploadFile) {
       setUploadError("Please choose a file to upload.");
@@ -254,7 +303,8 @@ export function CreatePostForm() {
       // Add TikTok-specific metadata if TikTok is connected
       if (hasTikTokConnection) {
         if (!tiktokMetadata.privacyLevel) {
-          setUploadError("Please select a privacy level for TikTok");
+          setTiktokPrivacyError("Please select a privacy level for TikTok");
+          toast.error("Please select a privacy level for TikTok");
           setUploadLoading(false);
           return;
         }
@@ -280,13 +330,13 @@ export function CreatePostForm() {
         | null;
 
       if (!response.ok) {
-        setUploadError((data as { error?: string } | null)?.error ?? "Failed to create post.");
+        toast.error((data as { error?: string } | null)?.error ?? "Failed to create post.");
         setUploadLoading(false);
         return;
       }
 
-      const jobId = (data as PostResponse).postJob.id;
-      setSuccessMessage(`Post created (job ${jobId}).`);
+      toast.success("Post queued — track it in Activity");
+      setShowSuccess(true);
       setUploadFile(null);
       setUploadCaption("");
       setUploadLocation("");
@@ -300,8 +350,8 @@ export function CreatePostForm() {
       });
       setYoutubeMetadata({ privacyStatus: "unlisted" });
       setUploadLoading(false);
-    } catch (_err) {
-      setUploadError("Unexpected error while creating post.");
+    } catch {
+      toast.error("Unexpected error while creating post.");
       setUploadLoading(false);
     }
   }
@@ -338,174 +388,215 @@ export function CreatePostForm() {
       setUploadCaption(enhancedCaption);
     } catch (err: unknown) {
       console.error("Error enhancing caption:", err);
-      setUploadError((err as Error).message || "Failed to enhance caption");
+      toast.error((err as Error).message || "Failed to enhance caption");
     } finally {
       setEnhancingCaption(false);
     }
   }
 
+  const isImagePreview = uploadFile?.type.startsWith("image/") ?? false;
+  const isVideoPreview = uploadFile?.type.startsWith("video/") ?? false;
+
   return (
-    <div className="space-y-6">
-      {successMessage && (
-        <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-3 py-2">
-          {successMessage}
-        </div>
-      )}
+    <Card className="p-6">
+      <form onSubmit={handleUploadSubmit} className="space-y-5">
+        {showSuccess && (
+          <Alert variant="success" title="Post queued">
+            <div className="flex flex-col items-start gap-2">
+              <p>
+                We&apos;re publishing to your connected platforms. Per-platform results appear in
+                Activity.
+              </p>
+              <Link
+                href="/activity"
+                className={buttonVariants({ variant: "outline", size: "sm" })}
+              >
+                View activity
+              </Link>
+            </div>
+          </Alert>
+        )}
 
-      <form onSubmit={handleUploadSubmit} className="space-y-3">
-          <div>
-            <label className="block text-sm font-medium text-zinc-900">
-              Media file (image or video)
-            </label>
-            <input
-              type="file"
-              accept="video/*,image/*"
-              onChange={async (event) => {
-                const nextFile = event.target.files?.[0] ?? null;
-                setUploadFile(nextFile);
-                setUploadedBlob(null);
-                // Changing (or clearing) the file invalidates any
-                // in-flight/completed upload for the previous file so it
-                // can never be applied to this new selection.
-                activeUploadRef.current = null;
+        {uploadError && <Alert variant="danger">{uploadError}</Alert>}
 
-                if (!nextFile) {
-                  return;
+        <div className="space-y-1.5">
+          <Label htmlFor="post-media">Media file (image or video)</Label>
+          <input
+            id="post-media"
+            type="file"
+            accept="video/*,image/*"
+            onChange={async (event) => {
+              const nextFile = event.target.files?.[0] ?? null;
+              setUploadFile(nextFile);
+              setUploadedBlob(null);
+              setShowSuccess(false);
+              // Changing (or clearing) the file invalidates any
+              // in-flight/completed upload for the previous file so it
+              // can never be applied to this new selection.
+              activeUploadRef.current = null;
+
+              if (!nextFile) {
+                return;
+              }
+
+              try {
+                setAutoCaptionLoading(true);
+                setUploadError(null);
+
+                const blobInfo = await ensureUploaded(nextFile);
+
+                if (autoCaptionEnabled) {
+                  await runAutoCaptionFromMedia({
+                    overwrite: false,
+                    blobOverride: blobInfo,
+                  });
                 }
+              } catch (err: unknown) {
+                console.error(
+                  "Error uploading media for auto-caption:",
+                  err,
+                );
+                toast.error(
+                  (err as Error).message ||
+                    "Failed to prepare media for posting. Please try again.",
+                );
+              } finally {
+                setAutoCaptionLoading(false);
+              }
+            }}
+            className="block w-full cursor-pointer text-sm text-foreground file:mr-3 file:cursor-pointer file:rounded-[var(--radius)] file:border-0 file:bg-secondary file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-secondary-foreground hover:file:bg-secondary/80"
+          />
 
-                try {
-                  setAutoCaptionLoading(true);
-                  setUploadError(null);
+          {uploadFile && previewUrl && (
+            <div className="mt-2 space-y-2">
+              {isImagePreview ? (
+                // eslint-disable-next-line @next/next/no-img-element -- local object-URL preview; next/image would need remote host config
+                <img
+                  src={previewUrl}
+                  alt={`Preview of ${uploadFile.name}`}
+                  className="max-h-64 w-auto rounded-[var(--radius)] border border-border object-contain"
+                />
+              ) : isVideoPreview ? (
+                <video
+                  src={previewUrl}
+                  controls
+                  className="max-h-64 w-full rounded-[var(--radius)] border border-border"
+                />
+              ) : null}
+              <p className="text-xs text-muted-foreground">
+                {uploadFile.name} &middot; {formatBytes(uploadFile.size)}
+              </p>
+            </div>
+          )}
 
-                  const blobInfo = await ensureUploaded(nextFile);
-
-                  if (autoCaptionEnabled) {
-                    await runAutoCaptionFromMedia({
-                      overwrite: false,
-                      blobOverride: blobInfo,
-                    });
-                  }
-                } catch (err: unknown) {
-                  console.error(
-                    "Error uploading media for auto-caption:",
-                    err,
-                  );
-                  setUploadError(
-                    (err as Error).message ||
-                      "Failed to prepare media for posting. Please try again.",
-                  );
-                } finally {
-                  setAutoCaptionLoading(false);
-                }
-              }}
-              className="mt-1 block w-full text-sm text-zinc-900 file:mr-3 file:rounded file:border-0 file:bg-zinc-900 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-zinc-800"
-            />
-          </div>
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <div className="flex flex-col gap-1">
-                <label className="block text-sm font-medium text-zinc-900">
-                  Caption
-                </label>
-                <label className="inline-flex items-center gap-1 text-xs text-zinc-600">
-                  <input
-                    type="checkbox"
-                    className="h-3 w-3"
-                    checked={autoCaptionEnabled}
-                    onChange={(event) =>
-                      setAutoCaptionEnabled(event.target.checked)
-                    }
-                  />
-                  <span>Auto-caption from media (on attach)</span>
-                </label>
+          {uploadProgress !== null && (
+            <div className="mt-2 space-y-1">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>Uploading&hellip;</span>
+                <span>{Math.round(uploadProgress)}%</span>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() =>
-                    runAutoCaptionFromMedia({ overwrite: true })
-                  }
-                  disabled={autoCaptionLoading || !uploadedBlob}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {autoCaptionLoading ? (
-                    <>
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      Auto caption...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="h-3 w-3 fill-blue-600" />
-                      Auto Caption
-                    </>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleEnhanceCaption}
-                  disabled={enhancingCaption || !uploadCaption.trim()}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-purple-200 bg-purple-50 px-3 py-1 text-xs font-semibold text-purple-700 hover:bg-purple-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {enhancingCaption ? (
-                    <>
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      Enhancing...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="h-3 w-3 fill-purple-600" />
-                      AI Enhance Caption
-                    </>
-                  )}
-                </button>
+              <div
+                role="progressbar"
+                aria-label="Upload progress"
+                aria-valuenow={Math.round(uploadProgress)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                className="h-2 w-full overflow-hidden rounded-full bg-muted"
+              >
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-200"
+                  style={{ width: `${uploadProgress}%` }}
+                />
               </div>
             </div>
-            <textarea
-              value={uploadCaption}
-              onChange={(event) => setUploadCaption(event.target.value)}
-              rows={3}
-              className="mt-1 w-full rounded border border-zinc-300 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-zinc-900"
-              placeholder="What do you want to say with this post?"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-zinc-900">
-              Location <span className="text-xs text-zinc-500">(optional)</span>
-            </label>
-            <LocationAutocomplete
-              value={uploadLocation}
-              onChange={setUploadLocation}
-              placeholder="Start typing a location..."
-              className="mt-1 w-full rounded border border-zinc-300 px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-zinc-900"
-            />
-            <p className="mt-1 text-xs text-zinc-500">
-              Type to search for locations. Will be added to Instagram, TikTok, and X posts. (YouTube requires manual location setting via Studio)
-            </p>
-          </div>
-          {hasTikTokConnection && uploadFile && (
-            <TikTokPostSettings
-              metadata={tiktokMetadata}
-              onChange={setTiktokMetadata}
-              isVideo={uploadFile.type.startsWith("video/")}
-            />
           )}
-          {hasYouTubeConnection && uploadFile && (
-            <YouTubePostSettings
-              metadata={youtubeMetadata}
-              onChange={setYoutubeMetadata}
-            />
-          )}
-          <div className="flex items-center justify-between text-xs">
-            <button
-              type="submit"
-              disabled={uploadLoading}
-              className="rounded bg-black px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-800 disabled:opacity-70"
-            >
-              {uploadLoading ? "Creating post..." : "Create post"}
-            </button>
-            {uploadError && <span className="text-xs text-red-600">{uploadError}</span>}
+        </div>
+
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap items-end justify-between gap-2">
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="post-caption">Caption</Label>
+              <label className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 rounded border-input accent-[var(--primary)]"
+                  checked={autoCaptionEnabled}
+                  onChange={(event) => setAutoCaptionEnabled(event.target.checked)}
+                />
+                <span>Auto-caption from media (on attach)</span>
+              </label>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => runAutoCaptionFromMedia({ overwrite: true })}
+                loading={autoCaptionLoading}
+                disabled={autoCaptionLoading || !uploadedBlob}
+              >
+                {!autoCaptionLoading && <Sparkles className="h-4 w-4" aria-hidden />}
+                Auto Caption
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleEnhanceCaption}
+                loading={enhancingCaption}
+                disabled={enhancingCaption || !uploadCaption.trim()}
+              >
+                {!enhancingCaption && <Sparkles className="h-4 w-4" aria-hidden />}
+                AI Enhance
+              </Button>
+            </div>
           </div>
-        </form>
-    </div>
+          <Textarea
+            id="post-caption"
+            value={uploadCaption}
+            onChange={(event) => setUploadCaption(event.target.value)}
+            rows={3}
+            placeholder="What do you want to say with this post?"
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="post-location">
+            Location <span className="font-normal text-muted-foreground">(optional)</span>
+          </Label>
+          <LocationAutocomplete
+            value={uploadLocation}
+            onChange={setUploadLocation}
+            placeholder="Start typing a location..."
+            className={cn(fieldBaseClasses, "h-10 px-3 py-2")}
+          />
+          <p className="text-xs text-muted-foreground">
+            Type to search for locations. Will be added to Instagram, TikTok, and X posts. (YouTube
+            requires manual location setting via Studio)
+          </p>
+        </div>
+
+        {hasTikTokConnection && uploadFile && (
+          <TikTokPostSettings
+            metadata={tiktokMetadata}
+            onChange={setTiktokMetadata}
+            isVideo={uploadFile.type.startsWith("video/")}
+            privacyError={tiktokPrivacyError}
+          />
+        )}
+        {hasYouTubeConnection && uploadFile && (
+          <YouTubePostSettings
+            metadata={youtubeMetadata}
+            onChange={setYoutubeMetadata}
+          />
+        )}
+
+        <div className="flex items-center gap-3 pt-1">
+          <Button type="submit" loading={uploadLoading}>
+            {uploadLoading ? "Creating post…" : "Create post"}
+          </Button>
+        </div>
+      </form>
+    </Card>
   );
 }

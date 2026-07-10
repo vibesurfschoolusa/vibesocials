@@ -2,53 +2,48 @@ import Link from "next/link";
 
 import { getCurrentUser } from "@/lib/auth";
 import { CreatePostForm } from "@/components/create-post-form";
+import { buttonVariants } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 
 export default async function NewPostPage() {
   const user = await getCurrentUser();
 
   if (!user) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50">
-        <div className="w-full max-w-md rounded-2xl bg-white p-10 shadow-xl border border-gray-100">
-          <p className="text-base text-gray-700">
+      <div className="mx-auto flex min-h-[60vh] max-w-md items-center px-4 py-12">
+        <Card className="w-full p-8">
+          <p className="text-base text-foreground">
             You need to be logged in to create posts.
           </p>
-          <div className="mt-4 flex gap-3">
+          <div className="mt-6 flex gap-3">
             <Link
               href="/login"
-              className="flex-1 rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2.5 text-center text-sm font-semibold text-white hover:from-blue-700 hover:to-blue-800 transition-all shadow-md hover:shadow-lg"
+              className={buttonVariants({ variant: "primary", className: "flex-1" })}
             >
               Log in
             </Link>
             <Link
               href="/register"
-              className="flex-1 rounded-lg border-2 border-blue-200 px-4 py-2.5 text-center text-sm font-semibold text-blue-700 hover:bg-blue-50 transition-all"
+              className={buttonVariants({ variant: "outline", className: "flex-1" })}
             >
               Create account
             </Link>
           </div>
-        </div>
+        </Card>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 py-12 px-4">
-      <div className="mx-auto w-full max-w-4xl rounded-2xl bg-white p-10 shadow-xl border border-gray-100">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-zinc-900">Create post</h1>
-            <p className="mt-1 text-sm text-zinc-600">
-              Upload a new image or video, then post to your connected platforms.
-            </p>
-          </div>
-          <Link href="/" className="text-sm text-gray-600 hover:text-blue-600 underline transition-colors">
-            Back to dashboard
-          </Link>
-        </div>
-
-        <CreatePostForm />
+    <div className="mx-auto max-w-2xl px-4 py-8 md:px-6">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold tracking-tight text-foreground">Create post</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Upload a new image or video, then post to your connected platforms.
+        </p>
       </div>
+
+      <CreatePostForm />
     </div>
   );
 }
