@@ -30,6 +30,10 @@ export default async function SettingsPage() {
       platform: true,
       accountIdentifier: true,
       metadata: true,
+      // Roadmap Phase 4: the connection-health flag itself — still never
+      // accessToken/refreshToken/scopes/raw metadata beyond the two fields
+      // flattened below.
+      needsReconnect: true,
     },
   });
 
@@ -42,6 +46,7 @@ export default async function SettingsPage() {
       accountIdentifier: row.accountIdentifier,
       username: metadata?.username ?? null,
       locationName: metadata?.locationName ?? null,
+      needsReconnect: row.needsReconnect,
     };
   });
 

@@ -123,7 +123,11 @@ export function ConnectionsSection({ connections }: ConnectionsSectionProps) {
 
                 <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
                   {connection ? (
-                    <ConnectionActions platform={key} isConnected />
+                    <ConnectionActions
+                      platform={key}
+                      isConnected
+                      needsReconnect={connection.needsReconnect}
+                    />
                   ) : href ? (
                     <ButtonLink href={href} variant="outline" size="sm">
                       Connect

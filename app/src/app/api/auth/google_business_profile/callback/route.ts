@@ -116,6 +116,11 @@ export async function GET(request: NextRequest) {
         metadata: {
           locationName: null,
         },
+        // Roadmap Phase 4: a fresh/successful connect always starts (and a
+        // reconnect always resets to) a healthy state.
+        needsReconnect: false,
+        lastRefreshErrorCode: null,
+        refreshFailedAt: null,
       },
       update: {
         accessToken: tokenJson.access_token,
@@ -123,6 +128,11 @@ export async function GET(request: NextRequest) {
         expiresAt,
         accountIdentifier,
         scopes: tokenJson.scope ? tokenJson.scope.split(" ") : undefined,
+        // Roadmap Phase 4: successful reconnect clears the flag set by a
+        // prior refresh failure (see server/platforms/connectionHealth.ts).
+        needsReconnect: false,
+        lastRefreshErrorCode: null,
+        refreshFailedAt: null,
       },
     });
 

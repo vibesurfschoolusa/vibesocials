@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CheckCircle2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import {
@@ -70,11 +70,21 @@ export function ConnectionHealth() {
                   />
                   {platformLabel(connection.platform)}
                 </span>
-                {connection.connected ? (
+                {connection.connected && !connection.needsReconnect ? (
                   <Badge variant="success">
                     <CheckCircle2 aria-hidden className="h-3.5 w-3.5" />
                     Connected
                   </Badge>
+                ) : connection.connected ? (
+                  // Roadmap Phase 4: danger badge, links straight to this
+                  // platform's OAuth start (a plain anchor — /api/auth/* is a
+                  // redirect handler, not a Next.js route).
+                  <a href={`/api/auth/${connection.platform}/start`}>
+                    <Badge variant="danger" className="cursor-pointer hover:opacity-80">
+                      <AlertTriangle aria-hidden className="h-3.5 w-3.5" />
+                      Reconnect
+                    </Badge>
+                  </a>
                 ) : (
                   <Link
                     href="/settings"

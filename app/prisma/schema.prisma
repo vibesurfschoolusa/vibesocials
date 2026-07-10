@@ -57,6 +57,16 @@ model SocialConnection {
   metadata         Json?
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
+  // Connection health (Roadmap Phase 4). `expiresAt` is only the ~1h
+  // auto-refreshed access-token expiry (null for X) and is NOT a health
+  // signal. `needsReconnect` is the real signal: set when a token *refresh*
+  // terminally fails (Google invalid_grant) or a platform client maps a 401
+  // to its `*_RECONNECT_REQUIRED` code — see server/platforms/connectionHealth.ts.
+  // Cleared on the next successful OAuth callback write. Never set alongside
+  // accessToken/refreshToken in the same update (see connectionHealth.ts).
+  needsReconnect       Boolean   @default(false)
+  lastRefreshErrorCode String?
+  refreshFailedAt      DateTime?
 
   user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   postJobResults  PostJobResult[]

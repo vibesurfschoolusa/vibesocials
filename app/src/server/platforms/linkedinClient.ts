@@ -3,6 +3,7 @@ import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { markConnectionNeedsReconnect } from "./connectionHealth";
 
 /**
  * LinkedIn API client for posting images and videos
@@ -49,6 +50,9 @@ interface LinkedInAssetUploadResponse {
 const LINKEDIN_TOKEN_ENDPOINT = "https://www.linkedin.com/oauth/v2/accessToken";
 const LINKEDIN_DEFAULT_TOKEN_TTL_SECONDS = 5_184_000; // LinkedIn access tokens last ~60 days
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // treat tokens within 5 min of expiry as expired
+// Roadmap Phase 4: the code marked via markConnectionNeedsReconnect() at every
+// site below that throws this error (expiry guard + 401 mapping).
+const LINKEDIN_RECONNECT_CODE = "LINKEDIN_RECONNECT_REQUIRED";
 
 function isExpiredOrExpiringSoon(expiresAt: Date | null | undefined): boolean {
   if (!expiresAt) return false; // no expiry recorded -> cannot judge; let publish proceed
@@ -59,7 +63,7 @@ function linkedinReconnectRequiredError(cause?: unknown): Error & { code: string
   const error = new Error(
     "Your LinkedIn connection has expired — please reconnect it in Settings.",
   ) as Error & { code: string };
-  error.code = "LINKEDIN_RECONNECT_REQUIRED";
+  error.code = LINKEDIN_RECONNECT_CODE;
   if (cause !== undefined) error.cause = cause;
   return error;
 }
@@ -166,17 +170,26 @@ export async function ensureFreshLinkedInToken(
     try {
       return await refreshLinkedInToken(connection);
     } catch (error) {
+      // Roadmap Phase 4: the refresh attempt failed — mark needsReconnect
+      // before throwing the actionable reconnect error (see
+      // connectionHealth.ts). Flag fields only; never touches
+      // accessToken/refreshToken.
+      await markConnectionNeedsReconnect(connection.id, LINKEDIN_RECONNECT_CODE);
       throw linkedinReconnectRequiredError(error);
     }
   }
 
+  // Roadmap Phase 4: expired with no refresh token stored (the common
+  // non-partner-app case) — mark before throwing.
+  await markConnectionNeedsReconnect(connection.id, LINKEDIN_RECONNECT_CODE);
   throw linkedinReconnectRequiredError();
 }
 
 async function uploadImage(
   accessToken: string,
   ownerUrn: string,
-  imageUrl: string
+  imageUrl: string,
+  connectionId: string
 ): Promise<string> {
   console.log("[LinkedIn] Starting image upload", { imageUrl });
 
@@ -213,6 +226,8 @@ async function uploadImage(
     });
     // COR-5: 401 means the access token is no longer valid -> reconnect.
     if (registerResponse.status === 401) {
+      // Roadmap Phase 4: mark before throwing (see connectionHealth.ts).
+      await markConnectionNeedsReconnect(connectionId, LINKEDIN_RECONNECT_CODE);
       throw linkedinReconnectRequiredError();
     }
     // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
@@ -273,7 +288,8 @@ async function uploadVideo(
   accessToken: string,
   ownerUrn: string,
   videoUrl: string,
-  filename: string
+  filename: string,
+  connectionId: string
 ): Promise<string> {
   console.log("[LinkedIn] Starting video upload", { videoUrl, filename });
 
@@ -333,6 +349,8 @@ async function uploadVideo(
     });
     // COR-5: 401 means the access token is no longer valid -> reconnect.
     if (registerResponse.status === 401) {
+      // Roadmap Phase 4: mark before throwing (see connectionHealth.ts).
+      await markConnectionNeedsReconnect(connectionId, LINKEDIN_RECONNECT_CODE);
       throw linkedinReconnectRequiredError();
     }
     // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
@@ -405,6 +423,7 @@ async function createPost(
   accessToken: string,
   authorUrn: string,
   caption: string,
+  connectionId: string,
   mediaUrn?: string,
   isVideo: boolean = false
 ): Promise<string> {
@@ -500,6 +519,8 @@ async function createPost(
     });
     // COR-5: 401 means the access token is no longer valid -> reconnect.
     if (response.status === 401) {
+      // Roadmap Phase 4: mark before throwing (see connectionHealth.ts).
+      await markConnectionNeedsReconnect(connectionId, LINKEDIN_RECONNECT_CODE);
       throw linkedinReconnectRequiredError();
     }
     // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
@@ -583,10 +604,11 @@ export const linkedinClient: PlatformClient = {
           accessToken,
           authorUrn,
           mediaUrl,
-          mediaItem.originalFilename
+          mediaItem.originalFilename,
+          socialConnection.id
         );
       } else if (mediaItem.mimeType.startsWith("image/")) {
-        mediaUrn = await uploadImage(accessToken, authorUrn, mediaUrl);
+        mediaUrn = await uploadImage(accessToken, authorUrn, mediaUrl, socialConnection.id);
       }
 
       // Create the post
@@ -595,11 +617,12 @@ export const linkedinClient: PlatformClient = {
         mediaUrn,
         match: mediaUrn ? `Video owner and post author both use: ${authorUrn}` : "No media",
       });
-      
+
       const postId = await createPost(
         accessToken,
         authorUrn,
         caption,
+        socialConnection.id,
         mediaUrn,
         isVideo
       );

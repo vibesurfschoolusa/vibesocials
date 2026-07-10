@@ -9,6 +9,14 @@ import type { Platform } from "@prisma/client";
 export interface ConnectionStatus {
   platform: Platform;
   connected: boolean;
+  /**
+   * Roadmap Phase 4: true when a token refresh terminally failed (Google
+   * invalid_grant) or a platform client mapped a 401 to its
+   * `*_RECONNECT_REQUIRED` code — see server/platforms/connectionHealth.ts.
+   * NOT derived from `expiresAt` (that's just the short-lived access-token
+   * expiry). Always `false` when `connected` is `false`.
+   */
+  needsReconnect: boolean;
 }
 
 export interface ConnectionsResponse {

@@ -2,6 +2,7 @@ import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { SocialConnection } from "@prisma/client";
 
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { markConnectionNeedsReconnect } from "./connectionHealth";
 
 // COR-5: Instagram token expiry handling.
 //
@@ -21,6 +22,9 @@ import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 // actually used for publishing, surfaced as a clean, coded reconnect error.
 
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // treat tokens within 5 min of expiry as expired
+// Roadmap Phase 4: the code marked via markConnectionNeedsReconnect() at every
+// site below that throws this error (expiry guard + 401 mapping).
+const INSTAGRAM_RECONNECT_CODE = "INSTAGRAM_RECONNECT_REQUIRED";
 
 function isExpiredOrExpiringSoon(expiresAt: Date | null | undefined): boolean {
   if (!expiresAt) return false; // no expiry recorded -> cannot judge; let publish proceed
@@ -31,7 +35,7 @@ function instagramReconnectRequiredError(cause?: unknown): Error & { code: strin
   const error = new Error(
     "Your Instagram connection has expired — please reconnect it in Settings.",
   ) as Error & { code: string };
-  error.code = "INSTAGRAM_RECONNECT_REQUIRED";
+  error.code = INSTAGRAM_RECONNECT_CODE;
   if (cause !== undefined) error.cause = cause;
   return error;
 }
@@ -59,7 +63,14 @@ export const instagramClient: PlatformClient = {
 
     // COR-5: fail fast with a clear reconnect error if the page token has
     // aged out, rather than letting the Graph API return a cryptic OAuth error.
-    socialConnection = ensureFreshInstagramToken(socialConnection);
+    // Roadmap Phase 4: mark needsReconnect before the guard's error
+    // propagates (see connectionHealth.ts).
+    try {
+      socialConnection = ensureFreshInstagramToken(socialConnection);
+    } catch (error) {
+      await markConnectionNeedsReconnect(socialConnection.id, INSTAGRAM_RECONNECT_CODE);
+      throw error;
+    }
 
     const accessToken = socialConnection.accessToken;
     if (!accessToken) {
@@ -149,6 +160,8 @@ export const instagramClient: PlatformClient = {
         // COR-5: a 401 here means the page token is no longer accepted — map it
         // to the actionable reconnect error instead of leaking the raw body.
         if (containerResponse.status === 401) {
+          // Roadmap Phase 4: mark before throwing (see connectionHealth.ts).
+          await markConnectionNeedsReconnect(socialConnection.id, INSTAGRAM_RECONNECT_CODE);
           throw instagramReconnectRequiredError();
         }
         // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
@@ -234,6 +247,8 @@ export const instagramClient: PlatformClient = {
         });
         // COR-5: 401 on publish -> token no longer valid; ask for reconnect.
         if (publishResponse.status === 401) {
+          // Roadmap Phase 4: mark before throwing (see connectionHealth.ts).
+          await markConnectionNeedsReconnect(socialConnection.id, INSTAGRAM_RECONNECT_CODE);
           throw instagramReconnectRequiredError();
         }
         // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
@@ -269,6 +284,12 @@ export const instagramClient: PlatformClient = {
     // the same guard used at publish time so any future caller gets correct
     // behavior — a fresh connection or a coded reconnect error — not a silent
     // no-op that hides an expired token.
-    return ensureFreshInstagramToken(connection);
+    try {
+      return ensureFreshInstagramToken(connection);
+    } catch (error) {
+      // Roadmap Phase 4: mark before throwing (see connectionHealth.ts).
+      await markConnectionNeedsReconnect(connection.id, INSTAGRAM_RECONNECT_CODE);
+      throw error;
+    }
   },
 };

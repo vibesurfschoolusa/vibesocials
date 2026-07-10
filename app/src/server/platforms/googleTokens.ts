@@ -2,6 +2,7 @@ import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { markConnectionNeedsReconnect } from "./connectionHealth";
 
 // Server-only: touches prisma and Google OAuth client secrets.
 //
@@ -32,6 +33,11 @@ export async function refreshGoogleToken(
 ): Promise<SocialConnection> {
   const refreshToken = connection.refreshToken;
   if (!refreshToken) {
+    // Roadmap Phase 4: no refresh token to retry with is a terminal,
+    // connection-specific signal — mark needsReconnect before throwing (see
+    // connectionHealth.ts). Flag fields only; never touches accessToken/
+    // refreshToken.
+    await markConnectionNeedsReconnect(connection.id, "GOOGLE_NO_REFRESH_TOKEN");
     const error = new Error(
       "No refresh token available for this Google connection",
     ) as Error & { code: string };
@@ -66,10 +72,19 @@ export async function refreshGoogleToken(
     }),
   });
 
-  await assertOk(response, {
-    code: "GOOGLE_TOKEN_REFRESH_FAILED",
-    prefix: "Failed to refresh Google access token",
-  });
+  try {
+    await assertOk(response, {
+      code: "GOOGLE_TOKEN_REFRESH_FAILED",
+      prefix: "Failed to refresh Google access token",
+    });
+  } catch (error) {
+    // Roadmap Phase 4: a non-2xx here is the real invalid_grant signal — mark
+    // needsReconnect before rethrowing the sanitized error (see
+    // connectionHealth.ts). Flag fields only; never touches accessToken/
+    // refreshToken.
+    await markConnectionNeedsReconnect(connection.id, "GOOGLE_TOKEN_REFRESH_FAILED");
+    throw error;
+  }
 
   const tokenData = (await response.json()) as {
     access_token: string;
