@@ -63,6 +63,7 @@ export function LocationAutocomplete({
 
     if (value.trim().length < 2) {
       setSuggestions([]);
+      setSelectedIndex(-1);
       setShowDropdown(false);
       return;
     }
@@ -75,6 +76,7 @@ export function LocationAutocomplete({
         if (response.ok) {
           const data = await response.json();
           setSuggestions(data.suggestions || []);
+          setSelectedIndex(-1);
           setShowDropdown(true);
         }
       } catch (error) {
@@ -124,7 +126,7 @@ export function LocationAutocomplete({
         type="text"
         role="combobox"
         aria-expanded={isOpen}
-        aria-controls={listboxId}
+        aria-controls={isOpen ? listboxId : undefined}
         aria-autocomplete="list"
         aria-activedescendant={
           isOpen && selectedIndex >= 0 ? optionId(selectedIndex) : undefined
