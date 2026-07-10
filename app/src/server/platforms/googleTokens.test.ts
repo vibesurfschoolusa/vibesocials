@@ -87,9 +87,18 @@ describe("refreshGoogleToken", () => {
 
     expect(arg.where).toEqual({ id: "conn-42" });
 
-    // THE program-level constraint: update data contains ONLY these two keys.
-    expect(Object.keys(arg.data).sort()).toEqual(["accessToken", "expiresAt"]);
+    // The success write persists the new token + expiry and clears the
+    // reconnect-health flags. THE program-level constraint: it must NEVER touch
+    // refreshToken (or metadata).
+    expect(Object.keys(arg.data).sort()).toEqual([
+      "accessToken",
+      "expiresAt",
+      "lastRefreshErrorCode",
+      "needsReconnect",
+      "refreshFailedAt",
+    ]);
     expect(arg.data).not.toHaveProperty("refreshToken");
+    expect(arg.data.needsReconnect).toBe(false);
     expect(arg.data.accessToken).toBe("new-access-token");
 
     // Expiry math: now + expires_in seconds.

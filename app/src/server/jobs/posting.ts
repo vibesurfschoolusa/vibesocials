@@ -198,38 +198,58 @@ export async function createPostJobForExistingMedia(
 
   const now = new Date();
 
-  await prisma.mediaItem.update({
-    where: { id: mediaItemId },
-    data: {
-      // Attach-time stamp, same rationale as createPostJobOnly.
-      lastUsedAt: now,
-      // Only touch metadata when a new location was actually supplied, so a
-      // reuse call that omits `location` doesn't clobber the item's existing
-      // one (platform clients read it fresh from this row at publish time).
-      ...(location ? { metadata: { location: { description: location } } } : {}),
-    },
-  });
+  // Create the reuse job inside a transaction that FIRST locks the MediaItem row
+  // (`SELECT ... FOR UPDATE`). This serializes against the retention sweep's
+  // matching lock (inngest-functions.ts): if the sweep soft-deletes + removes the
+  // blob first, our post-lock re-check sees `deletedAt` and aborts; if we create
+  // the job first, the sweep sees the new non-terminal job and skips. Closes the
+  // check-then-act reuse race the Phase-1 review flagged.
+  const { postJob, resultRecords } = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT id FROM "MediaItem" WHERE id = ${mediaItemId} FOR UPDATE`;
 
-  const postJob = await prisma.postJob.create({
-    data: {
-      userId,
-      mediaItemId,
-      status: "in_progress",
-    },
-  });
+    // Re-assert under the row lock — a concurrent sweep may have soft-deleted the
+    // item between the initial check above and our acquiring the lock.
+    const locked = await tx.mediaItem.findUnique({
+      where: { id: mediaItemId },
+      select: { userId: true, deletedAt: true },
+    });
+    assertMediaItemReusable(locked, userId);
 
-  const resultRecords = await Promise.all(
-    socialConnections.map(connection =>
-      prisma.postJobResult.create({
-        data: {
-          postJobId: postJob.id,
-          platform: connection.platform,
-          socialConnectionId: connection.id,
-          status: "pending",
-        },
-      })
-    )
-  );
+    await tx.mediaItem.update({
+      where: { id: mediaItemId },
+      data: {
+        // Attach-time stamp, same rationale as createPostJobOnly.
+        lastUsedAt: now,
+        // Only touch metadata when a new location was actually supplied, so a
+        // reuse call that omits `location` doesn't clobber the item's existing
+        // one (platform clients read it fresh from this row at publish time).
+        ...(location ? { metadata: { location: { description: location } } } : {}),
+      },
+    });
+
+    const job = await tx.postJob.create({
+      data: {
+        userId,
+        mediaItemId,
+        status: "in_progress",
+      },
+    });
+
+    const results = await Promise.all(
+      socialConnections.map(connection =>
+        tx.postJobResult.create({
+          data: {
+            postJobId: job.id,
+            platform: connection.platform,
+            socialConnectionId: connection.id,
+            status: "pending",
+          },
+        })
+      )
+    );
+
+    return { postJob: job, resultRecords: results };
+  });
 
   return {
     postJobId: postJob.id,

@@ -100,13 +100,19 @@ export async function refreshGoogleToken(
       : 3600;
   const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
 
-  // Update ONLY accessToken + expiresAt. Never refreshToken. (See file header.)
+  // Update accessToken + expiresAt and clear the reconnect-health flags — a
+  // successful refresh means the connection works again, so a stale
+  // needsReconnect from an earlier transient failure must not persist. Never
+  // touch refreshToken. (See file header.)
   const { prisma } = await import("@/lib/db");
   const updated = await prisma.socialConnection.update({
     where: { id: connection.id },
     data: {
       accessToken: tokenData.access_token,
       expiresAt,
+      needsReconnect: false,
+      lastRefreshErrorCode: null,
+      refreshFailedAt: null,
     },
   });
 

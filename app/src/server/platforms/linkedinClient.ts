@@ -134,13 +134,18 @@ export async function refreshLinkedInToken(
       : LINKEDIN_DEFAULT_TOKEN_TTL_SECONDS;
   const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
 
-  // Update ONLY accessToken + expiresAt. Never refreshToken or metadata. (See header.)
+  // Update accessToken + expiresAt and clear the reconnect-health flags — a
+  // successful refresh means the connection works again. Never refreshToken or
+  // metadata. (See header.)
   const { prisma } = await import("@/lib/db");
   const updated = await prisma.socialConnection.update({
     where: { id: connection.id },
     data: {
       accessToken: tokenData.access_token,
       expiresAt,
+      needsReconnect: false,
+      lastRefreshErrorCode: null,
+      refreshFailedAt: null,
     },
   });
 

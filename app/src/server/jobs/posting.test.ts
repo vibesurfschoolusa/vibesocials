@@ -11,16 +11,22 @@ const {
   findManyConnectionsMock,
   postJobCreateMock,
   postJobResultCreateMock,
+  executeRawMock,
 } = vi.hoisted(() => ({
   findUniqueMock: vi.fn(),
   mediaItemUpdateMock: vi.fn(),
   findManyConnectionsMock: vi.fn(),
   postJobCreateMock: vi.fn(),
   postJobResultCreateMock: vi.fn(),
+  executeRawMock: vi.fn(),
 }));
 
-vi.mock("@/lib/db", () => ({
-  prisma: {
+vi.mock("@/lib/db", () => {
+  // The reuse helper runs its writes inside `prisma.$transaction(cb)` after a
+  // `$executeRaw` FOR UPDATE lock; the mock invokes the callback with the same
+  // client, so `tx.<model>.<op>` resolves to these same mocks.
+  const prisma: Record<string, unknown> = {
+    $executeRaw: executeRawMock,
     mediaItem: {
       findUnique: findUniqueMock,
       update: mediaItemUpdateMock,
@@ -34,8 +40,10 @@ vi.mock("@/lib/db", () => ({
     postJobResult: {
       create: postJobResultCreateMock,
     },
-  },
-}));
+    $transaction: (cb: (tx: unknown) => unknown) => cb(prisma),
+  };
+  return { prisma };
+});
 
 import {
   assertMediaItemReusable,
@@ -72,6 +80,9 @@ function makeConnection(overrides: Partial<SocialConnection> = {}): SocialConnec
     accountIdentifier: "acct-1",
     scopes: null,
     metadata: null,
+    needsReconnect: false,
+    lastRefreshErrorCode: null,
+    refreshFailedAt: null,
     createdAt: new Date("2026-01-01T00:00:00Z"),
     updatedAt: new Date("2026-01-01T00:00:00Z"),
     ...overrides,

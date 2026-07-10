@@ -283,6 +283,13 @@ export const mediaRetentionSweep = inngest.createFunction(
         try {
           const outcome = await prisma.$transaction(
             async (tx) => {
+              // Lock the MediaItem row before re-checking, so a concurrent reuse
+              // (which takes the same FOR UPDATE lock in createPostJobForExistingMedia)
+              // serializes with us: after this returns we see any reuse that
+              // committed first, and a reuse that arrives after waits until we
+              // commit the soft-delete. Closes the check-then-act reuse race.
+              await tx.$executeRaw`SELECT id FROM "MediaItem" WHERE id = ${candidate.id} FOR UPDATE`;
+
               const media = await tx.mediaItem.findUnique({
                 where: { id: candidate.id },
                 select: {
