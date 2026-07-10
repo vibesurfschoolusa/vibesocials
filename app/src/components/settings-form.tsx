@@ -11,6 +11,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import type { UserSettings } from "@/lib/userSettings";
 
+// Mirrors tiktok-post-settings.tsx's checkbox styling for a consistent look
+// across the app's few native checkbox controls.
+const checkboxClass =
+  "h-4 w-4 rounded border-input accent-[var(--primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
+
 interface SettingsFormProps {
   settings: UserSettings;
 }
@@ -20,6 +25,9 @@ export function SettingsForm({ settings }: SettingsFormProps) {
   const toast = useToast();
   const [companyWebsite, setCompanyWebsite] = useState(settings.companyWebsite || "");
   const [defaultHashtags, setDefaultHashtags] = useState(settings.defaultHashtags || "");
+  const [notifyOnPostComplete, setNotifyOnPostComplete] = useState(
+    settings.notifyOnPostComplete,
+  );
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -33,6 +41,7 @@ export function SettingsForm({ settings }: SettingsFormProps) {
         body: JSON.stringify({
           companyWebsite: companyWebsite.trim(),
           defaultHashtags: defaultHashtags.trim(),
+          notifyOnPostComplete,
         }),
       });
 
@@ -104,6 +113,27 @@ export function SettingsForm({ settings }: SettingsFormProps) {
           <div className="mt-2 whitespace-pre-wrap border-l-2 border-primary pl-3 text-sm text-muted-foreground">
             {previewCaption()}
           </div>
+        </div>
+
+        {/* Roadmap Phase 6: post-outcome email preference. Submitted together
+            with the fields above — POST /api/settings replaces all of them in
+            one request, so this must always ride along with the same submit
+            rather than get its own form/button. */}
+        <div className="flex flex-col gap-1.5 border-t border-border pt-6">
+          <h3 className="text-sm font-medium text-foreground">Notifications</h3>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={notifyOnPostComplete}
+              onChange={(e) => setNotifyOnPostComplete(e.target.checked)}
+              className={checkboxClass}
+            />
+            <span className="text-sm text-foreground">Email me when a post finishes</span>
+          </label>
+          <p className="text-sm text-muted-foreground">
+            Get a per-platform summary emailed to you whenever a post (including a
+            scheduled post or a retry) finishes publishing.
+          </p>
         </div>
 
         <div>

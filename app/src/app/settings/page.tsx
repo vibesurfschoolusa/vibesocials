@@ -19,6 +19,7 @@ export default async function SettingsPage() {
   const settings: UserSettings = {
     companyWebsite: user.companyWebsite,
     defaultHashtags: user.defaultHashtags,
+    notifyOnPostComplete: user.notifyOnPostComplete,
   };
 
   // Fetch user connections. SEC-1: select only browser-safe columns and map to

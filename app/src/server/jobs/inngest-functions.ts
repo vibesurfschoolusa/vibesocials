@@ -12,6 +12,7 @@ import {
 import { recomputePostJobStatus } from "@/server/jobs/postStatus";
 import { claimDueScheduledJobs } from "@/server/jobs/scheduledScanner";
 import { prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
+import { deliverPostOutcomeNotification } from "@/server/notifications/postOutcomeEmail";
 import type { MediaItem, Platform, SocialConnection, User } from "@prisma/client";
 import type {
   PublishContext,
@@ -232,10 +233,19 @@ export const publishToAllPlatforms = inngest.createFunction(
       };
     });
 
+    // Roadmap Phase 6 (spec §7.2): fire-and-forget the best-effort post-outcome
+    // email. `step.sendEvent` is memoized (exactly-once per finalize) and only
+    // enqueues `notification.requested` — it does NOT await `sendNotification`,
+    // let alone email delivery, so this can never delay or fail this job.
+    await step.sendEvent("notify-outcome", {
+      name: "notification.requested",
+      data: { userId, postJobId },
+    });
+
     console.log("[Inngest] Job completed", { postJobId, ...finalResult });
 
-    return { 
-      postJobId, 
+    return {
+      postJobId,
       status: finalResult.finalStatus,
       results,
     };
@@ -558,6 +568,15 @@ export const retryPlatforms = inngest.createFunction(
       };
     });
 
+    // Roadmap Phase 6 (spec §7.2): same fire-and-forget hook as the initial
+    // publish path above — a retry reaching a terminal state is itself a new
+    // outcome worth emailing (e.g. the user just found out their retry of a
+    // failed platform succeeded, or failed again).
+    await step.sendEvent("notify-outcome", {
+      name: "notification.requested",
+      data: { userId, postJobId },
+    });
+
     console.log("[Inngest] Retry job completed", { postJobId, ...finalResult });
 
     return { postJobId, status: finalResult.finalStatus, results };
@@ -637,9 +656,45 @@ export const scheduledPostScanner = inngest.createFunction(
   },
 );
 
+/**
+ * Roadmap Phase 6 — sends the best-effort post-outcome email (spec §7.2).
+ *
+ * Triggered by `notification.requested`, sent fire-and-forget from the
+ * `publishToAllPlatforms` / `retryPlatforms` finalize steps above via
+ * `step.sendEvent` — which only enqueues and does NOT await this function.
+ * `retries: 1` gives a single retry for a transient failure (e.g. a blip
+ * reaching the DB), but in practice this function cannot fail loudly at all:
+ * all of its real work is delegated to `deliverPostOutcomeNotification`,
+ * which is itself fully env-gated (no-ops with no DB access when
+ * `RESEND_API_KEY` is unset) and never throws (every branch, including a
+ * send failure, is caught and logged there). This function's job is only to
+ * be the Inngest entry point + step-memoization boundary.
+ */
+export const sendNotification = inngest.createFunction(
+  {
+    id: "send-notification",
+    name: "Send Post Outcome Notification",
+    retries: 1,
+  },
+  { event: "notification.requested" },
+  async ({ event, step }) => {
+    // `event.data` is untyped (schemaless Inngest client) — assign into typed
+    // locals here rather than annotating with `any` (mirrors retryPlatforms).
+    const userId: string = event.data.userId;
+    const postJobId: string = event.data.postJobId;
+
+    await step.run("deliver-notification", async () => {
+      await deliverPostOutcomeNotification({ userId, postJobId });
+    });
+
+    return { postJobId };
+  },
+);
+
 export const inngestFunctions = [
   publishToAllPlatforms,
   mediaRetentionSweep,
   retryPlatforms,
   scheduledPostScanner,
+  sendNotification,
 ];

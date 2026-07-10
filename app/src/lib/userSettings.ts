@@ -14,4 +14,10 @@ export interface UserSettings {
   companyWebsite: string | null;
   /** Appended to caption footers on a new line after the website. */
   defaultHashtags: string | null;
+  /**
+   * Roadmap Phase 6 — whether to email the user the per-platform outcome when
+   * a post job (immediate or a retry) reaches a terminal state. Independent
+   * of the RESEND_API_KEY env gate: see server/notifications/postOutcomeEmail.ts.
+   */
+  notifyOnPostComplete: boolean;
 }

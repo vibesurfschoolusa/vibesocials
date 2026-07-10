@@ -4,10 +4,14 @@ import { prisma } from "@/lib/db";
 
 export const COMPANY_WEBSITE_MAX_LENGTH = 2048;
 export const DEFAULT_HASHTAGS_MAX_LENGTH = 1024;
+// Roadmap Phase 6: matches the Prisma schema's `@default(true)` so an omitted
+// field behaves the same at the API layer as a never-touched DB row.
+export const NOTIFY_ON_POST_COMPLETE_DEFAULT = true;
 
 export interface ParsedSettingsInput {
   companyWebsite: string | null;
   defaultHashtags: string | null;
+  notifyOnPostComplete: boolean;
 }
 
 export type SettingsValidationResult =
@@ -51,9 +55,34 @@ function validateOptionalString(
 }
 
 /**
- * Validate + normalize an `unknown` parsed JSON body into the two known
- * settings fields (`companyWebsite`, `defaultHashtags`). Any other top-level
- * fields present on the body are ignored, not rejected.
+ * Validate a single boolean field from an unknown parsed JSON body.
+ *
+ * - Missing (`undefined`) or explicit `null` is valid and normalizes to
+ *   `defaultValue` (mirrors `validateOptionalString`'s missing-is-valid
+ *   leniency, adapted for a non-nullable DB column: there is no `null` to
+ *   normalize to, so a missing field falls back to the schema's own default).
+ * - Any non-boolean value (string, number, object, array) is rejected.
+ */
+function validateBoolean(
+  value: unknown,
+  fieldName: string,
+  defaultValue: boolean,
+): { ok: true; value: boolean } | { ok: false; error: string } {
+  if (value === undefined || value === null) {
+    return { ok: true, value: defaultValue };
+  }
+
+  if (typeof value !== "boolean") {
+    return { ok: false, error: `${fieldName} must be a boolean` };
+  }
+
+  return { ok: true, value };
+}
+
+/**
+ * Validate + normalize an `unknown` parsed JSON body into the known settings
+ * fields (`companyWebsite`, `defaultHashtags`, `notifyOnPostComplete`). Any
+ * other top-level fields present on the body are ignored, not rejected.
  *
  * Exported (and kept a pure function of its input) so it can be unit tested
  * directly without exercising the HTTP handler.
@@ -83,11 +112,21 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
     return { ok: false, error: defaultHashtags.error };
   }
 
+  const notifyOnPostComplete = validateBoolean(
+    record.notifyOnPostComplete,
+    "notifyOnPostComplete",
+    NOTIFY_ON_POST_COMPLETE_DEFAULT,
+  );
+  if (!notifyOnPostComplete.ok) {
+    return { ok: false, error: notifyOnPostComplete.error };
+  }
+
   return {
     ok: true,
     data: {
       companyWebsite: companyWebsite.value,
       defaultHashtags: defaultHashtags.value,
+      notifyOnPostComplete: notifyOnPostComplete.value,
     },
   };
 }
@@ -120,6 +159,7 @@ export async function POST(request: Request) {
       data: {
         companyWebsite: validation.data.companyWebsite,
         defaultHashtags: validation.data.defaultHashtags,
+        notifyOnPostComplete: validation.data.notifyOnPostComplete,
       },
     });
 
