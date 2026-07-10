@@ -14,6 +14,9 @@ import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import type { PostJobDTO } from "@/lib/postsDto";
 import { PlatformResultBadge } from "./platform-result";
 
+// Exhaustive over PostJobStatus — adding an enum member (Roadmap Phase 5 added
+// draft/scheduled/cancelled) fails `tsc` here (TS2741) until it's listed, which
+// is the intended tripwire the spec calls out.
 const JOB_STATUS_META: Record<
   PostJobStatus,
   { variant: BadgeVariant; label: string }
@@ -22,6 +25,9 @@ const JOB_STATUS_META: Record<
   failed: { variant: "danger", label: "Failed" },
   in_progress: { variant: "warning", label: "In progress" },
   pending: { variant: "neutral", label: "Pending" },
+  scheduled: { variant: "secondary", label: "Scheduled" },
+  draft: { variant: "neutral", label: "Draft" },
+  cancelled: { variant: "outline", label: "Cancelled" },
 };
 
 /** Shape of the retry endpoint's JSON error body (Roadmap Phase 3). */
@@ -160,7 +166,14 @@ export function PostJobCard({ job }: { job: PostJobDTO }) {
           <p className="truncate text-sm font-medium text-foreground">
             {job.caption?.trim() || "Untitled post"}
           </p>
-          {job.createdAt ? (
+          {job.status === "scheduled" && job.scheduledFor ? (
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Scheduled for{" "}
+              <time dateTime={job.scheduledFor}>
+                {formatTimestamp(job.scheduledFor)}
+              </time>
+            </p>
+          ) : job.createdAt ? (
             <p className="mt-0.5 text-xs text-muted-foreground">
               <time dateTime={job.createdAt}>{formatTimestamp(job.createdAt)}</time>
             </p>

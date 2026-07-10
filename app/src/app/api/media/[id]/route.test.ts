@@ -177,7 +177,11 @@ describe("DELETE /api/media/[id]", () => {
     await DELETE(dummyRequest, ctx("media-42"));
 
     expect(postJobCountMock).toHaveBeenCalledWith({
-      where: { mediaItemId: "media-42", status: { notIn: ["completed", "failed"] } },
+      where: {
+        mediaItemId: "media-42",
+        // Roadmap Phase 5 added `cancelled` to the terminal set.
+        status: { notIn: ["completed", "failed", "cancelled"] },
+      },
     });
   });
 

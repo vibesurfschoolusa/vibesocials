@@ -10,6 +10,8 @@ import {
   isMediaSweepEligible,
 } from "@/server/jobs/mediaRetention";
 import { recomputePostJobStatus } from "@/server/jobs/postStatus";
+import { claimDueScheduledJobs } from "@/server/jobs/scheduledScanner";
+import { prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
 import type { MediaItem, Platform, SocialConnection, User } from "@prisma/client";
 import type {
   PublishContext,
@@ -562,8 +564,65 @@ export const retryPlatforms = inngest.createFunction(
   },
 );
 
+/**
+ * Roadmap Phase 5 — cron due-scanner for scheduled posts (§6.2).
+ *
+ * Runs every minute. Atomically claims scheduled jobs whose `scheduledFor` has
+ * arrived (`claimDueScheduledJobs`, scheduled → in_progress), then for each
+ * claimed job materializes its per-platform results from the connections that
+ * exist NOW (`prepareDeferredPostJobDispatch` — the review's run-time-result
+ * fix, §6.3) and hands off to the SAME `post/publish.requested` /
+ * `publishToAllPlatforms` path immediate posts use (which is untouched and
+ * stays short-lived / freely deployable — no long `sleepUntil` inside it).
+ *
+ * Step structure gives exactly-once dispatch under Inngest step-memoization:
+ *  - `claim-due-jobs` is memoized, so a function retry never re-claims.
+ *  - each `materialize-{id}` is memoized + idempotent (creates results only if
+ *    none exist yet), so a retry never duplicates result rows or the live post.
+ *  - `step.sendEvent` is a memoized step, so a completed send is never re-sent.
+ * A job with no connections at run time is marked `failed` inside the
+ * materialize step (mirrors the existing no-connections path).
+ */
+export const scheduledPostScanner = inngest.createFunction(
+  { id: "scheduled-post-scanner", name: "Scheduled Post Scanner" },
+  { cron: "* * * * *" },
+  async ({ step }) => {
+    const claimedIds = await step.run("claim-due-jobs", async () => {
+      return claimDueScheduledJobs(new Date());
+    });
+
+    let dispatched = 0;
+    let failedNoConnections = 0;
+
+    for (const postJobId of claimedIds) {
+      const prep = await step.run(`materialize-${postJobId}`, async () => {
+        return prepareDeferredPostJobDispatch(postJobId);
+      });
+
+      if (prep.ok) {
+        await step.sendEvent(`publish-${postJobId}`, {
+          name: "post/publish.requested",
+          data: prep.event,
+        });
+        dispatched += 1;
+      } else if (prep.reason === "NO_CONNECTIONS") {
+        failedNoConnections += 1;
+      }
+    }
+
+    console.log("[Inngest] Scheduled post scan complete", {
+      claimed: claimedIds.length,
+      dispatched,
+      failedNoConnections,
+    });
+
+    return { claimed: claimedIds.length, dispatched, failedNoConnections };
+  },
+);
+
 export const inngestFunctions = [
   publishToAllPlatforms,
   mediaRetentionSweep,
   retryPlatforms,
+  scheduledPostScanner,
 ];

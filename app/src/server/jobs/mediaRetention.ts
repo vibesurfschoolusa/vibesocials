@@ -21,14 +21,18 @@ export const RETENTION_DAYS = 30;
  * set is treated as non-terminal / active — a media item referenced by a
  * non-terminal job is never swept, because that job may still publish its blob.
  *
- * Modelled as the terminal set (not the non-terminal set) on purpose: future
- * statuses such as `scheduled`/`draft` then default to non-terminal — the SAFE
- * direction — without having to edit this list. Callers query with
+ * Non-terminal (kept): `pending`, `in_progress`, and Roadmap Phase 5's
+ * `scheduled` / `draft` (an upcoming post may still publish its blob — spec §2
+ * enumerates exactly these as non-terminal). Terminal (sweepable/deletable):
+ * `completed`, `failed`, and `cancelled` — a cancelled job will NEVER publish,
+ * so pinning its media forever would be a storage leak AND would wrongly 409
+ * media-delete for media referenced only by a cancelled job. Callers query with
  * `status: { notIn: TERMINAL_POST_JOB_STATUSES }` to find non-terminal jobs.
  */
 export const TERMINAL_POST_JOB_STATUSES: readonly PostJobStatus[] = [
   "completed",
   "failed",
+  "cancelled",
 ];
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;

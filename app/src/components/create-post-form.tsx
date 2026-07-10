@@ -19,6 +19,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import type { MediaItemDto } from "@/lib/mediaDto";
+import {
+  SCHEDULE_BUFFER_MS,
+  localDateTimeToUtcIso,
+  localTimeZoneLabel,
+  toDateTimeLocalValue,
+} from "@/lib/scheduling";
 import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
 
 interface PostResponse {
@@ -35,9 +41,22 @@ interface UploadedBlobInfo {
   sizeBytes: number;
 }
 
+// Roadmap Phase 5 — how the composer wants to publish. `now` is the original
+// immediate flow; `schedule` sends a `scheduledFor` (UTC ISO); `draft` sends
+// `draft: true`. Both deferred modes create no results / send no event now.
+type PublishMode = "now" | "schedule" | "draft";
+
+// Fields shared by both create bodies for the deferred modes.
+interface DeferredPostFields {
+  /** Present + true → save as draft. */
+  draft?: boolean;
+  /** Present → schedule for this UTC ISO time. */
+  scheduledFor?: string;
+}
+
 // Request body posted to /api/posts. Metadata fields are added conditionally
 // based on which platforms are connected.
-interface CreatePostRequest {
+interface CreatePostRequest extends DeferredPostFields {
   blobUrl: string;
   filename: string;
   mimeType: string;
@@ -52,7 +71,7 @@ interface CreatePostRequest {
 // MediaItem instead of a fresh blobUrl upload. Same optional metadata fields
 // as CreatePostRequest; POST /api/posts branches on which of blobUrl /
 // mediaItemId is present.
-interface CreatePostReuseRequest {
+interface CreatePostReuseRequest extends DeferredPostFields {
   mediaItemId: string;
   baseCaption: string;
   location?: string;
@@ -104,6 +123,22 @@ function CreatePostFormInner() {
   const [autoCaptionEnabled, setAutoCaptionEnabled] = useState(true);
   const [autoCaptionLoading, setAutoCaptionLoading] = useState(false);
   const [uploadedBlob, setUploadedBlob] = useState<UploadedBlobInfo | null>(null);
+
+  // Roadmap Phase 5 — publish timing. `scheduledForLocal` is the raw
+  // datetime-local (browser-local wall time) string; it's converted to a UTC
+  // ISO `scheduledFor` only at submit. Works for both the upload and reuse flows.
+  const [publishMode, setPublishMode] = useState<PublishMode>("now");
+  const [scheduledForLocal, setScheduledForLocal] = useState("");
+  // Earliest schedulable datetime-local value (now + buffer) for the picker's
+  // `min`. A lazy useState initializer computes it once at mount, keeping the
+  // impure `Date.now()` off the render path; submit-time validation is the
+  // authoritative future-time check.
+  const [minScheduleLocal] = useState(() =>
+    toDateTimeLocalValue(new Date(Date.now() + SCHEDULE_BUFFER_MS)),
+  );
+  // The mode that produced the current success banner (so it reads correctly
+  // for now / schedule / draft).
+  const [submittedMode, setSubmittedMode] = useState<PublishMode>("now");
 
   // Local object-URL preview for the currently attached file. Created/revoked
   // by the effect below so we never leak object URLs.
@@ -374,6 +409,27 @@ function CreatePostFormInner() {
       return;
     }
 
+    // Roadmap Phase 5 — resolve the deferred (schedule/draft) fields once for
+    // both the reuse and upload flows. TikTok privacy is only required for an
+    // immediate post: scheduled/draft jobs don't persist per-post TikTok/YouTube
+    // metadata, so they publish with each client's safe default.
+    const deferred: DeferredPostFields = {};
+    if (publishMode === "draft") {
+      deferred.draft = true;
+    } else if (publishMode === "schedule") {
+      const iso = localDateTimeToUtcIso(scheduledForLocal);
+      if (!iso) {
+        setUploadError("Please choose a valid date and time to schedule this post.");
+        return;
+      }
+      if (new Date(iso).getTime() < Date.now() + SCHEDULE_BUFFER_MS) {
+        setUploadError("Scheduled time must be at least a minute in the future.");
+        return;
+      }
+      deferred.scheduledFor = iso;
+    }
+    const requireTikTokPrivacy = publishMode === "now";
+
     setUploadLoading(true);
 
     try {
@@ -381,7 +437,7 @@ function CreatePostFormInner() {
 
       if (reuseItem) {
         // Roadmap Phase 2 — reuse: no upload, attach the existing MediaItem.
-        if (hasTikTokConnection && !tiktokMetadata.privacyLevel) {
+        if (requireTikTokPrivacy && hasTikTokConnection && !tiktokMetadata.privacyLevel) {
           setTiktokPrivacyError("Please select a privacy level for TikTok");
           toast.error("Please select a privacy level for TikTok");
           setUploadLoading(false);
@@ -392,6 +448,7 @@ function CreatePostFormInner() {
           mediaItemId: reuseItem.id,
           baseCaption: uploadCaption,
           location: uploadLocation.trim() || undefined,
+          ...deferred,
         };
 
         if (reusePerPlatformOverrides) {
@@ -426,11 +483,14 @@ function CreatePostFormInner() {
           sizeBytes: blob.sizeBytes,
           baseCaption: uploadCaption,
           location: uploadLocation.trim() || undefined,
+          ...deferred,
         };
 
-        // Add TikTok-specific metadata if TikTok is connected
+        // Add TikTok-specific metadata if TikTok is connected. The privacy
+        // level is only *required* for an immediate post (scheduled/draft
+        // publish with the client's safe default).
         if (hasTikTokConnection) {
-          if (!tiktokMetadata.privacyLevel) {
+          if (requireTikTokPrivacy && !tiktokMetadata.privacyLevel) {
             setTiktokPrivacyError("Please select a privacy level for TikTok");
             toast.error("Please select a privacy level for TikTok");
             setUploadLoading(false);
@@ -465,7 +525,14 @@ function CreatePostFormInner() {
         return;
       }
 
-      toast.success("Post queued — track it in Activity");
+      toast.success(
+        publishMode === "draft"
+          ? "Draft saved — find it in your Queue"
+          : publishMode === "schedule"
+            ? "Post scheduled — see it in your Queue"
+            : "Post queued — track it in Activity",
+      );
+      setSubmittedMode(publishMode);
       setShowSuccess(true);
       setUploadCaption("");
       setUploadLocation("");
@@ -478,6 +545,8 @@ function CreatePostFormInner() {
       activeUploadRef.current = null;
       setReuseItem(null);
       setReusePerPlatformOverrides(null);
+      setPublishMode("now");
+      setScheduledForLocal("");
       setTiktokMetadata({
         privacyLevel: "",
         disableComment: true,
@@ -543,17 +612,29 @@ function CreatePostFormInner() {
     <Card className="p-6">
       <form onSubmit={handleUploadSubmit} className="space-y-5">
         {showSuccess && (
-          <Alert variant="success" title="Post queued">
+          <Alert
+            variant="success"
+            title={
+              submittedMode === "draft"
+                ? "Draft saved"
+                : submittedMode === "schedule"
+                  ? "Post scheduled"
+                  : "Post queued"
+            }
+          >
             <div className="flex flex-col items-start gap-2">
               <p>
-                We&apos;re publishing to your connected platforms. Per-platform results appear in
-                Activity.
+                {submittedMode === "draft"
+                  ? "Your draft is saved. Publish or schedule it any time from the Queue."
+                  : submittedMode === "schedule"
+                    ? "We'll publish this at the time you chose. Edit or cancel it from the Queue until then."
+                    : "We're publishing to your connected platforms. Per-platform results appear in Activity."}
               </p>
               <Link
-                href="/activity"
+                href={submittedMode === "now" ? "/activity" : "/queue"}
                 className={buttonVariants({ variant: "outline", size: "sm" })}
               >
-                View activity
+                {submittedMode === "now" ? "View activity" : "View queue"}
               </Link>
             </div>
           </Alert>
@@ -777,10 +858,74 @@ function CreatePostFormInner() {
           />
         )}
 
-        <div className="flex items-center gap-3 pt-1">
-          <Button type="submit" loading={uploadLoading}>
-            {uploadLoading ? "Creating post…" : "Create post"}
-          </Button>
+        {/* Roadmap Phase 5 — publish timing: now / schedule / draft. */}
+        <div className="space-y-3 pt-1">
+          <div className="space-y-1.5">
+            <span className="block text-sm font-medium text-foreground">
+              When to publish
+            </span>
+            <div
+              role="group"
+              aria-label="When to publish"
+              className="inline-flex flex-wrap gap-0.5 rounded-[var(--radius)] border border-input p-0.5"
+            >
+              {(
+                [
+                  ["now", "Publish now"],
+                  ["schedule", "Schedule"],
+                  ["draft", "Save draft"],
+                ] as const
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={publishMode === mode}
+                  onClick={() => setPublishMode(mode)}
+                  className={cn(
+                    "rounded-[calc(var(--radius)-0.125rem)] px-3 py-1.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                    publishMode === mode
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {publishMode === "schedule" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="post-schedule">Publish at</Label>
+              <input
+                id="post-schedule"
+                type="datetime-local"
+                value={scheduledForLocal}
+                min={minScheduleLocal || undefined}
+                onChange={(event) => setScheduledForLocal(event.target.value)}
+                className={cn(fieldBaseClasses, "h-10 px-3 py-2")}
+              />
+              <p className="text-xs text-muted-foreground">
+                Times are in {localTimeZoneLabel()} (your browser&apos;s timezone).
+              </p>
+            </div>
+          )}
+
+          <div className="flex items-center gap-3">
+            <Button type="submit" loading={uploadLoading}>
+              {uploadLoading
+                ? publishMode === "draft"
+                  ? "Saving…"
+                  : publishMode === "schedule"
+                    ? "Scheduling…"
+                    : "Creating post…"
+                : publishMode === "draft"
+                  ? "Save draft"
+                  : publishMode === "schedule"
+                    ? "Schedule post"
+                    : "Create post"}
+            </Button>
+          </div>
         </div>
       </form>
     </Card>

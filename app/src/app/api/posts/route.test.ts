@@ -158,6 +158,9 @@ describe("POST /api/posts — blobUrl path (preserved behavior)", () => {
       baseCaption: "hello world",
       location: "Miami",
       perPlatformOverrides: undefined,
+      // Roadmap Phase 5 additive params; default immediate path unchanged.
+      intent: "immediate",
+      scheduledFor: null,
     });
     expect(createPostJobForExistingMediaMock).not.toHaveBeenCalled();
 
@@ -219,6 +222,9 @@ describe("POST /api/posts — mediaItemId reuse path (Roadmap Phase 2)", () => {
       baseCaption: "reused caption",
       perPlatformOverrides: undefined,
       location: "LA",
+      // Roadmap Phase 5 additive params; default immediate reuse unchanged.
+      intent: "immediate",
+      scheduledFor: null,
     });
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
 
@@ -284,5 +290,100 @@ describe("POST /api/posts — mediaItemId reuse path (Roadmap Phase 2)", () => {
 
     expect(response.status).toBe(400);
     expect(createPostJobForExistingMediaMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
+  const FUTURE = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({
+      postJobId: "job-1",
+      mediaItemId: "media-1",
+      resultIds: [],
+    });
+  });
+
+  it("immediate (no draft/scheduledFor): intent 'immediate' AND sends the publish event (preserved)", async () => {
+    const response = await POST(
+      jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi" }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "immediate", scheduledFor: null }),
+    );
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("draft: creates with intent 'draft' and sends NO event", async () => {
+    const response = await POST(
+      jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi", draft: true }),
+    );
+    const body = (await response.json()) as { message?: string };
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "draft", scheduledFor: null }),
+    );
+    expect(inngestSendMock).not.toHaveBeenCalled();
+    expect(body.message).toBe("Draft saved.");
+  });
+
+  it("scheduled: creates with intent 'scheduled' + the parsed Date and sends NO event", async () => {
+    const response = await POST(
+      jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi", scheduledFor: FUTURE }),
+    );
+    const body = (await response.json()) as { message?: string };
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "scheduled", scheduledFor: new Date(FUTURE) }),
+    );
+    expect(inngestSendMock).not.toHaveBeenCalled();
+    expect(body.message).toBe("Post scheduled.");
+  });
+
+  it("draft wins over a provided scheduledFor", async () => {
+    await POST(
+      jsonRequest({
+        blobUrl: "https://x/y",
+        baseCaption: "hi",
+        draft: true,
+        scheduledFor: FUTURE,
+      }),
+    );
+
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "draft" }),
+    );
+  });
+
+  it("rejects a past/invalid scheduledFor with 400 and creates nothing", async () => {
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const response = await POST(
+      jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi", scheduledFor: past }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("schedules the reuse path too (intent forwarded to createPostJobForExistingMedia)", async () => {
+    createPostJobForExistingMediaMock.mockResolvedValue({
+      postJobId: "job-2",
+      mediaItemId: "media-9",
+      resultIds: [],
+    });
+
+    await POST(
+      jsonRequest({ mediaItemId: "media-9", baseCaption: "reuse", scheduledFor: FUTURE }),
+    );
+
+    expect(createPostJobForExistingMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "scheduled", scheduledFor: new Date(FUTURE) }),
+    );
+    expect(inngestSendMock).not.toHaveBeenCalled();
   });
 });

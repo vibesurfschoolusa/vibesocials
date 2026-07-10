@@ -212,8 +212,17 @@ describe("createPostJobForExistingMedia", () => {
 
     // Skips MediaItem creation entirely — no `prisma.mediaItem.create` mock
     // even exists here, so any call to it would throw "not a function".
+    // Roadmap Phase 5: the create data now comes from buildPostJobCreateData;
+    // for the default (immediate) intent it adds scheduledFor/baseCaption = null
+    // (caption travels in the event payload for immediate posts, not on the row).
     expect(postJobCreateMock).toHaveBeenCalledWith({
-      data: { userId: "user-1", mediaItemId: "media-1", status: "in_progress" },
+      data: {
+        userId: "user-1",
+        mediaItemId: "media-1",
+        status: "in_progress",
+        scheduledFor: null,
+        baseCaption: null,
+      },
     });
     expect(postJobResultCreateMock).toHaveBeenCalledTimes(2);
   });

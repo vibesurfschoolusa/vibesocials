@@ -1,9 +1,26 @@
-import type { MediaItem, Platform } from "@prisma/client";
+import type { MediaItem, Platform, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import type { SavedFileInfo } from "@/server/storage";
 import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
+import { postJobStatusForIntent, type PostJobIntent } from "@/lib/scheduling";
 
-export interface CreatePostJobOnlyParams {
+/**
+ * Fields shared by every create-post helper controlling WHEN/HOW the job runs
+ * (Roadmap Phase 5). `intent` defaults to `immediate` (today's behavior:
+ * results created up-front, publish event sent by the caller). For `scheduled`
+ * / `draft`, the helper creates NO per-platform results and does NOT require a
+ * connection — the fan-out is materialized at run time by the cron
+ * due-scanner / publish-promote from the connections that exist THEN — and
+ * snapshots the caption/overrides onto the PostJob so editing (PATCH) never
+ * mutates shared reused media.
+ */
+export interface PostJobSchedulingParams {
+  intent?: PostJobIntent;
+  /** Target publish time; required (and only used) when `intent === "scheduled"`. */
+  scheduledFor?: Date | null;
+}
+
+export interface CreatePostJobOnlyParams extends PostJobSchedulingParams {
   userId: string;
   media: SavedFileInfo;
   baseCaption: string;
@@ -68,12 +85,17 @@ export async function createPostJobOnly(
   params: CreatePostJobOnlyParams,
 ): Promise<PostJobCreated> {
   const { userId, media, baseCaption, location, perPlatformOverrides } = params;
+  const intent = params.intent ?? "immediate";
 
-  const socialConnections = await prisma.socialConnection.findMany({
-    where: { userId },
-  });
+  // Only the immediate path materializes the fan-out (and thus requires a
+  // connection) up front. Scheduled/draft jobs defer result creation to run
+  // time (§6.3), so they can be created before any platform is connected.
+  const socialConnections =
+    intent === "immediate"
+      ? await prisma.socialConnection.findMany({ where: { userId } })
+      : [];
 
-  if (socialConnections.length === 0) {
+  if (intent === "immediate" && socialConnections.length === 0) {
     throw new Error("NO_CONNECTIONS");
   }
 
@@ -84,7 +106,7 @@ export async function createPostJobOnly(
 
   // Roadmap Phase 1: this MediaItem is attached to a PostJob below, so stamp
   // `lastUsedAt` now. This drives age-based retention (set at attach time, not
-  // just at run time, so a scheduled reuse that runs weeks later isn't treated
+  // just at run time, so a scheduled post that runs weeks later isn't treated
   // as stale). Never-posted library uploads via `POST /api/media` create no
   // PostJob and correctly leave `lastUsedAt = null`.
   const now = new Date();
@@ -106,25 +128,33 @@ export async function createPostJobOnly(
   });
 
   const postJob = await prisma.postJob.create({
-    data: {
+    data: buildPostJobCreateData({
       userId,
       mediaItemId: mediaItem.id,
-      status: "in_progress",
-    },
+      intent,
+      scheduledFor: params.scheduledFor ?? null,
+      baseCaption,
+      perPlatformOverrides,
+    }),
   });
 
-  const resultRecords = await Promise.all(
-    socialConnections.map(connection =>
-      prisma.postJobResult.create({
-        data: {
-          postJobId: postJob.id,
-          platform: connection.platform,
-          socialConnectionId: connection.id,
-          status: "pending",
-        },
-      })
-    )
-  );
+  // Scheduled/draft jobs get NO results here — the cron/promote create them at
+  // run time from the connections that exist then.
+  const resultRecords =
+    intent === "immediate"
+      ? await Promise.all(
+          socialConnections.map((connection) =>
+            prisma.postJobResult.create({
+              data: {
+                postJobId: postJob.id,
+                platform: connection.platform,
+                socialConnectionId: connection.id,
+                status: "pending",
+              },
+            }),
+          ),
+        )
+      : [];
 
   return {
     postJobId: postJob.id,
@@ -133,7 +163,38 @@ export async function createPostJobOnly(
   };
 }
 
-export interface CreatePostJobForExistingMediaParams {
+/**
+ * Build the `PostJob.create` data for a given intent (Roadmap Phase 5). Shared
+ * by both create helpers so the status/`scheduledFor`/caption-snapshot rule
+ * lives in one place. Immediate jobs leave `scheduledFor`/`baseCaption`/
+ * `perPlatformOverrides` null (caption travels in the event payload as before);
+ * scheduled/draft jobs snapshot the composer content onto the job so it is
+ * durable and editable without touching shared media.
+ */
+export function buildPostJobCreateData(args: {
+  userId: string;
+  mediaItemId: string;
+  intent: PostJobIntent;
+  scheduledFor: Date | null;
+  baseCaption: string;
+  perPlatformOverrides?: Partial<Record<Platform, string>> | null;
+}): Prisma.PostJobUncheckedCreateInput {
+  const isDeferred = args.intent !== "immediate";
+  return {
+    userId: args.userId,
+    mediaItemId: args.mediaItemId,
+    status: postJobStatusForIntent(args.intent),
+    scheduledFor: args.intent === "scheduled" ? args.scheduledFor : null,
+    baseCaption: isDeferred ? args.baseCaption : null,
+    perPlatformOverrides:
+      isDeferred && args.perPlatformOverrides
+        ? (args.perPlatformOverrides as unknown as Prisma.InputJsonValue)
+        : undefined,
+  };
+}
+
+export interface CreatePostJobForExistingMediaParams
+  extends PostJobSchedulingParams {
   userId: string;
   mediaItemId: string;
   /**
@@ -181,18 +242,23 @@ export interface CreatePostJobForExistingMediaParams {
 export async function createPostJobForExistingMedia(
   params: CreatePostJobForExistingMediaParams,
 ): Promise<PostJobCreated> {
-  const { userId, mediaItemId, location } = params;
+  const { userId, mediaItemId, location, baseCaption, perPlatformOverrides } =
+    params;
+  const intent = params.intent ?? "immediate";
 
   const mediaItem = await prisma.mediaItem.findUnique({
     where: { id: mediaItemId },
   });
   assertMediaItemReusable(mediaItem, userId);
 
-  const socialConnections = await prisma.socialConnection.findMany({
-    where: { userId },
-  });
+  // Immediate reuse materializes the fan-out now (and requires a connection);
+  // scheduled/draft reuse defers result creation to run time (§6.3).
+  const socialConnections =
+    intent === "immediate"
+      ? await prisma.socialConnection.findMany({ where: { userId } })
+      : [];
 
-  if (socialConnections.length === 0) {
+  if (intent === "immediate" && socialConnections.length === 0) {
     throw new Error("NO_CONNECTIONS");
   }
 
@@ -228,25 +294,32 @@ export async function createPostJobForExistingMedia(
     });
 
     const job = await tx.postJob.create({
-      data: {
+      data: buildPostJobCreateData({
         userId,
         mediaItemId,
-        status: "in_progress",
-      },
+        intent,
+        scheduledFor: params.scheduledFor ?? null,
+        baseCaption,
+        perPlatformOverrides,
+      }),
     });
 
-    const results = await Promise.all(
-      socialConnections.map(connection =>
-        tx.postJobResult.create({
-          data: {
-            postJobId: job.id,
-            platform: connection.platform,
-            socialConnectionId: connection.id,
-            status: "pending",
-          },
-        })
-      )
-    );
+    // Scheduled/draft reuse creates no results here (run-time creation, §6.3).
+    const results =
+      intent === "immediate"
+        ? await Promise.all(
+            socialConnections.map((connection) =>
+              tx.postJobResult.create({
+                data: {
+                  postJobId: job.id,
+                  platform: connection.platform,
+                  socialConnectionId: connection.id,
+                  status: "pending",
+                },
+              }),
+            ),
+          )
+        : [];
 
     return { postJob: job, resultRecords: results };
   });
@@ -255,5 +328,100 @@ export async function createPostJobForExistingMedia(
     postJobId: postJob.id,
     mediaItemId,
     resultIds: resultRecords.map(r => r.id),
+  };
+}
+
+/** Event payload for `post/publish.requested` (the shape `publishToAllPlatforms` reads). */
+export interface PublishRequestedEventData {
+  postJobId: string;
+  userId: string;
+  mediaItemId: string;
+  baseCaption: string;
+  perPlatformOverrides: Partial<Record<Platform, string>> | null;
+}
+
+/** Outcome of preparing a deferred (scheduled/draft) job for publishing. */
+export type DeferredDispatchResult =
+  | { ok: true; event: PublishRequestedEventData }
+  | { ok: false; reason: "NOT_FOUND" | "NO_CONNECTIONS" };
+
+/**
+ * Roadmap Phase 5 — the review's KEY correctness fix (§6.3): materialize a
+ * scheduled/draft job's per-platform `PostJobResult`s from the connections that
+ * exist NOW (run time), not at schedule time. Pre-creating them at schedule
+ * time breaks when connections change over the gap — a deleted connection
+ * cascade-removes its result (silent vanish) and a newly added one has no result
+ * and is never posted to.
+ *
+ * Shared by the cron due-scanner and the publish-draft endpoint. The caller
+ * MUST have already atomically claimed the job (status → `in_progress`) so this
+ * runs at most once per job. Returns the `post/publish.requested` payload to
+ * send (caller sends it — via `step.sendEvent` in the cron for exactly-once, or
+ * `inngest.send` in the route); on no connections it marks the job `failed`
+ * (mirroring the existing no-connections path) and returns `ok: false`.
+ *
+ * Result creation is guarded by a "no results yet" check so a retried cron step
+ * can't duplicate rows. Caption/overrides come from the job's own snapshot
+ * (`PostJob.baseCaption` / `perPlatformOverrides`), falling back to the media
+ * item — so a scheduled reuse uses the caption the user typed for THIS post, not
+ * the shared item's caption. Per-post TikTok/YouTube publishing metadata is not
+ * persisted for scheduled jobs, so publishing falls back to each client's SAFE
+ * default (YouTube unlisted, TikTok SELF_ONLY) — same accepted limitation as the
+ * retry path.
+ */
+export async function prepareDeferredPostJobDispatch(
+  postJobId: string,
+): Promise<DeferredDispatchResult> {
+  const job = await prisma.postJob.findUnique({
+    where: { id: postJobId },
+    include: { mediaItem: { select: { baseCaption: true, perPlatformOverrides: true } } },
+  });
+
+  if (!job) {
+    return { ok: false, reason: "NOT_FOUND" };
+  }
+
+  const connections = await prisma.socialConnection.findMany({
+    where: { userId: job.userId },
+  });
+
+  if (connections.length === 0) {
+    // No connections at run time → fail the job (mirrors publishToAllPlatforms'
+    // no-connections path). §6.6.
+    await prisma.postJob.update({
+      where: { id: postJobId },
+      data: { status: "failed" },
+    });
+    return { ok: false, reason: "NO_CONNECTIONS" };
+  }
+
+  // Idempotent: only create the fan-out if it hasn't been created yet, so a
+  // retried caller step never duplicates result rows.
+  const existingResults = await prisma.postJobResult.count({ where: { postJobId } });
+  if (existingResults === 0) {
+    await prisma.postJobResult.createMany({
+      data: connections.map((c) => ({
+        postJobId,
+        platform: c.platform,
+        socialConnectionId: c.id,
+        status: "pending" as const,
+      })),
+    });
+  }
+
+  const overrides =
+    (job.perPlatformOverrides as Partial<Record<Platform, string>> | null) ??
+    (job.mediaItem.perPlatformOverrides as Partial<Record<Platform, string>> | null) ??
+    null;
+
+  return {
+    ok: true,
+    event: {
+      postJobId,
+      userId: job.userId,
+      mediaItemId: job.mediaItemId,
+      baseCaption: job.baseCaption ?? job.mediaItem.baseCaption,
+      perPlatformOverrides: overrides,
+    },
   };
 }

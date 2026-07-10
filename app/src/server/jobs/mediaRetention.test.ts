@@ -103,7 +103,14 @@ describe("retention constants", () => {
     expect(RETENTION_DAYS).toBe(30);
   });
 
-  it("treats only completed/failed as terminal (everything else is non-terminal)", () => {
-    expect([...TERMINAL_POST_JOB_STATUSES].sort()).toEqual(["completed", "failed"]);
+  it("treats completed/failed/cancelled as terminal (scheduled/draft stay non-terminal)", () => {
+    // Roadmap Phase 5: `cancelled` is terminal (a cancelled job never publishes,
+    // so its media is sweepable/deletable); `scheduled`/`draft` are NOT in this
+    // set, so they remain non-terminal and their media is kept.
+    expect([...TERMINAL_POST_JOB_STATUSES].sort()).toEqual([
+      "cancelled",
+      "completed",
+      "failed",
+    ]);
   });
 });

@@ -27,10 +27,25 @@ export interface PostJobResultDTO {
 /** A single post job and its per-platform fan-out results. */
 export interface PostJobDTO {
   id: string;
+  /**
+   * `status` is the full Prisma `PostJobStatus` union, so it widens
+   * automatically when enum members are added (Roadmap Phase 5:
+   * draft/scheduled/cancelled). Consumers that switch on it exhaustively must
+   * still be updated — see `JOB_STATUS_META` in post-job-card.tsx.
+   */
   status: PostJobStatus;
   /** ISO-8601 creation timestamp. */
   createdAt: string;
-  /** Base caption (from the associated media item), if available. */
+  /**
+   * ISO-8601 target publish time for a `scheduled` job, else null (Roadmap
+   * Phase 5). Drives the Queue ordering + the "Scheduled for …" label.
+   */
+  scheduledFor: string | null;
+  /**
+   * Base caption. For scheduled/draft jobs this is the job's own snapshot
+   * (`PostJob.baseCaption`); for immediate/older jobs it falls back to the
+   * associated media item's caption.
+   */
   caption: string | null;
   results: PostJobResultDTO[];
 }

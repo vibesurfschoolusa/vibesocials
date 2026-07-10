@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
-import type { Platform } from "@prisma/client";
+import { PostJobStatus, type Platform, type Prisma } from "@prisma/client";
 import {
   createPostJobForExistingMedia,
   createPostJobOnly,
@@ -10,8 +10,12 @@ import {
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { validateScheduledFor, type PostJobIntent } from "@/lib/scheduling";
 import type { YouTubePostMetadata } from "@/server/platforms/types";
 import type { PostsResponse } from "@/lib/postsDto";
+
+/** Runtime set of valid PostJobStatus values, for the `?status=` filter. */
+const VALID_POST_JOB_STATUSES = new Set<string>(Object.values(PostJobStatus));
 
 const YOUTUBE_PRIVACY_STATUSES = ["public", "unlisted", "private"] as const;
 
@@ -26,22 +30,41 @@ const POSTS_PAGE_SIZE = 50;
  * jobs with their per-platform results, projected to display-safe fields only
  * (SEC-1 discipline — no tokens, secrets, or raw connection metadata).
  */
-export async function GET() {
+export async function GET(request: Request) {
   const user = await getCurrentUser();
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Optional `?status=` filter (Roadmap Phase 5) — a comma-separated list of
+  // PostJobStatus values, e.g. `?status=scheduled,draft` for the Queue view.
+  // Unknown values are ignored; if nothing valid remains the filter is dropped
+  // (returns all), so a bad param can never 500 or silently return empty.
+  const statusParam = new URL(request.url).searchParams.get("status");
+  const statusFilter = statusParam
+    ? statusParam
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => VALID_POST_JOB_STATUSES.has(s))
+    : [];
+
+  const where: Prisma.PostJobWhereInput = { userId: user.id };
+  if (statusFilter.length > 0) {
+    where.status = { in: statusFilter as PostJobStatus[] };
+  }
+
   try {
     const jobs = await prisma.postJob.findMany({
-      where: { userId: user.id },
+      where,
       orderBy: { createdAt: "desc" },
       take: POSTS_PAGE_SIZE,
       select: {
         id: true,
         status: true,
         createdAt: true,
+        scheduledFor: true,
+        baseCaption: true,
         mediaItem: { select: { baseCaption: true } },
         results: {
           select: {
@@ -60,7 +83,11 @@ export async function GET() {
         id: job.id,
         status: job.status,
         createdAt: job.createdAt.toISOString(),
-        caption: job.mediaItem?.baseCaption ?? null,
+        scheduledFor: job.scheduledFor?.toISOString() ?? null,
+        // Scheduled/draft jobs snapshot their caption on the job itself so
+        // editing them never mutates shared reused media; fall back to the
+        // media item's caption for immediate/older jobs.
+        caption: job.baseCaption ?? job.mediaItem?.baseCaption ?? null,
         results: job.results.map((result) => ({
           platform: result.platform,
           status: result.status,
@@ -96,6 +123,11 @@ interface CreatePostBody {
   perPlatformOverrides?: unknown;
   tiktokMetadata?: unknown;
   youtubeMetadata?: { privacyStatus?: unknown };
+  // Roadmap Phase 5. `draft: true` saves a draft (no results, no event);
+  // `scheduledFor` (ISO string) schedules for later (no results, no event —
+  // the cron claims it when due). Absent both = immediate (today's behavior).
+  draft?: unknown;
+  scheduledFor?: unknown;
 }
 
 export async function POST(request: Request) {
@@ -207,6 +239,22 @@ export async function POST(request: Request) {
 
   const location = typeof locationRaw === "string" && locationRaw.trim() ? locationRaw.trim() : undefined;
 
+  // Roadmap Phase 5 — resolve the intent. `draft: true` wins; otherwise a
+  // present `scheduledFor` means "schedule" (validated to be a real, future
+  // time); otherwise it's an immediate post (today's path, byte-for-byte).
+  let intent: PostJobIntent = "immediate";
+  let scheduledForDate: Date | null = null;
+  if (body?.draft === true) {
+    intent = "draft";
+  } else if (body?.scheduledFor != null) {
+    const validation = validateScheduledFor(body.scheduledFor, new Date());
+    if (!validation.ok) {
+      return NextResponse.json({ error: validation.error }, { status: 400 });
+    }
+    intent = "scheduled";
+    scheduledForDate = validation.date;
+  }
+
   try {
     // Create job records without executing (for background processing).
     // Reuse (mediaItemId, Roadmap Phase 2) skips MediaItem creation via
@@ -221,6 +269,8 @@ export async function POST(request: Request) {
         baseCaption: baseCaptionRaw,
         perPlatformOverrides,
         location,
+        intent,
+        scheduledFor: scheduledForDate,
       });
       postJobId = created.postJobId;
       mediaItemId = created.mediaItemId;
@@ -248,27 +298,35 @@ export async function POST(request: Request) {
         baseCaption: baseCaptionRaw,
         location,
         perPlatformOverrides,
+        intent,
+        scheduledFor: scheduledForDate,
       });
       postJobId = created.postJobId;
       mediaItemId = created.mediaItemId;
     }
 
-    // Trigger background job via Inngest — identical event shape for both
-    // paths; the publisher already resolves media by id, so reuse needs no
-    // changes on that side.
-    await inngest.send({
-      name: "post/publish.requested",
-      data: {
-        postJobId,
-        userId: user.id,
-        mediaItemId,
-        baseCaption: baseCaptionRaw,
-        location,
-        perPlatformOverrides,
-        tiktokMetadata: tiktokMetadataRaw,
-        youtubeMetadata,
-      },
-    });
+    // Immediate posts trigger the background publish now. Scheduled/draft jobs
+    // send NO event here (Roadmap Phase 5): a scheduled job is picked up by the
+    // cron due-scanner when `scheduledFor` arrives (which materializes its
+    // per-platform results from the connections that exist THEN — the review's
+    // run-time-result-creation fix), and a draft is promoted via the publish
+    // endpoint. The event shape is identical to the reuse path; the publisher
+    // resolves media by id, so it needs no changes.
+    if (intent === "immediate") {
+      await inngest.send({
+        name: "post/publish.requested",
+        data: {
+          postJobId,
+          userId: user.id,
+          mediaItemId,
+          baseCaption: baseCaptionRaw,
+          location,
+          perPlatformOverrides,
+          tiktokMetadata: tiktokMetadataRaw,
+          youtubeMetadata,
+        },
+      });
+    }
 
     // Return immediately - job runs in background
     const postJob = await prisma.postJob.findUnique({
@@ -278,11 +336,14 @@ export async function POST(request: Request) {
       where: { postJobId },
     });
 
-    return NextResponse.json({
-      postJob,
-      results,
-      message: "Publishing in progress. Large videos may take a few minutes.",
-    });
+    const message =
+      intent === "draft"
+        ? "Draft saved."
+        : intent === "scheduled"
+          ? "Post scheduled."
+          : "Publishing in progress. Large videos may take a few minutes.";
+
+    return NextResponse.json({ postJob, results, message });
   } catch (error: unknown) {
     if (error instanceof Error && error.message === "NO_CONNECTIONS") {
       return NextResponse.json(
