@@ -4,18 +4,16 @@ import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, Loader2, MessageSquare } from "lucide-react";
 import Link from "next/link";
 
-import { ToastProvider, useToast } from "@/components/ui/toast";
+import { useToast } from "@/components/ui/toast";
 import { ErrorState } from "@/components/reviews/error-state";
 import { LocationPicker } from "@/components/reviews/location-picker";
 import { ReviewCard } from "@/components/reviews/review-card";
 import type { GoogleReview, Location } from "@/components/reviews/types";
 
+// Toasts are provided app-wide by the shell's ToastProvider (see
+// components/shell/app-shell.tsx), so this page no longer wraps its own.
 export default function ReviewsPage() {
-  return (
-    <ToastProvider>
-      <ReviewsPageContent />
-    </ToastProvider>
-  );
+  return <ReviewsPageContent />;
 }
 
 function ReviewsPageContent() {
