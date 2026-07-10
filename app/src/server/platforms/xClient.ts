@@ -429,8 +429,11 @@ export const xClient: PlatformClient = {
     // If caption is longer, we'll truncate with ellipsis
     let tweetText = caption;
     if (tweetText.length > 280) {
-      tweetText = truncateGraphemes(tweetText, 280, { ellipsis: "..." });
-      console.log("[X OAuth 1.0a] Caption truncated to 280 characters");
+      const truncated = truncateGraphemes(tweetText, 280, { ellipsis: "..." });
+      if (truncated !== tweetText) {
+        console.log("[X OAuth 1.0a] Caption truncated to fit X's 280-character limit");
+        tweetText = truncated;
+      }
     }
 
     // Create tweet with media using API v2 (Free tier has access to v2 endpoints)
