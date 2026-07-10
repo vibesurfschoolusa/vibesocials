@@ -1,5 +1,6 @@
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { truncateGraphemes } from "@/lib/truncate";
 
 import type { PlatformClient, PublishContext, PublishResult, TikTokCreatorInfo } from "./types";
 
@@ -217,8 +218,8 @@ export const tiktokClient: PlatformClient = {
 
     // TikTok title has a 2200 character limit, but captions are typically shorter
     // Truncate if needed to avoid API rejection
-    const tiktokCaption = caption 
-      ? (caption.length > 2200 ? caption.substring(0, 2200) : caption)
+    const tiktokCaption = caption
+      ? truncateGraphemes(caption, 2200)
       : "Video posted via Vibe Socials";
 
     // TikTok FILE_UPLOAD chunking (see computeChunkPlan): chunk_size is capped at

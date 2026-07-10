@@ -5,6 +5,7 @@ import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { truncateGraphemes } from "@/lib/truncate";
 
 // COR-2/COR-3: xClient uses oauth-1.0a request signing (see `oauth.authorize`
 // calls below). fetchWithTimeout passes `init` through unchanged except for
@@ -428,7 +429,7 @@ export const xClient: PlatformClient = {
     // If caption is longer, we'll truncate with ellipsis
     let tweetText = caption;
     if (tweetText.length > 280) {
-      tweetText = tweetText.substring(0, 277) + "...";
+      tweetText = truncateGraphemes(tweetText, 280, { ellipsis: "..." });
       console.log("[X OAuth 1.0a] Caption truncated to 280 characters");
     }
 

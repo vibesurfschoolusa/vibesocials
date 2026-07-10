@@ -2,6 +2,7 @@ import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { truncateGraphemes } from "@/lib/truncate";
 
 import { refreshGoogleToken } from "./googleTokens";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
@@ -130,7 +131,7 @@ export const youtubeClient: PlatformClient = {
 
     // YouTube video metadata
     // Use baseCaption for title (no footer), full caption for description (with footer)
-    const title = (mediaItem.baseCaption || caption).substring(0, 100); // YouTube title max 100 chars
+    const title = truncateGraphemes(mediaItem.baseCaption || caption, 100); // YouTube title max 100 chars
     const metadata: YouTubeVideoResource = {
       snippet: {
         title,
