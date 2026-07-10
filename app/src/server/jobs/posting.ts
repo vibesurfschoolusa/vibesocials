@@ -34,6 +34,13 @@ export async function createPostJobOnly(
     metadata.location = { description: location };
   }
 
+  // Roadmap Phase 1: this MediaItem is attached to a PostJob below, so stamp
+  // `lastUsedAt` now. This drives age-based retention (set at attach time, not
+  // just at run time, so a scheduled reuse that runs weeks later isn't treated
+  // as stale). Never-posted library uploads via `POST /api/media` create no
+  // PostJob and correctly leave `lastUsedAt = null`.
+  const now = new Date();
+
   const mediaItem = await prisma.mediaItem.create({
     data: {
       userId,
@@ -42,6 +49,7 @@ export async function createPostJobOnly(
       mimeType: media.mimeType,
       sizeBytes: media.sizeBytes,
       baseCaption,
+      lastUsedAt: now,
       metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
       perPlatformOverrides: perPlatformOverrides
         ? (perPlatformOverrides as unknown as Record<string, string>)

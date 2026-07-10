@@ -75,6 +75,13 @@ model MediaItem {
   perPlatformOverrides Json?
   metadata             Json?
   createdAt            DateTime  @default(now())
+  // Retention lifecycle (Roadmap Phase 1). Soft-delete: the row is kept
+  // (history/captions depend on it) and only the blob is removed; `deletedAt`
+  // marks when the blob was removed. `lastUsedAt` is stamped when the media is
+  // attached to a post and drives age-based retention (null = never-posted
+  // library upload, which is exempt from the sweep).
+  deletedAt            DateTime?
+  lastUsedAt           DateTime?
 
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   postJobs  PostJob[]

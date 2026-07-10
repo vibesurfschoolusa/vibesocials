@@ -1,7 +1,14 @@
+import { del } from "@vercel/blob";
+
 import { inngest } from "@/lib/inngest";
 import { prisma } from "@/lib/db";
 import { getPlatformClient } from "@/server/platforms";
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
+import {
+  RETENTION_DAYS,
+  TERMINAL_POST_JOB_STATUSES,
+  isMediaSweepEligible,
+} from "@/server/jobs/mediaRetention";
 import type { MediaItem, Platform, SocialConnection, User } from "@prisma/client";
 import type {
   PublishContext,
@@ -193,7 +200,11 @@ export const publishToAllPlatforms = inngest.createFunction(
       results.push(result);
     }
 
-    // Final step: Update job status and cleanup
+    // Final step: Update job status.
+    // Roadmap Phase 1: the media blob is intentionally NOT deleted here anymore.
+    // It persists so media can be reused/retried and browsed in the library;
+    // storage is bounded by the `mediaRetentionSweep` cron instead of a
+    // delete-after-every-post. Immediate posting is otherwise unchanged.
     const finalResult = await step.run("finalize-job", async () => {
       const hasSuccess = results.some((r) => r.status === "success");
       const finalStatus = hasSuccess ? "completed" : "failed";
@@ -202,20 +213,6 @@ export const publishToAllPlatforms = inngest.createFunction(
         where: { id: postJobId },
         data: { status: finalStatus },
       });
-
-      // Clean up blob storage after job completes (success or failure)
-      // This prevents storage quota issues from failed posts
-      try {
-        const { del } = await import("@vercel/blob");
-        await del(setupData.mediaItem.storageLocation);
-        console.log("[Inngest] Deleted media from blob storage", { 
-          mediaItemId, 
-          finalStatus,
-          note: "Blob deleted regardless of post status to free storage"
-        });
-      } catch (error) {
-        console.error("[Inngest] Failed to delete media from blob storage", error);
-      }
 
       return { finalStatus, successCount: results.filter(r => r.status === "success").length };
     });
@@ -230,4 +227,118 @@ export const publishToAllPlatforms = inngest.createFunction(
   }
 );
 
-export const inngestFunctions = [publishToAllPlatforms];
+/**
+ * Roadmap Phase 1 — daily media retention sweep.
+ *
+ * Because blobs now persist past posting, this cron bounds Blob storage: it
+ * finds *posted*, stale media that no active/scheduled job still needs, removes
+ * the blob (`del`), and soft-deletes the row (`deletedAt = now`, the row itself
+ * is kept for history/captions). Never-posted library uploads are exempt — see
+ * `isMediaSweepEligible`. The eligibility rule is re-evaluated against fresh data
+ * inside the same transaction as the delete to close the check-then-act race
+ * (a reuse can newly reference an old item between the scan and the delete).
+ */
+export const mediaRetentionSweep = inngest.createFunction(
+  { id: "media-retention-sweep", name: "Media Retention Sweep" },
+  { cron: "0 3 * * *" },
+  async ({ step }) => {
+    const summary = await step.run("sweep-expired-media", async () => {
+      const now = new Date();
+      const cutoff = new Date(now.getTime() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
+
+      // Coarse candidate filter (let the DB narrow the set): not already swept,
+      // posted at least once, no non-terminal referencing job, and stale by age
+      // (lastUsedAt when stamped, else createdAt). The authoritative rule and the
+      // race-closing re-check run per item inside the transaction below.
+      const candidates = await prisma.mediaItem.findMany({
+        where: {
+          deletedAt: null,
+          postJobs: {
+            some: {},
+            none: { status: { notIn: [...TERMINAL_POST_JOB_STATUSES] } },
+          },
+          OR: [
+            { lastUsedAt: { lt: cutoff } },
+            { lastUsedAt: null, createdAt: { lt: cutoff } },
+          ],
+        },
+        select: { id: true },
+      });
+
+      let swept = 0;
+      let skipped = 0;
+      let errors = 0;
+
+      for (const candidate of candidates) {
+        try {
+          const outcome = await prisma.$transaction(
+            async (tx) => {
+              const media = await tx.mediaItem.findUnique({
+                where: { id: candidate.id },
+                select: {
+                  storageLocation: true,
+                  deletedAt: true,
+                  lastUsedAt: true,
+                  createdAt: true,
+                  _count: { select: { postJobs: true } },
+                },
+              });
+              if (!media) return "skipped";
+
+              // Fresh, in-transaction re-check of the race-sensitive predicate.
+              const nonTerminalJobs = await tx.postJob.count({
+                where: {
+                  mediaItemId: candidate.id,
+                  status: { notIn: [...TERMINAL_POST_JOB_STATUSES] },
+                },
+              });
+
+              const eligible = isMediaSweepEligible({
+                deletedAt: media.deletedAt,
+                hasNonTerminalJob: nonTerminalJobs > 0,
+                hasAnyJob: media._count.postJobs > 0,
+                lastUsedAt: media.lastUsedAt,
+                createdAt: media.createdAt,
+                now,
+                retentionDays: RETENTION_DAYS,
+              });
+              if (!eligible) return "skipped";
+
+              // Mark the row first, then remove the blob: if `del` throws the
+              // whole transaction rolls back, so we never record a delete we did
+              // not actually perform. (`del` is idempotent for a missing blob.)
+              await tx.mediaItem.update({
+                where: { id: candidate.id },
+                data: { deletedAt: now },
+              });
+              await del(media.storageLocation);
+              return "swept";
+            },
+            { timeout: 15000 },
+          );
+
+          if (outcome === "swept") swept += 1;
+          else skipped += 1;
+        } catch (error) {
+          errors += 1;
+          console.error("[Inngest] Failed to sweep media item", {
+            mediaItemId: candidate.id,
+            error,
+          });
+        }
+      }
+
+      console.log("[Inngest] Media retention sweep complete", {
+        candidates: candidates.length,
+        swept,
+        skipped,
+        errors,
+      });
+      return { candidates: candidates.length, swept, skipped, errors };
+    });
+
+    return summary;
+  },
+);
+
+export const inngestFunctions = [publishToAllPlatforms, mediaRetentionSweep];
