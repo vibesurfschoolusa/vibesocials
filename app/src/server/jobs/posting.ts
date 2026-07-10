@@ -26,6 +26,42 @@ export interface CreatePostJobOnlyParams extends PostJobSchedulingParams {
   baseCaption: string;
   location?: string;
   perPlatformOverrides?: Partial<Record<Platform, string>> | null;
+  /**
+   * Per-post platform publishing metadata (Roadmap Phase 5 review B1). Carried
+   * in the event payload for immediate posts; PERSISTED on the job (as
+   * `publishMetadata`) for scheduled/draft so the deferred publish honors the
+   * user's compose-time YouTube/TikTok privacy choice instead of a client
+   * default. See {@link buildPublishMetadataSnapshot}.
+   */
+  tiktokMetadata?: TikTokPostMetadata;
+  youtubeMetadata?: YouTubePostMetadata;
+}
+
+/**
+ * Persisted shape of `PostJob.publishMetadata` (Roadmap Phase 5 review B1) — the
+ * per-platform publishing options a scheduled/draft post must replay at run time
+ * so it publishes with the privacy the user chose, not each client's default.
+ */
+export interface PublishMetadataSnapshot {
+  tiktok?: TikTokPostMetadata;
+  youtube?: YouTubePostMetadata;
+}
+
+/**
+ * Build the `publishMetadata` snapshot from the per-post metadata, or `undefined`
+ * when neither platform has any (so an immediate job / a job with no per-post
+ * privacy leaves the column null). Deferred jobs persist this; immediate jobs
+ * don't (their metadata rides the event).
+ */
+export function buildPublishMetadataSnapshot(
+  tiktokMetadata?: TikTokPostMetadata,
+  youtubeMetadata?: YouTubePostMetadata,
+): PublishMetadataSnapshot | undefined {
+  if (!tiktokMetadata && !youtubeMetadata) return undefined;
+  return {
+    ...(tiktokMetadata ? { tiktok: tiktokMetadata } : {}),
+    ...(youtubeMetadata ? { youtube: youtubeMetadata } : {}),
+  };
 }
 
 export interface PostJobCreated {
@@ -135,6 +171,8 @@ export async function createPostJobOnly(
       scheduledFor: params.scheduledFor ?? null,
       baseCaption,
       perPlatformOverrides,
+      tiktokMetadata: params.tiktokMetadata,
+      youtubeMetadata: params.youtubeMetadata,
     }),
   });
 
@@ -178,8 +216,15 @@ export function buildPostJobCreateData(args: {
   scheduledFor: Date | null;
   baseCaption: string;
   perPlatformOverrides?: Partial<Record<Platform, string>> | null;
+  tiktokMetadata?: TikTokPostMetadata;
+  youtubeMetadata?: YouTubePostMetadata;
 }): Prisma.PostJobUncheckedCreateInput {
   const isDeferred = args.intent !== "immediate";
+  // Snapshot per-post privacy for deferred jobs only (review B1) — immediate
+  // jobs carry it in the event payload, so persisting there would be dead data.
+  const publishMetadata = isDeferred
+    ? buildPublishMetadataSnapshot(args.tiktokMetadata, args.youtubeMetadata)
+    : undefined;
   return {
     userId: args.userId,
     mediaItemId: args.mediaItemId,
@@ -190,6 +235,9 @@ export function buildPostJobCreateData(args: {
       isDeferred && args.perPlatformOverrides
         ? (args.perPlatformOverrides as unknown as Prisma.InputJsonValue)
         : undefined,
+    publishMetadata: publishMetadata
+      ? (publishMetadata as unknown as Prisma.InputJsonValue)
+      : undefined,
   };
 }
 
@@ -301,6 +349,8 @@ export async function createPostJobForExistingMedia(
         scheduledFor: params.scheduledFor ?? null,
         baseCaption,
         perPlatformOverrides,
+        tiktokMetadata: params.tiktokMetadata,
+        youtubeMetadata: params.youtubeMetadata,
       }),
     });
 
@@ -338,6 +388,13 @@ export interface PublishRequestedEventData {
   mediaItemId: string;
   baseCaption: string;
   perPlatformOverrides: Partial<Record<Platform, string>> | null;
+  /**
+   * Per-post platform privacy replayed from the job's `publishMetadata` snapshot
+   * (review B1). Omitted when the scheduled/draft post carried none — the client
+   * then applies its default, same as an immediate post without metadata.
+   */
+  tiktokMetadata?: TikTokPostMetadata;
+  youtubeMetadata?: YouTubePostMetadata;
 }
 
 /** Outcome of preparing a deferred (scheduled/draft) job for publishing. */
@@ -364,10 +421,10 @@ export type DeferredDispatchResult =
  * can't duplicate rows. Caption/overrides come from the job's own snapshot
  * (`PostJob.baseCaption` / `perPlatformOverrides`), falling back to the media
  * item — so a scheduled reuse uses the caption the user typed for THIS post, not
- * the shared item's caption. Per-post TikTok/YouTube publishing metadata is not
- * persisted for scheduled jobs, so publishing falls back to each client's SAFE
- * default (YouTube unlisted, TikTok SELF_ONLY) — same accepted limitation as the
- * retry path.
+ * the shared item's caption. Per-post TikTok/YouTube publishing metadata is
+ * replayed from the job's `publishMetadata` snapshot (review B1) so the deferred
+ * publish honors the privacy the user chose at compose time (a scheduled YouTube
+ * "private" stays private, not silently escalated to the client-default unlisted).
  */
 export async function prepareDeferredPostJobDispatch(
   postJobId: string,
@@ -414,6 +471,10 @@ export async function prepareDeferredPostJobDispatch(
     (job.mediaItem.perPlatformOverrides as Partial<Record<Platform, string>> | null) ??
     null;
 
+  // Replay the per-post privacy the user chose at compose time (review B1).
+  const publishMetadata =
+    (job.publishMetadata as PublishMetadataSnapshot | null) ?? null;
+
   return {
     ok: true,
     event: {
@@ -422,6 +483,10 @@ export async function prepareDeferredPostJobDispatch(
       mediaItemId: job.mediaItemId,
       baseCaption: job.baseCaption ?? job.mediaItem.baseCaption,
       perPlatformOverrides: overrides,
+      // Only set when the snapshot has them, so a job with no per-post privacy
+      // yields the same event shape as before (client applies its default).
+      ...(publishMetadata?.tiktok ? { tiktokMetadata: publishMetadata.tiktok } : {}),
+      ...(publishMetadata?.youtube ? { youtubeMetadata: publishMetadata.youtube } : {}),
     },
   };
 }

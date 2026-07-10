@@ -6,11 +6,29 @@ import {
   DELETABLE_POST_JOB_STATUSES,
   MUTABLE_POST_JOB_STATUSES,
   SCHEDULE_BUFFER_MS,
+  isValidPerPlatformOverrides,
   localDateTimeToUtcIso,
   postJobStatusForIntent,
   toDateTimeLocalValue,
   validateScheduledFor,
 } from "./scheduling";
+
+describe("isValidPerPlatformOverrides (review Minor #3)", () => {
+  it("accepts a plain object whose values are all strings (and the empty object)", () => {
+    expect(isValidPerPlatformOverrides({})).toBe(true);
+    expect(isValidPerPlatformOverrides({ youtube: "yt caption", tiktok: "tt caption" })).toBe(true);
+  });
+
+  it("rejects arrays, null, primitives, and objects with non-string values", () => {
+    expect(isValidPerPlatformOverrides(["a", "b"])).toBe(false); // array
+    expect(isValidPerPlatformOverrides(null)).toBe(false);
+    expect(isValidPerPlatformOverrides("caption")).toBe(false);
+    expect(isValidPerPlatformOverrides(42)).toBe(false);
+    expect(isValidPerPlatformOverrides({ youtube: 5 })).toBe(false); // non-string value
+    expect(isValidPerPlatformOverrides({ youtube: { nested: "x" } })).toBe(false);
+    expect(isValidPerPlatformOverrides({ youtube: null })).toBe(false);
+  });
+});
 
 describe("postJobStatusForIntent", () => {
   it("maps each intent to its initial PostJob status", () => {

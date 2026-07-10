@@ -387,3 +387,114 @@ describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
 });
+
+describe("POST /api/posts — per-post privacy persistence + validation (review B1 / Minor #3)", () => {
+  const FUTURE = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({
+      postJobId: "job-1",
+      mediaItemId: "media-1",
+      resultIds: [],
+    });
+  });
+
+  it("forwards youtubeMetadata to the create helper for a SCHEDULED post (so B1 can persist it)", async () => {
+    await POST(
+      jsonRequest({
+        blobUrl: "https://x/y",
+        baseCaption: "hi",
+        scheduledFor: FUTURE,
+        youtubeMetadata: { privacyStatus: "private" },
+      }),
+    );
+
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        intent: "scheduled",
+        youtubeMetadata: { privacyStatus: "private" },
+      }),
+    );
+  });
+
+  it("sends the VALIDATED tiktokMetadata (not the raw body) in the immediate publish event", async () => {
+    await POST(
+      jsonRequest({
+        blobUrl: "https://x/y",
+        baseCaption: "hi",
+        tiktokMetadata: {
+          privacyLevel: "PUBLIC_TO_EVERYONE",
+          disableComment: true,
+          disableDuet: false,
+          disableStitch: false,
+          // an unknown extra field must be dropped by validation
+          bogus: "x",
+        },
+      }),
+    );
+
+    expect(inngestSendMock).toHaveBeenCalledWith({
+      name: "post/publish.requested",
+      data: expect.objectContaining({
+        tiktokMetadata: {
+          privacyLevel: "PUBLIC_TO_EVERYONE",
+          disableComment: true,
+          disableDuet: false,
+          disableStitch: false,
+        },
+      }),
+    });
+  });
+
+  it("accepts tiktokMetadata WITHOUT a privacyLevel for a scheduled post and normalizes it to empty", async () => {
+    // The composer only requires an explicit TikTok privacy for immediate posts,
+    // so a scheduled/draft post can legitimately carry none — it must not 400.
+    await POST(
+      jsonRequest({
+        blobUrl: "https://x/y",
+        baseCaption: "hi",
+        scheduledFor: FUTURE,
+        tiktokMetadata: { disableComment: true, disableDuet: false, disableStitch: false },
+      }),
+    );
+
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        intent: "scheduled",
+        tiktokMetadata: {
+          privacyLevel: "",
+          disableComment: true,
+          disableDuet: false,
+          disableStitch: false,
+        },
+      }),
+    );
+  });
+
+  it("rejects a non-string tiktokMetadata.privacyLevel with 400 and creates nothing", async () => {
+    const response = await POST(
+      jsonRequest({
+        blobUrl: "https://x/y",
+        baseCaption: "hi",
+        tiktokMetadata: { privacyLevel: 5 },
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-string-map perPlatformOverrides (array) with 400", async () => {
+    const response = await POST(
+      jsonRequest({
+        blobUrl: "https://x/y",
+        baseCaption: "hi",
+        perPlatformOverrides: ["not", "a", "map"],
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+});

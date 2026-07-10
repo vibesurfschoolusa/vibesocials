@@ -10,8 +10,8 @@ import {
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
-import { validateScheduledFor, type PostJobIntent } from "@/lib/scheduling";
-import type { YouTubePostMetadata } from "@/server/platforms/types";
+import { isValidPerPlatformOverrides, validateScheduledFor, type PostJobIntent } from "@/lib/scheduling";
+import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
 import type { PostsResponse } from "@/lib/postsDto";
 
 /** Runtime set of valid PostJobStatus values, for the `?status=` filter. */
@@ -207,9 +207,12 @@ export async function POST(request: Request) {
 
   let perPlatformOverrides: Partial<Record<Platform, string>> | undefined;
   if (overridesRaw != null) {
-    if (typeof overridesRaw !== "object") {
+    // Require a Record<string,string> (review Minor #3 — reject arrays and
+    // non-string values so a later publish can't feed a non-string to caption
+    // building).
+    if (!isValidPerPlatformOverrides(overridesRaw)) {
       return NextResponse.json(
-        { error: "perPlatformOverrides must be an object if provided" },
+        { error: "perPlatformOverrides must be an object of string values if provided" },
         { status: 400 },
       );
     }
@@ -234,6 +237,39 @@ export async function POST(request: Request) {
     }
     youtubeMetadata = {
       privacyStatus: youtubeMetadataRaw.privacyStatus as YouTubePostMetadata["privacyStatus"],
+    };
+  }
+
+  // Validate TikTok metadata into a clean typed object (previously forwarded raw
+  // — now at parity with youtube, and normalized so it can be persisted on
+  // scheduled/draft jobs, review B1). `privacyLevel` must be a STRING if present
+  // but may be empty: the composer only requires an explicit level for immediate
+  // posts, so a scheduled/draft post can legitimately carry none — the TikTok
+  // client then applies its SELF_ONLY default at publish (a *chosen* level is
+  // preserved and honored). TikTok's allowed set is per-creator (resolved from
+  // creator-info), so it's not a fixed enum here; the toggles coerce to booleans.
+  let tiktokMetadata: TikTokPostMetadata | undefined;
+  if (tiktokMetadataRaw != null) {
+    if (typeof tiktokMetadataRaw !== "object" || Array.isArray(tiktokMetadataRaw)) {
+      return NextResponse.json(
+        { error: "tiktokMetadata must be an object if provided" },
+        { status: 400 },
+      );
+    }
+    const raw = tiktokMetadataRaw as Record<string, unknown>;
+    if (raw.privacyLevel !== undefined && typeof raw.privacyLevel !== "string") {
+      return NextResponse.json(
+        { error: "tiktokMetadata.privacyLevel must be a string" },
+        { status: 400 },
+      );
+    }
+    tiktokMetadata = {
+      privacyLevel: typeof raw.privacyLevel === "string" ? raw.privacyLevel : "",
+      disableComment: Boolean(raw.disableComment),
+      disableDuet: Boolean(raw.disableDuet),
+      disableStitch: Boolean(raw.disableStitch),
+      ...(raw.brandedContent !== undefined ? { brandedContent: Boolean(raw.brandedContent) } : {}),
+      ...(raw.brandOrganic !== undefined ? { brandOrganic: Boolean(raw.brandOrganic) } : {}),
     };
   }
 
@@ -271,6 +307,10 @@ export async function POST(request: Request) {
         location,
         intent,
         scheduledFor: scheduledForDate,
+        // Persisted onto the job for scheduled/draft (review B1); ignored for
+        // immediate (which carries them in the event below).
+        tiktokMetadata,
+        youtubeMetadata,
       });
       postJobId = created.postJobId;
       mediaItemId = created.mediaItemId;
@@ -300,6 +340,10 @@ export async function POST(request: Request) {
         perPlatformOverrides,
         intent,
         scheduledFor: scheduledForDate,
+        // Persisted onto the job for scheduled/draft (review B1); ignored for
+        // immediate (which carries them in the event below).
+        tiktokMetadata,
+        youtubeMetadata,
       });
       postJobId = created.postJobId;
       mediaItemId = created.mediaItemId;
@@ -322,7 +366,7 @@ export async function POST(request: Request) {
           baseCaption: baseCaptionRaw,
           location,
           perPlatformOverrides,
-          tiktokMetadata: tiktokMetadataRaw,
+          tiktokMetadata,
           youtubeMetadata,
         },
       });

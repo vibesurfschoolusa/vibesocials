@@ -47,6 +47,8 @@ vi.mock("@/lib/db", () => {
 
 import {
   assertMediaItemReusable,
+  buildPostJobCreateData,
+  buildPublishMetadataSnapshot,
   createPostJobForExistingMedia,
   MediaItemUnavailableError,
 } from "./posting";
@@ -279,5 +281,55 @@ describe("createPostJobForExistingMedia", () => {
 
     expect(findUniqueMock).toHaveBeenCalledWith({ where: { id: "media-999" } });
     expect(result.mediaItemId).toBe("media-999");
+  });
+});
+
+describe("buildPublishMetadataSnapshot (review B1)", () => {
+  const yt = { privacyStatus: "private" } as const;
+  const tt = { privacyLevel: "SELF_ONLY", disableComment: false, disableDuet: false, disableStitch: false };
+
+  it("returns undefined when neither platform has metadata", () => {
+    expect(buildPublishMetadataSnapshot(undefined, undefined)).toBeUndefined();
+  });
+
+  it("includes only the platforms that have metadata", () => {
+    expect(buildPublishMetadataSnapshot(undefined, yt)).toEqual({ youtube: yt });
+    expect(buildPublishMetadataSnapshot(tt, undefined)).toEqual({ tiktok: tt });
+    expect(buildPublishMetadataSnapshot(tt, yt)).toEqual({ tiktok: tt, youtube: yt });
+  });
+});
+
+describe("buildPostJobCreateData (review B1 — persist deferred privacy)", () => {
+  const yt = { privacyStatus: "private" } as const;
+
+  it("persists publishMetadata for a scheduled job (and sets scheduledFor/baseCaption)", () => {
+    const when = new Date("2030-01-01T00:00:00Z");
+    const data = buildPostJobCreateData({
+      userId: "u", mediaItemId: "m", intent: "scheduled",
+      scheduledFor: when, baseCaption: "hi", youtubeMetadata: yt,
+    });
+    expect(data.status).toBe("scheduled");
+    expect(data.scheduledFor).toBe(when);
+    expect(data.baseCaption).toBe("hi");
+    expect(data.publishMetadata).toEqual({ youtube: yt });
+  });
+
+  it("persists publishMetadata for a draft job", () => {
+    const data = buildPostJobCreateData({
+      userId: "u", mediaItemId: "m", intent: "draft",
+      scheduledFor: null, baseCaption: "hi", youtubeMetadata: yt,
+    });
+    expect(data.status).toBe("draft");
+    expect(data.publishMetadata).toEqual({ youtube: yt });
+  });
+
+  it("does NOT persist publishMetadata for an immediate job (it rides the event instead)", () => {
+    const data = buildPostJobCreateData({
+      userId: "u", mediaItemId: "m", intent: "immediate",
+      scheduledFor: null, baseCaption: "hi", youtubeMetadata: yt,
+    });
+    expect(data.status).toBe("in_progress");
+    expect(data.baseCaption).toBeNull();
+    expect(data.publishMetadata).toBeUndefined();
   });
 });

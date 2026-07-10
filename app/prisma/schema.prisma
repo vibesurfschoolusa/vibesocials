@@ -120,6 +120,13 @@ model PostJob {
   scheduledFor         DateTime?
   baseCaption          String?
   perPlatformOverrides Json?
+  // Roadmap Phase 5 (review B1). Per-post platform publishing metadata —
+  // `{ tiktok?, youtube? }` — snapshotted for `scheduled`/`draft` jobs ONLY.
+  // Immediate posts carry this in the event payload; deferred jobs have no
+  // event yet, so without persisting it the cron/publish path would fall back
+  // to each client's default and SILENTLY ESCALATE a user's YouTube "private"
+  // to "unlisted". The due-scanner/publish-promote replays it into the event.
+  publishMetadata      Json?
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 

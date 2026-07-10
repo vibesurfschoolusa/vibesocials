@@ -114,6 +114,46 @@ describe("prepareDeferredPostJobDispatch", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("replays the persisted publishMetadata (per-post privacy) into the event — review B1", async () => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({
+        publishMetadata: {
+          youtube: { privacyStatus: "private" },
+          tiktok: { privacyLevel: "SELF_ONLY", disableComment: false, disableDuet: false, disableStitch: false },
+        },
+      }),
+    );
+    connectionFindManyMock.mockResolvedValue([{ id: "c-youtube", platform: "youtube" }]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      // The user chose "private"; the deferred publish must NOT escalate it to
+      // the client-default "unlisted".
+      expect(result.event.youtubeMetadata).toEqual({ privacyStatus: "private" });
+      expect(result.event.tiktokMetadata).toEqual({
+        privacyLevel: "SELF_ONLY",
+        disableComment: false,
+        disableDuet: false,
+        disableStitch: false,
+      });
+    }
+  });
+
+  it("omits tiktok/youtube metadata from the event when the job has no publishMetadata", async () => {
+    postJobFindUniqueMock.mockResolvedValue(makeJob({ publishMetadata: null }));
+    connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.event).not.toHaveProperty("tiktokMetadata");
+      expect(result.event).not.toHaveProperty("youtubeMetadata");
+    }
+  });
+
   it("falls back to the media item's caption/overrides when the job has no snapshot", async () => {
     postJobFindUniqueMock.mockResolvedValue(
       makeJob({

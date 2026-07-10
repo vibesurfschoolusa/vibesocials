@@ -63,6 +63,26 @@ export const DELETABLE_POST_JOB_STATUSES: readonly PostJobStatus[] = [
   "cancelled",
 ];
 
+/**
+ * Shape-guard for a `perPlatformOverrides` payload (review Minor #3). It must be
+ * a plain object whose values are ALL strings — an array or a non-string value
+ * (a number, nested object, null-in-a-value) is rejected before it reaches the
+ * DB, so a later publish can't feed a non-string into caption building. `null`
+ * (explicit "clear") and `undefined` (absent) are handled by callers, not here.
+ * Keys aren't constrained to known platforms — an unknown key is inert (the
+ * publisher only reads overrides for platforms it actually posts to).
+ */
+export function isValidPerPlatformOverrides(
+  value: unknown,
+): value is Record<string, string> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return Object.values(value as Record<string, unknown>).every(
+    (v) => typeof v === "string",
+  );
+}
+
 /** Result of validating a caller-supplied `scheduledFor`. */
 export type ScheduledForValidation =
   | { ok: true; date: Date }

@@ -4,14 +4,29 @@ import { Prisma } from "@prisma/client";
 import type { Platform } from "@prisma/client";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { checkRateLimit } from "@/lib/rateLimit";
 import {
   DELETABLE_POST_JOB_STATUSES,
+  isValidPerPlatformOverrides,
   MUTABLE_POST_JOB_STATUSES,
   validateScheduledFor,
 } from "@/lib/scheduling";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
+}
+
+/** See cancel/route.ts — generous throttle shared by the DB-only mutations. */
+const MUTATE_RATE_LIMIT = { route: "posts/mutate", limit: 60, windowMs: 5 * 60 * 1000 } as const;
+
+/** 429 helper for the mutation endpoints. Returns null when the request is allowed. */
+async function enforceMutateRateLimit(userId: string): Promise<NextResponse | null> {
+  const rateLimit = await checkRateLimit({ userId, ...MUTATE_RATE_LIMIT });
+  if (rateLimit.allowed) return null;
+  return NextResponse.json(
+    { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
+    { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) } },
+  );
 }
 
 /** Editable fields on a scheduled/draft job (Roadmap Phase 5 PATCH, §6.2). */
@@ -67,6 +82,9 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const limited = await enforceMutateRateLimit(user.id);
+  if (limited) return limited;
+
   const { postJobId } = context.params as { postJobId: string };
 
   let body: PatchBody;
@@ -89,12 +107,14 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
   }
 
   if (body.perPlatformOverrides !== undefined) {
+    // null = explicit clear; otherwise require a Record<string,string> (review
+    // Minor #3 — reject arrays and non-string values, not just non-objects).
     if (
       body.perPlatformOverrides !== null &&
-      typeof body.perPlatformOverrides !== "object"
+      !isValidPerPlatformOverrides(body.perPlatformOverrides)
     ) {
       return NextResponse.json(
-        { error: "perPlatformOverrides must be an object or null." },
+        { error: "perPlatformOverrides must be an object of string values, or null." },
         { status: 400 },
       );
     }
@@ -184,6 +204,9 @@ export async function DELETE(_request: NextRequest, context: PostJobRouteContext
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const limited = await enforceMutateRateLimit(user.id);
+  if (limited) return limited;
 
   const { postJobId } = context.params as { postJobId: string };
 

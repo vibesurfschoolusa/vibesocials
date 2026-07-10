@@ -593,20 +593,36 @@ export const scheduledPostScanner = inngest.createFunction(
 
     let dispatched = 0;
     let failedNoConnections = 0;
+    let dispatchErrors = 0;
 
     for (const postJobId of claimedIds) {
-      const prep = await step.run(`materialize-${postJobId}`, async () => {
-        return prepareDeferredPostJobDispatch(postJobId);
-      });
-
-      if (prep.ok) {
-        await step.sendEvent(`publish-${postJobId}`, {
-          name: "post/publish.requested",
-          data: prep.event,
+      // Isolate each claimed job (review Minor #1): a materialize/dispatch that
+      // throws even after Inngest exhausts the step's retries must not abort the
+      // whole scan and strand every LATER job in the batch (already flipped to
+      // in_progress, so the next tick — which only re-queries `scheduled` — never
+      // re-claims them). Catching the terminal step error here bounds the blast
+      // radius to the single failing job and lets the rest dispatch. Successful
+      // steps remain memoized, so transient errors still get the normal retries.
+      try {
+        const prep = await step.run(`materialize-${postJobId}`, async () => {
+          return prepareDeferredPostJobDispatch(postJobId);
         });
-        dispatched += 1;
-      } else if (prep.reason === "NO_CONNECTIONS") {
-        failedNoConnections += 1;
+
+        if (prep.ok) {
+          await step.sendEvent(`publish-${postJobId}`, {
+            name: "post/publish.requested",
+            data: prep.event,
+          });
+          dispatched += 1;
+        } else if (prep.reason === "NO_CONNECTIONS") {
+          failedNoConnections += 1;
+        }
+      } catch (error) {
+        // The job stays in_progress (a rare, no-known-trigger case); surfaced
+        // loudly for reconciliation rather than silently marked failed, which
+        // would mislabel a transient DB blip.
+        console.error(`[Inngest] Scheduled dispatch failed for ${postJobId}`, error);
+        dispatchErrors += 1;
       }
     }
 
@@ -614,9 +630,10 @@ export const scheduledPostScanner = inngest.createFunction(
       claimed: claimedIds.length,
       dispatched,
       failedNoConnections,
+      dispatchErrors,
     });
 
-    return { claimed: claimedIds.length, dispatched, failedNoConnections };
+    return { claimed: claimedIds.length, dispatched, failedNoConnections, dispatchErrors };
   },
 );
 
