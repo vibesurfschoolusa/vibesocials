@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { upload } from '@vercel/blob/client';
 import { LocationAutocomplete } from "./location-autocomplete";
 import { TikTokPostSettings } from "./tiktok-post-settings";
@@ -62,7 +62,19 @@ export function CreatePostForm() {
   const [autoCaptionEnabled, setAutoCaptionEnabled] = useState(true);
   const [autoCaptionLoading, setAutoCaptionLoading] = useState(false);
   const [uploadedBlob, setUploadedBlob] = useState<UploadedBlobInfo | null>(null);
-  
+
+  // Tracks the in-flight/most recent Blob upload for the CURRENT file, keyed
+  // by File identity. This guarantees a given file is uploaded to Vercel
+  // Blob at most once: both the attach-time auto-caption path and the
+  // submit path call ensureUploaded() and share this same promise instead
+  // of independently starting a second upload. Selecting a different (or
+  // no) file resets this ref, which invalidates any stale in-flight upload
+  // so its result is never applied to the newly selected file.
+  const activeUploadRef = useRef<{
+    file: File;
+    promise: Promise<UploadedBlobInfo>;
+  } | null>(null);
+
   const [hasTikTokConnection, setHasTikTokConnection] = useState(false);
   const [tiktokMetadata, setTiktokMetadata] = useState<TikTokPostMetadata>({
     privacyLevel: "",
@@ -102,6 +114,53 @@ export function CreatePostForm() {
     } catch {
       setHasYouTubeConnection(false);
     }
+  }
+
+  // Uploads `file` to Vercel Blob at most once. Concurrent/subsequent calls
+  // for the SAME file (by reference) reuse the in-flight or already-resolved
+  // upload instead of starting a new one, so the attach-time auto-caption
+  // path and the submit path never double-upload. If the upload fails, the
+  // cache entry is cleared so a later retry with the same file can try
+  // again.
+  function ensureUploaded(file: File): Promise<UploadedBlobInfo> {
+    if (activeUploadRef.current && activeUploadRef.current.file === file) {
+      return activeUploadRef.current.promise;
+    }
+
+    const uploadKey = generateBlobKey(file);
+
+    const promise = upload(uploadKey, file, {
+      access: "public",
+      handleUploadUrl: "/api/upload",
+    }).then(
+      (newBlob) => {
+        const blobInfo: UploadedBlobInfo = {
+          url: newBlob.url,
+          filename: file.name,
+          mimeType: file.type,
+          sizeBytes: file.size,
+        };
+
+        // Only commit to state if this upload is still the active one for
+        // the currently selected file (the user may have swapped files
+        // while this upload was in flight).
+        if (activeUploadRef.current?.file === file) {
+          setUploadedBlob(blobInfo);
+        }
+
+        return blobInfo;
+      },
+      (err: unknown) => {
+        if (activeUploadRef.current?.file === file) {
+          activeUploadRef.current = null;
+        }
+        throw err;
+      },
+    );
+
+    activeUploadRef.current = { file, promise };
+
+    return promise;
   }
 
   async function runAutoCaptionFromMedia(options: {
@@ -179,35 +238,9 @@ export function CreatePostForm() {
     setUploadLoading(true);
 
     try {
-      let blob: UploadedBlobInfo | null = uploadedBlob;
-
-      if (!blob) {
-        console.log("[Upload] Starting client-side upload to Vercel Blob", {
-          filename: uploadFile.name,
-          size: uploadFile.size,
-          type: uploadFile.type,
-        });
-
-        const uploadKey = generateBlobKey(uploadFile);
-
-        const newBlob = await upload(uploadKey, uploadFile, {
-          access: "public",
-          handleUploadUrl: "/api/upload",
-        });
-
-        console.log("[Upload] Blob uploaded successfully", {
-          url: newBlob.url,
-        });
-
-        blob = {
-          url: newBlob.url,
-          filename: uploadFile.name,
-          mimeType: uploadFile.type,
-          sizeBytes: uploadFile.size,
-        };
-
-        setUploadedBlob(blob);
-      }
+      // Reuses the attach-time upload when it already covers this exact
+      // file; only uploads if it hasn't been (or needs to be re-) uploaded.
+      const blob = await ensureUploaded(uploadFile);
 
       const postData: CreatePostRequest = {
         blobUrl: blob.url,
@@ -258,6 +291,7 @@ export function CreatePostForm() {
       setUploadCaption("");
       setUploadLocation("");
       setUploadedBlob(null);
+      activeUploadRef.current = null;
       setTiktokMetadata({
         privacyLevel: "",
         disableComment: true,
@@ -330,6 +364,10 @@ export function CreatePostForm() {
                 const nextFile = event.target.files?.[0] ?? null;
                 setUploadFile(nextFile);
                 setUploadedBlob(null);
+                // Changing (or clearing) the file invalidates any
+                // in-flight/completed upload for the previous file so it
+                // can never be applied to this new selection.
+                activeUploadRef.current = null;
 
                 if (!nextFile) {
                   return;
@@ -339,21 +377,7 @@ export function CreatePostForm() {
                   setAutoCaptionLoading(true);
                   setUploadError(null);
 
-                  const uploadKey = generateBlobKey(nextFile);
-
-                  const newBlob = await upload(uploadKey, nextFile, {
-                    access: "public",
-                    handleUploadUrl: "/api/upload",
-                  });
-
-                  const blobInfo: UploadedBlobInfo = {
-                    url: newBlob.url,
-                    filename: nextFile.name,
-                    mimeType: nextFile.type,
-                    sizeBytes: nextFile.size,
-                  };
-
-                  setUploadedBlob(blobInfo);
+                  const blobInfo = await ensureUploaded(nextFile);
 
                   if (autoCaptionEnabled) {
                     await runAutoCaptionFromMedia({

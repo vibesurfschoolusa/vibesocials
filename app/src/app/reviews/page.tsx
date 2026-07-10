@@ -1,67 +1,42 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Star, MessageSquare, AlertCircle, Loader2, ArrowLeft } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { ArrowLeft, Loader2, MessageSquare } from "lucide-react";
 import Link from "next/link";
 
-interface GoogleReview {
-  name: string;
-  reviewId: string;
-  reviewer: {
-    profilePhotoUrl?: string;
-    displayName: string;
-    isAnonymous: boolean;
-  };
-  starRating: "ONE" | "TWO" | "THREE" | "FOUR" | "FIVE";
-  comment?: string;
-  createTime: string;
-  updateTime: string;
-  reviewReply?: {
-    comment: string;
-    updateTime: string;
-  };
-}
-
-const STAR_RATINGS = {
-  ONE: 1,
-  TWO: 2,
-  THREE: 3,
-  FOUR: 4,
-  FIVE: 5,
-};
-
-interface Location {
-  name: string;
-  locationName: string;
-  title: string;
-  storeCode?: string;
-}
+import { ToastProvider, useToast } from "@/components/ui/toast";
+import { ErrorState } from "@/components/reviews/error-state";
+import { LocationPicker } from "@/components/reviews/location-picker";
+import { ReviewCard } from "@/components/reviews/review-card";
+import type { GoogleReview, Location } from "@/components/reviews/types";
 
 export default function ReviewsPage() {
+  return (
+    <ToastProvider>
+      <ReviewsPageContent />
+    </ToastProvider>
+  );
+}
+
+function ReviewsPageContent() {
+  const toast = useToast();
+
   const [reviews, setReviews] = useState<GoogleReview[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingLocations, setLoadingLocations] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [locationsError, setLocationsError] = useState<string | null>(null);
+  const [reviewsError, setReviewsError] = useState<string | null>(null);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [generatingAI, setGeneratingAI] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchLocations();
-  }, []);
-
-  useEffect(() => {
-    if (selectedLocation) {
-      fetchReviews();
-    }
-  }, [selectedLocation]);
-
-  const fetchLocations = async () => {
+  const loadLocations = useCallback(async () => {
     try {
       setLoadingLocations(true);
+      setLocationsError(null);
       const response = await fetch("/api/reviews/locations");
 
       if (!response.ok) {
@@ -70,7 +45,7 @@ export default function ReviewsPage() {
       }
 
       const data = await response.json();
-      const locs = data.locations || [];
+      const locs: Location[] = data.locations || [];
       setLocations(locs);
 
       // Auto-select first location if only one exists
@@ -79,18 +54,18 @@ export default function ReviewsPage() {
       }
     } catch (err: unknown) {
       console.error("Error fetching locations:", err);
-      setError((err as Error).message || "Failed to load locations");
+      setLocationsError((err as Error).message || "Failed to load locations");
     } finally {
       setLoadingLocations(false);
     }
-  };
+  }, []);
 
-  const fetchReviews = async () => {
+  const loadReviews = useCallback(async () => {
     if (!selectedLocation) return;
 
     try {
       setLoading(true);
-      setError(null);
+      setReviewsError(null);
 
       const response = await fetch(
         `/api/reviews?location=${encodeURIComponent(selectedLocation)}`
@@ -105,17 +80,35 @@ export default function ReviewsPage() {
       setReviews(data.reviews || []);
     } catch (err: unknown) {
       console.error("Error fetching reviews:", err);
-      setError((err as Error).message || "Failed to load reviews");
+      setReviewsError((err as Error).message || "Failed to load reviews");
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedLocation]);
 
-  const handleReply = async (review: GoogleReview) => {
+  useEffect(() => {
+    loadLocations();
+  }, [loadLocations]);
+
+  useEffect(() => {
+    loadReviews();
+  }, [loadReviews]);
+
+  // Validate then post the reply.
+  const requestReply = (review: GoogleReview) => {
     const comment = replyText[review.reviewId]?.trim();
 
     if (!comment) {
-      alert("Please enter a reply message");
+      toast.error("Please enter a reply message");
+      return;
+    }
+
+    performReply(review);
+  };
+
+  const performReply = async (review: GoogleReview) => {
+    const comment = replyText[review.reviewId]?.trim();
+    if (!comment) {
       return;
     }
 
@@ -127,7 +120,7 @@ export default function ReviewsPage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           comment,
           reviewName: review.name, // Pass full review name for API
         }),
@@ -157,10 +150,10 @@ export default function ReviewsPage() {
       setReplyText((prev) => ({ ...prev, [review.reviewId]: "" }));
       setReplyingTo(null);
 
-      alert("Reply posted successfully!");
+      toast.success("Reply posted successfully!");
     } catch (err: unknown) {
       console.error("Error posting reply:", err);
-      alert((err as Error).message || "Failed to post reply");
+      toast.error((err as Error).message || "Failed to post reply");
     } finally {
       setSubmitting(null);
     }
@@ -203,41 +196,13 @@ export default function ReviewsPage() {
       }
     } catch (err: unknown) {
       console.error("Error generating AI response:", err);
-      alert((err as Error).message || "Failed to generate AI response");
+      toast.error((err as Error).message || "Failed to generate AI response");
     } finally {
       setGeneratingAI(null);
     }
   };
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-  };
-
-  const renderStars = (rating: keyof typeof STAR_RATINGS) => {
-    const numStars = STAR_RATINGS[rating];
-    return (
-      <div className="flex gap-0.5">
-        {Array.from({ length: 5 }).map((_, i) => (
-          <Star
-            key={i}
-            className={`h-4 w-4 ${
-              i < numStars
-                ? "fill-yellow-400 text-yellow-400"
-                : "fill-gray-200 text-gray-200"
-            }`}
-          />
-        ))}
-      </div>
-    );
-  };
-
-  const needsReply = reviews.filter((r) => !r.reviewReply);
-  const hasReplies = reviews.filter((r) => r.reviewReply);
+  const needsReplyReviews = reviews.filter((r) => !r.reviewReply);
 
   if (loadingLocations) {
     return (
@@ -251,27 +216,15 @@ export default function ReviewsPage() {
     );
   }
 
-  if (error) {
+  if (locationsError) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
         <div className="container mx-auto max-w-6xl px-4 py-8">
-          <div className="rounded-lg border border-red-200 bg-red-50 p-6">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
-              <div>
-                <h3 className="font-semibold text-red-900">Error Loading Reviews</h3>
-                <p className="mt-1 text-sm text-red-700">{error}</p>
-                {error.includes("not configured") && (
-                  <Link
-                    href="/connections"
-                    className="mt-3 inline-block text-sm text-blue-600 hover:text-blue-700 underline"
-                  >
-                    Go to Connections →
-                  </Link>
-                )}
-              </div>
-            </div>
-          </div>
+          <ErrorState
+            title="Error Loading Reviews"
+            message={locationsError}
+            onRetry={loadLocations}
+          />
         </div>
       </div>
     );
@@ -297,35 +250,22 @@ export default function ReviewsPage() {
 
         {/* Location Selector */}
         {locations.length > 1 && (
-          <div className="mb-8">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Select Location
-            </label>
-            <select
-              value={selectedLocation || ""}
-              onChange={(e) => setSelectedLocation(e.target.value)}
-              className="w-full max-w-md rounded-lg border border-gray-300 px-4 py-2 text-gray-900 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none"
-            >
-              <option value="">Choose a location...</option>
-              {locations.map((loc) => (
-                <option key={loc.name} value={loc.name}>
-                  {loc.title}
-                  {loc.storeCode && ` (${loc.storeCode})`}
-                </option>
-              ))}
-            </select>
-          </div>
+          <LocationPicker
+            locations={locations}
+            selectedLocation={selectedLocation}
+            onChange={setSelectedLocation}
+          />
         )}
 
         {/* Summary Card - Only Needs Reply */}
-        {selectedLocation && (
+        {selectedLocation && !reviewsError && (
           <div className="mb-8">
             <div className="rounded-xl border border-orange-200 bg-orange-50 p-6 shadow-sm max-w-sm">
               <div className="text-sm font-medium text-orange-900">
                 Reviews Needing Reply
               </div>
               <div className="mt-2 text-4xl font-bold text-orange-600">
-                {needsReply.length}
+                {needsReplyReviews.length}
               </div>
             </div>
           </div>
@@ -335,233 +275,60 @@ export default function ReviewsPage() {
         {!selectedLocation ? (
           <div className="rounded-xl border border-gray-200 bg-white p-12 text-center">
             <MessageSquare className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-gray-900">Select a Location</h3>
+            <h3 className="text-lg font-semibold text-gray-900">
+              Select a Location
+            </h3>
             <p className="mt-2 text-gray-600">
               {locations.length === 0
                 ? "No locations found. Please connect your Google Business Profile."
                 : "Choose a location above to view and reply to reviews"}
             </p>
           </div>
+        ) : reviewsError ? (
+          <ErrorState
+            title="Error Loading Reviews"
+            message={reviewsError}
+            onRetry={loadReviews}
+          />
         ) : loading ? (
           <div className="flex items-center justify-center py-20">
             <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
           </div>
-        ) : needsReply.length === 0 ? (
+        ) : needsReplyReviews.length === 0 ? (
           <div className="rounded-xl border border-green-200 bg-green-50 p-12 text-center">
             <MessageSquare className="h-12 w-12 text-green-600 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-green-900">All Caught Up!</h3>
+            <h3 className="text-lg font-semibold text-green-900">
+              All Caught Up!
+            </h3>
             <p className="mt-2 text-green-700">
               No reviews need replies at this location. Great job!
             </p>
           </div>
         ) : (
           <div className="space-y-4">
-            {needsReply.map((review) => (
+            {needsReplyReviews.map((review) => (
               <ReviewCard
                 key={review.reviewId}
                 review={review}
-                replyingTo={replyingTo}
-                setReplyingTo={setReplyingTo}
-                replyText={replyText}
-                setReplyText={setReplyText}
-                submitting={submitting}
-                handleReply={handleReply}
-                handleDraftAI={handleDraftAI}
-                generatingAI={generatingAI}
-                renderStars={renderStars}
-                formatDate={formatDate}
-                needsReply={true}
+                needsReply
+                isReplyOpen={replyingTo === review.reviewId}
+                isSubmitting={submitting === review.reviewId}
+                isGeneratingAI={generatingAI === review.reviewId}
+                replyValue={replyText[review.reviewId] || ""}
+                onOpenReply={() => setReplyingTo(review.reviewId)}
+                onCloseReply={() => setReplyingTo(null)}
+                onChangeReply={(value) =>
+                  setReplyText((prev) => ({
+                    ...prev,
+                    [review.reviewId]: value,
+                  }))
+                }
+                onSubmitReply={() => requestReply(review)}
+                onDraftAI={() => handleDraftAI(review)}
               />
             ))}
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-interface ReviewCardProps {
-  review: GoogleReview;
-  replyingTo: string | null;
-  setReplyingTo: (id: string | null) => void;
-  replyText: Record<string, string>;
-  setReplyText: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  submitting: string | null;
-  handleReply: (review: GoogleReview) => void;
-  handleDraftAI: (review: GoogleReview) => void;
-  generatingAI: string | null;
-  renderStars: (rating: keyof typeof STAR_RATINGS) => React.JSX.Element;
-  formatDate: (date: string) => string;
-  needsReply: boolean;
-}
-
-function ReviewCard({
-  review,
-  replyingTo,
-  setReplyingTo,
-  replyText,
-  setReplyText,
-  submitting,
-  handleReply,
-  handleDraftAI,
-  generatingAI,
-  renderStars,
-  formatDate,
-  needsReply,
-}: ReviewCardProps) {
-  return (
-    <div
-      className={`rounded-xl border ${
-        needsReply
-          ? "border-orange-200 bg-orange-50/50"
-          : "border-gray-200 bg-white"
-      } p-6 shadow-sm`}
-    >
-      {/* Reviewer Info */}
-      <div className="flex items-start gap-4">
-        {review.reviewer.profilePhotoUrl ? (
-          <img
-            src={review.reviewer.profilePhotoUrl}
-            alt={review.reviewer.displayName}
-            className="h-12 w-12 rounded-full object-cover"
-          />
-        ) : (
-          <div className="h-12 w-12 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white font-semibold">
-            {review.reviewer.displayName[0]?.toUpperCase()}
-          </div>
-        )}
-
-        <div className="flex-1">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="font-semibold text-gray-900">
-                {review.reviewer.displayName}
-              </div>
-              <div className="flex items-center gap-2 mt-1">
-                {renderStars(review.starRating)}
-                <span className="text-sm text-gray-500">
-                  {formatDate(review.createTime)}
-                </span>
-              </div>
-            </div>
-            {needsReply && (
-              <span className="px-3 py-1 rounded-full bg-orange-100 text-orange-700 text-xs font-medium">
-                Needs Reply
-              </span>
-            )}
-          </div>
-
-          {/* Review Comment */}
-          {review.comment && (
-            <p className="mt-3 text-gray-700">{review.comment}</p>
-          )}
-
-          {/* Existing Reply */}
-          {review.reviewReply && (
-            <div className="mt-4 rounded-lg border border-gray-200 bg-white p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <MessageSquare className="h-4 w-4 text-blue-600" />
-                <span className="text-sm font-medium text-gray-900">Your Reply</span>
-                <span className="text-xs text-gray-500">
-                  {formatDate(review.reviewReply.updateTime)}
-                </span>
-              </div>
-              <p className="text-sm text-gray-700">{review.reviewReply.comment}</p>
-            </div>
-          )}
-
-          {/* Reply Form */}
-          {!review.reviewReply && (
-            <div className="mt-4">
-              {replyingTo === review.reviewId ? (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="text-sm font-medium text-gray-700">Your Reply</label>
-                    <button
-                      onClick={() => handleDraftAI(review)}
-                      disabled={generatingAI === review.reviewId}
-                      className="inline-flex items-center gap-2 rounded-lg border border-purple-200 bg-purple-50 px-3 py-1.5 text-xs font-semibold text-purple-700 hover:bg-purple-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                      {generatingAI === review.reviewId ? (
-                        <>
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                          Generating...
-                        </>
-                      ) : (
-                        <>
-                          <Star className="h-3 w-3 fill-purple-600" />
-                          Draft AI Response
-                        </>
-                      )}
-                    </button>
-                  </div>
-                  <textarea
-                    value={replyText[review.reviewId] || ""}
-                    onChange={(e) =>
-                      setReplyText((prev) => ({
-                        ...prev,
-                        [review.reviewId]: e.target.value,
-                      }))
-                    }
-                    placeholder="Write your reply or use AI to draft one..."
-                    rows={4}
-                    className="w-full rounded-lg border border-gray-300 px-4 py-2 text-gray-900 placeholder:text-gray-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none resize-none"
-                  />
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => handleReply(review)}
-                      disabled={submitting === review.reviewId}
-                      className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                      {submitting === review.reviewId ? (
-                        <span className="flex items-center gap-2">
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          Posting...
-                        </span>
-                      ) : (
-                        "Post Reply"
-                      )}
-                    </button>
-                    <button
-                      onClick={() => setReplyingTo(null)}
-                      disabled={submitting === review.reviewId}
-                      className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => setReplyingTo(review.reviewId)}
-                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 transition-colors"
-                  >
-                    <MessageSquare className="h-4 w-4" />
-                    Reply to Review
-                  </button>
-                  <button
-                    onClick={() => handleDraftAI(review)}
-                    disabled={generatingAI === review.reviewId}
-                    className="inline-flex items-center gap-2 rounded-lg border-2 border-purple-200 px-4 py-2 text-sm font-semibold text-purple-700 hover:bg-purple-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {generatingAI === review.reviewId ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Generating...
-                      </>
-                    ) : (
-                      <>
-                        <Star className="h-4 w-4 fill-purple-600" />
-                        Draft AI Response
-                      </>
-                    )}
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );
