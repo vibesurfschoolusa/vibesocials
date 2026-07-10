@@ -2,9 +2,14 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import type { Platform } from "@prisma/client";
-import { createPostJobOnly } from "@/server/jobs/posting";
+import {
+  createPostJobForExistingMedia,
+  createPostJobOnly,
+  MediaItemUnavailableError,
+} from "@/server/jobs/posting";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
+import { checkRateLimit } from "@/lib/rateLimit";
 import type { YouTubePostMetadata } from "@/server/platforms/types";
 import type { PostsResponse } from "@/lib/postsDto";
 
@@ -77,8 +82,12 @@ export async function GET() {
 
 // Shape of the JSON POST body. Fields the handler validates at runtime are
 // typed `unknown` (narrowed at use); the rest reflect their consumed types.
+// `mediaItemId` (Roadmap Phase 2) is the additive reuse path: a body with
+// `mediaItemId` and no `blobUrl` skips upload and re-attaches an existing,
+// already-persisted MediaItem instead.
 interface CreatePostBody {
   blobUrl?: string;
+  mediaItemId?: string;
   filename?: string;
   mimeType?: string;
   sizeBytes?: number;
@@ -94,6 +103,31 @@ export async function POST(request: Request) {
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Roadmap Phase 2 (spec §1.2): POST /api/posts triggers live
+  // multi-platform publishing — the heaviest external action in the app —
+  // and was unlimited until now. Shared by both the blobUrl and mediaItemId
+  // (reuse) creation paths below; checked right after auth, before any
+  // parsing/DB work.
+  const rateLimit = await checkRateLimit({
+    userId: user.id,
+    route: "posts/publish",
+    limit: 30,
+    windowMs: 5 * 60 * 1000,
+  });
+
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      {
+        error: "Too many posts created recently. Please slow down.",
+        retryAfterSeconds: rateLimit.retryAfterSeconds,
+      },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) },
+      },
+    );
   }
 
   const contentType = request.headers.get("content-type") || "";
@@ -112,17 +146,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  if (!body?.blobUrl) {
+  const hasBlobUrl = typeof body?.blobUrl === "string" && body.blobUrl.trim().length > 0;
+  const hasMediaItemId =
+    typeof body?.mediaItemId === "string" && body.mediaItemId.trim().length > 0;
+  // blobUrl wins if a caller somehow sends both, preserving the original
+  // (pre-Phase-2) path byte-for-byte for every existing caller.
+  const usingExistingMedia = hasMediaItemId && !hasBlobUrl;
+
+  if (!hasBlobUrl && !usingExistingMedia) {
     return NextResponse.json(
-      { error: "blobUrl is required" },
+      { error: "blobUrl or mediaItemId is required" },
       { status: 400 },
     );
   }
 
-  const blobUrl = body.blobUrl;
-  const filename = body.filename || "upload";
-  const mimeType = body.mimeType || "application/octet-stream";
-  const sizeBytes = body.sizeBytes || 0;
   const baseCaptionRaw = body?.baseCaption;
   const locationRaw = body?.location;
   const overridesRaw = body?.perPlatformOverrides;
@@ -171,21 +208,54 @@ export async function POST(request: Request) {
   const location = typeof locationRaw === "string" && locationRaw.trim() ? locationRaw.trim() : undefined;
 
   try {
-    // Create job records without executing (for background processing)
-    const { postJobId, mediaItemId } = await createPostJobOnly({
-      userId: user.id,
-      media: {
-        storageLocation: blobUrl,
-        originalFilename: filename,
-        mimeType,
-        sizeBytes,
-      },
-      baseCaption: baseCaptionRaw,
-      location,
-      perPlatformOverrides,
-    });
+    // Create job records without executing (for background processing).
+    // Reuse (mediaItemId, Roadmap Phase 2) skips MediaItem creation via
+    // createPostJobForExistingMedia; the original blobUrl path is untouched.
+    let postJobId: string;
+    let mediaItemId: string;
 
-    // Trigger background job via Inngest
+    if (usingExistingMedia) {
+      const created = await createPostJobForExistingMedia({
+        userId: user.id,
+        mediaItemId: body.mediaItemId as string,
+        baseCaption: baseCaptionRaw,
+        perPlatformOverrides,
+        location,
+      });
+      postJobId = created.postJobId;
+      mediaItemId = created.mediaItemId;
+    } else {
+      // Redundant with the `hasBlobUrl` check above at runtime (this branch
+      // only runs when `usingExistingMedia` is false, which — given the
+      // earlier guard — guarantees `hasBlobUrl`), but TypeScript can't carry
+      // that guarantee through the intermediate boolean, so this narrows
+      // `body.blobUrl` to `string` for the call below.
+      if (typeof body.blobUrl !== "string" || !body.blobUrl.trim()) {
+        return NextResponse.json(
+          { error: "blobUrl is required" },
+          { status: 400 },
+        );
+      }
+
+      const created = await createPostJobOnly({
+        userId: user.id,
+        media: {
+          storageLocation: body.blobUrl,
+          originalFilename: body.filename || "upload",
+          mimeType: body.mimeType || "application/octet-stream",
+          sizeBytes: body.sizeBytes || 0,
+        },
+        baseCaption: baseCaptionRaw,
+        location,
+        perPlatformOverrides,
+      });
+      postJobId = created.postJobId;
+      mediaItemId = created.mediaItemId;
+    }
+
+    // Trigger background job via Inngest — identical event shape for both
+    // paths; the publisher already resolves media by id, so reuse needs no
+    // changes on that side.
     await inngest.send({
       name: "post/publish.requested",
       data: {
@@ -225,7 +295,14 @@ export async function POST(request: Request) {
       );
     }
 
-    console.error("[POST /api/posts] Unexpected error (blob upload)", { error });
+    if (error instanceof MediaItemUnavailableError) {
+      return NextResponse.json(
+        { error: error.message, code: error.code },
+        { status: 404 },
+      );
+    }
+
+    console.error("[POST /api/posts] Unexpected error", { error, usingExistingMedia });
     return NextResponse.json(
       { error: "Failed to create post" },
       { status: 500 },

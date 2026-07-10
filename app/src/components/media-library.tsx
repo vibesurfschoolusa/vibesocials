@@ -1,12 +1,15 @@
 "use client";
 
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import {
   File as FileIcon,
   ImageOff,
   Images,
   PlayCircle,
+  Repeat,
+  Trash2,
 } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
@@ -18,6 +21,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -109,24 +113,54 @@ function MediaThumbnail({ item }: { item: MediaItemDto }) {
   );
 }
 
-function MediaCard({ item }: { item: MediaItemDto }) {
+interface MediaCardProps {
+  item: MediaItemDto;
+  onReuse: (item: MediaItemDto) => void;
+  onDeleteRequest: (item: MediaItemDto) => void;
+}
+
+function MediaCard({ item, onReuse, onDeleteRequest }: MediaCardProps) {
   return (
     <Card className="overflow-hidden">
       <MediaThumbnail item={item} />
-      <div className="space-y-0.5 p-3">
-        <p
-          className="truncate text-sm font-medium text-foreground"
-          title={item.originalFilename}
-        >
-          {item.originalFilename}
-        </p>
-        <p className="text-xs text-muted-foreground">
-          {formatBytes(item.sizeBytes)}
-          {" · "}
-          <time dateTime={item.createdAt}>
-            {new Date(item.createdAt).toLocaleDateString()}
-          </time>
-        </p>
+      <div className="space-y-2 p-3">
+        <div className="space-y-0.5">
+          <p
+            className="truncate text-sm font-medium text-foreground"
+            title={item.originalFilename}
+          >
+            {item.originalFilename}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {formatBytes(item.sizeBytes)}
+            {" · "}
+            <time dateTime={item.createdAt}>
+              {new Date(item.createdAt).toLocaleDateString()}
+            </time>
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="flex-1"
+            onClick={() => onReuse(item)}
+          >
+            <Repeat className="h-3.5 w-3.5" aria-hidden />
+            Use in new post
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 flex-shrink-0 text-muted-foreground hover:text-destructive"
+            aria-label={`Delete ${item.originalFilename}`}
+            onClick={() => onDeleteRequest(item)}
+          >
+            <Trash2 className="h-4 w-4" aria-hidden />
+          </Button>
+        </div>
       </div>
     </Card>
   );
@@ -134,6 +168,7 @@ function MediaCard({ item }: { item: MediaItemDto }) {
 
 export function MediaLibrary() {
   const toast = useToast();
+  const router = useRouter();
 
   const [items, setItems] = useState<MediaItemDto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -143,6 +178,11 @@ export function MediaLibrary() {
   const [baseCaption, setBaseCaption] = useState("");
   const [uploading, setUploading] = useState(false);
   const [fileInputKey, setFileInputKey] = useState(0);
+
+  // Delete confirmation (Roadmap Phase 2). `deleteTarget` doubles as the
+  // dialog's open/closed flag (open whenever it's non-null) so there's no
+  // separate boolean to keep in sync.
+  const [deleteTarget, setDeleteTarget] = useState<MediaItemDto | null>(null);
 
   // Does the actual fetch/parse. Deliberately does NOT reset `loading`/`error`
   // at the top: `loading`/`error` already start `true`/`null` from useState,
@@ -226,6 +266,48 @@ export function MediaLibrary() {
     }
   }
 
+  // Roadmap Phase 2: "Use in new post" hands off to the composer's reuse
+  // mode via a query param — no local state needed here.
+  const handleReuse = useCallback(
+    (item: MediaItemDto) => {
+      router.push(`/posts/new?mediaItemId=${encodeURIComponent(item.id)}`);
+    },
+    [router],
+  );
+
+  const handleDeleteRequest = useCallback((item: MediaItemDto) => {
+    setDeleteTarget(item);
+  }, []);
+
+  // Passed as ConfirmDialog's `onConfirm`: it awaits this (showing a busy
+  // state) and only closes the dialog if it resolves without throwing — so
+  // every failure path below throws AFTER toasting, which keeps the dialog
+  // open for the user to retry (see ConfirmDialog's own doc comment).
+  const handleConfirmDelete = useCallback(async () => {
+    if (!deleteTarget) return;
+    const target = deleteTarget;
+
+    let response: Response;
+    try {
+      response = await fetch(`/api/media/${target.id}`, { method: "DELETE" });
+    } catch {
+      toast.error("Unexpected error while deleting media.");
+      throw new Error("DELETE_FAILED");
+    }
+
+    if (!response.ok) {
+      const data = (await response.json().catch(() => null)) as { error?: string } | null;
+      // Covers the 409 "still referenced by an active post" case: the
+      // server's message already states the reason, so it's shown as-is.
+      toast.error(data?.error ?? "Failed to delete media.");
+      throw new Error("DELETE_FAILED");
+    }
+
+    // No re-fetch of the whole list — just remove it client-side.
+    setItems((prev) => prev.filter((existing) => existing.id !== target.id));
+    toast.success("Media deleted.");
+  }, [deleteTarget, toast]);
+
   return (
     <div className="space-y-8">
       <Card>
@@ -304,11 +386,31 @@ export function MediaLibrary() {
         ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
             {items.map((item) => (
-              <MediaCard key={item.id} item={item} />
+              <MediaCard
+                key={item.id}
+                item={item}
+                onReuse={handleReuse}
+                onDeleteRequest={handleDeleteRequest}
+              />
             ))}
           </div>
         )}
       </section>
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title="Delete this media?"
+        description={
+          deleteTarget
+            ? `"${deleteTarget.originalFilename}" will be removed from your library and can't be used in new posts. This can't be undone.`
+            : undefined
+        }
+        destructive
+        onConfirm={handleConfirmDelete}
+      />
     </div>
   );
 }

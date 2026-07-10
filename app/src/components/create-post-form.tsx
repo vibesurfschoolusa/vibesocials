@@ -1,9 +1,11 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, Suspense } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { upload } from '@vercel/blob/client';
 import { Sparkles } from "lucide-react";
+import type { Platform } from "@prisma/client";
 import { LocationAutocomplete } from "./location-autocomplete";
 import { TikTokPostSettings } from "./tiktok-post-settings";
 import { YouTubePostSettings } from "./youtube-post-settings";
@@ -12,9 +14,11 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { fieldBaseClasses } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
+import type { MediaItemDto } from "@/lib/mediaDto";
 import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
 
 interface PostResponse {
@@ -44,6 +48,19 @@ interface CreatePostRequest {
   youtubeMetadata?: YouTubePostMetadata;
 }
 
+// Roadmap Phase 2 — request body for the reuse path: an already-persisted
+// MediaItem instead of a fresh blobUrl upload. Same optional metadata fields
+// as CreatePostRequest; POST /api/posts branches on which of blobUrl /
+// mediaItemId is present.
+interface CreatePostReuseRequest {
+  mediaItemId: string;
+  baseCaption: string;
+  location?: string;
+  perPlatformOverrides?: Partial<Record<Platform, string>>;
+  tiktokMetadata?: TikTokPostMetadata;
+  youtubeMetadata?: YouTubePostMetadata;
+}
+
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
   const k = 1024;
@@ -59,8 +76,22 @@ function generateBlobKey(file: File): string {
   return `${Date.now()}-${random}-${safeName}`;
 }
 
-export function CreatePostForm() {
+function CreatePostFormInner() {
   const toast = useToast();
+  const searchParams = useSearchParams();
+
+  // Roadmap Phase 2 — reuse mode. `?mediaItemId=` names an already-persisted
+  // MediaItem (from the media library's "Use in new post" action) to attach
+  // to a new post instead of uploading a fresh file. `reuseItem` (not the
+  // presence of the query param) is the source of truth for whether the
+  // reuse UI renders, so a failed fetch or an explicit "use a different file"
+  // cleanly falls back to the normal upload flow below.
+  const reuseMediaItemId = searchParams.get("mediaItemId");
+  const [reuseItem, setReuseItem] = useState<MediaItemDto | null>(null);
+  const [reuseLoading, setReuseLoading] = useState(() => Boolean(reuseMediaItemId));
+  const [reusePerPlatformOverrides, setReusePerPlatformOverrides] = useState<Partial<
+    Record<Platform, string>
+  > | null>(null);
 
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadCaption, setUploadCaption] = useState("");
@@ -112,6 +143,54 @@ export function CreatePostForm() {
     checkYouTubeConnection();
   }, []);
 
+  // Roadmap Phase 2 — load the reuse target, if any. Runs once per distinct
+  // `reuseMediaItemId` (a fresh navigation from the media library always
+  // remounts this component, so the realistic case of the param changing
+  // while already mounted doesn't arise). Mirrors the MediaLibrary
+  // fetch-effect convention: state starts pre-set via the `useState`
+  // initializer above so nothing is set synchronously in the effect body
+  // itself — every setState here happens after the `await`.
+  useEffect(() => {
+    if (!reuseMediaItemId) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const response = await fetch(`/api/media/${encodeURIComponent(reuseMediaItemId)}`);
+        const data = (await response.json().catch(() => null)) as
+          | { item?: MediaItemDto; error?: string }
+          | null;
+
+        if (cancelled) return;
+
+        if (!response.ok || !data?.item) {
+          toast.error(
+            data?.error ?? "Couldn't load that media item. Upload a new file instead.",
+          );
+          setReuseLoading(false);
+          return;
+        }
+
+        const item = data.item;
+        setReuseItem(item);
+        setUploadCaption(item.baseCaption ?? "");
+        setReusePerPlatformOverrides(
+          (item.perPlatformOverrides as Partial<Record<Platform, string>> | null) ?? null,
+        );
+        setReuseLoading(false);
+      } catch {
+        if (cancelled) return;
+        toast.error("Couldn't load that media item. Upload a new file instead.");
+        setReuseLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reuseMediaItemId, toast]);
+
   // Build (and clean up) an object URL for the attached file so we can render
   // an inline media preview without touching the upload flow.
   useEffect(() => {
@@ -130,6 +209,17 @@ export function CreatePostForm() {
       setTiktokPrivacyError(null);
     }
   }, [tiktokMetadata.privacyLevel]);
+
+  // Roadmap Phase 2 — leave reuse mode and fall back to the normal upload
+  // flow. The `?mediaItemId` query param stays in the URL (harmless; the
+  // fetch effect above only re-runs if that param's VALUE changes), but
+  // clearing `reuseItem` is what actually drives the UI back to the file
+  // input.
+  const handleDismissReuse = useCallback(() => {
+    setReuseItem(null);
+    setReusePerPlatformOverrides(null);
+    setUploadCaption("");
+  }, []);
 
   async function checkTikTokConnection() {
     try {
@@ -274,7 +364,7 @@ export function CreatePostForm() {
     setUploadError(null);
     setShowSuccess(false);
 
-    if (!uploadFile) {
+    if (!reuseItem && !uploadFile) {
       setUploadError("Please choose a file to upload.");
       return;
     }
@@ -287,33 +377,73 @@ export function CreatePostForm() {
     setUploadLoading(true);
 
     try {
-      // Reuses the attach-time upload when it already covers this exact
-      // file; only uploads if it hasn't been (or needs to be re-) uploaded.
-      const blob = await ensureUploaded(uploadFile);
+      let postData: CreatePostRequest | CreatePostReuseRequest;
 
-      const postData: CreatePostRequest = {
-        blobUrl: blob.url,
-        filename: blob.filename,
-        mimeType: blob.mimeType,
-        sizeBytes: blob.sizeBytes,
-        baseCaption: uploadCaption,
-        location: uploadLocation.trim() || undefined,
-      };
-
-      // Add TikTok-specific metadata if TikTok is connected
-      if (hasTikTokConnection) {
-        if (!tiktokMetadata.privacyLevel) {
+      if (reuseItem) {
+        // Roadmap Phase 2 — reuse: no upload, attach the existing MediaItem.
+        if (hasTikTokConnection && !tiktokMetadata.privacyLevel) {
           setTiktokPrivacyError("Please select a privacy level for TikTok");
           toast.error("Please select a privacy level for TikTok");
           setUploadLoading(false);
           return;
         }
-        postData.tiktokMetadata = tiktokMetadata;
-      }
 
-      // Add YouTube-specific metadata if YouTube is connected
-      if (hasYouTubeConnection) {
-        postData.youtubeMetadata = youtubeMetadata;
+        const reuseData: CreatePostReuseRequest = {
+          mediaItemId: reuseItem.id,
+          baseCaption: uploadCaption,
+          location: uploadLocation.trim() || undefined,
+        };
+
+        if (reusePerPlatformOverrides) {
+          reuseData.perPlatformOverrides = reusePerPlatformOverrides;
+        }
+        if (hasTikTokConnection) {
+          reuseData.tiktokMetadata = tiktokMetadata;
+        }
+        if (hasYouTubeConnection) {
+          reuseData.youtubeMetadata = youtubeMetadata;
+        }
+        postData = reuseData;
+      } else {
+        // Unreachable given the guard above (this branch only runs when
+        // reuseItem is falsy, and that guard already required
+        // reuseItem || uploadFile), but narrows `uploadFile` to `File` for
+        // TypeScript without a non-null assertion.
+        if (!uploadFile) {
+          setUploadError("Please choose a file to upload.");
+          setUploadLoading(false);
+          return;
+        }
+
+        // Reuses the attach-time upload when it already covers this exact
+        // file; only uploads if it hasn't been (or needs to be re-) uploaded.
+        const blob = await ensureUploaded(uploadFile);
+
+        const blobData: CreatePostRequest = {
+          blobUrl: blob.url,
+          filename: blob.filename,
+          mimeType: blob.mimeType,
+          sizeBytes: blob.sizeBytes,
+          baseCaption: uploadCaption,
+          location: uploadLocation.trim() || undefined,
+        };
+
+        // Add TikTok-specific metadata if TikTok is connected
+        if (hasTikTokConnection) {
+          if (!tiktokMetadata.privacyLevel) {
+            setTiktokPrivacyError("Please select a privacy level for TikTok");
+            toast.error("Please select a privacy level for TikTok");
+            setUploadLoading(false);
+            return;
+          }
+          blobData.tiktokMetadata = tiktokMetadata;
+        }
+
+        // Add YouTube-specific metadata if YouTube is connected
+        if (hasYouTubeConnection) {
+          blobData.youtubeMetadata = youtubeMetadata;
+        }
+        postData = blobData;
       }
 
       const response = await fetch("/api/posts", {
@@ -337,11 +467,15 @@ export function CreatePostForm() {
 
       toast.success("Post queued — track it in Activity");
       setShowSuccess(true);
-      setUploadFile(null);
       setUploadCaption("");
       setUploadLocation("");
-      setUploadedBlob(null);
-      activeUploadRef.current = null;
+      // The reuse target stays attached (composer is ready to post the same
+      // media again); only the upload-path file state is reset.
+      if (!reuseItem) {
+        setUploadFile(null);
+        setUploadedBlob(null);
+        activeUploadRef.current = null;
+      }
       setTiktokMetadata({
         privacyLevel: "",
         disableComment: true,
@@ -397,6 +531,12 @@ export function CreatePostForm() {
   const isImagePreview = uploadFile?.type.startsWith("image/") ?? false;
   const isVideoPreview = uploadFile?.type.startsWith("video/") ?? false;
 
+  // Drives the TikTok/YouTube settings gate below for BOTH the upload and
+  // reuse flows: originally gated on `uploadFile` alone (a real File only
+  // exists in the upload flow), so reuse mode needs the equivalent signal
+  // from `reuseItem` instead.
+  const activeMimeType = uploadFile?.type ?? reuseItem?.mimeType ?? null;
+
   return (
     <Card className="p-6">
       <form onSubmit={handleUploadSubmit} className="space-y-5">
@@ -420,95 +560,138 @@ export function CreatePostForm() {
         {uploadError && <Alert variant="danger">{uploadError}</Alert>}
 
         <div className="space-y-1.5">
-          <Label htmlFor="post-media">Media file (image or video)</Label>
-          <input
-            id="post-media"
-            type="file"
-            accept="video/*,image/*"
-            onChange={async (event) => {
-              const nextFile = event.target.files?.[0] ?? null;
-              setUploadFile(nextFile);
-              setUploadedBlob(null);
-              setShowSuccess(false);
-              // Changing (or clearing) the file invalidates any
-              // in-flight/completed upload for the previous file so it
-              // can never be applied to this new selection.
-              activeUploadRef.current = null;
-
-              if (!nextFile) {
-                return;
-              }
-
-              try {
-                setAutoCaptionLoading(true);
-                setUploadError(null);
-
-                const blobInfo = await ensureUploaded(nextFile);
-
-                if (autoCaptionEnabled) {
-                  await runAutoCaptionFromMedia({
-                    overwrite: false,
-                    blobOverride: blobInfo,
-                  });
-                }
-              } catch (err: unknown) {
-                console.error(
-                  "Error uploading media for auto-caption:",
-                  err,
-                );
-                toast.error(
-                  (err as Error).message ||
-                    "Failed to prepare media for posting. Please try again.",
-                );
-              } finally {
-                setAutoCaptionLoading(false);
-              }
-            }}
-            className="block w-full cursor-pointer text-sm text-foreground file:mr-3 file:cursor-pointer file:rounded-[var(--radius)] file:border-0 file:bg-secondary file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-secondary-foreground hover:file:bg-secondary/80"
-          />
-
-          {uploadFile && previewUrl && (
-            <div className="mt-2 space-y-2">
-              {isImagePreview ? (
-                // eslint-disable-next-line @next/next/no-img-element -- local object-URL preview; next/image would need remote host config
+          {reuseItem ? (
+            // Roadmap Phase 2 — reuse mode: preview the already-persisted
+            // MediaItem from its storageLocation and skip the upload UI
+            // entirely (no `id="post-media"` control exists in this branch,
+            // so this uses a plain label-styled <p>, not <Label htmlFor>).
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-medium text-foreground">Media</p>
+                <button
+                  type="button"
+                  onClick={handleDismissReuse}
+                  className="text-xs font-medium text-primary underline-offset-4 hover:underline"
+                >
+                  Use a different file instead
+                </button>
+              </div>
+              {reuseItem.mimeType.startsWith("image/") ? (
+                // eslint-disable-next-line @next/next/no-img-element -- remote (already-public) Vercel Blob URL preview; same bounded-size pattern as the local object-URL preview below
                 <img
-                  src={previewUrl}
-                  alt={`Preview of ${uploadFile.name}`}
+                  src={reuseItem.storageLocation}
+                  alt={`Preview of ${reuseItem.originalFilename}`}
                   className="max-h-64 w-auto rounded-[var(--radius)] border border-border object-contain"
                 />
-              ) : isVideoPreview ? (
+              ) : reuseItem.mimeType.startsWith("video/") ? (
                 <video
-                  src={previewUrl}
+                  src={reuseItem.storageLocation}
                   controls
                   className="max-h-64 w-full rounded-[var(--radius)] border border-border"
                 />
               ) : null}
               <p className="text-xs text-muted-foreground">
-                {uploadFile.name} &middot; {formatBytes(uploadFile.size)}
+                {reuseItem.originalFilename} &middot; {formatBytes(reuseItem.sizeBytes)}
               </p>
             </div>
-          )}
-
-          {uploadProgress !== null && (
-            <div className="mt-2 space-y-1">
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>Uploading&hellip;</span>
-                <span>{Math.round(uploadProgress)}%</span>
-              </div>
-              <div
-                role="progressbar"
-                aria-label="Upload progress"
-                aria-valuenow={Math.round(uploadProgress)}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                className="h-2 w-full overflow-hidden rounded-full bg-muted"
-              >
-                <div
-                  className="h-full rounded-full bg-primary transition-all duration-200"
-                  style={{ width: `${uploadProgress}%` }}
-                />
-              </div>
+          ) : reuseLoading ? (
+            <div className="space-y-2" aria-hidden>
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-48 w-full max-w-sm" />
             </div>
+          ) : (
+            <>
+              <Label htmlFor="post-media">Media file (image or video)</Label>
+              <input
+                id="post-media"
+                type="file"
+                accept="video/*,image/*"
+                onChange={async (event) => {
+                  const nextFile = event.target.files?.[0] ?? null;
+                  setUploadFile(nextFile);
+                  setUploadedBlob(null);
+                  setShowSuccess(false);
+                  // Changing (or clearing) the file invalidates any
+                  // in-flight/completed upload for the previous file so it
+                  // can never be applied to this new selection.
+                  activeUploadRef.current = null;
+
+                  if (!nextFile) {
+                    return;
+                  }
+
+                  try {
+                    setAutoCaptionLoading(true);
+                    setUploadError(null);
+
+                    const blobInfo = await ensureUploaded(nextFile);
+
+                    if (autoCaptionEnabled) {
+                      await runAutoCaptionFromMedia({
+                        overwrite: false,
+                        blobOverride: blobInfo,
+                      });
+                    }
+                  } catch (err: unknown) {
+                    console.error(
+                      "Error uploading media for auto-caption:",
+                      err,
+                    );
+                    toast.error(
+                      (err as Error).message ||
+                        "Failed to prepare media for posting. Please try again.",
+                    );
+                  } finally {
+                    setAutoCaptionLoading(false);
+                  }
+                }}
+                className="block w-full cursor-pointer text-sm text-foreground file:mr-3 file:cursor-pointer file:rounded-[var(--radius)] file:border-0 file:bg-secondary file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-secondary-foreground hover:file:bg-secondary/80"
+              />
+
+              {uploadFile && previewUrl && (
+                <div className="mt-2 space-y-2">
+                  {isImagePreview ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- local object-URL preview; next/image would need remote host config
+                    <img
+                      src={previewUrl}
+                      alt={`Preview of ${uploadFile.name}`}
+                      className="max-h-64 w-auto rounded-[var(--radius)] border border-border object-contain"
+                    />
+                  ) : isVideoPreview ? (
+                    <video
+                      src={previewUrl}
+                      controls
+                      className="max-h-64 w-full rounded-[var(--radius)] border border-border"
+                    />
+                  ) : null}
+                  <p className="text-xs text-muted-foreground">
+                    {uploadFile.name} &middot; {formatBytes(uploadFile.size)}
+                  </p>
+                </div>
+              )}
+
+              {uploadProgress !== null && (
+                <div className="mt-2 space-y-1">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>Uploading&hellip;</span>
+                    <span>{Math.round(uploadProgress)}%</span>
+                  </div>
+                  <div
+                    role="progressbar"
+                    aria-label="Upload progress"
+                    aria-valuenow={Math.round(uploadProgress)}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    className="h-2 w-full overflow-hidden rounded-full bg-muted"
+                  >
+                    <div
+                      className="h-full rounded-full bg-primary transition-all duration-200"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -577,15 +760,15 @@ export function CreatePostForm() {
           </p>
         </div>
 
-        {hasTikTokConnection && uploadFile && (
+        {hasTikTokConnection && activeMimeType && (
           <TikTokPostSettings
             metadata={tiktokMetadata}
             onChange={setTiktokMetadata}
-            isVideo={uploadFile.type.startsWith("video/")}
+            isVideo={activeMimeType.startsWith("video/")}
             privacyError={tiktokPrivacyError}
           />
         )}
-        {hasYouTubeConnection && uploadFile && (
+        {hasYouTubeConnection && activeMimeType && (
           <YouTubePostSettings
             metadata={youtubeMetadata}
             onChange={setYoutubeMetadata}
@@ -599,5 +782,34 @@ export function CreatePostForm() {
         </div>
       </form>
     </Card>
+  );
+}
+
+/** Lightweight placeholder for the Suspense boundary `useSearchParams`
+ * requires — resolves near-instantly since this route is already dynamic
+ * (the page reads the session via `getCurrentUser`), so this is rarely, if
+ * ever, actually seen. */
+function CreatePostFormSkeleton() {
+  return (
+    <Card className="space-y-5 p-6">
+      <Skeleton className="h-5 w-40" />
+      <Skeleton className="h-24 w-full" />
+      <Skeleton className="h-20 w-full" />
+      <Skeleton className="h-10 w-32" />
+    </Card>
+  );
+}
+
+/**
+ * `useSearchParams` (used by the reuse-mode fetch above) requires a Suspense
+ * boundary around its consumer during static rendering; self-contained here
+ * so the parent page (`app/posts/new/page.tsx`) doesn't need to know about
+ * it — mirrors how `ConnectionsSection` wraps `LinkedInSetupDialog`.
+ */
+export function CreatePostForm() {
+  return (
+    <Suspense fallback={<CreatePostFormSkeleton />}>
+      <CreatePostFormInner />
+    </Suspense>
   );
 }
