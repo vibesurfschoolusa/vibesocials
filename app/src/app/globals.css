@@ -56,6 +56,13 @@
   --warning-foreground: #ffffff;
   --destructive: #dc2626; /* red-600 — white text = 4.8:1 */
   --destructive-foreground: #ffffff;
+
+  /* Tinted-pill text (badge.tsx): darker in light for AA on the 10-percent
+     tint. success 6.2:1, warning 6.2:1, danger 5.5:1, neutral 6.9:1. */
+  --success-ontint: #166534; /* green-800 */
+  --warning-ontint: #92400e; /* amber-800 */
+  --danger-ontint: #b91c1c; /* red-700 */
+  --neutral-ontint: #475569; /* slate-600 */
 }
 
 /* Dark palette — declared once, shared by the system-default and manual paths. */
@@ -88,6 +95,11 @@
     --warning-foreground: #451a03; /* amber-950 */
     --destructive: #f87171; /* red-400 */
     --destructive-foreground: #450a0a; /* red-950 */
+
+    --success-ontint: #4ade80;
+    --warning-ontint: #fbbf24;
+    --danger-ontint: #f87171;
+    --neutral-ontint: #cbd5e1;
   }
 }
 
@@ -119,6 +131,11 @@
   --warning-foreground: #451a03;
   --destructive: #f87171;
   --destructive-foreground: #450a0a;
+
+  --success-ontint: #4ade80;
+  --warning-ontint: #fbbf24;
+  --danger-ontint: #f87171;
+  --neutral-ontint: #cbd5e1;
 }
 
 /* Expose the semantic variables to Tailwind v4 so bg-, text-, border-, ring-
@@ -151,6 +168,10 @@
   --color-warning-foreground: var(--warning-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-success-ontint: var(--success-ontint);
+  --color-warning-ontint: var(--warning-ontint);
+  --color-danger-ontint: var(--danger-ontint);
+  --color-neutral-ontint: var(--neutral-ontint);
 
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);

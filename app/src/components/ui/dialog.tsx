@@ -275,10 +275,14 @@ export function ConfirmDialog({
   const [busy, setBusy] = useState(false);
 
   const handleConfirm = useCallback(async () => {
+    setBusy(true);
     try {
-      setBusy(true);
       await onConfirm();
       onOpenChange(false);
+    } catch {
+      // Keep the dialog open on failure so the user can retry. The caller's
+      // onConfirm is responsible for surfacing the error (e.g. via toast);
+      // we swallow here only to avoid an unhandled promise rejection.
     } finally {
       setBusy(false);
     }

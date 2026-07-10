@@ -15,11 +15,13 @@ const BADGE_VARIANTS: Record<BadgeVariant, string> = {
   default: "border-transparent bg-primary text-primary-foreground",
   secondary: "border-transparent bg-secondary text-secondary-foreground",
   outline: "border-border text-foreground",
-  // Status pills: subtle tint + intent-colored text (AA in both themes).
-  success: "border-success/25 bg-success/10 text-success",
-  warning: "border-warning/25 bg-warning/10 text-warning",
-  danger: "border-destructive/25 bg-destructive/10 text-destructive",
-  neutral: "border-border bg-muted text-muted-foreground",
+  // Status pills: subtle tint + intent-colored text. The -ontint text tokens
+  // are darkened in light mode so the 12px label clears WCAG AA (>=4.5:1) on
+  // the 10-percent tint in both themes.
+  success: "border-success/25 bg-success/10 text-success-ontint",
+  warning: "border-warning/25 bg-warning/10 text-warning-ontint",
+  danger: "border-destructive/25 bg-destructive/10 text-danger-ontint",
+  neutral: "border-border bg-muted text-neutral-ontint",
 };
 
 export interface BadgeProps extends ComponentPropsWithoutRef<"span"> {
