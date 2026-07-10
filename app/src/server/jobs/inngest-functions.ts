@@ -9,6 +9,7 @@ import {
   TERMINAL_POST_JOB_STATUSES,
   isMediaSweepEligible,
 } from "@/server/jobs/mediaRetention";
+import { recomputePostJobStatus } from "@/server/jobs/postStatus";
 import type { MediaItem, Platform, SocialConnection, User } from "@prisma/client";
 import type {
   PublishContext,
@@ -206,15 +207,27 @@ export const publishToAllPlatforms = inngest.createFunction(
     // storage is bounded by the `mediaRetentionSweep` cron instead of a
     // delete-after-every-post. Immediate posting is otherwise unchanged.
     const finalResult = await step.run("finalize-job", async () => {
-      const hasSuccess = results.some((r) => r.status === "success");
-      const finalStatus = hasSuccess ? "completed" : "failed";
+      // Recompute from the AUTHORITATIVE DB results (not the in-memory `results`
+      // subset) via the shared pure rule. For this all-platforms path every
+      // platform just ran, so no result is `pending` and the recompute reduces
+      // to the original `some(success) ? completed : failed` — behavior-
+      // preserving. Reading from the DB keeps it correct if only some platforms
+      // had run (the case the retry path relies on).
+      const dbResults = await prisma.postJobResult.findMany({
+        where: { postJobId },
+        select: { status: true },
+      });
+      const finalStatus = recomputePostJobStatus(dbResults);
 
       await prisma.postJob.update({
         where: { id: postJobId },
         data: { status: finalStatus },
       });
 
-      return { finalStatus, successCount: results.filter(r => r.status === "success").length };
+      return {
+        finalStatus,
+        successCount: dbResults.filter((r) => r.status === "success").length,
+      };
     });
 
     console.log("[Inngest] Job completed", { postJobId, ...finalResult });
@@ -358,4 +371,191 @@ export const mediaRetentionSweep = inngest.createFunction(
   },
 );
 
-export const inngestFunctions = [publishToAllPlatforms, mediaRetentionSweep];
+/**
+ * Roadmap Phase 3 — retry only the named (previously failed) platforms of an
+ * existing PostJob without re-running the platforms that already succeeded.
+ *
+ * The `POST /api/posts/[postJobId]/retry` endpoint is the ONLY producer of
+ * `post/retry.requested`. It has already, atomically and per-platform, flipped
+ * each eligible `PostJobResult` from `failed` -> `pending` (the conditional
+ * `updateMany` that makes a double-click / concurrent retry safe — posting is
+ * NOT idempotent) and set `PostJob.status = in_progress`. This function only
+ * re-publishes those platforms and recomputes the job status from ALL results.
+ *
+ * IDEMPOTENCY (defense-in-depth): the `concurrency` key below serializes runs
+ * per `postJobId`, so two overlapping retry events for the same job can never
+ * re-run the same platform at the same time. The endpoint's conditional claim
+ * is the primary guard; this is the second layer.
+ *
+ * Caption source: unlike the initial publish (which carries caption/overrides
+ * in the event payload), a retry re-derives them from the persisted
+ * `MediaItem.baseCaption` / `perPlatformOverrides`. Per-post TikTok/YouTube
+ * metadata (e.g. YouTube privacy) is NOT persisted per job, so a retry falls
+ * back to each client's SAFE default (YouTube `unlisted`, TikTok `SELF_ONLY`).
+ */
+export const retryPlatforms = inngest.createFunction(
+  {
+    id: "retry-platforms",
+    name: "Retry Failed Platforms",
+    retries: 0,
+    // Serialize by PostJob: overlapping retries for the same job queue behind
+    // one another instead of double-running a platform (posting isn't
+    // idempotent). Pairs with the endpoint's failed->pending conditional claim.
+    concurrency: {
+      limit: 1,
+      key: "event.data.postJobId",
+    },
+  },
+  { event: "post/retry.requested" },
+  async ({ event, step }) => {
+    // `event.data` is untyped (schemaless Inngest client) — assign into typed
+    // locals here rather than annotating with `any`.
+    const postJobId: string = event.data.postJobId;
+    const userId: string = event.data.userId;
+    const platforms: Platform[] = event.data.platforms ?? [];
+
+    console.log("[Inngest] Starting retry job", { postJobId, platforms });
+
+    if (platforms.length === 0) {
+      return { postJobId, error: "No platforms to retry" };
+    }
+
+    // Fetch everything needed for just the named platforms, scoped to the owner.
+    const setupData = await step.run("fetch-retry-data", async () => {
+      const postJob = await prisma.postJob.findFirst({
+        where: { id: postJobId, userId },
+      });
+      if (!postJob) {
+        return null;
+      }
+
+      const [user, mediaItem, connections, resultRecords] = await Promise.all([
+        prisma.user.findUnique({ where: { id: userId } }),
+        prisma.mediaItem.findUnique({ where: { id: postJob.mediaItemId } }),
+        prisma.socialConnection.findMany({
+          where: { userId, platform: { in: platforms } },
+        }),
+        prisma.postJobResult.findMany({
+          where: { postJobId, platform: { in: platforms } },
+        }),
+      ]);
+
+      return { user, mediaItem, connections, resultRecords };
+    });
+
+    if (!setupData) {
+      console.error("[Inngest] Retry job not found or not owned", { postJobId });
+      return { postJobId, error: "Job not found" };
+    }
+
+    const { user, mediaItem, connections, resultRecords } = setupData;
+
+    // The blob must still exist to re-publish. The endpoint already gates this,
+    // but a concurrent retention sweep could have removed it in between — fail
+    // the re-queued results deterministically so the job never hangs
+    // `in_progress`, then recompute.
+    if (!user || !mediaItem || mediaItem.deletedAt !== null) {
+      await step.run("fail-media-unavailable", async () => {
+        await prisma.postJobResult.updateMany({
+          where: { postJobId, platform: { in: platforms }, status: "pending" },
+          data: {
+            status: "failed",
+            errorCode: "MEDIA_UNAVAILABLE",
+            errorMessage:
+              "The media for this post is no longer available. Recreate the post.",
+          },
+        });
+        const dbResults = await prisma.postJobResult.findMany({
+          where: { postJobId },
+          select: { status: true },
+        });
+        await prisma.postJob.update({
+          where: { id: postJobId },
+          data: { status: recomputePostJobStatus(dbResults) },
+        });
+      });
+      return { postJobId, error: "Media unavailable" };
+    }
+
+    const fullBaseCaption = buildCaptionWithFooter(mediaItem.baseCaption, user);
+    const overrides = mediaItem.perPlatformOverrides as
+      | Partial<Record<Platform, string>>
+      | null;
+
+    const results: { platform: Platform; status: string; error?: string }[] = [];
+
+    for (const platform of platforms) {
+      const resultRecord = resultRecords.find((r) => r.platform === platform);
+      if (!resultRecord) {
+        // No re-queued result row for this platform — nothing to retry.
+        console.error("[Inngest] No result record to retry", { postJobId, platform });
+        continue;
+      }
+
+      const connection = connections.find((c) => c.platform === platform);
+
+      const result = await step.run(`retry-${platform}`, async () => {
+        if (!connection) {
+          // The platform was disconnected since the original post; there is no
+          // token to publish with. Fail with a reconnect-shaped code so the UI
+          // can point the user at Settings.
+          await prisma.postJobResult.update({
+            where: { id: resultRecord.id },
+            data: {
+              status: "failed",
+              errorCode: "RECONNECT_REQUIRED",
+              errorMessage:
+                "This platform is no longer connected. Reconnect it in Settings and try again.",
+            },
+          });
+          return { platform, status: "failed", error: "No connection" };
+        }
+
+        const captionOverride = overrides?.[platform] ?? null;
+        const caption = captionOverride
+          ? buildCaptionWithFooter(captionOverride, user)
+          : fullBaseCaption;
+
+        return publishToPlatform(
+          connection,
+          mediaItem,
+          caption,
+          userId,
+          resultRecord.id,
+        );
+      });
+
+      results.push(result);
+    }
+
+    // Recompute PostJob.status from ALL results (the retried platforms plus the
+    // ones that already succeeded and were never touched) via the shared rule.
+    const finalResult = await step.run("finalize-retry", async () => {
+      const dbResults = await prisma.postJobResult.findMany({
+        where: { postJobId },
+        select: { status: true },
+      });
+      const finalStatus = recomputePostJobStatus(dbResults);
+
+      await prisma.postJob.update({
+        where: { id: postJobId },
+        data: { status: finalStatus },
+      });
+
+      return {
+        finalStatus,
+        successCount: dbResults.filter((r) => r.status === "success").length,
+      };
+    });
+
+    console.log("[Inngest] Retry job completed", { postJobId, ...finalResult });
+
+    return { postJobId, status: finalResult.finalStatus, results };
+  },
+);
+
+export const inngestFunctions = [
+  publishToAllPlatforms,
+  mediaRetentionSweep,
+  retryPlatforms,
+];

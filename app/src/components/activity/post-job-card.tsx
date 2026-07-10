@@ -1,11 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
+import Link from "next/link";
 import { ChevronDown } from "lucide-react";
-import type { PostJobStatus } from "@prisma/client";
+import type { Platform, PostJobResultStatus, PostJobStatus } from "@prisma/client";
 
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import type { PostJobDTO } from "@/lib/postsDto";
@@ -20,6 +23,12 @@ const JOB_STATUS_META: Record<
   in_progress: { variant: "warning", label: "In progress" },
   pending: { variant: "neutral", label: "Pending" },
 };
+
+/** Shape of the retry endpoint's JSON error body (Roadmap Phase 3). */
+interface RetryErrorBody {
+  error?: string;
+  code?: string;
+}
 
 function formatTimestamp(iso: string): string {
   const date = new Date(iso);
@@ -43,13 +52,105 @@ function orderResults(results: PostJobDTO["results"]): PostJobDTO["results"] {
 /**
  * A single post job: caption preview, timestamp, overall status, and per-platform
  * result pills. Sanitized failure messages are collapsed behind a toggle.
+ *
+ * Roadmap Phase 3: each failed platform gets a Retry button that re-publishes
+ * just that platform (`POST /api/posts/[id]/retry`). The result is optimistically
+ * shown as pending; a `RECONNECT_REQUIRED` response swaps the button for a
+ * "Reconnect … in Settings" link. Self-contained (no new props) so both the
+ * dashboard preview and the full activity view pick it up unchanged.
  */
 export function PostJobCard({ job }: { job: PostJobDTO }) {
   const [expanded, setExpanded] = useState(false);
+  // Platforms whose retry is in flight (optimistic pending) and platforms the
+  // server told us to reconnect. Both are keyed by Platform.
+  const [pending, setPending] = useState<Set<Platform>>(new Set());
+  const [reconnect, setReconnect] = useState<Set<Platform>>(new Set());
+  const toast = useToast();
+
   const status = JOB_STATUS_META[job.status];
   const results = orderResults(job.results);
+
+  // A platform mid-retry displays as pending even though its stored result is
+  // still `failed` until the background job finishes.
+  const displayStatus = (
+    result: PostJobDTO["results"][number],
+  ): PostJobResultStatus =>
+    pending.has(result.platform) ? "pending" : result.status;
+
+  const failedPlatforms = results
+    .filter((result) => result.status === "failed")
+    .map((result) => result.platform);
+
+  // Hide a failure's stored error message while it's being retried (we've
+  // optimistically cleared it).
   const failures = results.filter(
-    (result) => result.status === "failed" && result.errorMessage,
+    (result) =>
+      result.status === "failed" &&
+      result.errorMessage &&
+      !pending.has(result.platform),
+  );
+
+  const retry = useCallback(
+    async (platform: Platform) => {
+      setReconnect((prev) => {
+        if (!prev.has(platform)) return prev;
+        const next = new Set(prev);
+        next.delete(platform);
+        return next;
+      });
+      setPending((prev) => new Set(prev).add(platform));
+
+      try {
+        const response = await fetch(`/api/posts/${job.id}/retry`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ platform }),
+        });
+
+        if (response.ok) {
+          toast.success(`Retrying ${platformLabel(platform)}…`);
+          return; // keep the optimistic pending state
+        }
+
+        let body: RetryErrorBody = {};
+        try {
+          body = (await response.json()) as RetryErrorBody;
+        } catch {
+          // Non-JSON error — fall through to the generic message below.
+        }
+
+        // Roll back the optimistic pending state: the retry never started.
+        setPending((prev) => {
+          const next = new Set(prev);
+          next.delete(platform);
+          return next;
+        });
+
+        if (body.code === "RECONNECT_REQUIRED") {
+          setReconnect((prev) => new Set(prev).add(platform));
+          toast.error(
+            body.error ??
+              `Reconnect ${platformLabel(platform)} in Settings before retrying.`,
+          );
+          return;
+        }
+
+        toast.error(
+          body.error ??
+            `Couldn't retry ${platformLabel(platform)}. Please try again.`,
+        );
+      } catch {
+        setPending((prev) => {
+          const next = new Set(prev);
+          next.delete(platform);
+          return next;
+        });
+        toast.error(
+          `Couldn't retry ${platformLabel(platform)}. Please try again.`,
+        );
+      }
+    },
+    [job.id, toast],
   );
 
   return (
@@ -74,9 +175,41 @@ export function PostJobCard({ job }: { job: PostJobDTO }) {
             <PlatformResultBadge
               key={result.platform}
               platform={result.platform}
-              status={result.status}
+              status={displayStatus(result)}
             />
           ))}
+        </div>
+      ) : null}
+
+      {failedPlatforms.length > 0 ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {failedPlatforms.map((platform) =>
+            reconnect.has(platform) ? (
+              <span
+                key={platform}
+                className="inline-flex items-center gap-1 rounded-[var(--radius)] border border-primary/25 bg-primary/10 px-2.5 py-1 text-xs text-foreground"
+              >
+                Reconnect {platformLabel(platform)} in{" "}
+                <Link
+                  href="/settings"
+                  className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                >
+                  Settings
+                </Link>
+              </span>
+            ) : (
+              <Button
+                key={platform}
+                size="sm"
+                variant="outline"
+                loading={pending.has(platform)}
+                onClick={() => retry(platform)}
+              >
+                {pending.has(platform) ? "Retrying" : "Retry"}{" "}
+                {platformLabel(platform)}
+              </Button>
+            ),
+          )}
         </div>
       ) : null}
 
