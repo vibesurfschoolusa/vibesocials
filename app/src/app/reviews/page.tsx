@@ -5,7 +5,6 @@ import { ArrowLeft, Loader2, MessageSquare } from "lucide-react";
 import Link from "next/link";
 
 import { ToastProvider, useToast } from "@/components/ui/toast";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { ErrorState } from "@/components/reviews/error-state";
 import { LocationPicker } from "@/components/reviews/location-picker";
 import { ReviewCard } from "@/components/reviews/review-card";
@@ -33,7 +32,6 @@ function ReviewsPageContent() {
   const [replyText, setReplyText] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [generatingAI, setGeneratingAI] = useState<string | null>(null);
-  const [confirmReview, setConfirmReview] = useState<GoogleReview | null>(null);
 
   const loadLocations = useCallback(async () => {
     try {
@@ -96,7 +94,7 @@ function ReviewsPageContent() {
     loadReviews();
   }, [loadReviews]);
 
-  // Validate then open the confirmation dialog before posting a public reply.
+  // Validate then post the reply.
   const requestReply = (review: GoogleReview) => {
     const comment = replyText[review.reviewId]?.trim();
 
@@ -105,13 +103,12 @@ function ReviewsPageContent() {
       return;
     }
 
-    setConfirmReview(review);
+    performReply(review);
   };
 
   const performReply = async (review: GoogleReview) => {
     const comment = replyText[review.reviewId]?.trim();
     if (!comment) {
-      setConfirmReview(null);
       return;
     }
 
@@ -159,7 +156,6 @@ function ReviewsPageContent() {
       toast.error((err as Error).message || "Failed to post reply");
     } finally {
       setSubmitting(null);
-      setConfirmReview(null);
     }
   };
 
@@ -334,21 +330,6 @@ function ReviewsPageContent() {
           </div>
         )}
       </div>
-
-      <ConfirmDialog
-        open={confirmReview !== null}
-        title="Post this reply?"
-        description="Your reply will be posted publicly to this Google review and visible to everyone."
-        confirmLabel="Post Reply"
-        cancelLabel="Cancel"
-        busy={submitting !== null}
-        onConfirm={() => {
-          if (confirmReview) performReply(confirmReview);
-        }}
-        onCancel={() => {
-          if (submitting === null) setConfirmReview(null);
-        }}
-      />
     </div>
   );
 }
