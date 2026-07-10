@@ -565,6 +565,7 @@ export function CreatePostForm() {
             Location <span className="font-normal text-muted-foreground">(optional)</span>
           </Label>
           <LocationAutocomplete
+            id="post-location"
             value={uploadLocation}
             onChange={setUploadLocation}
             placeholder="Start typing a location..."
