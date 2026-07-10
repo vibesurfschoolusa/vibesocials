@@ -74,9 +74,10 @@ export async function GET(_request: NextRequest, context: MediaItemRouteContext)
  * the row first: if `del()` throws, the whole transaction (including the
  * row update) rolls back, so a failed blob delete can never be recorded as a
  * successful one — same reasoning as `mediaRetentionSweep` in
- * `inngest-functions.ts`. The non-terminal-job recheck also runs inside that
- * transaction against fresh data, closing the check-then-act race against a
- * concurrent reuse (same race the retention sweep closes).
+ * `inngest-functions.ts`. The transaction takes a `SELECT ... FOR UPDATE` row
+ * lock on the MediaItem before counting referencing jobs, so it serializes with
+ * a concurrent reuse (which takes the same lock) — closing the check-then-act
+ * race exactly as the retention sweep does.
  */
 export async function DELETE(_request: NextRequest, context: MediaItemRouteContext) {
   const user = await getCurrentUser();
@@ -98,6 +99,12 @@ export async function DELETE(_request: NextRequest, context: MediaItemRouteConte
 
   try {
     const outcome = await prisma.$transaction(async (tx) => {
+      // Lock the MediaItem row FIRST (same FOR UPDATE lock the reuse helper and
+      // retention sweep take) so the count below sees any reuse that committed
+      // before the lock was granted, and a reuse arriving after this delete
+      // blocks then aborts — closing the check-then-act race with a reuse.
+      await tx.$executeRaw`SELECT id FROM "MediaItem" WHERE id = ${id} FOR UPDATE`;
+
       const nonTerminalJobCount = await tx.postJob.count({
         where: { mediaItemId: id, status: { notIn: [...TERMINAL_POST_JOB_STATUSES] } },
       });
@@ -117,7 +124,7 @@ export async function DELETE(_request: NextRequest, context: MediaItemRouteConte
       await del(item.storageLocation);
 
       return { ok: true as const };
-    });
+    }, { timeout: 15000 });
 
     if (!outcome.ok) {
       return NextResponse.json(

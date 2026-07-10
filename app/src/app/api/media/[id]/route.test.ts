@@ -77,6 +77,7 @@ beforeEach(() => {
   // `mediaItemUpdateMock`/`postJobCountMock` record calls made via `tx.*`.
   transactionMock.mockImplementation(async (callback: (tx: unknown) => unknown) =>
     callback({
+      $executeRaw: vi.fn(),
       postJob: { count: postJobCountMock },
       mediaItem: { update: mediaItemUpdateMock },
     }),
@@ -216,6 +217,7 @@ describe("DELETE /api/media/[id]", () => {
     // against a real client.
     transactionMock.mockImplementation(async (callback: (tx: unknown) => unknown) =>
       callback({
+        $executeRaw: vi.fn(),
         postJob: { count: postJobCountMock },
         mediaItem: { update: mediaItemUpdateMock },
       }),

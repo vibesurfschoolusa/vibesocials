@@ -469,13 +469,15 @@ function CreatePostFormInner() {
       setShowSuccess(true);
       setUploadCaption("");
       setUploadLocation("");
-      // The reuse target stays attached (composer is ready to post the same
-      // media again); only the upload-path file state is reset.
-      if (!reuseItem) {
-        setUploadFile(null);
-        setUploadedBlob(null);
-        activeUploadRef.current = null;
-      }
+      // Detach the media after a successful post. For the reuse path this
+      // prevents an accidental second submit from re-posting the same item;
+      // for the upload path it clears the file state as before. Clearing
+      // `reuseItem` returns the composer to the normal file-upload UI.
+      setUploadFile(null);
+      setUploadedBlob(null);
+      activeUploadRef.current = null;
+      setReuseItem(null);
+      setReusePerPlatformOverrides(null);
       setTiktokMetadata({
         privacyLevel: "",
         disableComment: true,
