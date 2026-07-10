@@ -1,8 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, CheckCircle2, MessageSquare } from "lucide-react";
-import Link from "next/link";
+import { CheckCircle2, MessageSquare } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -231,13 +230,6 @@ function ReviewsPageContent() {
     <div className="mx-auto max-w-6xl px-4 py-8 md:px-6 lg:px-8">
       {/* Header */}
       <div className="mb-8">
-        <Link
-          href="/"
-          className="mb-4 inline-flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ArrowLeft aria-hidden className="h-4 w-4" />
-          Back to Dashboard
-        </Link>
         <h1 className="text-3xl font-bold tracking-tight text-foreground">Google Reviews</h1>
         <p className="mt-2 text-muted-foreground">
           Manage and reply to your Google Business Profile reviews

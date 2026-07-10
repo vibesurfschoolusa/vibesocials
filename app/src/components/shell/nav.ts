@@ -25,16 +25,15 @@ export const NAV_ITEMS: NavItemDef[] = [
 ];
 
 /**
- * Routes that render with NO app shell — auth pages, legal pages, and the design
- * preview. Everything else is treated as an authenticated app route and gets the
- * full shell once the user is signed in.
+ * Routes that render with NO app shell — auth pages and legal pages. Everything
+ * else is treated as an authenticated app route and gets the full shell once the
+ * user is signed in.
  */
 export const PUBLIC_ROUTE_PREFIXES = [
   "/login",
   "/register",
   "/privacy",
   "/terms",
-  "/design",
 ];
 
 export function isPublicRoute(pathname: string): boolean {
