@@ -1,28 +1,32 @@
-import { type ReactNode } from "react";
+import { forwardRef, type ComponentPropsWithoutRef, type ReactNode } from "react";
 
 import { cn } from "@/lib/cn";
 
-export interface EmptyStateProps {
+export interface EmptyStateProps extends ComponentPropsWithoutRef<"div"> {
   /** Icon element (e.g. a lucide icon). Rendered in a muted circle. */
   icon?: ReactNode;
   title: string;
   description?: string;
   /** Optional call to action (e.g. a `<Button>`). */
   action?: ReactNode;
-  className?: string;
 }
 
 /**
  * Centered placeholder for empty lists / zero-data views: icon + title +
  * description + optional action.
  */
-export function EmptyState({ icon, title, description, action, className }: EmptyStateProps) {
+export const EmptyState = forwardRef<HTMLDivElement, EmptyStateProps>(function EmptyState(
+  { icon, title, description, action, className, ...props },
+  ref
+) {
   return (
     <div
+      ref={ref}
       className={cn(
         "flex flex-col items-center justify-center gap-3 rounded-[calc(var(--radius)+0.125rem)] border border-dashed border-border px-6 py-12 text-center",
         className
       )}
+      {...props}
     >
       {icon ? (
         <div
@@ -41,4 +45,4 @@ export function EmptyState({ icon, title, description, action, className }: Empt
       {action ? <div className="mt-1">{action}</div> : null}
     </div>
   );
-}
+});

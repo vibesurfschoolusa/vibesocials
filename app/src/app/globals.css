@@ -42,7 +42,7 @@
 
   /* Lines & focus */
   --border: #e2e8f0; /* slate-200 */
-  --input: #cbd5e1; /* slate-300 — control borders */
+  --input: #8794a8; /* ~slate-450 — control borders, 3.07:1 on white for WCAG 1.4.11 */
   --ring: #6366f1; /* indigo-500 */
 
   /* Brand accent */
@@ -83,7 +83,7 @@
     --accent-foreground: #e2e8f0;
 
     --border: #26324a;
-    --input: #334155; /* slate-700 */
+    --input: #5a6a8a; /* ~slate-550 — 3.19:1 on --card for WCAG 1.4.11 */
     --ring: #818cf8; /* indigo-400 */
 
     --primary: #818cf8; /* indigo-400 — dark text for AA on the light fill */
@@ -119,7 +119,7 @@
   --accent-foreground: #e2e8f0;
 
   --border: #26324a;
-  --input: #334155;
+  --input: #5a6a8a; /* ~slate-550 — 3.19:1 on --card for WCAG 1.4.11 */
   --ring: #818cf8;
 
   --primary: #818cf8;

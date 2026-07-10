@@ -1,3 +1,5 @@
+import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import type { Location } from "./types";
 
 interface LocationPickerProps {
@@ -16,26 +18,24 @@ export function LocationPicker({
 }: LocationPickerProps) {
   return (
     <div className="mb-8">
-      <label
-        htmlFor="location-picker"
-        className="block text-sm font-medium text-gray-700 mb-2"
-      >
+      <Label htmlFor="location-picker" className="mb-2 block">
         Select Location
-      </label>
-      <select
-        id="location-picker"
-        value={selectedLocation || ""}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full max-w-md rounded-lg border border-gray-300 px-4 py-2 text-gray-900 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none"
-      >
-        <option value="">Choose a location...</option>
-        {locations.map((loc) => (
-          <option key={loc.name} value={loc.name}>
-            {loc.title}
-            {loc.storeCode && ` (${loc.storeCode})`}
-          </option>
-        ))}
-      </select>
+      </Label>
+      <div className="max-w-md">
+        <Select
+          id="location-picker"
+          value={selectedLocation || ""}
+          onChange={(e) => onChange(e.target.value)}
+        >
+          <option value="">Choose a location...</option>
+          {locations.map((loc) => (
+            <option key={loc.name} value={loc.name}>
+              {loc.title}
+              {loc.storeCode && ` (${loc.storeCode})`}
+            </option>
+          ))}
+        </Select>
+      </div>
     </div>
   );
 }

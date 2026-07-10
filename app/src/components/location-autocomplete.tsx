@@ -1,6 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useId, useRef } from "react";
+
+import { cn } from "@/lib/cn";
+import { fieldBaseClasses } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 
 interface LocationSuggestion {
   description: string;
@@ -14,6 +18,8 @@ interface LocationAutocompleteProps {
   onChange: (value: string) => void;
   placeholder?: string;
   className?: string;
+  /** Input id so a `<Label htmlFor>` can associate. Defaults to a generated id. */
+  id?: string;
 }
 
 export function LocationAutocomplete({
@@ -21,6 +27,7 @@ export function LocationAutocomplete({
   onChange,
   placeholder = "e.g., Miami Beach, FL",
   className = "",
+  id,
 }: LocationAutocompleteProps) {
   const [suggestions, setSuggestions] = useState<LocationSuggestion[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -28,6 +35,13 @@ export function LocationAutocomplete({
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const debounceTimer = useRef<NodeJS.Timeout | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+
+  const generatedId = useId();
+  const inputId = id ?? generatedId;
+  const listboxId = `${inputId}-listbox`;
+  const optionId = (index: number) => `${inputId}-option-${index}`;
+
+  const isOpen = showDropdown && suggestions.length > 0;
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -106,42 +120,60 @@ export function LocationAutocomplete({
   return (
     <div ref={wrapperRef} className="relative">
       <input
+        id={inputId}
         type="text"
+        role="combobox"
+        aria-expanded={isOpen}
+        aria-controls={listboxId}
+        aria-autocomplete="list"
+        aria-activedescendant={
+          isOpen && selectedIndex >= 0 ? optionId(selectedIndex) : undefined
+        }
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={handleKeyDown}
         onFocus={() => {
           if (suggestions.length > 0) setShowDropdown(true);
         }}
-        className={className}
+        className={cn(fieldBaseClasses, "h-10 px-3 py-2", className)}
         placeholder={placeholder}
         autoComplete="off"
       />
 
-      {showDropdown && suggestions.length > 0 && (
-        <div className="absolute z-50 mt-1 w-full rounded-md border border-gray-300 bg-white shadow-lg max-h-60 overflow-auto">
+      {isOpen && (
+        <ul
+          id={listboxId}
+          role="listbox"
+          aria-label="Location suggestions"
+          className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-[var(--radius)] border border-input bg-card text-card-foreground shadow-lg"
+        >
           {suggestions.map((suggestion, index) => (
-            <button
-              key={suggestion.placeId}
-              type="button"
-              onClick={() => handleSelect(suggestion)}
-              onMouseEnter={() => setSelectedIndex(index)}
-              className={`w-full text-left px-3 py-2 text-sm hover:bg-blue-50 border-b border-gray-100 last:border-b-0 ${
-                index === selectedIndex ? "bg-blue-50" : ""
-              }`}
-            >
-              <div className="font-medium text-gray-900">{suggestion.description}</div>
-              <div className="text-xs text-gray-500 mt-0.5">
-                {suggestion.latitude.toFixed(4)}, {suggestion.longitude.toFixed(4)}
-              </div>
-            </button>
+            <li key={suggestion.placeId} role="presentation">
+              <button
+                id={optionId(index)}
+                type="button"
+                role="option"
+                aria-selected={index === selectedIndex}
+                onClick={() => handleSelect(suggestion)}
+                onMouseEnter={() => setSelectedIndex(index)}
+                className={cn(
+                  "w-full border-b border-border px-3 py-2 text-left text-sm transition-colors last:border-b-0 hover:bg-accent hover:text-accent-foreground",
+                  index === selectedIndex && "bg-accent text-accent-foreground"
+                )}
+              >
+                <div className="font-medium text-foreground">{suggestion.description}</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  {suggestion.latitude.toFixed(4)}, {suggestion.longitude.toFixed(4)}
+                </div>
+              </button>
+            </li>
           ))}
-        </div>
+        </ul>
       )}
 
       {isLoading && (
         <div className="absolute right-3 top-1/2 -translate-y-1/2">
-          <div className="animate-spin h-4 w-4 border-2 border-gray-300 border-t-blue-600 rounded-full" />
+          <Spinner size="sm" className="text-muted-foreground" />
         </div>
       )}
     </div>

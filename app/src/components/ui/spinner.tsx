@@ -1,5 +1,5 @@
 import { Loader2 } from "lucide-react";
-import { type ComponentPropsWithoutRef } from "react";
+import { forwardRef, type ComponentPropsWithoutRef } from "react";
 
 import { cn } from "@/lib/cn";
 
@@ -22,9 +22,13 @@ export interface SpinnerProps extends Omit<ComponentPropsWithoutRef<"svg">, "chi
  * Indeterminate loading spinner. Decorative by default (pass `label` to
  * announce a standalone loading region to assistive tech).
  */
-export function Spinner({ size = "md", label, className, ...props }: SpinnerProps) {
+export const Spinner = forwardRef<SVGSVGElement, SpinnerProps>(function Spinner(
+  { size = "md", label, className, ...props },
+  ref
+) {
   return (
     <Loader2
+      ref={ref}
       role={label ? "status" : undefined}
       aria-label={label}
       aria-hidden={label ? undefined : true}
@@ -32,4 +36,4 @@ export function Spinner({ size = "md", label, className, ...props }: SpinnerProp
       {...props}
     />
   );
-}
+});

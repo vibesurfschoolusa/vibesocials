@@ -21,6 +21,28 @@ import { Button, type ButtonVariant } from "@/components/ui/button";
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
+// Ref-counted body scroll lock. Nested dialogs (e.g. a ConfirmDialog opened
+// from inside a Dialog) must not restore `overflow` while an ancestor is still
+// open — only the first lock saves the original value and the last unlock
+// restores it.
+let scrollLockCount = 0;
+let savedBodyOverflow = "";
+
+function lockBodyScroll() {
+  if (scrollLockCount === 0) {
+    savedBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+  }
+  scrollLockCount += 1;
+}
+
+function unlockBodyScroll() {
+  scrollLockCount = Math.max(0, scrollLockCount - 1);
+  if (scrollLockCount === 0) {
+    document.body.style.overflow = savedBodyOverflow;
+  }
+}
+
 interface DialogContextValue {
   titleId: string;
   descriptionId: string;
@@ -79,9 +101,7 @@ export function Dialog({ open, onOpenChange, children, label, className }: Dialo
     previouslyFocused.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
-    const { body } = document;
-    const previousOverflow = body.style.overflow;
-    body.style.overflow = "hidden";
+    lockBodyScroll();
 
     // Move focus into the dialog.
     const panel = panelRef.current;
@@ -89,9 +109,28 @@ export function Dialog({ open, onOpenChange, children, label, className }: Dialo
     (first ?? panel)?.focus();
 
     return () => {
-      body.style.overflow = previousOverflow;
+      unlockBodyScroll();
       previouslyFocused.current?.focus();
     };
+  }, [open]);
+
+  // Dev-only: warn when a Dialog is opened with no accessible name (no
+  // <DialogTitle> rendered and no `label` prop). Read via ref on a macrotask so
+  // a title registered by a child effect is already reflected.
+  const hasNameRef = useRef(false);
+  useEffect(() => {
+    hasNameRef.current = hasTitle || Boolean(label);
+  }, [hasTitle, label]);
+  useEffect(() => {
+    if (!open || process.env.NODE_ENV === "production") return;
+    const timer = window.setTimeout(() => {
+      if (!hasNameRef.current) {
+        console.warn(
+          "<Dialog> has no accessible name. Render a <DialogTitle> or pass a `label` prop."
+        );
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [open]);
 
   // Esc to close + Tab focus trap.
@@ -118,7 +157,12 @@ export function Dialog({ open, onOpenChange, children, label, className }: Dialo
       const last = focusable[focusable.length - 1];
       const active = document.activeElement;
 
-      if (event.shiftKey && (active === first || active === panel)) {
+      // Focus escaped the panel entirely — pull it back in rather than let the
+      // user Tab into the page behind the modal.
+      if (!(active instanceof Node) || !panel.contains(active)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && (active === first || active === panel)) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && active === last) {
@@ -172,14 +216,17 @@ export function Dialog({ open, onOpenChange, children, label, className }: Dialo
   );
 }
 
-export function DialogHeader({ className, ...props }: ComponentPropsWithoutRef<"div">) {
-  return (
-    <div
-      className={cn("flex flex-col gap-1.5 p-6 pb-0", className)}
-      {...props}
-    />
-  );
-}
+export const DialogHeader = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<"div">>(
+  function DialogHeader({ className, ...props }, ref) {
+    return (
+      <div
+        ref={ref}
+        className={cn("flex flex-col gap-1.5 p-6 pb-0", className)}
+        {...props}
+      />
+    );
+  }
+);
 
 export const DialogTitle = forwardRef<HTMLHeadingElement, ComponentPropsWithoutRef<"h2">>(
   function DialogTitle({ className, ...props }, ref) {
@@ -212,21 +259,28 @@ export const DialogDescription = forwardRef<
   );
 });
 
-export function DialogBody({ className, ...props }: ComponentPropsWithoutRef<"div">) {
-  return <div className={cn("p-6 text-sm text-foreground", className)} {...props} />;
-}
+export const DialogBody = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<"div">>(
+  function DialogBody({ className, ...props }, ref) {
+    return (
+      <div ref={ref} className={cn("p-6 text-sm text-foreground", className)} {...props} />
+    );
+  }
+);
 
-export function DialogFooter({ className, ...props }: ComponentPropsWithoutRef<"div">) {
-  return (
-    <div
-      className={cn(
-        "flex flex-col-reverse gap-2 p-6 pt-0 sm:flex-row sm:justify-end",
-        className
-      )}
-      {...props}
-    />
-  );
-}
+export const DialogFooter = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<"div">>(
+  function DialogFooter({ className, ...props }, ref) {
+    return (
+      <div
+        ref={ref}
+        className={cn(
+          "flex flex-col-reverse gap-2 p-6 pt-0 sm:flex-row sm:justify-end",
+          className
+        )}
+        {...props}
+      />
+    );
+  }
+);
 
 /** Icon-only close button wired to the dialog's `onOpenChange`. */
 export function DialogClose({ className }: { className?: string }) {

@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { forwardRef, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import { AlertCircle, AlertTriangle, CheckCircle2, Info, type LucideIcon } from "lucide-react";
 
 import { cn } from "@/lib/cn";
@@ -35,13 +35,12 @@ const VARIANT_META: Record<
   },
 };
 
-export interface AlertProps {
+export interface AlertProps extends ComponentPropsWithoutRef<"div"> {
   variant?: AlertVariant;
   title?: string;
   children?: ReactNode;
   /** Override the default icon, or pass `false` to hide it. */
   icon?: ReactNode | false;
-  className?: string;
 }
 
 /**
@@ -49,18 +48,23 @@ export interface AlertProps {
  * for guaranteed AA contrast on the tint. `warning`/`danger` announce as
  * `role="alert"`, `info`/`success` as `role="status"`.
  */
-export function Alert({ variant = "info", title, children, icon, className }: AlertProps) {
+export const Alert = forwardRef<HTMLDivElement, AlertProps>(function Alert(
+  { variant = "info", title, children, icon, className, ...props },
+  ref
+) {
   const meta = VARIANT_META[variant];
   const DefaultIcon = meta.Icon;
 
   return (
     <div
+      ref={ref}
       role={meta.role}
       className={cn(
         "flex gap-3 rounded-[var(--radius)] border p-4 text-foreground",
         meta.container,
         className
       )}
+      {...props}
     >
       {icon !== false ? (
         <span className={cn("mt-0.5 flex-shrink-0 [&_svg]:h-5 [&_svg]:w-5", meta.icon)}>
@@ -73,4 +77,4 @@ export function Alert({ variant = "info", title, children, icon, className }: Al
       </div>
     </div>
   );
-}
+});
