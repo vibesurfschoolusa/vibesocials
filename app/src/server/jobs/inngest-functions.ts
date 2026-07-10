@@ -235,8 +235,14 @@ export const publishToAllPlatforms = inngest.createFunction(
  * the blob (`del`), and soft-deletes the row (`deletedAt = now`, the row itself
  * is kept for history/captions). Never-posted library uploads are exempt — see
  * `isMediaSweepEligible`. The eligibility rule is re-evaluated against fresh data
- * inside the same transaction as the delete to close the check-then-act race
- * (a reuse can newly reference an old item between the scan and the delete).
+ * inside the delete transaction, which NARROWS but does not fully close the
+ * check-then-act race with a concurrent reuse: under Read Committed an uncommitted
+ * reuse is invisible to the re-check, and the sweep's `UPDATE deletedAt` and a
+ * reuse's `INSERT PostJob` take non-conflicting row locks. This is unreachable
+ * today (no code attaches a PostJob to a pre-existing MediaItem). The reuse phase
+ * MUST add row-level locking — `SELECT ... FOR UPDATE` on the MediaItem in BOTH
+ * the sweep and the reuse path (or a Serializable transaction) — to close it.
+ * The candidate set is capped per run and drains over the daily cadence.
  */
 export const mediaRetentionSweep = inngest.createFunction(
   { id: "media-retention-sweep", name: "Media Retention Sweep" },
@@ -262,6 +268,10 @@ export const mediaRetentionSweep = inngest.createFunction(
             { lastUsedAt: null, createdAt: { lt: cutoff } },
           ],
         },
+        // Cap per run so a large first-deploy backlog (every pre-existing posted
+        // item is a candidate once, blobs already gone) can't exceed the function
+        // budget in one invocation; the daily cadence drains the rest.
+        take: 500,
         select: { id: true },
       });
 
