@@ -28,7 +28,11 @@ interface ToastContextValue {
 
 const ToastContext = createContext<ToastContextValue | null>(null);
 
-const AUTO_DISMISS_MS = 4000;
+const AUTO_DISMISS_MS: Record<ToastVariant, number> = {
+  success: 4000,
+  info: 4000,
+  error: 8000, // errors carry actionable info — give them longer
+};
 
 /**
  * Access the toast API. Must be called inside a {@link ToastProvider}.
@@ -60,15 +64,32 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const armDismiss = useCallback(
+    (id: number, variant: ToastVariant) => {
+      const existing = timers.current.get(id);
+      if (existing) clearTimeout(existing);
+      const timer = setTimeout(() => dismiss(id), AUTO_DISMISS_MS[variant]);
+      timers.current.set(id, timer);
+    },
+    [dismiss]
+  );
+
+  const pauseDismiss = useCallback((id: number) => {
+    const timer = timers.current.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      timers.current.delete(id);
+    }
+  }, []);
+
   const push = useCallback(
     (message: string, variant: ToastVariant) => {
       idRef.current += 1;
       const id = idRef.current;
       setToasts((prev) => [...prev, { id, message, variant }]);
-      const timer = setTimeout(() => dismiss(id), AUTO_DISMISS_MS);
-      timers.current.set(id, timer);
+      armDismiss(id, variant);
     },
-    [dismiss]
+    [armDismiss]
   );
 
   const value = useMemo<ToastContextValue>(
@@ -91,7 +112,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <Toaster toasts={toasts} onDismiss={dismiss} />
+      <Toaster toasts={toasts} onDismiss={dismiss} onPause={pauseDismiss} onResume={armDismiss} />
     </ToastContext.Provider>
   );
 }
@@ -117,22 +138,28 @@ const VARIANT_STYLES: Record<
 function Toaster({
   toasts,
   onDismiss,
+  onPause,
+  onResume,
 }: {
   toasts: ToastItem[];
   onDismiss: (id: number) => void;
+  onPause: (id: number) => void;
+  onResume: (id: number, variant: ToastVariant) => void;
 }) {
   return (
     <div
       aria-live="polite"
       aria-atomic="false"
-      className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-full max-w-sm flex-col gap-2"
+      className="pointer-events-none fixed bottom-4 left-4 right-4 sm:left-auto sm:w-full sm:max-w-sm z-[60] flex flex-col gap-2"
     >
       {toasts.map((toast) => {
         const styles = VARIANT_STYLES[toast.variant];
         return (
           <div
             key={toast.id}
-            role="status"
+            role={toast.variant === "error" ? "alert" : "status"}
+            onMouseEnter={() => onPause(toast.id)}
+            onMouseLeave={() => onResume(toast.id, toast.variant)}
             className={`pointer-events-auto flex items-start gap-3 rounded-lg border px-4 py-3 shadow-lg ${styles.container}`}
           >
             {styles.icon}
