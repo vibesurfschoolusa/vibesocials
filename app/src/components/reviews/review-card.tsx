@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { MessageSquare, Star } from "lucide-react";
+import { MessageSquare, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -81,7 +81,7 @@ export function ReviewCard({
                 </span>
               </div>
             </div>
-            {needsReply && <Badge variant="warning">Needs Reply</Badge>}
+            {needsReply && <Badge variant="warning">Needs reply</Badge>}
           </div>
 
           {/* Review Comment */}
@@ -95,7 +95,7 @@ export function ReviewCard({
               <div className="mb-2 flex items-center gap-2">
                 <MessageSquare aria-hidden className="h-4 w-4 text-primary" />
                 <span className="text-sm font-medium text-foreground">
-                  Your Reply
+                  Your reply
                 </span>
                 <span className="text-xs text-muted-foreground">
                   {formatDate(review.reviewReply.updateTime)}
@@ -124,7 +124,7 @@ export function ReviewCard({
                 <div className="flex gap-3">
                   <Button type="button" onClick={onOpenReply}>
                     <MessageSquare aria-hidden className="h-4 w-4" />
-                    Reply to Review
+                    Reply to review
                   </Button>
                   <Button
                     type="button"
@@ -132,8 +132,8 @@ export function ReviewCard({
                     onClick={onDraftAI}
                     loading={isGeneratingAI}
                   >
-                    {!isGeneratingAI && <Star aria-hidden className="h-4 w-4" />}
-                    {isGeneratingAI ? "Generating..." : "Draft AI Response"}
+                    {!isGeneratingAI && <Sparkles aria-hidden className="h-4 w-4" />}
+                    {isGeneratingAI ? "Generating…" : "Draft AI response"}
                   </Button>
                 </div>
               )}
