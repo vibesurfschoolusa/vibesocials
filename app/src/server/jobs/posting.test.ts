@@ -370,6 +370,93 @@ describe("createPostJobForExistingMedia", () => {
   });
 });
 
+describe("createPostJobForExistingMedia (Task 7 — per-post platform targeting)", () => {
+  // Same trio as the createPostJobOnly targeting block above, against the
+  // reuse path (Task 7 review fix: posting.ts's `targeted` filter +
+  // NO_CONNECTIONS throw + result creation exist independently in BOTH create
+  // helpers, so both need coverage). Mirrors the reuse-path mock conventions
+  // of the createPostJobForExistingMedia block above (mediaItem findUnique
+  // feeds both the pre-check and the in-transaction locked re-check; the
+  // $transaction mock at the top of this file replays the callback against
+  // the same mocked client, with $executeRaw as a plain vi.fn()).
+  beforeEach(() => {
+    findUniqueMock.mockReset();
+    mediaItemUpdateMock.mockReset();
+    findManyConnectionsMock.mockReset();
+    postJobCreateMock.mockReset();
+    postJobResultCreateMock.mockReset();
+
+    findUniqueMock.mockResolvedValue(makeMediaItem());
+    mediaItemUpdateMock.mockResolvedValue(makeMediaItem());
+    postJobCreateMock.mockResolvedValue({ id: "job-1" });
+    postJobResultCreateMock.mockImplementation((args: { data: { platform: string } }) =>
+      Promise.resolve({ id: `result-${args.data.platform}` }),
+    );
+  });
+
+  it("targetPlatforms narrows the reuse fan-out to only the matching connection", async () => {
+    findManyConnectionsMock.mockResolvedValue([
+      makeConnection({ id: "conn-yt", platform: "youtube" }),
+      makeConnection({ id: "conn-tt", platform: "tiktok" }),
+    ]);
+
+    const result = await createPostJobForExistingMedia({
+      userId: "user-1",
+      mediaItemId: "media-1",
+      baseCaption: "hello",
+      targetPlatforms: ["youtube"],
+    });
+
+    expect(postJobResultCreateMock).toHaveBeenCalledTimes(1);
+    expect(postJobResultCreateMock).toHaveBeenCalledWith({
+      data: {
+        postJobId: "job-1",
+        platform: "youtube",
+        socialConnectionId: "conn-yt",
+        status: "pending",
+      },
+    });
+    expect(result.resultIds).toEqual(["result-youtube"]);
+  });
+
+  it("throws NO_CONNECTIONS when targetPlatforms excludes every connected platform (reuse path)", async () => {
+    findManyConnectionsMock.mockResolvedValue([
+      makeConnection({ id: "conn-yt", platform: "youtube" }),
+    ]);
+
+    await expect(
+      createPostJobForExistingMedia({
+        userId: "user-1",
+        mediaItemId: "media-1",
+        baseCaption: "hello",
+        targetPlatforms: ["x"],
+      }),
+    ).rejects.toThrow("NO_CONNECTIONS");
+
+    // The throw happens before the transaction, so nothing was written: no
+    // job row, no result rows, and the media item wasn't touched either.
+    expect(postJobCreateMock).not.toHaveBeenCalled();
+    expect(postJobResultCreateMock).not.toHaveBeenCalled();
+    expect(mediaItemUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("targetPlatforms undefined creates a result for every connection (legacy reuse behavior preserved)", async () => {
+    findManyConnectionsMock.mockResolvedValue([
+      makeConnection({ id: "conn-x", platform: "x" }),
+      makeConnection({ id: "conn-yt", platform: "youtube" }),
+    ]);
+
+    const result = await createPostJobForExistingMedia({
+      userId: "user-1",
+      mediaItemId: "media-1",
+      baseCaption: "hello",
+    });
+
+    expect(postJobResultCreateMock).toHaveBeenCalledTimes(2);
+    expect(result.resultIds).toEqual(["result-x", "result-youtube"]);
+  });
+});
+
 describe("buildPublishMetadataSnapshot (review B1)", () => {
   const yt = { privacyStatus: "private" } as const;
   const tt = { privacyLevel: "SELF_ONLY", disableComment: false, disableDuet: false, disableStitch: false };
