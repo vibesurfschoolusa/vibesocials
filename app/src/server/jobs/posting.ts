@@ -502,15 +502,9 @@ export async function prepareDeferredPostJobDispatch(
     // publishToAllPlatforms' no-connections path). §6.6. Covers both "no
     // connections at all" and "connections exist but none match the chosen
     // targetPlatforms" (Task 7).
-    // KNOWN GAP (Phase 6 review §5, deferred v1): this failure fires NO
-    // post-outcome email — a scheduled post that fails here (user disconnected
-    // everything before it fired) is exactly the "silent 3am failure" the
-    // notifications feature advertises. A real fix must (a) emit
-    // `notification.requested` from the caller's NO_CONNECTIONS branch AND (b)
-    // teach buildPostOutcomeEmail an empty-results = "failed, no platforms"
-    // subject (today empty results reads as a neutral "finished processing").
-    // Platform-level scheduled failures DO notify (they route through
-    // publishToAllPlatforms). Tracked as a follow-up.
+    // The scheduled scanner emits notification.requested for this failure
+    // (see inngest-functions.ts) and buildPostOutcomeEmail has a dedicated
+    // empty-results-failed subject.
     await prisma.postJob.update({
       where: { id: postJobId },
       data: { status: "failed" },

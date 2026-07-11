@@ -1,4 +1,4 @@
-import type { Platform, PostJobResultStatus } from "@prisma/client";
+import type { Platform, PostJobResultStatus, PostJobStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
 import { platformLabel } from "@/lib/platforms";
@@ -56,6 +56,14 @@ export interface PostOutcomeResultSummary {
 
 export interface BuildPostOutcomeEmailParams {
   results: PostOutcomeResultSummary[];
+  /**
+   * PostJob.status. Optional and consulted ONLY by the zero-results branch
+   * below (Task 9: a scheduled post that fires with no eligible connections
+   * is marked `failed` with zero PostJobResult rows) — every other branch is
+   * derived purely from `results`, so existing callers that never pass it
+   * keep the pre-existing neutral "finished processing" behavior.
+   */
+  status?: PostJobStatus;
   /** `process.env.NEXTAUTH_URL`. Omit/null to render the email with no link. */
   appBaseUrl?: string | null;
   postJobId: string;
@@ -115,27 +123,51 @@ function renderResultRow(result: PostOutcomeResultSummary): string {
  */
 export function buildPostOutcomeEmail({
   results,
+  status,
   appBaseUrl,
   postJobId,
 }: BuildPostOutcomeEmailParams): PostOutcomeEmail {
+  // Omitted cleanly (no dead link, no crash) when no base URL is available.
+  // Trim a trailing slash so a NEXTAUTH_URL like "https://host/" doesn't yield
+  // "https://host//activity" (review Minor #4). Computed once — every branch
+  // below shares it.
+  const link = appBaseUrl
+    ? `<p><a href="${escapeHtml(appBaseUrl.replace(/\/+$/, ""))}/activity">View in Activity</a></p>`
+    : "";
+  const reference = `<p style="color:#888888;font-size:12px;">Reference: ${escapeHtml(postJobId)}</p>`;
+
+  // Task 9 (Phase-6 review gap close): a scheduled post that fires with zero
+  // eligible connections is marked `failed` with NO PostJobResult rows at
+  // all, so — left unhandled — it falls straight through to the neutral
+  // "finished processing" subject below and silently under-reports a real
+  // failure. Any OTHER empty-results status (e.g. a job caught mid-flight)
+  // keeps that pre-existing neutral copy; only `failed` gets this dedicated
+  // subject/body.
+  if (results.length === 0 && status === "failed") {
+    const subject = "Your scheduled post couldn't be published";
+    const html = [
+      "<div>",
+      `<h1>${escapeHtml(subject)}</h1>`,
+      "<p>This post had no connected platforms when it ran, so nothing was published. Connect a platform in Settings, then create the post again.</p>",
+      link,
+      reference,
+      "</div>",
+    ].join("");
+    return { subject, html };
+  }
+
   const succeededCount = results.filter((r) => r.status === "success").length;
   const failedCount = results.filter((r) => r.status === "failed").length;
   const subject = buildSubject(succeededCount, failedCount, results.length);
 
   const rows = results.map(renderResultRow).join("");
-  // Omitted cleanly (no dead link, no crash) when no base URL is available.
-  // Trim a trailing slash so a NEXTAUTH_URL like "https://host/" doesn't yield
-  // "https://host//activity" (review Minor #4).
-  const link = appBaseUrl
-    ? `<p><a href="${escapeHtml(appBaseUrl.replace(/\/+$/, ""))}/activity">View in Activity</a></p>`
-    : "";
 
   const html = [
     "<div>",
     `<h1>${escapeHtml(subject)}</h1>`,
     `<ul>${rows}</ul>`,
     link,
-    `<p style="color:#888888;font-size:12px;">Reference: ${escapeHtml(postJobId)}</p>`,
+    reference,
     "</div>",
   ].join("");
 
@@ -183,6 +215,10 @@ export async function deliverPostOutcomeNotification({
       prisma.postJob.findUnique({
         where: { id: postJobId },
         select: {
+          // Task 9: needed so buildPostOutcomeEmail can tell a
+          // zero-eligible-connections `failed` job apart from any other
+          // empty-results state.
+          status: true,
           results: {
             // Only what buildPostOutcomeEmail renders — externalPostId was
             // selected but never read (review Minor #3), so it's dropped.
@@ -208,6 +244,7 @@ export async function deliverPostOutcomeNotification({
 
     const { subject, html } = buildPostOutcomeEmail({
       results: postJob.results,
+      status: postJob.status,
       appBaseUrl: process.env.NEXTAUTH_URL || null,
       postJobId,
     });

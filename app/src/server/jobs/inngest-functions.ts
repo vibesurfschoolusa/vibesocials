@@ -627,7 +627,12 @@ export const retryPlatforms = inngest.createFunction(
  *    none exist yet), so a retry never duplicates result rows or the live post.
  *  - `step.sendEvent` is a memoized step, so a completed send is never re-sent.
  * A job with no connections at run time is marked `failed` inside the
- * materialize step (mirrors the existing no-connections path).
+ * materialize step (mirrors the existing no-connections path). Task 9: that
+ * NO_CONNECTIONS branch also notifies the owner — `owner-{id}` (memoized
+ * lookup) and `notify-noconn-{id}` (memoized send) keep that exactly-once
+ * too, and it reuses the same `notification.requested` → `sendNotification`
+ * → `deliverPostOutcomeNotification` path every other outcome uses, so the
+ * user's `notifyOnPostComplete` preference gates it identically.
  */
 export const scheduledPostScanner = inngest.createFunction(
   { id: "scheduled-post-scanner", name: "Scheduled Post Scanner" },
@@ -662,6 +667,20 @@ export const scheduledPostScanner = inngest.createFunction(
           dispatched += 1;
         } else if (prep.reason === "NO_CONNECTIONS") {
           failedNoConnections += 1;
+          // Phase-6 gap closed: the unattended "no platforms connected" failure now
+          // notifies like every other outcome. Memoized step => exactly-once.
+          const owner = await step.run(`owner-${postJobId}`, async () => {
+            return prisma.postJob.findUnique({
+              where: { id: postJobId },
+              select: { userId: true },
+            });
+          });
+          if (owner) {
+            await step.sendEvent(`notify-noconn-${postJobId}`, {
+              name: "notification.requested",
+              data: { userId: owner.userId, postJobId },
+            });
+          }
         }
       } catch (error) {
         // The job stays in_progress (a rare, no-known-trigger case); surfaced

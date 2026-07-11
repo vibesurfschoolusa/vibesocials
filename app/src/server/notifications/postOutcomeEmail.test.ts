@@ -175,6 +175,37 @@ describe("buildPostOutcomeEmail", () => {
     expect(email.subject).toBe("Your post has finished processing");
     expect(email.html).toContain("<ul></ul>");
   });
+
+  // Task 9 (Phase-6 review gap close): a scheduled post that fires with zero
+  // eligible connections is marked `failed` with NO PostJobResult rows at
+  // all, so — unhandled — it would read as the neutral "finished processing"
+  // case above, silently under-reporting a real failure.
+  it("produces a distinct couldn't-be-published subject and body for a failed job with zero results", () => {
+    const email = buildPostOutcomeEmail({
+      results: [],
+      status: "failed",
+      postJobId: "job-5",
+    });
+
+    expect(email.subject).toBe("Your scheduled post couldn't be published");
+    expect(email.subject).toContain("couldn't be published");
+    expect(email.html).toContain("no connected platforms");
+    expect(email.html).toContain("Settings");
+    expect(email.html).toContain(
+      "This post had no connected platforms when it ran, so nothing was published. Connect a platform in Settings, then create the post again.",
+    );
+  });
+
+  it("keeps the neutral finished-processing subject for a zero-results job that is NOT failed (e.g. completed)", () => {
+    const email = buildPostOutcomeEmail({
+      results: [],
+      status: "completed",
+      postJobId: "job-6",
+    });
+
+    expect(email.subject).toBe("Your post has finished processing");
+    expect(email.html).toContain("<ul></ul>");
+  });
 });
 
 describe("deliverPostOutcomeNotification", () => {
@@ -207,6 +238,27 @@ describe("deliverPostOutcomeNotification", () => {
     const arg = sendEmailMock.mock.calls[0][0] as { to: string; subject: string; html: string };
     expect(arg.to).toBe("user@example.com");
     expect(arg.html).toContain("https://app.example.com/activity");
+  });
+
+  // Task 9: end-to-end check that the DB `select` actually carries
+  // PostJob.status through to buildPostOutcomeEmail — the pure-function unit
+  // tests above cover the branch logic, this covers the wiring that makes it
+  // reachable from the real `notification.requested` → deliver flow.
+  it("sends the couldn't-be-published email for a failed job with zero results (Task 9)", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    findUniqueUserMock.mockResolvedValue({
+      email: "user@example.com",
+      notifyOnPostComplete: true,
+    });
+    findUniquePostJobMock.mockResolvedValue({ status: "failed", results: [] });
+
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
+
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    const arg = sendEmailMock.mock.calls[0][0] as { subject: string; html: string };
+    expect(arg.subject).toBe("Your scheduled post couldn't be published");
+    expect(arg.html).toContain("no connected platforms");
+    expect(arg.html).toContain("Settings");
   });
 
   it("does not send when the user's preference is off", async () => {
