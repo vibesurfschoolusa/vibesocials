@@ -37,7 +37,7 @@ const PLATFORMS: PlatformConfig[] = [
     href: "/api/auth/tiktok/start",
     icon: Music2,
     description:
-      "Connect your TikTok account so Vibe Socials can upload videos to your inbox.",
+      "Connect your TikTok account. Videos are sent to your TikTok inbox as drafts — you finish and publish them in the TikTok app.",
   },
   {
     key: "youtube",
@@ -48,7 +48,7 @@ const PLATFORMS: PlatformConfig[] = [
   },
   {
     key: "x",
-    label: "X (Twitter)",
+    label: "X",
     href: "/api/auth/x/start",
     icon: Twitter,
     description: "Connect your X (Twitter) account to post tweets with media.",
@@ -69,7 +69,7 @@ const PLATFORMS: PlatformConfig[] = [
   },
   {
     key: "google_business_profile",
-    label: "Google Business Profile (Maps)",
+    label: "Google Business Profile",
     href: "/api/auth/google_business_profile/start",
     icon: MapPin,
     description:

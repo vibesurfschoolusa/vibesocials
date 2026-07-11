@@ -52,7 +52,7 @@ export function ReplyForm({
       />
       <div className="flex gap-3">
         <Button type="button" onClick={onSubmit} loading={submitting}>
-          {submitting ? "Posting..." : "Post reply"}
+          {submitting ? "Posting…" : "Post reply"}
         </Button>
         <Button type="button" variant="outline" onClick={onCancel} disabled={submitting}>
           Cancel

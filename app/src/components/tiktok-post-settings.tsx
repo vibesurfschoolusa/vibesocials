@@ -130,9 +130,9 @@ export function TikTokPostSettings({
           <option value="">Select privacy level...</option>
           {creatorInfo.privacyLevelOptions.map((option) => (
             <option key={option} value={option}>
-              {option === "PUBLIC_TO_EVERYONE" && "Public (Everyone)"}
+              {option === "PUBLIC_TO_EVERYONE" && "Public (everyone)"}
               {option === "MUTUAL_FOLLOW_FRIENDS" && "Friends"}
-              {option === "SELF_ONLY" && "Private (Only Me)"}
+              {option === "SELF_ONLY" && "Private (only me)"}
               {option === "FOLLOWER_OF_CREATOR" && "Followers"}
             </option>
           ))}
@@ -279,7 +279,7 @@ export function TikTokPostSettings({
 
             {!canPublish && (
               <Alert variant="warning" className="p-2 text-xs">
-                You must select at least one option (Your Brand or Branded Content) to proceed
+                You must select at least one option (Your brand or Branded content) to proceed
               </Alert>
             )}
           </div>

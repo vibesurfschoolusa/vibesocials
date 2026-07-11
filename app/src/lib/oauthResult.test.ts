@@ -53,7 +53,7 @@ describe("describeOAuthResult — real callback-route codes", () => {
   it("maps every platform's real *_connected success code to its label", () => {
     expect(describeOAuthResult({ error: null, success: "facebook_page_connected" })).toEqual({
       variant: "success",
-      message: "Facebook connected.",
+      message: "Facebook Page connected.",
     });
     expect(
       describeOAuthResult({ error: null, success: "google_business_profile_connected" }),

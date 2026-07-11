@@ -21,7 +21,16 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { status } = useSession();
 
-  const showShell = !isPublicRoute(pathname) && status === "authenticated";
+  // Task 10 — show the chrome optimistically while the session resolves, to
+  // avoid a bare-then-shell flash on hard loads of protected routes. Safe
+  // because every non-public route except "/" server-redirects unauthenticated
+  // users before this ever mounts (Tasks 3/4 + settings); "/" keeps its exact
+  // prior behavior (bare while loading/signed-out, shell only once
+  // authenticated) since it's excluded from `isAppRoute` and hosts both the
+  // signed-out Landing and the signed-in Dashboard.
+  const isAppRoute = !isPublicRoute(pathname) && pathname !== "/";
+  const showShell =
+    status === "authenticated" ? !isPublicRoute(pathname) : isAppRoute && status === "loading";
 
   return (
     <ToastProvider>

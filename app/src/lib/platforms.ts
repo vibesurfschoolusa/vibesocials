@@ -10,7 +10,7 @@ export const PLATFORM_LABELS: Record<Platform, string> = {
   instagram: "Instagram",
   x: "X",
   linkedin: "LinkedIn",
-  facebook_page: "Facebook",
+  facebook_page: "Facebook Page",
   google_business_profile: "Google Business Profile",
 };
 
