@@ -165,7 +165,7 @@ test.describe(
           .getByRole("group", { name: "When to publish" })
           .getByRole("button", { name: "Publish now" })
           .click();
-        await form.getByRole("button", { name: "Create post" }).click();
+        await form.getByRole("button", { name: "Publish post" }).click();
 
         // Alert `title` renders as styled text, not a heading (see
         // src/components/ui/alert.tsx) — match on visible text instead.

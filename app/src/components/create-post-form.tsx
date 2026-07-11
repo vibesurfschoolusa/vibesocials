@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useRef, useCallback, Suspense } from "rea
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { upload } from '@vercel/blob/client';
-import { Sparkles } from "lucide-react";
+import { PlugZap, Sparkles } from "lucide-react";
 import type { Platform } from "@prisma/client";
 import { PlatformPreviewList } from "./composer/platform-preview";
 import { LocationAutocomplete } from "./location-autocomplete";
@@ -13,12 +13,14 @@ import { YouTubePostSettings } from "./youtube-post-settings";
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { fieldBaseClasses } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { useConnections } from "@/hooks/useConnections";
+import { generateBlobKey } from "@/lib/blobKey";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { cn } from "@/lib/cn";
 import type { MediaItemDto } from "@/lib/mediaDto";
@@ -93,12 +95,6 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${sizes[i]}`;
 }
 
-function generateBlobKey(file: File): string {
-  const safeName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, "_");
-  const random = Math.random().toString(36).slice(2, 10);
-  return `${Date.now()}-${random}-${safeName}`;
-}
-
 interface CreatePostFormInnerProps {
   /**
    * Roadmap Phase 7 — the posting user's footer settings (companyWebsite /
@@ -154,6 +150,10 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
   // The mode that produced the current success banner (so it reads correctly
   // for now / schedule / draft).
   const [submittedMode, setSubmittedMode] = useState<PublishMode>("now");
+  // Scrolled into view whenever the success banner appears (effect below) so
+  // a submit from further down the form doesn't leave the confirmation
+  // off-screen.
+  const successRef = useRef<HTMLDivElement>(null);
 
   // Local object-URL preview for the currently attached file. Created/revoked
   // by the effect below so we never leak object URLs.
@@ -174,7 +174,6 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
     promise: Promise<UploadedBlobInfo>;
   } | null>(null);
 
-  const [hasTikTokConnection, setHasTikTokConnection] = useState(false);
   const [tiktokMetadata, setTiktokMetadata] = useState<TikTokPostMetadata>({
     privacyLevel: "",
     disableComment: true,
@@ -182,37 +181,34 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
     disableStitch: true,
   });
   const [tiktokPrivacyError, setTiktokPrivacyError] = useState<string | null>(null);
+  const [tiktokCommercialEnabled, setTiktokCommercialEnabled] = useState(false);
 
-  const [hasYouTubeConnection, setHasYouTubeConnection] = useState(false);
   const [youtubeMetadata, setYoutubeMetadata] = useState<YouTubePostMetadata>({
     privacyStatus: "unlisted",
   });
 
-  // Roadmap Phase 7 — connection state for the OTHER platforms (x, instagram,
-  // linkedin, facebook_page, google_business_profile), reusing the same
-  // read-only `GET /api/connections` the dashboard's connection-health widget
-  // already calls (via this shared hook) rather than adding a new endpoint.
-  // TikTok/YouTube keep using their own existing hasTikTokConnection /
-  // hasYouTubeConnection checks below (unchanged) so the live preview never
-  // disagrees with the TikTok/YouTube settings panels already gated on them.
+  // Roadmap Phase 7 / Task 6 — single source of truth for connection state:
+  // the same read-only `GET /api/connections` the dashboard's
+  // connection-health widget calls (via this shared hook). `connectionsResolved`
+  // distinguishes "still loading" from "loaded and empty" for the
+  // zero-connection gate below; TikTok/YouTube no longer run their own
+  // ad-hoc fetches to determine connectedness.
   const { connections } = useConnections();
-
-  useEffect(() => {
-    checkTikTokConnection();
-    checkYouTubeConnection();
-  }, []);
+  const connectionsResolved = connections !== null;
+  const hasTikTokConnection =
+    connections?.some((c) => c.platform === "tiktok" && c.connected) ?? false;
+  const hasYouTubeConnection =
+    connections?.some((c) => c.platform === "youtube" && c.connected) ?? false;
 
   // Roadmap Phase 7 — platforms to show a live preview card for: connected
-  // platforms only, in the app's standard display order. tiktok/youtube read
-  // the existing flags; every other platform reads the `useConnections()`
-  // fetch above.
-  const connectedPlatforms = useMemo(() => {
-    return PLATFORM_ORDER.filter((platform) => {
-      if (platform === "tiktok") return hasTikTokConnection;
-      if (platform === "youtube") return hasYouTubeConnection;
-      return connections?.some((c) => c.platform === platform && c.connected) ?? false;
-    });
-  }, [connections, hasTikTokConnection, hasYouTubeConnection]);
+  // platforms only, in the app's standard display order.
+  const connectedPlatforms = useMemo(
+    () =>
+      PLATFORM_ORDER.filter((platform) =>
+        connections?.some((c) => c.platform === platform && c.connected),
+      ),
+    [connections],
+  );
 
   // Roadmap Phase 2 — load the reuse target, if any. Runs once per distinct
   // `reuseMediaItemId` (a fresh navigation from the media library always
@@ -281,6 +277,15 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
     }
   }, [tiktokMetadata.privacyLevel]);
 
+  // Scroll the success banner into view on submit — the form can be tall
+  // enough that a submit from near the bottom leaves the confirmation
+  // off-screen otherwise. Respects the user's reduced-motion preference.
+  useEffect(() => {
+    if (!showSuccess) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    successRef.current?.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
+  }, [showSuccess]);
+
   // Roadmap Phase 2 — leave reuse mode and fall back to the normal upload
   // flow. The `?mediaItemId` query param stays in the URL (harmless; the
   // fetch effect above only re-runs if that param's VALUE changes), but
@@ -291,29 +296,6 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
     setReusePerPlatformOverrides(null);
     setUploadCaption("");
   }, []);
-
-  async function checkTikTokConnection() {
-    try {
-      const response = await fetch("/api/tiktok/creator-info");
-      setHasTikTokConnection(response.ok);
-    } catch {
-      setHasTikTokConnection(false);
-    }
-  }
-
-  async function checkYouTubeConnection() {
-    try {
-      const response = await fetch("/api/connections/youtube");
-      if (!response.ok) {
-        setHasYouTubeConnection(false);
-        return;
-      }
-      const data = (await response.json().catch(() => null)) as { connected?: boolean } | null;
-      setHasYouTubeConnection(Boolean(data?.connected));
-    } catch {
-      setHasYouTubeConnection(false);
-    }
-  }
 
   // Uploads `file` to Vercel Blob at most once. Concurrent/subsequent calls
   // for the SAME file (by reference) reuse the in-flight or already-resolved
@@ -445,10 +427,21 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
       return;
     }
 
-    // Roadmap Phase 5 — resolve the deferred (schedule/draft) fields once for
-    // both the reuse and upload flows. TikTok privacy is only required for an
-    // immediate post: scheduled/draft jobs don't persist per-post TikTok/YouTube
-    // metadata, so they publish with each client's safe default.
+    const tiktokCommercialBlocked =
+      hasTikTokConnection &&
+      tiktokCommercialEnabled &&
+      !tiktokMetadata.brandedContent &&
+      !tiktokMetadata.brandOrganic;
+    if (tiktokCommercialBlocked) {
+      setUploadError(
+        'Select "Your brand" or "Branded content" (or turn off the promotional toggle) before posting to TikTok.',
+      );
+      return;
+    }
+
+    // Deferred (schedule/draft) jobs persist tiktok/youtube metadata on the
+    // job (PostJob.publishMetadata) and replay it at publish — see
+    // server/jobs/posting.ts.
     const deferred: DeferredPostFields = {};
     if (publishMode === "draft") {
       deferred.draft = true;
@@ -556,7 +549,11 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
         | null;
 
       if (!response.ok) {
-        toast.error((data as { error?: string } | null)?.error ?? "Failed to create post.");
+        toast.error(
+          (data as { message?: string; error?: string } | null)?.message ??
+            (data as { error?: string } | null)?.error ??
+            "Failed to create post.",
+        );
         setUploadLoading(false);
         return;
       }
@@ -589,6 +586,7 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
         disableDuet: true,
         disableStitch: true,
       });
+      setTiktokCommercialEnabled(false);
       setYoutubeMetadata({ privacyStatus: "unlisted" });
       setUploadLoading(false);
     } catch {
@@ -654,35 +652,50 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
     <Card className="p-6">
       <form onSubmit={handleUploadSubmit} className="space-y-5">
         {showSuccess && (
-          <Alert
-            variant="success"
-            title={
-              submittedMode === "draft"
-                ? "Draft saved"
-                : submittedMode === "schedule"
-                  ? "Post scheduled"
-                  : "Post queued"
-            }
-          >
-            <div className="flex flex-col items-start gap-2">
-              <p>
-                {submittedMode === "draft"
-                  ? "Your draft is saved. Publish or schedule it any time from the Queue."
+          <div ref={successRef}>
+            <Alert
+              variant="success"
+              title={
+                submittedMode === "draft"
+                  ? "Draft saved"
                   : submittedMode === "schedule"
-                    ? "We'll publish this at the time you chose. Edit or cancel it from the Queue until then."
-                    : "We're publishing to your connected platforms. Per-platform results appear in Activity."}
-              </p>
-              <Link
-                href={submittedMode === "now" ? "/activity" : "/queue"}
-                className={buttonVariants({ variant: "outline", size: "sm" })}
-              >
-                {submittedMode === "now" ? "View activity" : "View queue"}
-              </Link>
-            </div>
-          </Alert>
+                    ? "Post scheduled"
+                    : "Post queued"
+              }
+            >
+              <div className="flex flex-col items-start gap-2">
+                <p>
+                  {submittedMode === "draft"
+                    ? "Your draft is saved. Publish or schedule it any time from the Queue."
+                    : submittedMode === "schedule"
+                      ? "We'll publish this at the time you chose. Edit or cancel it from the Queue until then."
+                      : "We're publishing to your connected platforms. Per-platform results appear in Activity."}
+                </p>
+                <Link
+                  href={submittedMode === "now" ? "/activity" : "/queue"}
+                  className={buttonVariants({ variant: "outline", size: "sm" })}
+                >
+                  {submittedMode === "now" ? "View activity" : "View queue"}
+                </Link>
+              </div>
+            </Alert>
+          </div>
         )}
 
         {uploadError && <Alert variant="danger">{uploadError}</Alert>}
+
+        {connectionsResolved && connectedPlatforms.length === 0 ? (
+          <EmptyState
+            icon={<PlugZap />}
+            title="Connect a platform to start posting"
+            description="Vibe Socials publishes to the platforms you've connected. Connect at least one in Settings, then come back here."
+            action={
+              <Link href="/settings" className={buttonVariants({ variant: "primary" })}>
+                Go to connections
+              </Link>
+            }
+          />
+        ) : null}
 
         <div className="space-y-1.5">
           {reuseItem ? (
@@ -831,7 +844,7 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
                   checked={autoCaptionEnabled}
                   onChange={(event) => setAutoCaptionEnabled(event.target.checked)}
                 />
-                <span>Auto-caption from media (on attach)</span>
+                <span>Generate a caption when media is added</span>
               </label>
             </div>
             <div className="flex items-center gap-2">
@@ -844,7 +857,7 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
                 disabled={autoCaptionLoading || !uploadedBlob}
               >
                 {!autoCaptionLoading && <Sparkles className="h-4 w-4" aria-hidden />}
-                Auto Caption
+                Caption from media
               </Button>
               <Button
                 type="button"
@@ -855,7 +868,7 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
                 disabled={enhancingCaption || !uploadCaption.trim()}
               >
                 {!enhancingCaption && <Sparkles className="h-4 w-4" aria-hidden />}
-                AI Enhance
+                Enhance caption
               </Button>
             </div>
           </div>
@@ -891,6 +904,8 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
             onChange={setTiktokMetadata}
             isVideo={activeMimeType.startsWith("video/")}
             privacyError={tiktokPrivacyError}
+            commercialContentEnabled={tiktokCommercialEnabled}
+            onCommercialContentEnabledChange={setTiktokCommercialEnabled}
           />
         )}
         {hasYouTubeConnection && activeMimeType && (
@@ -967,18 +982,22 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
           )}
 
           <div className="flex items-center gap-3">
-            <Button type="submit" loading={uploadLoading}>
+            <Button
+              type="submit"
+              loading={uploadLoading}
+              disabled={connectionsResolved && connectedPlatforms.length === 0}
+            >
               {uploadLoading
                 ? publishMode === "draft"
                   ? "Saving…"
                   : publishMode === "schedule"
                     ? "Scheduling…"
-                    : "Creating post…"
+                    : "Publishing…"
                 : publishMode === "draft"
                   ? "Save draft"
                   : publishMode === "schedule"
                     ? "Schedule post"
-                    : "Create post"}
+                    : "Publish post"}
             </Button>
           </div>
         </div>
