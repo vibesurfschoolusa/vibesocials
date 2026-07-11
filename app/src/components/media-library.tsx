@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { upload } from "@vercel/blob/client";
 import {
   File as FileIcon,
   ImageOff,
@@ -28,6 +29,9 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
+import { generateBlobKey } from "@/lib/blobKey";
+import { daysUntilRemoval } from "@/lib/mediaDto";
+import { RETENTION_DAYS } from "@/server/jobs/mediaRetention";
 
 interface MediaItemDto {
   id: string;
@@ -37,6 +41,7 @@ interface MediaItemDto {
   baseCaption: string;
   storageLocation: string;
   createdAt: string;
+  lastUsedAt: string | null;
 }
 
 interface ListResponse {
@@ -120,6 +125,10 @@ interface MediaCardProps {
 }
 
 function MediaCard({ item, onReuse, onDeleteRequest }: MediaCardProps) {
+  // null for a never-posted upload (retention-exempt — see
+  // server/jobs/mediaRetention.ts); 0 means "eligible for removal now".
+  const retentionDays = daysUntilRemoval(item.lastUsedAt, RETENTION_DAYS, new Date());
+
   return (
     <Card className="overflow-hidden">
       <MediaThumbnail item={item} />
@@ -137,6 +146,12 @@ function MediaCard({ item, onReuse, onDeleteRequest }: MediaCardProps) {
             <time dateTime={item.createdAt}>
               {new Date(item.createdAt).toLocaleDateString()}
             </time>
+            {retentionDays !== null && (
+              <>
+                {" · "}
+                {retentionDays === 0 ? "auto-removes soon" : `auto-removes in ${retentionDays} days`}
+              </>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -177,6 +192,9 @@ export function MediaLibrary() {
   const [file, setFile] = useState<File | null>(null);
   const [baseCaption, setBaseCaption] = useState("");
   const [uploading, setUploading] = useState(false);
+  // 0-100 while a Blob upload is in flight; null when idle. Mirrors
+  // create-post-form.tsx's identically-named upload-progress state.
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
 
   // Delete confirmation (Roadmap Phase 2). `deleteTarget` doubles as the
@@ -230,16 +248,34 @@ export function MediaLibrary() {
       return;
     }
 
+    // Client-side guard first, ahead of the (bandwidth-costing) upload —
+    // mirrors the server-side check in POST /api/media so a mismatched file
+    // never reaches the blob store.
+    if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) {
+      toast.error("Only image or video files can be added to the library.");
+      return;
+    }
+
     setUploading(true);
+    setUploadProgress(0);
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("baseCaption", baseCaption);
+      const blob = await upload(generateBlobKey(file), file, {
+        access: "public",
+        handleUploadUrl: "/api/upload",
+        onUploadProgress: (progressEvent) => setUploadProgress(progressEvent.percentage),
+      });
 
       const response = await fetch("/api/media", {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          blobUrl: blob.url,
+          filename: file.name,
+          mimeType: file.type,
+          sizeBytes: file.size,
+          baseCaption,
+        }),
       });
 
       const data = (await response.json().catch(() => null)) as
@@ -249,7 +285,6 @@ export function MediaLibrary() {
 
       if (!response.ok) {
         toast.error((data as { error?: string } | null)?.error ?? "Failed to upload media.");
-        setUploading(false);
         return;
       }
 
@@ -259,10 +294,11 @@ export function MediaLibrary() {
       setBaseCaption("");
       setFileInputKey((key) => key + 1);
       toast.success("Media uploaded successfully.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Unexpected error while uploading media.");
+    } finally {
       setUploading(false);
-    } catch (_err) {
-      toast.error("Unexpected error while uploading media.");
-      setUploading(false);
+      setUploadProgress(null);
     }
   }
 
@@ -314,7 +350,9 @@ export function MediaLibrary() {
         <CardHeader>
           <CardTitle className="text-base">Upload new media</CardTitle>
           <CardDescription>
-            Add a video or image once, then reuse it across posts and platforms.
+            Add a video or image once, then reuse it across posts. Items you&apos;ve posted are
+            removed automatically 30 days after their last use; never-posted uploads stay until
+            you delete them.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -331,6 +369,27 @@ export function MediaLibrary() {
                   setFile(nextFile);
                 }}
               />
+              {uploadProgress !== null && (
+                <div className="mt-2 space-y-1">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>Uploading&hellip;</span>
+                    <span>{Math.round(uploadProgress)}%</span>
+                  </div>
+                  <div
+                    role="progressbar"
+                    aria-label="Upload progress"
+                    aria-valuenow={Math.round(uploadProgress)}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    className="h-2 w-full overflow-hidden rounded-full bg-muted"
+                  >
+                    <div
+                      className="h-full rounded-full bg-primary transition-all duration-200"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="media-caption">Base caption</Label>

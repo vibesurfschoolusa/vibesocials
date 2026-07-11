@@ -2,10 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { logger } from "@/lib/logger";
 import { toMediaItemDto } from "@/lib/mediaDto";
-import { saveUploadedFile } from "@/server/storage";
-import type { Platform } from "@prisma/client";
 
 export async function GET(_request: Request) {
   const user = await getCurrentUser();
@@ -29,6 +26,7 @@ export async function GET(_request: Request) {
       baseCaption: true,
       perPlatformOverrides: true,
       createdAt: true,
+      lastUsedAt: true,
     },
   });
 
@@ -43,62 +41,58 @@ export async function POST(request: Request) {
   }
 
   const contentType = request.headers.get("content-type") || "";
-  if (!contentType.includes("multipart/form-data")) {
+  if (!contentType.includes("application/json")) {
     return NextResponse.json(
-      { error: "Content-Type must be multipart/form-data" },
+      { error: "Content-Type must be application/json" },
       { status: 400 },
     );
   }
 
-  const formData = await request.formData();
-
-  const file = formData.get("file");
-  const baseCaptionRaw = formData.get("baseCaption");
-  const overridesRaw = formData.get("perPlatformOverrides");
-
-  if (!(file instanceof File)) {
-    return NextResponse.json({ error: "file is required" }, { status: 400 });
-  }
-
-  const baseCaption =
-    typeof baseCaptionRaw === "string" ? baseCaptionRaw.trim() : "";
-
-  let perPlatformOverrides: Partial<Record<Platform, string>> | undefined;
-  if (typeof overridesRaw === "string" && overridesRaw.trim()) {
-    try {
-      const parsed = JSON.parse(overridesRaw) as Record<string, string>;
-      perPlatformOverrides = parsed as Partial<Record<Platform, string>>;
-    } catch {
-      return NextResponse.json(
-        { error: "Invalid perPlatformOverrides JSON" },
-        { status: 400 },
-      );
-    }
-  }
-
+  let body: {
+    blobUrl?: unknown; filename?: unknown; mimeType?: unknown;
+    sizeBytes?: unknown; baseCaption?: unknown;
+  };
   try {
-    const saved = await saveUploadedFile(user.id, file);
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
 
-    const mediaItem = await prisma.mediaItem.create({
-      data: {
-        userId: user.id,
-        storageLocation: saved.storageLocation,
-        originalFilename: saved.originalFilename,
-        mimeType: saved.mimeType,
-        sizeBytes: saved.sizeBytes,
-        baseCaption,
-        perPlatformOverrides: perPlatformOverrides
-          ? (perPlatformOverrides as unknown as Record<string, string>)
-          : undefined,
-      },
-    });
-
-    return NextResponse.json({ mediaItem }, { status: 201 });
-  } catch (error) {
-    logger.error("[POST /api/media] Unexpected error", { error, userId: user.id });
+  const blobUrl = typeof body.blobUrl === "string" ? body.blobUrl.trim() : "";
+  if (!blobUrl) {
+    return NextResponse.json({ error: "blobUrl is required" }, { status: 400 });
+  }
+  const mimeType = typeof body.mimeType === "string" ? body.mimeType : "";
+  if (!mimeType.startsWith("image/") && !mimeType.startsWith("video/")) {
     return NextResponse.json(
-      { error: "Failed to save media item" },
-      { status: 500 },
+      { error: "Only image or video files can be added to the library." },
+      { status: 400 },
     );
   }
+  const MAX_MEDIA_BYTES = 512 * 1024 * 1024;
+  const sizeBytes = typeof body.sizeBytes === "number" && Number.isFinite(body.sizeBytes)
+    ? body.sizeBytes
+    : 0;
+  if (sizeBytes <= 0 || sizeBytes > MAX_MEDIA_BYTES) {
+    return NextResponse.json(
+      { error: "File is too large (max 512 MB)." },
+      { status: 400 },
+    );
+  }
+  const filename = typeof body.filename === "string" && body.filename.trim()
+    ? body.filename.trim()
+    : "upload";
+  const baseCaption = typeof body.baseCaption === "string" ? body.baseCaption.trim() : "";
+
+  const mediaItem = await prisma.mediaItem.create({
+    data: {
+      userId: user.id,
+      storageLocation: blobUrl,
+      originalFilename: filename,
+      mimeType,
+      sizeBytes,
+      baseCaption,
+    },
+  });
+  return NextResponse.json({ mediaItem }, { status: 201 });
 }
