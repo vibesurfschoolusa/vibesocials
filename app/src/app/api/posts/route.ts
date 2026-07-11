@@ -78,6 +78,44 @@ export async function GET(request: Request) {
       },
     });
 
+    // Roadmap Phase 8 (analytics): join the latest engagement snapshot per
+    // result. Scoped to the caller (SEC — a metric is only ever read by its
+    // owner) and joined by (platform, externalPostId) — the metric's DURABLE
+    // identity — so it stays correct even after a connection delete cascades the
+    // originating result away but leaves the metric row. YouTube-only in v1, so
+    // we only collect/join YouTube video ids. One extra bounded query.
+    const youtubeVideoIds = Array.from(
+      new Set(
+        jobs.flatMap((job) =>
+          job.results
+            .filter((result) => result.platform === "youtube" && result.externalPostId)
+            .map((result) => result.externalPostId as string),
+        ),
+      ),
+    );
+
+    const metricRows = youtubeVideoIds.length
+      ? await prisma.postMetric.findMany({
+          where: {
+            userId: user.id,
+            platform: "youtube",
+            externalPostId: { in: youtubeVideoIds },
+          },
+          // SEC-1: display fields only — never raw payload, id, userId, or the
+          // postJobResultId link.
+          select: {
+            externalPostId: true,
+            views: true,
+            likes: true,
+            comments: true,
+            shares: true,
+            fetchedAt: true,
+          },
+        })
+      : [];
+
+    const metricByVideoId = new Map(metricRows.map((row) => [row.externalPostId, row]));
+
     const payload: PostsResponse = {
       jobs: jobs.map((job) => ({
         id: job.id,
@@ -88,12 +126,27 @@ export async function GET(request: Request) {
         // editing them never mutates shared reused media; fall back to the
         // media item's caption for immediate/older jobs.
         caption: job.baseCaption ?? job.mediaItem?.baseCaption ?? null,
-        results: job.results.map((result) => ({
-          platform: result.platform,
-          status: result.status,
-          externalPostId: result.externalPostId,
-          errorMessage: result.errorMessage,
-        })),
+        results: job.results.map((result) => {
+          const metricRow =
+            result.platform === "youtube" && result.externalPostId
+              ? metricByVideoId.get(result.externalPostId)
+              : undefined;
+          return {
+            platform: result.platform,
+            status: result.status,
+            externalPostId: result.externalPostId,
+            errorMessage: result.errorMessage,
+            metric: metricRow
+              ? {
+                  views: metricRow.views,
+                  likes: metricRow.likes,
+                  comments: metricRow.comments,
+                  shares: metricRow.shares,
+                  fetchedAt: metricRow.fetchedAt.toISOString(),
+                }
+              : null,
+          };
+        }),
       })),
     };
 

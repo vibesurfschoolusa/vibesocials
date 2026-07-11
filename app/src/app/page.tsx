@@ -14,6 +14,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { RecentActivity } from "@/components/dashboard/recent-activity";
 import { ConnectionHealth } from "@/components/dashboard/connection-health";
+import { YouTubeMetricsSummary } from "@/components/dashboard/youtube-metrics-summary";
 
 export default function HomePage() {
   const { data: session, status } = useSession();
@@ -110,7 +111,9 @@ function Dashboard({ email }: { email: string }) {
       </div>
 
       <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+        <div className="space-y-6 lg:col-span-2">
+          {/* Roadmap Phase 8 — renders only once a YouTube post has fetched metrics. */}
+          <YouTubeMetricsSummary />
           <RecentActivity />
         </div>
         <div className="space-y-6">

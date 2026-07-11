@@ -13,6 +13,7 @@ import { cn } from "@/lib/cn";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import type { PostJobDTO } from "@/lib/postsDto";
 import { PlatformResultBadge } from "./platform-result";
+import { PostMetricStats } from "./post-metric-stats";
 
 // Exhaustive over PostJobStatus — adding an enum member (Roadmap Phase 5 added
 // draft/scheduled/cancelled) fails `tsc` here (TS2741) until it's listed, which
@@ -75,6 +76,17 @@ export function PostJobCard({ job }: { job: PostJobDTO }) {
 
   const status = JOB_STATUS_META[job.status];
   const results = orderResults(job.results);
+
+  // Roadmap Phase 8: a job fans out to one result per platform, so there is at
+  // most one YouTube result. Show its engagement stats once it succeeded (only
+  // then does it carry the externalPostId the metric is keyed on); the row shows
+  // "—" until the hourly sync cron fetches the counts.
+  const youtubeResult = results.find(
+    (result) =>
+      result.platform === "youtube" &&
+      result.status === "success" &&
+      Boolean(result.externalPostId),
+  );
 
   // A platform mid-retry displays as pending even though its stored result is
   // still `failed` until the background job finishes.
@@ -193,6 +205,8 @@ export function PostJobCard({ job }: { job: PostJobDTO }) {
           ))}
         </div>
       ) : null}
+
+      {youtubeResult ? <PostMetricStats metric={youtubeResult.metric} /> : null}
 
       {failedPlatforms.length > 0 ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">

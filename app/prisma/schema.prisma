@@ -157,6 +157,13 @@ model PostJobResult {
 
   postJob          PostJob          @relation(fields: [postJobId], references: [id], onDelete: Cascade)
   socialConnection SocialConnection @relation(fields: [socialConnectionId], references: [id], onDelete: Cascade)
+  // Roadmap Phase 8 (analytics). Back-relation for PostMetric.postJobResultId,
+  // which is onDelete:SetNull — so deleting this result NULLs the link but keeps
+  // the metric row (its durable identity is the denormalized userId/platform/
+  // externalPostId, not this FK). The metrics UI joins by (platform,
+  // externalPostId), NOT via this relation, so a retry that changes the result's
+  // externalPostId can leave >1 historical metric pointing here harmlessly.
+  metrics          PostMetric[]
 }
 
 // Fixed-window rate-limit counters (see src/lib/rateLimit.ts).
@@ -168,4 +175,56 @@ model RateLimitEntry {
   expiresAt DateTime
 
   @@index([expiresAt])
+}
+
+// Roadmap Phase 8 (analytics — post performance, §7.3). Per-post engagement
+// snapshot fetched from the platform. YouTube-only in v1 (via the YouTube Data
+// API v3 `videos.list?part=statistics`, which the app's EXISTING YouTube scope
+// already permits — no new OAuth scope / owner reconnect); other platforms are
+// intentionally not fetched (X needs paid tiers, GBP has no per-post insight
+// API, LinkedIn personal shares expose little — see the cron's extension point).
+//
+// DECOUPLED FROM SocialConnection ON PURPOSE. `PostJobResult.socialConnection`
+// is onDelete:Cascade, so disconnecting a platform deletes historical results —
+// which would erode analytics. This row therefore DENORMALIZES the durable
+// identity (`userId`, `platform`, `externalPostId`) onto itself and links back
+// to the originating result only OPTIONALLY, via `postJobResultId` with
+// onDelete:SetNull, so the metric SURVIVES a later result/connection deletion.
+//
+// SNAPSHOT STRATEGY: upsert-latest (one row per (platform, externalPostId),
+// updated in place by the sync cron), NOT append-only time-series. v1 only needs
+// "current" views/likes/comments; a single keyed row is the simplest thing that
+// makes that queryable and is idempotent for the cron (repeated runs update, not
+// duplicate). Switch to time-series later if history/graphs are needed.
+model PostMetric {
+  id             String   @id @default(cuid())
+  userId         String
+  platform       Platform
+  externalPostId String
+  // OPTIONAL link back to the result that produced this post. SetNull (not
+  // Cascade) so the metric outlives the result. NEVER treat as required — the
+  // denormalized userId/platform/externalPostId above is the durable identity
+  // the UI/aggregate query by.
+  postJobResultId String?
+  fetchedAt      DateTime @default(now())
+  views          Int?
+  likes          Int?
+  comments       Int?
+  // Not exposed by the YouTube `videos.list` statistics part → always null for
+  // YouTube v1. Kept in the schema for platform-extensibility.
+  shares         Int?
+  // Raw provider statistics payload for debugging/audit. MUST NOT be surfaced in
+  // any DTO (SEC-1) — it is never a token store, but keep the read path minimal.
+  raw            Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  postJobResult PostJobResult? @relation(fields: [postJobResultId], references: [id], onDelete: SetNull)
+
+  // One current snapshot per external post. A YouTube video id is globally
+  // unique per upload, so (platform, externalPostId) is a safe upsert key
+  // without userId. This unique also serves as the cron's lookup index.
+  @@unique([platform, externalPostId])
+  // Dashboard aggregate / per-user reads.
+  @@index([userId])
 }
