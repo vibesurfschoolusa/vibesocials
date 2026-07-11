@@ -1,38 +1,14 @@
-import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { getCurrentUser } from "@/lib/auth";
 import { CreatePostForm } from "@/components/create-post-form";
-import { buttonVariants } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 
 export default async function NewPostPage() {
   const user = await getCurrentUser();
 
   if (!user) {
-    return (
-      <div className="mx-auto flex min-h-[60vh] max-w-md items-center px-4 py-12">
-        <Card className="w-full p-8">
-          <p className="text-base text-foreground">
-            You need to be logged in to create posts.
-          </p>
-          <div className="mt-6 flex gap-3">
-            <Link
-              href="/login"
-              className={buttonVariants({ variant: "primary", className: "flex-1" })}
-            >
-              Log in
-            </Link>
-            <Link
-              href="/register"
-              className={buttonVariants({ variant: "outline", className: "flex-1" })}
-            >
-              Create account
-            </Link>
-          </div>
-        </Card>
-      </div>
-    );
+    redirect(`/login?callbackUrl=${encodeURIComponent("/posts/new")}`);
   }
 
   // SEC-1: project only the two caption-footer fields the Preview section
