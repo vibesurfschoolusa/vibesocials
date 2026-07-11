@@ -71,6 +71,17 @@ export interface PostJobDTO {
    */
   caption: string | null;
   results: PostJobResultDTO[];
+  /** Attached media for thumbnails (public blob URL — already exposed via /api/media). */
+  media: { url: string; mimeType: string } | null;
+  /**
+   * Compose-time publish choices snapshotted on the job (Roadmap Phase 5 +
+   * targeting). Null for legacy/immediate jobs with no snapshot.
+   */
+  publish: {
+    targetPlatforms: Platform[] | null;
+    youtubePrivacy: string | null;
+    tiktokPrivacy: string | null;
+  } | null;
 }
 
 /** Response body of `GET /api/posts`. */

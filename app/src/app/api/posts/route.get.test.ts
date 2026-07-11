@@ -48,7 +48,18 @@ function jobWithYouTube() {
     createdAt: new Date("2026-07-10T00:00:00.000Z"),
     scheduledFor: null,
     baseCaption: "hello",
-    mediaItem: { baseCaption: "media cap" },
+    mediaItem: {
+      baseCaption: "media cap",
+      storageLocation: "https://blob.example.com/media-1.mp4",
+      mimeType: "video/mp4",
+    },
+    // Task 8 — compose-time publish snapshot (Task 7's publishMetadata),
+    // mapped onto the DTO's `publish` field.
+    publishMetadata: {
+      youtube: { privacyStatus: "unlisted" },
+      tiktok: { privacyLevel: "SELF_ONLY" },
+      targetPlatforms: ["youtube", "tiktok"],
+    },
     results: [
       {
         platform: "youtube",
@@ -175,7 +186,12 @@ describe("GET /api/posts — metrics join (Roadmap Phase 8)", () => {
         createdAt: new Date("2026-07-10T00:00:00.000Z"),
         scheduledFor: null,
         baseCaption: "x",
-        mediaItem: { baseCaption: "y" },
+        mediaItem: {
+          baseCaption: "y",
+          storageLocation: "https://blob.example.com/media-2.jpg",
+          mimeType: "image/jpeg",
+        },
+        publishMetadata: null,
         results: [
           { platform: "tiktok", status: "success", externalPostId: "t1", errorMessage: null },
         ],
@@ -184,5 +200,89 @@ describe("GET /api/posts — metrics join (Roadmap Phase 8)", () => {
 
     await GET(getRequest());
     expect(postMetricFindManyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("GET /api/posts — media + publish snapshot (Task 8)", () => {
+  it("maps mediaItem + publishMetadata onto the DTO's media/publish fields, round-tripping targetPlatforms and per-platform privacy", async () => {
+    postJobFindManyMock.mockResolvedValue([jobWithYouTube()]);
+    postMetricFindManyMock.mockResolvedValue([]);
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+    const job = body.jobs[0];
+
+    expect(job.media).toEqual({
+      url: "https://blob.example.com/media-1.mp4",
+      mimeType: "video/mp4",
+    });
+    expect(job.publish).toEqual({
+      targetPlatforms: ["youtube", "tiktok"],
+      youtubePrivacy: "unlisted",
+      tiktokPrivacy: "SELF_ONLY",
+    });
+  });
+
+  it("maps a null publishMetadata (legacy/immediate job) to publish: null", async () => {
+    postJobFindManyMock.mockResolvedValue([
+      {
+        id: "job-3",
+        status: "completed",
+        createdAt: new Date("2026-07-10T00:00:00.000Z"),
+        scheduledFor: null,
+        baseCaption: "legacy post",
+        mediaItem: {
+          baseCaption: "legacy media",
+          storageLocation: "https://blob.example.com/media-3.png",
+          mimeType: "image/png",
+        },
+        publishMetadata: null,
+        results: [],
+      },
+    ]);
+    postMetricFindManyMock.mockResolvedValue([]);
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+    const job = body.jobs[0];
+
+    expect(job.publish).toBeNull();
+    expect(job.media).toEqual({
+      url: "https://blob.example.com/media-3.png",
+      mimeType: "image/png",
+    });
+  });
+
+  it("maps a job with no mediaItem to media: null", async () => {
+    postJobFindManyMock.mockResolvedValue([
+      {
+        id: "job-4",
+        status: "completed",
+        createdAt: new Date("2026-07-10T00:00:00.000Z"),
+        scheduledFor: null,
+        baseCaption: "no media",
+        mediaItem: null,
+        publishMetadata: null,
+        results: [],
+      },
+    ]);
+    postMetricFindManyMock.mockResolvedValue([]);
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+    expect(body.jobs[0].media).toBeNull();
+  });
+
+  it("leaks no new secret-bearing fields via media/publish (SEC-1)", async () => {
+    postJobFindManyMock.mockResolvedValue([jobWithYouTube()]);
+    postMetricFindManyMock.mockResolvedValue([]);
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+    const serialized = JSON.stringify(body);
+
+    expect(serialized).not.toContain("accessToken");
+    expect(serialized).not.toContain("refreshToken");
+    expect(serialized).not.toContain("socialConnectionId");
   });
 });

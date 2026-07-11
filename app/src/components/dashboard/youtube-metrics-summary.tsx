@@ -10,7 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { summarizeYouTubeMetrics } from "@/lib/metricsSummary";
-import { usePostJobs } from "@/hooks/usePostJobs";
+import type { UsePostJobsResult } from "@/hooks/usePostJobs";
 
 interface SummaryStatProps {
   icon: LucideIcon;
@@ -34,15 +34,17 @@ function SummaryStat({ icon: Icon, label, value }: SummaryStatProps) {
 
 /**
  * Roadmap Phase 8 — dashboard YouTube performance summary. Reuses the same
- * `GET /api/posts` payload the recent-activity feed loads (via `usePostJobs`)
- * and aggregates it with the pure `summarizeYouTubeMetrics`, so it needs no new
- * endpoint. Renders nothing until there is at least one YouTube video with a
- * fetched metric — so users who don't post to YouTube (or whose first sync
- * hasn't run yet) never see an empty "0 views" card.
+ * `GET /api/posts` payload the recent-activity feed loads and aggregates it
+ * with the pure `summarizeYouTubeMetrics`, so it needs no new endpoint.
+ * Renders nothing until there is at least one YouTube video with a fetched
+ * metric — so users who don't post to YouTube (or whose first sync hasn't run
+ * yet) never see an empty "0 views" card.
+ *
+ * Task 8 — takes `jobs` as a prop instead of calling `usePostJobs()` itself:
+ * `Dashboard` (src/app/page.tsx) is the single fetch/poll owner, shared with
+ * `RecentActivity` beside it.
  */
-export function YouTubeMetricsSummary() {
-  const { jobs } = usePostJobs();
-
+export function YouTubeMetricsSummary({ jobs }: Pick<UsePostJobsResult, "jobs">) {
   if (!jobs) {
     return null;
   }

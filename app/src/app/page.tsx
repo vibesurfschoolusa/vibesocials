@@ -15,6 +15,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { RecentActivity } from "@/components/dashboard/recent-activity";
 import { ConnectionHealth } from "@/components/dashboard/connection-health";
 import { YouTubeMetricsSummary } from "@/components/dashboard/youtube-metrics-summary";
+import { usePostJobs } from "@/hooks/usePostJobs";
 
 export default function HomePage() {
   const { data: session, status } = useSession();
@@ -90,6 +91,11 @@ function Landing() {
 }
 
 function Dashboard({ email }: { email: string }) {
+  // Task 8 — single fetch/poll owner for the dashboard: both widgets below
+  // took this over their own `usePostJobs()` call, so the dashboard makes one
+  // `/api/posts` request (and one poll timer) instead of two.
+  const postJobs = usePostJobs();
+
   return (
     <div className="mx-auto max-w-6xl px-4 py-8 md:px-6 lg:px-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -113,8 +119,8 @@ function Dashboard({ email }: { email: string }) {
       <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           {/* Roadmap Phase 8 — renders only once a YouTube post has fetched metrics. */}
-          <YouTubeMetricsSummary />
-          <RecentActivity />
+          <YouTubeMetricsSummary jobs={postJobs.jobs} />
+          <RecentActivity {...postJobs} />
         </div>
         <div className="space-y-6">
           <ConnectionHealth />

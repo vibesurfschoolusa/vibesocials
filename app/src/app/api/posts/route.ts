@@ -66,7 +66,10 @@ export async function GET(request: Request) {
         createdAt: true,
         scheduledFor: true,
         baseCaption: true,
-        mediaItem: { select: { baseCaption: true } },
+        mediaItem: { select: { baseCaption: true, storageLocation: true, mimeType: true } },
+        // Task 8 — compose-time publish snapshot (Task 7's `publishMetadata`),
+        // surfaced read-only via the `publish` DTO field below.
+        publishMetadata: true,
         results: {
           select: {
             platform: true,
@@ -118,37 +121,62 @@ export async function GET(request: Request) {
     const metricByVideoId = new Map(metricRows.map((row) => [row.externalPostId, row]));
 
     const payload: PostsResponse = {
-      jobs: jobs.map((job) => ({
-        id: job.id,
-        status: job.status,
-        createdAt: job.createdAt.toISOString(),
-        scheduledFor: job.scheduledFor?.toISOString() ?? null,
-        // Scheduled/draft jobs snapshot their caption on the job itself so
-        // editing them never mutates shared reused media; fall back to the
-        // media item's caption for immediate/older jobs.
-        caption: job.baseCaption ?? job.mediaItem?.baseCaption ?? null,
-        results: job.results.map((result) => {
-          const metricRow =
-            result.platform === "youtube" && result.externalPostId
-              ? metricByVideoId.get(result.externalPostId)
-              : undefined;
-          return {
-            platform: result.platform,
-            status: result.status,
-            externalPostId: result.externalPostId,
-            errorMessage: result.errorMessage,
-            metric: metricRow
-              ? {
-                  views: metricRow.views,
-                  likes: metricRow.likes,
-                  comments: metricRow.comments,
-                  shares: metricRow.shares,
-                  fetchedAt: metricRow.fetchedAt.toISOString(),
-                }
-              : null,
-          };
-        }),
-      })),
+      jobs: jobs.map((job) => {
+        // Task 8 — the raw JSON snapshot narrowed to the display fields the
+        // DTO exposes. Untyped at the Prisma boundary (Json?), so this cast
+        // only asserts the shape we read from — never trusts it beyond that.
+        const snapshot = job.publishMetadata as {
+          tiktok?: { privacyLevel?: string };
+          youtube?: { privacyStatus?: string };
+          targetPlatforms?: string[];
+        } | null;
+
+        return {
+          id: job.id,
+          status: job.status,
+          createdAt: job.createdAt.toISOString(),
+          scheduledFor: job.scheduledFor?.toISOString() ?? null,
+          // Scheduled/draft jobs snapshot their caption on the job itself so
+          // editing them never mutates shared reused media; fall back to the
+          // media item's caption for immediate/older jobs.
+          caption: job.baseCaption ?? job.mediaItem?.baseCaption ?? null,
+          // Display-only thumbnail source (SEC-1: storageLocation is a public
+          // blob URL, already exposed via /api/media — no new secret surface).
+          media: job.mediaItem
+            ? { url: job.mediaItem.storageLocation, mimeType: job.mediaItem.mimeType }
+            : null,
+          // Compose-time publish choices, null for legacy/immediate jobs with
+          // no snapshot (see PublishMetadataSnapshot, src/server/jobs/posting.ts).
+          publish: snapshot
+            ? {
+                targetPlatforms: (snapshot.targetPlatforms as Platform[] | undefined) ?? null,
+                youtubePrivacy: snapshot.youtube?.privacyStatus ?? null,
+                tiktokPrivacy: snapshot.tiktok?.privacyLevel ?? null,
+              }
+            : null,
+          results: job.results.map((result) => {
+            const metricRow =
+              result.platform === "youtube" && result.externalPostId
+                ? metricByVideoId.get(result.externalPostId)
+                : undefined;
+            return {
+              platform: result.platform,
+              status: result.status,
+              externalPostId: result.externalPostId,
+              errorMessage: result.errorMessage,
+              metric: metricRow
+                ? {
+                    views: metricRow.views,
+                    likes: metricRow.likes,
+                    comments: metricRow.comments,
+                    shares: metricRow.shares,
+                    fetchedAt: metricRow.fetchedAt.toISOString(),
+                  }
+                : null,
+            };
+          }),
+        };
+      }),
     };
 
     return NextResponse.json(payload);

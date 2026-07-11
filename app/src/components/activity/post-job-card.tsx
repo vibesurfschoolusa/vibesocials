@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import Link from "next/link";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, ExternalLink } from "lucide-react";
 import type { Platform, PostJobResultStatus, PostJobStatus } from "@prisma/client";
 
 import { Badge, type BadgeVariant } from "@/components/ui/badge";
@@ -11,6 +11,7 @@ import { Card } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
+import { platformPostUrl } from "@/lib/platformPostUrl";
 import type { PostJobDTO } from "@/lib/postsDto";
 import { PlatformResultBadge } from "./platform-result";
 import { PostMetricStats } from "./post-metric-stats";
@@ -73,6 +74,27 @@ export function PostJobCard({ job }: { job: PostJobDTO }) {
   const [pending, setPending] = useState<Set<Platform>>(new Set());
   const [reconnect, setReconnect] = useState<Set<Platform>>(new Set());
   const toast = useToast();
+
+  // Task 8 — polling (usePostJobs) delivers a fresh `job` object identity
+  // every 10s. Reset ONLY the optimistic `pending` set when that happens: the
+  // server has already flipped a claimed retry to `pending` by the time its
+  // response resolves (see retry/route.ts's atomic updateMany), so
+  // `result.status` takes over as the truthful source and the UI still reads
+  // "pending" until it resolves to success/failed. `reconnect` is
+  // server-derived (from a RECONNECT_REQUIRED response), not optimism, so
+  // it's left untouched here.
+  //
+  // Adjusted during render — React's documented pattern for resetting state
+  // when a prop changes ("Storing information from previous renders" in the
+  // React docs) — rather than in a useEffect: an unconditional setState at
+  // the top of an effect body is the derived-state anti-pattern this repo's
+  // lint config blocks (react-hooks/set-state-in-effect; see the analogous
+  // note in media-library.tsx's fetchItems).
+  const [prevJob, setPrevJob] = useState(job);
+  if (job !== prevJob) {
+    setPrevJob(job);
+    setPending(new Set());
+  }
 
   const status = JOB_STATUS_META[job.status];
   const results = orderResults(job.results);
@@ -174,6 +196,26 @@ export function PostJobCard({ job }: { job: PostJobDTO }) {
   return (
     <Card className="p-4 sm:p-5">
       <div className="flex items-start justify-between gap-3">
+        {job.media ? (
+          job.media.mimeType.startsWith("video/") ? (
+            <video
+              src={job.media.url}
+              muted
+              playsInline
+              preload="metadata"
+              aria-hidden
+              tabIndex={-1}
+              className="h-12 w-12 shrink-0 rounded-[var(--radius)] border border-border object-cover"
+            />
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element -- remote (already-public) Vercel Blob URL thumbnail; same pattern as create-post-form.tsx's reuse preview
+            <img
+              src={job.media.url}
+              alt=""
+              className="h-12 w-12 shrink-0 rounded-[var(--radius)] border border-border object-cover"
+            />
+          )
+        ) : null}
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-foreground">
             {job.caption?.trim() || "Untitled post"}
@@ -203,6 +245,34 @@ export function PostJobCard({ job }: { job: PostJobDTO }) {
               status={displayStatus(result)}
             />
           ))}
+        </div>
+      ) : null}
+
+      {job.status === "failed" && results.length === 0 ? (
+        <p className="mt-3 rounded-[var(--radius)] border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-foreground">
+          This post failed because no platforms were connected when it ran. Connect a
+          platform in <Link href="/settings" className="font-medium text-primary underline underline-offset-2">Settings</Link> and create it again.
+        </p>
+      ) : null}
+
+      {results.some((r) => r.status === "success" && platformPostUrl(r.platform, r.externalPostId)) ? (
+        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+          {results.map((result) => {
+            const url = result.status === "success" ? platformPostUrl(result.platform, result.externalPostId) : null;
+            if (!url) return null;
+            return (
+              <a
+                key={result.platform}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded text-xs font-medium text-primary underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                View on {platformLabel(result.platform)}
+                <ExternalLink aria-hidden className="h-3 w-3" />
+              </a>
+            );
+          })}
         </div>
       ) : null}
 

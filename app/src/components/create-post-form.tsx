@@ -25,7 +25,7 @@ import { generateBlobKey } from "@/lib/blobKey";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { cn } from "@/lib/cn";
 import type { MediaItemDto } from "@/lib/mediaDto";
-import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
+import { PLATFORM_ORDER, platformLabel, TIKTOK_PRIVACY_LABELS } from "@/lib/platforms";
 import {
   SCHEDULE_BUFFER_MS,
   localDateTimeToUtcIso,
@@ -99,16 +99,6 @@ function formatBytes(bytes: number): string {
   const value = bytes / Math.pow(k, i);
   return `${value.toFixed(1)} ${sizes[i]}`;
 }
-
-/** Task 7 — human-readable labels for the TikTok privacy confirmation line in
- *  the publish-now dialog. Falls back to the raw value for any level not
- *  listed here (mirrors `platformLabel`'s fallback pattern). */
-const TIKTOK_PRIVACY_LABELS: Record<string, string> = {
-  PUBLIC_TO_EVERYONE: "Public (everyone)",
-  MUTUAL_FOLLOW_FRIENDS: "Friends",
-  SELF_ONLY: "Private (only me)",
-  FOLLOWER_OF_CREATOR: "Followers",
-};
 
 interface CreatePostFormInnerProps {
   /**
