@@ -1,12 +1,19 @@
 import type { Platform } from "@prisma/client";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 
-/** Longest-prefix match so google_business_profile_* resolves correctly. */
-function platformFromCode(code: string): string {
+/**
+ * Longest-prefix match so google_business_profile_* resolves correctly.
+ * Returns null when the code doesn't start with (or equal) any known
+ * platform key — e.g. a raw OAuth provider code like "access_denied" that
+ * several callback routes forward unprefixed. Callers supply their own
+ * label-less phrasing in that case rather than pairing a fallback noun
+ * with a template that already carries its own article.
+ */
+function platformFromCode(code: string): string | null {
   const match = (Object.keys(PLATFORM_LABELS) as Platform[])
     .filter((key) => code === key || code.startsWith(`${key}_`))
     .sort((a, b) => b.length - a.length)[0];
-  return match ? PLATFORM_LABELS[match] : "The account";
+  return match ? PLATFORM_LABELS[match] : null;
 }
 
 /**
@@ -22,26 +29,39 @@ export function describeOAuthResult(params: {
 
   if (error) {
     const label = platformFromCode(error);
-    if (error.includes("denied")) {
+    // LinkedIn's own "user declined" redirect uses a fixed linkedin_auth_failed
+    // code rather than a "*_denied" one — catch it too so it reads as a
+    // cancellation instead of a generic failure.
+    if (error.includes("denied") || error.endsWith("auth_failed")) {
       return {
         variant: "danger",
-        message: `You cancelled the ${label} authorization — nothing was connected. Click Connect to try again.`,
+        message: label
+          ? `You cancelled the ${label} authorization — nothing was connected. Click Connect to try again.`
+          : "You cancelled the authorization — nothing was connected. Click Connect to try again.",
       };
     }
     if (error.includes("missing_params") || error.includes("invalid_state")) {
       return {
         variant: "danger",
-        message: `The ${label} sign-in couldn't be completed securely. Please try connecting again.`,
+        message: label
+          ? `The ${label} sign-in couldn't be completed securely. Please try connecting again.`
+          : "The sign-in couldn't be completed securely. Please try connecting again.",
       };
     }
     return {
       variant: "danger",
-      message: `${label} couldn't be connected. Please try again.`,
+      message: label
+        ? `${label} couldn't be connected. Please try again.`
+        : "The account couldn't be connected. Please try again.",
     };
   }
 
   if (success) {
-    return { variant: "success", message: `${platformFromCode(success)} connected.` };
+    const label = platformFromCode(success);
+    return {
+      variant: "success",
+      message: label ? `${label} connected.` : "Account connected.",
+    };
   }
 
   return null;

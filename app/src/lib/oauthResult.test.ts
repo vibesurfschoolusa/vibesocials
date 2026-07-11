@@ -136,14 +136,17 @@ describe("describeOAuthResult — real callback-route codes", () => {
   });
 
   // LinkedIn's own "user declined the authorization" redirect uses a fixed
-  // linkedin_auth_failed code (src/app/api/auth/linkedin/callback/route.ts),
-  // not a "*_denied" code, so it lands in the generic bucket rather than the
-  // "cancelled" bucket. Still a correctly-labeled, valid danger message.
-  it("resolves LinkedIn's own denial code (linkedin_auth_failed) to a generic LinkedIn message", () => {
+  // linkedin_auth_failed code (src/app/api/auth/linkedin/callback/route.ts)
+  // rather than a "*_denied" code. The denied-bucket condition also matches
+  // `error.endsWith("auth_failed")` so this still reads as a cancellation
+  // instead of a generic failure.
+  it("resolves LinkedIn's own denial code (linkedin_auth_failed) to a cancelled LinkedIn message", () => {
     const result = describeOAuthResult({ error: "linkedin_auth_failed", success: null });
-    expect(result?.variant).toBe("danger");
-    expect(result?.message).toContain("LinkedIn");
-    expect(result?.message).toContain("couldn't be connected");
+    expect(result).toEqual({
+      variant: "danger",
+      message:
+        "You cancelled the LinkedIn authorization — nothing was connected. Click Connect to try again.",
+    });
   });
 
   // facebook_page, instagram, google_business_profile, and tiktok forward the
@@ -164,18 +167,27 @@ describe("describeOAuthResult — real callback-route codes", () => {
     }
   });
 
-  // Known copy quirk (pre-existing in this task's brief, not introduced or
-  // fixed here): the "missing_params"/"invalid_state" template already
-  // supplies its own leading "The ", and so does the "denied" template's
-  // "the ", so pairing either with the fallback label (itself "The account")
-  // doubles the article. Recorded here so a future copy pass has a concrete
-  // repro instead of rediscovering it from scratch.
-  it("still recognizes the real unprefixed invalid_state code (documents the doubled-article fallback text)", () => {
-    const result = describeOAuthResult({ error: "invalid_state", success: null });
+  // Fixed: platformFromCode now returns null (instead of the literal string
+  // "The account") when no platform key matches, so each template supplies
+  // its own label-less phrasing rather than pairing its built-in article
+  // with a fallback noun that already carried one — this used to render as
+  // "You cancelled the The account authorization..." / "The The account
+  // sign-in..." (doubled article).
+  it("treats an unprefixed access_denied code as a cancellation, without a doubled article", () => {
+    const result = describeOAuthResult({ error: "access_denied", success: null });
     expect(result).toEqual({
       variant: "danger",
       message:
-        "The The account sign-in couldn't be completed securely. Please try connecting again.",
+        "You cancelled the authorization — nothing was connected. Click Connect to try again.",
     });
+  });
+
+  it("buckets an unprefixed invalid_state code as a secure sign-in failure, without a doubled article", () => {
+    const result = describeOAuthResult({ error: "invalid_state", success: null });
+    expect(result).toEqual({
+      variant: "danger",
+      message: "The sign-in couldn't be completed securely. Please try connecting again.",
+    });
+    expect(result?.message.startsWith("The sign-in")).toBe(true);
   });
 });

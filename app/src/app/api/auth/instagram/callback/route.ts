@@ -18,14 +18,14 @@ export async function GET(request: NextRequest) {
 
   if (!code || !state) {
     return NextResponse.redirect(
-      new URL("/settings?error=missing_code_or_state", request.url),
+      new URL("/settings?error=instagram_missing_code_or_state", request.url),
     );
   }
 
   const stateCheck = verifyOAuthState(state);
   if (!stateCheck.valid || !stateCheck.userId) {
     return NextResponse.redirect(
-      new URL("/settings?error=invalid_state", request.url),
+      new URL("/settings?error=instagram_invalid_state", request.url),
     );
   }
 
@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
   if (!clientId || !clientSecret || !redirectUri) {
     console.error("[Instagram OAuth] Missing environment variables");
     return NextResponse.redirect(
-      new URL("/connections?error=config_error", request.url),
+      new URL("/settings?error=instagram_config_error", request.url),
     );
   }
 
@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
       const errorText = await tokenResponse.text();
       console.error("[Instagram OAuth] Token exchange failed:", errorText);
       return NextResponse.redirect(
-        new URL("/connections?error=token_exchange_failed", request.url),
+        new URL("/settings?error=instagram_token_exchange_failed", request.url),
       );
     }
 
@@ -78,7 +78,7 @@ export async function GET(request: NextRequest) {
       const errorText = await longLivedResponse.text();
       console.error("[Instagram OAuth] Long-lived token exchange failed:", errorText);
       return NextResponse.redirect(
-        new URL("/connections?error=long_lived_token_failed", request.url),
+        new URL("/settings?error=instagram_long_lived_token_failed", request.url),
       );
     }
 
@@ -102,7 +102,7 @@ export async function GET(request: NextRequest) {
       const errorText = await pagesResponse.text();
       console.error("[Instagram OAuth] Failed to fetch pages:", errorText);
       return NextResponse.redirect(
-        new URL("/connections?error=failed_to_fetch_pages", request.url),
+        new URL("/settings?error=instagram_failed_to_fetch_pages", request.url),
       );
     }
 
@@ -130,7 +130,7 @@ export async function GET(request: NextRequest) {
     if (!pageWithInstagram || !pageWithInstagram.instagram_business_account) {
       console.error("[Instagram OAuth] No Instagram Business Account found");
       return NextResponse.redirect(
-        new URL("/connections?error=no_instagram_account", request.url),
+        new URL("/settings?error=instagram_no_instagram_account", request.url),
       );
     }
 
@@ -147,7 +147,7 @@ export async function GET(request: NextRequest) {
       const errorText = await igResponse.text();
       console.error("[Instagram OAuth] Failed to fetch IG account:", errorText);
       return NextResponse.redirect(
-        new URL("/connections?error=failed_to_fetch_ig_account", request.url),
+        new URL("/settings?error=instagram_failed_to_fetch_ig_account", request.url),
       );
     }
 
@@ -214,7 +214,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error("[Instagram OAuth] Unexpected error:", error);
     return NextResponse.redirect(
-      new URL("/settings?error=unexpected_error", request.url),
+      new URL("/settings?error=instagram_unexpected_error", request.url),
     );
   }
 }
