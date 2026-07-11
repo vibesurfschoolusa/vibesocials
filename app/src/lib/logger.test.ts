@@ -156,6 +156,17 @@ describe("redactContext (SEC-1)", () => {
     circular.self = circular;
     expect(() => redactContext(circular)).not.toThrow();
   });
+
+  it("coerces a BigInt to a string (JSON.stringify can't serialize BigInt) — review H1 blocker A", () => {
+    // BigInt(...) not a `10n` literal — the tsconfig target is below ES2020.
+    expect(() => redactContext({ count: BigInt(10) })).not.toThrow();
+    expect(redactContext({ count: BigInt(10) })).toEqual({ count: "10" });
+  });
+
+  it("renders an invalid Date safely instead of throwing on toISOString — review H1 blocker A", () => {
+    expect(() => redactContext({ when: new Date(NaN) })).not.toThrow();
+    expect(redactContext({ when: new Date(NaN) })).toEqual({ when: "[invalid date]" });
+  });
 });
 
 describe("logger level filtering and record structure", () => {
@@ -326,5 +337,22 @@ describe("Sentry env-gate", () => {
     });
 
     expect(() => logger.error("[Test] should not throw", {})).not.toThrow();
+  });
+
+  it("never throws when a context value's getter throws — degrades, doesn't escape the caller's catch (H1 blocker A)", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const hostile = {
+      get boom(): string {
+        throw new Error("getter exploded");
+      },
+    };
+    // logger.error runs inside real catch blocks now; it must swallow this.
+    expect(() => logger.error("[Test] hostile getter", { hostile })).not.toThrow();
+  });
+
+  it("never throws on a BigInt in context (prod JSON path stringifies the record) — H1 blocker A", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() => logger.error("[Test] bigint context", { count: BigInt("9007199254740993") })).not.toThrow();
   });
 });

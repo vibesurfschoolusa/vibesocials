@@ -89,7 +89,15 @@ function redactAny(value: unknown, depth: number): unknown {
   }
 
   if (value instanceof Date) {
-    return value.toISOString();
+    // An invalid Date (`new Date(NaN)`) throws on `.toISOString()` — guard it so
+    // the logger never throws on a bad Date in context (review H1 blocker A).
+    return Number.isNaN(value.getTime()) ? "[invalid date]" : value.toISOString();
+  }
+
+  // BigInt is not JSON-serializable (`JSON.stringify(1n)` throws), and the prod
+  // console path stringifies the whole record — coerce to string here (H1 A).
+  if (typeof value === "bigint") {
+    return value.toString();
   }
 
   if (value !== null && typeof value === "object") {
@@ -254,13 +262,27 @@ function log(level: LogLevel, message: string, context?: LogContext): void {
     return;
   }
 
-  const originalError = extractError(context);
-  const redacted = redactContext(context);
+  // The logger is called from ~15 catch blocks; it MUST NEVER throw — a throw
+  // here would mask the original error and can strand job state (review H1
+  // blocker A). Redaction is hardened against BigInt/invalid-Date above, but a
+  // hostile getter on a context value could still throw during the walk (or a
+  // future exotic value), so wrap the whole path and degrade to a bare message.
+  try {
+    const originalError = extractError(context);
+    const redacted = redactContext(context);
 
-  writeToConsole(level, message, redacted);
+    writeToConsole(level, message, redacted);
 
-  if ((level === "warn" || level === "error") && isSentryEnabled()) {
-    forwardToSentry(level, message, redacted, originalError);
+    if ((level === "warn" || level === "error") && isSentryEnabled()) {
+      forwardToSentry(level, message, redacted, originalError);
+    }
+  } catch {
+    // Last resort — never propagate a logging failure to the caller's catch.
+    try {
+      console.error(message);
+    } catch {
+      /* nothing more we can safely do */
+    }
   }
 }
 
