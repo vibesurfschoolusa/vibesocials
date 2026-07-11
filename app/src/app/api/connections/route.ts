@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { Platform } from "@prisma/client";
 import type {
   ConnectionStatus,
@@ -46,7 +47,7 @@ export async function GET() {
     const payload: ConnectionsResponse = { connections };
     return NextResponse.json(payload);
   } catch (error: unknown) {
-    console.error("[GET /api/connections] Unexpected error", { error });
+    logger.error("[GET /api/connections] Unexpected error", { error, userId: user.id });
     return NextResponse.json(
       { error: "Failed to load connections" },
       { status: 500 },

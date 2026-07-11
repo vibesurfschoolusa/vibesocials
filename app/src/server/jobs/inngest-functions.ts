@@ -2,6 +2,7 @@ import { del } from "@vercel/blob";
 
 import { inngest } from "@/lib/inngest";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { getPlatformClient } from "@/server/platforms";
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
 import {
@@ -115,7 +116,12 @@ async function publishToPlatform(
     return { platform: connection.platform, status: "success" };
   } catch (error: unknown) {
     const err = error as Error & { code?: string };
-    console.error(`[Inngest] Platform ${connection.platform} failed:`, err.message);
+    logger.error(`[Inngest] Platform ${connection.platform} failed to publish`, {
+      platform: connection.platform,
+      resultRecordId,
+      code: err.code,
+      error: err,
+    });
     await prisma.postJobResult.update({
       where: { id: resultRecordId },
       data: {
@@ -186,7 +192,7 @@ export const publishToAllPlatforms = inngest.createFunction(
     for (const connection of setupData.socialConnections) {
       const resultRecord = setupData.resultRecords.find(r => r.platform === connection.platform);
       if (!resultRecord) {
-        console.error(`[Inngest] No result record for ${connection.platform}`);
+        logger.error("[Inngest] No result record for platform", { postJobId, platform: connection.platform });
         continue;
       }
 
@@ -255,7 +261,7 @@ export const publishToAllPlatforms = inngest.createFunction(
         data: { userId, postJobId },
       });
     } catch (err) {
-      console.error("[Inngest] Failed to enqueue post-outcome notification (ignored)", { postJobId, err });
+      logger.error("[Inngest] Failed to enqueue post-outcome notification (ignored)", { postJobId, error: err });
     }
 
     console.log("[Inngest] Job completed", { postJobId, ...finalResult });
@@ -379,7 +385,7 @@ export const mediaRetentionSweep = inngest.createFunction(
           else skipped += 1;
         } catch (error) {
           errors += 1;
-          console.error("[Inngest] Failed to sweep media item", {
+          logger.error("[Inngest] Failed to sweep media item", {
             mediaItemId: candidate.id,
             error,
           });
@@ -472,7 +478,7 @@ export const retryPlatforms = inngest.createFunction(
     });
 
     if (!setupData) {
-      console.error("[Inngest] Retry job not found or not owned", { postJobId });
+      logger.error("[Inngest] Retry job not found or not owned", { postJobId });
       return { postJobId, error: "Job not found" };
     }
 
@@ -516,7 +522,7 @@ export const retryPlatforms = inngest.createFunction(
       const resultRecord = resultRecords.find((r) => r.platform === platform);
       if (!resultRecord) {
         // No re-queued result row for this platform — nothing to retry.
-        console.error("[Inngest] No result record to retry", { postJobId, platform });
+        logger.error("[Inngest] No result record to retry", { postJobId, platform });
         continue;
       }
 
@@ -595,7 +601,7 @@ export const retryPlatforms = inngest.createFunction(
         data: { userId, postJobId },
       });
     } catch (err) {
-      console.error("[Inngest] Failed to enqueue post-outcome notification (ignored)", { postJobId, err });
+      logger.error("[Inngest] Failed to enqueue post-outcome notification (ignored)", { postJobId, error: err });
     }
 
     console.log("[Inngest] Retry job completed", { postJobId, ...finalResult });
@@ -661,7 +667,7 @@ export const scheduledPostScanner = inngest.createFunction(
         // The job stays in_progress (a rare, no-known-trigger case); surfaced
         // loudly for reconciliation rather than silently marked failed, which
         // would mislabel a transient DB blip.
-        console.error(`[Inngest] Scheduled dispatch failed for ${postJobId}`, error);
+        logger.error("[Inngest] Scheduled dispatch failed", { postJobId, error });
         dispatchErrors += 1;
       }
     }
@@ -779,7 +785,7 @@ export const youtubePostMetricsSync = inngest.createFunction(
             token = active.accessToken || null;
           }
         } catch (error) {
-          console.error("[Inngest] YouTube metrics: token resolve failed (skipping user)", {
+          logger.error("[Inngest] YouTube metrics: token resolve failed (skipping user)", {
             userId,
             error,
           });
@@ -859,7 +865,7 @@ export const youtubePostMetricsSync = inngest.createFunction(
           updated += 1;
         } catch (error) {
           errors += 1;
-          console.error("[Inngest] YouTube metrics: failed to sync item", {
+          logger.error("[Inngest] YouTube metrics: failed to sync item", {
             resultId: item.resultId,
             externalPostId: item.externalPostId,
             error,

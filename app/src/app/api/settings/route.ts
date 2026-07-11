@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 
 export const COMPANY_WEBSITE_MAX_LENGTH = 2048;
 export const DEFAULT_HASHTAGS_MAX_LENGTH = 1024;
@@ -171,7 +172,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true }, { status: 200 });
   } catch (error) {
-    console.error("[POST /api/settings] Error", { error });
+    logger.error("[POST /api/settings] Error", { error, userId: user.id });
     return NextResponse.json(
       { error: "Failed to update settings" },
       { status: 500 }

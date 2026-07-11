@@ -3,6 +3,7 @@ import { del } from "@vercel/blob";
 
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { toMediaItemDto } from "@/lib/mediaDto";
 import { TERMINAL_POST_JOB_STATUSES } from "@/server/jobs/mediaRetention";
 
@@ -136,7 +137,7 @@ export async function DELETE(_request: NextRequest, context: MediaItemRouteConte
       );
     }
   } catch (error) {
-    console.error("[DELETE /api/media/[id]] Unexpected error", { id, error });
+    logger.error("[DELETE /api/media/[id]] Unexpected error", { id, error, userId: user.id });
     return NextResponse.json({ error: "Failed to delete media" }, { status: 500 });
   }
 

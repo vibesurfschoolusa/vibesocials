@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { toMediaItemDto } from "@/lib/mediaDto";
 import { saveUploadedFile } from "@/server/storage";
 import type { Platform } from "@prisma/client";
@@ -94,7 +95,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ mediaItem }, { status: 201 });
   } catch (error) {
-    console.error("[POST /api/media] Unexpected error", { error });
+    logger.error("[POST /api/media] Unexpected error", { error, userId: user.id });
     return NextResponse.json(
       { error: "Failed to save media item" },
       { status: 500 },

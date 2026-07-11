@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
+import { logger } from "@/lib/logger";
 import { PostJobStatus, type Platform, type Prisma } from "@prisma/client";
 import {
   createPostJobForExistingMedia,
@@ -152,7 +153,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json(payload);
   } catch (error: unknown) {
-    console.error("[GET /api/posts] Unexpected error", { error });
+    logger.error("[GET /api/posts] Unexpected error", { error, userId: user.id });
     return NextResponse.json(
       { error: "Failed to load posts" },
       { status: 500 },
@@ -460,7 +461,7 @@ export async function POST(request: Request) {
       );
     }
 
-    console.error("[POST /api/posts] Unexpected error", { error, usingExistingMedia });
+    logger.error("[POST /api/posts] Unexpected error", { error, usingExistingMedia, userId: user.id });
     return NextResponse.json(
       { error: "Failed to create post" },
       { status: 500 },
