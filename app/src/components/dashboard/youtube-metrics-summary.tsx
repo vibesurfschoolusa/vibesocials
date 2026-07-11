@@ -57,7 +57,9 @@ export function YouTubeMetricsSummary() {
       <CardHeader>
         <CardTitle className="text-base">YouTube performance</CardTitle>
         <CardDescription>
-          Across {summary.trackedVideos}{" "}
+          {/* "recent" is honest: the aggregate covers the recent jobs the
+              activity feed loads, not the user's entire history (review Minor #4). */}
+          Across {summary.trackedVideos} recent{" "}
           {summary.trackedVideos === 1 ? "video" : "videos"}
         </CardDescription>
       </CardHeader>

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   fetchYouTubeVideoStatistics,
+  hasAnyStatistic,
   parseYouTubeStatistics,
 } from "@/server/platforms/youtubeMetrics";
 
@@ -11,6 +12,18 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+describe("hasAnyStatistic (review Minor #2/#5 upsert guard)", () => {
+  it("is false when every count is null (so the cron skips the upsert, not wiping good data)", () => {
+    expect(hasAnyStatistic({ views: null, likes: null, comments: null })).toBe(false);
+  });
+
+  it("is true when at least one count is present — including a real zero", () => {
+    expect(hasAnyStatistic({ views: 0, likes: null, comments: null })).toBe(true);
+    expect(hasAnyStatistic({ views: null, likes: 5, comments: null })).toBe(true);
+    expect(hasAnyStatistic({ views: 100, likes: 2, comments: 1 })).toBe(true);
+  });
+})
 
 describe("parseYouTubeStatistics", () => {
   it("parses a normal statistics payload, coercing string counts to numbers", () => {

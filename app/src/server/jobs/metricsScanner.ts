@@ -31,11 +31,14 @@ export interface EligibleMetricResult {
  *
  * v1 orders by `createdAt desc` and bounds the batch to `take` — so each run
  * refreshes the most-recent posts (the ones whose "current" stats matter most).
- * A user with more than `take` YouTube posts will not have the long tail
- * refreshed; draining the full history (order by metric staleness) is a
- * deliberate future extension — see the cron comment. The query is
- * platform-scoped to `youtube` because that is the only fetcher implemented in
- * v1 (extension point in the cron).
+ * NOTE (review Minor #3): this batch is GLOBAL across all users (no `userId`
+ * scope), so with more than `take` recent YouTube posts in the system a single
+ * high-volume user can fill a run and delay other users' refreshes. Effect is
+ * staleness only — existing metric rows persist and are still served — never
+ * data loss. Fairer scheduling (per-user round-robin, or ordering by metric
+ * staleness to drain the long tail) is a deliberate future extension. The query
+ * is platform-scoped to `youtube` because that is the only fetcher in v1
+ * (extension point in the cron).
  */
 export async function selectYouTubeMetricEligibleResults(
   take: number = METRICS_SYNC_BATCH,

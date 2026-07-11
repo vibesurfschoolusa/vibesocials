@@ -18,7 +18,7 @@ import {
 import { prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
 import { deliverPostOutcomeNotification } from "@/server/notifications/postOutcomeEmail";
 import { refreshGoogleToken } from "@/server/platforms/googleTokens";
-import { fetchYouTubeVideoStatistics } from "@/server/platforms/youtubeMetrics";
+import { fetchYouTubeVideoStatistics, hasAnyStatistic } from "@/server/platforms/youtubeMetrics";
 import { Prisma } from "@prisma/client";
 import type { MediaItem, Platform, SocialConnection, User } from "@prisma/client";
 import type {
@@ -810,14 +810,20 @@ export const youtubePostMetricsSync = inngest.createFunction(
             errors += 1;
             continue;
           }
-          // 200 but the video is gone/inaccessible (empty items): do NOT
-          // overwrite a prior good snapshot with all-null counts — leave the
-          // last-known metric intact.
-          if (!result.found) {
+          // 200 but the video is gone/inaccessible (empty items) OR present but
+          // carrying no parseable statistics: do NOT overwrite a prior good
+          // snapshot with all-null counts — leave the last-known metric intact
+          // (review Minor #2/#5; `found` alone doesn't prove there's data).
+          if (!result.found || !hasAnyStatistic(result.stats)) {
             skippedNotFound += 1;
             continue;
           }
 
+          // NOTE (review Minor #1, deferred): views/likes/comments are stored as
+          // 32-bit Int. A count exceeding 2,147,483,647 would fail the write (and
+          // be caught below as an item error). Not reachable for this app's
+          // audience; widen these columns to BigInt if it ever serves channels
+          // with billions of views (also convert bigint→Number at the DTO).
           const now = new Date();
           await prisma.postMetric.upsert({
             where: {

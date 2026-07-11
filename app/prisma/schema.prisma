@@ -56,6 +56,7 @@ model User {
   socialConnections SocialConnection[]
   mediaItems        MediaItem[]
   postJobs          PostJob[]
+  postMetrics       PostMetric[]
 }
 
 model SocialConnection {
@@ -220,6 +221,11 @@ model PostMetric {
   updatedAt      DateTime @updatedAt
 
   postJobResult PostJobResult? @relation(fields: [postJobResultId], references: [id], onDelete: SetNull)
+  // Owner FK is Cascade (review Minor #6): deleting a user removes their
+  // metrics (no orphaned per-user rows). This is orthogonal to the
+  // survives-a-disconnect design — that is served by `postJobResultId`'s
+  // SetNull above, so a connection/result deletion still keeps the metric.
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   // One current snapshot per external post. A YouTube video id is globally
   // unique per upload, so (platform, externalPostId) is a safe upsert key

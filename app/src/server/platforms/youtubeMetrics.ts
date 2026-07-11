@@ -82,6 +82,17 @@ export function parseYouTubeStatistics(apiResponse: unknown): YouTubeStatistics 
 }
 
 /**
+ * True when at least one count parsed to a real number (review Minor #2/#5).
+ * The cron uses this to skip the upsert on an all-`null` parse — a 200 whose
+ * `items` is present but whose `statistics` object is missing/empty would
+ * otherwise WIPE a previously-good snapshot to null. `found` (non-empty items)
+ * isn't enough; this guards on actual data.
+ */
+export function hasAnyStatistic(stats: YouTubeStatistics): boolean {
+  return stats.views !== null || stats.likes !== null || stats.comments !== null;
+}
+
+/**
  * Result of {@link fetchYouTubeVideoStatistics}. Best-effort: this NEVER throws
  * to the caller.
  *

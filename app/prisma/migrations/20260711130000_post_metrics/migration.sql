@@ -37,3 +37,8 @@ CREATE UNIQUE INDEX "PostMetric_platform_externalPostId_key" ON "PostMetric"("pl
 
 -- AddForeignKey
 ALTER TABLE "PostMetric" ADD CONSTRAINT "PostMetric_postJobResultId_fkey" FOREIGN KEY ("postJobResultId") REFERENCES "PostJobResult"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey (review Minor #6): owner FK cascades so a deleted user's metrics
+-- are removed (no orphaned rows). Orthogonal to the survives-a-disconnect design,
+-- which is served by the SetNull on postJobResultId above.
+ALTER TABLE "PostMetric" ADD CONSTRAINT "PostMetric_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
