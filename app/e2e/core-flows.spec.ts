@@ -167,6 +167,12 @@ test.describe(
           .click();
         await form.getByRole("button", { name: "Publish post" }).click();
 
+        // Publish-now confirmation dialog (per-post platform targeting change)
+        await page
+          .getByRole("dialog")
+          .getByRole("button", { name: "Publish now" })
+          .click();
+
         // Alert `title` renders as styled text, not a heading (see
         // src/components/ui/alert.tsx) — match on visible text instead.
         await expect(page.getByText("Post queued")).toBeVisible();

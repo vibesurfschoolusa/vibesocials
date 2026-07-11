@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // mocked before posting.ts is imported below.
 const {
   findUniqueMock,
+  mediaItemCreateMock,
   mediaItemUpdateMock,
   findManyConnectionsMock,
   postJobCreateMock,
@@ -14,6 +15,7 @@ const {
   executeRawMock,
 } = vi.hoisted(() => ({
   findUniqueMock: vi.fn(),
+  mediaItemCreateMock: vi.fn(),
   mediaItemUpdateMock: vi.fn(),
   findManyConnectionsMock: vi.fn(),
   postJobCreateMock: vi.fn(),
@@ -28,6 +30,7 @@ vi.mock("@/lib/db", () => {
   const prisma: Record<string, unknown> = {
     $executeRaw: executeRawMock,
     mediaItem: {
+      create: mediaItemCreateMock,
       findUnique: findUniqueMock,
       update: mediaItemUpdateMock,
     },
@@ -50,6 +53,7 @@ import {
   buildPostJobCreateData,
   buildPublishMetadataSnapshot,
   createPostJobForExistingMedia,
+  createPostJobOnly,
   MediaItemUnavailableError,
 } from "./posting";
 
@@ -129,6 +133,88 @@ describe("assertMediaItemReusable (pure ownership/deletedAt guard)", () => {
     expect(() =>
       assertMediaItemReusable({ userId: "user-1", deletedAt: null }, "user-1"),
     ).not.toThrow();
+  });
+});
+
+describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
+  const media = {
+    storageLocation: "https://example.public.blob.vercel-storage.com/foo.jpg",
+    originalFilename: "foo.jpg",
+    mimeType: "image/jpeg",
+    sizeBytes: 1024,
+  };
+
+  beforeEach(() => {
+    mediaItemCreateMock.mockReset();
+    findManyConnectionsMock.mockReset();
+    postJobCreateMock.mockReset();
+    postJobResultCreateMock.mockReset();
+
+    mediaItemCreateMock.mockResolvedValue(makeMediaItem());
+    postJobCreateMock.mockResolvedValue({ id: "job-1" });
+    postJobResultCreateMock.mockImplementation((args: { data: { platform: string } }) =>
+      Promise.resolve({ id: `result-${args.data.platform}` }),
+    );
+  });
+
+  it("targetPlatforms narrows the fan-out to only the matching connection", async () => {
+    findManyConnectionsMock.mockResolvedValue([
+      makeConnection({ id: "conn-yt", platform: "youtube" }),
+      makeConnection({ id: "conn-tt", platform: "tiktok" }),
+    ]);
+
+    const result = await createPostJobOnly({
+      userId: "user-1",
+      media,
+      baseCaption: "hello",
+      targetPlatforms: ["youtube"],
+    });
+
+    expect(postJobResultCreateMock).toHaveBeenCalledTimes(1);
+    expect(postJobResultCreateMock).toHaveBeenCalledWith({
+      data: {
+        postJobId: "job-1",
+        platform: "youtube",
+        socialConnectionId: "conn-yt",
+        status: "pending",
+      },
+    });
+    expect(result.resultIds).toEqual(["result-youtube"]);
+  });
+
+  it("throws NO_CONNECTIONS when targetPlatforms excludes every connected platform", async () => {
+    findManyConnectionsMock.mockResolvedValue([
+      makeConnection({ id: "conn-yt", platform: "youtube" }),
+    ]);
+
+    await expect(
+      createPostJobOnly({
+        userId: "user-1",
+        media,
+        baseCaption: "hello",
+        targetPlatforms: ["x"],
+      }),
+    ).rejects.toThrow("NO_CONNECTIONS");
+
+    expect(mediaItemCreateMock).not.toHaveBeenCalled();
+    expect(postJobCreateMock).not.toHaveBeenCalled();
+    expect(postJobResultCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("targetPlatforms undefined creates a result for every connection (legacy behavior preserved)", async () => {
+    findManyConnectionsMock.mockResolvedValue([
+      makeConnection({ id: "conn-x", platform: "x" }),
+      makeConnection({ id: "conn-yt", platform: "youtube" }),
+    ]);
+
+    const result = await createPostJobOnly({
+      userId: "user-1",
+      media,
+      baseCaption: "hello",
+    });
+
+    expect(postJobResultCreateMock).toHaveBeenCalledTimes(2);
+    expect(result.resultIds).toEqual(["result-x", "result-youtube"]);
   });
 });
 
@@ -296,6 +382,24 @@ describe("buildPublishMetadataSnapshot (review B1)", () => {
     expect(buildPublishMetadataSnapshot(undefined, yt)).toEqual({ youtube: yt });
     expect(buildPublishMetadataSnapshot(tt, undefined)).toEqual({ tiktok: tt });
     expect(buildPublishMetadataSnapshot(tt, yt)).toEqual({ tiktok: tt, youtube: yt });
+  });
+
+  // Task 7 — third positional param: chosen subset of platforms to publish to.
+  it("returns undefined when all three args are absent/empty", () => {
+    expect(buildPublishMetadataSnapshot(undefined, undefined, undefined)).toBeUndefined();
+  });
+
+  it("includes targetPlatforms alone when only it is provided", () => {
+    expect(buildPublishMetadataSnapshot(undefined, undefined, ["x"])).toEqual({
+      targetPlatforms: ["x"],
+    });
+  });
+
+  it("includes targetPlatforms alongside tiktok metadata", () => {
+    expect(buildPublishMetadataSnapshot(tt, undefined, ["tiktok", "x"])).toEqual({
+      tiktok: tt,
+      targetPlatforms: ["tiktok", "x"],
+    });
   });
 });
 

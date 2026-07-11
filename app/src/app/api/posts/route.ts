@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import { logger } from "@/lib/logger";
-import { PostJobStatus, type Platform, type Prisma } from "@prisma/client";
+import { PostJobStatus, Platform, type Prisma } from "@prisma/client";
 import {
   createPostJobForExistingMedia,
   createPostJobOnly,
@@ -177,6 +177,9 @@ interface CreatePostBody {
   perPlatformOverrides?: unknown;
   tiktokMetadata?: unknown;
   youtubeMetadata?: { privacyStatus?: unknown };
+  // Task 7 — optional chosen subset of platforms to publish this post to.
+  // Absent = every connected platform (legacy/default behavior).
+  platforms?: unknown;
   // Roadmap Phase 5. `draft: true` saves a draft (no results, no event);
   // `scheduledFor` (ISO string) schedules for later (no results, no event —
   // the cron claims it when due). Absent both = immediate (today's behavior).
@@ -327,6 +330,33 @@ export async function POST(request: Request) {
     };
   }
 
+  // Task 7 — optional per-post platform targeting: a chosen subset of the
+  // user's connected platforms to publish to. Absent (`undefined`) means
+  // "every connection" (legacy/default behavior) all the way down through
+  // the create helpers. SEC-1: only ever a display-safe Platform enum value.
+  const VALID_PLATFORMS = new Set<string>(Object.values(Platform));
+  let targetPlatforms: Platform[] | undefined;
+  if (body?.platforms != null) {
+    if (!Array.isArray(body.platforms) || body.platforms.some((p) => typeof p !== "string")) {
+      return NextResponse.json(
+        { error: "platforms must be an array of platform names" },
+        { status: 400 },
+      );
+    }
+    const unknown = body.platforms.filter((p) => !VALID_PLATFORMS.has(p));
+    if (unknown.length > 0) {
+      return NextResponse.json(
+        { error: `Unknown platform(s): ${unknown.join(", ")}` },
+        { status: 400 },
+      );
+    }
+    const deduped = Array.from(new Set(body.platforms)) as Platform[];
+    if (deduped.length === 0) {
+      return NextResponse.json({ error: "Select at least one platform." }, { status: 400 });
+    }
+    targetPlatforms = deduped;
+  }
+
   const location = typeof locationRaw === "string" && locationRaw.trim() ? locationRaw.trim() : undefined;
 
   // Roadmap Phase 5 — resolve the intent. `draft: true` wins; otherwise a
@@ -365,6 +395,8 @@ export async function POST(request: Request) {
         // immediate (which carries them in the event below).
         tiktokMetadata,
         youtubeMetadata,
+        // Task 7 — chosen platform subset; undefined = every connection.
+        targetPlatforms,
       });
       postJobId = created.postJobId;
       mediaItemId = created.mediaItemId;
@@ -398,6 +430,8 @@ export async function POST(request: Request) {
         // immediate (which carries them in the event below).
         tiktokMetadata,
         youtubeMetadata,
+        // Task 7 — chosen platform subset; undefined = every connection.
+        targetPlatforms,
       });
       postJobId = created.postJobId;
       mediaItemId = created.mediaItemId;

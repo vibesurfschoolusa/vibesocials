@@ -13,6 +13,7 @@ import { YouTubePostSettings } from "./youtube-post-settings";
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { fieldBaseClasses } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,7 +25,7 @@ import { generateBlobKey } from "@/lib/blobKey";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { cn } from "@/lib/cn";
 import type { MediaItemDto } from "@/lib/mediaDto";
-import { PLATFORM_ORDER } from "@/lib/platforms";
+import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import {
   SCHEDULE_BUFFER_MS,
   localDateTimeToUtcIso,
@@ -71,6 +72,8 @@ interface CreatePostRequest extends DeferredPostFields {
   location?: string;
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
+  /** Task 7 — chosen subset of connected platforms to publish to. */
+  platforms?: Platform[];
 }
 
 // Roadmap Phase 2 — request body for the reuse path: an already-persisted
@@ -84,6 +87,8 @@ interface CreatePostReuseRequest extends DeferredPostFields {
   perPlatformOverrides?: Partial<Record<Platform, string>>;
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
+  /** Task 7 — chosen subset of connected platforms to publish to. */
+  platforms?: Platform[];
 }
 
 function formatBytes(bytes: number): string {
@@ -94,6 +99,16 @@ function formatBytes(bytes: number): string {
   const value = bytes / Math.pow(k, i);
   return `${value.toFixed(1)} ${sizes[i]}`;
 }
+
+/** Task 7 — human-readable labels for the TikTok privacy confirmation line in
+ *  the publish-now dialog. Falls back to the raw value for any level not
+ *  listed here (mirrors `platformLabel`'s fallback pattern). */
+const TIKTOK_PRIVACY_LABELS: Record<string, string> = {
+  PUBLIC_TO_EVERYONE: "Public (everyone)",
+  MUTUAL_FOLLOW_FRIENDS: "Friends",
+  SELF_ONLY: "Private (only me)",
+  FOLLOWER_OF_CREATOR: "Followers",
+};
 
 interface CreatePostFormInnerProps {
   /**
@@ -150,6 +165,10 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
   // The mode that produced the current success banner (so it reads correctly
   // for now / schedule / draft).
   const [submittedMode, setSubmittedMode] = useState<PublishMode>("now");
+  // Task 7 — publish-now confirmation dialog. Immediate publishes can't be
+  // undone once sent, so `handleUploadSubmit` opens this instead of posting
+  // directly when `publishMode === "now"`; schedule/draft submit right away.
+  const [confirmPublishOpen, setConfirmPublishOpen] = useState(false);
   // Scrolled into view whenever the success banner appears (effect below) so
   // a submit from further down the form doesn't leave the confirmation
   // off-screen.
@@ -208,6 +227,18 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
         connections?.some((c) => c.platform === platform && c.connected),
       ),
     [connections],
+  );
+
+  // Task 7 — per-post platform targeting. `deselected` tracks platforms the
+  // user has explicitly opted OUT of for this post; `selectedPlatforms`
+  // derives the chosen subset from it. Starting `deselected` empty means
+  // everything defaults to selected, including a platform whose connection
+  // finishes loading after mount (it simply appears in `connectedPlatforms`
+  // later and, having never been deselected, is selected).
+  const [deselected, setDeselected] = useState<Set<Platform>>(new Set());
+  const selectedPlatforms = useMemo(
+    () => connectedPlatforms.filter((p) => !deselected.has(p)),
+    [connectedPlatforms, deselected],
   );
 
   // Roadmap Phase 2 — load the reuse target, if any. Runs once per distinct
@@ -412,87 +443,61 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
     }
   }
 
-  async function handleUploadSubmit(event: React.FormEvent) {
-    event.preventDefault();
-    setUploadError(null);
-    setShowSuccess(false);
-
-    if (!reuseItem && !uploadFile) {
-      setUploadError("Please choose a file to upload.");
-      return;
-    }
-
-    if (!uploadCaption.trim()) {
-      setUploadError("Please enter a caption for this post.");
-      return;
-    }
-
-    const tiktokCommercialBlocked =
-      hasTikTokConnection &&
-      tiktokCommercialEnabled &&
-      !tiktokMetadata.brandedContent &&
-      !tiktokMetadata.brandOrganic;
-    if (tiktokCommercialBlocked) {
-      setUploadError(
-        'Select "Your brand" or "Branded content" (or turn off the promotional toggle) before posting to TikTok.',
-      );
-      return;
-    }
+  // Extracted from handleUploadSubmit below (Task 7 / Step 5) so it can run
+  // either directly (schedule/draft — no confirmation needed) or via the
+  // publish-now confirmation dialog's onConfirm (immediate publish). Every
+  // blocking validation (file/caption/platforms/schedule/tiktok privacy)
+  // already ran in handleUploadSubmit before either path reaches here, so
+  // this only builds the request and submits it. Handles its own
+  // loading/toast/error state and never throws — ConfirmDialog always closes
+  // after this resolves; failures surface via toast, same as before this task.
+  async function performSubmit() {
+    setUploadLoading(true);
 
     // Deferred (schedule/draft) jobs persist tiktok/youtube metadata on the
     // job (PostJob.publishMetadata) and replay it at publish — see
-    // server/jobs/posting.ts.
+    // server/jobs/posting.ts. The schedule time was already validated in
+    // handleUploadSubmit before it called (or deferred calling) this
+    // function, so re-deriving it here from the same unchanged state is safe.
     const deferred: DeferredPostFields = {};
     if (publishMode === "draft") {
       deferred.draft = true;
     } else if (publishMode === "schedule") {
       const iso = localDateTimeToUtcIso(scheduledForLocal);
-      if (!iso) {
-        setUploadError("Please choose a valid date and time to schedule this post.");
-        return;
+      if (iso) {
+        deferred.scheduledFor = iso;
       }
-      if (new Date(iso).getTime() < Date.now() + SCHEDULE_BUFFER_MS) {
-        setUploadError("Scheduled time must be at least a minute in the future.");
-        return;
-      }
-      deferred.scheduledFor = iso;
     }
-    const requireTikTokPrivacy = publishMode === "now";
-
-    setUploadLoading(true);
 
     try {
       let postData: CreatePostRequest | CreatePostReuseRequest;
 
       if (reuseItem) {
         // Roadmap Phase 2 — reuse: no upload, attach the existing MediaItem.
-        if (requireTikTokPrivacy && hasTikTokConnection && !tiktokMetadata.privacyLevel) {
-          setTiktokPrivacyError("Please select a privacy level for TikTok");
-          toast.error("Please select a privacy level for TikTok");
-          setUploadLoading(false);
-          return;
-        }
-
         const reuseData: CreatePostReuseRequest = {
           mediaItemId: reuseItem.id,
           baseCaption: uploadCaption,
           location: uploadLocation.trim() || undefined,
+          // Task 7 — chosen platform subset for this post.
+          platforms: selectedPlatforms,
           ...deferred,
         };
 
         if (reusePerPlatformOverrides) {
           reuseData.perPlatformOverrides = reusePerPlatformOverrides;
         }
-        if (hasTikTokConnection) {
+        // Task 7 — only attach metadata for a platform still selected for
+        // this post; a deselected TikTok/YouTube isn't published to.
+        if (hasTikTokConnection && selectedPlatforms.includes("tiktok")) {
           reuseData.tiktokMetadata = tiktokMetadata;
         }
-        if (hasYouTubeConnection) {
+        if (hasYouTubeConnection && selectedPlatforms.includes("youtube")) {
           reuseData.youtubeMetadata = youtubeMetadata;
         }
         postData = reuseData;
       } else {
-        // Unreachable given the guard above (this branch only runs when
-        // reuseItem is falsy, and that guard already required
+        // Unreachable given the guard in handleUploadSubmit (this branch only
+        // runs when reuseItem is falsy, and that guard already required
         // reuseItem || uploadFile), but narrows `uploadFile` to `File` for
         // TypeScript without a non-null assertion.
         if (!uploadFile) {
@@ -512,24 +517,17 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
           sizeBytes: blob.sizeBytes,
           baseCaption: uploadCaption,
           location: uploadLocation.trim() || undefined,
+          // Task 7 — chosen platform subset for this post.
+          platforms: selectedPlatforms,
           ...deferred,
         };
 
-        // Add TikTok-specific metadata if TikTok is connected. The privacy
-        // level is only *required* for an immediate post (scheduled/draft
-        // publish with the client's safe default).
-        if (hasTikTokConnection) {
-          if (requireTikTokPrivacy && !tiktokMetadata.privacyLevel) {
-            setTiktokPrivacyError("Please select a privacy level for TikTok");
-            toast.error("Please select a privacy level for TikTok");
-            setUploadLoading(false);
-            return;
-          }
+        // Task 7 — only attach metadata for a platform still selected for
+        // this post; a deselected TikTok/YouTube isn't published to.
+        if (hasTikTokConnection && selectedPlatforms.includes("tiktok")) {
           blobData.tiktokMetadata = tiktokMetadata;
         }
-
-        // Add YouTube-specific metadata if YouTube is connected
-        if (hasYouTubeConnection) {
+        if (hasYouTubeConnection && selectedPlatforms.includes("youtube")) {
           blobData.youtubeMetadata = youtubeMetadata;
         }
         postData = blobData;
@@ -580,6 +578,9 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
       setReusePerPlatformOverrides(null);
       setPublishMode("now");
       setScheduledForLocal("");
+      // Task 7 — every connected platform defaults back to selected for the
+      // next post.
+      setDeselected(new Set());
       setTiktokMetadata({
         privacyLevel: "",
         disableComment: true,
@@ -593,6 +594,77 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
       toast.error("Unexpected error while creating post.");
       setUploadLoading(false);
     }
+  }
+
+  async function handleUploadSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    setUploadError(null);
+    setShowSuccess(false);
+
+    if (!reuseItem && !uploadFile) {
+      setUploadError("Please choose a file to upload.");
+      return;
+    }
+
+    if (!uploadCaption.trim()) {
+      setUploadError("Please enter a caption for this post.");
+      return;
+    }
+
+    // Task 7 — at least one target platform must stay selected.
+    if (selectedPlatforms.length === 0) {
+      setUploadError("Select at least one platform to publish to.");
+      return;
+    }
+
+    const tiktokCommercialBlocked =
+      hasTikTokConnection &&
+      tiktokCommercialEnabled &&
+      !tiktokMetadata.brandedContent &&
+      !tiktokMetadata.brandOrganic;
+    if (tiktokCommercialBlocked) {
+      setUploadError(
+        'Select "Your brand" or "Branded content" (or turn off the promotional toggle) before posting to TikTok.',
+      );
+      return;
+    }
+
+    if (publishMode === "schedule") {
+      const iso = localDateTimeToUtcIso(scheduledForLocal);
+      if (!iso) {
+        setUploadError("Please choose a valid date and time to schedule this post.");
+        return;
+      }
+      if (new Date(iso).getTime() < Date.now() + SCHEDULE_BUFFER_MS) {
+        setUploadError("Scheduled time must be at least a minute in the future.");
+        return;
+      }
+    }
+
+    // TikTok privacy level is only *required* for an immediate post to a
+    // SELECTED TikTok connection (scheduled/draft publish with the client's
+    // safe default; a deselected TikTok isn't published to, so it needs no
+    // privacy level here). Runs BEFORE the publish-now confirmation dialog
+    // below so the dialog only ever opens on an already-valid form.
+    const requireTikTokPrivacy = publishMode === "now";
+    if (
+      requireTikTokPrivacy &&
+      hasTikTokConnection &&
+      !deselected.has("tiktok") &&
+      !tiktokMetadata.privacyLevel
+    ) {
+      setTiktokPrivacyError("Please select a privacy level for TikTok");
+      toast.error("Please select a privacy level for TikTok");
+      return;
+    }
+
+    // Immediate publishes can't be undone once sent — confirm first. Deferred
+    // modes (schedule/draft) submit directly, same as before this task.
+    if (publishMode === "now") {
+      setConfirmPublishOpen(true);
+      return;
+    }
+    await performSubmit();
   }
 
   async function handleEnhanceCaption() {
@@ -898,7 +970,7 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
           </p>
         </div>
 
-        {hasTikTokConnection && activeMimeType && (
+        {hasTikTokConnection && !deselected.has("tiktok") && activeMimeType && (
           <TikTokPostSettings
             metadata={tiktokMetadata}
             onChange={setTiktokMetadata}
@@ -908,19 +980,66 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
             onCommercialContentEnabledChange={setTiktokCommercialEnabled}
           />
         )}
-        {hasYouTubeConnection && activeMimeType && (
+        {hasYouTubeConnection && !deselected.has("youtube") && activeMimeType && (
           <YouTubePostSettings
             metadata={youtubeMetadata}
             onChange={setYoutubeMetadata}
           />
         )}
 
+        {/* Task 7 — per-post platform targeting: defaults to every connected
+            platform selected; unchecking one excludes it from the preview
+            below, the TikTok/YouTube settings panels above, and the publish
+            request. */}
+        {connectedPlatforms.length > 0 ? (
+          <fieldset className="space-y-1.5">
+            <legend className="text-sm font-medium text-foreground">Publish to</legend>
+            <div className="flex flex-wrap gap-2">
+              {connectedPlatforms.map((platform) => {
+                const checked = !deselected.has(platform);
+                return (
+                  <label
+                    key={platform}
+                    className={cn(
+                      "inline-flex cursor-pointer items-center gap-2 rounded-[var(--radius)] border px-3 py-1.5 text-sm transition-colors",
+                      checked
+                        ? "border-primary/40 bg-primary/10 text-foreground"
+                        : "border-input text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5 rounded border-input accent-[var(--primary)]"
+                      checked={checked}
+                      onChange={(event) => {
+                        setDeselected((prev) => {
+                          const next = new Set(prev);
+                          if (event.target.checked) next.delete(platform);
+                          else next.add(platform);
+                          return next;
+                        });
+                      }}
+                    />
+                    {platformLabel(platform)}
+                  </label>
+                );
+              })}
+            </div>
+            {selectedPlatforms.length === 0 ? (
+              <p className="text-xs text-destructive" role="alert">
+                Select at least one platform.
+              </p>
+            ) : null}
+          </fieldset>
+        ) : null}
+
         {/* Roadmap Phase 7 — live per-platform preview (spec §7.1): caption
             with footer, media thumbnail, and char-limit feedback for every
-            CONNECTED platform. Recomputed on every render, so it updates as
-            the user types. */}
+            SELECTED platform (Task 7 — narrowed from every connected platform
+            to the chosen subset). Recomputed on every render, so it updates
+            as the user types. */}
         <PlatformPreviewList
-          platforms={connectedPlatforms}
+          platforms={selectedPlatforms}
           caption={uploadCaption}
           overrides={reusePerPlatformOverrides}
           user={footerSettings}
@@ -1002,6 +1121,30 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
           </div>
         </div>
       </form>
+
+      {/* Task 7 — publish-now confirmation: immediate posts publish right
+          away and can't be undone here, so confirm the target platforms
+          (and any per-platform privacy) before performSubmit actually
+          fires. Schedule/draft submit directly without this dialog. */}
+      <ConfirmDialog
+        open={confirmPublishOpen}
+        onOpenChange={setConfirmPublishOpen}
+        title={`Publish to ${selectedPlatforms.length} ${selectedPlatforms.length === 1 ? "platform" : "platforms"} now?`}
+        description={
+          <span className="block space-y-1">
+            <span className="block">{selectedPlatforms.map(platformLabel).join(", ")}</span>
+            {selectedPlatforms.includes("youtube") ? (
+              <span className="block">YouTube privacy: {youtubeMetadata.privacyStatus}</span>
+            ) : null}
+            {selectedPlatforms.includes("tiktok") && tiktokMetadata.privacyLevel ? (
+              <span className="block">TikTok privacy: {TIKTOK_PRIVACY_LABELS[tiktokMetadata.privacyLevel] ?? tiktokMetadata.privacyLevel}</span>
+            ) : null}
+            <span className="block">This publishes immediately and can&apos;t be undone here.</span>
+          </span>
+        }
+        confirmText="Publish now"
+        onConfirm={performSubmit}
+      />
     </Card>
   );
 }
