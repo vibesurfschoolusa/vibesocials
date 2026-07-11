@@ -33,6 +33,20 @@ describe("buildPlatformPreview", () => {
     }
   });
 
+  it("mirrors TikTok's empty-caption default title (Phase 7 review Minor #1)", () => {
+    // Reuse-mode edge: whitespace-only override + no footer → empty footer-applied
+    // caption. TikTok's client posts a default title; the preview must show it too.
+    const result = buildPlatformPreview({ platform: "tiktok", caption: "", override: "   " });
+    expect(result.rendered).toBe("Video posted via Vibe Socials");
+    expect(result.truncated).toBe(false);
+    expect(result.willTruncate).toBe(false);
+  });
+
+  it("does NOT substitute a default for other platforms on an empty caption (only TikTok does)", () => {
+    const result = buildPlatformPreview({ platform: "x", caption: "" });
+    expect(result.rendered).toBe("");
+  });
+
   it("appends the user's footer (website + hashtags) the same way buildCaptionWithFooter does", () => {
     const user = { companyWebsite: "example.com", defaultHashtags: "#surf #lessons" };
     const result = buildPlatformPreview({ platform: "instagram", caption: "Check us out", user });

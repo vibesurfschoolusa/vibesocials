@@ -52,3 +52,11 @@ export const PLATFORM_CAPTION_LIMITS: Record<Platform, PlatformCaptionLimit> = {
   // which in fact doesn't send a caption/description at all yet).
   google_business_profile: { charLimit: null },
 };
+
+/**
+ * The title TikTok posts when the (footer-applied) caption is empty. Shared
+ * source of truth so `tiktokClient.ts`'s `computeTikTokCaption` and the
+ * composer preview (`platformPreview.ts`) can't drift on it (Phase 7 review
+ * Minor #1 — the preview must show what TikTok will actually post).
+ */
+export const TIKTOK_DEFAULT_CAPTION = "Video posted via Vibe Socials";

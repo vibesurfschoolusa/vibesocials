@@ -1,7 +1,7 @@
 import type { Platform } from "@prisma/client";
 
 import { buildCaptionWithFooter, type CaptionFooterUser } from "@/lib/captionFooter";
-import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
+import { PLATFORM_CAPTION_LIMITS, TIKTOK_DEFAULT_CAPTION } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 
 // A local grapheme counter, intentionally NOT added to lib/truncate.ts: Phase
@@ -74,7 +74,17 @@ export interface PlatformPreviewResult {
  */
 export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPreviewResult {
   const effectiveCaption = input.override ? input.override : input.caption;
-  const fullCaption = buildCaptionWithFooter(effectiveCaption, input.user ?? {});
+  let fullCaption = buildCaptionWithFooter(effectiveCaption, input.user ?? {});
+
+  // Mirror the TikTok client's empty-caption fallback (computeTikTokCaption →
+  // TIKTOK_DEFAULT_CAPTION) so the preview shows the default title TikTok will
+  // actually post rather than an empty preview (Phase 7 review Minor #1). Narrow
+  // case: reuse mode with a whitespace-only override + no footer settings yields
+  // an empty footer-applied caption. Only TikTok substitutes a default; other
+  // clients send empty as-is, so their preview correctly stays empty.
+  if (input.platform === "tiktok" && !fullCaption) {
+    fullCaption = TIKTOK_DEFAULT_CAPTION;
+  }
 
   const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS[input.platform];
   const charCount = countGraphemes(fullCaption);

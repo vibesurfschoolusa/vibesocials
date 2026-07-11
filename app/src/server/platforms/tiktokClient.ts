@@ -1,6 +1,6 @@
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
+import { PLATFORM_CAPTION_LIMITS, TIKTOK_DEFAULT_CAPTION } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 
 import type { PlatformClient, PublishContext, PublishResult, TikTokCreatorInfo } from "./types";
@@ -110,7 +110,7 @@ export function computeTikTokCaption(caption: string): string {
   const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS.tiktok;
 
   if (!caption) {
-    return "Video posted via Vibe Socials";
+    return TIKTOK_DEFAULT_CAPTION;
   }
 
   // tiktok's charLimit is always a number (see platformLimits.ts); the null
