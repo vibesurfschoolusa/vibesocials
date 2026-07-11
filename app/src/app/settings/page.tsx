@@ -1,18 +1,31 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { SettingsForm } from "@/components/settings-form";
 import { ConnectionsSection } from "@/components/connections-section";
+import { Alert } from "@/components/ui/alert";
+import { describeOAuthResult } from "@/lib/oauthResult";
 import type { ConnectionSummary } from "@/lib/connectionSummary";
 import type { UserSettings } from "@/lib/userSettings";
 
-export default async function SettingsPage() {
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string; success?: string }>;
+}) {
   const user = await getCurrentUser();
 
   if (!user) {
-    redirect("/login");
+    redirect(`/login?callbackUrl=${encodeURIComponent("/settings")}`);
   }
+
+  const params = await searchParams;
+  const oauthResult = describeOAuthResult({
+    error: params.error ?? null,
+    success: params.success ?? null,
+  });
 
   // SEC-1: project only browser-safe fields so passwordHash/email never reach
   // the client component payload. See lib/userSettings.ts.
@@ -53,6 +66,20 @@ export default async function SettingsPage() {
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8 md:px-6 lg:px-8">
+      {oauthResult ? (
+        <Alert variant={oauthResult.variant} className="mb-6">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p>{oauthResult.message}</p>
+            <Link
+              href="/settings"
+              className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+            >
+              Dismiss
+            </Link>
+          </div>
+        </Alert>
+      ) : null}
+
       <header className="mb-8">
         <h1 className="text-2xl font-bold tracking-tight text-foreground">Settings</h1>
         <p className="mt-1 text-sm text-muted-foreground">

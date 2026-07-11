@@ -11,7 +11,7 @@ export const PLATFORM_LABELS: Record<Platform, string> = {
   x: "X",
   linkedin: "LinkedIn",
   facebook_page: "Facebook",
-  google_business_profile: "Google Business",
+  google_business_profile: "Google Business Profile",
 };
 
 /** Stable display order for platform chips / status badges. */

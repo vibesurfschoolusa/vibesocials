@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   ConfirmDialog,
   Dialog,
@@ -107,13 +107,12 @@ export function ConnectionActions({ platform, isConnected, needsReconnect = fals
     <>
       <div className="flex flex-wrap items-center gap-2">
         {needsReconnect ? (
-          // Roadmap Phase 4: danger badge, links straight to this platform's
-          // OAuth start (a plain anchor — /api/auth/* is a redirect handler,
-          // not a Next.js route, matching the "Connect" ButtonLink below).
-          <a href={authUrl}>
-            <Badge variant="danger" className="cursor-pointer hover:opacity-80">
-              Reconnect
-            </Badge>
+          // Roadmap Phase 4: destructive button, links straight to this
+          // platform's OAuth start (a plain anchor — /api/auth/* is a
+          // redirect handler, not a Next.js route, matching the "Connect"
+          // ButtonLink below).
+          <a href={authUrl} className={buttonVariants({ variant: "destructive", size: "sm" })}>
+            Reconnect
           </a>
         ) : (
           <Badge variant="success">Connected</Badge>
@@ -136,7 +135,7 @@ export function ConnectionActions({ platform, isConnected, needsReconnect = fals
         onOpenChange={setDisconnectOpen}
         destructive
         title="Disconnect this account?"
-        description="Future posts will no longer use it. You can reconnect at any time."
+        description="Future posts — including scheduled ones — will skip this platform. You can reconnect at any time."
         confirmText="Disconnect"
         onConfirm={handleDisconnect}
       />

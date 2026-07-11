@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
+import { buildCaptionWithFooter } from "@/lib/captionFooter";
 import type { UserSettings } from "@/lib/userSettings";
 
 // Mirrors tiktok-post-settings.tsx's checkbox styling for a consistent look
@@ -58,24 +59,11 @@ export function SettingsForm({ settings }: SettingsFormProps) {
     }
   };
 
-  const previewCaption = () => {
-    const sampleCaption = "Check out this amazing content!";
-    const footer: string[] = [];
-
-    if (companyWebsite.trim()) {
-      footer.push(`For more info visit ${companyWebsite.trim()}`);
-    }
-
-    if (defaultHashtags.trim()) {
-      footer.push(defaultHashtags.trim());
-    }
-
-    if (footer.length === 0) {
-      return sampleCaption;
-    }
-
-    return `${sampleCaption}\n\n${footer.join("\n")}`;
-  };
+  const previewCaption = () =>
+    buildCaptionWithFooter("Check out this amazing content!", {
+      companyWebsite,
+      defaultHashtags,
+    });
 
   return (
     <Card className="p-6">
@@ -103,7 +91,7 @@ export function SettingsForm({ settings }: SettingsFormProps) {
             rows={3}
           />
           <p className="text-sm text-muted-foreground">
-            Added on a new line after your website.
+            Added after your website, separated by a blank line.
           </p>
         </div>
 

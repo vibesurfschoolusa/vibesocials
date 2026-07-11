@@ -76,14 +76,19 @@ export function ConnectionHealth() {
                     Connected
                   </Badge>
                 ) : connection.connected ? (
-                  // Roadmap Phase 4: danger badge, links straight to this
-                  // platform's OAuth start (a plain anchor — /api/auth/* is a
-                  // redirect handler, not a Next.js route).
-                  <a href={`/api/auth/${connection.platform}/start`}>
-                    <Badge variant="danger" className="cursor-pointer hover:opacity-80">
-                      <AlertTriangle aria-hidden className="h-3.5 w-3.5" />
-                      Reconnect
-                    </Badge>
+                  // Roadmap Phase 4: destructive button, links straight to
+                  // this platform's OAuth start (a plain anchor —
+                  // /api/auth/* is a redirect handler, not a Next.js route).
+                  <a
+                    href={`/api/auth/${connection.platform}/start`}
+                    className={buttonVariants({
+                      variant: "destructive",
+                      size: "sm",
+                      className: "h-7 gap-1 px-2 text-xs",
+                    })}
+                  >
+                    <AlertTriangle aria-hidden className="h-3.5 w-3.5" />
+                    Reconnect
                   </a>
                 ) : (
                   <Link
