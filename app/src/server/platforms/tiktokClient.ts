@@ -1,5 +1,6 @@
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 
 import type { PlatformClient, PublishContext, PublishResult, TikTokCreatorInfo } from "./types";
@@ -94,6 +95,27 @@ export function computeChunkPlan(
   }
 
   return { chunkSize, totalChunks, ranges };
+}
+
+/**
+ * Compute the TikTok post title/caption the same way `publishVideo` does:
+ * fall back to a default when `caption` is empty, else truncate to TikTok's
+ * client-enforced limit — read from the shared `platformLimits.ts` map
+ * instead of an inline literal. Extracted as a pure, exported function so
+ * this behavior can be asserted directly in tests without mocking the
+ * chunked-upload/network calls the rest of `publishVideo` makes — see
+ * tiktokClient.test.ts.
+ */
+export function computeTikTokCaption(caption: string): string {
+  const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS.tiktok;
+
+  if (!caption) {
+    return "Video posted via Vibe Socials";
+  }
+
+  // tiktok's charLimit is always a number (see platformLimits.ts); the null
+  // check only exists to satisfy the shared `Record<Platform, ...>` type.
+  return charLimit === null ? caption : truncateGraphemes(caption, charLimit, { ellipsis });
 }
 
 /** Terminal/transient classification of a single TikTok publish-status poll. */
@@ -216,11 +238,9 @@ export const tiktokClient: PlatformClient = {
     const fileBytes = Buffer.from(await videoResponse.arrayBuffer());
     const size = fileBytes.byteLength;
 
-    // TikTok title has a 2200 character limit, but captions are typically shorter
-    // Truncate if needed to avoid API rejection
-    const tiktokCaption = caption
-      ? truncateGraphemes(caption, 2200)
-      : "Video posted via Vibe Socials";
+    // TikTok title has a 2200 character limit (see lib/platformLimits.ts), but
+    // captions are typically shorter. Truncate if needed to avoid API rejection.
+    const tiktokCaption = computeTikTokCaption(caption);
 
     // TikTok FILE_UPLOAD chunking (see computeChunkPlan): chunk_size is capped at
     // 10MB, total_chunk_count is floor(size / chunk_size), and the FINAL chunk

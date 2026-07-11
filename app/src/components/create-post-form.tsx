@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, Suspense } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { upload } from '@vercel/blob/client';
 import { Sparkles } from "lucide-react";
 import type { Platform } from "@prisma/client";
+import { PlatformPreviewList } from "./composer/platform-preview";
 import { LocationAutocomplete } from "./location-autocomplete";
 import { TikTokPostSettings } from "./tiktok-post-settings";
 import { YouTubePostSettings } from "./youtube-post-settings";
@@ -17,8 +18,11 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
+import { useConnections } from "@/hooks/useConnections";
+import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { cn } from "@/lib/cn";
 import type { MediaItemDto } from "@/lib/mediaDto";
+import { PLATFORM_ORDER } from "@/lib/platforms";
 import {
   SCHEDULE_BUFFER_MS,
   localDateTimeToUtcIso,
@@ -95,7 +99,18 @@ function generateBlobKey(file: File): string {
   return `${Date.now()}-${random}-${safeName}`;
 }
 
-function CreatePostFormInner() {
+interface CreatePostFormInnerProps {
+  /**
+   * Roadmap Phase 7 — the posting user's footer settings (companyWebsite /
+   * defaultHashtags), projected server-side (see app/posts/new/page.tsx) so
+   * only these two display fields — never the full `User` row — reach this
+   * client component. Optional: the live preview below still renders (minus
+   * the footer) when this isn't provided.
+   */
+  footerSettings?: CaptionFooterUser;
+}
+
+function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
   const toast = useToast();
   const searchParams = useSearchParams();
 
@@ -173,10 +188,31 @@ function CreatePostFormInner() {
     privacyStatus: "unlisted",
   });
 
+  // Roadmap Phase 7 — connection state for the OTHER platforms (x, instagram,
+  // linkedin, facebook_page, google_business_profile), reusing the same
+  // read-only `GET /api/connections` the dashboard's connection-health widget
+  // already calls (via this shared hook) rather than adding a new endpoint.
+  // TikTok/YouTube keep using their own existing hasTikTokConnection /
+  // hasYouTubeConnection checks below (unchanged) so the live preview never
+  // disagrees with the TikTok/YouTube settings panels already gated on them.
+  const { connections } = useConnections();
+
   useEffect(() => {
     checkTikTokConnection();
     checkYouTubeConnection();
   }, []);
+
+  // Roadmap Phase 7 — platforms to show a live preview card for: connected
+  // platforms only, in the app's standard display order. tiktok/youtube read
+  // the existing flags; every other platform reads the `useConnections()`
+  // fetch above.
+  const connectedPlatforms = useMemo(() => {
+    return PLATFORM_ORDER.filter((platform) => {
+      if (platform === "tiktok") return hasTikTokConnection;
+      if (platform === "youtube") return hasYouTubeConnection;
+      return connections?.some((c) => c.platform === platform && c.connected) ?? false;
+    });
+  }, [connections, hasTikTokConnection, hasYouTubeConnection]);
 
   // Roadmap Phase 2 — load the reuse target, if any. Runs once per distinct
   // `reuseMediaItemId` (a fresh navigation from the media library always
@@ -608,6 +644,12 @@ function CreatePostFormInner() {
   // from `reuseItem` instead.
   const activeMimeType = uploadFile?.type ?? reuseItem?.mimeType ?? null;
 
+  // Roadmap Phase 7 — same media the sections above already preview, reused
+  // (never re-uploaded) for the per-platform preview cards: the reused
+  // MediaItem's public blob URL in reuse mode, else the local object-URL
+  // preview of the freshly attached file.
+  const activeMediaUrl = reuseItem ? reuseItem.storageLocation : previewUrl;
+
   return (
     <Card className="p-6">
       <form onSubmit={handleUploadSubmit} className="space-y-5">
@@ -858,6 +900,19 @@ function CreatePostFormInner() {
           />
         )}
 
+        {/* Roadmap Phase 7 — live per-platform preview (spec §7.1): caption
+            with footer, media thumbnail, and char-limit feedback for every
+            CONNECTED platform. Recomputed on every render, so it updates as
+            the user types. */}
+        <PlatformPreviewList
+          platforms={connectedPlatforms}
+          caption={uploadCaption}
+          overrides={reusePerPlatformOverrides}
+          user={footerSettings}
+          mediaUrl={activeMediaUrl}
+          mediaMimeType={activeMimeType}
+        />
+
         {/* Roadmap Phase 5 — publish timing: now / schedule / draft. */}
         <div className="space-y-3 pt-1">
           <div className="space-y-1.5">
@@ -947,16 +1002,26 @@ function CreatePostFormSkeleton() {
   );
 }
 
+export interface CreatePostFormProps {
+  /**
+   * Roadmap Phase 7 — footer settings for the Preview section, projected
+   * server-side by `app/posts/new/page.tsx` (SEC-1: only companyWebsite /
+   * defaultHashtags, never the full `User` row). Optional so existing/other
+   * callers of `CreatePostForm` keep working unchanged.
+   */
+  footerSettings?: CaptionFooterUser;
+}
+
 /**
  * `useSearchParams` (used by the reuse-mode fetch above) requires a Suspense
  * boundary around its consumer during static rendering; self-contained here
  * so the parent page (`app/posts/new/page.tsx`) doesn't need to know about
  * it — mirrors how `ConnectionsSection` wraps `LinkedInSetupDialog`.
  */
-export function CreatePostForm() {
+export function CreatePostForm({ footerSettings }: CreatePostFormProps) {
   return (
     <Suspense fallback={<CreatePostFormSkeleton />}>
-      <CreatePostFormInner />
+      <CreatePostFormInner footerSettings={footerSettings} />
     </Suspense>
   );
 }
