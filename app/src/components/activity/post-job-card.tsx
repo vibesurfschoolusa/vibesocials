@@ -9,6 +9,7 @@ import { Badge, type BadgeVariant } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
+import { MediaThumb } from "@/components/media-thumb";
 import { cn } from "@/lib/cn";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { platformPostUrl } from "@/lib/platformPostUrl";
@@ -196,26 +197,7 @@ export function PostJobCard({ job }: { job: PostJobDTO }) {
   return (
     <Card className="p-4 sm:p-5">
       <div className="flex items-start justify-between gap-3">
-        {job.media ? (
-          job.media.mimeType.startsWith("video/") ? (
-            <video
-              src={job.media.url}
-              muted
-              playsInline
-              preload="metadata"
-              aria-hidden
-              tabIndex={-1}
-              className="h-12 w-12 shrink-0 rounded-[var(--radius)] border border-border object-cover"
-            />
-          ) : (
-            // eslint-disable-next-line @next/next/no-img-element -- remote (already-public) Vercel Blob URL thumbnail; same pattern as create-post-form.tsx's reuse preview
-            <img
-              src={job.media.url}
-              alt=""
-              className="h-12 w-12 shrink-0 rounded-[var(--radius)] border border-border object-cover"
-            />
-          )
-        ) : null}
+        <MediaThumb media={job.media} />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-foreground">
             {job.caption?.trim() || "Untitled post"}

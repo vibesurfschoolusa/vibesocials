@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
+import { MediaThumb } from "@/components/media-thumb";
 import { cn } from "@/lib/cn";
 import { platformLabel, TIKTOK_PRIVACY_LABELS } from "@/lib/platforms";
 import type { PostJobDTO, PostsResponse } from "@/lib/postsDto";
@@ -82,26 +83,7 @@ function QueueCard({ job, onEdit, onCancel, onPublish, onDelete }: QueueCardProp
   return (
     <Card className="p-4 sm:p-5">
       <div className="flex items-start justify-between gap-3">
-        {job.media ? (
-          job.media.mimeType.startsWith("video/") ? (
-            <video
-              src={job.media.url}
-              muted
-              playsInline
-              preload="metadata"
-              aria-hidden
-              tabIndex={-1}
-              className="h-12 w-12 shrink-0 rounded-[var(--radius)] border border-border object-cover"
-            />
-          ) : (
-            // eslint-disable-next-line @next/next/no-img-element -- remote (already-public) Vercel Blob URL thumbnail; same pattern as create-post-form.tsx's reuse preview
-            <img
-              src={job.media.url}
-              alt=""
-              className="h-12 w-12 shrink-0 rounded-[var(--radius)] border border-border object-cover"
-            />
-          )
-        ) : null}
+        <MediaThumb media={job.media} />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-foreground">{title}</p>
           {job.status === "scheduled" && job.scheduledFor ? (

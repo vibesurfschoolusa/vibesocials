@@ -47,18 +47,28 @@ function RegisterPageInner() {
         setLoading(false);
         return;
       }
+    } catch (_err) {
+      setError("Unexpected error while registering.");
+      setLoading(false);
+      return;
+    }
 
+    // The account exists now (201 above) regardless of what happens next, so
+    // auto-sign-in runs in its own try/catch: a network blip here must not
+    // land in the block above and show the misleading "Unexpected error while
+    // registering." — it should just fall through to the friendly login
+    // handoff below, same as the "signed in but not ok" case.
+    try {
       const result = await signIn("credentials", { redirect: false, email, password });
       if (result?.ok) {
         router.push(callbackUrl);
         return;
       }
-      // Extremely unlikely (account was just created) — fall back to a friendly login handoff.
-      router.push(`/login?registered=1&callbackUrl=${encodeURIComponent(callbackUrl)}`);
-    } catch (_err) {
-      setError("Unexpected error while registering.");
-      setLoading(false);
+    } catch {
+      // fall through to the handoff below
     }
+    // Extremely unlikely (account was just created) — fall back to a friendly login handoff.
+    router.push(`/login?registered=1&callbackUrl=${encodeURIComponent(callbackUrl)}`);
   }
 
   return (
