@@ -176,6 +176,12 @@ export async function GET(request: NextRequest) {
           profilePicture: igData.profile_picture_url || null,
           pageId: pageWithInstagram.id,
         },
+        // Roadmap Phase 4: successful reconnect clears the flag set by a
+        // prior COR-5 reconnect-required failure (see
+        // server/platforms/connectionHealth.ts).
+        needsReconnect: false,
+        lastRefreshErrorCode: null,
+        refreshFailedAt: null,
       },
       create: {
         userId,
@@ -189,6 +195,10 @@ export async function GET(request: NextRequest) {
           profilePicture: igData.profile_picture_url || null,
           pageId: pageWithInstagram.id,
         },
+        // Roadmap Phase 4: a fresh connect always starts in a healthy state.
+        needsReconnect: false,
+        lastRefreshErrorCode: null,
+        refreshFailedAt: null,
       },
     });
 

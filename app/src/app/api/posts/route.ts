@@ -1,12 +1,22 @@
 import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
-import type { Platform } from "@prisma/client";
-import { createPostJobOnly } from "@/server/jobs/posting";
+import { logger } from "@/lib/logger";
+import { PostJobStatus, type Platform, type Prisma } from "@prisma/client";
+import {
+  createPostJobForExistingMedia,
+  createPostJobOnly,
+  MediaItemUnavailableError,
+} from "@/server/jobs/posting";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
-import type { YouTubePostMetadata } from "@/server/platforms/types";
+import { checkRateLimit } from "@/lib/rateLimit";
+import { isValidPerPlatformOverrides, validateScheduledFor, type PostJobIntent } from "@/lib/scheduling";
+import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
 import type { PostsResponse } from "@/lib/postsDto";
+
+/** Runtime set of valid PostJobStatus values, for the `?status=` filter. */
+const VALID_POST_JOB_STATUSES = new Set<string>(Object.values(PostJobStatus));
 
 const YOUTUBE_PRIVACY_STATUSES = ["public", "unlisted", "private"] as const;
 
@@ -21,22 +31,41 @@ const POSTS_PAGE_SIZE = 50;
  * jobs with their per-platform results, projected to display-safe fields only
  * (SEC-1 discipline — no tokens, secrets, or raw connection metadata).
  */
-export async function GET() {
+export async function GET(request: Request) {
   const user = await getCurrentUser();
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Optional `?status=` filter (Roadmap Phase 5) — a comma-separated list of
+  // PostJobStatus values, e.g. `?status=scheduled,draft` for the Queue view.
+  // Unknown values are ignored; if nothing valid remains the filter is dropped
+  // (returns all), so a bad param can never 500 or silently return empty.
+  const statusParam = new URL(request.url).searchParams.get("status");
+  const statusFilter = statusParam
+    ? statusParam
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => VALID_POST_JOB_STATUSES.has(s))
+    : [];
+
+  const where: Prisma.PostJobWhereInput = { userId: user.id };
+  if (statusFilter.length > 0) {
+    where.status = { in: statusFilter as PostJobStatus[] };
+  }
+
   try {
     const jobs = await prisma.postJob.findMany({
-      where: { userId: user.id },
+      where,
       orderBy: { createdAt: "desc" },
       take: POSTS_PAGE_SIZE,
       select: {
         id: true,
         status: true,
         createdAt: true,
+        scheduledFor: true,
+        baseCaption: true,
         mediaItem: { select: { baseCaption: true } },
         results: {
           select: {
@@ -50,24 +79,81 @@ export async function GET() {
       },
     });
 
+    // Roadmap Phase 8 (analytics): join the latest engagement snapshot per
+    // result. Scoped to the caller (SEC — a metric is only ever read by its
+    // owner) and joined by (platform, externalPostId) — the metric's DURABLE
+    // identity — so it stays correct even after a connection delete cascades the
+    // originating result away but leaves the metric row. YouTube-only in v1, so
+    // we only collect/join YouTube video ids. One extra bounded query.
+    const youtubeVideoIds = Array.from(
+      new Set(
+        jobs.flatMap((job) =>
+          job.results
+            .filter((result) => result.platform === "youtube" && result.externalPostId)
+            .map((result) => result.externalPostId as string),
+        ),
+      ),
+    );
+
+    const metricRows = youtubeVideoIds.length
+      ? await prisma.postMetric.findMany({
+          where: {
+            userId: user.id,
+            platform: "youtube",
+            externalPostId: { in: youtubeVideoIds },
+          },
+          // SEC-1: display fields only — never raw payload, id, userId, or the
+          // postJobResultId link.
+          select: {
+            externalPostId: true,
+            views: true,
+            likes: true,
+            comments: true,
+            shares: true,
+            fetchedAt: true,
+          },
+        })
+      : [];
+
+    const metricByVideoId = new Map(metricRows.map((row) => [row.externalPostId, row]));
+
     const payload: PostsResponse = {
       jobs: jobs.map((job) => ({
         id: job.id,
         status: job.status,
         createdAt: job.createdAt.toISOString(),
-        caption: job.mediaItem?.baseCaption ?? null,
-        results: job.results.map((result) => ({
-          platform: result.platform,
-          status: result.status,
-          externalPostId: result.externalPostId,
-          errorMessage: result.errorMessage,
-        })),
+        scheduledFor: job.scheduledFor?.toISOString() ?? null,
+        // Scheduled/draft jobs snapshot their caption on the job itself so
+        // editing them never mutates shared reused media; fall back to the
+        // media item's caption for immediate/older jobs.
+        caption: job.baseCaption ?? job.mediaItem?.baseCaption ?? null,
+        results: job.results.map((result) => {
+          const metricRow =
+            result.platform === "youtube" && result.externalPostId
+              ? metricByVideoId.get(result.externalPostId)
+              : undefined;
+          return {
+            platform: result.platform,
+            status: result.status,
+            externalPostId: result.externalPostId,
+            errorMessage: result.errorMessage,
+            metric: metricRow
+              ? {
+                  views: metricRow.views,
+                  likes: metricRow.likes,
+                  comments: metricRow.comments,
+                  shares: metricRow.shares,
+                  fetchedAt: metricRow.fetchedAt.toISOString(),
+                }
+              : null,
+          };
+        }),
       })),
     };
 
     return NextResponse.json(payload);
   } catch (error: unknown) {
-    console.error("[GET /api/posts] Unexpected error", { error });
+    logger.error("[GET /api/posts] Unexpected error", { error, userId: user.id });
     return NextResponse.json(
       { error: "Failed to load posts" },
       { status: 500 },
@@ -77,8 +163,12 @@ export async function GET() {
 
 // Shape of the JSON POST body. Fields the handler validates at runtime are
 // typed `unknown` (narrowed at use); the rest reflect their consumed types.
+// `mediaItemId` (Roadmap Phase 2) is the additive reuse path: a body with
+// `mediaItemId` and no `blobUrl` skips upload and re-attaches an existing,
+// already-persisted MediaItem instead.
 interface CreatePostBody {
   blobUrl?: string;
+  mediaItemId?: string;
   filename?: string;
   mimeType?: string;
   sizeBytes?: number;
@@ -87,6 +177,11 @@ interface CreatePostBody {
   perPlatformOverrides?: unknown;
   tiktokMetadata?: unknown;
   youtubeMetadata?: { privacyStatus?: unknown };
+  // Roadmap Phase 5. `draft: true` saves a draft (no results, no event);
+  // `scheduledFor` (ISO string) schedules for later (no results, no event —
+  // the cron claims it when due). Absent both = immediate (today's behavior).
+  draft?: unknown;
+  scheduledFor?: unknown;
 }
 
 export async function POST(request: Request) {
@@ -94,6 +189,31 @@ export async function POST(request: Request) {
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Roadmap Phase 2 (spec §1.2): POST /api/posts triggers live
+  // multi-platform publishing — the heaviest external action in the app —
+  // and was unlimited until now. Shared by both the blobUrl and mediaItemId
+  // (reuse) creation paths below; checked right after auth, before any
+  // parsing/DB work.
+  const rateLimit = await checkRateLimit({
+    userId: user.id,
+    route: "posts/publish",
+    limit: 30,
+    windowMs: 5 * 60 * 1000,
+  });
+
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      {
+        error: "Too many posts created recently. Please slow down.",
+        retryAfterSeconds: rateLimit.retryAfterSeconds,
+      },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) },
+      },
+    );
   }
 
   const contentType = request.headers.get("content-type") || "";
@@ -112,17 +232,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  if (!body?.blobUrl) {
+  const hasBlobUrl = typeof body?.blobUrl === "string" && body.blobUrl.trim().length > 0;
+  const hasMediaItemId =
+    typeof body?.mediaItemId === "string" && body.mediaItemId.trim().length > 0;
+  // blobUrl wins if a caller somehow sends both, preserving the original
+  // (pre-Phase-2) path byte-for-byte for every existing caller.
+  const usingExistingMedia = hasMediaItemId && !hasBlobUrl;
+
+  if (!hasBlobUrl && !usingExistingMedia) {
     return NextResponse.json(
-      { error: "blobUrl is required" },
+      { error: "blobUrl or mediaItemId is required" },
       { status: 400 },
     );
   }
 
-  const blobUrl = body.blobUrl;
-  const filename = body.filename || "upload";
-  const mimeType = body.mimeType || "application/octet-stream";
-  const sizeBytes = body.sizeBytes || 0;
   const baseCaptionRaw = body?.baseCaption;
   const locationRaw = body?.location;
   const overridesRaw = body?.perPlatformOverrides;
@@ -138,9 +261,12 @@ export async function POST(request: Request) {
 
   let perPlatformOverrides: Partial<Record<Platform, string>> | undefined;
   if (overridesRaw != null) {
-    if (typeof overridesRaw !== "object") {
+    // Require a Record<string,string> (review Minor #3 — reject arrays and
+    // non-string values so a later publish can't feed a non-string to caption
+    // building).
+    if (!isValidPerPlatformOverrides(overridesRaw)) {
       return NextResponse.json(
-        { error: "perPlatformOverrides must be an object if provided" },
+        { error: "perPlatformOverrides must be an object of string values if provided" },
         { status: 400 },
       );
     }
@@ -168,37 +294,137 @@ export async function POST(request: Request) {
     };
   }
 
+  // Validate TikTok metadata into a clean typed object (previously forwarded raw
+  // — now at parity with youtube, and normalized so it can be persisted on
+  // scheduled/draft jobs, review B1). `privacyLevel` must be a STRING if present
+  // but may be empty: the composer only requires an explicit level for immediate
+  // posts, so a scheduled/draft post can legitimately carry none — the TikTok
+  // client then applies its SELF_ONLY default at publish (a *chosen* level is
+  // preserved and honored). TikTok's allowed set is per-creator (resolved from
+  // creator-info), so it's not a fixed enum here; the toggles coerce to booleans.
+  let tiktokMetadata: TikTokPostMetadata | undefined;
+  if (tiktokMetadataRaw != null) {
+    if (typeof tiktokMetadataRaw !== "object" || Array.isArray(tiktokMetadataRaw)) {
+      return NextResponse.json(
+        { error: "tiktokMetadata must be an object if provided" },
+        { status: 400 },
+      );
+    }
+    const raw = tiktokMetadataRaw as Record<string, unknown>;
+    if (raw.privacyLevel !== undefined && typeof raw.privacyLevel !== "string") {
+      return NextResponse.json(
+        { error: "tiktokMetadata.privacyLevel must be a string" },
+        { status: 400 },
+      );
+    }
+    tiktokMetadata = {
+      privacyLevel: typeof raw.privacyLevel === "string" ? raw.privacyLevel : "",
+      disableComment: Boolean(raw.disableComment),
+      disableDuet: Boolean(raw.disableDuet),
+      disableStitch: Boolean(raw.disableStitch),
+      ...(raw.brandedContent !== undefined ? { brandedContent: Boolean(raw.brandedContent) } : {}),
+      ...(raw.brandOrganic !== undefined ? { brandOrganic: Boolean(raw.brandOrganic) } : {}),
+    };
+  }
+
   const location = typeof locationRaw === "string" && locationRaw.trim() ? locationRaw.trim() : undefined;
 
-  try {
-    // Create job records without executing (for background processing)
-    const { postJobId, mediaItemId } = await createPostJobOnly({
-      userId: user.id,
-      media: {
-        storageLocation: blobUrl,
-        originalFilename: filename,
-        mimeType,
-        sizeBytes,
-      },
-      baseCaption: baseCaptionRaw,
-      location,
-      perPlatformOverrides,
-    });
+  // Roadmap Phase 5 — resolve the intent. `draft: true` wins; otherwise a
+  // present `scheduledFor` means "schedule" (validated to be a real, future
+  // time); otherwise it's an immediate post (today's path, byte-for-byte).
+  let intent: PostJobIntent = "immediate";
+  let scheduledForDate: Date | null = null;
+  if (body?.draft === true) {
+    intent = "draft";
+  } else if (body?.scheduledFor != null) {
+    const validation = validateScheduledFor(body.scheduledFor, new Date());
+    if (!validation.ok) {
+      return NextResponse.json({ error: validation.error }, { status: 400 });
+    }
+    intent = "scheduled";
+    scheduledForDate = validation.date;
+  }
 
-    // Trigger background job via Inngest
-    await inngest.send({
-      name: "post/publish.requested",
-      data: {
-        postJobId,
+  try {
+    // Create job records without executing (for background processing).
+    // Reuse (mediaItemId, Roadmap Phase 2) skips MediaItem creation via
+    // createPostJobForExistingMedia; the original blobUrl path is untouched.
+    let postJobId: string;
+    let mediaItemId: string;
+
+    if (usingExistingMedia) {
+      const created = await createPostJobForExistingMedia({
         userId: user.id,
-        mediaItemId,
+        mediaItemId: body.mediaItemId as string,
+        baseCaption: baseCaptionRaw,
+        perPlatformOverrides,
+        location,
+        intent,
+        scheduledFor: scheduledForDate,
+        // Persisted onto the job for scheduled/draft (review B1); ignored for
+        // immediate (which carries them in the event below).
+        tiktokMetadata,
+        youtubeMetadata,
+      });
+      postJobId = created.postJobId;
+      mediaItemId = created.mediaItemId;
+    } else {
+      // Redundant with the `hasBlobUrl` check above at runtime (this branch
+      // only runs when `usingExistingMedia` is false, which — given the
+      // earlier guard — guarantees `hasBlobUrl`), but TypeScript can't carry
+      // that guarantee through the intermediate boolean, so this narrows
+      // `body.blobUrl` to `string` for the call below.
+      if (typeof body.blobUrl !== "string" || !body.blobUrl.trim()) {
+        return NextResponse.json(
+          { error: "blobUrl is required" },
+          { status: 400 },
+        );
+      }
+
+      const created = await createPostJobOnly({
+        userId: user.id,
+        media: {
+          storageLocation: body.blobUrl,
+          originalFilename: body.filename || "upload",
+          mimeType: body.mimeType || "application/octet-stream",
+          sizeBytes: body.sizeBytes || 0,
+        },
         baseCaption: baseCaptionRaw,
         location,
         perPlatformOverrides,
-        tiktokMetadata: tiktokMetadataRaw,
+        intent,
+        scheduledFor: scheduledForDate,
+        // Persisted onto the job for scheduled/draft (review B1); ignored for
+        // immediate (which carries them in the event below).
+        tiktokMetadata,
         youtubeMetadata,
-      },
-    });
+      });
+      postJobId = created.postJobId;
+      mediaItemId = created.mediaItemId;
+    }
+
+    // Immediate posts trigger the background publish now. Scheduled/draft jobs
+    // send NO event here (Roadmap Phase 5): a scheduled job is picked up by the
+    // cron due-scanner when `scheduledFor` arrives (which materializes its
+    // per-platform results from the connections that exist THEN — the review's
+    // run-time-result-creation fix), and a draft is promoted via the publish
+    // endpoint. The event shape is identical to the reuse path; the publisher
+    // resolves media by id, so it needs no changes.
+    if (intent === "immediate") {
+      await inngest.send({
+        name: "post/publish.requested",
+        data: {
+          postJobId,
+          userId: user.id,
+          mediaItemId,
+          baseCaption: baseCaptionRaw,
+          location,
+          perPlatformOverrides,
+          tiktokMetadata,
+          youtubeMetadata,
+        },
+      });
+    }
 
     // Return immediately - job runs in background
     const postJob = await prisma.postJob.findUnique({
@@ -208,11 +434,14 @@ export async function POST(request: Request) {
       where: { postJobId },
     });
 
-    return NextResponse.json({
-      postJob,
-      results,
-      message: "Publishing in progress. Large videos may take a few minutes.",
-    });
+    const message =
+      intent === "draft"
+        ? "Draft saved."
+        : intent === "scheduled"
+          ? "Post scheduled."
+          : "Publishing in progress. Large videos may take a few minutes.";
+
+    return NextResponse.json({ postJob, results, message });
   } catch (error: unknown) {
     if (error instanceof Error && error.message === "NO_CONNECTIONS") {
       return NextResponse.json(
@@ -225,7 +454,14 @@ export async function POST(request: Request) {
       );
     }
 
-    console.error("[POST /api/posts] Unexpected error (blob upload)", { error });
+    if (error instanceof MediaItemUnavailableError) {
+      return NextResponse.json(
+        { error: error.message, code: error.code },
+        { status: 404 },
+      );
+    }
+
+    logger.error("[POST /api/posts] Unexpected error", { error, usingExistingMedia, userId: user.id });
     return NextResponse.json(
       { error: "Failed to create post" },
       { status: 500 },

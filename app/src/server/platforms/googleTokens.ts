@@ -2,6 +2,8 @@ import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { logger } from "@/lib/logger";
+import { markConnectionNeedsReconnect } from "./connectionHealth";
 
 // Server-only: touches prisma and Google OAuth client secrets.
 //
@@ -32,6 +34,15 @@ export async function refreshGoogleToken(
 ): Promise<SocialConnection> {
   const refreshToken = connection.refreshToken;
   if (!refreshToken) {
+    // Roadmap Phase 4: no refresh token to retry with is a terminal,
+    // connection-specific signal — mark needsReconnect before throwing (see
+    // connectionHealth.ts). Flag fields only; never touches accessToken/
+    // refreshToken.
+    logger.warn("[GoogleTokens] No refresh token available; marking connection for reconnect", {
+      connectionId: connection.id,
+      code: "GOOGLE_NO_REFRESH_TOKEN",
+    });
+    await markConnectionNeedsReconnect(connection.id, "GOOGLE_NO_REFRESH_TOKEN");
     const error = new Error(
       "No refresh token available for this Google connection",
     ) as Error & { code: string };
@@ -42,6 +53,13 @@ export async function refreshGoogleToken(
   const clientId = process.env.GOOGLE_GBP_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_GBP_CLIENT_SECRET;
   if (!clientId || !clientSecret) {
+    // Deployment misconfiguration, not a per-connection failure — never
+    // includes the (absent) client id/secret themselves, just that they're
+    // missing.
+    logger.error("[GoogleTokens] Missing Google OAuth credentials", {
+      connectionId: connection.id,
+      code: "GOOGLE_MISSING_OAUTH_CREDENTIALS",
+    });
     const error = new Error(
       "Missing Google OAuth credentials",
     ) as Error & { code: string };
@@ -49,7 +67,7 @@ export async function refreshGoogleToken(
     throw error;
   }
 
-  console.log("[GoogleTokens] Refreshing access token", {
+  logger.info("[GoogleTokens] Refreshing access token", {
     connectionId: connection.id,
   });
 
@@ -66,10 +84,35 @@ export async function refreshGoogleToken(
     }),
   });
 
-  await assertOk(response, {
-    code: "GOOGLE_TOKEN_REFRESH_FAILED",
-    prefix: "Failed to refresh Google access token",
-  });
+  try {
+    await assertOk(response, {
+      code: "GOOGLE_TOKEN_REFRESH_FAILED",
+      prefix: "Failed to refresh Google access token",
+    });
+  } catch (error) {
+    // Roadmap Phase 4: a non-2xx here is the real invalid_grant signal — mark
+    // needsReconnect before rethrowing the sanitized error (see
+    // connectionHealth.ts). Flag fields only; never touches accessToken/
+    // refreshToken.
+    //
+    // Health H1: `assertOk` above already `console.error`s the raw upstream
+    // status/body server-side (by design — see assertOk.ts), but WITHOUT a
+    // connection id attached. That's precisely why an invalid_grant on one
+    // user's reviews connection was hard to find in a shared log stream:
+    // nothing tied the failure to a specific connection. This is the
+    // structured, connection-correlated counterpart — connection id + the
+    // sanitized error code only, never the tokens — and (via the logger) also
+    // reaches Sentry as a real, filterable error event once monitoring is
+    // enabled.
+    logger.error("[GoogleTokens] Token refresh failed; marking connection for reconnect", {
+      connectionId: connection.id,
+      platform: connection.platform,
+      code: (error as Error & { code?: string }).code ?? "GOOGLE_TOKEN_REFRESH_FAILED",
+      error,
+    });
+    await markConnectionNeedsReconnect(connection.id, "GOOGLE_TOKEN_REFRESH_FAILED");
+    throw error;
+  }
 
   const tokenData = (await response.json()) as {
     access_token: string;
@@ -85,17 +128,23 @@ export async function refreshGoogleToken(
       : 3600;
   const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
 
-  // Update ONLY accessToken + expiresAt. Never refreshToken. (See file header.)
+  // Update accessToken + expiresAt and clear the reconnect-health flags — a
+  // successful refresh means the connection works again, so a stale
+  // needsReconnect from an earlier transient failure must not persist. Never
+  // touch refreshToken. (See file header.)
   const { prisma } = await import("@/lib/db");
   const updated = await prisma.socialConnection.update({
     where: { id: connection.id },
     data: {
       accessToken: tokenData.access_token,
       expiresAt,
+      needsReconnect: false,
+      lastRefreshErrorCode: null,
+      refreshFailedAt: null,
     },
   });
 
-  console.log("[GoogleTokens] Access token refreshed successfully", {
+  logger.info("[GoogleTokens] Access token refreshed successfully", {
     connectionId: connection.id,
   });
 

@@ -19,11 +19,17 @@ import { useToast } from "@/components/ui/toast";
 interface Props {
   platform: string;
   isConnected: boolean;
+  /**
+   * Roadmap Phase 4: true when this connection needs reconnecting (see
+   * server/platforms/connectionHealth.ts). Swaps the "Connected" badge for a
+   * danger "Reconnect" badge that links to this platform's OAuth start.
+   */
+  needsReconnect?: boolean;
 }
 
 const TIKTOK_LOGOUT_URL = "https://www.tiktok.com/logout";
 
-export function ConnectionActions({ platform, isConnected }: Props) {
+export function ConnectionActions({ platform, isConnected, needsReconnect = false }: Props) {
   const router = useRouter();
   const toast = useToast();
 
@@ -100,7 +106,18 @@ export function ConnectionActions({ platform, isConnected }: Props) {
   return (
     <>
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="success">Connected</Badge>
+        {needsReconnect ? (
+          // Roadmap Phase 4: danger badge, links straight to this platform's
+          // OAuth start (a plain anchor — /api/auth/* is a redirect handler,
+          // not a Next.js route, matching the "Connect" ButtonLink below).
+          <a href={authUrl}>
+            <Badge variant="danger" className="cursor-pointer hover:opacity-80">
+              Reconnect
+            </Badge>
+          </a>
+        ) : (
+          <Badge variant="success">Connected</Badge>
+        )}
         <Button size="sm" variant="outline" onClick={() => setSwitchOpen(true)}>
           Switch account
         </Button>

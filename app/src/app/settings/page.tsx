@@ -19,6 +19,7 @@ export default async function SettingsPage() {
   const settings: UserSettings = {
     companyWebsite: user.companyWebsite,
     defaultHashtags: user.defaultHashtags,
+    notifyOnPostComplete: user.notifyOnPostComplete,
   };
 
   // Fetch user connections. SEC-1: select only browser-safe columns and map to
@@ -30,6 +31,10 @@ export default async function SettingsPage() {
       platform: true,
       accountIdentifier: true,
       metadata: true,
+      // Roadmap Phase 4: the connection-health flag itself — still never
+      // accessToken/refreshToken/scopes/raw metadata beyond the two fields
+      // flattened below.
+      needsReconnect: true,
     },
   });
 
@@ -42,6 +47,7 @@ export default async function SettingsPage() {
       accountIdentifier: row.accountIdentifier,
       username: metadata?.username ?? null,
       locationName: metadata?.locationName ?? null,
+      needsReconnect: row.needsReconnect,
     };
   });
 

@@ -163,6 +163,11 @@ export async function GET(request: Request) {
             username: screenName,
             user_id: userIdFromX,
           },
+          // Roadmap Phase 4: successful reconnect clears the flag set by a
+          // prior refresh failure (see server/platforms/connectionHealth.ts).
+          needsReconnect: false,
+          lastRefreshErrorCode: null,
+          refreshFailedAt: null,
         },
       });
       console.log("[X OAuth 1.0a] Connection updated", { connectionId: existingConnection.id });
@@ -181,6 +186,10 @@ export async function GET(request: Request) {
             username: screenName,
             user_id: userIdFromX,
           },
+          // Roadmap Phase 4: a fresh connect always starts in a healthy state.
+          needsReconnect: false,
+          lastRefreshErrorCode: null,
+          refreshFailedAt: null,
         },
       });
       console.log("[X OAuth 1.0a] Connection created");

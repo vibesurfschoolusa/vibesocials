@@ -27,6 +27,9 @@ function makeConnection(overrides: Partial<SocialConnection> = {}): SocialConnec
     accountIdentifier: "acct-1",
     scopes: null,
     metadata: null,
+    needsReconnect: false,
+    lastRefreshErrorCode: null,
+    refreshFailedAt: null,
     createdAt: new Date("2020-01-01T00:00:00Z"),
     updatedAt: new Date("2020-01-01T00:00:00Z"),
     ...overrides,
@@ -84,9 +87,18 @@ describe("refreshGoogleToken", () => {
 
     expect(arg.where).toEqual({ id: "conn-42" });
 
-    // THE program-level constraint: update data contains ONLY these two keys.
-    expect(Object.keys(arg.data).sort()).toEqual(["accessToken", "expiresAt"]);
+    // The success write persists the new token + expiry and clears the
+    // reconnect-health flags. THE program-level constraint: it must NEVER touch
+    // refreshToken (or metadata).
+    expect(Object.keys(arg.data).sort()).toEqual([
+      "accessToken",
+      "expiresAt",
+      "lastRefreshErrorCode",
+      "needsReconnect",
+      "refreshFailedAt",
+    ]);
     expect(arg.data).not.toHaveProperty("refreshToken");
+    expect(arg.data.needsReconnect).toBe(false);
     expect(arg.data.accessToken).toBe("new-access-token");
 
     // Expiry math: now + expires_in seconds.
@@ -127,11 +139,11 @@ describe("refreshGoogleToken", () => {
     expect(arg.data).not.toHaveProperty("refreshToken");
   });
 
-  it("throws GOOGLE_NO_REFRESH_TOKEN and never touches the database when no refresh token", async () => {
+  it("throws GOOGLE_NO_REFRESH_TOKEN, never hits the network, and marks needsReconnect (flag fields only, no tokens)", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    const connection = makeConnection({ refreshToken: null });
+    const connection = makeConnection({ id: "conn-7", refreshToken: null });
 
     const error = await refreshGoogleToken(connection)
       .then(() => null)
@@ -139,7 +151,26 @@ describe("refreshGoogleToken", () => {
 
     expect(error?.code).toBe("GOOGLE_NO_REFRESH_TOKEN");
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(updateMock).not.toHaveBeenCalled();
+
+    // Roadmap Phase 4: the connection-specific "no refresh token" failure IS
+    // marked (unlike the env-config failure below) — flag fields only, never
+    // accessToken/refreshToken.
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    const arg = updateMock.mock.calls[0][0] as {
+      where: { id: string };
+      data: Record<string, unknown>;
+    };
+    expect(arg.where).toEqual({ id: "conn-7" });
+    expect(Object.keys(arg.data).sort()).toEqual([
+      "lastRefreshErrorCode",
+      "needsReconnect",
+      "refreshFailedAt",
+    ]);
+    expect(arg.data.needsReconnect).toBe(true);
+    expect(arg.data.lastRefreshErrorCode).toBe("GOOGLE_NO_REFRESH_TOKEN");
+    expect(arg.data.refreshFailedAt).toBeInstanceOf(Date);
+    expect(arg.data).not.toHaveProperty("accessToken");
+    expect(arg.data).not.toHaveProperty("refreshToken");
   });
 
   it("throws GOOGLE_MISSING_OAUTH_CREDENTIALS when client env vars are absent", async () => {
@@ -157,7 +188,7 @@ describe("refreshGoogleToken", () => {
     expect(updateMock).not.toHaveBeenCalled();
   });
 
-  it("throws sanitized GOOGLE_TOKEN_REFRESH_FAILED without leaking the upstream body or updating", async () => {
+  it("throws sanitized GOOGLE_TOKEN_REFRESH_FAILED without leaking the upstream body, and marks needsReconnect (flag fields only, no tokens)", async () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const upstreamBody = "invalid_grant: token has been expired or revoked SECRET123";
     const fetchMock = vi
@@ -165,15 +196,33 @@ describe("refreshGoogleToken", () => {
       .mockResolvedValue(new Response(upstreamBody, { status: 400, statusText: "Bad Request" }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const error = await refreshGoogleToken(makeConnection())
+    const connection = makeConnection({ id: "conn-8" });
+    const error = await refreshGoogleToken(connection)
       .then(() => null)
       .catch((e: unknown) => e as Error & { code?: string });
 
     expect(error?.code).toBe("GOOGLE_TOKEN_REFRESH_FAILED");
     expect(error?.message).not.toContain(upstreamBody);
     expect(error?.message).toContain("400");
-    expect(updateMock).not.toHaveBeenCalled();
     // Raw upstream body reaches the server logs.
     expect(JSON.stringify(consoleSpy.mock.calls)).toContain(upstreamBody);
+
+    // Roadmap Phase 4: assertOk's non-2xx (the real invalid_grant signal) is
+    // the OTHER marked path — flag fields only, never accessToken/refreshToken.
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    const arg = updateMock.mock.calls[0][0] as {
+      where: { id: string };
+      data: Record<string, unknown>;
+    };
+    expect(arg.where).toEqual({ id: "conn-8" });
+    expect(Object.keys(arg.data).sort()).toEqual([
+      "lastRefreshErrorCode",
+      "needsReconnect",
+      "refreshFailedAt",
+    ]);
+    expect(arg.data.needsReconnect).toBe(true);
+    expect(arg.data.lastRefreshErrorCode).toBe("GOOGLE_TOKEN_REFRESH_FAILED");
+    expect(arg.data).not.toHaveProperty("accessToken");
+    expect(arg.data).not.toHaveProperty("refreshToken");
   });
 });

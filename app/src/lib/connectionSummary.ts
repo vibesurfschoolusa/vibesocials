@@ -20,4 +20,10 @@ export interface ConnectionSummary {
   username: string | null;
   /** Flattened `metadata.locationName` (Google Business Profile), if present. */
   locationName: string | null;
+  /**
+   * Roadmap Phase 4: true when a token refresh terminally failed or a
+   * platform client mapped a 401 to its `*_RECONNECT_REQUIRED` code — see
+   * server/platforms/connectionHealth.ts. NOT derived from `expiresAt`.
+   */
+  needsReconnect: boolean;
 }

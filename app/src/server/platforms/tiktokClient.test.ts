@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import { truncateGraphemes } from "@/lib/truncate";
+
 import {
   computeChunkPlan,
+  computeTikTokCaption,
   decidePollOutcome,
   TIKTOK_MAX_CHUNK_SIZE,
   TIKTOK_MAX_FINAL_CHUNK_SIZE,
@@ -101,6 +104,53 @@ describe("computeChunkPlan", () => {
     const plan = assertFullCoverage(size, computeChunkPlan(size, 5 * MB));
     expect(plan.chunkSize).toBe(5 * MB);
     expect(plan.totalChunks).toBe(5); // floor(25 / 5) === 5
+  });
+});
+
+// Roadmap Phase 7 (spec §7.1) — this locks computeTikTokCaption (extracted
+// from publishVideo when it was refactored to read its limit from
+// lib/platformLimits.ts instead of the inline `2200` literal) to the EXACT
+// same output as the pre-refactor inline expression:
+//
+//   const tiktokCaption = caption
+//     ? truncateGraphemes(caption, 2200)
+//     : "Video posted via Vibe Socials";
+//
+// If this ever fails, either the refactor broke posting behavior or someone
+// edited PLATFORM_CAPTION_LIMITS.tiktok without meaning to change what
+// TikTok posts.
+describe("computeTikTokCaption", () => {
+  it("falls back to the default title when caption is empty", () => {
+    expect(computeTikTokCaption("")).toBe("Video posted via Vibe Socials");
+  });
+
+  it("returns a caption under 2200 graphemes unchanged", () => {
+    const caption = "Just a short caption";
+    expect(computeTikTokCaption(caption)).toBe(caption);
+  });
+
+  it("returns a caption at exactly 2200 graphemes unchanged (boundary)", () => {
+    const caption = "a".repeat(2200);
+    expect(computeTikTokCaption(caption)).toBe(caption);
+  });
+
+  it("truncates a caption of length 2500 to exactly 2200 graphemes with no ellipsis", () => {
+    const caption = "a".repeat(2500);
+    const result = computeTikTokCaption(caption);
+    expect(result).toHaveLength(2200);
+    expect(result).toBe("a".repeat(2200));
+  });
+
+  it("matches the pre-refactor inline call byte-for-byte for a realistic long caption", () => {
+    const caption = "The quick brown fox jumps over the lazy dog. ".repeat(60);
+    expect(caption.length).toBeGreaterThan(2200);
+    expect(computeTikTokCaption(caption)).toBe(truncateGraphemes(caption, 2200));
+  });
+
+  it("matches the pre-refactor inline call byte-for-byte for emoji/ZWJ-heavy content over the limit", () => {
+    const caption = "😀👨‍👩‍👧🇺🇸".repeat(500);
+    expect(caption.length).toBeGreaterThan(2200);
+    expect(computeTikTokCaption(caption)).toBe(truncateGraphemes(caption, 2200));
   });
 });
 

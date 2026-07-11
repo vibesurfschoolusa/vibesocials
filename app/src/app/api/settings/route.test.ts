@@ -27,6 +27,7 @@ vi.mock("@/lib/auth", () => ({
 import {
   COMPANY_WEBSITE_MAX_LENGTH,
   DEFAULT_HASHTAGS_MAX_LENGTH,
+  NOTIFY_ON_POST_COMPLETE_DEFAULT,
   parseSettingsInput,
   POST,
 } from "./route";
@@ -39,6 +40,7 @@ function makeUser(overrides: Partial<User> = {}): User {
     passwordHash: null,
     companyWebsite: null,
     defaultHashtags: null,
+    notifyOnPostComplete: true,
     createdAt: new Date("2020-01-01T00:00:00Z"),
     updatedAt: new Date("2020-01-01T00:00:00Z"),
     ...overrides,
@@ -72,7 +74,11 @@ describe("parseSettingsInput", () => {
       parseSettingsInput({ companyWebsite: "example.com", defaultHashtags: "#tag1 #tag2" }),
     ).toEqual({
       ok: true,
-      data: { companyWebsite: "example.com", defaultHashtags: "#tag1 #tag2" },
+      data: {
+        companyWebsite: "example.com",
+        defaultHashtags: "#tag1 #tag2",
+        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
+      },
     });
   });
 
@@ -81,28 +87,44 @@ describe("parseSettingsInput", () => {
       parseSettingsInput({ companyWebsite: "  example.com  ", defaultHashtags: "  #tag  " }),
     ).toEqual({
       ok: true,
-      data: { companyWebsite: "example.com", defaultHashtags: "#tag" },
+      data: {
+        companyWebsite: "example.com",
+        defaultHashtags: "#tag",
+        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
+      },
     });
   });
 
   it("normalizes missing fields to null", () => {
     expect(parseSettingsInput({})).toEqual({
       ok: true,
-      data: { companyWebsite: null, defaultHashtags: null },
+      data: {
+        companyWebsite: null,
+        defaultHashtags: null,
+        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
+      },
     });
   });
 
   it("normalizes explicit null fields to null", () => {
     expect(parseSettingsInput({ companyWebsite: null, defaultHashtags: null })).toEqual({
       ok: true,
-      data: { companyWebsite: null, defaultHashtags: null },
+      data: {
+        companyWebsite: null,
+        defaultHashtags: null,
+        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
+      },
     });
   });
 
   it("normalizes empty and whitespace-only strings to null", () => {
     expect(parseSettingsInput({ companyWebsite: "", defaultHashtags: "   " })).toEqual({
       ok: true,
-      data: { companyWebsite: null, defaultHashtags: null },
+      data: {
+        companyWebsite: null,
+        defaultHashtags: null,
+        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
+      },
     });
   });
 
@@ -116,7 +138,11 @@ describe("parseSettingsInput", () => {
       }),
     ).toEqual({
       ok: true,
-      data: { companyWebsite: "example.com", defaultHashtags: "#tag" },
+      data: {
+        companyWebsite: "example.com",
+        defaultHashtags: "#tag",
+        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
+      },
     });
   });
 
@@ -163,7 +189,11 @@ describe("parseSettingsInput", () => {
     const value = "a".repeat(COMPANY_WEBSITE_MAX_LENGTH);
     expect(parseSettingsInput({ companyWebsite: value })).toEqual({
       ok: true,
-      data: { companyWebsite: value, defaultHashtags: null },
+      data: {
+        companyWebsite: value,
+        defaultHashtags: null,
+        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
+      },
     });
   });
 
@@ -180,7 +210,11 @@ describe("parseSettingsInput", () => {
     const value = "#".repeat(DEFAULT_HASHTAGS_MAX_LENGTH);
     expect(parseSettingsInput({ defaultHashtags: value })).toEqual({
       ok: true,
-      data: { companyWebsite: null, defaultHashtags: value },
+      data: {
+        companyWebsite: null,
+        defaultHashtags: value,
+        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
+      },
     });
   });
 
@@ -188,7 +222,51 @@ describe("parseSettingsInput", () => {
     const padded = `  ${"a".repeat(COMPANY_WEBSITE_MAX_LENGTH)}  `;
     expect(parseSettingsInput({ companyWebsite: padded })).toEqual({
       ok: true,
-      data: { companyWebsite: "a".repeat(COMPANY_WEBSITE_MAX_LENGTH), defaultHashtags: null },
+      data: {
+        companyWebsite: "a".repeat(COMPANY_WEBSITE_MAX_LENGTH),
+        defaultHashtags: null,
+        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
+      },
+    });
+  });
+
+  describe("notifyOnPostComplete (Roadmap Phase 6)", () => {
+    it("accepts an explicit true", () => {
+      expect(parseSettingsInput({ notifyOnPostComplete: true })).toEqual({
+        ok: true,
+        data: { companyWebsite: null, defaultHashtags: null, notifyOnPostComplete: true },
+      });
+    });
+
+    it("accepts an explicit false", () => {
+      expect(parseSettingsInput({ notifyOnPostComplete: false })).toEqual({
+        ok: true,
+        data: { companyWebsite: null, defaultHashtags: null, notifyOnPostComplete: false },
+      });
+    });
+
+    it("normalizes a missing value to the default (true)", () => {
+      const result = parseSettingsInput({});
+      expect(result.ok).toBe(true);
+      expect(result.ok && result.data.notifyOnPostComplete).toBe(true);
+    });
+
+    it("normalizes an explicit null to the default (true)", () => {
+      expect(parseSettingsInput({ notifyOnPostComplete: null })).toEqual({
+        ok: true,
+        data: { companyWebsite: null, defaultHashtags: null, notifyOnPostComplete: true },
+      });
+    });
+
+    it("rejects a non-boolean value", () => {
+      expect(parseSettingsInput({ notifyOnPostComplete: "yes" })).toEqual({
+        ok: false,
+        error: "notifyOnPostComplete must be a boolean",
+      });
+      expect(parseSettingsInput({ notifyOnPostComplete: 1 })).toEqual({
+        ok: false,
+        error: "notifyOnPostComplete must be a boolean",
+      });
     });
   });
 });
@@ -197,7 +275,9 @@ describe("POST /api/settings", () => {
   it("returns 401 and never touches the database when unauthenticated", async () => {
     getCurrentUserMock.mockResolvedValue(null);
 
-    const response = await POST(jsonRequest({ companyWebsite: "example.com" }));
+    const response = await POST(
+      jsonRequest({ companyWebsite: "example.com", notifyOnPostComplete: false }),
+    );
 
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
@@ -237,6 +317,18 @@ describe("POST /api/settings", () => {
     expect(updateMock).not.toHaveBeenCalled();
   });
 
+  it("returns 400 and never touches the database for a non-boolean notifyOnPostComplete", async () => {
+    getCurrentUserMock.mockResolvedValue(makeUser());
+
+    const response = await POST(jsonRequest({ notifyOnPostComplete: "sure" }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "notifyOnPostComplete must be a boolean",
+    });
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
   it("persists trimmed valid input and returns { success: true }, unchanged from before", async () => {
     getCurrentUserMock.mockResolvedValue(makeUser({ id: "user-42" }));
     updateMock.mockResolvedValue(makeUser());
@@ -249,7 +341,11 @@ describe("POST /api/settings", () => {
     await expect(response.json()).resolves.toEqual({ success: true });
     expect(updateMock).toHaveBeenCalledWith({
       where: { id: "user-42" },
-      data: { companyWebsite: "example.com", defaultHashtags: "#tag" },
+      data: {
+        companyWebsite: "example.com",
+        defaultHashtags: "#tag",
+        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
+      },
     });
   });
 
@@ -262,7 +358,34 @@ describe("POST /api/settings", () => {
     expect(response.status).toBe(200);
     expect(updateMock).toHaveBeenCalledWith({
       where: { id: "user-42" },
-      data: { companyWebsite: null, defaultHashtags: null },
+      data: {
+        companyWebsite: null,
+        defaultHashtags: null,
+        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
+      },
+    });
+  });
+
+  it("persists notifyOnPostComplete: false (the toggle's whole purpose)", async () => {
+    getCurrentUserMock.mockResolvedValue(makeUser({ id: "user-42" }));
+    updateMock.mockResolvedValue(makeUser({ notifyOnPostComplete: false }));
+
+    const response = await POST(
+      jsonRequest({
+        companyWebsite: "example.com",
+        defaultHashtags: "#tag",
+        notifyOnPostComplete: false,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateMock).toHaveBeenCalledWith({
+      where: { id: "user-42" },
+      data: {
+        companyWebsite: "example.com",
+        defaultHashtags: "#tag",
+        notifyOnPostComplete: false,
+      },
     });
   });
 

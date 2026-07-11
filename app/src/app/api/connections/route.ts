@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { Platform } from "@prisma/client";
 import type {
   ConnectionStatus,
@@ -26,21 +27,27 @@ export async function GET() {
   try {
     const rows = await prisma.socialConnection.findMany({
       where: { userId: user.id },
-      select: { platform: true },
+      // Roadmap Phase 4: needsReconnect is the connection-health flag itself
+      // (see server/platforms/connectionHealth.ts) — still never accessToken/
+      // refreshToken/scopes/metadata.
+      select: { platform: true, needsReconnect: true },
     });
 
-    const connectedPlatforms = new Set(rows.map((row) => row.platform));
+    const reconnectByPlatform = new Map(
+      rows.map((row) => [row.platform, row.needsReconnect]),
+    );
     const connections: ConnectionStatus[] = (
       Object.values(Platform) as Platform[]
     ).map((platform) => ({
       platform,
-      connected: connectedPlatforms.has(platform),
+      connected: reconnectByPlatform.has(platform),
+      needsReconnect: reconnectByPlatform.get(platform) ?? false,
     }));
 
     const payload: ConnectionsResponse = { connections };
     return NextResponse.json(payload);
   } catch (error: unknown) {
-    console.error("[GET /api/connections] Unexpected error", { error });
+    logger.error("[GET /api/connections] Unexpected error", { error, userId: user.id });
     return NextResponse.json(
       { error: "Failed to load connections" },
       { status: 500 },

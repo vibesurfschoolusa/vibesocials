@@ -33,6 +33,9 @@ function makeConnection(
     accountIdentifier: "acct-1",
     scopes: "w_organization_social",
     metadata: { organizations: [{ id: "123", name: "Acme" }] },
+    needsReconnect: false,
+    lastRefreshErrorCode: null,
+    refreshFailedAt: null,
     createdAt: new Date("2020-01-01T00:00:00Z"),
     updatedAt: new Date("2020-01-01T00:00:00Z"),
     ...overrides,
@@ -90,10 +93,18 @@ describe("refreshLinkedInToken", () => {
 
     expect(arg.where).toEqual({ id: "conn-42" });
 
-    // THE program-level constraint: update data contains ONLY these two keys.
-    expect(Object.keys(arg.data).sort()).toEqual(["accessToken", "expiresAt"]);
+    // The success write persists the new token + expiry and clears the
+    // reconnect-health flags. It must NEVER touch refreshToken or metadata.
+    expect(Object.keys(arg.data).sort()).toEqual([
+      "accessToken",
+      "expiresAt",
+      "lastRefreshErrorCode",
+      "needsReconnect",
+      "refreshFailedAt",
+    ]);
     expect(arg.data).not.toHaveProperty("refreshToken");
     expect(arg.data).not.toHaveProperty("metadata");
+    expect(arg.data.needsReconnect).toBe(false);
     expect(arg.data.accessToken).toBe("new-access-token");
 
     // Expiry math: now + expires_in seconds.
@@ -196,11 +207,11 @@ describe("ensureFreshLinkedInToken", () => {
     expect(updateMock).not.toHaveBeenCalled();
   });
 
-  it("throws LINKEDIN_RECONNECT_REQUIRED (no network, no DB) when expired and there is no refresh token", async () => {
+  it("throws LINKEDIN_RECONNECT_REQUIRED (no network) and marks needsReconnect (flag fields only, no tokens) when expired and there is no refresh token", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    const connection = makeConnection({ refreshToken: null }); // expiresAt past by default
+    const connection = makeConnection({ id: "conn-55", refreshToken: null }); // expiresAt past by default
 
     const error = await ensureFreshLinkedInToken(connection)
       .then(() => null)
@@ -209,7 +220,24 @@ describe("ensureFreshLinkedInToken", () => {
     expect(error?.code).toBe("LINKEDIN_RECONNECT_REQUIRED");
     expect(error?.message).toContain("reconnect");
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(updateMock).not.toHaveBeenCalled();
+
+    // Roadmap Phase 4: this is the common non-partner-app case — mark before
+    // throwing. Flag fields only, never accessToken/refreshToken.
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    const arg = updateMock.mock.calls[0][0] as {
+      where: { id: string };
+      data: Record<string, unknown>;
+    };
+    expect(arg.where).toEqual({ id: "conn-55" });
+    expect(Object.keys(arg.data).sort()).toEqual([
+      "lastRefreshErrorCode",
+      "needsReconnect",
+      "refreshFailedAt",
+    ]);
+    expect(arg.data.needsReconnect).toBe(true);
+    expect(arg.data.lastRefreshErrorCode).toBe("LINKEDIN_RECONNECT_REQUIRED");
+    expect(arg.data).not.toHaveProperty("accessToken");
+    expect(arg.data).not.toHaveProperty("refreshToken");
   });
 
   it("refreshes and returns the updated connection when expired and a refresh token is present", async () => {
@@ -225,18 +253,25 @@ describe("ensureFreshLinkedInToken", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(updateMock).toHaveBeenCalledTimes(1);
     const arg = updateMock.mock.calls[0][0] as { data: Record<string, unknown> };
-    expect(Object.keys(arg.data).sort()).toEqual(["accessToken", "expiresAt"]);
+    expect(Object.keys(arg.data).sort()).toEqual([
+      "accessToken",
+      "expiresAt",
+      "lastRefreshErrorCode",
+      "needsReconnect",
+      "refreshFailedAt",
+    ]);
+    expect(arg.data).not.toHaveProperty("refreshToken");
     expect(result.accessToken).toBe("fresh-token");
   });
 
-  it("maps a refresh failure to LINKEDIN_RECONNECT_REQUIRED, preserving the original error as cause", async () => {
+  it("maps a refresh failure to LINKEDIN_RECONNECT_REQUIRED, preserving the original error as cause, and marks needsReconnect (flag fields only, no tokens)", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const fetchMock = vi
       .fn()
       .mockResolvedValue(new Response("invalid_grant", { status: 400 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const connection = makeConnection({ refreshToken: "dead-refresh-token" });
+    const connection = makeConnection({ id: "conn-66", refreshToken: "dead-refresh-token" });
 
     const error = await ensureFreshLinkedInToken(connection)
       .then(() => null)
@@ -244,6 +279,25 @@ describe("ensureFreshLinkedInToken", () => {
 
     expect(error?.code).toBe("LINKEDIN_RECONNECT_REQUIRED");
     expect(error?.cause?.code).toBe("LINKEDIN_TOKEN_REFRESH_FAILED");
-    expect(updateMock).not.toHaveBeenCalled();
+
+    // Roadmap Phase 4: the wrapping guard marks on the actionable
+    // LINKEDIN_RECONNECT_REQUIRED outcome — flag fields only, never
+    // accessToken/refreshToken (refreshLinkedInToken's own failed attempt
+    // above never touched the database either).
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    const arg = updateMock.mock.calls[0][0] as {
+      where: { id: string };
+      data: Record<string, unknown>;
+    };
+    expect(arg.where).toEqual({ id: "conn-66" });
+    expect(Object.keys(arg.data).sort()).toEqual([
+      "lastRefreshErrorCode",
+      "needsReconnect",
+      "refreshFailedAt",
+    ]);
+    expect(arg.data.needsReconnect).toBe(true);
+    expect(arg.data.lastRefreshErrorCode).toBe("LINKEDIN_RECONNECT_REQUIRED");
+    expect(arg.data).not.toHaveProperty("accessToken");
+    expect(arg.data).not.toHaveProperty("refreshToken");
   });
 });

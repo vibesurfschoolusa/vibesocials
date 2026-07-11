@@ -1,5 +1,6 @@
 import {
   Activity,
+  CalendarClock,
   Images,
   LayoutDashboard,
   PenSquare,
@@ -18,6 +19,7 @@ export interface NavItemDef {
 export const NAV_ITEMS: NavItemDef[] = [
   { label: "Dashboard", href: "/", icon: LayoutDashboard },
   { label: "Create", href: "/posts/new", icon: PenSquare },
+  { label: "Queue", href: "/queue", icon: CalendarClock },
   { label: "Activity", href: "/activity", icon: Activity },
   { label: "Media", href: "/media", icon: Images },
   { label: "Reviews", href: "/reviews", icon: Star },

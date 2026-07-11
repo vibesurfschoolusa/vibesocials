@@ -1,9 +1,12 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, Suspense } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { upload } from '@vercel/blob/client';
 import { Sparkles } from "lucide-react";
+import type { Platform } from "@prisma/client";
+import { PlatformPreviewList } from "./composer/platform-preview";
 import { LocationAutocomplete } from "./location-autocomplete";
 import { TikTokPostSettings } from "./tiktok-post-settings";
 import { YouTubePostSettings } from "./youtube-post-settings";
@@ -12,9 +15,20 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { fieldBaseClasses } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
+import { useConnections } from "@/hooks/useConnections";
+import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { cn } from "@/lib/cn";
+import type { MediaItemDto } from "@/lib/mediaDto";
+import { PLATFORM_ORDER } from "@/lib/platforms";
+import {
+  SCHEDULE_BUFFER_MS,
+  localDateTimeToUtcIso,
+  localTimeZoneLabel,
+  toDateTimeLocalValue,
+} from "@/lib/scheduling";
 import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
 
 interface PostResponse {
@@ -31,15 +45,41 @@ interface UploadedBlobInfo {
   sizeBytes: number;
 }
 
+// Roadmap Phase 5 — how the composer wants to publish. `now` is the original
+// immediate flow; `schedule` sends a `scheduledFor` (UTC ISO); `draft` sends
+// `draft: true`. Both deferred modes create no results / send no event now.
+type PublishMode = "now" | "schedule" | "draft";
+
+// Fields shared by both create bodies for the deferred modes.
+interface DeferredPostFields {
+  /** Present + true → save as draft. */
+  draft?: boolean;
+  /** Present → schedule for this UTC ISO time. */
+  scheduledFor?: string;
+}
+
 // Request body posted to /api/posts. Metadata fields are added conditionally
 // based on which platforms are connected.
-interface CreatePostRequest {
+interface CreatePostRequest extends DeferredPostFields {
   blobUrl: string;
   filename: string;
   mimeType: string;
   sizeBytes: number;
   baseCaption: string;
   location?: string;
+  tiktokMetadata?: TikTokPostMetadata;
+  youtubeMetadata?: YouTubePostMetadata;
+}
+
+// Roadmap Phase 2 — request body for the reuse path: an already-persisted
+// MediaItem instead of a fresh blobUrl upload. Same optional metadata fields
+// as CreatePostRequest; POST /api/posts branches on which of blobUrl /
+// mediaItemId is present.
+interface CreatePostReuseRequest extends DeferredPostFields {
+  mediaItemId: string;
+  baseCaption: string;
+  location?: string;
+  perPlatformOverrides?: Partial<Record<Platform, string>>;
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
 }
@@ -59,8 +99,33 @@ function generateBlobKey(file: File): string {
   return `${Date.now()}-${random}-${safeName}`;
 }
 
-export function CreatePostForm() {
+interface CreatePostFormInnerProps {
+  /**
+   * Roadmap Phase 7 — the posting user's footer settings (companyWebsite /
+   * defaultHashtags), projected server-side (see app/posts/new/page.tsx) so
+   * only these two display fields — never the full `User` row — reach this
+   * client component. Optional: the live preview below still renders (minus
+   * the footer) when this isn't provided.
+   */
+  footerSettings?: CaptionFooterUser;
+}
+
+function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
   const toast = useToast();
+  const searchParams = useSearchParams();
+
+  // Roadmap Phase 2 — reuse mode. `?mediaItemId=` names an already-persisted
+  // MediaItem (from the media library's "Use in new post" action) to attach
+  // to a new post instead of uploading a fresh file. `reuseItem` (not the
+  // presence of the query param) is the source of truth for whether the
+  // reuse UI renders, so a failed fetch or an explicit "use a different file"
+  // cleanly falls back to the normal upload flow below.
+  const reuseMediaItemId = searchParams.get("mediaItemId");
+  const [reuseItem, setReuseItem] = useState<MediaItemDto | null>(null);
+  const [reuseLoading, setReuseLoading] = useState(() => Boolean(reuseMediaItemId));
+  const [reusePerPlatformOverrides, setReusePerPlatformOverrides] = useState<Partial<
+    Record<Platform, string>
+  > | null>(null);
 
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadCaption, setUploadCaption] = useState("");
@@ -73,6 +138,22 @@ export function CreatePostForm() {
   const [autoCaptionEnabled, setAutoCaptionEnabled] = useState(true);
   const [autoCaptionLoading, setAutoCaptionLoading] = useState(false);
   const [uploadedBlob, setUploadedBlob] = useState<UploadedBlobInfo | null>(null);
+
+  // Roadmap Phase 5 — publish timing. `scheduledForLocal` is the raw
+  // datetime-local (browser-local wall time) string; it's converted to a UTC
+  // ISO `scheduledFor` only at submit. Works for both the upload and reuse flows.
+  const [publishMode, setPublishMode] = useState<PublishMode>("now");
+  const [scheduledForLocal, setScheduledForLocal] = useState("");
+  // Earliest schedulable datetime-local value (now + buffer) for the picker's
+  // `min`. A lazy useState initializer computes it once at mount, keeping the
+  // impure `Date.now()` off the render path; submit-time validation is the
+  // authoritative future-time check.
+  const [minScheduleLocal] = useState(() =>
+    toDateTimeLocalValue(new Date(Date.now() + SCHEDULE_BUFFER_MS)),
+  );
+  // The mode that produced the current success banner (so it reads correctly
+  // for now / schedule / draft).
+  const [submittedMode, setSubmittedMode] = useState<PublishMode>("now");
 
   // Local object-URL preview for the currently attached file. Created/revoked
   // by the effect below so we never leak object URLs.
@@ -107,10 +188,79 @@ export function CreatePostForm() {
     privacyStatus: "unlisted",
   });
 
+  // Roadmap Phase 7 — connection state for the OTHER platforms (x, instagram,
+  // linkedin, facebook_page, google_business_profile), reusing the same
+  // read-only `GET /api/connections` the dashboard's connection-health widget
+  // already calls (via this shared hook) rather than adding a new endpoint.
+  // TikTok/YouTube keep using their own existing hasTikTokConnection /
+  // hasYouTubeConnection checks below (unchanged) so the live preview never
+  // disagrees with the TikTok/YouTube settings panels already gated on them.
+  const { connections } = useConnections();
+
   useEffect(() => {
     checkTikTokConnection();
     checkYouTubeConnection();
   }, []);
+
+  // Roadmap Phase 7 — platforms to show a live preview card for: connected
+  // platforms only, in the app's standard display order. tiktok/youtube read
+  // the existing flags; every other platform reads the `useConnections()`
+  // fetch above.
+  const connectedPlatforms = useMemo(() => {
+    return PLATFORM_ORDER.filter((platform) => {
+      if (platform === "tiktok") return hasTikTokConnection;
+      if (platform === "youtube") return hasYouTubeConnection;
+      return connections?.some((c) => c.platform === platform && c.connected) ?? false;
+    });
+  }, [connections, hasTikTokConnection, hasYouTubeConnection]);
+
+  // Roadmap Phase 2 — load the reuse target, if any. Runs once per distinct
+  // `reuseMediaItemId` (a fresh navigation from the media library always
+  // remounts this component, so the realistic case of the param changing
+  // while already mounted doesn't arise). Mirrors the MediaLibrary
+  // fetch-effect convention: state starts pre-set via the `useState`
+  // initializer above so nothing is set synchronously in the effect body
+  // itself — every setState here happens after the `await`.
+  useEffect(() => {
+    if (!reuseMediaItemId) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const response = await fetch(`/api/media/${encodeURIComponent(reuseMediaItemId)}`);
+        const data = (await response.json().catch(() => null)) as
+          | { item?: MediaItemDto; error?: string }
+          | null;
+
+        if (cancelled) return;
+
+        if (!response.ok || !data?.item) {
+          toast.error(
+            data?.error ?? "Couldn't load that media item. Upload a new file instead.",
+          );
+          setReuseLoading(false);
+          return;
+        }
+
+        const item = data.item;
+        setReuseItem(item);
+        setUploadCaption(item.baseCaption ?? "");
+        setReusePerPlatformOverrides(
+          (item.perPlatformOverrides as Partial<Record<Platform, string>> | null) ?? null,
+        );
+        setReuseLoading(false);
+      } catch {
+        if (cancelled) return;
+        toast.error("Couldn't load that media item. Upload a new file instead.");
+        setReuseLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reuseMediaItemId, toast]);
 
   // Build (and clean up) an object URL for the attached file so we can render
   // an inline media preview without touching the upload flow.
@@ -130,6 +280,17 @@ export function CreatePostForm() {
       setTiktokPrivacyError(null);
     }
   }, [tiktokMetadata.privacyLevel]);
+
+  // Roadmap Phase 2 — leave reuse mode and fall back to the normal upload
+  // flow. The `?mediaItemId` query param stays in the URL (harmless; the
+  // fetch effect above only re-runs if that param's VALUE changes), but
+  // clearing `reuseItem` is what actually drives the UI back to the file
+  // input.
+  const handleDismissReuse = useCallback(() => {
+    setReuseItem(null);
+    setReusePerPlatformOverrides(null);
+    setUploadCaption("");
+  }, []);
 
   async function checkTikTokConnection() {
     try {
@@ -274,7 +435,7 @@ export function CreatePostForm() {
     setUploadError(null);
     setShowSuccess(false);
 
-    if (!uploadFile) {
+    if (!reuseItem && !uploadFile) {
       setUploadError("Please choose a file to upload.");
       return;
     }
@@ -284,36 +445,101 @@ export function CreatePostForm() {
       return;
     }
 
+    // Roadmap Phase 5 — resolve the deferred (schedule/draft) fields once for
+    // both the reuse and upload flows. TikTok privacy is only required for an
+    // immediate post: scheduled/draft jobs don't persist per-post TikTok/YouTube
+    // metadata, so they publish with each client's safe default.
+    const deferred: DeferredPostFields = {};
+    if (publishMode === "draft") {
+      deferred.draft = true;
+    } else if (publishMode === "schedule") {
+      const iso = localDateTimeToUtcIso(scheduledForLocal);
+      if (!iso) {
+        setUploadError("Please choose a valid date and time to schedule this post.");
+        return;
+      }
+      if (new Date(iso).getTime() < Date.now() + SCHEDULE_BUFFER_MS) {
+        setUploadError("Scheduled time must be at least a minute in the future.");
+        return;
+      }
+      deferred.scheduledFor = iso;
+    }
+    const requireTikTokPrivacy = publishMode === "now";
+
     setUploadLoading(true);
 
     try {
-      // Reuses the attach-time upload when it already covers this exact
-      // file; only uploads if it hasn't been (or needs to be re-) uploaded.
-      const blob = await ensureUploaded(uploadFile);
+      let postData: CreatePostRequest | CreatePostReuseRequest;
 
-      const postData: CreatePostRequest = {
-        blobUrl: blob.url,
-        filename: blob.filename,
-        mimeType: blob.mimeType,
-        sizeBytes: blob.sizeBytes,
-        baseCaption: uploadCaption,
-        location: uploadLocation.trim() || undefined,
-      };
-
-      // Add TikTok-specific metadata if TikTok is connected
-      if (hasTikTokConnection) {
-        if (!tiktokMetadata.privacyLevel) {
+      if (reuseItem) {
+        // Roadmap Phase 2 — reuse: no upload, attach the existing MediaItem.
+        if (requireTikTokPrivacy && hasTikTokConnection && !tiktokMetadata.privacyLevel) {
           setTiktokPrivacyError("Please select a privacy level for TikTok");
           toast.error("Please select a privacy level for TikTok");
           setUploadLoading(false);
           return;
         }
-        postData.tiktokMetadata = tiktokMetadata;
-      }
 
-      // Add YouTube-specific metadata if YouTube is connected
-      if (hasYouTubeConnection) {
-        postData.youtubeMetadata = youtubeMetadata;
+        const reuseData: CreatePostReuseRequest = {
+          mediaItemId: reuseItem.id,
+          baseCaption: uploadCaption,
+          location: uploadLocation.trim() || undefined,
+          ...deferred,
+        };
+
+        if (reusePerPlatformOverrides) {
+          reuseData.perPlatformOverrides = reusePerPlatformOverrides;
+        }
+        if (hasTikTokConnection) {
+          reuseData.tiktokMetadata = tiktokMetadata;
+        }
+        if (hasYouTubeConnection) {
+          reuseData.youtubeMetadata = youtubeMetadata;
+        }
+        postData = reuseData;
+      } else {
+        // Unreachable given the guard above (this branch only runs when
+        // reuseItem is falsy, and that guard already required
+        // reuseItem || uploadFile), but narrows `uploadFile` to `File` for
+        // TypeScript without a non-null assertion.
+        if (!uploadFile) {
+          setUploadError("Please choose a file to upload.");
+          setUploadLoading(false);
+          return;
+        }
+
+        // Reuses the attach-time upload when it already covers this exact
+        // file; only uploads if it hasn't been (or needs to be re-) uploaded.
+        const blob = await ensureUploaded(uploadFile);
+
+        const blobData: CreatePostRequest = {
+          blobUrl: blob.url,
+          filename: blob.filename,
+          mimeType: blob.mimeType,
+          sizeBytes: blob.sizeBytes,
+          baseCaption: uploadCaption,
+          location: uploadLocation.trim() || undefined,
+          ...deferred,
+        };
+
+        // Add TikTok-specific metadata if TikTok is connected. The privacy
+        // level is only *required* for an immediate post (scheduled/draft
+        // publish with the client's safe default).
+        if (hasTikTokConnection) {
+          if (requireTikTokPrivacy && !tiktokMetadata.privacyLevel) {
+            setTiktokPrivacyError("Please select a privacy level for TikTok");
+            toast.error("Please select a privacy level for TikTok");
+            setUploadLoading(false);
+            return;
+          }
+          blobData.tiktokMetadata = tiktokMetadata;
+        }
+
+        // Add YouTube-specific metadata if YouTube is connected
+        if (hasYouTubeConnection) {
+          blobData.youtubeMetadata = youtubeMetadata;
+        }
+        postData = blobData;
       }
 
       const response = await fetch("/api/posts", {
@@ -335,13 +561,28 @@ export function CreatePostForm() {
         return;
       }
 
-      toast.success("Post queued — track it in Activity");
+      toast.success(
+        publishMode === "draft"
+          ? "Draft saved — find it in your Queue"
+          : publishMode === "schedule"
+            ? "Post scheduled — see it in your Queue"
+            : "Post queued — track it in Activity",
+      );
+      setSubmittedMode(publishMode);
       setShowSuccess(true);
-      setUploadFile(null);
       setUploadCaption("");
       setUploadLocation("");
+      // Detach the media after a successful post. For the reuse path this
+      // prevents an accidental second submit from re-posting the same item;
+      // for the upload path it clears the file state as before. Clearing
+      // `reuseItem` returns the composer to the normal file-upload UI.
+      setUploadFile(null);
       setUploadedBlob(null);
       activeUploadRef.current = null;
+      setReuseItem(null);
+      setReusePerPlatformOverrides(null);
+      setPublishMode("now");
+      setScheduledForLocal("");
       setTiktokMetadata({
         privacyLevel: "",
         disableComment: true,
@@ -397,21 +638,45 @@ export function CreatePostForm() {
   const isImagePreview = uploadFile?.type.startsWith("image/") ?? false;
   const isVideoPreview = uploadFile?.type.startsWith("video/") ?? false;
 
+  // Drives the TikTok/YouTube settings gate below for BOTH the upload and
+  // reuse flows: originally gated on `uploadFile` alone (a real File only
+  // exists in the upload flow), so reuse mode needs the equivalent signal
+  // from `reuseItem` instead.
+  const activeMimeType = uploadFile?.type ?? reuseItem?.mimeType ?? null;
+
+  // Roadmap Phase 7 — same media the sections above already preview, reused
+  // (never re-uploaded) for the per-platform preview cards: the reused
+  // MediaItem's public blob URL in reuse mode, else the local object-URL
+  // preview of the freshly attached file.
+  const activeMediaUrl = reuseItem ? reuseItem.storageLocation : previewUrl;
+
   return (
     <Card className="p-6">
       <form onSubmit={handleUploadSubmit} className="space-y-5">
         {showSuccess && (
-          <Alert variant="success" title="Post queued">
+          <Alert
+            variant="success"
+            title={
+              submittedMode === "draft"
+                ? "Draft saved"
+                : submittedMode === "schedule"
+                  ? "Post scheduled"
+                  : "Post queued"
+            }
+          >
             <div className="flex flex-col items-start gap-2">
               <p>
-                We&apos;re publishing to your connected platforms. Per-platform results appear in
-                Activity.
+                {submittedMode === "draft"
+                  ? "Your draft is saved. Publish or schedule it any time from the Queue."
+                  : submittedMode === "schedule"
+                    ? "We'll publish this at the time you chose. Edit or cancel it from the Queue until then."
+                    : "We're publishing to your connected platforms. Per-platform results appear in Activity."}
               </p>
               <Link
-                href="/activity"
+                href={submittedMode === "now" ? "/activity" : "/queue"}
                 className={buttonVariants({ variant: "outline", size: "sm" })}
               >
-                View activity
+                {submittedMode === "now" ? "View activity" : "View queue"}
               </Link>
             </div>
           </Alert>
@@ -420,95 +685,138 @@ export function CreatePostForm() {
         {uploadError && <Alert variant="danger">{uploadError}</Alert>}
 
         <div className="space-y-1.5">
-          <Label htmlFor="post-media">Media file (image or video)</Label>
-          <input
-            id="post-media"
-            type="file"
-            accept="video/*,image/*"
-            onChange={async (event) => {
-              const nextFile = event.target.files?.[0] ?? null;
-              setUploadFile(nextFile);
-              setUploadedBlob(null);
-              setShowSuccess(false);
-              // Changing (or clearing) the file invalidates any
-              // in-flight/completed upload for the previous file so it
-              // can never be applied to this new selection.
-              activeUploadRef.current = null;
-
-              if (!nextFile) {
-                return;
-              }
-
-              try {
-                setAutoCaptionLoading(true);
-                setUploadError(null);
-
-                const blobInfo = await ensureUploaded(nextFile);
-
-                if (autoCaptionEnabled) {
-                  await runAutoCaptionFromMedia({
-                    overwrite: false,
-                    blobOverride: blobInfo,
-                  });
-                }
-              } catch (err: unknown) {
-                console.error(
-                  "Error uploading media for auto-caption:",
-                  err,
-                );
-                toast.error(
-                  (err as Error).message ||
-                    "Failed to prepare media for posting. Please try again.",
-                );
-              } finally {
-                setAutoCaptionLoading(false);
-              }
-            }}
-            className="block w-full cursor-pointer text-sm text-foreground file:mr-3 file:cursor-pointer file:rounded-[var(--radius)] file:border-0 file:bg-secondary file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-secondary-foreground hover:file:bg-secondary/80"
-          />
-
-          {uploadFile && previewUrl && (
-            <div className="mt-2 space-y-2">
-              {isImagePreview ? (
-                // eslint-disable-next-line @next/next/no-img-element -- local object-URL preview; next/image would need remote host config
+          {reuseItem ? (
+            // Roadmap Phase 2 — reuse mode: preview the already-persisted
+            // MediaItem from its storageLocation and skip the upload UI
+            // entirely (no `id="post-media"` control exists in this branch,
+            // so this uses a plain label-styled <p>, not <Label htmlFor>).
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-medium text-foreground">Media</p>
+                <button
+                  type="button"
+                  onClick={handleDismissReuse}
+                  className="text-xs font-medium text-primary underline-offset-4 hover:underline"
+                >
+                  Use a different file instead
+                </button>
+              </div>
+              {reuseItem.mimeType.startsWith("image/") ? (
+                // eslint-disable-next-line @next/next/no-img-element -- remote (already-public) Vercel Blob URL preview; same bounded-size pattern as the local object-URL preview below
                 <img
-                  src={previewUrl}
-                  alt={`Preview of ${uploadFile.name}`}
+                  src={reuseItem.storageLocation}
+                  alt={`Preview of ${reuseItem.originalFilename}`}
                   className="max-h-64 w-auto rounded-[var(--radius)] border border-border object-contain"
                 />
-              ) : isVideoPreview ? (
+              ) : reuseItem.mimeType.startsWith("video/") ? (
                 <video
-                  src={previewUrl}
+                  src={reuseItem.storageLocation}
                   controls
                   className="max-h-64 w-full rounded-[var(--radius)] border border-border"
                 />
               ) : null}
               <p className="text-xs text-muted-foreground">
-                {uploadFile.name} &middot; {formatBytes(uploadFile.size)}
+                {reuseItem.originalFilename} &middot; {formatBytes(reuseItem.sizeBytes)}
               </p>
             </div>
-          )}
-
-          {uploadProgress !== null && (
-            <div className="mt-2 space-y-1">
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>Uploading&hellip;</span>
-                <span>{Math.round(uploadProgress)}%</span>
-              </div>
-              <div
-                role="progressbar"
-                aria-label="Upload progress"
-                aria-valuenow={Math.round(uploadProgress)}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                className="h-2 w-full overflow-hidden rounded-full bg-muted"
-              >
-                <div
-                  className="h-full rounded-full bg-primary transition-all duration-200"
-                  style={{ width: `${uploadProgress}%` }}
-                />
-              </div>
+          ) : reuseLoading ? (
+            <div className="space-y-2" aria-hidden>
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-48 w-full max-w-sm" />
             </div>
+          ) : (
+            <>
+              <Label htmlFor="post-media">Media file (image or video)</Label>
+              <input
+                id="post-media"
+                type="file"
+                accept="video/*,image/*"
+                onChange={async (event) => {
+                  const nextFile = event.target.files?.[0] ?? null;
+                  setUploadFile(nextFile);
+                  setUploadedBlob(null);
+                  setShowSuccess(false);
+                  // Changing (or clearing) the file invalidates any
+                  // in-flight/completed upload for the previous file so it
+                  // can never be applied to this new selection.
+                  activeUploadRef.current = null;
+
+                  if (!nextFile) {
+                    return;
+                  }
+
+                  try {
+                    setAutoCaptionLoading(true);
+                    setUploadError(null);
+
+                    const blobInfo = await ensureUploaded(nextFile);
+
+                    if (autoCaptionEnabled) {
+                      await runAutoCaptionFromMedia({
+                        overwrite: false,
+                        blobOverride: blobInfo,
+                      });
+                    }
+                  } catch (err: unknown) {
+                    console.error(
+                      "Error uploading media for auto-caption:",
+                      err,
+                    );
+                    toast.error(
+                      (err as Error).message ||
+                        "Failed to prepare media for posting. Please try again.",
+                    );
+                  } finally {
+                    setAutoCaptionLoading(false);
+                  }
+                }}
+                className="block w-full cursor-pointer text-sm text-foreground file:mr-3 file:cursor-pointer file:rounded-[var(--radius)] file:border-0 file:bg-secondary file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-secondary-foreground hover:file:bg-secondary/80"
+              />
+
+              {uploadFile && previewUrl && (
+                <div className="mt-2 space-y-2">
+                  {isImagePreview ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- local object-URL preview; next/image would need remote host config
+                    <img
+                      src={previewUrl}
+                      alt={`Preview of ${uploadFile.name}`}
+                      className="max-h-64 w-auto rounded-[var(--radius)] border border-border object-contain"
+                    />
+                  ) : isVideoPreview ? (
+                    <video
+                      src={previewUrl}
+                      controls
+                      className="max-h-64 w-full rounded-[var(--radius)] border border-border"
+                    />
+                  ) : null}
+                  <p className="text-xs text-muted-foreground">
+                    {uploadFile.name} &middot; {formatBytes(uploadFile.size)}
+                  </p>
+                </div>
+              )}
+
+              {uploadProgress !== null && (
+                <div className="mt-2 space-y-1">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>Uploading&hellip;</span>
+                    <span>{Math.round(uploadProgress)}%</span>
+                  </div>
+                  <div
+                    role="progressbar"
+                    aria-label="Upload progress"
+                    aria-valuenow={Math.round(uploadProgress)}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    className="h-2 w-full overflow-hidden rounded-full bg-muted"
+                  >
+                    <div
+                      className="h-full rounded-full bg-primary transition-all duration-200"
+                      style={{ width: `${uploadProgress}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -577,27 +885,143 @@ export function CreatePostForm() {
           </p>
         </div>
 
-        {hasTikTokConnection && uploadFile && (
+        {hasTikTokConnection && activeMimeType && (
           <TikTokPostSettings
             metadata={tiktokMetadata}
             onChange={setTiktokMetadata}
-            isVideo={uploadFile.type.startsWith("video/")}
+            isVideo={activeMimeType.startsWith("video/")}
             privacyError={tiktokPrivacyError}
           />
         )}
-        {hasYouTubeConnection && uploadFile && (
+        {hasYouTubeConnection && activeMimeType && (
           <YouTubePostSettings
             metadata={youtubeMetadata}
             onChange={setYoutubeMetadata}
           />
         )}
 
-        <div className="flex items-center gap-3 pt-1">
-          <Button type="submit" loading={uploadLoading}>
-            {uploadLoading ? "Creating post…" : "Create post"}
-          </Button>
+        {/* Roadmap Phase 7 — live per-platform preview (spec §7.1): caption
+            with footer, media thumbnail, and char-limit feedback for every
+            CONNECTED platform. Recomputed on every render, so it updates as
+            the user types. */}
+        <PlatformPreviewList
+          platforms={connectedPlatforms}
+          caption={uploadCaption}
+          overrides={reusePerPlatformOverrides}
+          user={footerSettings}
+          mediaUrl={activeMediaUrl}
+          mediaMimeType={activeMimeType}
+        />
+
+        {/* Roadmap Phase 5 — publish timing: now / schedule / draft. */}
+        <div className="space-y-3 pt-1">
+          <div className="space-y-1.5">
+            <span className="block text-sm font-medium text-foreground">
+              When to publish
+            </span>
+            <div
+              role="group"
+              aria-label="When to publish"
+              className="inline-flex flex-wrap gap-0.5 rounded-[var(--radius)] border border-input p-0.5"
+            >
+              {(
+                [
+                  ["now", "Publish now"],
+                  ["schedule", "Schedule"],
+                  ["draft", "Save draft"],
+                ] as const
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={publishMode === mode}
+                  onClick={() => setPublishMode(mode)}
+                  className={cn(
+                    "rounded-[calc(var(--radius)-0.125rem)] px-3 py-1.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                    publishMode === mode
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {publishMode === "schedule" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="post-schedule">Publish at</Label>
+              <input
+                id="post-schedule"
+                type="datetime-local"
+                value={scheduledForLocal}
+                min={minScheduleLocal || undefined}
+                onChange={(event) => setScheduledForLocal(event.target.value)}
+                className={cn(fieldBaseClasses, "h-10 px-3 py-2")}
+              />
+              <p className="text-xs text-muted-foreground">
+                Times are in {localTimeZoneLabel()} (your browser&apos;s timezone).
+              </p>
+            </div>
+          )}
+
+          <div className="flex items-center gap-3">
+            <Button type="submit" loading={uploadLoading}>
+              {uploadLoading
+                ? publishMode === "draft"
+                  ? "Saving…"
+                  : publishMode === "schedule"
+                    ? "Scheduling…"
+                    : "Creating post…"
+                : publishMode === "draft"
+                  ? "Save draft"
+                  : publishMode === "schedule"
+                    ? "Schedule post"
+                    : "Create post"}
+            </Button>
+          </div>
         </div>
       </form>
     </Card>
+  );
+}
+
+/** Lightweight placeholder for the Suspense boundary `useSearchParams`
+ * requires — resolves near-instantly since this route is already dynamic
+ * (the page reads the session via `getCurrentUser`), so this is rarely, if
+ * ever, actually seen. */
+function CreatePostFormSkeleton() {
+  return (
+    <Card className="space-y-5 p-6">
+      <Skeleton className="h-5 w-40" />
+      <Skeleton className="h-24 w-full" />
+      <Skeleton className="h-20 w-full" />
+      <Skeleton className="h-10 w-32" />
+    </Card>
+  );
+}
+
+export interface CreatePostFormProps {
+  /**
+   * Roadmap Phase 7 — footer settings for the Preview section, projected
+   * server-side by `app/posts/new/page.tsx` (SEC-1: only companyWebsite /
+   * defaultHashtags, never the full `User` row). Optional so existing/other
+   * callers of `CreatePostForm` keep working unchanged.
+   */
+  footerSettings?: CaptionFooterUser;
+}
+
+/**
+ * `useSearchParams` (used by the reuse-mode fetch above) requires a Suspense
+ * boundary around its consumer during static rendering; self-contained here
+ * so the parent page (`app/posts/new/page.tsx`) doesn't need to know about
+ * it — mirrors how `ConnectionsSection` wraps `LinkedInSetupDialog`.
+ */
+export function CreatePostForm({ footerSettings }: CreatePostFormProps) {
+  return (
+    <Suspense fallback={<CreatePostFormSkeleton />}>
+      <CreatePostFormInner footerSettings={footerSettings} />
+    </Suspense>
   );
 }

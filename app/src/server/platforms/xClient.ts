@@ -5,6 +5,7 @@ import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 
 // COR-2/COR-3: xClient uses oauth-1.0a request signing (see `oauth.authorize`
@@ -13,6 +14,37 @@ import { truncateGraphemes } from "@/lib/truncate";
 // `fetchWithTimeout(url, init, timeoutMs)` preserves the exact URL/method/
 // headers/body the signature was computed over — only a composed abort
 // signal is added, which the signature does not cover.
+
+/**
+ * Apply X's client-enforced caption truncation the same way `publishVideo`
+ * does, reading the limit/ellipsis from the shared `platformLimits.ts` map
+ * instead of inline literals. Extracted as a pure, exported function so this
+ * behavior can be asserted directly in tests without mocking the OAuth/media-
+ * upload network calls the rest of `publishVideo` makes — see xClient.test.ts.
+ *
+ * Behavior is intentionally unchanged from before the platformLimits.ts
+ * refactor: the `.length > charLimit` pre-check is a fast-path (grapheme
+ * count can never exceed UTF-16 length, so it never changes the outcome,
+ * only skips the Intl.Segmenter call when definitely under the limit).
+ */
+export function computeTweetText(caption: string): string {
+  const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS.x;
+  // x's charLimit is always a number (see platformLimits.ts); the null check
+  // only exists to satisfy the shared `Record<Platform, ...>` type.
+  if (charLimit === null) {
+    return caption;
+  }
+
+  let tweetText = caption;
+  if (tweetText.length > charLimit) {
+    const truncated = truncateGraphemes(tweetText, charLimit, { ellipsis });
+    if (truncated !== tweetText) {
+      console.log("[X OAuth 1.0a] Caption truncated to fit X's 280-character limit");
+      tweetText = truncated;
+    }
+  }
+  return tweetText;
+}
 
 /**
  * OAuth 1.0a tokens don't expire, no refresh needed
@@ -425,16 +457,9 @@ export const xClient: PlatformClient = {
       mediaItem.mimeType || ""
     );
 
-    // X tweet character limit is 280
-    // If caption is longer, we'll truncate with ellipsis
-    let tweetText = caption;
-    if (tweetText.length > 280) {
-      const truncated = truncateGraphemes(tweetText, 280, { ellipsis: "..." });
-      if (truncated !== tweetText) {
-        console.log("[X OAuth 1.0a] Caption truncated to fit X's 280-character limit");
-        tweetText = truncated;
-      }
-    }
+    // X tweet character limit is 280 (see lib/platformLimits.ts). If caption
+    // is longer, we'll truncate with ellipsis.
+    const tweetText = computeTweetText(caption);
 
     // Create tweet with media using API v2 (Free tier has access to v2 endpoints)
     console.log("[X OAuth 1.0a] Creating tweet with v2 API", {

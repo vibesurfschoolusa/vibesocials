@@ -22,6 +22,14 @@ enum PostJobStatus {
   in_progress
   completed
   failed
+  // Roadmap Phase 5 (scheduling + drafts). DB-additive, but NOT free at the
+  // TypeScript layer: any exhaustive `Record<PostJobStatus, …>` / switch on
+  // `.status` (e.g. JOB_STATUS_META in components/activity/post-job-card.tsx)
+  // must enumerate these or `tsc` fails. `draft`/`scheduled` are non-terminal
+  // (their media is kept by the retention sweep); `cancelled` is terminal.
+  draft
+  scheduled
+  cancelled
 }
 
 enum PostJobResultStatus {
@@ -31,18 +39,24 @@ enum PostJobResultStatus {
 }
 
 model User {
-  id              String             @id @default(cuid())
-  email           String             @unique
-  name            String?
-  passwordHash    String?
-  companyWebsite  String?
-  defaultHashtags String?
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
+  id                   String   @id @default(cuid())
+  email                String   @unique
+  name                 String?
+  passwordHash         String?
+  companyWebsite       String?
+  defaultHashtags      String?
+  // Roadmap Phase 6 (notifications). Gates the best-effort post-outcome email
+  // (see server/notifications/postOutcomeEmail.ts) — independent of whether
+  // RESEND_API_KEY is configured, which is the other, env-level gate. Defaults
+  // to true so existing users start opted in, matching the spec (§7.2).
+  notifyOnPostComplete Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   socialConnections SocialConnection[]
   mediaItems        MediaItem[]
   postJobs          PostJob[]
+  postMetrics       PostMetric[]
 }
 
 model SocialConnection {
@@ -57,6 +71,16 @@ model SocialConnection {
   metadata         Json?
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
+  // Connection health (Roadmap Phase 4). `expiresAt` is only the ~1h
+  // auto-refreshed access-token expiry (null for X) and is NOT a health
+  // signal. `needsReconnect` is the real signal: set when a token *refresh*
+  // terminally fails (Google invalid_grant) or a platform client maps a 401
+  // to its `*_RECONNECT_REQUIRED` code — see server/platforms/connectionHealth.ts.
+  // Cleared on the next successful OAuth callback write. Never set alongside
+  // accessToken/refreshToken in the same update (see connectionHealth.ts).
+  needsReconnect       Boolean   @default(false)
+  lastRefreshErrorCode String?
+  refreshFailedAt      DateTime?
 
   user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   postJobResults  PostJobResult[]
@@ -75,6 +99,13 @@ model MediaItem {
   perPlatformOverrides Json?
   metadata             Json?
   createdAt            DateTime  @default(now())
+  // Retention lifecycle (Roadmap Phase 1). Soft-delete: the row is kept
+  // (history/captions depend on it) and only the blob is removed; `deletedAt`
+  // marks when the blob was removed. `lastUsedAt` is stamped when the media is
+  // attached to a post and drives age-based retention (null = never-posted
+  // library upload, which is exempt from the sweep).
+  deletedAt            DateTime?
+  lastUsedAt           DateTime?
 
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   postJobs  PostJob[]
@@ -85,12 +116,32 @@ model PostJob {
   userId      String
   mediaItemId String
   status      PostJobStatus   @default(pending)
+  // Roadmap Phase 5. `scheduledFor` is null for immediate posts and set for
+  // `scheduled` jobs; the cron due-scanner claims `status=scheduled` rows whose
+  // `scheduledFor <= now` (hence the composite index). `baseCaption` /
+  // `perPlatformOverrides` snapshot the composer content for `scheduled`/`draft`
+  // jobs so it is durable and editable (PATCH) without mutating the shared
+  // MediaItem — immediate posts leave them null and carry caption in the event
+  // payload as before. The cron/promote read `?? mediaItem.*` as a fallback.
+  scheduledFor         DateTime?
+  baseCaption          String?
+  perPlatformOverrides Json?
+  // Roadmap Phase 5 (review B1). Per-post platform publishing metadata —
+  // `{ tiktok?, youtube? }` — snapshotted for `scheduled`/`draft` jobs ONLY.
+  // Immediate posts carry this in the event payload; deferred jobs have no
+  // event yet, so without persisting it the cron/publish path would fall back
+  // to each client's default and SILENTLY ESCALATE a user's YouTube "private"
+  // to "unlisted". The due-scanner/publish-promote replays it into the event.
+  publishMetadata      Json?
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   mediaItem MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
   results   PostJobResult[]
+
+  // Due-scanner lookup: WHERE status = 'scheduled' AND scheduledFor <= now.
+  @@index([status, scheduledFor])
 }
 
 model PostJobResult {
@@ -107,6 +158,13 @@ model PostJobResult {
 
   postJob          PostJob          @relation(fields: [postJobId], references: [id], onDelete: Cascade)
   socialConnection SocialConnection @relation(fields: [socialConnectionId], references: [id], onDelete: Cascade)
+  // Roadmap Phase 8 (analytics). Back-relation for PostMetric.postJobResultId,
+  // which is onDelete:SetNull — so deleting this result NULLs the link but keeps
+  // the metric row (its durable identity is the denormalized userId/platform/
+  // externalPostId, not this FK). The metrics UI joins by (platform,
+  // externalPostId), NOT via this relation, so a retry that changes the result's
+  // externalPostId can leave >1 historical metric pointing here harmlessly.
+  metrics          PostMetric[]
 }
 
 // Fixed-window rate-limit counters (see src/lib/rateLimit.ts).
@@ -118,4 +176,61 @@ model RateLimitEntry {
   expiresAt DateTime
 
   @@index([expiresAt])
+}
+
+// Roadmap Phase 8 (analytics — post performance, §7.3). Per-post engagement
+// snapshot fetched from the platform. YouTube-only in v1 (via the YouTube Data
+// API v3 `videos.list?part=statistics`, which the app's EXISTING YouTube scope
+// already permits — no new OAuth scope / owner reconnect); other platforms are
+// intentionally not fetched (X needs paid tiers, GBP has no per-post insight
+// API, LinkedIn personal shares expose little — see the cron's extension point).
+//
+// DECOUPLED FROM SocialConnection ON PURPOSE. `PostJobResult.socialConnection`
+// is onDelete:Cascade, so disconnecting a platform deletes historical results —
+// which would erode analytics. This row therefore DENORMALIZES the durable
+// identity (`userId`, `platform`, `externalPostId`) onto itself and links back
+// to the originating result only OPTIONALLY, via `postJobResultId` with
+// onDelete:SetNull, so the metric SURVIVES a later result/connection deletion.
+//
+// SNAPSHOT STRATEGY: upsert-latest (one row per (platform, externalPostId),
+// updated in place by the sync cron), NOT append-only time-series. v1 only needs
+// "current" views/likes/comments; a single keyed row is the simplest thing that
+// makes that queryable and is idempotent for the cron (repeated runs update, not
+// duplicate). Switch to time-series later if history/graphs are needed.
+model PostMetric {
+  id             String   @id @default(cuid())
+  userId         String
+  platform       Platform
+  externalPostId String
+  // OPTIONAL link back to the result that produced this post. SetNull (not
+  // Cascade) so the metric outlives the result. NEVER treat as required — the
+  // denormalized userId/platform/externalPostId above is the durable identity
+  // the UI/aggregate query by.
+  postJobResultId String?
+  fetchedAt      DateTime @default(now())
+  views          Int?
+  likes          Int?
+  comments       Int?
+  // Not exposed by the YouTube `videos.list` statistics part → always null for
+  // YouTube v1. Kept in the schema for platform-extensibility.
+  shares         Int?
+  // Raw provider statistics payload for debugging/audit. MUST NOT be surfaced in
+  // any DTO (SEC-1) — it is never a token store, but keep the read path minimal.
+  raw            Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  postJobResult PostJobResult? @relation(fields: [postJobResultId], references: [id], onDelete: SetNull)
+  // Owner FK is Cascade (review Minor #6): deleting a user removes their
+  // metrics (no orphaned per-user rows). This is orthogonal to the
+  // survives-a-disconnect design — that is served by `postJobResultId`'s
+  // SetNull above, so a connection/result deletion still keeps the metric.
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // One current snapshot per external post. A YouTube video id is globally
+  // unique per upload, so (platform, externalPostId) is a safe upsert key
+  // without userId. This unique also serves as the cron's lookup index.
+  @@unique([platform, externalPostId])
+  // Dashboard aggregate / per-user reads.
+  @@index([userId])
 }

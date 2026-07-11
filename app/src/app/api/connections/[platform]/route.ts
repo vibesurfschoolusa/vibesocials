@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { Platform } from "@prisma/client";
 
 interface PlatformRouteContext {
@@ -46,8 +47,10 @@ export async function GET(_request: NextRequest, context: PlatformRouteContext) 
 
     return NextResponse.json({ connected: Boolean(connection) });
   } catch (error) {
-    console.error("[GET /api/connections/[platform]] Unexpected error", {
+    logger.error("[GET /api/connections/[platform]] Unexpected error", {
       error,
+      userId: user.id,
+      platform: platformParam,
     });
     return NextResponse.json(
       { error: "Failed to check connection status" },
@@ -97,8 +100,10 @@ export async function DELETE(_request: NextRequest, context: PlatformRouteContex
       { status: 200 },
     );
   } catch (error) {
-    console.error("[DELETE /api/connections/[platform]] Unexpected error", {
+    logger.error("[DELETE /api/connections/[platform]] Unexpected error", {
       error,
+      userId: user.id,
+      platform: platformParam,
     });
     return NextResponse.json(
       { error: "Failed to disconnect platform" },

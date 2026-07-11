@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
+import { toMediaItemDto } from "@/lib/mediaDto";
 import { saveUploadedFile } from "@/server/storage";
 import type { Platform } from "@prisma/client";
 
@@ -12,12 +14,25 @@ export async function GET(_request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Library view: exclude soft-deleted media (blob removed / user-deleted), and
+  // project a display-only DTO (drops userId + internal columns; keeps
+  // storageLocation for thumbnails). See src/lib/mediaDto.ts.
   const items = await prisma.mediaItem.findMany({
-    where: { userId: user.id },
+    where: { userId: user.id, deletedAt: null },
     orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      storageLocation: true,
+      originalFilename: true,
+      mimeType: true,
+      sizeBytes: true,
+      baseCaption: true,
+      perPlatformOverrides: true,
+      createdAt: true,
+    },
   });
 
-  return NextResponse.json({ items }, { status: 200 });
+  return NextResponse.json({ items: items.map(toMediaItemDto) }, { status: 200 });
 }
 
 export async function POST(request: Request) {
@@ -80,7 +95,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ mediaItem }, { status: 201 });
   } catch (error) {
-    console.error("[POST /api/media] Unexpected error", { error });
+    logger.error("[POST /api/media] Unexpected error", { error, userId: user.id });
     return NextResponse.json(
       { error: "Failed to save media item" },
       { status: 500 },
