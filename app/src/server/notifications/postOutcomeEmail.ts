@@ -124,8 +124,10 @@ export function buildPostOutcomeEmail({
 
   const rows = results.map(renderResultRow).join("");
   // Omitted cleanly (no dead link, no crash) when no base URL is available.
+  // Trim a trailing slash so a NEXTAUTH_URL like "https://host/" doesn't yield
+  // "https://host//activity" (review Minor #4).
   const link = appBaseUrl
-    ? `<p><a href="${escapeHtml(appBaseUrl)}/activity">View in Activity</a></p>`
+    ? `<p><a href="${escapeHtml(appBaseUrl.replace(/\/+$/, ""))}/activity">View in Activity</a></p>`
     : "";
 
   const html = [
@@ -182,10 +184,11 @@ export async function deliverPostOutcomeNotification({
         where: { id: postJobId },
         select: {
           results: {
+            // Only what buildPostOutcomeEmail renders — externalPostId was
+            // selected but never read (review Minor #3), so it's dropped.
             select: {
               platform: true,
               status: true,
-              externalPostId: true,
               errorMessage: true,
             },
           },

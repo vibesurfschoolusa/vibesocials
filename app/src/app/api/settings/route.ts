@@ -153,6 +153,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: validation.error }, { status: 400 });
   }
 
+  // NOTE (review Minor #1): this is a FULL-REPLACE endpoint. An omitted field is
+  // normalized to its default (null / schema default), so a partial body would
+  // reset unsent fields — e.g. a POST without `notifyOnPostComplete` re-opts the
+  // user IN. The sole caller (settings-form.tsx) always sends all three fields,
+  // so this is latent; any NEW caller must send the complete settings object (or
+  // switch this to partial/merge semantics before adding one).
   try {
     await prisma.user.update({
       where: { id: user.id },

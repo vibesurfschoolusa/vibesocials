@@ -233,14 +233,23 @@ export const publishToAllPlatforms = inngest.createFunction(
       };
     });
 
-    // Roadmap Phase 6 (spec §7.2): fire-and-forget the best-effort post-outcome
-    // email. `step.sendEvent` is memoized (exactly-once per finalize) and only
-    // enqueues `notification.requested` — it does NOT await `sendNotification`,
-    // let alone email delivery, so this can never delay or fail this job.
-    await step.sendEvent("notify-outcome", {
-      name: "notification.requested",
-      data: { userId, postJobId },
-    });
+    // Roadmap Phase 6 (spec §7.2; review B1): fire-and-forget the best-effort
+    // post-outcome email. `step.sendEvent` is memoized (exactly-once per finalize)
+    // and only enqueues `notification.requested` — it does NOT await
+    // `sendNotification` or email delivery. The try/catch is REQUIRED: this
+    // function is `retries: 0`, so an un-swallowed enqueue transport error would
+    // mark a fully-successful publish RUN as Failed (every platform already
+    // published and `PostJob.status` is already written) — corrupting the signal
+    // used to detect real failures. A notification must never affect posting.
+    // Mirrors the try/catch scheduledPostScanner wraps its own sendEvent in.
+    try {
+      await step.sendEvent("notify-outcome", {
+        name: "notification.requested",
+        data: { userId, postJobId },
+      });
+    } catch (err) {
+      console.error("[Inngest] Failed to enqueue post-outcome notification (ignored)", { postJobId, err });
+    }
 
     console.log("[Inngest] Job completed", { postJobId, ...finalResult });
 
@@ -568,14 +577,19 @@ export const retryPlatforms = inngest.createFunction(
       };
     });
 
-    // Roadmap Phase 6 (spec §7.2): same fire-and-forget hook as the initial
-    // publish path above — a retry reaching a terminal state is itself a new
-    // outcome worth emailing (e.g. the user just found out their retry of a
-    // failed platform succeeded, or failed again).
-    await step.sendEvent("notify-outcome", {
-      name: "notification.requested",
-      data: { userId, postJobId },
-    });
+    // Roadmap Phase 6 (spec §7.2; review B1): same fire-and-forget hook as the
+    // initial publish path above — a retry reaching a terminal state is itself a
+    // new outcome worth emailing. Same REQUIRED try/catch: this function is also
+    // `retries: 0`, so an un-swallowed enqueue error would falsely fail a retry
+    // run whose platforms already published.
+    try {
+      await step.sendEvent("notify-outcome", {
+        name: "notification.requested",
+        data: { userId, postJobId },
+      });
+    } catch (err) {
+      console.error("[Inngest] Failed to enqueue post-outcome notification (ignored)", { postJobId, err });
+    }
 
     console.log("[Inngest] Retry job completed", { postJobId, ...finalResult });
 
@@ -683,6 +697,9 @@ export const sendNotification = inngest.createFunction(
     const userId: string = event.data.userId;
     const postJobId: string = event.data.postJobId;
 
+    // At-least-once (review Minor #2): if the email sends but Inngest loses the
+    // step ack, `retries: 1` re-invokes this and the user gets a duplicate email
+    // for one outcome. Accepted — best-effort delivery, at most two, no dedupe.
     await step.run("deliver-notification", async () => {
       await deliverPostOutcomeNotification({ userId, postJobId });
     });
