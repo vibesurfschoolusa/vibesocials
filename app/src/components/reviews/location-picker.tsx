@@ -19,7 +19,7 @@ export function LocationPicker({
   return (
     <div className="mb-8">
       <Label htmlFor="location-picker" className="mb-2 block">
-        Select Location
+        Select location
       </Label>
       <div className="max-w-md">
         <Select

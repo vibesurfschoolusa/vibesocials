@@ -33,6 +33,8 @@ function job(results: PostJobResultDTO[]): PostJobDTO {
     scheduledFor: null,
     caption: "c",
     results,
+    media: null,
+    publish: null,
   };
 }
 

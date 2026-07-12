@@ -22,7 +22,9 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
+import { MediaThumb } from "@/components/media-thumb";
 import { cn } from "@/lib/cn";
+import { platformLabel, TIKTOK_PRIVACY_LABELS } from "@/lib/platforms";
 import type { PostJobDTO, PostsResponse } from "@/lib/postsDto";
 import {
   SCHEDULE_BUFFER_MS,
@@ -46,6 +48,7 @@ function formatTimestamp(iso: string): string {
     weekday: "short",
     month: "short",
     day: "numeric",
+    year: "numeric",
     hour: "numeric",
     minute: "2-digit",
   });
@@ -75,14 +78,14 @@ function QueueCard({ job, onEdit, onCancel, onPublish, onDelete }: QueueCardProp
     job.status === "scheduled"
       ? QUEUE_STATUS_META.scheduled
       : QUEUE_STATUS_META.draft;
+  const title = job.caption?.trim() || "Untitled post";
 
   return (
     <Card className="p-4 sm:p-5">
       <div className="flex items-start justify-between gap-3">
+        <MediaThumb media={job.media} />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-foreground">
-            {job.caption?.trim() || "Untitled post"}
-          </p>
+          <p className="truncate text-sm font-medium text-foreground">{title}</p>
           {job.status === "scheduled" && job.scheduledFor ? (
             <p className="mt-0.5 text-xs text-muted-foreground">
               Scheduled for{" "}
@@ -96,19 +99,26 @@ function QueueCard({ job, onEdit, onCancel, onPublish, onDelete }: QueueCardProp
               <time dateTime={job.createdAt}>{formatTimestamp(job.createdAt)}</time>
             </p>
           )}
+          <p className="mt-1 text-xs text-muted-foreground">
+            {job.publish?.targetPlatforms?.length
+              ? `Publishing to ${job.publish.targetPlatforms.map(platformLabel).join(", ")}`
+              : "Publishing to all platforms connected at publish time"}
+            {job.publish?.youtubePrivacy ? ` · YouTube: ${job.publish.youtubePrivacy}` : ""}
+            {job.publish?.tiktokPrivacy ? ` · TikTok: ${TIKTOK_PRIVACY_LABELS[job.publish.tiktokPrivacy] ?? job.publish.tiktokPrivacy}` : ""}
+          </p>
         </div>
         <Badge variant={meta.variant}>{meta.label}</Badge>
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="outline" onClick={() => onEdit(job)}>
+        <Button size="sm" variant="outline" aria-label={`Edit "${title}"`} onClick={() => onEdit(job)}>
           Edit
         </Button>
-        <Button size="sm" variant="outline" onClick={() => onPublish(job)}>
+        <Button size="sm" variant="outline" aria-label={`Publish "${title}" now`} onClick={() => onPublish(job)}>
           Publish now
         </Button>
         {job.status === "scheduled" ? (
-          <Button size="sm" variant="ghost" onClick={() => onCancel(job)}>
+          <Button size="sm" variant="ghost" aria-label={`Cancel "${title}"`} onClick={() => onCancel(job)}>
             Cancel
           </Button>
         ) : (
@@ -116,6 +126,7 @@ function QueueCard({ job, onEdit, onCancel, onPublish, onDelete }: QueueCardProp
             size="sm"
             variant="ghost"
             className="text-muted-foreground hover:text-destructive"
+            aria-label={`Delete "${title}"`}
             onClick={() => onDelete(job)}
           >
             Delete

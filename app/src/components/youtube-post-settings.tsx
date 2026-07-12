@@ -14,7 +14,7 @@ export function YouTubePostSettings({ metadata, onChange }: YouTubePostSettingsP
   return (
     <Card className="space-y-3 p-4">
       <div className="border-b border-border pb-2">
-        <h3 className="text-sm font-semibold text-foreground">YouTube Post Settings</h3>
+        <h3 className="text-sm font-semibold text-foreground">YouTube post settings</h3>
       </div>
 
       <div className="space-y-1.5">

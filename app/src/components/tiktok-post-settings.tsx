@@ -14,6 +14,9 @@ interface TikTokPostSettingsProps {
   isVideo: boolean;
   /** Submit-time privacy validation message surfaced inline near the field. */
   privacyError?: string | null;
+  /** Lifted to the form so it can enforce the commercial-content rule at submit. */
+  commercialContentEnabled: boolean;
+  onCommercialContentEnabledChange: (enabled: boolean) => void;
 }
 
 const checkboxClass =
@@ -24,11 +27,12 @@ export function TikTokPostSettings({
   onChange,
   isVideo,
   privacyError,
+  commercialContentEnabled,
+  onCommercialContentEnabledChange,
 }: TikTokPostSettingsProps) {
   const [creatorInfo, setCreatorInfo] = useState<TikTokCreatorInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [commercialContentEnabled, setCommercialContentEnabled] = useState(false);
 
   useEffect(() => {
     fetchCreatorInfo();
@@ -64,7 +68,7 @@ export function TikTokPostSettings({
   };
 
   const handleCommercialToggle = (enabled: boolean) => {
-    setCommercialContentEnabled(enabled);
+    onCommercialContentEnabledChange(enabled);
     if (!enabled) {
       onChange({ ...metadata, brandedContent: false, brandOrganic: false });
     }
@@ -97,7 +101,7 @@ export function TikTokPostSettings({
 
   if (error || !creatorInfo) {
     return (
-      <Alert variant="danger" title="TikTok Settings Error">
+      <Alert variant="danger" title="Couldn't load TikTok settings">
         {error || "Unable to load TikTok settings"}
       </Alert>
     );
@@ -106,14 +110,14 @@ export function TikTokPostSettings({
   return (
     <Card className="space-y-4 p-4">
       <div className="flex items-center gap-2 border-b border-border pb-2">
-        <h3 className="text-sm font-semibold text-foreground">TikTok Post Settings</h3>
+        <h3 className="text-sm font-semibold text-foreground">TikTok post settings</h3>
         <span className="text-xs text-muted-foreground">@{creatorInfo.creatorUsername}</span>
       </div>
 
       {/* Privacy Level - REQUIRED by TikTok Guidelines */}
       <div className="space-y-1.5">
         <Label htmlFor="tiktok-privacy">
-          Privacy Level <span className="text-destructive">*</span>
+          Privacy level <span className="text-destructive">*</span>
         </Label>
         <Select
           id="tiktok-privacy"
@@ -121,23 +125,24 @@ export function TikTokPostSettings({
           onChange={(e) => handlePrivacyChange(e.target.value)}
           required
           aria-invalid={privacyError ? true : undefined}
+          aria-describedby={privacyError ? "tiktok-privacy-error" : "tiktok-privacy-help"}
         >
           <option value="">Select privacy level...</option>
           {creatorInfo.privacyLevelOptions.map((option) => (
             <option key={option} value={option}>
-              {option === "PUBLIC_TO_EVERYONE" && "Public (Everyone)"}
+              {option === "PUBLIC_TO_EVERYONE" && "Public (everyone)"}
               {option === "MUTUAL_FOLLOW_FRIENDS" && "Friends"}
-              {option === "SELF_ONLY" && "Private (Only Me)"}
+              {option === "SELF_ONLY" && "Private (only me)"}
               {option === "FOLLOWER_OF_CREATOR" && "Followers"}
             </option>
           ))}
         </Select>
         {privacyError ? (
-          <p className="text-xs text-destructive" role="alert">
+          <p id="tiktok-privacy-error" className="text-xs text-destructive" role="alert">
             {privacyError}
           </p>
         ) : (
-          <p className="text-xs text-muted-foreground">
+          <p id="tiktok-privacy-help" className="text-xs text-muted-foreground">
             You must manually select who can view this video
           </p>
         )}
@@ -145,7 +150,7 @@ export function TikTokPostSettings({
 
       {/* Interaction Settings - REQUIRED by TikTok Guidelines */}
       <div>
-        <Label className="mb-2 block">Interaction Settings</Label>
+        <Label className="mb-2 block">Interaction settings</Label>
         <div className="space-y-2">
           <label className="flex items-center gap-2">
             <input
@@ -156,7 +161,7 @@ export function TikTokPostSettings({
               className={checkboxClass}
             />
             <span className="text-sm text-foreground">
-              Allow Comments
+              Allow comments
               {creatorInfo.commentDisabled && (
                 <span className="ml-2 text-xs text-muted-foreground">
                   (Disabled in your TikTok settings)
@@ -176,7 +181,7 @@ export function TikTokPostSettings({
                   className={checkboxClass}
                 />
                 <span className="text-sm text-foreground">
-                  Allow Duet
+                  Allow duets
                   {creatorInfo.duetDisabled && (
                     <span className="ml-2 text-xs text-muted-foreground">
                       (Disabled in your TikTok settings)
@@ -194,7 +199,7 @@ export function TikTokPostSettings({
                   className={checkboxClass}
                 />
                 <span className="text-sm text-foreground">
-                  Allow Stitch
+                  Allow stitches
                   {creatorInfo.stitchDisabled && (
                     <span className="ml-2 text-xs text-muted-foreground">
                       (Disabled in your TikTok settings)
@@ -234,7 +239,7 @@ export function TikTokPostSettings({
                 className={`${checkboxClass} mt-0.5`}
               />
               <div className="flex-1">
-                <span className="text-sm font-medium text-foreground">Your Brand</span>
+                <span className="text-sm font-medium text-foreground">Your brand</span>
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   You are promoting yourself or your own business
                 </p>
@@ -255,7 +260,7 @@ export function TikTokPostSettings({
                 className={`${checkboxClass} mt-0.5`}
               />
               <div className="flex-1">
-                <span className="text-sm font-medium text-foreground">Branded Content</span>
+                <span className="text-sm font-medium text-foreground">Branded content</span>
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   You are promoting another brand or third party
                 </p>
@@ -274,7 +279,7 @@ export function TikTokPostSettings({
 
             {!canPublish && (
               <Alert variant="warning" className="p-2 text-xs">
-                You must select at least one option (Your Brand or Branded Content) to proceed
+                You must select at least one option (Your brand or Branded content) to proceed
               </Alert>
             )}
           </div>

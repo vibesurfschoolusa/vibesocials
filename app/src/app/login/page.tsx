@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Eye, EyeOff } from "lucide-react";
 
@@ -12,8 +12,15 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export default function LoginPage() {
+function LoginPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // Sanitize once: only accept an internal path so we never redirect off-site
+  // or hit a protocol-relative URL ("//evil.example.com").
+  const raw = searchParams.get("callbackUrl");
+  const callbackUrl = raw && raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";
+  const registered = searchParams.get("registered") === "1";
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -31,13 +38,12 @@ export default function LoginPage() {
       password,
     });
 
-    if (result?.error) {
-      setError("Invalid email or password.");
-      setLoading(false);
+    if (result?.ok) {
+      router.push(callbackUrl);
       return;
     }
-
-    router.push("/");
+    setError("Invalid email or password.");
+    setLoading(false);
   }
 
   return (
@@ -75,6 +81,11 @@ export default function LoginPage() {
             <CardDescription>Welcome back to Vibe Socials</CardDescription>
           </CardHeader>
           <CardContent>
+            {registered ? (
+              <Alert variant="success" className="mb-4">
+                Account created — sign in below.
+              </Alert>
+            ) : null}
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">
                 <Label htmlFor="email">Email</Label>
@@ -125,15 +136,26 @@ export default function LoginPage() {
             <p className="mt-6 text-center text-sm text-muted-foreground">
               Need an account?{" "}
               <Link
-                href="/register"
+                href={callbackUrl === "/" ? "/register" : `/register?callbackUrl=${encodeURIComponent(callbackUrl)}`}
                 className="font-semibold text-primary outline-none hover:underline focus-visible:underline"
               >
                 Create one
               </Link>
             </p>
+            <p className="mt-2 text-center text-xs text-muted-foreground">
+              Forgot your password? Reset isn&apos;t available yet — contact the site owner.
+            </p>
           </CardContent>
         </Card>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginPageInner />
+    </Suspense>
   );
 }

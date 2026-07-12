@@ -50,7 +50,7 @@ export function AccountMenu() {
         ref={buttonRef}
         type="button"
         onClick={() => setOpen((value) => !value)}
-        aria-haspopup="true"
+        aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
         className="flex items-center gap-2 rounded-[var(--radius)] border border-border bg-card px-2 py-1.5 text-sm outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"

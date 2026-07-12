@@ -31,7 +31,7 @@ export function TopBar({ onMenuClick }: { onMenuClick: () => void }) {
         <Brand />
       </div>
 
-      <span className="hidden text-sm font-semibold text-foreground md:inline">
+      <span className="min-w-0 truncate text-sm font-semibold text-foreground">
         {title}
       </span>
 

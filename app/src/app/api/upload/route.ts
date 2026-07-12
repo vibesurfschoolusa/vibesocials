@@ -28,6 +28,10 @@ export async function POST(request: Request): Promise<NextResponse> {
             'video/quicktime',
             'video/webm',
           ],
+          // Blob store cap for a single upload. Matches the largest media any
+          // connected platform accepts in practice; the platforms themselves
+          // enforce their own stricter limits at publish time.
+          maximumSizeInBytes: 512 * 1024 * 1024,
           tokenPayload: JSON.stringify({
             userId: user.id,
             uploadedAt: new Date().toISOString(),

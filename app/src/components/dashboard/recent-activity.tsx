@@ -8,13 +8,18 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PostJobCard } from "@/components/activity/post-job-card";
-import { usePostJobs } from "@/hooks/usePostJobs";
+import type { UsePostJobsResult } from "@/hooks/usePostJobs";
 
 const PREVIEW_COUNT = 5;
 
-/** Dashboard widget: the most recent post jobs with a link to the full view. */
-export function RecentActivity() {
-  const { jobs, loading, error, reload } = usePostJobs();
+/**
+ * Dashboard widget: the most recent post jobs with a link to the full view.
+ *
+ * Task 8 — takes its data as props instead of calling `usePostJobs()` itself:
+ * `Dashboard` (src/app/page.tsx) is now the single fetch/poll owner for the
+ * dashboard, shared with `YouTubeMetricsSummary` below it.
+ */
+export function RecentActivity({ jobs, loading, error, reload }: UsePostJobsResult) {
   const preview = jobs ? jobs.slice(0, PREVIEW_COUNT) : [];
 
   return (

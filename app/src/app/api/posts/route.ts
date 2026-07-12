@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import { logger } from "@/lib/logger";
-import { PostJobStatus, type Platform, type Prisma } from "@prisma/client";
+import { PostJobStatus, Platform, type Prisma } from "@prisma/client";
 import {
   createPostJobForExistingMedia,
   createPostJobOnly,
@@ -66,7 +66,10 @@ export async function GET(request: Request) {
         createdAt: true,
         scheduledFor: true,
         baseCaption: true,
-        mediaItem: { select: { baseCaption: true } },
+        mediaItem: { select: { baseCaption: true, storageLocation: true, mimeType: true } },
+        // Task 8 — compose-time publish snapshot (Task 7's `publishMetadata`),
+        // surfaced read-only via the `publish` DTO field below.
+        publishMetadata: true,
         results: {
           select: {
             platform: true,
@@ -118,37 +121,62 @@ export async function GET(request: Request) {
     const metricByVideoId = new Map(metricRows.map((row) => [row.externalPostId, row]));
 
     const payload: PostsResponse = {
-      jobs: jobs.map((job) => ({
-        id: job.id,
-        status: job.status,
-        createdAt: job.createdAt.toISOString(),
-        scheduledFor: job.scheduledFor?.toISOString() ?? null,
-        // Scheduled/draft jobs snapshot their caption on the job itself so
-        // editing them never mutates shared reused media; fall back to the
-        // media item's caption for immediate/older jobs.
-        caption: job.baseCaption ?? job.mediaItem?.baseCaption ?? null,
-        results: job.results.map((result) => {
-          const metricRow =
-            result.platform === "youtube" && result.externalPostId
-              ? metricByVideoId.get(result.externalPostId)
-              : undefined;
-          return {
-            platform: result.platform,
-            status: result.status,
-            externalPostId: result.externalPostId,
-            errorMessage: result.errorMessage,
-            metric: metricRow
-              ? {
-                  views: metricRow.views,
-                  likes: metricRow.likes,
-                  comments: metricRow.comments,
-                  shares: metricRow.shares,
-                  fetchedAt: metricRow.fetchedAt.toISOString(),
-                }
-              : null,
-          };
-        }),
-      })),
+      jobs: jobs.map((job) => {
+        // Task 8 — the raw JSON snapshot narrowed to the display fields the
+        // DTO exposes. Untyped at the Prisma boundary (Json?), so this cast
+        // only asserts the shape we read from — never trusts it beyond that.
+        const snapshot = job.publishMetadata as {
+          tiktok?: { privacyLevel?: string };
+          youtube?: { privacyStatus?: string };
+          targetPlatforms?: string[];
+        } | null;
+
+        return {
+          id: job.id,
+          status: job.status,
+          createdAt: job.createdAt.toISOString(),
+          scheduledFor: job.scheduledFor?.toISOString() ?? null,
+          // Scheduled/draft jobs snapshot their caption on the job itself so
+          // editing them never mutates shared reused media; fall back to the
+          // media item's caption for immediate/older jobs.
+          caption: job.baseCaption ?? job.mediaItem?.baseCaption ?? null,
+          // Display-only thumbnail source (SEC-1: storageLocation is a public
+          // blob URL, already exposed via /api/media — no new secret surface).
+          media: job.mediaItem
+            ? { url: job.mediaItem.storageLocation, mimeType: job.mediaItem.mimeType }
+            : null,
+          // Compose-time publish choices, null for legacy/immediate jobs with
+          // no snapshot (see PublishMetadataSnapshot, src/server/jobs/posting.ts).
+          publish: snapshot
+            ? {
+                targetPlatforms: (snapshot.targetPlatforms as Platform[] | undefined) ?? null,
+                youtubePrivacy: snapshot.youtube?.privacyStatus ?? null,
+                tiktokPrivacy: snapshot.tiktok?.privacyLevel ?? null,
+              }
+            : null,
+          results: job.results.map((result) => {
+            const metricRow =
+              result.platform === "youtube" && result.externalPostId
+                ? metricByVideoId.get(result.externalPostId)
+                : undefined;
+            return {
+              platform: result.platform,
+              status: result.status,
+              externalPostId: result.externalPostId,
+              errorMessage: result.errorMessage,
+              metric: metricRow
+                ? {
+                    views: metricRow.views,
+                    likes: metricRow.likes,
+                    comments: metricRow.comments,
+                    shares: metricRow.shares,
+                    fetchedAt: metricRow.fetchedAt.toISOString(),
+                  }
+                : null,
+            };
+          }),
+        };
+      }),
     };
 
     return NextResponse.json(payload);
@@ -177,6 +205,9 @@ interface CreatePostBody {
   perPlatformOverrides?: unknown;
   tiktokMetadata?: unknown;
   youtubeMetadata?: { privacyStatus?: unknown };
+  // Task 7 — optional chosen subset of platforms to publish this post to.
+  // Absent = every connected platform (legacy/default behavior).
+  platforms?: unknown;
   // Roadmap Phase 5. `draft: true` saves a draft (no results, no event);
   // `scheduledFor` (ISO string) schedules for later (no results, no event —
   // the cron claims it when due). Absent both = immediate (today's behavior).
@@ -327,6 +358,33 @@ export async function POST(request: Request) {
     };
   }
 
+  // Task 7 — optional per-post platform targeting: a chosen subset of the
+  // user's connected platforms to publish to. Absent (`undefined`) means
+  // "every connection" (legacy/default behavior) all the way down through
+  // the create helpers. SEC-1: only ever a display-safe Platform enum value.
+  const VALID_PLATFORMS = new Set<string>(Object.values(Platform));
+  let targetPlatforms: Platform[] | undefined;
+  if (body?.platforms != null) {
+    if (!Array.isArray(body.platforms) || body.platforms.some((p) => typeof p !== "string")) {
+      return NextResponse.json(
+        { error: "platforms must be an array of platform names" },
+        { status: 400 },
+      );
+    }
+    const unknown = body.platforms.filter((p) => !VALID_PLATFORMS.has(p));
+    if (unknown.length > 0) {
+      return NextResponse.json(
+        { error: `Unknown platform(s): ${unknown.join(", ")}` },
+        { status: 400 },
+      );
+    }
+    const deduped = Array.from(new Set(body.platforms)) as Platform[];
+    if (deduped.length === 0) {
+      return NextResponse.json({ error: "Select at least one platform." }, { status: 400 });
+    }
+    targetPlatforms = deduped;
+  }
+
   const location = typeof locationRaw === "string" && locationRaw.trim() ? locationRaw.trim() : undefined;
 
   // Roadmap Phase 5 — resolve the intent. `draft: true` wins; otherwise a
@@ -365,6 +423,8 @@ export async function POST(request: Request) {
         // immediate (which carries them in the event below).
         tiktokMetadata,
         youtubeMetadata,
+        // Task 7 — chosen platform subset; undefined = every connection.
+        targetPlatforms,
       });
       postJobId = created.postJobId;
       mediaItemId = created.mediaItemId;
@@ -398,6 +458,8 @@ export async function POST(request: Request) {
         // immediate (which carries them in the event below).
         tiktokMetadata,
         youtubeMetadata,
+        // Task 7 — chosen platform subset; undefined = every connection.
+        targetPlatforms,
       });
       postJobId = created.postJobId;
       mediaItemId = created.mediaItemId;

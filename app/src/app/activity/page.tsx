@@ -10,7 +10,7 @@ export default async function ActivityPage() {
   const user = await getCurrentUser();
 
   if (!user) {
-    redirect("/login");
+    redirect(`/login?callbackUrl=${encodeURIComponent("/activity")}`);
   }
 
   return <ActivityView />;

@@ -10,7 +10,7 @@ export default async function QueuePage() {
   const user = await getCurrentUser();
 
   if (!user) {
-    redirect("/login");
+    redirect(`/login?callbackUrl=${encodeURIComponent("/queue")}`);
   }
 
   return <QueueView />;

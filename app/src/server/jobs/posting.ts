@@ -18,6 +18,17 @@ export interface PostJobSchedulingParams {
   intent?: PostJobIntent;
   /** Target publish time; required (and only used) when `intent === "scheduled"`. */
   scheduledFor?: Date | null;
+  /**
+   * Per-post platform targeting (Task 7). The chosen subset of the user's
+   * connected platforms to publish this post to. `undefined` = every
+   * connection (legacy/default behavior — unchanged for existing callers).
+   * For immediate jobs this narrows which connections get a `PostJobResult`
+   * row (and thus the Inngest publisher's fan-out, since that derives its
+   * work from existing result rows — see inngest-functions.ts). For
+   * scheduled/draft jobs this rides the `publishMetadata` snapshot and is
+   * replayed by {@link prepareDeferredPostJobDispatch} at run time.
+   */
+  targetPlatforms?: Platform[];
 }
 
 export interface CreatePostJobOnlyParams extends PostJobSchedulingParams {
@@ -45,22 +56,34 @@ export interface CreatePostJobOnlyParams extends PostJobSchedulingParams {
 export interface PublishMetadataSnapshot {
   tiktok?: TikTokPostMetadata;
   youtube?: YouTubePostMetadata;
+  /**
+   * Task 7 — the chosen subset of platforms to publish to, replayed by
+   * {@link prepareDeferredPostJobDispatch} at run time. Absent/empty means
+   * "all connections" (legacy behavior). SEC-1: display-safe platform enum
+   * values only.
+   */
+  targetPlatforms?: Platform[];
 }
 
 /**
  * Build the `publishMetadata` snapshot from the per-post metadata, or `undefined`
- * when neither platform has any (so an immediate job / a job with no per-post
- * privacy leaves the column null). Deferred jobs persist this; immediate jobs
- * don't (their metadata rides the event).
+ * when none of the three inputs has anything (so an immediate job / a job with
+ * no per-post privacy or targeting leaves the column null). Deferred jobs
+ * persist this; immediate jobs don't (their metadata rides the event — Task 7's
+ * `targetPlatforms` is the exception: immediate jobs apply it directly to the
+ * result-row fan-out instead of persisting it).
  */
 export function buildPublishMetadataSnapshot(
   tiktokMetadata?: TikTokPostMetadata,
   youtubeMetadata?: YouTubePostMetadata,
+  targetPlatforms?: Platform[],
 ): PublishMetadataSnapshot | undefined {
-  if (!tiktokMetadata && !youtubeMetadata) return undefined;
+  const hasTargetPlatforms = Boolean(targetPlatforms && targetPlatforms.length > 0);
+  if (!tiktokMetadata && !youtubeMetadata && !hasTargetPlatforms) return undefined;
   return {
     ...(tiktokMetadata ? { tiktok: tiktokMetadata } : {}),
     ...(youtubeMetadata ? { youtube: youtubeMetadata } : {}),
+    ...(hasTargetPlatforms ? { targetPlatforms } : {}),
   };
 }
 
@@ -120,7 +143,7 @@ export function assertMediaItemReusable(
 export async function createPostJobOnly(
   params: CreatePostJobOnlyParams,
 ): Promise<PostJobCreated> {
-  const { userId, media, baseCaption, location, perPlatformOverrides } = params;
+  const { userId, media, baseCaption, location, perPlatformOverrides, targetPlatforms } = params;
   const intent = params.intent ?? "immediate";
 
   // Only the immediate path materializes the fan-out (and thus requires a
@@ -131,7 +154,13 @@ export async function createPostJobOnly(
       ? await prisma.socialConnection.findMany({ where: { userId } })
       : [];
 
-  if (intent === "immediate" && socialConnections.length === 0) {
+  // Task 7 — narrow to the caller's chosen subset when given; `undefined`
+  // means "every connection" (legacy/default behavior, byte-for-byte).
+  const targeted = targetPlatforms
+    ? socialConnections.filter((c) => targetPlatforms.includes(c.platform))
+    : socialConnections;
+
+  if (intent === "immediate" && targeted.length === 0) {
     throw new Error("NO_CONNECTIONS");
   }
 
@@ -173,6 +202,7 @@ export async function createPostJobOnly(
       perPlatformOverrides,
       tiktokMetadata: params.tiktokMetadata,
       youtubeMetadata: params.youtubeMetadata,
+      targetPlatforms,
     }),
   });
 
@@ -181,7 +211,7 @@ export async function createPostJobOnly(
   const resultRecords =
     intent === "immediate"
       ? await Promise.all(
-          socialConnections.map((connection) =>
+          targeted.map((connection) =>
             prisma.postJobResult.create({
               data: {
                 postJobId: postJob.id,
@@ -218,12 +248,17 @@ export function buildPostJobCreateData(args: {
   perPlatformOverrides?: Partial<Record<Platform, string>> | null;
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
+  /** Task 7 — chosen platform subset, persisted for deferred jobs so
+   *  {@link prepareDeferredPostJobDispatch} can replay it at run time. */
+  targetPlatforms?: Platform[];
 }): Prisma.PostJobUncheckedCreateInput {
   const isDeferred = args.intent !== "immediate";
-  // Snapshot per-post privacy for deferred jobs only (review B1) — immediate
-  // jobs carry it in the event payload, so persisting there would be dead data.
+  // Snapshot per-post privacy + targeting for deferred jobs only (review B1 /
+  // Task 7) — immediate jobs carry privacy in the event payload and apply
+  // targeting directly to the result-row fan-out, so persisting either here
+  // would be dead data.
   const publishMetadata = isDeferred
-    ? buildPublishMetadataSnapshot(args.tiktokMetadata, args.youtubeMetadata)
+    ? buildPublishMetadataSnapshot(args.tiktokMetadata, args.youtubeMetadata, args.targetPlatforms)
     : undefined;
   return {
     userId: args.userId,
@@ -290,7 +325,7 @@ export interface CreatePostJobForExistingMediaParams
 export async function createPostJobForExistingMedia(
   params: CreatePostJobForExistingMediaParams,
 ): Promise<PostJobCreated> {
-  const { userId, mediaItemId, location, baseCaption, perPlatformOverrides } =
+  const { userId, mediaItemId, location, baseCaption, perPlatformOverrides, targetPlatforms } =
     params;
   const intent = params.intent ?? "immediate";
 
@@ -306,7 +341,13 @@ export async function createPostJobForExistingMedia(
       ? await prisma.socialConnection.findMany({ where: { userId } })
       : [];
 
-  if (intent === "immediate" && socialConnections.length === 0) {
+  // Task 7 — narrow to the caller's chosen subset when given; `undefined`
+  // means "every connection" (legacy/default behavior, byte-for-byte).
+  const targeted = targetPlatforms
+    ? socialConnections.filter((c) => targetPlatforms.includes(c.platform))
+    : socialConnections;
+
+  if (intent === "immediate" && targeted.length === 0) {
     throw new Error("NO_CONNECTIONS");
   }
 
@@ -351,6 +392,7 @@ export async function createPostJobForExistingMedia(
         perPlatformOverrides,
         tiktokMetadata: params.tiktokMetadata,
         youtubeMetadata: params.youtubeMetadata,
+        targetPlatforms,
       }),
     });
 
@@ -358,7 +400,7 @@ export async function createPostJobForExistingMedia(
     const results =
       intent === "immediate"
         ? await Promise.all(
-            socialConnections.map((connection) =>
+            targeted.map((connection) =>
               tx.postJobResult.create({
                 data: {
                   postJobId: job.id,
@@ -442,18 +484,27 @@ export async function prepareDeferredPostJobDispatch(
     where: { userId: job.userId },
   });
 
-  if (connections.length === 0) {
-    // No connections at run time → fail the job (mirrors publishToAllPlatforms'
-    // no-connections path). §6.6.
-    // KNOWN GAP (Phase 6 review §5, deferred v1): this failure fires NO
-    // post-outcome email — a scheduled post that fails here (user disconnected
-    // everything before it fired) is exactly the "silent 3am failure" the
-    // notifications feature advertises. A real fix must (a) emit
-    // `notification.requested` from the caller's NO_CONNECTIONS branch AND (b)
-    // teach buildPostOutcomeEmail an empty-results = "failed, no platforms"
-    // subject (today empty results reads as a neutral "finished processing").
-    // Platform-level scheduled failures DO notify (they route through
-    // publishToAllPlatforms). Tracked as a follow-up.
+  // Replay the per-post privacy AND platform targeting the user chose at
+  // compose time (review B1 / Task 7).
+  const publishMetadata =
+    (job.publishMetadata as PublishMetadataSnapshot | null) ?? null;
+  const target = publishMetadata?.targetPlatforms;
+  // `eligible` narrows `connections` to the chosen subset when the snapshot
+  // recorded one; `undefined`/empty means "all connections" (legacy
+  // behavior). This also correctly subsumes the old "no connections at all"
+  // case below: an empty `connections` filters to an empty `eligible` either way.
+  const eligible = target?.length
+    ? connections.filter((c) => target.includes(c.platform))
+    : connections;
+
+  if (eligible.length === 0) {
+    // No eligible connections at run time → fail the job (mirrors
+    // publishToAllPlatforms' no-connections path). §6.6. Covers both "no
+    // connections at all" and "connections exist but none match the chosen
+    // targetPlatforms" (Task 7).
+    // The scheduled scanner emits notification.requested for this failure
+    // (see inngest-functions.ts) and buildPostOutcomeEmail has a dedicated
+    // empty-results-failed subject.
     await prisma.postJob.update({
       where: { id: postJobId },
       data: { status: "failed" },
@@ -466,7 +517,7 @@ export async function prepareDeferredPostJobDispatch(
   const existingResults = await prisma.postJobResult.count({ where: { postJobId } });
   if (existingResults === 0) {
     await prisma.postJobResult.createMany({
-      data: connections.map((c) => ({
+      data: eligible.map((c) => ({
         postJobId,
         platform: c.platform,
         socialConnectionId: c.id,
@@ -479,10 +530,6 @@ export async function prepareDeferredPostJobDispatch(
     (job.perPlatformOverrides as Partial<Record<Platform, string>> | null) ??
     (job.mediaItem.perPlatformOverrides as Partial<Record<Platform, string>> | null) ??
     null;
-
-  // Replay the per-post privacy the user chose at compose time (review B1).
-  const publishMetadata =
-    (job.publishMetadata as PublishMetadataSnapshot | null) ?? null;
 
   return {
     ok: true,

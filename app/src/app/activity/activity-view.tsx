@@ -22,7 +22,8 @@ export function ActivityView() {
             Activity
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Every post you&apos;ve published and how each platform responded.
+            Everything you&apos;ve created — drafts, scheduled posts, and how each
+            platform responded.
           </p>
         </div>
         <Link

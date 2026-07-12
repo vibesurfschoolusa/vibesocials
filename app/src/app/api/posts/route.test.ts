@@ -498,3 +498,74 @@ describe("POST /api/posts — per-post privacy persistence + validation (review 
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
   });
 });
+
+describe("POST /api/posts — platform targeting validation (Task 7)", () => {
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({
+      postJobId: "job-1",
+      mediaItemId: "media-1",
+      resultIds: [],
+    });
+  });
+
+  it("returns 400 when platforms is not an array", async () => {
+    const response = await POST(
+      jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi", platforms: "youtube" }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "platforms must be an array of platform names",
+    });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 mentioning the unknown platform name", async () => {
+    const response = await POST(
+      jsonRequest({
+        blobUrl: "https://x/y",
+        baseCaption: "hi",
+        platforms: ["youtube", "myspace"],
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error?: string };
+    expect(body.error).toContain("myspace");
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 'Select at least one platform.' for an empty array", async () => {
+    const response = await POST(
+      jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi", platforms: [] }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "Select at least one platform.",
+    });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("dedupes repeated platform names before passing them to the create helper", async () => {
+    await POST(
+      jsonRequest({
+        blobUrl: "https://x/y",
+        baseCaption: "hi",
+        platforms: ["youtube", "youtube"],
+      }),
+    );
+
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ targetPlatforms: ["youtube"] }),
+    );
+  });
+
+  it("passes targetPlatforms undefined to the create helper when platforms is absent", async () => {
+    await POST(jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi" }));
+
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ targetPlatforms: undefined }),
+    );
+  });
+});

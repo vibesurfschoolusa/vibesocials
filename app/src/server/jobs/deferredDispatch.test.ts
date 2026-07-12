@@ -172,4 +172,39 @@ describe("prepareDeferredPostJobDispatch", () => {
       expect(result.event.perPlatformOverrides).toEqual({ x: "override" });
     }
   });
+
+  // Task 7 — per-post platform targeting replayed from the publishMetadata
+  // snapshot at run time, same as tiktok/youtube privacy (review B1).
+  it("narrows result creation to only the connections in publishMetadata.targetPlatforms", async () => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({ publishMetadata: { targetPlatforms: ["youtube"] } }),
+    );
+    connectionFindManyMock.mockResolvedValue([
+      { id: "c-youtube", platform: "youtube" },
+      { id: "c-x", platform: "x" },
+    ]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(resultCreateManyMock).toHaveBeenCalledWith({
+      data: [{ postJobId: "job-1", platform: "youtube", socialConnectionId: "c-youtube", status: "pending" }],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("marks the job failed when targetPlatforms excludes every connection that exists at run time", async () => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({ publishMetadata: { targetPlatforms: ["tiktok"] } }),
+    );
+    connectionFindManyMock.mockResolvedValue([{ id: "c-youtube", platform: "youtube" }]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(result).toEqual({ ok: false, reason: "NO_CONNECTIONS" });
+    expect(postJobUpdateMock).toHaveBeenCalledWith({
+      where: { id: "job-1" },
+      data: { status: "failed" },
+    });
+    expect(resultCreateManyMock).not.toHaveBeenCalled();
+  });
 });

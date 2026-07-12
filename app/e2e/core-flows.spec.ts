@@ -103,7 +103,10 @@ test.describe(
   () => {
     test.skip(!dbReady, "Set E2E_DATABASE_URL to a seeded test DB to run these");
 
-    test("register via the UI, then log in with the new account", async ({ page }) => {
+    test("register via the UI, then log in with the new account", async ({
+      page,
+      context,
+    }) => {
       const user = freshTestUser("register-ui");
 
       await page.goto("/register");
@@ -116,9 +119,19 @@ test.describe(
       await page.getByLabel("Password", { exact: true }).fill(user.password);
       await page.getByRole("button", { name: "Create account" }).click();
 
-      // RegisterPage pushes to /login on a 201 (src/app/register/page.tsx).
-      await expect(page).toHaveURL(/\/login$/);
+      // RegisterPage signs the new account in immediately on a 201
+      // (src/app/register/page.tsx) and lands on the authenticated dashboard —
+      // no separate manual login required for a fresh registration.
+      await expect(page).toHaveURL("/");
+      await expect(
+        page.getByRole("heading", { level: 1, name: "Welcome back" }),
+      ).toBeVisible();
 
+      // Clear the session and exercise the manual login form too, so this
+      // test still covers the plain email/password sign-in path.
+      await context.clearCookies();
+
+      await page.goto("/login");
       await page.getByLabel("Email").fill(user.email);
       await page.getByLabel("Password", { exact: true }).fill(user.password);
       await page.getByRole("button", { name: "Sign in" }).click();
@@ -152,7 +165,13 @@ test.describe(
           .getByRole("group", { name: "When to publish" })
           .getByRole("button", { name: "Publish now" })
           .click();
-        await form.getByRole("button", { name: "Create post" }).click();
+        await form.getByRole("button", { name: "Publish post" }).click();
+
+        // Publish-now confirmation dialog (per-post platform targeting change)
+        await page
+          .getByRole("dialog")
+          .getByRole("button", { name: "Publish now" })
+          .click();
 
         // Alert `title` renders as styled text, not a heading (see
         // src/components/ui/alert.tsx) — match on visible text instead.

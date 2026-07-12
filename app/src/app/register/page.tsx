@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { Eye, EyeOff } from "lucide-react";
 
@@ -11,8 +12,14 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-export default function RegisterPage() {
+function RegisterPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // Sanitize once: only accept an internal path so we never redirect off-site
+  // or hit a protocol-relative URL ("//evil.example.com").
+  const raw = searchParams.get("callbackUrl");
+  const callbackUrl = raw && raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -40,12 +47,28 @@ export default function RegisterPage() {
         setLoading(false);
         return;
       }
-
-      router.push("/login");
     } catch (_err) {
       setError("Unexpected error while registering.");
       setLoading(false);
+      return;
     }
+
+    // The account exists now (201 above) regardless of what happens next, so
+    // auto-sign-in runs in its own try/catch: a network blip here must not
+    // land in the block above and show the misleading "Unexpected error while
+    // registering." — it should just fall through to the friendly login
+    // handoff below, same as the "signed in but not ok" case.
+    try {
+      const result = await signIn("credentials", { redirect: false, email, password });
+      if (result?.ok) {
+        router.push(callbackUrl);
+        return;
+      }
+    } catch {
+      // fall through to the handoff below
+    }
+    // Extremely unlikely (account was just created) — fall back to a friendly login handoff.
+    router.push(`/login?registered=1&callbackUrl=${encodeURIComponent(callbackUrl)}`);
   }
 
   return (
@@ -85,7 +108,9 @@ export default function RegisterPage() {
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">
-                <Label htmlFor="name">Name</Label>
+                <Label htmlFor="name">
+                  Name <span className="font-normal text-muted-foreground">(optional)</span>
+                </Label>
                 <Input
                   id="name"
                   type="text"
@@ -113,6 +138,7 @@ export default function RegisterPage() {
                     type={showPassword ? "text" : "password"}
                     autoComplete="new-password"
                     required
+                    minLength={8}
                     className="pl-3 pr-10"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
@@ -131,6 +157,7 @@ export default function RegisterPage() {
                     )}
                   </button>
                 </div>
+                <p className="text-xs text-muted-foreground">At least 8 characters.</p>
               </div>
 
               {error ? <Alert variant="danger">{error}</Alert> : null}
@@ -153,5 +180,13 @@ export default function RegisterPage() {
         </Card>
       </div>
     </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={null}>
+      <RegisterPageInner />
+    </Suspense>
   );
 }
