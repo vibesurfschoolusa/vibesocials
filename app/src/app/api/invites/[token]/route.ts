@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { hashInviteToken } from "@/lib/inviteToken";
+import { checkRateLimit } from "@/lib/rateLimit";
 
 interface InviteRouteContext {
   params: Promise<{ token: string }>;
@@ -29,6 +30,23 @@ export async function GET(_request: Request, { params }: InviteRouteContext) {
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Post-release review (Task D): this preview GET was unguarded — per-user
+  // throttle, distinct key from invites/accept's own 10/5min limit, same
+  // shared 429 envelope as posts/[postJobId]'s enforceMutateRateLimit (body +
+  // Retry-After header).
+  const rateLimit = await checkRateLimit({
+    userId: user.id,
+    route: "invites/preview",
+    limit: 60,
+    windowMs: 5 * 60 * 1000,
+  });
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
+      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) } },
+    );
   }
 
   const { token } = await params;

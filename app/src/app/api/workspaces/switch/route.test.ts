@@ -2,14 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
 // workspaces/route.test.ts). route.ts imports `@/lib/db`, `@/lib/workspace`,
-// and `next/headers` at module scope, so all three must be mocked before
-// route.ts is imported below.
-const { findFirstMock, getWorkspaceContextMock, cookieSetMock, cookiesMock } = vi.hoisted(() => ({
-  findFirstMock: vi.fn(),
-  getWorkspaceContextMock: vi.fn(),
-  cookieSetMock: vi.fn(),
-  cookiesMock: vi.fn(),
-}));
+// `@/lib/rateLimit`, and `next/headers` at module scope, so all four must be
+// mocked before route.ts is imported below.
+const { findFirstMock, getWorkspaceContextMock, checkRateLimitMock, cookieSetMock, cookiesMock } =
+  vi.hoisted(() => ({
+    findFirstMock: vi.fn(),
+    getWorkspaceContextMock: vi.fn(),
+    checkRateLimitMock: vi.fn(),
+    cookieSetMock: vi.fn(),
+    cookiesMock: vi.fn(),
+  }));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -20,6 +22,10 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/workspace", () => ({
   ACTIVE_WORKSPACE_COOKIE: "vs_active_workspace",
   getWorkspaceContext: getWorkspaceContextMock,
+}));
+
+vi.mock("@/lib/rateLimit", () => ({
+  checkRateLimit: checkRateLimitMock,
 }));
 
 vi.mock("next/headers", () => ({
@@ -46,10 +52,12 @@ function jsonRequest(body: unknown): Request {
 beforeEach(() => {
   findFirstMock.mockReset();
   getWorkspaceContextMock.mockReset();
+  checkRateLimitMock.mockReset();
   cookieSetMock.mockReset();
   cookiesMock.mockReset();
 
   getWorkspaceContextMock.mockResolvedValue(CONTEXT);
+  checkRateLimitMock.mockResolvedValue({ allowed: true });
   cookiesMock.mockResolvedValue({ set: cookieSetMock });
 });
 
@@ -62,6 +70,30 @@ describe("POST /api/workspaces/switch", () => {
     expect(response.status).toBe(401);
     expect(findFirstMock).not.toHaveBeenCalled();
     expect(cookieSetMock).not.toHaveBeenCalled();
+  });
+
+  it("429s with Retry-After when the switch rate limit blocks", async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 120 });
+
+    const response = await POST(jsonRequest({ workspaceId: "ws-2" }));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("120");
+    await expect(response.json()).resolves.toMatchObject({ retryAfterSeconds: 120 });
+    expect(findFirstMock).not.toHaveBeenCalled(); // limited BEFORE any DB read
+  });
+
+  it("checks the per-user switch rate limit with the shared envelope", async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: true });
+
+    await POST(jsonRequest({ workspaceId: "ws-1" }));
+
+    expect(checkRateLimitMock).toHaveBeenCalledWith({
+      userId: "user-1",
+      route: "workspaces/switch",
+      limit: 60,
+      windowMs: 5 * 60 * 1000,
+    });
   });
 
   it("returns 400 on invalid JSON", async () => {

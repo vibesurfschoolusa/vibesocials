@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
+import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
 
 /**
@@ -31,6 +32,23 @@ export async function POST() {
 
   if (!context) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Post-release review (Task D): this mutation was unguarded — per-user
+  // throttle, same shared 429 envelope as posts/[postJobId]'s
+  // enforceMutateRateLimit (body + Retry-After header). Placed before the
+  // owner-role check below: the throttle is on the endpoint, not the outcome.
+  const rateLimit = await checkRateLimit({
+    userId: context.user.id,
+    route: "workspaces/leave",
+    limit: 60,
+    windowMs: 5 * 60 * 1000,
+  });
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
+      { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) } },
+    );
   }
 
   if (context.role === "owner") {
