@@ -2,23 +2,27 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
 // workspaces/active/route.test.ts). route.ts imports `@/lib/db`,
-// `@/lib/workspace`, and `@/lib/inviteToken` at module scope, so all three
-// must be mocked before route.ts is imported below. `WorkspaceForbiddenError`
-// and `INVITE_TTL_MS` are kept REAL via importActual (route.ts does
-// `instanceof` checks / arithmetic against the real values).
+// `@/lib/workspace` (the shared `requireOwnerContext` owner gate — review
+// fix round 1, Minor 1; its 401/403 mapping is unit-tested in
+// src/lib/workspace.test.ts), and `@/lib/inviteToken` at module scope, so
+// all three must be mocked before route.ts is imported below.
+// `INVITE_TTL_MS` is kept REAL via importActual (route.ts does arithmetic
+// against the real value).
 const {
   findFirstMock,
   updateManyMock,
   createMock,
   transactionMock,
-  getWorkspaceContextMock,
+  executeRawMock,
+  requireOwnerContextMock,
   generateInviteTokenMock,
 } = vi.hoisted(() => ({
   findFirstMock: vi.fn(),
   updateManyMock: vi.fn(),
   createMock: vi.fn(),
   transactionMock: vi.fn(),
-  getWorkspaceContextMock: vi.fn(),
+  executeRawMock: vi.fn(),
+  requireOwnerContextMock: vi.fn(),
   generateInviteTokenMock: vi.fn(),
 }));
 
@@ -33,13 +37,9 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-vi.mock("@/lib/workspace", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/workspace")>("@/lib/workspace");
-  return {
-    ...actual,
-    getWorkspaceContext: getWorkspaceContextMock,
-  };
-});
+vi.mock("@/lib/workspace", () => ({
+  requireOwnerContext: requireOwnerContextMock,
+}));
 
 vi.mock("@/lib/inviteToken", async () => {
   const actual = await vi.importActual<typeof import("@/lib/inviteToken")>("@/lib/inviteToken");
@@ -49,7 +49,8 @@ vi.mock("@/lib/inviteToken", async () => {
   };
 });
 
-import { WorkspaceForbiddenError } from "@/lib/workspace";
+import { NextResponse } from "next/server";
+
 import { INVITE_TTL_MS } from "@/lib/inviteToken";
 import { DELETE, GET, POST } from "./route";
 
@@ -59,6 +60,13 @@ const OWNER_CONTEXT = {
   role: "owner" as const,
   memberCount: 2,
 };
+
+// What the (mocked) shared owner gate resolves for the two error cases —
+// the routes return these as-is.
+const unauthorizedResponse = () =>
+  NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+const forbiddenResponse = () =>
+  NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 });
 
 function makeInviteRow(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -79,17 +87,21 @@ beforeEach(() => {
   updateManyMock.mockReset();
   createMock.mockReset();
   transactionMock.mockReset();
-  getWorkspaceContextMock.mockReset();
+  executeRawMock.mockReset();
+  requireOwnerContextMock.mockReset();
   generateInviteTokenMock.mockReset();
 
-  getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+  requireOwnerContextMock.mockResolvedValue(OWNER_CONTEXT);
   generateInviteTokenMock.mockReturnValue({ raw: "RAW_TOKEN_VALUE", hash: "hashed-token-value" });
 
   // Default transaction implementation: invoke the callback with a `tx`
   // whose methods are the same spies the tests assert against (mirrors
-  // workspace.test.ts / media/[id]/route.test.ts).
+  // workspace.test.ts / media/[id]/route.test.ts). `$executeRaw` receives
+  // the per-workspace pg_advisory_xact_lock POST takes (review fix round 1
+  // — single-active-invite race).
   transactionMock.mockImplementation(async (callback: (tx: unknown) => unknown) =>
     callback({
+      $executeRaw: executeRawMock,
       workspaceInvite: { updateMany: updateManyMock, create: createMock },
     }),
   );
@@ -99,7 +111,7 @@ beforeEach(() => {
 
 describe("GET /api/workspaces/invites", () => {
   it("returns 401 when unauthenticated", async () => {
-    getWorkspaceContextMock.mockResolvedValue(null);
+    requireOwnerContextMock.mockResolvedValue(unauthorizedResponse());
 
     const response = await GET();
 
@@ -108,7 +120,7 @@ describe("GET /api/workspaces/invites", () => {
   });
 
   it("returns 403 for a member", async () => {
-    getWorkspaceContextMock.mockRejectedValue(new WorkspaceForbiddenError());
+    requireOwnerContextMock.mockResolvedValue(forbiddenResponse());
 
     const response = await GET();
 
@@ -152,7 +164,7 @@ describe("GET /api/workspaces/invites", () => {
 
 describe("POST /api/workspaces/invites", () => {
   it("returns 401 when unauthenticated", async () => {
-    getWorkspaceContextMock.mockResolvedValue(null);
+    requireOwnerContextMock.mockResolvedValue(unauthorizedResponse());
 
     const response = await POST();
 
@@ -161,7 +173,7 @@ describe("POST /api/workspaces/invites", () => {
   });
 
   it("returns 403 for a member", async () => {
-    getWorkspaceContextMock.mockRejectedValue(new WorkspaceForbiddenError());
+    requireOwnerContextMock.mockResolvedValue(forbiddenResponse());
 
     const response = await POST();
 
@@ -193,6 +205,26 @@ describe("POST /api/workspaces/invites", () => {
     const revokeOrder = updateManyMock.mock.invocationCallOrder[0];
     const createOrder = createMock.mock.invocationCallOrder[0];
     expect(revokeOrder).toBeLessThan(createOrder);
+  });
+
+  it("takes a per-workspace advisory lock BEFORE revoke-then-create (review fix round 1 — two concurrent POSTs can't both leave an active invite)", async () => {
+    createMock.mockResolvedValue(makeInviteRow());
+
+    await POST();
+
+    expect(executeRawMock).toHaveBeenCalledTimes(1);
+    // $executeRaw is a tagged-template call: (TemplateStringsArray, ...values).
+    // The SQL must be the xact-scoped advisory lock, keyed per workspace —
+    // same pattern as ensurePersonalWorkspace in src/lib/workspace.ts.
+    const [strings, lockKey] = executeRawMock.mock.calls[0] as [readonly string[], string];
+    expect(strings.join("?")).toContain("pg_advisory_xact_lock(hashtext(");
+    expect(lockKey).toBe("ws-invite:ws-1");
+    // Order: lock -> revoke -> create, all inside the one transaction.
+    const lockOrder = executeRawMock.mock.invocationCallOrder[0];
+    expect(lockOrder).toBeLessThan(updateManyMock.mock.invocationCallOrder[0]);
+    expect(updateManyMock.mock.invocationCallOrder[0]).toBeLessThan(
+      createMock.mock.invocationCallOrder[0],
+    );
   });
 
   it("sets expiresAt to now + INVITE_TTL_MS", async () => {
@@ -258,7 +290,7 @@ describe("POST /api/workspaces/invites", () => {
 
 describe("DELETE /api/workspaces/invites", () => {
   it("returns 401 when unauthenticated", async () => {
-    getWorkspaceContextMock.mockResolvedValue(null);
+    requireOwnerContextMock.mockResolvedValue(unauthorizedResponse());
 
     const response = await DELETE();
 
@@ -267,7 +299,7 @@ describe("DELETE /api/workspaces/invites", () => {
   });
 
   it("returns 403 for a member", async () => {
-    getWorkspaceContextMock.mockRejectedValue(new WorkspaceForbiddenError());
+    requireOwnerContextMock.mockResolvedValue(forbiddenResponse());
 
     const response = await DELETE();
 

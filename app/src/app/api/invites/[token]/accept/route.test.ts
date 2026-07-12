@@ -10,7 +10,7 @@ const {
   getCurrentUserMock,
   checkRateLimitMock,
   findUniqueInviteMock,
-  updateInviteMock,
+  updateManyInviteMock,
   upsertMemberMock,
   transactionMock,
   cookieSetMock,
@@ -19,7 +19,7 @@ const {
   getCurrentUserMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   findUniqueInviteMock: vi.fn(),
-  updateInviteMock: vi.fn(),
+  updateManyInviteMock: vi.fn(),
   upsertMemberMock: vi.fn(),
   transactionMock: vi.fn(),
   cookieSetMock: vi.fn(),
@@ -36,7 +36,7 @@ vi.mock("@/lib/rateLimit", () => ({
 
 vi.mock("@/lib/db", () => ({
   prisma: {
-    workspaceInvite: { findUnique: findUniqueInviteMock, update: updateInviteMock },
+    workspaceInvite: { findUnique: findUniqueInviteMock },
     workspaceMember: { upsert: upsertMemberMock },
     $transaction: transactionMock,
   },
@@ -78,7 +78,7 @@ beforeEach(() => {
   getCurrentUserMock.mockReset();
   checkRateLimitMock.mockReset();
   findUniqueInviteMock.mockReset();
-  updateInviteMock.mockReset();
+  updateManyInviteMock.mockReset();
   upsertMemberMock.mockReset();
   transactionMock.mockReset();
   cookieSetMock.mockReset();
@@ -87,9 +87,12 @@ beforeEach(() => {
   getCurrentUserMock.mockResolvedValue(USER);
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   cookiesMock.mockResolvedValue({ set: cookieSetMock });
+  // The conditional in-transaction re-validation (review fix round 1) matched
+  // the still-active invite row by default.
+  updateManyInviteMock.mockResolvedValue({ count: 1 });
   transactionMock.mockImplementation(async (callback: (tx: unknown) => unknown) =>
     callback({
-      workspaceInvite: { update: updateInviteMock },
+      workspaceInvite: { updateMany: updateManyInviteMock },
       workspaceMember: { upsert: upsertMemberMock },
     }),
   );
@@ -179,8 +182,12 @@ describe("POST /api/invites/[token]/accept", () => {
     await POST(new Request("http://localhost", { method: "POST" }), ctx(RAW_TOKEN));
 
     expect(transactionMock).toHaveBeenCalledTimes(1);
-    expect(updateInviteMock).toHaveBeenCalledWith({
-      where: { id: "invite-42" },
+    // Review fix round 1 (Important 1): the increment is a CONDITIONAL
+    // mutation that re-validates revocation + expiry INSIDE the transaction,
+    // so a revoke landing between the fast-path read and the commit can
+    // never still grant membership.
+    expect(updateManyInviteMock).toHaveBeenCalledWith({
+      where: { id: "invite-42", revokedAt: null, expiresAt: { gt: expect.any(Date) } },
       data: { usedCount: { increment: 1 } },
     });
     expect(upsertMemberMock).toHaveBeenCalledWith({
@@ -188,6 +195,27 @@ describe("POST /api/invites/[token]/accept", () => {
       create: { workspaceId: "ws-42", userId: "user-1", role: "member" },
       update: {},
     });
+    // The membership upsert happens strictly AFTER the guard matched.
+    expect(updateManyInviteMock.mock.invocationCallOrder[0]).toBeLessThan(
+      upsertMemberMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("returns the SAME uniform 404 — no upsert, no cookie — when the in-transaction re-check loses to a concurrent revoke/expiry (count 0)", async () => {
+    // The fast-path read saw an active invite, but by the time the
+    // transaction ran, a concurrent revoke (or expiry) made the conditional
+    // updateMany match nothing.
+    findUniqueInviteMock.mockResolvedValue(makeInviteRow({ workspaceId: "ws-1" }));
+    updateManyInviteMock.mockResolvedValue({ count: 0 });
+
+    const response = await POST(new Request("http://localhost", { method: "POST" }), ctx(RAW_TOKEN));
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: "This invite link is invalid or has expired.",
+    });
+    expect(upsertMemberMock).not.toHaveBeenCalled();
+    expect(cookieSetMock).not.toHaveBeenCalled();
   });
 
   it("never downgrades an existing member/owner: the upsert's update branch is a no-op", async () => {

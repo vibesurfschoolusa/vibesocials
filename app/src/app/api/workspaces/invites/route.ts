@@ -3,27 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { generateInviteToken, INVITE_TTL_MS } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
-import { getWorkspaceContext, WorkspaceForbiddenError, type WorkspaceContext } from "@/lib/workspace";
-
-/**
- * Resolves the caller's owner-role workspace context, or an error response
- * to return as-is (mirrors the identical helper in workspaces/active/route.ts
- * — small per-file duplication, per the Task 3 brief).
- */
-async function requireOwnerContext(): Promise<WorkspaceContext | NextResponse> {
-  try {
-    const context = await getWorkspaceContext({ requireRole: "owner" });
-    if (!context) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-    return context;
-  } catch (error) {
-    if (error instanceof WorkspaceForbiddenError) {
-      return NextResponse.json({ error: error.message }, { status: 403 });
-    }
-    throw error;
-  }
-}
+import { requireOwnerContext } from "@/lib/workspace";
 
 /**
  * GET /api/workspaces/invites
@@ -69,9 +49,21 @@ export async function GET() {
  * Single-active-invite policy (design doc §1/§4): revokes every currently
  * active invite for this workspace, then creates a new one — both inside one
  * transaction, so a reader never observes a workspace with zero AND the old
- * invite simultaneously "active", nor two active invites at once. Returns
- * the raw token embedded in the join URL; this is the ONLY time the raw
- * token is ever available (only its hash is persisted).
+ * invite simultaneously "active", nor two active invites at once.
+ *
+ * CONCURRENCY (review fix round 1, Important 2): revoke-then-create alone
+ * is not atomic ACROSS transactions — two concurrent POSTs could each
+ * revoke the (same) prior invites and then BOTH create, leaving two active
+ * invites. The transaction therefore first takes a Postgres
+ * TRANSACTION-SCOPED advisory lock keyed per workspace
+ * (`pg_advisory_xact_lock` — auto-released at commit/rollback), the same
+ * pattern `ensurePersonalWorkspace` in src/lib/workspace.ts established:
+ * the second POST blocks on the lock until the first commits, then its
+ * revoke pass sees (and revokes) the first's fresh invite before creating
+ * its own — at most one active invite survives any interleaving.
+ *
+ * Returns the raw token embedded in the join URL; this is the ONLY time the
+ * raw token is ever available (only its hash is persisted).
  */
 export async function POST() {
   const contextOrError = await requireOwnerContext();
@@ -86,6 +78,11 @@ export async function POST() {
   let invite;
   try {
     invite = await prisma.$transaction(async (tx) => {
+      // Serialize invite creation per workspace (see doc comment above).
+      // hashtext() folds the string key into the advisory-lock integer
+      // space; xact-scoped, so it releases when this transaction ends.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`ws-invite:${context.workspace.id}`}))`;
+
       await tx.workspaceInvite.updateMany({
         where: { workspaceId: context.workspace.id, revokedAt: null },
         data: { revokedAt: new Date() },

@@ -14,14 +14,28 @@ interface AcceptRouteContext {
 
 const RATE_LIMIT = { route: "invites/accept", limit: 10, windowMs: 5 * 60 * 1000 } as const;
 
+/** Uniform 404 for any invalid/expired/revoked token — no oracle beyond validity. */
+const invalidInviteResponse = () =>
+  NextResponse.json({ error: "This invite link is invalid or has expired." }, { status: 404 });
+
 /**
  * POST /api/invites/[token]/accept
  *
  * Auth-only (see GET /api/invites/[token] for why this uses `getCurrentUser`
  * rather than `getWorkspaceContext`: the token names the target workspace,
- * not the caller's active one). Re-validates hash+expiry+revocation exactly
- * like the preview route (same uniform 404) since the preview and the actual
- * accept can race an expiring/revoked invite between the two calls.
+ * not the caller's active one).
+ *
+ * Validation happens TWICE (review fix round 1, Important 1). The fast-path
+ * read below gives a cheap uniform 404 for obviously-dead tokens without
+ * opening a transaction — but alone it would be a TOCTOU hole: a revoke (or
+ * expiry) landing between that read and the membership write would still
+ * grant membership. The transaction therefore re-validates ATOMICALLY via a
+ * conditional `updateMany` (`revokedAt: null`, `expiresAt > now` in the
+ * WHERE, same conditional-mutation pattern as the posts cancel route and
+ * members/[userId] DELETE): `count === 0` means the invite died in the
+ * window — abort (nothing was mutated) and return the SAME uniform 404.
+ * Only a matched guard (count 1) proceeds to the membership upsert, and the
+ * cookie is set only after the transaction commits.
  *
  * Idempotent for an already-existing member: `workspaceMember.upsert`'s
  * `update: {}` is a no-op when the (workspaceId, userId) row already exists
@@ -53,24 +67,31 @@ export async function POST(_request: Request, { params }: AcceptRouteContext) {
   });
 
   if (!invite || invite.revokedAt || invite.expiresAt <= new Date()) {
-    return NextResponse.json(
-      { error: "This invite link is invalid or has expired." },
-      { status: 404 },
-    );
+    return invalidInviteResponse();
   }
 
+  let joined = false;
   try {
-    await prisma.$transaction(async (tx) => {
-      await tx.workspaceInvite.update({
-        where: { id: invite.id },
+    joined = await prisma.$transaction(async (tx) => {
+      // Atomic re-validation + use-count bump in one statement (see the
+      // route doc comment). Matching nothing mutates nothing, so the early
+      // return commits an empty transaction — no rollback bookkeeping.
+      const { count } = await tx.workspaceInvite.updateMany({
+        where: { id: invite.id, revokedAt: null, expiresAt: { gt: new Date() } },
         data: { usedCount: { increment: 1 } },
       });
+
+      if (count === 0) {
+        return false;
+      }
 
       await tx.workspaceMember.upsert({
         where: { workspaceId_userId: { workspaceId: invite.workspaceId, userId: user.id } },
         create: { workspaceId: invite.workspaceId, userId: user.id, role: "member" },
         update: {},
       });
+
+      return true;
     });
   } catch (error) {
     logger.error("[POST /api/invites/[token]/accept] Unexpected error", {
@@ -79,6 +100,10 @@ export async function POST(_request: Request, { params }: AcceptRouteContext) {
       userId: user.id,
     });
     return NextResponse.json({ error: "Failed to join workspace" }, { status: 500 });
+  }
+
+  if (!joined) {
+    return invalidInviteResponse();
   }
 
   const cookieStore = await cookies();

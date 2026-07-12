@@ -1,30 +1,10 @@
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
-import { getWorkspaceContext, WorkspaceForbiddenError, type WorkspaceContext } from "@/lib/workspace";
+import { requireOwnerContext } from "@/lib/workspace";
 
 interface MemberRouteContext {
   params: Promise<{ userId: string }>;
-}
-
-/**
- * Resolves the caller's owner-role workspace context, or an error response
- * to return as-is (mirrors the identical helper in workspaces/active/route.ts
- * — small per-file duplication, per the Task 3 brief).
- */
-async function requireOwnerContext(): Promise<WorkspaceContext | NextResponse> {
-  try {
-    const context = await getWorkspaceContext({ requireRole: "owner" });
-    if (!context) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-    return context;
-  } catch (error) {
-    if (error instanceof WorkspaceForbiddenError) {
-      return NextResponse.json({ error: error.message }, { status: 403 });
-    }
-    throw error;
-  }
 }
 
 /**
@@ -36,6 +16,14 @@ async function requireOwnerContext(): Promise<WorkspaceContext | NextResponse> {
  * BEFORE the not-a-member lookup since the owner is always a member of their
  * own active workspace, so a self-removal attempt would otherwise reach the
  * (misleading) 404 branch instead of the correct 400.
+ *
+ * Owner-role targets are equally non-removable (review fix round 1, Minor 2
+ * — future-proofs multi-owner states, where "remove the other owner" must
+ * be an explicit transfer/demotion flow, not a member delete): the role is
+ * read for the 400-vs-404 disambiguation, and the guard is REPEATED in the
+ * delete's where clause (`role: { not: "owner" }`, conditional-mutation
+ * pattern) so a promotion racing between the read and the delete still
+ * can't remove an owner — the delete then matches nothing and 404s.
  */
 export async function DELETE(_request: Request, { params }: MemberRouteContext) {
   const contextOrError = await requireOwnerContext();
@@ -53,8 +41,21 @@ export async function DELETE(_request: Request, { params }: MemberRouteContext) 
     );
   }
 
-  const { count } = await prisma.workspaceMember.deleteMany({
+  const membership = await prisma.workspaceMember.findFirst({
     where: { workspaceId: context.workspace.id, userId: targetUserId },
+    select: { role: true },
+  });
+
+  if (!membership) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  if (membership.role === "owner") {
+    return NextResponse.json({ error: "Owners can't be removed." }, { status: 400 });
+  }
+
+  const { count } = await prisma.workspaceMember.deleteMany({
+    where: { workspaceId: context.workspace.id, userId: targetUserId, role: { not: "owner" } },
   });
 
   if (count === 0) {

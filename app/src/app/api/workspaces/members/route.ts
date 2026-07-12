@@ -1,27 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
-import { getWorkspaceContext, WorkspaceForbiddenError, type WorkspaceContext } from "@/lib/workspace";
-
-/**
- * Resolves the caller's owner-role workspace context, or an error response
- * to return as-is (mirrors the identical helper in workspaces/active/route.ts
- * — small per-file duplication, per the Task 3 brief).
- */
-async function requireOwnerContext(): Promise<WorkspaceContext | NextResponse> {
-  try {
-    const context = await getWorkspaceContext({ requireRole: "owner" });
-    if (!context) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-    return context;
-  } catch (error) {
-    if (error instanceof WorkspaceForbiddenError) {
-      return NextResponse.json({ error: error.message }, { status: 403 });
-    }
-    throw error;
-  }
-}
+import { requireOwnerContext } from "@/lib/workspace";
 
 /**
  * GET /api/workspaces/members

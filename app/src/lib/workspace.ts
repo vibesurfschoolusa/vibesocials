@@ -1,5 +1,6 @@
 import type { PrismaClient, User, Workspace, WorkspaceRole } from "@prisma/client";
 import { cookies } from "next/headers";
+import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "./auth";
 import { prisma } from "./db";
@@ -251,4 +252,31 @@ export async function getWorkspaceContext(
     role: active.role,
     memberCount,
   };
+}
+
+/**
+ * Shared route-layer owner gate (review fix round 1, Minor 1 — hoisted from
+ * 4 byte-identical per-route copies). Resolves the caller's owner-role
+ * workspace context, or an error response for the route to return as-is:
+ * 401 `{ error: "Unauthorized" }` when unauthenticated, 403 `{ error: "Only
+ * the workspace owner can do that." }` when {@link getWorkspaceContext}
+ * throws {@link WorkspaceForbiddenError}. Anything else rethrows (routes
+ * surface it through their own 500 handling). Usage:
+ *
+ *   const contextOrError = await requireOwnerContext();
+ *   if (contextOrError instanceof NextResponse) return contextOrError;
+ */
+export async function requireOwnerContext(): Promise<WorkspaceContext | NextResponse> {
+  try {
+    const context = await getWorkspaceContext({ requireRole: "owner" });
+    if (!context) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    return context;
+  } catch (error) {
+    if (error instanceof WorkspaceForbiddenError) {
+      return NextResponse.json({ error: error.message }, { status: 403 });
+    }
+    throw error;
+  }
 }

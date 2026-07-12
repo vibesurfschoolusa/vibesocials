@@ -1,13 +1,16 @@
+import { NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
 // workspaces/switch/route.test.ts). route.ts imports `@/lib/db` and
-// `@/lib/workspace` at module scope, so both must be mocked before route.ts
-// is imported below. `WorkspaceForbiddenError` is kept REAL (route.ts does
-// `error instanceof WorkspaceForbiddenError` in its catch block).
-const { updateMock, getWorkspaceContextMock } = vi.hoisted(() => ({
+// `@/lib/workspace` (the shared `requireOwnerContext` owner gate — review
+// fix round 1, Minor 1) at module scope, so both must be mocked before
+// route.ts is imported below. The gate's own 401/403 mapping is unit-tested
+// in src/lib/workspace.test.ts; here it's mocked to either the owner
+// context or a ready-made error response.
+const { updateMock, requireOwnerContextMock } = vi.hoisted(() => ({
   updateMock: vi.fn(),
-  getWorkspaceContextMock: vi.fn(),
+  requireOwnerContextMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -16,15 +19,10 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-vi.mock("@/lib/workspace", async () => {
-  const actual = await vi.importActual<typeof import("@/lib/workspace")>("@/lib/workspace");
-  return {
-    ...actual,
-    getWorkspaceContext: getWorkspaceContextMock,
-  };
-});
+vi.mock("@/lib/workspace", () => ({
+  requireOwnerContext: requireOwnerContextMock,
+}));
 
-import { WorkspaceForbiddenError } from "@/lib/workspace";
 import { PATCH } from "./route";
 
 const OWNER_CONTEXT = {
@@ -44,13 +42,15 @@ function jsonRequest(body: unknown): Request {
 
 beforeEach(() => {
   updateMock.mockReset();
-  getWorkspaceContextMock.mockReset();
-  getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+  requireOwnerContextMock.mockReset();
+  requireOwnerContextMock.mockResolvedValue(OWNER_CONTEXT);
 });
 
 describe("PATCH /api/workspaces/active", () => {
-  it("returns 401 when unauthenticated", async () => {
-    getWorkspaceContextMock.mockResolvedValue(null);
+  it("returns the gate's 401 response as-is when unauthenticated", async () => {
+    requireOwnerContextMock.mockResolvedValue(
+      NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
+    );
 
     const response = await PATCH(jsonRequest({ name: "New name" }));
 
@@ -58,8 +58,10 @@ describe("PATCH /api/workspaces/active", () => {
     expect(updateMock).not.toHaveBeenCalled();
   });
 
-  it("returns 403 with the shared message when a member (not owner) calls it", async () => {
-    getWorkspaceContextMock.mockRejectedValue(new WorkspaceForbiddenError());
+  it("returns the gate's 403 response as-is when a member (not owner) calls it", async () => {
+    requireOwnerContextMock.mockResolvedValue(
+      NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }),
+    );
 
     const response = await PATCH(jsonRequest({ name: "New name" }));
 
@@ -68,14 +70,6 @@ describe("PATCH /api/workspaces/active", () => {
       error: "Only the workspace owner can do that.",
     });
     expect(updateMock).not.toHaveBeenCalled();
-  });
-
-  it("requests the owner role from getWorkspaceContext", async () => {
-    updateMock.mockResolvedValue({ id: "ws-1", name: "New name" });
-
-    await PATCH(jsonRequest({ name: "New name" }));
-
-    expect(getWorkspaceContextMock).toHaveBeenCalledWith({ requireRole: "owner" });
   });
 
   it("returns 400 on invalid JSON", async () => {

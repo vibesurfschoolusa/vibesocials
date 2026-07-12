@@ -59,10 +59,13 @@ vi.mock("next/headers", () => ({
   cookies: cookiesMock,
 }));
 
+import { NextResponse } from "next/server";
+
 import {
   ACTIVE_WORKSPACE_COOKIE,
   getWorkspaceContext,
   provisionPersonalWorkspace,
+  requireOwnerContext,
   resolveActiveMembershipId,
   resolveWorkspaceForUser,
   WorkspaceForbiddenError,
@@ -494,5 +497,56 @@ describe("getWorkspaceContext", () => {
     countMock.mockResolvedValue(1);
 
     await expect(getWorkspaceContext({ requireRole: "owner" })).resolves.not.toBeNull();
+  });
+});
+
+// Review fix round 1 (Minor 1): the shared owner gate the 4 owner-gated
+// routes import — hoisted here from 4 byte-identical per-route copies. The
+// route contract it must preserve: 401 { error: "Unauthorized" } when
+// unauthenticated, 403 { error: "Only the workspace owner can do that." }
+// for a non-owner, the context object for an owner, and anything unexpected
+// rethrown (routes let it become a 500 via their own error handling).
+describe("requireOwnerContext", () => {
+  it("returns a 401 JSON response when unauthenticated", async () => {
+    getCurrentUserMock.mockResolvedValue(null);
+
+    const result = await requireOwnerContext();
+
+    expect(result).toBeInstanceOf(NextResponse);
+    const response = result as NextResponse;
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
+  });
+
+  it("returns a 403 JSON response with the shared message for a member", async () => {
+    getCurrentUserMock.mockResolvedValue(makeUser());
+    findManyMock.mockResolvedValue([makeMembership({ role: "member" })]);
+
+    const result = await requireOwnerContext();
+
+    expect(result).toBeInstanceOf(NextResponse);
+    const response = result as NextResponse;
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Only the workspace owner can do that.",
+    });
+  });
+
+  it("returns the workspace context (not a response) for an owner", async () => {
+    getCurrentUserMock.mockResolvedValue(makeUser());
+    findManyMock.mockResolvedValue([makeMembership({ role: "owner" })]);
+    countMock.mockResolvedValue(1);
+
+    const result = await requireOwnerContext();
+
+    expect(result).not.toBeInstanceOf(NextResponse);
+    expect(result).toMatchObject({ role: "owner", workspace: { id: "workspace-1" } });
+  });
+
+  it("rethrows unexpected errors instead of mapping them to 403", async () => {
+    getCurrentUserMock.mockResolvedValue(makeUser());
+    findManyMock.mockRejectedValue(new Error("db down"));
+
+    await expect(requireOwnerContext()).rejects.toThrow("db down");
   });
 });
