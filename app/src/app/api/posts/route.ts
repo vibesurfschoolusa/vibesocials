@@ -448,6 +448,9 @@ export async function POST(request: Request) {
     let mediaItemId: string;
 
     if (usingExistingMedia) {
+      // WORKSPACE-BRIDGE: assertMediaItemReusable (posting.ts) still requires
+      // exact uploader match, so a member attaching a teammate's media 404s
+      // here — Task 5 rescopes it to the workspace.
       const created = await createPostJobForExistingMedia({
         userId: context.user.id,
         mediaItemId: body.mediaItemId as string,
