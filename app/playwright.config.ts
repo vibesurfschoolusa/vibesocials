@@ -58,10 +58,11 @@ export default defineConfig({
       //  - core-flows run: when `E2E_DATABASE_URL` is set (a throwaway,
       //    migrated test Postgres — NEVER prod), the webServer MUST boot
       //    against it or every authenticated flow would hit the unreachable
-      //    dummy. `webServer.env` fully replaces the child's environment, so
-      //    without threading it through here the CI/local core-flow run could
-      //    never reach a real database. Falls back to the dummy so the
-      //    smoke-only path is byte-for-byte unchanged.
+      //    dummy. Playwright merges `webServer.env` over the parent's
+      //    process.env, but E2E_DATABASE_URL is not a name the app reads —
+      //    without this explicit DATABASE_URL mapping the CI/local core-flow
+      //    run could never reach a real database. Falls back to the dummy so
+      //    the smoke-only path is byte-for-byte unchanged.
       DATABASE_URL:
         process.env.E2E_DATABASE_URL ?? "postgresql://user:pass@localhost:5432/db",
       // next-auth v4 hard-requires a `secret` once NODE_ENV=production (which
@@ -94,7 +95,7 @@ export default defineConfig({
       // command). The non-public var covers any server-side blob call. Both
       // point at the mock blob server (e2e/support/mock-blob-server.mjs). Only
       // threaded when present, so the smoke-only build is byte-for-byte
-      // unchanged (defaults to the real blob.vercel-storage.com).
+      // unchanged (the SDK then uses its real default API base).
       ...(process.env.NEXT_PUBLIC_VERCEL_BLOB_API_URL
         ? { NEXT_PUBLIC_VERCEL_BLOB_API_URL: process.env.NEXT_PUBLIC_VERCEL_BLOB_API_URL }
         : {}),
