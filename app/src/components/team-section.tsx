@@ -24,6 +24,15 @@ interface Member {
 }
 
 /**
+ * GET /api/workspaces/members/roster list item — member-safe route (SEC-1:
+ * names + roles only, never emails/user ids). Consumed by `MemberView`.
+ */
+interface RosterEntry {
+  name: string;
+  role: WorkspaceRole;
+}
+
+/**
  * Locally-tracked invite metadata. Mirrors the union of what
  * `GET`/`POST /api/workspaces/invites` return: the GET always has
  * `createdAt`; the POST response doesn't, but since it's only ever read at
@@ -59,13 +68,11 @@ export function TeamSection({ role, workspaceName }: TeamSectionProps) {
 }
 
 /**
- * `GET /api/workspaces/members` is owner-only (SEC-1 — a member's teammates'
- * emails are workspace-internal data with no member-safe list variant). The
- * design doc's member view calls for "the member list (names only)", but
- * since the API this task must build against has no such endpoint (and
- * `src/app/api/**` is frozen for this task), the member view renders the
- * workspace name plus the explanatory line only — no list fetch. Flagged in
- * the task report as a design-vs-API gap rather than patched here.
+ * Uses the member-safe `GET /api/workspaces/members/roster` (SEC-1 — a
+ * member's teammates' emails and user ids are workspace-internal data, so
+ * this route returns display names + roles only; the owner-only
+ * `GET /api/workspaces/members` above is the full variant). Renders the
+ * workspace name, the explanatory line, and the roster list.
  *
  * Task 8 plan amendment adds "Leave workspace" (design §1 — member-only; an
  * owner never sees this view at all, so the sole-owner-can't-leave rule
@@ -75,6 +82,34 @@ function MemberView({ workspaceName }: { workspaceName: string }) {
   const router = useRouter();
   const toast = useToast();
   const [leaveOpen, setLeaveOpen] = useState(false);
+
+  // --- Roster (GET /api/workspaces/members/roster) ---
+  const [roster, setRoster] = useState<RosterEntry[] | null>(null);
+  const [rosterLoading, setRosterLoading] = useState(true);
+  const [rosterError, setRosterError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch("/api/workspaces/members/roster");
+        const data = (await response.json().catch(() => null)) as
+          | { members: RosterEntry[] }
+          | null;
+        if (!cancelled) {
+          if (response.ok && data) setRoster(data.members);
+          else setRosterError(true);
+        }
+      } catch {
+        if (!cancelled) setRosterError(true);
+      } finally {
+        if (!cancelled) setRosterLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure (the
   // error is already surfaced via toast here, mirrors revokeInvite/
@@ -96,6 +131,34 @@ function MemberView({ workspaceName }: { workspaceName: string }) {
       <p className="mt-1 text-sm text-muted-foreground">
         Only the workspace owner can manage members.
       </p>
+
+      <div className="mt-4 flex flex-col gap-2 border-t border-border pt-4">
+        <h4 className="text-sm font-medium text-foreground">Members</h4>
+        {rosterLoading ? (
+          <div className="flex flex-col gap-2" aria-hidden>
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
+          </div>
+        ) : rosterError ? (
+          <p className="text-sm text-muted-foreground">
+            Couldn&apos;t load members. Try reloading the page.
+          </p>
+        ) : roster && roster.length > 0 ? (
+          <ul className="divide-y divide-border">
+            {roster.map((entry, index) => (
+              <li
+                key={`${entry.name}-${index}`}
+                className="flex items-center justify-between gap-3 py-2"
+              >
+                <p className="truncate text-sm text-foreground">{entry.name}</p>
+                <Badge variant={entry.role === "owner" ? "default" : "secondary"}>
+                  {entry.role === "owner" ? "Owner" : "Member"}
+                </Badge>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
 
       <div className="mt-4 border-t border-border pt-4">
         <Button
