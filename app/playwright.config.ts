@@ -48,24 +48,44 @@ export default defineConfig({
     // take a while on a cold cache or a slow CI runner; generous on purpose.
     timeout: 180_000,
     env: {
-      // Dummy, unreachable DB so `new PrismaClient()` (constructed eagerly by
-      // `src/lib/db.ts`) has a DATABASE_URL to read and the server process
-      // boots. Nothing this suite exercises issues a real query: the four
-      // public routes under test are statically prerendered, and the
-      // next-auth `jwt` session strategy never touches Prisma for an
-      // unauthenticated request. See e2e/README.md for the full rationale.
-      DATABASE_URL: "postgresql://user:pass@localhost:5432/db",
+      // DATABASE_URL resolution:
+      //  - Smoke-only run (no E2E_DATABASE_URL): a dummy, unreachable DB so
+      //    `new PrismaClient()` (constructed eagerly by `src/lib/db.ts`) has a
+      //    URL to read and the server boots. Nothing the smoke suite exercises
+      //    issues a real query — the four public routes are statically
+      //    prerendered and the next-auth `jwt` strategy never touches Prisma
+      //    for an unauthenticated request (see e2e/README.md).
+      //  - core-flows run: when `E2E_DATABASE_URL` is set (a throwaway,
+      //    migrated test Postgres — NEVER prod), the webServer MUST boot
+      //    against it or every authenticated flow would hit the unreachable
+      //    dummy. `webServer.env` fully replaces the child's environment, so
+      //    without threading it through here the CI/local core-flow run could
+      //    never reach a real database. Falls back to the dummy so the
+      //    smoke-only path is byte-for-byte unchanged.
+      DATABASE_URL:
+        process.env.E2E_DATABASE_URL ?? "postgresql://user:pass@localhost:5432/db",
       // next-auth v4 hard-requires a `secret` once NODE_ENV=production (which
       // `next start` sets) — every page mounts `useSession()`, which calls
       // `GET /api/auth/session`, and that route 500s without this (observed:
-      // "[next-auth][error][NO_SECRET] ... MissingSecretError"). Dummy value
-      // is fine: this server instance is throwaway and talks to no real DB.
-      NEXTAUTH_SECRET: "e2e-test-secret-do-not-use-in-production",
+      // "[next-auth][error][NO_SECRET] ... MissingSecretError"). A fixed dummy
+      // is fine for the throwaway server; honor an explicit override so a
+      // core-flow run can sign a real, decodable session cookie (the login
+      // flow depends on the running server and the encoder agreeing on it).
+      NEXTAUTH_SECRET:
+        process.env.NEXTAUTH_SECRET ?? "e2e-test-secret-do-not-use-in-production",
       // Silences next-auth's "[warn][NEXTAUTH_URL]" (harmless — it falls
       // back to inferring the URL from request headers — but this matches
       // real deployments, which always set it, and keeps webServer's log
       // free of noise that isn't ours to ignore-by-default).
       NEXTAUTH_URL: baseURL,
+      // Blob store token for the compose/schedule/invite flows' upload step
+      // (@vercel/blob/client, src/app/api/upload/route.ts). Only threaded
+      // through when present — those flows are additionally gated on
+      // E2E_STUBS_READY in core-flows.spec.ts, so the DB-only flows never need
+      // it. Passing `undefined` here is a no-op (the key is simply absent).
+      ...(process.env.BLOB_READ_WRITE_TOKEN
+        ? { BLOB_READ_WRITE_TOKEN: process.env.BLOB_READ_WRITE_TOKEN }
+        : {}),
     },
   },
 });

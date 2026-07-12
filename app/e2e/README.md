@@ -56,22 +56,40 @@ the new *intended* behavior, not to loosen the check.
 
 ## Why `core-flows.spec.ts` is skipped here
 
-It's gated behind an env flag and never runs in this sandbox:
+It's gated behind **two** independent env flags, so the flows a plain
+Postgres satisfies can run green in CI without faking the ones that also need
+a blob store and a connected platform:
 
 ```ts
-const dbReady = !!process.env.E2E_DATABASE_URL;
-test.describe(dbReady ? "core flows" : "core flows (skipped — needs E2E_DATABASE_URL)", () => {
-  test.skip(!dbReady, "Set E2E_DATABASE_URL to a seeded test DB to run these");
-  ...
-});
+const dbReady = !!process.env.E2E_DATABASE_URL;   // gates the whole file
+const stubsReady = !!process.env.E2E_STUBS_READY; // gates the blob/OAuth flows
 ```
 
-`E2E_DATABASE_URL` is unset here, so the whole file reports as **skipped**,
-never **passed** — a skip is honest about "not exercised"; a pass would be a
-lie. The test bodies are written for real against the current source
-(concrete selectors, concrete copy, cross-checked against
-`src/app/{login,register,posts/new,queue,activity,settings}/*` as of this
-commit) so they're ready to run as-is once the infra below exists, not TODOs.
+| Flow | Needs | Gate |
+| --- | --- | --- |
+| register via the UI, then log in | Postgres only | `E2E_DATABASE_URL` |
+| edit settings and see it persist | Postgres only | `E2E_DATABASE_URL` |
+| compose a post → Activity | Postgres + blob + connected platform | `+ E2E_STUBS_READY` |
+| schedule a post → Queue | Postgres + blob (upload step) | `+ E2E_STUBS_READY` |
+| owner invites → member posts | Postgres + blob + connected platform | `+ E2E_STUBS_READY` |
+
+With only `E2E_DATABASE_URL` set (the CI job below), the two DB-only flows run
+for real and the three blob/OAuth flows report **skipped** — honest about
+"not exercised", never a false pass. Set `E2E_STUBS_READY` only once the
+upload/OAuth doubles from part 3/4 below exist. The test bodies are written
+for real against the current source (concrete selectors, concrete copy,
+cross-checked against
+`src/app/{login,register,posts/new,queue,activity,settings,join/[token]}/*`
+and `src/components/team-section.tsx` as of this commit), so they're ready to
+run as-is once each gate's infra exists, not TODOs.
+
+**How the server reaches the test DB.** `playwright.config.ts`'s `webServer`
+block fully replaces the child process's environment, so it threads
+`E2E_DATABASE_URL` through as the booted server's `DATABASE_URL` (falling back
+to the unreachable dummy when unset, so the smoke-only path is unchanged).
+Without that, a core-flow run would boot against the dummy DB and every
+authenticated request would fail — setting `E2E_DATABASE_URL` alone is not
+enough; the config has to forward it.
 
 ### What it takes to actually run these
 
@@ -161,22 +179,30 @@ upload step before they ever reach a platform client.
 
 ### Wiring it into CI
 
-Not done in this change (out of scope for H3 — see the task's own framing:
-a working smoke harness + a credible scaffold, not a fake green suite). When
-the owner is ready:
+**Done** — `.github/workflows/ci.yml` has an `e2e` job (separate from the
+fast unit lane) that:
 
-1. Provision a throwaway Postgres service for the job (e.g. GitHub Actions'
-   `services: postgres:` container, or a Neon/Supabase branch database).
-2. In `.github/workflows/ci.yml`, add a step after the existing `Test` step
-   that sets `E2E_DATABASE_URL` (+ `DATABASE_URL`, `NEXTAUTH_SECRET`, and the
-   OAuth-double strategy chosen above from part 3) and runs
-   `npx prisma migrate deploy && npx playwright install chromium --with-deps
-   && npx playwright test`.
-3. Until then, `core-flows.spec.ts` stays a documented, reviewable scaffold
-   — every future PR that touches the auth/compose/queue/settings UI can
-   still be checked against it by eye (do the selectors/copy in the spec
-   still match the real page?), which is most of the value of having it
-   checked in even unexecuted.
+1. Stands up a throwaway `postgres:16` **service container** (never prod),
+   health-checked before the steps run.
+2. Sets `DATABASE_URL` + `E2E_DATABASE_URL` to that service and a fixed
+   throwaway `NEXTAUTH_SECRET`, then runs `npx prisma migrate deploy` against
+   it, `npx playwright install --with-deps chromium`, and `npx playwright
+   test`.
+3. Does **not** set `E2E_STUBS_READY`, so the run exercises the public smoke
+   suite + the two DB-only core flows for real and reports the three
+   blob/OAuth flows as skipped — a green that means what it says.
+
+To extend coverage to the blob/OAuth flows later: implement the doubles from
+parts 3–4 above (an env-seam-redirected mock server or a sandbox app + a
+`BLOB_READ_WRITE_TOKEN` test store), seed a `SocialConnection` on the test
+user, then set `E2E_STUBS_READY: "1"` (and `BLOB_READ_WRITE_TOKEN`) in the
+job's `env`. The three currently-skipped tests light up with no code change.
+
+**Local run.** Same shape without CI: point a disposable Postgres at
+`E2E_DATABASE_URL` (and `DATABASE_URL` for the Prisma CLI), `npx prisma
+migrate deploy`, then `npx playwright test`. A `postgres:16` container is the
+easiest source: `docker run --rm -e POSTGRES_PASSWORD=postgres -e
+POSTGRES_DB=vibesocials_e2e -p 5432:5432 postgres:16`.
 
 ## Keeping this separate from Vitest
 

@@ -42,7 +42,18 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
  * substring match would resolve alongside the actual textarea.
  */
 
+// Two independent capability gates, so CI can run the flows a plain Postgres
+// satisfies (register, settings) WITHOUT faking green on the ones that also
+// need a blob store + a connected platform:
+//  - E2E_DATABASE_URL: a throwaway, migrated test Postgres (NEVER prod). Gates
+//    the whole file — no DB, nothing authenticated runs.
+//  - E2E_STUBS_READY: set only once the upload (blob) + OAuth-connection
+//    doubles from e2e/README.md exist. Gates the compose / schedule /
+//    invite→post flows, which upload media and publish to a connected
+//    platform. Left unset (the default, incl. in CI today) they SKIP — an
+//    honest "not exercised", never a false pass — while the DB-only flows run.
 const dbReady = !!process.env.E2E_DATABASE_URL;
+const stubsReady = !!process.env.E2E_STUBS_READY;
 
 const SAMPLE_IMAGE_PATH = path.join(__dirname, "fixtures", "sample-image.png");
 
@@ -169,6 +180,10 @@ test.describe(
 
     test.describe("as a logged-in user", () => {
       test("compose a post and see it land in Activity", async ({ page, request }) => {
+        test.skip(
+          !stubsReady,
+          "Needs a blob store + connected platform — set E2E_STUBS_READY (see e2e/README.md)",
+        );
         await loginAsFreshUser(page, request, "compose");
 
         await page.goto("/posts/new");
@@ -213,6 +228,10 @@ test.describe(
       });
 
       test("schedule a post and see it land in the Queue", async ({ page, request }) => {
+        test.skip(
+          !stubsReady,
+          "Needs a blob store for the media upload step — set E2E_STUBS_READY (see e2e/README.md)",
+        );
         await loginAsFreshUser(page, request, "schedule");
 
         await page.goto("/posts/new");
@@ -278,6 +297,10 @@ test.describe(
       request,
       context,
     }) => {
+      test.skip(
+        !stubsReady,
+        "Member-posts step needs a blob store + connected platform — set E2E_STUBS_READY (see e2e/README.md)",
+      );
       const owner = await loginAsFreshUser(page, request, "invite-owner");
 
       // Simpler and more stable than driving the Team section's Create/Copy
