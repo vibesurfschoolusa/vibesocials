@@ -1,7 +1,10 @@
 import type {
   Platform,
+  PostJob,
+  PostJobResult,
   PostJobResultStatus,
   PostJobStatus,
+  Prisma,
 } from "@prisma/client";
 
 /**
@@ -103,4 +106,74 @@ export interface PostsResponse {
    * (design doc §7), so a solo workspace's activity feed looks unchanged.
    */
   workspaceMemberCount: number;
+}
+
+/**
+ * Display-safe single-job projection for `GET /api/posts/[postJobId]` and the
+ * `POST /api/posts` create echo (post-release review Task C, SEC-1).
+ *
+ * DROPS `userId`, `workspaceId` (ownership/tenancy — the route already scopes
+ * the read to the caller's workspace before this ever runs), `publishMetadata`
+ * (the raw compose-time snapshot — `perPlatformOverrides` below is the
+ * display-safe caption data callers need) and `updatedAt` (an internal
+ * bookkeeping timestamp with no UI use). KEEPS `mediaItemId`: it's not a
+ * secret — it's the same id already returned by `GET /api/media` /
+ * `POST /api/media`, and the compose UI uses it as a public "reuse this
+ * media" handle (`/posts/new?mediaItemId=`).
+ */
+export interface PostJobDetailDTO {
+  id: string;
+  status: PostJobStatus;
+  /** ISO-8601 creation timestamp. */
+  createdAt: string;
+  /** ISO-8601 target publish time for a `scheduled` job, else null. */
+  scheduledFor: string | null;
+  baseCaption: string | null;
+  perPlatformOverrides: Prisma.JsonValue | null;
+  mediaItemId: string;
+}
+
+/**
+ * Display-safe projection of one platform's outcome for `GET
+ * /api/posts/[postJobId]` and the `POST /api/posts` create echo (post-release
+ * review Task C, SEC-1).
+ *
+ * DROPS `id` and `postJobId` (internal row/foreign-key ids the client never
+ * addresses directly — the job itself is already keyed by `PostJobDetailDTO.id`),
+ * `socialConnectionId` (an internal FK into the caller's OAuth connection —
+ * never surfaced, unlike the public `mediaItemId` above), `errorCode` (an
+ * internal classification; `errorMessage` is the sanitized, human-readable
+ * string the UI actually renders) and `createdAt`/`updatedAt` (no UI use for a
+ * per-result timestamp).
+ */
+export interface PostJobResultSummaryDTO {
+  platform: Platform;
+  status: PostJobResultStatus;
+  /** Provider post id on success (e.g. a YouTube/TikTok id), else null. */
+  externalPostId: string | null;
+  /** Sanitized, human-readable failure reason, else null. */
+  errorMessage: string | null;
+}
+
+/** Map a PostJob row to its display-safe single-job DTO. */
+export function toPostJobDetailDto(job: PostJob): PostJobDetailDTO {
+  return {
+    id: job.id,
+    status: job.status,
+    createdAt: job.createdAt.toISOString(),
+    scheduledFor: job.scheduledFor?.toISOString() ?? null,
+    baseCaption: job.baseCaption,
+    perPlatformOverrides: job.perPlatformOverrides,
+    mediaItemId: job.mediaItemId,
+  };
+}
+
+/** Map a PostJobResult row to its display-safe summary DTO. */
+export function toPostJobResultSummaryDto(result: PostJobResult): PostJobResultSummaryDTO {
+  return {
+    platform: result.platform,
+    status: result.status,
+    externalPostId: result.externalPostId,
+    errorMessage: result.errorMessage,
+  };
 }

@@ -100,5 +100,9 @@ export async function POST(request: Request) {
       baseCaption,
     },
   });
-  return NextResponse.json({ mediaItem }, { status: 201 });
+  // SEC-1 (post-release review Task C): echo the display DTO, not the raw
+  // row — the raw MediaItem carries userId/workspaceId/metadata/deletedAt,
+  // none of which the client needs (media-library already types this
+  // response as MediaItemDto).
+  return NextResponse.json({ mediaItem: toMediaItemDto(mediaItem) }, { status: 201 });
 }

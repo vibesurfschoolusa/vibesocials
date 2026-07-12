@@ -14,6 +14,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { isValidPerPlatformOverrides, validateScheduledFor, type PostJobIntent } from "@/lib/scheduling";
 import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
 import type { PostsResponse } from "@/lib/postsDto";
+import { toPostJobDetailDto, toPostJobResultSummaryDto } from "@/lib/postsDto";
 
 /** Runtime set of valid PostJobStatus values, for the `?status=` filter. */
 const VALID_POST_JOB_STATUSES = new Set<string>(Object.values(PostJobStatus));
@@ -534,7 +535,18 @@ export async function POST(request: Request) {
           ? "Post scheduled."
           : "Publishing in progress. Large videos may take a few minutes.";
 
-    return NextResponse.json({ postJob, results, message });
+    // SEC-1 (post-release review Task C): project to the display-safe DTOs —
+    // the raw rows carry userId/workspaceId/publishMetadata (job) and
+    // socialConnectionId/errorCode (results). `postJob` is `PostJob | null`
+    // per findUnique's type; it can't actually be null right after this job
+    // was just created, but guard anyway so a theoretical race can't crash
+    // toPostJobDetailDto — preserving today's `{ postJob: null, results: [],
+    // message }` envelope in that case.
+    return NextResponse.json({
+      postJob: postJob ? toPostJobDetailDto(postJob) : null,
+      results: postJob ? results.map(toPostJobResultSummaryDto) : [],
+      message,
+    });
   } catch (error: unknown) {
     if (error instanceof Error && error.message === "NO_CONNECTIONS") {
       return NextResponse.json(

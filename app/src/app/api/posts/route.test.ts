@@ -84,7 +84,24 @@ beforeEach(() => {
 
   getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
   checkRateLimitMock.mockResolvedValue({ allowed: true });
-  postJobFindUniqueMock.mockResolvedValue({ id: "job-1", status: "in_progress" });
+  // Full raw-row fixture (incl. userId/workspaceId/publishMetadata) — not
+  // just the minimal `{ id, status }` — so that any test reaching the
+  // response-composition line exercises the same shape a real Prisma
+  // `findUnique` would return (the SEC-1 DTO-projection tests below rely on
+  // this to make their negative assertions actually bite).
+  postJobFindUniqueMock.mockResolvedValue({
+    id: "job-1",
+    userId: "user-1",
+    workspaceId: "ws-1",
+    mediaItemId: "media-1",
+    status: "in_progress",
+    scheduledFor: null,
+    baseCaption: "hi",
+    perPlatformOverrides: null,
+    publishMetadata: null,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
+    updatedAt: new Date("2026-01-01T00:00:00Z"),
+  });
   postJobResultFindManyMock.mockResolvedValue([]);
   inngestSendMock.mockResolvedValue(undefined);
 });
@@ -574,5 +591,102 @@ describe("POST /api/posts — platform targeting validation (Task 7)", () => {
     expect(createPostJobOnlyMock).toHaveBeenCalledWith(
       expect.objectContaining({ targetPlatforms: undefined }),
     );
+  });
+});
+
+describe("POST /api/posts — response DTO projection (SEC-1)", () => {
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({
+      postJobId: "job-1",
+      mediaItemId: "media-1",
+      resultIds: [],
+    });
+  });
+
+  it("projects postJob + results to the display DTO, dropping internal fields", async () => {
+    // Full raw-row fixtures (incl. userId/workspaceId/socialConnectionId/
+    // publishMetadata) so the negative assertions below actually bite.
+    const jobRow = {
+      id: "job-1",
+      userId: "user-1",
+      workspaceId: "ws-1",
+      mediaItemId: "media-1",
+      status: "in_progress",
+      scheduledFor: null,
+      baseCaption: "hello world",
+      perPlatformOverrides: null,
+      publishMetadata: { youtube: { privacyStatus: "public" } },
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      updatedAt: new Date("2026-01-01T00:05:00Z"),
+    };
+    const resultRow = {
+      id: "result-1",
+      postJobId: "job-1",
+      platform: "youtube",
+      socialConnectionId: "conn-1",
+      status: "pending",
+      externalPostId: null,
+      errorCode: null,
+      errorMessage: null,
+      createdAt: new Date("2026-01-01T00:00:01Z"),
+      updatedAt: new Date("2026-01-01T00:00:01Z"),
+    };
+    postJobFindUniqueMock.mockResolvedValue(jobRow);
+    postJobResultFindManyMock.mockResolvedValue([resultRow]);
+
+    const response = await POST(
+      jsonRequest({ blobUrl: "https://x/y", baseCaption: "hello world" }),
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.postJob).toEqual({
+      id: "job-1",
+      status: "in_progress",
+      createdAt: jobRow.createdAt.toISOString(),
+      scheduledFor: null,
+      baseCaption: "hello world",
+      perPlatformOverrides: null,
+      mediaItemId: "media-1",
+    });
+    expect(body.postJob.createdAt).toBe(jobRow.createdAt.toISOString());
+    expect(body.results).toEqual([
+      {
+        platform: "youtube",
+        status: "pending",
+        externalPostId: null,
+        errorMessage: null,
+      },
+    ]);
+    expect(body.message).toBe("Publishing in progress. Large videos may take a few minutes.");
+
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("socialConnectionId");
+    expect(raw).not.toContain("workspaceId");
+    expect(raw).not.toContain('"userId"');
+    expect(raw).not.toContain("publishMetadata");
+    expect(raw).not.toContain("errorCode");
+    expect(raw).not.toContain("updatedAt");
+  });
+
+  // Today's code (pre-DTO) queries postJob via findUnique and unconditionally
+  // echoes it; a null result (the FK guarantees this can't happen in
+  // practice right after creation, but findUnique's return type is
+  // `PostJob | null`) still serialized `{ postJob: null, results: [],
+  // message }` without a 500. This pins that same envelope now that the
+  // response is DTO-projected — toPostJobDetailDto must never be called with
+  // null.
+  it("guards the theoretical null postJob (findUnique race): preserves the {postJob:null, results:[], message} envelope, no crash", async () => {
+    postJobFindUniqueMock.mockResolvedValue(null);
+
+    const response = await POST(jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi" }));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({
+      postJob: null,
+      results: [],
+      message: "Publishing in progress. Large videos may take a few minutes.",
+    });
   });
 });
