@@ -56,11 +56,14 @@ export function RecentActivity({
       </div>
 
       {loading ? (
-        <div className="space-y-3" aria-hidden>
-          {Array.from({ length: 3 }).map((_, index) => (
-            <Skeleton key={index} className="h-24 w-full" />
-          ))}
-        </div>
+        <>
+          <p role="status" className="sr-only">Loading recent posts…</p>
+          <div className="space-y-3" aria-hidden>
+            {Array.from({ length: 3 }).map((_, index) => (
+              <Skeleton key={index} className="h-24 w-full" />
+            ))}
+          </div>
+        </>
       ) : error ? (
         <Alert variant="danger" title="Couldn't load activity">
           <div className="flex flex-col items-start gap-3">

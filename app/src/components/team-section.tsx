@@ -135,10 +135,13 @@ function MemberView({ workspaceName }: { workspaceName: string }) {
       <div className="mt-4 flex flex-col gap-2 border-t border-border pt-4">
         <h4 className="text-sm font-medium text-foreground">Members</h4>
         {rosterLoading ? (
-          <div className="flex flex-col gap-2" aria-hidden>
-            <Skeleton className="h-8 w-full" />
-            <Skeleton className="h-8 w-full" />
-          </div>
+          <>
+            <p role="status" className="sr-only">Loading members…</p>
+            <div className="flex flex-col gap-2" aria-hidden>
+              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-8 w-full" />
+            </div>
+          </>
         ) : rosterError ? (
           <p className="text-sm text-muted-foreground">
             Couldn&apos;t load members. Try reloading the page.
@@ -373,7 +376,10 @@ function OwnerView({ workspaceName }: { workspaceName: string }) {
         </p>
 
         {inviteLoading ? (
-          <Skeleton className="mt-1 h-9 w-full max-w-sm" />
+          <>
+            <p role="status" className="sr-only">Loading invite link…</p>
+            <Skeleton className="mt-1 h-9 w-full max-w-sm" />
+          </>
         ) : invite ? (
           <div className="mt-2 flex flex-col gap-2">
             {freshUrl ? (
@@ -420,10 +426,13 @@ function OwnerView({ workspaceName }: { workspaceName: string }) {
       <div className="flex flex-col gap-2 border-t border-border pt-6">
         <h3 className="text-sm font-medium text-foreground">Members</h3>
         {membersLoading ? (
-          <div className="flex flex-col gap-2" aria-hidden>
-            <Skeleton className="h-10 w-full" />
-            <Skeleton className="h-10 w-full" />
-          </div>
+          <>
+            <p role="status" className="sr-only">Loading members…</p>
+            <div className="flex flex-col gap-2" aria-hidden>
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+          </>
         ) : membersError ? (
           <p className="text-sm text-muted-foreground">
             Couldn&apos;t load members. Try reloading the page.

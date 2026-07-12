@@ -419,14 +419,17 @@ export function MediaLibrary() {
         </h2>
 
         {loading ? (
-          <div
-            className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4"
-            aria-hidden
-          >
-            {Array.from({ length: 8 }).map((_, index) => (
-              <Skeleton key={index} className="aspect-square w-full" />
-            ))}
-          </div>
+          <>
+            <p role="status" className="sr-only">Loading media library…</p>
+            <div
+              className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4"
+              aria-hidden
+            >
+              {Array.from({ length: 8 }).map((_, index) => (
+                <Skeleton key={index} className="aspect-square w-full" />
+              ))}
+            </div>
+          </>
         ) : error ? (
           <Alert variant="danger" title="Couldn't load your media">
             <div className="flex flex-col items-start gap-3">
