@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { Prisma } from "@prisma/client";
 import type { Platform } from "@prisma/client";
-import { getCurrentUser } from "@/lib/auth";
+import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { checkRateLimit } from "@/lib/rateLimit";
 import {
@@ -37,9 +37,9 @@ interface PatchBody {
 }
 
 export async function GET(_request: NextRequest, context: PostJobRouteContext) {
-  const user = await getCurrentUser();
+  const workspaceContext = await getWorkspaceContext();
 
-  if (!user) {
+  if (!workspaceContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -48,8 +48,12 @@ export async function GET(_request: NextRequest, context: PostJobRouteContext) {
   // assignable to Next's generated route type.
   const { postJobId } = context.params as { postJobId: string };
 
+  // Team Workspaces (Task 4): any member of the job's workspace, not just its
+  // creator — see the permission matrix (design doc §1). A job in a
+  // DIFFERENT workspace simply doesn't match this WHERE, so it 404s exactly
+  // like "doesn't exist" (no 403 existence oracle).
   const postJob = await prisma.postJob.findFirst({
-    where: { id: postJobId, userId: user.id },
+    where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
   });
 
   if (!postJob) {
@@ -76,13 +80,13 @@ export async function GET(_request: NextRequest, context: PostJobRouteContext) {
  * cron just claimed.
  */
 export async function PATCH(request: NextRequest, context: PostJobRouteContext) {
-  const user = await getCurrentUser();
+  const workspaceContext = await getWorkspaceContext();
 
-  if (!user) {
+  if (!workspaceContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const limited = await enforceMutateRateLimit(user.id);
+  const limited = await enforceMutateRateLimit(workspaceContext.user.id);
   if (limited) return limited;
 
   const { postJobId } = context.params as { postJobId: string };
@@ -127,9 +131,11 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
   }
 
   // Ownership + status in one read (404 vs 409 disambiguation, plus the
-  // scheduledFor-on-draft rule needs the current status).
+  // scheduledFor-on-draft rule needs the current status). Team Workspaces
+  // (Task 4): any member of the job's workspace may edit it (design §1) — a
+  // job in a different workspace 404s here exactly like "doesn't exist".
   const existing = await prisma.postJob.findFirst({
-    where: { id: postJobId, userId: user.id },
+    where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
     select: { status: true },
   });
 
@@ -172,7 +178,7 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
   const { count } = await prisma.postJob.updateMany({
     where: {
       id: postJobId,
-      userId: user.id,
+      workspaceId: workspaceContext.workspace.id,
       status: { in: [...MUTABLE_POST_JOB_STATUSES] },
     },
     data,
@@ -199,28 +205,30 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
  * conditional delete on the deletable status set.
  */
 export async function DELETE(_request: NextRequest, context: PostJobRouteContext) {
-  const user = await getCurrentUser();
+  const workspaceContext = await getWorkspaceContext();
 
-  if (!user) {
+  if (!workspaceContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const limited = await enforceMutateRateLimit(user.id);
+  const limited = await enforceMutateRateLimit(workspaceContext.user.id);
   if (limited) return limited;
 
   const { postJobId } = context.params as { postJobId: string };
 
+  // Team Workspaces (Task 4): any member of the job's workspace, not just its
+  // creator (design §1).
   const { count } = await prisma.postJob.deleteMany({
     where: {
       id: postJobId,
-      userId: user.id,
+      workspaceId: workspaceContext.workspace.id,
       status: { in: [...DELETABLE_POST_JOB_STATUSES] },
     },
   });
 
   if (count === 0) {
     const existing = await prisma.postJob.findFirst({
-      where: { id: postJobId, userId: user.id },
+      where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
       select: { id: true },
     });
     if (!existing) {

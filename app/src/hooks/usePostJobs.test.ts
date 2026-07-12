@@ -27,6 +27,9 @@ function job(partial: Partial<PostJobDTO> = {}): PostJobDTO {
     results: [],
     media: null,
     publish: null,
+    // Team Workspaces (Task 4) — irrelevant to hasWorkInFlight; a fixed
+    // stand-in like every other field here.
+    createdBy: null,
     ...partial,
   };
 }

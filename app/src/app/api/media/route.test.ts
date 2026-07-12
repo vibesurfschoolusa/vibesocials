@@ -1,16 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { makeWorkspaceContext } from "../__test-helpers__/workspaceContextMock";
+
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
 // settings/route.test.ts / media/[id]/route.test.ts / posts/route.test.ts).
-// route.ts imports `@/lib/db`, `@/lib/auth`, and (Task 2 bridge) `@/lib/workspace`
-// at module scope, so all three must be mocked before route.ts is imported below.
-const { findManyMock, createMock, getCurrentUserMock, resolveWorkspaceForUserMock } =
-  vi.hoisted(() => ({
-    findManyMock: vi.fn(),
-    createMock: vi.fn(),
-    getCurrentUserMock: vi.fn(),
-    resolveWorkspaceForUserMock: vi.fn(),
-  }));
+// route.ts imports `@/lib/db` and `@/lib/workspace` at module scope, so both
+// must be mocked before route.ts is imported below.
+const { findManyMock, createMock, getWorkspaceContextMock } = vi.hoisted(() => ({
+  findManyMock: vi.fn(),
+  createMock: vi.fn(),
+  getWorkspaceContextMock: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -21,20 +21,14 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-vi.mock("@/lib/auth", () => ({
-  getCurrentUser: getCurrentUserMock,
-}));
-
-// Task 2 green-build bridge: route.ts stamps `workspaceId` on create via
-// `resolveWorkspaceForUser` (see @/lib/workspace, unit-tested separately in
-// workspace.test.ts) — mocked here so this suite stays a pure route unit test.
+// Team Workspaces (Task 4): getCurrentUser -> getWorkspaceContext, and
+// route.ts now stamps `workspaceId` straight from `context.workspace.id`
+// instead of the Task 2 `resolveWorkspaceForUser` bridge.
 vi.mock("@/lib/workspace", () => ({
-  resolveWorkspaceForUser: resolveWorkspaceForUserMock,
+  getWorkspaceContext: getWorkspaceContextMock,
 }));
 
 import { GET, POST } from "./route";
-
-const USER = { id: "user-1", email: "user@example.com" };
 
 function jsonRequest(body: unknown): Request {
   return new Request("http://localhost/api/media", {
@@ -59,15 +53,13 @@ const dummyGetRequest = {} as Request;
 beforeEach(() => {
   findManyMock.mockReset();
   createMock.mockReset();
-  getCurrentUserMock.mockReset();
-  resolveWorkspaceForUserMock.mockReset();
-  getCurrentUserMock.mockResolvedValue(USER);
-  resolveWorkspaceForUserMock.mockResolvedValue("workspace-1");
+  getWorkspaceContextMock.mockReset();
+  getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
 });
 
 describe("POST /api/media", () => {
   it("returns 401 and never touches the database when unauthenticated", async () => {
-    getCurrentUserMock.mockResolvedValue(null);
+    getWorkspaceContextMock.mockResolvedValue(null);
 
     const response = await POST(jsonRequest({ blobUrl: "https://blob.example/x" }));
 
@@ -151,8 +143,8 @@ describe("POST /api/media", () => {
     expect(createMock).toHaveBeenCalledWith({
       data: {
         userId: "user-1",
-        // Task 2 bridge — stamped via resolveWorkspaceForUser (mocked above).
-        workspaceId: "workspace-1",
+        // Team Workspaces (Task 4) — stamped straight from context.workspace.id.
+        workspaceId: "ws-1",
         storageLocation: "https://blob.example/x",
         originalFilename: "cat.png",
         mimeType: "image/png",
@@ -162,9 +154,46 @@ describe("POST /api/media", () => {
     });
     expect(body.mediaItem).toEqual(created);
   });
+
+  it("stamps the caller's ACTIVE workspace (not necessarily their personal one)", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-team" }));
+    createMock.mockResolvedValue({ id: "media-2" });
+
+    await POST(
+      jsonRequest({
+        blobUrl: "https://blob.example/x",
+        mimeType: "image/png",
+        sizeBytes: 10,
+      }),
+    );
+
+    expect(createMock).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ workspaceId: "ws-team" }) }),
+    );
+  });
 });
 
 describe("GET /api/media", () => {
+  it("401s and never queries when unauthenticated", async () => {
+    getWorkspaceContextMock.mockResolvedValue(null);
+
+    const response = await GET(dummyGetRequest);
+
+    expect(response.status).toBe(401);
+    expect(findManyMock).not.toHaveBeenCalled();
+  });
+
+  it("cross-workspace isolation: scopes the library to the active workspace (not the uploader) — any member sees the whole shared library", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-shared" }));
+    findManyMock.mockResolvedValue([]);
+
+    await GET(dummyGetRequest);
+
+    expect(findManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { workspaceId: "ws-shared", deletedAt: null } }),
+    );
+  });
+
   it("selects lastUsedAt and returns items with it mapped to an ISO string or null", async () => {
     findManyMock.mockResolvedValue([
       {
@@ -196,7 +225,7 @@ describe("GET /api/media", () => {
 
     expect(response.status).toBe(200);
     expect(findManyMock).toHaveBeenCalledWith({
-      where: { userId: "user-1", deletedAt: null },
+      where: { workspaceId: "ws-1", deletedAt: null },
       orderBy: { createdAt: "desc" },
       select: expect.objectContaining({ lastUsedAt: true }),
     });

@@ -1,28 +1,28 @@
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { makeWorkspaceContext } from "../../../__test-helpers__/workspaceContextMock";
+
 // vi.mock + vi.hoisted are hoisted above imports (mirrors media/[id]/route.test.ts).
-// route.ts imports `@/lib/auth`, `@/lib/db`, `@/lib/inngest`, `@/lib/rateLimit`,
-// and (Task 2 bridge) `@/lib/workspace` at module scope, so all five must be
-// mocked before route.ts is imported.
+// route.ts imports `@/lib/workspace`, `@/lib/db`, `@/lib/inngest`, and
+// `@/lib/rateLimit` at module scope, so all four must be mocked before
+// route.ts is imported.
 const {
-  getCurrentUserMock,
+  getWorkspaceContextMock,
   postJobFindFirstMock,
   postJobUpdateMock,
   resultUpdateManyMock,
   connectionFindUniqueMock,
   inngestSendMock,
   checkRateLimitMock,
-  resolveWorkspaceForUserMock,
 } = vi.hoisted(() => ({
-  getCurrentUserMock: vi.fn(),
+  getWorkspaceContextMock: vi.fn(),
   postJobFindFirstMock: vi.fn(),
   postJobUpdateMock: vi.fn(),
   resultUpdateManyMock: vi.fn(),
   connectionFindUniqueMock: vi.fn(),
   inngestSendMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
-  resolveWorkspaceForUserMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -33,19 +33,16 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-vi.mock("@/lib/auth", () => ({ getCurrentUser: getCurrentUserMock }));
 vi.mock("@/lib/inngest", () => ({ inngest: { send: inngestSendMock } }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
-// Task 2 green-build bridge: the reconnect preflight resolves `workspaceId`
-// via `resolveWorkspaceForUser` (see @/lib/workspace, unit-tested separately
-// in workspace.test.ts) — mocked here so this suite stays a pure route unit test.
+// Team Workspaces (Task 4): getCurrentUser -> getWorkspaceContext, and the
+// reconnect preflight now reads `context.workspace.id` directly instead of
+// re-resolving via resolveWorkspaceForUser (the Task 2 bridge this replaces).
 vi.mock("@/lib/workspace", () => ({
-  resolveWorkspaceForUser: resolveWorkspaceForUserMock,
+  getWorkspaceContext: getWorkspaceContextMock,
 }));
 
 import { POST, parseRetryBody } from "./route";
-
-const OWNER = { id: "user-1", email: "owner@example.com" };
 
 function ctx(postJobId: string) {
   return { params: Promise.resolve({ postJobId }) };
@@ -69,22 +66,20 @@ function makeJob(
 }
 
 beforeEach(() => {
-  getCurrentUserMock.mockReset();
+  getWorkspaceContextMock.mockReset();
   postJobFindFirstMock.mockReset();
   postJobUpdateMock.mockReset();
   resultUpdateManyMock.mockReset();
   connectionFindUniqueMock.mockReset();
   inngestSendMock.mockReset();
   checkRateLimitMock.mockReset();
-  resolveWorkspaceForUserMock.mockReset();
 
   // Sensible defaults for the happy path; individual tests override.
-  getCurrentUserMock.mockResolvedValue(OWNER);
+  getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   postJobUpdateMock.mockResolvedValue({});
   inngestSendMock.mockResolvedValue(undefined);
   connectionFindUniqueMock.mockResolvedValue({ needsReconnect: false });
-  resolveWorkspaceForUserMock.mockResolvedValue("workspace-1");
 });
 
 describe("parseRetryBody (pure)", () => {
@@ -123,7 +118,7 @@ describe("parseRetryBody (pure)", () => {
 
 describe("POST /api/posts/[postJobId]/retry", () => {
   it("returns 401 and never rate-limits or hits the DB when unauthenticated", async () => {
-    getCurrentUserMock.mockResolvedValue(null);
+    getWorkspaceContextMock.mockResolvedValue(null);
 
     const res = await POST(req({ platform: "tiktok" }), ctx("job-1"));
 
@@ -159,17 +154,27 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     expect(postJobFindFirstMock).not.toHaveBeenCalled();
   });
 
-  it("returns 404 when the job isn't owned by the caller", async () => {
+  it("returns 404 when the job isn't in the caller's active workspace", async () => {
     postJobFindFirstMock.mockResolvedValue(null);
 
     const res = await POST(req({ platform: "tiktok" }), ctx("job-1"));
 
     expect(res.status).toBe(404);
     expect(postJobFindFirstMock).toHaveBeenCalledWith({
-      where: { id: "job-1", userId: "user-1" },
+      where: { id: "job-1", workspaceId: "ws-1" },
       select: expect.any(Object),
     });
     expect(resultUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("cross-workspace isolation: a job in another workspace 404s, not 403 (no existence oracle)", async () => {
+    // ws-1's WHERE wouldn't match a job that actually lives in ws-2.
+    postJobFindFirstMock.mockResolvedValue(null);
+
+    const res = await POST(req({ retryAllFailed: true }), ctx("foreign-job"));
+
+    expect(res.status).toBe(404);
+    await expect(res.json()).resolves.toEqual({ error: "Not found" });
   });
 
   it("returns 409 MEDIA_UNAVAILABLE when the media blob was soft-deleted", async () => {
@@ -271,6 +276,21 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     expect(inngestSendMock).toHaveBeenCalledWith({
       name: "post/retry.requested",
       data: { postJobId: "job-1", userId: "user-1", platforms: ["tiktok"] },
+    });
+  });
+
+  it("resolves the reconnect-preflight connection lookup from the context's workspace, not resolveWorkspaceForUser (Task 2 bridge removed)", async () => {
+    postJobFindFirstMock.mockResolvedValue(
+      makeJob([{ platform: "instagram", status: "failed" }]),
+    );
+    resultUpdateManyMock.mockResolvedValue({ count: 1 });
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-42" }));
+
+    await POST(req({ platform: "instagram" }), ctx("job-1"));
+
+    expect(connectionFindUniqueMock).toHaveBeenCalledWith({
+      where: { workspaceId_platform: { workspaceId: "ws-42", platform: "instagram" } },
+      select: { needsReconnect: true },
     });
   });
 

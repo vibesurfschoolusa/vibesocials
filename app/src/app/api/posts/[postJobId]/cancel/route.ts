@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { getCurrentUser } from "@/lib/auth";
+import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { MUTABLE_POST_JOB_STATUSES } from "@/lib/scheduling";
@@ -31,13 +31,16 @@ const MUTATE_RATE_LIMIT = { route: "posts/mutate", limit: 60, windowMs: 5 * 60 *
  * count === 0 and 409s rather than cancelling a post that already went live.
  */
 export async function POST(_request: NextRequest, context: PostJobRouteContext) {
-  const user = await getCurrentUser();
+  const workspaceContext = await getWorkspaceContext();
 
-  if (!user) {
+  if (!workspaceContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const rateLimit = await checkRateLimit({ userId: user.id, ...MUTATE_RATE_LIMIT });
+  const rateLimit = await checkRateLimit({
+    userId: workspaceContext.user.id,
+    ...MUTATE_RATE_LIMIT,
+  });
   if (!rateLimit.allowed) {
     return NextResponse.json(
       { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
@@ -47,19 +50,21 @@ export async function POST(_request: NextRequest, context: PostJobRouteContext) 
 
   const { postJobId } = await Promise.resolve(context.params);
 
+  // Team Workspaces (Task 4): any member of the job's workspace, not just its
+  // creator (design §1 — cancel is unrestricted by role).
   const { count } = await prisma.postJob.updateMany({
     where: {
       id: postJobId,
-      userId: user.id,
+      workspaceId: workspaceContext.workspace.id,
       status: { in: [...MUTABLE_POST_JOB_STATUSES] },
     },
     data: { status: "cancelled" },
   });
 
   if (count === 0) {
-    // Disambiguate not-found/not-owned (404) from wrong-state (409).
+    // Disambiguate not-found/not-in-workspace (404) from wrong-state (409).
     const existing = await prisma.postJob.findFirst({
-      where: { id: postJobId, userId: user.id },
+      where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
       select: { id: true },
     });
     if (!existing) {

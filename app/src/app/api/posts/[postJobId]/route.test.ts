@@ -1,18 +1,28 @@
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// vitest hoists vi.mock above imports. route.ts imports `@/lib/auth`, `@/lib/db`
-// and `@/lib/scheduling` (kept REAL — pure guards) at module scope; `Prisma`
-// from `@prisma/client` is real too (the handler uses `Prisma.DbNull`).
-const { getCurrentUserMock, findFirstMock, updateManyMock, deleteManyMock } =
-  vi.hoisted(() => ({
-    getCurrentUserMock: vi.fn(),
-    findFirstMock: vi.fn(),
-    updateManyMock: vi.fn(),
-    deleteManyMock: vi.fn(),
-  }));
+import { makeWorkspaceContext } from "../../__test-helpers__/workspaceContextMock";
 
-vi.mock("@/lib/auth", () => ({ getCurrentUser: getCurrentUserMock }));
+// vitest hoists vi.mock above imports. route.ts imports `@/lib/workspace`,
+// `@/lib/db` and `@/lib/scheduling` (kept REAL — pure guards) at module
+// scope; `Prisma` from `@prisma/client` is real too (the handler uses
+// `Prisma.DbNull`).
+const {
+  getWorkspaceContextMock,
+  findFirstMock,
+  updateManyMock,
+  deleteManyMock,
+  postJobResultFindManyMock,
+} = vi.hoisted(() => ({
+  getWorkspaceContextMock: vi.fn(),
+  findFirstMock: vi.fn(),
+  updateManyMock: vi.fn(),
+  deleteManyMock: vi.fn(),
+  postJobResultFindManyMock: vi.fn(),
+}));
+
+// Team Workspaces (Task 4): getCurrentUser -> getWorkspaceContext.
+vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
 vi.mock("@/lib/db", () => ({
   prisma: {
     postJob: {
@@ -20,12 +30,12 @@ vi.mock("@/lib/db", () => ({
       updateMany: updateManyMock,
       deleteMany: deleteManyMock,
     },
+    postJobResult: { findMany: postJobResultFindManyMock },
   },
 }));
 
-import { PATCH, DELETE } from "./route";
+import { PATCH, DELETE, GET } from "./route";
 
-const OWNER = { id: "user-1", email: "owner@example.com" };
 const FUTURE = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
 function ctx(postJobId: string) {
@@ -42,18 +52,55 @@ function req(body: unknown, throwOnJson = false): NextRequest {
 }
 
 beforeEach(() => {
-  getCurrentUserMock.mockReset();
+  getWorkspaceContextMock.mockReset();
   findFirstMock.mockReset();
   updateManyMock.mockReset();
   deleteManyMock.mockReset();
-  getCurrentUserMock.mockResolvedValue(OWNER);
+  postJobResultFindManyMock.mockReset();
+  getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
   updateManyMock.mockResolvedValue({ count: 1 });
   deleteManyMock.mockResolvedValue({ count: 1 });
+  postJobResultFindManyMock.mockResolvedValue([]);
+});
+
+describe("GET /api/posts/[postJobId]", () => {
+  it("401s when unauthenticated", async () => {
+    getWorkspaceContextMock.mockResolvedValue(null);
+    const res = await GET(req(null), ctx("job-1"));
+    expect(res.status).toBe(401);
+    expect(findFirstMock).not.toHaveBeenCalled();
+  });
+
+  it("404s when the job isn't in the caller's active workspace", async () => {
+    findFirstMock.mockResolvedValue(null);
+    const res = await GET(req(null), ctx("job-1"));
+    expect(res.status).toBe(404);
+  });
+
+  it("scopes the ownership read to workspaceId (not userId) — cross-workspace isolation", async () => {
+    findFirstMock.mockResolvedValue({ id: "job-1" });
+
+    await GET(req(null), ctx("job-1"));
+
+    expect(findFirstMock).toHaveBeenCalledWith({
+      where: { id: "job-1", workspaceId: "ws-1" },
+    });
+  });
+
+  it("a job belonging to a DIFFERENT workspace 404s, not 403 (no existence oracle)", async () => {
+    // The caller's active workspace is ws-1; simulate the real-DB outcome for
+    // a job that actually lives in ws-2 — the where clause wouldn't match it,
+    // so Prisma would return null, same as "doesn't exist".
+    findFirstMock.mockResolvedValue(null);
+    const res = await GET(req(null), ctx("foreign-job"));
+    expect(res.status).toBe(404);
+    await expect(res.json()).resolves.toEqual({ error: "Not found" });
+  });
 });
 
 describe("PATCH /api/posts/[postJobId]", () => {
   it("401s when unauthenticated", async () => {
-    getCurrentUserMock.mockResolvedValue(null);
+    getWorkspaceContextMock.mockResolvedValue(null);
     const res = await PATCH(req({ baseCaption: "x" }), ctx("job-1"));
     expect(res.status).toBe(401);
   });
@@ -100,7 +147,7 @@ describe("PATCH /api/posts/[postJobId]", () => {
 
     expect(res.status).toBe(200);
     expect(updateManyMock).toHaveBeenCalledWith({
-      where: { id: "job-1", userId: "user-1", status: { in: ["scheduled", "draft"] } },
+      where: { id: "job-1", workspaceId: "ws-1", status: { in: ["scheduled", "draft"] } },
       data: { baseCaption: "updated", scheduledFor: new Date(FUTURE) },
     });
   });
@@ -118,11 +165,21 @@ describe("PATCH /api/posts/[postJobId]", () => {
     const res = await PATCH(req({ baseCaption: "x" }), ctx("job-1"));
     expect(res.status).toBe(409);
   });
+
+  it("cross-workspace isolation: a job in another workspace 404s (the ownership read is workspace-scoped, not user-scoped)", async () => {
+    findFirstMock.mockResolvedValue(null); // ws-1's WHERE wouldn't match a ws-2 job
+    const res = await PATCH(req({ baseCaption: "x" }), ctx("foreign-job"));
+    expect(res.status).toBe(404);
+    expect(findFirstMock).toHaveBeenCalledWith({
+      where: { id: "foreign-job", workspaceId: "ws-1" },
+      select: { status: true },
+    });
+  });
 });
 
 describe("DELETE /api/posts/[postJobId]", () => {
   it("401s when unauthenticated", async () => {
-    getCurrentUserMock.mockResolvedValue(null);
+    getWorkspaceContextMock.mockResolvedValue(null);
     const res = await DELETE(req(null), ctx("job-1"));
     expect(res.status).toBe(401);
   });
@@ -131,7 +188,7 @@ describe("DELETE /api/posts/[postJobId]", () => {
     const res = await DELETE(req(null), ctx("job-1"));
     expect(res.status).toBe(200);
     expect(deleteManyMock).toHaveBeenCalledWith({
-      where: { id: "job-1", userId: "user-1", status: { in: ["draft", "cancelled"] } },
+      where: { id: "job-1", workspaceId: "ws-1", status: { in: ["draft", "cancelled"] } },
     });
   });
 
@@ -140,6 +197,20 @@ describe("DELETE /api/posts/[postJobId]", () => {
     findFirstMock.mockResolvedValue(null);
     const res = await DELETE(req(null), ctx("job-1"));
     expect(res.status).toBe(404);
+  });
+
+  it("cross-workspace isolation: a job in another workspace 404s via the workspace-scoped disambiguation read", async () => {
+    deleteManyMock.mockResolvedValue({ count: 0 });
+    findFirstMock.mockResolvedValue(null); // ws-1's WHERE wouldn't match a ws-2 job
+    const res = await DELETE(req(null), ctx("foreign-job"));
+    expect(res.status).toBe(404);
+    expect(deleteManyMock).toHaveBeenCalledWith({
+      where: { id: "foreign-job", workspaceId: "ws-1", status: { in: ["draft", "cancelled"] } },
+    });
+    expect(findFirstMock).toHaveBeenCalledWith({
+      where: { id: "foreign-job", workspaceId: "ws-1" },
+      select: { id: true },
+    });
   });
 
   it("409s NOT_DELETABLE when the job exists but is in a non-deletable state", async () => {

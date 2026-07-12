@@ -1,22 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PostsResponse } from "@/lib/postsDto";
+import { makeWorkspaceContext } from "../__test-helpers__/workspaceContextMock";
 
 // Roadmap Phase 8 — GET /api/posts metrics join. route.ts imports several
-// modules at scope but GET only uses getCurrentUser + prisma.postJob.findMany +
-// prisma.postMetric.findMany; the rest are mocked so the module loads without
-// real side effects (mirrors route.test.ts, which covers POST).
+// modules at scope but GET only uses getWorkspaceContext (Team Workspaces,
+// Task 4) + prisma.postJob.findMany + prisma.postMetric.findMany; the rest
+// are mocked so the module loads without real side effects (mirrors
+// route.test.ts, which covers POST).
 const {
-  getCurrentUserMock,
+  getWorkspaceContextMock,
   postJobFindManyMock,
   postMetricFindManyMock,
 } = vi.hoisted(() => ({
-  getCurrentUserMock: vi.fn(),
+  getWorkspaceContextMock: vi.fn(),
   postJobFindManyMock: vi.fn(),
   postMetricFindManyMock: vi.fn(),
 }));
 
-vi.mock("@/lib/auth", () => ({ getCurrentUser: getCurrentUserMock }));
+vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: vi.fn() }));
 vi.mock("@/lib/inngest", () => ({ inngest: { send: vi.fn() } }));
 vi.mock("@/server/jobs/posting", async () => {
@@ -33,8 +35,6 @@ vi.mock("@/lib/db", () => ({
 }));
 
 import { GET } from "./route";
-
-const USER = { id: "user-1", email: "owner@example.com" };
 
 function getRequest(url = "http://localhost/api/posts"): Request {
   return new Request(url, { method: "GET" });
@@ -53,6 +53,10 @@ function jobWithYouTube() {
       storageLocation: "https://blob.example.com/media-1.mp4",
       mimeType: "video/mp4",
     },
+    // Team Workspaces (Task 4) — joined creator, mapped to the DTO's
+    // `createdBy` field. Has a `name`, so most tests don't exercise the
+    // email-local-part fallback (see the dedicated `createdBy` block below).
+    user: { name: "Alice", email: "alice@example.com" },
     // Task 8 — compose-time publish snapshot (Task 7's publishMetadata),
     // mapped onto the DTO's `publish` field.
     publishMetadata: {
@@ -78,17 +82,17 @@ function jobWithYouTube() {
 }
 
 beforeEach(() => {
-  getCurrentUserMock.mockReset();
+  getWorkspaceContextMock.mockReset();
   postJobFindManyMock.mockReset();
   postMetricFindManyMock.mockReset();
-  getCurrentUserMock.mockResolvedValue(USER);
+  getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
   postJobFindManyMock.mockResolvedValue([]);
   postMetricFindManyMock.mockResolvedValue([]);
 });
 
 describe("GET /api/posts — metrics join (Roadmap Phase 8)", () => {
   it("401s when unauthenticated and never queries", async () => {
-    getCurrentUserMock.mockResolvedValue(null);
+    getWorkspaceContextMock.mockResolvedValue(null);
     const res = await GET(getRequest());
     expect(res.status).toBe(401);
     expect(postJobFindManyMock).not.toHaveBeenCalled();
@@ -112,9 +116,10 @@ describe("GET /api/posts — metrics join (Roadmap Phase 8)", () => {
 
     expect(postMetricFindManyMock).toHaveBeenCalledTimes(1);
     const arg = postMetricFindManyMock.mock.calls[0][0];
-    // SEC: scoped to the authenticated user (never global).
+    // Team Workspaces (Task 4): scoped to the active WORKSPACE (never global,
+    // and never just the caller — a teammate's metrics must show too).
     expect(arg.where).toEqual({
-      userId: "user-1",
+      workspaceId: "ws-1",
       platform: "youtube",
       externalPostId: { in: ["vidA"] },
     });
@@ -284,5 +289,83 @@ describe("GET /api/posts — media + publish snapshot (Task 8)", () => {
     expect(serialized).not.toContain("accessToken");
     expect(serialized).not.toContain("refreshToken");
     expect(serialized).not.toContain("socialConnectionId");
+  });
+});
+
+describe("GET /api/posts — workspace scoping (Team Workspaces, Task 4)", () => {
+  it("queries jobs scoped to the active workspace, selecting the creator relation for attribution", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-active" }));
+
+    await GET(getRequest());
+
+    expect(postJobFindManyMock).toHaveBeenCalledTimes(1);
+    const arg = postJobFindManyMock.mock.calls[0][0];
+    expect(arg.where).toEqual({ workspaceId: "ws-active" });
+    expect(arg.select.user).toEqual({ select: { name: true, email: true } });
+  });
+
+  it("cross-workspace isolation: a job belonging to another workspace is never requested — the query only ever asks for the caller's ACTIVE workspace id", async () => {
+    // Simulates a job that lives in workspace B: since the mocked DB layer
+    // only ever returns what postJobFindManyMock is told to, "isolation" here
+    // means the ROUTE must ask for workspace A's id — never B's, and never
+    // unscoped — so a real Prisma query could not possibly return B's rows.
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-A" }));
+    postJobFindManyMock.mockResolvedValue([]); // workspace A has no jobs of its own
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+
+    expect(postJobFindManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { workspaceId: "ws-A" } }),
+    );
+    expect(body.jobs).toEqual([]);
+  });
+
+  it("includes workspaceMemberCount at the top level, from the context's memberCount", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ memberCount: 4 }));
+    postJobFindManyMock.mockResolvedValue([]);
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+
+    expect(body.workspaceMemberCount).toBe(4);
+  });
+});
+
+describe("GET /api/posts — createdBy attribution round-trip (Team Workspaces, Task 4)", () => {
+  it("maps the joined user's name onto createdBy", async () => {
+    postJobFindManyMock.mockResolvedValue([jobWithYouTube()]); // user: { name: "Alice", ... }
+    postMetricFindManyMock.mockResolvedValue([]);
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+
+    expect(body.jobs[0].createdBy).toEqual({ name: "Alice" });
+  });
+
+  it("falls back to the email local-part when the creator has no display name, and NEVER includes the full email", async () => {
+    postJobFindManyMock.mockResolvedValue([
+      { ...jobWithYouTube(), user: { name: null, email: "bob.smith@example.com" } },
+    ]);
+    postMetricFindManyMock.mockResolvedValue([]);
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+
+    expect(body.jobs[0].createdBy).toEqual({ name: "bob.smith" });
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("bob.smith@example.com");
+  });
+
+  it("maps createdBy: null when the creator relation is missing", async () => {
+    postJobFindManyMock.mockResolvedValue([
+      { ...jobWithYouTube(), user: null },
+    ]);
+    postMetricFindManyMock.mockResolvedValue([]);
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+
+    expect(body.jobs[0].createdBy).toBeNull();
   });
 });

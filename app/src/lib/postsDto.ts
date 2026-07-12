@@ -82,9 +82,25 @@ export interface PostJobDTO {
     youtubePrivacy: string | null;
     tiktokPrivacy: string | null;
   } | null;
+  /**
+   * Team Workspaces (Task 4) — display name of the job's creator, always
+   * included by the API. `name` falls back to the email local-part when the
+   * user has no display name set; NEVER the full email (SEC-1). `null` only
+   * when the creator relation is missing. The UI decides when to render this
+   * (design doc §7 — only in workspaces with >1 member; see
+   * `PostsResponse.workspaceMemberCount`).
+   */
+  createdBy: { name: string } | null;
 }
 
 /** Response body of `GET /api/posts`. */
 export interface PostsResponse {
   jobs: PostJobDTO[];
+  /**
+   * Team Workspaces (Task 4) — total members in the caller's active
+   * workspace (from `WorkspaceContext.memberCount`). Gates the `createdBy`
+   * attribution display: the UI only shows "by {name}" when this is >1
+   * (design doc §7), so a solo workspace's activity feed looks unchanged.
+   */
+  workspaceMemberCount: number;
 }
