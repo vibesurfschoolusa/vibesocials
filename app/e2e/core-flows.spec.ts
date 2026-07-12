@@ -42,6 +42,15 @@ import { seedWorkspaceConnection } from "./support/seed-connection";
  * renders a "Generate a caption when media is added" wrapping-label checkbox
  * (src/components/create-post-form.tsx), which the default case-insensitive
  * substring match would resolve alongside the actual textarea.
+ *
+ * The success-banner assertions need `getByText(..., { exact: true })` too:
+ * on submit the composer renders BOTH the success Alert titled "Post
+ * scheduled" / "Post queued" AND a toast that repeats that title as a prefix
+ * ("Post scheduled — see it in your Queue" — create-post-form.tsx's
+ * toast.success), so the default substring match resolves to 2 elements.
+ * Caught for real in CI (strict-mode violation, run 29213578981); `exact`
+ * pins the Alert title, whose "View queue"/"View activity" link the next
+ * step clicks.
  */
 
 // Capability gates, so CI runs exactly the flows whose doubles are real and
@@ -225,8 +234,10 @@ test.describe(
           .click();
 
         // Alert `title` renders as styled text, not a heading (see
-        // src/components/ui/alert.tsx) — match on visible text instead.
-        await expect(page.getByText("Post queued")).toBeVisible();
+        // src/components/ui/alert.tsx) — match on visible text, `exact`
+        // because the submit toast ("Post queued — track it in Activity")
+        // repeats the title as a prefix (see header note).
+        await expect(page.getByText("Post queued", { exact: true })).toBeVisible();
         await page.getByRole("link", { name: "View activity" }).click();
 
         await expect(page).toHaveURL("/activity");
@@ -268,7 +279,10 @@ test.describe(
           .fill(toDateTimeLocalInputValue(oneHourFromNow));
 
         await form.getByRole("button", { name: "Schedule post" }).click();
-        await expect(page.getByText("Post scheduled")).toBeVisible();
+        // `exact`: the submit toast ("Post scheduled — see it in your Queue")
+        // repeats the Alert title as a prefix — the default substring match
+        // resolved both (CI strict-mode violation; see header note).
+        await expect(page.getByText("Post scheduled", { exact: true })).toBeVisible();
 
         await page.getByRole("link", { name: "View queue" }).click();
         await expect(page).toHaveURL("/queue");
@@ -368,7 +382,8 @@ test.describe(
         .getByRole("button", { name: "Publish now" })
         .click();
 
-      await expect(page.getByText("Post queued")).toBeVisible();
+      // `exact`: same Alert-title + toast-prefix pair as the compose test.
+      await expect(page.getByText("Post queued", { exact: true })).toBeVisible();
       await page.getByRole("link", { name: "View activity" }).click();
 
       await expect(page).toHaveURL("/activity");
