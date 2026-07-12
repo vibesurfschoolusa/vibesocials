@@ -103,7 +103,13 @@ export default async function SettingsPage({
               Configure the default footer appended to all your posts.
             </p>
           </div>
-          <SettingsForm settings={settings} role={context.role} />
+          {/* key: force a REMOUNT when the active workspace changes. This
+              client component seeds its local state from props once at mount
+              (footer inputs, preview, member read-only card), and the
+              account-menu switcher's router.refresh() intentionally preserves
+              client state — without the key, workspace A's values would stay
+              on screen under workspace B after an in-page switch. */}
+          <SettingsForm key={context.workspace.id} settings={settings} role={context.role} />
         </section>
 
         <section>
@@ -125,7 +131,15 @@ export default async function SettingsPage({
                 : "See who else is in this workspace."}
             </p>
           </div>
-          <TeamSection role={context.role} workspaceName={context.workspace.name} />
+          {/* key: same remount-on-switch rule as SettingsForm above — the
+              owner view's invite/member fetch effects run once per mount and
+              its rename state seeds from props, all assuming one workspace
+              per mounted instance. */}
+          <TeamSection
+            key={context.workspace.id}
+            role={context.role}
+            workspaceName={context.workspace.name}
+          />
         </section>
       </div>
     </div>

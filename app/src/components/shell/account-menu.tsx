@@ -107,6 +107,9 @@ export function AccountMenu() {
         return;
       }
       setOpen(false);
+      // Return focus to the trigger, exactly like the Escape handler — the
+      // popover (and the button that had focus) just went away under the user.
+      buttonRef.current?.focus();
       toast.success(`Switched to ${workspace.name}.`);
       router.refresh();
     } catch {
