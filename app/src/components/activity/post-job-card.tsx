@@ -65,10 +65,20 @@ function orderResults(results: PostJobDTO["results"]): PostJobDTO["results"] {
  * Roadmap Phase 3: each failed platform gets a Retry button that re-publishes
  * just that platform (`POST /api/posts/[id]/retry`). The result is optimistically
  * shown as pending; a `RECONNECT_REQUIRED` response swaps the button for a
- * "Reconnect … in Settings" link. Self-contained (no new props) so both the
- * dashboard preview and the full activity view pick it up unchanged.
+ * "Reconnect … in Settings" link.
+ *
+ * Team Workspaces (Task 7) — `showAttribution` (default off, so existing
+ * single-member callers are unchanged) shows `by {createdBy.name}` next to
+ * the timestamp when the job carries a creator. Callers gate this on
+ * `workspaceMemberCount > 1` (design doc §7) before passing it down.
  */
-export function PostJobCard({ job }: { job: PostJobDTO }) {
+export function PostJobCard({
+  job,
+  showAttribution = false,
+}: {
+  job: PostJobDTO;
+  showAttribution?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   // Platforms whose retry is in flight (optimistic pending) and platforms the
   // server told us to reconnect. Both are keyed by Platform.
@@ -208,10 +218,12 @@ export function PostJobCard({ job }: { job: PostJobDTO }) {
               <time dateTime={job.scheduledFor}>
                 {formatTimestamp(job.scheduledFor)}
               </time>
+              {showAttribution && job.createdBy ? <> · by {job.createdBy.name}</> : null}
             </p>
           ) : job.createdAt ? (
             <p className="mt-0.5 text-xs text-muted-foreground">
               <time dateTime={job.createdAt}>{formatTimestamp(job.createdAt)}</time>
+              {showAttribution && job.createdBy ? <> · by {job.createdBy.name}</> : null}
             </p>
           ) : null}
         </div>

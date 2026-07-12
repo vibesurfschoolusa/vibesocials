@@ -5,6 +5,7 @@ import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { SettingsForm } from "@/components/settings-form";
 import { ConnectionsSection } from "@/components/connections-section";
+import { TeamSection } from "@/components/team-section";
 import { Alert } from "@/components/ui/alert";
 import { describeOAuthResult } from "@/lib/oauthResult";
 import type { ConnectionSummary } from "@/lib/connectionSummary";
@@ -18,10 +19,9 @@ export default async function SettingsPage({
   // Team Workspaces (Task 6): getWorkspaceContext() covers the auth gate
   // (null when unauthenticated, same as a bare getCurrentUser() check) and
   // additionally resolves the active workspace this page's data now reads
-  // from. Full settings-page UI rework (owner-only mutation controls,
-  // member read-only footer, split forms) is Task 7 — this is the minimal
-  // interim fix so the page reads the workspace (the footer's real source
-  // of truth per design §2) instead of the now-stale User columns.
+  // from. Task 7 uses `context.role` below to split the Captions/Connections
+  // forms into owner-mutation vs member-read-only, and to gate the new Team
+  // card's management controls.
   const context = await getWorkspaceContext();
 
   if (!context) {
@@ -103,7 +103,7 @@ export default async function SettingsPage({
               Configure the default footer appended to all your posts.
             </p>
           </div>
-          <SettingsForm settings={settings} />
+          <SettingsForm settings={settings} role={context.role} />
         </section>
 
         <section>
@@ -113,7 +113,19 @@ export default async function SettingsPage({
               Connect your social accounts so Vibe Socials can publish on your behalf.
             </p>
           </div>
-          <ConnectionsSection connections={connections} />
+          <ConnectionsSection connections={connections} readOnly={context.role !== "owner"} />
+        </section>
+
+        <section>
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold tracking-tight text-foreground">Team</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {context.role === "owner"
+                ? "Invite teammates and manage who has access to this workspace."
+                : "See who else is in this workspace."}
+            </p>
+          </div>
+          <TeamSection role={context.role} workspaceName={context.workspace.name} />
         </section>
       </div>
     </div>

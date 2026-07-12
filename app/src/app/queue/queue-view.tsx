@@ -67,13 +67,15 @@ function sortQueue(jobs: PostJobDTO[]): PostJobDTO[] {
 
 interface QueueCardProps {
   job: PostJobDTO;
+  /** Team Workspaces (Task 7, design §7) — show `by {createdBy.name}` next to the timestamp. */
+  showAttribution: boolean;
   onEdit: (job: PostJobDTO) => void;
   onCancel: (job: PostJobDTO) => void;
   onPublish: (job: PostJobDTO) => void;
   onDelete: (job: PostJobDTO) => void;
 }
 
-function QueueCard({ job, onEdit, onCancel, onPublish, onDelete }: QueueCardProps) {
+function QueueCard({ job, showAttribution, onEdit, onCancel, onPublish, onDelete }: QueueCardProps) {
   const meta =
     job.status === "scheduled"
       ? QUEUE_STATUS_META.scheduled
@@ -92,11 +94,13 @@ function QueueCard({ job, onEdit, onCancel, onPublish, onDelete }: QueueCardProp
               <time dateTime={job.scheduledFor}>
                 {formatTimestamp(job.scheduledFor)}
               </time>
+              {showAttribution && job.createdBy ? <> · by {job.createdBy.name}</> : null}
             </p>
           ) : (
             <p className="mt-0.5 text-xs text-muted-foreground">
               Saved{" "}
               <time dateTime={job.createdAt}>{formatTimestamp(job.createdAt)}</time>
+              {showAttribution && job.createdBy ? <> · by {job.createdBy.name}</> : null}
             </p>
           )}
           <p className="mt-1 text-xs text-muted-foreground">
@@ -266,6 +270,10 @@ export function QueueView() {
   const [jobs, setJobs] = useState<PostJobDTO[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Team Workspaces (Task 7) — this view fetches independently of
+  // usePostJobs (its own status filter), so it tracks
+  // PostsResponse.workspaceMemberCount itself to gate QueueCard attribution.
+  const [workspaceMemberCount, setWorkspaceMemberCount] = useState<number | null>(null);
 
   const [editTarget, setEditTarget] = useState<PostJobDTO | null>(null);
   const [cancelTarget, setCancelTarget] = useState<PostJobDTO | null>(null);
@@ -285,6 +293,7 @@ export function QueueView() {
       }
       const data: PostsResponse = await response.json();
       setJobs(sortQueue(data.jobs));
+      setWorkspaceMemberCount(data.workspaceMemberCount);
     } catch {
       setError("Failed to load your queue.");
     } finally {
@@ -404,6 +413,7 @@ export function QueueView() {
               <QueueCard
                 key={job.id}
                 job={job}
+                showAttribution={(workspaceMemberCount ?? 0) > 1}
                 onEdit={setEditTarget}
                 onCancel={setCancelTarget}
                 onPublish={setPublishTarget}
