@@ -78,13 +78,28 @@ export default defineConfig({
       // real deployments, which always set it, and keeps webServer's log
       // free of noise that isn't ours to ignore-by-default).
       NEXTAUTH_URL: baseURL,
-      // Blob store token for the compose/schedule/invite flows' upload step
-      // (@vercel/blob/client, src/app/api/upload/route.ts). Only threaded
-      // through when present — those flows are additionally gated on
-      // E2E_STUBS_READY in core-flows.spec.ts, so the DB-only flows never need
-      // it. Passing `undefined` here is a no-op (the key is simply absent).
+      // Blob store token for the schedule flow's upload step (@vercel/blob/client,
+      // src/app/api/upload/route.ts — handleUpload signs a client token LOCALLY
+      // from this, no network). Only threaded through when present; the DB-only
+      // flows never need it. A throwaway, correctly-shaped test token is fine
+      // (`vercel_blob_rw_<storeId>_<secret>`). Passing `undefined` is a no-op.
       ...(process.env.BLOB_READ_WRITE_TOKEN
         ? { BLOB_READ_WRITE_TOKEN: process.env.BLOB_READ_WRITE_TOKEN }
+        : {}),
+      // Blob API base-URL seam for the upload double (Task F). `@vercel/blob@2`
+      // reads these in getApiUrl() (node_modules/@vercel/blob/dist/chunk-*.js).
+      // The composer's `upload()` runs in the BROWSER, so the actual PUT of the
+      // file bytes only honors the build-time-inlined NEXT_PUBLIC_ form — hence
+      // it must be present for `npm run build` (which runs as part of this
+      // command). The non-public var covers any server-side blob call. Both
+      // point at the mock blob server (e2e/support/mock-blob-server.mjs). Only
+      // threaded when present, so the smoke-only build is byte-for-byte
+      // unchanged (defaults to the real blob.vercel-storage.com).
+      ...(process.env.NEXT_PUBLIC_VERCEL_BLOB_API_URL
+        ? { NEXT_PUBLIC_VERCEL_BLOB_API_URL: process.env.NEXT_PUBLIC_VERCEL_BLOB_API_URL }
+        : {}),
+      ...(process.env.VERCEL_BLOB_API_URL
+        ? { VERCEL_BLOB_API_URL: process.env.VERCEL_BLOB_API_URL }
         : {}),
     },
   },

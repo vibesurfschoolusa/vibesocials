@@ -2,6 +2,8 @@ import path from "node:path";
 
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
+import { seedWorkspaceConnection } from "./support/seed-connection";
+
 /**
  * Health track H3 — authenticated core-flow scaffold.
  *
@@ -42,18 +44,27 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
  * substring match would resolve alongside the actual textarea.
  */
 
-// Two independent capability gates, so CI can run the flows a plain Postgres
-// satisfies (register, settings) WITHOUT faking green on the ones that also
-// need a blob store + a connected platform:
+// Capability gates, so CI runs exactly the flows whose doubles are real and
+// SKIPS (never fakes green on) the ones that aren't:
 //  - E2E_DATABASE_URL: a throwaway, migrated test Postgres (NEVER prod). Gates
 //    the whole file — no DB, nothing authenticated runs.
-//  - E2E_STUBS_READY: set only once the upload (blob) + OAuth-connection
-//    doubles from e2e/README.md exist. Gates the compose / schedule /
-//    invite→post flows, which upload media and publish to a connected
-//    platform. Left unset (the default, incl. in CI today) they SKIP — an
-//    honest "not exercised", never a false pass — while the DB-only flows run.
+//  - E2E_UPLOAD_STUBS_READY: the blob-UPLOAD double exists (Task F) — a mock
+//    Vercel-Blob server reached via the NEXT_PUBLIC_VERCEL_BLOB_API_URL seam,
+//    plus a seeded SocialConnection so the composer will submit. Gates the
+//    "schedule a post" flow, which uploads media then writes a scheduled job
+//    (no publish, no platform call). CI sets this — the flow runs for real.
+//  - E2E_STUBS_READY: the full PUBLISH double exists — a path that actually
+//    runs the platform clients on an immediate publish. Gates "compose a post"
+//    and "owner invites → member posts". NOT achievable in this harness: an
+//    immediate publish calls inngest.send(), which THROWS under `next start`
+//    (prod mode, no event key), and the real publish is an async Inngest
+//    function no worker runs here — so a green would prove only "job created +
+//    shown in Activity", not "published to a connected platform". Left unset in
+//    CI, these SKIP — honest "not exercised". See e2e/README.md ("Why compose /
+//    invite stay skipped").
 const dbReady = !!process.env.E2E_DATABASE_URL;
-const stubsReady = !!process.env.E2E_STUBS_READY;
+const uploadStubsReady = !!process.env.E2E_UPLOAD_STUBS_READY;
+const publishStubsReady = !!process.env.E2E_STUBS_READY;
 
 const SAMPLE_IMAGE_PATH = path.join(__dirname, "fixtures", "sample-image.png");
 
@@ -181,8 +192,8 @@ test.describe(
     test.describe("as a logged-in user", () => {
       test("compose a post and see it land in Activity", async ({ page, request }) => {
         test.skip(
-          !stubsReady,
-          "Needs a blob store + connected platform — set E2E_STUBS_READY (see e2e/README.md)",
+          !publishStubsReady,
+          "Needs a real publish path (inngest.send throws in prod; no worker runs the platform clients here) — set E2E_STUBS_READY (see e2e/README.md)",
         );
         await loginAsFreshUser(page, request, "compose");
 
@@ -229,10 +240,15 @@ test.describe(
 
       test("schedule a post and see it land in the Queue", async ({ page, request }) => {
         test.skip(
-          !stubsReady,
-          "Needs a blob store for the media upload step — set E2E_STUBS_READY (see e2e/README.md)",
+          !uploadStubsReady,
+          "Needs the blob-upload double for the media upload step — set E2E_UPLOAD_STUBS_READY (see e2e/README.md)",
         );
-        await loginAsFreshUser(page, request, "schedule");
+        const scheduler = await loginAsFreshUser(page, request, "schedule");
+        // The composer refuses to submit (schedule included) without at least
+        // one connected platform — seed one on this fresh user's workspace so
+        // the flow can reach the schedule write. The connection is inert; a
+        // scheduled job creates no results and calls no platform client.
+        await seedWorkspaceConnection(scheduler.email);
 
         await page.goto("/posts/new");
         await page.setInputFiles("#post-media", SAMPLE_IMAGE_PATH);
@@ -298,8 +314,8 @@ test.describe(
       context,
     }) => {
       test.skip(
-        !stubsReady,
-        "Member-posts step needs a blob store + connected platform — set E2E_STUBS_READY (see e2e/README.md)",
+        !publishStubsReady,
+        "Member-posts step needs a real publish path (see compose test / e2e/README.md) — set E2E_STUBS_READY",
       );
       const owner = await loginAsFreshUser(page, request, "invite-owner");
 
