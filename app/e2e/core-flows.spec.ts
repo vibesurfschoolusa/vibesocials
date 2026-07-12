@@ -12,9 +12,17 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
  * report a false pass.
  *
  * The bodies below are written against the real selectors/copy in
- * src/app/{login,register,posts/new,queue,activity,settings}/*, cross-checked
- * against the current source as of this commit — a real scaffold, not
- * placeholders. If the UI changes, update the selectors here in the same PR.
+ * src/app/{login,register,posts/new,queue,activity,settings,join/[token]}/*
+ * and src/components/team-section.tsx, cross-checked against the current
+ * source as of this commit — a real scaffold, not placeholders. If the UI
+ * changes, update the selectors here in the same PR.
+ *
+ * Team Workspaces: the "owner invites..." scenario below needs everything
+ * "compose a post" already needs (a connected platform + blob store — see
+ * e2e/README.md's "OAuth test doubles" section) PLUS that connection living
+ * on the shared workspace the invite grants access to, not just the owner's
+ * personal one — an unconnected workspace hits the same zero-connection
+ * empty state either test would.
  *
  * Each test provisions its own user (via the register API directly, not the
  * UI, to keep it fast) rather than sharing one created by another test. With
@@ -33,6 +41,19 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 const dbReady = !!process.env.E2E_DATABASE_URL;
 
 const SAMPLE_IMAGE_PATH = path.join(__dirname, "fixtures", "sample-image.png");
+
+/** `POST /api/workspaces/invites` returns `${NEXTAUTH_URL ?? ""}/join/<token>`
+ *  — absolute if NEXTAUTH_URL is set in this environment, a bare path
+ *  otherwise (see src/app/api/workspaces/invites/route.ts). `page.goto` wants
+ *  a path either way, so parse out the pathname when it's absolute and fall
+ *  back to the raw string (already a bare path) when `URL` rejects it. */
+function joinPathFromInviteUrl(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
+  }
+}
 
 /** `<input type="datetime-local">` wants "YYYY-MM-DDTHH:mm" in the browser's
  *  local time zone (see src/lib/scheduling.ts's localDateTimeToUtcIso, which
@@ -240,6 +261,81 @@ test.describe(
         await page.reload();
         await expect(page.getByLabel("Company website")).toHaveValue(website);
       });
+    });
+
+    // Team Workspaces plan amendment (Task 8, design §7/§8): invite -> join
+    // -> post-attribution flow. Two accounts share one browser (`page`), so
+    // each hop is explicit about whose session is active. `page.request` —
+    // not the bare `request` fixture `registerViaApi` uses above — shares
+    // cookies with the browser context, which is what lets the invite POST
+    // below ride the owner's just-established login session.
+    test("owner invites → member joins → member posts with attribution", async ({
+      page,
+      request,
+      context,
+    }) => {
+      const owner = await loginAsFreshUser(page, request, "invite-owner");
+
+      // Simpler and more stable than driving the Team section's Create/Copy
+      // UI (src/components/team-section.tsx) for what this test actually
+      // needs to assert: a live invite link, created with the owner's real
+      // session.
+      const inviteResponse = await page.request.post("/api/workspaces/invites");
+      if (!inviteResponse.ok()) {
+        throw new Error(
+          `Failed to create invite: ${inviteResponse.status()} ${await inviteResponse.text()}`,
+        );
+      }
+      const { url: joinUrl } = (await inviteResponse.json()) as { url: string };
+
+      // Sign the owner out and become a second, fresh account — same
+      // sign-out-then-sign-in-again pattern as "register via the UI" above.
+      await context.clearCookies();
+      const member = await loginAsFreshUser(page, request, "invite-member");
+
+      await page.goto(joinPathFromInviteUrl(joinUrl));
+
+      // src/app/join/[token]/join-view.tsx
+      await expect(
+        page.getByRole("heading", { level: 1, name: `Join ${owner.name}'s workspace?` }),
+      ).toBeVisible();
+      await page.getByRole("button", { name: "Join workspace" }).click();
+      await expect(page.getByText(`Joined ${owner.name}'s workspace.`)).toBeVisible();
+
+      // Accept switches the active-workspace cookie to the shared workspace
+      // (design §1) and JoinView redirects to "/" on success.
+      await expect(page).toHaveURL("/");
+
+      // Compose + publish as the member, mirroring "compose a post and see
+      // it land in Activity" above.
+      await page.goto("/posts/new");
+      await page.setInputFiles("#post-media", SAMPLE_IMAGE_PATH);
+      await page
+        .getByLabel("Caption")
+        .fill("Hello from the member, via the Playwright core-flow suite.");
+
+      const form = page.locator("form");
+      await form
+        .getByRole("group", { name: "When to publish" })
+        .getByRole("button", { name: "Publish now" })
+        .click();
+      await form.getByRole("button", { name: "Publish post" }).click();
+      await page
+        .getByRole("dialog")
+        .getByRole("button", { name: "Publish now" })
+        .click();
+
+      await expect(page.getByText("Post queued")).toBeVisible();
+      await page.getByRole("link", { name: "View activity" }).click();
+
+      await expect(page).toHaveURL("/activity");
+      await expect(
+        page.getByText("Hello from the member, via the Playwright core-flow suite."),
+      ).toBeVisible();
+      // Attribution (design §7, src/components/activity/post-job-card.tsx):
+      // the shared workspace now has 2 members, so the card shows
+      // "by {creator name}" next to the timestamp.
+      await expect(page.getByText(`by ${member.name}`)).toBeVisible();
     });
   },
 );

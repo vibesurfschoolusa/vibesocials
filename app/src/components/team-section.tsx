@@ -66,14 +66,57 @@ export function TeamSection({ role, workspaceName }: TeamSectionProps) {
  * `src/app/api/**` is frozen for this task), the member view renders the
  * workspace name plus the explanatory line only — no list fetch. Flagged in
  * the task report as a design-vs-API gap rather than patched here.
+ *
+ * Task 8 plan amendment adds "Leave workspace" (design §1 — member-only; an
+ * owner never sees this view at all, so the sole-owner-can't-leave rule
+ * needs no UI check here, only the API's own 400).
  */
 function MemberView({ workspaceName }: { workspaceName: string }) {
+  const router = useRouter();
+  const toast = useToast();
+  const [leaveOpen, setLeaveOpen] = useState(false);
+
+  // ConfirmDialog contract: throw to keep the dialog open on failure (the
+  // error is already surfaced via toast here, mirrors revokeInvite/
+  // confirmRemove below).
+  const handleLeave = useCallback(async () => {
+    const response = await fetch("/api/workspaces/leave", { method: "POST" });
+    if (!response.ok) {
+      const data = (await response.json().catch(() => null)) as { error?: string } | null;
+      toast.error(data?.error ?? "Couldn't leave the workspace.");
+      throw new Error("LEAVE_FAILED");
+    }
+    toast.success("Left the workspace.");
+    router.refresh();
+  }, [router, toast]);
+
   return (
     <Card className="p-6">
       <h3 className="text-base font-semibold text-foreground">{workspaceName}</h3>
       <p className="mt-1 text-sm text-muted-foreground">
         Only the workspace owner can manage members.
       </p>
+
+      <div className="mt-4 border-t border-border pt-4">
+        <Button
+          size="sm"
+          variant="ghost"
+          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+          onClick={() => setLeaveOpen(true)}
+        >
+          Leave workspace
+        </Button>
+      </div>
+
+      <ConfirmDialog
+        open={leaveOpen}
+        onOpenChange={setLeaveOpen}
+        destructive
+        title="Leave this workspace?"
+        description="You'll lose access to its accounts and posts. Your own account keeps working."
+        confirmText="Leave"
+        onConfirm={handleLeave}
+      />
     </Card>
   );
 }
