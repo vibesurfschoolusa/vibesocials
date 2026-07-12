@@ -33,8 +33,10 @@ export function isMediaDeletable(nonTerminalJobCount: number): boolean {
  * same display-only DTO as `GET /api/media` (see `src/lib/mediaDto.ts`) —
  * never `userId` or internal lifecycle columns.
  *
- * NOTE: viewing is workspace-scoped, but attaching via POST /api/posts is
- * still uploader-scoped until Task 5 (see WORKSPACE-BRIDGE in posts/route.ts).
+ * NOTE: viewing here and attaching via POST /api/posts (Task 5) are both
+ * workspace-scoped now — any member may reuse any item in the shared
+ * library, not just their own uploads (see assertMediaItemReusable in
+ * server/jobs/posting.ts).
  */
 export async function GET(_request: NextRequest, context: MediaItemRouteContext) {
   const workspaceContext = await getWorkspaceContext();

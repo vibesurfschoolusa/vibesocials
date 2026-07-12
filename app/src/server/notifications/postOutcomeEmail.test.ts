@@ -240,6 +240,35 @@ describe("deliverPostOutcomeNotification", () => {
     expect(arg.html).toContain("https://app.example.com/activity");
   });
 
+  // Team Workspaces (Task 5, verify-only): the recipient must stay the JOB'S
+  // CREATOR (`PostJob.userId`, carried in as this function's `userId` param
+  // by the caller — see inngest-functions.ts's `notify-outcome` sendEvent),
+  // never some notion of "the workspace owner". deliverPostOutcomeNotification
+  // only ever looks up `userId` from the event payload, so a member-created
+  // job's outcome mail resolves and addresses the MEMBER's own row.
+  it("emails the job's CREATOR — a member-created job emails the member, never the workspace owner", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    // The creator of THIS job is a workspace MEMBER, not the owner.
+    findUniqueUserMock.mockResolvedValue({
+      email: "member@example.com",
+      notifyOnPostComplete: true,
+    });
+    findUniquePostJobMock.mockResolvedValue({
+      status: "completed",
+      results: [{ platform: "tiktok", status: "success", errorMessage: null }],
+    });
+
+    await deliverPostOutcomeNotification({ userId: "member-1", postJobId: "job-1" });
+
+    expect(findUniqueUserMock).toHaveBeenCalledWith({
+      where: { id: "member-1" },
+      select: { email: true, notifyOnPostComplete: true },
+    });
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    const arg = sendEmailMock.mock.calls[0][0] as { to: string };
+    expect(arg.to).toBe("member@example.com");
+  });
+
   // Task 9: end-to-end check that the DB `select` actually carries
   // PostJob.status through to buildPostOutcomeEmail — the pure-function unit
   // tests above cover the branch logic, this covers the wiring that makes it

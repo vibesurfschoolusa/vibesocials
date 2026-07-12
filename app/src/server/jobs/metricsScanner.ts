@@ -18,8 +18,15 @@ export const METRICS_SYNC_BATCH = 100;
 export interface EligibleMetricResult {
   /** The originating PostJobResult id — stored as the metric's OPTIONAL SetNull link. */
   resultId: string;
-  /** Owner; both scopes the connection lookup and is denormalized onto the metric. */
+  /** The post's creator; denormalized onto the metric for legacy compat (Team
+   *  Workspaces: the metric row's `userId` is stamped from the connection's
+   *  connector instead — see inngest-functions.ts — but this field stays for
+   *  attribution/logging). */
   userId: string;
+  /** Team Workspaces (Task 5) — the post's tenant. Scopes the connection
+   *  lookup (a shared workspace connection, not a personal-workspace bridge)
+   *  and is stamped onto the metric row. */
+  workspaceId: string;
   platform: Platform;
   /** The YouTube video id (PostJobResult.externalPostId). */
   externalPostId: string;
@@ -52,8 +59,9 @@ export async function selectYouTubeMetricEligibleResults(
     select: {
       id: true,
       externalPostId: true,
-      // userId lives on the parent job (PostJobResult has no userId column).
-      postJob: { select: { userId: true } },
+      // userId/workspaceId live on the parent job (PostJobResult has neither
+      // column itself).
+      postJob: { select: { userId: true, workspaceId: true } },
     },
     orderBy: { createdAt: "desc" },
     take,
@@ -70,6 +78,7 @@ export async function selectYouTubeMetricEligibleResults(
     eligible.push({
       resultId: row.id,
       userId: row.postJob.userId,
+      workspaceId: row.postJob.workspaceId,
       platform: "youtube",
       externalPostId: row.externalPostId,
     });

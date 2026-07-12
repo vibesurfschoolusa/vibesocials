@@ -151,6 +151,9 @@ describe("POST /api/posts — blobUrl path (preserved behavior)", () => {
     expect(response.status).toBe(200);
     expect(createPostJobOnlyMock).toHaveBeenCalledWith({
       userId: "user-1",
+      // Team Workspaces (Task 5) — the request's ACTIVE workspace
+      // (`makeWorkspaceContext()` default is "ws-1"), passed explicitly.
+      workspaceId: "ws-1",
       media: {
         storageLocation: "https://blob.example/vid.mp4",
         originalFilename: "vid.mp4",
@@ -220,6 +223,8 @@ describe("POST /api/posts — mediaItemId reuse path (Roadmap Phase 2)", () => {
     expect(response.status).toBe(200);
     expect(createPostJobForExistingMediaMock).toHaveBeenCalledWith({
       userId: "user-1",
+      // Team Workspaces (Task 5) — the request's ACTIVE workspace.
+      workspaceId: "ws-1",
       mediaItemId: "media-9",
       baseCaption: "reused caption",
       perPlatformOverrides: undefined,

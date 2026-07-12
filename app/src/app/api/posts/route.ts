@@ -430,29 +430,19 @@ export async function POST(request: Request) {
     // Reuse (mediaItemId, Roadmap Phase 2) skips MediaItem creation via
     // createPostJobForExistingMedia; the original blobUrl path is untouched.
     //
-    // WORKSPACE-BRIDGE: both create helpers below still take only `userId`
-    // and resolve the workspace to create INTO themselves, internally, via
-    // `resolveWorkspaceForUser(userId)` — the caller's PERSONAL (oldest-owned)
-    // workspace, not necessarily `context.workspace.id` (this request's ACTIVE
-    // workspace). For the owner of a shared workspace those are the same
-    // workspace (their personal one IS the shared one), but for an invited
-    // MEMBER posting into someone else's workspace they differ: the job would
-    // land in the member's own personal workspace, invisible from the shared
-    // workspace's activity feed. `CreatePostJobOnlyParams` /
-    // `CreatePostJobForExistingMediaParams` (src/server/jobs/posting.ts) don't
-    // accept an explicit `workspaceId` yet — widening their signature to take
-    // one (and stamping `context.workspace.id` here instead) is job-internals
-    // work owned by Task 5, out of this task's file boundary. See
-    // task-4-report.md.
+    // Team Workspaces (Task 5): both create helpers take the request's ACTIVE
+    // workspace (`context.workspace.id`) explicitly, so a member posting into
+    // a shared (non-personal) workspace lands the job there — visible in the
+    // shared workspace's activity feed — not in their own personal workspace.
     let postJobId: string;
     let mediaItemId: string;
 
     if (usingExistingMedia) {
-      // WORKSPACE-BRIDGE: assertMediaItemReusable (posting.ts) still requires
-      // exact uploader match, so a member attaching a teammate's media 404s
-      // here — Task 5 rescopes it to the workspace.
+      // assertMediaItemReusable (posting.ts) is workspace-scoped (Task 5): any
+      // member of `context.workspace.id` may attach a teammate's media.
       const created = await createPostJobForExistingMedia({
         userId: context.user.id,
+        workspaceId: context.workspace.id,
         mediaItemId: body.mediaItemId as string,
         baseCaption: baseCaptionRaw,
         perPlatformOverrides,
@@ -483,6 +473,7 @@ export async function POST(request: Request) {
 
       const created = await createPostJobOnly({
         userId: context.user.id,
+        workspaceId: context.workspace.id,
         media: {
           storageLocation: body.blobUrl,
           originalFilename: body.filename || "upload",
