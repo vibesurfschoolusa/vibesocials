@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createHmac } from "crypto";
-import { getCurrentUser } from "@/lib/auth";
+import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
 
 /**
  * OAuth 1.0a signature generation
@@ -37,12 +37,23 @@ function generateOAuthSignature(
   return signature;
 }
 
-export async function GET() {
-  const user = await getCurrentUser();
-
-  if (!user) {
+export async function GET(request: Request) {
+  // X's OAuth 1.0a dance has no app-controlled `state` param (only
+  // Twitter's own opaque oauth_token round-trips) — the request-token
+  // secret and userId are already bridged callback-side via httpOnly
+  // cookies below, so workspaceId is embedded the same way (a third
+  // cookie) rather than via createOAuthState/verifyOAuthState.
+  const contextOrRedirect = await requireOwnerContextForOAuthStart(
+    request,
+    "x_not_workspace_owner",
+  );
+  if (contextOrRedirect instanceof NextResponse) {
+    return contextOrRedirect;
+  }
+  if (!contextOrRedirect) {
     return NextResponse.redirect(new URL("/login", process.env.NEXTAUTH_URL));
   }
+  const { user, workspace } = contextOrRedirect;
 
   const consumerKey = process.env.X_CONSUMER_KEY; // API Key
   const consumerSecret = process.env.X_CONSUMER_SECRET; // API Secret
@@ -130,7 +141,7 @@ export async function GET() {
     const authorizeUrl = new URL("https://api.twitter.com/oauth/authorize");
     authorizeUrl.searchParams.set("oauth_token", oauthToken);
 
-    // Store user ID and token secret for callback
+    // Store user ID, workspace ID, and token secret for callback
     // In production, store this in Redis with oauth_token as key
     const response2 = NextResponse.redirect(authorizeUrl.toString());
     response2.cookies.set("x_oauth_token_secret", oauthTokenSecret, {
@@ -140,6 +151,17 @@ export async function GET() {
       maxAge: 600, // 10 minutes
     });
     response2.cookies.set("x_user_id", user.id, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 600,
+    });
+    // Team Workspaces (Task 6, design §5): X has no app-controlled `state`
+    // param to embed workspaceId in, so it rides the same cookie bridge as
+    // x_user_id — the callback re-verifies the caller is still an owner of
+    // this workspace before writing the connection, same as every other
+    // platform's signed-state workspaceId.
+    response2.cookies.set("x_workspace_id", workspace.id, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",

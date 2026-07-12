@@ -146,16 +146,24 @@ export const publishToAllPlatforms = inngest.createFunction(
 
     console.log("[Inngest] Starting background publish job", { postJobId, mediaItemId });
 
-    // Step 1: Fetch all required data
+    // Step 1: Fetch all required data. Team Workspaces (Task 5): the job's
+    // `workspaceId` is the source of truth for the connection fan-out, so the
+    // job row is fetched FIRST (not inside the same Promise.all as the
+    // connections query it feeds).
     const setupData = await step.run("fetch-data", async () => {
-      const [user, mediaItem, socialConnections, postJob] = await Promise.all([
+      const postJob = await prisma.postJob.findUnique({ where: { id: postJobId } });
+      if (!postJob) {
+        throw new Error("Missing required data");
+      }
+
+      const [user, workspace, mediaItem, socialConnections] = await Promise.all([
         prisma.user.findUnique({ where: { id: userId } }),
+        prisma.workspace.findUnique({ where: { id: postJob.workspaceId } }),
         prisma.mediaItem.findUnique({ where: { id: mediaItemId } }),
-        prisma.socialConnection.findMany({ where: { userId } }),
-        prisma.postJob.findUnique({ where: { id: postJobId } }),
+        prisma.socialConnection.findMany({ where: { workspaceId: postJob.workspaceId } }),
       ]);
 
-      if (!user || !mediaItem || !postJob) {
+      if (!user || !workspace || !mediaItem) {
         throw new Error("Missing required data");
       }
 
@@ -165,6 +173,7 @@ export const publishToAllPlatforms = inngest.createFunction(
 
       return {
         user,
+        workspace,
         mediaItem,
         socialConnections,
         resultRecords,
@@ -181,7 +190,11 @@ export const publishToAllPlatforms = inngest.createFunction(
       return { error: "No connections" };
     }
 
-    const fullBaseCaption = buildCaptionWithFooter(baseCaption, setupData.user);
+    // Team Workspaces (Task 6, controller-added scope): the footer is the
+    // WORKSPACE's brand fields (companyWebsite/defaultHashtags — design §2),
+    // never the acting user's — a member can publish/retry a teammate's
+    // post, and the footer must stay deterministic regardless of who acts.
+    const fullBaseCaption = buildCaptionWithFooter(baseCaption, setupData.workspace);
     const overrides = perPlatformOverrides as Partial<Record<Platform, string>> | null;
 
     console.log(`[Inngest] Publishing to ${setupData.socialConnections.length} platforms`);
@@ -197,8 +210,8 @@ export const publishToAllPlatforms = inngest.createFunction(
       }
 
       const captionOverride = overrides?.[connection.platform] ?? null;
-      const caption = captionOverride 
-        ? buildCaptionWithFooter(captionOverride, setupData.user)
+      const caption = captionOverride
+        ? buildCaptionWithFooter(captionOverride, setupData.workspace)
         : fullBaseCaption;
 
       // Each platform upload is a separate step - this allows checkpointing
@@ -454,41 +467,49 @@ export const retryPlatforms = inngest.createFunction(
       return { postJobId, error: "No platforms to retry" };
     }
 
-    // Fetch everything needed for just the named platforms, scoped to the owner.
+    // Fetch everything needed for just the named platforms. Team Workspaces
+    // (Task 5): the retry ROUTE already validated the job is in the caller's
+    // active workspace and any member (not just the job's creator) may
+    // retrieve it (design §1) — this trusted internal step no longer re-gates
+    // by `userId` (which is the RETRYING member, not necessarily the job's
+    // creator) and instead derives the connection fan-out from the job's own
+    // `workspaceId`, mirroring `publishToAllPlatforms` above.
     const setupData = await step.run("fetch-retry-data", async () => {
-      const postJob = await prisma.postJob.findFirst({
-        where: { id: postJobId, userId },
-      });
+      const postJob = await prisma.postJob.findUnique({ where: { id: postJobId } });
       if (!postJob) {
         return null;
       }
 
-      const [user, mediaItem, connections, resultRecords] = await Promise.all([
+      const [user, workspace, mediaItem, connections, resultRecords] = await Promise.all([
         prisma.user.findUnique({ where: { id: userId } }),
+        prisma.workspace.findUnique({ where: { id: postJob.workspaceId } }),
         prisma.mediaItem.findUnique({ where: { id: postJob.mediaItemId } }),
         prisma.socialConnection.findMany({
-          where: { userId, platform: { in: platforms } },
+          where: { workspaceId: postJob.workspaceId, platform: { in: platforms } },
         }),
         prisma.postJobResult.findMany({
           where: { postJobId, platform: { in: platforms } },
         }),
       ]);
 
-      return { user, mediaItem, connections, resultRecords };
+      return { user, workspace, mediaItem, connections, resultRecords };
     });
 
     if (!setupData) {
-      logger.error("[Inngest] Retry job not found or not owned", { postJobId });
+      logger.error("[Inngest] Retry job not found", { postJobId });
       return { postJobId, error: "Job not found" };
     }
 
-    const { user, mediaItem, connections, resultRecords } = setupData;
+    const { user, workspace, mediaItem, connections, resultRecords } = setupData;
 
     // The blob must still exist to re-publish. The endpoint already gates this,
     // but a concurrent retention sweep could have removed it in between — fail
     // the re-queued results deterministically so the job never hangs
-    // `in_progress`, then recompute.
-    if (!user || !mediaItem || mediaItem.deletedAt !== null) {
+    // `in_progress`, then recompute. `workspace` folds into the same
+    // defensive check: the job's workspaceId is a NOT NULL FK, so a missing
+    // row here means the workspace was deleted concurrently (or DB
+    // corruption) — equally "shouldn't happen" as a missing user/mediaItem.
+    if (!user || !workspace || !mediaItem || mediaItem.deletedAt !== null) {
       await step.run("fail-media-unavailable", async () => {
         await prisma.postJobResult.updateMany({
           where: { postJobId, platform: { in: platforms }, status: "pending" },
@@ -511,7 +532,11 @@ export const retryPlatforms = inngest.createFunction(
       return { postJobId, error: "Media unavailable" };
     }
 
-    const fullBaseCaption = buildCaptionWithFooter(mediaItem.baseCaption, user);
+    // Team Workspaces (Task 6, controller-added scope): footer source is the
+    // JOB's workspace, not the retrying member — same reasoning as
+    // publishToAllPlatforms above. `user` is kept (existence-checked above)
+    // for `userId`'s continued use below; it no longer feeds the footer.
+    const fullBaseCaption = buildCaptionWithFooter(mediaItem.baseCaption, workspace);
     const overrides = mediaItem.perPlatformOverrides as
       | Partial<Record<Platform, string>>
       | null;
@@ -547,7 +572,7 @@ export const retryPlatforms = inngest.createFunction(
 
         const captionOverride = overrides?.[platform] ?? null;
         const caption = captionOverride
-          ? buildCaptionWithFooter(captionOverride, user)
+          ? buildCaptionWithFooter(captionOverride, workspace)
           : fullBaseCaption;
 
         // Per-post TikTok/YouTube metadata isn't persisted, so a retry can't
@@ -773,23 +798,33 @@ export const youtubePostMetricsSync = inngest.createFunction(
     const summary = await step.run("sync-youtube-metrics", async () => {
       const eligible = await selectYouTubeMetricEligibleResults(METRICS_SYNC_BATCH);
 
-      // Per-RUN cache: userId -> access token (or null when unavailable).
-      // Dedupes the connection load + token refresh when a user has several
-      // videos in the batch, and makes one user's reconnect/refresh failure skip
-      // all their items fast without re-hitting the DB or Google. Function-local,
-      // so it resets every run.
-      const tokenCache = new Map<string, string | null>();
+      // Per-RUN cache: workspaceId -> resolved connection (or null when
+      // unavailable). Dedupes the connection load + token refresh when a
+      // workspace has several videos in the batch, and makes one workspace's
+      // reconnect/refresh failure skip all its items fast without re-hitting
+      // the DB or Google. Function-local, so it resets every run. Team
+      // Workspaces (Task 5): keyed by workspaceId (the shared connection) —
+      // NOT userId, since the eligible item's poster may not be who connected
+      // the platform. `connectorUserId` (the connection's own `userId`, i.e.
+      // whoever connected this YouTube account) is carried alongside the
+      // token so it can be stamped onto the PostMetric row below.
+      const connectionCache = new Map<
+        string,
+        { accessToken: string; connectorUserId: string } | null
+      >();
 
-      async function resolveAccessToken(userId: string): Promise<string | null> {
-        const cached = tokenCache.get(userId);
+      async function resolveConnection(
+        workspaceId: string,
+      ): Promise<{ accessToken: string; connectorUserId: string } | null> {
+        const cached = connectionCache.get(workspaceId);
         if (cached !== undefined) {
           return cached;
         }
 
-        let token: string | null = null;
+        let resolved: { accessToken: string; connectorUserId: string } | null = null;
         try {
           const connection = await prisma.socialConnection.findUnique({
-            where: { userId_platform: { userId, platform: "youtube" } },
+            where: { workspaceId_platform: { workspaceId, platform: "youtube" } },
           });
           // Skip a gone (disconnected) or `needsReconnect`-flagged connection —
           // do NOT push a known-bad token through refresh.
@@ -801,18 +836,20 @@ export const youtubePostMetricsSync = inngest.createFunction(
               // needsReconnect on invalid_grant — caught here so token stays null.
               active = await refreshGoogleToken(active);
             }
-            token = active.accessToken || null;
+            if (active.accessToken) {
+              resolved = { accessToken: active.accessToken, connectorUserId: active.userId };
+            }
           }
         } catch (error) {
-          logger.error("[Inngest] YouTube metrics: token resolve failed (skipping user)", {
-            userId,
+          logger.error("[Inngest] YouTube metrics: connection resolve failed (skipping workspace)", {
+            workspaceId,
             error,
           });
-          token = null;
+          resolved = null;
         }
 
-        tokenCache.set(userId, token);
-        return token;
+        connectionCache.set(workspaceId, resolved);
+        return resolved;
       }
 
       let updated = 0;
@@ -824,13 +861,13 @@ export const youtubePostMetricsSync = inngest.createFunction(
         // Isolate every item: one video's failure (network, token, upsert) must
         // never sink the batch — mirrors scheduledPostScanner / mediaRetentionSweep.
         try {
-          const accessToken = await resolveAccessToken(item.userId);
-          if (!accessToken) {
+          const connection = await resolveConnection(item.workspaceId);
+          if (!connection) {
             skippedNoConnection += 1;
             continue;
           }
 
-          const result = await fetchYouTubeVideoStatistics(item.externalPostId, accessToken);
+          const result = await fetchYouTubeVideoStatistics(item.externalPostId, connection.accessToken);
           if (!result.ok) {
             errors += 1;
             continue;
@@ -858,7 +895,13 @@ export const youtubePostMetricsSync = inngest.createFunction(
               },
             },
             create: {
-              userId: item.userId,
+              // Team Workspaces (Task 5): stamped from the CONNECTION's
+              // connector (whoever connected this YouTube account) rather
+              // than the post's creator — see EligibleMetricResult.userId's
+              // doc comment (metricsScanner.ts) for the "legacy compat"
+              // rationale.
+              userId: connection.connectorUserId,
+              workspaceId: item.workspaceId,
               platform: "youtube",
               externalPostId: item.externalPostId,
               postJobResultId: item.resultId,
@@ -871,7 +914,7 @@ export const youtubePostMetricsSync = inngest.createFunction(
               fetchedAt: now,
             },
             update: {
-              userId: item.userId,
+              userId: connection.connectorUserId,
               postJobResultId: item.resultId,
               views: result.stats.views,
               likes: result.stats.likes,

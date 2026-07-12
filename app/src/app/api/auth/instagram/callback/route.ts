@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { verifyOAuthState } from "@/lib/oauthState";
+import { isWorkspaceOwner } from "@/lib/workspace";
 import { Platform } from "@prisma/client";
 
 export async function GET(request: NextRequest) {
@@ -23,13 +24,23 @@ export async function GET(request: NextRequest) {
   }
 
   const stateCheck = verifyOAuthState(state);
-  if (!stateCheck.valid || !stateCheck.userId) {
+  if (!stateCheck.valid || !stateCheck.userId || !stateCheck.workspaceId) {
     return NextResponse.redirect(
       new URL("/settings?error=instagram_invalid_state", request.url),
     );
   }
 
   const userId = stateCheck.userId;
+  const workspaceId = stateCheck.workspaceId;
+
+  // Team Workspaces (Task 6, design §5): re-verify the caller is STILL an
+  // owner of this workspace before writing a connection — ownership could
+  // have changed between the redirect to Facebook and this return trip.
+  if (!(await isWorkspaceOwner(userId, workspaceId))) {
+    return NextResponse.redirect(
+      new URL("/settings?error=instagram_not_workspace_owner", request.url),
+    );
+  }
 
   const clientId = process.env.FACEBOOK_APP_ID;
   const clientSecret = process.env.FACEBOOK_APP_SECRET;
@@ -161,8 +172,8 @@ export async function GET(request: NextRequest) {
 
     await prisma.socialConnection.upsert({
       where: {
-        userId_platform: {
-          userId,
+        workspaceId_platform: {
+          workspaceId,
           platform: "instagram" as Platform,
         },
       },
@@ -185,6 +196,7 @@ export async function GET(request: NextRequest) {
       },
       create: {
         userId,
+        workspaceId,
         platform: "instagram" as Platform,
         accessToken: pageAccessToken,
         refreshToken: null,

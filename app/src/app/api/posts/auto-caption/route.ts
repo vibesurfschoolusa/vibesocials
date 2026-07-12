@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
-import { getCurrentUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { getWorkspaceContext } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 
@@ -16,15 +16,23 @@ interface AutoCaptionRequestBody {
 
 export async function POST(request: Request) {
   try {
-    const user = await getCurrentUser();
+    // Team Workspaces sweep (Task 8): was `getCurrentUser()` reading
+    // `user.companyWebsite` directly — that column stopped being written
+    // once Task 7 moved the caption-footer fields to Workspace (`POST
+    // /api/settings` is owner-only and workspace-scoped now), so any
+    // workspace whose brand website was set/changed post-migration would
+    // silently fall back to a stale or empty User row here. Any member may
+    // auto-caption (design §1 — composing is member-level), so
+    // `getWorkspaceContext()` with no `requireRole` is the right gate.
+    const context = await getWorkspaceContext();
 
-    if (!user) {
+    if (!context) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     // Throttle per user: vision calls are the most expensive, so keep this tight.
     const rateLimit = await checkRateLimit({
-      userId: user.id,
+      userId: context.user.id,
       route: "posts/auto-caption",
       limit: 10,
       windowMs: 5 * 60 * 1000,
@@ -118,8 +126,8 @@ export async function POST(request: Request) {
     const mediaKind = isImage ? "photo" : "video";
 
     const brandPieces: string[] = [];
-    if (user.companyWebsite?.trim()) {
-      brandPieces.push(`Brand website: ${user.companyWebsite.trim()}`);
+    if (context.workspace.companyWebsite?.trim()) {
+      brandPieces.push(`Brand website: ${context.workspace.companyWebsite.trim()}`);
     }
 
     const platformText = platform ? `Target platform: ${platform}.` : "";
@@ -237,7 +245,7 @@ The media is a short social media video. You do not have direct access to the vi
     }
 
     console.log("[Auto Caption] Generated successfully", {
-      userId: user.id,
+      userId: context.user.id,
       mediaKind,
       mimeType: trimmedMimeType,
       captionLength: caption.length,

@@ -101,6 +101,15 @@ Initial goal: deliver a thin, maintainable vertical slice for **one real platfor
   - Use OAuth 2.0 authorization code flow.
   - Store access token, refresh token, expiry, Google account ID, and any default album ID.
 
+## Workspaces (multi-user)
+
+Vibe Socials supports shared team access via **Workspaces**, layered on top of the auth model above:
+
+- **Model:** `Workspace` (the tenant — owns connections, media, posts, metrics, and the caption-footer brand settings), `WorkspaceMember` (workspace + user + role, one row per pair), `WorkspaceInvite` (an owner-created join token: SHA-256-hashed, 7-day expiry, one active link per workspace at a time). Every user gets a personal workspace at registration (and existing accounts self-heal one lazily), so solo use is unchanged.
+- **Roles:** `owner` (connections, workspace settings/rename, invites, member management) and `member` (compose/publish/schedule, upload + delete own media, reply to reviews; everything else read-only). A member can leave a shared workspace at any time; a sole owner cannot (no ownership-transfer flow in v1) — see the permission matrix in `docs/superpowers/specs/2026-07-12-team-workspaces-design.md` §1.
+- **Active workspace:** a user may belong to several workspaces; the current one is tracked by an httpOnly `vs_active_workspace` cookie (set on switch/invite-accept, cleared on leave), but every server read re-validates membership from the database — the cookie is a hint, never an authority.
+- **Migration:** `SocialConnection`, `MediaItem`, `PostJob`, and `PostMetric` each gained a `workspaceId` column via a hand-authored backfill migration that provisions one workspace per existing user and re-parents their rows onto it; `userId` stays on all four as creator/uploader attribution, not the access-control scope.
+
 ## Data Model (Conceptual)
 
 Backed by Prisma models mapped to PostgreSQL tables.

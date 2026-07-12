@@ -1,51 +1,51 @@
-import type { User } from "@prisma/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
-// googleTokens.test.ts / linkedinClient.test.ts). route.ts imports both
-// `@/lib/db` (a real `new PrismaClient()` requiring DATABASE_URL) and
-// `@/lib/auth` (next-auth session lookup) at module scope, so both must be
+// workspaces/switch/route.test.ts). route.ts imports `@/lib/db` (a real
+// `new PrismaClient()` requiring DATABASE_URL) and `@/lib/workspace` (the
+// shared workspace-context resolver) at module scope, so both must be
 // mocked before route.ts is imported below — otherwise importing the route
 // module would try to construct a real Prisma client and throw.
-const { updateMock, getCurrentUserMock } = vi.hoisted(() => ({
-  updateMock: vi.fn(),
-  getCurrentUserMock: vi.fn(),
+const { workspaceUpdateMock, userUpdateMock, getWorkspaceContextMock } = vi.hoisted(() => ({
+  workspaceUpdateMock: vi.fn(),
+  userUpdateMock: vi.fn(),
+  getWorkspaceContextMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
-    user: {
-      update: updateMock,
-    },
+    workspace: { update: workspaceUpdateMock },
+    user: { update: userUpdateMock },
   },
 }));
 
-vi.mock("@/lib/auth", () => ({
-  getCurrentUser: getCurrentUserMock,
+vi.mock("@/lib/workspace", () => ({
+  getWorkspaceContext: getWorkspaceContextMock,
 }));
 
 import {
   COMPANY_WEBSITE_MAX_LENGTH,
   DEFAULT_HASHTAGS_MAX_LENGTH,
   NOTIFY_ON_POST_COMPLETE_DEFAULT,
+  OWNER_ONLY_FOOTER_ERROR,
   parseSettingsInput,
   POST,
+  touchesWorkspaceFooter,
 } from "./route";
 
-function makeUser(overrides: Partial<User> = {}): User {
-  return {
-    id: "user-1",
-    email: "user@example.com",
-    name: null,
-    passwordHash: null,
-    companyWebsite: null,
-    defaultHashtags: null,
-    notifyOnPostComplete: true,
-    createdAt: new Date("2020-01-01T00:00:00Z"),
-    updatedAt: new Date("2020-01-01T00:00:00Z"),
-    ...overrides,
-  };
-}
+const OWNER_CONTEXT = {
+  user: { id: "user-owner", email: "owner@example.com", name: "Owner" },
+  workspace: { id: "ws-1", name: "Acme", companyWebsite: null, defaultHashtags: null },
+  role: "owner" as const,
+  memberCount: 2,
+};
+
+const MEMBER_CONTEXT = {
+  user: { id: "user-member", email: "member@example.com", name: "Member" },
+  workspace: { id: "ws-1", name: "Acme", companyWebsite: null, defaultHashtags: null },
+  role: "member" as const,
+  memberCount: 2,
+};
 
 function jsonRequest(body: unknown): Request {
   return new Request("http://localhost/api/settings", {
@@ -64,20 +64,47 @@ function rawRequest(rawBody: string): Request {
 }
 
 beforeEach(() => {
-  updateMock.mockReset();
-  getCurrentUserMock.mockReset();
+  workspaceUpdateMock.mockReset();
+  userUpdateMock.mockReset();
+  getWorkspaceContextMock.mockReset();
 });
 
 describe("parseSettingsInput", () => {
-  it("accepts a body with both fields as valid strings", () => {
+  // Team Workspaces (Task 6, design §4): the footer fields and
+  // notifyOnPostComplete now write to different rows (workspace vs. user)
+  // with different role gates, so the parser switched from
+  // full-replace-with-defaults to presence-based partial update — a key
+  // absent from the body is OMITTED from `data` entirely (not normalized to
+  // null/a default), so the caller can tell "not touching this field" apart
+  // from "clearing it to null".
+  it("returns an empty data object when the body has no recognized keys", () => {
+    expect(parseSettingsInput({})).toEqual({ ok: true, data: {} });
+  });
+
+  it("includes only the keys present in the body", () => {
+    expect(parseSettingsInput({ companyWebsite: "example.com" })).toEqual({
+      ok: true,
+      data: { companyWebsite: "example.com" },
+    });
+    expect(parseSettingsInput({ notifyOnPostComplete: false })).toEqual({
+      ok: true,
+      data: { notifyOnPostComplete: false },
+    });
+  });
+
+  it("accepts all three fields together as valid values", () => {
     expect(
-      parseSettingsInput({ companyWebsite: "example.com", defaultHashtags: "#tag1 #tag2" }),
+      parseSettingsInput({
+        companyWebsite: "example.com",
+        defaultHashtags: "#tag1 #tag2",
+        notifyOnPostComplete: false,
+      }),
     ).toEqual({
       ok: true,
       data: {
         companyWebsite: "example.com",
         defaultHashtags: "#tag1 #tag2",
-        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
+        notifyOnPostComplete: false,
       },
     });
   });
@@ -87,62 +114,30 @@ describe("parseSettingsInput", () => {
       parseSettingsInput({ companyWebsite: "  example.com  ", defaultHashtags: "  #tag  " }),
     ).toEqual({
       ok: true,
-      data: {
-        companyWebsite: "example.com",
-        defaultHashtags: "#tag",
-        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
-      },
+      data: { companyWebsite: "example.com", defaultHashtags: "#tag" },
     });
   });
 
-  it("normalizes missing fields to null", () => {
-    expect(parseSettingsInput({})).toEqual({
-      ok: true,
-      data: {
-        companyWebsite: null,
-        defaultHashtags: null,
-        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
-      },
-    });
-  });
-
-  it("normalizes explicit null fields to null", () => {
+  it("normalizes an explicit null to null (present, cleared) rather than omitting the key", () => {
     expect(parseSettingsInput({ companyWebsite: null, defaultHashtags: null })).toEqual({
       ok: true,
-      data: {
-        companyWebsite: null,
-        defaultHashtags: null,
-        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
-      },
+      data: { companyWebsite: null, defaultHashtags: null },
     });
   });
 
   it("normalizes empty and whitespace-only strings to null", () => {
     expect(parseSettingsInput({ companyWebsite: "", defaultHashtags: "   " })).toEqual({
       ok: true,
-      data: {
-        companyWebsite: null,
-        defaultHashtags: null,
-        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
-      },
+      data: { companyWebsite: null, defaultHashtags: null },
     });
   });
 
   it("ignores unknown top-level fields", () => {
     expect(
-      parseSettingsInput({
-        companyWebsite: "example.com",
-        defaultHashtags: "#tag",
-        admin: true,
-        extra: "field",
-      }),
+      parseSettingsInput({ companyWebsite: "example.com", admin: true, extra: "field" }),
     ).toEqual({
       ok: true,
-      data: {
-        companyWebsite: "example.com",
-        defaultHashtags: "#tag",
-        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
-      },
+      data: { companyWebsite: "example.com" },
     });
   });
 
@@ -189,11 +184,7 @@ describe("parseSettingsInput", () => {
     const value = "a".repeat(COMPANY_WEBSITE_MAX_LENGTH);
     expect(parseSettingsInput({ companyWebsite: value })).toEqual({
       ok: true,
-      data: {
-        companyWebsite: value,
-        defaultHashtags: null,
-        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
-      },
+      data: { companyWebsite: value },
     });
   });
 
@@ -210,11 +201,7 @@ describe("parseSettingsInput", () => {
     const value = "#".repeat(DEFAULT_HASHTAGS_MAX_LENGTH);
     expect(parseSettingsInput({ defaultHashtags: value })).toEqual({
       ok: true,
-      data: {
-        companyWebsite: null,
-        defaultHashtags: value,
-        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
-      },
+      data: { defaultHashtags: value },
     });
   });
 
@@ -222,11 +209,7 @@ describe("parseSettingsInput", () => {
     const padded = `  ${"a".repeat(COMPANY_WEBSITE_MAX_LENGTH)}  `;
     expect(parseSettingsInput({ companyWebsite: padded })).toEqual({
       ok: true,
-      data: {
-        companyWebsite: "a".repeat(COMPANY_WEBSITE_MAX_LENGTH),
-        defaultHashtags: null,
-        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
-      },
+      data: { companyWebsite: "a".repeat(COMPANY_WEBSITE_MAX_LENGTH) },
     });
   });
 
@@ -234,27 +217,21 @@ describe("parseSettingsInput", () => {
     it("accepts an explicit true", () => {
       expect(parseSettingsInput({ notifyOnPostComplete: true })).toEqual({
         ok: true,
-        data: { companyWebsite: null, defaultHashtags: null, notifyOnPostComplete: true },
+        data: { notifyOnPostComplete: true },
       });
     });
 
     it("accepts an explicit false", () => {
       expect(parseSettingsInput({ notifyOnPostComplete: false })).toEqual({
         ok: true,
-        data: { companyWebsite: null, defaultHashtags: null, notifyOnPostComplete: false },
+        data: { notifyOnPostComplete: false },
       });
     });
 
-    it("normalizes a missing value to the default (true)", () => {
-      const result = parseSettingsInput({});
-      expect(result.ok).toBe(true);
-      expect(result.ok && result.data.notifyOnPostComplete).toBe(true);
-    });
-
-    it("normalizes an explicit null to the default (true)", () => {
+    it("normalizes an explicit null (present) to the default (true)", () => {
       expect(parseSettingsInput({ notifyOnPostComplete: null })).toEqual({
         ok: true,
-        data: { companyWebsite: null, defaultHashtags: null, notifyOnPostComplete: true },
+        data: { notifyOnPostComplete: true },
       });
     });
 
@@ -271,9 +248,26 @@ describe("parseSettingsInput", () => {
   });
 });
 
+describe("touchesWorkspaceFooter", () => {
+  it("is false when neither footer key is present", () => {
+    expect(touchesWorkspaceFooter({})).toBe(false);
+    expect(touchesWorkspaceFooter({ notifyOnPostComplete: true })).toBe(false);
+  });
+
+  it("is true when companyWebsite is present, even if null", () => {
+    expect(touchesWorkspaceFooter({ companyWebsite: "a.com" })).toBe(true);
+    expect(touchesWorkspaceFooter({ companyWebsite: null })).toBe(true);
+  });
+
+  it("is true when defaultHashtags is present, even if null", () => {
+    expect(touchesWorkspaceFooter({ defaultHashtags: "#a" })).toBe(true);
+    expect(touchesWorkspaceFooter({ defaultHashtags: null })).toBe(true);
+  });
+});
+
 describe("POST /api/settings", () => {
   it("returns 401 and never touches the database when unauthenticated", async () => {
-    getCurrentUserMock.mockResolvedValue(null);
+    getWorkspaceContextMock.mockResolvedValue(null);
 
     const response = await POST(
       jsonRequest({ companyWebsite: "example.com", notifyOnPostComplete: false }),
@@ -281,21 +275,22 @@ describe("POST /api/settings", () => {
 
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
-    expect(updateMock).not.toHaveBeenCalled();
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
+    expect(userUpdateMock).not.toHaveBeenCalled();
   });
 
   it("returns 400 for a malformed JSON body instead of a 500", async () => {
-    getCurrentUserMock.mockResolvedValue(makeUser());
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
 
     const response = await POST(rawRequest("{not valid json"));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
-    expect(updateMock).not.toHaveBeenCalled();
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
   });
 
   it("returns 400 and never touches the database for an invalid field type", async () => {
-    getCurrentUserMock.mockResolvedValue(makeUser());
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
 
     const response = await POST(jsonRequest({ companyWebsite: 42 }));
 
@@ -303,22 +298,23 @@ describe("POST /api/settings", () => {
     await expect(response.json()).resolves.toEqual({
       error: "companyWebsite must be a string",
     });
-    expect(updateMock).not.toHaveBeenCalled();
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
+    expect(userUpdateMock).not.toHaveBeenCalled();
   });
 
   it("returns 400 and never touches the database for an oversized field", async () => {
-    getCurrentUserMock.mockResolvedValue(makeUser());
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
 
     const response = await POST(
       jsonRequest({ defaultHashtags: "#".repeat(DEFAULT_HASHTAGS_MAX_LENGTH + 1) }),
     );
 
     expect(response.status).toBe(400);
-    expect(updateMock).not.toHaveBeenCalled();
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
   });
 
   it("returns 400 and never touches the database for a non-boolean notifyOnPostComplete", async () => {
-    getCurrentUserMock.mockResolvedValue(makeUser());
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
 
     const response = await POST(jsonRequest({ notifyOnPostComplete: "sure" }));
 
@@ -326,79 +322,175 @@ describe("POST /api/settings", () => {
     await expect(response.json()).resolves.toEqual({
       error: "notifyOnPostComplete must be a boolean",
     });
-    expect(updateMock).not.toHaveBeenCalled();
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
+    expect(userUpdateMock).not.toHaveBeenCalled();
   });
 
-  it("persists trimmed valid input and returns { success: true }, unchanged from before", async () => {
-    getCurrentUserMock.mockResolvedValue(makeUser({ id: "user-42" }));
-    updateMock.mockResolvedValue(makeUser());
+  describe("owner", () => {
+    beforeEach(() => {
+      getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+      workspaceUpdateMock.mockResolvedValue({});
+      userUpdateMock.mockResolvedValue({});
+    });
 
-    const response = await POST(
-      jsonRequest({ companyWebsite: "  example.com  ", defaultHashtags: "  #tag  " }),
-    );
+    it("persists trimmed footer fields to the workspace row, keyed by the active workspace id", async () => {
+      const response = await POST(
+        jsonRequest({ companyWebsite: "  example.com  ", defaultHashtags: "  #tag  " }),
+      );
 
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ success: true });
-    expect(updateMock).toHaveBeenCalledWith({
-      where: { id: "user-42" },
-      data: {
-        companyWebsite: "example.com",
-        defaultHashtags: "#tag",
-        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
-      },
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ success: true });
+      expect(workspaceUpdateMock).toHaveBeenCalledWith({
+        where: { id: "ws-1" },
+        data: { companyWebsite: "example.com", defaultHashtags: "#tag" },
+      });
+      expect(userUpdateMock).not.toHaveBeenCalled();
+    });
+
+    it("persists null for empty footer fields, matching prior `field || null` behavior", async () => {
+      const response = await POST(jsonRequest({ companyWebsite: "", defaultHashtags: "" }));
+
+      expect(response.status).toBe(200);
+      expect(workspaceUpdateMock).toHaveBeenCalledWith({
+        where: { id: "ws-1" },
+        data: { companyWebsite: null, defaultHashtags: null },
+      });
+    });
+
+    it("sending only notifyOnPostComplete writes only the user row, not the workspace", async () => {
+      const response = await POST(jsonRequest({ notifyOnPostComplete: false }));
+
+      expect(response.status).toBe(200);
+      expect(userUpdateMock).toHaveBeenCalledWith({
+        where: { id: "user-owner" },
+        data: { notifyOnPostComplete: false },
+      });
+      expect(workspaceUpdateMock).not.toHaveBeenCalled();
+    });
+
+    it("sending footer fields + notifyOnPostComplete together writes both rows", async () => {
+      const response = await POST(
+        jsonRequest({
+          companyWebsite: "example.com",
+          defaultHashtags: "#tag",
+          notifyOnPostComplete: false,
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(workspaceUpdateMock).toHaveBeenCalledWith({
+        where: { id: "ws-1" },
+        data: { companyWebsite: "example.com", defaultHashtags: "#tag" },
+      });
+      expect(userUpdateMock).toHaveBeenCalledWith({
+        where: { id: "user-owner" },
+        data: { notifyOnPostComplete: false },
+      });
+    });
+
+    it("sending only companyWebsite (not defaultHashtags) writes only that key", async () => {
+      const response = await POST(jsonRequest({ companyWebsite: "example.com" }));
+
+      expect(response.status).toBe(200);
+      expect(workspaceUpdateMock).toHaveBeenCalledWith({
+        where: { id: "ws-1" },
+        data: { companyWebsite: "example.com" },
+      });
+    });
+
+    it("returns 200 with no writes for an empty body", async () => {
+      const response = await POST(jsonRequest({}));
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ success: true });
+      expect(workspaceUpdateMock).not.toHaveBeenCalled();
+      expect(userUpdateMock).not.toHaveBeenCalled();
+    });
+
+    it("returns 500 when the workspace update fails", async () => {
+      workspaceUpdateMock.mockRejectedValue(new Error("db down"));
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const response = await POST(jsonRequest({ companyWebsite: "example.com" }));
+
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({ error: "Failed to update settings" });
+
+      consoleSpy.mockRestore();
+    });
+
+    it("returns 500 when the user update fails", async () => {
+      userUpdateMock.mockRejectedValue(new Error("db down"));
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const response = await POST(jsonRequest({ notifyOnPostComplete: false }));
+
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({ error: "Failed to update settings" });
+
+      consoleSpy.mockRestore();
     });
   });
 
-  it("persists null for empty fields, matching prior `field || null` behavior", async () => {
-    getCurrentUserMock.mockResolvedValue(makeUser({ id: "user-42" }));
-    updateMock.mockResolvedValue(makeUser());
+  describe("member", () => {
+    beforeEach(() => {
+      getWorkspaceContextMock.mockResolvedValue(MEMBER_CONTEXT);
+      workspaceUpdateMock.mockResolvedValue({});
+      userUpdateMock.mockResolvedValue({});
+    });
 
-    const response = await POST(jsonRequest({ companyWebsite: "", defaultHashtags: "" }));
+    it("sending only notifyOnPostComplete succeeds and writes the calling user's own row", async () => {
+      const response = await POST(jsonRequest({ notifyOnPostComplete: false }));
 
-    expect(response.status).toBe(200);
-    expect(updateMock).toHaveBeenCalledWith({
-      where: { id: "user-42" },
-      data: {
-        companyWebsite: null,
-        defaultHashtags: null,
-        notifyOnPostComplete: NOTIFY_ON_POST_COMPLETE_DEFAULT,
-      },
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ success: true });
+      expect(userUpdateMock).toHaveBeenCalledWith({
+        where: { id: "user-member" },
+        data: { notifyOnPostComplete: false },
+      });
+      expect(workspaceUpdateMock).not.toHaveBeenCalled();
+    });
+
+    it("sending a footer field returns 403 and writes nothing", async () => {
+      const response = await POST(jsonRequest({ companyWebsite: "evil.com" }));
+
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({ error: OWNER_ONLY_FOOTER_ERROR });
+      expect(workspaceUpdateMock).not.toHaveBeenCalled();
+      expect(userUpdateMock).not.toHaveBeenCalled();
+    });
+
+    it("sending an explicit-null footer field still 403s (presence, not truthiness, gates it)", async () => {
+      const response = await POST(jsonRequest({ companyWebsite: null }));
+
+      expect(response.status).toBe(403);
+      expect(workspaceUpdateMock).not.toHaveBeenCalled();
+    });
+
+    it("sending footer fields + notifyOnPostComplete together 403s wholesale (no partial apply)", async () => {
+      const response = await POST(
+        jsonRequest({ companyWebsite: "evil.com", notifyOnPostComplete: false }),
+      );
+
+      expect(response.status).toBe(403);
+      expect(workspaceUpdateMock).not.toHaveBeenCalled();
+      expect(userUpdateMock).not.toHaveBeenCalled();
+    });
+
+    it("returns 200 with no writes for an empty body", async () => {
+      const response = await POST(jsonRequest({}));
+
+      expect(response.status).toBe(200);
+      expect(workspaceUpdateMock).not.toHaveBeenCalled();
+      expect(userUpdateMock).not.toHaveBeenCalled();
     });
   });
+});
 
-  it("persists notifyOnPostComplete: false (the toggle's whole purpose)", async () => {
-    getCurrentUserMock.mockResolvedValue(makeUser({ id: "user-42" }));
-    updateMock.mockResolvedValue(makeUser({ notifyOnPostComplete: false }));
-
-    const response = await POST(
-      jsonRequest({
-        companyWebsite: "example.com",
-        defaultHashtags: "#tag",
-        notifyOnPostComplete: false,
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    expect(updateMock).toHaveBeenCalledWith({
-      where: { id: "user-42" },
-      data: {
-        companyWebsite: "example.com",
-        defaultHashtags: "#tag",
-        notifyOnPostComplete: false,
-      },
-    });
-  });
-
-  it("returns 500 when the database update fails", async () => {
-    getCurrentUserMock.mockResolvedValue(makeUser());
-    updateMock.mockRejectedValue(new Error("db down"));
-    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    const response = await POST(jsonRequest({ companyWebsite: "example.com" }));
-
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({ error: "Failed to update settings" });
-
-    consoleSpy.mockRestore();
+// Coverage for the exported constants staying wired to the schema default
+// (Roadmap Phase 6) — kept from the pre-Task-6 suite.
+describe("NOTIFY_ON_POST_COMPLETE_DEFAULT", () => {
+  it("is true, matching the Prisma schema's @default(true)", () => {
+    expect(NOTIFY_ON_POST_COMPLETE_DEFAULT).toBe(true);
   });
 });

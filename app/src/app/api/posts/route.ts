@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getCurrentUser } from "@/lib/auth";
+import { getWorkspaceContext } from "@/lib/workspace";
 import { logger } from "@/lib/logger";
 import { PostJobStatus, Platform, type Prisma } from "@prisma/client";
 import {
@@ -32,9 +32,9 @@ const POSTS_PAGE_SIZE = 50;
  * (SEC-1 discipline — no tokens, secrets, or raw connection metadata).
  */
 export async function GET(request: Request) {
-  const user = await getCurrentUser();
+  const context = await getWorkspaceContext();
 
-  if (!user) {
+  if (!context) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -50,7 +50,10 @@ export async function GET(request: Request) {
         .filter((s) => VALID_POST_JOB_STATUSES.has(s))
     : [];
 
-  const where: Prisma.PostJobWhereInput = { userId: user.id };
+  // Team Workspaces (Task 4) — any member sees every job in the active
+  // workspace, not just their own (design doc §4/§7); `createdBy` (below)
+  // is what lets the UI attribute each one to its creator.
+  const where: Prisma.PostJobWhereInput = { workspaceId: context.workspace.id };
   if (statusFilter.length > 0) {
     where.status = { in: statusFilter as PostJobStatus[] };
   }
@@ -70,6 +73,11 @@ export async function GET(request: Request) {
         // Task 8 — compose-time publish snapshot (Task 7's `publishMetadata`),
         // surfaced read-only via the `publish` DTO field below.
         publishMetadata: true,
+        // Team Workspaces (Task 4) — creator attribution for the `createdBy`
+        // DTO field. Display fields only: name falls back to the email
+        // local-part at map time below, and the full email NEVER reaches the
+        // DTO (SEC-1).
+        user: { select: { name: true, email: true } },
         results: {
           select: {
             platform: true,
@@ -83,9 +91,11 @@ export async function GET(request: Request) {
     });
 
     // Roadmap Phase 8 (analytics): join the latest engagement snapshot per
-    // result. Scoped to the caller (SEC — a metric is only ever read by its
-    // owner) and joined by (platform, externalPostId) — the metric's DURABLE
-    // identity — so it stays correct even after a connection delete cascades the
+    // result. Team Workspaces (Task 4): scoped to the active WORKSPACE, not
+    // the caller — the jobs above already span every member (SEC: still
+    // never global, just widened from "caller" to "caller's tenant") — and
+    // joined by (platform, externalPostId) — the metric's DURABLE identity —
+    // so it stays correct even after a connection delete cascades the
     // originating result away but leaves the metric row. YouTube-only in v1, so
     // we only collect/join YouTube video ids. One extra bounded query.
     const youtubeVideoIds = Array.from(
@@ -101,7 +111,7 @@ export async function GET(request: Request) {
     const metricRows = youtubeVideoIds.length
       ? await prisma.postMetric.findMany({
           where: {
-            userId: user.id,
+            workspaceId: context.workspace.id,
             platform: "youtube",
             externalPostId: { in: youtubeVideoIds },
           },
@@ -121,6 +131,7 @@ export async function GET(request: Request) {
     const metricByVideoId = new Map(metricRows.map((row) => [row.externalPostId, row]));
 
     const payload: PostsResponse = {
+      workspaceMemberCount: context.memberCount,
       jobs: jobs.map((job) => {
         // Task 8 — the raw JSON snapshot narrowed to the display fields the
         // DTO exposes. Untyped at the Prisma boundary (Json?), so this cast
@@ -154,6 +165,12 @@ export async function GET(request: Request) {
                 tiktokPrivacy: snapshot.tiktok?.privacyLevel ?? null,
               }
             : null,
+          // Team Workspaces (Task 4) — creator attribution. `name` falls back
+          // to the email local-part; the full email never reaches the DTO
+          // (SEC-1). `null` only if the creator relation is missing.
+          createdBy: job.user
+            ? { name: job.user.name ?? job.user.email.split("@")[0] }
+            : null,
           results: job.results.map((result) => {
             const metricRow =
               result.platform === "youtube" && result.externalPostId
@@ -181,7 +198,11 @@ export async function GET(request: Request) {
 
     return NextResponse.json(payload);
   } catch (error: unknown) {
-    logger.error("[GET /api/posts] Unexpected error", { error, userId: user.id });
+    logger.error("[GET /api/posts] Unexpected error", {
+      error,
+      userId: context.user.id,
+      workspaceId: context.workspace.id,
+    });
     return NextResponse.json(
       { error: "Failed to load posts" },
       { status: 500 },
@@ -216,9 +237,9 @@ interface CreatePostBody {
 }
 
 export async function POST(request: Request) {
-  const user = await getCurrentUser();
+  const context = await getWorkspaceContext();
 
-  if (!user) {
+  if (!context) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -226,9 +247,10 @@ export async function POST(request: Request) {
   // multi-platform publishing — the heaviest external action in the app —
   // and was unlimited until now. Shared by both the blobUrl and mediaItemId
   // (reuse) creation paths below; checked right after auth, before any
-  // parsing/DB work.
+  // parsing/DB work. Team Workspaces (Task 4): keyed by user id, not
+  // workspace — a per-member throttle, same as every other rate-limited route.
   const rateLimit = await checkRateLimit({
-    userId: user.id,
+    userId: context.user.id,
     route: "posts/publish",
     limit: 30,
     windowMs: 5 * 60 * 1000,
@@ -407,12 +429,20 @@ export async function POST(request: Request) {
     // Create job records without executing (for background processing).
     // Reuse (mediaItemId, Roadmap Phase 2) skips MediaItem creation via
     // createPostJobForExistingMedia; the original blobUrl path is untouched.
+    //
+    // Team Workspaces (Task 5): both create helpers take the request's ACTIVE
+    // workspace (`context.workspace.id`) explicitly, so a member posting into
+    // a shared (non-personal) workspace lands the job there — visible in the
+    // shared workspace's activity feed — not in their own personal workspace.
     let postJobId: string;
     let mediaItemId: string;
 
     if (usingExistingMedia) {
+      // assertMediaItemReusable (posting.ts) is workspace-scoped (Task 5): any
+      // member of `context.workspace.id` may attach a teammate's media.
       const created = await createPostJobForExistingMedia({
-        userId: user.id,
+        userId: context.user.id,
+        workspaceId: context.workspace.id,
         mediaItemId: body.mediaItemId as string,
         baseCaption: baseCaptionRaw,
         perPlatformOverrides,
@@ -442,7 +472,8 @@ export async function POST(request: Request) {
       }
 
       const created = await createPostJobOnly({
-        userId: user.id,
+        userId: context.user.id,
+        workspaceId: context.workspace.id,
         media: {
           storageLocation: body.blobUrl,
           originalFilename: body.filename || "upload",
@@ -477,7 +508,7 @@ export async function POST(request: Request) {
         name: "post/publish.requested",
         data: {
           postJobId,
-          userId: user.id,
+          userId: context.user.id,
           mediaItemId,
           baseCaption: baseCaptionRaw,
           location,
@@ -523,7 +554,12 @@ export async function POST(request: Request) {
       );
     }
 
-    logger.error("[POST /api/posts] Unexpected error", { error, usingExistingMedia, userId: user.id });
+    logger.error("[POST /api/posts] Unexpected error", {
+      error,
+      usingExistingMedia,
+      userId: context.user.id,
+      workspaceId: context.workspace.id,
+    });
     return NextResponse.json(
       { error: "Failed to create post" },
       { status: 500 },

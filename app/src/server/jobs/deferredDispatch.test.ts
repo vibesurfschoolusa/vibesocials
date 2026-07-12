@@ -31,6 +31,7 @@ function makeJob(overrides: Record<string, unknown> = {}) {
   return {
     id: "job-1",
     userId: "user-1",
+    workspaceId: "workspace-1",
     mediaItemId: "media-1",
     baseCaption: "Job snapshot caption",
     perPlatformOverrides: null,
@@ -73,6 +74,23 @@ describe("prepareDeferredPostJobDispatch", () => {
       data: { status: "failed" },
     });
     expect(resultCreateManyMock).not.toHaveBeenCalled();
+  });
+
+  // Team Workspaces (Task 5) — the run-time fan-out must key the connection
+  // lookup off the JOB's workspace, not its creator's personal workspace, so
+  // a member posting into a shared workspace still fans out to every
+  // teammate-connected platform, not just the ones they'd see solo.
+  it("fans out the connection lookup by the job's workspaceId, not its userId", async () => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({ workspaceId: "workspace-42", userId: "user-1" }),
+    );
+    connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
+
+    await prepareDeferredPostJobDispatch("job-1");
+
+    expect(connectionFindManyMock).toHaveBeenCalledWith({
+      where: { workspaceId: "workspace-42" },
+    });
   });
 
   it("creates a result PER CURRENT connection and returns the publish payload", async () => {

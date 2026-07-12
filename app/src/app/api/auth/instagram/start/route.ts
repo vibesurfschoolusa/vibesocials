@@ -1,14 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { getCurrentUser } from "@/lib/auth";
 import { createOAuthState } from "@/lib/oauthState";
+import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
 
 export async function GET(request: NextRequest) {
-  const user = await getCurrentUser();
-
-  if (!user) {
+  const contextOrRedirect = await requireOwnerContextForOAuthStart(
+    request,
+    "instagram_not_workspace_owner",
+  );
+  if (contextOrRedirect instanceof NextResponse) {
+    return contextOrRedirect;
+  }
+  if (!contextOrRedirect) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
+  const { user, workspace } = contextOrRedirect;
 
   const clientId = process.env.FACEBOOK_APP_ID;
   const redirectUri = process.env.INSTAGRAM_REDIRECT_URI;
@@ -20,7 +26,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const encodedState = createOAuthState(user.id);
+  const encodedState = createOAuthState({ userId: user.id, workspaceId: workspace.id });
 
   // Instagram uses Facebook OAuth with specific scopes
   const authUrl = new URL("https://www.facebook.com/v21.0/dialog/oauth");

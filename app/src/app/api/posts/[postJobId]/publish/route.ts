@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { getCurrentUser } from "@/lib/auth";
+import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -33,14 +33,14 @@ interface PublishBody {
  * job can't publish it twice.
  */
 export async function POST(request: NextRequest, context: PostJobRouteContext) {
-  const user = await getCurrentUser();
+  const workspaceContext = await getWorkspaceContext();
 
-  if (!user) {
+  if (!workspaceContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const rateLimit = await checkRateLimit({
-    userId: user.id,
+    userId: workspaceContext.user.id,
     route: "posts/publish",
     limit: 30,
     windowMs: 5 * 60 * 1000,
@@ -71,9 +71,10 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
 
   const wantsSchedule = body.scheduledFor != null;
 
-  // Ownership + current status in one read; 404 if not the caller's.
+  // Ownership + current status in one read; 404 if not in the caller's
+  // workspace. Team Workspaces (Task 4): any member may publish (design §1).
   const job = await prisma.postJob.findFirst({
-    where: { id: postJobId, userId: user.id },
+    where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
     select: { status: true },
   });
 
@@ -96,7 +97,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     }
 
     const { count } = await prisma.postJob.updateMany({
-      where: { id: postJobId, userId: user.id, status: "draft" },
+      where: { id: postJobId, workspaceId: workspaceContext.workspace.id, status: "draft" },
       data: { status: "scheduled", scheduledFor: validation.date },
     });
 
@@ -123,9 +124,12 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   }
 
   // Require ≥1 connection up front and leave the job intact if there are none
-  // (don't consume it on a fixable error).
+  // (don't consume it on a fixable error). Team Workspaces (Task 4): scoped
+  // to the WORKSPACE — connections are shared by every member (schema §2:
+  // `SocialConnection.workspaceId`, unique per `[workspaceId, platform]`), so
+  // a member who didn't personally connect anything must still see them.
   const connectionCount = await prisma.socialConnection.count({
-    where: { userId: user.id },
+    where: { workspaceId: workspaceContext.workspace.id },
   });
   if (connectionCount === 0) {
     return NextResponse.json(
@@ -142,7 +146,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   const { count } = await prisma.postJob.updateMany({
     where: {
       id: postJobId,
-      userId: user.id,
+      workspaceId: workspaceContext.workspace.id,
       status: { in: [...MUTABLE_POST_JOB_STATUSES] },
     },
     data: { status: "in_progress" },

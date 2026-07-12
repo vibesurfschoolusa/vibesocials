@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { del } from "@vercel/blob";
 
-import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { toMediaItemDto } from "@/lib/mediaDto";
+import { getWorkspaceContext } from "@/lib/workspace";
 import { TERMINAL_POST_JOB_STATUSES } from "@/server/jobs/mediaRetention";
 
 interface MediaItemRouteContext {
@@ -25,23 +25,30 @@ export function isMediaDeletable(nonTerminalJobCount: number): boolean {
 /**
  * GET /api/media/[id]
  *
- * Auth + ownership scoped single-item lookup, used by the post composer's
+ * Auth + workspace scoped single-item lookup, used by the post composer's
  * "reuse this media" flow (Roadmap Phase 2) to prefill caption/overrides and
- * render a preview without re-fetching the entire library. Returns the same
- * display-only DTO as `GET /api/media` (see `src/lib/mediaDto.ts`) — never
- * `userId` or internal lifecycle columns.
+ * render a preview without re-fetching the entire library. Team Workspaces
+ * (Task 4): any member of the workspace may look up (and reuse) any item in
+ * its shared library, not just their own uploads (design §1). Returns the
+ * same display-only DTO as `GET /api/media` (see `src/lib/mediaDto.ts`) —
+ * never `userId` or internal lifecycle columns.
+ *
+ * NOTE: viewing here and attaching via POST /api/posts (Task 5) are both
+ * workspace-scoped now — any member may reuse any item in the shared
+ * library, not just their own uploads (see assertMediaItemReusable in
+ * server/jobs/posting.ts).
  */
 export async function GET(_request: NextRequest, context: MediaItemRouteContext) {
-  const user = await getCurrentUser();
+  const workspaceContext = await getWorkspaceContext();
 
-  if (!user) {
+  if (!workspaceContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id } = await Promise.resolve(context.params);
 
   const item = await prisma.mediaItem.findFirst({
-    where: { id, userId: user.id, deletedAt: null },
+    where: { id, workspaceId: workspaceContext.workspace.id, deletedAt: null },
     select: {
       id: true,
       storageLocation: true,
@@ -64,12 +71,15 @@ export async function GET(_request: NextRequest, context: MediaItemRouteContext)
 /**
  * DELETE /api/media/[id]
  *
- * Auth + ownership scoped soft-delete (Roadmap Phase 2). 404 if the item
- * doesn't exist, isn't owned by the caller, or was already deleted. 409 if
- * it's still referenced by a non-terminal PostJob (`isMediaDeletable`). On
- * success, removes the blob and stamps `deletedAt` — the row itself is kept
- * (history/captions depend on it), matching the Phase 1 retention sweep's
- * soft-delete semantics.
+ * Auth + workspace scoped soft-delete (Roadmap Phase 2). 404 if the item
+ * doesn't exist, isn't in the caller's active workspace, or was already
+ * deleted (never 403 here — no existence oracle for a foreign workspace's
+ * item). Team Workspaces (Task 4, design §1 permission matrix): any member
+ * may delete their OWN upload; deleting someone ELSE's requires the
+ * workspace owner role — 403 otherwise. 409 if it's still referenced by a
+ * non-terminal PostJob (`isMediaDeletable`). On success, removes the blob and
+ * stamps `deletedAt` — the row itself is kept (history/captions depend on
+ * it), matching the Phase 1 retention sweep's soft-delete semantics.
  *
  * The row update and the blob `del()` run inside one `$transaction`, marking
  * the row first: if `del()` throws, the whole transaction (including the
@@ -81,21 +91,37 @@ export async function GET(_request: NextRequest, context: MediaItemRouteContext)
  * race exactly as the retention sweep does.
  */
 export async function DELETE(_request: NextRequest, context: MediaItemRouteContext) {
-  const user = await getCurrentUser();
+  const workspaceContext = await getWorkspaceContext();
 
-  if (!user) {
+  if (!workspaceContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id } = await Promise.resolve(context.params);
 
+  // `userId` (the uploader) is selected here — not for the workspace scope
+  // itself, but so the permission check below can compare it against the
+  // caller without a second query.
   const item = await prisma.mediaItem.findFirst({
-    where: { id, userId: user.id, deletedAt: null },
-    select: { id: true, storageLocation: true },
+    where: { id, workspaceId: workspaceContext.workspace.id, deletedAt: null },
+    select: { id: true, userId: true, storageLocation: true },
   });
 
   if (!item) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  // Team Workspaces (Task 4, design §1): the uploader or the workspace owner
+  // — anyone else gets a 403, not a 404 (the item's existence is already
+  // established for this workspace by the query above, so there's no
+  // existence oracle to protect here).
+  const isUploader = item.userId === workspaceContext.user.id;
+  const isOwner = workspaceContext.role === "owner";
+  if (!isUploader && !isOwner) {
+    return NextResponse.json(
+      { error: "Only the uploader or the workspace owner can delete this." },
+      { status: 403 },
+    );
   }
 
   try {
@@ -137,7 +163,12 @@ export async function DELETE(_request: NextRequest, context: MediaItemRouteConte
       );
     }
   } catch (error) {
-    logger.error("[DELETE /api/media/[id]] Unexpected error", { id, error, userId: user.id });
+    logger.error("[DELETE /api/media/[id]] Unexpected error", {
+      id,
+      error,
+      userId: workspaceContext.user.id,
+      workspaceId: workspaceContext.workspace.id,
+    });
     return NextResponse.json({ error: "Failed to delete media" }, { status: 500 });
   }
 

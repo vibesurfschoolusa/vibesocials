@@ -33,6 +33,14 @@ export interface PostJobSchedulingParams {
 
 export interface CreatePostJobOnlyParams extends PostJobSchedulingParams {
   userId: string;
+  /**
+   * Team Workspaces (Task 5) — the tenant this job/media belongs to. Callers
+   * pass the request's ACTIVE workspace (`getWorkspaceContext().workspace.id`),
+   * not a workspace resolved from `userId` — a member acting in a shared
+   * (non-personal) workspace must have their post land there, not in their
+   * own personal workspace.
+   */
+  workspaceId: string;
   media: SavedFileInfo;
   baseCaption: string;
   location?: string;
@@ -113,23 +121,29 @@ export class MediaItemUnavailableError extends Error {
 }
 
 /**
- * Pure ownership/lifecycle guard for reusing an existing MediaItem in a new
+ * Pure workspace/lifecycle guard for reusing an existing MediaItem in a new
  * post. Takes just the fields it needs (or `null` for "no row found") so it
  * is unit-testable without touching the database — mirrors the
  * `isMediaSweepEligible` pattern in `mediaRetention.ts`.
  *
+ * Team Workspaces (Task 5): reuse eligibility is WORKSPACE-scoped, not
+ * uploader-scoped — any member of the item's workspace may reuse it
+ * (design §1 permission matrix: "Upload media, use library" is a member
+ * action), matching the shared-library semantics `GET /api/media` already
+ * exposes. `userId`/uploader identity plays no role here.
+ *
  * Throws {@link MediaItemUnavailableError}; never returns a value.
- *  - `NOT_FOUND` — no row, or the row belongs to a different user (folded
- *    together deliberately: an owned-by-someone-else id must not reveal
- *    "it exists but isn't yours").
- *  - `MEDIA_DELETED` — the row exists and is owned, but its blob has already
- *    been removed (soft-deleted via `deletedAt`).
+ *  - `NOT_FOUND` — no row, or the row belongs to a different workspace
+ *    (folded together deliberately: a foreign workspace's item id must not
+ *    reveal "it exists but isn't yours").
+ *  - `MEDIA_DELETED` — the row exists and is in-workspace, but its blob has
+ *    already been removed (soft-deleted via `deletedAt`).
  */
 export function assertMediaItemReusable(
-  item: Pick<MediaItem, "userId" | "deletedAt"> | null,
-  userId: string,
+  item: Pick<MediaItem, "workspaceId" | "deletedAt"> | null,
+  workspaceId: string,
 ): void {
-  if (!item || item.userId !== userId) {
+  if (!item || item.workspaceId !== workspaceId) {
     throw new MediaItemUnavailableError("NOT_FOUND", "Media item not found.");
   }
   if (item.deletedAt !== null) {
@@ -143,15 +157,19 @@ export function assertMediaItemReusable(
 export async function createPostJobOnly(
   params: CreatePostJobOnlyParams,
 ): Promise<PostJobCreated> {
-  const { userId, media, baseCaption, location, perPlatformOverrides, targetPlatforms } = params;
+  const { userId, workspaceId, media, baseCaption, location, perPlatformOverrides, targetPlatforms } =
+    params;
   const intent = params.intent ?? "immediate";
 
   // Only the immediate path materializes the fan-out (and thus requires a
   // connection) up front. Scheduled/draft jobs defer result creation to run
   // time (§6.3), so they can be created before any platform is connected.
+  // Team Workspaces (Task 5): fan out over the WORKSPACE's connections, not
+  // the caller's personal ones — any member's post reaches every platform
+  // the shared workspace has connected.
   const socialConnections =
     intent === "immediate"
-      ? await prisma.socialConnection.findMany({ where: { userId } })
+      ? await prisma.socialConnection.findMany({ where: { workspaceId } })
       : [];
 
   // Task 7 — narrow to the caller's chosen subset when given; `undefined`
@@ -179,6 +197,7 @@ export async function createPostJobOnly(
   const mediaItem = await prisma.mediaItem.create({
     data: {
       userId,
+      workspaceId,
       storageLocation: media.storageLocation,
       originalFilename: media.originalFilename,
       mimeType: media.mimeType,
@@ -193,17 +212,20 @@ export async function createPostJobOnly(
   });
 
   const postJob = await prisma.postJob.create({
-    data: buildPostJobCreateData({
-      userId,
-      mediaItemId: mediaItem.id,
-      intent,
-      scheduledFor: params.scheduledFor ?? null,
-      baseCaption,
-      perPlatformOverrides,
-      tiktokMetadata: params.tiktokMetadata,
-      youtubeMetadata: params.youtubeMetadata,
-      targetPlatforms,
-    }),
+    data: {
+      ...buildPostJobCreateData({
+        userId,
+        mediaItemId: mediaItem.id,
+        intent,
+        scheduledFor: params.scheduledFor ?? null,
+        baseCaption,
+        perPlatformOverrides,
+        tiktokMetadata: params.tiktokMetadata,
+        youtubeMetadata: params.youtubeMetadata,
+        targetPlatforms,
+      }),
+      workspaceId,
+    },
   });
 
   // Scheduled/draft jobs get NO results here — the cron/promote create them at
@@ -251,7 +273,11 @@ export function buildPostJobCreateData(args: {
   /** Task 7 — chosen platform subset, persisted for deferred jobs so
    *  {@link prepareDeferredPostJobDispatch} can replay it at run time. */
   targetPlatforms?: Platform[];
-}): Prisma.PostJobUncheckedCreateInput {
+  // This pure builder deliberately does NOT take/stamp workspaceId — both
+  // callers below merge it in directly (from their own required
+  // `workspaceId` param) right at their `prisma.postJob.create` call, so this
+  // function (and its existing unit tests) stay unchanged.
+}): Omit<Prisma.PostJobUncheckedCreateInput, "workspaceId"> {
   const isDeferred = args.intent !== "immediate";
   // Snapshot per-post privacy + targeting for deferred jobs only (review B1 /
   // Task 7) — immediate jobs carry privacy in the event payload and apply
@@ -279,6 +305,14 @@ export function buildPostJobCreateData(args: {
 export interface CreatePostJobForExistingMediaParams
   extends PostJobSchedulingParams {
   userId: string;
+  /**
+   * Team Workspaces (Task 5) — the ACTING caller's active workspace (see
+   * {@link CreatePostJobOnlyParams.workspaceId}). Also the scope
+   * {@link assertMediaItemReusable} checks the target MediaItem against — a
+   * member may reuse ANY item in this workspace, regardless of who uploaded
+   * it, but never an item from a different workspace.
+   */
+  workspaceId: string;
   mediaItemId: string;
   /**
    * Accepted for parity with `CreatePostJobOnlyParams` / the request body so
@@ -310,12 +344,14 @@ export interface CreatePostJobForExistingMediaParams
 /**
  * Roadmap Phase 2 — create a PostJob that reuses an already-persisted
  * MediaItem instead of uploading a new one. Modeled on `createPostJobOnly`
- * but skips MediaItem creation entirely: it verifies the item exists, is
- * owned by `userId`, and hasn't been soft-deleted (`assertMediaItemReusable`,
- * throws `MediaItemUnavailableError` otherwise), then creates only the
- * PostJob + per-platform PostJobResults referencing the existing
- * `mediaItemId` and stamps `lastUsedAt = now` (Phase 1 retention: reusing is
- * itself a "use").
+ * but skips MediaItem creation entirely: it verifies the item exists, is IN
+ * THE CALLER'S WORKSPACE, and hasn't been soft-deleted
+ * (`assertMediaItemReusable`, throws `MediaItemUnavailableError` otherwise),
+ * then creates only the PostJob + per-platform PostJobResults referencing the
+ * existing `mediaItemId` and stamps `lastUsedAt = now` (Phase 1 retention:
+ * reusing is itself a "use"). Team Workspaces (Task 5): reuse is
+ * WORKSPACE-scoped, not uploader-scoped — any member may reuse any item in
+ * their active workspace's shared library (design §1).
  *
  * The Inngest publisher already resolves media by id (refetches the
  * MediaItem row), so it needs NO changes — the caller sends the same
@@ -325,20 +361,28 @@ export interface CreatePostJobForExistingMediaParams
 export async function createPostJobForExistingMedia(
   params: CreatePostJobForExistingMediaParams,
 ): Promise<PostJobCreated> {
-  const { userId, mediaItemId, location, baseCaption, perPlatformOverrides, targetPlatforms } =
-    params;
+  const {
+    userId,
+    workspaceId,
+    mediaItemId,
+    location,
+    baseCaption,
+    perPlatformOverrides,
+    targetPlatforms,
+  } = params;
   const intent = params.intent ?? "immediate";
 
   const mediaItem = await prisma.mediaItem.findUnique({
     where: { id: mediaItemId },
   });
-  assertMediaItemReusable(mediaItem, userId);
+  assertMediaItemReusable(mediaItem, workspaceId);
 
   // Immediate reuse materializes the fan-out now (and requires a connection);
-  // scheduled/draft reuse defers result creation to run time (§6.3).
+  // scheduled/draft reuse defers result creation to run time (§6.3). Team
+  // Workspaces (Task 5): the workspace's connections, not the caller's.
   const socialConnections =
     intent === "immediate"
-      ? await prisma.socialConnection.findMany({ where: { userId } })
+      ? await prisma.socialConnection.findMany({ where: { workspaceId } })
       : [];
 
   // Task 7 — narrow to the caller's chosen subset when given; `undefined`
@@ -366,9 +410,9 @@ export async function createPostJobForExistingMedia(
     // item between the initial check above and our acquiring the lock.
     const locked = await tx.mediaItem.findUnique({
       where: { id: mediaItemId },
-      select: { userId: true, deletedAt: true },
+      select: { workspaceId: true, deletedAt: true },
     });
-    assertMediaItemReusable(locked, userId);
+    assertMediaItemReusable(locked, workspaceId);
 
     await tx.mediaItem.update({
       where: { id: mediaItemId },
@@ -383,17 +427,20 @@ export async function createPostJobForExistingMedia(
     });
 
     const job = await tx.postJob.create({
-      data: buildPostJobCreateData({
-        userId,
-        mediaItemId,
-        intent,
-        scheduledFor: params.scheduledFor ?? null,
-        baseCaption,
-        perPlatformOverrides,
-        tiktokMetadata: params.tiktokMetadata,
-        youtubeMetadata: params.youtubeMetadata,
-        targetPlatforms,
-      }),
+      data: {
+        ...buildPostJobCreateData({
+          userId,
+          mediaItemId,
+          intent,
+          scheduledFor: params.scheduledFor ?? null,
+          baseCaption,
+          perPlatformOverrides,
+          tiktokMetadata: params.tiktokMetadata,
+          youtubeMetadata: params.youtubeMetadata,
+          targetPlatforms,
+        }),
+        workspaceId,
+      },
     });
 
     // Scheduled/draft reuse creates no results here (run-time creation, §6.3).
@@ -481,7 +528,7 @@ export async function prepareDeferredPostJobDispatch(
   }
 
   const connections = await prisma.socialConnection.findMany({
-    where: { userId: job.userId },
+    where: { workspaceId: job.workspaceId },
   });
 
   // Replay the per-post privacy AND platform targeting the user chose at

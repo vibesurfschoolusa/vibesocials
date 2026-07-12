@@ -19,8 +19,17 @@ const PREVIEW_COUNT = 5;
  * `Dashboard` (src/app/page.tsx) is now the single fetch/poll owner for the
  * dashboard, shared with `YouTubeMetricsSummary` below it.
  */
-export function RecentActivity({ jobs, loading, error, reload }: UsePostJobsResult) {
+export function RecentActivity({
+  jobs,
+  loading,
+  error,
+  reload,
+  workspaceMemberCount,
+}: UsePostJobsResult) {
   const preview = jobs ? jobs.slice(0, PREVIEW_COUNT) : [];
+  // Team Workspaces (Task 7, design §7) — attribution only in a shared
+  // (>1-member) workspace, so a solo workspace's dashboard preview is unchanged.
+  const showAttribution = (workspaceMemberCount ?? 0) > 1;
 
   return (
     <section aria-labelledby="recent-activity-heading">
@@ -78,7 +87,7 @@ export function RecentActivity({ jobs, loading, error, reload }: UsePostJobsResu
       ) : (
         <div className="space-y-3">
           {preview.map((job) => (
-            <PostJobCard key={job.id} job={job} />
+            <PostJobCard key={job.id} job={job} showAttribution={showAttribution} />
           ))}
         </div>
       )}

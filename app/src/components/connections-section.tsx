@@ -87,14 +87,23 @@ const PLATFORMS: PlatformConfig[] = [
 
 interface ConnectionsSectionProps {
   connections: ConnectionSummary[];
+  /**
+   * Team Workspaces (Task 7, design §7): connections are workspace-owned and
+   * owner-only to mutate. A member sees the same rows (health/connected
+   * status stays visible) but no Connect/Disconnect/Switch/Reconnect
+   * controls, and no GBP location picker (also a mutation).
+   */
+  readOnly?: boolean;
 }
 
-export function ConnectionsSection({ connections }: ConnectionsSectionProps) {
+export function ConnectionsSection({ connections, readOnly = false }: ConnectionsSectionProps) {
   return (
     <>
-      <Suspense fallback={null}>
-        <LinkedInSetupDialog />
-      </Suspense>
+      {!readOnly ? (
+        <Suspense fallback={null}>
+          <LinkedInSetupDialog />
+        </Suspense>
+      ) : null}
 
       <div className="flex flex-col gap-3">
         {PLATFORMS.map(({ key, label, href, icon: Icon, description }) => {
@@ -127,8 +136,9 @@ export function ConnectionsSection({ connections }: ConnectionsSectionProps) {
                       platform={key}
                       isConnected
                       needsReconnect={connection.needsReconnect}
+                      readOnly={readOnly}
                     />
-                  ) : href ? (
+                  ) : readOnly ? null : href ? (
                     <ButtonLink href={href} variant="outline" size="sm">
                       Connect
                     </ButtonLink>
@@ -140,7 +150,7 @@ export function ConnectionsSection({ connections }: ConnectionsSectionProps) {
                 </div>
               </div>
 
-              {isGoogleBusinessProfile && connection ? (
+              {isGoogleBusinessProfile && connection && !readOnly ? (
                 <div className="mt-4 border-t border-border pt-4">
                   <GoogleBusinessLocationForm initialLocationName={locationName} />
                 </div>

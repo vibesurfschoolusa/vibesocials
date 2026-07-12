@@ -1,25 +1,27 @@
 import { NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/auth";
+import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { refreshAccessToken } from "@/server/googleReviews";
 
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/reviews/locations - Fetch all Google Business Profile locations for the user
+ * GET /api/reviews/locations - Fetch all Google Business Profile locations
+ * for the active workspace. Any member may read (Team Workspaces — same
+ * member-level access as the rest of the reviews surface).
  */
 export async function GET() {
   try {
-    const user = await getCurrentUser();
+    const context = await getWorkspaceContext();
 
-    if (!user) {
+    if (!context) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Get the user's Google Business Profile connection
+    // Get the workspace's Google Business Profile connection
     const connection = await prisma.socialConnection.findFirst({
       where: {
-        userId: user.id,
+        workspaceId: context.workspace.id,
         platform: "google_business_profile",
       },
     });

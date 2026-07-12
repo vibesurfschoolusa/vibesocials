@@ -1,0 +1,116 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
+// workspaces/switch/route.test.ts). route.ts imports `@/lib/db`,
+// `@/lib/workspace`, and `next/headers` at module scope, so all three must
+// be mocked before route.ts is imported below.
+const { deleteManyMock, getWorkspaceContextMock, cookieSetMock, cookiesMock } = vi.hoisted(() => ({
+  deleteManyMock: vi.fn(),
+  getWorkspaceContextMock: vi.fn(),
+  cookieSetMock: vi.fn(),
+  cookiesMock: vi.fn(),
+}));
+
+vi.mock("@/lib/db", () => ({
+  prisma: {
+    workspaceMember: { deleteMany: deleteManyMock },
+  },
+}));
+
+vi.mock("@/lib/workspace", () => ({
+  ACTIVE_WORKSPACE_COOKIE: "vs_active_workspace",
+  getWorkspaceContext: getWorkspaceContextMock,
+}));
+
+vi.mock("next/headers", () => ({
+  cookies: cookiesMock,
+}));
+
+import { POST } from "./route";
+
+const MEMBER_CONTEXT = {
+  user: { id: "user-2", email: "member@example.com", name: "Member" },
+  workspace: { id: "ws-1", name: "Acme", companyWebsite: null, defaultHashtags: null },
+  role: "member" as const,
+  memberCount: 2,
+};
+
+const OWNER_CONTEXT = {
+  user: { id: "user-1", email: "owner@example.com", name: "Owner" },
+  workspace: { id: "ws-1", name: "Acme", companyWebsite: null, defaultHashtags: null },
+  role: "owner" as const,
+  memberCount: 2,
+};
+
+beforeEach(() => {
+  deleteManyMock.mockReset();
+  getWorkspaceContextMock.mockReset();
+  cookieSetMock.mockReset();
+  cookiesMock.mockReset();
+
+  getWorkspaceContextMock.mockResolvedValue(MEMBER_CONTEXT);
+  deleteManyMock.mockResolvedValue({ count: 1 });
+  cookiesMock.mockResolvedValue({ set: cookieSetMock });
+});
+
+describe("POST /api/workspaces/leave", () => {
+  it("returns 401 and never deletes when unauthenticated", async () => {
+    getWorkspaceContextMock.mockResolvedValue(null);
+
+    const response = await POST();
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
+    expect(deleteManyMock).not.toHaveBeenCalled();
+    expect(cookieSetMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 and never deletes when the caller is the workspace owner", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+
+    const response = await POST();
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Transfer ownership before removing yourself.",
+    });
+    expect(deleteManyMock).not.toHaveBeenCalled();
+    expect(cookieSetMock).not.toHaveBeenCalled();
+  });
+
+  it("deletes the caller's own membership (role-guarded, scoped to the active workspace) and clears the active-workspace cookie on success", async () => {
+    const response = await POST();
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({ left: true });
+    // The role guard is repeated IN the delete's where clause (same
+    // conditional-mutation / defense-in-depth pattern as DELETE
+    // /api/workspaces/members/[userId]) so a concurrent promotion between
+    // the context read and the delete can't remove an owner's membership
+    // through this route.
+    expect(deleteManyMock).toHaveBeenCalledWith({
+      where: { workspaceId: "ws-1", userId: "user-2", role: "member" },
+    });
+    expect(cookieSetMock).toHaveBeenCalledWith(
+      "vs_active_workspace",
+      "",
+      expect.objectContaining({
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        maxAge: 0,
+      }),
+    );
+  });
+
+  it("returns 404 and never touches the cookie when the delete matches nothing (membership raced away)", async () => {
+    deleteManyMock.mockResolvedValue({ count: 0 });
+
+    const response = await POST();
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: "Not found" });
+    expect(cookieSetMock).not.toHaveBeenCalled();
+  });
+});

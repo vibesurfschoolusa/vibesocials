@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { verifyOAuthState } from "@/lib/oauthState";
+import { isWorkspaceOwner } from "@/lib/workspace";
 import { Platform, Prisma } from "@prisma/client";
 
 // Minimal shapes for the LinkedIn responses this handler reads. Only the fields
@@ -59,7 +60,7 @@ export async function GET(request: Request) {
   // used only as an organization lookup fallback, never as a source of identity).
   const [signedState, encodedVanityName] = state.split(".");
   const stateCheck = verifyOAuthState(signedState);
-  if (!stateCheck.valid || !stateCheck.userId) {
+  if (!stateCheck.valid || !stateCheck.userId || !stateCheck.workspaceId) {
     console.error("[LinkedIn OAuth] Invalid state");
     return NextResponse.redirect(
       new URL("/settings?error=linkedin_invalid_state", process.env.NEXTAUTH_URL!)
@@ -67,6 +68,28 @@ export async function GET(request: Request) {
   }
 
   const userId = stateCheck.userId;
+  // Team Workspaces (Task 6, design §5): workspaceId now rides the signed
+  // state itself (embedded at /start, verified above) — no separate
+  // resolve/provision DB call needed at all, which is what fixes the Task 2
+  // review note's "early-resolution quirk": the OLD `resolveWorkspaceForUser`
+  // call sat here, before the config check and every LinkedIn API call
+  // below, doing a DB round trip that was wasted whenever any of THOSE later
+  // steps failed. Reused below at Strategy 4's existing-connection lookup and
+  // the final upsert, same two call sites as before.
+  const workspaceId = stateCheck.workspaceId;
+
+  // Re-verify the caller is STILL an owner of this workspace before writing
+  // a connection — ownership could have changed between the redirect to
+  // LinkedIn and this return trip. Checked here (right after state
+  // verification, before the config check and any LinkedIn API calls) so an
+  // unauthorized request fails fast instead of spending a token exchange and
+  // several organization-lookup calls first.
+  if (!(await isWorkspaceOwner(userId, workspaceId))) {
+    return NextResponse.redirect(
+      new URL("/settings?error=linkedin_not_workspace_owner", process.env.NEXTAUTH_URL!)
+    );
+  }
+
   const clientId = process.env.LINKEDIN_CLIENT_ID;
   const clientSecret = process.env.LINKEDIN_CLIENT_SECRET;
   const redirectUri = process.env.LINKEDIN_REDIRECT_URI;
@@ -271,8 +294,8 @@ export async function GET(request: Request) {
       try {
         const existingConnection = await prisma.socialConnection.findUnique({
           where: {
-            userId_platform: {
-              userId,
+            workspaceId_platform: {
+              workspaceId,
               platform: "linkedin" as Platform,
             },
           },
@@ -436,13 +459,14 @@ export async function GET(request: Request) {
     // Upsert social connection
     await prisma.socialConnection.upsert({
       where: {
-        userId_platform: {
-          userId,
+        workspaceId_platform: {
+          workspaceId,
           platform: "linkedin",
         },
       },
       create: {
         userId,
+        workspaceId,
         platform: "linkedin",
         accessToken: tokenData.access_token,
         refreshToken: tokenData.refresh_token || null,

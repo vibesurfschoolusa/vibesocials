@@ -7,19 +7,31 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // module would try to construct a real Prisma client and throw. route.ts also
 // imports `bcryptjs` directly; left un-mocked here and asserted on the hash
 // shape instead (cheap enough at cost 10 for a unit test).
-const { findUniqueMock, createMock } = vi.hoisted(() => ({
-  findUniqueMock: vi.fn(),
-  createMock: vi.fn(),
-}));
+//
+// Task 2 — registration now wraps the User create in `prisma.$transaction`
+// together with `provisionPersonalWorkspace` (the REAL implementation runs
+// here, against these mocked `workspace`/`workspaceMember` models, so the
+// happy-path test below exercises the actual name-rule + owner-role logic).
+const { findUniqueMock, createMock, workspaceCreateMock, workspaceMemberCreateMock } =
+  vi.hoisted(() => ({
+    findUniqueMock: vi.fn(),
+    createMock: vi.fn(),
+    workspaceCreateMock: vi.fn(),
+    workspaceMemberCreateMock: vi.fn(),
+  }));
 
-vi.mock("@/lib/db", () => ({
-  prisma: {
+vi.mock("@/lib/db", () => {
+  const prisma: Record<string, unknown> = {
     user: {
       findUnique: findUniqueMock,
       create: createMock,
     },
-  },
-}));
+    workspace: { create: workspaceCreateMock },
+    workspaceMember: { create: workspaceMemberCreateMock },
+    $transaction: (cb: (tx: unknown) => unknown) => cb(prisma),
+  };
+  return { prisma };
+});
 
 import { POST } from "./route";
 
@@ -34,6 +46,8 @@ function jsonRequest(body: unknown): Request {
 beforeEach(() => {
   findUniqueMock.mockReset();
   createMock.mockReset();
+  workspaceCreateMock.mockReset();
+  workspaceMemberCreateMock.mockReset();
 });
 
 describe("POST /api/auth/register", () => {
@@ -94,7 +108,11 @@ describe("POST /api/auth/register", () => {
       id: "user-1",
       email: "user@example.com",
       name: "New User",
+      companyWebsite: null,
+      defaultHashtags: null,
     });
+    workspaceCreateMock.mockResolvedValue({ id: "workspace-1" });
+    workspaceMemberCreateMock.mockResolvedValue({});
 
     const response = await POST(
       jsonRequest({
@@ -119,5 +137,18 @@ describe("POST /api/auth/register", () => {
     expect(typeof createArgs.data.passwordHash).toBe("string");
     expect(createArgs.data.passwordHash).not.toBe("goodpassword");
     expect(createArgs.data.passwordHash.length).toBeGreaterThan(0);
+
+    // Task 2 — registration provisions a personal workspace + owner
+    // membership in the same transaction as the User row.
+    expect(workspaceCreateMock).toHaveBeenCalledWith({
+      data: {
+        name: "New User's workspace",
+        companyWebsite: null,
+        defaultHashtags: null,
+      },
+    });
+    expect(workspaceMemberCreateMock).toHaveBeenCalledWith({
+      data: { workspaceId: "workspace-1", userId: "user-1", role: "owner" },
+    });
   });
 });

@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { makeWorkspaceContext } from "../__test-helpers__/workspaceContextMock";
+
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
 // settings/route.test.ts / media/[id]/route.test.ts). route.ts imports
-// `@/lib/db`, `@/lib/auth`, `@/lib/inngest`, `@/lib/rateLimit`, and
+// `@/lib/db`, `@/lib/workspace`, `@/lib/inngest`, `@/lib/rateLimit`, and
 // `@/server/jobs/posting` at module scope, so all must be mocked (or
 // selectively real, for `MediaItemUnavailableError` below) before route.ts is
 // imported.
 const {
-  getCurrentUserMock,
+  getWorkspaceContextMock,
   checkRateLimitMock,
   createPostJobOnlyMock,
   createPostJobForExistingMediaMock,
@@ -15,7 +17,7 @@ const {
   postJobResultFindManyMock,
   inngestSendMock,
 } = vi.hoisted(() => ({
-  getCurrentUserMock: vi.fn(),
+  getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   createPostJobOnlyMock: vi.fn(),
   createPostJobForExistingMediaMock: vi.fn(),
@@ -24,8 +26,10 @@ const {
   inngestSendMock: vi.fn(),
 }));
 
-vi.mock("@/lib/auth", () => ({
-  getCurrentUser: getCurrentUserMock,
+// Team Workspaces (Task 4) — route.ts now resolves the caller via
+// `getWorkspaceContext` instead of `getCurrentUser` (design doc §3/§4).
+vi.mock("@/lib/workspace", () => ({
+  getWorkspaceContext: getWorkspaceContextMock,
 }));
 
 vi.mock("@/lib/rateLimit", () => ({
@@ -61,8 +65,6 @@ vi.mock("@/server/jobs/posting", async () => {
 import { MediaItemUnavailableError } from "@/server/jobs/posting";
 import { POST } from "./route";
 
-const USER = { id: "user-1", email: "user@example.com" };
-
 function jsonRequest(body: unknown): Request {
   return new Request("http://localhost/api/posts", {
     method: "POST",
@@ -72,7 +74,7 @@ function jsonRequest(body: unknown): Request {
 }
 
 beforeEach(() => {
-  getCurrentUserMock.mockReset();
+  getWorkspaceContextMock.mockReset();
   checkRateLimitMock.mockReset();
   createPostJobOnlyMock.mockReset();
   createPostJobForExistingMediaMock.mockReset();
@@ -80,7 +82,7 @@ beforeEach(() => {
   postJobResultFindManyMock.mockReset();
   inngestSendMock.mockReset();
 
-  getCurrentUserMock.mockResolvedValue(USER);
+  getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   postJobFindUniqueMock.mockResolvedValue({ id: "job-1", status: "in_progress" });
   postJobResultFindManyMock.mockResolvedValue([]);
@@ -118,7 +120,7 @@ describe("POST /api/posts — rate limiting", () => {
   });
 
   it("returns 401 (and never checks the rate limit) when unauthenticated", async () => {
-    getCurrentUserMock.mockResolvedValue(null);
+    getWorkspaceContextMock.mockResolvedValue(null);
 
     const response = await POST(jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi" }));
 
@@ -149,6 +151,9 @@ describe("POST /api/posts — blobUrl path (preserved behavior)", () => {
     expect(response.status).toBe(200);
     expect(createPostJobOnlyMock).toHaveBeenCalledWith({
       userId: "user-1",
+      // Team Workspaces (Task 5) — the request's ACTIVE workspace
+      // (`makeWorkspaceContext()` default is "ws-1"), passed explicitly.
+      workspaceId: "ws-1",
       media: {
         storageLocation: "https://blob.example/vid.mp4",
         originalFilename: "vid.mp4",
@@ -218,6 +223,8 @@ describe("POST /api/posts — mediaItemId reuse path (Roadmap Phase 2)", () => {
     expect(response.status).toBe(200);
     expect(createPostJobForExistingMediaMock).toHaveBeenCalledWith({
       userId: "user-1",
+      // Team Workspaces (Task 5) — the request's ACTIVE workspace.
+      workspaceId: "ws-1",
       mediaItemId: "media-9",
       baseCaption: "reused caption",
       perPlatformOverrides: undefined,

@@ -4,7 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
 // settings/route.test.ts / googleTokens.test.ts). posting.ts imports
 // `@/lib/db` (a real `new PrismaClient()`) at module scope, so it must be
-// mocked before posting.ts is imported below.
+// mocked before posting.ts is imported below. Team Workspaces (Task 5):
+// posting.ts no longer imports `@/lib/workspace` — every create-helper takes
+// `workspaceId` as an explicit param instead of resolving it internally.
 const {
   findUniqueMock,
   mediaItemCreateMock,
@@ -61,6 +63,7 @@ function makeMediaItem(overrides: Partial<MediaItem> = {}): MediaItem {
   return {
     id: "media-1",
     userId: "user-1",
+    workspaceId: "workspace-1",
     storageLocation: "https://example.public.blob.vercel-storage.com/foo.jpg",
     originalFilename: "foo.jpg",
     mimeType: "image/jpeg",
@@ -79,6 +82,7 @@ function makeConnection(overrides: Partial<SocialConnection> = {}): SocialConnec
   return {
     id: "conn-1",
     userId: "user-1",
+    workspaceId: "workspace-1",
     platform: "x",
     accessToken: "token",
     refreshToken: null,
@@ -95,11 +99,16 @@ function makeConnection(overrides: Partial<SocialConnection> = {}): SocialConnec
   };
 }
 
-describe("assertMediaItemReusable (pure ownership/deletedAt guard)", () => {
+// Team Workspaces (Task 5) — assertMediaItemReusable is now WORKSPACE-scoped,
+// not uploader-scoped: reuse is allowed across members of the same
+// workspace, and rejected across workspaces regardless of who uploaded.
+describe("assertMediaItemReusable (pure workspace/deletedAt guard)", () => {
   it("throws NOT_FOUND when the item is null (no such row)", () => {
-    expect(() => assertMediaItemReusable(null, "user-1")).toThrow(MediaItemUnavailableError);
+    expect(() => assertMediaItemReusable(null, "workspace-1")).toThrow(
+      MediaItemUnavailableError,
+    );
     try {
-      assertMediaItemReusable(null, "user-1");
+      assertMediaItemReusable(null, "workspace-1");
       expect.unreachable();
     } catch (error) {
       expect(error).toBeInstanceOf(MediaItemUnavailableError);
@@ -107,20 +116,23 @@ describe("assertMediaItemReusable (pure ownership/deletedAt guard)", () => {
     }
   });
 
-  it("throws NOT_FOUND (not a leaked 'exists but not yours') when owned by a different user", () => {
+  it("throws NOT_FOUND (not a leaked 'exists but not yours') when the item belongs to a different workspace", () => {
     try {
-      assertMediaItemReusable({ userId: "someone-else", deletedAt: null }, "user-1");
+      assertMediaItemReusable(
+        { workspaceId: "someone-elses-workspace", deletedAt: null },
+        "workspace-1",
+      );
       expect.unreachable();
     } catch (error) {
       expect((error as MediaItemUnavailableError).code).toBe("NOT_FOUND");
     }
   });
 
-  it("throws MEDIA_DELETED when the item is owned but soft-deleted", () => {
+  it("throws MEDIA_DELETED when the item is in-workspace but soft-deleted", () => {
     try {
       assertMediaItemReusable(
-        { userId: "user-1", deletedAt: new Date("2026-01-01T00:00:00Z") },
-        "user-1",
+        { workspaceId: "workspace-1", deletedAt: new Date("2026-01-01T00:00:00Z") },
+        "workspace-1",
       );
       expect.unreachable();
     } catch (error) {
@@ -129,9 +141,9 @@ describe("assertMediaItemReusable (pure ownership/deletedAt guard)", () => {
     }
   });
 
-  it("does not throw for an owned, non-deleted item", () => {
+  it("does not throw for an in-workspace, non-deleted item", () => {
     expect(() =>
-      assertMediaItemReusable({ userId: "user-1", deletedAt: null }, "user-1"),
+      assertMediaItemReusable({ workspaceId: "workspace-1", deletedAt: null }, "workspace-1"),
     ).not.toThrow();
   });
 });
@@ -165,6 +177,7 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
 
     const result = await createPostJobOnly({
       userId: "user-1",
+      workspaceId: "workspace-1",
       media,
       baseCaption: "hello",
       targetPlatforms: ["youtube"],
@@ -190,6 +203,7 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
     await expect(
       createPostJobOnly({
         userId: "user-1",
+        workspaceId: "workspace-1",
         media,
         baseCaption: "hello",
         targetPlatforms: ["x"],
@@ -209,6 +223,7 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
 
     const result = await createPostJobOnly({
       userId: "user-1",
+      workspaceId: "workspace-1",
       media,
       baseCaption: "hello",
     });
@@ -216,6 +231,39 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
     expect(postJobResultCreateMock).toHaveBeenCalledTimes(2);
     expect(result.resultIds).toEqual(["result-x", "result-youtube"]);
   });
+
+  // Team Workspaces (Task 5): pin the workspaceId stamping on BOTH rows this
+  // helper creates — now the caller's EXPLICIT param, not something resolved
+  // internally — and pin the connection fan-out to the SAME workspaceId, so a
+  // regression that drops the stamp or reverts the fan-out to `userId` fails
+  // here, mirroring the createPostJobForExistingMedia assertion further down.
+  it("stamps the passed workspaceId on both the MediaItem and the PostJob, and fans out connections by workspaceId", async () => {
+    findManyConnectionsMock.mockResolvedValue([makeConnection()]);
+
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media,
+      baseCaption: "hello",
+    });
+
+    expect(findManyConnectionsMock).toHaveBeenCalledWith({
+      where: { workspaceId: "workspace-1" },
+    });
+    expect(mediaItemCreateMock).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: "user-1",
+        workspaceId: "workspace-1",
+      }),
+    });
+    expect(postJobCreateMock).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: "user-1",
+        workspaceId: "workspace-1",
+      }),
+    });
+  });
+
 });
 
 describe("createPostJobForExistingMedia", () => {
@@ -233,12 +281,15 @@ describe("createPostJobForExistingMedia", () => {
     );
   });
 
-  it("throws MediaItemUnavailableError and never creates a PostJob when the item is not owned", async () => {
-    findUniqueMock.mockResolvedValue(makeMediaItem({ userId: "someone-else" }));
+  // Team Workspaces (Task 5): reuse eligibility is now WORKSPACE-scoped, not
+  // uploader-scoped — a different workspace 404s regardless of userId.
+  it("throws MediaItemUnavailableError (NOT_FOUND) and never creates a PostJob when the item belongs to a different workspace", async () => {
+    findUniqueMock.mockResolvedValue(makeMediaItem({ workspaceId: "someone-elses-workspace" }));
 
     await expect(
       createPostJobForExistingMedia({
         userId: "user-1",
+        workspaceId: "workspace-1",
         mediaItemId: "media-1",
         baseCaption: "hello",
       }),
@@ -246,6 +297,27 @@ describe("createPostJobForExistingMedia", () => {
 
     expect(postJobCreateMock).not.toHaveBeenCalled();
     expect(findManyConnectionsMock).not.toHaveBeenCalled();
+  });
+
+  // Complement of the above: a DIFFERENT uploader in the SAME workspace must
+  // be allowed to reuse the item — proves the guard checks workspace
+  // membership, not who originally uploaded it (design §1 permission matrix:
+  // any member may use the shared library).
+  it("allows reuse when the item was uploaded by a different workspace member, as long as the workspace matches", async () => {
+    findUniqueMock.mockResolvedValue(
+      makeMediaItem({ userId: "teammate-2", workspaceId: "workspace-1" }),
+    );
+    findManyConnectionsMock.mockResolvedValue([makeConnection()]);
+
+    const result = await createPostJobForExistingMedia({
+      userId: "user-1", // acting member, NOT the item's uploader
+      workspaceId: "workspace-1",
+      mediaItemId: "media-1",
+      baseCaption: "hello",
+    });
+
+    expect(result.postJobId).toBe("job-1");
+    expect(postJobCreateMock).toHaveBeenCalled();
   });
 
   it("throws MediaItemUnavailableError and never creates a PostJob when the item was deleted", async () => {
@@ -256,6 +328,7 @@ describe("createPostJobForExistingMedia", () => {
     await expect(
       createPostJobForExistingMedia({
         userId: "user-1",
+        workspaceId: "workspace-1",
         mediaItemId: "media-1",
         baseCaption: "hello",
       }),
@@ -264,19 +337,44 @@ describe("createPostJobForExistingMedia", () => {
     expect(postJobCreateMock).not.toHaveBeenCalled();
   });
 
-  it("throws NO_CONNECTIONS and never creates a PostJob when the user has no social connections", async () => {
+  it("throws NO_CONNECTIONS and never creates a PostJob when the workspace has no social connections", async () => {
     findUniqueMock.mockResolvedValue(makeMediaItem());
     findManyConnectionsMock.mockResolvedValue([]);
 
     await expect(
       createPostJobForExistingMedia({
         userId: "user-1",
+        workspaceId: "workspace-1",
         mediaItemId: "media-1",
         baseCaption: "hello",
       }),
     ).rejects.toThrow("NO_CONNECTIONS");
 
     expect(postJobCreateMock).not.toHaveBeenCalled();
+  });
+
+  // Team Workspaces (Task 5) — the in-transaction row-locked re-check must
+  // read the SAME field the pre-check uses (workspaceId), not the retired
+  // userId, or a regression here would silently re-open the uploader-only
+  // guard under concurrent load.
+  it("re-checks the row-locked media item by workspaceId (not userId)", async () => {
+    findUniqueMock.mockResolvedValue(makeMediaItem());
+    findManyConnectionsMock.mockResolvedValue([makeConnection()]);
+
+    await createPostJobForExistingMedia({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      mediaItemId: "media-1",
+      baseCaption: "hello",
+    });
+
+    // First call is the pre-transaction existence check; second is the
+    // in-transaction lock re-check inside `$transaction`.
+    expect(findUniqueMock).toHaveBeenCalledTimes(2);
+    const lockedCall = findUniqueMock.mock.calls[1][0] as {
+      select: Record<string, boolean>;
+    };
+    expect(lockedCall.select).toEqual({ workspaceId: true, deletedAt: true });
   });
 
   it("creates a PostJob + one PostJobResult per connection, referencing the existing mediaItemId", async () => {
@@ -288,6 +386,7 @@ describe("createPostJobForExistingMedia", () => {
 
     const result = await createPostJobForExistingMedia({
       userId: "user-1",
+      workspaceId: "workspace-1",
       mediaItemId: "media-1",
       baseCaption: "hello",
     });
@@ -296,6 +395,10 @@ describe("createPostJobForExistingMedia", () => {
       postJobId: "job-1",
       mediaItemId: "media-1",
       resultIds: ["result-x", "result-youtube"],
+    });
+
+    expect(findManyConnectionsMock).toHaveBeenCalledWith({
+      where: { workspaceId: "workspace-1" },
     });
 
     // Skips MediaItem creation entirely — no `prisma.mediaItem.create` mock
@@ -310,6 +413,8 @@ describe("createPostJobForExistingMedia", () => {
         status: "in_progress",
         scheduledFor: null,
         baseCaption: null,
+        // Team Workspaces (Task 5) — the caller's explicit workspaceId param.
+        workspaceId: "workspace-1",
       },
     });
     expect(postJobResultCreateMock).toHaveBeenCalledTimes(2);
@@ -322,6 +427,7 @@ describe("createPostJobForExistingMedia", () => {
     const before = Date.now();
     await createPostJobForExistingMedia({
       userId: "user-1",
+      workspaceId: "workspace-1",
       mediaItemId: "media-1",
       baseCaption: "hello",
     });
@@ -344,6 +450,7 @@ describe("createPostJobForExistingMedia", () => {
 
     await createPostJobForExistingMedia({
       userId: "user-1",
+      workspaceId: "workspace-1",
       mediaItemId: "media-1",
       baseCaption: "hello",
       location: "Miami Beach, FL",
@@ -361,6 +468,7 @@ describe("createPostJobForExistingMedia", () => {
 
     const result = await createPostJobForExistingMedia({
       userId: "user-1",
+      workspaceId: "workspace-1",
       mediaItemId: "media-999",
       baseCaption: "hello",
     });
@@ -402,6 +510,7 @@ describe("createPostJobForExistingMedia (Task 7 — per-post platform targeting)
 
     const result = await createPostJobForExistingMedia({
       userId: "user-1",
+      workspaceId: "workspace-1",
       mediaItemId: "media-1",
       baseCaption: "hello",
       targetPlatforms: ["youtube"],
@@ -427,6 +536,7 @@ describe("createPostJobForExistingMedia (Task 7 — per-post platform targeting)
     await expect(
       createPostJobForExistingMedia({
         userId: "user-1",
+        workspaceId: "workspace-1",
         mediaItemId: "media-1",
         baseCaption: "hello",
         targetPlatforms: ["x"],
@@ -448,6 +558,7 @@ describe("createPostJobForExistingMedia (Task 7 — per-post platform targeting)
 
     const result = await createPostJobForExistingMedia({
       userId: "user-1",
+      workspaceId: "workspace-1",
       mediaItemId: "media-1",
       baseCaption: "hello",
     });

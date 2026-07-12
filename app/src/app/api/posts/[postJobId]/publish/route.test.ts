@@ -1,11 +1,13 @@
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// vitest hoists vi.mock above imports. route.ts imports auth, db, inngest,
-// rateLimit, and posting at module scope; `@/lib/scheduling` stays REAL (pure
-// guards/validation the handler relies on).
+import { makeWorkspaceContext } from "../../../__test-helpers__/workspaceContextMock";
+
+// vitest hoists vi.mock above imports. route.ts imports `@/lib/workspace`,
+// db, inngest, rateLimit, and posting at module scope; `@/lib/scheduling`
+// stays REAL (pure guards/validation the handler relies on).
 const {
-  getCurrentUserMock,
+  getWorkspaceContextMock,
   checkRateLimitMock,
   findFirstMock,
   updateManyMock,
@@ -13,7 +15,7 @@ const {
   inngestSendMock,
   prepareDispatchMock,
 } = vi.hoisted(() => ({
-  getCurrentUserMock: vi.fn(),
+  getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   findFirstMock: vi.fn(),
   updateManyMock: vi.fn(),
@@ -22,7 +24,8 @@ const {
   prepareDispatchMock: vi.fn(),
 }));
 
-vi.mock("@/lib/auth", () => ({ getCurrentUser: getCurrentUserMock }));
+// Team Workspaces (Task 4): getCurrentUser -> getWorkspaceContext.
+vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 vi.mock("@/lib/inngest", () => ({ inngest: { send: inngestSendMock } }));
 vi.mock("@/lib/db", () => ({
@@ -37,7 +40,6 @@ vi.mock("@/server/jobs/posting", () => ({
 
 import { POST } from "./route";
 
-const OWNER = { id: "user-1", email: "owner@example.com" };
 const FUTURE = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
 function ctx(postJobId: string) {
@@ -48,7 +50,7 @@ function req(body: unknown): NextRequest {
 }
 
 beforeEach(() => {
-  getCurrentUserMock.mockReset();
+  getWorkspaceContextMock.mockReset();
   checkRateLimitMock.mockReset();
   findFirstMock.mockReset();
   updateManyMock.mockReset();
@@ -56,7 +58,7 @@ beforeEach(() => {
   inngestSendMock.mockReset();
   prepareDispatchMock.mockReset();
 
-  getCurrentUserMock.mockResolvedValue(OWNER);
+  getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   updateManyMock.mockResolvedValue({ count: 1 });
   connectionCountMock.mockResolvedValue(2);
@@ -69,7 +71,7 @@ beforeEach(() => {
 
 describe("POST /api/posts/[postJobId]/publish", () => {
   it("401s before any work when unauthenticated", async () => {
-    getCurrentUserMock.mockResolvedValue(null);
+    getWorkspaceContextMock.mockResolvedValue(null);
     const res = await POST(req({}), ctx("job-1"));
     expect(res.status).toBe(401);
     expect(checkRateLimitMock).not.toHaveBeenCalled();
@@ -85,10 +87,23 @@ describe("POST /api/posts/[postJobId]/publish", () => {
     expect(findFirstMock).not.toHaveBeenCalled();
   });
 
-  it("404s when the job isn't the caller's", async () => {
+  it("404s when the job isn't in the caller's active workspace", async () => {
     findFirstMock.mockResolvedValue(null);
     const res = await POST(req({}), ctx("job-1"));
     expect(res.status).toBe(404);
+  });
+
+  it("cross-workspace isolation: scopes the ownership read to workspaceId (not userId), and a foreign job 404s — not 403 (no existence oracle)", async () => {
+    findFirstMock.mockResolvedValue(null); // ws-1's WHERE wouldn't match a ws-2 job
+
+    const res = await POST(req({}), ctx("foreign-job"));
+
+    expect(res.status).toBe(404);
+    await expect(res.json()).resolves.toEqual({ error: "Not found" });
+    expect(findFirstMock).toHaveBeenCalledWith({
+      where: { id: "foreign-job", workspaceId: "ws-1" },
+      select: { status: true },
+    });
   });
 
   // --- schedule-a-draft path ---
@@ -101,7 +116,7 @@ describe("POST /api/posts/[postJobId]/publish", () => {
     expect(res.status).toBe(200);
     expect(body.status).toBe("scheduled");
     expect(updateManyMock).toHaveBeenCalledWith({
-      where: { id: "job-1", userId: "user-1", status: "draft" },
+      where: { id: "job-1", workspaceId: "ws-1", status: "draft" },
       data: { status: "scheduled", scheduledFor: new Date(FUTURE) },
     });
     // Scheduling sends no event now — the cron dispatches when due.
@@ -131,7 +146,7 @@ describe("POST /api/posts/[postJobId]/publish", () => {
 
     expect(res.status).toBe(202);
     expect(updateManyMock).toHaveBeenCalledWith({
-      where: { id: "job-1", userId: "user-1", status: { in: ["scheduled", "draft"] } },
+      where: { id: "job-1", workspaceId: "ws-1", status: { in: ["scheduled", "draft"] } },
       data: { status: "in_progress" },
     });
     expect(prepareDispatchMock).toHaveBeenCalledWith("job-1");
@@ -146,6 +161,14 @@ describe("POST /api/posts/[postJobId]/publish", () => {
     const res = await POST(req({}), ctx("job-1"));
     expect(res.status).toBe(202);
     expect(inngestSendMock).toHaveBeenCalled();
+  });
+
+  it("scopes the up-front connection check to the WORKSPACE, not the caller (Team Workspaces, Task 4 — a member who didn't personally connect anything must still see the workspace's shared connections)", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+
+    await POST(req({}), ctx("job-1"));
+
+    expect(connectionCountMock).toHaveBeenCalledWith({ where: { workspaceId: "ws-1" } });
   });
 
   it("400s NO_CONNECTIONS and leaves the draft intact when there are no connections", async () => {

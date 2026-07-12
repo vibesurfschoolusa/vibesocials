@@ -1,21 +1,23 @@
 import { NextResponse } from "next/server";
 
-import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { toMediaItemDto } from "@/lib/mediaDto";
+import { getWorkspaceContext } from "@/lib/workspace";
 
 export async function GET(_request: Request) {
-  const user = await getCurrentUser();
+  const context = await getWorkspaceContext();
 
-  if (!user) {
+  if (!context) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Library view: exclude soft-deleted media (blob removed / user-deleted), and
-  // project a display-only DTO (drops userId + internal columns; keeps
-  // storageLocation for thumbnails). See src/lib/mediaDto.ts.
+  // Library view: shared by every member of the workspace (design §1 — "use
+  // library" isn't restricted to own uploads), excluding soft-deleted media
+  // (blob removed / user-deleted). Projects a display-only DTO (drops userId
+  // + internal columns; keeps storageLocation for thumbnails). See
+  // src/lib/mediaDto.ts.
   const items = await prisma.mediaItem.findMany({
-    where: { userId: user.id, deletedAt: null },
+    where: { workspaceId: context.workspace.id, deletedAt: null },
     orderBy: { createdAt: "desc" },
     select: {
       id: true,
@@ -34,9 +36,9 @@ export async function GET(_request: Request) {
 }
 
 export async function POST(request: Request) {
-  const user = await getCurrentUser();
+  const context = await getWorkspaceContext();
 
-  if (!user) {
+  if (!context) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -84,9 +86,13 @@ export async function POST(request: Request) {
     : "upload";
   const baseCaption = typeof body.baseCaption === "string" ? body.baseCaption.trim() : "";
 
+  // Team Workspaces (Task 4): stamps the caller's ACTIVE workspace directly
+  // (replaces the Task 2 `resolveWorkspaceForUser` bridge, which always
+  // resolved the caller's PERSONAL workspace).
   const mediaItem = await prisma.mediaItem.create({
     data: {
-      userId: user.id,
+      userId: context.user.id,
+      workspaceId: context.workspace.id,
       storageLocation: blobUrl,
       originalFilename: filename,
       mimeType,

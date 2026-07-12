@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getCurrentUser } from "@/lib/auth";
+import { requireOwnerContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { refreshGoogleToken } from "@/server/platforms/googleTokens";
 import { Platform, type SocialConnection } from "@prisma/client";
@@ -49,16 +49,23 @@ async function refreshAccessToken(
   }
 }
 
+/**
+ * GET /api/connections/google_business_profile/locations
+ * Lists the workspace's GBP account locations for the picker. Owner-only —
+ * it feeds the location POST above, which is itself owner-only (Team
+ * Workspaces — design §1: GBP location selection is owner-only, not just
+ * member-readable).
+ */
 export async function GET(_request: Request) {
-  const user = await getCurrentUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const contextOrError = await requireOwnerContext();
+  if (contextOrError instanceof NextResponse) {
+    return contextOrError;
   }
+  const { workspace } = contextOrError;
 
   let connection = await prisma.socialConnection.findFirst({
     where: {
-      userId: user.id,
+      workspaceId: workspace.id,
       platform: Platform.google_business_profile,
     },
   });

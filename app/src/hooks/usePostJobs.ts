@@ -9,6 +9,14 @@ export interface UsePostJobsResult {
   loading: boolean;
   error: string | null;
   reload: () => void;
+  /**
+   * Team Workspaces (Task 7) — total members in the caller's active
+   * workspace, straight from `PostsResponse.workspaceMemberCount`. `null`
+   * until the first successful load. Consumers gate the `by {name}`
+   * attribution on `PostJobCard` with `(workspaceMemberCount ?? 0) > 1`
+   * (design doc §7 — a solo workspace's activity feed looks unchanged).
+   */
+  workspaceMemberCount: number | null;
 }
 
 const POLL_INTERVAL_MS = 10_000;
@@ -54,6 +62,7 @@ export function usePostJobs(): UsePostJobsResult {
   const [jobs, setJobs] = useState<PostJobDTO[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [workspaceMemberCount, setWorkspaceMemberCount] = useState<number | null>(null);
   // Bumped in the `finally` of every *background* load (see the poll effect
   // below). A failed background poll intentionally never calls `setJobs`, so
   // without this counter the poll effect would have no changed dependency to
@@ -77,6 +86,7 @@ export function usePostJobs(): UsePostJobsResult {
       }
       const data: PostsResponse = await response.json();
       setJobs(data.jobs);
+      setWorkspaceMemberCount(data.workspaceMemberCount);
     } catch (err: unknown) {
       // Background failures keep the stale list on screen silently — only a
       // foreground (initial or manual-reload) failure surfaces the error UI.
@@ -111,5 +121,5 @@ export function usePostJobs(): UsePostJobsResult {
     return () => clearTimeout(t);
   }, [jobs, load, pollCycle]);
 
-  return { jobs, loading, error, reload: load };
+  return { jobs, loading, error, reload: load, workspaceMemberCount };
 }

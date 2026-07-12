@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getCurrentUser } from "@/lib/auth";
+import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { Platform } from "@prisma/client";
@@ -13,20 +13,22 @@ import type {
  * GET /api/connections
  *
  * Additive, read-only summary powering the dashboard "connection health" row.
- * Reports, for every supported platform, whether the authenticated user has a
- * connection — without exposing any connection details. Complements the
- * existing per-platform `GET /api/connections/[platform]` in a single request.
+ * Reports, for every supported platform, whether the active WORKSPACE has a
+ * connection (Team Workspaces — connections are shared by every member,
+ * design §1/§4: "View connection health" is member-readable) — without
+ * exposing any connection details. Complements the existing per-platform
+ * `GET /api/connections/[platform]` in a single request.
  */
 export async function GET() {
-  const user = await getCurrentUser();
+  const context = await getWorkspaceContext();
 
-  if (!user) {
+  if (!context) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
     const rows = await prisma.socialConnection.findMany({
-      where: { userId: user.id },
+      where: { workspaceId: context.workspace.id },
       // Roadmap Phase 4: needsReconnect is the connection-health flag itself
       // (see server/platforms/connectionHealth.ts) — still never accessToken/
       // refreshToken/scopes/metadata.
@@ -47,7 +49,10 @@ export async function GET() {
     const payload: ConnectionsResponse = { connections };
     return NextResponse.json(payload);
   } catch (error: unknown) {
-    logger.error("[GET /api/connections] Unexpected error", { error, userId: user.id });
+    logger.error("[GET /api/connections] Unexpected error", {
+      error,
+      workspaceId: context.workspace.id,
+    });
     return NextResponse.json(
       { error: "Failed to load connections" },
       { status: 500 },

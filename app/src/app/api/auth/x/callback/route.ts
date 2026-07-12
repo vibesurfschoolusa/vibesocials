@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { createHmac } from "crypto";
 import { prisma } from "@/lib/db";
 import { cookies } from "next/headers";
+import { isWorkspaceOwner } from "@/lib/workspace";
+import { Platform } from "@prisma/client";
 
 /**
  * OAuth 1.0a signature generation
@@ -53,15 +55,28 @@ export async function GET(request: Request) {
     );
   }
 
-  // Get stored data from cookies
+  // Get stored data from cookies. Team Workspaces (Task 6, design §5): X's
+  // OAuth 1.0a dance has no app-controlled `state` param, so workspaceId
+  // rides the same httpOnly-cookie bridge as userId (set at /start)
+  // rather than createOAuthState/verifyOAuthState.
   const cookieStore = await cookies();
   const oauthTokenSecret = cookieStore.get("x_oauth_token_secret")?.value;
   const userId = cookieStore.get("x_user_id")?.value;
+  const workspaceId = cookieStore.get("x_workspace_id")?.value;
 
-  if (!oauthTokenSecret || !userId) {
-    console.error("[X OAuth 1.0a] Missing stored token secret or user ID");
+  if (!oauthTokenSecret || !userId || !workspaceId) {
+    console.error("[X OAuth 1.0a] Missing stored token secret, user ID, or workspace ID");
     return NextResponse.redirect(
       new URL("/settings?error=x_session_expired", process.env.NEXTAUTH_URL!)
+    );
+  }
+
+  // Re-verify the caller is STILL an owner of this workspace before writing
+  // a connection — ownership could have changed between the redirect to X
+  // and this return trip.
+  if (!(await isWorkspaceOwner(userId, workspaceId))) {
+    return NextResponse.redirect(
+      new URL("/settings?error=x_not_workspace_owner", process.env.NEXTAUTH_URL!)
     );
   }
 
@@ -141,59 +156,55 @@ export async function GET(request: Request) {
       userIdFromX,
     });
 
-    // Store or update social connection
-    const existingConnection = await prisma.socialConnection.findFirst({
+    // Store or update social connection. Team Workspaces (Task 6): keyed on
+    // the workspaceId_platform compound unique (same as every other
+    // platform), stamping both workspaceId and userId (connector
+    // attribution) — replaces the old find-by-userId-then-branch, which
+    // predated workspaces and never matched the other 6 platforms' upsert
+    // shape.
+    await prisma.socialConnection.upsert({
       where: {
+        workspaceId_platform: {
+          workspaceId,
+          platform: Platform.x,
+        },
+      },
+      update: {
+        accountIdentifier: userIdFromX || screenName || "",
+        accessToken: accessToken,
+        refreshToken: accessTokenSecret, // Store token secret as refreshToken
+        expiresAt: null, // OAuth 1.0a tokens don't expire
+        scopes: "read write", // OAuth 1.0a doesn't have explicit scopes
+        metadata: {
+          username: screenName,
+          user_id: userIdFromX,
+        },
+        // Roadmap Phase 4: successful reconnect clears the flag set by a
+        // prior refresh failure (see server/platforms/connectionHealth.ts).
+        needsReconnect: false,
+        lastRefreshErrorCode: null,
+        refreshFailedAt: null,
+      },
+      create: {
         userId,
-        platform: "x",
+        workspaceId,
+        platform: Platform.x,
+        accountIdentifier: userIdFromX || screenName || "",
+        accessToken: accessToken,
+        refreshToken: accessTokenSecret, // Store token secret as refreshToken
+        expiresAt: null, // OAuth 1.0a tokens don't expire
+        scopes: "read write",
+        metadata: {
+          username: screenName,
+          user_id: userIdFromX,
+        },
+        // Roadmap Phase 4: a fresh connect always starts in a healthy state.
+        needsReconnect: false,
+        lastRefreshErrorCode: null,
+        refreshFailedAt: null,
       },
     });
-
-    if (existingConnection) {
-      // Update existing connection
-      await prisma.socialConnection.update({
-        where: { id: existingConnection.id },
-        data: {
-          accountIdentifier: userIdFromX || screenName || "",
-          accessToken: accessToken,
-          refreshToken: accessTokenSecret, // Store token secret as refreshToken
-          expiresAt: null, // OAuth 1.0a tokens don't expire
-          scopes: "read write", // OAuth 1.0a doesn't have explicit scopes
-          metadata: {
-            username: screenName,
-            user_id: userIdFromX,
-          },
-          // Roadmap Phase 4: successful reconnect clears the flag set by a
-          // prior refresh failure (see server/platforms/connectionHealth.ts).
-          needsReconnect: false,
-          lastRefreshErrorCode: null,
-          refreshFailedAt: null,
-        },
-      });
-      console.log("[X OAuth 1.0a] Connection updated", { connectionId: existingConnection.id });
-    } else {
-      // Create new connection
-      await prisma.socialConnection.create({
-        data: {
-          userId,
-          platform: "x",
-          accountIdentifier: userIdFromX || screenName || "",
-          accessToken: accessToken,
-          refreshToken: accessTokenSecret, // Store token secret as refreshToken
-          expiresAt: null, // OAuth 1.0a tokens don't expire
-          scopes: "read write",
-          metadata: {
-            username: screenName,
-            user_id: userIdFromX,
-          },
-          // Roadmap Phase 4: a fresh connect always starts in a healthy state.
-          needsReconnect: false,
-          lastRefreshErrorCode: null,
-          refreshFailedAt: null,
-        },
-      });
-      console.log("[X OAuth 1.0a] Connection created");
-    }
+    console.log("[X OAuth 1.0a] Connection saved", { userId, workspaceId });
 
     // Clear cookies
     const redirectResponse = NextResponse.redirect(
@@ -201,6 +212,7 @@ export async function GET(request: Request) {
     );
     redirectResponse.cookies.delete("x_oauth_token_secret");
     redirectResponse.cookies.delete("x_user_id");
+    redirectResponse.cookies.delete("x_workspace_id");
 
     return redirectResponse;
   } catch (err) {

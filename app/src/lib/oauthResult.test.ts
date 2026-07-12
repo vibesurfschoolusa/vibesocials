@@ -41,6 +41,50 @@ describe("describeOAuthResult", () => {
     });
     expect(result?.variant).toBe("danger");
   });
+
+  // Team Workspaces (Task 6, design §5): OAuth start/callback routes gate on
+  // workspace ownership and redirect `?error=<platform>_not_workspace_owner`
+  // when the caller is authenticated but not the workspace owner.
+  describe("_not_workspace_owner (Team Workspaces)", () => {
+    it("maps a platform-prefixed not_workspace_owner code to a label-aware message", () => {
+      const result = describeOAuthResult({
+        error: "facebook_page_not_workspace_owner",
+        success: null,
+      });
+      expect(result).toEqual({
+        variant: "danger",
+        message: "Only the workspace owner can connect accounts. Ask them to connect Facebook Page.",
+      });
+    });
+
+    it("resolves every platform's not_workspace_owner code to its label", () => {
+      const cases: Array<[string, string]> = [
+        ["facebook_page_not_workspace_owner", "Facebook Page"],
+        ["google_business_profile_not_workspace_owner", "Google Business Profile"],
+        ["instagram_not_workspace_owner", "Instagram"],
+        ["linkedin_not_workspace_owner", "LinkedIn"],
+        ["tiktok_not_workspace_owner", "TikTok"],
+        ["x_not_workspace_owner", "X"],
+        ["youtube_not_workspace_owner", "YouTube"],
+      ];
+
+      for (const [code, label] of cases) {
+        const result = describeOAuthResult({ error: code, success: null });
+        expect(result?.variant).toBe("danger");
+        expect(result?.message).toBe(
+          `Only the workspace owner can connect accounts. Ask them to connect ${label}.`,
+        );
+      }
+    });
+
+    it("falls back gracefully for an unprefixed not_workspace_owner code", () => {
+      const result = describeOAuthResult({ error: "not_workspace_owner", success: null });
+      expect(result).toEqual({
+        variant: "danger",
+        message: "Only the workspace owner can connect accounts. Ask them to connect it.",
+      });
+    });
+  });
 });
 
 // Coverage for the literal codes actually emitted today by the 7 routes at

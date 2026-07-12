@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/auth";
+import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 
@@ -8,23 +8,47 @@ export const DEFAULT_HASHTAGS_MAX_LENGTH = 1024;
 // Roadmap Phase 6: matches the Prisma schema's `@default(true)` so an omitted
 // field behaves the same at the API layer as a never-touched DB row.
 export const NOTIFY_ON_POST_COMPLETE_DEFAULT = true;
+// Team Workspaces (Task 6, design §4). Mirrors WorkspaceForbiddenError's
+// default message (src/lib/workspace.ts) for one consistent "you're not the
+// owner" string app-wide. Duplicated rather than imported: this route's gate
+// is CONDITIONAL (only the footer fields are owner-only — notifyOnPostComplete
+// is open to any member), so it can't just delegate the whole route to
+// requireOwnerContext()/WorkspaceForbiddenError the way the fully owner-gated
+// routes do.
+export const OWNER_ONLY_FOOTER_ERROR = "Only the workspace owner can do that.";
 
+/**
+ * Team Workspaces (Task 6, design §4): the caption footer moved to the
+ * Workspace row (brand-level, owner-only); `notifyOnPostComplete` stays a
+ * per-user preference. A key ABSENT from the request body is omitted from
+ * `data` entirely — distinct from an explicit `null`, which normalizes to
+ * "present, clear this field". This lets a partial request (e.g. a member
+ * toggling only their notification preference) leave the fields it doesn't
+ * mention untouched, instead of the old full-replace semantics.
+ */
 export interface ParsedSettingsInput {
-  companyWebsite: string | null;
-  defaultHashtags: string | null;
-  notifyOnPostComplete: boolean;
+  companyWebsite?: string | null;
+  defaultHashtags?: string | null;
+  notifyOnPostComplete?: boolean;
 }
 
 export type SettingsValidationResult =
   | { ok: true; data: ParsedSettingsInput }
   | { ok: false; error: string };
 
+function hasKey(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
 /**
- * Validate a single optional string field from an unknown parsed JSON body.
+ * Validate a present optional string field from an unknown parsed JSON body.
+ * Only called when the field's key is present in the body (see `hasKey`
+ * gating in `parseSettingsInput`) — absence is handled by the caller, not
+ * this function.
  *
- * - Missing (`undefined`) or explicit `null` is valid and normalizes to `null`.
- * - Any non-string, non-null/undefined value (number, boolean, object, array)
- *   is rejected.
+ * - An explicit `null` is valid and normalizes to `null` ("clear this field").
+ * - Any non-string, non-null value (number, boolean, object, array) is
+ *   rejected.
  * - The value is trimmed; a value that is empty or whitespace-only after
  *   trimming normalizes to `null` (matches the pre-existing `field || null`
  *   persistence behavior for falsy input).
@@ -35,7 +59,7 @@ function validateOptionalString(
   fieldName: string,
   maxLength: number,
 ): { ok: true; value: string | null } | { ok: false; error: string } {
-  if (value === undefined || value === null) {
+  if (value === null) {
     return { ok: true, value: null };
   }
 
@@ -56,21 +80,19 @@ function validateOptionalString(
 }
 
 /**
- * Validate a single boolean field from an unknown parsed JSON body.
+ * Validate a present `notifyOnPostComplete` value. Only called when the key
+ * is present in the body — absence is handled by the caller.
  *
- * - Missing (`undefined`) or explicit `null` is valid and normalizes to
- *   `defaultValue` (mirrors `validateOptionalString`'s missing-is-valid
- *   leniency, adapted for a non-nullable DB column: there is no `null` to
- *   normalize to, so a missing field falls back to the schema's own default).
+ * - An explicit `null` is valid and normalizes to the schema default
+ *   (`true`) — there's no meaningful "null" notification preference.
  * - Any non-boolean value (string, number, object, array) is rejected.
  */
 function validateBoolean(
   value: unknown,
   fieldName: string,
-  defaultValue: boolean,
 ): { ok: true; value: boolean } | { ok: false; error: string } {
-  if (value === undefined || value === null) {
-    return { ok: true, value: defaultValue };
+  if (value === null) {
+    return { ok: true, value: NOTIFY_ON_POST_COMPLETE_DEFAULT };
   }
 
   if (typeof value !== "boolean") {
@@ -83,7 +105,9 @@ function validateBoolean(
 /**
  * Validate + normalize an `unknown` parsed JSON body into the known settings
  * fields (`companyWebsite`, `defaultHashtags`, `notifyOnPostComplete`). Any
- * other top-level fields present on the body are ignored, not rejected.
+ * other top-level fields present on the body are ignored, not rejected. Only
+ * keys ACTUALLY PRESENT in the body appear on the returned `data` — see
+ * {@link ParsedSettingsInput}.
  *
  * Exported (and kept a pure function of its input) so it can be unit tested
  * directly without exercising the HTTP handler.
@@ -94,48 +118,56 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
   }
 
   const record = body as Record<string, unknown>;
+  const data: ParsedSettingsInput = {};
 
-  const companyWebsite = validateOptionalString(
-    record.companyWebsite,
-    "companyWebsite",
-    COMPANY_WEBSITE_MAX_LENGTH,
-  );
-  if (!companyWebsite.ok) {
-    return { ok: false, error: companyWebsite.error };
+  if (hasKey(record, "companyWebsite")) {
+    const result = validateOptionalString(
+      record.companyWebsite,
+      "companyWebsite",
+      COMPANY_WEBSITE_MAX_LENGTH,
+    );
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    data.companyWebsite = result.value;
   }
 
-  const defaultHashtags = validateOptionalString(
-    record.defaultHashtags,
-    "defaultHashtags",
-    DEFAULT_HASHTAGS_MAX_LENGTH,
-  );
-  if (!defaultHashtags.ok) {
-    return { ok: false, error: defaultHashtags.error };
+  if (hasKey(record, "defaultHashtags")) {
+    const result = validateOptionalString(
+      record.defaultHashtags,
+      "defaultHashtags",
+      DEFAULT_HASHTAGS_MAX_LENGTH,
+    );
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    data.defaultHashtags = result.value;
   }
 
-  const notifyOnPostComplete = validateBoolean(
-    record.notifyOnPostComplete,
-    "notifyOnPostComplete",
-    NOTIFY_ON_POST_COMPLETE_DEFAULT,
-  );
-  if (!notifyOnPostComplete.ok) {
-    return { ok: false, error: notifyOnPostComplete.error };
+  if (hasKey(record, "notifyOnPostComplete")) {
+    const result = validateBoolean(record.notifyOnPostComplete, "notifyOnPostComplete");
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    data.notifyOnPostComplete = result.value;
   }
 
-  return {
-    ok: true,
-    data: {
-      companyWebsite: companyWebsite.value,
-      defaultHashtags: defaultHashtags.value,
-      notifyOnPostComplete: notifyOnPostComplete.value,
-    },
-  };
+  return { ok: true, data };
+}
+
+/**
+ * True when the parsed body attempts to touch either caption-footer field —
+ * PRESENCE-based (a key in the request, even set to `null` to clear it), not
+ * value-based. Gates the owner-only branch in `POST` below.
+ */
+export function touchesWorkspaceFooter(data: ParsedSettingsInput): boolean {
+  return "companyWebsite" in data || "defaultHashtags" in data;
 }
 
 export async function POST(request: Request) {
-  const user = await getCurrentUser();
+  const context = await getWorkspaceContext();
 
-  if (!user) {
+  if (!context) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -154,25 +186,46 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: validation.error }, { status: 400 });
   }
 
-  // NOTE (review Minor #1): this is a FULL-REPLACE endpoint. An omitted field is
-  // normalized to its default (null / schema default), so a partial body would
-  // reset unsent fields — e.g. a POST without `notifyOnPostComplete` re-opts the
-  // user IN. The sole caller (settings-form.tsx) always sends all three fields,
-  // so this is latent; any NEW caller must send the complete settings object (or
-  // switch this to partial/merge semantics before adding one).
+  const { data } = validation;
+  const updatesFooter = touchesWorkspaceFooter(data);
+
+  // Team Workspaces (Task 6, design §4): the caption footer is workspace
+  // (brand) level and owner-only to change. A member request that touches
+  // it is rejected WHOLESALE — no partial application of a notifyOnPostComplete
+  // sent in the same body — simplest fail-closed behavior. Task 7 splits the
+  // settings form so members never see footer inputs at all; until then, a
+  // member submitting the (still-combined) form gets this 403.
+  if (updatesFooter && context.role !== "owner") {
+    return NextResponse.json({ error: OWNER_ONLY_FOOTER_ERROR }, { status: 403 });
+  }
+
   try {
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        companyWebsite: validation.data.companyWebsite,
-        defaultHashtags: validation.data.defaultHashtags,
-        notifyOnPostComplete: validation.data.notifyOnPostComplete,
-      },
-    });
+    if (updatesFooter) {
+      const workspaceData: { companyWebsite?: string | null; defaultHashtags?: string | null } =
+        {};
+      if ("companyWebsite" in data) {
+        workspaceData.companyWebsite = data.companyWebsite;
+      }
+      if ("defaultHashtags" in data) {
+        workspaceData.defaultHashtags = data.defaultHashtags;
+      }
+
+      await prisma.workspace.update({
+        where: { id: context.workspace.id },
+        data: workspaceData,
+      });
+    }
+
+    if ("notifyOnPostComplete" in data) {
+      await prisma.user.update({
+        where: { id: context.user.id },
+        data: { notifyOnPostComplete: data.notifyOnPostComplete },
+      });
+    }
 
     return NextResponse.json({ success: true }, { status: 200 });
   } catch (error) {
-    logger.error("[POST /api/settings] Error", { error, userId: user.id });
+    logger.error("[POST /api/settings] Error", { error, userId: context.user.id });
     return NextResponse.json(
       { error: "Failed to update settings" },
       { status: 500 }

@@ -25,11 +25,23 @@ interface Props {
    * danger "Reconnect" badge that links to this platform's OAuth start.
    */
   needsReconnect?: boolean;
+  /**
+   * Team Workspaces (Task 7, design §7): connect/disconnect/switch/reconnect
+   * are all owner-only mutations. A read-only (member) caller gets the same
+   * health status — Connected, or a "Needs reconnect" badge in place of the
+   * owner's actionable Reconnect button — with none of the buttons.
+   */
+  readOnly?: boolean;
 }
 
 const TIKTOK_LOGOUT_URL = "https://www.tiktok.com/logout";
 
-export function ConnectionActions({ platform, isConnected, needsReconnect = false }: Props) {
+export function ConnectionActions({
+  platform,
+  isConnected,
+  needsReconnect = false,
+  readOnly = false,
+}: Props) {
   const router = useRouter();
   const toast = useToast();
 
@@ -101,6 +113,14 @@ export function ConnectionActions({ platform, isConnected, needsReconnect = fals
 
   if (!isConnected) {
     return null;
+  }
+
+  if (readOnly) {
+    return needsReconnect ? (
+      <Badge variant="danger">Needs reconnect</Badge>
+    ) : (
+      <Badge variant="success">Connected</Badge>
+    );
   }
 
   return (

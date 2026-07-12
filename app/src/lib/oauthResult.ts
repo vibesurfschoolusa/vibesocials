@@ -48,6 +48,16 @@ export function describeOAuthResult(params: {
           : "The sign-in couldn't be completed securely. Please try connecting again.",
       };
     }
+    // Team Workspaces (Task 6, design §5): OAuth start/callback routes are
+    // owner-gated; a member hitting one redirects with this code.
+    if (error.endsWith("not_workspace_owner")) {
+      return {
+        variant: "danger",
+        message: label
+          ? `Only the workspace owner can connect accounts. Ask them to connect ${label}.`
+          : "Only the workspace owner can connect accounts. Ask them to connect it.",
+      };
+    }
     return {
       variant: "danger",
       message: label

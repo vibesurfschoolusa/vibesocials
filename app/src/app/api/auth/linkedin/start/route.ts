@@ -1,13 +1,19 @@
 import { NextResponse, NextRequest } from "next/server";
-import { getCurrentUser } from "@/lib/auth";
 import { createOAuthState } from "@/lib/oauthState";
+import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
 
 export async function GET(request: NextRequest) {
-  const user = await getCurrentUser();
-
-  if (!user) {
+  const contextOrRedirect = await requireOwnerContextForOAuthStart(
+    request,
+    "linkedin_not_workspace_owner",
+  );
+  if (contextOrRedirect instanceof NextResponse) {
+    return contextOrRedirect;
+  }
+  if (!contextOrRedirect) {
     return NextResponse.redirect(new URL("/login", process.env.NEXTAUTH_URL));
   }
+  const { user, workspace } = contextOrRedirect;
 
   const clientId = process.env.LINKEDIN_CLIENT_ID;
   const redirectUri = process.env.LINKEDIN_REDIRECT_URI;
@@ -23,10 +29,11 @@ export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const vanityName = searchParams.get("vanity_name");
 
-  // Sign the state with the canonical HMAC helper (userId is signed, tamper-proof).
-  // An optional vanity-name hint is appended as a separate, non-sensitive segment;
-  // it is only used as a lookup fallback and never as a source of identity.
-  let state = createOAuthState(user.id);
+  // Sign the state with the canonical HMAC helper (userId + workspaceId are
+  // signed, tamper-proof). An optional vanity-name hint is appended as a
+  // separate, non-sensitive segment; it is only used as a lookup fallback and
+  // never as a source of identity.
+  let state = createOAuthState({ userId: user.id, workspaceId: workspace.id });
 
   if (vanityName) {
     state = `${state}.${Buffer.from(vanityName, "utf8").toString("base64url")}`;

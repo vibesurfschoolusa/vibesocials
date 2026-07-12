@@ -1,10 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
+import { getWorkspaceContext } from "@/lib/workspace";
 import type { Platform } from "@prisma/client";
 
 interface RetryRouteContext {
@@ -69,16 +69,16 @@ export function parseRetryBody(body: unknown): RetryTarget | { error: string } {
  * `post/retry.requested` for the `retryPlatforms` Inngest function.
  */
 export async function POST(request: NextRequest, context: RetryRouteContext) {
-  const user = await getCurrentUser();
+  const workspaceContext = await getWorkspaceContext();
 
-  if (!user) {
+  if (!workspaceContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   // Tight rate limit right after auth, before any parsing/DB work. Retrying is
   // a live external publish; abuse would create duplicate posts.
   const rateLimit = await checkRateLimit({
-    userId: user.id,
+    userId: workspaceContext.user.id,
     route: "posts/retry",
     limit: 10,
     windowMs: 5 * 60 * 1000,
@@ -111,9 +111,12 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     return NextResponse.json({ error: target.error }, { status: 400 });
   }
 
-  // Ownership + the data needed to decide eligibility, in one query.
+  // Ownership + the data needed to decide eligibility, in one query. Team
+  // Workspaces (Task 4): any member of the job's workspace, not just its
+  // creator (design §1) — a job in a different workspace 404s exactly like
+  // "doesn't exist" (no 403 existence oracle).
   const postJob = await prisma.postJob.findFirst({
-    where: { id: postJobId, userId: user.id },
+    where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
     select: {
       id: true,
       mediaItem: { select: { deletedAt: true } },
@@ -172,9 +175,17 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   // signal the client can turn into a "Reconnect … in Settings" link, and don't
   // flip anything to pending.
   if (target.kind === "platform") {
+    // Team Workspaces (Task 4): the connection lookup now reads the caller's
+    // ACTIVE workspace directly off the context (replaces the Task 2
+    // `resolveWorkspaceForUser` bridge, which always resolved the caller's
+    // PERSONAL workspace — wrong for an invited member acting in someone
+    // else's shared workspace).
     const connection = await prisma.socialConnection.findUnique({
       where: {
-        userId_platform: { userId: user.id, platform: target.platform },
+        workspaceId_platform: {
+          workspaceId: workspaceContext.workspace.id,
+          platform: target.platform,
+        },
       },
       select: { needsReconnect: true },
     });
@@ -240,7 +251,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     // Hand off to the background retry function for exactly the claimed platforms.
     await inngest.send({
       name: "post/retry.requested",
-      data: { postJobId, userId: user.id, platforms: eligible },
+      data: { postJobId, userId: workspaceContext.user.id, platforms: eligible },
     });
   } catch (error) {
     console.error("[retry] failed to enqueue retry run; reverting claim", error);
