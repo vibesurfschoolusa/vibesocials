@@ -235,6 +235,34 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
     expect(postJobResultCreateMock).toHaveBeenCalledTimes(2);
     expect(result.resultIds).toEqual(["result-x", "result-youtube"]);
   });
+
+  // Task 2 bridge (review fix round 1 — Minor): pin the workspaceId stamping
+  // on BOTH rows this helper creates — resolved from the ACTING user — so a
+  // regression that drops the stamp fails here, mirroring the
+  // createPostJobForExistingMedia assertion further down.
+  it("stamps the resolved workspaceId on both the MediaItem and the PostJob it creates", async () => {
+    findManyConnectionsMock.mockResolvedValue([makeConnection()]);
+
+    await createPostJobOnly({
+      userId: "user-1",
+      media,
+      baseCaption: "hello",
+    });
+
+    expect(resolveWorkspaceForUserMock).toHaveBeenCalledWith("user-1");
+    expect(mediaItemCreateMock).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: "user-1",
+        workspaceId: "workspace-1",
+      }),
+    });
+    expect(postJobCreateMock).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: "user-1",
+        workspaceId: "workspace-1",
+      }),
+    });
+  });
 });
 
 describe("createPostJobForExistingMedia", () => {

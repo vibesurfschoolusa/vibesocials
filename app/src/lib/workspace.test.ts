@@ -13,6 +13,7 @@ const {
   countMock,
   workspaceCreateMock,
   workspaceMemberCreateMock,
+  executeRawMock,
   getCurrentUserMock,
   cookiesGetMock,
   cookiesMock,
@@ -23,6 +24,7 @@ const {
   countMock: vi.fn(),
   workspaceCreateMock: vi.fn(),
   workspaceMemberCreateMock: vi.fn(),
+  executeRawMock: vi.fn(),
   getCurrentUserMock: vi.fn(),
   cookiesGetMock: vi.fn(),
   cookiesMock: vi.fn(),
@@ -31,8 +33,11 @@ const {
 vi.mock("@/lib/db", () => {
   // $transaction's mock replays the callback against this same object, so
   // `tx.<model>.<op>` inside a transaction resolves to these same mocks
-  // (mirrors posting.test.ts's $transaction mock).
+  // (mirrors posting.test.ts's $transaction mock). `$executeRaw` receives the
+  // per-user pg_advisory_xact_lock the provisioning core takes (review fix
+  // round 1 — TOCTOU double-provision guard).
   const prisma: Record<string, unknown> = {
+    $executeRaw: executeRawMock,
     user: { findUnique: findUniqueUserMock },
     workspace: { create: workspaceCreateMock },
     workspaceMember: {
@@ -107,6 +112,7 @@ beforeEach(() => {
   countMock.mockReset();
   workspaceCreateMock.mockReset();
   workspaceMemberCreateMock.mockReset();
+  executeRawMock.mockReset();
   getCurrentUserMock.mockReset();
   cookiesGetMock.mockReset();
   cookiesMock.mockReset();
@@ -268,6 +274,14 @@ describe("resolveWorkspaceForUser", () => {
     expect(workspaceCreateMock).not.toHaveBeenCalled();
   });
 
+  it("takes no advisory lock on the fast path (owned membership already exists)", async () => {
+    findFirstMock.mockResolvedValue({ workspaceId: "ws-existing" });
+
+    await resolveWorkspaceForUser("user-1");
+
+    expect(executeRawMock).not.toHaveBeenCalled();
+  });
+
   it("lazily provisions a personal workspace when the user owns none yet", async () => {
     findFirstMock.mockResolvedValue(null);
     findUniqueUserMock.mockResolvedValue(makeUser({ id: "user-2", name: "New Guy" }));
@@ -283,6 +297,12 @@ describe("resolveWorkspaceForUser", () => {
     expect(workspaceMemberCreateMock).toHaveBeenCalledWith({
       data: { workspaceId: "ws-new", userId: "user-2", role: "owner" },
     });
+    // Review fix round 1: provisioning happens strictly AFTER the per-user
+    // advisory lock is taken.
+    expect(executeRawMock).toHaveBeenCalledTimes(1);
+    expect(executeRawMock.mock.invocationCallOrder[0]).toBeLessThan(
+      workspaceCreateMock.mock.invocationCallOrder[0],
+    );
   });
 
   it("throws when the user no longer exists", async () => {
@@ -291,6 +311,52 @@ describe("resolveWorkspaceForUser", () => {
 
     await expect(resolveWorkspaceForUser("ghost")).rejects.toThrow(/ghost/);
     expect(workspaceCreateMock).not.toHaveBeenCalled();
+  });
+
+  // Review fix round 1 (TOCTOU): two concurrent first-touch requests for a
+  // zero-membership user must not BOTH provision. The provisioning core takes
+  // a per-user pg_advisory_xact_lock and re-checks membership INSIDE the lock,
+  // so the race loser adopts the winner's workspace instead of creating a
+  // second one.
+  describe("concurrent first-touch (advisory-locked re-check)", () => {
+    it("returns the racing winner's workspace from the in-lock re-check without provisioning", async () => {
+      // Fast path (call 1) misses; by the time the lock is held, a concurrent
+      // request has provisioned — the in-lock re-check (call 2) finds it.
+      findFirstMock
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ workspaceId: "ws-race-winner" });
+
+      const workspaceId = await resolveWorkspaceForUser("user-1");
+
+      expect(workspaceId).toBe("ws-race-winner");
+      expect(findFirstMock).toHaveBeenCalledTimes(2);
+      expect(workspaceCreateMock).not.toHaveBeenCalled();
+      expect(workspaceMemberCreateMock).not.toHaveBeenCalled();
+      // The winner's row satisfies the lookup — no need to reload the user.
+      expect(findUniqueUserMock).not.toHaveBeenCalled();
+    });
+
+    it("issues the per-user advisory lock BEFORE the in-lock re-check", async () => {
+      findFirstMock
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ workspaceId: "ws-race-winner" });
+
+      await resolveWorkspaceForUser("user-1");
+
+      expect(executeRawMock).toHaveBeenCalledTimes(1);
+      // $executeRaw is a tagged-template call: (TemplateStringsArray, ...values).
+      // The SQL must be the xact-scoped advisory lock, keyed per user.
+      const [strings, lockKey] = executeRawMock.mock.calls[0] as [
+        readonly string[],
+        string,
+      ];
+      expect(strings.join("?")).toContain("pg_advisory_xact_lock(hashtext(");
+      expect(lockKey).toBe("ws-provision:user-1");
+      // Order: fast-path lookup -> advisory lock -> in-lock re-check.
+      const lockOrder = executeRawMock.mock.invocationCallOrder[0];
+      expect(lockOrder).toBeGreaterThan(findFirstMock.mock.invocationCallOrder[0]);
+      expect(lockOrder).toBeLessThan(findFirstMock.mock.invocationCallOrder[1]);
+    });
   });
 });
 
@@ -330,6 +396,11 @@ describe("getWorkspaceContext", () => {
       .mockResolvedValueOnce([
         makeMembership({ userId: "user-heal", role: "owner", workspaceId: "ws-healed" }),
       ]);
+    // The shared provisioning core (review fix round 1): fast-path owned
+    // lookup + in-lock re-check both miss, then the user row is reloaded
+    // inside the lock for the workspace name rule.
+    findFirstMock.mockResolvedValue(null);
+    findUniqueUserMock.mockResolvedValue(makeUser({ id: "user-heal" }));
     workspaceCreateMock.mockResolvedValue({ id: "ws-healed" });
     workspaceMemberCreateMock.mockResolvedValue({});
     countMock.mockResolvedValue(1);
@@ -342,6 +413,28 @@ describe("getWorkspaceContext", () => {
     });
     expect(context?.workspace.id).toBe("ws-healed");
     expect(findManyMock).toHaveBeenCalledTimes(2);
+    // Self-heal rides the same advisory-locked core as resolveWorkspaceForUser.
+    expect(executeRawMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("self-heal adopts a concurrently provisioned workspace instead of double-provisioning", async () => {
+    getCurrentUserMock.mockResolvedValue(makeUser({ id: "user-heal" }));
+    findManyMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        makeMembership({ userId: "user-heal", role: "owner", workspaceId: "ws-won" }),
+      ]);
+    // Fast path misses; the in-lock re-check finds the racing winner's row.
+    findFirstMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ workspaceId: "ws-won" });
+    countMock.mockResolvedValue(1);
+
+    const context = await getWorkspaceContext();
+
+    expect(workspaceCreateMock).not.toHaveBeenCalled();
+    expect(workspaceMemberCreateMock).not.toHaveBeenCalled();
+    expect(context?.workspace.id).toBe("ws-won");
   });
 
   it("honors the active-workspace cookie when it matches a membership", async () => {

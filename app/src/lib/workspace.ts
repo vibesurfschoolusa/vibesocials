@@ -120,16 +120,26 @@ export async function provisionPersonalWorkspace(
 }
 
 /**
- * PLAN AMENDMENT (green-build bridge): resolves `userId`'s personal
- * (oldest-owned) workspace id, lazily provisioning one if the user somehow
- * has none yet — the same logic {@link getWorkspaceContext} uses. Every
- * pre-existing call site this unblocks is marked `// WORKSPACE-BRIDGE:
- * personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId
- * in Tasks 4-6.`. This function itself is NOT temporary: later tasks keep
- * using it wherever only a userId (not a request context) is available, e.g.
- * background jobs.
+ * Shared provisioning core behind {@link resolveWorkspaceForUser} and
+ * {@link getWorkspaceContext}'s self-heal: returns the user's personal
+ * (oldest-owned) workspace id, creating workspace + owner membership when
+ * none exists.
+ *
+ * CONCURRENCY (review fix, Task 2 round 1 — TOCTOU): two concurrent
+ * first-touch requests for a zero-membership user (parallel API calls on one
+ * page load) would otherwise BOTH pass the "no membership" check and
+ * provision twice; the oldest-owned tie-break would then permanently strand
+ * whatever the losing request wrote into its workspace. The provisioning
+ * transaction therefore takes a Postgres TRANSACTION-SCOPED advisory lock
+ * keyed per user (`pg_advisory_xact_lock` — auto-released at commit/rollback,
+ * so no unlock bookkeeping and no leak on error) and RE-CHECKS membership
+ * INSIDE the lock: the race loser blocks on the lock until the winner
+ * commits, then sees the winner's membership and adopts it instead of
+ * provisioning a second workspace.
  */
-export async function resolveWorkspaceForUser(userId: string): Promise<string> {
+async function ensurePersonalWorkspace(userId: string): Promise<string> {
+  // Fast path — no transaction, no lock: after a user's very first touch,
+  // every call finds the existing owned membership here.
   const owned = await prisma.workspaceMember.findFirst({
     where: { userId, role: "owner" },
     orderBy: { createdAt: "asc" },
@@ -139,13 +149,44 @@ export async function resolveWorkspaceForUser(userId: string): Promise<string> {
     return owned.workspaceId;
   }
 
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user) {
-    throw new Error(`resolveWorkspaceForUser: no such user "${userId}"`);
-  }
+  return prisma.$transaction(async (tx) => {
+    // Serialize provisioning per user. hashtext() folds the string key into
+    // the advisory-lock integer space; xact-scoped, so the lock releases when
+    // this transaction ends (commit OR rollback).
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`ws-provision:${userId}`}))`;
 
-  const { workspaceId } = await prisma.$transaction((tx) => provisionPersonalWorkspace(tx, user));
-  return workspaceId;
+    // Re-check INSIDE the lock: a concurrent request may have provisioned
+    // while we waited on the lock. If so, adopt the winner's workspace.
+    const existing = await tx.workspaceMember.findFirst({
+      where: { userId, role: "owner" },
+      orderBy: { createdAt: "asc" },
+    });
+    if (existing) {
+      return existing.workspaceId;
+    }
+
+    const user = await tx.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new Error(`ensurePersonalWorkspace: no such user "${userId}"`);
+    }
+
+    const { workspaceId } = await provisionPersonalWorkspace(tx, user);
+    return workspaceId;
+  });
+}
+
+/**
+ * PLAN AMENDMENT (green-build bridge): resolves `userId`'s personal
+ * (oldest-owned) workspace id, lazily provisioning one if the user somehow
+ * has none yet — the same advisory-locked core {@link getWorkspaceContext}'s
+ * self-heal uses (see {@link ensurePersonalWorkspace}). Every pre-existing
+ * call site this unblocks is marked `// WORKSPACE-BRIDGE: personal-workspace
+ * interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.`.
+ * This function itself is NOT temporary: later tasks keep using it wherever
+ * only a userId (not a request context) is available, e.g. background jobs.
+ */
+export async function resolveWorkspaceForUser(userId: string): Promise<string> {
+  return ensurePersonalWorkspace(userId);
 }
 
 /**
@@ -172,7 +213,10 @@ export async function getWorkspaceContext(
   });
 
   if (memberships.length === 0) {
-    await prisma.$transaction((tx) => provisionPersonalWorkspace(tx, user));
+    // Self-heal via the shared advisory-locked core (review fix round 1) —
+    // safe against a concurrent first-touch request provisioning in parallel:
+    // the loser adopts the winner's workspace instead of creating a second.
+    await ensurePersonalWorkspace(user.id);
     memberships = await prisma.workspaceMember.findMany({
       where: { userId: user.id },
       include: { workspace: true },
