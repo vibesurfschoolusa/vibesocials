@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 
 import { prisma } from '@/lib/db';
+import { provisionPersonalWorkspace } from '@/lib/workspace';
 
 export async function POST(request: Request) {
   try {
@@ -29,12 +30,20 @@ export async function POST(request: Request) {
 
     const passwordHash = await bcrypt.hash(password, 10);
 
-    const user = await prisma.user.create({
-      data: {
-        email,
-        name: name ?? null,
-        passwordHash,
-      },
+    // Registration creates the User and its personal workspace + owner
+    // membership atomically (design doc §2), so a mid-way failure never
+    // leaves a user without a workspace. (getWorkspaceContext's self-heal is
+    // the backstop for pre-existing gaps, not the normal path.)
+    const user = await prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          email,
+          name: name ?? null,
+          passwordHash,
+        },
+      });
+      await provisionPersonalWorkspace(tx, created);
+      return created;
     });
 
     return NextResponse.json(

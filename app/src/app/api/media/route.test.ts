@@ -2,13 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
 // settings/route.test.ts / media/[id]/route.test.ts / posts/route.test.ts).
-// route.ts imports `@/lib/db` and `@/lib/auth` at module scope, so both must
-// be mocked before route.ts is imported below.
-const { findManyMock, createMock, getCurrentUserMock } = vi.hoisted(() => ({
-  findManyMock: vi.fn(),
-  createMock: vi.fn(),
-  getCurrentUserMock: vi.fn(),
-}));
+// route.ts imports `@/lib/db`, `@/lib/auth`, and (Task 2 bridge) `@/lib/workspace`
+// at module scope, so all three must be mocked before route.ts is imported below.
+const { findManyMock, createMock, getCurrentUserMock, resolveWorkspaceForUserMock } =
+  vi.hoisted(() => ({
+    findManyMock: vi.fn(),
+    createMock: vi.fn(),
+    getCurrentUserMock: vi.fn(),
+    resolveWorkspaceForUserMock: vi.fn(),
+  }));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -21,6 +23,13 @@ vi.mock("@/lib/db", () => ({
 
 vi.mock("@/lib/auth", () => ({
   getCurrentUser: getCurrentUserMock,
+}));
+
+// Task 2 green-build bridge: route.ts stamps `workspaceId` on create via
+// `resolveWorkspaceForUser` (see @/lib/workspace, unit-tested separately in
+// workspace.test.ts) — mocked here so this suite stays a pure route unit test.
+vi.mock("@/lib/workspace", () => ({
+  resolveWorkspaceForUser: resolveWorkspaceForUserMock,
 }));
 
 import { GET, POST } from "./route";
@@ -51,7 +60,9 @@ beforeEach(() => {
   findManyMock.mockReset();
   createMock.mockReset();
   getCurrentUserMock.mockReset();
+  resolveWorkspaceForUserMock.mockReset();
   getCurrentUserMock.mockResolvedValue(USER);
+  resolveWorkspaceForUserMock.mockResolvedValue("workspace-1");
 });
 
 describe("POST /api/media", () => {
@@ -140,6 +151,8 @@ describe("POST /api/media", () => {
     expect(createMock).toHaveBeenCalledWith({
       data: {
         userId: "user-1",
+        // Task 2 bridge — stamped via resolveWorkspaceForUser (mocked above).
+        workspaceId: "workspace-1",
         storageLocation: "https://blob.example/x",
         originalFilename: "cat.png",
         mimeType: "image/png",

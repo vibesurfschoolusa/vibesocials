@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { verifyOAuthState } from "@/lib/oauthState";
+import { resolveWorkspaceForUser } from "@/lib/workspace";
 import { Platform } from "@prisma/client";
 
 export async function GET(request: NextRequest) {
@@ -143,10 +144,13 @@ export async function GET(request: NextRequest) {
 
     const expiresAt = new Date(Date.now() + expiresIn * 1000);
 
+    // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+    const workspaceId = await resolveWorkspaceForUser(userId);
+
     await prisma.socialConnection.upsert({
       where: {
-        userId_platform: {
-          userId,
+        workspaceId_platform: {
+          workspaceId,
           platform: Platform.facebook_page,
         },
       },
@@ -167,6 +171,8 @@ export async function GET(request: NextRequest) {
       },
       create: {
         userId,
+        // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+        workspaceId,
         platform: Platform.facebook_page,
         accessToken: pageAccessToken,
         refreshToken: null,

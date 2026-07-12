@@ -2,8 +2,9 @@ import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.mock + vi.hoisted are hoisted above imports (mirrors media/[id]/route.test.ts).
-// route.ts imports `@/lib/auth`, `@/lib/db`, `@/lib/inngest`, `@/lib/rateLimit`
-// at module scope, so all four must be mocked before route.ts is imported.
+// route.ts imports `@/lib/auth`, `@/lib/db`, `@/lib/inngest`, `@/lib/rateLimit`,
+// and (Task 2 bridge) `@/lib/workspace` at module scope, so all five must be
+// mocked before route.ts is imported.
 const {
   getCurrentUserMock,
   postJobFindFirstMock,
@@ -12,6 +13,7 @@ const {
   connectionFindUniqueMock,
   inngestSendMock,
   checkRateLimitMock,
+  resolveWorkspaceForUserMock,
 } = vi.hoisted(() => ({
   getCurrentUserMock: vi.fn(),
   postJobFindFirstMock: vi.fn(),
@@ -20,6 +22,7 @@ const {
   connectionFindUniqueMock: vi.fn(),
   inngestSendMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
+  resolveWorkspaceForUserMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -33,6 +36,12 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/auth", () => ({ getCurrentUser: getCurrentUserMock }));
 vi.mock("@/lib/inngest", () => ({ inngest: { send: inngestSendMock } }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
+// Task 2 green-build bridge: the reconnect preflight resolves `workspaceId`
+// via `resolveWorkspaceForUser` (see @/lib/workspace, unit-tested separately
+// in workspace.test.ts) — mocked here so this suite stays a pure route unit test.
+vi.mock("@/lib/workspace", () => ({
+  resolveWorkspaceForUser: resolveWorkspaceForUserMock,
+}));
 
 import { POST, parseRetryBody } from "./route";
 
@@ -67,6 +76,7 @@ beforeEach(() => {
   connectionFindUniqueMock.mockReset();
   inngestSendMock.mockReset();
   checkRateLimitMock.mockReset();
+  resolveWorkspaceForUserMock.mockReset();
 
   // Sensible defaults for the happy path; individual tests override.
   getCurrentUserMock.mockResolvedValue(OWNER);
@@ -74,6 +84,7 @@ beforeEach(() => {
   postJobUpdateMock.mockResolvedValue({});
   inngestSendMock.mockResolvedValue(undefined);
   connectionFindUniqueMock.mockResolvedValue({ needsReconnect: false });
+  resolveWorkspaceForUserMock.mockResolvedValue("workspace-1");
 });
 
 describe("parseRetryBody (pure)", () => {

@@ -20,6 +20,7 @@ function makeConnection(overrides: Partial<SocialConnection> = {}): SocialConnec
   return {
     id: "conn-1",
     userId: "user-1",
+    workspaceId: "workspace-1",
     platform: "youtube",
     accessToken: "old-access-token",
     refreshToken: "refresh-abc",

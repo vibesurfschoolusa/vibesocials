@@ -25,6 +25,7 @@ function makeConnection(
   return {
     id: "conn-1",
     userId: "user-1",
+    workspaceId: "workspace-1",
     platform: "linkedin",
     accessToken: "old-access-token",
     refreshToken: "refresh-abc",

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import type { SavedFileInfo } from "@/server/storage";
 import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
 import { postJobStatusForIntent, type PostJobIntent } from "@/lib/scheduling";
+import { resolveWorkspaceForUser } from "@/lib/workspace";
 
 /**
  * Fields shared by every create-post helper controlling WHEN/HOW the job runs
@@ -176,9 +177,14 @@ export async function createPostJobOnly(
   // PostJob and correctly leave `lastUsedAt = null`.
   const now = new Date();
 
+  // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+  const workspaceId = await resolveWorkspaceForUser(userId);
+
   const mediaItem = await prisma.mediaItem.create({
     data: {
       userId,
+      // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+      workspaceId,
       storageLocation: media.storageLocation,
       originalFilename: media.originalFilename,
       mimeType: media.mimeType,
@@ -193,17 +199,21 @@ export async function createPostJobOnly(
   });
 
   const postJob = await prisma.postJob.create({
-    data: buildPostJobCreateData({
-      userId,
-      mediaItemId: mediaItem.id,
-      intent,
-      scheduledFor: params.scheduledFor ?? null,
-      baseCaption,
-      perPlatformOverrides,
-      tiktokMetadata: params.tiktokMetadata,
-      youtubeMetadata: params.youtubeMetadata,
-      targetPlatforms,
-    }),
+    data: {
+      ...buildPostJobCreateData({
+        userId,
+        mediaItemId: mediaItem.id,
+        intent,
+        scheduledFor: params.scheduledFor ?? null,
+        baseCaption,
+        perPlatformOverrides,
+        tiktokMetadata: params.tiktokMetadata,
+        youtubeMetadata: params.youtubeMetadata,
+        targetPlatforms,
+      }),
+      // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+      workspaceId,
+    },
   });
 
   // Scheduled/draft jobs get NO results here — the cron/promote create them at
@@ -251,7 +261,12 @@ export function buildPostJobCreateData(args: {
   /** Task 7 — chosen platform subset, persisted for deferred jobs so
    *  {@link prepareDeferredPostJobDispatch} can replay it at run time. */
   targetPlatforms?: Platform[];
-}): Prisma.PostJobUncheckedCreateInput {
+  // WORKSPACE-BRIDGE: this pure builder deliberately does NOT take/stamp
+  // workspaceId — both callers below merge it in via `resolveWorkspaceForUser`
+  // right at their `prisma.postJob.create` call, so this function (and its
+  // existing unit tests) stay unchanged. Replaced by getWorkspaceContext/
+  // job.workspaceId in Tasks 4-6.
+}): Omit<Prisma.PostJobUncheckedCreateInput, "workspaceId"> {
   const isDeferred = args.intent !== "immediate";
   // Snapshot per-post privacy + targeting for deferred jobs only (review B1 /
   // Task 7) — immediate jobs carry privacy in the event payload and apply
@@ -353,6 +368,11 @@ export async function createPostJobForExistingMedia(
 
   const now = new Date();
 
+  // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+  // Resolved OUTSIDE the transaction below (a separate `prisma.` call
+  // shouldn't run on the `tx` connection) and captured by the closure.
+  const workspaceId = await resolveWorkspaceForUser(userId);
+
   // Create the reuse job inside a transaction that FIRST locks the MediaItem row
   // (`SELECT ... FOR UPDATE`). This serializes against the retention sweep's
   // matching lock (inngest-functions.ts): if the sweep soft-deletes + removes the
@@ -383,17 +403,21 @@ export async function createPostJobForExistingMedia(
     });
 
     const job = await tx.postJob.create({
-      data: buildPostJobCreateData({
-        userId,
-        mediaItemId,
-        intent,
-        scheduledFor: params.scheduledFor ?? null,
-        baseCaption,
-        perPlatformOverrides,
-        tiktokMetadata: params.tiktokMetadata,
-        youtubeMetadata: params.youtubeMetadata,
-        targetPlatforms,
-      }),
+      data: {
+        ...buildPostJobCreateData({
+          userId,
+          mediaItemId,
+          intent,
+          scheduledFor: params.scheduledFor ?? null,
+          baseCaption,
+          perPlatformOverrides,
+          tiktokMetadata: params.tiktokMetadata,
+          youtubeMetadata: params.youtubeMetadata,
+          targetPlatforms,
+        }),
+        // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+        workspaceId,
+      },
     });
 
     // Scheduled/draft reuse creates no results here (run-time creation, §6.3).

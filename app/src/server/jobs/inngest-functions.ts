@@ -20,6 +20,7 @@ import { prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
 import { deliverPostOutcomeNotification } from "@/server/notifications/postOutcomeEmail";
 import { refreshGoogleToken } from "@/server/platforms/googleTokens";
 import { fetchYouTubeVideoStatistics, hasAnyStatistic } from "@/server/platforms/youtubeMetrics";
+import { resolveWorkspaceForUser } from "@/lib/workspace";
 import { Prisma } from "@prisma/client";
 import type { MediaItem, Platform, SocialConnection, User } from "@prisma/client";
 import type {
@@ -788,8 +789,10 @@ export const youtubePostMetricsSync = inngest.createFunction(
 
         let token: string | null = null;
         try {
+          // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+          const workspaceId = await resolveWorkspaceForUser(userId);
           const connection = await prisma.socialConnection.findUnique({
-            where: { userId_platform: { userId, platform: "youtube" } },
+            where: { workspaceId_platform: { workspaceId, platform: "youtube" } },
           });
           // Skip a gone (disconnected) or `needsReconnect`-flagged connection —
           // do NOT push a known-bad token through refresh.
@@ -850,6 +853,8 @@ export const youtubePostMetricsSync = inngest.createFunction(
           // audience; widen these columns to BigInt if it ever serves channels
           // with billions of views (also convert bigint→Number at the DTO).
           const now = new Date();
+          // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+          const metricWorkspaceId = await resolveWorkspaceForUser(item.userId);
           await prisma.postMetric.upsert({
             where: {
               platform_externalPostId: {
@@ -859,6 +864,8 @@ export const youtubePostMetricsSync = inngest.createFunction(
             },
             create: {
               userId: item.userId,
+              // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+              workspaceId: metricWorkspaceId,
               platform: "youtube",
               externalPostId: item.externalPostId,
               postJobResultId: item.resultId,

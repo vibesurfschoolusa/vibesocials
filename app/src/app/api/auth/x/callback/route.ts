@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createHmac } from "crypto";
 import { prisma } from "@/lib/db";
 import { cookies } from "next/headers";
+import { resolveWorkspaceForUser } from "@/lib/workspace";
 
 /**
  * OAuth 1.0a signature generation
@@ -173,9 +174,13 @@ export async function GET(request: Request) {
       console.log("[X OAuth 1.0a] Connection updated", { connectionId: existingConnection.id });
     } else {
       // Create new connection
+      // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+      const workspaceId = await resolveWorkspaceForUser(userId);
       await prisma.socialConnection.create({
         data: {
           userId,
+          // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+          workspaceId,
           platform: "x",
           accountIdentifier: userIdFromX || screenName || "",
           accessToken: accessToken,

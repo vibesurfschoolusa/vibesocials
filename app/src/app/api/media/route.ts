@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { toMediaItemDto } from "@/lib/mediaDto";
+import { resolveWorkspaceForUser } from "@/lib/workspace";
 
 export async function GET(_request: Request) {
   const user = await getCurrentUser();
@@ -84,9 +85,14 @@ export async function POST(request: Request) {
     : "upload";
   const baseCaption = typeof body.baseCaption === "string" ? body.baseCaption.trim() : "";
 
+  // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+  const workspaceId = await resolveWorkspaceForUser(user.id);
+
   const mediaItem = await prisma.mediaItem.create({
     data: {
       userId: user.id,
+      // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+      workspaceId,
       storageLocation: blobUrl,
       originalFilename: filename,
       mimeType,

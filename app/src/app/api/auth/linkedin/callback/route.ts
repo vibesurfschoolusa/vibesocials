@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { verifyOAuthState } from "@/lib/oauthState";
+import { resolveWorkspaceForUser } from "@/lib/workspace";
 import { Platform, Prisma } from "@prisma/client";
 
 // Minimal shapes for the LinkedIn responses this handler reads. Only the fields
@@ -67,6 +68,11 @@ export async function GET(request: Request) {
   }
 
   const userId = stateCheck.userId;
+  // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+  // Resolved once here and reused below (Strategy 4's existing-connection
+  // lookup + the final upsert) so this handler's one user-provisioning side
+  // effect isn't duplicated across the two sites.
+  const workspaceId = await resolveWorkspaceForUser(userId);
   const clientId = process.env.LINKEDIN_CLIENT_ID;
   const clientSecret = process.env.LINKEDIN_CLIENT_SECRET;
   const redirectUri = process.env.LINKEDIN_REDIRECT_URI;
@@ -271,8 +277,9 @@ export async function GET(request: Request) {
       try {
         const existingConnection = await prisma.socialConnection.findUnique({
           where: {
-            userId_platform: {
-              userId,
+            // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+            workspaceId_platform: {
+              workspaceId,
               platform: "linkedin" as Platform,
             },
           },
@@ -436,13 +443,16 @@ export async function GET(request: Request) {
     // Upsert social connection
     await prisma.socialConnection.upsert({
       where: {
-        userId_platform: {
-          userId,
+        // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+        workspaceId_platform: {
+          workspaceId,
           platform: "linkedin",
         },
       },
       create: {
         userId,
+        // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+        workspaceId,
         platform: "linkedin",
         accessToken: tokenData.access_token,
         refreshToken: tokenData.refresh_token || null,

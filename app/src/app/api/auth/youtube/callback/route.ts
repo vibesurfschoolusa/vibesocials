@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
 import { verifyOAuthState } from "@/lib/oauthState";
+import { resolveWorkspaceForUser } from "@/lib/workspace";
 
 interface GoogleTokenResponse {
   access_token: string;
@@ -124,15 +125,20 @@ export async function GET(request: NextRequest) {
 
   // Upsert social connection
   try {
+    // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+    const workspaceId = await resolveWorkspaceForUser(userId);
+
     await prisma.socialConnection.upsert({
       where: {
-        userId_platform: {
-          userId,
+        workspaceId_platform: {
+          workspaceId,
           platform: "youtube",
         },
       },
       create: {
         userId,
+        // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+        workspaceId,
         platform: "youtube",
         accessToken: tokenJson.access_token,
         refreshToken: tokenJson.refresh_token ?? null,

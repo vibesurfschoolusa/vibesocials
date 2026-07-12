@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
 // settings/route.test.ts / googleTokens.test.ts). posting.ts imports
-// `@/lib/db` (a real `new PrismaClient()`) at module scope, so it must be
-// mocked before posting.ts is imported below.
+// `@/lib/db` (a real `new PrismaClient()`) and (Task 2 bridge) `@/lib/workspace`
+// at module scope, so both must be mocked before posting.ts is imported below.
 const {
   findUniqueMock,
   mediaItemCreateMock,
@@ -13,6 +13,7 @@ const {
   postJobCreateMock,
   postJobResultCreateMock,
   executeRawMock,
+  resolveWorkspaceForUserMock,
 } = vi.hoisted(() => ({
   findUniqueMock: vi.fn(),
   mediaItemCreateMock: vi.fn(),
@@ -21,6 +22,7 @@ const {
   postJobCreateMock: vi.fn(),
   postJobResultCreateMock: vi.fn(),
   executeRawMock: vi.fn(),
+  resolveWorkspaceForUserMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => {
@@ -48,6 +50,14 @@ vi.mock("@/lib/db", () => {
   return { prisma };
 });
 
+// Task 2 green-build bridge: both create helpers stamp `workspaceId` via
+// `resolveWorkspaceForUser` (see @/lib/workspace, unit-tested separately in
+// workspace.test.ts) — mocked here so this suite stays a pure posting.ts unit
+// test, same convention as the route tests.
+vi.mock("@/lib/workspace", () => ({
+  resolveWorkspaceForUser: resolveWorkspaceForUserMock,
+}));
+
 import {
   assertMediaItemReusable,
   buildPostJobCreateData,
@@ -61,6 +71,7 @@ function makeMediaItem(overrides: Partial<MediaItem> = {}): MediaItem {
   return {
     id: "media-1",
     userId: "user-1",
+    workspaceId: "workspace-1",
     storageLocation: "https://example.public.blob.vercel-storage.com/foo.jpg",
     originalFilename: "foo.jpg",
     mimeType: "image/jpeg",
@@ -79,6 +90,7 @@ function makeConnection(overrides: Partial<SocialConnection> = {}): SocialConnec
   return {
     id: "conn-1",
     userId: "user-1",
+    workspaceId: "workspace-1",
     platform: "x",
     accessToken: "token",
     refreshToken: null,
@@ -94,6 +106,13 @@ function makeConnection(overrides: Partial<SocialConnection> = {}): SocialConnec
     ...overrides,
   };
 }
+
+// Global default for the Task 2 bridge — every create-path test resolves to
+// the same fixed workspace unless a test overrides it.
+beforeEach(() => {
+  resolveWorkspaceForUserMock.mockReset();
+  resolveWorkspaceForUserMock.mockResolvedValue("workspace-1");
+});
 
 describe("assertMediaItemReusable (pure ownership/deletedAt guard)", () => {
   it("throws NOT_FOUND when the item is null (no such row)", () => {
@@ -310,6 +329,8 @@ describe("createPostJobForExistingMedia", () => {
         status: "in_progress",
         scheduledFor: null,
         baseCaption: null,
+        // Task 2 bridge — stamped via resolveWorkspaceForUser (mocked above).
+        workspaceId: "workspace-1",
       },
     });
     expect(postJobResultCreateMock).toHaveBeenCalledTimes(2);

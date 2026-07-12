@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
+import { resolveWorkspaceForUser } from "@/lib/workspace";
 import type { Platform } from "@prisma/client";
 
 interface RetryRouteContext {
@@ -172,9 +173,11 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   // signal the client can turn into a "Reconnect … in Settings" link, and don't
   // flip anything to pending.
   if (target.kind === "platform") {
+    // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
+    const workspaceId = await resolveWorkspaceForUser(user.id);
     const connection = await prisma.socialConnection.findUnique({
       where: {
-        userId_platform: { userId: user.id, platform: target.platform },
+        workspaceId_platform: { workspaceId, platform: target.platform },
       },
       select: { needsReconnect: true },
     });
