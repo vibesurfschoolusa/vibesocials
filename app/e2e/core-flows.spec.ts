@@ -36,6 +36,10 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
  * would otherwise resolve "Password" to both it and the actual <input> —
  * caught for real in public-routes.smoke.spec.ts, applied here by
  * inspection since this file can't run in this sandbox to catch it itself.
+ * Same story for `getByLabel("Caption", { exact: true })`: the composer also
+ * renders a "Generate a caption when media is added" wrapping-label checkbox
+ * (src/components/create-post-form.tsx), which the default case-insensitive
+ * substring match would resolve alongside the actual textarea.
  */
 
 const dbReady = !!process.env.E2E_DATABASE_URL;
@@ -178,7 +182,7 @@ test.describe(
         // @vercel/blob/client) for the upload step below to succeed.
         await page.setInputFiles("#post-media", SAMPLE_IMAGE_PATH);
         await page
-          .getByLabel("Caption")
+          .getByLabel("Caption", { exact: true })
           .fill("Hello from the Playwright core-flow suite.");
 
         const form = page.locator("form");
@@ -214,7 +218,7 @@ test.describe(
         await page.goto("/posts/new");
         await page.setInputFiles("#post-media", SAMPLE_IMAGE_PATH);
         await page
-          .getByLabel("Caption")
+          .getByLabel("Caption", { exact: true })
           .fill("Scheduled via the Playwright core-flow suite.");
 
         const form = page.locator("form");
@@ -311,7 +315,7 @@ test.describe(
       await page.goto("/posts/new");
       await page.setInputFiles("#post-media", SAMPLE_IMAGE_PATH);
       await page
-        .getByLabel("Caption")
+        .getByLabel("Caption", { exact: true })
         .fill("Hello from the member, via the Playwright core-flow suite.");
 
       const form = page.locator("form");
@@ -329,6 +333,9 @@ test.describe(
       await page.getByRole("link", { name: "View activity" }).click();
 
       await expect(page).toHaveURL("/activity");
+      await expect(
+        page.getByRole("heading", { level: 1, name: "Activity" }),
+      ).toBeVisible();
       await expect(
         page.getByText("Hello from the member, via the Playwright core-flow suite."),
       ).toBeVisible();
