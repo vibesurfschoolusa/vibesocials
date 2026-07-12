@@ -6,9 +6,10 @@
 -- agree byte-for-byte (verified via offline `prisma migrate diff`).
 --
 -- OWNER APPLIES via `prisma migrate deploy` in the gated release step.
--- Plain DROP INDEX (not CONCURRENTLY): it only takes a brief lock on
--- PostMetric writes, which come from the hourly metrics cron and user
--- deletes — negligible traffic.
+-- Plain DROP INDEX (not CONCURRENTLY): it takes an ACCESS EXCLUSIVE lock
+-- on PostMetric — briefly blocking reads (dashboard metric joins) as well
+-- as writes (hourly metrics cron). The table is one row per tracked
+-- YouTube video, so the lock is sub-second — a non-event.
 
 -- DropIndex
 DROP INDEX "PostMetric_userId_idx";
