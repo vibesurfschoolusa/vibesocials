@@ -170,6 +170,14 @@ UI-only task: no new unit tests; gate = full suite + lint + build.
 
 Final whole-branch review (opus) → fixes → PR. Then the OWNER-GATED sequence, exactly like the roadmap release: (1) explicit owner confirmation in chat; (2) `prisma migrate deploy` against prod Neon (controller runs it with the prod URL — never a subagent); (3) merge PR → Vercel deploy; (4) post-deploy checks from spec §9.
 
+### Runbook detail (final-review Important #1 — read before executing)
+
+- **Run migrate and deploy back-to-back.** The migration takes ACCESS EXCLUSIVE locks (4× `SET NOT NULL` full-table scans, 7 FK validations, the unique-index swap) — sub-second on this DB, but between `migrate deploy` finishing and the new code deploying, the OLD code's writes to SocialConnection/MediaItem/PostJob/PostMetric will 500 on the NOT NULL (transient, no corruption). Minimize the window: merge the PR first so Vercel starts building, run `migrate deploy` while it builds.
+- **Rollback semantics:** Prisma wraps the migration file in ONE transaction on Postgres — a mid-migration failure rolls back cleanly; the backout is simply "fix and re-run." There is no partial state.
+- **Precision on ordering:** the new code hard-depends on the new tables (deploy-before-migrate would 500 on every context resolution). The lazy self-heal (`ensurePersonalWorkspace`) covers exactly one reverse case — a user registered by OLD code inside the window has no membership rows and gets provisioned on first touch under the advisory lock. Migrate-first remains the required order.
+- **Post-deploy §9 additions:** (a) backfill sanity SQL — `SELECT (SELECT count(*) FROM "User") AS users, (SELECT count(*) FROM "Workspace") AS workspaces, (SELECT count(*) FROM "WorkspaceMember" WHERE role='owner') AS owners;` — all three counts must match; (b) YouTube analytics still render (PostMetric backfill); (c) exercise leave-workspace with the test member + switch back; (d) confirm `NEXTAUTH_URL` set in Vercel prod (invite links are built from it).
+- **Named follow-up (do not lose):** a later migration drops the orphaned `PostMetric_userId_idx` (deliberately retained; schema no longer declares it).
+
 ## Self-review notes
 
 Spec §1-§7 map: §2→T1, §3→T2, §4→T3+T4+T6, §5→T6, §6→T5, §7→T7, §8→T2-T8 tests + T8 e2e, §9→Release. Deliberate: `GET /api/media/[id]` stays member-accessible (reuse flow); `PATCH /api/workspaces/active` in T3; lazy provisioning in T2 makes deploy-before-migrate survivable but the release still orders migrate-first.
