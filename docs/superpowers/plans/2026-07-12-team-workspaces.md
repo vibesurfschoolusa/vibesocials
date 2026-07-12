@@ -158,6 +158,8 @@ UI-only task: no new unit tests; gate = full suite + lint + build.
 - Sweep: grep for remaining `getCurrentUser()` usages in `src/app/api/**` — every data route must be on `getWorkspaceContext` (auth pages/gates legitimately keep `getCurrentUser`); grep `where: { userId` in `src/app/api` + `src/server/jobs` — remaining hits must each be justified in the report (rate limits, user-pref writes, media-delete uploader check ARE justified).
 - Docs: update `docs/PROJECT_OVERVIEW.md` with a short Workspaces section (model + roles, 10 lines).
 
+**PLAN AMENDMENT (controller, after Task 7):** spec §1 grants members "Leave workspace" but no task built it. Task 8 additionally ships: `POST /api/workspaces/leave` (+route test) — any non-owner member deletes their OWN membership in the ACTIVE workspace (owner → 400 "Transfer ownership before removing yourself."; personal-workspace fallback: clear the active-workspace cookie so context falls back), returns `{ left: true }`; and a "Leave workspace" button (ConfirmDialog: title "Leave this workspace?", description "You'll lose access to its accounts and posts. Your own account keeps working.", confirm "Leave") in `team-section.tsx`'s MEMBER view, on success toast + `router.refresh()`.
+
 - [ ] Step 1: Sweep + fixes; e2e edits.
 - [ ] Step 2: Full gate IN ORDER: `npm test` → `npm run lint` → `npm run build` → `npx playwright test` (16 passed/4+1-scenario skipped acceptable — the smoke set must stay green).
 - [ ] Step 3: Commit `feat(workspace): e2e scaffold, scope sweep, docs`.
