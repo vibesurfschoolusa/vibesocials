@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { getCurrentUser } from "@/lib/auth";
+import { getWorkspaceContext, requireOwnerContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { Platform } from "@prisma/client";
@@ -11,13 +11,15 @@ interface PlatformRouteContext {
 
 /**
  * GET /api/connections/[platform]
- * Reports whether the authenticated user has a connection for the given platform.
- * Used by post-creation UI to conditionally show per-platform settings.
+ * Reports whether the active WORKSPACE has a connection for the given
+ * platform (Team Workspaces — member-readable, same as the collection GET;
+ * design §1: "View connection health" is member-readable). Used by
+ * post-creation UI to conditionally show per-platform settings.
  */
 export async function GET(_request: NextRequest, context: PlatformRouteContext) {
-  const user = await getCurrentUser();
+  const wsContext = await getWorkspaceContext();
 
-  if (!user) {
+  if (!wsContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -39,7 +41,7 @@ export async function GET(_request: NextRequest, context: PlatformRouteContext) 
   try {
     const connection = await prisma.socialConnection.findFirst({
       where: {
-        userId: user.id,
+        workspaceId: wsContext.workspace.id,
         platform,
       },
       select: { id: true },
@@ -49,7 +51,7 @@ export async function GET(_request: NextRequest, context: PlatformRouteContext) 
   } catch (error) {
     logger.error("[GET /api/connections/[platform]] Unexpected error", {
       error,
-      userId: user.id,
+      workspaceId: wsContext.workspace.id,
       platform: platformParam,
     });
     return NextResponse.json(
@@ -59,12 +61,18 @@ export async function GET(_request: NextRequest, context: PlatformRouteContext) 
   }
 }
 
+/**
+ * DELETE /api/connections/[platform]
+ * Disconnects the active workspace's connection for the given platform.
+ * Owner-only (Team Workspaces — design §1: "Connect / disconnect / switch
+ * platform accounts" is owner-only).
+ */
 export async function DELETE(_request: NextRequest, context: PlatformRouteContext) {
-  const user = await getCurrentUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const contextOrError = await requireOwnerContext();
+  if (contextOrError instanceof NextResponse) {
+    return contextOrError;
   }
+  const { workspace } = contextOrError;
 
   // In Next.js 15+, params might be a Promise
   const params = await Promise.resolve(context.params);
@@ -78,7 +86,7 @@ export async function DELETE(_request: NextRequest, context: PlatformRouteContex
   });
 
   if (!allPlatforms.includes(platformParam)) {
-    return NextResponse.json({ 
+    return NextResponse.json({
       error: "Unknown platform",
       received: platformParam,
       expected: allPlatforms,
@@ -90,7 +98,7 @@ export async function DELETE(_request: NextRequest, context: PlatformRouteContex
   try {
     const result = await prisma.socialConnection.deleteMany({
       where: {
-        userId: user.id,
+        workspaceId: workspace.id,
         platform,
       },
     });
@@ -102,7 +110,7 @@ export async function DELETE(_request: NextRequest, context: PlatformRouteContex
   } catch (error) {
     logger.error("[DELETE /api/connections/[platform]] Unexpected error", {
       error,
-      userId: user.id,
+      workspaceId: workspace.id,
       platform: platformParam,
     });
     return NextResponse.json(

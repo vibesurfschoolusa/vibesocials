@@ -10,8 +10,19 @@ function getSecret(): string {
   return secret;
 }
 
-export function createOAuthState(userId: string): string {
-  const payload = JSON.stringify({ userId, ts: Date.now() });
+/**
+ * Team Workspaces (design §5): the OAuth state now carries the workspace the
+ * caller was gated into at `/start` time (an owner of `workspaceId`), so the
+ * callback can re-verify ownership without a separate DB round trip to
+ * "resolve" a workspace for the user.
+ */
+export interface OAuthStatePayload {
+  userId: string;
+  workspaceId: string;
+}
+
+export function createOAuthState({ userId, workspaceId }: OAuthStatePayload): string {
+  const payload = JSON.stringify({ userId, workspaceId, ts: Date.now() });
   const secret = getSecret();
 
   const hmac = crypto.createHmac("sha256", secret);
@@ -22,7 +33,9 @@ export function createOAuthState(userId: string): string {
   return Buffer.from(wrapped, "utf8").toString("base64url");
 }
 
-export function verifyOAuthState(state: string): { valid: boolean; userId?: string } {
+export function verifyOAuthState(
+  state: string,
+): { valid: boolean; userId?: string; workspaceId?: string } {
   try {
     const decoded = Buffer.from(state, "base64url").toString("utf8");
     const parsed = JSON.parse(decoded) as { p: string; s: string };
@@ -45,8 +58,13 @@ export function verifyOAuthState(state: string): { valid: boolean; userId?: stri
       return { valid: false };
     }
 
-    const data = JSON.parse(parsed.p) as { userId: string; ts: number };
-    if (!data?.userId || typeof data.ts !== "number") {
+    const data = JSON.parse(parsed.p) as { userId: string; workspaceId: string; ts: number };
+    // workspaceId is REQUIRED (Team Workspaces). A pre-workspaces state has no
+    // workspaceId at all; this also rejects an empty-string value. Old-format
+    // states fail closed here rather than resolving to `workspaceId:
+    // undefined` — safe because the 10-minute TTL already makes a
+    // deploy-boundary mismatch a non-event (the in-flight state just dies).
+    if (!data?.userId || !data?.workspaceId || typeof data.ts !== "number") {
       return { valid: false };
     }
 
@@ -54,7 +72,7 @@ export function verifyOAuthState(state: string): { valid: boolean; userId?: stri
       return { valid: false };
     }
 
-    return { valid: true, userId: data.userId };
+    return { valid: true, userId: data.userId, workspaceId: data.workspaceId };
   } catch {
     return { valid: false };
   }

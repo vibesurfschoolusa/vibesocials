@@ -1,17 +1,23 @@
 import { NextResponse } from "next/server";
 
-import { getCurrentUser } from "@/lib/auth";
+import { requireOwnerContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { Platform, Prisma } from "@prisma/client";
 
 export const runtime = "nodejs";
 
+/**
+ * POST /api/connections/google_business_profile/location
+ * Sets the chosen Maps location on the workspace's GBP connection.
+ * Owner-only — it drives setup (Team Workspaces — design §1: "Connect /
+ * disconnect / switch platform accounts, GBP location" is owner-only).
+ */
 export async function POST(request: Request) {
-  const user = await getCurrentUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const contextOrError = await requireOwnerContext();
+  if (contextOrError instanceof NextResponse) {
+    return contextOrError;
   }
+  const { workspace } = contextOrError;
 
   const contentType = request.headers.get("content-type") || "";
 
@@ -38,7 +44,7 @@ export async function POST(request: Request) {
 
   const connection = await prisma.socialConnection.findFirst({
     where: {
-      userId: user.id,
+      workspaceId: workspace.id,
       platform: Platform.google_business_profile,
     },
   });

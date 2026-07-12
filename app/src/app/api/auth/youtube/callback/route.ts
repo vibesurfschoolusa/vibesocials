@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
 import { verifyOAuthState } from "@/lib/oauthState";
-import { resolveWorkspaceForUser } from "@/lib/workspace";
+import { isWorkspaceOwner } from "@/lib/workspace";
 
 interface GoogleTokenResponse {
   access_token: string;
@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
   }
 
   const stateCheck = verifyOAuthState(encodedState);
-  if (!stateCheck.valid || !stateCheck.userId) {
+  if (!stateCheck.valid || !stateCheck.userId || !stateCheck.workspaceId) {
     console.error("[YouTube OAuth] Invalid state parameter");
     return NextResponse.redirect(
       new URL(`/settings?error=youtube_oauth_invalid_state`, request.url),
@@ -41,6 +41,16 @@ export async function GET(request: NextRequest) {
   }
 
   const userId = stateCheck.userId;
+  const workspaceId = stateCheck.workspaceId;
+
+  // Team Workspaces (Task 6, design §5): re-verify the caller is STILL an
+  // owner of this workspace before writing a connection — ownership could
+  // have changed between the redirect to Google and this return trip.
+  if (!(await isWorkspaceOwner(userId, workspaceId))) {
+    return NextResponse.redirect(
+      new URL(`/settings?error=youtube_not_workspace_owner`, request.url),
+    );
+  }
 
   const clientId = process.env.GOOGLE_GBP_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_GBP_CLIENT_SECRET;
@@ -125,9 +135,6 @@ export async function GET(request: NextRequest) {
 
   // Upsert social connection
   try {
-    // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
-    const workspaceId = await resolveWorkspaceForUser(userId);
-
     await prisma.socialConnection.upsert({
       where: {
         workspaceId_platform: {
@@ -137,7 +144,6 @@ export async function GET(request: NextRequest) {
       },
       create: {
         userId,
-        // WORKSPACE-BRIDGE: personal-workspace interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.
         workspaceId,
         platform: "youtube",
         accessToken: tokenJson.access_token,

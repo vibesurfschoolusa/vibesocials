@@ -156,13 +156,14 @@ export const publishToAllPlatforms = inngest.createFunction(
         throw new Error("Missing required data");
       }
 
-      const [user, mediaItem, socialConnections] = await Promise.all([
+      const [user, workspace, mediaItem, socialConnections] = await Promise.all([
         prisma.user.findUnique({ where: { id: userId } }),
+        prisma.workspace.findUnique({ where: { id: postJob.workspaceId } }),
         prisma.mediaItem.findUnique({ where: { id: mediaItemId } }),
         prisma.socialConnection.findMany({ where: { workspaceId: postJob.workspaceId } }),
       ]);
 
-      if (!user || !mediaItem) {
+      if (!user || !workspace || !mediaItem) {
         throw new Error("Missing required data");
       }
 
@@ -172,6 +173,7 @@ export const publishToAllPlatforms = inngest.createFunction(
 
       return {
         user,
+        workspace,
         mediaItem,
         socialConnections,
         resultRecords,
@@ -188,7 +190,11 @@ export const publishToAllPlatforms = inngest.createFunction(
       return { error: "No connections" };
     }
 
-    const fullBaseCaption = buildCaptionWithFooter(baseCaption, setupData.user);
+    // Team Workspaces (Task 6, controller-added scope): the footer is the
+    // WORKSPACE's brand fields (companyWebsite/defaultHashtags — design §2),
+    // never the acting user's — a member can publish/retry a teammate's
+    // post, and the footer must stay deterministic regardless of who acts.
+    const fullBaseCaption = buildCaptionWithFooter(baseCaption, setupData.workspace);
     const overrides = perPlatformOverrides as Partial<Record<Platform, string>> | null;
 
     console.log(`[Inngest] Publishing to ${setupData.socialConnections.length} platforms`);
@@ -204,8 +210,8 @@ export const publishToAllPlatforms = inngest.createFunction(
       }
 
       const captionOverride = overrides?.[connection.platform] ?? null;
-      const caption = captionOverride 
-        ? buildCaptionWithFooter(captionOverride, setupData.user)
+      const caption = captionOverride
+        ? buildCaptionWithFooter(captionOverride, setupData.workspace)
         : fullBaseCaption;
 
       // Each platform upload is a separate step - this allows checkpointing
@@ -474,8 +480,9 @@ export const retryPlatforms = inngest.createFunction(
         return null;
       }
 
-      const [user, mediaItem, connections, resultRecords] = await Promise.all([
+      const [user, workspace, mediaItem, connections, resultRecords] = await Promise.all([
         prisma.user.findUnique({ where: { id: userId } }),
+        prisma.workspace.findUnique({ where: { id: postJob.workspaceId } }),
         prisma.mediaItem.findUnique({ where: { id: postJob.mediaItemId } }),
         prisma.socialConnection.findMany({
           where: { workspaceId: postJob.workspaceId, platform: { in: platforms } },
@@ -485,7 +492,7 @@ export const retryPlatforms = inngest.createFunction(
         }),
       ]);
 
-      return { user, mediaItem, connections, resultRecords };
+      return { user, workspace, mediaItem, connections, resultRecords };
     });
 
     if (!setupData) {
@@ -493,13 +500,16 @@ export const retryPlatforms = inngest.createFunction(
       return { postJobId, error: "Job not found" };
     }
 
-    const { user, mediaItem, connections, resultRecords } = setupData;
+    const { user, workspace, mediaItem, connections, resultRecords } = setupData;
 
     // The blob must still exist to re-publish. The endpoint already gates this,
     // but a concurrent retention sweep could have removed it in between — fail
     // the re-queued results deterministically so the job never hangs
-    // `in_progress`, then recompute.
-    if (!user || !mediaItem || mediaItem.deletedAt !== null) {
+    // `in_progress`, then recompute. `workspace` folds into the same
+    // defensive check: the job's workspaceId is a NOT NULL FK, so a missing
+    // row here means the workspace was deleted concurrently (or DB
+    // corruption) — equally "shouldn't happen" as a missing user/mediaItem.
+    if (!user || !workspace || !mediaItem || mediaItem.deletedAt !== null) {
       await step.run("fail-media-unavailable", async () => {
         await prisma.postJobResult.updateMany({
           where: { postJobId, platform: { in: platforms }, status: "pending" },
@@ -522,7 +532,11 @@ export const retryPlatforms = inngest.createFunction(
       return { postJobId, error: "Media unavailable" };
     }
 
-    const fullBaseCaption = buildCaptionWithFooter(mediaItem.baseCaption, user);
+    // Team Workspaces (Task 6, controller-added scope): footer source is the
+    // JOB's workspace, not the retrying member — same reasoning as
+    // publishToAllPlatforms above. `user` is kept (existence-checked above)
+    // for `userId`'s continued use below; it no longer feeds the footer.
+    const fullBaseCaption = buildCaptionWithFooter(mediaItem.baseCaption, workspace);
     const overrides = mediaItem.perPlatformOverrides as
       | Partial<Record<Platform, string>>
       | null;
@@ -558,7 +572,7 @@ export const retryPlatforms = inngest.createFunction(
 
         const captionOverride = overrides?.[platform] ?? null;
         const caption = captionOverride
-          ? buildCaptionWithFooter(captionOverride, user)
+          ? buildCaptionWithFooter(captionOverride, workspace)
           : fullBaseCaption;
 
         // Per-post TikTok/YouTube metadata isn't persisted, so a retry can't

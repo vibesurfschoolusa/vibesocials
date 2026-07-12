@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 
-import { getCurrentUser } from "@/lib/auth";
+import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { SettingsForm } from "@/components/settings-form";
 import { ConnectionsSection } from "@/components/connections-section";
@@ -15,9 +15,16 @@ export default async function SettingsPage({
 }: {
   searchParams: Promise<{ error?: string; success?: string }>;
 }) {
-  const user = await getCurrentUser();
+  // Team Workspaces (Task 6): getWorkspaceContext() covers the auth gate
+  // (null when unauthenticated, same as a bare getCurrentUser() check) and
+  // additionally resolves the active workspace this page's data now reads
+  // from. Full settings-page UI rework (owner-only mutation controls,
+  // member read-only footer, split forms) is Task 7 — this is the minimal
+  // interim fix so the page reads the workspace (the footer's real source
+  // of truth per design §2) instead of the now-stale User columns.
+  const context = await getWorkspaceContext();
 
-  if (!user) {
+  if (!context) {
     redirect(`/login?callbackUrl=${encodeURIComponent("/settings")}`);
   }
 
@@ -30,16 +37,17 @@ export default async function SettingsPage({
   // SEC-1: project only browser-safe fields so passwordHash/email never reach
   // the client component payload. See lib/userSettings.ts.
   const settings: UserSettings = {
-    companyWebsite: user.companyWebsite,
-    defaultHashtags: user.defaultHashtags,
-    notifyOnPostComplete: user.notifyOnPostComplete,
+    companyWebsite: context.workspace.companyWebsite,
+    defaultHashtags: context.workspace.defaultHashtags,
+    notifyOnPostComplete: context.user.notifyOnPostComplete,
   };
 
-  // Fetch user connections. SEC-1: select only browser-safe columns and map to
+  // Fetch the WORKSPACE's connections (shared by every member — design §2),
+  // not just this user's. SEC-1: select only browser-safe columns and map to
   // ConnectionSummary so OAuth tokens (accessToken/refreshToken) and the raw
   // metadata JSON (which holds page access tokens) never reach the client.
   const rows = await prisma.socialConnection.findMany({
-    where: { userId: user.id },
+    where: { workspaceId: context.workspace.id },
     select: {
       platform: true,
       accountIdentifier: true,

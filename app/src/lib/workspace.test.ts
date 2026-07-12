@@ -64,8 +64,10 @@ import { NextResponse } from "next/server";
 import {
   ACTIVE_WORKSPACE_COOKIE,
   getWorkspaceContext,
+  isWorkspaceOwner,
   provisionPersonalWorkspace,
   requireOwnerContext,
+  requireOwnerContextForOAuthStart,
   resolveActiveMembershipId,
   resolveWorkspaceForUser,
   WorkspaceForbiddenError,
@@ -548,5 +550,91 @@ describe("requireOwnerContext", () => {
     findManyMock.mockRejectedValue(new Error("db down"));
 
     await expect(requireOwnerContext()).rejects.toThrow("db down");
+  });
+});
+
+// Task 6 (design §5): owner gate for the 7 OAuth start routes. Unlike
+// requireOwnerContext (a JSON API gate), these are browser redirect
+// handlers — unauthenticated must stay whatever the CALLING route already
+// does today (it varies per route), so this returns `null` rather than a
+// 401 response and lets the caller keep its own pre-existing redirect.
+// "Authenticated but not owner" is new territory these routes never had to
+// handle before workspaces, so it uniformly redirects to
+// `/settings?error=<errorCode>`.
+describe("requireOwnerContextForOAuthStart", () => {
+  const request = new Request("http://localhost/api/auth/facebook_page/start");
+
+  it("returns null when unauthenticated (caller keeps its own redirect)", async () => {
+    getCurrentUserMock.mockResolvedValue(null);
+
+    const result = await requireOwnerContextForOAuthStart(
+      request,
+      "facebook_page_not_workspace_owner",
+    );
+
+    expect(result).toBeNull();
+  });
+
+  it("redirects to /settings?error=<errorCode> for an authenticated member", async () => {
+    getCurrentUserMock.mockResolvedValue(makeUser());
+    findManyMock.mockResolvedValue([makeMembership({ role: "member" })]);
+
+    const result = await requireOwnerContextForOAuthStart(
+      request,
+      "facebook_page_not_workspace_owner",
+    );
+
+    expect(result).toBeInstanceOf(NextResponse);
+    const response = result as NextResponse;
+    expect(response.status).toBe(307); // NextResponse.redirect default
+    expect(response.headers.get("location")).toBe(
+      "http://localhost/settings?error=facebook_page_not_workspace_owner",
+    );
+  });
+
+  it("returns the workspace context (not a response) for an owner", async () => {
+    getCurrentUserMock.mockResolvedValue(makeUser());
+    findManyMock.mockResolvedValue([makeMembership({ role: "owner" })]);
+    countMock.mockResolvedValue(1);
+
+    const result = await requireOwnerContextForOAuthStart(
+      request,
+      "facebook_page_not_workspace_owner",
+    );
+
+    expect(result).not.toBeInstanceOf(NextResponse);
+    expect(result).toMatchObject({ role: "owner", workspace: { id: "workspace-1" } });
+  });
+
+  it("rethrows unexpected errors instead of mapping them to a redirect", async () => {
+    getCurrentUserMock.mockResolvedValue(makeUser());
+    findManyMock.mockRejectedValue(new Error("db down"));
+
+    await expect(
+      requireOwnerContextForOAuthStart(request, "facebook_page_not_workspace_owner"),
+    ).rejects.toThrow("db down");
+  });
+});
+
+// Task 6 (design §5): OAuth callbacks re-verify the caller is STILL an
+// owner of the state's workspaceId before writing a connection — ownership
+// could have changed between the redirect to the provider and the return
+// trip. Unlike getWorkspaceContext, this checks a SPECIFIC (userId,
+// workspaceId) pair from the verified state, not the caller's active
+// workspace cookie.
+describe("isWorkspaceOwner", () => {
+  it("returns true when the membership row exists with role owner", async () => {
+    findFirstMock.mockResolvedValue({ workspaceId: "ws-1", userId: "user-1", role: "owner" });
+
+    await expect(isWorkspaceOwner("user-1", "ws-1")).resolves.toBe(true);
+    expect(findFirstMock).toHaveBeenCalledWith({
+      where: { workspaceId: "ws-1", userId: "user-1", role: "owner" },
+    });
+  });
+
+  it("returns false when no matching owner membership row exists", async () => {
+    findFirstMock.mockResolvedValue(null);
+
+    await expect(isWorkspaceOwner("user-1", "ws-1")).resolves.toBe(false);
   });
 });

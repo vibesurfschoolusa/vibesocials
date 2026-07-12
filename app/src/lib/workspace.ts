@@ -177,14 +177,23 @@ async function ensurePersonalWorkspace(userId: string): Promise<string> {
 }
 
 /**
- * PLAN AMENDMENT (green-build bridge): resolves `userId`'s personal
- * (oldest-owned) workspace id, lazily provisioning one if the user somehow
- * has none yet — the same advisory-locked core {@link getWorkspaceContext}'s
- * self-heal uses (see {@link ensurePersonalWorkspace}). Every pre-existing
- * call site this unblocks is marked `// WORKSPACE-BRIDGE: personal-workspace
- * interim — replaced by getWorkspaceContext/job.workspaceId in Tasks 4-6.`.
- * This function itself is NOT temporary: later tasks keep using it wherever
- * only a userId (not a request context) is available, e.g. background jobs.
+ * Resolves `userId`'s personal (oldest-owned) workspace id, lazily
+ * provisioning one if the user somehow has none yet — the same
+ * advisory-locked core {@link getWorkspaceContext}'s self-heal uses (see
+ * {@link ensurePersonalWorkspace}).
+ *
+ * HISTORY: introduced as an interim bridge so pre-workspaces call sites
+ * (OAuth callbacks, posts/media routes) could compile against the
+ * workspace-scoped schema before each was migrated to resolve a real request
+ * context. Every such call site carried a marker comment pointing back here;
+ * Task 6 removed the last of them (the 7 OAuth callbacks — they now resolve
+ * `workspaceId` from the signed OAuth state instead), so this function has no
+ * production callers as of Task 6.
+ *
+ * Kept (not deleted) as a documented utility: still the right tool wherever
+ * only a userId — not a request context — is available, e.g. a future
+ * background job or one-off script that needs "this user's personal
+ * workspace" without a cookie/session to resolve an ACTIVE workspace from.
  */
 export async function resolveWorkspaceForUser(userId: string): Promise<string> {
   return ensurePersonalWorkspace(userId);
@@ -279,4 +288,60 @@ export async function requireOwnerContext(): Promise<WorkspaceContext | NextResp
     }
     throw error;
   }
+}
+
+/**
+ * Owner gate for the 7 OAuth `/api/auth/<platform>/start` routes (Task 6,
+ * design §5). These are browser redirect handlers, not JSON APIs, so the
+ * failure modes differ from {@link requireOwnerContext}:
+ *
+ *   - Unauthenticated: returns `null` so the CALLER keeps its own
+ *     pre-existing `/login` redirect — every start route already had its own
+ *     (slightly different) unauthenticated behavior before workspaces, and
+ *     this preserves it unchanged rather than centralizing a new one.
+ *   - Authenticated but not owner: new territory these routes never had to
+ *     handle pre-workspaces, so it uniformly redirects to
+ *     `/settings?error=<errorCode>` (the OAuth-callback error-redirect
+ *     convention every route already follows for its OTHER failure
+ *     branches).
+ *   - Owner: returns the {@link WorkspaceContext} so the route can embed
+ *     `workspace.id` in the OAuth state.
+ *
+ * Usage:
+ *   const contextOrRedirect = await requireOwnerContextForOAuthStart(request, "facebook_page_not_workspace_owner");
+ *   if (contextOrRedirect instanceof NextResponse) return contextOrRedirect;
+ *   if (!contextOrRedirect) return <route's existing unauthenticated redirect>;
+ */
+export async function requireOwnerContextForOAuthStart(
+  request: Request,
+  errorCode: string,
+): Promise<WorkspaceContext | NextResponse | null> {
+  try {
+    return await getWorkspaceContext({ requireRole: "owner" });
+  } catch (error) {
+    if (error instanceof WorkspaceForbiddenError) {
+      const url = new URL("/settings", request.url);
+      url.searchParams.set("error", errorCode);
+      return NextResponse.redirect(url);
+    }
+    throw error;
+  }
+}
+
+/**
+ * OAuth callback re-check (Task 6, design §5): after `verifyOAuthState`
+ * resolves `{ userId, workspaceId }`, every callback re-verifies the caller
+ * is STILL an owner of that workspace before writing a connection —
+ * ownership could have changed (e.g. the owner removed themselves, or was
+ * demoted by another owner in a future multi-owner world) between the
+ * redirect to the provider and the return trip. Unlike
+ * {@link getWorkspaceContext}, this checks a SPECIFIC (userId, workspaceId)
+ * pair carried by the verified state, not the caller's current
+ * active-workspace cookie.
+ */
+export async function isWorkspaceOwner(userId: string, workspaceId: string): Promise<boolean> {
+  const membership = await prisma.workspaceMember.findFirst({
+    where: { workspaceId, userId, role: "owner" },
+  });
+  return membership !== null;
 }

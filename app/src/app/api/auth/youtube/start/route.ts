@@ -1,14 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { getCurrentUser } from "@/lib/auth";
 import { createOAuthState } from "@/lib/oauthState";
+import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
 
 export async function GET(request: NextRequest) {
-  const user = await getCurrentUser();
-
-  if (!user) {
+  const contextOrRedirect = await requireOwnerContextForOAuthStart(
+    request,
+    "youtube_not_workspace_owner",
+  );
+  if (contextOrRedirect instanceof NextResponse) {
+    return contextOrRedirect;
+  }
+  if (!contextOrRedirect) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
+  const { user, workspace } = contextOrRedirect;
 
   const clientId = process.env.GOOGLE_GBP_CLIENT_ID;
   const redirectUriEnv = process.env.YOUTUBE_REDIRECT_URI;
@@ -20,8 +26,9 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // Sign the state with the canonical HMAC helper so the callback can trust userId.
-  const encodedState = createOAuthState(user.id);
+  // Sign the state with the canonical HMAC helper so the callback can trust
+  // both userId and workspaceId.
+  const encodedState = createOAuthState({ userId: user.id, workspaceId: workspace.id });
 
   const authUrl = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   authUrl.searchParams.set("client_id", clientId);

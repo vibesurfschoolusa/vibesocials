@@ -1,23 +1,27 @@
 import { NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/auth";
+import { getWorkspaceContext } from "@/lib/workspace";
 import { checkRateLimit } from "@/lib/rateLimit";
 
 export const dynamic = "force-dynamic";
 
 /**
- * POST /api/reviews/draft-response - Generate AI-powered review response
+ * POST /api/reviews/draft-response - Generate AI-powered review response.
+ * Any member may draft a reply (Team Workspaces — design §1: "Reply to
+ * Google reviews (incl. AI draft)" is member-level). No workspace-scoped
+ * data is read here (no GBP connection lookup) — rate limiting stays
+ * per-CALLING-user, not per-workspace.
  */
 export async function POST(request: Request) {
   try {
-    const user = await getCurrentUser();
+    const context = await getWorkspaceContext();
 
-    if (!user) {
+    if (!context) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     // Throttle per user to cap OpenAI spend from a single account/session.
     const rateLimit = await checkRateLimit({
-      userId: user.id,
+      userId: context.user.id,
       route: "reviews/draft-response",
       limit: 20,
       windowMs: 5 * 60 * 1000,
