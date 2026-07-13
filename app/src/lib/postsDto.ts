@@ -106,6 +106,14 @@ export interface PostsResponse {
    * (design doc §7), so a solo workspace's activity feed looks unchanged.
    */
   workspaceMemberCount: number;
+  /**
+   * Keyset pagination cursor for the NEXT (older) page (activity pagination).
+   * An opaque base64url token encoding the last returned job's (createdAt, id)
+   * total-order key; pass it back as `?cursor=` to fetch the following page.
+   * `null` when this is the last page. Additive — page-1 callers that ignore it
+   * are unaffected, and the field is always present (never omitted).
+   */
+  nextCursor: string | null;
 }
 
 /**
@@ -176,4 +184,55 @@ export function toPostJobResultSummaryDto(result: PostJobResult): PostJobResultS
     externalPostId: result.externalPostId,
     errorMessage: result.errorMessage,
   };
+}
+
+/**
+ * Keyset pagination cursor helpers for `GET /api/posts` (activity pagination).
+ *
+ * The cursor is an opaque, URL-safe token over the (createdAt, id) total-order
+ * key the endpoint pages by (`orderBy: [{ createdAt: "desc" }, { id: "desc" }]`).
+ * It carries no secret or tenant data — just a job id + its creation timestamp,
+ * both already in the DTO — so it round-trips safely through the client as a
+ * bare `?cursor=` query param. Server-only in practice (only the route imports
+ * these functions as values; client modules import this file for TYPES only,
+ * which are erased at build), so the Node `Buffer` global is always available.
+ */
+export function encodePostsCursor(createdAt: Date, id: string): string {
+  return Buffer.from(`${createdAt.toISOString()}|${id}`).toString("base64url");
+}
+
+/**
+ * Inverse of {@link encodePostsCursor}. Returns `null` for ANY malformed input
+ * — undecodable base64, a missing `|` separator, an empty id, or an unparseable
+ * timestamp — so the route can answer a tampered/garbage `?cursor=` with a 400
+ * and never feed a bad value into the keyset query. Splits on the FIRST `|`
+ * only: an ISO-8601 timestamp never contains one, so everything after it is the
+ * id (preserved verbatim even in the degenerate case that an id did contain a
+ * `|`).
+ */
+export function decodePostsCursor(cursor: string): { createdAt: Date; id: string } | null {
+  let decoded: string;
+  try {
+    decoded = Buffer.from(cursor, "base64url").toString("utf8");
+  } catch {
+    return null;
+  }
+
+  const separatorIndex = decoded.indexOf("|");
+  if (separatorIndex === -1) {
+    return null;
+  }
+
+  const isoPart = decoded.slice(0, separatorIndex);
+  const id = decoded.slice(separatorIndex + 1);
+  if (!id) {
+    return null;
+  }
+
+  const createdAt = new Date(isoPart);
+  if (Number.isNaN(createdAt.getTime())) {
+    return null;
+  }
+
+  return { createdAt, id };
 }

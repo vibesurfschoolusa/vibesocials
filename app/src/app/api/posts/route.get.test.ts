@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { PostsResponse } from "@/lib/postsDto";
+import { encodePostsCursor, type PostsResponse } from "@/lib/postsDto";
 import { makeWorkspaceContext } from "../__test-helpers__/workspaceContextMock";
 
 // Roadmap Phase 8 — GET /api/posts metrics join. route.ts imports several
@@ -367,5 +367,114 @@ describe("GET /api/posts — createdBy attribution round-trip (Team Workspaces, 
     const body = (await res.json()) as PostsResponse;
 
     expect(body.jobs[0].createdBy).toBeNull();
+  });
+});
+
+describe("GET /api/posts — keyset cursor pagination (activity pagination)", () => {
+  // Minimal job rows carrying only the fields the DTO mapping reads, with
+  // strictly-decreasing createdAt + distinct ids (the desc total order).
+  function makeJobs(count: number) {
+    const base = Date.UTC(2026, 6, 10, 0, 0, 0);
+    return Array.from({ length: count }, (_, i) => ({
+      id: `job-${String(i).padStart(3, "0")}`,
+      status: "completed",
+      createdAt: new Date(base - i * 1000),
+      scheduledFor: null,
+      baseCaption: `cap ${i}`,
+      mediaItem: null,
+      publishMetadata: null,
+      user: null,
+      results: [],
+    }));
+  }
+
+  it("first page (no cursor): no keyset filter, over-fetches PAGE_SIZE + 1, orders by the (createdAt, id) total key", async () => {
+    postJobFindManyMock.mockResolvedValue(makeJobs(10));
+
+    await GET(getRequest());
+
+    expect(postJobFindManyMock).toHaveBeenCalledTimes(1);
+    const arg = postJobFindManyMock.mock.calls[0][0];
+    expect(arg.where).toEqual({ workspaceId: "ws-1" });
+    expect(arg.where).not.toHaveProperty("OR");
+    // POSTS_PAGE_SIZE (50) + 1 — the extra "is there more?" probe row.
+    expect(arg.take).toBe(51);
+    expect(arg.orderBy).toEqual([{ createdAt: "desc" }, { id: "desc" }]);
+  });
+
+  it("returns nextCursor: null when exactly PAGE_SIZE rows come back (no further page)", async () => {
+    postJobFindManyMock.mockResolvedValue(makeJobs(50));
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+
+    expect(body.jobs).toHaveLength(50);
+    expect(body.nextCursor).toBeNull();
+  });
+
+  it("slices the probe row and returns nextCursor from the LAST returned row when PAGE_SIZE + 1 rows come back", async () => {
+    const rows = makeJobs(51);
+    postJobFindManyMock.mockResolvedValue(rows);
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+
+    // 51 fetched -> 50 returned; the 51st is only a "has more" probe.
+    expect(body.jobs).toHaveLength(50);
+    const lastReturned = rows[49]; // row 50, 0-indexed
+    expect(body.nextCursor).toBe(encodePostsCursor(lastReturned.createdAt, lastReturned.id));
+    // The probe row must NOT appear in the payload.
+    expect(body.jobs.some((j) => j.id === rows[50].id)).toBe(false);
+  });
+
+  it("with ?cursor=: adds the keyset OR predicate for the decoded (createdAt, id), ANDed with the workspace scope", async () => {
+    const createdAt = new Date("2026-07-09T00:00:00.000Z");
+    const id = "job-042";
+    const cursor = encodePostsCursor(createdAt, id);
+    postJobFindManyMock.mockResolvedValue(makeJobs(3));
+
+    await GET(getRequest(`http://localhost/api/posts?cursor=${cursor}`));
+
+    const arg = postJobFindManyMock.mock.calls[0][0];
+    expect(arg.where).toEqual({
+      workspaceId: "ws-1",
+      OR: [
+        { createdAt: { lt: createdAt } },
+        { createdAt: createdAt, id: { lt: id } },
+      ],
+    });
+    expect(arg.orderBy).toEqual([{ createdAt: "desc" }, { id: "desc" }]);
+  });
+
+  it("returns 400 { error: 'Invalid cursor.' } and never queries the DB for a garbage cursor", async () => {
+    // A syntactically valid base64url token that decodes to a string with no
+    // createdAt|id structure — i.e. a tampered/garbage cursor.
+    const garbage = Buffer.from("totally-not-a-cursor").toString("base64url");
+
+    const res = await GET(getRequest(`http://localhost/api/posts?cursor=${garbage}`));
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: "Invalid cursor." });
+    expect(postJobFindManyMock).not.toHaveBeenCalled();
+    expect(postMetricFindManyMock).not.toHaveBeenCalled();
+  });
+
+  it("composes ?status= with ?cursor= — the status filter and the keyset predicate both land in where", async () => {
+    const createdAt = new Date("2026-07-09T00:00:00.000Z");
+    const id = "job-042";
+    const cursor = encodePostsCursor(createdAt, id);
+    postJobFindManyMock.mockResolvedValue(makeJobs(2));
+
+    await GET(getRequest(`http://localhost/api/posts?status=scheduled,draft&cursor=${cursor}`));
+
+    const arg = postJobFindManyMock.mock.calls[0][0];
+    expect(arg.where).toEqual({
+      workspaceId: "ws-1",
+      status: { in: ["scheduled", "draft"] },
+      OR: [
+        { createdAt: { lt: createdAt } },
+        { createdAt: createdAt, id: { lt: id } },
+      ],
+    });
   });
 });

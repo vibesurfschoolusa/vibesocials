@@ -14,7 +14,12 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { isValidPerPlatformOverrides, validateScheduledFor, type PostJobIntent } from "@/lib/scheduling";
 import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
 import type { PostsResponse } from "@/lib/postsDto";
-import { toPostJobDetailDto, toPostJobResultSummaryDto } from "@/lib/postsDto";
+import {
+  toPostJobDetailDto,
+  toPostJobResultSummaryDto,
+  encodePostsCursor,
+  decodePostsCursor,
+} from "@/lib/postsDto";
 
 /** Runtime set of valid PostJobStatus values, for the `?status=` filter. */
 const VALID_POST_JOB_STATUSES = new Set<string>(Object.values(PostJobStatus));
@@ -43,13 +48,28 @@ export async function GET(request: Request) {
   // PostJobStatus values, e.g. `?status=scheduled,draft` for the Queue view.
   // Unknown values are ignored; if nothing valid remains the filter is dropped
   // (returns all), so a bad param can never 500 or silently return empty.
-  const statusParam = new URL(request.url).searchParams.get("status");
+  const url = new URL(request.url);
+
+  const statusParam = url.searchParams.get("status");
   const statusFilter = statusParam
     ? statusParam
         .split(",")
         .map((s) => s.trim())
         .filter((s) => VALID_POST_JOB_STATUSES.has(s))
     : [];
+
+  // Keyset pagination cursor (activity pagination) — an opaque base64url token
+  // from a previous page's `nextCursor`. Decode it BEFORE any DB work so a
+  // tampered/garbage value is a clean 400 with zero queries; absent or empty
+  // means "first page" (no keyset predicate). See encode/decodePostsCursor.
+  const cursorParam = url.searchParams.get("cursor");
+  let cursor: { createdAt: Date; id: string } | null = null;
+  if (cursorParam) {
+    cursor = decodePostsCursor(cursorParam);
+    if (!cursor) {
+      return NextResponse.json({ error: "Invalid cursor." }, { status: 400 });
+    }
+  }
 
   // Team Workspaces (Task 4) — any member sees every job in the active
   // workspace, not just their own (design doc §4/§7); `createdBy` (below)
@@ -58,12 +78,22 @@ export async function GET(request: Request) {
   if (statusFilter.length > 0) {
     where.status = { in: statusFilter as PostJobStatus[] };
   }
+  // Keyset predicate for the (createdAt desc, id desc) total order: the page
+  // AFTER the cursor (C, I) is every row strictly older in that order —
+  // createdAt < C, or the same createdAt with a smaller id. ANDed with the
+  // workspace + status filters above.
+  if (cursor) {
+    where.OR = [
+      { createdAt: { lt: cursor.createdAt } },
+      { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+    ];
+  }
 
   try {
-    const jobs = await prisma.postJob.findMany({
+    const rows = await prisma.postJob.findMany({
       where,
-      orderBy: { createdAt: "desc" },
-      take: POSTS_PAGE_SIZE,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: POSTS_PAGE_SIZE + 1,
       select: {
         id: true,
         status: true,
@@ -90,6 +120,18 @@ export async function GET(request: Request) {
         },
       },
     });
+
+    // Keyset windowing (activity pagination): we over-fetch one row beyond the
+    // page (take: POSTS_PAGE_SIZE + 1) to tell whether an older page exists
+    // without a second COUNT query. If the probe row came back, drop it and
+    // hand the client a cursor pointing at the last row we DO return; otherwise
+    // this is the final page (nextCursor: null). Everything below — the metric
+    // join and the DTO mapping — operates on the sliced `jobs`, unchanged.
+    const hasMore = rows.length > POSTS_PAGE_SIZE;
+    const jobs = hasMore ? rows.slice(0, POSTS_PAGE_SIZE) : rows;
+    const lastJob = jobs[jobs.length - 1];
+    const nextCursor =
+      hasMore && lastJob ? encodePostsCursor(lastJob.createdAt, lastJob.id) : null;
 
     // Roadmap Phase 8 (analytics): join the latest engagement snapshot per
     // result. Team Workspaces (Task 4): scoped to the active WORKSPACE, not
@@ -133,6 +175,7 @@ export async function GET(request: Request) {
 
     const payload: PostsResponse = {
       workspaceMemberCount: context.memberCount,
+      nextCursor,
       jobs: jobs.map((job) => {
         // Task 8 — the raw JSON snapshot narrowed to the display fields the
         // DTO exposes. Untyped at the Prisma boundary (Json?), so this cast
