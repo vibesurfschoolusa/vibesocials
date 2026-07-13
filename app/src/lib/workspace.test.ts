@@ -79,6 +79,7 @@ function makeUser(overrides: Partial<User> = {}): User {
     email: "user@example.com",
     name: "Klaus",
     passwordHash: null,
+    emailVerifiedAt: null,
     companyWebsite: null,
     defaultHashtags: null,
     notifyOnPostComplete: true,

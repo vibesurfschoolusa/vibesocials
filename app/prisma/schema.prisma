@@ -46,26 +46,39 @@ enum WorkspaceRole {
   member
 }
 
+// Account lifecycle (scale-readiness spec §A). Discriminates the two kinds of
+// short-lived, single-use AccountToken: password reset (60 min TTL) and email
+// verification (7 day TTL). See src/lib/accountToken.ts for the TTLs.
+enum AccountTokenType {
+  password_reset
+  email_verify
+}
+
 model User {
-  id                   String   @id @default(cuid())
-  email                String   @unique
+  id                   String    @id @default(cuid())
+  email                String    @unique
   name                 String?
   passwordHash         String?
+  // Account lifecycle (scale-readiness spec §A). Null until the user verifies
+  // their email. The backfill migration grandfathers every EXISTING user as
+  // verified (stamped CURRENT_TIMESTAMP) so this rollout locks nobody out.
+  emailVerifiedAt      DateTime?
   companyWebsite       String?
   defaultHashtags      String?
   // Roadmap Phase 6 (notifications). Gates the best-effort post-outcome email
   // (see server/notifications/postOutcomeEmail.ts) — independent of whether
   // RESEND_API_KEY is configured, which is the other, env-level gate. Defaults
   // to true so existing users start opted in, matching the spec (§7.2).
-  notifyOnPostComplete Boolean  @default(true)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  notifyOnPostComplete Boolean   @default(true)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   workspaceMemberships WorkspaceMember[]
   socialConnections    SocialConnection[]
   mediaItems           MediaItem[]
   postJobs             PostJob[]
   postMetrics          PostMetric[]
+  accountTokens        AccountToken[]
 }
 
 // Team Workspaces. The tenant: owns connections, media, posts, metrics, and
@@ -120,6 +133,27 @@ model WorkspaceInvite {
   createdAt   DateTime  @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+// Account lifecycle (scale-readiness spec §A). Short-lived, single-use tokens
+// for password reset and email verification. Same hash-only storage model as
+// WorkspaceInvite: a random 43-char base64url token (32 bytes) is emailed once
+// in a URL FRAGMENT; only its SHA-256 hex digest (`tokenHash`, unique) is
+// persisted — the raw token is never stored and cannot be recovered. `usedAt`
+// marks single-use consumption; `expiresAt` is stamped by issueAccountToken per
+// AccountTokenType TTL. Cascade-deleted with the owning user.
+model AccountToken {
+  id        String           @id @default(cuid())
+  userId    String
+  type      AccountTokenType
+  tokenHash String           @unique // sha256 hex of the raw token
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
 }
 
 model SocialConnection {
