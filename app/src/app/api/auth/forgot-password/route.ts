@@ -57,7 +57,11 @@ export async function POST(request: Request) {
 
   // Rate limits FIRST, before any DB read. Per-email caps how often one address
   // can be targeted; per-ip caps enumeration across many addresses from one host.
-  const emailLimit = await checkRateLimit({ userId: `email:${email}`, ...EMAIL_RATE_LIMIT });
+  // The throttle key is normalized (trim + lowercase) so case rotation
+  // ("User@x.com", "uSer@X.com", ...) can't mint fresh buckets for one mailbox
+  // (review Important #1).
+  const rateLimitEmailKey = `email:${email.trim().toLowerCase()}`;
+  const emailLimit = await checkRateLimit({ userId: rateLimitEmailKey, ...EMAIL_RATE_LIMIT });
   if (!emailLimit.allowed) {
     return tooManyRequests(emailLimit.retryAfterSeconds);
   }
@@ -69,6 +73,11 @@ export async function POST(request: Request) {
   }
 
   try {
+    // The throttle key above is normalized for rotation hygiene; this lookup
+    // stays AS-TYPED to match the app-wide case-sensitive email model
+    // (register/login store + compare emails as-typed) — normalizing only here
+    // would miss mixed-case-registered accounts. App-wide email normalization
+    // is a separate concern.
     const user = await prisma.user.findUnique({
       where: { email },
       select: { id: true, email: true },

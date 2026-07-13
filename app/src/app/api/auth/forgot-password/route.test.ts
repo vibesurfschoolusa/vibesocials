@@ -103,6 +103,28 @@ describe("POST /api/auth/forgot-password", () => {
     });
   });
 
+  it("normalizes the per-email throttle key to lowercase but looks the user up AS-TYPED (review Important #1)", async () => {
+    findUniqueUserMock.mockResolvedValue(null);
+
+    await POST(req({ email: "User@X.com" }));
+
+    // Case rotation ("User@x.com", "uSer@X.com", ...) must not mint fresh
+    // rate-limit buckets for the same mailbox.
+    expect(checkRateLimitMock).toHaveBeenCalledWith({
+      userId: "email:user@x.com",
+      route: "auth/forgot",
+      limit: 3,
+      windowMs: 15 * 60 * 1000,
+    });
+    // The lookup stays as-typed: the app's email model is uniformly
+    // case-sensitive (register/login store + compare as-typed), so a
+    // normalized lookup would MISS mixed-case-registered accounts.
+    expect(findUniqueUserMock).toHaveBeenCalledWith({
+      where: { email: "User@X.com" },
+      select: { id: true, email: true },
+    });
+  });
+
   it("returns 429 with Retry-After and never reads the db when rate limited", async () => {
     checkRateLimitMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 42 });
 
