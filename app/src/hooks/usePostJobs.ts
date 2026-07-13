@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type { PostJobDTO, PostsResponse } from "@/lib/postsDto";
+import { appendJobsPage, mergePolledPageOne } from "@/lib/postsPagination";
 
 export interface UsePostJobsResult {
   jobs: PostJobDTO[] | null;
@@ -17,6 +18,22 @@ export interface UsePostJobsResult {
    * (design doc §7 — a solo workspace's activity feed looks unchanged).
    */
   workspaceMemberCount: number | null;
+  /**
+   * Activity pagination (Task C2) — fetch the next (older) page via the last
+   * response's `nextCursor` and APPEND it, de-duplicated by id. A no-op while a
+   * page is already loading or when `hasMore` is false. Never flips
+   * `loading`/`error`: a failed Load more keeps the current list on screen and
+   * leaves the button in place for a retry.
+   */
+  loadMore: () => void;
+  /** True while a `loadMore()` fetch is in flight — drives the button spinner. */
+  loadingMore: boolean;
+  /**
+   * True while the last successful load reported a `nextCursor` (an older page
+   * exists). Gates the Load more button; the background poll never changes it,
+   * so the loaded tail's cursor survives a refresh.
+   */
+  hasMore: boolean;
 }
 
 const POLL_INTERVAL_MS = 10_000;
@@ -68,6 +85,13 @@ export function usePostJobs(): UsePostJobsResult {
   // without this counter the poll effect would have no changed dependency to
   // re-run on after a failure and would stop re-arming for good.
   const [pollCycle, setPollCycle] = useState(0);
+  // Activity pagination (Task C2). `nextCursor` is the opaque `?cursor=` token
+  // for the next OLDER page from the last successful load (null = last page,
+  // drives `hasMore`). Only a foreground load (initial/reload) and `loadMore`
+  // move it; the background poll deliberately leaves it untouched so the loaded
+  // tail's cursor survives a refresh. `loadingMore` guards + spins the button.
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const load = useCallback(async (options?: { background?: boolean }) => {
     const background = options?.background ?? false;
@@ -85,7 +109,20 @@ export function usePostJobs(): UsePostJobsResult {
         );
       }
       const data: PostsResponse = await response.json();
-      setJobs(data.jobs);
+      if (background) {
+        // Background poll: keep page 1 fresh WITHOUT dropping the older tail the
+        // user pulled in via Load more. `mergePolledPageOne` collapses to a plain
+        // page-1 replace when no tail exists, so page-1 refresh is unchanged for
+        // callers who never paginated. nextCursor is intentionally NOT touched
+        // here — re-adopting page 1's cursor would make the next Load more
+        // re-fetch already-shown rows (deep-tail staleness is accepted, §C).
+        setJobs((prev) => (prev ? mergePolledPageOne(data.jobs, prev) : data.jobs));
+      } else {
+        // Foreground load (initial or explicit reload): reset to page 1 and adopt
+        // its fresh cursor — a reload deliberately restarts pagination.
+        setJobs(data.jobs);
+        setNextCursor(data.nextCursor);
+      }
       setWorkspaceMemberCount(data.workspaceMemberCount);
     } catch (err: unknown) {
       // Background failures keep the stale list on screen silently — only a
@@ -101,6 +138,33 @@ export function usePostJobs(): UsePostJobsResult {
       }
     }
   }, []);
+
+  const loadMore = useCallback(async () => {
+    // Guard: nothing older to fetch, or a page is already in flight. Reading
+    // both from the closure is safe — the deps below refresh this callback on
+    // every change, and the Button is `disabled` while `loadingMore` is true.
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const response = await fetch(`/api/posts?cursor=${encodeURIComponent(nextCursor)}`);
+      if (!response.ok) {
+        // Silent: the full-width error state is owned by the initial load /
+        // reload only (Finding 1). Leave the list AND nextCursor intact so the
+        // button stays for a retry; the spinner stops in `finally`.
+        return;
+      }
+      const data: PostsResponse = await response.json();
+      // APPEND the older page, de-duped by id — a poll may have prepended a row
+      // this page also carries; appendJobsPage keeps the on-screen copy so the
+      // rendered list never has a duplicate key.
+      setJobs((prev) => (prev ? appendJobsPage(prev, data.jobs) : data.jobs));
+      setNextCursor(data.nextCursor);
+    } catch {
+      // Same as a non-ok response — keep the loaded list + cursor for a retry.
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [nextCursor, loadingMore]);
 
   useEffect(() => {
     load();
@@ -121,5 +185,14 @@ export function usePostJobs(): UsePostJobsResult {
     return () => clearTimeout(t);
   }, [jobs, load, pollCycle]);
 
-  return { jobs, loading, error, reload: load, workspaceMemberCount };
+  return {
+    jobs,
+    loading,
+    error,
+    reload: load,
+    workspaceMemberCount,
+    loadMore,
+    loadingMore,
+    hasMore: nextCursor !== null,
+  };
 }

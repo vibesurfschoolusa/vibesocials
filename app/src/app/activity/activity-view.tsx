@@ -12,7 +12,8 @@ import { usePostJobs } from "@/hooks/usePostJobs";
 
 /** Client-rendered activity list. The parent server component gates access. */
 export function ActivityView() {
-  const { jobs, loading, error, reload, workspaceMemberCount } = usePostJobs();
+  const { jobs, loading, error, reload, workspaceMemberCount, loadMore, loadingMore, hasMore } =
+    usePostJobs();
   // Team Workspaces (Task 7, design §7) — attribution only in a shared
   // (>1-member) workspace, so a solo workspace's activity feed is unchanged.
   const showAttribution = (workspaceMemberCount ?? 0) > 1;
@@ -72,11 +73,20 @@ export function ActivityView() {
             }
           />
         ) : (
-          <div className="space-y-3">
-            {jobs.map((job) => (
-              <PostJobCard key={job.id} job={job} showAttribution={showAttribution} />
-            ))}
-          </div>
+          <>
+            <div className="space-y-3">
+              {jobs.map((job) => (
+                <PostJobCard key={job.id} job={job} showAttribution={showAttribution} />
+              ))}
+            </div>
+            {hasMore ? (
+              <div className="mt-4 flex justify-center">
+                <Button variant="outline" size="sm" loading={loadingMore} onClick={loadMore}>
+                  Load more
+                </Button>
+              </div>
+            ) : null}
+          </>
         )}
       </div>
     </div>
