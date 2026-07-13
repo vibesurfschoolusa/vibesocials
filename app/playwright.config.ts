@@ -48,24 +48,60 @@ export default defineConfig({
     // take a while on a cold cache or a slow CI runner; generous on purpose.
     timeout: 180_000,
     env: {
-      // Dummy, unreachable DB so `new PrismaClient()` (constructed eagerly by
-      // `src/lib/db.ts`) has a DATABASE_URL to read and the server process
-      // boots. Nothing this suite exercises issues a real query: the four
-      // public routes under test are statically prerendered, and the
-      // next-auth `jwt` session strategy never touches Prisma for an
-      // unauthenticated request. See e2e/README.md for the full rationale.
-      DATABASE_URL: "postgresql://user:pass@localhost:5432/db",
+      // DATABASE_URL resolution:
+      //  - Smoke-only run (no E2E_DATABASE_URL): a dummy, unreachable DB so
+      //    `new PrismaClient()` (constructed eagerly by `src/lib/db.ts`) has a
+      //    URL to read and the server boots. Nothing the smoke suite exercises
+      //    issues a real query — the four public routes are statically
+      //    prerendered and the next-auth `jwt` strategy never touches Prisma
+      //    for an unauthenticated request (see e2e/README.md).
+      //  - core-flows run: when `E2E_DATABASE_URL` is set (a throwaway,
+      //    migrated test Postgres — NEVER prod), the webServer MUST boot
+      //    against it or every authenticated flow would hit the unreachable
+      //    dummy. Playwright merges `webServer.env` over the parent's
+      //    process.env, but E2E_DATABASE_URL is not a name the app reads —
+      //    without this explicit DATABASE_URL mapping the CI/local core-flow
+      //    run could never reach a real database. Falls back to the dummy so
+      //    the smoke-only path is byte-for-byte unchanged.
+      DATABASE_URL:
+        process.env.E2E_DATABASE_URL ?? "postgresql://user:pass@localhost:5432/db",
       // next-auth v4 hard-requires a `secret` once NODE_ENV=production (which
       // `next start` sets) — every page mounts `useSession()`, which calls
       // `GET /api/auth/session`, and that route 500s without this (observed:
-      // "[next-auth][error][NO_SECRET] ... MissingSecretError"). Dummy value
-      // is fine: this server instance is throwaway and talks to no real DB.
-      NEXTAUTH_SECRET: "e2e-test-secret-do-not-use-in-production",
+      // "[next-auth][error][NO_SECRET] ... MissingSecretError"). A fixed dummy
+      // is fine for the throwaway server; honor an explicit override so a
+      // core-flow run can sign a real, decodable session cookie (the login
+      // flow depends on the running server and the encoder agreeing on it).
+      NEXTAUTH_SECRET:
+        process.env.NEXTAUTH_SECRET ?? "e2e-test-secret-do-not-use-in-production",
       // Silences next-auth's "[warn][NEXTAUTH_URL]" (harmless — it falls
       // back to inferring the URL from request headers — but this matches
       // real deployments, which always set it, and keeps webServer's log
       // free of noise that isn't ours to ignore-by-default).
       NEXTAUTH_URL: baseURL,
+      // Blob store token for the schedule flow's upload step (@vercel/blob/client,
+      // src/app/api/upload/route.ts — handleUpload signs a client token LOCALLY
+      // from this, no network). Only threaded through when present; the DB-only
+      // flows never need it. A throwaway, correctly-shaped test token is fine
+      // (`vercel_blob_rw_<storeId>_<secret>`). Passing `undefined` is a no-op.
+      ...(process.env.BLOB_READ_WRITE_TOKEN
+        ? { BLOB_READ_WRITE_TOKEN: process.env.BLOB_READ_WRITE_TOKEN }
+        : {}),
+      // Blob API base-URL seam for the upload double (Task F). `@vercel/blob@2`
+      // reads these in getApiUrl() (node_modules/@vercel/blob/dist/chunk-*.js).
+      // The composer's `upload()` runs in the BROWSER, so the actual PUT of the
+      // file bytes only honors the build-time-inlined NEXT_PUBLIC_ form — hence
+      // it must be present for `npm run build` (which runs as part of this
+      // command). The non-public var covers any server-side blob call. Both
+      // point at the mock blob server (e2e/support/mock-blob-server.mjs). Only
+      // threaded when present, so the smoke-only build is byte-for-byte
+      // unchanged (the SDK then uses its real default API base).
+      ...(process.env.NEXT_PUBLIC_VERCEL_BLOB_API_URL
+        ? { NEXT_PUBLIC_VERCEL_BLOB_API_URL: process.env.NEXT_PUBLIC_VERCEL_BLOB_API_URL }
+        : {}),
+      ...(process.env.VERCEL_BLOB_API_URL
+        ? { VERCEL_BLOB_API_URL: process.env.VERCEL_BLOB_API_URL }
+        : {}),
     },
   },
 });

@@ -47,3 +47,98 @@ jobs:
 
       - name: Test
         run: npm run test --if-present
+
+  # End-to-end (Playwright). Separate job so a browser/DB failure is
+  # attributable at a glance and doesn't gate the fast unit lane above.
+  #
+  # Runs against a THROWAWAY Postgres service container (never prod). With
+  # E2E_DATABASE_URL set, playwright.config.ts boots `next start` against it,
+  # so the public smoke suite PLUS the DB-only core flows (register, settings)
+  # execute for real. Task F adds a blob-UPLOAD double (a mock Vercel-Blob
+  # server + the NEXT_PUBLIC_VERCEL_BLOB_API_URL seam + a seeded connection),
+  # so the "schedule a post" flow runs for real too (E2E_UPLOAD_STUBS_READY=1).
+  #
+  # The compose/invite→post flows stay skipped: an immediate publish calls
+  # inngest.send(), which throws under `next start` (prod mode, no event key),
+  # and the real publish is an async Inngest function no worker runs here — so
+  # E2E_STUBS_READY is deliberately NOT set. Skipped is honest ("not
+  # exercised"); a green there would misrepresent "job created" as "published".
+  # See app/e2e/README.md ("Why compose / invite stay skipped").
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: app
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vibesocials_e2e
+        ports:
+          - 5432:5432
+        # Wait for the DB to accept connections before the steps run.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # Prisma CLI reads DATABASE_URL; playwright.config.ts's webServer reads
+      # E2E_DATABASE_URL (and threads it into the booted server as DATABASE_URL).
+      # Same throwaway service DB either way.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/vibesocials_e2e
+      E2E_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/vibesocials_e2e
+      # Fixed test secret: the encoder and the running server must agree on it
+      # for the login flow's session cookie to decode. Throwaway, not a real
+      # credential.
+      NEXTAUTH_SECRET: e2e-ci-secret-not-for-production
+      # Task F — blob-upload double for the "schedule a post" flow.
+      # NEXT_PUBLIC_ form is what the browser's `upload()` PUT honors (inlined at
+      # build); the non-public form covers any server-side blob call. Both point
+      # at the mock blob server started in the E2E step below.
+      NEXT_PUBLIC_VERCEL_BLOB_API_URL: http://localhost:9366
+      VERCEL_BLOB_API_URL: http://localhost:9366
+      # Throwaway, correctly-shaped (`vercel_blob_rw_<storeId>_<secret>`) token —
+      # handleUpload() only needs it to sign a client token locally; no network.
+      BLOB_READ_WRITE_TOKEN: vercel_blob_rw_e2eteststore_e2etestsecrettoken0123456789
+      # Lights the upload-only schedule flow. NOTE: E2E_STUBS_READY is
+      # deliberately absent — compose/invite stay skipped (see job comment).
+      E2E_UPLOAD_STUBS_READY: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply migrations to the test database
+        run: npx prisma migrate deploy
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E (smoke + DB-only core flows + scheduled-post upload)
+        run: |
+          # Task F — start the blob-upload double for the schedule flow. It runs
+          # for the duration of this step, then is torn down. (next build inside
+          # `playwright test` takes minutes, so it is always up before the first
+          # upload, but wait for readiness anyway.)
+          node e2e/support/mock-blob-server.mjs &
+          MOCK_BLOB_PID=$!
+          for _ in $(seq 1 40); do
+            curl -s -o /dev/null "http://localhost:9366/" && break
+            sleep 0.25
+          done
+          set +e
+          npx playwright test
+          status=$?
+          kill "$MOCK_BLOB_PID" 2>/dev/null || true
+          exit $status

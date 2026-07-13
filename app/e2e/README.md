@@ -54,24 +54,84 @@ the smoke spec should start failing loudly — that's a real regression, not a
 harness problem, and the fix is to adapt the app or the assertion to match
 the new *intended* behavior, not to loosen the check.
 
-## Why `core-flows.spec.ts` is skipped here
+## What runs, what's skipped, and why (the capability gates)
 
-It's gated behind an env flag and never runs in this sandbox:
+`core-flows.spec.ts` is gated by env flags so CI runs exactly the flows whose
+doubles are **real** and skips the rest — never a false pass:
 
 ```ts
-const dbReady = !!process.env.E2E_DATABASE_URL;
-test.describe(dbReady ? "core flows" : "core flows (skipped — needs E2E_DATABASE_URL)", () => {
-  test.skip(!dbReady, "Set E2E_DATABASE_URL to a seeded test DB to run these");
-  ...
-});
+const dbReady = !!process.env.E2E_DATABASE_URL;              // gates the whole file
+const uploadStubsReady = !!process.env.E2E_UPLOAD_STUBS_READY; // gates the schedule flow
+const publishStubsReady = !!process.env.E2E_STUBS_READY;      // gates compose / invite→post
 ```
 
-`E2E_DATABASE_URL` is unset here, so the whole file reports as **skipped**,
-never **passed** — a skip is honest about "not exercised"; a pass would be a
-lie. The test bodies are written for real against the current source
-(concrete selectors, concrete copy, cross-checked against
-`src/app/{login,register,posts/new,queue,activity,settings}/*` as of this
-commit) so they're ready to run as-is once the infra below exists, not TODOs.
+| Flow | Needs | Gate | In CI |
+| --- | --- | --- | --- |
+| register via the UI, then log in | Postgres only | `E2E_DATABASE_URL` | **runs** |
+| edit settings and see it persist | Postgres only | `E2E_DATABASE_URL` | **runs** |
+| schedule a post → Queue | Postgres + blob upload double + seeded connection | `+ E2E_UPLOAD_STUBS_READY` | **runs** (Task F) |
+| compose a post → Activity | Postgres + a real publish path | `+ E2E_STUBS_READY` | **skipped** |
+| owner invites → member posts | Postgres + a real publish path | `+ E2E_STUBS_READY` | **skipped** |
+
+The CI job (below) sets `E2E_DATABASE_URL` + `E2E_UPLOAD_STUBS_READY` (plus the
+blob env from part 4), so **four** flows run for real and the two publish flows
+report skipped. The test bodies are written for real against the current source
+(concrete selectors/copy, cross-checked against
+`src/app/{login,register,posts/new,queue,activity,settings,join/[token]}/*`
+and `src/components/team-section.tsx`), not TODOs.
+
+### Why the schedule flow *can* run but compose / invite *can't* (Task F finding)
+
+The three "posting" flows look alike, but `POST /api/posts` treats them very
+differently (see `src/app/api/posts/route.ts` + `src/server/jobs/posting.ts`):
+
+- **Scheduled** intent creates the `PostJob` (status `scheduled`, caption
+  snapshotted) with **no** per-platform results, does **not** require a
+  connection to fan out to, and **sends no Inngest event**. So the schedule flow
+  runs end to end against just Postgres + a working media upload — no platform
+  API is ever contacted. Its only real dependency beyond the DB is the blob
+  upload (part 4) and a `SocialConnection` row so the composer will submit
+  (part 3). Both are now provided; the flow is lit.
+
+- **Immediate** intent (compose, and the member-posts step of the invite flow)
+  calls `inngest.send({ name: "post/publish.requested", … })`. The actual
+  publish is the async Inngest function `publishToAllPlatforms`
+  (`src/server/jobs/inngest-functions.ts`) — the *only* place the platform
+  clients (`src/server/platforms/*Client.ts`) are called. This harness runs
+  `next start` + Postgres but **no Inngest worker**, so:
+  1. `inngest.send()` itself throws. `next start` sets `NODE_ENV=production`, so
+     the Inngest SDK infers **cloud** mode, and with no `INNGEST_EVENT_KEY` the
+     v3 client fails fast:
+     `node_modules/inngest/components/Inngest.js` (`_send`):
+     `if (this.mode.isCloud && !this.eventKeySet()) throw … "Failed to send event"`.
+     `POST /api/posts` catches it and returns 500, so the composer never shows
+     "Post queued" — the flow can't even reach Activity.
+  2. Even if the event send were faked to a mock intake (return `{status:200}`),
+     no worker ever invokes `publishToAllPlatforms`, so the `PostJobResult`s stay
+     `pending` forever and the platform clients are never run. A green would
+     prove only "a job row was created and shows in Activity", **not** "composed
+     and published to a connected platform" — which is what the flow, and the
+     confirm dialog's "This publishes immediately", claim. That's a misleading
+     pass, so these stay **skipped** (honest "not exercised").
+
+**Consequence for the platform seam.** Because *no* lightable flow calls a
+platform client, there is nothing for a TikTok/base-URL seam or a mock platform
+API to faithfully cover here (the brief's rule: "seam ONLY the client(s) your
+doubles actually cover"). None was added — a seam with no consumer would be
+inert, unexercised code. Lighting compose/invite honestly requires running the
+publish worker in E2E (e.g. an Inngest dev server that introspects
+`/api/inngest` and invokes the function), which would *then* hit the platform
+clients and justify seaming one + a mock platform server. That's a larger,
+separate change (a real worker process, not a "plain node http" double) and is
+called out as the follow-up, not faked in.
+
+**How the server reaches the test DB.** `playwright.config.ts`'s `webServer`
+block fully replaces the child process's environment, so it threads
+`E2E_DATABASE_URL` through as the booted server's `DATABASE_URL` (falling back
+to the unreachable dummy when unset, so the smoke-only path is unchanged).
+Without that, a core-flow run would boot against the dummy DB and every
+authenticated request would fail — setting `E2E_DATABASE_URL` alone is not
+enough; the config has to forward it.
 
 ### What it takes to actually run these
 
@@ -151,32 +211,102 @@ Either way, the connection also has to exist in the DB
 unconnected test user sees an empty `PlatformPreviewList` and the "connect a
 platform" empty states instead of anything to publish to.
 
-**4. Media upload needs a blob store.**
+**Connection seed — IMPLEMENTED (Task F), for the schedule flow.** Even a
+*scheduled* post can't be submitted from an unconnected composer (the submit
+button is disabled and `selectedPlatforms.length === 0` blocks it), so the
+schedule flow needs a `SocialConnection` too — but a scheduled job creates no
+results and never calls a platform client, so the connection is inert. Because
+every test provisions its own random-email user via `registerViaApi`, the
+connection is seeded **per test, in-process**, keyed by that fresh user:
+`e2e/support/seed-connection.ts`'s `seedWorkspaceConnection(email)` finds the
+user's personal workspace (oldest owned membership) and upserts one row. It
+constructs its **own** `PrismaClient` pointed explicitly at `E2E_DATABASE_URL`
+(never imports `src/lib/db.ts`) and **throws if `E2E_DATABASE_URL` is unset**, so
+it can only ever touch a throwaway test DB.
 
-`src/app/api/upload/route.ts` uses `@vercel/blob/client`, which needs a real
-`BLOB_READ_WRITE_TOKEN`. For E2E, either point it at a real (test/dev)
-Vercel Blob store, or stub the upload route the same way as the OAuth
-clients above. Without one, `compose a post` / `schedule a post` fail at the
-upload step before they ever reach a platform client.
+**4. Media upload needs a blob store. — IMPLEMENTED (Task F).**
+
+`src/app/api/upload/route.ts` uses `@vercel/blob/client`. The upload is doubled
+**env-only, with no change to product code**, because `@vercel/blob@2` reads its
+API base URL from an env var at call time:
+
+```js
+// node_modules/@vercel/blob/dist/chunk-UVSKRCEW.js
+function getApiUrl(pathname = "") {
+  let baseUrl = process.env.VERCEL_BLOB_API_URL
+             || process.env.NEXT_PUBLIC_VERCEL_BLOB_API_URL;
+  return `${baseUrl || defaultVercelBlobApiUrl}${pathname}`;
+}
+```
+
+The real `upload()` runs unchanged. It is a two-hop flow:
+
+1. The browser POSTs `/api/upload` (the app's real route). `handleUpload()` calls
+   `onBeforeGenerateToken` and signs a **client token locally** from
+   `BLOB_READ_WRITE_TOKEN` — no network (verified in
+   `node_modules/@vercel/blob/dist/client.js`). So a throwaway,
+   correctly-shaped token (`vercel_blob_rw_<storeId>_<secret>`) is all the
+   server needs.
+2. The browser then PUTs the file bytes to
+   `${NEXT_PUBLIC_VERCEL_BLOB_API_URL}/?pathname=<key>` and reads back
+   `{ url, downloadUrl, pathname, contentType, contentDisposition, etag }`
+   (`createPutMethod` → `requestApi`, `chunk-*.js`).
+
+**Two subtleties that matter:**
+
+- `upload()` runs in the **browser**, so only the build-time-inlined
+  `NEXT_PUBLIC_` form of the override reaches the PUT. It must be set for
+  `npm run build`, which `playwright.config.ts`'s `webServer` runs as part of
+  its command — that config threads it (and the non-public var, for any
+  server-side call) through when present, so the smoke-only build is unchanged.
+- Using `http://localhost:<port>` (not `127.0.0.1`) as the base makes the SDK's
+  `supportsRequestStreams` return `false`, so the PUT body is sent whole rather
+  than as a duplex request stream — which is what keeps a cross-origin PUT
+  working over plain HTTP/1.1 in Chromium.
+
+The double is a tiny dependency-free Node server, `e2e/support/mock-blob-server.mjs`:
+it implements the PUT (store bytes, return the exact `PutBlobResult` JSON), a GET
+that re-serves the bytes (so the Queue thumbnail resolves), and permissive CORS
+including an OPTIONS preflight that echoes the SDK's `authorization`/`x-api-*`
+request headers (the PUT is cross-origin: app on `:3000`, mock on `:9366`). It's
+started for the run (CI step below; locally `node e2e/support/mock-blob-server.mjs`).
 
 ### Wiring it into CI
 
-Not done in this change (out of scope for H3 — see the task's own framing:
-a working smoke harness + a credible scaffold, not a fake green suite). When
-the owner is ready:
+**Done** — `.github/workflows/ci.yml` has an `e2e` job (separate from the
+fast unit lane) that:
 
-1. Provision a throwaway Postgres service for the job (e.g. GitHub Actions'
-   `services: postgres:` container, or a Neon/Supabase branch database).
-2. In `.github/workflows/ci.yml`, add a step after the existing `Test` step
-   that sets `E2E_DATABASE_URL` (+ `DATABASE_URL`, `NEXTAUTH_SECRET`, and the
-   OAuth-double strategy chosen above from part 3) and runs
-   `npx prisma migrate deploy && npx playwright install chromium --with-deps
-   && npx playwright test`.
-3. Until then, `core-flows.spec.ts` stays a documented, reviewable scaffold
-   — every future PR that touches the auth/compose/queue/settings UI can
-   still be checked against it by eye (do the selectors/copy in the spec
-   still match the real page?), which is most of the value of having it
-   checked in even unexecuted.
+1. Stands up a throwaway `postgres:16` **service container** (never prod),
+   health-checked before the steps run.
+2. Sets `DATABASE_URL` + `E2E_DATABASE_URL` to that service and a fixed
+   throwaway `NEXTAUTH_SECRET`, then runs `npx prisma migrate deploy` against
+   it and `npx playwright install --with-deps chromium`.
+3. Sets the Task F blob env (`NEXT_PUBLIC_VERCEL_BLOB_API_URL` +
+   `VERCEL_BLOB_API_URL` → the mock, a throwaway `BLOB_READ_WRITE_TOKEN`) and
+   `E2E_UPLOAD_STUBS_READY: "1"`, starts `e2e/support/mock-blob-server.mjs` in
+   the background, then runs `npx playwright test` (tearing the mock down
+   after). So the run exercises the public smoke suite + the register,
+   settings, **and schedule** flows for real.
+4. Does **not** set `E2E_STUBS_READY`, so the compose / invite→post flows report
+   skipped — a green that means what it says (see "Why the schedule flow can run
+   but compose / invite can't" above).
+
+To extend coverage to the compose / invite→post flows later, you need a running
+**publish worker**, not just a mock — see that section. Once the async
+`publishToAllPlatforms` actually runs in E2E (e.g. via an Inngest dev server
+that introspects `/api/inngest`), add a base-URL env seam to whichever platform
+client it will hit (e.g. `const TIKTOK_API_BASE = process.env.TIKTOK_API_BASE ??
+"https://open.tiktokapis.com"` — default identical) and a mock platform server
+for it, then set `E2E_STUBS_READY: "1"`. The two skipped tests light up with no
+change to their bodies.
+
+**Local run.** A `postgres:16` container is the easiest DB source:
+`docker run --rm -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=vibesocials_e2e -p 5432:5432 postgres:16`.
+Point Prisma at it (`export E2E_DATABASE_URL=… DATABASE_URL="$E2E_DATABASE_URL"`),
+`npx prisma migrate deploy`, then — for the DB-only flows — `npx playwright test`.
+To also run the schedule flow, start the blob double in one shell
+(`node e2e/support/mock-blob-server.mjs`) and in another run:
+`NEXT_PUBLIC_VERCEL_BLOB_API_URL=http://localhost:9366 VERCEL_BLOB_API_URL=http://localhost:9366 BLOB_READ_WRITE_TOKEN=vercel_blob_rw_e2eteststore_localdev E2E_UPLOAD_STUBS_READY=1 npx playwright test`.
 
 ## Keeping this separate from Vitest
 
