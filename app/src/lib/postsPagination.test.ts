@@ -132,4 +132,33 @@ describe("mergePolledPageOne", () => {
     expect(ids(out)).toEqual(["1", "2"]);
     expect(new Set(ids(out)).size).toBe(out.length);
   });
+
+  it("CLEARS the list when a poll returns an empty page 1 (workspace went to zero jobs)", () => {
+    // Regression guard vs main: pre-pagination, a background poll that returned
+    // no rows replaced the list (cleared it). An empty page 1 means the workspace
+    // truly has ZERO jobs, so any tail pulled in via Load more is stale and must
+    // NOT be retained — trust the server and clear.
+    const prevWithRows = [job("1"), job("2"), job("3")];
+    const emptyPageOne: PostJobDTO[] = [];
+    const out = mergePolledPageOne(emptyPageOne, prevWithRows);
+    expect(ids(out)).toEqual([]);
+    // Returns the (empty) page-1 reference as-is: the "no tail ⇒ result is page 1"
+    // invariant holds for the empty case too, and no fresh array is allocated.
+    expect(out).toBe(emptyPageOne);
+  });
+
+  it("returns empty when both page 1 and prev are empty", () => {
+    expect(ids(mergePolledPageOne([], []))).toEqual([]);
+  });
+
+  it("dedupes a prev-repeated TAIL row (off page 1) so it cannot surface twice", () => {
+    // Defensive symmetry with appendJobsPage: the composed [page 1 ++ tail] is run
+    // through dedupeJobsById, so even if prev repeats a row that is NOT on page 1
+    // (id "3" here — a Load-more tail row), the merged output holds it exactly once.
+    const prev = [job("1"), job("2"), job("3"), job("3")];
+    const pageOne = [job("1"), job("2")];
+    const out = mergePolledPageOne(pageOne, prev);
+    expect(ids(out)).toEqual(["1", "2", "3"]);
+    expect(new Set(ids(out)).size).toBe(out.length);
+  });
 });

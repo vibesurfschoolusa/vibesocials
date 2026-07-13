@@ -59,7 +59,19 @@ export function appendJobsPage(existing: PostJobDTO[], page: PostJobDTO[]): Post
  * unchanged for callers who never clicked Load more.
  */
 export function mergePolledPageOne(pageOne: PostJobDTO[], prev: PostJobDTO[]): PostJobDTO[] {
+  // An empty page 1 ⇒ the workspace is truly empty (the poll re-fetched the
+  // newest page and it came back with zero jobs). Any retained tail (rows pulled
+  // in via Load more) is therefore stale and must NOT survive — return the empty
+  // page as-is. This restores main's clear-on-empty poll behavior (pre-pagination
+  // an empty poll replaced the list); keeping `prev` here would strand deleted
+  // rows on screen. Returning the `pageOne` reference also keeps the "no tail ⇒
+  // result is page 1" invariant intact for the empty case.
+  if (pageOne.length === 0) return pageOne;
   const pageOneIds = new Set(pageOne.map((job) => job.id));
   const tail = prev.filter((job) => !pageOneIds.has(job.id));
-  return [...pageOne, ...tail];
+  // Defensive symmetry with appendJobsPage: dedupe the composed result so a prev
+  // that somehow repeats a tail row (off page 1) cannot surface a duplicate id
+  // (React key collision). The tail already excludes every page-1 id, so this
+  // only ever collapses accidental repeats within the tail itself.
+  return dedupeJobsById([...pageOne, ...tail]);
 }

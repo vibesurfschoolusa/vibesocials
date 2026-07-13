@@ -225,6 +225,11 @@ model PostJob {
   // Due-scanner lookup: WHERE status = 'scheduled' AND scheduledFor <= now.
   @@index([status, scheduledFor])
   @@index([workspaceId])
+  // Backs GET /api/posts keyset pagination: the per-workspace total order
+  // `ORDER BY createdAt DESC, id DESC` (Postgres backward-scans this composite
+  // for the DESC direction, so no extra sort/filesort). Keep @@index([workspaceId])
+  // above — other queries filter on workspaceId alone and don't need the sort key.
+  @@index([workspaceId, createdAt, id])
 }
 
 model PostJobResult {
