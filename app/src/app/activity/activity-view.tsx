@@ -40,11 +40,14 @@ export function ActivityView() {
 
       <div className="mt-8">
         {loading ? (
-          <div className="space-y-3" aria-hidden>
-            {Array.from({ length: 5 }).map((_, index) => (
-              <Skeleton key={index} className="h-28 w-full" />
-            ))}
-          </div>
+          <>
+            <p role="status" className="sr-only">Loading activity…</p>
+            <div className="space-y-3" aria-hidden>
+              {Array.from({ length: 5 }).map((_, index) => (
+                <Skeleton key={index} className="h-28 w-full" />
+              ))}
+            </div>
+          </>
         ) : error ? (
           <Alert variant="danger" title="Couldn't load your activity">
             <div className="flex flex-col items-start gap-3">

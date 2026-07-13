@@ -5,6 +5,7 @@ import type { Platform } from "@prisma/client";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { toPostJobDetailDto, toPostJobResultSummaryDto } from "@/lib/postsDto";
 import {
   DELETABLE_POST_JOB_STATUSES,
   isValidPerPlatformOverrides,
@@ -64,7 +65,18 @@ export async function GET(_request: NextRequest, context: PostJobRouteContext) {
     where: { postJobId: postJob.id },
   });
 
-  return NextResponse.json({ postJob, results }, { status: 200 });
+  // SEC-1 (post-release review Task C): project to the display-safe DTOs —
+  // the raw rows carry userId/workspaceId/publishMetadata (job) and
+  // socialConnectionId/errorCode (results), none of which any caller needs
+  // (this endpoint has zero UI callers today, but the wire contract should
+  // still never leak internal fields).
+  return NextResponse.json(
+    {
+      postJob: toPostJobDetailDto(postJob),
+      results: results.map(toPostJobResultSummaryDto),
+    },
+    { status: 200 },
+  );
 }
 
 /**

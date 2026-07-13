@@ -117,14 +117,25 @@ describe("POST /api/media", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
-  it("creates the MediaItem and returns 201 on the happy path", async () => {
+  it("creates the MediaItem and returns 201 with the display-safe DTO, dropping internal fields (SEC-1)", async () => {
+    // Full raw-row fixture (incl. userId/workspaceId/metadata/deletedAt) so
+    // the negative assertions below actually bite — a minimal fixture would
+    // pass trivially even with no projection at all.
+    const createdAt = new Date("2026-01-01T00:00:00Z");
     const created = {
       id: "media-1",
+      userId: "user-1",
+      workspaceId: "ws-1",
       storageLocation: "https://blob.example/x",
       originalFilename: "cat.png",
       mimeType: "image/png",
       sizeBytes: 1234,
       baseCaption: "hello",
+      perPlatformOverrides: null,
+      metadata: null,
+      createdAt,
+      deletedAt: null,
+      lastUsedAt: null,
     };
     createMock.mockResolvedValue(created);
 
@@ -152,12 +163,35 @@ describe("POST /api/media", () => {
         baseCaption: "hello",
       },
     });
-    expect(body.mediaItem).toEqual(created);
+    // SEC-1 (post-release review Task C): the echo is the display DTO, not
+    // the raw row — media-library.tsx types this response as
+    // { mediaItem: MediaItemDto } and prepends it into the (already-DTO'd)
+    // list, so the wire shape must actually match that type.
+    expect(body.mediaItem).toEqual({
+      id: "media-1",
+      storageLocation: "https://blob.example/x",
+      originalFilename: "cat.png",
+      mimeType: "image/png",
+      sizeBytes: 1234,
+      baseCaption: "hello",
+      perPlatformOverrides: null,
+      createdAt: createdAt.toISOString(),
+      lastUsedAt: null,
+    });
+
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("userId");
+    expect(raw).not.toContain("workspaceId");
+    expect(raw).not.toContain("deletedAt");
+    expect(raw).not.toContain("metadata");
   });
 
   it("stamps the caller's ACTIVE workspace (not necessarily their personal one)", async () => {
     getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-team" }));
-    createMock.mockResolvedValue({ id: "media-2" });
+    // toMediaItemDto (applied to the response) requires a real createdAt —
+    // this test only cares about the create() call args, but the fixture
+    // still needs to satisfy the DTO projection so POST doesn't throw.
+    createMock.mockResolvedValue({ id: "media-2", createdAt: new Date("2026-01-01T00:00:00Z") });
 
     await POST(
       jsonRequest({

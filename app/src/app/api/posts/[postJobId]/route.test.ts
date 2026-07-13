@@ -51,6 +51,46 @@ function req(body: unknown, throwOnJson = false): NextRequest {
   } as unknown as NextRequest;
 }
 
+/**
+ * Full raw PostJob row, as Prisma's `findFirst` would return it — includes
+ * userId/workspaceId/publishMetadata/updatedAt so the DTO-projection tests'
+ * negative assertions actually exercise the drop (a minimal `{ id }` fixture
+ * would pass trivially even with no projection at all).
+ */
+function makeJobRow(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: "job-1",
+    userId: "user-1",
+    workspaceId: "ws-1",
+    mediaItemId: "media-1",
+    status: "completed",
+    scheduledFor: null,
+    baseCaption: "hello world",
+    perPlatformOverrides: null,
+    publishMetadata: { youtube: { privacyStatus: "public" } },
+    createdAt: new Date("2026-01-01T00:00:00Z"),
+    updatedAt: new Date("2026-01-01T00:05:00Z"),
+    ...overrides,
+  };
+}
+
+/** Full raw PostJobResult row, as Prisma's `findMany` would return it. */
+function makeResultRow(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: "result-1",
+    postJobId: "job-1",
+    platform: "youtube",
+    socialConnectionId: "conn-1",
+    status: "success",
+    externalPostId: "yt-123",
+    errorCode: null,
+    errorMessage: null,
+    createdAt: new Date("2026-01-01T00:01:00Z"),
+    updatedAt: new Date("2026-01-01T00:01:30Z"),
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   getWorkspaceContextMock.mockReset();
   findFirstMock.mockReset();
@@ -78,7 +118,7 @@ describe("GET /api/posts/[postJobId]", () => {
   });
 
   it("scopes the ownership read to workspaceId (not userId) — cross-workspace isolation", async () => {
-    findFirstMock.mockResolvedValue({ id: "job-1" });
+    findFirstMock.mockResolvedValue(makeJobRow());
 
     await GET(req(null), ctx("job-1"));
 
@@ -95,6 +135,61 @@ describe("GET /api/posts/[postJobId]", () => {
     const res = await GET(req(null), ctx("foreign-job"));
     expect(res.status).toBe(404);
     await expect(res.json()).resolves.toEqual({ error: "Not found" });
+  });
+});
+
+describe("GET /api/posts/[postJobId] — response DTO projection (SEC-1)", () => {
+  it("projects the job + results to the display DTO, dropping internal fields", async () => {
+    const jobRow = makeJobRow();
+    const resultRow = makeResultRow();
+    findFirstMock.mockResolvedValue(jobRow);
+    postJobResultFindManyMock.mockResolvedValue([resultRow]);
+
+    const res = await GET(req(null), ctx("job-1"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.postJob).toEqual({
+      id: "job-1",
+      status: "completed",
+      createdAt: jobRow.createdAt.toISOString(),
+      scheduledFor: null,
+      baseCaption: "hello world",
+      perPlatformOverrides: null,
+      mediaItemId: "media-1",
+    });
+    expect(body.postJob.createdAt).toBe(jobRow.createdAt.toISOString());
+    expect(body.results).toEqual([
+      {
+        platform: "youtube",
+        status: "success",
+        externalPostId: "yt-123",
+        errorMessage: null,
+      },
+    ]);
+
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("socialConnectionId");
+    expect(raw).not.toContain("workspaceId");
+    expect(raw).not.toContain('"userId"');
+    expect(raw).not.toContain("publishMetadata");
+    expect(raw).not.toContain("errorCode");
+    expect(raw).not.toContain("updatedAt");
+  });
+
+  it("maps a scheduled job's Date scheduledFor to an ISO string, and an empty results list to []", async () => {
+    const scheduledFor = new Date("2026-02-01T12:00:00Z");
+    findFirstMock.mockResolvedValue(
+      makeJobRow({ status: "scheduled", scheduledFor, publishMetadata: null }),
+    );
+    postJobResultFindManyMock.mockResolvedValue([]);
+
+    const res = await GET(req(null), ctx("job-1"));
+    const body = await res.json();
+
+    expect(body.postJob.status).toBe("scheduled");
+    expect(body.postJob.scheduledFor).toBe(scheduledFor.toISOString());
+    expect(body.results).toEqual([]);
   });
 });
 

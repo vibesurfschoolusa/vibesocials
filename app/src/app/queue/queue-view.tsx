@@ -379,11 +379,14 @@ export function QueueView() {
 
       <div className="mt-8">
         {loading ? (
-          <div className="space-y-3" aria-hidden>
-            {Array.from({ length: 4 }).map((_, index) => (
-              <Skeleton key={index} className="h-28 w-full" />
-            ))}
-          </div>
+          <>
+            <p role="status" className="sr-only">Loading queue…</p>
+            <div className="space-y-3" aria-hidden>
+              {Array.from({ length: 4 }).map((_, index) => (
+                <Skeleton key={index} className="h-28 w-full" />
+              ))}
+            </div>
+          </>
         ) : error ? (
           <Alert variant="danger" title="Couldn't load your queue">
             <div className="flex flex-col items-start gap-3">

@@ -170,7 +170,10 @@ export function AccountMenu() {
           <div className="px-2 py-2">
             <p className="text-xs text-muted-foreground">Workspace</p>
             {workspacesLoading ? (
-              <Skeleton className="mt-1.5 h-5 w-32" />
+              <>
+                <p role="status" className="sr-only">Loading workspaces…</p>
+                <Skeleton className="mt-1.5 h-5 w-32" />
+              </>
             ) : activeWorkspace ? (
               <p className="truncate text-sm font-medium text-foreground">
                 {activeWorkspace.name}

@@ -42,11 +42,14 @@ export function ConnectionHealth() {
       </CardHeader>
       <CardContent className="space-y-3">
         {loading ? (
-          <div className="space-y-2" aria-hidden>
-            {Array.from({ length: 5 }).map((_, index) => (
-              <Skeleton key={index} className="h-7 w-full" />
-            ))}
-          </div>
+          <>
+            <p role="status" className="sr-only">Loading connection health…</p>
+            <div className="space-y-2" aria-hidden>
+              {Array.from({ length: 5 }).map((_, index) => (
+                <Skeleton key={index} className="h-7 w-full" />
+              ))}
+            </div>
+          </>
         ) : error ? (
           <p className="text-sm text-muted-foreground">
             Couldn&apos;t load connection status.

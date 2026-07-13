@@ -2,14 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
 // workspaces/switch/route.test.ts). route.ts imports `@/lib/db`,
-// `@/lib/workspace`, and `next/headers` at module scope, so all three must
-// be mocked before route.ts is imported below.
-const { deleteManyMock, getWorkspaceContextMock, cookieSetMock, cookiesMock } = vi.hoisted(() => ({
-  deleteManyMock: vi.fn(),
-  getWorkspaceContextMock: vi.fn(),
-  cookieSetMock: vi.fn(),
-  cookiesMock: vi.fn(),
-}));
+// `@/lib/workspace`, `@/lib/rateLimit`, and `next/headers` at module scope,
+// so all four must be mocked before route.ts is imported below.
+const { deleteManyMock, getWorkspaceContextMock, checkRateLimitMock, cookieSetMock, cookiesMock } =
+  vi.hoisted(() => ({
+    deleteManyMock: vi.fn(),
+    getWorkspaceContextMock: vi.fn(),
+    checkRateLimitMock: vi.fn(),
+    cookieSetMock: vi.fn(),
+    cookiesMock: vi.fn(),
+  }));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -20,6 +22,10 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/workspace", () => ({
   ACTIVE_WORKSPACE_COOKIE: "vs_active_workspace",
   getWorkspaceContext: getWorkspaceContextMock,
+}));
+
+vi.mock("@/lib/rateLimit", () => ({
+  checkRateLimit: checkRateLimitMock,
 }));
 
 vi.mock("next/headers", () => ({
@@ -45,10 +51,12 @@ const OWNER_CONTEXT = {
 beforeEach(() => {
   deleteManyMock.mockReset();
   getWorkspaceContextMock.mockReset();
+  checkRateLimitMock.mockReset();
   cookieSetMock.mockReset();
   cookiesMock.mockReset();
 
   getWorkspaceContextMock.mockResolvedValue(MEMBER_CONTEXT);
+  checkRateLimitMock.mockResolvedValue({ allowed: true });
   deleteManyMock.mockResolvedValue({ count: 1 });
   cookiesMock.mockResolvedValue({ set: cookieSetMock });
 });
@@ -63,6 +71,30 @@ describe("POST /api/workspaces/leave", () => {
     await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
     expect(deleteManyMock).not.toHaveBeenCalled();
     expect(cookieSetMock).not.toHaveBeenCalled();
+  });
+
+  it("429s with Retry-After when the leave rate limit blocks", async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 120 });
+
+    const response = await POST();
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("120");
+    await expect(response.json()).resolves.toMatchObject({ retryAfterSeconds: 120 });
+    expect(deleteManyMock).not.toHaveBeenCalled(); // limited BEFORE any DB read
+  });
+
+  it("checks the per-user leave rate limit with the shared envelope", async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: true });
+
+    await POST();
+
+    expect(checkRateLimitMock).toHaveBeenCalledWith({
+      userId: "user-2",
+      route: "workspaces/leave",
+      limit: 60,
+      windowMs: 5 * 60 * 1000,
+    });
   });
 
   it("returns 400 and never deletes when the caller is the workspace owner", async () => {
