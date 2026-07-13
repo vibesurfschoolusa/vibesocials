@@ -8,6 +8,7 @@ import { ToastProvider } from "@/components/ui/toast";
 import { Sidebar } from "./sidebar";
 import { TopBar } from "./top-bar";
 import { MobileDrawer } from "./mobile-drawer";
+import { VerifyEmailBanner } from "./verify-email-banner";
 import { isPublicRoute } from "./nav";
 
 /**
@@ -67,6 +68,10 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
       <div className="md:pl-64">
         <TopBar onMenuClick={() => setDrawerOpen(true)} />
         <main id="main-content" className="min-h-[calc(100vh-4rem)]">
+          {/* Soft email-verification nudge. Self-gates: renders nothing unless
+              the authenticated user is unverified AND email is configured, so it
+              is safe to mount unconditionally inside the authed chrome. */}
+          <VerifyEmailBanner />
           {children}
         </main>
       </div>

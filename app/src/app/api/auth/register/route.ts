@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 
+import { buildVerifyEmail, deliverAccountEmail } from '@/lib/accountEmails';
+import { issueAccountToken } from '@/lib/accountToken';
 import { prisma } from '@/lib/db';
+import { logger } from '@/lib/logger';
 import { provisionPersonalWorkspace } from '@/lib/workspace';
 
 export async function POST(request: Request) {
@@ -45,6 +48,25 @@ export async function POST(request: Request) {
       await provisionPersonalWorkspace(tx, created);
       return created;
     });
+
+    // Fire-and-forget email verification. Runs AFTER the registration
+    // transaction has COMMITTED and is fully failure-isolated: every path
+    // (issuance or delivery) is caught and logged, so it can NEVER fail the
+    // registration or turn a transient email hiccup into a 500. Gated on
+    // RESEND_API_KEY so a deployment with email disabled issues no token at all
+    // (mirrors deliverAccountEmail's own env gate; keeps the token table clean).
+    try {
+      if (process.env.RESEND_API_KEY) {
+        const baseUrl = process.env.NEXTAUTH_URL ?? '';
+        const rawToken = await issueAccountToken(prisma, user.id, 'email_verify');
+        await deliverAccountEmail(
+          user.email,
+          buildVerifyEmail({ to: user.email, rawToken, baseUrl }),
+        );
+      }
+    } catch (error) {
+      logger.warn('[register] verification email failed', { error });
+    }
 
     return NextResponse.json(
       {

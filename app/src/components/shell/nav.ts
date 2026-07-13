@@ -36,6 +36,7 @@ export const PUBLIC_ROUTE_PREFIXES = [
   "/register",
   "/forgot-password",
   "/reset-password",
+  "/verify-email",
   "/privacy",
   "/terms",
 ];
