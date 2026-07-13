@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { Copy } from "lucide-react";
 import type { WorkspaceRole } from "@prisma/client";
 
@@ -190,6 +191,12 @@ function MemberView({ workspaceName }: { workspaceName: string }) {
 function OwnerView({ workspaceName }: { workspaceName: string }) {
   const router = useRouter();
   const toast = useToast();
+  // Own user id — next-auth populates `session.user.id` via the jwt/session
+  // callbacks (lib/auth.ts), typed loosely there so cast here too. Used only to
+  // tell a SELF-demotion (owner steps down to member) from demoting another
+  // owner: the former must re-render the whole card as MemberView.
+  const { data: session } = useSession();
+  const currentUserId = (session?.user as { id?: string } | undefined)?.id ?? null;
 
   // --- Rename (PATCH /api/workspaces/active) ---
   const [name, setName] = useState(workspaceName);
@@ -301,6 +308,9 @@ function OwnerView({ workspaceName }: { workspaceName: string }) {
   const [membersLoading, setMembersLoading] = useState(true);
   const [membersError, setMembersError] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<Member | null>(null);
+  const [promoteTarget, setPromoteTarget] = useState<Member | null>(null);
+  const [demoteTarget, setDemoteTarget] = useState<Member | null>(null);
+  const [leaveOpen, setLeaveOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -340,6 +350,79 @@ function OwnerView({ workspaceName }: { workspaceName: string }) {
     setMembers((prev) => (prev ? prev.filter((m) => m.userId !== removeTarget.userId) : prev));
     toast.success(`Removed ${removeTarget.name ?? removeTarget.email}.`);
   }, [removeTarget, toast]);
+
+  // ConfirmDialog contract: throw to keep the dialog open on failure. Promote
+  // member -> owner only ever ADDS an owner, so patch local state in place
+  // (never a self-transition out of OwnerView — the caller's own row is an
+  // owner row, which shows "Make member", not "Make owner").
+  const confirmPromote = useCallback(async () => {
+    if (!promoteTarget) return;
+    const response = await fetch(`/api/workspaces/members/${promoteTarget.userId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "owner" }),
+    });
+    if (!response.ok) {
+      const data = (await response.json().catch(() => null)) as { error?: string } | null;
+      toast.error(data?.error ?? "Couldn't update that member's role.");
+      throw new Error("PROMOTE_FAILED");
+    }
+    setMembers((prev) =>
+      prev
+        ? prev.map((m): Member => (m.userId === promoteTarget.userId ? { ...m, role: "owner" } : m))
+        : prev,
+    );
+    toast.success("Role updated.");
+  }, [promoteTarget, toast]);
+
+  // ConfirmDialog contract: throw to keep the dialog open on failure. Demote
+  // owner -> member. Demoting YOURSELF drops you out of OwnerView, so on that
+  // branch refresh the route (the server now resolves role="member" and the
+  // card re-renders as MemberView) instead of patching local state — mirrors
+  // MemberView.handleLeave. The server enforces the >=1-owner invariant, so a
+  // last-owner demote is refused there and surfaced via toast.
+  const confirmDemote = useCallback(async () => {
+    if (!demoteTarget) return;
+    const response = await fetch(`/api/workspaces/members/${demoteTarget.userId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "member" }),
+    });
+    if (!response.ok) {
+      const data = (await response.json().catch(() => null)) as { error?: string } | null;
+      toast.error(data?.error ?? "Couldn't update that member's role.");
+      throw new Error("DEMOTE_FAILED");
+    }
+    toast.success("Role updated.");
+    if (demoteTarget.userId === currentUserId) {
+      router.refresh();
+      return;
+    }
+    setMembers((prev) =>
+      prev
+        ? prev.map((m): Member => (m.userId === demoteTarget.userId ? { ...m, role: "member" } : m))
+        : prev,
+    );
+  }, [demoteTarget, currentUserId, router, toast]);
+
+  // ConfirmDialog contract: throw to keep the dialog open on failure. Verbatim
+  // MemberView.handleLeave — an owner may leave once another owner remains (the
+  // Leave control is disabled below until then; the server backstops with a
+  // 400 either way).
+  const handleLeave = useCallback(async () => {
+    const response = await fetch("/api/workspaces/leave", { method: "POST" });
+    if (!response.ok) {
+      const data = (await response.json().catch(() => null)) as { error?: string } | null;
+      toast.error(data?.error ?? "Couldn't leave the workspace.");
+      throw new Error("LEAVE_FAILED");
+    }
+    toast.success("Left the workspace.");
+    router.refresh();
+  }, [router, toast]);
+
+  // Derived from the loaded roster each render, so it stays fresh after every
+  // local-state role change above. Gates the last-owner demote/leave guards.
+  const ownerCount = members?.filter((m) => m.role === "owner").length ?? 0;
 
   return (
     <Card className="flex flex-col gap-8 p-6">
@@ -453,25 +536,61 @@ function OwnerView({ workspaceName }: { workspaceName: string }) {
                   <Badge variant={member.role === "owner" ? "default" : "secondary"}>
                     {member.role === "owner" ? "Owner" : "Member"}
                   </Badge>
-                  {/* v1 has no ownership transfer (design §10): the caller is
-                      always the sole owner, so hiding Remove for owner-role
-                      rows both keeps an owner from ever seeing a dead-end
-                      "remove yourself" control and matches the API's
-                      independent "owners can't be removed" guard. */}
-                  {member.role !== "owner" ? (
+                  {/* Owners are demoted, not removed: removing a co-owner is
+                      the demote-then-remove flow the DELETE route guards for (it
+                      refuses owner-role targets), so an owner row shows "Make
+                      member" instead of "Remove". Disabled for the last
+                      remaining owner — the server enforces the same >=1-owner
+                      invariant with a 400. */}
+                  {member.role === "owner" ? (
                     <Button
                       size="sm"
                       variant="ghost"
                       className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                      onClick={() => setRemoveTarget(member)}
+                      disabled={ownerCount < 2}
+                      title={ownerCount < 2 ? "Promote another owner first." : undefined}
+                      onClick={() => setDemoteTarget(member)}
                     >
-                      Remove
+                      Make member
                     </Button>
-                  ) : null}
+                  ) : (
+                    <>
+                      <Button size="sm" variant="ghost" onClick={() => setPromoteTarget(member)}>
+                        Make owner
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => setRemoveTarget(member)}
+                      >
+                        Remove
+                      </Button>
+                    </>
+                  )}
                 </div>
               </li>
             ))}
           </ul>
+        ) : null}
+      </div>
+
+      {/* Leave — an owner may step down once another owner exists. Disabled
+          with an explanation until then (the server backstops with a 400). */}
+      <div className="border-t border-border pt-6">
+        <Button
+          size="sm"
+          variant="ghost"
+          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+          disabled={ownerCount < 2}
+          onClick={() => setLeaveOpen(true)}
+        >
+          Leave workspace
+        </Button>
+        {ownerCount < 2 ? (
+          <p className="mt-2 text-sm text-muted-foreground">
+            You&apos;re the only owner — promote someone first.
+          </p>
         ) : null}
       </div>
 
@@ -495,6 +614,39 @@ function OwnerView({ workspaceName }: { workspaceName: string }) {
         description="They'll lose access to this workspace's accounts and posts. Their own account keeps working."
         confirmText="Remove"
         onConfirm={confirmRemove}
+      />
+
+      <ConfirmDialog
+        open={promoteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setPromoteTarget(null);
+        }}
+        title={`Make ${promoteTarget?.name ?? promoteTarget?.email ?? "this member"} an owner?`}
+        description="They'll be able to manage members, connections, and settings."
+        confirmText="Make owner"
+        onConfirm={confirmPromote}
+      />
+
+      <ConfirmDialog
+        open={demoteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setDemoteTarget(null);
+        }}
+        destructive
+        title={`Make ${demoteTarget?.name ?? demoteTarget?.email ?? "this member"} a member?`}
+        description="They'll no longer manage members, connections, or settings."
+        confirmText="Make member"
+        onConfirm={confirmDemote}
+      />
+
+      <ConfirmDialog
+        open={leaveOpen}
+        onOpenChange={setLeaveOpen}
+        destructive
+        title="Leave this workspace?"
+        description="You'll lose access to its accounts and posts. Your own account keeps working."
+        confirmText="Leave"
+        onConfirm={handleLeave}
       />
     </Card>
   );
