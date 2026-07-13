@@ -26,6 +26,12 @@ const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
 /** Resolve the env file to inspect (default `.env.local`, relative to cwd). */
 function envFileFromArgs(argv) {
+  // GOTCHA (review minor): `--env-file` is ALSO a Node >=20.6 builtin flag.
+  // When testing manually, Node intercepts a MISSING explicit path and exits 9
+  // before this script runs (an existing path is side-loaded into process.env,
+  // which is harmless — the guard reads the file itself, and only DEV_DB_OK
+  // from the environment). The real `predev` invocation passes no argument, so
+  // none of this affects the guard's production behavior.
   const i = argv.indexOf("--env-file");
   if (i !== -1 && argv[i + 1]) return argv[i + 1];
   return ".env.local";
