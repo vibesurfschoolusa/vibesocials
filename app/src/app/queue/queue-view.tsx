@@ -26,6 +26,7 @@ import { MediaThumb } from "@/components/media-thumb";
 import { cn } from "@/lib/cn";
 import { platformLabel, TIKTOK_PRIVACY_LABELS } from "@/lib/platforms";
 import type { PostJobDTO, PostsResponse } from "@/lib/postsDto";
+import { appendJobsPage } from "@/lib/postsPagination";
 import {
   SCHEDULE_BUFFER_MS,
   localDateTimeToUtcIso,
@@ -274,6 +275,13 @@ export function QueueView() {
   // usePostJobs (its own status filter), so it tracks
   // PostsResponse.workspaceMemberCount itself to gate QueueCard attribution.
   const [workspaceMemberCount, setWorkspaceMemberCount] = useState<number | null>(null);
+  // Activity pagination (Task C2) — the Queue fetches independently (its own
+  // ?status= filter), so it tracks the cursor locally rather than via
+  // usePostJobs. nextCursor is the next (older) page's ?cursor= token from the
+  // last load (null = last page → hides Load more); loadingMore guards + spins
+  // the button. The Queue has no background poll, so no page-1 merge is needed.
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const [editTarget, setEditTarget] = useState<PostJobDTO | null>(null);
   const [cancelTarget, setCancelTarget] = useState<PostJobDTO | null>(null);
@@ -293,6 +301,7 @@ export function QueueView() {
       }
       const data: PostsResponse = await response.json();
       setJobs(sortQueue(data.jobs));
+      setNextCursor(data.nextCursor);
       setWorkspaceMemberCount(data.workspaceMemberCount);
     } catch {
       setError("Failed to load your queue.");
@@ -310,6 +319,35 @@ export function QueueView() {
     setError(null);
     void load();
   }, [load]);
+
+  const loadMore = useCallback(async () => {
+    // Guard: nothing older to fetch, or a page is already in flight. The Button
+    // is `disabled` while loadingMore is true; deps refresh this callback when
+    // either value changes.
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const response = await fetch(
+        `/api/posts?status=scheduled,draft&cursor=${encodeURIComponent(nextCursor)}`,
+      );
+      if (!response.ok) {
+        // Silent — the full-width error state belongs to the initial load /
+        // Retry only. Leave nextCursor intact so the button stays for a retry.
+        return;
+      }
+      const data: PostsResponse = await response.json();
+      // Append the older page (de-duped by id), then re-apply the Queue's
+      // scheduled-then-drafts ordering over the union. Keyset paging is by
+      // (createdAt, id); sortQueue owns DISPLAY order, so an appended row can
+      // land mid-list at its scheduledFor position — expected for the Queue.
+      setJobs((prev) => (prev ? sortQueue(appendJobsPage(prev, data.jobs)) : sortQueue(data.jobs)));
+      setNextCursor(data.nextCursor);
+    } catch {
+      // Keep the loaded list + cursor for a retry.
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [nextCursor, loadingMore]);
 
   const removeJob = useCallback((id: string) => {
     setJobs((prev) => (prev ? prev.filter((j) => j.id !== id) : prev));
@@ -411,19 +449,28 @@ export function QueueView() {
             }
           />
         ) : (
-          <div className="space-y-3">
-            {jobs.map((job) => (
-              <QueueCard
-                key={job.id}
-                job={job}
-                showAttribution={(workspaceMemberCount ?? 0) > 1}
-                onEdit={setEditTarget}
-                onCancel={setCancelTarget}
-                onPublish={setPublishTarget}
-                onDelete={setDeleteTarget}
-              />
-            ))}
-          </div>
+          <>
+            <div className="space-y-3">
+              {jobs.map((job) => (
+                <QueueCard
+                  key={job.id}
+                  job={job}
+                  showAttribution={(workspaceMemberCount ?? 0) > 1}
+                  onEdit={setEditTarget}
+                  onCancel={setCancelTarget}
+                  onPublish={setPublishTarget}
+                  onDelete={setDeleteTarget}
+                />
+              ))}
+            </div>
+            {nextCursor !== null ? (
+              <div className="mt-4 flex justify-center">
+                <Button variant="outline" size="sm" loading={loadingMore} onClick={loadMore}>
+                  Load more
+                </Button>
+              </div>
+            ) : null}
+          </>
         )}
       </div>
 
