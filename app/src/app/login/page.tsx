@@ -99,7 +99,15 @@ function LoginPageInner() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="password">Password</Label>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="password">Password</Label>
+                  <Link
+                    href="/forgot-password"
+                    className="text-sm font-medium text-primary outline-none hover:underline focus-visible:underline"
+                  >
+                    Forgot password?
+                  </Link>
+                </div>
                 <div className="relative">
                   <Input
                     id="password"
@@ -141,9 +149,6 @@ function LoginPageInner() {
               >
                 Create one
               </Link>
-            </p>
-            <p className="mt-2 text-center text-xs text-muted-foreground">
-              Forgot your password? Reset isn&apos;t available yet — contact the site owner.
             </p>
           </CardContent>
         </Card>

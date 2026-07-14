@@ -34,6 +34,9 @@ export const NAV_ITEMS: NavItemDef[] = [
 export const PUBLIC_ROUTE_PREFIXES = [
   "/login",
   "/register",
+  "/forgot-password",
+  "/reset-password",
+  "/verify-email",
   "/privacy",
   "/terms",
 ];
