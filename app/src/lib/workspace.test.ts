@@ -169,6 +169,32 @@ describe("resolveActiveMembershipId (pure)", () => {
     );
   });
 
+  // Multi-owner (Task D1): a member promoted to co-own a SHARED workspace now
+  // holds two OWNED memberships. The default-workspace tie-break is still
+  // "oldest owned", so a user's older personal workspace stays their default
+  // even after they're promoted to own a newer shared one — promotion doesn't
+  // hijack which workspace resolves on login.
+  it("keeps the older personal owned workspace as the default over a newer shared one the user was promoted to own", () => {
+    const personalOwned: Membership = {
+      workspaceId: "ws-personal",
+      role: "owner",
+      createdAt: new Date("2020-01-01T00:00:00Z"),
+    };
+    const promotedSharedOwned: Membership = {
+      workspaceId: "ws-shared",
+      role: "owner",
+      createdAt: new Date("2020-06-01T00:00:00Z"),
+    };
+
+    expect(resolveActiveMembershipId([promotedSharedOwned, personalOwned], undefined)).toBe(
+      "ws-personal",
+    );
+    // The cookie hint still wins when it points at the shared workspace.
+    expect(resolveActiveMembershipId([promotedSharedOwned, personalOwned], "ws-shared")).toBe(
+      "ws-shared",
+    );
+  });
+
   it("falls back to the oldest membership of any role when none is owned", () => {
     const memberA: Membership = {
       workspaceId: "ws-a",
