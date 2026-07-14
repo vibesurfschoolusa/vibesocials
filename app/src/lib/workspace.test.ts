@@ -80,8 +80,6 @@ function makeUser(overrides: Partial<User> = {}): User {
     name: "Klaus",
     passwordHash: null,
     emailVerifiedAt: null,
-    companyWebsite: null,
-    defaultHashtags: null,
     notifyOnPostComplete: true,
     sessionVersion: 0,
     createdAt: new Date("2020-01-01T00:00:00Z"),
@@ -230,7 +228,7 @@ describe("provisionPersonalWorkspace", () => {
     );
 
     expect(workspaceCreateMock).toHaveBeenCalledWith({
-      data: { name: "Klaus's workspace", companyWebsite: null, defaultHashtags: null },
+      data: { name: "Klaus's workspace" },
     });
   });
 
@@ -244,7 +242,7 @@ describe("provisionPersonalWorkspace", () => {
     );
 
     expect(workspaceCreateMock).toHaveBeenCalledWith({
-      data: { name: "jane.doe's workspace", companyWebsite: null, defaultHashtags: null },
+      data: { name: "jane.doe's workspace" },
     });
   });
 
@@ -258,25 +256,18 @@ describe("provisionPersonalWorkspace", () => {
     );
 
     expect(workspaceCreateMock).toHaveBeenCalledWith({
-      data: { name: "noname's workspace", companyWebsite: null, defaultHashtags: null },
+      data: { name: "noname's workspace" },
     });
   });
 
-  it("copies companyWebsite/defaultHashtags from the user onto the workspace", async () => {
+  it("creates a workspace with name only (brand fields live on Workspace settings)", async () => {
     workspaceCreateMock.mockResolvedValue({ id: "ws-4" });
     workspaceMemberCreateMock.mockResolvedValue({});
 
-    await provisionPersonalWorkspace(
-      makeTx(),
-      makeUser({ companyWebsite: "https://acme.test", defaultHashtags: "#acme" }),
-    );
+    await provisionPersonalWorkspace(makeTx(), makeUser());
 
     expect(workspaceCreateMock).toHaveBeenCalledWith({
-      data: {
-        name: "Klaus's workspace",
-        companyWebsite: "https://acme.test",
-        defaultHashtags: "#acme",
-      },
+      data: { name: "Klaus's workspace" },
     });
   });
 
@@ -325,7 +316,7 @@ describe("resolveWorkspaceForUser", () => {
 
     expect(workspaceId).toBe("ws-new");
     expect(workspaceCreateMock).toHaveBeenCalledWith({
-      data: { name: "New Guy's workspace", companyWebsite: null, defaultHashtags: null },
+      data: { name: "New Guy's workspace" },
     });
     expect(workspaceMemberCreateMock).toHaveBeenCalledWith({
       data: { workspaceId: "ws-new", userId: "user-2", role: "owner" },

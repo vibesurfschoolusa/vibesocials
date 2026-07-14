@@ -89,7 +89,7 @@ describe("prepareDeferredPostJobDispatch", () => {
     await prepareDeferredPostJobDispatch("job-1");
 
     expect(connectionFindManyMock).toHaveBeenCalledWith({
-      where: { workspaceId: "workspace-42" },
+      where: { workspaceId: "workspace-42", needsReconnect: false },
     });
   });
 

@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { BLOB_URL_REJECTED_MESSAGE, isAllowedBlobUrl } from "@/lib/blobUrl";
+import { LLM_NOT_CONFIGURED_MESSAGE, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
 
@@ -31,11 +33,13 @@ export async function POST(request: Request) {
     }
 
     // Throttle per user: vision calls are the most expensive, so keep this tight.
+    // Fail closed — a limiter outage must not open unlimited LLM spend.
     const rateLimit = await checkRateLimit({
       userId: context.user.id,
       route: "posts/auto-caption",
       limit: 10,
       windowMs: 5 * 60 * 1000,
+      failClosed: true,
     });
 
     if (!rateLimit.allowed) {
@@ -77,28 +81,10 @@ export async function POST(request: Request) {
     const trimmedBlobUrl = blobUrl.trim();
     const trimmedMimeType = mimeType.trim().toLowerCase();
 
-    // SSRF guard: the image path hands blobUrl to OpenAI to fetch as an
-    // image_url. Only allow our own Vercel Blob host (public URLs are
-    // https://<store-id>.public.blob.vercel-storage.com/...), so an attacker
-    // cannot make OpenAI fetch an arbitrary/internal URL on our behalf.
-    let parsedBlobUrl: URL;
-    try {
-      parsedBlobUrl = new URL(trimmedBlobUrl);
-    } catch {
-      return NextResponse.json(
-        { error: "blobUrl must be a valid URL" },
-        { status: 400 },
-      );
-    }
-
-    if (
-      parsedBlobUrl.protocol !== "https:" ||
-      !parsedBlobUrl.hostname.endsWith(".public.blob.vercel-storage.com")
-    ) {
-      return NextResponse.json(
-        { error: "blobUrl must be a Vercel Blob URL" },
-        { status: 400 },
-      );
+    // SSRF guard: the image path hands blobUrl to the LLM provider to fetch as
+    // an image_url. Same host allowlist as media/posts create.
+    if (!isAllowedBlobUrl(trimmedBlobUrl)) {
+      return NextResponse.json({ error: BLOB_URL_REJECTED_MESSAGE }, { status: 400 });
     }
 
     const isImage = trimmedMimeType.startsWith("image/");
@@ -111,16 +97,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const openaiApiKey = process.env.OPENAI_API_KEY;
-
-    if (!openaiApiKey) {
-      return NextResponse.json(
-        {
-          error:
-            "OpenAI API key not configured. Please add OPENAI_API_KEY to your environment variables.",
-        },
-        { status: 500 },
-      );
+    const llm = resolveLlmConfig();
+    if (!llm) {
+      return NextResponse.json({ error: LLM_NOT_CONFIGURED_MESSAGE }, { status: 500 });
     }
 
     const mediaKind = isImage ? "photo" : "video";
@@ -202,34 +181,31 @@ The media is a short social media video. You do not have direct access to the vi
       ];
     }
 
-    const openaiResponse = await fetch(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${openaiApiKey}`,
-        },
-        body: JSON.stringify({
-          model: isImage ? "gpt-4o" : "gpt-4o-mini",
-          messages,
-          temperature: 0.8,
-          max_tokens: 150,
-        }),
+    const llmResponse = await fetch(`${llm.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${llm.apiKey}`,
       },
-    );
+      body: JSON.stringify({
+        model: isImage ? llm.visionModel : llm.textModel,
+        messages,
+        temperature: 0.8,
+        max_tokens: 150,
+      }),
+    });
 
-    if (!openaiResponse.ok) {
-      const errorData = await openaiResponse.json().catch(() => ({}));
-      console.error("[Auto Caption] OpenAI API error:", errorData);
+    if (!llmResponse.ok) {
+      const errorData = await llmResponse.json().catch(() => ({}));
+      console.error(`[Auto Caption] ${llm.providerLabel} API error:`, errorData);
       return NextResponse.json(
         { error: "Failed to generate caption from media" },
         { status: 500 },
       );
     }
 
-    const openaiData = await openaiResponse.json();
-    let caption = openaiData.choices?.[0]?.message?.content?.trim() ?? "";
+    const llmData = await llmResponse.json();
+    let caption = llmData.choices?.[0]?.message?.content?.trim() ?? "";
 
     caption = caption.replace(/#/g, "").trim();
 

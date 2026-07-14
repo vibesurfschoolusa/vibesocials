@@ -2,6 +2,10 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
+import {
+  EMAIL_VERIFY_REQUIRED_MESSAGE,
+  isEmailVerifiedForPublish,
+} from "@/lib/emailVerified";
 import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
@@ -111,6 +115,14 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     return NextResponse.json(
       { ok: true, status: "scheduled", scheduledFor: validation.date.toISOString() },
       { status: 200 },
+    );
+  }
+
+  // Publish-now (live fan-out): require verified email when Resend is configured.
+  if (!isEmailVerifiedForPublish(workspaceContext.user)) {
+    return NextResponse.json(
+      { error: EMAIL_VERIFY_REQUIRED_MESSAGE, code: "EMAIL_VERIFY_REQUIRED" },
+      { status: 403 },
     );
   }
 

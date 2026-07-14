@@ -12,7 +12,7 @@ import { NextResponse } from "next/server";
  * sent to login with callbackUrl preserved (same as the page-level gate).
  */
 export default withAuth(
-  function middleware(req) {
+  function middleware(_req) {
     return NextResponse.next();
   },
   {
@@ -43,7 +43,11 @@ export default withAuth(
           return true;
         }
 
-        return !!token;
+        // Require a JWT with a user id claim. sessionVersion is re-checked in
+        // the jwt callback / getCurrentUser (middleware cannot hit the DB on
+        // the edge); a null/empty token after password reset fails here once
+        // the cookie is cleared by a session fetch.
+        return !!token?.id || !!token?.sub;
       },
     },
   },

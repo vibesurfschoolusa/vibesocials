@@ -167,9 +167,12 @@ export async function createPostJobOnly(
   // Team Workspaces (Task 5): fan out over the WORKSPACE's connections, not
   // the caller's personal ones — any member's post reaches every platform
   // the shared workspace has connected.
+  // Healthy connections only — needsReconnect would just fail at the provider.
   const socialConnections =
     intent === "immediate"
-      ? await prisma.socialConnection.findMany({ where: { workspaceId } })
+      ? await prisma.socialConnection.findMany({
+          where: { workspaceId, needsReconnect: false },
+        })
       : [];
 
   // Task 7 — narrow to the caller's chosen subset when given; `undefined`
@@ -194,62 +197,70 @@ export async function createPostJobOnly(
   // PostJob and correctly leave `lastUsedAt = null`.
   const now = new Date();
 
-  const mediaItem = await prisma.mediaItem.create({
-    data: {
-      userId,
-      workspaceId,
-      storageLocation: media.storageLocation,
-      originalFilename: media.originalFilename,
-      mimeType: media.mimeType,
-      sizeBytes: media.sizeBytes,
-      baseCaption,
-      lastUsedAt: now,
-      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-      perPlatformOverrides: perPlatformOverrides
-        ? (perPlatformOverrides as unknown as Record<string, string>)
-        : undefined,
-    },
-  });
+  // Atomic media + job + results so a mid-path failure never leaves orphans
+  // (mirrors createPostJobForExistingMedia).
+  const { postJob, mediaItem, resultRecords } = await prisma.$transaction(
+    async (tx) => {
+      const mediaItemRow = await tx.mediaItem.create({
+        data: {
+          userId,
+          workspaceId,
+          storageLocation: media.storageLocation,
+          originalFilename: media.originalFilename,
+          mimeType: media.mimeType,
+          sizeBytes: media.sizeBytes,
+          baseCaption,
+          lastUsedAt: now,
+          metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+          perPlatformOverrides: perPlatformOverrides
+            ? (perPlatformOverrides as unknown as Record<string, string>)
+            : undefined,
+        },
+      });
 
-  const postJob = await prisma.postJob.create({
-    data: {
-      ...buildPostJobCreateData({
-        userId,
-        mediaItemId: mediaItem.id,
-        intent,
-        scheduledFor: params.scheduledFor ?? null,
-        baseCaption,
-        perPlatformOverrides,
-        tiktokMetadata: params.tiktokMetadata,
-        youtubeMetadata: params.youtubeMetadata,
-        targetPlatforms,
-      }),
-      workspaceId,
-    },
-  });
+      const job = await tx.postJob.create({
+        data: {
+          ...buildPostJobCreateData({
+            userId,
+            mediaItemId: mediaItemRow.id,
+            intent,
+            scheduledFor: params.scheduledFor ?? null,
+            baseCaption,
+            perPlatformOverrides,
+            tiktokMetadata: params.tiktokMetadata,
+            youtubeMetadata: params.youtubeMetadata,
+            targetPlatforms,
+          }),
+          workspaceId,
+        },
+      });
 
-  // Scheduled/draft jobs get NO results here — the cron/promote create them at
-  // run time from the connections that exist then.
-  const resultRecords =
-    intent === "immediate"
-      ? await Promise.all(
-          targeted.map((connection) =>
-            prisma.postJobResult.create({
-              data: {
-                postJobId: postJob.id,
-                platform: connection.platform,
-                socialConnectionId: connection.id,
-                status: "pending",
-              },
-            }),
-          ),
-        )
-      : [];
+      // Scheduled/draft jobs get NO results here — the cron/promote create them
+      // at run time from the connections that exist then.
+      const results =
+        intent === "immediate"
+          ? await Promise.all(
+              targeted.map((connection) =>
+                tx.postJobResult.create({
+                  data: {
+                    postJobId: job.id,
+                    platform: connection.platform,
+                    socialConnectionId: connection.id,
+                    status: "pending",
+                  },
+                }),
+              ),
+            )
+          : [];
+
+      return { postJob: job, mediaItem: mediaItemRow, resultRecords: results };
+    },
+  );
 
   return {
     postJobId: postJob.id,
     mediaItemId: mediaItem.id,
-    resultIds: resultRecords.map(r => r.id),
+    resultIds: resultRecords.map((r) => r.id),
   };
 }
 
@@ -279,13 +290,14 @@ export function buildPostJobCreateData(args: {
   // function (and its existing unit tests) stay unchanged.
 }): Omit<Prisma.PostJobUncheckedCreateInput, "workspaceId"> {
   const isDeferred = args.intent !== "immediate";
-  // Snapshot per-post privacy + targeting for deferred jobs only (review B1 /
-  // Task 7) — immediate jobs carry privacy in the event payload and apply
-  // targeting directly to the result-row fan-out, so persisting either here
-  // would be dead data.
-  const publishMetadata = isDeferred
-    ? buildPublishMetadataSnapshot(args.tiktokMetadata, args.youtubeMetadata, args.targetPlatforms)
-    : undefined;
+  // Always snapshot privacy + targeting when present so retry can replay the
+  // user's compose-time choice (review S6). Immediate jobs still put privacy
+  // on the event payload; the column is no longer deferred-only dead data.
+  const publishMetadata = buildPublishMetadataSnapshot(
+    args.tiktokMetadata,
+    args.youtubeMetadata,
+    args.targetPlatforms,
+  );
   return {
     userId: args.userId,
     mediaItemId: args.mediaItemId,
@@ -379,10 +391,12 @@ export async function createPostJobForExistingMedia(
 
   // Immediate reuse materializes the fan-out now (and requires a connection);
   // scheduled/draft reuse defers result creation to run time (§6.3). Team
-  // Workspaces (Task 5): the workspace's connections, not the caller's.
+  // Workspaces (Task 5): the workspace's healthy connections, not the caller's.
   const socialConnections =
     intent === "immediate"
-      ? await prisma.socialConnection.findMany({ where: { workspaceId } })
+      ? await prisma.socialConnection.findMany({
+          where: { workspaceId, needsReconnect: false },
+        })
       : [];
 
   // Task 7 — narrow to the caller's chosen subset when given; `undefined`
@@ -527,8 +541,9 @@ export async function prepareDeferredPostJobDispatch(
     return { ok: false, reason: "NOT_FOUND" };
   }
 
+  // Skip dead connections — same filter as immediate create paths.
   const connections = await prisma.socialConnection.findMany({
-    where: { workspaceId: job.workspaceId },
+    where: { workspaceId: job.workspaceId, needsReconnect: false },
   });
 
   // Replay the per-post privacy AND platform targeting the user chose at

@@ -72,9 +72,17 @@ export function sealSecret(plaintext: string): string {
 
   const key = getKey();
   if (!key) {
-    if (!warnedMissingKey && process.env.NODE_ENV === "production") {
+    // Production must never write plaintext OAuth tokens. Local/test keep the
+    // identity transform so unit tests and offline dev work without a key.
+    if (process.env.NODE_ENV === "production") {
+      throw new Error(
+        "TOKEN_ENCRYPTION_KEY is required in production to seal OAuth tokens " +
+          "(generate with: openssl rand -base64 32)",
+      );
+    }
+    if (!warnedMissingKey) {
       warnedMissingKey = true;
-      console.error(
+      console.warn(
         "[tokenCrypto] TOKEN_ENCRYPTION_KEY is unset; OAuth tokens will be stored in plaintext",
       );
     }

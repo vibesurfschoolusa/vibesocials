@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
+import { checkRateLimit } from "@/lib/rateLimit";
 
 // Minimal shape of a Google Geocoding API result (only the fields we read).
 interface GeocodeResult {
@@ -14,6 +15,26 @@ export async function GET(request: NextRequest) {
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const rateLimit = await checkRateLimit({
+    userId: user.id,
+    route: "geocode",
+    limit: 60,
+    windowMs: 5 * 60 * 1000,
+    failClosed: true,
+  });
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      {
+        error: "Too many requests. Please slow down.",
+        retryAfterSeconds: rateLimit.retryAfterSeconds,
+      },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) },
+      },
+    );
   }
 
   const { searchParams } = new URL(request.url);
@@ -34,7 +55,6 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // Use Geocoding API to search for locations
     const geocodeUrl = new URL("https://maps.googleapis.com/maps/api/geocode/json");
     geocodeUrl.searchParams.set("address", query);
     geocodeUrl.searchParams.set("key", apiKey);
@@ -59,7 +79,6 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Format results for frontend
     const suggestions = (data.results || []).slice(0, 5).map((result: GeocodeResult) => ({
       description: result.formatted_address,
       latitude: result.geometry.location.lat,

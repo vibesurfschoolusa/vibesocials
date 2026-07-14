@@ -64,12 +64,21 @@ export async function POST(request: Request) {
     }
 
     const email = normalizeEmail(rawEmail);
+    const displayName = typeof name === "string" ? name : null;
 
+    // SEC-1 — no email-existence oracle. Whether or not the address is taken,
+    // the HTTP response is the same 201 shape. The client always attempts
+    // signIn afterward: a new account signs in; an existing one only signs in
+    // if the submitted password matches (otherwise the UI hands off to login).
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
       return NextResponse.json(
-        { error: "A user with that email already exists." },
-        { status: 400 },
+        {
+          id: "ok",
+          email,
+          name: displayName,
+        },
+        { status: 201 },
       );
     }
 
@@ -83,7 +92,7 @@ export async function POST(request: Request) {
       const created = await tx.user.create({
         data: {
           email,
-          name: name ?? null,
+          name: displayName,
           passwordHash,
         },
       });

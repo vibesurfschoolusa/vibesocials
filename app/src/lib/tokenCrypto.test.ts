@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   isSealedSecret,
@@ -49,10 +49,21 @@ describe("tokenCrypto", () => {
     expect(sealSecret(once)).toBe(once);
   });
 
-  it("is identity when the key is unset", () => {
+  it("is identity when the key is unset outside production", () => {
+    vi.stubEnv("NODE_ENV", "test");
     delete process.env.TOKEN_ENCRYPTION_KEY;
     expect(sealSecret("plain")).toBe("plain");
     expect(openSecret("plain")).toBe("plain");
+    vi.unstubAllEnvs();
+    process.env.TOKEN_ENCRYPTION_KEY = TEST_KEY;
+  });
+
+  it("throws in production when the key is unset on seal", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    delete process.env.TOKEN_ENCRYPTION_KEY;
+    expect(() => sealSecret("plain")).toThrow(/TOKEN_ENCRYPTION_KEY is required in production/);
+    vi.unstubAllEnvs();
+    process.env.TOKEN_ENCRYPTION_KEY = TEST_KEY;
   });
 
   it("sealTokenFields / openTokenFields cover both token columns", () => {

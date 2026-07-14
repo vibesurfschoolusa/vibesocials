@@ -11,7 +11,10 @@ import {
   isMediaSweepEligible,
 } from "@/server/jobs/mediaRetention";
 import { recomputePostJobStatus } from "@/server/jobs/postStatus";
-import { claimDueScheduledJobs } from "@/server/jobs/scheduledScanner";
+import {
+  claimDueScheduledJobs,
+  reconcileStuckInProgressJobs,
+} from "@/server/jobs/scheduledScanner";
 import {
   METRICS_SYNC_BATCH,
   selectYouTubeMetricEligibleResults,
@@ -21,7 +24,7 @@ import { deliverPostOutcomeNotification } from "@/server/notifications/postOutco
 import { refreshGoogleToken } from "@/server/platforms/googleTokens";
 import { fetchYouTubeVideoStatistics, hasAnyStatistic } from "@/server/platforms/youtubeMetrics";
 import { Prisma } from "@prisma/client";
-import type { MediaItem, Platform, SocialConnection, User } from "@prisma/client";
+import type { MediaItem, Platform, User } from "@prisma/client";
 import type {
   PublishContext,
   TikTokPostMetadata,
@@ -93,6 +96,22 @@ async function publishToPlatform(
         platform: connectionRef.platform,
         status: "failed",
         error: "Connection gone",
+      };
+    }
+    if (connection.needsReconnect) {
+      await prisma.postJobResult.update({
+        where: { id: resultRecordId },
+        data: {
+          status: "failed",
+          errorCode: "RECONNECT_REQUIRED",
+          errorMessage:
+            "This platform needs to be reconnected in Settings before publishing.",
+        },
+      });
+      return {
+        platform: connectionRef.platform,
+        status: "failed",
+        error: "Reconnect required",
       };
     }
 
@@ -627,20 +646,30 @@ export const retryPlatforms = inngest.createFunction(
           ? buildCaptionWithFooter(captionOverride, workspace)
           : fullBaseCaption;
 
-        // Per-post TikTok/YouTube metadata isn't persisted, so a retry can't
-        // recover the user's original privacy choice. Use each platform's SAFEST
-        // value so a retry is never MORE public than the user picked: TikTok ->
-        // its SELF_ONLY default (arg omitted), YouTube -> explicit "private"
-        // (the client's own default "unlisted" is MORE public than a user's
-        // "private", which would be a silent privacy escalation).
+        // Replay publishMetadata from the job when present (immediate jobs now
+        // snapshot it too). Fallback: safest defaults so a retry is never MORE
+        // public than a missing choice (YouTube private, TikTok SELF_ONLY).
+        const jobMeta = await prisma.postJob.findUnique({
+          where: { id: postJobId },
+          select: { publishMetadata: true },
+        });
+        const snap = (jobMeta?.publishMetadata ?? null) as {
+          tiktok?: TikTokPostMetadata;
+          youtube?: YouTubePostMetadata;
+        } | null;
+        const ytMeta =
+          snap?.youtube ??
+          (platform === "youtube" ? { privacyStatus: "private" as const } : undefined);
+        const ttMeta = snap?.tiktok;
+
         return publishToPlatform(
           connection,
           mediaItem,
           caption,
           userId,
           resultRecord.id,
-          undefined,
-          platform === "youtube" ? { privacyStatus: "private" } : undefined,
+          ttMeta,
+          ytMeta,
         );
       });
 
@@ -718,6 +747,15 @@ export const scheduledPostScanner = inngest.createFunction(
     const claimedIds = await step.run("claim-due-jobs", async () => {
       return claimDueScheduledJobs(new Date());
     });
+
+    // Reconcile jobs stuck in_progress after a materialize/dispatch crash
+    // (leaves no pending work and never reaches finalize).
+    const reconciled = await step.run("reconcile-stuck-in-progress", async () => {
+      return reconcileStuckInProgressJobs(new Date());
+    });
+    if (reconciled.reconciled > 0) {
+      logger.info("[Inngest] Reconciled stuck in_progress jobs", reconciled);
+    }
 
     let dispatched = 0;
     let failedNoConnections = 0;

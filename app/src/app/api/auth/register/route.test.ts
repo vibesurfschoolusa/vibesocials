@@ -78,8 +78,6 @@ function happyPathUser() {
     id: "user-1",
     email: "user@example.com",
     name: "New User",
-    companyWebsite: null,
-    defaultHashtags: null,
   });
   workspaceCreateMock.mockResolvedValue({ id: "workspace-1" });
   workspaceMemberCreateMock.mockResolvedValue({});
@@ -148,16 +146,18 @@ describe("POST /api/auth/register", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
-  it("returns 400 when a user with that email already exists", async () => {
+  it("returns the same 201 shape when a user with that email already exists (no oracle)", async () => {
     findUniqueMock.mockResolvedValue({ id: "existing-user", email: "user@example.com" });
 
     const response = await POST(
-      jsonRequest({ email: "user@example.com", password: "goodpassword" }),
+      jsonRequest({ email: "user@example.com", password: "goodpassword", name: "Hacker" }),
     );
 
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(201);
     await expect(response.json()).resolves.toEqual({
-      error: "A user with that email already exists.",
+      id: "ok",
+      email: "user@example.com",
+      name: "Hacker",
     });
     expect(createMock).not.toHaveBeenCalled();
   });
@@ -168,8 +168,6 @@ describe("POST /api/auth/register", () => {
       id: "user-1",
       email: "user@example.com",
       name: "New User",
-      companyWebsite: null,
-      defaultHashtags: null,
     });
     workspaceCreateMock.mockResolvedValue({ id: "workspace-1" });
     workspaceMemberCreateMock.mockResolvedValue({});
@@ -211,8 +209,6 @@ describe("POST /api/auth/register", () => {
     expect(workspaceCreateMock).toHaveBeenCalledWith({
       data: {
         name: "New User's workspace",
-        companyWebsite: null,
-        defaultHashtags: null,
       },
     });
     expect(workspaceMemberCreateMock).toHaveBeenCalledWith({

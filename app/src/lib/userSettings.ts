@@ -7,9 +7,8 @@
  * `companyWebsite`/`defaultHashtags` are the caption footer, which moved to
  * the Workspace row (brand-level, owner-only to change — design §2/§4);
  * `settings/page.tsx` sources them from `getWorkspaceContext().workspace`,
- * not `getCurrentUser()`. `User.companyWebsite`/`defaultHashtags` still exist
- * as dead columns (no destructive drop this program) — never read them for
- * display again.
+ * not `getCurrentUser()`. User-level brand columns were dropped — never read
+ * them for display.
  *
  * `User`/`Workspace` rows carry secrets (passwordHash) and PII (email,
  * timestamps). Never pass a raw row into a `"use client"` component — the App

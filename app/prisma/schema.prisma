@@ -65,8 +65,6 @@ model User {
   // their email. The backfill migration grandfathers every EXISTING user as
   // verified (stamped CURRENT_TIMESTAMP) so this rollout locks nobody out.
   emailVerifiedAt      DateTime?
-  companyWebsite       String?
-  defaultHashtags      String?
   // Roadmap Phase 6 (notifications). Gates the best-effort post-outcome email
   // (see server/notifications/postOutcomeEmail.ts) — independent of whether
   // RESEND_API_KEY is configured, which is the other, env-level gate. Defaults
@@ -86,11 +84,26 @@ model User {
   accountTokens        AccountToken[]
 }
 
+// Short-lived server-side store for OAuth handshakes that cannot put secrets
+// in signed state (X OAuth 1.0a). Keyed by the provider request token; only
+// the token secret + owner context live here — never long-lived access tokens.
+// Rows expire and are deleted on successful callback or opportunistic cleanup.
+model OAuthHandshake {
+  // Provider request token (oauth_token) — unique per handshake.
+  token       String   @id
+  tokenSecret String
+  userId      String
+  workspaceId String
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
 // Team Workspaces. The tenant: owns connections, media, posts, metrics, and
-// brand settings (caption footer, moved here from User.companyWebsite/
-// defaultHashtags — those columns remain but are dead going forward). Every
-// user gets a personal workspace at registration (existing users via
-// backfill migration), so solo use is unchanged. See design doc §1-2.
+// brand settings (caption footer). Every user gets a personal workspace at
+// registration (existing users via backfill migration), so solo use is
+// unchanged. See design doc §1-2.
 model Workspace {
   id              String   @id @default(cuid())
   name            String
