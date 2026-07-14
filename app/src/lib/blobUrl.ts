@@ -9,11 +9,13 @@
  * Allowed by default:
  * - Vercel Blob public hosts (`*.public.blob.vercel-storage.com`,
  *   `*.blob.vercel-storage.com`)
- * - localhost / 127.0.0.1 over http(s) in non-production (local filesystem
- *   storage fallback)
+ * - Loopback (`localhost` / `127.0.0.1` / `[::1]`) for local filesystem
+ *   storage and the e2e mock blob server (CI runs `next start` with
+ *   NODE_ENV=production against http://localhost:9366 — loopback is still
+ *   not a remote SSRF target for cloud metadata / internal VPC)
  * - Hosts listed in `BLOB_ALLOWED_HOSTS` (comma-separated), for custom CDNs
  *
- * Protocol: https only in production; http allowed for localhost in dev.
+ * Protocol: https for remote hosts; http allowed only for loopback.
  */
 
 const VERCEL_BLOB_SUFFIXES = [
@@ -37,7 +39,11 @@ function isVercelBlobHost(hostname: string): boolean {
 }
 
 function isLocalDevHost(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "[::1]"
+  );
 }
 
 /**
@@ -58,12 +64,12 @@ export function isAllowedBlobUrl(url: string): boolean {
 
   const host = parsed.hostname.toLowerCase();
   const isLocal = isLocalDevHost(host);
-  const isProd = process.env.NODE_ENV === "production";
 
   if (parsed.protocol === "https:") {
-    // ok
-  } else if (parsed.protocol === "http:" && isLocal && !isProd) {
-    // local storage fallback in development
+    // ok for any allowed host
+  } else if (parsed.protocol === "http:" && isLocal) {
+    // Loopback over http: local storage + e2e mock blob (CI uses production
+    // NODE_ENV with NEXT_PUBLIC_VERCEL_BLOB_API_URL=http://localhost:9366).
   } else {
     return false;
   }
@@ -72,7 +78,7 @@ export function isAllowedBlobUrl(url: string): boolean {
     return true;
   }
 
-  if (isLocal && !isProd) {
+  if (isLocal) {
     return true;
   }
 

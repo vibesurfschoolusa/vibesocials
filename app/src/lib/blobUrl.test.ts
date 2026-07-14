@@ -29,14 +29,18 @@ describe("isAllowedBlobUrl", () => {
     expect(isAllowedBlobUrl("")).toBe(false);
   });
 
-  it("allows localhost over http outside production", () => {
-    vi.stubEnv("NODE_ENV", "development");
+  it("allows localhost over http (local storage + e2e mock blob)", () => {
     expect(isAllowedBlobUrl("http://localhost:3000/uploads/a.mp4")).toBe(true);
+    expect(isAllowedBlobUrl("http://localhost:9366/media/x.png")).toBe(true);
   });
 
-  it("rejects localhost in production", () => {
+  it("allows localhost over http even when NODE_ENV is production (CI e2e)", () => {
     vi.stubEnv("NODE_ENV", "production");
-    expect(isAllowedBlobUrl("http://localhost:3000/uploads/a.mp4")).toBe(false);
+    expect(isAllowedBlobUrl("http://localhost:9366/?pathname=x")).toBe(true);
+  });
+
+  it("rejects non-loopback http hosts", () => {
+    expect(isAllowedBlobUrl("http://evil.example/x.mp4")).toBe(false);
   });
 
   it("honors BLOB_ALLOWED_HOSTS", () => {
