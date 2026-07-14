@@ -128,11 +128,13 @@ export const authOptions: NextAuthOptions = {
     },
     async session({ session, token }) {
       if (!token?.id) {
-        // Cleared JWT / invalid sessionVersion — present an empty session so
-        // client status is unauthenticated after SessionProvider refetch.
+        // Cleared JWT / invalid sessionVersion. Expire immediately so the
+        // client SessionProvider treats this as unauthenticated (a bare
+        // `user: undefined` with a future `expires` can still look signed-in).
         return {
           ...session,
           user: undefined as unknown as typeof session.user,
+          expires: new Date(0).toISOString(),
         };
       }
       if (session.user) {

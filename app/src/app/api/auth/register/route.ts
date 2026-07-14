@@ -39,6 +39,11 @@ export async function POST(request: Request) {
     );
   }
 
+  // Parsed once so the outer catch can reuse email/name for the P2002
+  // no-oracle response without re-reading the request body.
+  let parsedEmail = "";
+  let parsedDisplayName: string | null = null;
+
   try {
     const body = await request.json();
     const { email: rawEmail, password, name } = body ?? {};
@@ -65,6 +70,8 @@ export async function POST(request: Request) {
 
     const email = normalizeEmail(rawEmail);
     const displayName = typeof name === "string" ? name : null;
+    parsedEmail = email;
+    parsedDisplayName = displayName;
 
     // SEC-1 — no email-existence oracle. Whether or not the address is taken,
     // the HTTP response is the same 201 shape. The client always attempts
@@ -128,6 +135,19 @@ export async function POST(request: Request) {
       { status: 201 },
     );
   } catch (error) {
+    // Unique-constraint race: two concurrent registers for the same email —
+    // the loser would otherwise 500 and leak "email taken". Match the
+    // no-oracle 201 shape used for the pre-create existence check.
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : "";
+    if (code === "P2002") {
+      return NextResponse.json(
+        { id: "ok", email: parsedEmail, name: parsedDisplayName },
+        { status: 201 },
+      );
+    }
     logger.error("[POST /api/auth/register] Unexpected error", { error });
     return NextResponse.json({ error: "Failed to register user." }, { status: 500 });
   }

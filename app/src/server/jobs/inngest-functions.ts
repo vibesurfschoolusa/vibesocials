@@ -548,7 +548,11 @@ export const retryPlatforms = inngest.createFunction(
         }),
         prisma.mediaItem.findUnique({ where: { id: postJob.mediaItemId } }),
         prisma.socialConnection.findMany({
-          where: { workspaceId: postJob.workspaceId, platform: { in: platforms } },
+          where: {
+            workspaceId: postJob.workspaceId,
+            platform: { in: platforms },
+            needsReconnect: false,
+          },
           select: { id: true, platform: true },
         }),
         prisma.postJobResult.findMany({
@@ -557,12 +561,19 @@ export const retryPlatforms = inngest.createFunction(
         }),
       ]);
 
+      // Privacy snapshot once (not per platform step) for retry replay.
+      const publishMetadata = postJob.publishMetadata as {
+        tiktok?: TikTokPostMetadata;
+        youtube?: YouTubePostMetadata;
+      } | null;
+
       return {
         user,
         workspace,
         mediaItem,
         connections: connections as ConnectionRef[],
         resultRecords,
+        publishMetadata,
       };
     });
 
@@ -571,7 +582,8 @@ export const retryPlatforms = inngest.createFunction(
       return { postJobId, error: "Job not found" };
     }
 
-    const { user, workspace, mediaItem, connections, resultRecords } = setupData;
+    const { user, workspace, mediaItem, connections, resultRecords, publishMetadata } =
+      setupData;
 
     // The blob must still exist to re-publish. The endpoint already gates this,
     // but a concurrent retention sweep could have removed it in between — fail
@@ -649,18 +661,10 @@ export const retryPlatforms = inngest.createFunction(
         // Replay publishMetadata from the job when present (immediate jobs now
         // snapshot it too). Fallback: safest defaults so a retry is never MORE
         // public than a missing choice (YouTube private, TikTok SELF_ONLY).
-        const jobMeta = await prisma.postJob.findUnique({
-          where: { id: postJobId },
-          select: { publishMetadata: true },
-        });
-        const snap = (jobMeta?.publishMetadata ?? null) as {
-          tiktok?: TikTokPostMetadata;
-          youtube?: YouTubePostMetadata;
-        } | null;
         const ytMeta =
-          snap?.youtube ??
+          publishMetadata?.youtube ??
           (platform === "youtube" ? { privacyStatus: "private" as const } : undefined);
-        const ttMeta = snap?.tiktok;
+        const ttMeta = publishMetadata?.tiktok;
 
         return publishToPlatform(
           connection,

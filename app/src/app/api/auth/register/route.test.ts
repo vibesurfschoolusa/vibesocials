@@ -162,6 +162,22 @@ describe("POST /api/auth/register", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
+  it("returns the same 201 shape on a unique-constraint race (P2002), not 500", async () => {
+    findUniqueMock.mockResolvedValue(null);
+    createMock.mockRejectedValue(Object.assign(new Error("Unique constraint"), { code: "P2002" }));
+
+    const response = await POST(
+      jsonRequest({ email: "race@example.com", password: "goodpassword", name: "Racer" }),
+    );
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual({
+      id: "ok",
+      email: "race@example.com",
+      name: "Racer",
+    });
+  });
+
   it("creates the user, hashes the password, and returns 201 on the happy path", async () => {
     findUniqueMock.mockResolvedValue(null);
     createMock.mockResolvedValue({
