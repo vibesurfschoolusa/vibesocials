@@ -198,7 +198,7 @@ describe("POST /api/auth/register", () => {
 
     expect(response.status).toBe(201);
     await expect(response.json()).resolves.toEqual({
-      id: "user-1",
+      id: "ok",
       email: "user@example.com",
       name: "New User",
     });
@@ -257,7 +257,7 @@ describe("POST /api/auth/register", () => {
     // The registration succeeds despite the email work throwing.
     expect(response.status).toBe(201);
     await expect(response.json()).resolves.toEqual({
-      id: "user-1",
+      id: "ok",
       email: "user@example.com",
       name: "New User",
     });

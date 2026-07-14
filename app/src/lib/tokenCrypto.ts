@@ -11,9 +11,9 @@ import crypto from "crypto";
  * Key: `TOKEN_ENCRYPTION_KEY` — 32 raw bytes, base64- or base64url-encoded
  * (44-char standard base64 with padding, or 43-char base64url without).
  *
- * When the key is unset, seal/open are identity transforms so local/test
- * environments keep working. Production deployments MUST set the key; a
- * missing key leaves tokens plaintext (logged once at first seal attempt).
+ * When the key is unset outside production, seal/open are identity transforms
+ * so local/test keep working. In production, seal() throws if the key is
+ * missing (never write plaintext OAuth tokens).
  *
  * Open accepts legacy plaintext (no `enc:v1:` prefix) so existing rows keep
  * working after rollout; the next token write re-seals them.
