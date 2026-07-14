@@ -57,8 +57,8 @@ Browser → Next.js pages + API routes
 
 - Email + password (bcrypt). Emails stored **normalized** (`trim` + lowercase).
 - JWT sessions carry `id` + `sessionVersion`. Password reset increments `sessionVersion`; `getCurrentUser` rejects stale JWTs.
-- Soft email verification (banner only) when Resend is configured.
-- Social OAuth is separate; `state` is HMAC-signed and carries `userId` + `workspaceId`.
+- Soft email verification when Resend is configured (banner + **live publish** gated on `emailVerifiedAt`).
+- Social OAuth is separate; `state` is HMAC-signed and carries `userId` + `workspaceId` (X OAuth 1.0a uses server-side `OAuthHandshake` instead of cookies).
 
 ### Workspaces
 
@@ -100,9 +100,12 @@ All secrets via environment variables (see `app/.env.example`). Never commit rea
 
 Notable:
 
-- `TOKEN_ENCRYPTION_KEY` — production required for OAuth token encryption
+- `TOKEN_ENCRYPTION_KEY` — production **required** for OAuth token encryption (seal throws if missing in production)
 - `BLOB_ALLOWED_HOSTS` — optional extra media hosts
+- `XAI_API_KEY` / `OPENAI_API_KEY` — AI captions (SpaceXAI preferred)
 - `DEV_DB_OK=1` — override for local dev against a remote (staging) DB
+
+**Ops:** `npm run build` does **not** run migrations. Deploy checklist: `npx prisma migrate deploy`, set `TOKEN_ENCRYPTION_KEY`, redeploy, smoke auth + publish.
 
 ## Repo layout
 
@@ -123,4 +126,3 @@ docs/                Setup guides, design specs, plans
 - Ownership transfer UI (beyond co-owner leave)
 - Metrics for non-YouTube platforms
 - X thread support for long captions; X chunked upload for large media
-- Drop dead `User.companyWebsite` / `defaultHashtags` columns (workspace is source of truth)

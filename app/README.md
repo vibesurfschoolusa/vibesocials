@@ -33,7 +33,8 @@ Open [http://localhost:3000](http://localhost:3000).
 | `DATABASE_URL` | Postgres connection string |
 | `NEXTAUTH_SECRET` | Session JWT signing |
 | `NEXTAUTH_URL` | Canonical app URL |
-| `TOKEN_ENCRYPTION_KEY` | AES key for OAuth tokens at rest (`openssl rand -base64 32`) — **required in production** |
+| `TOKEN_ENCRYPTION_KEY` | AES key for OAuth tokens at rest (`openssl rand -base64 32`) — **required in production** (seal fails hard if missing) |
+| `XAI_API_KEY` | Preferred LLM for captions / review drafts (falls back to `OPENAI_API_KEY`) |
 | `BLOB_READ_WRITE_TOKEN` | Vercel Blob |
 | `BLOB_ALLOWED_HOSTS` | Optional extra hosts for `blobUrl` allowlist |
 | `RESEND_API_KEY` | Email delivery (reset / verify / notifications) |

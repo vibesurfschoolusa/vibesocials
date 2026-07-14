@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 
 import { getWorkspaceContext } from "@/lib/workspace";
 import { BLOB_URL_REJECTED_MESSAGE, isAllowedBlobUrl } from "@/lib/blobUrl";
+import {
+  EMAIL_VERIFY_REQUIRED_MESSAGE,
+  isEmailVerifiedForPublish,
+} from "@/lib/emailVerified";
 import { logger } from "@/lib/logger";
 import { PostJobStatus, Platform, type Prisma } from "@prisma/client";
 import {
@@ -475,6 +479,14 @@ export async function POST(request: Request) {
     }
     intent = "scheduled";
     scheduledForDate = validation.date;
+  }
+
+  // Live publish only (drafts/schedules can be prepared before verify).
+  if (intent === "immediate" && !isEmailVerifiedForPublish(context.user)) {
+    return NextResponse.json(
+      { error: EMAIL_VERIFY_REQUIRED_MESSAGE, code: "EMAIL_VERIFY_REQUIRED" },
+      { status: 403 },
+    );
   }
 
   try {

@@ -248,7 +248,7 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
     });
 
     expect(findManyConnectionsMock).toHaveBeenCalledWith({
-      where: { workspaceId: "workspace-1" },
+      where: { workspaceId: "workspace-1", needsReconnect: false },
     });
     expect(mediaItemCreateMock).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -398,7 +398,7 @@ describe("createPostJobForExistingMedia", () => {
     });
 
     expect(findManyConnectionsMock).toHaveBeenCalledWith({
-      where: { workspaceId: "workspace-1" },
+      where: { workspaceId: "workspace-1", needsReconnect: false },
     });
 
     // Skips MediaItem creation entirely — no `prisma.mediaItem.create` mock
@@ -625,13 +625,13 @@ describe("buildPostJobCreateData (review B1 — persist deferred privacy)", () =
     expect(data.publishMetadata).toEqual({ youtube: yt });
   });
 
-  it("does NOT persist publishMetadata for an immediate job (it rides the event instead)", () => {
+  it("persists publishMetadata for an immediate job so retry can replay privacy", () => {
     const data = buildPostJobCreateData({
       userId: "u", mediaItemId: "m", intent: "immediate",
       scheduledFor: null, baseCaption: "hi", youtubeMetadata: yt,
     });
     expect(data.status).toBe("in_progress");
     expect(data.baseCaption).toBeNull();
-    expect(data.publishMetadata).toBeUndefined();
+    expect(data.publishMetadata).toEqual({ youtube: yt });
   });
 });

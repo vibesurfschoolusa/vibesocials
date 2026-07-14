@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createHmac } from "crypto";
+import { prisma } from "@/lib/db";
 import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
 
 /**
@@ -11,38 +12,30 @@ function generateOAuthSignature(
   url: string,
   params: Record<string, string>,
   consumerSecret: string,
-  tokenSecret: string = ""
+  tokenSecret: string = "",
 ): string {
-  // Sort parameters alphabetically
   const sortedParams = Object.keys(params)
     .sort()
     .map((key) => `${encodeURIComponent(key)}=${encodeURIComponent(params[key])}`)
     .join("&");
 
-  // Create signature base string
   const signatureBase = [
     method.toUpperCase(),
     encodeURIComponent(url),
     encodeURIComponent(sortedParams),
   ].join("&");
 
-  // Create signing key
   const signingKey = `${encodeURIComponent(consumerSecret)}&${encodeURIComponent(tokenSecret)}`;
 
-  // Generate signature
-  const signature = createHmac("sha1", signingKey)
-    .update(signatureBase)
-    .digest("base64");
-
-  return signature;
+  return createHmac("sha1", signingKey).update(signatureBase).digest("base64");
 }
 
+const HANDSHAKE_TTL_MS = 10 * 60 * 1000;
+
 export async function GET(request: Request) {
-  // X's OAuth 1.0a dance has no app-controlled `state` param (only
-  // Twitter's own opaque oauth_token round-trips) — the request-token
-  // secret and userId are already bridged callback-side via httpOnly
-  // cookies below, so workspaceId is embedded the same way (a third
-  // cookie) rather than via createOAuthState/verifyOAuthState.
+  // X's OAuth 1.0a dance has no app-controlled `state` param — request-token
+  // secret + userId + workspaceId are stored server-side in OAuthHandshake
+  // (keyed by oauth_token), not in browser cookies.
   const contextOrRedirect = await requireOwnerContextForOAuthStart(
     request,
     "x_not_workspace_owner",
@@ -55,19 +48,18 @@ export async function GET(request: Request) {
   }
   const { user, workspace } = contextOrRedirect;
 
-  const consumerKey = process.env.X_CONSUMER_KEY; // API Key
-  const consumerSecret = process.env.X_CONSUMER_SECRET; // API Secret
+  const consumerKey = process.env.X_CONSUMER_KEY;
+  const consumerSecret = process.env.X_CONSUMER_SECRET;
   const callbackUrl = process.env.X_CALLBACK_URL;
 
   if (!consumerKey || !consumerSecret || !callbackUrl) {
     console.error("[X OAuth 1.0a] Missing environment variables");
     return NextResponse.redirect(
-      new URL("/settings?error=x_config_missing", process.env.NEXTAUTH_URL)
+      new URL("/settings?error=x_config_missing", process.env.NEXTAUTH_URL),
     );
   }
 
   try {
-    // Step 1: Request a request token
     const timestamp = Math.floor(Date.now() / 1000).toString();
     const nonce = Math.random().toString(36).substring(2);
 
@@ -81,11 +73,15 @@ export async function GET(request: Request) {
     };
 
     const requestTokenUrl = "https://api.twitter.com/oauth/request_token";
-    const signature = generateOAuthSignature("POST", requestTokenUrl, oauthParams, consumerSecret);
+    const signature = generateOAuthSignature(
+      "POST",
+      requestTokenUrl,
+      oauthParams,
+      consumerSecret,
+    );
 
     oauthParams.oauth_signature = signature;
 
-    // Build Authorization header
     const authHeader =
       "OAuth " +
       Object.keys(oauthParams)
@@ -112,7 +108,7 @@ export async function GET(request: Request) {
         error: errorText,
       });
       return NextResponse.redirect(
-        new URL("/settings?error=x_request_token_failed", process.env.NEXTAUTH_URL)
+        new URL("/settings?error=x_request_token_failed", process.env.NEXTAUTH_URL),
       );
     }
 
@@ -124,55 +120,48 @@ export async function GET(request: Request) {
     if (!oauthToken || !oauthTokenSecret) {
       console.error("[X OAuth 1.0a] Invalid request token response");
       return NextResponse.redirect(
-        new URL("/settings?error=x_invalid_token_response", process.env.NEXTAUTH_URL)
+        new URL("/settings?error=x_invalid_token_response", process.env.NEXTAUTH_URL),
       );
     }
 
-    // Store oauth_token_secret temporarily (in production, use Redis or database)
-    // For now, we'll encode it in a cookie or state parameter
-    // Note: This is a security consideration - in production, use server-side storage
+    const now = new Date();
+    // Opportunistic cleanup of expired handshakes (~every start).
+    if (Math.random() < 0.1) {
+      void prisma.oAuthHandshake
+        .deleteMany({ where: { expiresAt: { lt: now } } })
+        .catch(() => {});
+    }
+
+    await prisma.oAuthHandshake.upsert({
+      where: { token: oauthToken },
+      create: {
+        token: oauthToken,
+        tokenSecret: oauthTokenSecret,
+        userId: user.id,
+        workspaceId: workspace.id,
+        expiresAt: new Date(now.getTime() + HANDSHAKE_TTL_MS),
+      },
+      update: {
+        tokenSecret: oauthTokenSecret,
+        userId: user.id,
+        workspaceId: workspace.id,
+        expiresAt: new Date(now.getTime() + HANDSHAKE_TTL_MS),
+      },
+    });
 
     console.log("[X OAuth 1.0a] Request token received", {
       userId: user.id,
       oauthToken,
     });
 
-    // Step 2: Redirect user to authorization URL
     const authorizeUrl = new URL("https://api.twitter.com/oauth/authorize");
     authorizeUrl.searchParams.set("oauth_token", oauthToken);
 
-    // Store user ID, workspace ID, and token secret for callback
-    // In production, store this in Redis with oauth_token as key
-    const response2 = NextResponse.redirect(authorizeUrl.toString());
-    response2.cookies.set("x_oauth_token_secret", oauthTokenSecret, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 600, // 10 minutes
-    });
-    response2.cookies.set("x_user_id", user.id, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 600,
-    });
-    // Team Workspaces (Task 6, design §5): X has no app-controlled `state`
-    // param to embed workspaceId in, so it rides the same cookie bridge as
-    // x_user_id — the callback re-verifies the caller is still an owner of
-    // this workspace before writing the connection, same as every other
-    // platform's signed-state workspaceId.
-    response2.cookies.set("x_workspace_id", workspace.id, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 600,
-    });
-
-    return response2;
+    return NextResponse.redirect(authorizeUrl.toString());
   } catch (error) {
     console.error("[X OAuth 1.0a] Unexpected error:", error);
     return NextResponse.redirect(
-      new URL("/settings?error=x_unexpected_error", process.env.NEXTAUTH_URL)
+      new URL("/settings?error=x_unexpected_error", process.env.NEXTAUTH_URL),
     );
   }
 }

@@ -1,6 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { prisma } from "@/lib/db";
+import {
+  EMAIL_VERIFY_REQUIRED_MESSAGE,
+  isEmailVerifiedForPublish,
+} from "@/lib/emailVerified";
 import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
@@ -94,6 +98,14 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
         status: 429,
         headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) },
       },
+    );
+  }
+
+  // Same live-publish gate as POST /api/posts and publish-now.
+  if (!isEmailVerifiedForPublish(workspaceContext.user)) {
+    return NextResponse.json(
+      { error: EMAIL_VERIFY_REQUIRED_MESSAGE, code: "EMAIL_VERIFY_REQUIRED" },
+      { status: 403 },
     );
   }
 

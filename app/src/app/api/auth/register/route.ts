@@ -39,6 +39,11 @@ export async function POST(request: Request) {
     );
   }
 
+  // Parsed once so the outer catch can reuse email/name for the P2002
+  // no-oracle response without re-reading the request body.
+  let parsedEmail = "";
+  let parsedDisplayName: string | null = null;
+
   try {
     const body = await request.json();
     const { email: rawEmail, password, name } = body ?? {};
@@ -64,13 +69,23 @@ export async function POST(request: Request) {
     }
 
     const email = normalizeEmail(rawEmail);
+    const displayName = typeof name === "string" ? name : null;
+    parsedEmail = email;
+    parsedDisplayName = displayName;
+
+    // SEC-1 — no email-existence oracle. Body shape is identical for new and
+    // existing accounts (never return a real user id — `id: "ok"` vs a cuid
+    // would reintroduce an oracle). Client always attempts signIn next: a new
+    // account signs in; an existing one only if the password matches.
+    const registerOkBody = (emailValue: string, nameValue: string | null) => ({
+      id: "ok" as const,
+      email: emailValue,
+      name: nameValue,
+    });
 
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
-      return NextResponse.json(
-        { error: "A user with that email already exists." },
-        { status: 400 },
-      );
+      return NextResponse.json(registerOkBody(email, displayName), { status: 201 });
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
@@ -83,7 +98,7 @@ export async function POST(request: Request) {
       const created = await tx.user.create({
         data: {
           email,
-          name: name ?? null,
+          name: displayName,
           passwordHash,
         },
       });
@@ -110,15 +125,21 @@ export async function POST(request: Request) {
       logger.warn("[register] verification email failed", { error });
     }
 
-    return NextResponse.json(
-      {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-      },
-      { status: 201 },
-    );
+    return NextResponse.json(registerOkBody(user.email, user.name), { status: 201 });
   } catch (error) {
+    // Unique-constraint race: two concurrent registers for the same email —
+    // the loser would otherwise 500 and leak "email taken". Match the
+    // no-oracle 201 shape used for the pre-create existence check.
+    const code =
+      error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : "";
+    if (code === "P2002") {
+      return NextResponse.json(
+        { id: "ok", email: parsedEmail, name: parsedDisplayName },
+        { status: 201 },
+      );
+    }
     logger.error("[POST /api/auth/register] Unexpected error", { error });
     return NextResponse.json({ error: "Failed to register user." }, { status: 500 });
   }

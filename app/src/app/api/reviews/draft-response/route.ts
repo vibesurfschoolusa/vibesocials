@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { LLM_NOT_CONFIGURED_MESSAGE, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
 
 export const dynamic = "force-dynamic";
@@ -19,12 +20,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Throttle per user to cap OpenAI spend from a single account/session.
+    // Throttle per user to cap LLM spend; fail closed on limiter outage.
     const rateLimit = await checkRateLimit({
       userId: context.user.id,
       route: "reviews/draft-response",
       limit: 20,
       windowMs: 5 * 60 * 1000,
+      failClosed: true,
     });
 
     if (!rateLimit.allowed) {
@@ -60,17 +62,9 @@ export async function POST(request: Request) {
     };
     const ratingNumber = ratingMap[starRating] || 5;
 
-    // Generate AI response using OpenAI-compatible API
-    const openaiApiKey = process.env.OPENAI_API_KEY;
-
-    if (!openaiApiKey) {
-      return NextResponse.json(
-        {
-          error:
-            "OpenAI API key not configured. Please add OPENAI_API_KEY to your environment variables.",
-        },
-        { status: 500 }
-      );
+    const llm = resolveLlmConfig();
+    if (!llm) {
+      return NextResponse.json({ error: LLM_NOT_CONFIGURED_MESSAGE }, { status: 500 });
     }
 
     // Determine response tone based on rating
@@ -108,39 +102,34 @@ ${comment ? `Comment: "${comment}"` : "No written comment"}
 
 Generate a professional, warm response to this review.`;
 
-    // Call OpenAI API
-    const openaiResponse = await fetch(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${openaiApiKey}`,
-        },
-        body: JSON.stringify({
-          model: "gpt-4o-mini", // Fast and cost-effective
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-          temperature: 0.7,
-          max_tokens: 200,
-        }),
-      }
-    );
+    const llmResponse = await fetch(`${llm.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${llm.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: llm.textModel,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.7,
+        max_tokens: 200,
+      }),
+    });
 
-    if (!openaiResponse.ok) {
-      const errorData = await openaiResponse.json().catch(() => ({}));
-      console.error("[Draft Response] OpenAI API error:", errorData);
+    if (!llmResponse.ok) {
+      const errorData = await llmResponse.json().catch(() => ({}));
+      console.error(`[Draft Response] ${llm.providerLabel} API error:`, errorData);
       return NextResponse.json(
         { error: "Failed to generate AI response" },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
-    const openaiData = await openaiResponse.json();
-    const draftResponse =
-      openaiData.choices?.[0]?.message?.content?.trim() || "";
+    const llmData = await llmResponse.json();
+    const draftResponse = llmData.choices?.[0]?.message?.content?.trim() || "";
 
     if (!draftResponse) {
       return NextResponse.json(

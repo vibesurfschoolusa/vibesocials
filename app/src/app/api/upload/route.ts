@@ -3,12 +3,34 @@ import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
 import { logger } from "@/lib/logger";
+import { checkRateLimit } from "@/lib/rateLimit";
 
 export async function POST(request: Request): Promise<NextResponse> {
   const user = await getCurrentUser();
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Cap client upload-token issuance (each call can authorize up to 512MB).
+  const rateLimit = await checkRateLimit({
+    userId: user.id,
+    route: "upload",
+    limit: 40,
+    windowMs: 15 * 60 * 1000,
+    failClosed: true,
+  });
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      {
+        error: "Too many uploads. Please slow down.",
+        retryAfterSeconds: rateLimit.retryAfterSeconds,
+      },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) },
+      },
+    );
   }
 
   const body = (await request.json()) as HandleUploadBody;

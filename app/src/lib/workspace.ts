@@ -99,13 +99,11 @@ function personalWorkspaceName(user: Pick<User, "name" | "email">): string {
  */
 export async function provisionPersonalWorkspace(
   tx: PrismaClientLike,
-  user: Pick<User, "id" | "name" | "email" | "companyWebsite" | "defaultHashtags">,
+  user: Pick<User, "id" | "name" | "email">,
 ): Promise<{ workspaceId: string }> {
   const workspace = await tx.workspace.create({
     data: {
       name: personalWorkspaceName(user),
-      companyWebsite: user.companyWebsite,
-      defaultHashtags: user.defaultHashtags,
     },
   });
 
