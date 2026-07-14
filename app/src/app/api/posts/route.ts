@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getWorkspaceContext } from "@/lib/workspace";
+import { BLOB_URL_REJECTED_MESSAGE, isAllowedBlobUrl } from "@/lib/blobUrl";
 import { logger } from "@/lib/logger";
 import { PostJobStatus, Platform, type Prisma } from "@prisma/client";
 import {
@@ -341,6 +342,13 @@ export async function POST(request: Request) {
       { error: "blobUrl or mediaItemId is required" },
       { status: 400 },
     );
+  }
+
+  if (hasBlobUrl) {
+    const blobUrl = (body.blobUrl as string).trim();
+    if (!isAllowedBlobUrl(blobUrl)) {
+      return NextResponse.json({ error: BLOB_URL_REJECTED_MESSAGE }, { status: 400 });
+    }
   }
 
   const baseCaptionRaw = body?.baseCaption;

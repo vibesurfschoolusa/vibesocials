@@ -84,6 +84,7 @@ describe("POST /api/auth/verify-email", () => {
       route: "auth/verify",
       limit: 10,
       windowMs: 15 * 60 * 1000,
+      failClosed: true,
     });
   });
 

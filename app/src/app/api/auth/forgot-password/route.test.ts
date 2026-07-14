@@ -94,16 +94,18 @@ describe("POST /api/auth/forgot-password", () => {
       route: "auth/forgot",
       limit: 3,
       windowMs: 15 * 60 * 1000,
+      failClosed: true,
     });
     expect(checkRateLimitMock).toHaveBeenCalledWith({
       userId: expect.stringMatching(/^ip:/),
       route: "auth/forgot-ip",
       limit: 10,
       windowMs: 15 * 60 * 1000,
+      failClosed: true,
     });
   });
 
-  it("normalizes the per-email throttle key to lowercase but looks the user up AS-TYPED (review Important #1)", async () => {
+  it("normalizes the per-email throttle key and looks the user up normalized", async () => {
     findUniqueUserMock.mockResolvedValue(null);
 
     await POST(req({ email: "User@X.com" }));
@@ -115,12 +117,11 @@ describe("POST /api/auth/forgot-password", () => {
       route: "auth/forgot",
       limit: 3,
       windowMs: 15 * 60 * 1000,
+      failClosed: true,
     });
-    // The lookup stays as-typed: the app's email model is uniformly
-    // case-sensitive (register/login store + compare as-typed), so a
-    // normalized lookup would MISS mixed-case-registered accounts.
+    // Lookup matches registration/login (normalizeEmail = trim + lowercase).
     expect(findUniqueUserMock).toHaveBeenCalledWith({
-      where: { email: "User@X.com" },
+      where: { email: "user@x.com" },
       select: { id: true, email: true },
     });
   });

@@ -61,7 +61,7 @@ describe("POST /api/media", () => {
   it("returns 401 and never touches the database when unauthenticated", async () => {
     getWorkspaceContextMock.mockResolvedValue(null);
 
-    const response = await POST(jsonRequest({ blobUrl: "https://blob.example/x" }));
+    const response = await POST(jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x" }));
 
     expect(response.status).toBe(401);
     expect(createMock).not.toHaveBeenCalled();
@@ -90,7 +90,7 @@ describe("POST /api/media", () => {
   it("returns 400 when mimeType is neither image/* nor video/*", async () => {
     const response = await POST(
       jsonRequest({
-        blobUrl: "https://blob.example/x",
+        blobUrl: "https://test.public.blob.vercel-storage.com/x",
         mimeType: "application/pdf",
         sizeBytes: 1234,
       }),
@@ -105,7 +105,7 @@ describe("POST /api/media", () => {
   it("returns 400 when sizeBytes exceeds the 512MB cap", async () => {
     const response = await POST(
       jsonRequest({
-        blobUrl: "https://blob.example/x",
+        blobUrl: "https://test.public.blob.vercel-storage.com/x",
         mimeType: "image/png",
         sizeBytes: 600 * 1024 * 1024,
       }),
@@ -126,7 +126,7 @@ describe("POST /api/media", () => {
       id: "media-1",
       userId: "user-1",
       workspaceId: "ws-1",
-      storageLocation: "https://blob.example/x",
+      storageLocation: "https://test.public.blob.vercel-storage.com/x",
       originalFilename: "cat.png",
       mimeType: "image/png",
       sizeBytes: 1234,
@@ -141,7 +141,7 @@ describe("POST /api/media", () => {
 
     const response = await POST(
       jsonRequest({
-        blobUrl: "https://blob.example/x",
+        blobUrl: "https://test.public.blob.vercel-storage.com/x",
         filename: "cat.png",
         mimeType: "image/png",
         sizeBytes: 1234,
@@ -156,7 +156,7 @@ describe("POST /api/media", () => {
         userId: "user-1",
         // Team Workspaces (Task 4) — stamped straight from context.workspace.id.
         workspaceId: "ws-1",
-        storageLocation: "https://blob.example/x",
+        storageLocation: "https://test.public.blob.vercel-storage.com/x",
         originalFilename: "cat.png",
         mimeType: "image/png",
         sizeBytes: 1234,
@@ -169,7 +169,7 @@ describe("POST /api/media", () => {
     // list, so the wire shape must actually match that type.
     expect(body.mediaItem).toEqual({
       id: "media-1",
-      storageLocation: "https://blob.example/x",
+      storageLocation: "https://test.public.blob.vercel-storage.com/x",
       originalFilename: "cat.png",
       mimeType: "image/png",
       sizeBytes: 1234,
@@ -195,7 +195,7 @@ describe("POST /api/media", () => {
 
     await POST(
       jsonRequest({
-        blobUrl: "https://blob.example/x",
+        blobUrl: "https://test.public.blob.vercel-storage.com/x",
         mimeType: "image/png",
         sizeBytes: 10,
       }),

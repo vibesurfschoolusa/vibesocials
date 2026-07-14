@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { BLOB_URL_REJECTED_MESSAGE, isAllowedBlobUrl } from "@/lib/blobUrl";
 import { prisma } from "@/lib/db";
 import { toMediaItemDto } from "@/lib/mediaDto";
 import { getWorkspaceContext } from "@/lib/workspace";
@@ -63,6 +64,9 @@ export async function POST(request: Request) {
   const blobUrl = typeof body.blobUrl === "string" ? body.blobUrl.trim() : "";
   if (!blobUrl) {
     return NextResponse.json({ error: "blobUrl is required" }, { status: 400 });
+  }
+  if (!isAllowedBlobUrl(blobUrl)) {
+    return NextResponse.json({ error: BLOB_URL_REJECTED_MESSAGE }, { status: 400 });
   }
   const mimeType = typeof body.mimeType === "string" ? body.mimeType : "";
   if (!mimeType.startsWith("image/") && !mimeType.startsWith("video/")) {

@@ -1,36 +1,70 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Vibe Socials (app)
 
-## Getting Started
+Multi-platform social publishing: upload media once, caption once, post to TikTok, YouTube, X, LinkedIn, Instagram, Google Business Profile, and Facebook Page. Supports team workspaces, scheduling/drafts, media library, Google review replies, and YouTube engagement metrics.
 
-First, run the development server:
+## Stack
+
+- **Next.js** (App Router) + React + TypeScript + Tailwind
+- **PostgreSQL** via Prisma (Neon in production)
+- **NextAuth** credentials auth (JWT sessions)
+- **Vercel Blob** for media (client direct upload)
+- **Inngest** for async multi-platform publish, retention, metrics cron
+- **Resend** for password reset / verification / post-outcome email (optional)
+- **Sentry** for error reporting (optional)
+
+## Getting started
 
 ```bash
+cp .env.example .env.local
+# Fill DATABASE_URL (local or staging — never production), NEXTAUTH_SECRET, etc.
+npm install
+npx prisma migrate deploy   # or prisma migrate dev for local schema work
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+`npm run dev` runs a **predev guard** that refuses a remote `DATABASE_URL` unless `DEV_DB_OK=1`. See `docs/STAGING_SETUP.md`.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Important env vars
 
-## Learn More
+| Variable | Purpose |
+|----------|---------|
+| `DATABASE_URL` | Postgres connection string |
+| `NEXTAUTH_SECRET` | Session JWT signing |
+| `NEXTAUTH_URL` | Canonical app URL |
+| `TOKEN_ENCRYPTION_KEY` | AES key for OAuth tokens at rest (`openssl rand -base64 32`) — **required in production** |
+| `BLOB_READ_WRITE_TOKEN` | Vercel Blob |
+| `BLOB_ALLOWED_HOSTS` | Optional extra hosts for `blobUrl` allowlist |
+| `RESEND_API_KEY` | Email delivery (reset / verify / notifications) |
+| Platform OAuth vars | See `.env.example` |
 
-To learn more about Next.js, take a look at the following resources:
+## Scripts
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npm run dev          # local server (+ DB guard)
+npm run build        # prisma generate + next build
+npm test             # vitest unit suite
+npm run test:e2e     # playwright
+npm run lint
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Architecture (short)
 
-## Deploy on Vercel
+- UI routes under `src/app/` (dashboard, composer, queue, activity, media, reviews, settings)
+- API under `src/app/api/` (auth, OAuth callbacks, posts, media, workspaces, reviews)
+- Domain helpers in `src/lib/` (workspace context, DTOs, rate limit, token crypto)
+- Platform clients + jobs in `src/server/`
+- Tenant scope is **Workspace**; members share connections and media
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Security notes
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Social OAuth tokens are encrypted at rest when `TOKEN_ENCRYPTION_KEY` is set
+- Client-supplied media URLs must match the blob host allowlist
+- Emails are stored normalized (lowercase); registration is rate-limited
+- Password reset bumps `sessionVersion` so outstanding JWTs stop working
+- API responses use SEC-1 DTOs (no tokens / raw secrets)
+
+## Docs
+
+Project-level docs live in `../docs/` (overview, staging, platform setup, design specs).

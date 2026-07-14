@@ -94,6 +94,7 @@ describe("POST /api/auth/reset-password", () => {
       route: "auth/reset",
       limit: 10,
       windowMs: 15 * 60 * 1000,
+      failClosed: true,
     });
   });
 
@@ -195,10 +196,15 @@ describe("POST /api/auth/reset-password", () => {
 
     expect(bcryptHashMock).toHaveBeenCalledWith("brandnewpassword", 10);
 
-    // Password written + email verified (was null) in the same transaction.
+    // Password written + sessionVersion bumped + email verified (was null)
+    // in the same transaction.
     expect(updateUserMock).toHaveBeenCalledWith({
       where: { id: "user-1" },
-      data: { passwordHash: "new-hashed-password", emailVerifiedAt: expect.any(Date) },
+      data: {
+        passwordHash: "new-hashed-password",
+        sessionVersion: { increment: 1 },
+        emailVerifiedAt: expect.any(Date),
+      },
     });
 
     // Any OTHER still-unused reset token for this user is invalidated.
@@ -222,7 +228,10 @@ describe("POST /api/auth/reset-password", () => {
     expect(response.status).toBe(200);
     expect(updateUserMock).toHaveBeenCalledWith({
       where: { id: "user-1" },
-      data: { passwordHash: "new-hashed-password" },
+      data: {
+        passwordHash: "new-hashed-password",
+        sessionVersion: { increment: 1 },
+      },
     });
   });
 

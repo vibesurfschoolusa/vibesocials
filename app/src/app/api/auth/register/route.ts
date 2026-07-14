@@ -1,23 +1,60 @@
-import { NextResponse } from 'next/server';
-import bcrypt from 'bcryptjs';
+import { NextResponse } from "next/server";
+import bcrypt from "bcryptjs";
 
-import { buildVerifyEmail, deliverAccountEmail } from '@/lib/accountEmails';
-import { issueAccountToken } from '@/lib/accountToken';
-import { prisma } from '@/lib/db';
-import { logger } from '@/lib/logger';
-import { provisionPersonalWorkspace } from '@/lib/workspace';
+import { buildVerifyEmail, deliverAccountEmail } from "@/lib/accountEmails";
+import { issueAccountToken } from "@/lib/accountToken";
+import { prisma } from "@/lib/db";
+import { normalizeEmail } from "@/lib/email";
+import { logger } from "@/lib/logger";
+import { checkRateLimit } from "@/lib/rateLimit";
+import { provisionPersonalWorkspace } from "@/lib/workspace";
+
+const REGISTER_RATE_LIMIT = {
+  route: "auth/register",
+  limit: 5,
+  windowMs: 60 * 60 * 1000,
+} as const;
 
 export async function POST(request: Request) {
+  // IP throttle first (anonymous abuse surface). Fail closed on store errors so
+  // a DB blip cannot open unlimited signup.
+  const ip =
+    (request.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim() ||
+    "unknown";
+  const rateLimit = await checkRateLimit({
+    userId: `ip:${ip}`,
+    ...REGISTER_RATE_LIMIT,
+    failClosed: true,
+  });
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      {
+        error: "Too many accounts created from this network. Please try again later.",
+        retryAfterSeconds: rateLimit.retryAfterSeconds,
+      },
+      {
+        status: 429,
+        headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 60) },
+      },
+    );
+  }
+
   try {
     const body = await request.json();
-    const { email, password, name } = body ?? {};
+    const { email: rawEmail, password, name } = body ?? {};
 
-    if (!email || !password) {
-      return NextResponse.json({ error: 'Email and password are required.' }, { status: 400 });
+    if (!rawEmail || !password) {
+      return NextResponse.json(
+        { error: "Email and password are required." },
+        { status: 400 },
+      );
     }
 
-    if (typeof email !== "string" || !/^\S+@\S+\.\S+$/.test(email)) {
-      return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
+    if (typeof rawEmail !== "string" || !/^\S+@\S+\.\S+$/.test(rawEmail)) {
+      return NextResponse.json(
+        { error: "Enter a valid email address." },
+        { status: 400 },
+      );
     }
     if (typeof password !== "string" || password.length < 8) {
       return NextResponse.json(
@@ -26,9 +63,14 @@ export async function POST(request: Request) {
       );
     }
 
+    const email = normalizeEmail(rawEmail);
+
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
-      return NextResponse.json({ error: 'A user with that email already exists.' }, { status: 400 });
+      return NextResponse.json(
+        { error: "A user with that email already exists." },
+        { status: 400 },
+      );
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
@@ -57,15 +99,15 @@ export async function POST(request: Request) {
     // (mirrors deliverAccountEmail's own env gate; keeps the token table clean).
     try {
       if (process.env.RESEND_API_KEY) {
-        const baseUrl = process.env.NEXTAUTH_URL ?? '';
-        const rawToken = await issueAccountToken(prisma, user.id, 'email_verify');
+        const baseUrl = process.env.NEXTAUTH_URL ?? "";
+        const rawToken = await issueAccountToken(prisma, user.id, "email_verify");
         await deliverAccountEmail(
           user.email,
           buildVerifyEmail({ to: user.email, rawToken, baseUrl }),
         );
       }
     } catch (error) {
-      logger.warn('[register] verification email failed', { error });
+      logger.warn("[register] verification email failed", { error });
     }
 
     return NextResponse.json(
@@ -77,6 +119,7 @@ export async function POST(request: Request) {
       { status: 201 },
     );
   } catch (error) {
-    return NextResponse.json({ error: 'Failed to register user.' }, { status: 500 });
+    logger.error("[POST /api/auth/register] Unexpected error", { error });
+    return NextResponse.json({ error: "Failed to register user." }, { status: 500 });
   }
 }

@@ -28,7 +28,8 @@ import type {
   YouTubePostMetadata,
 } from "@/server/platforms/types";
 
-// Simplified types for serialized data from step.run()
+// Step-memoized refs only — NEVER put accessToken/refreshToken in step output
+// (Inngest persists step results). Publish steps re-load secrets from the DB.
 interface SerializedMediaItem {
   id: string;
   createdAt: string;
@@ -40,25 +41,19 @@ interface SerializedMediaItem {
   baseCaption: string;
   metadata: unknown;
   perPlatformOverrides: unknown;
+  deletedAt?: string | null;
 }
 
-interface SerializedConnection {
+/** Connection identity carried across steps — no OAuth secrets. */
+interface ConnectionRef {
   id: string;
-  createdAt: string;
-  updatedAt: string;
   platform: Platform;
-  accessToken: string;
-  refreshToken: string | null;
-  expiresAt: string | null;
-  accountIdentifier: string;
-  scopes: unknown;
-  metadata: unknown;
-  userId: string;
 }
 
-// Helper to publish to a single platform
+// Helper to publish to a single platform. Loads the connection fresh so tokens
+// are never serialized through step.run() memoization.
 async function publishToPlatform(
-  connection: SerializedConnection,
+  connectionRef: ConnectionRef,
   mediaItem: SerializedMediaItem,
   caption: string,
   userId: string,
@@ -66,7 +61,7 @@ async function publishToPlatform(
   tiktokMetadata?: TikTokPostMetadata,
   youtubeMetadata?: YouTubePostMetadata
 ): Promise<{ platform: Platform; status: string; error?: string }> {
-  const client = getPlatformClient(connection.platform);
+  const client = getPlatformClient(connectionRef.platform);
 
   if (!client) {
     await prisma.postJobResult.update({
@@ -77,18 +72,39 @@ async function publishToPlatform(
         errorMessage: "No client configured for this platform.",
       },
     });
-    return { platform: connection.platform, status: "failed", error: "No client" };
+    return { platform: connectionRef.platform, status: "failed", error: "No client" };
   }
 
   try {
-    console.log(`[Inngest] Publishing to ${connection.platform}...`);
-    // step.run() serializes Dates to strings, so these records don't structurally
-    // match the Prisma types PublishContext expects. The platform clients only read
-    // fields present on both the serialized and Prisma shapes (and nothing reads
-    // `user` beyond `id`), so assert through `unknown` at this boundary.
+    // Reload inside the step so tokens stay in-process only (db.ts opens seals).
+    const connection = await prisma.socialConnection.findUnique({
+      where: { id: connectionRef.id },
+    });
+    if (!connection) {
+      await prisma.postJobResult.update({
+        where: { id: resultRecordId },
+        data: {
+          status: "failed",
+          errorCode: "CONNECTION_GONE",
+          errorMessage: "This platform connection was removed. Reconnect and retry.",
+        },
+      });
+      return {
+        platform: connectionRef.platform,
+        status: "failed",
+        error: "Connection gone",
+      };
+    }
+
+    logger.info(`[Inngest] Publishing to ${connection.platform}...`, {
+      platform: connection.platform,
+      resultRecordId,
+    });
+    // step.run() serializes Dates to strings on mediaItem; platform clients only
+    // read fields present on both shapes (and nothing reads `user` beyond `id`).
     const publishContext: PublishContext = {
       user: { id: userId } as unknown as User,
-      socialConnection: connection as unknown as SocialConnection,
+      socialConnection: connection,
       mediaItem: mediaItem as unknown as MediaItem,
       caption,
     };
@@ -105,7 +121,10 @@ async function publishToPlatform(
 
     const publishResult = await client.publishVideo(publishContext);
 
-    console.log(`[Inngest] ${connection.platform} success`, { externalPostId: publishResult.externalPostId });
+    logger.info(`[Inngest] ${connection.platform} success`, {
+      platform: connection.platform,
+      externalPostId: publishResult.externalPostId,
+    });
     await prisma.postJobResult.update({
       where: { id: resultRecordId },
       data: {
@@ -116,8 +135,8 @@ async function publishToPlatform(
     return { platform: connection.platform, status: "success" };
   } catch (error: unknown) {
     const err = error as Error & { code?: string };
-    logger.error(`[Inngest] Platform ${connection.platform} failed to publish`, {
-      platform: connection.platform,
+    logger.error(`[Inngest] Platform ${connectionRef.platform} failed to publish`, {
+      platform: connectionRef.platform,
       resultRecordId,
       code: err.code,
       error: err,
@@ -130,7 +149,7 @@ async function publishToPlatform(
         errorMessage: err.message || "Failed to publish to platform.",
       },
     });
-    return { platform: connection.platform, status: "failed", error: err.message };
+    return { platform: connectionRef.platform, status: "failed", error: err.message };
   }
 }
 
@@ -144,12 +163,16 @@ export const publishToAllPlatforms = inngest.createFunction(
   async ({ event, step }) => {
     const { postJobId, userId, mediaItemId, baseCaption, perPlatformOverrides, tiktokMetadata, youtubeMetadata } = event.data;
 
-    console.log("[Inngest] Starting background publish job", { postJobId, mediaItemId });
+    logger.info("[Inngest] Starting background publish job", { postJobId, mediaItemId });
 
     // Step 1: Fetch all required data. Team Workspaces (Task 5): the job's
     // `workspaceId` is the source of truth for the connection fan-out, so the
     // job row is fetched FIRST (not inside the same Promise.all as the
     // connections query it feeds).
+    //
+    // SEC: step results are memoized by Inngest — never put OAuth tokens in
+    // the return value. Connection refs (id + platform) only; publish steps
+    // re-load tokens from the DB.
     const setupData = await step.run("fetch-data", async () => {
       const postJob = await prisma.postJob.findUnique({ where: { id: postJobId } });
       if (!postJob) {
@@ -157,10 +180,19 @@ export const publishToAllPlatforms = inngest.createFunction(
       }
 
       const [user, workspace, mediaItem, socialConnections] = await Promise.all([
-        prisma.user.findUnique({ where: { id: userId } }),
-        prisma.workspace.findUnique({ where: { id: postJob.workspaceId } }),
+        prisma.user.findUnique({
+          where: { id: userId },
+          select: { id: true },
+        }),
+        prisma.workspace.findUnique({
+          where: { id: postJob.workspaceId },
+          select: { id: true, companyWebsite: true, defaultHashtags: true },
+        }),
         prisma.mediaItem.findUnique({ where: { id: mediaItemId } }),
-        prisma.socialConnection.findMany({ where: { workspaceId: postJob.workspaceId } }),
+        prisma.socialConnection.findMany({
+          where: { workspaceId: postJob.workspaceId },
+          select: { id: true, platform: true },
+        }),
       ]);
 
       if (!user || !workspace || !mediaItem) {
@@ -169,13 +201,14 @@ export const publishToAllPlatforms = inngest.createFunction(
 
       const resultRecords = await prisma.postJobResult.findMany({
         where: { postJobId },
+        select: { id: true, platform: true },
       });
 
       return {
         user,
         workspace,
         mediaItem,
-        socialConnections,
+        socialConnections: socialConnections as ConnectionRef[],
         resultRecords,
       };
     });
@@ -197,7 +230,10 @@ export const publishToAllPlatforms = inngest.createFunction(
     const fullBaseCaption = buildCaptionWithFooter(baseCaption, setupData.workspace);
     const overrides = perPlatformOverrides as Partial<Record<Platform, string>> | null;
 
-    console.log(`[Inngest] Publishing to ${setupData.socialConnections.length} platforms`);
+    logger.info(`[Inngest] Publishing to ${setupData.socialConnections.length} platforms`, {
+      postJobId,
+      count: setupData.socialConnections.length,
+    });
 
     // Process each platform as a separate step (allows longer execution per platform)
     const results: { platform: Platform; status: string; error?: string }[] = [];
@@ -277,7 +313,7 @@ export const publishToAllPlatforms = inngest.createFunction(
       logger.error("[Inngest] Failed to enqueue post-outcome notification (ignored)", { postJobId, error: err });
     }
 
-    console.log("[Inngest] Job completed", { postJobId, ...finalResult });
+    logger.info("[Inngest] Job completed", { postJobId, ...finalResult });
 
     return {
       postJobId,
@@ -461,7 +497,7 @@ export const retryPlatforms = inngest.createFunction(
     const userId: string = event.data.userId;
     const platforms: Platform[] = event.data.platforms ?? [];
 
-    console.log("[Inngest] Starting retry job", { postJobId, platforms });
+    logger.info("[Inngest] Starting retry job", { postJobId, platforms });
 
     if (platforms.length === 0) {
       return { postJobId, error: "No platforms to retry" };
@@ -474,6 +510,8 @@ export const retryPlatforms = inngest.createFunction(
     // by `userId` (which is the RETRYING member, not necessarily the job's
     // creator) and instead derives the connection fan-out from the job's own
     // `workspaceId`, mirroring `publishToAllPlatforms` above.
+    //
+    // SEC: connection list is id+platform only — tokens reloaded in publish step.
     const setupData = await step.run("fetch-retry-data", async () => {
       const postJob = await prisma.postJob.findUnique({ where: { id: postJobId } });
       if (!postJob) {
@@ -481,18 +519,32 @@ export const retryPlatforms = inngest.createFunction(
       }
 
       const [user, workspace, mediaItem, connections, resultRecords] = await Promise.all([
-        prisma.user.findUnique({ where: { id: userId } }),
-        prisma.workspace.findUnique({ where: { id: postJob.workspaceId } }),
+        prisma.user.findUnique({
+          where: { id: userId },
+          select: { id: true },
+        }),
+        prisma.workspace.findUnique({
+          where: { id: postJob.workspaceId },
+          select: { id: true, companyWebsite: true, defaultHashtags: true },
+        }),
         prisma.mediaItem.findUnique({ where: { id: postJob.mediaItemId } }),
         prisma.socialConnection.findMany({
           where: { workspaceId: postJob.workspaceId, platform: { in: platforms } },
+          select: { id: true, platform: true },
         }),
         prisma.postJobResult.findMany({
           where: { postJobId, platform: { in: platforms } },
+          select: { id: true, platform: true },
         }),
       ]);
 
-      return { user, workspace, mediaItem, connections, resultRecords };
+      return {
+        user,
+        workspace,
+        mediaItem,
+        connections: connections as ConnectionRef[],
+        resultRecords,
+      };
     });
 
     if (!setupData) {

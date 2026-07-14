@@ -110,7 +110,7 @@ describe("POST /api/posts — rate limiting", () => {
   it("returns 429 with Retry-After and never creates a job when the limit is exceeded", async () => {
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 42 });
 
-    const response = await POST(jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi" }));
+    const response = await POST(jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }));
 
     expect(response.status).toBe(429);
     expect(response.headers.get("Retry-After")).toBe("42");
@@ -126,7 +126,7 @@ describe("POST /api/posts — rate limiting", () => {
       resultIds: [],
     });
 
-    await POST(jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi" }));
+    await POST(jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }));
 
     expect(checkRateLimitMock).toHaveBeenCalledWith({
       userId: "user-1",
@@ -139,7 +139,7 @@ describe("POST /api/posts — rate limiting", () => {
   it("returns 401 (and never checks the rate limit) when unauthenticated", async () => {
     getWorkspaceContextMock.mockResolvedValue(null);
 
-    const response = await POST(jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi" }));
+    const response = await POST(jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }));
 
     expect(response.status).toBe(401);
     expect(checkRateLimitMock).not.toHaveBeenCalled();
@@ -156,7 +156,7 @@ describe("POST /api/posts — blobUrl path (preserved behavior)", () => {
 
     const response = await POST(
       jsonRequest({
-        blobUrl: "https://blob.example/vid.mp4",
+        blobUrl: "https://test.public.blob.vercel-storage.com/vid.mp4",
         filename: "vid.mp4",
         mimeType: "video/mp4",
         sizeBytes: 123,
@@ -172,7 +172,7 @@ describe("POST /api/posts — blobUrl path (preserved behavior)", () => {
       // (`makeWorkspaceContext()` default is "ws-1"), passed explicitly.
       workspaceId: "ws-1",
       media: {
-        storageLocation: "https://blob.example/vid.mp4",
+        storageLocation: "https://test.public.blob.vercel-storage.com/vid.mp4",
         originalFilename: "vid.mp4",
         mimeType: "video/mp4",
         sizeBytes: 123,
@@ -208,8 +208,23 @@ describe("POST /api/posts — blobUrl path (preserved behavior)", () => {
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
   });
 
+  it("returns 400 when blobUrl is not on an allowed storage host", async () => {
+    const response = await POST(
+      jsonRequest({
+        blobUrl: "https://evil.example/ssrf.mp4",
+        baseCaption: "hi",
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "Media URL is not from an allowed storage host.",
+    });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
   it("returns 400 when baseCaption is missing, without creating a job", async () => {
-    const response = await POST(jsonRequest({ blobUrl: "https://x/y" }));
+    const response = await POST(jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x" }));
 
     expect(response.status).toBe(400);
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
@@ -218,7 +233,7 @@ describe("POST /api/posts — blobUrl path (preserved behavior)", () => {
   it("maps a NO_CONNECTIONS error to 400 with the NO_CONNECTIONS code", async () => {
     createPostJobOnlyMock.mockRejectedValue(new Error("NO_CONNECTIONS"));
 
-    const response = await POST(jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi" }));
+    const response = await POST(jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ code: "NO_CONNECTIONS" });
@@ -270,7 +285,7 @@ describe("POST /api/posts — mediaItemId reuse path (Roadmap Phase 2)", () => {
     });
 
     await POST(
-      jsonRequest({ blobUrl: "https://x/y", mediaItemId: "media-9", baseCaption: "hi" }),
+      jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", mediaItemId: "media-9", baseCaption: "hi" }),
     );
 
     expect(createPostJobOnlyMock).toHaveBeenCalled();
@@ -330,7 +345,7 @@ describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
 
   it("immediate (no draft/scheduledFor): intent 'immediate' AND sends the publish event (preserved)", async () => {
     const response = await POST(
-      jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi" }),
+      jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }),
     );
 
     expect(response.status).toBe(200);
@@ -342,7 +357,7 @@ describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
 
   it("draft: creates with intent 'draft' and sends NO event", async () => {
     const response = await POST(
-      jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi", draft: true }),
+      jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi", draft: true }),
     );
     const body = (await response.json()) as { message?: string };
 
@@ -356,7 +371,7 @@ describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
 
   it("scheduled: creates with intent 'scheduled' + the parsed Date and sends NO event", async () => {
     const response = await POST(
-      jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi", scheduledFor: FUTURE }),
+      jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi", scheduledFor: FUTURE }),
     );
     const body = (await response.json()) as { message?: string };
 
@@ -371,7 +386,7 @@ describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
   it("draft wins over a provided scheduledFor", async () => {
     await POST(
       jsonRequest({
-        blobUrl: "https://x/y",
+        blobUrl: "https://test.public.blob.vercel-storage.com/x",
         baseCaption: "hi",
         draft: true,
         scheduledFor: FUTURE,
@@ -386,7 +401,7 @@ describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
   it("rejects a past/invalid scheduledFor with 400 and creates nothing", async () => {
     const past = new Date(Date.now() - 60_000).toISOString();
     const response = await POST(
-      jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi", scheduledFor: past }),
+      jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi", scheduledFor: past }),
     );
 
     expect(response.status).toBe(400);
@@ -426,7 +441,7 @@ describe("POST /api/posts — per-post privacy persistence + validation (review 
   it("forwards youtubeMetadata to the create helper for a SCHEDULED post (so B1 can persist it)", async () => {
     await POST(
       jsonRequest({
-        blobUrl: "https://x/y",
+        blobUrl: "https://test.public.blob.vercel-storage.com/x",
         baseCaption: "hi",
         scheduledFor: FUTURE,
         youtubeMetadata: { privacyStatus: "private" },
@@ -444,7 +459,7 @@ describe("POST /api/posts — per-post privacy persistence + validation (review 
   it("sends the VALIDATED tiktokMetadata (not the raw body) in the immediate publish event", async () => {
     await POST(
       jsonRequest({
-        blobUrl: "https://x/y",
+        blobUrl: "https://test.public.blob.vercel-storage.com/x",
         baseCaption: "hi",
         tiktokMetadata: {
           privacyLevel: "PUBLIC_TO_EVERYONE",
@@ -475,7 +490,7 @@ describe("POST /api/posts — per-post privacy persistence + validation (review 
     // so a scheduled/draft post can legitimately carry none — it must not 400.
     await POST(
       jsonRequest({
-        blobUrl: "https://x/y",
+        blobUrl: "https://test.public.blob.vercel-storage.com/x",
         baseCaption: "hi",
         scheduledFor: FUTURE,
         tiktokMetadata: { disableComment: true, disableDuet: false, disableStitch: false },
@@ -498,7 +513,7 @@ describe("POST /api/posts — per-post privacy persistence + validation (review 
   it("rejects a non-string tiktokMetadata.privacyLevel with 400 and creates nothing", async () => {
     const response = await POST(
       jsonRequest({
-        blobUrl: "https://x/y",
+        blobUrl: "https://test.public.blob.vercel-storage.com/x",
         baseCaption: "hi",
         tiktokMetadata: { privacyLevel: 5 },
       }),
@@ -512,7 +527,7 @@ describe("POST /api/posts — per-post privacy persistence + validation (review 
   it("rejects a non-string-map perPlatformOverrides (array) with 400", async () => {
     const response = await POST(
       jsonRequest({
-        blobUrl: "https://x/y",
+        blobUrl: "https://test.public.blob.vercel-storage.com/x",
         baseCaption: "hi",
         perPlatformOverrides: ["not", "a", "map"],
       }),
@@ -534,7 +549,7 @@ describe("POST /api/posts — platform targeting validation (Task 7)", () => {
 
   it("returns 400 when platforms is not an array", async () => {
     const response = await POST(
-      jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi", platforms: "youtube" }),
+      jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi", platforms: "youtube" }),
     );
 
     expect(response.status).toBe(400);
@@ -547,7 +562,7 @@ describe("POST /api/posts — platform targeting validation (Task 7)", () => {
   it("returns 400 mentioning the unknown platform name", async () => {
     const response = await POST(
       jsonRequest({
-        blobUrl: "https://x/y",
+        blobUrl: "https://test.public.blob.vercel-storage.com/x",
         baseCaption: "hi",
         platforms: ["youtube", "myspace"],
       }),
@@ -561,7 +576,7 @@ describe("POST /api/posts — platform targeting validation (Task 7)", () => {
 
   it("returns 400 'Select at least one platform.' for an empty array", async () => {
     const response = await POST(
-      jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi", platforms: [] }),
+      jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi", platforms: [] }),
     );
 
     expect(response.status).toBe(400);
@@ -574,7 +589,7 @@ describe("POST /api/posts — platform targeting validation (Task 7)", () => {
   it("dedupes repeated platform names before passing them to the create helper", async () => {
     await POST(
       jsonRequest({
-        blobUrl: "https://x/y",
+        blobUrl: "https://test.public.blob.vercel-storage.com/x",
         baseCaption: "hi",
         platforms: ["youtube", "youtube"],
       }),
@@ -586,7 +601,7 @@ describe("POST /api/posts — platform targeting validation (Task 7)", () => {
   });
 
   it("passes targetPlatforms undefined to the create helper when platforms is absent", async () => {
-    await POST(jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi" }));
+    await POST(jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }));
 
     expect(createPostJobOnlyMock).toHaveBeenCalledWith(
       expect.objectContaining({ targetPlatforms: undefined }),
@@ -635,7 +650,7 @@ describe("POST /api/posts — response DTO projection (SEC-1)", () => {
     postJobResultFindManyMock.mockResolvedValue([resultRow]);
 
     const response = await POST(
-      jsonRequest({ blobUrl: "https://x/y", baseCaption: "hello world" }),
+      jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hello world" }),
     );
     const body = await response.json();
 
@@ -679,7 +694,7 @@ describe("POST /api/posts — response DTO projection (SEC-1)", () => {
   it("guards the theoretical null postJob (findUnique race): preserves the {postJob:null, results:[], message} envelope, no crash", async () => {
     postJobFindUniqueMock.mockResolvedValue(null);
 
-    const response = await POST(jsonRequest({ blobUrl: "https://x/y", baseCaption: "hi" }));
+    const response = await POST(jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }));
     const body = await response.json();
 
     expect(response.status).toBe(200);
