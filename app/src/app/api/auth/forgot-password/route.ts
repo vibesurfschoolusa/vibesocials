@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { buildPasswordResetEmail, deliverAccountEmail } from "@/lib/accountEmails";
 import { issueAccountToken } from "@/lib/accountToken";
 import { prisma } from "@/lib/db";
+import { normalizeEmail } from "@/lib/email";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 
@@ -60,26 +61,31 @@ export async function POST(request: Request) {
   // The throttle key is normalized (trim + lowercase) so case rotation
   // ("User@x.com", "uSer@X.com", ...) can't mint fresh buckets for one mailbox
   // (review Important #1).
-  const rateLimitEmailKey = `email:${email.trim().toLowerCase()}`;
-  const emailLimit = await checkRateLimit({ userId: rateLimitEmailKey, ...EMAIL_RATE_LIMIT });
+  const normalizedEmail = normalizeEmail(email);
+  const rateLimitEmailKey = `email:${normalizedEmail}`;
+  const emailLimit = await checkRateLimit({
+    userId: rateLimitEmailKey,
+    ...EMAIL_RATE_LIMIT,
+    failClosed: true,
+  });
   if (!emailLimit.allowed) {
     return tooManyRequests(emailLimit.retryAfterSeconds);
   }
 
   const ip = (request.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim() || "unknown";
-  const ipLimit = await checkRateLimit({ userId: `ip:${ip}`, ...IP_RATE_LIMIT });
+  const ipLimit = await checkRateLimit({
+    userId: `ip:${ip}`,
+    ...IP_RATE_LIMIT,
+    failClosed: true,
+  });
   if (!ipLimit.allowed) {
     return tooManyRequests(ipLimit.retryAfterSeconds);
   }
 
   try {
-    // The throttle key above is normalized for rotation hygiene; this lookup
-    // stays AS-TYPED to match the app-wide case-sensitive email model
-    // (register/login store + compare emails as-typed) — normalizing only here
-    // would miss mixed-case-registered accounts. App-wide email normalization
-    // is a separate concern.
+    // Lookup uses the same normalizeEmail() form stored at registration/login.
     const user = await prisma.user.findUnique({
-      where: { email },
+      where: { email: normalizedEmail },
       select: { id: true, email: true },
     });
 

@@ -26,6 +26,7 @@ const {
   issueAccountTokenMock,
   buildVerifyEmailMock,
   deliverAccountEmailMock,
+  checkRateLimitMock,
 } = vi.hoisted(() => ({
   findUniqueMock: vi.fn(),
   createMock: vi.fn(),
@@ -34,6 +35,7 @@ const {
   issueAccountTokenMock: vi.fn(),
   buildVerifyEmailMock: vi.fn(),
   deliverAccountEmailMock: vi.fn(),
+  checkRateLimitMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => {
@@ -48,6 +50,10 @@ vi.mock("@/lib/db", () => {
   };
   return { prisma };
 });
+
+vi.mock("@/lib/rateLimit", () => ({
+  checkRateLimit: checkRateLimitMock,
+}));
 
 vi.mock("@/lib/accountToken", () => ({ issueAccountToken: issueAccountTokenMock }));
 
@@ -87,7 +93,9 @@ beforeEach(() => {
   issueAccountTokenMock.mockReset();
   buildVerifyEmailMock.mockReset();
   deliverAccountEmailMock.mockReset();
+  checkRateLimitMock.mockReset();
 
+  checkRateLimitMock.mockResolvedValue({ allowed: true });
   issueAccountTokenMock.mockResolvedValue("raw-verify-token");
   buildVerifyEmailMock.mockReturnValue({ subject: "Verify your email address", html: "<html>", text: "text" });
   deliverAccountEmailMock.mockResolvedValue(true);
@@ -168,7 +176,7 @@ describe("POST /api/auth/register", () => {
 
     const response = await POST(
       jsonRequest({
-        email: "user@example.com",
+        email: "User@Example.com",
         password: "goodpassword",
         name: "New User",
       }),
@@ -181,8 +189,16 @@ describe("POST /api/auth/register", () => {
       name: "New User",
     });
 
+    expect(checkRateLimitMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: "auth/register",
+        failClosed: true,
+      }),
+    );
+
     expect(createMock).toHaveBeenCalledTimes(1);
     const createArgs = createMock.mock.calls[0][0];
+    // Email is always stored normalized (trim + lowercase).
     expect(createArgs.data.email).toBe("user@example.com");
     expect(createArgs.data.name).toBe("New User");
     // The route must persist a bcrypt hash, never the plaintext password.
@@ -202,6 +218,18 @@ describe("POST /api/auth/register", () => {
     expect(workspaceMemberCreateMock).toHaveBeenCalledWith({
       data: { workspaceId: "workspace-1", userId: "user-1", role: "owner" },
     });
+  });
+
+  it("returns 429 when the registration rate limit blocks", async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 900 });
+
+    const response = await POST(
+      jsonRequest({ email: "user@example.com", password: "goodpassword" }),
+    );
+
+    expect(response.status).toBe(429);
+    expect(findUniqueMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
   });
 
   it("still returns 201 when the verification email REJECTS — the send is fire-and-forget and can never fail registration", async () => {

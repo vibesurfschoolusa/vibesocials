@@ -31,6 +31,22 @@ export function platformLabel(platform: Platform): string {
 }
 
 /**
+ * Product maturity notes for the UI (sandbox modes, partial analytics, etc.).
+ * Display-only; never carries secrets. Empty string means production-ready
+ * with no special callout.
+ */
+export const PLATFORM_MATURITY_NOTES: Partial<Record<Platform, string>> = {
+  tiktok:
+    "TikTok runs in sandbox mode until production approval — videos may land in the Creator inbox as private.",
+  linkedin:
+    "LinkedIn company-page posting requires Community Management API access on the LinkedIn app.",
+};
+
+/** Short dashboard note: engagement metrics are YouTube-only in v1. */
+export const METRICS_MATURITY_NOTE =
+  "Engagement metrics currently include YouTube only. Other platforms are not synced yet.";
+
+/**
  * Task 7 — human-readable labels for TikTok's privacy levels, shown in the
  * publish-now confirmation dialog (composer) and the Queue's target/privacy
  * summary line. Falls back to the raw value for any level not listed here

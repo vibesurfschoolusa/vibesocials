@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { summarizeYouTubeMetrics } from "@/lib/metricsSummary";
+import { METRICS_MATURITY_NOTE } from "@/lib/platforms";
 import type { UsePostJobsResult } from "@/hooks/usePostJobs";
 
 interface SummaryStatProps {
@@ -58,6 +59,7 @@ export function YouTubeMetricsSummary({ jobs }: Pick<UsePostJobsResult, "jobs">)
     <Card>
       <CardHeader>
         <CardTitle className="text-base">YouTube performance</CardTitle>
+        <CardDescription className="text-xs">{METRICS_MATURITY_NOTE}</CardDescription>
         <CardDescription>
           {/* "recent" is honest: the aggregate covers the recent jobs the
               activity feed loads, not the user's entire history (review Minor #4). */}

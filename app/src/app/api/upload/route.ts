@@ -1,12 +1,14 @@
-import { handleUpload, type HandleUploadBody } from '@vercel/blob/client';
-import { NextResponse } from 'next/server';
-import { getCurrentUser } from '@/lib/auth';
+import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
+import { NextResponse } from "next/server";
+
+import { getCurrentUser } from "@/lib/auth";
+import { logger } from "@/lib/logger";
 
 export async function POST(request: Request): Promise<NextResponse> {
   const user = await getCurrentUser();
 
   if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const body = (await request.json()) as HandleUploadBody;
@@ -15,18 +17,18 @@ export async function POST(request: Request): Promise<NextResponse> {
     const jsonResponse = await handleUpload({
       body,
       request,
-      onBeforeGenerateToken: async (pathname, clientPayload) => {
-        console.log('[Upload] Generating token for:', { pathname, userId: user.id });
-        
+      onBeforeGenerateToken: async (pathname) => {
+        logger.info("[Upload] Generating token", { pathname, userId: user.id });
+
         return {
           allowedContentTypes: [
-            'image/jpeg',
-            'image/png',
-            'image/gif',
-            'image/webp',
-            'video/mp4',
-            'video/quicktime',
-            'video/webm',
+            "image/jpeg",
+            "image/png",
+            "image/gif",
+            "image/webp",
+            "video/mp4",
+            "video/quicktime",
+            "video/webm",
           ],
           // Blob store cap for a single upload. Matches the largest media any
           // connected platform accepts in practice; the platforms themselves
@@ -38,20 +40,17 @@ export async function POST(request: Request): Promise<NextResponse> {
           }),
         };
       },
-      onUploadCompleted: async ({ blob, tokenPayload }) => {
-        console.log('[Upload] Upload completed:', {
-          url: blob.url,
-          tokenPayload,
-        });
+      onUploadCompleted: async ({ blob }) => {
+        logger.info("[Upload] Upload completed", { url: blob.url });
       },
     });
 
     return NextResponse.json(jsonResponse);
   } catch (error) {
-    console.error('[Upload] Error:', error);
+    logger.error("[Upload] Error", { error });
     return NextResponse.json(
       { error: (error as Error).message },
-      { status: 400 }
+      { status: 400 },
     );
   }
 }

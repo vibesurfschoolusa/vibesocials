@@ -1,488 +1,126 @@
 # Vibe Socials – Project Overview
 
 ## Purpose
-Vibe Socials lets a logged-in user upload media (primarily videos, but also photos where required) + caption once and post it to multiple social platforms (TikTok, YouTube, X, LinkedIn, Instagram, Google Business Profile for Maps photos) using that user’s own connected accounts.
 
-Initial goal: deliver a thin, maintainable vertical slice for **one real platform (Google Business Profile / Google Maps photos)** end-to-end, with scaffolding for all others. **All platforms are now fully implemented!** Google Business Profile, TikTok, Instagram, LinkedIn, YouTube, and X (Twitter) all have complete OAuth flows and posting capabilities.
+Vibe Socials lets a logged-in user upload media + caption once and publish to multiple social platforms (TikTok, YouTube, X, LinkedIn, Instagram, Google Business Profile, Facebook Page) using connected accounts. Team **workspaces** share connections, media, and brand footer settings via invite links.
 
-## Tech Stack (V1)
-- **Language:** TypeScript
-- **Runtime:** Node.js (LTS)
-- **Web framework:** Next.js (App Router, React, TypeScript)
-- **Frontend:** Next.js pages/routes, React components, Tailwind CSS for simple responsive UI.
-- **Backend:** Next.js server routes (API routes) for auth, OAuth callbacks, posting jobs, and status.
-- **Database:** PostgreSQL (via Prisma ORM) - Neon hosted database for production.
-- **Storage:** 
-  - **Production:** Vercel Blob Storage for media uploads (images and videos).
-  - **Client-side direct upload:** Files upload directly from browser to Vercel Blob using `@vercel/blob/client`, bypassing the 4.5MB serverless function limit.
-  - **Development:** Local filesystem fallback with abstraction layer.
-  - Storage abstraction (`src/server/storage`) detects mime types from file extensions and handles server-side uploads to Vercel Blob.
-  - **No size limit:** Direct client uploads support files of any size (up to Vercel Blob's ~500MB limit).
-- **Auth for app users:** NextAuth (Auth.js) using an email+password credentials provider (initially).
-  - Later extension: add Google Sign-In using the same Google Cloud project used for Google Photos, if desired.
-- **Social OAuth & APIs:**
-  - First implemented platform: **Google Business Profile (GBP)**, posting photos that appear on Google Maps for a specific business location.
-  - Second implemented platform: **TikTok**, uploading videos via TikTok's Content Posting API (Sandbox mode).
-  - Third implemented platform: **Instagram**, posting photos and videos as Reels via Facebook Graph API.
-  - Fourth implemented platform: **LinkedIn**, posting images and videos to company pages via UGC Post API v2 (requires Community Management API approval for production use).
-  - Fifth implemented platform: **YouTube**, uploading videos via YouTube Data API v3 with full metadata support.
-  - Sixth implemented platform: **X (Twitter)**, posting tweets with images and videos via X API v2 with OAuth 2.0 PKCE.
-  - **All platforms complete!** 🎉
-- **Background Jobs:** Inngest (free tier) for async video uploads that exceed Vercel's 60s timeout.
-  - Handles large video uploads to X (chunked), Instagram (processing polling), TikTok, etc.
-  - Connected via Vercel integration (auto-configures `INNGEST_SIGNING_KEY`, `INNGEST_EVENT_KEY`).
-  - Dashboard: https://app.inngest.com
-- **Tooling:**
-  - ESLint + Prettier (Next.js defaults).
-  - Prisma migrations.
+## Tech stack
 
-## High-Level Architecture
+| Layer | Choice |
+|-------|--------|
+| Language | TypeScript |
+| Framework | Next.js App Router |
+| DB | PostgreSQL + Prisma (Neon in production) |
+| Auth | NextAuth v4 credentials (JWT) |
+| Media | Vercel Blob (client direct upload); local FS in dev |
+| Jobs | Inngest (publish fan-out, retention, metrics, scheduled scanner) |
+| Email | Resend (optional; env-gated) |
+| Monitoring | Sentry (optional; env-gated) |
 
-### Overview
-- **Next.js app** (single repo) provides both UI and backend API routes.
-- **Database (PostgreSQL)** stores users, per-user social connections, media items, post jobs, and per-platform post results.
-- **Storage layer** provides an abstraction for saving and reading uploaded video files.
-- **Platform clients** implement a shared interface for publishing videos and refreshing tokens.
+## Current product surface
 
-### Main Components
-- **`/app` (Next.js App Router)**
-  - UI routes:
-    - `/login`, `/register` (credentials auth).
-    - `/connections` – list and manage per-platform social connections.
-    - `/settings` – configure company website and default hashtags for caption footer.
-    - `/posts/new` – create post (upload video + captions).
-    - `/posts/[id]` – view posting status (per platform).
-    - `/media` – view media library.
-- **`/app/api` routes**
-  - **Auth for Vibe Socials users**
-    - NextAuth route (e.g. `/api/auth/[...nextauth]`) for app sessions.
-  - **Social OAuth:** for each platform
-    - `GET /api/auth/{platform}/start`
-    - `GET /api/auth/{platform}/callback`
-  - **Settings:**
-    - `POST /api/settings` – update user's company website and default hashtags.
-  - **Media:**
-    - `GET /api/media` – list user's uploaded media items.
-    - `POST /api/media` – upload media to Vercel Blob and create MediaItem.
-  - **Upload:**
-    - `POST /api/upload` – generate secure upload token for client-side direct upload to Vercel Blob.
-  - **Posting flow:**
-    - `POST /api/posts` – accepts either:
-      - `multipart/form-data` with file upload (< 4.5MB, legacy)
-      - `application/json` with pre-uploaded blob URL (unlimited size, preferred)
-    - Creates `MediaItem` + `PostJob` + `PostJobResults`, triggers Inngest background job, returns immediately.
-    - `GET /api/posts/{postJobId}` – read combined job + results status.
-  - **Background Jobs:**
-    - `POST /api/inngest` – Inngest webhook endpoint for receiving and executing background functions.
+| Area | Status |
+|------|--------|
+| Multi-platform publish (7 platforms) | Done |
+| Client direct-to-Blob uploads | Done |
+| Background publish via Inngest | Done |
+| Scheduling, drafts, queue, cancel, retry | Done |
+| Media library + retention sweep | Done |
+| Team workspaces (owner/member, invites, co-owners) | Done |
+| Connection health / reconnect flags | Done |
+| Google review list + reply + AI draft | Done |
+| YouTube engagement metrics (hourly cron) | Done (YouTube only) |
+| Password reset + soft email verification | Done |
+| Activity keyset pagination | Done |
 
-- **Domain/Service Layer** (under `src/server` or similar):
-  - `auth` – helpers for getting the current user (`getCurrentUser()`) using NextAuth sessions in server contexts.
-  - `db` – Prisma client and repositories for core models.
-  - `storage` – file storage abstraction (e.g. `saveUpload`, `getFilePath`).
-  - `platforms` – one module per social platform implementing a shared `PlatformClient` interface.
-  - `jobs` – posting orchestration logic.
+### Platform maturity notes
 
-## Authentication Model
+- **TikTok**: sandbox / Creator inbox draft flow until production approval.
+- **LinkedIn**: company-page posting needs Community Management API access.
+- **Metrics**: YouTube only in v1; other platforms are not synced yet.
 
-### App Users
-- Users authenticate to Vibe Socials via **NextAuth** using a **Credentials Provider**:
-  - `email` + `password` at registration.
-  - Passwords stored as `passwordHash` (e.g. bcrypt) in the `User` table.
-- NextAuth sessions expose the authenticated user ID in `session.user.id`.
-- Backend code (API routes, server actions) uses a small helper, e.g. `getCurrentUser()`:
-  - Calls `getServerSession()`.
-  - Throws or returns `null` if unauthenticated.
-  - Returns a `User` record (via Prisma) or at least the user ID.
+## High-level architecture
 
-### Social Connections
-- Each user can connect **one account per platform** (simple v1 model).
-- Social OAuth flows are separate from app auth and use platform-specific client IDs/secrets from environment variables.
-- For Google Photos (first platform):
-  - Use OAuth 2.0 authorization code flow.
-  - Store access token, refresh token, expiry, Google account ID, and any default album ID.
+```
+Browser → Next.js pages + API routes
+              ↓
+         getWorkspaceContext (session + active workspace cookie, re-validated)
+              ↓
+         Prisma / Postgres (workspace-scoped tenants)
+              ↓
+         Inngest steps → platform clients → social APIs
+              ↓
+         Vercel Blob (media)
+```
 
-## Workspaces (multi-user)
+### Auth model
 
-Vibe Socials supports shared team access via **Workspaces**, layered on top of the auth model above:
+- Email + password (bcrypt). Emails stored **normalized** (`trim` + lowercase).
+- JWT sessions carry `id` + `sessionVersion`. Password reset increments `sessionVersion`; `getCurrentUser` rejects stale JWTs.
+- Soft email verification (banner only) when Resend is configured.
+- Social OAuth is separate; `state` is HMAC-signed and carries `userId` + `workspaceId`.
 
-- **Model:** `Workspace` (the tenant — owns connections, media, posts, metrics, and the caption-footer brand settings), `WorkspaceMember` (workspace + user + role, one row per pair), `WorkspaceInvite` (an owner-created join token: SHA-256-hashed, 7-day expiry, one active link per workspace at a time). Every user gets a personal workspace at registration (and existing accounts self-heal one lazily), so solo use is unchanged.
-- **Roles:** `owner` (connections, workspace settings/rename, invites, member management) and `member` (compose/publish/schedule, upload + delete own media, reply to reviews; everything else read-only). A member can leave a shared workspace at any time; a sole owner cannot (no ownership-transfer flow in v1) — see the permission matrix in `docs/superpowers/specs/2026-07-12-team-workspaces-design.md` §1.
-- **Active workspace:** a user may belong to several workspaces; the current one is tracked by an httpOnly `vs_active_workspace` cookie (set on switch/invite-accept, cleared on leave), but every server read re-validates membership from the database — the cookie is a hint, never an authority.
-- **Migration:** `SocialConnection`, `MediaItem`, `PostJob`, and `PostMetric` each gained a `workspaceId` column via a hand-authored backfill migration that provisions one workspace per existing user and re-parents their rows onto it; `userId` stays on all four as creator/uploader attribution, not the access-control scope.
+### Workspaces
 
-## Data Model (Conceptual)
+- Every user gets a personal workspace at registration.
+- Active workspace: httpOnly cookie `vs_active_workspace` (hint only; membership always re-checked).
+- Roles: `owner` (connections, settings, invites, member management) and `member` (compose/publish, own media delete, reviews).
+- Connections are **one per platform per workspace** (shared by members).
 
-Backed by Prisma models mapped to PostgreSQL tables.
+### Data model (core)
 
-- **Users**
-  - `id` (PK)
-  - `email` (unique)
-  - `name` (optional)
-  - `passwordHash` (for credentials auth)
-  - `companyWebsite` (optional, for caption footer)
-  - `defaultHashtags` (optional, for caption footer)
-  - `createdAt`, `updatedAt`
+- `User` — credentials, notification prefs, `sessionVersion`, `emailVerifiedAt`
+- `Workspace` / `WorkspaceMember` / `WorkspaceInvite`
+- `SocialConnection` — OAuth tokens (**encrypted at rest** when `TOKEN_ENCRYPTION_KEY` is set)
+- `MediaItem` — blob URL, captions, soft-delete / retention fields
+- `PostJob` / `PostJobResult` — immediate, draft, scheduled, cancelled statuses
+- `PostMetric` — denormalized engagement snapshots (survives disconnect)
+- `AccountToken` — password reset / email verify (hash-only storage)
+- `RateLimitEntry` — fixed-window counters
 
-- **SocialConnections**
-  - `id` (PK)
-  - `userId` (FK → Users)
-  - `platform` (enum/string: `tiktok`, `youtube`, `x`, `linkedin`, `instagram`, `google_business_profile`)
-  - `accessToken`
-  - `refreshToken` (nullable)
-  - `expiresAt` (nullable)
-  - `accountIdentifier` (e.g. Google account ID, YouTube channel ID, TikTok user ID)
-  - `scopes` (text/json)
-  - `metadata` (jsonb: platform-specific fields like album IDs, page IDs, Google Business `locationName` values)
-  - `createdAt`, `updatedAt`
+### Posting flow
 
-- **MediaItems**
-  - `id` (PK)
-  - `userId` (FK → Users)
-  - `storageLocation` (Vercel Blob URL or local path)
-  - `originalFilename`
-  - `mimeType` (auto-detected from file extension as fallback)
-  - `sizeBytes`
-  - `baseCaption` (text, user-provided caption before footer)
-  - `perPlatformOverrides` (jsonb: partial map of platform → caption override)
-  - `createdAt`
-  
-  **Note:** All captions are automatically appended with user's `companyWebsite` and `defaultHashtags` before posting.
+1. Client uploads media via `@vercel/blob/client` → `/api/upload` (token only).
+2. Client `POST /api/posts` with allowlisted `blobUrl` (or reuse `mediaItemId`), caption, optional schedule/draft/platforms.
+3. Server creates `MediaItem` + `PostJob` (+ results for immediate jobs) and enqueues Inngest.
+4. Inngest steps re-load connections from DB (tokens never serialized in step output) and publish per platform.
+5. Activity/queue UI polls `GET /api/posts` (keyset pagination).
 
-- **PostJobs**
-  - `id` (PK)
-  - `userId` (FK → Users)
-  - `mediaItemId` (FK → MediaItems)
-  - `status` (`pending` | `in_progress` | `completed` | `failed`)
-  - `createdAt`, `updatedAt`
+### Security practices
 
-- **PostJobResults**
-  - `id` (PK)
-  - `postJobId` (FK → PostJobs)
-  - `platform`
-  - `socialConnectionId` (FK → SocialConnections)
-  - `status` (`pending` | `success` | `failed`)
-  - `externalPostId` (nullable)
-  - `errorCode` (nullable; machine-readable)
-  - `errorMessage` (nullable; user-safe)
-  - `createdAt`, `updatedAt`
+- SEC-1 DTOs: API never returns access tokens, refresh tokens, or raw connection secrets.
+- Blob URL host allowlist (`isAllowedBlobUrl`) on media/posts create.
+- Rate limits on publish, invites, and **fail-closed** limits on anonymous auth routes (register / forgot / reset / verify).
+- Logger key-based redaction for secret-shaped fields.
+- Middleware gates non-public app pages; API routes still enforce session themselves.
 
-## Social Platform Integrations
+## Configuration
 
-All platform modules implement a shared interface:
+All secrets via environment variables (see `app/.env.example`). Never commit real values.
 
-- `publishVideo(ctx: PublishContext): Promise<PublishResult>`
-- Optional `refreshToken(connection: SocialConnection): Promise<SocialConnection>`
+Notable:
 
-Where:
+- `TOKEN_ENCRYPTION_KEY` — production required for OAuth token encryption
+- `BLOB_ALLOWED_HOSTS` — optional extra media hosts
+- `DEV_DB_OK=1` — override for local dev against a remote (staging) DB
 
-- `PublishContext` includes:
-  - `user`
-  - `socialConnection`
-  - `mediaItem`
-  - `caption` (resolved from base + per-platform override)
+## Repo layout
 
-- `PublishResult` includes:
-  - `externalPostId?`
+```
+app/                 Next.js application
+  src/app/           Pages + API routes
+  src/components/    UI
+  src/lib/           Shared helpers (auth, workspace, DTOs, crypto)
+  src/server/        Platform clients, jobs, storage, notifications
+  prisma/            Schema + migrations
+docs/                Setup guides, design specs, plans
+```
 
-### First Platform: Google Business Profile (Google Maps photos) - ✅ FULLY WORKING
+## Future enhancements (not implemented)
 
-- **Status:** Production ready with automatic token refresh
-- **Implementation:**
-  - OAuth start/callback endpoints for `google_business_profile` platform
-  - Automatic access token refresh using refresh tokens when expired
-  - Photo uploads using Google My Business API v4 with public Vercel Blob URLs
-  - Photos posted with `ADDITIONAL` category (flexible aspect ratios)
-  - Location configuration with three options:
-    - Manual entry of full resource: `accounts/{accountId}/locations/{locationId}`
-    - Store code from GBP Advanced settings (auto-resolved via APIs)
-    - Location picker fetching all accessible locations from Google
-- **Technical details:**
-  - API: `https://mybusiness.googleapis.com/v4/{locationName}/media`
-  - Scope: `https://www.googleapis.com/auth/business.manage`
-  - Token refresh: Automatic before API calls when `expiresAt < now()`
-  - Media format: Uses `sourceUrl` field pointing to Vercel Blob public URL
-  - Category: `ADDITIONAL` to support any aspect ratio (COVER requires 16:9)
-- **Required APIs enabled in Google Cloud:**
-  - Google My Business API
-  - Business Profile API
-  - My Business Account Management API
-  - My Business Business Information API
-
-### Second Platform: TikTok (Sandbox - Implemented)
-
-- **Status:** Fully working in Sandbox mode
-- **Implementation:**
-  - OAuth start/callback endpoints for TikTok authentication
-  - Content Posting API v2 integration (`/v2/post/publish/inbox/video/init/`)
-  - Video uploads with captions to TikTok Creator Portal inbox
-  - Videos require manual approval/publish in Sandbox mode (privacy: `SELF_ONLY`)
-  - Supports video files only (MP4, MOV, WebM) - images not supported by TikTok
-  - Automatic mime type detection from file extensions
-- **Environment Variables:**
-  - `TIKTOK_CLIENT_KEY`
-  - `TIKTOK_CLIENT_SECRET`
-  - `TIKTOK_REDIRECT_URI`
-- **Limitations:**
-  - Sandbox mode requires videos to be manually approved in TikTok Creator Portal
-  - Videos are private (`SELF_ONLY`) until Production approval
-  - Rate limits: `spam_risk_too_many_pending_share` error if too many pending videos in inbox
-    - **Solution:** Clear pending videos from Creator Portal before uploading more
-    - Alternatively: wait 30-60 minutes for rate limit to reset
-  - Disconnect/reconnect may help reset rate limits
-
-### Third Platform: Instagram (Production - Fully Working)
-
-- **Status:** Production ready, posting to Instagram Business Accounts
-- **Implementation:**
-  - OAuth via Facebook Login with Instagram-specific scopes
-  - Posts images and videos (as Reels) using Facebook Graph API v21.0
-  - Supports captions and location coordinates
-  - Video processing with polling for completion before publishing
-  - Image publishing with 3-second processing delay
-  - Requires Instagram Business Account connected to Facebook Page
-- **Environment Variables:**
-  - `FACEBOOK_APP_ID` – Facebook App ID (used for Instagram OAuth)
-  - `FACEBOOK_APP_SECRET` – Facebook App Secret
-  - `INSTAGRAM_REDIRECT_URI` – OAuth redirect URI
-- **Required Scopes (publish-only, no DM or comment management):**
-  - `instagram_basic` – Basic Instagram account access
-  - `instagram_content_publish` – Create and publish posts
-  - `pages_show_list` – List Facebook Pages
-  - `business_management` – Access to business assets
-- **Prerequisites:**
-  - Instagram account must be converted to Business or Creator account
-  - Instagram must be connected to a Facebook Page
-  - User must be admin of the Facebook Page
-- **Media Types:**
-  - **Images:** Post directly to feed with `image_url` parameter
-  - **Videos:** Post as Reels (required by Instagram API as of 2024)
-    - Uses `media_type: "REELS"` (deprecated: `"VIDEO"`)
-    - Includes video processing polling (checks `status_code` until `FINISHED`)
-    - Max wait time: 2.5 minutes (30 attempts × 5 seconds)
-- **Location Support:**
-  - Extracts coordinates from location string
-  - Coordinates passed to Instagram (Place ID lookup not yet implemented)
-- **Technical Details:**
-  - API: Facebook Graph API v21.0
-  - Endpoint: `https://graph.facebook.com/v21.0/{ig-user-id}/media`
-  - Publishing: Two-step process (create container → publish container)
-  - Token exchange: Short-lived → Long-lived (60-day expiry)
-  - Account discovery: Fetches Pages → Finds Instagram Business Account
-
-### Fourth Platform: LinkedIn (Development - Awaiting Production Approval)
-
-- **Status:** Development ready, awaiting Community Management API approval from LinkedIn (~10-14 business days)
-- **Implementation:**
-  - OAuth via LinkedIn OAuth 2.0 with OpenID Connect
-  - Posts images and videos to LinkedIn Company Pages using UGC Post API v2
-  - Chunked video upload for large files (up to 200MB)
-  - Image upload with asset registration
-  - Organization detection - fetches user's administered company pages
-  - **Safety: Only posts to company pages, never personal profiles**
-- **Environment Variables:**
-  - `LINKEDIN_CLIENT_ID` – LinkedIn app client ID
-  - `LINKEDIN_CLIENT_SECRET` – LinkedIn app client secret
-  - `LINKEDIN_REDIRECT_URI` – OAuth redirect URI
-- **Required Scopes:**
-  - `openid` – OpenID Connect authentication
-  - `profile` – Basic profile information
-  - `email` – Email address
-  - `w_member_social` – Post content on behalf of user (personal profile)
-  - `w_organization_social` – Post content on behalf of organization (company page)
-  - `r_organization_social` – Read organization data
-- **Required Products (LinkedIn Developer Portal):**
-  - "Sign In with LinkedIn using OpenID Connect" – For authentication
-  - "Share on LinkedIn" – For personal profile posting
-  - "Community Management API" – For organization/company page posting (REQUIRED - awaiting approval)
-- **Prerequisites:**
-  - User must be an administrator of a LinkedIn Company Page
-  - LinkedIn app must have Community Management API enabled (Development Tier or approved for Production)
-- **Media Types:**
-  - **Images:** Up to 10MB, JPG/PNG/GIF formats
-  - **Videos:** Up to 200MB, MP4 format, chunked upload for reliability
-- **Technical Details:**
-  - API: LinkedIn UGC Post API v2
-  - Organization detection: Fetches all organizations where user is administrator
-  - Video upload: Multi-step process (initialize → upload chunks → finalize → create post)
-  - Image upload: Register asset → upload to LinkedIn CDN → create post
-  - Posts always use first organization found, never falls back to personal profile
-- **Limitations:**
-  - Requires LinkedIn Community Management API approval for production use
-  - Development mode works for app admin only
-  - Only supports first organization (if user administers multiple company pages)
-
-### Fifth Platform: YouTube (Production - Fully Working)
-
-- **Status:** Production ready, uploading videos to YouTube channels
-- **Implementation:**
-  - OAuth via Google OAuth 2.0 (same as Google Business Profile)
-  - Uploads videos using YouTube Data API v3 with multipart upload
-  - Supports full video metadata (title, description, tags, location)
-  - Automatic token refresh when expired
-  - Extracts hashtags from caption for video tags
-  - Location/coordinates support for recording details
-- **Environment Variables:**
-  - `GOOGLE_GBP_CLIENT_ID` – Google OAuth client ID (shared with GBP)
-  - `GOOGLE_GBP_CLIENT_SECRET` – Google OAuth client secret (shared with GBP)
-  - `YOUTUBE_REDIRECT_URI` – OAuth redirect URI for YouTube
-- **Required Scopes:**
-  - `https://www.googleapis.com/auth/youtube.force-ssl` – Upload and manage YouTube videos
-  - `https://www.googleapis.com/auth/youtube.readonly` – Read YouTube channel data
-- **Prerequisites:**
-  - User must have a YouTube channel
-  - Google Cloud project with YouTube Data API v3 enabled
-- **Media Types:**
-  - **Videos only:** MP4, MOV, AVI formats supported
-  - No maximum file size (limited by Vercel Blob's ~500MB)
-  - Images not supported (YouTube is video-only platform)
-- **Technical Details:**
-  - API: YouTube Data API v3
-  - Upload endpoint: `https://www.googleapis.com/upload/youtube/v3/videos`
-  - Upload type: Multipart upload with JSON metadata + video binary
-  - Title max: 100 characters (extracted from caption)
-  - Description: Full caption with footer
-  - Tags: Extracted from hashtags in caption
-  - Privacy: Configurable (public/private/unlisted) - currently set to public
-  - Category: Default to "People & Blogs" (ID: 22)
-  - Kids content: Marked as not made for kids
-- **Location Support:**
-  - Parses coordinates from location string format: "lat,lng"
-  - Supports optional description: "Place Name (lat,lng)"
-  - Sets `recordingDetails.location` with latitude/longitude
-  - Note: Location can also be set manually via YouTube Studio
-- **Limitations:**
-  - Videos only (no images)
-  - Initial upload is public (privacy can be changed in YouTube Studio)
-  - Processing time depends on video length and quality
-  - YouTube may take time to process video after upload
-
-### Sixth Platform: X (Twitter) (Production - Fully Working)
-
-- **Status:** Production ready, posting tweets with media to X (Twitter)
-- **Implementation:**
-  - OAuth 2.0 with PKCE (Proof Key for Code Exchange) for enhanced security
-  - Posts tweets with images and videos using X API v2
-  - Automatic token refresh when expired
-  - Character limit handling (280 characters, auto-truncates with "...")
-  - Media upload via Media Upload API v1.1
-- **Environment Variables:**
-  - `X_CLIENT_ID` – X (Twitter) app client ID
-  - `X_CLIENT_SECRET` – X (Twitter) app client secret
-  - `X_REDIRECT_URI` – OAuth redirect URI for X
-- **Required Scopes:**
-  - `tweet.read` – Read tweets
-  - `tweet.write` – Create tweets (post on user's behalf)
-  - `users.read` – Read user profile information
-  - `offline.access` – Refresh token for long-lived access
-- **Prerequisites:**
-  - X (Twitter) Developer account
-  - X app created in X Developer Portal
-  - OAuth 2.0 configured with correct callback URL
-- **Media Types:**
-  - **Images:** JPG, PNG, GIF (up to 5MB for simple upload)
-  - **Videos:** MP4 (up to 15MB for simple upload, 512MB for chunked upload)
-- **Technical Details:**
-  - API: X API v2 for tweets, Media Upload API v1.1 for media
-  - Auth: OAuth 2.0 with PKCE (S256 code challenge method)
-  - Tweet endpoint: `https://api.twitter.com/2/tweets`
-  - Media endpoint: `https://upload.twitter.com/1.1/media/upload.json`
-  - Token endpoint: `https://api.twitter.com/2/oauth2/token`
-  - Simple upload: Base64-encoded media for files < 5MB
-  - Character limit: 280 characters (auto-truncated if longer)
-  - Refresh token: Automatically refreshes when access token expires
-- **Limitations:**
-  - Text limited to 280 characters (longer captions are truncated)
-  - Simple upload limited to 5MB (chunked upload for larger files not yet implemented)
-  - Rate limits apply based on X API tier (Free: 1,500 tweets/month, Pro: unlimited)
-  - Media format restrictions (MP4 for video, JPG/PNG/GIF for images)
-
-## Data Flow Summary
-
-### 1. User login
-1. User registers/logs in via NextAuth (credentials provider).
-2. NextAuth creates a session; backend can access `session.user.id`.
-
-### 2. Connect platform via OAuth (e.g., Google Business Profile)
-1. User visits `/connections` and clicks **Connect Google Business Profile**.
-2. Frontend calls `GET /api/auth/google_business_profile/start`.
-3. Backend builds an authorization URL with:
-   - `client_id`, `redirect_uri`, `scope`, `response_type=code`, `state` tied to the user session.
-4. Browser is redirected to Google’s consent screen.
-5. Google redirects back to `/api/auth/google_business_profile/callback` with `code` and `state`.
-6. Backend validates `state`, exchanges `code` for tokens, and calls a "who am I" endpoint.
-7. Backend upserts a `SocialConnection` for `(userId, platform='google_business_profile')`.
-8. User is redirected back to `/connections` with a success or error message.
-9. On the Connections page, the user configures the GBP target location using the location form (manual resource, store code, or picker), which updates `metadata.locationName`.
-
-### 3. Upload + Post (Client-Side Upload)
-1. User opens `/posts/new` and selects a media file + base caption and optional per-platform captions.
-2. Frontend uploads file directly to Vercel Blob:
-   - Calls `upload(filename, file, { handleUploadUrl: '/api/upload' })` from `@vercel/blob/client`
-   - File streams directly from browser to Vercel Blob (bypasses API route size limit)
-   - Upload API route only generates secure token (no file data passes through)
-   - Supports unlimited file sizes (up to Vercel Blob's ~500MB limit)
-3. Frontend sends `POST /api/posts` with `application/json`:
-   - `blobUrl` (from step 2)
-   - `filename`, `mimeType`, `sizeBytes`
-   - `baseCaption`
-   - `location` (optional)
-   - optional overrides (JSON).
-4. Backend:
-   - Authenticates user via session.
-   - Creates `MediaItem` row with blob URL as `storageLocation`.
-   - Creates `PostJob` (`status='pending'`).
-   - Looks up all `SocialConnections` for the user.
-   - For each connection:
-     - Creates `PostJobResult` row (`status='pending'`).
-     - Immediately runs `publishVideo` (or `publishImage`) for that platform (synchronous v1).
-     - On success/failure, updates `PostJobResult` status + `externalPostId`/error details.
-   - Deletes uploaded media from Vercel Blob after successful posting (saves storage).
-   - Updates `PostJob.status` based on per-platform outcomes.
-5. Backend returns initial `PostJob` + `PostJobResults` in the response.
-
-### 4. Status Reporting
-- Frontend may:
-  - Use the initial response; or
-  - Poll `GET /api/posts/{postJobId}` for updated `PostJob` + `PostJobResults`.
-- UI displays per-platform status chips: success/failure + message.
-
-## Configuration & Secrets
-
-- All sensitive values are provided via environment variables (e.g. `.env.local` in Next.js):
-  - Database connection string (`DATABASE_URL`).
-  - NextAuth secret and configuration (`NEXTAUTH_SECRET`, etc.).
-  - Google Business Profile OAuth credentials (`GOOGLE_GBP_CLIENT_ID`, `GOOGLE_GBP_CLIENT_SECRET`, `GOOGLE_GBP_REDIRECT_URI`, scopes).
-  - Other platform-specific keys as they are added.
-- No secrets are committed to the repo.
-- Logging redacts tokens and secrets; only non-sensitive identifiers and error messages are exposed.
-
-## Extension Points / Future Work
-
-## Platform Implementation Status
-
-✅ **ALL 6 PLATFORMS COMPLETE!**
-
-- ✅ ~~Replace local file storage with object store~~ - **DONE: Using Vercel Blob Storage**
-- ✅ ~~Implement Google Business Profile photo posting~~ - **DONE: Fully working**
-- ✅ ~~Implement TikTok video posting~~ - **DONE: Working in Sandbox**
-- ✅ ~~Implement Instagram photo and video posting~~ - **DONE: Fully working**
-- ✅ ~~Add client-side direct-to-Blob uploads for files >4MB~~ - **DONE: Unlimited file sizes supported**
-- ✅ ~~Implement LinkedIn company page posting~~ - **DONE: Awaiting Community Management API approval**
-- ✅ ~~Implement YouTube video uploads~~ - **DONE: Fully working with metadata support**
-- ✅ ~~Implement X (Twitter) OAuth and posting integration~~ - **DONE: Fully working with PKCE**
-
-## Future Enhancements
-
-Now that all platforms are implemented, focus on:
-
-- Add background job processing (e.g., queues) instead of synchronous posting
-- Add post scheduling functionality
-- Implement media library management (delete, edit captions)
-- Integrate analytics/insights from all platforms
-- Add more auth options (Sign in with Google, etc.)
-- Expand multi-tenancy (teams, roles, billing) as needed
-- Submit TikTok app for Production approval to enable public posting
-- Implement Instagram Place ID lookup for proper location tagging
-- Add chunked upload for X (Twitter) media > 5MB
-- Implement thread support for X (Twitter) captions > 280 characters
-
+- Billing / plans
+- SSO / Google Sign-In for app users
+- Ownership transfer UI (beyond co-owner leave)
+- Metrics for non-YouTube platforms
+- X thread support for long captions; X chunked upload for large media
+- Drop dead `User.companyWebsite` / `defaultHashtags` columns (workspace is source of truth)

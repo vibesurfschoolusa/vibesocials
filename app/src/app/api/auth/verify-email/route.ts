@@ -40,7 +40,11 @@ const invalidTokenResponse = () =>
 export async function POST(request: Request) {
   // Rate limit FIRST, before any DB work (keyed by ip — the caller is anonymous).
   const ip = (request.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim() || "unknown";
-  const rateLimit = await checkRateLimit({ userId: `ip:${ip}`, ...RATE_LIMIT });
+  const rateLimit = await checkRateLimit({
+    userId: `ip:${ip}`,
+    ...RATE_LIMIT,
+    failClosed: true,
+  });
   if (!rateLimit.allowed) {
     return NextResponse.json(
       { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },

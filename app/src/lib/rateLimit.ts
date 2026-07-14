@@ -9,6 +9,14 @@ export interface CheckRateLimitOptions {
   limit: number;
   /** Window length in milliseconds. */
   windowMs: number;
+  /**
+   * When true, a store error DENIES the request instead of allowing it.
+   * Use for anonymous auth abuse surfaces (register / forgot / reset / verify)
+   * where unlimited throughput during a DB outage is worse than a 429.
+   * Product routes keep the default (fail open) so a limiter blip cannot take
+   * publishing down.
+   */
+  failClosed?: boolean;
 }
 
 export interface RateLimitResult {
@@ -25,14 +33,15 @@ export interface RateLimitResult {
  * serverless instances (an in-memory counter would multiply with horizontal
  * scale). Atomicity comes from a single DB upsert.
  *
- * Fails OPEN: any store error — including "table does not exist" before the
- * migration is applied — is logged loudly and the request is allowed. The
- * limiter must never take a guarded route down.
+ * Default Fails OPEN: any store error — including "table does not exist"
+ * before the migration is applied — is logged loudly and the request is
+ * allowed, so the limiter never takes a product route down. Pass
+ * `failClosed: true` for anonymous auth routes.
  */
 export async function checkRateLimit(
   opts: CheckRateLimitOptions,
 ): Promise<RateLimitResult> {
-  const { userId, route, limit, windowMs } = opts;
+  const { userId, route, limit, windowMs, failClosed = false } = opts;
 
   const now = Date.now();
   const bucket = Math.floor(now / windowMs);
@@ -67,6 +76,10 @@ export async function checkRateLimit(
 
     return { allowed: true };
   } catch (error) {
+    if (failClosed) {
+      console.error("[rateLimit] store error, failing closed", error);
+      return { allowed: false, retryAfterSeconds: 60 };
+    }
     console.error("[rateLimit] store error, failing open", error);
     return { allowed: true };
   }

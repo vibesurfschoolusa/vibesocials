@@ -56,6 +56,8 @@ enum AccountTokenType {
 
 model User {
   id                   String    @id @default(cuid())
+  // Always stored normalizeEmail() (trim + lowercase). Lookups and unique
+  // constraint assume that form — see src/lib/email.ts.
   email                String    @unique
   name                 String?
   passwordHash         String?
@@ -70,6 +72,9 @@ model User {
   // RESEND_API_KEY is configured, which is the other, env-level gate. Defaults
   // to true so existing users start opted in, matching the spec (§7.2).
   notifyOnPostComplete Boolean   @default(true)
+  // Bumped on password reset so outstanding next-auth JWTs (which embed the
+  // prior version) fail getCurrentUser until the user signs in again.
+  sessionVersion       Int       @default(0)
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 

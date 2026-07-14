@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 
 import type { ConnectionSummary } from "@/lib/connectionSummary";
+import { PLATFORM_MATURITY_NOTES } from "@/lib/platforms";
+import type { Platform } from "@prisma/client";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { GoogleBusinessLocationForm } from "./google-business-location-form";
@@ -20,7 +22,7 @@ import { ConnectionActions } from "./connection-actions";
 import { LinkedInSetupDialog } from "./linkedin-setup-dialog";
 
 interface PlatformConfig {
-  key: string;
+  key: Platform;
   label: string;
   /** OAuth start route. Absent for not-yet-implemented platforms ("Coming soon"). */
   href?: string;
@@ -127,6 +129,11 @@ export function ConnectionsSection({ connections, readOnly = false }: Connection
                     <p className="mt-0.5 break-words text-sm text-muted-foreground">
                       {connection ? `Connected as ${username}` : description}
                     </p>
+                    {PLATFORM_MATURITY_NOTES[key] ? (
+                      <p className="mt-1 break-words text-xs text-muted-foreground/90">
+                        {PLATFORM_MATURITY_NOTES[key]}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
 

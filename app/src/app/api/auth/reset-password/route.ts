@@ -24,11 +24,9 @@ import { checkRateLimit } from "@/lib/rateLimit";
  * in the window, so nothing is written (mirrors invites/[token]/accept). The
  * token mark, password write, and sibling-token cleanup are ONE transaction.
  *
- * ACCEPTED DEBT: this does not revoke outstanding next-auth v4 JWT sessions —
- * they are stateless and self-expire (30-day maxAge). A reset changes the
- * password (blocking new logins with the old one) but any already-issued
- * session cookie remains valid until it expires. Server-side session
- * revocation is out of scope for this task.
+ * Session invalidation: bumps User.sessionVersion inside the same transaction
+ * as the password write. Outstanding JWTs embed the prior version and fail
+ * getCurrentUser until the user signs in again.
  */
 
 const RATE_LIMIT = { route: "auth/reset", limit: 10, windowMs: 15 * 60 * 1000 } as const;
@@ -40,7 +38,11 @@ const invalidResetResponse = () =>
 export async function POST(request: Request) {
   // Rate limit FIRST, before any DB work (keyed by ip — the caller is anonymous).
   const ip = (request.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim() || "unknown";
-  const rateLimit = await checkRateLimit({ userId: `ip:${ip}`, ...RATE_LIMIT });
+  const rateLimit = await checkRateLimit({
+    userId: `ip:${ip}`,
+    ...RATE_LIMIT,
+    failClosed: true,
+  });
   if (!rateLimit.allowed) {
     return NextResponse.json(
       { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
@@ -107,6 +109,8 @@ export async function POST(request: Request) {
         where: { id: record.userId },
         data: {
           passwordHash,
+          // Invalidate outstanding JWTs issued before this reset.
+          sessionVersion: { increment: 1 },
           // Receiving the reset link proves control of the address, so verify
           // it too — but only if it wasn't already verified (never re-stamp).
           ...(record.user.emailVerifiedAt === null ? { emailVerifiedAt: now } : {}),
