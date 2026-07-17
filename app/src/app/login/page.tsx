@@ -21,9 +21,12 @@ function LoginPageInner() {
   const raw = searchParams.get("callbackUrl");
   const callbackUrl = raw && raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";
   const registered = searchParams.get("registered") === "1";
-  // NextAuth redirects OAuth failures here as ?error=<code> (pages.signIn).
-  // Rendered generically — the code itself (AccessDenied, OAuthCallback, …)
-  // is not user-actionable and we don't leak which account exists.
+  // NextAuth redirects OAuth failures here as ?error=<code> (pages.signIn for
+  // transient OAuth errors, pages.error for AccessDenied refusals). Rendered
+  // without the code itself; AccessDenied is deterministic (retrying the same
+  // Google account can never succeed — see lib/googleSso.ts refusal rules),
+  // so its copy points at the password form instead of "try again". Neither
+  // message leaks whether an account exists.
   const oauthError = searchParams.get("error");
 
   const [email, setEmail] = useState("");
@@ -93,7 +96,9 @@ function LoginPageInner() {
             ) : null}
             {oauthError && !error ? (
               <Alert variant="danger" className="mb-4">
-                Sign-in didn&apos;t complete. Please try again.
+                {oauthError === "AccessDenied"
+                  ? "We couldn't sign you in with that Google account — use your email and password below instead."
+                  : "Sign-in didn't complete. Please try again."}
               </Alert>
             ) : null}
             <form onSubmit={handleSubmit} className="space-y-4">

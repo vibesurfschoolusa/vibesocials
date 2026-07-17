@@ -20,6 +20,10 @@ const LOGIN_IP_LIMIT = {
   windowMs: 15 * 60 * 1000,
 } as const;
 
+// Evaluated once at module load (authOptions is a module-level const anyway);
+// env vars are fixed for a deployment's lifetime.
+const googleSso = googleSsoConfig();
+
 function clientIpFromAuthReq(req: { headers?: Headers | Record<string, string | string[] | undefined> } | undefined): string {
   if (!req?.headers) return "unknown";
   const headers = req.headers;
@@ -98,27 +102,35 @@ export const authOptions: NextAuthOptions = {
     // configured a Google OAuth client — see lib/googleSso.ts. With it absent
     // (the default today) /api/auth/providers reports credentials only and the
     // login/register pages render no Google button.
-    ...(() => {
-      const google = googleSsoConfig();
-      return google
-        ? [
-            GoogleProvider({
-              clientId: google.clientId,
-              clientSecret: google.clientSecret,
-            }),
-          ]
-        : [];
-    })(),
+    ...(googleSso
+      ? [
+          GoogleProvider({
+            clientId: googleSso.clientId,
+            clientSecret: googleSso.clientSecret,
+          }),
+        ]
+      : []),
   ],
   pages: {
     signIn: "/login",
+    // Also route NextAuth's error redirects to /login: a refused signIn
+    // callback raises AccessDenied, which v4 does NOT forward to pages.signIn
+    // (only OAuthSignin/OAuthCallback/... are) — without this, a refused
+    // Google sign-in lands on the unbranded /api/auth/error page. The login
+    // page renders any ?error= generically.
+    error: "/login",
   },
   callbacks: {
     // Google sign-ins resolve to OUR User row (created on first sign-in) or
     // are refused outright — see lib/googleSso.ts for the verified-email
-    // linking rules. Credentials sign-ins pass straight through (authorize()
-    // above already did the work).
-    async signIn({ account, profile }) {
+    // linking rules. On success the resolved row's id/sessionVersion are
+    // stamped ONTO `user`: NextAuth v4 hands this same object to the jwt
+    // callback below, so the one generic `if (user)` branch mints the token
+    // from OUR prisma id (raw OAuth `user.id` is Google's subject, and the
+    // sessionVersion-revocation design depends on token.id being a prisma
+    // User id). Single resolution, no second lookup, no divergence.
+    // Credentials sign-ins pass straight through (authorize() did the work).
+    async signIn({ user, account, profile }) {
       if (account?.provider !== "google") return true;
       const oidc = profile as
         | { email?: string; name?: string; email_verified?: boolean }
@@ -128,27 +140,13 @@ export const authOptions: NextAuthOptions = {
         name: oidc?.name,
         emailVerified: oidc?.email_verified,
       });
-      return dbUser !== null;
+      if (!dbUser) return false;
+      const mutable = user as { id?: string; sessionVersion?: number };
+      mutable.id = dbUser.id;
+      mutable.sessionVersion = dbUser.sessionVersion;
+      return true;
     },
-    async jwt({ token, user, account }) {
-      if (user && account?.provider === "google") {
-        // OAuth `user.id` is Google's subject, NOT our row id — resolve the
-        // row signIn() just found/created so token.id and sessionVersion
-        // carry OUR values (the whole sessionVersion-revocation design
-        // depends on token.id being a prisma User id).
-        const email = user.email ? normalizeEmail(user.email) : null;
-        const dbUser = email
-          ? await prisma.user.findUnique({ where: { email } })
-          : null;
-        if (!dbUser) {
-          // Should be unreachable after signIn() passed; refuse rather than
-          // mint a token with a foreign id.
-          return null as unknown as typeof token;
-        }
-        token.id = dbUser.id;
-        token.sessionVersion = dbUser.sessionVersion;
-        return token;
-      }
+    async jwt({ token, user }) {
       if (user) {
         token.id = (user as { id: string }).id;
         token.sessionVersion =

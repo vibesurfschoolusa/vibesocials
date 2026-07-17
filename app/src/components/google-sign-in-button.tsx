@@ -30,6 +30,16 @@ export function GoogleSignInButton({ callbackUrl }: { callbackUrl: string }) {
     };
   }, []);
 
+  useEffect(() => {
+    // Back-navigation from Google's consent screen can restore this page from
+    // the bfcache with `loading` still true — reset so the button is usable.
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) setLoading(false);
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
+
   if (!available) return null;
 
   return (
@@ -49,7 +59,9 @@ export function GoogleSignInButton({ callbackUrl }: { callbackUrl: string }) {
         onClick={() => {
           setLoading(true);
           // Full-page redirect to Google; NextAuth lands back on callbackUrl.
-          void signIn("google", { callbackUrl });
+          // If the pre-redirect fetch fails (offline, CSRF endpoint down) the
+          // promise rejects with no navigation — unstick the button.
+          signIn("google", { callbackUrl }).catch(() => setLoading(false));
         }}
       >
         <GoogleMark />
