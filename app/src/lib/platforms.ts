@@ -42,6 +42,22 @@ export const PLATFORM_MATURITY_NOTES: Partial<Record<Platform, string>> = {
     "LinkedIn company-page posting requires Community Management API access on the LinkedIn app.",
 };
 
+/**
+ * Short account-requirement badges for the connect list, so a new user sees
+ * which platforms need more than a personal account BEFORE starting an OAuth
+ * flow they can't finish. Display-only; absent means a personal account works
+ * (YouTube, X). TikTok's entry reflects the pending Direct Post approval —
+ * drop it once the app leaves sandbox (see TIKTOK_NEXT_STEPS.md).
+ */
+export const PLATFORM_CONNECT_REQUIREMENTS: Partial<Record<Platform, string>> =
+  {
+    tiktok: "Sandbox mode",
+    instagram: "Business account required",
+    linkedin: "Company page required",
+    facebook_page: "Facebook Page required",
+    google_business_profile: "Business Profile required",
+  };
+
 /** Short dashboard note: engagement metrics are YouTube-only in v1. */
 export const METRICS_MATURITY_NOTE =
   "Engagement metrics currently include YouTube only. Other platforms are not synced yet.";
