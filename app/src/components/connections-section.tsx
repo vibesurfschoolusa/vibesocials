@@ -13,8 +13,12 @@ import {
 } from "lucide-react";
 
 import type { ConnectionSummary } from "@/lib/connectionSummary";
-import { PLATFORM_MATURITY_NOTES } from "@/lib/platforms";
+import {
+  PLATFORM_CONNECT_REQUIREMENTS,
+  PLATFORM_MATURITY_NOTES,
+} from "@/lib/platforms";
 import type { Platform } from "@prisma/client";
+import { Badge } from "@/components/ui/badge";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { GoogleBusinessLocationForm } from "./google-business-location-form";
@@ -32,15 +36,11 @@ interface PlatformConfig {
 
 // Single source of truth for the connect list — the 7 rows used to be
 // copy-pasted. Each platform's OAuth start route is `/api/auth/{key}/start`.
+// Ordered by connection friction, lowest first: platforms a personal account
+// can link right now (YouTube, X) lead, so a new user's first Connect click
+// succeeds; the ones needing a business/creator account or pending platform
+// approval (see PLATFORM_CONNECT_REQUIREMENTS) follow.
 const PLATFORMS: PlatformConfig[] = [
-  {
-    key: "tiktok",
-    label: "TikTok",
-    href: "/api/auth/tiktok/start",
-    icon: Music2,
-    description:
-      "Connect your TikTok account. Videos are sent to your TikTok inbox as drafts — you finish and publish them in the TikTok app.",
-  },
   {
     key: "youtube",
     label: "YouTube",
@@ -56,11 +56,12 @@ const PLATFORMS: PlatformConfig[] = [
     description: "Connect your X (Twitter) account to post tweets with media.",
   },
   {
-    key: "linkedin",
-    label: "LinkedIn",
-    href: "/api/auth/linkedin/start",
-    icon: Linkedin,
-    description: "Connect your LinkedIn profile to share posts with your network.",
+    key: "tiktok",
+    label: "TikTok",
+    href: "/api/auth/tiktok/start",
+    icon: Music2,
+    description:
+      "Connect your TikTok account. Videos are sent to your TikTok inbox as drafts — you finish and publish them in the TikTok app.",
   },
   {
     key: "instagram",
@@ -70,20 +71,27 @@ const PLATFORMS: PlatformConfig[] = [
     description: "Connect your Instagram Business account to post photos and videos.",
   },
   {
-    key: "google_business_profile",
-    label: "Google Business Profile",
-    href: "/api/auth/google_business_profile/start",
-    icon: MapPin,
-    description:
-      "Connect your Google Business Profile so new photos appear on your Maps listing.",
-  },
-  {
     key: "facebook_page",
     label: "Facebook Page",
     href: "/api/auth/facebook_page/start",
     icon: Facebook,
     description:
       "Connect your Facebook Page so Vibe Socials can post photos directly to your page.",
+  },
+  {
+    key: "linkedin",
+    label: "LinkedIn",
+    href: "/api/auth/linkedin/start",
+    icon: Linkedin,
+    description: "Connect your LinkedIn profile to share posts with your network.",
+  },
+  {
+    key: "google_business_profile",
+    label: "Google Business Profile",
+    href: "/api/auth/google_business_profile/start",
+    icon: MapPin,
+    description:
+      "Connect your Google Business Profile so new photos appear on your Maps listing.",
   },
 ];
 
@@ -125,7 +133,18 @@ export function ConnectionsSection({ connections, readOnly = false }: Connection
                     <Icon className="h-4 w-4" />
                   </span>
                   <div className="min-w-0">
-                    <div className="text-base font-semibold text-foreground">{label}</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-base font-semibold text-foreground">
+                        {label}
+                      </span>
+                      {/* Requirement badge only while unconnected — once the
+                          account is linked the requirement is proven met. */}
+                      {!connection && PLATFORM_CONNECT_REQUIREMENTS[key] ? (
+                        <Badge variant="neutral">
+                          {PLATFORM_CONNECT_REQUIREMENTS[key]}
+                        </Badge>
+                      ) : null}
+                    </div>
                     <p className="mt-0.5 break-words text-sm text-muted-foreground">
                       {connection ? `Connected as ${username}` : description}
                     </p>
