@@ -15,11 +15,19 @@ import { buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
-import { useConnections } from "@/hooks/useConnections";
+import type { UseConnectionsResult } from "@/hooks/useConnections";
 
-/** Dashboard widget: at-a-glance connected/disconnected status per platform. */
-export function ConnectionHealth() {
-  const { connections, loading, error } = useConnections();
+/**
+ * Dashboard widget: at-a-glance connected/disconnected status per platform.
+ * Takes the dashboard's single `useConnections()` result as props (same
+ * single-fetch-owner pattern as RecentActivity/usePostJobs) so the Get
+ * started checklist and this widget share one `/api/connections` request.
+ */
+export function ConnectionHealth({
+  connections,
+  loading,
+  error,
+}: Pick<UseConnectionsResult, "connections" | "loading" | "error">) {
   const ordered = connections
     ? [...connections].sort(
         (a, b) =>
