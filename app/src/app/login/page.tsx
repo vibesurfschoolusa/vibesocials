@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { GoogleSignInButton } from "@/components/google-sign-in-button";
 
 function LoginPageInner() {
   const router = useRouter();
@@ -20,6 +21,13 @@ function LoginPageInner() {
   const raw = searchParams.get("callbackUrl");
   const callbackUrl = raw && raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";
   const registered = searchParams.get("registered") === "1";
+  // NextAuth redirects OAuth failures here as ?error=<code> (pages.signIn for
+  // transient OAuth errors, pages.error for AccessDenied refusals). Rendered
+  // without the code itself; AccessDenied is deterministic (retrying the same
+  // Google account can never succeed — see lib/googleSso.ts refusal rules),
+  // so its copy points at the password form instead of "try again". Neither
+  // message leaks whether an account exists.
+  const oauthError = searchParams.get("error");
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -86,6 +94,13 @@ function LoginPageInner() {
                 Account created — sign in below.
               </Alert>
             ) : null}
+            {oauthError && !error ? (
+              <Alert variant="danger" className="mb-4">
+                {oauthError === "AccessDenied"
+                  ? "We couldn't sign you in with that Google account — use your email and password below instead."
+                  : "Sign-in didn't complete. Please try again."}
+              </Alert>
+            ) : null}
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">
                 <Label htmlFor="email">Email</Label>
@@ -140,6 +155,8 @@ function LoginPageInner() {
                 Sign in
               </Button>
             </form>
+
+            <GoogleSignInButton callbackUrl={callbackUrl} />
 
             <p className="mt-6 text-center text-sm text-muted-foreground">
               Need an account?{" "}

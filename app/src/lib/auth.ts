@@ -1,10 +1,12 @@
 import type { NextAuthOptions } from "next-auth";
 import { getServerSession } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
+import GoogleProvider from "next-auth/providers/google";
 import bcrypt from "bcryptjs";
 
 import { prisma } from "./db";
 import { normalizeEmail } from "./email";
+import { findOrCreateGoogleSsoUser, googleSsoConfig } from "./googleSso";
 import { checkRateLimit } from "./rateLimit";
 
 const LOGIN_EMAIL_LIMIT = {
@@ -17,6 +19,10 @@ const LOGIN_IP_LIMIT = {
   limit: 30,
   windowMs: 15 * 60 * 1000,
 } as const;
+
+// Evaluated once at module load (authOptions is a module-level const anyway);
+// env vars are fixed for a deployment's lifetime.
+const googleSso = googleSsoConfig();
 
 function clientIpFromAuthReq(req: { headers?: Headers | Record<string, string | string[] | undefined> } | undefined): string {
   if (!req?.headers) return "unknown";
@@ -92,11 +98,54 @@ export const authOptions: NextAuthOptions = {
         };
       },
     }),
+    // Env-gated (like RESEND_API_KEY): registered only when the owner has
+    // configured a Google OAuth client — see lib/googleSso.ts. With it absent
+    // (the default today) /api/auth/providers reports credentials only and the
+    // login/register pages render no Google button.
+    ...(googleSso
+      ? [
+          GoogleProvider({
+            clientId: googleSso.clientId,
+            clientSecret: googleSso.clientSecret,
+          }),
+        ]
+      : []),
   ],
   pages: {
     signIn: "/login",
+    // Also route NextAuth's error redirects to /login: a refused signIn
+    // callback raises AccessDenied, which v4 does NOT forward to pages.signIn
+    // (only OAuthSignin/OAuthCallback/... are) — without this, a refused
+    // Google sign-in lands on the unbranded /api/auth/error page. The login
+    // page renders any ?error= generically.
+    error: "/login",
   },
   callbacks: {
+    // Google sign-ins resolve to OUR User row (created on first sign-in) or
+    // are refused outright — see lib/googleSso.ts for the verified-email
+    // linking rules. On success the resolved row's id/sessionVersion are
+    // stamped ONTO `user`: NextAuth v4 hands this same object to the jwt
+    // callback below, so the one generic `if (user)` branch mints the token
+    // from OUR prisma id (raw OAuth `user.id` is Google's subject, and the
+    // sessionVersion-revocation design depends on token.id being a prisma
+    // User id). Single resolution, no second lookup, no divergence.
+    // Credentials sign-ins pass straight through (authorize() did the work).
+    async signIn({ user, account, profile }) {
+      if (account?.provider !== "google") return true;
+      const oidc = profile as
+        | { email?: string; name?: string; email_verified?: boolean }
+        | undefined;
+      const dbUser = await findOrCreateGoogleSsoUser({
+        email: oidc?.email,
+        name: oidc?.name,
+        emailVerified: oidc?.email_verified,
+      });
+      if (!dbUser) return false;
+      const mutable = user as { id?: string; sessionVersion?: number };
+      mutable.id = dbUser.id;
+      mutable.sessionVersion = dbUser.sessionVersion;
+      return true;
+    },
     async jwt({ token, user }) {
       if (user) {
         token.id = (user as { id: string }).id;
