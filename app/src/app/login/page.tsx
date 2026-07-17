@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { GoogleSignInButton } from "@/components/google-sign-in-button";
 
 function LoginPageInner() {
   const router = useRouter();
@@ -20,6 +21,10 @@ function LoginPageInner() {
   const raw = searchParams.get("callbackUrl");
   const callbackUrl = raw && raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";
   const registered = searchParams.get("registered") === "1";
+  // NextAuth redirects OAuth failures here as ?error=<code> (pages.signIn).
+  // Rendered generically — the code itself (AccessDenied, OAuthCallback, …)
+  // is not user-actionable and we don't leak which account exists.
+  const oauthError = searchParams.get("error");
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -86,6 +91,11 @@ function LoginPageInner() {
                 Account created — sign in below.
               </Alert>
             ) : null}
+            {oauthError && !error ? (
+              <Alert variant="danger" className="mb-4">
+                Sign-in didn&apos;t complete. Please try again.
+              </Alert>
+            ) : null}
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">
                 <Label htmlFor="email">Email</Label>
@@ -140,6 +150,8 @@ function LoginPageInner() {
                 Sign in
               </Button>
             </form>
+
+            <GoogleSignInButton callbackUrl={callbackUrl} />
 
             <p className="mt-6 text-center text-sm text-muted-foreground">
               Need an account?{" "}

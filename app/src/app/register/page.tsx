@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { GoogleSignInButton } from "@/components/google-sign-in-button";
 
 function RegisterPageInner() {
   const router = useRouter();
@@ -166,6 +167,8 @@ function RegisterPageInner() {
                 Create account
               </Button>
             </form>
+
+            <GoogleSignInButton callbackUrl={callbackUrl} />
 
             <p className="mt-6 text-center text-sm text-muted-foreground">
               Already have an account?{" "}

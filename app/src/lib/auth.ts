@@ -1,10 +1,12 @@
 import type { NextAuthOptions } from "next-auth";
 import { getServerSession } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
+import GoogleProvider from "next-auth/providers/google";
 import bcrypt from "bcryptjs";
 
 import { prisma } from "./db";
 import { normalizeEmail } from "./email";
+import { findOrCreateGoogleSsoUser, googleSsoConfig } from "./googleSso";
 import { checkRateLimit } from "./rateLimit";
 
 const LOGIN_EMAIL_LIMIT = {
@@ -92,12 +94,61 @@ export const authOptions: NextAuthOptions = {
         };
       },
     }),
+    // Env-gated (like RESEND_API_KEY): registered only when the owner has
+    // configured a Google OAuth client — see lib/googleSso.ts. With it absent
+    // (the default today) /api/auth/providers reports credentials only and the
+    // login/register pages render no Google button.
+    ...(() => {
+      const google = googleSsoConfig();
+      return google
+        ? [
+            GoogleProvider({
+              clientId: google.clientId,
+              clientSecret: google.clientSecret,
+            }),
+          ]
+        : [];
+    })(),
   ],
   pages: {
     signIn: "/login",
   },
   callbacks: {
-    async jwt({ token, user }) {
+    // Google sign-ins resolve to OUR User row (created on first sign-in) or
+    // are refused outright — see lib/googleSso.ts for the verified-email
+    // linking rules. Credentials sign-ins pass straight through (authorize()
+    // above already did the work).
+    async signIn({ account, profile }) {
+      if (account?.provider !== "google") return true;
+      const oidc = profile as
+        | { email?: string; name?: string; email_verified?: boolean }
+        | undefined;
+      const dbUser = await findOrCreateGoogleSsoUser({
+        email: oidc?.email,
+        name: oidc?.name,
+        emailVerified: oidc?.email_verified,
+      });
+      return dbUser !== null;
+    },
+    async jwt({ token, user, account }) {
+      if (user && account?.provider === "google") {
+        // OAuth `user.id` is Google's subject, NOT our row id — resolve the
+        // row signIn() just found/created so token.id and sessionVersion
+        // carry OUR values (the whole sessionVersion-revocation design
+        // depends on token.id being a prisma User id).
+        const email = user.email ? normalizeEmail(user.email) : null;
+        const dbUser = email
+          ? await prisma.user.findUnique({ where: { email } })
+          : null;
+        if (!dbUser) {
+          // Should be unreachable after signIn() passed; refuse rather than
+          // mint a token with a foreign id.
+          return null as unknown as typeof token;
+        }
+        token.id = dbUser.id;
+        token.sessionVersion = dbUser.sessionVersion;
+        return token;
+      }
       if (user) {
         token.id = (user as { id: string }).id;
         token.sessionVersion =
