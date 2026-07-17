@@ -1,4 +1,5 @@
 {
+  "buildCommand": "npm run build",
   "functions": {
     "src/app/api/posts/route.ts": {
       "maxDuration": 300
