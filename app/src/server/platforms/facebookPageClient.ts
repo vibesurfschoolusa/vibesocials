@@ -1,16 +1,48 @@
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { SocialConnection } from "@prisma/client";
 
-import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { markConnectionNeedsReconnect } from "./connectionHealth";
 
-async function refreshAccessToken(
-  connection: SocialConnection,
-): Promise<SocialConnection> {
-  // For now, Facebook Page access tokens are treated as long-lived.
-  // If we later add short-lived token handling, we'll implement a refresh flow here.
-  console.log("[FacebookPage] Token refresh not implemented - using existing page access token");
-  return connection;
+// Token-material reality (see app/api/auth/facebook_page/callback/route.ts):
+// `accessToken` is a Facebook PAGE access token minted from a long-lived user
+// token during OAuth, `refreshToken` is always null (the user token is never
+// stored), and `expiresAt` records the USER token's ~60-day expiry — not the
+// page token's. Page tokens minted this way generally do not expire, so unlike
+// instagramClient.ts there is deliberately NO preemptive expiry guard here (it
+// would falsely block still-working connections at day 60). The real health
+// signal is the Graph API rejecting the token at publish time: HTTP 401, or an
+// `OAuthException` with code 190 (invalid/expired token, commonly HTTP 400) —
+// both are mapped below to a clean, coded reconnect error plus the
+// `needsReconnect` flag (Roadmap Phase 4, see connectionHealth.ts).
+
+const FACEBOOK_PAGE_RECONNECT_CODE = "FACEBOOK_PAGE_RECONNECT_REQUIRED";
+
+function facebookPageReconnectRequiredError(): Error & { code: string } {
+  const error = new Error(
+    "Your Facebook Page connection is no longer valid — please reconnect it in Settings.",
+  ) as Error & { code: string };
+  error.code = FACEBOOK_PAGE_RECONNECT_CODE;
+  return error;
+}
+
+/**
+ * True when a Graph API error body is an auth failure that only a reconnect
+ * can fix: an `OAuthException` with code 190 (invalid/expired access token).
+ * Facebook frequently returns these with HTTP 400, so status alone is not
+ * enough. Exported for tests.
+ */
+export function isFacebookAuthErrorBody(body: string): boolean {
+  try {
+    const parsed = JSON.parse(body) as {
+      error?: { type?: string; code?: number };
+    };
+    return (
+      parsed.error?.type === "OAuthException" && parsed.error?.code === 190
+    );
+  } catch {
+    return false;
+  }
 }
 
 export const facebookPageClient: PlatformClient = {
@@ -61,10 +93,33 @@ export const facebookPageClient: PlatformClient = {
       body,
     });
 
-    await assertOk(response, {
-      code: "FACEBOOK_PAGE_PUBLISH_FAILED",
-      prefix: "Facebook Page photo publish failed",
-    });
+    if (!response.ok) {
+      // COR-3 discipline (matches instagramClient.ts): raw upstream bodies go
+      // to server logs only — PostJobResult.errorMessage renders in the UI, so
+      // the thrown message carries just a prefix + status.
+      const errorBody = await response
+        .text()
+        .catch(() => "Unable to read error body");
+      console.error("[FacebookPage] Photo publish failed", {
+        status: response.status,
+        error: errorBody,
+      });
+      // Token no longer accepted -> the actionable reconnect error, and flag
+      // the connection so the dashboard/settings Reconnect affordance lights
+      // up instead of the user retrying a dead token forever.
+      if (response.status === 401 || isFacebookAuthErrorBody(errorBody)) {
+        await markConnectionNeedsReconnect(
+          socialConnection.id,
+          FACEBOOK_PAGE_RECONNECT_CODE,
+        );
+        throw facebookPageReconnectRequiredError();
+      }
+      const error = new Error(
+        `Facebook Page photo publish failed (status ${response.status})`,
+      ) as Error & { code: string };
+      error.code = "FACEBOOK_PAGE_PUBLISH_FAILED";
+      throw error;
+    }
 
     const data = (await response.json()) as { id?: string };
     const externalPostId = data.id ?? null;
@@ -80,6 +135,10 @@ export const facebookPageClient: PlatformClient = {
   },
 
   async refreshToken(connection: SocialConnection): Promise<SocialConnection> {
-    return refreshAccessToken(connection);
+    // Nothing to refresh: no user token is stored (refreshToken is null) and
+    // the page token itself does not expire on a schedule — see the
+    // token-material note at the top of this file. A genuinely dead token is
+    // detected and flagged at publish time above.
+    return connection;
   },
-}
+};
