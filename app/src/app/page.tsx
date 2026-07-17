@@ -12,9 +12,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
+import { Landing } from "@/components/landing";
 import { RecentActivity } from "@/components/dashboard/recent-activity";
 import { ConnectionHealth } from "@/components/dashboard/connection-health";
+import { GettingStarted } from "@/components/dashboard/getting-started";
 import { YouTubeMetricsSummary } from "@/components/dashboard/youtube-metrics-summary";
+import { useConnections } from "@/hooks/useConnections";
 import { usePostJobs } from "@/hooks/usePostJobs";
 
 export default function HomePage() {
@@ -35,66 +38,14 @@ export default function HomePage() {
   return <Dashboard email={session?.user?.email ?? ""} />;
 }
 
-/** Signed-out hero. The one place a subtle brand gradient is allowed. */
-function Landing() {
-  return (
-    <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-background px-4 py-16">
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-b from-primary/5 via-background to-background"
-      />
-      <div
-        aria-hidden
-        className="pointer-events-none absolute -top-24 left-1/2 -z-10 h-72 w-72 -translate-x-1/2 rounded-full bg-primary/10 blur-3xl"
-      />
-      <div className="w-full max-w-md">
-        <div className="flex flex-col items-center text-center">
-          <span
-            aria-hidden
-            className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-lg font-bold text-white shadow-lg"
-          >
-            VS
-          </span>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">
-            Vibe Socials
-          </h1>
-          <p className="mt-3 text-base text-muted-foreground">
-            Upload once, post everywhere. Manage and sync your content across
-            TikTok, YouTube, Instagram, and more — from a single place.
-          </p>
-        </div>
-        <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-          <Link
-            href="/login"
-            className={buttonVariants({
-              variant: "primary",
-              size: "lg",
-              className: "flex-1",
-            })}
-          >
-            Log in
-          </Link>
-          <Link
-            href="/register"
-            className={buttonVariants({
-              variant: "outline",
-              size: "lg",
-              className: "flex-1",
-            })}
-          >
-            Create account
-          </Link>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function Dashboard({ email }: { email: string }) {
   // Task 8 — single fetch/poll owner for the dashboard: both widgets below
   // took this over their own `usePostJobs()` call, so the dashboard makes one
-  // `/api/posts` request (and one poll timer) instead of two.
+  // `/api/posts` request (and one poll timer) instead of two. Same pattern
+  // for connections: this is the one `/api/connections` fetch, shared by the
+  // Get started checklist and the ConnectionHealth widget.
   const postJobs = usePostJobs();
+  const connectionsState = useConnections();
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8 md:px-6 lg:px-8">
@@ -118,12 +69,18 @@ function Dashboard({ email }: { email: string }) {
 
       <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
+          {/* First-run checklist — renders nothing once the user has a
+              connection and a post (see lib/gettingStarted.ts). */}
+          <GettingStarted
+            connections={connectionsState.connections}
+            jobs={postJobs.jobs}
+          />
           {/* Roadmap Phase 8 — renders only once a YouTube post has fetched metrics. */}
           <YouTubeMetricsSummary jobs={postJobs.jobs} />
           <RecentActivity {...postJobs} />
         </div>
         <div className="space-y-6">
-          <ConnectionHealth />
+          <ConnectionHealth {...connectionsState} />
           <QuickActions />
         </div>
       </div>
