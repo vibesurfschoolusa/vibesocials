@@ -25,7 +25,16 @@ export function RecentActivity({
   error,
   reload,
   workspaceMemberCount,
-}: UsePostJobsResult) {
+  showCreateCta = true,
+}: UsePostJobsResult & {
+  /**
+   * Whether the "no posts yet" empty state offers its own create button. The
+   * dashboard turns this off while the "Get started" checklist is visible, so
+   * the checklist's step 2 owns that instruction instead of competing with a
+   * duplicate of it a few hundred pixels below.
+   */
+  showCreateCta?: boolean;
+}) {
   const preview = jobs ? jobs.slice(0, PREVIEW_COUNT) : [];
   // Team Workspaces (Task 7, design §7) — attribution only in a shared
   // (>1-member) workspace, so a solo workspace's dashboard preview is unchanged.
@@ -79,12 +88,14 @@ export function RecentActivity({
           title="No posts yet"
           description="Create your first post and it'll show up here with a per-platform status breakdown."
           action={
-            <Link
-              href="/posts/new"
-              className={buttonVariants({ variant: "primary" })}
-            >
-              Create your first post
-            </Link>
+            showCreateCta ? (
+              <Link
+                href="/posts/new"
+                className={buttonVariants({ variant: "primary" })}
+              >
+                Create your first post
+              </Link>
+            ) : undefined
           }
         />
       ) : (
