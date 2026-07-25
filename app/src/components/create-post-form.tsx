@@ -15,7 +15,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
-import { fieldBaseClasses } from "@/components/ui/input";
+import { fieldBaseClasses, Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
@@ -812,7 +812,7 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
           ) : (
             <>
               <Label htmlFor="post-media">Media file (image or video)</Label>
-              <input
+              <Input
                 id="post-media"
                 type="file"
                 accept="video/*,image/*"
@@ -855,7 +855,7 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
                     setAutoCaptionLoading(false);
                   }
                 }}
-                className="block w-full cursor-pointer text-sm text-foreground file:mr-3 file:cursor-pointer file:rounded-[var(--radius)] file:border-0 file:bg-secondary file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-secondary-foreground hover:file:bg-secondary/80"
+                className="cursor-pointer"
               />
 
               {uploadFile && previewUrl && (
