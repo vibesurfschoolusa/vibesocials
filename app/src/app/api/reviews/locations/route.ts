@@ -26,11 +26,13 @@ export async function GET() {
       },
     });
 
+    // Not being connected yet is the normal state for a new workspace, not a
+    // failure: the reviews page renders its red "Couldn't load reviews"
+    // ErrorState (with a Retry that could never succeed) for any non-ok
+    // response. Report it as an ordinary empty result and let the client show
+    // the "Connect Google Business Profile" empty state instead.
     if (!connection) {
-      return NextResponse.json(
-        { error: "No Google Business Profile connection found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ locations: [], connected: false });
     }
 
     // Check if token is expired and refresh if needed
@@ -77,7 +79,7 @@ export async function GET() {
     const accounts = accountsData.accounts || [];
 
     if (accounts.length === 0) {
-      return NextResponse.json({ locations: [] });
+      return NextResponse.json({ locations: [], connected: true });
     }
 
     // Fetch locations for all accounts
@@ -138,6 +140,7 @@ export async function GET() {
 
     return NextResponse.json({
       locations: allLocations,
+      connected: true,
     });
   } catch (error: unknown) {
     console.error("[GBP Locations] Error:", error);

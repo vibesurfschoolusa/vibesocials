@@ -22,6 +22,10 @@ export function ReviewsView() {
 
   const [reviews, setReviews] = useState<GoogleReview[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
+  // Whether a Google Business Profile connection exists at all. Separates the
+  // two zero-location cases: "nothing connected yet" (offer the connect CTA)
+  // vs "connected, but Google returned no locations" (a CTA wouldn't help).
+  const [gbpConnected, setGbpConnected] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingLocations, setLoadingLocations] = useState(true);
@@ -48,6 +52,7 @@ export function ReviewsView() {
       const data = await response.json();
       const locs: Location[] = data.locations || [];
       setLocations(locs);
+      setGbpConnected(data.connected === true);
 
       // Auto-select first location if only one exists
       if (locs.length === 1) {
@@ -328,15 +333,21 @@ export function ReviewsView() {
         <EmptyState
           icon={<MessageSquare />}
           title={
-            locations.length === 0 ? "Connect Google Business Profile" : "Select a location"
+            locations.length > 0
+              ? "Select a location"
+              : gbpConnected
+                ? "No locations found"
+                : "Connect Google Business Profile"
           }
           description={
-            locations.length === 0
-              ? "Reviews come from your Google Business Profile listing. Connect it in Settings to see and reply to reviews here."
-              : "Choose a location above to view and reply to reviews"
+            locations.length > 0
+              ? "Choose a location above to view and reply to reviews"
+              : gbpConnected
+                ? "Your connected Google Business Profile doesn't have any locations yet. Add one in Google Business Profile, then refresh this page."
+                : "Reviews come from your Google Business Profile listing. Connect it in Settings to see and reply to reviews here."
           }
           action={
-            locations.length === 0 ? (
+            locations.length === 0 && !gbpConnected ? (
               <Link href="/settings" className={buttonVariants({ variant: "primary" })}>
                 Go to connections
               </Link>
