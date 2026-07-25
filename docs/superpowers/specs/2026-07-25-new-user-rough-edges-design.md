@@ -92,17 +92,23 @@ existing `AppShell` from the root layout, so signed-in users keep their nav.
 
 **Severity: low.** The one place the design system visibly breaks.
 
-`create-post-form.tsx:805` is a bare `<input type="file">` with no styling at all.
-`media-library.tsx:362` uses the `Input` component, which has only minimal `file:`
-rules (`file:border-0 file:bg-transparent`), so the native "Choose File" button still
-renders raw.
+The two upload surfaces are styled inconsistently with each other — and not, as first
+recorded here, because the composer is unstyled. Corrected on implementation:
 
-**Fix.** Extend the `file:` styling in `src/components/ui/input.tsx` so the file
-button reads as a secondary button (`file:bg-secondary`, rounded, cursor-pointer,
-hover state) using existing theme tokens — which are already defined for both light
-and dark. Switch the composer's bare input to the `Input` component so both upload
-surfaces match. Vertical padding on the file button is kept inside the field's `h-10`
-so the control does not grow.
+- `create-post-form.tsx:805` is a bare `<input type="file">` that *does* carry its own
+  `file:` rules, so its button reads as a secondary button — but it has no field
+  border, so it floats on the page background.
+- `media-library.tsx:362` uses the `Input` component, which draws a proper bordered
+  field but has only minimal `file:` rules (`file:border-0 file:bg-transparent`), so
+  the native "Choose File" button inside it renders raw.
+
+**Fix.** Take the better half of each. Extend the `file:` styling in
+`src/components/ui/input.tsx` so the file button reads as a secondary button
+(`file:bg-secondary`, rounded, cursor-pointer, hover state) using existing theme
+tokens — already defined for both light and dark. Then switch the composer's bare
+input to the `Input` component and drop its now-duplicated inline classes, so both
+surfaces are a bordered field containing a styled button. The file button's height is
+kept inside the field's `h-10` so the control does not grow.
 
 ## Testing
 

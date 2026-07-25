@@ -19,7 +19,11 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
       type={type ?? "text"}
       className={cn(
         fieldBaseClasses,
-        "h-10 px-3 py-2 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground",
+        "h-10 px-3 py-2",
+        // The native file button is the one control that escaped the design
+        // system — style it to read as a secondary button. Padding is kept
+        // small enough to sit inside the field's h-10 without growing it.
+        "file:mr-3 file:h-6 file:cursor-pointer file:rounded-[calc(var(--radius)-0.125rem)] file:border-0 file:bg-secondary file:px-2.5 file:text-sm file:font-medium file:text-secondary-foreground hover:file:bg-secondary/80",
         className
       )}
       {...props}

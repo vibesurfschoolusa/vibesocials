@@ -364,6 +364,7 @@ export function MediaLibrary() {
                 id="media-file"
                 type="file"
                 accept="video/*,image/*"
+                className="cursor-pointer"
                 onChange={(event) => {
                   const nextFile = event.target.files?.[0] ?? null;
                   setFile(nextFile);
