@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveGettingStarted } from "./gettingStarted";
+import { deriveDashboardCta, deriveGettingStarted } from "./gettingStarted";
 import type { ConnectionStatus } from "@/lib/connectionsDto";
 import type { PostJobDTO } from "@/lib/postsDto";
 
@@ -92,5 +92,43 @@ describe("deriveGettingStarted", () => {
       complete: true,
       show: false,
     });
+  });
+});
+
+describe("deriveDashboardCta", () => {
+  it("returns null while connections are unresolved", () => {
+    // The caller renders nothing rather than flashing the wrong label and
+    // swapping it once the fetch lands.
+    expect(deriveDashboardCta(null)).toBeNull();
+  });
+
+  // Leading with "Create post" when nothing is connected sends the user to a
+  // composer that can only tell them to go connect something.
+  it("leads with connecting when nothing is connected", () => {
+    expect(deriveDashboardCta([])).toEqual({
+      kind: "connect",
+      href: "/settings",
+      label: "Connect a platform",
+    });
+    expect(deriveDashboardCta([connection({ connected: false })])).toMatchObject({
+      kind: "connect",
+    });
+  });
+
+  it("leads with composing once any platform is connected", () => {
+    expect(
+      deriveDashboardCta([
+        connection({ platform: "tiktok", connected: false }),
+        connection({ platform: "youtube", connected: true }),
+      ]),
+    ).toEqual({ kind: "compose", href: "/posts/new", label: "Create post" });
+  });
+
+  // A connection that needs reconnecting is still a connection: the composer
+  // works, and the ConnectionHealth widget is what flags the problem.
+  it("still leads with composing when the only connection needs reconnecting", () => {
+    expect(
+      deriveDashboardCta([connection({ connected: true, needsReconnect: true })]),
+    ).toMatchObject({ kind: "compose" });
   });
 });
