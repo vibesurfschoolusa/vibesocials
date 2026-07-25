@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveDashboardCta, deriveGettingStarted } from "./gettingStarted";
+import {
+  COMPOSE_CTA,
+  deriveDashboardCta,
+  deriveGettingStarted,
+} from "./gettingStarted";
 import type { ConnectionStatus } from "@/lib/connectionsDto";
 import type { PostJobDTO } from "@/lib/postsDto";
 
@@ -97,9 +101,25 @@ describe("deriveGettingStarted", () => {
 
 describe("deriveDashboardCta", () => {
   it("returns null while connections are unresolved", () => {
-    // The caller renders nothing rather than flashing the wrong label and
-    // swapping it once the fetch lands.
+    // The caller shows a skeleton rather than flashing the wrong label and
+    // swapping it once the fetch lands. `null` covers both "in flight" and
+    // "failed", so the caller must tell those apart itself — see COMPOSE_CTA.
     expect(deriveDashboardCta(null)).toBeNull();
+  });
+
+  // useConnections leaves `connections` null on a failed fetch, so an unwary
+  // caller would park a loading skeleton on screen forever. The fallback keeps
+  // the header usable: composing is safe to offer blind because the composer
+  // shows its own connect CTA when nothing is connected.
+  it("exposes a compose fallback for callers whose fetch failed", () => {
+    expect(COMPOSE_CTA).toEqual({
+      kind: "compose",
+      href: "/posts/new",
+      label: "Create post",
+    });
+    expect(deriveDashboardCta([connection({ connected: true })])).toEqual(
+      COMPOSE_CTA,
+    );
   });
 
   // Leading with "Create post" when nothing is connected sends the user to a

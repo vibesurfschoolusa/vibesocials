@@ -36,6 +36,17 @@ export interface DashboardCta {
 }
 
 /**
+ * The steady-state action, and the fallback when connections can't be read at
+ * all: composing is safe to offer blind because the composer answers with its
+ * own connect CTA if it turns out nothing is connected.
+ */
+export const COMPOSE_CTA: DashboardCta = {
+  kind: "compose",
+  href: "/posts/new",
+  label: "Create post",
+};
+
+/**
  * Pick the one primary action the dashboard should lead with.
  *
  * With nothing connected, "Create post" is a dead end — the composer can only
@@ -45,8 +56,10 @@ export interface DashboardCta {
  * until a platform exists. Composing is never removed, only demoted: the
  * "Get started" checklist and the left nav still reach it.
  *
- * Returns `null` while connections are unresolved so the caller can render
- * nothing rather than flash the wrong label and swap it a moment later.
+ * Returns `null` when connections are unresolved — either still in flight or
+ * failed. The caller distinguishes those two (a skeleton while loading, the
+ * COMPOSE_CTA fallback once a fetch has actually failed), because a `null`
+ * that never resolves must not leave a skeleton on screen forever.
  */
 export function deriveDashboardCta(
   connections: ConnectionStatus[] | null,

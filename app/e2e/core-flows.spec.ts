@@ -179,8 +179,15 @@ test.describe(
       // (src/app/register/page.tsx) and lands on the authenticated dashboard —
       // no separate manual login required for a fresh registration.
       await expect(page).toHaveURL("/");
+      // A brand-new account has no connections and no posts, so the dashboard
+      // greets a first visit rather than a return (src/app/page.tsx).
       await expect(
-        page.getByRole("heading", { level: 1, name: "Welcome back" }),
+        page.getByRole("heading", { level: 1, name: "Welcome to Vibe Socials" }),
+      ).toBeVisible();
+      // ...and leads with connecting, because "Create post" would only reach a
+      // composer that tells them to go connect something first.
+      await expect(
+        page.getByRole("link", { name: "Connect a platform" }),
       ).toBeVisible();
 
       // Clear the session and exercise the manual login form too, so this
@@ -193,8 +200,10 @@ test.describe(
       await page.getByRole("button", { name: "Sign in" }).click();
 
       await expect(page).toHaveURL("/");
+      // Still the first-run greeting: signing out and back in doesn't give the
+      // account a connection or a post.
       await expect(
-        page.getByRole("heading", { level: 1, name: "Welcome back" }),
+        page.getByRole("heading", { level: 1, name: "Welcome to Vibe Socials" }),
       ).toBeVisible();
     });
 
