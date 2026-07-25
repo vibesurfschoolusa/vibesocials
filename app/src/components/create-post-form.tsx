@@ -710,6 +710,29 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
   // preview of the freshly attached file.
   const activeMediaUrl = reuseItem ? reuseItem.storageLocation : previewUrl;
 
+  // With nothing connected there is no submit path at all — publish, schedule
+  // and save-draft are each disabled — so rendering the form underneath the
+  // connect CTA only invites the user to fill in a post that can never go
+  // anywhere. Show the CTA on its own instead. This sits after every hook, so
+  // hook order is unaffected; it also covers the reuse flow (arriving from
+  // Media -> "Use in new post"), where posting is equally impossible.
+  if (connectionsResolved && connectedPlatforms.length === 0) {
+    return (
+      <Card className="p-6">
+        <EmptyState
+          icon={<PlugZap />}
+          title="Connect a platform to start posting"
+          description="Vibe Socials publishes to the platforms you've connected. Connect at least one in Settings, then come back here."
+          action={
+            <Link href="/settings" className={buttonVariants({ variant: "primary" })}>
+              Go to connections
+            </Link>
+          }
+        />
+      </Card>
+    );
+  }
+
   return (
     <Card className="p-6">
       <form onSubmit={handleUploadSubmit} className="space-y-5">
@@ -745,19 +768,6 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
         )}
 
         {uploadError && <Alert variant="danger">{uploadError}</Alert>}
-
-        {connectionsResolved && connectedPlatforms.length === 0 ? (
-          <EmptyState
-            icon={<PlugZap />}
-            title="Connect a platform to start posting"
-            description="Vibe Socials publishes to the platforms you've connected. Connect at least one in Settings, then come back here."
-            action={
-              <Link href="/settings" className={buttonVariants({ variant: "primary" })}>
-                Go to connections
-              </Link>
-            }
-          />
-        ) : null}
 
         <div className="space-y-1.5">
           {reuseItem ? (
@@ -1091,11 +1101,10 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
           )}
 
           <div className="flex items-center gap-3">
-            <Button
-              type="submit"
-              loading={uploadLoading}
-              disabled={connectionsResolved && connectedPlatforms.length === 0}
-            >
+            {/* No `disabled` for the zero-connection case: the gate above
+                returns early, so the form only renders once at least one
+                platform is connected. */}
+            <Button type="submit" loading={uploadLoading}>
               {uploadLoading
                 ? publishMode === "draft"
                   ? "Saving…"
