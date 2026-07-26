@@ -20,6 +20,10 @@ import {
   selectYouTubeMetricEligibleResults,
 } from "@/server/jobs/metricsScanner";
 import { prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
+import {
+  STALE_ELIGIBLE_STATUSES,
+  staleCutoff,
+} from "@/server/jobs/stalePostJobs";
 import { deliverPostOutcomeNotification } from "@/server/notifications/postOutcomeEmail";
 import { refreshGoogleToken } from "@/server/platforms/googleTokens";
 import { fetchYouTubeVideoStatistics, hasAnyStatistic } from "@/server/platforms/youtubeMetrics";
@@ -1050,6 +1054,54 @@ export const youtubePostMetricsSync = inngest.createFunction(
   },
 );
 
+/**
+ * Hourly sweep that gives dispatched PostJobs a terminal state.
+ *
+ * A job relies on an Inngest event to carry it from `pending`/`in_progress` to
+ * `completed`/`failed`. When that event is lost — as it was for ten prod jobs
+ * around the January Inngest key rotation — nothing else ever moves the row:
+ * `retry` operates on failed PostJobResult rows and an orphan has none (so it
+ * 409s), the UI shows it publishing forever, and because those statuses are
+ * non-terminal the media retention sweep can never reclaim the blob.
+ *
+ * Marking them `failed` is the honest terminal state: we did try, and it did
+ * not publish. `cancelled` would claim the user stopped it. There is nowhere to
+ * record *why* — the per-platform error lives on PostJobResult and an orphan has
+ * none — so these surface exactly like the other resultless failures already in
+ * prod. Runs at :30 to stay clear of the metrics sync on the hour.
+ */
+export const stalePostJobSweep = inngest.createFunction(
+  { id: "stale-post-job-sweep", name: "Stale Post Job Sweep" },
+  { cron: "30 * * * *" },
+  async ({ step }) => {
+    const summary = await step.run("fail-stale-post-jobs", async () => {
+      const cutoff = staleCutoff(new Date());
+
+      // The eligibility rule is isStalePostJob(); expressed here as the
+      // equivalent WHERE so one statement claims the rows atomically. `updatedAt`
+      // (not `createdAt`) is the progress signal — a job still working through
+      // its platforms keeps rewriting the row and so keeps resetting its clock.
+      const { count } = await prisma.postJob.updateMany({
+        where: {
+          status: { in: [...STALE_ELIGIBLE_STATUSES] },
+          updatedAt: { lt: cutoff },
+        },
+        data: { status: "failed" },
+      });
+
+      if (count > 0) {
+        logger.warn("[StaleSweep] failed stale in-flight post jobs", {
+          count,
+          cutoff: cutoff.toISOString(),
+        });
+      }
+      return { swept: count, cutoff: cutoff.toISOString() };
+    });
+
+    return summary;
+  },
+);
+
 export const inngestFunctions = [
   publishToAllPlatforms,
   mediaRetentionSweep,
@@ -1057,4 +1109,5 @@ export const inngestFunctions = [
   scheduledPostScanner,
   sendNotification,
   youtubePostMetricsSync,
+  stalePostJobSweep,
 ];
