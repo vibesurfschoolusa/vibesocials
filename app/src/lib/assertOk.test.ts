@@ -42,6 +42,17 @@ describe("assertOk", () => {
     expect(JSON.stringify(consoleSpy.mock.calls)).toContain(upstreamBody);
   });
 
+  it("attaches the HTTP status to the thrown error for retry classification", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const response = new Response("upstream body", { status: 503 });
+
+    const error = await assertOk(response, { code: "X_FAILED", prefix: "Upload failed" })
+      .then(() => null)
+      .catch((e: unknown) => e as Error & { status?: number });
+
+    expect(error?.status).toBe(503);
+  });
+
   it("still throws the coded error when the body cannot be read", async () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const response = {

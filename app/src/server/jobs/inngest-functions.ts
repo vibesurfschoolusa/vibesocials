@@ -4,6 +4,7 @@ import { inngest } from "@/lib/inngest";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { getPlatformClient } from "@/server/platforms";
+import { withTransientRetries } from "@/server/platforms/transientRetry";
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
 import {
   RETENTION_DAYS,
@@ -142,7 +143,15 @@ async function publishToPlatform(
       publishContext.youtubeMetadata = youtubeMetadata;
     }
 
-    const publishResult = await client.publishVideo(publishContext);
+    // Bounded in-step retry for provably-uncommitted transient failures
+    // (429/5xx/pre-response network errors). See transientRetry.ts for why
+    // timeouts and 4xx are deliberately excluded and why this must NOT be
+    // an Inngest-level retry (the function is retries: 0 to prevent
+    // double-posting). Covers the user-triggered retry flow too — it also
+    // funnels through publishToPlatform.
+    const publishResult = await withTransientRetries(() =>
+      client.publishVideo(publishContext),
+    );
 
     logger.info(`[Inngest] ${connection.platform} success`, {
       platform: connection.platform,
