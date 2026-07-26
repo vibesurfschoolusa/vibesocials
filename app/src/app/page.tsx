@@ -12,6 +12,7 @@ import { RecentActivity } from "@/components/dashboard/recent-activity";
 import { ConnectionHealth } from "@/components/dashboard/connection-health";
 import { GettingStarted } from "@/components/dashboard/getting-started";
 import { YouTubeMetricsSummary } from "@/components/dashboard/youtube-metrics-summary";
+import { PublishHealthCard } from "@/components/dashboard/publish-health-card";
 import { useConnections } from "@/hooks/useConnections";
 import { usePostJobs } from "@/hooks/usePostJobs";
 import {
@@ -134,6 +135,9 @@ function Dashboard() {
         </div>
         <div className="space-y-6">
           <ConnectionHealth {...connectionsState} />
+          {/* Renders only once this workspace has finished at least one
+              publish, so a new user never meets an empty "0%" card. */}
+          <PublishHealthCard />
         </div>
       </div>
     </div>
