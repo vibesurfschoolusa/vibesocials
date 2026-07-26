@@ -286,15 +286,39 @@ export function TikTokPostSettings({
         )}
       </div>
 
-      {/* Required Consent Declaration - REQUIRED by TikTok Guidelines */}
+      {/* Consent declaration — REQUIRED by TikTok's UX Guidelines.
+          The 2026-01 Direct Post audit was rejected partly because this was
+          plain text: the guideline requires the referenced policies to be
+          CLICKABLE links, and the sentence to name the Branded Content Policy
+          only when a commercial-content option is selected. */}
       <div className="border-t border-border pt-3">
-        <Alert variant="info" title="By posting, you agree to:">
-          <ul className="list-inside list-disc space-y-0.5">
-            <li>TikTok&apos;s Music Usage Confirmation</li>
-            {(metadata.brandedContent || metadata.brandOrganic) && (
-              <li>TikTok&apos;s Branded Content Policy</li>
-            )}
-          </ul>
+        <Alert variant="info">
+          By posting, you agree to{" "}
+          {metadata.brandedContent || metadata.brandOrganic ? (
+            <>
+              TikTok&apos;s{" "}
+              <a
+                href="https://www.tiktok.com/legal/page/global/bc-policy/en"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium underline underline-offset-2 hover:no-underline"
+              >
+                Branded Content Policy
+              </a>{" "}
+              and{" "}
+            </>
+          ) : (
+            <>TikTok&apos;s </>
+          )}
+          <a
+            href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium underline underline-offset-2 hover:no-underline"
+          >
+            Music Usage Confirmation
+          </a>
+          .
         </Alert>
       </div>
 
