@@ -105,34 +105,37 @@ export function PublishHealthCard() {
             <span className="text-xs text-muted-foreground">overall success</span>
           </div>
 
-          <dl className="space-y-2">
+          {/* Name and counts share a row; the bar spans the full width beneath.
+              Keeping all three on one line collapsed the bar to nothing in the
+              dashboard's narrow sidebar. */}
+          <dl className="space-y-3">
             {data.platforms.map((platform) => (
-              <div key={platform.platform} className="flex items-center gap-3">
-                <dt className="w-40 shrink-0 truncate text-sm text-foreground">
-                  {platformLabel(platform.platform)}
-                </dt>
-                <dd className="flex min-w-0 flex-1 items-center gap-2">
-                  <div
-                    className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted"
-                    role="img"
-                    aria-label={`${platformLabel(platform.platform)}: ${platform.succeeded} of ${platform.attempted} succeeded`}
-                  >
-                    <div
-                      className={cn(
-                        "h-full rounded-full",
-                        platform.successRate >= 95
-                          ? "bg-success"
-                          : platform.successRate >= 75
-                            ? "bg-warning"
-                            : "bg-destructive",
-                      )}
-                      style={{ width: `${platform.successRate}%` }}
-                    />
-                  </div>
-                  <span className="w-24 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+              <div key={platform.platform} className="space-y-1">
+                <div className="flex items-baseline justify-between gap-2">
+                  <dt className="min-w-0 truncate text-sm text-foreground">
+                    {platformLabel(platform.platform)}
+                  </dt>
+                  <dd className="shrink-0 text-xs tabular-nums text-muted-foreground">
                     {platform.succeeded}/{platform.attempted} · {platform.successRate}%
-                  </span>
-                </dd>
+                  </dd>
+                </div>
+                <div
+                  className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
+                  role="img"
+                  aria-label={`${platformLabel(platform.platform)}: ${platform.succeeded} of ${platform.attempted} succeeded`}
+                >
+                  <div
+                    className={cn(
+                      "h-full rounded-full",
+                      platform.successRate >= 95
+                        ? "bg-success"
+                        : platform.successRate >= 75
+                          ? "bg-warning"
+                          : "bg-destructive",
+                    )}
+                    style={{ width: `${platform.successRate}%` }}
+                  />
+                </div>
               </div>
             ))}
           </dl>
