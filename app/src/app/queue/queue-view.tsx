@@ -23,6 +23,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { MediaThumb } from "@/components/media-thumb";
+import { QueueCalendar } from "./queue-calendar";
 import { cn } from "@/lib/cn";
 import { platformLabel, TIKTOK_PRIVACY_LABELS } from "@/lib/platforms";
 import type { PostJobDTO, PostsResponse } from "@/lib/postsDto";
@@ -287,6 +288,9 @@ export function QueueView() {
   const [cancelTarget, setCancelTarget] = useState<PostJobDTO | null>(null);
   const [publishTarget, setPublishTarget] = useState<PostJobDTO | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<PostJobDTO | null>(null);
+  // List stays the default; the calendar is an alternate lens on the SAME
+  // fetched jobs. Deliberately not persisted (YAGNI).
+  const [view, setView] = useState<"list" | "calendar">("list");
 
   const load = useCallback(async () => {
     try {
@@ -353,6 +357,16 @@ export function QueueView() {
     setJobs((prev) => (prev ? prev.filter((j) => j.id !== id) : prev));
   }, []);
 
+  // Calendar drag-to-reschedule already PATCHed the server; mirror the change
+  // into local state (and re-sort) so both views agree without a refetch.
+  const applyReschedule = useCallback((id: string, scheduledFor: string) => {
+    setJobs((prev) =>
+      prev
+        ? sortQueue(prev.map((j) => (j.id === id ? { ...j, scheduledFor } : j)))
+        : prev,
+    );
+  }, []);
+
   // Cancel a scheduled post (ConfirmDialog onConfirm: throw to keep it open on
   // failure, per the dialog's contract).
   const confirmCancel = useCallback(async () => {
@@ -406,13 +420,43 @@ export function QueueView() {
             Your scheduled posts and saved drafts. Edit, publish, or cancel them any time.
           </p>
         </div>
-        <Link
-          href="/posts/new"
-          className={buttonVariants({ variant: "primary", className: "gap-2" })}
-        >
-          <PlusCircle aria-hidden className="h-4 w-4" />
-          Create post
-        </Link>
+        <div className="flex items-center gap-3">
+          {/* Same segmented-toggle pattern as the composer's "When to publish". */}
+          <div
+            role="group"
+            aria-label="Queue view"
+            className="inline-flex gap-0.5 rounded-[var(--radius)] border border-input p-0.5"
+          >
+            {(
+              [
+                ["list", "List"],
+                ["calendar", "Calendar"],
+              ] as const
+            ).map(([mode, label]) => (
+              <button
+                key={mode}
+                type="button"
+                aria-pressed={view === mode}
+                onClick={() => setView(mode)}
+                className={cn(
+                  "rounded-[calc(var(--radius)-0.125rem)] px-3 py-1.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                  view === mode
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <Link
+            href="/posts/new"
+            className={buttonVariants({ variant: "primary", className: "gap-2" })}
+          >
+            <PlusCircle aria-hidden className="h-4 w-4" />
+            Create post
+          </Link>
+        </div>
       </div>
 
       <div className="mt-8">
@@ -450,19 +494,29 @@ export function QueueView() {
           />
         ) : (
           <>
-            <div className="space-y-3">
-              {jobs.map((job) => (
-                <QueueCard
-                  key={job.id}
-                  job={job}
-                  showAttribution={(workspaceMemberCount ?? 0) > 1}
-                  onEdit={setEditTarget}
-                  onCancel={setCancelTarget}
-                  onPublish={setPublishTarget}
-                  onDelete={setDeleteTarget}
-                />
-              ))}
-            </div>
+            {view === "calendar" ? (
+              <QueueCalendar
+                jobs={jobs}
+                onEdit={setEditTarget}
+                onRescheduled={applyReschedule}
+              />
+            ) : (
+              <div className="space-y-3">
+                {jobs.map((job) => (
+                  <QueueCard
+                    key={job.id}
+                    job={job}
+                    showAttribution={(workspaceMemberCount ?? 0) > 1}
+                    onEdit={setEditTarget}
+                    onCancel={setCancelTarget}
+                    onPublish={setPublishTarget}
+                    onDelete={setDeleteTarget}
+                  />
+                ))}
+              </div>
+            )}
+            {/* Older pages may hold scheduled posts too — keep Load more in
+                BOTH views. */}
             {nextCursor !== null ? (
               <div className="mt-4 flex justify-center">
                 <Button variant="outline" size="sm" loading={loadingMore} onClick={loadMore}>
