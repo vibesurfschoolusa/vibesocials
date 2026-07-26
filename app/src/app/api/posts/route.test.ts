@@ -14,6 +14,7 @@ const {
   createPostJobOnlyMock,
   createPostJobForExistingMediaMock,
   postJobFindUniqueMock,
+  postJobUpdateMock,
   postJobResultFindManyMock,
   inngestSendMock,
 } = vi.hoisted(() => ({
@@ -22,6 +23,7 @@ const {
   createPostJobOnlyMock: vi.fn(),
   createPostJobForExistingMediaMock: vi.fn(),
   postJobFindUniqueMock: vi.fn(),
+  postJobUpdateMock: vi.fn(),
   postJobResultFindManyMock: vi.fn(),
   inngestSendMock: vi.fn(),
 }));
@@ -38,7 +40,7 @@ vi.mock("@/lib/rateLimit", () => ({
 
 vi.mock("@/lib/db", () => ({
   prisma: {
-    postJob: { findUnique: postJobFindUniqueMock },
+    postJob: { findUnique: postJobFindUniqueMock, update: postJobUpdateMock },
     postJobResult: { findMany: postJobResultFindManyMock },
   },
 }));
@@ -81,6 +83,8 @@ beforeEach(() => {
   postJobFindUniqueMock.mockReset();
   postJobResultFindManyMock.mockReset();
   inngestSendMock.mockReset();
+  postJobUpdateMock.mockReset();
+  postJobUpdateMock.mockResolvedValue({});
 
   getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
   checkRateLimitMock.mockResolvedValue({ allowed: true });
@@ -381,6 +385,92 @@ describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
     );
     expect(inngestSendMock).not.toHaveBeenCalled();
     expect(body.message).toBe("Post scheduled.");
+  });
+
+  describe("approval workflow", () => {
+    it("holds a member's scheduled post as a draft, preserving their time, and sends NO event", async () => {
+      getWorkspaceContextMock.mockResolvedValue(
+        makeWorkspaceContext({ role: "member", requireApproval: true }),
+      );
+
+      const response = await POST(
+        jsonRequest({
+          blobUrl: "https://test.public.blob.vercel-storage.com/x",
+          baseCaption: "hi",
+          scheduledFor: FUTURE,
+        }),
+      );
+      const body = (await response.json()) as { message?: string; awaitingApproval?: boolean };
+
+      expect(response.status).toBe(200);
+      // Created as a draft — approval, not the schedule, releases it.
+      expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ intent: "draft" }),
+      );
+      expect(inngestSendMock).not.toHaveBeenCalled();
+      // Submission stamped and the member's chosen time restored on the row.
+      expect(postJobUpdateMock).toHaveBeenCalledWith({
+        where: { id: "job-1" },
+        data: {
+          submittedForApprovalAt: expect.any(Date),
+          scheduledFor: new Date(FUTURE),
+        },
+      });
+      expect(body.awaitingApproval).toBe(true);
+      expect(body.message).toContain("approval");
+    });
+
+    it("holds a member's immediate post too", async () => {
+      getWorkspaceContextMock.mockResolvedValue(
+        makeWorkspaceContext({ role: "member", requireApproval: true }),
+      );
+
+      await POST(
+        jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }),
+      );
+
+      expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ intent: "draft" }),
+      );
+      expect(inngestSendMock).not.toHaveBeenCalled();
+      // No chosen time to restore — only the submission stamp.
+      expect(postJobUpdateMock).toHaveBeenCalledWith({
+        where: { id: "job-1" },
+        data: { submittedForApprovalAt: expect.any(Date) },
+      });
+    });
+
+    it("never holds an OWNER's post — owners are the approvers", async () => {
+      getWorkspaceContextMock.mockResolvedValue(
+        makeWorkspaceContext({ role: "owner", requireApproval: true }),
+      );
+
+      await POST(
+        jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }),
+      );
+
+      expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ intent: "immediate" }),
+      );
+      expect(inngestSendMock).toHaveBeenCalledTimes(1);
+      expect(postJobUpdateMock).not.toHaveBeenCalled();
+    });
+
+    it("leaves a member's post alone when the workspace hasn't enabled approval", async () => {
+      getWorkspaceContextMock.mockResolvedValue(
+        makeWorkspaceContext({ role: "member", requireApproval: false }),
+      );
+
+      await POST(
+        jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }),
+      );
+
+      expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ intent: "immediate" }),
+      );
+      expect(inngestSendMock).toHaveBeenCalledTimes(1);
+      expect(postJobUpdateMock).not.toHaveBeenCalled();
+    });
   });
 
   it("draft wins over a provided scheduledFor", async () => {

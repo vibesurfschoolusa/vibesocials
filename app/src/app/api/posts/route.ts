@@ -17,6 +17,7 @@ import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { isValidPerPlatformOverrides, validateScheduledFor, type PostJobIntent } from "@/lib/scheduling";
+import { shouldHoldForApproval } from "@/lib/approval";
 import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
 import type { PostsResponse } from "@/lib/postsDto";
 import {
@@ -481,8 +482,23 @@ export async function POST(request: Request) {
     scheduledForDate = validation.date;
   }
 
-  // Live publish only (drafts/schedules can be prepared before verify).
-  if (intent === "immediate" && !isEmailVerifiedForPublish(context.user)) {
+  // Approval workflow (2026-07-26): a MEMBER's post that would publish or
+  // schedule is held as a `draft` for an owner to approve. The chosen
+  // `scheduledFor` is PRESERVED on the row (re-applied below — the create
+  // helpers null it for the draft intent) so approving can honor the member's
+  // time (lib/approval.ts approvalOutcome).
+  const heldForApproval = shouldHoldForApproval({
+    role: context.role,
+    requireApproval: context.workspace.requireApproval,
+    intent,
+  });
+  const effectiveIntent: PostJobIntent = heldForApproval ? "draft" : intent;
+
+  // Live publish only (drafts/schedules can be prepared before verify). A held
+  // post publishes nothing yet, so it doesn't need a verified email — the
+  // owner's approval is what triggers the live fan-out, and that path
+  // re-checks.
+  if (effectiveIntent === "immediate" && !isEmailVerifiedForPublish(context.user)) {
     return NextResponse.json(
       { error: EMAIL_VERIFY_REQUIRED_MESSAGE, code: "EMAIL_VERIFY_REQUIRED" },
       { status: 403 },
@@ -511,7 +527,7 @@ export async function POST(request: Request) {
         baseCaption: baseCaptionRaw,
         perPlatformOverrides,
         location,
-        intent,
+        intent: effectiveIntent,
         scheduledFor: scheduledForDate,
         // Persisted onto the job for scheduled/draft (review B1); ignored for
         // immediate (which carries them in the event below).
@@ -547,7 +563,7 @@ export async function POST(request: Request) {
         baseCaption: baseCaptionRaw,
         location,
         perPlatformOverrides,
-        intent,
+        intent: effectiveIntent,
         scheduledFor: scheduledForDate,
         // Persisted onto the job for scheduled/draft (review B1); ignored for
         // immediate (which carries them in the event below).
@@ -567,7 +583,22 @@ export async function POST(request: Request) {
     // run-time-result-creation fix), and a draft is promoted via the publish
     // endpoint. The event shape is identical to the reuse path; the publisher
     // resolves media by id, so it needs no changes.
-    if (intent === "immediate") {
+    // Approval workflow: stamp the submission and restore the member's chosen
+    // time. The create helpers write `scheduledFor: null` for a draft intent,
+    // so it is re-applied here rather than threading an extra param through
+    // both helpers (and their tests).
+    if (heldForApproval) {
+      await prisma.postJob.update({
+        where: { id: postJobId },
+        data: {
+          submittedForApprovalAt: new Date(),
+          ...(scheduledForDate ? { scheduledFor: scheduledForDate } : {}),
+        },
+      });
+    }
+
+    // A held post sends NO publish event — the owner's approval does that.
+    if (effectiveIntent === "immediate") {
       await inngest.send({
         name: "post/publish.requested",
         data: {
@@ -591,8 +622,9 @@ export async function POST(request: Request) {
       where: { postJobId },
     });
 
-    const message =
-      intent === "draft"
+    const message = heldForApproval
+      ? "Sent for approval — an owner will review it before it publishes."
+      : intent === "draft"
         ? "Draft saved."
         : intent === "scheduled"
           ? "Post scheduled."
@@ -609,6 +641,9 @@ export async function POST(request: Request) {
       postJob: postJob ? toPostJobDetailDto(postJob) : null,
       results: postJob ? results.map(toPostJobResultSummaryDto) : [],
       message,
+      // Approval workflow: lets the composer tell the member their post is
+      // queued for review rather than published/scheduled.
+      ...(heldForApproval ? { awaitingApproval: true } : {}),
     });
   } catch (error: unknown) {
     if (error instanceof Error && error.message === "NO_CONNECTIONS") {

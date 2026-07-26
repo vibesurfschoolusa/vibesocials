@@ -13,7 +13,10 @@ export const ACTIVE_WORKSPACE_COOKIE = "vs_active_workspace";
 
 export interface WorkspaceContext {
   user: User;
-  workspace: Pick<Workspace, "id" | "name" | "companyWebsite" | "defaultHashtags">;
+  workspace: Pick<
+    Workspace,
+    "id" | "name" | "companyWebsite" | "defaultHashtags" | "requireApproval"
+  >;
   role: WorkspaceRole;
   /** Total members in the active workspace — gates attribution display (design §7). */
   memberCount: number;
@@ -255,6 +258,9 @@ export async function getWorkspaceContext(
       name: active.workspace.name,
       companyWebsite: active.workspace.companyWebsite,
       defaultHashtags: active.workspace.defaultHashtags,
+      // Approval workflow: POST /api/posts reads this to decide whether a
+      // member's post is held for owner approval (lib/approval.ts).
+      requireApproval: active.workspace.requireApproval,
     },
     role: active.role,
     memberCount,

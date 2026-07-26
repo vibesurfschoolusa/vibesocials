@@ -40,6 +40,7 @@ export default async function SettingsPage({
     companyWebsite: context.workspace.companyWebsite,
     defaultHashtags: context.workspace.defaultHashtags,
     notifyOnPostComplete: context.user.notifyOnPostComplete,
+    requireApproval: context.workspace.requireApproval,
   };
 
   // Fetch the WORKSPACE's connections (shared by every member — design §2),

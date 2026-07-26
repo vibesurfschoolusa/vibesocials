@@ -248,6 +248,48 @@ describe("parseSettingsInput", () => {
   });
 });
 
+describe("requireApproval (approval workflow)", () => {
+  it("accepts a boolean and normalizes null to off", () => {
+    expect(parseSettingsInput({ requireApproval: true })).toEqual({
+      ok: true,
+      data: { requireApproval: true },
+    });
+    expect(parseSettingsInput({ requireApproval: null })).toEqual({
+      ok: true,
+      data: { requireApproval: false },
+    });
+  });
+
+  it("rejects a non-boolean", () => {
+    expect(parseSettingsInput({ requireApproval: "yes" })).toEqual({
+      ok: false,
+      error: "requireApproval must be a boolean",
+    });
+  });
+
+  it("403s a member trying to turn it on, without writing anything", async () => {
+    getWorkspaceContextMock.mockResolvedValue(MEMBER_CONTEXT);
+
+    const response = await POST(jsonRequest({ requireApproval: true }));
+
+    expect(response.status).toBe(403);
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("lets an owner turn it on", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    workspaceUpdateMock.mockResolvedValue({});
+
+    const response = await POST(jsonRequest({ requireApproval: true }));
+
+    expect(response.status).toBe(200);
+    expect(workspaceUpdateMock).toHaveBeenCalledWith({
+      where: { id: "ws-1" },
+      data: { requireApproval: true },
+    });
+  });
+});
+
 describe("touchesWorkspaceFooter", () => {
   it("is false when neither footer key is present", () => {
     expect(touchesWorkspaceFooter({})).toBe(false);

@@ -30,4 +30,11 @@ export interface UserSettings {
    * Still a genuine per-user field, sourced from the User row.
    */
   notifyOnPostComplete: boolean;
+  /**
+   * Approval workflow (2026-07-26) — when true, MEMBERS' posts are held for an
+   * owner to approve before anything publishes. Workspace-level and owner-only
+   * to change (same class as the footer fields). Sourced from the active
+   * Workspace.
+   */
+  requireApproval: boolean;
 }
