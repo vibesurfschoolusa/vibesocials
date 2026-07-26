@@ -40,6 +40,7 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
   const [notifyOnPostComplete, setNotifyOnPostComplete] = useState(
     settings.notifyOnPostComplete,
   );
+  const [requireApproval, setRequireApproval] = useState(settings.requireApproval);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -55,6 +56,9 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
         ? {
             companyWebsite: companyWebsite.trim(),
             defaultHashtags: defaultHashtags.trim(),
+            // Owner-only, same class as the footer fields — a member's body
+            // must omit it entirely or the route 403s the whole request.
+            requireApproval,
             notifyOnPostComplete,
           }
         : { notifyOnPostComplete };
@@ -146,6 +150,30 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
             {previewCaption()}
           </div>
         </div>
+
+        {/* Approval workflow (2026-07-26): owner-only workspace policy. Hidden
+            from members entirely — they can't change it, and the route 403s a
+            body that even mentions it. */}
+        {isOwner ? (
+          <div className="flex flex-col gap-1.5 border-t border-border pt-6">
+            <h3 className="text-sm font-medium text-foreground">Approvals</h3>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={requireApproval}
+                onChange={(e) => setRequireApproval(e.target.checked)}
+                className={checkboxClass}
+              />
+              <span className="text-sm text-foreground">
+                Require my approval for members&apos; posts
+              </span>
+            </label>
+            <p className="text-sm text-muted-foreground">
+              Posts created by members wait in the Queue for you to approve before publishing.
+              Your own posts are unaffected.
+            </p>
+          </div>
+        ) : null}
 
         {/* Roadmap Phase 6 / Team Workspaces Task 7: post-outcome email
             preference. Own-user field, open to any member regardless of

@@ -407,6 +407,9 @@ describe("getWorkspaceContext", () => {
         name: "Test workspace",
         companyWebsite: null,
         defaultHashtags: null,
+        // Approval workflow: projected so POST /api/posts can decide whether
+        // to hold a member's post.
+        requireApproval: false,
       },
       role: "owner",
       memberCount: 1,

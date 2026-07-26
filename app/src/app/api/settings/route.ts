@@ -30,6 +30,11 @@ export interface ParsedSettingsInput {
   companyWebsite?: string | null;
   defaultHashtags?: string | null;
   notifyOnPostComplete?: boolean;
+  /**
+   * Approval workflow (2026-07-26). Workspace-level and OWNER-ONLY, same class
+   * as the footer fields — it governs whether members' posts publish directly.
+   */
+  requireApproval?: boolean;
 }
 
 export type SettingsValidationResult =
@@ -152,6 +157,15 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
     data.notifyOnPostComplete = result.value;
   }
 
+  if (hasKey(record, "requireApproval")) {
+    // An explicit `null` normalizes to off — matching the schema default, same
+    // convention validateBoolean uses for notifyOnPostComplete.
+    if (record.requireApproval !== null && typeof record.requireApproval !== "boolean") {
+      return { ok: false, error: "requireApproval must be a boolean" };
+    }
+    data.requireApproval = record.requireApproval === true;
+  }
+
   return { ok: true, data };
 }
 
@@ -162,6 +176,15 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
  */
 export function touchesWorkspaceFooter(data: ParsedSettingsInput): boolean {
   return "companyWebsite" in data || "defaultHashtags" in data;
+}
+
+/**
+ * True when the body touches ANY workspace-level, owner-only field: the caption
+ * footer (above) or the approval flag. This is the gate for both the 403 and the
+ * `workspace.update` branch in `POST`.
+ */
+export function touchesOwnerOnlyWorkspaceFields(data: ParsedSettingsInput): boolean {
+  return touchesWorkspaceFooter(data) || "requireApproval" in data;
 }
 
 export async function POST(request: Request) {
@@ -187,7 +210,7 @@ export async function POST(request: Request) {
   }
 
   const { data } = validation;
-  const updatesFooter = touchesWorkspaceFooter(data);
+  const updatesWorkspace = touchesOwnerOnlyWorkspaceFields(data);
 
   // Team Workspaces (Task 6, design §4): the caption footer is workspace
   // (brand) level and owner-only to change. A member request that touches
@@ -195,19 +218,25 @@ export async function POST(request: Request) {
   // sent in the same body — simplest fail-closed behavior. Task 7 splits the
   // settings form so members never see footer inputs at all; until then, a
   // member submitting the (still-combined) form gets this 403.
-  if (updatesFooter && context.role !== "owner") {
+  if (updatesWorkspace && context.role !== "owner") {
     return NextResponse.json({ error: OWNER_ONLY_FOOTER_ERROR }, { status: 403 });
   }
 
   try {
-    if (updatesFooter) {
-      const workspaceData: { companyWebsite?: string | null; defaultHashtags?: string | null } =
-        {};
+    if (updatesWorkspace) {
+      const workspaceData: {
+        companyWebsite?: string | null;
+        defaultHashtags?: string | null;
+        requireApproval?: boolean;
+      } = {};
       if ("companyWebsite" in data) {
         workspaceData.companyWebsite = data.companyWebsite;
       }
       if ("defaultHashtags" in data) {
         workspaceData.defaultHashtags = data.defaultHashtags;
+      }
+      if ("requireApproval" in data) {
+        workspaceData.requireApproval = data.requireApproval;
       }
 
       await prisma.workspace.update({
