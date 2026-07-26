@@ -10,6 +10,18 @@ const nextConfig: NextConfig = {
       bodySizeLimit: '50mb',
     },
   },
+  // Auth-path aliases people actually type. Without these, an anonymous
+  // visitor at /signup was middleware-bounced to /login?callbackUrl=%2Fsignup
+  // — a login form in response to trying to sign up, and a 404 after logging
+  // in. Redirects run before middleware, so these never hit that path.
+  async redirects() {
+    return [
+      { source: "/signup", destination: "/register", permanent: true },
+      { source: "/sign-up", destination: "/register", permanent: true },
+      { source: "/signin", destination: "/login", permanent: true },
+      { source: "/sign-in", destination: "/login", permanent: true },
+    ];
+  },
 };
 
 // Health track H1 — Sentry build wrapper (source-map upload + build-time
