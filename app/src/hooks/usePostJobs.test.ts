@@ -30,6 +30,7 @@ function job(partial: Partial<PostJobDTO> = {}): PostJobDTO {
     // Team Workspaces (Task 4) — irrelevant to hasWorkInFlight; a fixed
     // stand-in like every other field here.
     createdBy: null,
+    approvalState: "none" as const,
     ...partial,
   };
 }

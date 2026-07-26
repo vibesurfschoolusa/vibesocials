@@ -5,7 +5,10 @@ import type {
   PostJobResultStatus,
   PostJobStatus,
   Prisma,
+  WorkspaceRole,
 } from "@prisma/client";
+
+import type { ApprovalState } from "./approval";
 
 /**
  * Display-safe projection of the PostJob / PostJobResult records surfaced by
@@ -94,6 +97,14 @@ export interface PostJobDTO {
    * `PostsResponse.workspaceMemberCount`).
    */
   createdBy: { name: string } | null;
+  /**
+   * Approval workflow (2026-07-26) — derived from the job's
+   * submittedForApprovalAt/approvedAt/status (see lib/approval.ts
+   * deriveApprovalState). `"none"` for every post created outside the approval
+   * flow, so existing UI is unaffected; the Queue renders the
+   * awaiting-approval section from `"pending"`.
+   */
+  approvalState: ApprovalState;
 }
 
 /** Response body of `GET /api/posts`. */
@@ -106,6 +117,12 @@ export interface PostsResponse {
    * (design doc §7), so a solo workspace's activity feed looks unchanged.
    */
   workspaceMemberCount: number;
+  /**
+   * Approval workflow — the CALLER's role in the active workspace, so the Queue
+   * knows whether to render Approve/Reject controls (owners) or a read-only
+   * "waiting for approval" badge (members).
+   */
+  workspaceRole: WorkspaceRole;
   /**
    * Keyset pagination cursor for the NEXT (older) page (activity pagination).
    * An opaque base64url token encoding the last returned job's (createdAt, id)

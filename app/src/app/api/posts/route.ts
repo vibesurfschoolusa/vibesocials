@@ -17,7 +17,7 @@ import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { isValidPerPlatformOverrides, validateScheduledFor, type PostJobIntent } from "@/lib/scheduling";
-import { shouldHoldForApproval } from "@/lib/approval";
+import { deriveApprovalState, shouldHoldForApproval } from "@/lib/approval";
 import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
 import type { PostsResponse } from "@/lib/postsDto";
 import {
@@ -106,6 +106,9 @@ export async function GET(request: Request) {
         createdAt: true,
         scheduledFor: true,
         baseCaption: true,
+        // Approval workflow — feeds the derived `approvalState` DTO field.
+        submittedForApprovalAt: true,
+        approvedAt: true,
         mediaItem: { select: { baseCaption: true, storageLocation: true, mimeType: true } },
         // Task 8 — compose-time publish snapshot (Task 7's `publishMetadata`),
         // surfaced read-only via the `publish` DTO field below.
@@ -181,6 +184,9 @@ export async function GET(request: Request) {
 
     const payload: PostsResponse = {
       workspaceMemberCount: context.memberCount,
+      // Approval workflow — lets the Queue decide between Approve/Reject
+      // controls (owner) and a read-only awaiting badge (member).
+      workspaceRole: context.role,
       nextCursor,
       jobs: jobs.map((job) => {
         // Task 8 — the raw JSON snapshot narrowed to the display fields the
@@ -197,6 +203,12 @@ export async function GET(request: Request) {
           status: job.status,
           createdAt: job.createdAt.toISOString(),
           scheduledFor: job.scheduledFor?.toISOString() ?? null,
+          // Approval workflow — derived, never a stored enum (lib/approval.ts).
+          approvalState: deriveApprovalState({
+            submittedForApprovalAt: job.submittedForApprovalAt,
+            approvedAt: job.approvedAt,
+            status: job.status,
+          }),
           // Scheduled/draft jobs snapshot their caption on the job itself so
           // editing them never mutates shared reused media; fall back to the
           // media item's caption for immediate/older jobs.
