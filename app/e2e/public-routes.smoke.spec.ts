@@ -31,6 +31,9 @@ const PUBLIC_ROUTES: PublicRoute[] = [
   },
   { path: "/privacy", heading: "Privacy Policy" },
   { path: "/terms", heading: "Terms of Service" },
+  // Platform app reviews (Meta especially) require a publicly reachable data
+  // deletion URL — if this ever stops being public, a review fails.
+  { path: "/data-deletion", heading: "Delete your data" },
 ];
 
 for (const route of PUBLIC_ROUTES) {
