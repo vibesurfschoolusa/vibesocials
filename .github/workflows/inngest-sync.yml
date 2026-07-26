@@ -1,0 +1,39 @@
+# Re-register the app's Inngest functions after every successful Production
+# deploy. Vercel's Git integration deploys on push to main, but nothing syncs
+# Inngest afterward: Inngest Cloud keeps serving the function list from the
+# LAST manual sync, so a PR that adds or reschedules a function silently never
+# takes effect (found 2026-07-25: stalePostJobSweep deployed but its cron never
+# fired until a manual PUT). The PUT is safe to expose publicly — it only asks
+# the app to re-register itself with Inngest using its own signing key, and it
+# is idempotent.
+name: Inngest sync
+
+on:
+  deployment_status:
+
+permissions: {}
+
+jobs:
+  sync:
+    if: >-
+      github.event.deployment_status.state == 'success' &&
+      github.event.deployment.environment == 'Production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Register functions with Inngest
+        run: |
+          url="https://vibesocials.wtf/api/inngest"
+          for attempt in 1 2 3 4 5; do
+            body=$(curl -sS -X PUT --max-time 30 -w '\n%{http_code}' "$url") && {
+              code=$(echo "$body" | tail -n1)
+              payload=$(echo "$body" | sed '$d')
+              echo "attempt $attempt: HTTP $code $payload"
+              if [ "$code" = "200" ] && echo "$payload" | grep -q "Successfully registered"; then
+                exit 0
+              fi
+            }
+            sleep 10
+          done
+          echo "Inngest sync failed after 5 attempts" >&2
+          exit 1
