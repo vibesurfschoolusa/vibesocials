@@ -44,10 +44,12 @@ export async function GET(_request: NextRequest, context: PostJobRouteContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Preserve the existing synchronous params access (see PlatformRouteContext
-  // in connections/[platform]); the union type keeps the handler signature
-  // assignable to Next's generated route type.
-  const { postJobId } = context.params as { postJobId: string };
+  // Next 16 passes `params` as a promise — it MUST be awaited. Reading it
+  // synchronously yielded `postJobId: undefined`, and Prisma treats an
+  // undefined WHERE field as "unfiltered", so every request silently operated
+  // on the FIRST job in the workspace. Same pattern as every sibling route
+  // (cancel/publish/retry/media).
+  const { postJobId } = await Promise.resolve(context.params);
 
   // Team Workspaces (Task 4): any member of the job's workspace, not just its
   // creator — see the permission matrix (design doc §1). A job in a
@@ -101,7 +103,7 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
   const limited = await enforceMutateRateLimit(workspaceContext.user.id);
   if (limited) return limited;
 
-  const { postJobId } = context.params as { postJobId: string };
+  const { postJobId } = await Promise.resolve(context.params);
 
   let body: PatchBody;
   try {
@@ -226,7 +228,7 @@ export async function DELETE(_request: NextRequest, context: PostJobRouteContext
   const limited = await enforceMutateRateLimit(workspaceContext.user.id);
   if (limited) return limited;
 
-  const { postJobId } = context.params as { postJobId: string };
+  const { postJobId } = await Promise.resolve(context.params);
 
   // Team Workspaces (Task 4): any member of the job's workspace, not just its
   // creator (design §1).

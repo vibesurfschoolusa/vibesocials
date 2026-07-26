@@ -39,8 +39,13 @@ import { PATCH, DELETE, GET } from "./route";
 const FUTURE = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
 function ctx(postJobId: string) {
-  // route.ts reads context.params synchronously (cast, not awaited).
-  return { params: { postJobId } };
+  // Next 16 passes `params` as a PROMISE. Resolving it is the handler's job
+  // (`await Promise.resolve(context.params)` — the pattern every sibling route
+  // uses). This fixture MUST be a promise: with a plain object, a handler that
+  // forgets to await still reads the id fine, so the tests pass while
+  // production sends `id: undefined` to Prisma — which silently matches the
+  // FIRST job in the workspace instead of the requested one.
+  return { params: Promise.resolve({ postJobId }) };
 }
 function req(body: unknown, throwOnJson = false): NextRequest {
   return {
