@@ -56,28 +56,53 @@ function formatTimestamp(iso: string): string {
   });
 }
 
-/** Scheduled posts soonest-first (next up on top), then drafts newest-first. */
+/**
+ * Posts awaiting approval first (they block someone else's work — oldest
+ * submission on top), then scheduled posts soonest-first (next up), then drafts
+ * newest-first.
+ */
 function sortQueue(jobs: PostJobDTO[]): PostJobDTO[] {
-  const scheduled = jobs
+  const pendingApproval = jobs
+    .filter((j) => j.approvalState === "pending")
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  const rest = jobs.filter((j) => j.approvalState !== "pending");
+  const scheduled = rest
     .filter((j) => j.status === "scheduled")
     .sort((a, b) => (a.scheduledFor ?? "").localeCompare(b.scheduledFor ?? ""));
-  const drafts = jobs
+  const drafts = rest
     .filter((j) => j.status === "draft")
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  return [...scheduled, ...drafts];
+  return [...pendingApproval, ...scheduled, ...drafts];
 }
 
 interface QueueCardProps {
   job: PostJobDTO;
   /** Team Workspaces (Task 7, design §7) — show `by {createdBy.name}` next to the timestamp. */
   showAttribution: boolean;
+  /** Approval workflow — only an owner gets Approve/Reject controls. */
+  isOwner: boolean;
   onEdit: (job: PostJobDTO) => void;
   onCancel: (job: PostJobDTO) => void;
   onPublish: (job: PostJobDTO) => void;
   onDelete: (job: PostJobDTO) => void;
+  /** Approval workflow — decide a pending submission (owners only). */
+  onDecide: (job: PostJobDTO, decision: "approve" | "reject") => void;
+  /** Approval workflow — a decision is in flight for this job. */
+  deciding: boolean;
 }
 
-function QueueCard({ job, showAttribution, onEdit, onCancel, onPublish, onDelete }: QueueCardProps) {
+function QueueCard({
+  job,
+  showAttribution,
+  isOwner,
+  onEdit,
+  onCancel,
+  onPublish,
+  onDelete,
+  onDecide,
+  deciding,
+}: QueueCardProps) {
+  const awaitingApproval = job.approvalState === "pending";
   const meta =
     job.status === "scheduled"
       ? QUEUE_STATUS_META.scheduled
@@ -113,9 +138,50 @@ function QueueCard({ job, showAttribution, onEdit, onCancel, onPublish, onDelete
             {job.publish?.tiktokPrivacy ? ` · TikTok: ${TIKTOK_PRIVACY_LABELS[job.publish.tiktokPrivacy] ?? job.publish.tiktokPrivacy}` : ""}
           </p>
         </div>
-        <Badge variant={meta.variant}>{meta.label}</Badge>
+        <Badge variant={awaitingApproval ? "warning" : meta.variant}>
+          {awaitingApproval ? "Awaiting approval" : meta.label}
+        </Badge>
       </div>
 
+      {/* Approval workflow: a pending submission gets its own action row.
+          Owners decide; the member who submitted just sees where it stands.
+          The normal Edit/Publish/Delete row is suppressed so nobody can
+          side-step review by publishing the draft directly. */}
+      {awaitingApproval ? (
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          {isOwner ? (
+            <>
+              <Button
+                size="sm"
+                loading={deciding}
+                aria-label={`Approve "${title}"`}
+                onClick={() => onDecide(job, "approve")}
+              >
+                Approve
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-muted-foreground hover:text-destructive"
+                disabled={deciding}
+                aria-label={`Reject "${title}"`}
+                onClick={() => onDecide(job, "reject")}
+              >
+                Reject
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                {job.scheduledFor
+                  ? "Approving keeps its scheduled time."
+                  : "Approving publishes it now."}
+              </span>
+            </>
+          ) : (
+            <span className="text-xs text-muted-foreground">
+              Waiting for an owner to approve. It won&apos;t publish until then.
+            </span>
+          )}
+        </div>
+      ) : (
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <Button size="sm" variant="outline" aria-label={`Edit "${title}"`} onClick={() => onEdit(job)}>
           Edit
@@ -139,6 +205,7 @@ function QueueCard({ job, showAttribution, onEdit, onCancel, onPublish, onDelete
           </Button>
         )}
       </div>
+      )}
     </Card>
   );
 }
@@ -276,6 +343,9 @@ export function QueueView() {
   // usePostJobs (its own status filter), so it tracks
   // PostsResponse.workspaceMemberCount itself to gate QueueCard attribution.
   const [workspaceMemberCount, setWorkspaceMemberCount] = useState<number | null>(null);
+  // Approval workflow — the caller's role decides whether Approve/Reject render.
+  const [workspaceRole, setWorkspaceRole] = useState<"owner" | "member" | null>(null);
+  const [decidingId, setDecidingId] = useState<string | null>(null);
   // Activity pagination (Task C2) — the Queue fetches independently (its own
   // ?status= filter), so it tracks the cursor locally rather than via
   // usePostJobs. nextCursor is the next (older) page's ?cursor= token from the
@@ -307,6 +377,7 @@ export function QueueView() {
       setJobs(sortQueue(data.jobs));
       setNextCursor(data.nextCursor);
       setWorkspaceMemberCount(data.workspaceMemberCount);
+      setWorkspaceRole(data.workspaceRole);
     } catch {
       setError("Failed to load your queue.");
     } finally {
@@ -356,6 +427,48 @@ export function QueueView() {
   const removeJob = useCallback((id: string) => {
     setJobs((prev) => (prev ? prev.filter((j) => j.id !== id) : prev));
   }, []);
+
+  // Approval workflow — owner decides a pending submission. On approve the job
+  // leaves the awaiting state (scheduled or publishing), on reject it's
+  // cancelled; either way it drops out of this scheduled/draft-filtered list.
+  const handleDecide = useCallback(
+    async (job: PostJobDTO, decision: "approve" | "reject") => {
+      if (decidingId) return;
+      setDecidingId(job.id);
+      try {
+        const response = await fetch(`/api/posts/${job.id}/approval`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ decision }),
+        });
+        const data = (await response.json().catch(() => null)) as
+          | { error?: string; status?: string }
+          | null;
+        if (!response.ok) {
+          toast.error(
+            data?.error ??
+              (decision === "approve"
+                ? "Couldn't approve this post."
+                : "Couldn't reject this post."),
+          );
+          return;
+        }
+        removeJob(job.id);
+        toast.success(
+          decision === "reject"
+            ? "Post rejected — the author has been notified."
+            : data?.status === "scheduled"
+              ? "Approved — it will publish at its scheduled time."
+              : "Approved — publishing now.",
+        );
+      } catch {
+        toast.error("Couldn't save that decision.");
+      } finally {
+        setDecidingId(null);
+      }
+    },
+    [decidingId, removeJob, toast],
+  );
 
   // Calendar drag-to-reschedule already PATCHed the server; mirror the change
   // into local state (and re-sort) so both views agree without a refetch.
@@ -507,10 +620,13 @@ export function QueueView() {
                     key={job.id}
                     job={job}
                     showAttribution={(workspaceMemberCount ?? 0) > 1}
+                    isOwner={workspaceRole === "owner"}
                     onEdit={setEditTarget}
                     onCancel={setCancelTarget}
                     onPublish={setPublishTarget}
                     onDelete={setDeleteTarget}
+                    onDecide={handleDecide}
+                    deciding={decidingId === job.id}
                   />
                 ))}
               </div>
