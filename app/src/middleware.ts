@@ -62,6 +62,7 @@ function isPublicPath(pathname: string): boolean {
     "/verify-email",
     "/privacy",
     "/terms",
+    "/data-deletion",
   ];
   return prefixes.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
