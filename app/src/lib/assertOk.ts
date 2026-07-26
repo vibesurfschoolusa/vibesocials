@@ -42,7 +42,11 @@ export async function assertOk(
 
   const error = new Error(`${prefix} (status ${res.status})`) as Error & {
     code: string;
+    status: number;
   };
   error.code = code;
+  // Numeric HTTP status for retry classification (server/platforms/
+  // transientRetry.ts): 429/5xx are retryable, other statuses are not.
+  error.status = res.status;
   throw error;
 }
