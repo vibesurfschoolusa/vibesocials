@@ -13,6 +13,7 @@ import {
   groupJobsByDay,
   localDayKey,
   retargetSchedule,
+  summarizeOffCalendar,
 } from "@/lib/queueCalendar";
 import { SCHEDULE_BUFFER_MS, localTimeZoneLabel } from "@/lib/scheduling";
 
@@ -59,7 +60,9 @@ export function QueueCalendar({ jobs, onEdit, onRescheduled }: QueueCalendarProp
   const [savingId, setSavingId] = useState<string | null>(null);
 
   const scheduled = useMemo(() => jobs.filter((j) => j.status === "scheduled"), [jobs]);
-  const draftCount = jobs.length - scheduled.length;
+  // Posts the grid can't plot, split by why — a post awaiting approval often
+  // HAS a proposed time, so it must not be described as "without a date".
+  const offCalendar = useMemo(() => summarizeOffCalendar(jobs), [jobs]);
   const weeks = useMemo(
     () => buildCalendarMonth(monthCursor.year, monthCursor.monthIndex),
     [monthCursor],
@@ -145,9 +148,19 @@ export function QueueCalendar({ jobs, onEdit, onRescheduled }: QueueCalendarProp
         </div>
       </div>
 
-      {draftCount > 0 ? (
+      {offCalendar.awaitingApproval > 0 || offCalendar.drafts > 0 ? (
         <p className="text-xs text-muted-foreground">
-          {draftCount} draft{draftCount === 1 ? "" : "s"} without a date — see List view.
+          {[
+            offCalendar.awaitingApproval > 0
+              ? `${offCalendar.awaitingApproval} awaiting approval`
+              : null,
+            offCalendar.drafts > 0
+              ? `${offCalendar.drafts} draft${offCalendar.drafts === 1 ? "" : "s"} without a date`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}{" "}
+          — see List view.
         </p>
       ) : null}
 

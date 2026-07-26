@@ -5,6 +5,7 @@ import {
   groupJobsByDay,
   localDayKey,
   retargetSchedule,
+  summarizeOffCalendar,
 } from "./queueCalendar";
 
 // All dates below are constructed from LOCAL components so the tests are
@@ -50,6 +51,29 @@ describe("groupJobsByDay", () => {
     expect(grouped.get("2026-07-15")?.map((j) => (j as { id: string }).id)).toEqual(["a", "b"]);
     expect(grouped.get("2026-07-16")).toHaveLength(1);
     expect([...grouped.values()].flat()).toHaveLength(3);
+  });
+});
+
+describe("summarizeOffCalendar", () => {
+  it("counts posts awaiting approval separately from dateless drafts", () => {
+    const jobs = [
+      { status: "scheduled", approvalState: "none", scheduledFor: "2026-08-01T10:00:00Z" },
+      // Held for approval — it HAS a proposed time, so calling it "without a
+      // date" would be wrong.
+      { status: "draft", approvalState: "pending", scheduledFor: "2026-08-12T09:30:00Z" },
+      { status: "draft", approvalState: "pending", scheduledFor: null },
+      { status: "draft", approvalState: "none", scheduledFor: null },
+    ] as const;
+
+    expect(summarizeOffCalendar([...jobs])).toEqual({ awaitingApproval: 2, drafts: 1 });
+  });
+
+  it("counts nothing when every post is on the calendar", () => {
+    expect(
+      summarizeOffCalendar([
+        { status: "scheduled", approvalState: "none", scheduledFor: "2026-08-01T10:00:00Z" },
+      ]),
+    ).toEqual({ awaitingApproval: 0, drafts: 0 });
   });
 });
 
