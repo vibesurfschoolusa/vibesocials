@@ -26,6 +26,10 @@ import {
   staleCutoff,
 } from "@/server/jobs/stalePostJobs";
 import { deliverPostOutcomeNotification } from "@/server/notifications/postOutcomeEmail";
+import { buildReconnectEmail } from "@/server/notifications/reconnectEmail";
+import { sendEmail } from "@/server/notifications/email";
+import { isProactiveRefreshEligible } from "@/server/jobs/connectionHealthSweep";
+import { platformLabel } from "@/lib/platforms";
 import { refreshGoogleToken } from "@/server/platforms/googleTokens";
 import { fetchYouTubeVideoStatistics, hasAnyStatistic } from "@/server/platforms/youtubeMetrics";
 import { Prisma } from "@prisma/client";
@@ -1111,6 +1115,93 @@ export const stalePostJobSweep = inngest.createFunction(
   },
 );
 
+/**
+ * Daily connection-health sweep (publish-reliability plan, Task 2).
+ *
+ * Proactively refreshes every healthy connection whose access token is
+ * expired or expiring within 24h (isProactiveRefreshEligible). Two effects:
+ * (1) provider refresh-tokens stay alive (Google revokes grants unused for
+ * ~6 months — exactly how the prod GBP connection died on 2026-07-26), and
+ * (2) a dead grant is discovered TODAY, flips `needsReconnect` (the platform
+ * clients do that themselves via markConnectionNeedsReconnect before
+ * throwing), and every workspace OWNER gets ONE reconnect email — instead of
+ * the user discovering it when a scheduled post fails.
+ *
+ * Email exactly-once: eligibility requires `needsReconnect === false`, so a
+ * connection that flips is skipped by every later sweep; a transient network
+ * failure during refresh leaves the flag false, sends nothing, and is simply
+ * retried tomorrow. Cron slot 04:45 UTC — cadence map: media-retention 03:00,
+ * scheduled-scanner every minute, youtube-metrics hourly :00,
+ * stale-post-sweep hourly :30.
+ *
+ * SEC: the step returns COUNTS only — never connection rows (tokens).
+ */
+export const connectionHealthSweep = inngest.createFunction(
+  { id: "connection-health-sweep", name: "Connection Health Sweep" },
+  { cron: "45 4 * * *" },
+  async ({ step }) => {
+    const summary = await step.run("refresh-expiring-connections", async () => {
+      const now = new Date();
+      const candidates = await prisma.socialConnection.findMany({
+        where: { needsReconnect: false, expiresAt: { not: null } },
+      });
+
+      let attempted = 0;
+      let refreshed = 0;
+      let flagged = 0;
+      let emailed = 0;
+
+      for (const connection of candidates) {
+        if (!isProactiveRefreshEligible(connection, now)) continue;
+        const client = getPlatformClient(connection.platform);
+        if (!client?.refreshToken) continue;
+
+        attempted++;
+        try {
+          await client.refreshToken(connection);
+          refreshed++;
+        } catch {
+          // Terminal failures already flipped needsReconnect inside the
+          // client (markConnectionNeedsReconnect); transient ones did not.
+          // Re-read the flag to distinguish — email ONLY on the flip.
+          const after = await prisma.socialConnection.findUnique({
+            where: { id: connection.id },
+            select: { needsReconnect: true, workspaceId: true },
+          });
+          if (!after?.needsReconnect) continue;
+          flagged++;
+
+          const [workspace, owners] = await Promise.all([
+            prisma.workspace.findUnique({
+              where: { id: after.workspaceId },
+              select: { name: true },
+            }),
+            prisma.workspaceMember.findMany({
+              where: { workspaceId: after.workspaceId, role: "owner" },
+              select: { user: { select: { email: true } } },
+            }),
+          ]);
+          const email = buildReconnectEmail({
+            platformLabel: platformLabel(connection.platform),
+            workspaceName: workspace?.name ?? "your workspace",
+            appBaseUrl: process.env.NEXTAUTH_URL || null,
+          });
+          for (const owner of owners) {
+            // sendEmail never throws (fail-safe transport).
+            await sendEmail({ to: owner.user.email, ...email });
+            emailed++;
+          }
+        }
+      }
+
+      return { candidates: candidates.length, attempted, refreshed, flagged, emailed };
+    });
+
+    logger.info("[Inngest] Connection health sweep complete", summary);
+    return summary;
+  },
+);
+
 export const inngestFunctions = [
   publishToAllPlatforms,
   mediaRetentionSweep,
@@ -1119,4 +1210,5 @@ export const inngestFunctions = [
   sendNotification,
   youtubePostMetricsSync,
   stalePostJobSweep,
+  connectionHealthSweep,
 ];
