@@ -109,6 +109,10 @@ model Workspace {
   name            String
   companyWebsite  String? // caption footer moves here (brand-level)
   defaultHashtags String?
+  // Approval workflow (2026-07-26). When true, a MEMBER's post that would
+  // publish or schedule is held as a `draft` + `submittedForApprovalAt` until
+  // an owner approves it. Owners' own posts are never held (they approve).
+  requireApproval Boolean  @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -262,6 +266,14 @@ model PostJob {
   // to each client's default and SILENTLY ESCALATE a user's YouTube "private"
   // to "unlisted". The due-scanner/publish-promote replays it into the event.
   publishMetadata      Json?
+  // Approval workflow (2026-07-26). Non-null = this draft is (or was) awaiting
+  // owner approval; `approvedAt`/`approvedByUserId` record the decision. A
+  // submitted-but-unapproved job that ends `cancelled` was REJECTED. Derived by
+  // lib/approval.ts deriveApprovalState() — deliberately NOT a new
+  // PostJobStatus (see the enum's comment above).
+  submittedForApprovalAt DateTime?
+  approvedAt             DateTime?
+  approvedByUserId       String?
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
 
@@ -282,6 +294,9 @@ model PostJob {
   // for the DESC direction, so no extra sort/filesort). Keep @@index([workspaceId])
   // above — other queries filter on workspaceId alone and don't need the sort key.
   @@index([workspaceId, createdAt, id])
+  // Approval workflow: the Queue's "awaiting approval" lookup filters on
+  // workspace + submittedForApprovalAt IS NOT NULL.
+  @@index([workspaceId, submittedForApprovalAt])
 }
 
 model PostJobResult {
