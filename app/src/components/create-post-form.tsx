@@ -24,6 +24,7 @@ import { useConnections } from "@/hooks/useConnections";
 import { generateBlobKey } from "@/lib/blobKey";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { cn } from "@/lib/cn";
+import { deriveComposerGate } from "@/lib/composerGate";
 import type { MediaItemDto } from "@/lib/mediaDto";
 import { PLATFORM_ORDER, platformLabel, TIKTOK_PRIVACY_LABELS } from "@/lib/platforms";
 import {
@@ -198,12 +199,11 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
 
   // Roadmap Phase 7 / Task 6 — single source of truth for connection state:
   // the same read-only `GET /api/connections` the dashboard's
-  // connection-health widget calls (via this shared hook). `connectionsResolved`
-  // distinguishes "still loading" from "loaded and empty" for the
-  // zero-connection gate below; TikTok/YouTube no longer run their own
-  // ad-hoc fetches to determine connectedness.
-  const { connections } = useConnections();
-  const connectionsResolved = connections !== null;
+  // connection-health widget calls (via this shared hook). `loading` feeds
+  // deriveComposerGate below, which distinguishes "still loading" from
+  // "loaded and empty" and from "failed"; TikTok/YouTube no longer run their
+  // own ad-hoc fetches to determine connectedness.
+  const { connections, loading: connectionsLoading } = useConnections();
   const hasTikTokConnection =
     connections?.some((c) => c.platform === "tiktok" && c.connected) ?? false;
   const hasYouTubeConnection =
@@ -710,13 +710,27 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
   // preview of the freshly attached file.
   const activeMediaUrl = reuseItem ? reuseItem.storageLocation : previewUrl;
 
+  // What to render while connections load, resolve, or fail — pure rule in
+  // lib/composerGate.ts. The `loading` branch exists because rendering the
+  // full form during the first fetch let the user attach a file (the blob
+  // upload even ran) that the zero-connection CTA below then silently
+  // discarded when the fetch resolved. Both early returns sit after every
+  // hook, so hook order is unaffected.
+  const composerGate = deriveComposerGate(connections, connectionsLoading);
+
+  if (composerGate === "loading") {
+    // Same placeholder the Suspense boundary below shows, so first paint and
+    // connections-loading are visually indistinguishable.
+    return <CreatePostFormSkeleton />;
+  }
+
   // With nothing connected there is no submit path at all — publish, schedule
   // and save-draft are each disabled — so rendering the form underneath the
   // connect CTA only invites the user to fill in a post that can never go
-  // anywhere. Show the CTA on its own instead. This sits after every hook, so
-  // hook order is unaffected; it also covers the reuse flow (arriving from
-  // Media -> "Use in new post"), where posting is equally impossible.
-  if (connectionsResolved && connectedPlatforms.length === 0) {
+  // anywhere. Show the CTA on its own instead. It also covers the reuse flow
+  // (arriving from Media -> "Use in new post"), where posting is equally
+  // impossible.
+  if (composerGate === "connect") {
     return (
       <Card className="p-6">
         <EmptyState
