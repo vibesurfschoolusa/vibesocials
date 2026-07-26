@@ -40,6 +40,13 @@ interface PostResponse {
     id: string;
     status: string;
   };
+  /**
+   * Approval workflow: true when the workspace requires approval and this
+   * member's post was HELD instead of published/scheduled. The success copy
+   * must say so — "Post scheduled" would be a lie (nothing is scheduled until
+   * an owner approves).
+   */
+  awaitingApproval?: boolean;
 }
 
 interface UploadedBlobInfo {
@@ -156,6 +163,9 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
   // The mode that produced the current success banner (so it reads correctly
   // for now / schedule / draft).
   const [submittedMode, setSubmittedMode] = useState<PublishMode>("now");
+  // Approval workflow — set from the create response so the success copy tells
+  // the truth for a held post (nothing is queued or scheduled yet).
+  const [awaitingApproval, setAwaitingApproval] = useState(false);
   // Task 7 — publish-now confirmation dialog. Immediate publishes can't be
   // undone once sent, so `handleUploadSubmit` opens this instead of posting
   // directly when `publishMode === "now"`; schedule/draft submit right away.
@@ -546,13 +556,19 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
         return;
       }
 
+      // Approval workflow: a held post is neither queued nor scheduled yet, so
+      // the confirmation must say what actually happened.
+      const heldForApproval = (data as PostResponse | null)?.awaitingApproval === true;
       toast.success(
-        publishMode === "draft"
-          ? "Draft saved — find it in your Queue"
-          : publishMode === "schedule"
-            ? "Post scheduled — see it in your Queue"
-            : "Post queued — track it in Activity",
+        heldForApproval
+          ? "Sent for approval — an owner will review it before it publishes"
+          : publishMode === "draft"
+            ? "Draft saved — find it in your Queue"
+            : publishMode === "schedule"
+              ? "Post scheduled — see it in your Queue"
+              : "Post queued — track it in Activity",
       );
+      setAwaitingApproval(heldForApproval);
       setSubmittedMode(publishMode);
       setShowSuccess(true);
       setUploadCaption("");
@@ -755,26 +771,32 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
             <Alert
               variant="success"
               title={
-                submittedMode === "draft"
-                  ? "Draft saved"
-                  : submittedMode === "schedule"
-                    ? "Post scheduled"
-                    : "Post queued"
+                awaitingApproval
+                  ? "Sent for approval"
+                  : submittedMode === "draft"
+                    ? "Draft saved"
+                    : submittedMode === "schedule"
+                      ? "Post scheduled"
+                      : "Post queued"
               }
             >
               <div className="flex flex-col items-start gap-2">
                 <p>
-                  {submittedMode === "draft"
-                    ? "Your draft is saved. Publish or schedule it any time from the Queue."
-                    : submittedMode === "schedule"
-                      ? "We'll publish this at the time you chose. Edit or cancel it from the Queue until then."
-                      : "We're publishing to your connected platforms. Per-platform results appear in Activity."}
+                  {awaitingApproval
+                    ? "An owner will review it before anything publishes. You can follow its status in the Queue."
+                    : submittedMode === "draft"
+                      ? "Your draft is saved. Publish or schedule it any time from the Queue."
+                      : submittedMode === "schedule"
+                        ? "We'll publish this at the time you chose. Edit or cancel it from the Queue until then."
+                        : "We're publishing to your connected platforms. Per-platform results appear in Activity."}
                 </p>
                 <Link
-                  href={submittedMode === "now" ? "/activity" : "/queue"}
+                  href={!awaitingApproval && submittedMode === "now" ? "/activity" : "/queue"}
                   className={buttonVariants({ variant: "outline", size: "sm" })}
                 >
-                  {submittedMode === "now" ? "View activity" : "View queue"}
+                  {!awaitingApproval && submittedMode === "now"
+                    ? "View activity"
+                    : "View queue"}
                 </Link>
               </div>
             </Alert>
