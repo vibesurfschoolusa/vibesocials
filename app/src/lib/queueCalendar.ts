@@ -62,6 +62,27 @@ export function groupJobsByDay<T extends { scheduledFor: string | null }>(
 }
 
 /**
+ * What the month grid can't show, split by WHY.
+ *
+ * The calendar only plots posts that will actually publish (`scheduled`).
+ * Everything else needs an honest label: a post awaiting approval may well
+ * carry a proposed time, so lumping it in with dateless drafts (the original
+ * "N drafts without a date" note) told the owner something untrue.
+ */
+export function summarizeOffCalendar<
+  T extends { status: string; approvalState: string },
+>(jobs: T[]): { awaitingApproval: number; drafts: number } {
+  let awaitingApproval = 0;
+  let drafts = 0;
+  for (const job of jobs) {
+    if (job.status === "scheduled") continue;
+    if (job.approvalState === "pending") awaitingApproval++;
+    else drafts++;
+  }
+  return { awaitingApproval, drafts };
+}
+
+/**
  * Drop rule for drag-to-reschedule: keep the post's local time-of-day, move it
  * to `dayKey`. Returns the new ISO string, or null when the day key is
  * malformed or the resulting instant is less than `now + bufferMs` away

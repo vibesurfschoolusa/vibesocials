@@ -115,7 +115,18 @@ function QueueCard({
         <MediaThumb media={job.media} />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-foreground">{title}</p>
-          {job.status === "scheduled" && job.scheduledFor ? (
+          {/* A post awaiting approval is technically a draft, but it may carry
+              the time its author chose — show that, or the owner is asked to
+              approve a schedule they can't see. */}
+          {awaitingApproval && job.scheduledFor ? (
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Proposed for{" "}
+              <time dateTime={job.scheduledFor}>
+                {formatTimestamp(job.scheduledFor)}
+              </time>
+              {showAttribution && job.createdBy ? <> · by {job.createdBy.name}</> : null}
+            </p>
+          ) : job.status === "scheduled" && job.scheduledFor ? (
             <p className="mt-0.5 text-xs text-muted-foreground">
               Scheduled for{" "}
               <time dateTime={job.scheduledFor}>
