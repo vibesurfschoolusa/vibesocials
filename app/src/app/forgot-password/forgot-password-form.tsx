@@ -6,32 +6,42 @@ import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { forgotPasswordOutcome } from "@/lib/forgotPasswordOutcome";
 
 /**
  * Request-a-reset form. Deliberately reveals NOTHING about whether the address
- * has an account (SEC-1 no-oracle): after any submit it shows the SAME uniform
- * confirmation, and it never inspects the response status — even a rate-limit
- * (429) or a network failure lands on the identical message.
+ * has an account (SEC-1 no-oracle): every accepted request shows the SAME
+ * uniform confirmation. A rate limit (429), any other failure status, or a
+ * network error shows an error instead (see lib/forgotPasswordOutcome.ts) —
+ * those depend only on the request, never on whether an account exists.
  */
 export function ForgotPasswordForm() {
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
+    setError(null);
     setLoading(true);
+    let status: number | null = null;
     try {
-      await fetch("/api/auth/forgot-password", {
+      const response = await fetch("/api/auth/forgot-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
+      status = response.status;
     } catch {
-      // Swallow: the confirmation below is intentionally uniform, so even a
-      // transport error shows the same message. The user can simply retry.
+      // No response at all (network failure): status stays null.
     }
-    setSubmitted(true);
+    const outcome = forgotPasswordOutcome(status);
+    if (outcome.kind === "sent") {
+      setSubmitted(true);
+    } else {
+      setError(outcome.message);
+    }
     setLoading(false);
   }
 
@@ -56,6 +66,8 @@ export function ForgotPasswordForm() {
           onChange={(e) => setEmail(e.target.value)}
         />
       </div>
+
+      {error ? <Alert variant="danger">{error}</Alert> : null}
 
       <Button type="submit" loading={loading} className="w-full">
         Send reset link
