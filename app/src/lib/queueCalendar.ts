@@ -111,3 +111,17 @@ export function retargetSchedule(
   if (target.getTime() < now.getTime() + bufferMs) return null;
   return target.toISOString();
 }
+
+/**
+ * Begin dragging a calendar chip. Firefox refuses to start a drag at all unless
+ * `dragstart` calls `dataTransfer.setData`, so the job id goes in as
+ * `text/plain` (2026-11-01 audit). The drop target still reads the dragged job
+ * from component state; this payload only has to exist.
+ */
+export function startJobDrag(
+  dataTransfer: { setData: (format: string, data: string) => void; effectAllowed: string },
+  jobId: string,
+): void {
+  dataTransfer.setData("text/plain", jobId);
+  dataTransfer.effectAllowed = "move";
+}

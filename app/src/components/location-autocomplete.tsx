@@ -3,6 +3,7 @@
 import { useState, useEffect, useId, useRef } from "react";
 
 import { cn } from "@/lib/cn";
+import { locationLookupAction } from "@/lib/locationLookup";
 import { fieldBaseClasses } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 
@@ -34,6 +35,10 @@ export function LocationAutocomplete({
   const [showDropdown, setShowDropdown] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const debounceTimer = useRef<NodeJS.Timeout | null>(null);
+  // The value a suggestion selection wrote into the field. The lookup effect
+  // skips exactly that value, otherwise picking a suggestion triggered a fresh
+  // lookup that re-opened the dropdown ~300ms later (2026-11-01 audit).
+  const selectedValueRef = useRef<string | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   const generatedId = useId();
@@ -61,20 +66,35 @@ export function LocationAutocomplete({
       clearTimeout(debounceTimer.current);
     }
 
-    if (value.trim().length < 2) {
-      setSuggestions([]);
-      setSelectedIndex(-1);
-      setShowDropdown(false);
+    const action = locationLookupAction(value, selectedValueRef.current);
+    // Anything but the selection's own value means the user is typing again.
+    if (action !== "skip") selectedValueRef.current = null;
+
+    if (action === "clear" || action === "skip") {
+      // The pending debounce above was just cancelled, so its `finally` will
+      // never clear the spinner - do it here.
+      setIsLoading(false);
+      if (action === "clear") {
+        setSuggestions([]);
+        setSelectedIndex(-1);
+        setShowDropdown(false);
+      }
       return;
     }
 
     setIsLoading(true);
+
+    // Set when this lookup is superseded (the value changed - including by a
+    // selection - or the component unmounted), so a response that arrives late
+    // can't re-open the dropdown over the user's choice.
+    let superseded = false;
 
     debounceTimer.current = setTimeout(async () => {
       try {
         const response = await fetch(`/api/geocode?query=${encodeURIComponent(value)}`);
         if (response.ok) {
           const data = await response.json();
+          if (superseded) return;
           setSuggestions(data.suggestions || []);
           setSelectedIndex(-1);
           setShowDropdown(true);
@@ -82,11 +102,12 @@ export function LocationAutocomplete({
       } catch (error) {
         console.error("Failed to fetch location suggestions", error);
       } finally {
-        setIsLoading(false);
+        if (!superseded) setIsLoading(false);
       }
     }, 300);
 
     return () => {
+      superseded = true;
       if (debounceTimer.current) {
         clearTimeout(debounceTimer.current);
       }
@@ -96,7 +117,10 @@ export function LocationAutocomplete({
   const handleSelect = (suggestion: LocationSuggestion) => {
     // Format as "Description (lat,lng)"
     const formatted = `${suggestion.description} (${suggestion.latitude},${suggestion.longitude})`;
+    selectedValueRef.current = formatted;
     onChange(formatted);
+    // The list belonged to what was typed; a later focus must not resurrect it.
+    setSuggestions([]);
     setShowDropdown(false);
     setSelectedIndex(-1);
   };

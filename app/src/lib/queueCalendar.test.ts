@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   buildCalendarMonth,
   groupJobsByDay,
   localDayKey,
   retargetSchedule,
+  startJobDrag,
   summarizeOffCalendar,
 } from "./queueCalendar";
 
@@ -110,5 +111,19 @@ describe("retargetSchedule", () => {
   it("returns null for an invalid day key", () => {
     const original = new Date(2026, 6, 20, 9, 30).toISOString();
     expect(retargetSchedule(original, "not-a-day", NOW, BUFFER)).toBeNull();
+  });
+});
+
+describe("startJobDrag", () => {
+  it("sets text/plain to the job id - Firefox won't start a drag without setData", () => {
+    const dataTransfer = { setData: vi.fn(), effectAllowed: "uninitialized" };
+    startJobDrag(dataTransfer, "job-42");
+    expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", "job-42");
+  });
+
+  it("marks the drag as a move", () => {
+    const dataTransfer = { setData: vi.fn(), effectAllowed: "uninitialized" };
+    startJobDrag(dataTransfer, "job-42");
+    expect(dataTransfer.effectAllowed).toBe("move");
   });
 });

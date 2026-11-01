@@ -14,6 +14,7 @@ import {
   groupJobsByDay,
   localDayKey,
   retargetSchedule,
+  startJobDrag,
   summarizeOffCalendar,
 } from "@/lib/queueCalendar";
 import { SCHEDULE_BUFFER_MS, localTimeZoneLabel } from "@/lib/scheduling";
@@ -223,7 +224,10 @@ export function QueueCalendar({ jobs, onEdit, onRescheduled }: QueueCalendarProp
                           key={job.id}
                           type="button"
                           draggable
-                          onDragStart={() => setDragJobId(job.id)}
+                          onDragStart={(e) => {
+                            startJobDrag(e.dataTransfer, job.id);
+                            setDragJobId(job.id);
+                          }}
                           onDragEnd={() => setDragJobId(null)}
                           onClick={() => onEdit(job)}
                           disabled={savingId === job.id}
