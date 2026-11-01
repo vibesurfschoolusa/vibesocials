@@ -49,8 +49,31 @@ describe("safeCallbackPath", () => {
     expect(safeCallbackPath(raw)).toBe(expected);
   });
 
-  it("returns the parsed pathname + search + hash (dot segments resolved)", () => {
-    expect(safeCallbackPath("/a/../queue?x=1#y")).toBe("/queue?x=1#y");
+  // URL parsing collapses dot segments AFTER the input checks, so a
+  // safe-looking input can parse to a protocol-relative "//host" path, which
+  // router.push sends off-site. The parsed result must pass the same rules.
+  it.each([
+    "/..//evil.com",
+    "/.//evil.com",
+    "/%2e%2e//evil.com",
+    "/%2E%2E//evil.com",
+    "/%2e//evil.com",
+    "/a/..//evil.com",
+    "/a/../..//evil.com",
+    "/a/b/../..//evil.com",
+    "/..//evil.com/queue?x=1#y",
+  ])("rejects %s (dot segments collapse to a protocol-relative path)", (raw) => {
+    expect(safeCallbackPath(raw)).toBe("/");
+    expect(safeCallbackPath(raw, "/queue")).toBe("/queue");
+  });
+
+  it.each([
+    ["/a/../queue", "/queue"],
+    ["/a/../queue?x=1#y", "/queue?x=1#y"],
+    ["/./join/abc", "/join/abc"],
+    ["/%2e%2e/queue", "/queue"],
+  ])("allows the benign dot-segment path %s (resolves to %s, still same-origin)", (raw, expected) => {
+    expect(safeCallbackPath(raw)).toBe(expected);
   });
 });
 
@@ -70,6 +93,8 @@ describe("authPageHref", () => {
   it("re-sanitizes the callbackUrl it is given, so an unsafe value is dropped", () => {
     expect(authPageHref("/login", "//evil.com")).toBe("/login");
     expect(authPageHref("/login", "/\\evil.com")).toBe("/login");
+    expect(authPageHref("/login", "/..//evil.com")).toBe("/login");
+    expect(authPageHref("/register", "/a/..//evil.com")).toBe("/register");
   });
 
   it("round-trips: the page reading the link gets the same safe path back", () => {
