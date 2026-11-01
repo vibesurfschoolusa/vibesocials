@@ -241,6 +241,13 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     );
   }
 
+  // A member under approval reached here only because the post they READ was
+  // approved; pin the claim to that exact version (updatedAt), so an edit that
+  // re-held it — or changed its text — in the meantime makes the claim match
+  // nothing (409 below) instead of publishing unreviewed content.
+  const memberUnderApproval =
+    workspaceContext.workspace.requireApproval && workspaceContext.role === "member";
+
   // Atomic claim {draft|scheduled} → in_progress. Only one caller wins — this
   // also blocks the cron from double-claiming a scheduled job we're publishing.
   const { count } = await prisma.postJob.updateMany({
@@ -248,6 +255,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       id: postJobId,
       workspaceId: workspaceContext.workspace.id,
       status: { in: [...MUTABLE_POST_JOB_STATUSES] },
+      ...(memberUnderApproval ? { updatedAt: job.updatedAt } : {}),
     },
     data: { status: "in_progress" },
   });

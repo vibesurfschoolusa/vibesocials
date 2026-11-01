@@ -433,6 +433,40 @@ describe("POST /api/posts/[postJobId]/publish — approval enforcement (2026-11-
     expect(inngestSendMock).toHaveBeenCalledTimes(1);
   });
 
+  it("pins a member's publish-now claim to the APPROVED version it read (updatedAt)", async () => {
+    findFirstMock.mockResolvedValue(
+      jobRow({ status: "scheduled", submittedForApprovalAt: SUBMITTED, approvedAt: SUBMITTED }),
+    );
+
+    await POST(req({}), ctx("job-1"));
+
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: {
+        id: "job-1",
+        workspaceId: "ws-1",
+        status: { in: ["scheduled", "draft"] },
+        updatedAt: UPDATED,
+      },
+      data: { status: "in_progress" },
+    });
+  });
+
+  it("a concurrent edit re-hold in the read→claim window makes the claim match nothing: 409 NOT_PUBLISHABLE, nothing published", async () => {
+    // Read: approved + scheduled. Meanwhile a PATCH re-held it (draft,
+    // approvedAt null, new text, new updatedAt) — the pinned claim misses.
+    findFirstMock.mockResolvedValue(
+      jobRow({ status: "scheduled", submittedForApprovalAt: SUBMITTED, approvedAt: SUBMITTED }),
+    );
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req({}), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe("NOT_PUBLISHABLE");
+    expect(prepareDispatchMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
   it("owners are never affected — an owner's draft publishes", async () => {
     getWorkspaceContextMock.mockResolvedValue(
       makeWorkspaceContext({ role: "owner", requireApproval: true }),
