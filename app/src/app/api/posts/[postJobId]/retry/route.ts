@@ -221,7 +221,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   //
   // KNOWN LIMITATION (accepted for v1): this cannot stop a provider false
   // negative — if a platform actually published but we recorded `failed`
-  // (notably TikTok's TIKTOK_PUBLISH_TIMEOUT, where the video "may still be
+  // (notably TikTok's TIKTOK_PUBLISH_PENDING, where the video "may still be
   // processing"), a retry creates a second live post. No provider exposes an
   // idempotency key here. A future guard could warn on retrying a timeout-coded
   // failure or persist provider post-ids to dedupe.

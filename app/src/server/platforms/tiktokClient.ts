@@ -1,8 +1,11 @@
+import type { Prisma, SocialConnection } from "@prisma/client";
+
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS, TIKTOK_DEFAULT_CAPTION } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 
+import { markConnectionNeedsReconnect } from "./connectionHealth";
 import type { PlatformClient, PublishContext, PublishResult, TikTokCreatorInfo } from "./types";
 
 /** Minimal shape of TikTok's creator_info response (only the fields we read). */
@@ -37,7 +40,52 @@ interface TikTokInitResponse {
   error?: { code?: string };
 }
 
+/** Minimal shape of TikTok's publish/status/fetch response (only the fields we read). */
+interface TikTokStatusResponse {
+  data?: { status?: string; fail_reason?: string };
+}
+
+/**
+ * Shape of TikTok's /v2/oauth/token/ response (refresh_token grant). A failure
+ * carries `error` / `error_description` / `log_id` instead of the token fields.
+ * See https://developers.tiktok.com/doc/oauth-user-access-token-management
+ */
+interface TikTokRefreshResponse {
+  access_token?: string;
+  expires_in?: number;
+  refresh_token?: string;
+  refresh_expires_in?: number;
+  open_id?: string;
+  scope?: string;
+  token_type?: string;
+  error?: string;
+  error_description?: string;
+  log_id?: string;
+}
+
 const TIKTOK_API_BASE = "https://open.tiktokapis.com";
+const TIKTOK_TOKEN_ENDPOINT = `${TIKTOK_API_BASE}/v2/oauth/token/`;
+
+/**
+ * Code thrown (and recorded via markConnectionNeedsReconnect) whenever TikTok
+ * tells us the connection's credentials are dead: a 401 from any API call
+ * during publish, or a terminal refresh failure. Follows the
+ * `*_RECONNECT_REQUIRED` convention (see connectionHealth.ts).
+ */
+const TIKTOK_RECONNECT_CODE = "TIKTOK_RECONNECT_REQUIRED";
+
+/** Treat tokens within 5 minutes of expiry as expired (matches linkedinClient.ts). */
+const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
+
+/** TikTok access tokens last ~24h; fallback when `expires_in` is missing/non-finite. */
+const TIKTOK_DEFAULT_TOKEN_TTL_SECONDS = 86_400;
+
+/**
+ * Publish-status poll budget: 24 attempts x 5s = ~120s. TikTok commonly needs
+ * well over the old 10 x 3s = 30s to pull/process an upload.
+ */
+export const TIKTOK_POLL_MAX_ATTEMPTS = 24;
+export const TIKTOK_POLL_INTERVAL_MS = 5_000;
 
 /** Max bytes per TikTok FILE_UPLOAD chunk (TikTok allows 5MB to 64MB; we use 10MB). */
 export const TIKTOK_MAX_CHUNK_SIZE = 10 * 1024 * 1024; // 10MB
@@ -122,15 +170,344 @@ export function computeTikTokCaption(caption: string): string {
 export type PollOutcome = "complete" | "failed" | "pending";
 
 /**
- * Pure decision for one publish-status poll result. Only "publish_complete" is
- * success and only "failed" is terminal; every other status
- * ("processing_upload", "processing_download", unknown, or missing) is still
+ * Pure decision for one publish-status poll result.
+ *
+ * TikTok's /v2/post/publish/status/fetch/ returns UPPERCASE statuses
+ * (PROCESSING_UPLOAD, PROCESSING_DOWNLOAD, SEND_TO_USER_INBOX, PUBLISH_COMPLETE,
+ * FAILED), so the value is normalized (trim + case-insensitive) before
+ * comparing. PUBLISH_COMPLETE and SEND_TO_USER_INBOX are success; FAILED is
+ * terminal; every other status (processing, unknown, or missing) is still
  * pending, so the caller should keep polling.
  */
 export function decidePollOutcome(status: string | null | undefined): PollOutcome {
-  if (status === "publish_complete") return "complete";
-  if (status === "failed") return "failed";
+  const normalized = typeof status === "string" ? status.trim().toUpperCase() : "";
+  if (normalized === "PUBLISH_COMPLETE" || normalized === "SEND_TO_USER_INBOX") {
+    return "complete";
+  }
+  if (normalized === "FAILED") return "failed";
   return "pending";
+}
+
+function tiktokReconnectRequiredError(): Error & { code: string } {
+  const error = new Error(
+    "Your TikTok connection has expired — please reconnect it in Settings.",
+  ) as Error & { code: string };
+  error.code = TIKTOK_RECONNECT_CODE;
+  return error;
+}
+
+/**
+ * TikTok rejected the access token (401). Flag the connection so the user sees
+ * "reconnect" copy, then throw the reconnect code. Flag fields only — never
+ * touches accessToken/refreshToken (see connectionHealth.ts).
+ */
+async function throwTikTokReconnect(connectionId: string, where: string): Promise<never> {
+  console.error("[TikTok] Access token rejected; marking connection for reconnect", {
+    connectionId,
+    where,
+  });
+  await markConnectionNeedsReconnect(connectionId, TIKTOK_RECONNECT_CODE);
+  throw tiktokReconnectRequiredError();
+}
+
+function isExpiredOrExpiringSoon(expiresAt: Date | string | null | undefined): boolean {
+  if (!expiresAt) return false; // no expiry recorded -> cannot judge; let publish proceed
+  return new Date(expiresAt).getTime() - Date.now() <= TOKEN_EXPIRY_BUFFER_MS;
+}
+
+/**
+ * Is this failed refresh TERMINAL (the grant is dead; the user must reconnect)
+ * as opposed to transient (retry later, do NOT flag)? Same classification the
+ * Google/LinkedIn refreshes are moving to ("flag only on terminal 400/401"):
+ *  - 429 / 5xx: transient, regardless of body.
+ *  - `invalid_client`: OUR client key/secret is wrong — a deployment problem,
+ *    not a dead grant; flagging would mark every user's connection dead.
+ *  - HTTP 400 / 401: terminal.
+ *  - `invalid_grant` (e.g. HTTP 200 carrying an error body, or any other
+ *    non-5xx status): terminal.
+ *  - anything else (403, 404, a 200 with no recognizable error, ...): not flagged.
+ */
+function isTerminalRefreshFailure(status: number, oauthError: string | undefined): boolean {
+  if (oauthError === "invalid_client") return false;
+  if (status === 429 || status >= 500) return false;
+  if (status === 400 || status === 401) return true;
+  return oauthError === "invalid_grant";
+}
+
+/**
+ * Refresh a TikTok access token using the stored refresh token and persist the
+ * result. Also exposed as `tiktokClient.refreshToken`, which is what the daily
+ * connection-health sweep calls.
+ *
+ * Request/response per
+ * https://developers.tiktok.com/doc/oauth-user-access-token-management :
+ * POST /v2/oauth/token/ (x-www-form-urlencoded: client_key, client_secret,
+ * grant_type=refresh_token, refresh_token) -> access_token, expires_in,
+ * refresh_token, refresh_expires_in, ...
+ *
+ * UNLIKE Google/LinkedIn ("never write refreshToken"), TikTok documents that
+ * the returned refresh_token "may be different than the one passed" and that a
+ * changed one MUST replace the stored one — so a changed refresh token IS
+ * persisted (alongside the access token + expiry, in the same write). An
+ * absent or unchanged one leaves the stored value untouched.
+ *
+ * Failure handling (flag fields are written ONLY by markConnectionNeedsReconnect,
+ * never in the same update as tokens):
+ *  - terminal (see isTerminalRefreshFailure) / no refresh token stored:
+ *    flag needsReconnect, throw `TIKTOK_RECONNECT_REQUIRED`.
+ *  - 429 / 5xx / other non-terminal responses: throw `TIKTOK_TOKEN_REFRESH_FAILED`
+ *    (sanitized, carries `status` so withTransientRetries can retry 429/5xx)
+ *    WITHOUT flagging. Network errors propagate unchanged (also retryable).
+ *  - missing env credentials: throw `TIKTOK_MISSING_OAUTH_CREDENTIALS` without
+ *    flagging (deployment problem, not a per-connection one).
+ */
+export async function refreshTikTokToken(
+  connection: SocialConnection,
+): Promise<SocialConnection> {
+  const refreshToken = connection.refreshToken;
+  if (!refreshToken) {
+    console.warn("[TikTok] No refresh token available; marking connection for reconnect", {
+      connectionId: connection.id,
+    });
+    await markConnectionNeedsReconnect(connection.id, TIKTOK_RECONNECT_CODE);
+    throw tiktokReconnectRequiredError();
+  }
+
+  const clientKey = process.env.TIKTOK_CLIENT_KEY;
+  const clientSecret = process.env.TIKTOK_CLIENT_SECRET;
+  if (!clientKey || !clientSecret) {
+    console.error("[TikTok] Missing TikTok OAuth credentials", {
+      connectionId: connection.id,
+      code: "TIKTOK_MISSING_OAUTH_CREDENTIALS",
+    });
+    const error = new Error("Missing TikTok OAuth credentials") as Error & { code: string };
+    error.code = "TIKTOK_MISSING_OAUTH_CREDENTIALS";
+    throw error;
+  }
+
+  console.log("[TikTok] Refreshing access token", { connectionId: connection.id });
+
+  const response = await fetchWithTimeout(TIKTOK_TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      client_key: clientKey,
+      client_secret: clientSecret,
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
+  });
+
+  // Parse defensively: a proxy/5xx page is not JSON, and TikTok can report an
+  // OAuth error in the body of an HTTP 200.
+  const rawBody = await response.text().catch(() => "");
+  let tokenData: TikTokRefreshResponse | null = null;
+  try {
+    const parsed: unknown = JSON.parse(rawBody);
+    if (parsed && typeof parsed === "object") tokenData = parsed as TikTokRefreshResponse;
+  } catch {
+    tokenData = null;
+  }
+
+  if (!response.ok || !tokenData?.access_token) {
+    const oauthError = typeof tokenData?.error === "string" ? tokenData.error : undefined;
+    // Server-side diagnostics only: status + TikTok's error identifiers. Never
+    // the request (secrets/tokens), and never surfaced to the user.
+    console.error("[TikTok] Token refresh failed", {
+      connectionId: connection.id,
+      status: response.status,
+      error: oauthError,
+      errorDescription: tokenData?.error_description,
+      logId: tokenData?.log_id,
+    });
+
+    if (isTerminalRefreshFailure(response.status, oauthError)) {
+      await markConnectionNeedsReconnect(connection.id, TIKTOK_RECONNECT_CODE);
+      throw tiktokReconnectRequiredError();
+    }
+
+    const error = new Error(
+      `Failed to refresh TikTok access token (status ${response.status})`,
+    ) as Error & { code: string; status: number };
+    error.code = "TIKTOK_TOKEN_REFRESH_FAILED";
+    error.status = response.status;
+    throw error;
+  }
+
+  // Guard: fall back to TikTok's standard ~24h access-token TTL if expires_in
+  // is missing/non-finite, rather than persisting an Invalid Date.
+  const expiresInSeconds =
+    typeof tokenData.expires_in === "number" &&
+    Number.isFinite(tokenData.expires_in) &&
+    tokenData.expires_in > 0
+      ? tokenData.expires_in
+      : TIKTOK_DEFAULT_TOKEN_TTL_SECONDS;
+
+  // A successful refresh means the connection works again, so clear any stale
+  // reconnect-health flags (never SET them here — that is only ever a
+  // flag-only write via markConnectionNeedsReconnect).
+  const data: Prisma.SocialConnectionUpdateInput = {
+    accessToken: tokenData.access_token,
+    expiresAt: new Date(Date.now() + expiresInSeconds * 1000),
+    needsReconnect: false,
+    lastRefreshErrorCode: null,
+    refreshFailedAt: null,
+  };
+  // TikTok may rotate the refresh token; a different one must replace the old.
+  if (
+    typeof tokenData.refresh_token === "string" &&
+    tokenData.refresh_token.length > 0 &&
+    tokenData.refresh_token !== refreshToken
+  ) {
+    data.refreshToken = tokenData.refresh_token;
+  }
+
+  const { prisma } = await import("@/lib/db");
+  const updated = await prisma.socialConnection.update({
+    where: { id: connection.id },
+    data,
+  });
+
+  console.log("[TikTok] Access token refreshed successfully", {
+    connectionId: connection.id,
+    refreshTokenRotated: data.refreshToken !== undefined,
+  });
+
+  return updated;
+}
+
+/**
+ * Ensure the connection's access token is usable before publishing: refresh it
+ * when `expiresAt` is within 5 minutes of now (or past). A null `expiresAt`
+ * cannot be judged, so the connection is returned unchanged. Failures
+ * propagate as thrown by refreshTikTokToken (terminal -> flagged reconnect
+ * error; transient -> unflagged, retryable). Returns the (possibly refreshed)
+ * connection. Exported for unit tests.
+ */
+export async function ensureFreshTikTokToken(
+  connection: SocialConnection,
+): Promise<SocialConnection> {
+  if (!isExpiredOrExpiringSoon(connection.expiresAt)) {
+    return connection;
+  }
+  return refreshTikTokToken(connection);
+}
+
+/** TikTok's `fail_reason` values are snake_case enums; anything else is not echoed. */
+function sanitizeFailReason(reason: unknown): string | null {
+  return typeof reason === "string" && /^[a-z0-9_]{1,64}$/i.test(reason) ? reason : null;
+}
+
+export interface PollTikTokPublishStatusOptions {
+  accessToken: string;
+  publishId: string;
+  /** Used to flag the connection if TikTok answers 401 mid-poll. */
+  connectionId: string;
+  /** Test seam: defaults to a real timer. */
+  sleep?: (ms: number) => Promise<void>;
+  maxAttempts?: number;
+  intervalMs?: number;
+}
+
+/**
+ * Poll TikTok's publish status until the post is confirmed. Resolves ONLY on a
+ * complete outcome; every other outcome throws so the job records a failure:
+ *  - FAILED -> `TIKTOK_PUBLISH_FAILED` (with TikTok's `fail_reason` when present)
+ *  - 401 -> `TIKTOK_RECONNECT_REQUIRED` (connection flagged)
+ *  - budget exhausted (24 x 5s = ~120s) -> `TIKTOK_PUBLISH_PENDING`: TikTok has
+ *    not confirmed or denied the post, so it may still appear on the account.
+ * Transient fetch/parse/HTTP errors within a single iteration are logged and
+ * retried on the next one; they must NOT be mistaken for a terminal outcome.
+ */
+export async function pollTikTokPublishStatus(
+  options: PollTikTokPublishStatusOptions,
+): Promise<void> {
+  const {
+    accessToken,
+    publishId,
+    connectionId,
+    sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    maxAttempts = TIKTOK_POLL_MAX_ATTEMPTS,
+    intervalMs = TIKTOK_POLL_INTERVAL_MS,
+  } = options;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    await sleep(intervalMs);
+
+    let publishStatus: string | undefined;
+    let failReason: string | null = null;
+    let unauthorized = false;
+    try {
+      const statusRes = await fetchWithTimeout(
+        `${TIKTOK_API_BASE}/v2/post/publish/status/fetch/`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ publish_id: publishId }),
+        },
+        30_000,
+      );
+
+      if (statusRes.status === 401) {
+        unauthorized = true;
+      } else if (!statusRes.ok) {
+        // Transient HTTP error: log and retry on the next iteration.
+        console.warn(`[TikTok] Status check ${attempt + 1}/${maxAttempts} HTTP ${statusRes.status}`);
+        continue;
+      } else {
+        const statusJson = (await statusRes.json()) as TikTokStatusResponse;
+        publishStatus = statusJson?.data?.status;
+        failReason = sanitizeFailReason(statusJson?.data?.fail_reason);
+      }
+    } catch (statusError) {
+      // Transient fetch/parse error: log and retry on the next iteration.
+      const message = statusError instanceof Error ? statusError.message : String(statusError);
+      console.warn(`[TikTok] Status check ${attempt + 1} failed:`, message);
+      continue;
+    }
+
+    // Decide OUTSIDE the try/catch above so terminal outcomes are not
+    // swallowed by the transient-error handler.
+    if (unauthorized) {
+      await throwTikTokReconnect(connectionId, "publish/status/fetch");
+    }
+
+    const decision = decidePollOutcome(publishStatus);
+    if (decision === "complete") return;
+    if (decision === "failed") {
+      const error = new Error(
+        failReason
+          ? `TikTok failed to process the video: ${failReason}`
+          : "TikTok failed to process the video",
+      ) as Error & { code: string };
+      error.code = "TIKTOK_PUBLISH_FAILED";
+      throw error;
+    }
+
+    // Still pending (PROCESSING_UPLOAD / PROCESSING_DOWNLOAD / unknown).
+    console.log(`[TikTok] Status check ${attempt + 1}/${maxAttempts}:`, {
+      status: publishStatus ?? "unknown",
+      publishId,
+    });
+  }
+
+  // Budget exhausted without TikTok confirming or denying the post: the video
+  // may still be processing and appear on the account. Distinct from a hard
+  // failure so the user checks TikTok before retrying (retrying can duplicate).
+  console.warn("[TikTok] Publish status not confirmed before the poll budget ran out", {
+    publishId,
+    note: "Video may still be processing on TikTok.",
+  });
+  const error = new Error(
+    "TikTok is still processing this video — it may still appear on your account. Check TikTok before retrying.",
+  ) as Error & { code: string };
+  error.code = "TIKTOK_PUBLISH_PENDING";
+  throw error;
 }
 
 /**
@@ -171,8 +548,18 @@ export async function getTikTokCreatorInfo(accessToken: string): Promise<TikTokC
 }
 
 export const tiktokClient: PlatformClient = {
+  // Exposed so the daily connection-health sweep (inngest-functions.ts), which
+  // only refreshes clients that have a refreshToken method, keeps TikTok's
+  // ~24h access tokens (and 365d refresh token) alive.
+  refreshToken: refreshTikTokToken,
+
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
-    const { socialConnection, mediaItem, caption } = ctx;
+    const { mediaItem, caption } = ctx;
+
+    // TikTok access tokens last ~24h: refresh a stale/expiring one BEFORE any
+    // API call (a terminal refresh failure flags the connection and throws
+    // TIKTOK_RECONNECT_REQUIRED; a transient one throws unflagged).
+    const socialConnection = await ensureFreshTikTokToken(ctx.socialConnection);
 
     const accessToken = socialConnection.accessToken;
     if (!accessToken) {
@@ -200,7 +587,11 @@ export const tiktokClient: PlatformClient = {
       }
     } catch (creatorInfoError: unknown) {
       console.error('[TikTok] Failed to fetch creator info:', creatorInfoError);
-      const cause = creatorInfoError as Error & { code?: string };
+      const cause = creatorInfoError as Error & { code?: string; status?: number };
+      // A 401 means the access token is no longer valid -> reconnect.
+      if (cause.status === 401) {
+        await throwTikTokReconnect(socialConnection.id, "creator_info/query");
+      }
       const error = new Error(
         `TikTok creator_info check failed: ${cause.message}`,
       ) as Error & { code: string };
@@ -301,6 +692,11 @@ export const tiktokClient: PlatformClient = {
       30_000,
     );
 
+    // A 401 means the access token is no longer valid -> reconnect.
+    if (initRes.status === 401) {
+      await throwTikTokReconnect(socialConnection.id, "video/init");
+    }
+
     await assertOk(initRes, {
       code: "TIKTOK_INIT_FAILED",
       prefix: "Failed to start TikTok video upload",
@@ -308,6 +704,10 @@ export const tiktokClient: PlatformClient = {
 
     const initJson = (await initRes.json().catch(() => null)) as TikTokInitResponse | null;
     const initErrorCode = initJson?.error?.code;
+    // TikTok can also report an invalid token as an error code in the body.
+    if (initErrorCode === "access_token_invalid") {
+      await throwTikTokReconnect(socialConnection.id, "video/init");
+    }
     if (initErrorCode && initErrorCode !== "ok") {
       console.error("[TikTok] video init error payload", initJson);
       const error = new Error("TikTok video init returned an error") as Error & { code: string };
@@ -362,91 +762,20 @@ export const tiktokClient: PlatformClient = {
 
     console.log('[TikTok] Video chunks uploaded, checking publish status...', { publishId });
 
-    // Poll publish status to verify TikTok processed the video.
-    // Terminal outcomes MUST escape this loop: a "failed" status or exhausting
-    // every attempt without "publish_complete" throws (so the job records a
-    // failure) - only a real "publish_complete" returns success. Transient
-    // fetch/parse errors within a single iteration are logged and retried; they
-    // must NOT be mistaken for a terminal outcome.
-    const maxAttempts = 10;
-    let completed = false;
+    // Poll publish status until TikTok confirms the post (uppercase statuses,
+    // ~120s budget). Resolves only on success; FAILED, a 401, or an exhausted
+    // budget (TIKTOK_PUBLISH_PENDING) throw so the job records the outcome.
+    await pollTikTokPublishStatus({
+      accessToken,
+      publishId,
+      connectionId: socialConnection.id,
+    });
 
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 3000)); // Wait 3s between checks
-
-      let publishStatus: string | undefined;
-      try {
-        const statusRes = await fetchWithTimeout(
-          `${TIKTOK_API_BASE}/v2/post/publish/status/fetch/`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ publish_id: publishId }),
-          },
-          30_000,
-        );
-
-        if (!statusRes.ok) {
-          // Transient HTTP error: log and retry on the next iteration.
-          console.warn(`[TikTok] Status check ${attempt + 1}/${maxAttempts} HTTP ${statusRes.status}`);
-          continue;
-        }
-
-        const statusJson = (await statusRes.json()) as {
-          data?: { status?: string };
-        };
-        publishStatus = statusJson?.data?.status;
-      } catch (statusError) {
-        // Transient fetch/parse error: log and retry on the next iteration.
-        const message =
-          statusError instanceof Error ? statusError.message : String(statusError);
-        console.warn(`[TikTok] Status check ${attempt + 1} failed:`, message);
-        continue;
-      }
-
-      // Decide OUTSIDE the try/catch above so terminal outcomes are not
-      // swallowed by the transient-error handler.
-      const decision = decidePollOutcome(publishStatus);
-      if (decision === "complete") {
-        console.log('[TikTok] Video published successfully', {
-          publishId,
-          privacyLevel: postInfo.privacy_level,
-          note: 'In sandbox mode, videos are forced to SELF_ONLY (private) visibility. Check your private posts in TikTok.',
-        });
-        completed = true;
-        break;
-      }
-      if (decision === "failed") {
-        const error = new Error("TikTok failed to process the video") as Error & {
-          code: string;
-        };
-        error.code = "TIKTOK_PUBLISH_FAILED";
-        throw error;
-      }
-
-      // Still pending ("processing_upload" / "processing_download" / unknown).
-      console.log(`[TikTok] Status check ${attempt + 1}/${maxAttempts}:`, {
-        status: publishStatus ?? "unknown",
-        publishId,
-      });
-    }
-
-    if (!completed) {
-      // Poll exhausted without a terminal "publish_complete": treat as failure
-      // rather than silently returning success for a video we never confirmed.
-      console.warn('[TikTok] Publish status not confirmed before timeout', {
-        publishId,
-        note: 'Video may still be processing on TikTok.',
-      });
-      const error = new Error(
-        "TikTok did not confirm publish completion in time; the video may still be processing",
-      ) as Error & { code: string };
-      error.code = "TIKTOK_PUBLISH_TIMEOUT";
-      throw error;
-    }
+    console.log('[TikTok] Video published successfully', {
+      publishId,
+      privacyLevel: postInfo.privacy_level,
+      note: 'In sandbox mode, videos are forced to SELF_ONLY (private) visibility. Check your private posts in TikTok.',
+    });
 
     return {
       externalPostId: publishId,

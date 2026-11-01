@@ -1,16 +1,107 @@
-import { describe, expect, it } from "vitest";
+import type { MediaItem, SocialConnection, User } from "@prisma/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { truncateGraphemes } from "@/lib/truncate";
 
+import type { PublishContext } from "./types";
 import {
   computeChunkPlan,
   computeTikTokCaption,
   decidePollOutcome,
+  ensureFreshTikTokToken,
+  pollTikTokPublishStatus,
+  refreshTikTokToken,
   TIKTOK_MAX_CHUNK_SIZE,
   TIKTOK_MAX_FINAL_CHUNK_SIZE,
+  TIKTOK_POLL_INTERVAL_MS,
+  TIKTOK_POLL_MAX_ATTEMPTS,
+  tiktokClient,
 } from "./tiktokClient";
 
+// markConnectionNeedsReconnect and the token-refresh persist both resolve
+// prisma via `await import("@/lib/db")` at call time, so they receive this
+// mock. No real database is touched, and no real TikTok endpoint is called:
+// every network call below goes through a stubbed global `fetch`.
+const { updateMock } = vi.hoisted(() => ({ updateMock: vi.fn() }));
+
+vi.mock("@/lib/db", () => ({
+  prisma: {
+    socialConnection: {
+      update: updateMock,
+    },
+  },
+}));
+
 const MB = 1024 * 1024;
+
+const RECONNECT_CODE = "TIKTOK_RECONNECT_REQUIRED";
+const PENDING_MESSAGE =
+  "TikTok is still processing this video — it may still appear on your account. Check TikTok before retrying.";
+
+type CodedError = Error & { code?: string; status?: number };
+
+function makeConnection(overrides: Partial<SocialConnection> = {}): SocialConnection {
+  return {
+    id: "conn-1",
+    userId: "user-1",
+    workspaceId: "workspace-1",
+    platform: "tiktok",
+    accessToken: "old-access-token",
+    refreshToken: "old-refresh-token",
+    // Default: comfortably fresh, so publish tests don't trigger a refresh.
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+    accountIdentifier: "open-id-1",
+    scopes: null,
+    metadata: null,
+    needsReconnect: false,
+    lastRefreshErrorCode: null,
+    refreshFailedAt: null,
+    createdAt: new Date("2020-01-01T00:00:00Z"),
+    updatedAt: new Date("2020-01-01T00:00:00Z"),
+    ...overrides,
+  };
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+async function caught(promise: Promise<unknown>): Promise<CodedError | null> {
+  return promise.then(
+    () => null,
+    (e: unknown) => e as CodedError,
+  );
+}
+
+/** The `data` payload of every `socialConnection.update` call, in order. */
+function updateCalls(): Array<{ where: { id: string }; data: Record<string, unknown> }> {
+  return updateMock.mock.calls.map(
+    (c) => c[0] as { where: { id: string }; data: Record<string, unknown> },
+  );
+}
+
+beforeEach(() => {
+  updateMock.mockReset();
+  updateMock.mockImplementation((args: { data: Record<string, unknown> }) =>
+    Promise.resolve({ ...makeConnection(), ...args.data }),
+  );
+  vi.stubEnv("TIKTOK_CLIENT_KEY", "test-client-key");
+  vi.stubEnv("TIKTOK_CLIENT_SECRET", "test-client-secret");
+  // The client logs progress and failures; keep test output pristine.
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 
 describe("computeChunkPlan", () => {
   // Every plan must fully and contiguously cover [0, size) using exactly
@@ -154,21 +245,677 @@ describe("computeTikTokCaption", () => {
   });
 });
 
+// TikTok's /v2/post/publish/status/fetch/ returns UPPERCASE statuses
+// (https://developers.tiktok.com/doc/content-posting-api-reference-get-video-status):
+// PROCESSING_UPLOAD, PROCESSING_DOWNLOAD, SEND_TO_USER_INBOX, PUBLISH_COMPLETE,
+// FAILED. The old code compared lowercase, so every post "timed out".
 describe("decidePollOutcome", () => {
-  it("classifies publish_complete as complete (the only success)", () => {
-    expect(decidePollOutcome("publish_complete")).toBe("complete");
+  it.each([
+    // TikTok's real values.
+    ["PUBLISH_COMPLETE", "complete"],
+    ["SEND_TO_USER_INBOX", "complete"],
+    ["FAILED", "failed"],
+    ["PROCESSING_UPLOAD", "pending"],
+    ["PROCESSING_DOWNLOAD", "pending"],
+    // Normalization: case-insensitive (and whitespace-tolerant).
+    ["publish_complete", "complete"],
+    ["Failed", "failed"],
+    ["  PUBLISH_COMPLETE ", "complete"],
+    // Anything else is still pending.
+    ["SOMETHING_NEW", "pending"],
+    ["", "pending"],
+    [undefined, "pending"],
+    [null, "pending"],
+  ] as const)("classifies %j as %s", (status, expected) => {
+    expect(decidePollOutcome(status)).toBe(expected);
+  });
+});
+
+describe("pollTikTokPublishStatus", () => {
+  const noSleep = () => Promise.resolve();
+
+  function statusResponse(status: string, failReason?: string): Response {
+    return jsonResponse({
+      data: { status, ...(failReason ? { fail_reason: failReason } : {}) },
+      error: { code: "ok", message: "", log_id: "log-1" },
+    });
+  }
+
+  function poll(overrides: Partial<Parameters<typeof pollTikTokPublishStatus>[0]> = {}) {
+    return pollTikTokPublishStatus({
+      accessToken: "access-token",
+      publishId: "publish-1",
+      connectionId: "conn-1",
+      sleep: noSleep,
+      ...overrides,
+    });
+  }
+
+  it("uses a ~120s budget: 24 attempts x 5s", () => {
+    expect(TIKTOK_POLL_MAX_ATTEMPTS).toBe(24);
+    expect(TIKTOK_POLL_INTERVAL_MS).toBe(5_000);
+    expect(TIKTOK_POLL_MAX_ATTEMPTS * TIKTOK_POLL_INTERVAL_MS).toBe(120_000);
   });
 
-  it("classifies failed as terminal so it cannot be swallowed", () => {
-    expect(decidePollOutcome("failed")).toBe("failed");
+  it("resolves once TikTok reports PUBLISH_COMPLETE (uppercase), after pending polls", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(statusResponse("PROCESSING_UPLOAD"))
+      .mockResolvedValueOnce(statusResponse("PROCESSING_DOWNLOAD"))
+      .mockResolvedValueOnce(statusResponse("PUBLISH_COMPLETE"));
+    vi.stubGlobal("fetch", fetchMock);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    await expect(poll({ sleep })).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledWith(5_000);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://open.tiktokapis.com/v2/post/publish/status/fetch/");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer access-token");
+    expect(JSON.parse(init.body as string)).toEqual({ publish_id: "publish-1" });
   });
 
-  it("treats processing / unknown / missing statuses as pending", () => {
-    expect(decidePollOutcome("processing_upload")).toBe("pending");
-    expect(decidePollOutcome("processing_download")).toBe("pending");
-    expect(decidePollOutcome("send_to_user_inbox")).toBe("pending");
-    expect(decidePollOutcome("")).toBe("pending");
-    expect(decidePollOutcome(undefined)).toBe("pending");
-    expect(decidePollOutcome(null)).toBe("pending");
+  it("treats SEND_TO_USER_INBOX as complete", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(statusResponse("SEND_TO_USER_INBOX")));
+    await expect(poll()).resolves.toBeUndefined();
+  });
+
+  it("still accepts a lowercase publish_complete (normalization)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(statusResponse("publish_complete")));
+    await expect(poll()).resolves.toBeUndefined();
+  });
+
+  it("throws TIKTOK_PUBLISH_FAILED including TikTok's fail_reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(statusResponse("FAILED", "file_format_check_failed")),
+    );
+
+    const error = await caught(poll());
+
+    expect(error?.code).toBe("TIKTOK_PUBLISH_FAILED");
+    expect(error?.message).toContain("file_format_check_failed");
+  });
+
+  it("throws TIKTOK_PUBLISH_FAILED without a reason suffix when fail_reason is absent", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(statusResponse("FAILED")));
+
+    const error = await caught(poll());
+
+    expect(error?.code).toBe("TIKTOK_PUBLISH_FAILED");
+    expect(error?.message).toBe("TikTok failed to process the video");
+  });
+
+  it("does not echo an arbitrary (non-enum-looking) fail_reason into the user-facing message", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(statusResponse("FAILED", "<script>alert(1)</script> secret=abc")),
+    );
+
+    const error = await caught(poll());
+
+    expect(error?.code).toBe("TIKTOK_PUBLISH_FAILED");
+    expect(error?.message).not.toContain("script");
+    expect(error?.message).not.toContain("secret");
+  });
+
+  it("exhausts after 24 attempts (~120s) with TIKTOK_PUBLISH_PENDING and the exact guidance message", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(statusResponse("PROCESSING_UPLOAD")),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const sleep = vi.fn().mockResolvedValue(undefined);
+
+    const error = await caught(poll({ sleep }));
+
+    expect(error?.code).toBe("TIKTOK_PUBLISH_PENDING");
+    expect(error?.message).toBe(PENDING_MESSAGE);
+    expect(fetchMock).toHaveBeenCalledTimes(24);
+    const totalWaitMs = sleep.mock.calls.reduce((sum, c) => sum + (c[0] as number), 0);
+    expect(totalWaitMs).toBe(120_000);
+    // Exhaustion is NOT a reconnect problem.
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps polling through transient HTTP 5xx and network errors", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("oops", { status: 503 }))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(statusResponse("PUBLISH_COMPLETE"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(poll()).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("maps a 401 from the status endpoint to TIKTOK_RECONNECT_REQUIRED and flags the connection", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({ error: { code: "access_token_invalid", message: "bad token" } }, 401),
+      ),
+    );
+
+    const error = await caught(poll({ connectionId: "conn-42" }));
+
+    expect(error?.code).toBe(RECONNECT_CODE);
+    expect(updateCalls()).toHaveLength(1);
+    expect(updateCalls()[0].where).toEqual({ id: "conn-42" });
+    expect(updateCalls()[0].data.needsReconnect).toBe(true);
+    expect(updateCalls()[0].data.lastRefreshErrorCode).toBe(RECONNECT_CODE);
+  });
+});
+
+describe("refreshTikTokToken", () => {
+  it("POSTs the documented form fields to TikTok's token endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        access_token: "new-access-token",
+        expires_in: 86_400,
+        refresh_token: "old-refresh-token",
+        refresh_expires_in: 31_536_000,
+        open_id: "open-id-1",
+        scope: "video.publish",
+        token_type: "Bearer",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await refreshTikTokToken(makeConnection({ refreshToken: "refresh-xyz" }));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://open.tiktokapis.com/v2/oauth/token/");
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe(
+      "application/x-www-form-urlencoded",
+    );
+    const body = new URLSearchParams(String(init.body));
+    expect(Object.fromEntries(body.entries())).toEqual({
+      client_key: "test-client-key",
+      client_secret: "test-client-secret",
+      grant_type: "refresh_token",
+      refresh_token: "refresh-xyz",
+    });
+  });
+
+  it("persists the new access token + expiry and clears the health flags (never sets the flag alongside tokens)", async () => {
+    const expiresIn = 86_400;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          access_token: "new-access-token",
+          expires_in: expiresIn,
+          refresh_token: "old-refresh-token", // unchanged -> not rewritten
+          refresh_expires_in: 31_536_000,
+        }),
+      ),
+    );
+
+    const before = Date.now();
+    const updated = await refreshTikTokToken(makeConnection({ id: "conn-42" }));
+    const after = Date.now();
+
+    expect(updateCalls()).toHaveLength(1);
+    const { where, data } = updateCalls()[0];
+    expect(where).toEqual({ id: "conn-42" });
+    expect(Object.keys(data).sort()).toEqual([
+      "accessToken",
+      "expiresAt",
+      "lastRefreshErrorCode",
+      "needsReconnect",
+      "refreshFailedAt",
+    ]);
+    expect(data.accessToken).toBe("new-access-token");
+    expect(data.needsReconnect).toBe(false);
+    expect(data.lastRefreshErrorCode).toBeNull();
+    expect(data.refreshFailedAt).toBeNull();
+    const expiresMs = (data.expiresAt as Date).getTime();
+    expect(expiresMs).toBeGreaterThanOrEqual(before + expiresIn * 1000);
+    expect(expiresMs).toBeLessThanOrEqual(after + expiresIn * 1000);
+
+    // Returns the persisted row (what db.ts hands back, tokens opened).
+    expect(updated.accessToken).toBe("new-access-token");
+  });
+
+  it("persists a ROTATED refresh token (TikTok: the returned refresh_token may differ and must replace the old one)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          access_token: "new-access-token",
+          expires_in: 86_400,
+          refresh_token: "rotated-refresh-token",
+          refresh_expires_in: 31_536_000,
+        }),
+      ),
+    );
+
+    await refreshTikTokToken(makeConnection({ refreshToken: "old-refresh-token" }));
+
+    expect(updateCalls()[0].data.refreshToken).toBe("rotated-refresh-token");
+  });
+
+  it("does not touch refreshToken when the response omits it or returns it unchanged", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse({ access_token: "a1", expires_in: 86_400 }))
+        .mockResolvedValueOnce(
+          jsonResponse({ access_token: "a2", expires_in: 86_400, refresh_token: "old-refresh-token" }),
+        ),
+    );
+
+    await refreshTikTokToken(makeConnection());
+    await refreshTikTokToken(makeConnection());
+
+    expect(updateCalls()[0].data).not.toHaveProperty("refreshToken");
+    expect(updateCalls()[1].data).not.toHaveProperty("refreshToken");
+  });
+
+  it("falls back to TikTok's 24h access-token TTL when expires_in is missing, never persisting an Invalid Date", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ access_token: "a1" })));
+
+    const before = Date.now();
+    await refreshTikTokToken(makeConnection());
+    const after = Date.now();
+
+    const expiresAt = updateCalls()[0].data.expiresAt as Date;
+    expect(Number.isNaN(expiresAt.getTime())).toBe(false);
+    expect(expiresAt.getTime()).toBeGreaterThanOrEqual(before + 86_400_000);
+    expect(expiresAt.getTime()).toBeLessThanOrEqual(after + 86_400_000);
+  });
+
+  describe("terminal failures (flag needsReconnect)", () => {
+    it.each([
+      ["HTTP 400 invalid_grant", 400, { error: "invalid_grant", error_description: "expired" }],
+      ["HTTP 400 invalid_request", 400, { error: "invalid_request" }],
+      ["HTTP 401", 401, { error: "invalid_token" }],
+      ["HTTP 401 with an unparseable body", 401, null],
+      ["HTTP 200 carrying error=invalid_grant and no access_token", 200, { error: "invalid_grant" }],
+    ] as const)("%s", async (_label, status, body) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          body === null ? new Response("<html>nope</html>", { status }) : jsonResponse(body, status),
+        ),
+      );
+
+      const error = await caught(refreshTikTokToken(makeConnection({ id: "conn-9" })));
+
+      expect(error?.code).toBe(RECONNECT_CODE);
+      // Exactly ONE write: the flag-only update. No tokens ride along.
+      expect(updateCalls()).toHaveLength(1);
+      const { where, data } = updateCalls()[0];
+      expect(where).toEqual({ id: "conn-9" });
+      expect(Object.keys(data).sort()).toEqual([
+        "lastRefreshErrorCode",
+        "needsReconnect",
+        "refreshFailedAt",
+      ]);
+      expect(data.needsReconnect).toBe(true);
+      expect(data.lastRefreshErrorCode).toBe(RECONNECT_CODE);
+    });
+
+    it("flags and throws a reconnect error when there is no refresh token at all, without any network call", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const error = await caught(refreshTikTokToken(makeConnection({ refreshToken: null })));
+
+      expect(error?.code).toBe(RECONNECT_CODE);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(updateCalls()).toHaveLength(1);
+      expect(updateCalls()[0].data.needsReconnect).toBe(true);
+    });
+  });
+
+  describe("transient / non-terminal failures (throw WITHOUT flagging)", () => {
+    it.each([
+      ["HTTP 429", 429],
+      ["HTTP 500", 500],
+      ["HTTP 503", 503],
+      ["HTTP 403 (not a documented terminal status)", 403],
+    ] as const)("%s", async (_label, status) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(new Response("upstream says: SECRET-BODY", { status })),
+      );
+
+      const error = await caught(refreshTikTokToken(makeConnection()));
+
+      expect(error?.code).toBe("TIKTOK_TOKEN_REFRESH_FAILED");
+      // status is carried so withTransientRetries can retry 429/5xx in-step.
+      expect(error?.status).toBe(status);
+      // Sanitized: never leaks the upstream body or tokens.
+      expect(error?.message).not.toContain("SECRET-BODY");
+      expect(error?.message).not.toContain("old-refresh-token");
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("propagates a network failure unchanged (retryable TypeError) and does not flag", async () => {
+      const networkError = new TypeError("fetch failed");
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(networkError));
+
+      const error = await caught(refreshTikTokToken(makeConnection()));
+
+      expect(error).toBe(networkError);
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("does not flag on 5xx even if the body says invalid_grant", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(jsonResponse({ error: "invalid_grant" }, 502)),
+      );
+
+      const error = await caught(refreshTikTokToken(makeConnection()));
+
+      expect(error?.code).toBe("TIKTOK_TOKEN_REFRESH_FAILED");
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("does not flag on invalid_client (a deployment/secret problem must not mark every user's connection dead)", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(jsonResponse({ error: "invalid_client" }, 401)),
+      );
+
+      const error = await caught(refreshTikTokToken(makeConnection()));
+
+      expect(error?.code).toBe("TIKTOK_TOKEN_REFRESH_FAILED");
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("does not flag when a 200 response has neither access_token nor a recognizable error", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({})));
+
+      const error = await caught(refreshTikTokToken(makeConnection()));
+
+      expect(error?.code).toBe("TIKTOK_TOKEN_REFRESH_FAILED");
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("throws TIKTOK_MISSING_OAUTH_CREDENTIALS (no network, no flag) when the client env vars are absent", async () => {
+      vi.stubEnv("TIKTOK_CLIENT_KEY", "");
+      vi.stubEnv("TIKTOK_CLIENT_SECRET", "");
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const error = await caught(refreshTikTokToken(makeConnection()));
+
+      expect(error?.code).toBe("TIKTOK_MISSING_OAUTH_CREDENTIALS");
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("ensureFreshTikTokToken", () => {
+  const refreshOk = () =>
+    vi.fn().mockResolvedValue(
+      jsonResponse({ access_token: "fresh-access-token", expires_in: 86_400 }),
+    );
+
+  it("returns the same connection without any refresh when expiresAt is null (cannot judge)", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const connection = makeConnection({ expiresAt: null });
+
+    await expect(ensureFreshTikTokToken(connection)).resolves.toBe(connection);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns the same connection when the token has more than 5 minutes left", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const connection = makeConnection({ expiresAt: new Date(Date.now() + 10 * 60 * 1000) });
+
+    await expect(ensureFreshTikTokToken(connection)).resolves.toBe(connection);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes when the token expires within 5 minutes", async () => {
+    vi.stubGlobal("fetch", refreshOk());
+    const connection = makeConnection({ expiresAt: new Date(Date.now() + 4 * 60 * 1000) });
+
+    const result = await ensureFreshTikTokToken(connection);
+
+    expect(result.accessToken).toBe("fresh-access-token");
+    expect(updateCalls()).toHaveLength(1);
+  });
+
+  it("refreshes when the token is already expired", async () => {
+    vi.stubGlobal("fetch", refreshOk());
+    const connection = makeConnection({ expiresAt: new Date("2020-01-01T00:00:00Z") });
+
+    const result = await ensureFreshTikTokToken(connection);
+
+    expect(result.accessToken).toBe("fresh-access-token");
+  });
+
+  it("propagates a terminal refresh failure as the reconnect error (flagged exactly once)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ error: "invalid_grant" }, 400)));
+    const connection = makeConnection({ expiresAt: new Date("2020-01-01T00:00:00Z") });
+
+    const error = await caught(ensureFreshTikTokToken(connection));
+
+    expect(error?.code).toBe(RECONNECT_CODE);
+    expect(updateCalls()).toHaveLength(1);
+    expect(updateCalls()[0].data.needsReconnect).toBe(true);
+  });
+
+  it("propagates a transient refresh failure as-is, unflagged", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 503 })));
+    const connection = makeConnection({ expiresAt: new Date("2020-01-01T00:00:00Z") });
+
+    const error = await caught(ensureFreshTikTokToken(connection));
+
+    expect(error?.code).toBe("TIKTOK_TOKEN_REFRESH_FAILED");
+    expect(error?.status).toBe(503);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("tiktokClient.refreshToken (connection-health sweep wiring)", () => {
+  it("exposes refreshToken so the daily sweep (which skips clients without one) refreshes TikTok", () => {
+    expect(typeof tiktokClient.refreshToken).toBe("function");
+  });
+
+  it("refreshes through the same implementation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse({ access_token: "swept", expires_in: 86_400 })),
+    );
+
+    const result = await tiktokClient.refreshToken!(makeConnection());
+
+    expect(result.accessToken).toBe("swept");
+  });
+});
+
+describe("tiktokClient.publishVideo", () => {
+  const mediaItem = {
+    id: "media-1",
+    mimeType: "video/mp4",
+    originalFilename: "clip.mp4",
+    storageLocation: "https://blob.example.com/clip.mp4",
+  } as unknown as MediaItem;
+
+  function makeCtx(connection: SocialConnection = makeConnection()): PublishContext {
+    return {
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: connection,
+      mediaItem,
+      caption: "hello",
+    };
+  }
+
+  /** Route a stubbed fetch by URL; unmatched URLs fail the test loudly. */
+  function stubFetch(routes: Record<string, () => Response>) {
+    const fetchMock = vi.fn<typeof fetch>((input) => {
+      const url = String(input);
+      const route = Object.entries(routes).find(([fragment]) => url.includes(fragment));
+      if (!route) throw new Error(`Unexpected fetch in test: ${url}`);
+      return Promise.resolve(route[1]());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  const creatorInfoOk = () =>
+    jsonResponse({ data: { creator_username: "acme", privacy_level_options: ["SELF_ONLY"] } });
+  const videoBlob = () => new Response(new Uint8Array([1, 2, 3, 4]), { status: 200 });
+  const initOk = () =>
+    jsonResponse({
+      data: { publish_id: "publish-123", upload_url: "https://upload.tiktok.example/u" },
+      error: { code: "ok" },
+    });
+  const uploadOk = () => new Response("", { status: 201 });
+
+  it("completes (no timeout failure) when TikTok reports the real uppercase PUBLISH_COMPLETE", async () => {
+    vi.useFakeTimers();
+    stubFetch({
+      "creator_info/query": creatorInfoOk,
+      "blob.example.com": videoBlob,
+      "video/init": initOk,
+      "upload.tiktok.example": uploadOk,
+      "status/fetch": () => jsonResponse({ data: { status: "PUBLISH_COMPLETE" } }),
+    });
+
+    const promise = tiktokClient.publishVideo(makeCtx());
+    await vi.advanceTimersByTimeAsync(TIKTOK_POLL_INTERVAL_MS);
+
+    await expect(promise).resolves.toEqual({ externalPostId: "publish-123" });
+  });
+
+  it("refreshes an expiring token BEFORE any TikTok API call and uses the new token", async () => {
+    vi.useFakeTimers();
+    const fetchMock = stubFetch({
+      "oauth/token": () => jsonResponse({ access_token: "fresh-access-token", expires_in: 86_400 }),
+      "creator_info/query": creatorInfoOk,
+      "blob.example.com": videoBlob,
+      "video/init": initOk,
+      "upload.tiktok.example": uploadOk,
+      "status/fetch": () => jsonResponse({ data: { status: "PUBLISH_COMPLETE" } }),
+    });
+
+    const promise = tiktokClient.publishVideo(
+      makeCtx(makeConnection({ expiresAt: new Date(Date.now() + 60 * 1000) })),
+    );
+    await vi.advanceTimersByTimeAsync(TIKTOK_POLL_INTERVAL_MS);
+    await promise;
+
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls[0]).toContain("oauth/token");
+    const creatorCall = fetchMock.mock.calls.find((c) => String(c[0]).includes("creator_info"))!;
+    expect(((creatorCall[1] as RequestInit).headers as Record<string, string>).Authorization).toBe(
+      "Bearer fresh-access-token",
+    );
+  });
+
+  it("does not call TikTok at all and surfaces the reconnect code when the refresh is terminal", async () => {
+    const fetchMock = stubFetch({
+      "oauth/token": () => jsonResponse({ error: "invalid_grant" }, 400),
+    });
+
+    const error = await caught(
+      tiktokClient.publishVideo(
+        makeCtx(makeConnection({ expiresAt: new Date("2020-01-01T00:00:00Z") })),
+      ),
+    );
+
+    expect(error?.code).toBe(RECONNECT_CODE);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(updateCalls()).toHaveLength(1);
+    expect(updateCalls()[0].data.needsReconnect).toBe(true);
+  });
+
+  it("maps a 401 from creator_info to TIKTOK_RECONNECT_REQUIRED and flags the connection", async () => {
+    stubFetch({
+      "creator_info/query": () =>
+        jsonResponse({ error: { code: "access_token_invalid", message: "expired" } }, 401),
+    });
+
+    const error = await caught(tiktokClient.publishVideo(makeCtx(makeConnection({ id: "conn-7" }))));
+
+    expect(error?.code).toBe(RECONNECT_CODE);
+    expect(error?.message).toMatch(/reconnect/i);
+    expect(updateCalls()).toHaveLength(1);
+    expect(updateCalls()[0].where).toEqual({ id: "conn-7" });
+    expect(updateCalls()[0].data.needsReconnect).toBe(true);
+    expect(updateCalls()[0].data.lastRefreshErrorCode).toBe(RECONNECT_CODE);
+    expect(updateCalls()[0].data).not.toHaveProperty("accessToken");
+    expect(updateCalls()[0].data).not.toHaveProperty("refreshToken");
+  });
+
+  it("maps a 401 from video/init to TIKTOK_RECONNECT_REQUIRED and flags the connection", async () => {
+    stubFetch({
+      "creator_info/query": creatorInfoOk,
+      "blob.example.com": videoBlob,
+      "video/init": () =>
+        jsonResponse({ error: { code: "access_token_invalid", message: "expired" } }, 401),
+    });
+
+    const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+    expect(error?.code).toBe(RECONNECT_CODE);
+    expect(updateCalls()).toHaveLength(1);
+    expect(updateCalls()[0].data.needsReconnect).toBe(true);
+  });
+
+  it("maps an access_token_invalid error code inside a 200 init response to the reconnect code too", async () => {
+    stubFetch({
+      "creator_info/query": creatorInfoOk,
+      "blob.example.com": videoBlob,
+      "video/init": () =>
+        jsonResponse({ error: { code: "access_token_invalid", message: "expired" } }, 200),
+    });
+
+    const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+    expect(error?.code).toBe(RECONNECT_CODE);
+    expect(updateCalls()).toHaveLength(1);
+  });
+
+  it("does NOT flag the connection for non-auth init failures", async () => {
+    stubFetch({
+      "creator_info/query": creatorInfoOk,
+      "blob.example.com": videoBlob,
+      "video/init": () => jsonResponse({ error: { code: "internal_error" } }, 500),
+    });
+
+    const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+    expect(error?.code).toBe("TIKTOK_INIT_FAILED");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("maps a 401 from the status poll to TIKTOK_RECONNECT_REQUIRED mid-publish", async () => {
+    vi.useFakeTimers();
+    stubFetch({
+      "creator_info/query": creatorInfoOk,
+      "blob.example.com": videoBlob,
+      "video/init": initOk,
+      "upload.tiktok.example": uploadOk,
+      "status/fetch": () => jsonResponse({ error: { code: "access_token_invalid" } }, 401),
+    });
+
+    const promise = caught(tiktokClient.publishVideo(makeCtx()));
+    await vi.advanceTimersByTimeAsync(TIKTOK_POLL_INTERVAL_MS);
+
+    const error = await promise;
+    expect(error?.code).toBe(RECONNECT_CODE);
+    expect(updateCalls()).toHaveLength(1);
+    expect(updateCalls()[0].data.needsReconnect).toBe(true);
   });
 });
