@@ -9,7 +9,13 @@ import { normalizeEmail } from "./email";
 import { findOrCreateGoogleSsoUser, googleSsoConfig } from "./googleSso";
 import { checkRateLimit } from "./rateLimit";
 
-const LOGIN_EMAIL_LIMIT = {
+// Login throttles (all fail-closed). Keyed per (email, IP) rather than per
+// email so one IP guessing at a victim's address exhausts only ITS bucket —
+// the victim, from their own IP, can still sign in. The per-IP limit caps
+// spraying many addresses from one host, and the per-email hourly backstop
+// caps a distributed attack on one account (one IP alone can reach at most
+// 40/hour against it: 10 per 15-minute bucket).
+const LOGIN_EMAIL_IP_LIMIT = {
   route: "auth/login",
   limit: 10,
   windowMs: 15 * 60 * 1000,
@@ -19,12 +25,21 @@ const LOGIN_IP_LIMIT = {
   limit: 30,
   windowMs: 15 * 60 * 1000,
 } as const;
+const LOGIN_EMAIL_LIMIT = {
+  route: "auth/login-email",
+  limit: 100,
+  windowMs: 60 * 60 * 1000,
+} as const;
 
 // Evaluated once at module load (authOptions is a module-level const anyway);
 // env vars are fixed for a deployment's lifetime.
 const googleSso = googleSsoConfig();
 
-function clientIpFromAuthReq(req: { headers?: Headers | Record<string, string | string[] | undefined> } | undefined): string {
+type AuthorizeRequest =
+  | { headers?: Headers | Record<string, string | string[] | undefined> }
+  | undefined;
+
+function clientIpFromAuthReq(req: AuthorizeRequest): string {
   if (!req?.headers) return "unknown";
   const headers = req.headers;
   const raw =
@@ -33,6 +48,66 @@ function clientIpFromAuthReq(req: { headers?: Headers | Record<string, string | 
       : (headers as Record<string, string | string[] | undefined>)["x-forwarded-for"];
   const value = Array.isArray(raw) ? raw[0] : raw;
   return (value ?? "unknown").split(",")[0].trim() || "unknown";
+}
+
+/**
+ * A fixed bcrypt hash (cost 10, same as register/reset) of a random string
+ * nobody knows. Compared against when the email has no account or the account
+ * has no password, so every login attempt pays one bcrypt.compare and the
+ * response time doesn't reveal which emails are registered.
+ */
+export const LOGIN_DUMMY_PASSWORD_HASH =
+  "$2b$10$q6MrNNSuZd96xoBcyDM4fOwEYlaaK9ofCxe.2kWdoXNQQJ1jGtipW";
+
+/** The Credentials provider's `authorize` (exported for tests). */
+export async function authorizeCredentials(
+  credentials: Record<"email" | "password", string> | undefined,
+  req: AuthorizeRequest,
+) {
+  if (!credentials?.email || !credentials?.password) {
+    return null;
+  }
+
+  const email = normalizeEmail(credentials.email);
+  const ip = clientIpFromAuthReq(req);
+
+  // Fail-closed throttles: online password guessing + cost amplification.
+  // Exhausted limits return null (same as bad credentials — no oracle).
+  // Checked in order and short-circuited, so attempts an IP makes after its
+  // own buckets are exhausted never count toward the per-email backstop.
+  const limits = [
+    { userId: `email-ip:${email}|${ip}`, ...LOGIN_EMAIL_IP_LIMIT },
+    { userId: `ip:${ip}`, ...LOGIN_IP_LIMIT },
+    { userId: `email:${email}`, ...LOGIN_EMAIL_LIMIT },
+  ];
+  for (const limit of limits) {
+    const result = await checkRateLimit({ ...limit, failClosed: true });
+    if (!result.allowed) {
+      return null;
+    }
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { email },
+  });
+
+  // Always exactly one bcrypt.compare — see LOGIN_DUMMY_PASSWORD_HASH.
+  const isValid = await bcrypt.compare(
+    credentials.password,
+    user?.passwordHash || LOGIN_DUMMY_PASSWORD_HASH,
+  );
+  if (!user || !user.passwordHash || !isValid) {
+    return null;
+  }
+
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name ?? undefined,
+    // Carried into the JWT so getCurrentUser / jwt re-check can reject
+    // sessions issued before a password reset (sessionVersion bump).
+    sessionVersion: user.sessionVersion,
+  };
 }
 
 export const authOptions: NextAuthOptions = {
@@ -49,54 +124,7 @@ export const authOptions: NextAuthOptions = {
         email: { label: "Email", type: "text" },
         password: { label: "Password", type: "password" },
       },
-      async authorize(credentials, req) {
-        if (!credentials?.email || !credentials?.password) {
-          return null;
-        }
-
-        const email = normalizeEmail(credentials.email);
-
-        // Fail-closed throttles: online password guessing + cost amplification.
-        // Exhausted limits return null (same as bad credentials — no oracle).
-        const emailLimit = await checkRateLimit({
-          userId: `email:${email}`,
-          ...LOGIN_EMAIL_LIMIT,
-          failClosed: true,
-        });
-        if (!emailLimit.allowed) {
-          return null;
-        }
-        const ipLimit = await checkRateLimit({
-          userId: `ip:${clientIpFromAuthReq(req)}`,
-          ...LOGIN_IP_LIMIT,
-          failClosed: true,
-        });
-        if (!ipLimit.allowed) {
-          return null;
-        }
-
-        const user = await prisma.user.findUnique({
-          where: { email },
-        });
-
-        if (!user || !user.passwordHash) {
-          return null;
-        }
-
-        const isValid = await bcrypt.compare(credentials.password, user.passwordHash);
-        if (!isValid) {
-          return null;
-        }
-
-        return {
-          id: user.id,
-          email: user.email,
-          name: user.name ?? undefined,
-          // Carried into the JWT so getCurrentUser / jwt re-check can reject
-          // sessions issued before a password reset (sessionVersion bump).
-          sessionVersion: user.sessionVersion,
-        };
-      },
+      authorize: (credentials, req) => authorizeCredentials(credentials, req),
     }),
     // Env-gated (like RESEND_API_KEY): registered only when the owner has
     // configured a Google OAuth client — see lib/googleSso.ts. With it absent
