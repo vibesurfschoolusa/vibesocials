@@ -237,14 +237,26 @@ interface PublishRunFailureArgs {
       function_id?: string;
       run_id?: string;
       /** The ORIGINAL triggering event (`post/publish.requested` / `post/retry.requested`). */
-      event: { data?: { postJobId?: unknown } };
+      event: { data?: { postJobId?: unknown; platforms?: unknown } };
     };
   };
   error: unknown;
 }
 
+/** The failed run's postJobId, or null (logged) when its event carries none. */
+function failedRunPostJobId({ event, error }: PublishRunFailureArgs): string | null {
+  const postJobId = event.data.event.data?.postJobId;
+  if (typeof postJobId === "string" && postJobId.length > 0) return postJobId;
+  logger.error("[Inngest] Publish run failed without a postJobId; nothing to fail", {
+    functionId: event.data.function_id,
+    runId: event.data.run_id,
+    error,
+  });
+  return null;
+}
+
 /**
- * `onFailure` for both publish functions (Task 4 items 7 + 9). They are
+ * `onFailure` for publishToAllPlatforms (Task 4 items 7 + 9). It is
  * `retries: 0` (posting is not idempotent), so when a run dies — a step killed
  * at Vercel's 300s per-invocation cap, a thrown setup step — Inngest fails it
  * once and the platforms not yet attempted stay `pending`: the job looked
@@ -254,27 +266,55 @@ interface PublishRunFailureArgs {
  * already finished are untouched (a platform that went live stays live), and
  * every failed one is retryable from the UI.
  */
-export async function failInterruptedPublishRun({
-  event,
-  error,
-}: PublishRunFailureArgs): Promise<void> {
-  const postJobId = event.data.event.data?.postJobId;
-  if (typeof postJobId !== "string" || postJobId.length === 0) {
-    logger.error("[Inngest] Publish run failed without a postJobId; nothing to fail", {
-      functionId: event.data.function_id,
-      runId: event.data.run_id,
-      error,
-    });
-    return;
-  }
+export async function failInterruptedPublishRun(args: PublishRunFailureArgs): Promise<void> {
+  const postJobId = failedRunPostJobId(args);
+  if (!postJobId) return;
 
   const outcome = await failPendingPostJobResults(postJobId, PUBLISH_INTERRUPTED);
   logger.warn("[Inngest] Publish run failed; interrupted results failed", {
     postJobId,
-    functionId: event.data.function_id,
-    runId: event.data.run_id,
+    functionId: args.event.data.function_id,
+    runId: args.event.data.run_id,
     ...outcome,
-    error,
+    error: args.error,
+  });
+}
+
+/**
+ * `onFailure` for retryPlatforms (Task 4 fix round 1, ruling R8b). Same
+ * cleanup as {@link failInterruptedPublishRun}, but ONLY for the platforms
+ * this retry run's own event re-queued (`event.data.platforms`): another run
+ * of the same job — the original publish or another retry — may still own the
+ * job's other pending results, and failing those would invite a second retry
+ * of a platform that is still being published. An event without platforms
+ * re-queued nothing, so nothing is failed.
+ */
+export async function failInterruptedRetryRun(args: PublishRunFailureArgs): Promise<void> {
+  const postJobId = failedRunPostJobId(args);
+  if (!postJobId) return;
+
+  const raw = args.event.data.event.data?.platforms;
+  const platforms = Array.isArray(raw)
+    ? raw.filter((p): p is Platform => typeof p === "string")
+    : [];
+  if (platforms.length === 0) {
+    logger.error("[Inngest] Retry run failed without platforms; nothing to fail", {
+      postJobId,
+      functionId: args.event.data.function_id,
+      runId: args.event.data.run_id,
+      error: args.error,
+    });
+    return;
+  }
+
+  const outcome = await failPendingPostJobResults(postJobId, PUBLISH_INTERRUPTED, { platforms });
+  logger.warn("[Inngest] Retry run failed; its interrupted results failed", {
+    postJobId,
+    platforms,
+    functionId: args.event.data.function_id,
+    runId: args.event.data.run_id,
+    ...outcome,
+    error: args.error,
   });
 }
 
@@ -595,7 +635,10 @@ export const mediaRetentionSweep = inngest.createFunction(
  * IDEMPOTENCY (defense-in-depth): the `concurrency` key below serializes runs
  * per `postJobId`, so two overlapping retry events for the same job can never
  * re-run the same platform at the same time. The endpoint's conditional claim
- * is the primary guard; this is the second layer.
+ * is the primary guard; this is the second layer. Third (ruling R8a): each
+ * `retry-<platform>` step re-reads its result and publishes only while it is
+ * still `pending` — the concurrency key does not serialize a retry against the
+ * original publish run, which may have finalized (or onFailure failed) it.
  *
  * Caption source: unlike the initial publish (which carries caption/overrides
  * in the event payload), a retry re-derives them from the DB — the JOB's own
@@ -611,8 +654,9 @@ export const retryPlatforms = inngest.createFunction(
     id: "retry-platforms",
     name: "Retry Failed Platforms",
     retries: 0,
-    // Same interrupted-run cleanup as publishToAllPlatforms (Task 4 item 7).
-    onFailure: failInterruptedPublishRun,
+    // Interrupted-run cleanup scoped to THIS run's platforms (Task 4 item 7,
+    // ruling R8b) — the original publish run may still own the others.
+    onFailure: failInterruptedRetryRun,
     // Serialize by PostJob: overlapping retries for the same job queue behind
     // one another instead of double-running a platform (posting isn't
     // idempotent). Pairs with the endpoint's failed->pending conditional claim.
@@ -757,6 +801,24 @@ export const retryPlatforms = inngest.createFunction(
       const connection = connections.find((c) => c.platform === platform);
 
       const result = await step.run(`retry-${platform}`, async () => {
+        // Ruling R8a: publish only while this result is still the `pending`
+        // the retry route claimed. An overlapping run may have finalized it
+        // since, or an onFailure handler failed it (and the user may already
+        // have retried it again) — publishing then would post twice.
+        const current = await prisma.postJobResult.findUnique({
+          where: { id: resultRecord.id },
+          select: { status: true },
+        });
+        if (current?.status !== "pending") {
+          logger.warn("[Inngest] Retry step skipped: result is no longer pending", {
+            postJobId,
+            platform,
+            resultRecordId: resultRecord.id,
+            status: current?.status ?? "missing",
+          });
+          return { platform, status: "skipped" };
+        }
+
         if (!connection) {
           // The platform was disconnected since the original post; there is no
           // token to publish with. Fail with a reconnect-shaped code so the UI

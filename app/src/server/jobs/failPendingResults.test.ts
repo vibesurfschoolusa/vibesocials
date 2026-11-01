@@ -100,6 +100,50 @@ describe("failPendingPostJobResults", () => {
     expect(outcome).toEqual({ failedCount: 1, status: "completed" });
   });
 
+  // Task 4 fix round 1 (ruling R8b): a retry run that dies may only fail the
+  // platforms IT re-queued — another run of the same job may still own the rest.
+  it("with a platforms filter, fails only those platforms' pending results", async () => {
+    await failPendingPostJobResults(
+      "job-1",
+      { errorCode: "PUBLISH_INTERRUPTED", errorMessage: "Publishing was interrupted. Please retry." },
+      { platforms: ["x", "tiktok"] },
+    );
+
+    expect(resultUpdateManyMock).toHaveBeenCalledWith({
+      where: { postJobId: "job-1", status: "pending", platform: { in: ["x", "tiktok"] } },
+      data: {
+        status: "failed",
+        errorCode: "PUBLISH_INTERRUPTED",
+        errorMessage: "Publishing was interrupted. Please retry.",
+      },
+    });
+  });
+
+  it("with a platforms filter, still recomputes the job over ALL its results", async () => {
+    resultFindManyMock.mockResolvedValue([{ status: "failed" }, { status: "pending" }]);
+
+    const outcome = await failPendingPostJobResults("job-1", DISPATCH_FAILURE, { platforms: ["x"] });
+
+    expect(resultFindManyMock).toHaveBeenCalledWith({
+      where: { postJobId: "job-1" },
+      select: { status: true },
+    });
+    // The other run's still-pending platform keeps the job in_progress.
+    expect(postJobUpdateMock).toHaveBeenCalledWith({
+      where: { id: "job-1" },
+      data: { status: "in_progress" },
+    });
+    expect(outcome.status).toBe("in_progress");
+  });
+
+  it("without the option (every existing caller), does not filter by platform", async () => {
+    await failPendingPostJobResults("job-1", DISPATCH_FAILURE, {});
+
+    expect(resultUpdateManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { postJobId: "job-1", status: "pending" } }),
+    );
+  });
+
   it("never leaves an empty fan-out in_progress (no results → failed)", async () => {
     resultUpdateManyMock.mockResolvedValue({ count: 0 });
     resultFindManyMock.mockResolvedValue([]);

@@ -1,4 +1,4 @@
-import type { PostJobStatus } from "@prisma/client";
+import type { Platform, PostJobStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
 import { recomputePostJobStatus } from "@/server/jobs/postStatus";
@@ -30,16 +30,28 @@ export const DISPATCH_FAILURE = {
  * live (the job then reads `completed`, and the failed rows are retryable).
  *
  * Shared by every route that dispatches `post/publish.requested` (on an
- * `inngest.send` failure) and meant for any later "the run is gone" path
- * (e.g. an Inngest `onFailure` handler) — hence the parameterized failure.
- * Mirrors retryPlatforms' fail-media-unavailable step in inngest-functions.ts.
+ * `inngest.send` failure) and the publish functions' Inngest `onFailure`
+ * handlers — hence the parameterized failure. Mirrors retryPlatforms'
+ * fail-media-unavailable step in inngest-functions.ts.
+ *
+ * `options.platforms` (Task 4 fix round 1, ruling R8b) narrows the write to
+ * those platforms' pending results — a dead RETRY run may only fail what it
+ * re-queued, since another run of the same job can still own the rest. The
+ * status recompute always covers ALL results. Omitted = every pending result
+ * (unchanged for existing callers).
  */
 export async function failPendingPostJobResults(
   postJobId: string,
   failure: PendingResultFailure,
+  options: { platforms?: Platform[] } = {},
 ): Promise<{ failedCount: number; status: PostJobStatus }> {
+  const { platforms } = options;
   const { count } = await prisma.postJobResult.updateMany({
-    where: { postJobId, status: "pending" },
+    where: {
+      postJobId,
+      status: "pending",
+      ...(platforms ? { platform: { in: platforms } } : {}),
+    },
     data: {
       status: "failed",
       errorCode: failure.errorCode,

@@ -18,6 +18,7 @@ const db = vi.hoisted(() => ({
   connectionFindMany: vi.fn(),
   connectionFindUnique: vi.fn(),
   resultFindMany: vi.fn(),
+  resultFindUnique: vi.fn(),
   resultUpdate: vi.fn(),
   resultUpdateMany: vi.fn(),
 }));
@@ -35,6 +36,7 @@ vi.mock("@/lib/db", () => ({
     socialConnection: { findMany: db.connectionFindMany, findUnique: db.connectionFindUnique },
     postJobResult: {
       findMany: db.resultFindMany,
+      findUnique: db.resultFindUnique,
       update: db.resultUpdate,
       updateMany: db.resultUpdateMany,
     },
@@ -48,6 +50,7 @@ vi.mock("@/server/jobs/failPendingResults", () => ({
 
 import {
   failInterruptedPublishRun,
+  failInterruptedRetryRun,
   publishToAllPlatforms,
   retryPlatforms,
 } from "./inngest-functions";
@@ -117,6 +120,9 @@ beforeEach(() => {
   );
   db.resultUpdate.mockResolvedValue({});
   db.resultUpdateMany.mockResolvedValue({ count: 0 });
+  // A retry step re-reads its result before publishing (ruling R8a); by
+  // default the row is still the `pending` the retry route claimed.
+  db.resultFindUnique.mockResolvedValue({ status: "pending" });
   db.postJobUpdate.mockResolvedValue({});
 });
 
@@ -400,9 +406,10 @@ describe("publish heartbeat — finalizing a result bumps PostJob.updatedAt (Tas
 // failPendingPostJobResults helper (which also recomputes the job status).
 describe("onFailure — interrupted publish runs (Task 4 items 7 + 9)", () => {
   it.each([
-    ["publishToAllPlatforms", publishToAllPlatforms, "publish-to-all-platforms"],
-    ["retryPlatforms", retryPlatforms, "retry-platforms"],
-  ] as const)("%s registers a failure handler for its own function id", (_name, fn, id) => {
+    ["publishToAllPlatforms", publishToAllPlatforms, "publish-to-all-platforms", failInterruptedPublishRun],
+    // Fix round 1 (ruling R8b): the retry run has its OWN, platform-scoped handler.
+    ["retryPlatforms", retryPlatforms, "retry-platforms", failInterruptedRetryRun],
+  ] as const)("%s registers a failure handler for its own function id", (_name, fn, id, handler) => {
     // getConfig is what Inngest's serve() registers; private in the SDK's
     // types, public at runtime.
     const { getConfig } = fn as unknown as {
@@ -417,7 +424,7 @@ describe("onFailure — interrupted publish runs (Task 4 items 7 + 9)", () => {
       { event: "inngest/function.failed", expression: `event.data.function_id == 'vibe-socials-${id}'` },
     ]);
     // ...and it is THIS module's handler.
-    expect((fn as unknown as { onFailureFn?: unknown }).onFailureFn).toBe(failInterruptedPublishRun);
+    expect((fn as unknown as { onFailureFn?: unknown }).onFailureFn).toBe(handler);
   });
 
   function failureEvent(data: Record<string, unknown>) {
@@ -451,6 +458,105 @@ describe("onFailure — interrupted publish runs (Task 4 items 7 + 9)", () => {
     await failInterruptedPublishRun({ event: failureEvent({}), error: new Error("boom") });
     expect(failPendingMock).not.toHaveBeenCalled();
     expect(console.error).toHaveBeenCalled();
+  });
+
+  // Fix round 1 (ruling R8b): a dead retry run fails ONLY the platforms its
+  // own event re-queued. The original publish run (or another retry) may
+  // still own the job's other pending results; failing those would let the
+  // user retry a platform that is still being published -> double post.
+  it("a failed retry run fails only the pending results of ITS OWN platforms", async () => {
+    failPendingMock.mockResolvedValue({ failedCount: 1, status: "in_progress" });
+
+    await failInterruptedRetryRun({
+      event: failureEvent({ postJobId: "job-9", userId: "user-1", platforms: ["x", "tiktok"] }),
+      error: new Error("step timed out"),
+    });
+
+    expect(failPendingMock).toHaveBeenCalledTimes(1);
+    expect(failPendingMock).toHaveBeenCalledWith(
+      "job-9",
+      { errorCode: "PUBLISH_INTERRUPTED", errorMessage: "Publishing was interrupted. Please retry." },
+      { platforms: ["x", "tiktok"] },
+    );
+  });
+
+  it.each([
+    ["no platforms field", { postJobId: "job-9" }],
+    ["an empty platforms list", { postJobId: "job-9", platforms: [] }],
+    ["no postJobId", { platforms: ["x"] }],
+  ])("a failed retry run with %s touches nothing (but logs)", async (_label, data) => {
+    await failInterruptedRetryRun({ event: failureEvent(data), error: new Error("boom") });
+    expect(failPendingMock).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalled();
+  });
+});
+
+// Fix round 1 (ruling R8a): a retry step re-reads its PostJobResult when it
+// starts and only publishes while it is still `pending`. If an overlapping
+// run already finalized it (or an onFailure handler failed it so the user
+// could retry again), publishing would post twice.
+describe("retryPlatforms — a retry step only publishes a still-pending result", () => {
+  function retryRun(platforms: Platform[]) {
+    return handlerOf(retryPlatforms)({
+      event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms } },
+      step: fakeStep(),
+    }) as Promise<{ results: Array<{ platform: Platform; status: string }> }>;
+  }
+
+  beforeEach(() => {
+    db.postJobFindUnique.mockResolvedValue({
+      id: "job-1", workspaceId: WORKSPACE.id, mediaItemId: "media-1",
+      baseCaption: "c", perPlatformOverrides: null, publishMetadata: null,
+    });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", perPlatformOverrides: null, deletedAt: null });
+    db.connectionFindMany.mockResolvedValue([
+      { id: "conn-x", platform: "x" },
+      { id: "conn-youtube", platform: "youtube" },
+    ]);
+    stubResults(["x", "youtube"]);
+  });
+
+  it.each(["failed", "success"] as const)(
+    "skips (no platform call, no result write) a result that is already %s",
+    async (status) => {
+      db.resultFindUnique.mockImplementation(({ where }: { where: { id: string } }) =>
+        Promise.resolve({ status: where.id === "result-x" ? status : "pending" }),
+      );
+
+      const out = await retryRun(["x", "youtube"]);
+
+      expect(db.resultFindUnique).toHaveBeenCalledWith({
+        where: { id: "result-x" },
+        select: { status: true },
+      });
+      expect(publishCtxs.map((c) => c.socialConnection.platform)).toEqual(["youtube"]);
+      expect(db.resultUpdate.mock.calls.map((c) => (c[0] as { where: { id: string } }).where.id)).toEqual([
+        "result-youtube",
+      ]);
+      expect(out.results).toEqual([
+        { platform: "x", status: "skipped" },
+        { platform: "youtube", status: "success" },
+      ]);
+    },
+  );
+
+  it("skips a result that no longer exists", async () => {
+    db.resultFindUnique.mockResolvedValue(null);
+
+    const out = await retryRun(["x"]);
+
+    expect(publishCtxs).toHaveLength(0);
+    expect(db.resultUpdate).not.toHaveBeenCalled();
+    expect(out.results).toEqual([{ platform: "x", status: "skipped" }]);
+  });
+
+  it("does not even write the no-connection failure over a result another run finalized", async () => {
+    db.connectionFindMany.mockResolvedValue([]);
+    db.resultFindUnique.mockResolvedValue({ status: "success" });
+
+    await retryRun(["x"]);
+
+    expect(db.resultUpdate).not.toHaveBeenCalled();
   });
 });
 
