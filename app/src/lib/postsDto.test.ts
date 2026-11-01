@@ -1,6 +1,7 @@
+import type { PostJobResult } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
-import { decodePostsCursor, encodePostsCursor } from "./postsDto";
+import { decodePostsCursor, encodePostsCursor, toPostJobResultSummaryDto } from "./postsDto";
 
 /**
  * Pure unit tests for the keyset pagination cursor helpers (activity
@@ -54,5 +55,36 @@ describe("postsDto cursor helpers (activity pagination)", () => {
     const decoded = decodePostsCursor(token);
     expect(decoded?.id).toBe("a|b");
     expect(decoded?.createdAt.toISOString()).toBe(createdAt.toISOString());
+  });
+});
+
+/**
+ * 2026-11-01 audit, Task 5: `PostJobResult.socialConnectionId` is nullable
+ * (onDelete: SetNull) so a result outlives a removed connection. The display
+ * DTO never carried the FK; a null one must map exactly like a present one.
+ */
+describe("toPostJobResultSummaryDto — results whose connection was removed", () => {
+  const row = (socialConnectionId: string | null): PostJobResult => ({
+    id: "result-1",
+    postJobId: "job-1",
+    platform: "youtube",
+    socialConnectionId,
+    status: "success",
+    externalPostId: "yt-123",
+    errorCode: null,
+    errorMessage: null,
+    createdAt: new Date("2026-01-01T00:01:00Z"),
+    updatedAt: new Date("2026-01-01T00:01:30Z"),
+  });
+
+  it("maps a null connection id to the same display shape as a present one", () => {
+    const expected = {
+      platform: "youtube",
+      status: "success",
+      externalPostId: "yt-123",
+      errorMessage: null,
+    };
+    expect(toPostJobResultSummaryDto(row(null))).toEqual(expected);
+    expect(toPostJobResultSummaryDto(row("conn-1"))).toEqual(expected);
   });
 });

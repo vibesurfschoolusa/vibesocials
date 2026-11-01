@@ -152,8 +152,9 @@ export async function GET(request: Request) {
     // the caller — the jobs above already span every member (SEC: still
     // never global, just widened from "caller" to "caller's tenant") — and
     // joined by (platform, externalPostId) — the metric's DURABLE identity —
-    // so it stays correct even after a connection delete cascades the
-    // originating result away but leaves the metric row. YouTube-only in v1, so
+    // so it stays correct across a connection removal (the originating result
+    // now survives with a null socialConnectionId; the metric row is keyed by
+    // platform + externalPostId either way). YouTube-only in v1, so
     // we only collect/join YouTube video ids. One extra bounded query.
     const youtubeVideoIds = Array.from(
       new Set(

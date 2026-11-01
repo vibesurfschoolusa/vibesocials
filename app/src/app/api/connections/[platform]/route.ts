@@ -66,6 +66,10 @@ export async function GET(_request: NextRequest, context: PlatformRouteContext) 
  * Disconnects the active workspace's connection for the given platform.
  * Owner-only (Team Workspaces — design §1: "Connect / disconnect / switch
  * platform accounts" is owner-only).
+ *
+ * Publish history survives: PostJobResult.socialConnectionId is `onDelete:
+ * SetNull` (2026-11-01 audit), so Activity / Publish health keep every past
+ * result — they just no longer point at a connection.
  */
 export async function DELETE(_request: NextRequest, context: PlatformRouteContext) {
   const contextOrError = await requireOwnerContext();

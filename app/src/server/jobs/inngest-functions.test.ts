@@ -527,7 +527,7 @@ describe("retryPlatforms — a retry step only publishes a still-pending result"
 
       expect(db.resultFindUnique).toHaveBeenCalledWith({
         where: { id: "result-x" },
-        select: { status: true },
+        select: { status: true, socialConnectionId: true },
       });
       expect(publishCtxs.map((c) => c.socialConnection.platform)).toEqual(["youtube"]);
       expect(db.resultUpdate.mock.calls.map((c) => (c[0] as { where: { id: string } }).where.id)).toEqual([
@@ -560,3 +560,110 @@ describe("retryPlatforms — a retry step only publishes a still-pending result"
   });
 });
 
+
+// 2026-11-01 audit, Task 5: PostJobResult.socialConnectionId is nullable
+// (onDelete: SetNull) so Disconnect / Switch account keep publish history. A
+// retried result whose connection was removed has a null FK; the retry step
+// publishes through the workspace's CURRENT connection for that platform and
+// repoints the result to it, or — with no connection — fails the result with a
+// clear not-connected error instead of throwing.
+describe("retryPlatforms — a result whose connection was removed (Task 5)", () => {
+  function retryRun(platforms: Platform[]) {
+    return handlerOf(retryPlatforms)({
+      event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms } },
+      step: fakeStep(),
+    }) as Promise<{ results: Array<{ platform: Platform; status: string; error?: string }> }>;
+  }
+
+  /** Writes that point a result at a (new) connection — not status finalizes. */
+  function repointWrites() {
+    return db.resultUpdateMany.mock.calls
+      .map((c) => c[0] as { where: unknown; data: Record<string, unknown> })
+      .filter((arg) => "socialConnectionId" in arg.data);
+  }
+
+  beforeEach(() => {
+    db.postJobFindUnique.mockResolvedValue({
+      id: "job-1", workspaceId: WORKSPACE.id, mediaItemId: "media-1",
+      baseCaption: "c", perPlatformOverrides: null, publishMetadata: null,
+    });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", perPlatformOverrides: null, deletedAt: null });
+    stubResults(["x"]);
+  });
+
+  describe("when the workspace has reconnected the platform", () => {
+    beforeEach(() => {
+      db.connectionFindMany.mockResolvedValue([{ id: "conn-x-new", platform: "x" }]);
+      db.connectionFindUnique.mockImplementation(({ where }: { where: { id: string } }) =>
+        Promise.resolve({ ...connectionRow("x"), id: where.id }),
+      );
+    });
+
+    it.each([
+      ["a null connection id (the connection was deleted)", null],
+      ["an id of a connection that is no longer the workspace's", "conn-x-old"],
+    ])("repoints a result with %s to the current connection and publishes through it", async (_label, staleId) => {
+      db.resultFindUnique.mockResolvedValue({ status: "pending", socialConnectionId: staleId });
+
+      const out = await retryRun(["x"]);
+
+      expect(repointWrites()).toEqual([
+        { where: { id: "result-x", status: "pending" }, data: { socialConnectionId: "conn-x-new" } },
+      ]);
+      expect(publishCtxs.map((c) => c.socialConnection.id)).toEqual(["conn-x-new"]);
+      expect(out.results).toEqual([{ platform: "x", status: "success" }]);
+    });
+
+    it("does not rewrite a result that already points at the current connection", async () => {
+      db.resultFindUnique.mockResolvedValue({ status: "pending", socialConnectionId: "conn-x-new" });
+
+      const out = await retryRun(["x"]);
+
+      expect(repointWrites()).toEqual([]);
+      expect(out.results).toEqual([{ platform: "x", status: "success" }]);
+    });
+
+    it("still publishes when the repoint write itself fails (bookkeeping only)", async () => {
+      db.resultFindUnique.mockResolvedValue({ status: "pending", socialConnectionId: null });
+      db.resultUpdateMany.mockRejectedValue(new Error("fk violation"));
+
+      const out = await retryRun(["x"]);
+
+      expect(publishCtxs.map((c) => c.socialConnection.id)).toEqual(["conn-x-new"]);
+      expect(out.results).toEqual([{ platform: "x", status: "success" }]);
+    });
+
+    it("reports a clean CONNECTION_GONE failure if the connection vanishes before the publish step", async () => {
+      db.resultFindUnique.mockResolvedValue({ status: "pending", socialConnectionId: null });
+      db.resultUpdateMany.mockRejectedValue(new Error("fk violation"));
+      db.connectionFindUnique.mockResolvedValue(null);
+
+      const out = await retryRun(["x"]);
+
+      expect(publishCtxs).toHaveLength(0);
+      expect(resultWrites()).toEqual([
+        expect.objectContaining({ status: "failed", errorCode: "CONNECTION_GONE", ...HEARTBEAT }),
+      ]);
+      expect(out.results).toEqual([{ platform: "x", status: "failed", error: "Connection gone" }]);
+    });
+  });
+
+  it("fails the result with a clear not-connected error — without throwing — when the platform has no connection", async () => {
+    db.connectionFindMany.mockResolvedValue([]);
+    db.resultFindUnique.mockResolvedValue({ status: "pending", socialConnectionId: null });
+
+    const out = await retryRun(["x"]);
+
+    expect(publishCtxs).toHaveLength(0);
+    expect(repointWrites()).toEqual([]);
+    expect(resultWrites()).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        errorCode: "RECONNECT_REQUIRED",
+        errorMessage: "This platform is no longer connected. Reconnect it in Settings and try again.",
+        ...HEARTBEAT,
+      }),
+    ]);
+    expect(out.results).toEqual([{ platform: "x", status: "failed", error: "No connection" }]);
+  });
+});

@@ -69,6 +69,17 @@ describe("GET /api/insights/publish-health", () => {
     });
   });
 
+  // 2026-11-01 audit, Task 5: results outlive a removed connection (FK is
+  // SET NULL), and health must keep counting them. The query is therefore
+  // keyed on the JOB's workspace and never on the connection relation.
+  it("does not filter on the connection, so results of a removed connection still count", async () => {
+    await GET();
+
+    const args = findManyMock.mock.calls[0][0];
+    expect(Object.keys(args.where).sort()).toEqual(["postJob", "status", "updatedAt"]);
+    expect(JSON.stringify(args.where)).not.toContain("socialConnection");
+  });
+
   it("returns an empty summary for a workspace that has never published", async () => {
     const res = await GET();
     const body = await res.json();

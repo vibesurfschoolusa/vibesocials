@@ -189,6 +189,24 @@ describe("GET /api/posts/[postJobId] — response DTO projection (SEC-1)", () =>
     expect(raw).not.toContain("updatedAt");
   });
 
+  // 2026-11-01 audit, Task 5: Disconnect / Switch account SET NULL the FK
+  // instead of deleting the history, so a result can have no connection.
+  it("still returns a result whose connection was removed (null socialConnectionId)", async () => {
+    findFirstMock.mockResolvedValue(makeJobRow());
+    postJobResultFindManyMock.mockResolvedValue([
+      makeResultRow({ socialConnectionId: null, status: "failed", externalPostId: null, errorMessage: "boom" }),
+    ]);
+
+    const res = await GET(req(null), ctx("job-1"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.results).toEqual([
+      { platform: "youtube", status: "failed", externalPostId: null, errorMessage: "boom" },
+    ]);
+    expect(JSON.stringify(body)).not.toContain("socialConnectionId");
+  });
+
   it("maps a scheduled job's Date scheduledFor to an ISO string, and an empty results list to []", async () => {
     const scheduledFor = new Date("2026-02-01T12:00:00Z");
     findFirstMock.mockResolvedValue(

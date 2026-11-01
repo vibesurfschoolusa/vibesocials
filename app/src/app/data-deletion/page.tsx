@@ -44,9 +44,10 @@ export default function DataDeletionPage() {
             <p>
               Sign in, open <strong>Settings</strong>, and choose <strong>Disconnect</strong> next
               to the platform you want to remove. This immediately deletes the stored access and
-              refresh tokens for that platform, along with the publishing history tied to that
-              connection. Posts already published on the platform itself are not affected — remove
-              those from the platform directly.
+              refresh tokens for that platform. Your past posts and their per-platform results
+              stay in your Activity history, no longer linked to the removed connection; they are
+              deleted only when you delete your account (step 2). Posts already published on the
+              platform itself are not affected — remove those from the platform directly.
             </p>
           </section>
 

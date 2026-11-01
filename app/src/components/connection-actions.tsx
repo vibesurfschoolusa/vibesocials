@@ -155,7 +155,7 @@ export function ConnectionActions({
         onOpenChange={setDisconnectOpen}
         destructive
         title="Disconnect this account?"
-        description="Future posts — including scheduled ones — will skip this platform. You can reconnect at any time."
+        description="Future posts — including scheduled ones — will skip this platform. Your past posts stay in Activity, and you can reconnect at any time."
         confirmText="Disconnect"
         onConfirm={handleDisconnect}
       />
@@ -201,7 +201,7 @@ export function ConnectionActions({
           open={switchOpen}
           onOpenChange={setSwitchOpen}
           title="Switch account?"
-          description="This disconnects your current account and sends you to reconnect a different one."
+          description="This disconnects your current account and sends you to reconnect a different one. Your past posts stay in Activity."
           confirmText="Continue"
           onConfirm={handleStandardSwitch}
         />

@@ -304,7 +304,13 @@ model PostJobResult {
   id                 String              @id @default(cuid())
   postJobId          String
   platform           Platform
-  socialConnectionId String
+  // Nullable + onDelete: SetNull (2026-11-01 audit): removing a connection
+  // (Disconnect / Switch account) must keep the publish history — Activity and
+  // Publish health read these rows — so the FK is cleared, not cascaded. A null
+  // id means "the connection that published this was removed"; a retry then
+  // publishes through the workspace's CURRENT connection for the platform and
+  // repoints the row (inngest-functions.ts retryPlatforms).
+  socialConnectionId String?
   status             PostJobResultStatus @default(pending)
   externalPostId     String?
   errorCode          String?
@@ -312,8 +318,8 @@ model PostJobResult {
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
-  postJob          PostJob          @relation(fields: [postJobId], references: [id], onDelete: Cascade)
-  socialConnection SocialConnection @relation(fields: [socialConnectionId], references: [id], onDelete: Cascade)
+  postJob          PostJob           @relation(fields: [postJobId], references: [id], onDelete: Cascade)
+  socialConnection SocialConnection? @relation(fields: [socialConnectionId], references: [id], onDelete: SetNull)
   // Roadmap Phase 8 (analytics). Back-relation for PostMetric.postJobResultId,
   // which is onDelete:SetNull — so deleting this result NULLs the link but keeps
   // the metric row (its durable identity is the denormalized userId/platform/

@@ -103,6 +103,33 @@ async function finalizeResult(resultRecordId: string, data: FinalResultData): Pr
   });
 }
 
+/**
+ * Point a still-`pending` result at the connection that will publish it.
+ * `PostJobResult.socialConnectionId` is SET NULL when its connection is removed
+ * (the history outlives Disconnect / Switch account); a retry through the
+ * workspace's current connection re-links it. Bookkeeping only, so a failure
+ * (e.g. the connection vanished since the setup step -> FK violation) is logged
+ * and swallowed: `publishToPlatform` reloads the connection itself and reports a
+ * clean CONNECTION_GONE failure, which a thrown error here would pre-empt.
+ */
+async function repointResultConnection(
+  resultRecordId: string,
+  connectionId: string,
+): Promise<void> {
+  try {
+    await prisma.postJobResult.updateMany({
+      where: { id: resultRecordId, status: "pending" },
+      data: { socialConnectionId: connectionId },
+    });
+  } catch (error) {
+    logger.warn("[Inngest] Could not repoint a retried result at the current connection", {
+      resultRecordId,
+      connectionId,
+      error,
+    });
+  }
+}
+
 // Helper to publish to a single platform. Loads the connection fresh so tokens
 // are never serialized through step.run() memoization.
 async function publishToPlatform({
@@ -640,6 +667,12 @@ export const mediaRetentionSweep = inngest.createFunction(
  * still `pending` — the concurrency key does not serialize a retry against the
  * original publish run, which may have finalized (or onFailure failed) it.
  *
+ * Removed connections (2026-11-01 audit): a result outlives its connection
+ * (`socialConnectionId` is SET NULL on Disconnect / Switch account). The retry
+ * always publishes through the workspace's CURRENT connection for the platform
+ * and repoints the result to it; with no usable connection the result is failed
+ * with RECONNECT_REQUIRED ("no longer connected") instead of throwing.
+ *
  * Caption source: unlike the initial publish (which carries caption/overrides
  * in the event payload), a retry re-derives them from the DB — the JOB's own
  * snapshot first (`PostJob.baseCaption` / `perPlatformOverrides`, written for
@@ -807,7 +840,7 @@ export const retryPlatforms = inngest.createFunction(
         // have retried it again) — publishing then would post twice.
         const current = await prisma.postJobResult.findUnique({
           where: { id: resultRecord.id },
-          select: { status: true },
+          select: { status: true, socialConnectionId: true },
         });
         if (current?.status !== "pending") {
           logger.warn("[Inngest] Retry step skipped: result is no longer pending", {
@@ -820,9 +853,11 @@ export const retryPlatforms = inngest.createFunction(
         }
 
         if (!connection) {
-          // The platform was disconnected since the original post; there is no
-          // token to publish with. Fail with a reconnect-shaped code so the UI
-          // can point the user at Settings.
+          // The platform was disconnected since the original post (the result's
+          // own `socialConnectionId` is null — SetNull keeps the row when its
+          // connection is removed) and the workspace has no usable connection
+          // for it now; there is no token to publish with. Fail with a
+          // reconnect-shaped code so the UI can point the user at Settings.
           await finalizeResult(resultRecord.id, {
             status: "failed",
             errorCode: "RECONNECT_REQUIRED",
@@ -830,6 +865,14 @@ export const retryPlatforms = inngest.createFunction(
               "This platform is no longer connected. Reconnect it in Settings and try again.",
           });
           return { platform, status: "failed", error: "No connection" };
+        }
+
+        // The result's original connection may have been removed (Disconnect /
+        // Switch account -> `socialConnectionId` null) and the platform since
+        // reconnected: this retry publishes through the workspace's CURRENT
+        // connection, so point the result at it.
+        if (current.socialConnectionId !== connection.id) {
+          await repointResultConnection(resultRecord.id, connection.id);
         }
 
         const captionOverride = overrides?.[platform] ?? null;
