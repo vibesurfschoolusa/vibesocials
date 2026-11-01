@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { LLM_NOT_CONFIGURED_MESSAGE, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -42,7 +43,10 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = await request.json();
+    const body = await readJsonObject(request);
+    if (!body) {
+      return invalidJsonBodyResponse();
+    }
     const { reviewerName, starRating, comment, businessName } = body;
 
     if (!reviewerName || !starRating) {
@@ -60,7 +64,7 @@ export async function POST(request: Request) {
       FOUR: 4,
       FIVE: 5,
     };
-    const ratingNumber = ratingMap[starRating] || 5;
+    const ratingNumber = ratingMap[String(starRating)] || 5;
 
     const llm = resolveLlmConfig();
     if (!llm) {

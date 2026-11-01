@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { hashAccountToken } from "@/lib/accountToken";
 import { prisma } from "@/lib/db";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 
@@ -52,13 +53,11 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    body = null;
+  const body = await readJsonObject(request);
+  if (!body) {
+    return invalidJsonBodyResponse();
   }
-  const { token } = (body ?? {}) as { token?: unknown };
+  const { token } = body;
 
   // A missing/empty token is just an invalid token — same uniform 400, no DB hit.
   if (typeof token !== "string" || token.length === 0) {

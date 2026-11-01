@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { BLOB_URL_REJECTED_MESSAGE, isAllowedBlobUrl } from "@/lib/blobUrl";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { LLM_NOT_CONFIGURED_MESSAGE, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
@@ -55,12 +56,12 @@ export async function POST(request: Request) {
       );
     }
 
-    let body: AutoCaptionRequestBody;
-    try {
-      body = (await request.json()) as AutoCaptionRequestBody;
-    } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    const parsedBody = await readJsonObject(request);
+    if (!parsedBody) {
+      return invalidJsonBodyResponse();
     }
+    // Fields are validated below (typeof checks); `Partial` keeps that honest.
+    const body = parsedBody as Partial<AutoCaptionRequestBody>;
 
     const { blobUrl, mimeType, platform, language, tone, maxLength } = body;
 

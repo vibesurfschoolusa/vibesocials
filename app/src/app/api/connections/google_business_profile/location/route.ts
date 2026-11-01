@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { requireOwnerContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { Platform, Prisma } from "@prisma/client";
 
 export const runtime = "nodejs";
@@ -23,12 +24,11 @@ export async function POST(request: Request) {
 
   let locationNameRaw: unknown;
   if (contentType.includes("application/json")) {
-    try {
-      const body = await request.json();
-      locationNameRaw = body?.locationName;
-    } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    const body = await readJsonObject(request);
+    if (!body) {
+      return invalidJsonBodyResponse();
     }
+    locationNameRaw = body.locationName;
   } else {
     const form = await request.formData();
     locationNameRaw = form.get("locationName");

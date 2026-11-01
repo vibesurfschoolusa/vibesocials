@@ -5,6 +5,7 @@ import type { Platform } from "@prisma/client";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { editApprovalEffect, holdForApprovalData } from "@/lib/approval";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { toPostJobDetailDto, toPostJobResultSummaryDto } from "@/lib/postsDto";
 import {
@@ -115,12 +116,12 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
 
   const { postJobId } = await Promise.resolve(context.params);
 
-  let body: PatchBody;
-  try {
-    body = (await request.json()) as PatchBody;
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  // `null` / an array / a primitive is valid JSON but not a body we can index.
+  const parsedBody = await readJsonObject(request);
+  if (!parsedBody) {
+    return invalidJsonBodyResponse();
   }
+  const body = parsedBody as PatchBody;
 
   const data: Prisma.PostJobUpdateInput = {};
 

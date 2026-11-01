@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 import { hashAccountToken } from "@/lib/accountToken";
 import { prisma } from "@/lib/db";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 
@@ -50,13 +51,11 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    body = null;
+  const body = await readJsonObject(request);
+  if (!body) {
+    return invalidJsonBodyResponse();
   }
-  const { token, password } = (body ?? {}) as { token?: unknown; password?: unknown };
+  const { token, password } = body;
 
   // New-password rule byte-matches the register route (SEC-1: reveals nothing
   // about the token — it's purely about the submitted password).

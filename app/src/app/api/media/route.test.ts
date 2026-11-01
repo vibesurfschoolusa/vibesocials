@@ -76,6 +76,26 @@ describe("POST /api/media", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["null", "null"],
+    ["an array", "[1,2]"],
+    ["a number", "5"],
+    ["a string", '"hi"'],
+    ["syntactically invalid JSON", "{not json"],
+  ])("returns 400 'Invalid JSON body' (not a 500) for a body of %s", async (_label, raw) => {
+    const response = await POST(
+      new Request("http://localhost/api/media", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: raw,
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
   it("returns 400 'blobUrl is required' when blobUrl is missing", async () => {
     const response = await POST(
       jsonRequest({ mimeType: "image/png", sizeBytes: 1234 }),

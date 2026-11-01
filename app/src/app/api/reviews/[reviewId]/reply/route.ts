@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 
@@ -21,7 +22,10 @@ export async function POST(
     }
 
     const { reviewId } = await params;
-    const body = await request.json();
+    const body = await readJsonObject(request);
+    if (!body) {
+      return invalidJsonBodyResponse();
+    }
     const { comment, reviewName } = body;
 
     if (!comment || typeof comment !== "string" || comment.trim().length === 0) {

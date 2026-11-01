@@ -2,12 +2,9 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
-
-interface SwitchBody {
-  workspaceId?: unknown;
-}
 
 /**
  * POST /api/workspaces/switch { workspaceId }
@@ -40,11 +37,9 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: SwitchBody;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  const body = await readJsonObject(request);
+  if (!body) {
+    return invalidJsonBodyResponse();
   }
 
   if (typeof body.workspaceId !== "string" || !body.workspaceId.trim()) {

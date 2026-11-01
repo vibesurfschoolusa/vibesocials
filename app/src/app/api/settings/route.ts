@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 
 export const COMPANY_WEBSITE_MAX_LENGTH = 2048;
@@ -194,14 +195,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json(
-      { error: "Invalid JSON body" },
-      { status: 400 }
-    );
+  const body = await readJsonObject(request);
+  if (!body) {
+    return invalidJsonBodyResponse();
   }
 
   const validation = parseSettingsInput(body);

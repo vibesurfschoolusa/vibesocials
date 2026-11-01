@@ -5,6 +5,7 @@ import {
   EMAIL_VERIFY_REQUIRED_MESSAGE,
   isEmailVerifiedForPublish,
 } from "@/lib/emailVerified";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
@@ -111,11 +112,9 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
 
   const { postJobId } = await Promise.resolve(context.params);
 
-  let rawBody: unknown;
-  try {
-    rawBody = await request.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  const rawBody = await readJsonObject(request);
+  if (!rawBody) {
+    return invalidJsonBodyResponse();
   }
 
   const target = parseRetryBody(rawBody);

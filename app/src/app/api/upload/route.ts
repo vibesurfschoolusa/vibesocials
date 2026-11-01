@@ -2,6 +2,7 @@ import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 
@@ -33,11 +34,17 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
 
-  const body = (await request.json()) as HandleUploadBody;
+  // Parsed before the try below: a malformed body used to throw straight out
+  // of the handler as an unhandled 500. `handleUpload` validates the body's
+  // shape itself (an unknown `type` throws into the catch -> 400).
+  const body = await readJsonObject(request);
+  if (!body) {
+    return invalidJsonBodyResponse();
+  }
 
   try {
     const jsonResponse = await handleUpload({
-      body,
+      body: body as unknown as HandleUploadBody,
       request,
       onBeforeGenerateToken: async (pathname) => {
         logger.info("[Upload] Generating token", { pathname, userId: user.id });

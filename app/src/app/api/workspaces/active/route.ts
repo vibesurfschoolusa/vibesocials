@@ -1,14 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { requireOwnerContext } from "@/lib/workspace";
 
 const NAME_MIN_LENGTH = 1;
 const NAME_MAX_LENGTH = 60;
-
-interface PatchBody {
-  name?: unknown;
-}
 
 /**
  * PATCH /api/workspaces/active { name }
@@ -24,11 +21,9 @@ export async function PATCH(request: Request) {
   }
   const context = contextOrError;
 
-  let body: PatchBody;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  const body = await readJsonObject(request);
+  if (!body) {
+    return invalidJsonBodyResponse();
   }
 
   if (typeof body.name !== "string") {

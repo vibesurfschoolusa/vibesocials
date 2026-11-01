@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { LLM_NOT_CONFIGURED_MESSAGE, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
 
@@ -38,7 +39,10 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = await request.json();
+    const body = await readJsonObject(request);
+    if (!body) {
+      return invalidJsonBodyResponse();
+    }
     const { caption } = body;
 
     if (!caption || typeof caption !== "string" || !caption.trim()) {

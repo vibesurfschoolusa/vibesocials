@@ -4,6 +4,7 @@ import { buildPasswordResetEmail, deliverAccountEmail } from "@/lib/accountEmail
 import { issueAccountToken } from "@/lib/accountToken";
 import { prisma } from "@/lib/db";
 import { normalizeEmail } from "@/lib/email";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 
@@ -41,13 +42,11 @@ function tooManyRequests(retryAfterSeconds: number | undefined) {
 }
 
 export async function POST(request: Request) {
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    body = null;
+  const body = await readJsonObject(request);
+  if (!body) {
+    return invalidJsonBodyResponse();
   }
-  const email = (body as { email?: unknown } | null)?.email;
+  const email = body.email;
 
   // Validate BEFORE rate limiting so the per-email throttle key is well-formed.
   // A malformed email reveals nothing about account existence, so returning 400

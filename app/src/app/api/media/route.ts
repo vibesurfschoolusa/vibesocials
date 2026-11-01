@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 
 import { BLOB_URL_REJECTED_MESSAGE, isAllowedBlobUrl } from "@/lib/blobUrl";
 import { prisma } from "@/lib/db";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { toMediaItemDto } from "@/lib/mediaDto";
+import { MAX_MEDIA_BYTES, isImageOrVideoMimeType } from "@/lib/mediaInput";
 import { getWorkspaceContext } from "@/lib/workspace";
 
 export async function GET(_request: Request) {
@@ -51,14 +53,9 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: {
-    blobUrl?: unknown; filename?: unknown; mimeType?: unknown;
-    sizeBytes?: unknown; baseCaption?: unknown;
-  };
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  const body = await readJsonObject(request);
+  if (!body) {
+    return invalidJsonBodyResponse();
   }
 
   const blobUrl = typeof body.blobUrl === "string" ? body.blobUrl.trim() : "";
@@ -68,14 +65,14 @@ export async function POST(request: Request) {
   if (!isAllowedBlobUrl(blobUrl)) {
     return NextResponse.json({ error: BLOB_URL_REJECTED_MESSAGE }, { status: 400 });
   }
-  const mimeType = typeof body.mimeType === "string" ? body.mimeType : "";
-  if (!mimeType.startsWith("image/") && !mimeType.startsWith("video/")) {
+  // The image/video rule is shared with POST /api/posts (lib/mediaInput.ts).
+  if (!isImageOrVideoMimeType(body.mimeType)) {
     return NextResponse.json(
       { error: "Only image or video files can be added to the library." },
       { status: 400 },
     );
   }
-  const MAX_MEDIA_BYTES = 512 * 1024 * 1024;
+  const mimeType = body.mimeType;
   const sizeBytes = typeof body.sizeBytes === "number" && Number.isFinite(body.sizeBytes)
     ? body.sizeBytes
     : 0;

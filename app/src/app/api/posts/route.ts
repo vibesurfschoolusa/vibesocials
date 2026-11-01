@@ -6,7 +6,9 @@ import {
   EMAIL_VERIFY_REQUIRED_MESSAGE,
   isEmailVerifiedForPublish,
 } from "@/lib/emailVerified";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
+import { parsePostMediaFields, type PostMediaFields } from "@/lib/mediaInput";
 import { PostJobStatus, Platform, type Prisma } from "@prisma/client";
 import {
   createPostJobForExistingMedia,
@@ -348,12 +350,12 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: CreatePostBody;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  // `null` / an array / a primitive is valid JSON but not a body we can index.
+  const parsedBody = await readJsonObject(request);
+  if (!parsedBody) {
+    return invalidJsonBodyResponse();
   }
+  const body = parsedBody as CreatePostBody;
 
   const hasBlobUrl = typeof body?.blobUrl === "string" && body.blobUrl.trim().length > 0;
   const hasMediaItemId =
@@ -369,11 +371,19 @@ export async function POST(request: Request) {
     );
   }
 
+  // The blobUrl path creates a MediaItem from the client-supplied metadata, so
+  // it is validated (reuse of an existing item ignores these fields).
+  let mediaFields: PostMediaFields | undefined;
   if (hasBlobUrl) {
     const blobUrl = (body.blobUrl as string).trim();
     if (!isAllowedBlobUrl(blobUrl)) {
       return NextResponse.json({ error: BLOB_URL_REJECTED_MESSAGE }, { status: 400 });
     }
+    const mediaValidation = parsePostMediaFields(body);
+    if (!mediaValidation.ok) {
+      return NextResponse.json({ error: mediaValidation.error }, { status: 400 });
+    }
+    mediaFields = mediaValidation.value;
   }
 
   const baseCaptionRaw = body?.baseCaption;
@@ -564,7 +574,7 @@ export async function POST(request: Request) {
       // earlier guard — guarantees `hasBlobUrl`), but TypeScript can't carry
       // that guarantee through the intermediate boolean, so this narrows
       // `body.blobUrl` to `string` for the call below.
-      if (typeof body.blobUrl !== "string" || !body.blobUrl.trim()) {
+      if (typeof body.blobUrl !== "string" || !body.blobUrl.trim() || !mediaFields) {
         return NextResponse.json(
           { error: "blobUrl is required" },
           { status: 400 },
@@ -576,9 +586,9 @@ export async function POST(request: Request) {
         workspaceId: context.workspace.id,
         media: {
           storageLocation: body.blobUrl,
-          originalFilename: body.filename || "upload",
-          mimeType: body.mimeType || "application/octet-stream",
-          sizeBytes: body.sizeBytes || 0,
+          originalFilename: mediaFields.filename,
+          mimeType: mediaFields.mimeType,
+          sizeBytes: mediaFields.sizeBytes,
         },
         baseCaption: baseCaptionRaw,
         location,

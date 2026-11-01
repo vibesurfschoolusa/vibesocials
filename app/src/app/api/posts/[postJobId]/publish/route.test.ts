@@ -207,6 +207,22 @@ describe("POST /api/posts/[postJobId]/publish", () => {
     });
   });
 
+  // The body is optional: publish-now sends none, so an empty / non-JSON /
+  // non-object body (readJsonObject -> null) must mean "no body", never a 4xx/5xx.
+  it.each([
+    ["an empty body (publish-now sends none)", () => Promise.reject(new SyntaxError("Unexpected end of JSON input"))],
+    ["null", () => Promise.resolve(null)],
+    ["an array", () => Promise.resolve([1])],
+    ["a number", () => Promise.resolve(5)],
+  ])("treats %s as no body and publishes now", async (_label, json) => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+
+    const res = await POST({ json } as unknown as NextRequest, ctx("job-1"));
+
+    expect(res.status).toBe(202);
+    expect(inngestSendMock).toHaveBeenCalled();
+  });
+
   it("publishes a SCHEDULED job now too (Queue 'Publish now')", async () => {
     findFirstMock.mockResolvedValue({ status: "scheduled" });
     const res = await POST(req({}), ctx("job-1"));

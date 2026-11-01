@@ -83,11 +83,20 @@ vi.mock("@/server/jobs/failPendingResults", async () => {
 import { MediaItemUnavailableError } from "@/server/jobs/posting";
 import { POST } from "./route";
 
+/**
+ * Since the 2026-11-01 audit (Task 8) a blobUrl body must carry an image/video
+ * `mimeType`. Fixtures that don't care about media metadata get a valid one
+ * here unless they set the key themselves (the Task 8 validation tests do, to
+ * exercise missing / invalid values).
+ */
 function jsonRequest(body: unknown): Request {
+  const isBlobBody =
+    typeof body === "object" && body !== null && "blobUrl" in body && !("mimeType" in body);
+  const withDefaults = isBlobBody ? { mimeType: "video/mp4", ...(body as object) } : body;
   return new Request("http://localhost/api/posts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withDefaults),
   });
 }
 
@@ -897,5 +906,118 @@ describe("POST /api/posts — response DTO projection (SEC-1)", () => {
       results: [],
       message: "Publishing in progress. Large videos may take a few minutes.",
     });
+  });
+});
+
+describe("POST /api/posts — malformed bodies (2026-11-01 audit, Task 8)", () => {
+  it.each([
+    ["null", "null"],
+    ["an array", "[1,2]"],
+    ["a number", "5"],
+    ["a string", '"hi"'],
+    ["syntactically invalid JSON", "{not json"],
+  ])("returns 400 'Invalid JSON body' (not a 500) for a body of %s", async (_label, raw) => {
+    const response = await POST(
+      new Request("http://localhost/api/posts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: raw,
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/posts — blobUrl media field validation (2026-11-01 audit, Task 8)", () => {
+  const BLOB = "https://test.public.blob.vercel-storage.com/vid.mp4";
+
+  function validBody(overrides: Record<string, unknown> = {}) {
+    return {
+      blobUrl: BLOB,
+      filename: "vid.mp4",
+      mimeType: "video/mp4",
+      sizeBytes: 123,
+      baseCaption: "hello",
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({
+      postJobId: "job-1",
+      mediaItemId: "media-1",
+      resultIds: [],
+    });
+  });
+
+  it.each([
+    ["sizeBytes is negative", { sizeBytes: -1 }, "sizeBytes"],
+    ["sizeBytes is fractional", { sizeBytes: 1.5 }, "sizeBytes"],
+    ["sizeBytes is a string", { sizeBytes: "123" }, "sizeBytes"],
+    ["sizeBytes is not a safe integer", { sizeBytes: 2 ** 53 }, "sizeBytes"],
+    ["sizeBytes is above the 512 MB cap", { sizeBytes: 600 * 1024 * 1024 }, "sizeBytes"],
+    ["mimeType is missing", { mimeType: undefined }, "mimeType"],
+    ["mimeType is empty", { mimeType: "" }, "mimeType"],
+    ["mimeType is not image/* or video/*", { mimeType: "application/pdf" }, "mimeType"],
+    ["mimeType is not a string", { mimeType: 7 }, "mimeType"],
+    ["filename is not a string", { filename: 12 }, "filename"],
+    ["filename is longer than 255 characters", { filename: "a".repeat(256) }, "filename"],
+  ])("returns 400 and creates nothing when %s", async (_label, overrides, field) => {
+    const response = await POST(jsonRequest(validBody(overrides)));
+    const body = (await response.json()) as { error?: string };
+
+    expect(response.status).toBe(400);
+    expect(body.error).toContain(field);
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts sizeBytes of 0, a 255-character filename and an image type, passing them through unchanged", async () => {
+    const filename = "a".repeat(255);
+    const response = await POST(
+      jsonRequest(validBody({ sizeBytes: 0, filename, mimeType: "image/png" })),
+    );
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        media: {
+          storageLocation: BLOB,
+          originalFilename: filename,
+          mimeType: "image/png",
+          sizeBytes: 0,
+        },
+      }),
+    );
+  });
+
+  it("defaults an absent sizeBytes to 0 and an absent filename to 'upload'", async () => {
+    const response = await POST(
+      jsonRequest(validBody({ sizeBytes: undefined, filename: undefined })),
+    );
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        media: expect.objectContaining({ originalFilename: "upload", sizeBytes: 0 }),
+      }),
+    );
+  });
+
+  it("does not validate media fields on the mediaItemId reuse path (they are ignored there)", async () => {
+    createPostJobForExistingMediaMock.mockResolvedValue({
+      postJobId: "job-1",
+      mediaItemId: "media-9",
+    });
+
+    const response = await POST(
+      jsonRequest({ mediaItemId: "media-9", baseCaption: "again", sizeBytes: -1, mimeType: 7 }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(createPostJobForExistingMediaMock).toHaveBeenCalled();
   });
 });

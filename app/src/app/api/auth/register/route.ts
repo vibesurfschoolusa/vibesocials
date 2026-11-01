@@ -5,6 +5,7 @@ import { buildVerifyEmail, deliverAccountEmail } from "@/lib/accountEmails";
 import { issueAccountToken } from "@/lib/accountToken";
 import { prisma } from "@/lib/db";
 import { normalizeEmail } from "@/lib/email";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { provisionPersonalWorkspace } from "@/lib/workspace";
@@ -39,14 +40,20 @@ export async function POST(request: Request) {
     );
   }
 
+  // Parsed outside the try below: a malformed body is a 400, not the 500 the
+  // catch-all would turn a failed body parse into.
+  const body = await readJsonObject(request);
+  if (!body) {
+    return invalidJsonBodyResponse();
+  }
+
   // Parsed once so the outer catch can reuse email/name for the P2002
   // no-oracle response without re-reading the request body.
   let parsedEmail = "";
   let parsedDisplayName: string | null = null;
 
   try {
-    const body = await request.json();
-    const { email: rawEmail, password, name } = body ?? {};
+    const { email: rawEmail, password, name } = body;
 
     if (!rawEmail || !password) {
       return NextResponse.json(

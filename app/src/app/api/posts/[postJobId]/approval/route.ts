@@ -12,6 +12,7 @@ import {
   EMAIL_VERIFY_REQUIRED_MESSAGE,
   isEmailVerifiedForPublish,
 } from "@/lib/emailVerified";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { inngest } from "@/lib/inngest";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -106,12 +107,11 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // route's params bug: an undefined id makes Prisma match the first row).
   const { postJobId } = await Promise.resolve(context.params);
 
-  let body: ApprovalBody = {};
-  try {
-    body = ((await request.json()) as ApprovalBody) ?? {};
-  } catch {
-    body = {};
+  const parsedBody = await readJsonObject(request);
+  if (!parsedBody) {
+    return invalidJsonBodyResponse();
   }
+  const body = parsedBody as ApprovalBody;
 
   if (body.decision !== "approve" && body.decision !== "reject") {
     return NextResponse.json(

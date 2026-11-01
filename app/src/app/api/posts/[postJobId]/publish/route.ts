@@ -11,6 +11,7 @@ import {
   EMAIL_VERIFY_REQUIRED_MESSAGE,
   isEmailVerifiedForPublish,
 } from "@/lib/emailVerified";
+import { readJsonObject } from "@/lib/http";
 import { inngest } from "@/lib/inngest";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -80,13 +81,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
 
   const { postJobId } = await Promise.resolve(context.params);
 
-  let body: PublishBody = {};
-  try {
-    // A body is optional (publish-now sends none); tolerate an empty/invalid one.
-    body = ((await request.json()) as PublishBody) ?? {};
-  } catch {
-    body = {};
-  }
+  // A body is optional (publish-now sends none): an empty, invalid or
+  // non-object one (null / array / primitive) is treated as "no body".
+  const body = ((await readJsonObject(request)) ?? {}) as PublishBody;
 
   const wantsSchedule = body.scheduledFor != null;
 
