@@ -12,6 +12,8 @@ const {
   transactionMock,
   postJobCountMock,
   mediaItemUpdateMock,
+  mediaItemCountMock,
+  executeRawMock,
   delMock,
   getWorkspaceContextMock,
 } = vi.hoisted(() => ({
@@ -19,6 +21,8 @@ const {
   transactionMock: vi.fn(),
   postJobCountMock: vi.fn(),
   mediaItemUpdateMock: vi.fn(),
+  mediaItemCountMock: vi.fn(),
+  executeRawMock: vi.fn(),
   delMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
 }));
@@ -77,6 +81,10 @@ beforeEach(() => {
   transactionMock.mockReset();
   postJobCountMock.mockReset();
   mediaItemUpdateMock.mockReset();
+  mediaItemCountMock.mockReset();
+  // Default: no OTHER live MediaItem shares this blob URL (the common case).
+  mediaItemCountMock.mockResolvedValue(0);
+  executeRawMock.mockReset();
   delMock.mockReset();
   getWorkspaceContextMock.mockReset();
   getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
@@ -86,9 +94,9 @@ beforeEach(() => {
   // `mediaItemUpdateMock`/`postJobCountMock` record calls made via `tx.*`.
   transactionMock.mockImplementation(async (callback: (tx: unknown) => unknown) =>
     callback({
-      $executeRaw: vi.fn(),
+      $executeRaw: executeRawMock,
       postJob: { count: postJobCountMock },
-      mediaItem: { update: mediaItemUpdateMock },
+      mediaItem: { update: mediaItemUpdateMock, count: mediaItemCountMock },
     }),
   );
 });
@@ -318,9 +326,9 @@ describe("DELETE /api/media/[id]", () => {
     // against a real client.
     transactionMock.mockImplementation(async (callback: (tx: unknown) => unknown) =>
       callback({
-        $executeRaw: vi.fn(),
+        $executeRaw: executeRawMock,
         postJob: { count: postJobCountMock },
-        mediaItem: { update: mediaItemUpdateMock },
+        mediaItem: { update: mediaItemUpdateMock, count: mediaItemCountMock },
       }),
     );
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -331,5 +339,86 @@ describe("DELETE /api/media/[id]", () => {
     await expect(response.json()).resolves.toEqual({ error: "Failed to delete media" });
 
     consoleSpy.mockRestore();
+  });
+
+  describe("shared blob URL (2026-11-01 audit, Task 8)", () => {
+    const SHARED_URL = "https://example.public.blob.vercel-storage.com/shared.jpg";
+
+    it("still soft-deletes this row but KEEPS the blob when another live MediaItem references the same URL", async () => {
+      findFirstMock.mockResolvedValue(
+        makeItemRow({ id: "media-1", storageLocation: SHARED_URL }),
+      );
+      postJobCountMock.mockResolvedValue(0);
+      mediaItemCountMock.mockResolvedValue(1); // a teammate's row in another workspace
+
+      const response = await DELETE(dummyRequest, ctx("media-1"));
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ ok: true });
+      expect(mediaItemUpdateMock).toHaveBeenCalledTimes(1);
+      expect(mediaItemUpdateMock.mock.calls[0][0]).toMatchObject({
+        where: { id: "media-1" },
+        data: { deletedAt: expect.any(Date) },
+      });
+      expect(delMock).not.toHaveBeenCalled();
+    });
+
+    it("deletes the blob when no other live MediaItem references the URL", async () => {
+      findFirstMock.mockResolvedValue(
+        makeItemRow({ id: "media-1", storageLocation: SHARED_URL }),
+      );
+      postJobCountMock.mockResolvedValue(0);
+      mediaItemCountMock.mockResolvedValue(0);
+
+      const response = await DELETE(dummyRequest, ctx("media-1"));
+
+      expect(response.status).toBe(200);
+      expect(delMock).toHaveBeenCalledTimes(1);
+      expect(delMock).toHaveBeenCalledWith(SHARED_URL);
+    });
+
+    it("counts only OTHER, non-purged rows (any workspace) with the same storageLocation", async () => {
+      findFirstMock.mockResolvedValue(
+        makeItemRow({ id: "media-7", storageLocation: SHARED_URL }),
+      );
+      postJobCountMock.mockResolvedValue(0);
+
+      await DELETE(dummyRequest, ctx("media-7"));
+
+      expect(mediaItemCountMock).toHaveBeenCalledWith({
+        where: { storageLocation: SHARED_URL, id: { not: "media-7" }, deletedAt: null },
+      });
+    });
+
+    it("serializes concurrent deletes of rows sharing a URL with an advisory lock taken before the count", async () => {
+      findFirstMock.mockResolvedValue(
+        makeItemRow({ id: "media-1", storageLocation: SHARED_URL }),
+      );
+      postJobCountMock.mockResolvedValue(0);
+      const order: string[] = [];
+      executeRawMock.mockImplementation(async (strings: TemplateStringsArray) => {
+        order.push(`raw:${strings.join("?").includes("pg_advisory_xact_lock") ? "advisory" : "row-lock"}`);
+        return 0;
+      });
+      mediaItemCountMock.mockImplementation(async () => {
+        order.push("count");
+        return 0;
+      });
+
+      await DELETE(dummyRequest, ctx("media-1"));
+
+      expect(order).toEqual(["raw:row-lock", "raw:advisory", "count"]);
+    });
+
+    it("a 409 (still referenced by an active post) never reaches the shared-blob check", async () => {
+      findFirstMock.mockResolvedValue(makeItemRow());
+      postJobCountMock.mockResolvedValue(1);
+
+      const response = await DELETE(dummyRequest, ctx("media-1"));
+
+      expect(response.status).toBe(409);
+      expect(mediaItemCountMock).not.toHaveBeenCalled();
+      expect(delMock).not.toHaveBeenCalled();
+    });
   });
 });

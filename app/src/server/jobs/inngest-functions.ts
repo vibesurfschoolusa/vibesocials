@@ -1,5 +1,3 @@
-import { del } from "@vercel/blob";
-
 import { inngest } from "@/lib/inngest";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
@@ -7,6 +5,7 @@ import { getPlatformClient } from "@/server/platforms";
 import { publishDeadline } from "@/server/platforms/publishBudget";
 import { withTransientRetries } from "@/server/platforms/transientRetry";
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
+import { deleteBlobUnlessShared } from "@/server/jobs/mediaBlob";
 import {
   RETENTION_DAYS,
   TERMINAL_POST_JOB_STATUSES,
@@ -522,8 +521,9 @@ export const publishToAllPlatforms = inngest.createFunction(
  *
  * Because blobs now persist past posting, this cron bounds Blob storage: it
  * finds *posted*, stale media that no active/scheduled job still needs, removes
- * the blob (`del`), and soft-deletes the row (`deletedAt = now`, the row itself
- * is kept for history/captions). Never-posted library uploads are exempt — see
+ * the blob (`del` — skipped when another live MediaItem, in any workspace,
+ * references the same URL), and soft-deletes the row (`deletedAt = now`, the
+ * row itself is kept for history/captions). Never-posted library uploads are exempt — see
  * `isMediaSweepEligible`. The eligibility rule is re-evaluated against fresh data
  * inside the delete transaction, which NARROWS but does not fully close the
  * check-then-act race with a concurrent reuse: under Read Committed an uncommitted
@@ -614,11 +614,18 @@ export const mediaRetentionSweep = inngest.createFunction(
               // Mark the row first, then remove the blob: if `del` throws the
               // whole transaction rolls back, so we never record a delete we did
               // not actually perform. (`del` is idempotent for a missing blob.)
+              // The blob is removed only when no OTHER live MediaItem (any
+              // workspace) references the same URL — `POST /api/media` lets two
+              // rows point at one file, and sweeping one must not destroy the
+              // other's media (2026-11-01 audit, Task 8).
               await tx.mediaItem.update({
                 where: { id: candidate.id },
                 data: { deletedAt: now },
               });
-              await del(media.storageLocation);
+              await deleteBlobUnlessShared(tx, {
+                id: candidate.id,
+                storageLocation: media.storageLocation,
+              });
               return "swept";
             },
             { timeout: 15000 },

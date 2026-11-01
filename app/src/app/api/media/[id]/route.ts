@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { del } from "@vercel/blob";
 
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { toMediaItemDto } from "@/lib/mediaDto";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { deleteBlobUnlessShared } from "@/server/jobs/mediaBlob";
 import { TERMINAL_POST_JOB_STATUSES } from "@/server/jobs/mediaRetention";
 
 interface MediaItemRouteContext {
@@ -77,9 +77,12 @@ export async function GET(_request: NextRequest, context: MediaItemRouteContext)
  * item). Team Workspaces (Task 4, design §1 permission matrix): any member
  * may delete their OWN upload; deleting someone ELSE's requires the
  * workspace owner role — 403 otherwise. 409 if it's still referenced by a
- * non-terminal PostJob (`isMediaDeletable`). On success, removes the blob and
- * stamps `deletedAt` — the row itself is kept (history/captions depend on
- * it), matching the Phase 1 retention sweep's soft-delete semantics.
+ * non-terminal PostJob (`isMediaDeletable`). On success, stamps `deletedAt`
+ * (the row itself is kept — history/captions depend on it, matching the Phase 1
+ * retention sweep's soft-delete semantics) and removes the blob UNLESS another
+ * live MediaItem, in any workspace, references the same URL
+ * (`deleteBlobUnlessShared`) — otherwise one member could destroy a teammate's
+ * file by re-adding its URL elsewhere and deleting that copy.
  *
  * The row update and the blob `del()` run inside one `$transaction`, marking
  * the row first: if `del()` throws, the whole transaction (including the
@@ -143,12 +146,15 @@ export async function DELETE(_request: NextRequest, context: MediaItemRouteConte
       // Mark the row first, then remove the blob: if `del` throws, the whole
       // transaction rolls back, so we never record a delete we didn't
       // actually perform (`del` is idempotent for an already-missing blob,
-      // so a retried DELETE after a transient failure is safe).
+      // so a retried DELETE after a transient failure is safe). The blob is
+      // removed only when no OTHER live MediaItem (any workspace) references
+      // the same URL — otherwise this row is soft-deleted and the file stays
+      // for whoever still uses it.
       await tx.mediaItem.update({
         where: { id },
         data: { deletedAt: new Date() },
       });
-      await del(item.storageLocation);
+      await deleteBlobUnlessShared(tx, item);
 
       return { ok: true as const };
     }, { timeout: 15000 });
