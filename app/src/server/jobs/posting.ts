@@ -163,6 +163,12 @@ export async function createPostJobOnly(
     params;
   const intent = params.intent ?? "immediate";
 
+  // 2026-11-01 audit (Task 9): an EXPLICIT platform list is validated for every
+  // intent - against this media's type (a platform whose client rejects it is a
+  // PostTargetingError, not a doomed result row) and the TikTok privacy rule -
+  // before anything is written.
+  assertPostTargetsValid(targetPlatforms, media.mimeType, params.tiktokMetadata);
+
   // Only the immediate path materializes the fan-out (and thus requires a
   // connection) up front. Scheduled/draft jobs defer result creation to run
   // time (§6.3), so they can be created before any platform is connected.
@@ -170,13 +176,6 @@ export async function createPostJobOnly(
   // the caller's personal ones — any member's post reaches every platform
   // the shared workspace has connected.
   // Healthy connections only — needsReconnect would just fail at the provider.
-  //
-  // 2026-11-01 audit (Task 9): an EXPLICIT platform list is validated for every
-  // intent — against this media's type (a platform whose client rejects it is a
-  // PostTargetingError, not a doomed result row) and the TikTok privacy rule —
-  // before anything is written. Throws PostTargetingError.
-  assertPostTargetsValid(targetPlatforms, media.mimeType, params.tiktokMetadata);
-
   const socialConnections =
     intent === "immediate"
       ? await prisma.socialConnection.findMany({

@@ -73,7 +73,7 @@ describe("platformAcceptsMedia (rules read from each platform client — see PLA
     ["youtube", true, false], // youtubeClient.ts:65-75 — video only
     ["tiktok", true, false], // tiktokClient.ts:654-658 — video only
     ["facebook_page", false, true], // facebookPageClient.ts:67-73 — images only
-    ["instagram", true, true], // instagramClient.ts:110-157 — REELS (video) or IMAGE
+    ["instagram", true, true], // instagramClient.ts:126-161 — REELS (video) or IMAGE
     ["x", true, true], // xClient.ts:528-537 — image or video
     ["linkedin", true, true], // linkedinClient.ts:619-643 — video or image
     ["google_business_profile", true, true], // googleBusinessProfileClient.ts:41-59 — warns, never rejects

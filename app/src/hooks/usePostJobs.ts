@@ -53,9 +53,9 @@ const POLL_INTERVAL_MS = 10_000;
  *
  * Task 8 — polls every 10s while `shouldPollPostJobs` is true (a fresh publish
  * or a retry still running, or an accepted retry not yet seen to finish), so
- * results move from pending to success/failed without a manual reload. Background polls never flip `loading`, so the UI
- * never blanks into skeletons mid-poll; only the initial load and an explicit
- * `reload()` do that.
+ * results move from pending to success/failed without a manual reload.
+ * Background polls never flip `loading`, so the UI never blanks into skeletons
+ * mid-poll; only the initial load and an explicit `reload()` do that.
  *
  * Whole-branch review, Finding 1 — background polls must never touch `error`:
  * only the initial load and an explicit `reload()` (both foreground) own that

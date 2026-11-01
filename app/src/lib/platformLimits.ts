@@ -79,8 +79,8 @@ export type MediaKind = "image" | "video";
  * - facebook_page  — images only: FACEBOOK_PAGE_UNSUPPORTED_MEDIA_TYPE
  *                    (server/platforms/facebookPageClient.ts:67-73).
  * - instagram      — both: a video becomes a REELS container, anything else an
- *                    IMAGE container (server/platforms/instagramClient.ts:110,
- *                    140-157).
+ *                    IMAGE container (server/platforms/instagramClient.ts:126,
+ *                    156-161).
  * - x              — both: rejects only what is neither (X_INVALID_MEDIA_TYPE,
  *                    server/platforms/xClient.ts:528-537).
  * - linkedin       — both: uploads a video via uploadVideo, an image via
