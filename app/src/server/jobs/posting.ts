@@ -10,9 +10,9 @@ import { postJobStatusForIntent, type PostJobIntent } from "@/lib/scheduling";
  * results created up-front, publish event sent by the caller). For `scheduled`
  * / `draft`, the helper creates NO per-platform results and does NOT require a
  * connection — the fan-out is materialized at run time by the cron
- * due-scanner / publish-promote from the connections that exist THEN — and
- * snapshots the caption/overrides onto the PostJob so editing (PATCH) never
- * mutates shared reused media.
+ * due-scanner / publish-promote from the connections that exist THEN. Every
+ * intent snapshots the caption/overrides onto the PostJob, so editing (PATCH)
+ * or retrying never reads or mutates shared reused media.
  */
 export interface PostJobSchedulingParams {
   intent?: PostJobIntent;
@@ -267,10 +267,12 @@ export async function createPostJobOnly(
 /**
  * Build the `PostJob.create` data for a given intent (Roadmap Phase 5). Shared
  * by both create helpers so the status/`scheduledFor`/caption-snapshot rule
- * lives in one place. Immediate jobs leave `scheduledFor`/`baseCaption`/
- * `perPlatformOverrides` null (caption travels in the event payload as before);
- * scheduled/draft jobs snapshot the composer content onto the job so it is
- * durable and editable without touching shared media.
+ * lives in one place. `scheduledFor` is set for scheduled jobs only. EVERY job
+ * (2026-11-01 audit — previously deferred jobs only) snapshots the composer's
+ * `baseCaption`/`perPlatformOverrides`, so the caption typed for THIS post is
+ * durable: a retry and YouTube's title read it back job-first (see
+ * {@link resolvePostCaptionSource}) instead of the shared MediaItem's, which a
+ * reuse never rewrites. Immediate jobs still carry the caption in the event too.
  */
 export function buildPostJobCreateData(args: {
   userId: string;
@@ -289,7 +291,6 @@ export function buildPostJobCreateData(args: {
   // `workspaceId` param) right at their `prisma.postJob.create` call, so this
   // function (and its existing unit tests) stay unchanged.
 }): Omit<Prisma.PostJobUncheckedCreateInput, "workspaceId"> {
-  const isDeferred = args.intent !== "immediate";
   // Always snapshot privacy + targeting when present so retry can replay the
   // user's compose-time choice (review S6). Immediate jobs still put privacy
   // on the event payload; the column is no longer deferred-only dead data.
@@ -303,11 +304,10 @@ export function buildPostJobCreateData(args: {
     mediaItemId: args.mediaItemId,
     status: postJobStatusForIntent(args.intent),
     scheduledFor: args.intent === "scheduled" ? args.scheduledFor : null,
-    baseCaption: isDeferred ? args.baseCaption : null,
-    perPlatformOverrides:
-      isDeferred && args.perPlatformOverrides
-        ? (args.perPlatformOverrides as unknown as Prisma.InputJsonValue)
-        : undefined,
+    baseCaption: args.baseCaption,
+    perPlatformOverrides: args.perPlatformOverrides
+      ? (args.perPlatformOverrides as unknown as Prisma.InputJsonValue)
+      : undefined,
     publishMetadata: publishMetadata
       ? (publishMetadata as unknown as Prisma.InputJsonValue)
       : undefined,
@@ -327,16 +327,15 @@ export interface CreatePostJobForExistingMediaParams
   workspaceId: string;
   mediaItemId: string;
   /**
-   * Accepted for parity with `CreatePostJobOnlyParams` / the request body so
-   * callers can pass one options object, but — matching the "REVISED caption
-   * source" note in the roadmap spec — this helper does NOT persist it. The
-   * publisher (`inngest-functions.ts`) reads caption/overrides from the
-   * `post/publish.requested` EVENT PAYLOAD, not from `MediaItem.baseCaption`,
-   * so the caller must still put `baseCaption` in the event it sends (same as
-   * the existing blobUrl path already does).
+   * Snapshotted onto the new PostJob (every intent — see
+   * {@link buildPostJobCreateData}), never onto the shared, reused MediaItem —
+   * matching the "REVISED caption source" note in the roadmap spec. The
+   * initial publish reads caption/overrides from the `post/publish.requested`
+   * EVENT PAYLOAD, so the caller must still put `baseCaption` in the event it
+   * sends; a retry reads the job's snapshot back.
    */
   baseCaption: string;
-  /** See `baseCaption` above: carried by the event payload, not this helper. */
+  /** See `baseCaption` above: snapshotted on the job + carried by the event. */
   perPlatformOverrides?: Partial<Record<Platform, string>> | null;
   /**
    * Unlike caption/overrides, location IS read from the persisted
@@ -484,6 +483,32 @@ export async function createPostJobForExistingMedia(
   };
 }
 
+/** A post's caption source: its base caption (no footer) + per-platform overrides. */
+export interface PostCaptionSource {
+  baseCaption: string;
+  perPlatformOverrides: Partial<Record<Platform, string>> | null;
+}
+
+/**
+ * Where a post's caption comes from when it is (re)published from the DB: the
+ * job's own snapshot first, the shared MediaItem only as a fallback (each field
+ * independently) for legacy jobs created before every job snapshotted its
+ * caption. One rule for the deferred dispatch, the retry run and YouTube's
+ * title, so a reused video never re-publishes another post's caption.
+ */
+export function resolvePostCaptionSource(
+  job: { baseCaption: string | null; perPlatformOverrides: Prisma.JsonValue | null },
+  mediaItem: { baseCaption: string; perPlatformOverrides: Prisma.JsonValue | null },
+): PostCaptionSource {
+  return {
+    baseCaption: job.baseCaption ?? mediaItem.baseCaption,
+    perPlatformOverrides:
+      ((job.perPlatformOverrides ?? mediaItem.perPlatformOverrides) as Partial<
+        Record<Platform, string>
+      > | null) ?? null,
+  };
+}
+
 /** Event payload for `post/publish.requested` (the shape `publishToAllPlatforms` reads). */
 export interface PublishRequestedEventData {
   postJobId: string;
@@ -588,10 +613,7 @@ export async function prepareDeferredPostJobDispatch(
     });
   }
 
-  const overrides =
-    (job.perPlatformOverrides as Partial<Record<Platform, string>> | null) ??
-    (job.mediaItem.perPlatformOverrides as Partial<Record<Platform, string>> | null) ??
-    null;
+  const captionSource = resolvePostCaptionSource(job, job.mediaItem);
 
   return {
     ok: true,
@@ -599,8 +621,8 @@ export async function prepareDeferredPostJobDispatch(
       postJobId,
       userId: job.userId,
       mediaItemId: job.mediaItemId,
-      baseCaption: job.baseCaption ?? job.mediaItem.baseCaption,
-      perPlatformOverrides: overrides,
+      baseCaption: captionSource.baseCaption,
+      perPlatformOverrides: captionSource.perPlatformOverrides,
       // Only set when the snapshot has them, so a job with no per-post privacy
       // yields the same event shape as before (client applies its default).
       ...(publishMetadata?.tiktok ? { tiktokMetadata: publishMetadata.tiktok } : {}),

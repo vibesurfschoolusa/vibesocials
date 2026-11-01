@@ -57,6 +57,7 @@ import {
   createPostJobForExistingMedia,
   createPostJobOnly,
   MediaItemUnavailableError,
+  resolvePostCaptionSource,
 } from "./posting";
 
 function makeMediaItem(overrides: Partial<MediaItem> = {}): MediaItem {
@@ -404,15 +405,16 @@ describe("createPostJobForExistingMedia", () => {
     // Skips MediaItem creation entirely — no `prisma.mediaItem.create` mock
     // even exists here, so any call to it would throw "not a function".
     // Roadmap Phase 5: the create data now comes from buildPostJobCreateData;
-    // for the default (immediate) intent it adds scheduledFor/baseCaption = null
-    // (caption travels in the event payload for immediate posts, not on the row).
+    // for the default (immediate) intent scheduledFor stays null. 2026-11-01
+    // audit: the caption typed for THIS post is snapshotted on the job (a
+    // reuse never rewrites the shared MediaItem's "Original caption").
     expect(postJobCreateMock).toHaveBeenCalledWith({
       data: {
         userId: "user-1",
         mediaItemId: "media-1",
         status: "in_progress",
         scheduledFor: null,
-        baseCaption: null,
+        baseCaption: "hello",
         // Team Workspaces (Task 5) — the caller's explicit workspaceId param.
         workspaceId: "workspace-1",
       },
@@ -631,7 +633,76 @@ describe("buildPostJobCreateData (review B1 — persist deferred privacy)", () =
       scheduledFor: null, baseCaption: "hi", youtubeMetadata: yt,
     });
     expect(data.status).toBe("in_progress");
-    expect(data.baseCaption).toBeNull();
     expect(data.publishMetadata).toEqual({ youtube: yt });
+  });
+});
+
+// 2026-11-01 audit (Task 4 item 1): EVERY job snapshots its own caption, so a
+// retry (and YouTube's title) use the text typed for THIS post — not the
+// shared MediaItem's, which a reuse never rewrites. `scheduledFor` stays
+// scheduled-only.
+describe("buildPostJobCreateData — caption snapshot for every intent", () => {
+  const overrides = { x: "X-only text" };
+
+  it.each(["immediate", "scheduled", "draft"] as const)(
+    "%s: snapshots baseCaption + perPlatformOverrides onto the job",
+    (intent) => {
+      const data = buildPostJobCreateData({
+        userId: "u", mediaItemId: "m", intent,
+        scheduledFor: new Date("2030-01-01T00:00:00Z"),
+        baseCaption: "typed for this post", perPlatformOverrides: overrides,
+      });
+      expect(data.baseCaption).toBe("typed for this post");
+      expect(data.perPlatformOverrides).toEqual(overrides);
+    },
+  );
+
+  it("leaves perPlatformOverrides unset when the post has none", () => {
+    const data = buildPostJobCreateData({
+      userId: "u", mediaItemId: "m", intent: "immediate",
+      scheduledFor: null, baseCaption: "hi", perPlatformOverrides: null,
+    });
+    expect(data.perPlatformOverrides).toBeUndefined();
+  });
+
+  it("keeps scheduledFor gated on the scheduled intent", () => {
+    const when = new Date("2030-01-01T00:00:00Z");
+    for (const intent of ["immediate", "draft"] as const) {
+      const data = buildPostJobCreateData({
+        userId: "u", mediaItemId: "m", intent, scheduledFor: when, baseCaption: "hi",
+      });
+      expect(data.scheduledFor).toBeNull();
+    }
+  });
+});
+
+describe("resolvePostCaptionSource — job snapshot first, media item fallback", () => {
+  const media = { baseCaption: "Media caption", perPlatformOverrides: { x: "media X" } };
+
+  it("uses the job's own caption and overrides when it has them", () => {
+    expect(
+      resolvePostCaptionSource(
+        { baseCaption: "Job caption", perPlatformOverrides: { x: "job X" } },
+        media,
+      ),
+    ).toEqual({ baseCaption: "Job caption", perPlatformOverrides: { x: "job X" } });
+  });
+
+  it("falls back per field to the media item (legacy immediate jobs have no snapshot)", () => {
+    expect(
+      resolvePostCaptionSource({ baseCaption: null, perPlatformOverrides: null }, media),
+    ).toEqual({ baseCaption: "Media caption", perPlatformOverrides: { x: "media X" } });
+    expect(
+      resolvePostCaptionSource({ baseCaption: "Job caption", perPlatformOverrides: null }, media),
+    ).toEqual({ baseCaption: "Job caption", perPlatformOverrides: { x: "media X" } });
+  });
+
+  it("returns null overrides when neither has any", () => {
+    expect(
+      resolvePostCaptionSource(
+        { baseCaption: "Job caption", perPlatformOverrides: null },
+        { baseCaption: "Media caption", perPlatformOverrides: null },
+      ),
+    ).toEqual({ baseCaption: "Job caption", perPlatformOverrides: null });
   });
 });

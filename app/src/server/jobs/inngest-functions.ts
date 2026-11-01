@@ -20,7 +20,10 @@ import {
   METRICS_SYNC_BATCH,
   selectYouTubeMetricEligibleResults,
 } from "@/server/jobs/metricsScanner";
-import { prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
+import {
+  prepareDeferredPostJobDispatch,
+  resolvePostCaptionSource,
+} from "@/server/jobs/posting";
 import {
   STALE_ELIGIBLE_STATUSES,
   staleCutoff,
@@ -62,17 +65,31 @@ interface ConnectionRef {
   platform: Platform;
 }
 
+interface PublishToPlatformArgs {
+  connectionRef: ConnectionRef;
+  mediaItem: SerializedMediaItem;
+  /** The text to publish (override or base caption + workspace footer). */
+  caption: string;
+  /** The post's base caption, no footer — YouTube's title source. */
+  baseCaption: string;
+  userId: string;
+  resultRecordId: string;
+  tiktokMetadata?: TikTokPostMetadata;
+  youtubeMetadata?: YouTubePostMetadata;
+}
+
 // Helper to publish to a single platform. Loads the connection fresh so tokens
 // are never serialized through step.run() memoization.
-async function publishToPlatform(
-  connectionRef: ConnectionRef,
-  mediaItem: SerializedMediaItem,
-  caption: string,
-  userId: string,
-  resultRecordId: string,
-  tiktokMetadata?: TikTokPostMetadata,
-  youtubeMetadata?: YouTubePostMetadata
-): Promise<{ platform: Platform; status: string; error?: string }> {
+async function publishToPlatform({
+  connectionRef,
+  mediaItem,
+  caption,
+  baseCaption,
+  userId,
+  resultRecordId,
+  tiktokMetadata,
+  youtubeMetadata,
+}: PublishToPlatformArgs): Promise<{ platform: Platform; status: string; error?: string }> {
   const client = getPlatformClient(connectionRef.platform);
 
   if (!client) {
@@ -135,6 +152,7 @@ async function publishToPlatform(
       socialConnection: connection,
       mediaItem: mediaItem as unknown as MediaItem,
       caption,
+      baseCaption,
     };
 
     // Add TikTok metadata if publishing to TikTok
@@ -288,15 +306,16 @@ export const publishToAllPlatforms = inngest.createFunction(
 
       // Each platform upload is a separate step - this allows checkpointing
       const result = await step.run(`publish-to-${connection.platform}`, async () => {
-        return publishToPlatform(
-          connection,
-          setupData.mediaItem,
+        return publishToPlatform({
+          connectionRef: connection,
+          mediaItem: setupData.mediaItem,
           caption,
+          baseCaption,
           userId,
-          resultRecord.id,
+          resultRecordId: resultRecord.id,
           tiktokMetadata,
-          youtubeMetadata
-        );
+          youtubeMetadata,
+        });
       });
 
       results.push(result);
@@ -507,10 +526,13 @@ export const mediaRetentionSweep = inngest.createFunction(
  * is the primary guard; this is the second layer.
  *
  * Caption source: unlike the initial publish (which carries caption/overrides
- * in the event payload), a retry re-derives them from the persisted
- * `MediaItem.baseCaption` / `perPlatformOverrides`. Per-post TikTok/YouTube
- * metadata (e.g. YouTube privacy) is NOT persisted per job, so a retry falls
- * back to each client's SAFE default (YouTube `unlisted`, TikTok `SELF_ONLY`).
+ * in the event payload), a retry re-derives them from the DB — the JOB's own
+ * snapshot first (`PostJob.baseCaption` / `perPlatformOverrides`, written for
+ * every job since the 2026-11-01 audit), the shared MediaItem only for legacy
+ * jobs (`resolvePostCaptionSource`), so a retried reuse never publishes the
+ * original upload's caption. Per-post TikTok/YouTube metadata is replayed from
+ * the job's `publishMetadata` snapshot; when absent, each client's SAFE default
+ * applies (YouTube `private` here, TikTok `SELF_ONLY`).
  */
 export const retryPlatforms = inngest.createFunction(
   {
@@ -591,6 +613,8 @@ export const retryPlatforms = inngest.createFunction(
         connections: connections as ConnectionRef[],
         resultRecords,
         publishMetadata,
+        // Job-first caption (the text typed for THIS post), media fallback.
+        captionSource: mediaItem ? resolvePostCaptionSource(postJob, mediaItem) : null,
       };
     });
 
@@ -599,8 +623,15 @@ export const retryPlatforms = inngest.createFunction(
       return { postJobId, error: "Job not found" };
     }
 
-    const { user, workspace, mediaItem, connections, resultRecords, publishMetadata } =
-      setupData;
+    const {
+      user,
+      workspace,
+      mediaItem,
+      connections,
+      resultRecords,
+      publishMetadata,
+      captionSource,
+    } = setupData;
 
     // The blob must still exist to re-publish. The endpoint already gates this,
     // but a concurrent retention sweep could have removed it in between — fail
@@ -609,7 +640,7 @@ export const retryPlatforms = inngest.createFunction(
     // defensive check: the job's workspaceId is a NOT NULL FK, so a missing
     // row here means the workspace was deleted concurrently (or DB
     // corruption) — equally "shouldn't happen" as a missing user/mediaItem.
-    if (!user || !workspace || !mediaItem || mediaItem.deletedAt !== null) {
+    if (!user || !workspace || !mediaItem || !captionSource || mediaItem.deletedAt !== null) {
       await step.run("fail-media-unavailable", async () => {
         await prisma.postJobResult.updateMany({
           where: { postJobId, platform: { in: platforms }, status: "pending" },
@@ -636,10 +667,8 @@ export const retryPlatforms = inngest.createFunction(
     // JOB's workspace, not the retrying member — same reasoning as
     // publishToAllPlatforms above. `user` is kept (existence-checked above)
     // for `userId`'s continued use below; it no longer feeds the footer.
-    const fullBaseCaption = buildCaptionWithFooter(mediaItem.baseCaption, workspace);
-    const overrides = mediaItem.perPlatformOverrides as
-      | Partial<Record<Platform, string>>
-      | null;
+    const fullBaseCaption = buildCaptionWithFooter(captionSource.baseCaption, workspace);
+    const overrides = captionSource.perPlatformOverrides;
 
     const results: { platform: Platform; status: string; error?: string }[] = [];
 
@@ -683,15 +712,16 @@ export const retryPlatforms = inngest.createFunction(
           (platform === "youtube" ? { privacyStatus: "private" as const } : undefined);
         const ttMeta = publishMetadata?.tiktok;
 
-        return publishToPlatform(
-          connection,
+        return publishToPlatform({
+          connectionRef: connection,
           mediaItem,
           caption,
+          baseCaption: captionSource.baseCaption,
           userId,
-          resultRecord.id,
-          ttMeta,
-          ytMeta,
-        );
+          resultRecordId: resultRecord.id,
+          tiktokMetadata: ttMeta,
+          youtubeMetadata: ytMeta,
+        });
       });
 
       results.push(result);

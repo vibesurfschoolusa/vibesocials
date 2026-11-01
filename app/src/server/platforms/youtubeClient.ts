@@ -26,6 +26,24 @@ interface YouTubeVideoResource {
   };
 }
 
+/** YouTube's hard limit on a video title. */
+const YOUTUBE_TITLE_MAX_GRAPHEMES = 100;
+
+/**
+ * The video title: the POST's own base caption (no footer) — the job's
+ * snapshot via `ctx.baseCaption`, the shared MediaItem's only for legacy jobs
+ * — else the full caption, truncated to YouTube's 100-grapheme limit. The
+ * description carries the full caption (with footer).
+ */
+export function computeYouTubeTitle(
+  ctx: Pick<PublishContext, "baseCaption" | "caption"> & {
+    mediaItem: Pick<PublishContext["mediaItem"], "baseCaption">;
+  },
+): string {
+  const baseCaption = ctx.baseCaption ?? ctx.mediaItem.baseCaption;
+  return truncateGraphemes(baseCaption || ctx.caption, YOUTUBE_TITLE_MAX_GRAPHEMES);
+}
+
 export const youtubeClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
     let { socialConnection } = ctx;
@@ -129,9 +147,9 @@ export const youtubeClient: PlatformClient = {
       console.log("[YouTube] No location metadata found");
     }
 
-    // YouTube video metadata
-    // Use baseCaption for title (no footer), full caption for description (with footer)
-    const title = truncateGraphemes(mediaItem.baseCaption || caption, 100); // YouTube title max 100 chars
+    // YouTube video metadata: the post's base caption for the title (no
+    // footer), the full caption for the description (with footer).
+    const title = computeYouTubeTitle(ctx);
     const metadata: YouTubeVideoResource = {
       snippet: {
         title,

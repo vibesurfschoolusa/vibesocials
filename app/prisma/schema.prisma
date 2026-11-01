@@ -252,10 +252,11 @@ model PostJob {
   // Roadmap Phase 5. `scheduledFor` is null for immediate posts and set for
   // `scheduled` jobs; the cron due-scanner claims `status=scheduled` rows whose
   // `scheduledFor <= now` (hence the composite index). `baseCaption` /
-  // `perPlatformOverrides` snapshot the composer content for `scheduled`/`draft`
-  // jobs so it is durable and editable (PATCH) without mutating the shared
-  // MediaItem — immediate posts leave them null and carry caption in the event
-  // payload as before. The cron/promote read `?? mediaItem.*` as a fallback.
+  // `perPlatformOverrides` snapshot the composer content for EVERY job (all
+  // intents since the 2026-11-01 audit; deferred-only before) so it is durable
+  // and editable (PATCH) without mutating the shared MediaItem; immediate posts
+  // also carry it in the event payload. The cron/promote/retry read
+  // `?? mediaItem.*` as a fallback for legacy rows (resolvePostCaptionSource).
   scheduledFor         DateTime?
   baseCaption          String?
   perPlatformOverrides Json?
