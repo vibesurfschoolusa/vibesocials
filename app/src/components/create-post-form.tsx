@@ -26,6 +26,10 @@ import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { cn } from "@/lib/cn";
 import { composerPublishConfirmCopy } from "@/lib/composerConfirm";
 import { deriveComposerGate } from "@/lib/composerGate";
+import {
+  COMPOSER_DISPATCH_FAILED_MESSAGE,
+  composerSubmitOutcome,
+} from "@/lib/composerSubmitOutcome";
 import type { MediaItemDto } from "@/lib/mediaDto";
 import { PLATFORM_ORDER, platformLabel, TIKTOK_PRIVACY_LABELS } from "@/lib/platforms";
 import {
@@ -40,20 +44,6 @@ import {
   toDateTimeLocalValue,
 } from "@/lib/scheduling";
 import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
-
-interface PostResponse {
-  postJob: {
-    id: string;
-    status: string;
-  };
-  /**
-   * Approval workflow: true when the workspace requires approval and this
-   * member's post was HELD instead of published/scheduled. The success copy
-   * must say so — "Post scheduled" would be a lie (nothing is scheduled until
-   * an owner approves).
-   */
-  awaitingApproval?: boolean;
-}
 
 interface UploadedBlobInfo {
   url: string;
@@ -178,6 +168,9 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
   // Approval workflow — set from the create response so the success copy tells
   // the truth for a held post (nothing is queued or scheduled yet).
   const [awaitingApproval, setAwaitingApproval] = useState(false);
+  // Final review M3 — the post was saved but its publishing never started
+  // (503 DISPATCH_FAILED): the banner points at Activity to retry it.
+  const [dispatchFailed, setDispatchFailed] = useState(false);
   // Task 7 — publish-now confirmation dialog. Immediate publishes can't be
   // undone once sent, so `handleUploadSubmit` opens this instead of posting
   // directly when `publishMode === "now"`; schedule/draft submit right away.
@@ -583,39 +576,34 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
         body: JSON.stringify(postData),
       });
 
-      const data = (await response.json().catch(() => null)) as
-        | PostResponse
-        | { error?: string }
-        | null;
+      const data: unknown = await response.json().catch(() => null);
 
-      if (!response.ok) {
-        toast.error(
-          (data as { message?: string; error?: string } | null)?.message ??
-            (data as { error?: string } | null)?.error ??
-            "Failed to create post.",
-        );
+      // Response → what the composer does (lib/composerSubmitOutcome.ts).
+      const outcome = composerSubmitOutcome({ ok: response.ok, body: data, mode: publishMode });
+
+      // Nothing was created: keep the form so the user can fix and resend.
+      if (!outcome.resetForm) {
+        toast.error(outcome.toast);
         setUploadLoading(false);
         return;
       }
 
-      // Approval workflow: a held post is neither queued nor scheduled yet, so
-      // the confirmation must say what actually happened.
-      const heldForApproval = (data as PostResponse | null)?.awaitingApproval === true;
-      toast.success(
-        heldForApproval
-          ? "Sent for approval — an owner will review it before it publishes"
-          : publishMode === "draft"
-            ? "Draft saved — find it in your Queue"
-            : publishMode === "schedule"
-              ? "Post scheduled — see it in your Queue"
-              : "Post queued — track it in Activity",
-      );
-      setAwaitingApproval(heldForApproval);
+      // The post exists — created, or (DISPATCH_FAILED, final review M3) saved
+      // but its publishing never started, so it already sits `failed` in
+      // Activity. Either way the form resets: pressing Post again would create
+      // a second job, and retrying the first later would publish it twice.
+      if (outcome.kind === "dispatch_failed") {
+        toast.error(outcome.toast);
+      } else {
+        toast.success(outcome.toast);
+      }
+      setDispatchFailed(outcome.kind === "dispatch_failed");
+      setAwaitingApproval(outcome.kind === "success" && outcome.heldForApproval);
       setSubmittedMode(publishMode);
       setShowSuccess(true);
       setUploadCaption("");
       setUploadLocation("");
-      // Detach the media after a successful post. For the reuse path this
+      // Detach the media once the post is saved. For the reuse path this
       // prevents an accidental second submit from re-posting the same item;
       // for the upload path it clears the file state as before. Clearing
       // `reuseItem` returns the composer to the normal file-upload UI.
@@ -835,7 +823,23 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
   return (
     <Card className="p-6">
       <form onSubmit={handleUploadSubmit} className="space-y-5">
-        {showSuccess && (
+        {showSuccess && dispatchFailed && (
+          <div ref={successRef}>
+            <Alert variant="warning" title="Publishing didn't start">
+              <div className="flex flex-col items-start gap-2">
+                <p>{COMPOSER_DISPATCH_FAILED_MESSAGE}</p>
+                <Link
+                  href="/activity"
+                  className={buttonVariants({ variant: "outline", size: "sm" })}
+                >
+                  View activity
+                </Link>
+              </div>
+            </Alert>
+          </div>
+        )}
+
+        {showSuccess && !dispatchFailed && (
           <div ref={successRef}>
             <Alert
               variant="success"
