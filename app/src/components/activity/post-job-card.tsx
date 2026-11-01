@@ -71,13 +71,21 @@ function orderResults(results: PostJobDTO["results"]): PostJobDTO["results"] {
  * single-member callers are unchanged) shows `by {createdBy.name}` next to
  * the timestamp when the job carries a creator. Callers gate this on
  * `workspaceMemberCount > 1` (design doc §7) before passing it down.
+ *
+ * 2026-11-01 audit — `onRetryAccepted` is called once the server has accepted a
+ * retry request. The owner of the job list (`usePostJobs().watchRetry`) then
+ * refetches and polls until the job settles; the optimistic "Retrying…" state
+ * below is replaced by that server data (it is reset whenever a fresh `job`
+ * arrives), so it can no longer outlive the retry.
  */
 export function PostJobCard({
   job,
   showAttribution = false,
+  onRetryAccepted,
 }: {
   job: PostJobDTO;
   showAttribution?: boolean;
+  onRetryAccepted: (jobId: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   // Platforms whose retry is in flight (optimistic pending) and platforms the
@@ -160,7 +168,10 @@ export function PostJobCard({
 
         if (response.ok) {
           toast.success(`Retrying ${platformLabel(platform)}…`);
-          return; // keep the optimistic pending state
+          // Keep the optimistic pending state until the refetch this triggers
+          // delivers the server's view of the job.
+          onRetryAccepted(job.id);
+          return;
         }
 
         let body: RetryErrorBody = {};
@@ -201,7 +212,7 @@ export function PostJobCard({
         );
       }
     },
-    [job.id, toast],
+    [job.id, onRetryAccepted, toast],
   );
 
   return (

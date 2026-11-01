@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { PostJobDTO, PostsResponse } from "@/lib/postsDto";
+import { settleRetryWatch, shouldPollPostJobs } from "@/lib/postJobPolling";
 import { appendJobsPage, mergePolledPageOne } from "@/lib/postsPagination";
 
 export interface UsePostJobsResult {
@@ -34,35 +35,25 @@ export interface UsePostJobsResult {
    * so the loaded tail's cursor survives a refresh.
    */
   hasMore: boolean;
+  /**
+   * 2026-11-01 audit — call after a "Retry <platform>" request has been
+   * ACCEPTED for `jobId`. Refetches right away and keeps polling until the
+   * fetched data shows that job terminal, so the card leaves "Retrying…" even
+   * though the list it was clicked in showed the job as settled (nothing in
+   * flight → no poll). See `shouldPollPostJobs` / `settleRetryWatch`.
+   */
+  watchRetry: (jobId: string) => void;
 }
 
 const POLL_INTERVAL_MS = 10_000;
 
 /**
- * True while any job has work in flight — a fresh publish still running, or a
- * retried result the server has marked pending. Drives the background poll
- * below so the activity/dashboard views catch up without a manual refresh.
- *
- * Exported (whole-branch review, Finding 1) so it can be unit-tested on its
- * own — the hook body itself has no React-render test harness in this repo.
- */
-export function hasWorkInFlight(jobs: PostJobDTO[] | null): boolean {
-  return (
-    jobs?.some(
-      (job) =>
-        job.status === "in_progress" ||
-        job.results.some((result) => result.status === "pending"),
-    ) ?? false
-  );
-}
-
-/**
  * Fetches the current user's post jobs from `GET /api/posts`. Shared by the
  * dashboard's recent-activity preview and the full activity view.
  *
- * Task 8 — polls every 10s while `hasWorkInFlight` is true (a fresh publish or
- * a retry still running), so results move from pending to success/failed
- * without a manual reload. Background polls never flip `loading`, so the UI
+ * Task 8 — polls every 10s while `shouldPollPostJobs` is true (a fresh publish
+ * or a retry still running, or an accepted retry not yet seen to finish), so
+ * results move from pending to success/failed without a manual reload. Background polls never flip `loading`, so the UI
  * never blanks into skeletons mid-poll; only the initial load and an explicit
  * `reload()` do that.
  *
@@ -92,9 +83,18 @@ export function usePostJobs(): UsePostJobsResult {
   // tail's cursor survives a refresh. `loadingMore` guards + spins the button.
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  // Job ids whose retry request was accepted and whose outcome we haven't seen
+  // yet (2026-11-01 audit). Keeps the poll armed when the list itself shows
+  // nothing in flight — see `shouldPollPostJobs`.
+  const [retryWatch, setRetryWatch] = useState<ReadonlySet<string>>(new Set());
+  // Bumped by `watchRetry`. A background fetch that STARTED before a retry was
+  // accepted may read the job as still `failed`; if it resolves after that
+  // retry it must not overwrite the fresher view or settle the watch.
+  const retryEpochRef = useRef(0);
 
   const load = useCallback(async (options?: { background?: boolean }) => {
     const background = options?.background ?? false;
+    const epoch = retryEpochRef.current;
     if (!background) {
       setLoading(true);
       setError(null);
@@ -109,6 +109,11 @@ export function usePostJobs(): UsePostJobsResult {
         );
       }
       const data: PostsResponse = await response.json();
+      if (background && epoch !== retryEpochRef.current) {
+        // Stale relative to a retry accepted while this request was in flight;
+        // the refetch `watchRetry` started will deliver the current view.
+        return;
+      }
       if (background) {
         // Background poll: keep page 1 fresh WITHOUT dropping the older tail the
         // user pulled in via Load more. `mergePolledPageOne` collapses to a plain
@@ -124,6 +129,7 @@ export function usePostJobs(): UsePostJobsResult {
         setNextCursor(data.nextCursor);
       }
       setWorkspaceMemberCount(data.workspaceMemberCount);
+      setRetryWatch((prev) => settleRetryWatch(prev, data.jobs));
     } catch (err: unknown) {
       // Background failures keep the stale list on screen silently — only a
       // foreground (initial or manual-reload) failure surfaces the error UI.
@@ -166,24 +172,33 @@ export function usePostJobs(): UsePostJobsResult {
     }
   }, [nextCursor, loadingMore]);
 
+  const watchRetry = useCallback(
+    (jobId: string) => {
+      retryEpochRef.current += 1;
+      setRetryWatch((prev) => new Set(prev).add(jobId));
+      void load({ background: true });
+    },
+    [load],
+  );
+
   useEffect(() => {
     load();
   }, [load]);
 
-  // Background poll: only while something is still in flight, so an idle
-  // activity list never keeps a timer running. Re-armed whenever `jobs`
-  // changes (any successful load) OR `pollCycle` ticks (any completed
-  // background attempt, including a failed one that left `jobs` untouched) —
-  // so polling keeps going until the server reports everything settled, and
-  // survives a dropped request instead of stalling forever. Cleans up on
-  // unmount/re-run.
+  // Background poll: only while something is still in flight (or an accepted
+  // retry is still being watched), so an idle activity list never keeps a timer
+  // running. Re-armed whenever `jobs` changes (any successful load), `pollCycle`
+  // ticks (any completed background attempt, including a failed one that left
+  // `jobs` untouched) OR `retryWatch` changes — so polling keeps going until
+  // the server reports everything settled, and survives a dropped request
+  // instead of stalling forever. Cleans up on unmount/re-run.
   useEffect(() => {
-    if (!hasWorkInFlight(jobs)) return;
+    if (!shouldPollPostJobs(jobs, retryWatch)) return;
     const t = setTimeout(() => {
       void load({ background: true });
     }, POLL_INTERVAL_MS);
     return () => clearTimeout(t);
-  }, [jobs, load, pollCycle]);
+  }, [jobs, load, pollCycle, retryWatch]);
 
   return {
     jobs,
@@ -194,5 +209,6 @@ export function usePostJobs(): UsePostJobsResult {
     loadMore,
     loadingMore,
     hasMore: nextCursor !== null,
+    watchRetry,
   };
 }

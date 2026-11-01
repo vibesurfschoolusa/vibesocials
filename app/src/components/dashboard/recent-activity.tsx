@@ -25,6 +25,7 @@ export function RecentActivity({
   error,
   reload,
   workspaceMemberCount,
+  watchRetry,
   showCreateCta = true,
 }: UsePostJobsResult & {
   /**
@@ -101,7 +102,12 @@ export function RecentActivity({
       ) : (
         <div className="space-y-3">
           {preview.map((job) => (
-            <PostJobCard key={job.id} job={job} showAttribution={showAttribution} />
+            <PostJobCard
+              key={job.id}
+              job={job}
+              showAttribution={showAttribution}
+              onRetryAccepted={watchRetry}
+            />
           ))}
         </div>
       )}
