@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { Check, ChevronDown, LogOut } from "lucide-react";
 import type { WorkspaceRole } from "@prisma/client";
@@ -27,7 +26,6 @@ interface WorkspaceSummary {
  */
 export function AccountMenu() {
   const { data: session } = useSession();
-  const router = useRouter();
   const toast = useToast();
   const email = session?.user?.email ?? "";
   const [open, setOpen] = useState(false);
@@ -104,17 +102,20 @@ export function AccountMenu() {
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         toast.error(data?.error ?? "Couldn't switch workspaces.");
+        setSwitchingId(null);
         return;
       }
       setOpen(false);
-      // Return focus to the trigger, exactly like the Escape handler — the
-      // popover (and the button that had focus) just went away under the user.
-      buttonRef.current?.focus();
-      toast.success(`Switched to ${workspace.name}.`);
-      router.refresh();
+      // 2026-11-01 audit: `router.refresh()` only re-renders server components,
+      // so every client-fetched view (Queue, Activity, Media, Settings…) kept
+      // showing the PREVIOUS workspace's data and acting on it 404'd. A full
+      // navigation to the current URL remounts every client component, which
+      // refetches under the new active workspace. `switchingId` is left set on
+      // purpose: the page is unloading, and the buttons staying disabled stops
+      // a second switch from racing the navigation.
+      window.location.assign(window.location.pathname + window.location.search);
     } catch {
       toast.error("Couldn't switch workspaces.");
-    } finally {
       setSwitchingId(null);
     }
   }
