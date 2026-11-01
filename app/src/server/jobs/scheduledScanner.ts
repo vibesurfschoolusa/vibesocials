@@ -26,39 +26,53 @@ export const STUCK_RECONCILE_BATCH = 50;
 /**
  * Atomically claim scheduled jobs whose `scheduledFor` has arrived.
  *
- * Two-step so the claim is atomic per row even across concurrent scanner
- * instances: find due candidates, then flip each via a CONDITIONAL
- * `updateMany({ where: { id, status: "scheduled" } })`. Only a row STILL
- * `scheduled` flips to `in_progress` (count === 1); a second scanner that
- * already claimed it — or a `cancel`/`PATCH` that moved it — sees count === 0
- * and it's dropped. No job is ever double-claimed and thus never double-posted.
+ * ONE statement (2026-11-01 audit): the inner SELECT locks the due rows with
+ * `FOR UPDATE SKIP LOCKED` and the UPDATE flips exactly those to
+ * `in_progress`, returning their ids. It either commits as a whole or not at
+ * all, so a failure can never leave rows claimed-but-unreported — the old
+ * find-then-flip-each loop stranded every row it had already flipped when it
+ * threw mid-loop (the step retry re-queries only `scheduled`). A concurrent
+ * scanner skips rows this one holds; a `cancel`/`PATCH` that already moved a
+ * row out of `scheduled` makes it ineligible. No job is ever double-claimed
+ * and thus never double-posted.
  *
- * Returns the ids this call actually claimed (to dispatch). ≤1-minute latency
- * is fine for a social scheduler.
+ * Never claims a submitted-but-unapproved job (`submittedForApprovalAt` set,
+ * `approvedAt` null): the old approval bypass could leave such rows
+ * `scheduled`, and the cron must not publish unreviewed posts (controller
+ * ruling R6; migration `20261101120000_rehold_unapproved_scheduled` re-holds
+ * the existing ones as drafts).
+ *
+ * Timestamps: Prisma binds a JS Date as `timestamptz`, while DateTime columns
+ * are `timestamp(3)` holding UTC wall-clock time — so the bound `now` is
+ * converted `AT TIME ZONE 'UTC'` instead of letting Postgres cast via the
+ * session TimeZone.
+ *
+ * Returns the claimed ids, oldest `scheduledFor` first. ≤1-minute latency is
+ * fine for a social scheduler.
  */
 export async function claimDueScheduledJobs(
   now: Date,
   take: number = DUE_SCAN_BATCH,
 ): Promise<string[]> {
-  const due = await prisma.postJob.findMany({
-    where: { status: "scheduled", scheduledFor: { lte: now } },
-    select: { id: true },
-    orderBy: { scheduledFor: "asc" },
-    take,
-  });
+  const claimed = await prisma.$queryRaw<{ id: string }[]>`
+    WITH claimed AS (
+      UPDATE "PostJob"
+      SET "status" = 'in_progress'::"PostJobStatus",
+          "updatedAt" = (${now}::timestamptz AT TIME ZONE 'UTC')
+      WHERE "id" IN (
+        SELECT "id" FROM "PostJob"
+        WHERE "status" = 'scheduled'::"PostJobStatus"
+          AND "scheduledFor" <= (${now}::timestamptz AT TIME ZONE 'UTC')
+          AND NOT ("submittedForApprovalAt" IS NOT NULL AND "approvedAt" IS NULL)
+        ORDER BY "scheduledFor" ASC
+        LIMIT ${take}
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING "id", "scheduledFor"
+    )
+    SELECT "id" FROM claimed ORDER BY "scheduledFor" ASC`;
 
-  const claimed: string[] = [];
-  for (const job of due) {
-    const { count } = await prisma.postJob.updateMany({
-      where: { id: job.id, status: "scheduled" },
-      data: { status: "in_progress" },
-    });
-    if (count === 1) {
-      claimed.push(job.id);
-    }
-  }
-
-  return claimed;
+  return claimed.map((row) => row.id);
 }
 
 /**

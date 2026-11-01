@@ -3,11 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // vitest hoists vi.mock above imports. scheduledScanner.ts imports `@/lib/db` at
 // module scope, so mock it before the import below (mirrors the route tests).
 const {
+  queryRawMock,
   findManyMock,
   updateManyMock,
   resultFindManyMock,
   resultUpdateManyMock,
 } = vi.hoisted(() => ({
+  queryRawMock: vi.fn(),
   findManyMock: vi.fn(),
   updateManyMock: vi.fn(),
   resultFindManyMock: vi.fn(),
@@ -16,6 +18,7 @@ const {
 
 vi.mock("@/lib/db", () => ({
   prisma: {
+    $queryRaw: queryRawMock,
     postJob: { findMany: findManyMock, updateMany: updateManyMock },
     postJobResult: {
       findMany: resultFindManyMock,
@@ -34,6 +37,7 @@ import {
 const NOW = new Date("2026-07-10T12:00:00.000Z");
 
 beforeEach(() => {
+  queryRawMock.mockReset();
   findManyMock.mockReset();
   updateManyMock.mockReset();
   resultFindManyMock.mockReset();
@@ -41,64 +45,69 @@ beforeEach(() => {
 });
 
 describe("claimDueScheduledJobs", () => {
-  it("queries only scheduled jobs that are due, oldest first, capped by batch", async () => {
-    findManyMock.mockResolvedValue([]);
+  /** The SQL text of the (single) claim statement, whitespace-collapsed. */
+  function claimSql(): string {
+    const [strings] = queryRawMock.mock.calls[0] as [TemplateStringsArray, ...unknown[]];
+    return strings.join("$").replace(/\s+/g, " ");
+  }
 
-    await claimDueScheduledJobs(NOW);
+  function claimValues(): unknown[] {
+    return (queryRawMock.mock.calls[0] as unknown[]).slice(1);
+  }
 
-    expect(findManyMock).toHaveBeenCalledWith({
-      where: { status: "scheduled", scheduledFor: { lte: NOW } },
-      select: { id: true },
-      orderBy: { scheduledFor: "asc" },
-      take: DUE_SCAN_BATCH,
-    });
-  });
-
-  it("claims each due job via a conditional updateMany and returns the claimed ids", async () => {
-    findManyMock.mockResolvedValue([{ id: "a" }, { id: "b" }]);
-    updateManyMock.mockResolvedValue({ count: 1 });
+  // 2026-11-01 audit (Task 4 item 5): the claim used to find due rows and
+  // flip them one by one inside one step — a mid-loop error + step retry
+  // stranded the rows it had already flipped (in_progress, never dispatched,
+  // never re-queried). It is now ONE statement that claims and returns the ids.
+  it("claims every due job in ONE atomic statement and returns the claimed ids", async () => {
+    queryRawMock.mockResolvedValue([{ id: "a" }, { id: "b" }]);
 
     const claimed = await claimDueScheduledJobs(NOW);
 
     expect(claimed).toEqual(["a", "b"]);
-    // The claim is conditional on status STILL being "scheduled" — the atomic guard.
-    expect(updateManyMock).toHaveBeenNthCalledWith(1, {
-      where: { id: "a", status: "scheduled" },
-      data: { status: "in_progress" },
-    });
-    expect(updateManyMock).toHaveBeenNthCalledWith(2, {
-      where: { id: "b", status: "scheduled" },
-      data: { status: "in_progress" },
-    });
-  });
-
-  it("drops a job it couldn't claim (count 0 — another scanner/cancel won the race)", async () => {
-    findManyMock.mockResolvedValue([{ id: "a" }, { id: "b" }, { id: "c" }]);
-    updateManyMock
-      .mockResolvedValueOnce({ count: 1 }) // a claimed
-      .mockResolvedValueOnce({ count: 0 }) // b already taken → dropped
-      .mockResolvedValueOnce({ count: 1 }); // c claimed
-
-    const claimed = await claimDueScheduledJobs(NOW);
-
-    expect(claimed).toEqual(["a", "c"]);
-  });
-
-  it("returns an empty list when nothing is due (no update attempts)", async () => {
-    findManyMock.mockResolvedValue([]);
-
-    const claimed = await claimDueScheduledJobs(NOW);
-
-    expect(claimed).toEqual([]);
+    expect(queryRawMock).toHaveBeenCalledTimes(1);
+    expect(findManyMock).not.toHaveBeenCalled();
     expect(updateManyMock).not.toHaveBeenCalled();
   });
 
-  it("honors an explicit take override", async () => {
-    findManyMock.mockResolvedValue([]);
-    await claimDueScheduledJobs(NOW, 5);
-    expect(findManyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ take: 5 }),
+  it("flips only still-scheduled, due rows to in_progress, oldest first, skipping rows another scanner holds", async () => {
+    queryRawMock.mockResolvedValue([]);
+
+    await claimDueScheduledJobs(NOW);
+
+    const sql = claimSql();
+    expect(sql).toMatch(/UPDATE "PostJob" SET "status" = 'in_progress'::"PostJobStatus"/);
+    expect(sql).toContain(`"status" = 'scheduled'::"PostJobStatus"`);
+    expect(sql).toMatch(/"scheduledFor" <= \(\$::timestamptz AT TIME ZONE 'UTC'\)/);
+    expect(sql).toMatch(/ORDER BY "scheduledFor" ASC LIMIT \$ FOR UPDATE SKIP LOCKED/);
+    expect(sql).toContain('RETURNING "id"');
+    expect(claimValues()).toContain(NOW);
+    expect(claimValues()).toContain(DUE_SCAN_BATCH);
+  });
+
+  // Task 4 item 8a (controller ruling R6): a row left `scheduled` by the old
+  // approval bypass — submitted but never approved — must never be claimed.
+  it("never claims a submitted-but-unapproved job", async () => {
+    queryRawMock.mockResolvedValue([]);
+
+    await claimDueScheduledJobs(NOW);
+
+    expect(claimSql()).toContain(
+      'AND NOT ("submittedForApprovalAt" IS NOT NULL AND "approvedAt" IS NULL)',
     );
+  });
+
+  it("returns an empty list when nothing is due", async () => {
+    queryRawMock.mockResolvedValue([]);
+
+    expect(await claimDueScheduledJobs(NOW)).toEqual([]);
+  });
+
+  it("honors an explicit take override", async () => {
+    queryRawMock.mockResolvedValue([]);
+    await claimDueScheduledJobs(NOW, 5);
+    expect(claimValues()).toContain(5);
+    expect(claimValues()).not.toContain(DUE_SCAN_BATCH);
   });
 });
 
