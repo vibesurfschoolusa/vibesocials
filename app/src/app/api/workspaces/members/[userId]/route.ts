@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requireOwnerContext } from "@/lib/workspace";
 
@@ -27,6 +28,14 @@ interface MemberRouteContext {
  * conditional-mutation pattern) so a promotion racing between the read and the
  * delete still can't remove an owner — the delete then matches nothing and
  * 404s. To remove a co-owner: demote them via PATCH first, then DELETE.
+ *
+ * Removal also REVOKES the workspace's active invite links (2026-11-01 audit):
+ * the join link is 7-day / unlimited-use, so a removed member holding it could
+ * otherwise rejoin immediately. The delete and the revoke run in one
+ * transaction (a refused or no-op removal revokes nothing); the response is
+ * `{ ok: true, invitesRevoked }` so the owner's UI can clear the link it is
+ * showing. "Active" means `revokedAt: null`, exactly as the invites route
+ * defines it.
  */
 export async function DELETE(_request: Request, { params }: MemberRouteContext) {
   const contextOrError = await requireOwnerContext();
@@ -57,15 +66,26 @@ export async function DELETE(_request: Request, { params }: MemberRouteContext) 
     return NextResponse.json({ error: "Owners can't be removed." }, { status: 400 });
   }
 
-  const { count } = await prisma.workspaceMember.deleteMany({
-    where: { workspaceId: context.workspace.id, userId: targetUserId, role: { not: "owner" } },
+  const outcome = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.workspaceMember.deleteMany({
+      where: { workspaceId: context.workspace.id, userId: targetUserId, role: { not: "owner" } },
+    });
+    if (count === 0) {
+      return null;
+    }
+
+    const revoked = await tx.workspaceInvite.updateMany({
+      where: { workspaceId: context.workspace.id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    return { invitesRevoked: revoked.count };
   });
 
-  if (count === 0) {
+  if (!outcome) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  return NextResponse.json({ ok: true }, { status: 200 });
+  return NextResponse.json({ ok: true, invitesRevoked: outcome.invitesRevoked }, { status: 200 });
 }
 
 /**
@@ -116,8 +136,11 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
     );
   }
 
-  const body = (await request.json().catch(() => null)) as { role?: unknown } | null;
-  const role = body?.role;
+  const body = await readJsonObject(request);
+  if (!body) {
+    return invalidJsonBodyResponse();
+  }
+  const role = body.role;
   if (role !== "owner" && role !== "member") {
     return NextResponse.json({ error: "Invalid role." }, { status: 400 });
   }

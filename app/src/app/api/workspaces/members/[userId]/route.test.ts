@@ -13,6 +13,8 @@ const {
   deleteManyMock,
   updateManyMock,
   countMock,
+  inviteUpdateManyMock,
+  transactionSpy,
   executeRawMock,
   requireOwnerContextMock,
   checkRateLimitMock,
@@ -21,6 +23,8 @@ const {
   deleteManyMock: vi.fn(),
   updateManyMock: vi.fn(),
   countMock: vi.fn(),
+  inviteUpdateManyMock: vi.fn(),
+  transactionSpy: vi.fn(),
   executeRawMock: vi.fn(),
   requireOwnerContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
@@ -39,7 +43,13 @@ vi.mock("@/lib/db", () => {
       updateMany: updateManyMock,
       count: countMock,
     },
-    $transaction: (cb: (tx: unknown) => unknown) => cb(prisma),
+    // 2026-11-01 audit (Task 8): member removal revokes the workspace's active
+    // invite links in the same transaction.
+    workspaceInvite: { updateMany: inviteUpdateManyMock },
+    $transaction: (cb: (tx: unknown) => unknown) => {
+      transactionSpy();
+      return cb(prisma);
+    },
   };
   return { prisma };
 });
@@ -78,6 +88,8 @@ beforeEach(() => {
   deleteManyMock.mockReset();
   updateManyMock.mockReset();
   countMock.mockReset();
+  inviteUpdateManyMock.mockReset();
+  transactionSpy.mockReset();
   executeRawMock.mockReset();
   requireOwnerContextMock.mockReset();
   checkRateLimitMock.mockReset();
@@ -91,6 +103,7 @@ beforeEach(() => {
   // unless a test narrows the count to 1 (target is the last owner).
   countMock.mockResolvedValue(2);
   executeRawMock.mockResolvedValue(1);
+  inviteUpdateManyMock.mockResolvedValue({ count: 1 });
 });
 
 describe("DELETE /api/workspaces/members/[userId]", () => {
@@ -161,7 +174,7 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
     const body = await response.json();
 
     expect(response.status).toBe(200);
-    expect(body).toEqual({ ok: true });
+    expect(body).toEqual({ ok: true, invitesRevoked: 1 });
     // The role guard is repeated IN the delete's where clause so a
     // concurrent promotion between the read and the delete can't remove an
     // owner (conditional-mutation pattern, same as the posts cancel route).
@@ -170,13 +183,66 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
     });
   });
 
-  it("returns 404 when the atomic delete matches nothing (membership raced away)", async () => {
+  it("returns 404 when the atomic delete matches nothing (membership raced away) and revokes NO invites", async () => {
     deleteManyMock.mockResolvedValue({ count: 0 });
 
     const response = await DELETE(new Request("http://localhost"), ctx("user-2"));
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: "Not found" });
+    expect(inviteUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  describe("revokes the workspace's invite links (2026-11-01 audit, Task 8)", () => {
+    it("revokes every active (unrevoked) invite of the active workspace and reports how many", async () => {
+      inviteUpdateManyMock.mockResolvedValue({ count: 2 });
+
+      const response = await DELETE(new Request("http://localhost"), ctx("user-2"));
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ ok: true, invitesRevoked: 2 });
+      expect(inviteUpdateManyMock).toHaveBeenCalledTimes(1);
+      expect(inviteUpdateManyMock).toHaveBeenCalledWith({
+        where: { workspaceId: "ws-1", revokedAt: null },
+        data: { revokedAt: expect.any(Date) },
+      });
+    });
+
+    it("reports invitesRevoked: 0 when there was no active invite", async () => {
+      inviteUpdateManyMock.mockResolvedValue({ count: 0 });
+
+      const response = await DELETE(new Request("http://localhost"), ctx("user-2"));
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ ok: true, invitesRevoked: 0 });
+    });
+
+    it("removes the member and revokes the invites inside ONE transaction, member first", async () => {
+      const order: string[] = [];
+      deleteManyMock.mockImplementation(async () => {
+        order.push("delete-member");
+        return { count: 1 };
+      });
+      inviteUpdateManyMock.mockImplementation(async () => {
+        order.push("revoke-invites");
+        return { count: 1 };
+      });
+
+      await DELETE(new Request("http://localhost"), ctx("user-2"));
+
+      expect(transactionSpy).toHaveBeenCalledTimes(1);
+      expect(order).toEqual(["delete-member", "revoke-invites"]);
+    });
+
+    it("does NOT revoke invites when the removal is refused (self / owner target / not a member)", async () => {
+      await DELETE(new Request("http://localhost"), ctx("user-1")); // self
+      findFirstMock.mockResolvedValueOnce({ role: "owner" });
+      await DELETE(new Request("http://localhost"), ctx("user-9")); // owner target
+      findFirstMock.mockResolvedValueOnce(null);
+      await DELETE(new Request("http://localhost"), ctx("user-ghost")); // non-member
+
+      expect(inviteUpdateManyMock).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -234,6 +300,27 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
     expect(findFirstMock).not.toHaveBeenCalled(); // limited BEFORE any membership read
     expect(updateManyMock).not.toHaveBeenCalled();
     expect(executeRawMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["null", "null"],
+    ["an array", '["owner"]'],
+    ["a string", '"owner"'],
+    ["syntactically invalid JSON", "{not json"],
+  ])("returns 400 'Invalid JSON body' for a body of %s, without reading membership", async (_label, raw) => {
+    const response = await PATCH(
+      new Request("http://localhost", {
+        method: "PATCH",
+        body: raw,
+        headers: { "content-type": "application/json" },
+      }),
+      ctx("user-2"),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
+    expect(findFirstMock).not.toHaveBeenCalled();
+    expect(updateManyMock).not.toHaveBeenCalled();
   });
 
   it("returns 400 for a role outside the enum, without reading membership", async () => {

@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
+import { memberRemovalOutcome } from "@/lib/memberRemoval";
 
 /** GET /api/workspaces/members list item — owner-only route (SEC-1: never fetched for a member). */
 interface Member {
@@ -349,6 +350,18 @@ function OwnerView({ workspaceName }: { workspaceName: string }) {
     }
     setMembers((prev) => (prev ? prev.filter((m) => m.userId !== removeTarget.userId) : prev));
     toast.success(`Removed ${removeTarget.name ?? removeTarget.email}.`);
+
+    // The server revokes the workspace's active invite links on removal (so the
+    // removed member can't rejoin with the link they hold): drop the link we're
+    // displaying — it's dead — and tell the owner to create a fresh one.
+    const outcome = memberRemovalOutcome(await response.json().catch(() => null));
+    if (outcome.clearInvite) {
+      setInvite(null);
+      setFreshUrl(null);
+    }
+    if (outcome.notice) {
+      toast.info(outcome.notice);
+    }
   }, [removeTarget, toast]);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure. Promote
