@@ -17,6 +17,8 @@ const {
   postJobUpdateMock,
   postJobResultFindManyMock,
   inngestSendMock,
+  notifyOwnersMock,
+  failPendingMock,
 } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
@@ -26,6 +28,8 @@ const {
   postJobUpdateMock: vi.fn(),
   postJobResultFindManyMock: vi.fn(),
   inngestSendMock: vi.fn(),
+  notifyOwnersMock: vi.fn(),
+  failPendingMock: vi.fn(),
 }));
 
 // Team Workspaces (Task 4) — route.ts now resolves the caller via
@@ -62,6 +66,18 @@ vi.mock("@/server/jobs/posting", async () => {
     createPostJobOnly: createPostJobOnlyMock,
     createPostJobForExistingMedia: createPostJobForExistingMediaMock,
   };
+});
+
+vi.mock("@/server/notifications/approvalRequested", () => ({
+  notifyOwnersOfApprovalRequest: notifyOwnersMock,
+}));
+
+// Keep the REAL DISPATCH_FAILURE constant; only the DB-touching helper is mocked.
+vi.mock("@/server/jobs/failPendingResults", async () => {
+  const actual = await vi.importActual<typeof import("@/server/jobs/failPendingResults")>(
+    "@/server/jobs/failPendingResults",
+  );
+  return { ...actual, failPendingPostJobResults: failPendingMock };
 });
 
 import { MediaItemUnavailableError } from "@/server/jobs/posting";
@@ -108,6 +124,10 @@ beforeEach(() => {
   });
   postJobResultFindManyMock.mockResolvedValue([]);
   inngestSendMock.mockResolvedValue(undefined);
+  notifyOwnersMock.mockReset();
+  notifyOwnersMock.mockResolvedValue(undefined);
+  failPendingMock.mockReset();
+  failPendingMock.mockResolvedValue({ failedCount: 1, status: "failed" });
 });
 
 describe("POST /api/posts — rate limiting", () => {
@@ -470,6 +490,90 @@ describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
       );
       expect(inngestSendMock).toHaveBeenCalledTimes(1);
       expect(postJobUpdateMock).not.toHaveBeenCalled();
+    });
+
+    it("emails the workspace owners when a member's post is held (2026-11-01 audit)", async () => {
+      getWorkspaceContextMock.mockResolvedValue(
+        makeWorkspaceContext({
+          userId: "member-1",
+          email: "sam@example.com",
+          name: "Sam",
+          role: "member",
+          requireApproval: true,
+        }),
+      );
+
+      await POST(
+        jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "Held caption" }),
+      );
+
+      expect(notifyOwnersMock).toHaveBeenCalledTimes(1);
+      expect(notifyOwnersMock).toHaveBeenCalledWith({
+        workspaceId: "ws-1",
+        workspaceName: "Acme",
+        submitter: expect.objectContaining({ id: "member-1", name: "Sam", email: "sam@example.com" }),
+        caption: "Held caption",
+      });
+      // Notified only once the hold is stamped on the row.
+      expect(postJobUpdateMock.mock.invocationCallOrder[0]).toBeLessThan(
+        notifyOwnersMock.mock.invocationCallOrder[0],
+      );
+    });
+
+    it("notifies nobody for a post that isn't held", async () => {
+      getWorkspaceContextMock.mockResolvedValue(
+        makeWorkspaceContext({ role: "owner", requireApproval: true }),
+      );
+
+      await POST(
+        jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }),
+      );
+
+      expect(notifyOwnersMock).not.toHaveBeenCalled();
+    });
+
+    it("notifies nobody for a member's own draft (a draft isn't submitted)", async () => {
+      getWorkspaceContextMock.mockResolvedValue(
+        makeWorkspaceContext({ role: "member", requireApproval: true }),
+      );
+
+      await POST(
+        jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi", draft: true }),
+      );
+
+      expect(notifyOwnersMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("dispatch failure (2026-11-01 audit)", () => {
+    it("503s DISPATCH_FAILED with the postJobId and fails the pending results when inngest.send throws", async () => {
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      inngestSendMock.mockRejectedValue(new Error("inngest unreachable"));
+
+      const response = await POST(
+        jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }),
+      );
+
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({
+        code: "DISPATCH_FAILED",
+        error: "Couldn't start publishing. Please try again.",
+        postJobId: "job-1",
+      });
+      expect(failPendingMock).toHaveBeenCalledWith("job-1", {
+        errorCode: "DISPATCH_FAILED",
+        errorMessage: "Couldn't start publishing. Please try again.",
+      });
+      consoleSpy.mockRestore();
+    });
+
+    it("does not touch results when the dispatch succeeds", async () => {
+      const response = await POST(
+        jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(failPendingMock).not.toHaveBeenCalled();
     });
   });
 

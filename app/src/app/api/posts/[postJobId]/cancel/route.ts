@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
+import { cancelData } from "@/lib/approval";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { MUTABLE_POST_JOB_STATUSES } from "@/lib/scheduling";
 
@@ -25,10 +26,18 @@ const MUTATE_RATE_LIMIT = { route: "posts/mutate", limit: 60, windowMs: 5 * 60 *
  * race-free. Auth + ownership scoped. Only `scheduled`/`draft` may be cancelled;
  * a job already `in_progress`/terminal returns 409.
  *
- * The guard is a single ATOMIC conditional `updateMany` (id + userId + status in
- * the cancelable set): if the cron claims the job (scheduled → in_progress) at
- * the same instant, exactly one of the two updates wins — the cancel then sees
- * count === 0 and 409s rather than cancelling a post that already went live.
+ * The guard is a single ATOMIC conditional `updateMany` (id + workspace +
+ * status in the cancelable set): if the cron claims the job (scheduled →
+ * in_progress) at the same instant, exactly one of the two updates wins — the
+ * cancel then sees count === 0 and 409s rather than cancelling a post that
+ * already went live.
+ *
+ * Approval (2026-11-01 audit): cancelling a post that is awaiting approval is
+ * the member WITHDRAWING it — owners reject through the approval route — so
+ * the same write also clears `submittedForApprovalAt` (`cancelData`), and the
+ * post reads back as approval state "none" rather than "rejected". The write is
+ * pinned to the approval columns it was decided from, so a submission or
+ * decision landing mid-request 409s instead of being mislabelled.
  */
 export async function POST(_request: NextRequest, context: PostJobRouteContext) {
   const workspaceContext = await getWorkspaceContext();
@@ -50,33 +59,44 @@ export async function POST(_request: NextRequest, context: PostJobRouteContext) 
 
   const { postJobId } = await Promise.resolve(context.params);
 
-  // Team Workspaces (Task 4): any member of the job's workspace, not just its
-  // creator (design §1 — cancel is unrestricted by role).
-  const { count } = await prisma.postJob.updateMany({
-    where: {
-      id: postJobId,
-      workspaceId: workspaceContext.workspace.id,
-      status: { in: [...MUTABLE_POST_JOB_STATUSES] },
-    },
-    data: { status: "cancelled" },
-  });
-
-  if (count === 0) {
-    // Disambiguate not-found/not-in-workspace (404) from wrong-state (409).
-    const existing = await prisma.postJob.findFirst({
-      where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
-      select: { id: true },
-    });
-    if (!existing) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
-    }
-    return NextResponse.json(
+  const notCancelable = () =>
+    NextResponse.json(
       {
         error: "Only scheduled or draft posts can be cancelled.",
         code: "NOT_CANCELABLE",
       },
       { status: 409 },
     );
+
+  // Team Workspaces (Task 4): any member of the job's workspace, not just its
+  // creator (design §1 — cancel is unrestricted by role). A job in another
+  // workspace doesn't match and 404s like "doesn't exist" (no 403 oracle).
+  const job = await prisma.postJob.findFirst({
+    where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
+    select: { status: true, submittedForApprovalAt: true, approvedAt: true },
+  });
+
+  if (!job) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  if (!MUTABLE_POST_JOB_STATUSES.includes(job.status)) {
+    return notCancelable();
+  }
+
+  const { count } = await prisma.postJob.updateMany({
+    where: {
+      id: postJobId,
+      workspaceId: workspaceContext.workspace.id,
+      status: { in: [...MUTABLE_POST_JOB_STATUSES] },
+      submittedForApprovalAt: job.submittedForApprovalAt,
+      approvedAt: job.approvedAt,
+    },
+    data: cancelData(job),
+  });
+
+  if (count === 0) {
+    return notCancelable();
   }
 
   return NextResponse.json({ ok: true, status: "cancelled" }, { status: 200 });

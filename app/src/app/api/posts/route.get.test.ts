@@ -46,6 +46,7 @@ function jobWithYouTube() {
     id: "job-1",
     status: "completed",
     createdAt: new Date("2026-07-10T00:00:00.000Z"),
+    updatedAt: new Date("2026-07-10T00:05:00.123Z"),
     scheduledFor: null,
     baseCaption: "hello",
     mediaItem: {
@@ -189,6 +190,7 @@ describe("GET /api/posts — metrics join (Roadmap Phase 8)", () => {
         id: "job-2",
         status: "completed",
         createdAt: new Date("2026-07-10T00:00:00.000Z"),
+        updatedAt: new Date("2026-07-10T00:00:00.000Z"),
         scheduledFor: null,
         baseCaption: "x",
         mediaItem: {
@@ -234,6 +236,7 @@ describe("GET /api/posts — media + publish snapshot (Task 8)", () => {
         id: "job-3",
         status: "completed",
         createdAt: new Date("2026-07-10T00:00:00.000Z"),
+        updatedAt: new Date("2026-07-10T00:00:00.000Z"),
         scheduledFor: null,
         baseCaption: "legacy post",
         mediaItem: {
@@ -264,6 +267,7 @@ describe("GET /api/posts — media + publish snapshot (Task 8)", () => {
         id: "job-4",
         status: "completed",
         createdAt: new Date("2026-07-10T00:00:00.000Z"),
+        updatedAt: new Date("2026-07-10T00:00:00.000Z"),
         scheduledFor: null,
         baseCaption: "no media",
         mediaItem: null,
@@ -332,6 +336,19 @@ describe("GET /api/posts — workspace scoping (Team Workspaces, Task 4)", () =>
   });
 });
 
+describe("GET /api/posts — updatedAt (2026-11-01 audit)", () => {
+  it("selects updatedAt and exposes it as an ISO string — the version an owner reviews (sent back as reviewedUpdatedAt)", async () => {
+    postJobFindManyMock.mockResolvedValue([jobWithYouTube()]);
+    postMetricFindManyMock.mockResolvedValue([]);
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+
+    expect(postJobFindManyMock.mock.calls[0][0].select.updatedAt).toBe(true);
+    expect(body.jobs[0].updatedAt).toBe("2026-07-10T00:05:00.123Z");
+  });
+});
+
 describe("GET /api/posts — createdBy attribution round-trip (Team Workspaces, Task 4)", () => {
   it("maps the joined user's name onto createdBy", async () => {
     postJobFindManyMock.mockResolvedValue([jobWithYouTube()]); // user: { name: "Alice", ... }
@@ -379,6 +396,7 @@ describe("GET /api/posts — keyset cursor pagination (activity pagination)", ()
       id: `job-${String(i).padStart(3, "0")}`,
       status: "completed",
       createdAt: new Date(base - i * 1000),
+      updatedAt: new Date(base - i * 1000),
       scheduledFor: null,
       baseCaption: `cap ${i}`,
       mediaItem: null,

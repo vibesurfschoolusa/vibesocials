@@ -62,3 +62,171 @@ export function approvalOutcome(
   if (Number.isNaN(target)) return "publish_now";
   return target >= now.getTime() + bufferMs ? "schedule" : "publish_now";
 }
+
+/*
+ * 2026-11-01 audit — server-side enforcement. The create-time hold above was
+ * the ONLY gate, so a member could publish a plain draft, publish a pending
+ * post, or edit an approved scheduled post and have the cron publish the
+ * unreviewed text. Every rule the publish/edit/approval/cancel routes apply is
+ * below; the routes only translate the outcome into a write + HTTP response.
+ */
+
+type Role = "owner" | "member";
+
+/** The columns every approval rule reads off a PostJob. */
+export interface ApprovalFacts {
+  status: PostJobStatus;
+  submittedForApprovalAt: Date | string | null;
+  approvedAt: Date | string | null;
+}
+
+/**
+ * Is this post HELD — a `draft` submitted for approval and not yet decided?
+ * Stricter than `deriveApprovalState(job) === "pending"`, which also matches a
+ * submitted-but-unapproved row that is no longer a draft (e.g. a `scheduled`
+ * row the pre-fix publish route produced); only a held draft can be decided,
+ * and only a held draft blocks publishing as "awaiting approval".
+ */
+export function isHeldForApproval(job: ApprovalFacts): boolean {
+  return job.status === "draft" && deriveApprovalState(job) === "pending";
+}
+
+/**
+ * Does this caller need an owner's approval before this job may go out?
+ * Owners never do (they ARE the approvers), and a post an owner already
+ * approved doesn't need it again.
+ */
+export function needsApproval(input: {
+  requireApproval: boolean;
+  role: Role;
+  approvedAt: Date | string | null;
+}): boolean {
+  return input.requireApproval && input.role === "member" && input.approvedAt == null;
+}
+
+/**
+ * What `POST /api/posts/[id]/publish` does for this caller + job:
+ *  - `proceed` — the normal publish/schedule path (whose own status guards
+ *    still 409 a running or finished job).
+ *  - `awaiting_approval` — the post is already held; publishing it is refused.
+ *  - `submit` — a plain draft, or a scheduled post nobody approved, is SUBMITTED
+ *    for approval instead of published. A scheduled row is judged by its status
+ *    (not by `submittedForApprovalAt`), so even a submitted-but-unapproved
+ *    scheduled row left by the pre-fix bypass is pulled back off the cron.
+ */
+export function publishApprovalAction(input: {
+  requireApproval: boolean;
+  role: Role;
+  job: ApprovalFacts;
+}): "proceed" | "awaiting_approval" | "submit" {
+  const { requireApproval, role, job } = input;
+  if (!needsApproval({ requireApproval, role, approvedAt: job.approvedAt })) return "proceed";
+  if (isHeldForApproval(job)) return "awaiting_approval";
+  if (job.status === "draft" || job.status === "scheduled") return "submit";
+  return "proceed";
+}
+
+/**
+ * The columns that (re)hold a post for approval: back to a `draft`, freshly
+ * submitted, any earlier decision cleared. Callers add `scheduledFor`.
+ */
+export function holdForApprovalData(now: Date): {
+  status: "draft";
+  submittedForApprovalAt: Date;
+  approvedAt: null;
+  approvedByUserId: null;
+} {
+  return { status: "draft", submittedForApprovalAt: now, approvedAt: null, approvedByUserId: null };
+}
+
+/**
+ * The time a publish-route submission keeps for the owner to honor: the
+ * requested (already validated) time if one was sent, else a scheduled job's
+ * existing time, else none (approving then publishes immediately).
+ */
+export function submissionScheduledFor(
+  job: { status: PostJobStatus; scheduledFor: Date | null },
+  requested: Date | null,
+): Date | null {
+  if (requested) return requested;
+  if (job.status === "scheduled") return job.scheduledFor;
+  return null;
+}
+
+/**
+ * What an edit (`PATCH /api/posts/[id]`) does to the approval state. Only a
+ * MEMBER in an approval workspace is affected:
+ *  - `rehold` — a scheduled post (approved or not) goes back for approval, so
+ *    the cron can't publish text nobody reviewed.
+ *  - `restamp` — a pending post stays pending; its submission time is
+ *    refreshed so owners see when it last changed.
+ *  - `none` — everything else (owners, plain drafts) edits as before.
+ */
+export function editApprovalEffect(input: {
+  requireApproval: boolean;
+  role: Role;
+  job: ApprovalFacts;
+}): "none" | "rehold" | "restamp" {
+  if (!input.requireApproval || input.role !== "member") return "none";
+  const { job } = input;
+  if (job.status === "scheduled") return "rehold";
+  if (isHeldForApproval(job)) return "restamp";
+  return "none";
+}
+
+/**
+ * Has the post changed since the owner opened it? `reviewedUpdatedAt` is the
+ * `updatedAt` the owner's view was rendered from; absent means the client
+ * didn't send one (nothing to compare). An unparseable value counts as changed
+ * — never decide on a version we can't identify.
+ */
+export function changedSinceReview(
+  reviewedUpdatedAt: string | null | undefined,
+  currentUpdatedAt: Date | string,
+): boolean {
+  if (reviewedUpdatedAt == null) return false;
+  const reviewed = new Date(reviewedUpdatedAt).getTime();
+  if (Number.isNaN(reviewed)) return true;
+  return reviewed !== new Date(currentUpdatedAt).getTime();
+}
+
+/**
+ * The full effect of an owner's decision: the status the post moves to, the
+ * approval state it then reads as, and — when approving — whether it keeps
+ * its time or publishes immediately (see {@link approvalOutcome}).
+ */
+export function decideApproval(input: {
+  decision: "approve" | "reject";
+  scheduledFor: Date | string | null;
+  now: Date;
+  bufferMs: number;
+}): {
+  status: "scheduled" | "in_progress" | "cancelled";
+  approvalState: "approved" | "rejected";
+  outcome: "schedule" | "publish_now" | null;
+} {
+  if (input.decision === "reject") {
+    return { status: "cancelled", approvalState: "rejected", outcome: null };
+  }
+  const outcome = approvalOutcome(input, input.now, input.bufferMs);
+  return {
+    status: outcome === "schedule" ? "scheduled" : "in_progress",
+    approvalState: "approved",
+    outcome,
+  };
+}
+
+/**
+ * What `POST /api/posts/[id]/cancel` writes. Cancelling a PENDING post is the
+ * member withdrawing it (owners reject through the approval route), so the
+ * submission stamp is cleared in the same write — otherwise
+ * {@link deriveApprovalState} would read the cancelled, submitted, unapproved
+ * row back as "rejected".
+ */
+export function cancelData(
+  job: ApprovalFacts,
+): { status: "cancelled"; submittedForApprovalAt?: null } {
+  return deriveApprovalState(job) === "pending"
+    ? { status: "cancelled", submittedForApprovalAt: null }
+    : { status: "cancelled" };
+}

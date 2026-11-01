@@ -13,6 +13,8 @@ import {
   createPostJobOnly,
   MediaItemUnavailableError,
 } from "@/server/jobs/posting";
+import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
+import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -104,6 +106,9 @@ export async function GET(request: Request) {
         id: true,
         status: true,
         createdAt: true,
+        // 2026-11-01 audit — the version an owner reviews; echoed back as the
+        // approval route's `reviewedUpdatedAt` (CHANGED_SINCE_REVIEW guard).
+        updatedAt: true,
         scheduledFor: true,
         baseCaption: true,
         // Approval workflow — feeds the derived `approvalState` DTO field.
@@ -202,6 +207,7 @@ export async function GET(request: Request) {
           id: job.id,
           status: job.status,
           createdAt: job.createdAt.toISOString(),
+          updatedAt: job.updatedAt.toISOString(),
           scheduledFor: job.scheduledFor?.toISOString() ?? null,
           // Approval workflow — derived, never a stored enum (lib/approval.ts).
           approvalState: deriveApprovalState({
@@ -607,23 +613,52 @@ export async function POST(request: Request) {
           ...(scheduledForDate ? { scheduledFor: scheduledForDate } : {}),
         },
       });
+
+      // 2026-11-01 audit: tell the owners something is waiting. Never throws.
+      await notifyOwnersOfApprovalRequest({
+        workspaceId: context.workspace.id,
+        workspaceName: context.workspace.name,
+        submitter: context.user,
+        caption: baseCaptionRaw,
+      });
     }
 
     // A held post sends NO publish event — the owner's approval does that.
     if (effectiveIntent === "immediate") {
-      await inngest.send({
-        name: "post/publish.requested",
-        data: {
+      // 2026-11-01 audit: the job and its pending results are already
+      // committed — if the event can't be handed to Inngest, fail those
+      // results (job → failed) so it can't hang "publishing", and say so.
+      try {
+        await inngest.send({
+          name: "post/publish.requested",
+          data: {
+            postJobId,
+            userId: context.user.id,
+            mediaItemId,
+            baseCaption: baseCaptionRaw,
+            location,
+            perPlatformOverrides,
+            tiktokMetadata,
+            youtubeMetadata,
+          },
+        });
+      } catch (dispatchError: unknown) {
+        logger.error("[POST /api/posts] Couldn't dispatch the publish event", {
+          error: dispatchError,
           postJobId,
           userId: context.user.id,
-          mediaItemId,
-          baseCaption: baseCaptionRaw,
-          location,
-          perPlatformOverrides,
-          tiktokMetadata,
-          youtubeMetadata,
-        },
-      });
+          workspaceId: context.workspace.id,
+        });
+        await failPendingPostJobResults(postJobId, DISPATCH_FAILURE);
+        return NextResponse.json(
+          {
+            code: DISPATCH_FAILURE.errorCode,
+            error: DISPATCH_FAILURE.errorMessage,
+            postJobId,
+          },
+          { status: 503 },
+        );
+      }
     }
 
     // Return immediately - job runs in background

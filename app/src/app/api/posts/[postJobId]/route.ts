@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import type { Platform } from "@prisma/client";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
+import { editApprovalEffect, holdForApprovalData } from "@/lib/approval";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { toPostJobDetailDto, toPostJobResultSummaryDto } from "@/lib/postsDto";
 import {
@@ -12,6 +13,7 @@ import {
   MUTABLE_POST_JOB_STATUSES,
   validateScheduledFor,
 } from "@/lib/scheduling";
+import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -92,6 +94,14 @@ export async function GET(_request: NextRequest, context: PostJobRouteContext) {
  * promote it via `POST …/publish`. The write is an ATOMIC conditional
  * `updateMany` (status still in the mutable set) so it can't edit a post the
  * cron just claimed.
+ *
+ * Approval (2026-11-01 audit, `editApprovalEffect`): a MEMBER in a workspace
+ * that requires approval who edits a SCHEDULED post (approved or not) sends it
+ * back for approval in the same write — otherwise the cron would publish text
+ * no owner reviewed — and the owners are emailed; editing a PENDING post keeps
+ * it pending with a fresh submission time. Both answer `{ ok: true, status:
+ * "draft", approvalState: "pending" }`. For such a member the write is pinned
+ * to the exact status the rule was decided on. Owners are unaffected.
  */
 export async function PATCH(request: NextRequest, context: PostJobRouteContext) {
   const workspaceContext = await getWorkspaceContext();
@@ -150,7 +160,7 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
   // job in a different workspace 404s here exactly like "doesn't exist".
   const existing = await prisma.postJob.findFirst({
     where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
-    select: { status: true },
+    select: { status: true, submittedForApprovalAt: true, approvedAt: true, baseCaption: true },
   });
 
   if (!existing) {
@@ -188,12 +198,30 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
     );
   }
 
+  const memberUnderApproval =
+    workspaceContext.workspace.requireApproval && workspaceContext.role === "member";
+  const approvalEffect = editApprovalEffect({
+    requireApproval: workspaceContext.workspace.requireApproval,
+    role: workspaceContext.role,
+    job: existing,
+  });
+
+  if (approvalEffect === "rehold") {
+    Object.assign(data, holdForApprovalData(new Date()));
+  } else if (approvalEffect === "restamp") {
+    data.submittedForApprovalAt = new Date();
+  }
+
   // Atomic write: still mutable at write time (guards the cron-claim race).
+  // A member under approval is pinned to the status the effect was decided
+  // on, so e.g. a draft an owner just scheduled can't take an unreviewed edit.
   const { count } = await prisma.postJob.updateMany({
     where: {
       id: postJobId,
       workspaceId: workspaceContext.workspace.id,
-      status: { in: [...MUTABLE_POST_JOB_STATUSES] },
+      status: memberUnderApproval
+        ? existing.status
+        : { in: [...MUTABLE_POST_JOB_STATUSES] },
     },
     data,
   });
@@ -202,6 +230,23 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
     return NextResponse.json(
       { error: "This post can no longer be edited.", code: "NOT_EDITABLE" },
       { status: 409 },
+    );
+  }
+
+  if (approvalEffect === "rehold") {
+    await notifyOwnersOfApprovalRequest({
+      workspaceId: workspaceContext.workspace.id,
+      workspaceName: workspaceContext.workspace.name,
+      submitter: workspaceContext.user,
+      caption:
+        typeof body.baseCaption === "string" ? body.baseCaption : (existing.baseCaption ?? ""),
+    });
+  }
+
+  if (approvalEffect !== "none") {
+    return NextResponse.json(
+      { ok: true, status: "draft", approvalState: "pending" },
+      { status: 200 },
     );
   }
 

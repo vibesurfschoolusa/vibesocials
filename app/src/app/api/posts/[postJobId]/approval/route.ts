@@ -1,15 +1,23 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import {
-  approvalOutcome,
   canDecideApproval,
+  changedSinceReview,
+  decideApproval,
   deriveApprovalState,
+  isHeldForApproval,
 } from "@/lib/approval";
 import { prisma } from "@/lib/db";
+import {
+  EMAIL_VERIFY_REQUIRED_MESSAGE,
+  isEmailVerifiedForPublish,
+} from "@/lib/emailVerified";
 import { inngest } from "@/lib/inngest";
+import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { SCHEDULE_BUFFER_MS } from "@/lib/scheduling";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
 import { prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
 import { sendEmail } from "@/server/notifications/email";
 import { buildApprovalDecisionEmail } from "@/server/notifications/approvalEmail";
@@ -20,7 +28,14 @@ interface PostJobRouteContext {
 
 interface ApprovalBody {
   decision?: unknown;
+  /** ISO `updatedAt` of the version the owner reviewed (optional). */
+  reviewedUpdatedAt?: unknown;
 }
+
+const CHANGED_SINCE_REVIEW_BODY = {
+  code: "CHANGED_SINCE_REVIEW",
+  error: "This post changed since you opened it. Review the latest version.",
+} as const;
 
 /** See the sibling routes — generous throttle shared by the DB-only mutations. */
 const MUTATE_RATE_LIMIT = {
@@ -49,6 +64,19 @@ const MUTATE_RATE_LIMIT = {
  * Every transition is an ATOMIC conditional `updateMany` on `status: "draft"`,
  * so a concurrent decide/publish/cancel can't double-dispatch. The member's
  * decision email is fire-and-forget: it must never fail the decision.
+ *
+ * 2026-11-01 audit:
+ *  - Approving into an immediate publish applies the same verified-email gate
+ *    as the publish route (403 `EMAIL_VERIFY_REQUIRED`) BEFORE any write.
+ *  - Optional body `reviewedUpdatedAt` (the `updatedAt` the owner reviewed):
+ *    a mismatch 409s `CHANGED_SINCE_REVIEW` without deciding, and the decision
+ *    write is also pinned to the `updatedAt` just read, so a member's edit
+ *    landing mid-request can't be approved unseen.
+ *  - 200 body: `{ ok, decision, status, approvalState, scheduledFor }`, where
+ *    `scheduledFor` is the time the post is now scheduled for (only when
+ *    `status` is `scheduled`, else null).
+ *  - An `inngest.send` failure on approve-and-publish fails the job's pending
+ *    results (`DISPATCH_FAILED`) and 503s instead of leaving it in_progress.
  */
 export async function POST(request: NextRequest, context: PostJobRouteContext) {
   const workspaceContext = await getWorkspaceContext();
@@ -91,7 +119,16 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       { status: 400 },
     );
   }
-  const approving = body.decision === "approve";
+  const decision = body.decision;
+  const approving = decision === "approve";
+
+  const reviewedUpdatedAt = body.reviewedUpdatedAt ?? null;
+  if (reviewedUpdatedAt !== null && typeof reviewedUpdatedAt !== "string") {
+    return NextResponse.json(
+      { error: "reviewedUpdatedAt must be an ISO-8601 timestamp." },
+      { status: 400 },
+    );
+  }
 
   const job = await prisma.postJob.findFirst({
     where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
@@ -102,6 +139,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       approvedAt: true,
       userId: true,
       baseCaption: true,
+      updatedAt: true,
     },
   });
 
@@ -130,23 +168,37 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     );
   }
 
-  const now = new Date();
-  const outcome = approving
-    ? approvalOutcome(job, now, SCHEDULE_BUFFER_MS)
-    : null;
-  const nextStatus = !approving
-    ? "cancelled"
-    : outcome === "schedule"
-      ? "scheduled"
-      : "in_progress";
+  // The owner reviewed an older version — make them look at the current one.
+  if (changedSinceReview(reviewedUpdatedAt, job.updatedAt)) {
+    return NextResponse.json(CHANGED_SINCE_REVIEW_BODY, { status: 409 });
+  }
 
-  // Atomic claim: only a still-`draft` row transitions, so a concurrent
-  // decision, publish or cancel can't double-dispatch.
+  const now = new Date();
+  const { status: nextStatus, approvalState, outcome } = decideApproval({
+    decision,
+    scheduledFor: job.scheduledFor,
+    now,
+    bufferMs: SCHEDULE_BUFFER_MS,
+  });
+
+  // Approving into an immediate publish is a live fan-out — same verified
+  // email gate as the publish route, checked before anything is written.
+  if (outcome === "publish_now" && !isEmailVerifiedForPublish(workspaceContext.user)) {
+    return NextResponse.json(
+      { error: EMAIL_VERIFY_REQUIRED_MESSAGE, code: "EMAIL_VERIFY_REQUIRED" },
+      { status: 403 },
+    );
+  }
+
+  // Atomic claim: only a still-`draft` row at the version just read
+  // transitions, so a concurrent decision, publish or cancel can't
+  // double-dispatch and a concurrent edit can't be decided unseen.
   const { count } = await prisma.postJob.updateMany({
     where: {
       id: postJobId,
       workspaceId: workspaceContext.workspace.id,
       status: "draft",
+      updatedAt: job.updatedAt,
     },
     data: approving
       ? {
@@ -158,6 +210,14 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   });
 
   if (count === 0) {
+    // Lost the write: if the post is still held, it was edited mid-request.
+    const current = await prisma.postJob.findFirst({
+      where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
+      select: { status: true, submittedForApprovalAt: true, approvedAt: true },
+    });
+    if (current && isHeldForApproval(current)) {
+      return NextResponse.json(CHANGED_SINCE_REVIEW_BODY, { status: 409 });
+    }
     return NextResponse.json(
       {
         error: "This post is no longer awaiting approval.",
@@ -169,7 +229,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
 
   // Publish-now path: materialize results from current connections and fire the
   // one publish event, exactly like the publish route.
-  if (approving && outcome === "publish_now") {
+  if (outcome === "publish_now") {
     const prep = await prepareDeferredPostJobDispatch(postJobId);
     if (!prep.ok) {
       // No usable connections — `prepare` already marked the job failed so it
@@ -182,8 +242,27 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         { status: 409 },
       );
     }
-    await inngest.send({ name: "post/publish.requested", data: prep.event });
+    // Same contract as the publish route: if the event can't be handed to
+    // Inngest, fail the pending results (job → failed) rather than leave it
+    // "publishing" forever. The approval itself stands.
+    try {
+      await inngest.send({ name: "post/publish.requested", data: prep.event });
+    } catch (error) {
+      logger.error("[POST /api/posts/[postJobId]/approval] Couldn't dispatch the publish event", {
+        error,
+        postJobId,
+      });
+      await failPendingPostJobResults(postJobId, DISPATCH_FAILURE);
+      return NextResponse.json(
+        { code: DISPATCH_FAILURE.errorCode, error: DISPATCH_FAILURE.errorMessage },
+        { status: 503 },
+      );
+    }
   }
+
+  // The time the post is now scheduled for — only when approval kept its slot.
+  const scheduledForIso =
+    nextStatus === "scheduled" && job.scheduledFor ? job.scheduledFor.toISOString() : null;
 
   // Tell the member. Fire-and-forget: sendEmail never throws, and the extra
   // try/catch documents that a mail failure must not fail the decision.
@@ -197,10 +276,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         approved: approving,
         workspaceName: workspaceContext.workspace.name,
         caption: job.baseCaption ?? "",
-        scheduledFor:
-          approving && outcome === "schedule" && job.scheduledFor
-            ? new Date(job.scheduledFor).toISOString()
-            : null,
+        scheduledFor: scheduledForIso,
         appBaseUrl: process.env.NEXTAUTH_URL || null,
       });
       await sendEmail({ to: submitter.email, ...email });
@@ -209,5 +285,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     // Ignored on purpose — the decision is already committed.
   }
 
-  return NextResponse.json({ ok: true, status: nextStatus }, { status: 200 });
+  return NextResponse.json(
+    { ok: true, decision, status: nextStatus, approvalState, scheduledFor: scheduledForIso },
+    { status: 200 },
+  );
 }

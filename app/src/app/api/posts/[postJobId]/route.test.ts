@@ -13,12 +13,14 @@ const {
   updateManyMock,
   deleteManyMock,
   postJobResultFindManyMock,
+  notifyOwnersMock,
 } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
   findFirstMock: vi.fn(),
   updateManyMock: vi.fn(),
   deleteManyMock: vi.fn(),
   postJobResultFindManyMock: vi.fn(),
+  notifyOwnersMock: vi.fn(),
 }));
 
 // Team Workspaces (Task 4): getCurrentUser -> getWorkspaceContext.
@@ -32,6 +34,9 @@ vi.mock("@/lib/db", () => ({
     },
     postJobResult: { findMany: postJobResultFindManyMock },
   },
+}));
+vi.mock("@/server/notifications/approvalRequested", () => ({
+  notifyOwnersOfApprovalRequest: notifyOwnersMock,
 }));
 
 import { PATCH, DELETE, GET } from "./route";
@@ -102,7 +107,9 @@ beforeEach(() => {
   updateManyMock.mockReset();
   deleteManyMock.mockReset();
   postJobResultFindManyMock.mockReset();
+  notifyOwnersMock.mockReset();
   getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
+  notifyOwnersMock.mockResolvedValue(undefined);
   updateManyMock.mockResolvedValue({ count: 1 });
   deleteManyMock.mockResolvedValue({ count: 1 });
   postJobResultFindManyMock.mockResolvedValue([]);
@@ -272,8 +279,157 @@ describe("PATCH /api/posts/[postJobId]", () => {
     expect(res.status).toBe(404);
     expect(findFirstMock).toHaveBeenCalledWith({
       where: { id: "foreign-job", workspaceId: "ws-1" },
-      select: { status: true },
+      select: { status: true, submittedForApprovalAt: true, approvedAt: true, baseCaption: true },
     });
+  });
+});
+
+describe("PATCH /api/posts/[postJobId] — approval enforcement (2026-11-01 audit)", () => {
+  const SUBMITTED = new Date("2026-11-01T09:00:00Z");
+
+  /** The ownership/approval read's row. */
+  function existingRow(overrides: Record<string, unknown> = {}) {
+    return {
+      status: "draft",
+      submittedForApprovalAt: null,
+      approvedAt: null,
+      baseCaption: "Original caption",
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    getWorkspaceContextMock.mockResolvedValue(
+      makeWorkspaceContext({
+        userId: "member-1",
+        email: "sam@example.com",
+        name: "Sam",
+        role: "member",
+        requireApproval: true,
+      }),
+    );
+  });
+
+  it("bypass (c): a member editing an APPROVED scheduled post re-holds it in the same conditional write", async () => {
+    findFirstMock.mockResolvedValue(
+      existingRow({ status: "scheduled", submittedForApprovalAt: SUBMITTED, approvedAt: SUBMITTED }),
+    );
+
+    const res = await PATCH(req({ baseCaption: "Unreviewed text" }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ ok: true, status: "draft", approvalState: "pending" });
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: "job-1", workspaceId: "ws-1", status: "scheduled" },
+      data: {
+        baseCaption: "Unreviewed text",
+        status: "draft",
+        submittedForApprovalAt: expect.any(Date),
+        approvedAt: null,
+        approvedByUserId: null,
+      },
+    });
+  });
+
+  it("emails the owners with the EDITED caption when it re-holds", async () => {
+    findFirstMock.mockResolvedValue(
+      existingRow({ status: "scheduled", submittedForApprovalAt: SUBMITTED, approvedAt: SUBMITTED }),
+    );
+
+    await PATCH(req({ baseCaption: "Unreviewed text" }), ctx("job-1"));
+
+    expect(notifyOwnersMock).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      workspaceName: "Acme",
+      submitter: expect.objectContaining({ id: "member-1", name: "Sam" }),
+      caption: "Unreviewed text",
+    });
+  });
+
+  it("re-holds a reschedule too, keeping the new time on the held draft", async () => {
+    findFirstMock.mockResolvedValue(existingRow({ status: "scheduled" }));
+
+    const res = await PATCH(req({ scheduledFor: FUTURE }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: "job-1", workspaceId: "ws-1", status: "scheduled" },
+      data: expect.objectContaining({ scheduledFor: new Date(FUTURE), status: "draft" }),
+    });
+    // Unchanged caption → the existing one is quoted to the owners.
+    expect(notifyOwnersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ caption: "Original caption" }),
+    );
+  });
+
+  it("editing a PENDING post keeps it pending and refreshes its submission time (no new email)", async () => {
+    findFirstMock.mockResolvedValue(existingRow({ submittedForApprovalAt: SUBMITTED }));
+
+    const res = await PATCH(req({ baseCaption: "Fixed typo" }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ ok: true, status: "draft", approvalState: "pending" });
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: "job-1", workspaceId: "ws-1", status: "draft" },
+      data: { baseCaption: "Fixed typo", submittedForApprovalAt: expect.any(Date) },
+    });
+    expect(notifyOwnersMock).not.toHaveBeenCalled();
+  });
+
+  it("a member's plain draft edits exactly as before", async () => {
+    findFirstMock.mockResolvedValue(existingRow());
+
+    const res = await PATCH(req({ baseCaption: "Draft text" }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ ok: true });
+    expect(updateManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { baseCaption: "Draft text" } }),
+    );
+    expect(notifyOwnersMock).not.toHaveBeenCalled();
+  });
+
+  it("409s and notifies nobody when the re-hold loses a race (e.g. the cron claimed it)", async () => {
+    findFirstMock.mockResolvedValue(existingRow({ status: "scheduled", approvedAt: SUBMITTED }));
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await PATCH(req({ baseCaption: "x" }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect(notifyOwnersMock).not.toHaveBeenCalled();
+  });
+
+  it("owners are never affected — an owner's edit of an approved scheduled post stays scheduled", async () => {
+    getWorkspaceContextMock.mockResolvedValue(
+      makeWorkspaceContext({ role: "owner", requireApproval: true }),
+    );
+    findFirstMock.mockResolvedValue(
+      existingRow({ status: "scheduled", submittedForApprovalAt: SUBMITTED, approvedAt: SUBMITTED }),
+    );
+
+    const res = await PATCH(req({ baseCaption: "Owner tweak" }), ctx("job-1"));
+
+    await expect(res.json()).resolves.toEqual({ ok: true });
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: "job-1", workspaceId: "ws-1", status: { in: ["scheduled", "draft"] } },
+      data: { baseCaption: "Owner tweak" },
+    });
+    expect(notifyOwnersMock).not.toHaveBeenCalled();
+  });
+
+  it("members edit scheduled posts freely when the workspace doesn't require approval", async () => {
+    getWorkspaceContextMock.mockResolvedValue(
+      makeWorkspaceContext({ role: "member", requireApproval: false }),
+    );
+    findFirstMock.mockResolvedValue(existingRow({ status: "scheduled" }));
+
+    const res = await PATCH(req({ baseCaption: "x" }), ctx("job-1"));
+
+    await expect(res.json()).resolves.toEqual({ ok: true });
+    expect(updateManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { baseCaption: "x" } }),
+    );
   });
 });
 

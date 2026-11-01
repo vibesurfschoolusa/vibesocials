@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeWorkspaceContext } from "../../../__test-helpers__/workspaceContextMock";
 
@@ -16,6 +16,7 @@ const {
   inngestSendMock,
   prepareDispatchMock,
   sendEmailMock,
+  failPendingMock,
 } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
@@ -25,6 +26,7 @@ const {
   inngestSendMock: vi.fn(),
   prepareDispatchMock: vi.fn(),
   sendEmailMock: vi.fn(),
+  failPendingMock: vi.fn(),
 }));
 
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
@@ -40,10 +42,19 @@ vi.mock("@/server/jobs/posting", () => ({
   prepareDeferredPostJobDispatch: prepareDispatchMock,
 }));
 vi.mock("@/server/notifications/email", () => ({ sendEmail: sendEmailMock }));
+// Keep the REAL DISPATCH_FAILURE constant; only the DB-touching helper is mocked.
+vi.mock("@/server/jobs/failPendingResults", async () => {
+  const actual = await vi.importActual<typeof import("@/server/jobs/failPendingResults")>(
+    "@/server/jobs/failPendingResults",
+  );
+  return { ...actual, failPendingPostJobResults: failPendingMock };
+});
 
 import { POST } from "./route";
 
 const SUBMITTED = new Date("2026-07-26T09:00:00Z");
+/** The version of the post the owner reviewed (PostJob.updatedAt). */
+const REVIEWED = new Date("2026-07-26T09:30:00.250Z");
 const FUTURE = new Date(Date.now() + 6 * 60 * 60 * 1000);
 const PAST = new Date(Date.now() - 60 * 60 * 1000);
 
@@ -64,9 +75,16 @@ function pendingJob(overrides: Record<string, unknown> = {}) {
     approvedAt: null,
     userId: "member-1",
     baseCaption: "Member's post",
+    updatedAt: REVIEWED,
     ...overrides,
   };
 }
+
+const ORIGINAL_RESEND_API_KEY = process.env.RESEND_API_KEY;
+afterEach(() => {
+  if (ORIGINAL_RESEND_API_KEY === undefined) delete process.env.RESEND_API_KEY;
+  else process.env.RESEND_API_KEY = ORIGINAL_RESEND_API_KEY;
+});
 
 beforeEach(() => {
   getWorkspaceContextMock.mockReset();
@@ -77,8 +95,12 @@ beforeEach(() => {
   inngestSendMock.mockReset();
   prepareDispatchMock.mockReset();
   sendEmailMock.mockReset();
+  failPendingMock.mockReset();
+  // Verification is only enforced when email can actually be delivered.
+  delete process.env.RESEND_API_KEY;
 
   getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "owner" }));
+  failPendingMock.mockResolvedValue({ failedCount: 1, status: "failed" });
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   updateManyMock.mockResolvedValue({ count: 1 });
   userFindUniqueMock.mockResolvedValue({ email: "member@example.com" });
@@ -153,7 +175,7 @@ describe("POST /api/posts/[postJobId]/approval", () => {
     expect(res.status).toBe(200);
     expect(body.status).toBe("scheduled");
     expect(updateManyMock).toHaveBeenCalledWith({
-      where: { id: "job-1", workspaceId: "ws-1", status: "draft" },
+      where: { id: "job-1", workspaceId: "ws-1", status: "draft", updatedAt: REVIEWED },
       data: {
         status: "scheduled",
         approvedAt: expect.any(Date),
@@ -172,7 +194,7 @@ describe("POST /api/posts/[postJobId]/approval", () => {
     expect(res.status).toBe(200);
     expect(body.status).toBe("in_progress");
     expect(updateManyMock).toHaveBeenCalledWith({
-      where: { id: "job-1", workspaceId: "ws-1", status: "draft" },
+      where: { id: "job-1", workspaceId: "ws-1", status: "draft", updatedAt: REVIEWED },
       data: {
         status: "in_progress",
         approvedAt: expect.any(Date),
@@ -212,7 +234,7 @@ describe("POST /api/posts/[postJobId]/approval", () => {
     expect(res.status).toBe(200);
     expect(body.status).toBe("cancelled");
     expect(updateManyMock).toHaveBeenCalledWith({
-      where: { id: "job-1", workspaceId: "ws-1", status: "draft" },
+      where: { id: "job-1", workspaceId: "ws-1", status: "draft", updatedAt: REVIEWED },
       data: { status: "cancelled" },
     });
     expect(inngestSendMock).not.toHaveBeenCalled();
@@ -238,5 +260,201 @@ describe("POST /api/posts/[postJobId]/approval", () => {
     const res = await POST(req({ decision: "approve" }), ctx("job-1"));
 
     expect(res.status).toBe(200);
+  });
+});
+
+describe("POST /api/posts/[postJobId]/approval — response contract (2026-11-01 audit)", () => {
+  it("approve + time ahead → scheduled, approved, keeps the time", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({
+      ok: true,
+      decision: "approve",
+      status: "scheduled",
+      approvalState: "approved",
+      scheduledFor: FUTURE.toISOString(),
+    });
+  });
+
+  it("approve + passed time → in_progress, approved, no scheduled time", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: PAST }));
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    await expect(res.json()).resolves.toEqual({
+      ok: true,
+      decision: "approve",
+      status: "in_progress",
+      approvalState: "approved",
+      scheduledFor: null,
+    });
+  });
+
+  it("reject → cancelled, rejected, no scheduled time", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+
+    const res = await POST(req({ decision: "reject" }), ctx("job-1"));
+
+    await expect(res.json()).resolves.toEqual({
+      ok: true,
+      decision: "reject",
+      status: "cancelled",
+      approvalState: "rejected",
+      scheduledFor: null,
+    });
+  });
+});
+
+describe("POST /api/posts/[postJobId]/approval — CHANGED_SINCE_REVIEW (2026-11-01 audit)", () => {
+  it("409s without deciding when the post changed after the owner opened it", async () => {
+    findFirstMock.mockResolvedValue(pendingJob());
+
+    const res = await POST(
+      req({ decision: "approve", reviewedUpdatedAt: "2026-07-26T09:00:00.000Z" }),
+      ctx("job-1"),
+    );
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({
+      code: "CHANGED_SINCE_REVIEW",
+      error: "This post changed since you opened it. Review the latest version.",
+    });
+    expect(updateManyMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+    expect(sendEmailMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a stale REJECT too", async () => {
+    findFirstMock.mockResolvedValue(pendingJob());
+    const res = await POST(
+      req({ decision: "reject", reviewedUpdatedAt: "2026-07-26T09:00:00.000Z" }),
+      ctx("job-1"),
+    );
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe("CHANGED_SINCE_REVIEW");
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("decides when the reviewed version is the current one", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+
+    const res = await POST(
+      req({ decision: "approve", reviewedUpdatedAt: REVIEWED.toISOString() }),
+      ctx("job-1"),
+    );
+
+    expect(res.status).toBe(200);
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("400s a reviewedUpdatedAt that isn't a string", async () => {
+    findFirstMock.mockResolvedValue(pendingJob());
+    const res = await POST(req({ decision: "approve", reviewedUpdatedAt: 12345 }), ctx("job-1"));
+    expect(res.status).toBe(400);
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("the decision write is pinned to the read updatedAt; losing it to a concurrent EDIT → CHANGED_SINCE_REVIEW", async () => {
+    // First read: the version being decided. Re-read after the lost write: an
+    // edit bumped updatedAt but the post is still a held draft.
+    findFirstMock
+      .mockResolvedValueOnce(pendingJob())
+      .mockResolvedValueOnce(pendingJob({ updatedAt: new Date("2026-07-26T09:45:00Z") }));
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe("CHANGED_SINCE_REVIEW");
+    expect(updateManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "job-1", workspaceId: "ws-1", status: "draft", updatedAt: REVIEWED },
+      }),
+    );
+    expect(prepareDispatchMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("losing the write to a concurrent DECISION → NOT_PENDING_APPROVAL", async () => {
+    findFirstMock
+      .mockResolvedValueOnce(pendingJob())
+      .mockResolvedValueOnce(pendingJob({ status: "cancelled" }));
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe("NOT_PENDING_APPROVAL");
+  });
+});
+
+describe("POST /api/posts/[postJobId]/approval — email verification (2026-11-01 audit)", () => {
+  beforeEach(() => {
+    // Email is deliverable → verification is enforced; the owner (fixture)
+    // has no emailVerifiedAt.
+    process.env.RESEND_API_KEY = "re_test";
+  });
+
+  it("403s EMAIL_VERIFY_REQUIRED before any state change when approving would publish now", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe("EMAIL_VERIFY_REQUIRED");
+    expect(updateManyMock).not.toHaveBeenCalled();
+    expect(prepareDispatchMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("lets a verified owner approve-and-publish", async () => {
+    getWorkspaceContextMock.mockResolvedValue({
+      ...makeWorkspaceContext({ role: "owner" }),
+      user: { id: "user-1", email: "owner@example.com", name: "Owner", emailVerifiedAt: new Date() },
+    });
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't gate an approval that only schedules (nothing goes out yet)", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+    expect(res.status).toBe(200);
+  });
+
+  it("doesn't gate a rejection", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
+    const res = await POST(req({ decision: "reject" }), ctx("job-1"));
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("POST /api/posts/[postJobId]/approval — dispatch failure (2026-11-01 audit)", () => {
+  it("503s DISPATCH_FAILED and fails the pending results when inngest.send throws on approve-and-publish", async () => {
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
+    inngestSendMock.mockRejectedValue(new Error("inngest unreachable"));
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toEqual({
+      code: "DISPATCH_FAILED",
+      error: "Couldn't start publishing. Please try again.",
+    });
+    expect(failPendingMock).toHaveBeenCalledWith("job-1", {
+      errorCode: "DISPATCH_FAILED",
+      errorMessage: "Couldn't start publishing. Please try again.",
+    });
+    // The member isn't told "publishing now" about a publish that never started.
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
   });
 });

@@ -3,12 +3,20 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import {
+  holdForApprovalData,
+  publishApprovalAction,
+  submissionScheduledFor,
+} from "@/lib/approval";
+import {
   EMAIL_VERIFY_REQUIRED_MESSAGE,
   isEmailVerifiedForPublish,
 } from "@/lib/emailVerified";
 import { inngest } from "@/lib/inngest";
+import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
 import { prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
+import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
 import { MUTABLE_POST_JOB_STATUSES, validateScheduledFor } from "@/lib/scheduling";
 
 interface PostJobRouteContext {
@@ -35,6 +43,13 @@ interface PublishBody {
  * publishing). Each state transition is an ATOMIC conditional `updateMany` so a
  * double-click, a concurrent promote, or the cron claiming the same scheduled
  * job can't publish it twice.
+ *
+ * Approval (2026-11-01 audit): for a MEMBER in a workspace that requires
+ * approval, a post no owner approved never goes out from here
+ * (`publishApprovalAction`). A post already awaiting approval 409s
+ * `AWAITING_APPROVAL`; a plain draft or an unapproved scheduled post is
+ * SUBMITTED for approval instead (202 `{ status: "draft", approvalState:
+ * "pending" }`, owners emailed, nothing dispatched). Owners are unaffected.
  */
 export async function POST(request: NextRequest, context: PostJobRouteContext) {
   const workspaceContext = await getWorkspaceContext();
@@ -79,11 +94,84 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // workspace. Team Workspaces (Task 4): any member may publish (design §1).
   const job = await prisma.postJob.findFirst({
     where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
-    select: { status: true },
+    select: {
+      status: true,
+      scheduledFor: true,
+      submittedForApprovalAt: true,
+      approvedAt: true,
+      baseCaption: true,
+      updatedAt: true,
+    },
   });
 
   if (!job) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  const approvalAction = publishApprovalAction({
+    requireApproval: workspaceContext.workspace.requireApproval,
+    role: workspaceContext.role,
+    job,
+  });
+
+  if (approvalAction === "awaiting_approval") {
+    return NextResponse.json(
+      { code: "AWAITING_APPROVAL", error: "This post is waiting for an owner's approval." },
+      { status: 409 },
+    );
+  }
+
+  // Submit for approval instead of publishing/scheduling. Needs no verified
+  // email or connection yet: nothing goes out until an owner approves, and
+  // the approval route re-checks both.
+  if (approvalAction === "submit") {
+    let requested: Date | null = null;
+    if (wantsSchedule) {
+      const validation = validateScheduledFor(body.scheduledFor, new Date());
+      if (!validation.ok) {
+        return NextResponse.json({ error: validation.error }, { status: 400 });
+      }
+      requested = validation.date;
+    }
+
+    const scheduledFor = submissionScheduledFor(job, requested);
+
+    // One conditional write pinned to the version just read (status AND
+    // updatedAt): a cron claim, a concurrent submit or an edit in between
+    // makes this a no-op instead of a double submission.
+    const { count } = await prisma.postJob.updateMany({
+      where: {
+        id: postJobId,
+        workspaceId: workspaceContext.workspace.id,
+        status: job.status,
+        updatedAt: job.updatedAt,
+      },
+      data: { ...holdForApprovalData(new Date()), scheduledFor },
+    });
+
+    if (count === 0) {
+      return NextResponse.json(
+        { error: "This post changed in the meantime. Refresh and try again.", code: "NOT_PUBLISHABLE" },
+        { status: 409 },
+      );
+    }
+
+    await notifyOwnersOfApprovalRequest({
+      workspaceId: workspaceContext.workspace.id,
+      workspaceName: workspaceContext.workspace.name,
+      submitter: workspaceContext.user,
+      caption: job.baseCaption ?? "",
+    });
+
+    return NextResponse.json(
+      {
+        ok: true,
+        status: "draft",
+        approvalState: "pending",
+        scheduledFor: scheduledFor ? scheduledFor.toISOString() : null,
+      },
+      { status: 202 },
+    );
   }
 
   // Path 1 — schedule a draft for later (a scheduled job reschedules via PATCH).
@@ -185,7 +273,22 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     );
   }
 
-  await inngest.send({ name: "post/publish.requested", data: prep.event });
+  // The job is already committed `in_progress` with pending results: if the
+  // event can't be handed to Inngest, fail those results now (job → failed)
+  // so it can't hang "publishing", and tell the caller to try again.
+  try {
+    await inngest.send({ name: "post/publish.requested", data: prep.event });
+  } catch (error) {
+    logger.error("[POST /api/posts/[postJobId]/publish] Couldn't dispatch the publish event", {
+      error,
+      postJobId,
+    });
+    await failPendingPostJobResults(postJobId, DISPATCH_FAILURE);
+    return NextResponse.json(
+      { code: DISPATCH_FAILURE.errorCode, error: DISPATCH_FAILURE.errorMessage },
+      { status: 503 },
+    );
+  }
 
   return NextResponse.json({ ok: true, status: "in_progress" }, { status: 202 });
 }

@@ -66,6 +66,13 @@ export interface PostJobDTO {
   /** ISO-8601 creation timestamp. */
   createdAt: string;
   /**
+   * ISO-8601 last-modified timestamp (`PostJob.updatedAt`) — identifies the
+   * VERSION of the post being shown (2026-11-01 audit). The Queue sends it
+   * back as the approval route's `reviewedUpdatedAt`, so an owner can't
+   * approve text that changed after they opened it (409 CHANGED_SINCE_REVIEW).
+   */
+  updatedAt: string;
+  /**
    * ISO-8601 target publish time for a `scheduled` job, else null (Roadmap
    * Phase 5). Drives the Queue ordering + the "Scheduled for …" label.
    */
@@ -140,8 +147,9 @@ export interface PostsResponse {
  * DROPS `userId`, `workspaceId` (ownership/tenancy — the route already scopes
  * the read to the caller's workspace before this ever runs), `publishMetadata`
  * (the raw compose-time snapshot — `perPlatformOverrides` below is the
- * display-safe caption data callers need) and `updatedAt` (an internal
- * bookkeeping timestamp with no UI use). KEEPS `mediaItemId`: it's not a
+ * display-safe caption data callers need) and `updatedAt` (no caller of THIS
+ * single-job DTO needs it; the Queue's approval review reads it from the
+ * list DTO, {@link PostJobDTO.updatedAt}). KEEPS `mediaItemId`: it's not a
  * secret — it's the same id already returned by `GET /api/media` /
  * `POST /api/media`, and the compose UI uses it as a public "reuse this
  * media" handle (`/posts/new?mediaItemId=`).

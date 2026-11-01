@@ -17,6 +17,7 @@ function job(id: string, partial: Partial<PostJobDTO> = {}): PostJobDTO {
     id,
     status: "completed",
     createdAt: "2026-07-10T00:00:00.000Z",
+    updatedAt: "2026-07-10T00:00:00.000Z",
     scheduledFor: null,
     caption: "c",
     results: [],
