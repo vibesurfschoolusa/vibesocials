@@ -59,7 +59,8 @@ export interface StalePostJobInput {
  * Whether a job is a dispatched job that has stopped making progress.
  *
  * Keys off `updatedAt`, not `createdAt`: a job that is genuinely moving through
- * its platforms rewrites the row as it goes, so an active long publish keeps
+ * its platforms bumps it as each platform's result is finalized (the heartbeat
+ * in inngest-functions.ts `finalizeResult`), so an active long publish keeps
  * resetting its own clock and is never swept.
  */
 export function isStalePostJob(job: StalePostJobInput, now: Date): boolean {

@@ -11,6 +11,10 @@ import {
   TERMINAL_POST_JOB_STATUSES,
   isMediaSweepEligible,
 } from "@/server/jobs/mediaRetention";
+import {
+  failPendingPostJobResults,
+  type PendingResultFailure,
+} from "@/server/jobs/failPendingResults";
 import { recomputePostJobStatus } from "@/server/jobs/postStatus";
 import {
   claimDueScheduledJobs,
@@ -78,6 +82,26 @@ interface PublishToPlatformArgs {
   youtubeMetadata?: YouTubePostMetadata;
 }
 
+/** A platform's final outcome, as written to its PostJobResult row. */
+type FinalResultData =
+  | { status: "success"; externalPostId: string | null }
+  | { status: "failed"; errorCode: string; errorMessage: string };
+
+/**
+ * Write a platform's final PostJobResult AND, in the same nested write, bump
+ * the parent PostJob's `updatedAt` (Task 4 item 6). That timestamp is the
+ * heartbeat the stale sweep (`stalePostJobSweep`, 6h) and the stuck-in_progress
+ * reconciler (`reconcileStuckInProgressJobs`, 2h) judge progress by; platform
+ * steps used to write only the result row, so a slow-but-alive run never
+ * touched its job and could be swept as stalled mid-flight.
+ */
+async function finalizeResult(resultRecordId: string, data: FinalResultData): Promise<void> {
+  await prisma.postJobResult.update({
+    where: { id: resultRecordId },
+    data: { ...data, postJob: { update: { updatedAt: new Date() } } },
+  });
+}
+
 // Helper to publish to a single platform. Loads the connection fresh so tokens
 // are never serialized through step.run() memoization.
 async function publishToPlatform({
@@ -93,13 +117,10 @@ async function publishToPlatform({
   const client = getPlatformClient(connectionRef.platform);
 
   if (!client) {
-    await prisma.postJobResult.update({
-      where: { id: resultRecordId },
-      data: {
-        status: "failed",
-        errorCode: "CLIENT_NOT_FOUND",
-        errorMessage: "No client configured for this platform.",
-      },
+    await finalizeResult(resultRecordId, {
+      status: "failed",
+      errorCode: "CLIENT_NOT_FOUND",
+      errorMessage: "No client configured for this platform.",
     });
     return { platform: connectionRef.platform, status: "failed", error: "No client" };
   }
@@ -110,13 +131,10 @@ async function publishToPlatform({
       where: { id: connectionRef.id },
     });
     if (!connection) {
-      await prisma.postJobResult.update({
-        where: { id: resultRecordId },
-        data: {
-          status: "failed",
-          errorCode: "CONNECTION_GONE",
-          errorMessage: "This platform connection was removed. Reconnect and retry.",
-        },
+      await finalizeResult(resultRecordId, {
+        status: "failed",
+        errorCode: "CONNECTION_GONE",
+        errorMessage: "This platform connection was removed. Reconnect and retry.",
       });
       return {
         platform: connectionRef.platform,
@@ -125,14 +143,10 @@ async function publishToPlatform({
       };
     }
     if (connection.needsReconnect) {
-      await prisma.postJobResult.update({
-        where: { id: resultRecordId },
-        data: {
-          status: "failed",
-          errorCode: "RECONNECT_REQUIRED",
-          errorMessage:
-            "This platform needs to be reconnected in Settings before publishing.",
-        },
+      await finalizeResult(resultRecordId, {
+        status: "failed",
+        errorCode: "RECONNECT_REQUIRED",
+        errorMessage: "This platform needs to be reconnected in Settings before publishing.",
       });
       return {
         platform: connectionRef.platform,
@@ -180,12 +194,9 @@ async function publishToPlatform({
       platform: connection.platform,
       externalPostId: publishResult.externalPostId,
     });
-    await prisma.postJobResult.update({
-      where: { id: resultRecordId },
-      data: {
-        status: "success",
-        externalPostId: publishResult.externalPostId ?? null,
-      },
+    await finalizeResult(resultRecordId, {
+      status: "success",
+      externalPostId: publishResult.externalPostId ?? null,
     });
     return { platform: connection.platform, status: "success" };
   } catch (error: unknown) {
@@ -196,23 +207,75 @@ async function publishToPlatform({
       code: err.code,
       error: err,
     });
-    await prisma.postJobResult.update({
-      where: { id: resultRecordId },
-      data: {
-        status: "failed",
-        errorCode: err.code ?? "PUBLISH_FAILED",
-        errorMessage: err.message || "Failed to publish to platform.",
-      },
+    await finalizeResult(resultRecordId, {
+      status: "failed",
+      errorCode: err.code ?? "PUBLISH_FAILED",
+      errorMessage: err.message || "Failed to publish to platform.",
     });
     return { platform: connectionRef.platform, status: "failed", error: err.message };
   }
 }
 
+/** Recorded on every result a dead publish/retry run left `pending` (Task 4 item 7). */
+export const PUBLISH_INTERRUPTED = {
+  errorCode: "PUBLISH_INTERRUPTED",
+  errorMessage: "Publishing was interrupted. Please retry.",
+} as const satisfies PendingResultFailure;
+
+/** The parts of Inngest's `inngest/function.failed` payload this handler reads. */
+interface PublishRunFailureArgs {
+  event: {
+    data: {
+      function_id?: string;
+      run_id?: string;
+      /** The ORIGINAL triggering event (`post/publish.requested` / `post/retry.requested`). */
+      event: { data?: { postJobId?: unknown } };
+    };
+  };
+  error: unknown;
+}
+
+/**
+ * `onFailure` for both publish functions (Task 4 items 7 + 9). They are
+ * `retries: 0` (posting is not idempotent), so when a run dies — a step killed
+ * at Vercel's 300s per-invocation cap, a thrown setup step — Inngest fails it
+ * once and the platforms not yet attempted stay `pending`: the job looked
+ * "publishing" until the 2h stuck reconciler gave up on it. This fails those
+ * still-`pending` results with PUBLISH_INTERRUPTED and recomputes the job's
+ * status through the shared failPendingPostJobResults helper. Results that
+ * already finished are untouched (a platform that went live stays live), and
+ * every failed one is retryable from the UI.
+ */
+export async function failInterruptedPublishRun({
+  event,
+  error,
+}: PublishRunFailureArgs): Promise<void> {
+  const postJobId = event.data.event.data?.postJobId;
+  if (typeof postJobId !== "string" || postJobId.length === 0) {
+    logger.error("[Inngest] Publish run failed without a postJobId; nothing to fail", {
+      functionId: event.data.function_id,
+      runId: event.data.run_id,
+      error,
+    });
+    return;
+  }
+
+  const outcome = await failPendingPostJobResults(postJobId, PUBLISH_INTERRUPTED);
+  logger.warn("[Inngest] Publish run failed; interrupted results failed", {
+    postJobId,
+    functionId: event.data.function_id,
+    runId: event.data.run_id,
+    ...outcome,
+    error,
+  });
+}
+
 export const publishToAllPlatforms = inngest.createFunction(
-  { 
+  {
     id: "publish-to-all-platforms",
     name: "Publish to All Platforms",
     retries: 0,
+    onFailure: failInterruptedPublishRun,
   },
   { event: "post/publish.requested" },
   async ({ event, step }) => {
@@ -540,6 +603,8 @@ export const retryPlatforms = inngest.createFunction(
     id: "retry-platforms",
     name: "Retry Failed Platforms",
     retries: 0,
+    // Same interrupted-run cleanup as publishToAllPlatforms (Task 4 item 7).
+    onFailure: failInterruptedPublishRun,
     // Serialize by PostJob: overlapping retries for the same job queue behind
     // one another instead of double-running a platform (posting isn't
     // idempotent). Pairs with the endpoint's failed->pending conditional claim.
@@ -688,14 +753,11 @@ export const retryPlatforms = inngest.createFunction(
           // The platform was disconnected since the original post; there is no
           // token to publish with. Fail with a reconnect-shaped code so the UI
           // can point the user at Settings.
-          await prisma.postJobResult.update({
-            where: { id: resultRecord.id },
-            data: {
-              status: "failed",
-              errorCode: "RECONNECT_REQUIRED",
-              errorMessage:
-                "This platform is no longer connected. Reconnect it in Settings and try again.",
-            },
+          await finalizeResult(resultRecord.id, {
+            status: "failed",
+            errorCode: "RECONNECT_REQUIRED",
+            errorMessage:
+              "This platform is no longer connected. Reconnect it in Settings and try again.",
           });
           return { platform, status: "failed", error: "No connection" };
         }
@@ -1124,7 +1186,8 @@ export const stalePostJobSweep = inngest.createFunction(
       // The eligibility rule is isStalePostJob(); expressed here as the
       // equivalent WHERE so one statement claims the rows atomically. `updatedAt`
       // (not `createdAt`) is the progress signal — a job still working through
-      // its platforms keeps rewriting the row and so keeps resetting its clock.
+      // its platforms bumps it as each platform finishes (finalizeResult's
+      // heartbeat) and so keeps resetting its clock.
       const { count } = await prisma.postJob.updateMany({
         where: {
           status: { in: [...STALE_ELIGIBLE_STATUSES] },

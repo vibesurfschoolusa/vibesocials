@@ -20,7 +20,10 @@ const db = vi.hoisted(() => ({
   resultUpdate: vi.fn(),
   resultUpdateMany: vi.fn(),
 }));
-const { getPlatformClientMock } = vi.hoisted(() => ({ getPlatformClientMock: vi.fn() }));
+const { getPlatformClientMock, failPendingMock } = vi.hoisted(() => ({
+  getPlatformClientMock: vi.fn(),
+  failPendingMock: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -38,8 +41,15 @@ vi.mock("@/lib/db", () => ({
 }));
 vi.mock("@/server/platforms", () => ({ getPlatformClient: getPlatformClientMock }));
 vi.mock("@vercel/blob", () => ({ del: vi.fn() }));
+vi.mock("@/server/jobs/failPendingResults", () => ({
+  failPendingPostJobResults: failPendingMock,
+}));
 
-import { publishToAllPlatforms, retryPlatforms } from "./inngest-functions";
+import {
+  failInterruptedPublishRun,
+  publishToAllPlatforms,
+  retryPlatforms,
+} from "./inngest-functions";
 
 const WORKSPACE = { id: "ws-1", companyWebsite: null, defaultHashtags: "#brand" };
 
@@ -85,6 +95,7 @@ let publishCtxs: PublishContext[];
 beforeEach(() => {
   for (const mock of Object.values(db)) mock.mockReset();
   getPlatformClientMock.mockReset();
+  failPendingMock.mockReset();
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -221,3 +232,151 @@ describe("publishToAllPlatforms — YouTube title source (Task 4 item 1)", () =>
     expect(ctxFor("youtube").caption).toBe(buildCaptionWithFooter("Typed for this post", WORKSPACE));
   });
 });
+
+/** Every `postJobResult.update` data payload, in call order. */
+function resultWrites(): Array<Record<string, unknown>> {
+  return db.resultUpdate.mock.calls.map((c) => (c[0] as { data: Record<string, unknown> }).data);
+}
+
+const HEARTBEAT = { postJob: { update: { updatedAt: expect.any(Date) } } };
+
+// Task 4 item 6: the stale sweep (6h) and the stuck-in_progress reconciler
+// (2h) judge progress by PostJob.updatedAt, but platform steps only wrote
+// PostJobResult — so a slow-but-alive run never touched its job row. Every
+// finalized result now bumps the job's updatedAt in the same nested write.
+describe("publish heartbeat — finalizing a result bumps PostJob.updatedAt (Task 4 item 6)", () => {
+  function publish(platforms: Platform[]) {
+    db.postJobFindUnique.mockResolvedValue({ id: "job-1", workspaceId: WORKSPACE.id });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null });
+    db.connectionFindMany.mockResolvedValue(
+      platforms.map((p) => ({ id: `conn-${p}`, platform: p })),
+    );
+    stubResults(platforms);
+    return handlerOf(publishToAllPlatforms)({
+      event: {
+        name: "post/publish.requested",
+        data: { postJobId: "job-1", userId: "user-1", mediaItemId: "media-1", baseCaption: "c", perPlatformOverrides: null },
+      },
+      step: fakeStep(),
+    });
+  }
+
+  it("on success", async () => {
+    await publish(["x"]);
+    expect(resultWrites()).toEqual([
+      expect.objectContaining({ status: "success", externalPostId: "ext-x", ...HEARTBEAT }),
+    ]);
+  });
+
+  it("on a platform failure", async () => {
+    getPlatformClientMock.mockImplementation(() => ({
+      publishVideo: vi.fn(async () => {
+        throw Object.assign(new Error("nope"), { code: "X_TWEET_FAILED", status: 403 });
+      }),
+    }));
+    await publish(["x"]);
+    expect(resultWrites()).toEqual([
+      expect.objectContaining({ status: "failed", errorCode: "X_TWEET_FAILED", ...HEARTBEAT }),
+    ]);
+  });
+
+  it("when no client exists, the connection is gone, or it needs a reconnect", async () => {
+    getPlatformClientMock.mockImplementation((platform: Platform) =>
+      platform === "x" ? null : { publishVideo: vi.fn() },
+    );
+    db.connectionFindUnique.mockImplementation(({ where }: { where: { id: string } }) =>
+      Promise.resolve(
+        where.id === "conn-youtube" ? null : { ...connectionRow("linkedin"), needsReconnect: true },
+      ),
+    );
+
+    await publish(["x", "youtube", "linkedin"]);
+
+    expect(resultWrites()).toEqual([
+      expect.objectContaining({ status: "failed", errorCode: "CLIENT_NOT_FOUND", ...HEARTBEAT }),
+      expect.objectContaining({ status: "failed", errorCode: "CONNECTION_GONE", ...HEARTBEAT }),
+      expect.objectContaining({ status: "failed", errorCode: "RECONNECT_REQUIRED", ...HEARTBEAT }),
+    ]);
+  });
+
+  it("when a retried platform has lost its connection", async () => {
+    db.postJobFindUnique.mockResolvedValue({
+      id: "job-1", workspaceId: WORKSPACE.id, mediaItemId: "media-1",
+      baseCaption: "c", perPlatformOverrides: null, publishMetadata: null,
+    });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", perPlatformOverrides: null, deletedAt: null });
+    db.connectionFindMany.mockResolvedValue([]);
+    stubResults(["x"]);
+
+    await handlerOf(retryPlatforms)({
+      event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms: ["x"] } },
+      step: fakeStep(),
+    });
+
+    expect(resultWrites()).toEqual([
+      expect.objectContaining({ status: "failed", errorCode: "RECONNECT_REQUIRED", ...HEARTBEAT }),
+    ]);
+  });
+});
+
+// Task 4 items 7 + 9: both publish functions are `retries: 0`. When a run dies
+// (a step killed at Vercel's 300s cap, a thrown step), the platforms not yet
+// attempted stayed `pending` and the job looked "publishing" for ~2h. An
+// Inngest onFailure handler now fails them via the shared
+// failPendingPostJobResults helper (which also recomputes the job status).
+describe("onFailure — interrupted publish runs (Task 4 items 7 + 9)", () => {
+  it.each([
+    ["publishToAllPlatforms", publishToAllPlatforms, "publish-to-all-platforms"],
+    ["retryPlatforms", retryPlatforms, "retry-platforms"],
+  ] as const)("%s registers a failure handler for its own function id", (_name, fn, id) => {
+    // getConfig is what Inngest's serve() registers; private in the SDK's
+    // types, public at runtime.
+    const { getConfig } = fn as unknown as {
+      getConfig(opts: { baseUrl: URL; appPrefix: string }): Array<{ id: string; triggers: unknown }>;
+    };
+    const config = getConfig.call(fn, {
+      baseUrl: new URL("https://app.example/api/inngest"),
+      appPrefix: "vibe-socials",
+    });
+    const failure = config.find((c) => c.id === `vibe-socials-${id}-failure`);
+    expect(failure?.triggers).toEqual([
+      { event: "inngest/function.failed", expression: `event.data.function_id == 'vibe-socials-${id}'` },
+    ]);
+    // ...and it is THIS module's handler.
+    expect((fn as unknown as { onFailureFn?: unknown }).onFailureFn).toBe(failInterruptedPublishRun);
+  });
+
+  function failureEvent(data: Record<string, unknown>) {
+    return {
+      name: "inngest/function.failed",
+      data: {
+        function_id: "vibe-socials-publish-to-all-platforms",
+        run_id: "run-1",
+        error: { name: "Error", message: "step timed out" },
+        event: { name: "post/publish.requested", data },
+      },
+    };
+  }
+
+  it("fails the job's still-pending results with PUBLISH_INTERRUPTED via the shared helper", async () => {
+    failPendingMock.mockResolvedValue({ failedCount: 2, status: "completed" });
+
+    await failInterruptedPublishRun({
+      event: failureEvent({ postJobId: "job-9", userId: "user-1" }),
+      error: new Error("step timed out"),
+    });
+
+    expect(failPendingMock).toHaveBeenCalledTimes(1);
+    expect(failPendingMock).toHaveBeenCalledWith("job-9", {
+      errorCode: "PUBLISH_INTERRUPTED",
+      errorMessage: "Publishing was interrupted. Please retry.",
+    });
+  });
+
+  it("does nothing (but logs) when the failed event carries no postJobId", async () => {
+    await failInterruptedPublishRun({ event: failureEvent({}), error: new Error("boom") });
+    expect(failPendingMock).not.toHaveBeenCalled();
+    expect(console.error).toHaveBeenCalled();
+  });
+});
+
