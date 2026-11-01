@@ -166,8 +166,9 @@ async function publishToPlatform({
     }
 
     // Bounded in-step retry for provably-uncommitted transient failures
-    // (429/5xx/pre-response network errors). See transientRetry.ts for why
-    // timeouts and 4xx are deliberately excluded and why this must NOT be
+    // (429/5xx, network errors that never connected). See transientRetry.ts
+    // for why timeouts, mid-request connection drops and 4xx are deliberately
+    // excluded and why this must NOT be
     // an Inngest-level retry (the function is retries: 0 to prevent
     // double-posting). Covers the user-triggered retry flow too — it also
     // funnels through publishToPlatform.

@@ -239,7 +239,8 @@ function isExpiredOrExpiringSoon(expiresAt: Date | string | null | undefined): b
  *    flag needsReconnect, throw `TIKTOK_RECONNECT_REQUIRED`.
  *  - 429 / 5xx / other non-terminal responses: throw `TIKTOK_TOKEN_REFRESH_FAILED`
  *    (sanitized, carries `status` so withTransientRetries can retry 429/5xx)
- *    WITHOUT flagging. Network errors propagate unchanged (also retryable).
+ *    WITHOUT flagging. Network errors propagate unchanged (retried in-step only
+ *    when they prove the connection was never made — see transientRetry.ts).
  *  - missing env credentials: throw `TIKTOK_MISSING_OAUTH_CREDENTIALS` without
  *    flagging (deployment problem, not a per-connection one).
  */

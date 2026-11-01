@@ -1,13 +1,46 @@
 import { FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
 
 /**
+ * `cause.code`s of a Node fetch failure that PROVE the connection was never
+ * established — so the platform cannot have received, let alone committed,
+ * the request: connection refused, DNS failure (permanent / temporary),
+ * network or host unreachable, and undici's connect-phase timeout.
+ */
+const NEVER_CONNECTED_CODES: ReadonlySet<string> = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+/**
+ * Is this a Node fetch network failure (`TypeError("fetch failed")`) whose
+ * `cause.code` proves the request never left this machine? A multi-address
+ * connect failure surfaces as an `AggregateError` cause that carries the code
+ * too. Any other TypeError — a connection reset mid-request, a socket closed
+ * after the body was sent, a programming error — is NOT provable.
+ */
+function isNeverConnectedFetchError(error: TypeError): boolean {
+  const cause = (error as { cause?: unknown }).cause;
+  if (!cause || typeof cause !== "object") return false;
+  const code = (cause as { code?: unknown }).code;
+  return typeof code === "string" && NEVER_CONNECTED_CODES.has(code);
+}
+
+/**
  * Should this publish-path failure be retried in-step?
  *
  * YES — the request provably did not commit on the platform:
  *  - HTTP 429 / 5xx responses (`assertOk` attaches `status`)
- *  - pre-response network failures (undici fetch rejects with TypeError)
+ *  - network failures that never connected (see NEVER_CONNECTED_CODES)
  *
  * NO — everything else, deliberately:
+ *  - other network failures (2026-11-01 audit): undici rejects with the same
+ *    `TypeError("fetch failed")` when a connection drops AFTER the platform
+ *    received the request (ECONNRESET, UND_ERR_SOCKET, ...) — it may already
+ *    have published, so re-running the whole publish could double-post.
  *  - FETCH_TIMEOUT: the platform may have received and committed the request;
  *    retrying risks a double post. (fetchWithTimeout's timer only covers
  *    connection + headers, but that is exactly the ambiguous window.)
@@ -15,7 +48,7 @@ import { FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
  *  - token/reconnect error codes: terminal until the user reconnects.
  */
 export function isTransientPublishError(error: unknown): boolean {
-  if (error instanceof TypeError) return true;
+  if (error instanceof TypeError) return isNeverConnectedFetchError(error);
   if (!error || typeof error !== "object") return false;
   const err = error as { status?: unknown; code?: unknown };
   if (err.code === FETCH_TIMEOUT_CODE) return false;

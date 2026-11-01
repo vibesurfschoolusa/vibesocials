@@ -600,7 +600,7 @@ describe("refreshTikTokToken", () => {
       expect(updateMock).not.toHaveBeenCalled();
     });
 
-    it("propagates a network failure unchanged (retryable TypeError) and does not flag", async () => {
+    it("propagates a network failure unchanged (a TypeError) and does not flag", async () => {
       const networkError = new TypeError("fetch failed");
       vi.stubGlobal("fetch", vi.fn().mockRejectedValue(networkError));
 
