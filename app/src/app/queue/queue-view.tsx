@@ -5,7 +5,7 @@ import Link from "next/link";
 import { CalendarClock, PlusCircle } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
-import { Badge, type BadgeVariant } from "@/components/ui/badge";
+import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -29,19 +29,27 @@ import { platformLabel, TIKTOK_PRIVACY_LABELS } from "@/lib/platforms";
 import type { PostJobDTO, PostsResponse } from "@/lib/postsDto";
 import { appendJobsPage } from "@/lib/postsPagination";
 import {
+  applyJobPatch,
+  approveHint,
+  captionChanged,
+  checkScheduleTime,
+  decisionOutcome,
+  editDialogModel,
+  editOutcome,
+  editSaveLabel,
+  getQueueCardActions,
+  publishConfirmCopy,
+  publishOutcome,
+  queueStatusBadge,
+  shouldRefetchAfterError,
+  type JobPatch,
+  type QueueViewer,
+} from "@/lib/queueActions";
+import {
   SCHEDULE_BUFFER_MS,
-  localDateTimeToUtcIso,
   localTimeZoneLabel,
   toDateTimeLocalValue,
 } from "@/lib/scheduling";
-
-const QUEUE_STATUS_META: Record<
-  "scheduled" | "draft",
-  { variant: BadgeVariant; label: string }
-> = {
-  scheduled: { variant: "secondary", label: "Scheduled" },
-  draft: { variant: "neutral", label: "Draft" },
-};
 
 function formatTimestamp(iso: string): string {
   const date = new Date(iso);
@@ -79,8 +87,10 @@ interface QueueCardProps {
   job: PostJobDTO;
   /** Team Workspaces (Task 7, design §7) — show `by {createdBy.name}` next to the timestamp. */
   showAttribution: boolean;
-  /** Approval workflow — only an owner gets Approve/Reject controls. */
-  isOwner: boolean;
+  /** Approval workflow — role + workspace setting decide which actions render (lib/queueActions.ts). */
+  viewer: QueueViewer;
+  /** Clock for the approve hint, refreshed on an interval (no impure Date in render). */
+  nowMs: number;
   onEdit: (job: PostJobDTO) => void;
   onCancel: (job: PostJobDTO) => void;
   onPublish: (job: PostJobDTO) => void;
@@ -94,7 +104,8 @@ interface QueueCardProps {
 function QueueCard({
   job,
   showAttribution,
-  isOwner,
+  viewer,
+  nowMs,
   onEdit,
   onCancel,
   onPublish,
@@ -103,10 +114,8 @@ function QueueCard({
   deciding,
 }: QueueCardProps) {
   const awaitingApproval = job.approvalState === "pending";
-  const meta =
-    job.status === "scheduled"
-      ? QUEUE_STATUS_META.scheduled
-      : QUEUE_STATUS_META.draft;
+  const actions = getQueueCardActions(job, viewer);
+  const badge = queueStatusBadge(job);
   const title = job.caption?.trim() || "Untitled post";
 
   return (
@@ -149,18 +158,16 @@ function QueueCard({
             {job.publish?.tiktokPrivacy ? ` · TikTok: ${TIKTOK_PRIVACY_LABELS[job.publish.tiktokPrivacy] ?? job.publish.tiktokPrivacy}` : ""}
           </p>
         </div>
-        <Badge variant={awaitingApproval ? "warning" : meta.variant}>
-          {awaitingApproval ? "Awaiting approval" : meta.label}
-        </Badge>
+        <Badge variant={badge.tone}>{badge.label}</Badge>
       </div>
 
       {/* Approval workflow: a pending submission gets its own action row.
           Owners decide; the member who submitted just sees where it stands.
           The normal Edit/Publish/Delete row is suppressed so nobody can
           side-step review by publishing the draft directly. */}
-      {awaitingApproval ? (
+      {actions.decide || actions.awaitingNote ? (
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          {isOwner ? (
+          {actions.decide ? (
             <>
               <Button
                 size="sm"
@@ -181,9 +188,7 @@ function QueueCard({
                 Reject
               </Button>
               <span className="text-xs text-muted-foreground">
-                {job.scheduledFor
-                  ? "Approving keeps its scheduled time."
-                  : "Approving publishes it now."}
+                {approveHint(job, new Date(nowMs), SCHEDULE_BUFFER_MS, formatTimestamp)}
               </span>
             </>
           ) : (
@@ -194,13 +199,26 @@ function QueueCard({
         </div>
       ) : (
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="outline" aria-label={`Edit "${title}"`} onClick={() => onEdit(job)}>
-          Edit
-        </Button>
-        <Button size="sm" variant="outline" aria-label={`Publish "${title}" now`} onClick={() => onPublish(job)}>
-          Publish now
-        </Button>
-        {job.status === "scheduled" ? (
+        {actions.edit ? (
+          <Button size="sm" variant="outline" aria-label={`Edit "${title}"`} onClick={() => onEdit(job)}>
+            Edit
+          </Button>
+        ) : null}
+        {actions.primary ? (
+          <Button
+            size="sm"
+            variant="outline"
+            aria-label={
+              actions.primary.kind === "submit"
+                ? `Submit "${title}" for approval`
+                : `Publish "${title}" now`
+            }
+            onClick={() => onPublish(job)}
+          >
+            {actions.primary.label}
+          </Button>
+        ) : null}
+        {actions.secondary === "cancel" ? (
           <Button size="sm" variant="ghost" aria-label={`Cancel "${title}"`} onClick={() => onCancel(job)}>
             Cancel
           </Button>
@@ -224,23 +242,35 @@ function QueueCard({
 /**
  * Edit dialog for a scheduled/draft post. Remounted per target (keyed by job
  * id) so its local caption/time state always initializes from the current job.
- * Scheduled jobs also edit their `scheduledFor`; drafts edit caption only (a
- * draft is scheduled by publishing it with a time).
+ * A scheduled job edits its caption + `scheduledFor` in one PATCH. A draft edits
+ * its caption and may be given a time ("Schedule for"): that PATCHes the caption
+ * only if it changed, then promotes the draft with `POST …/publish { scheduledFor }`
+ * — which, for a member in an approval workspace, SUBMITS it for approval.
  */
 function QueueEditDialog({
   job,
+  viewer,
   onClose,
   onSaved,
+  onPartialSave,
 }: {
   job: PostJobDTO;
+  viewer: QueueViewer;
   onClose: () => void;
-  onSaved: (patch: { caption: string; scheduledFor: string | null }) => void;
+  /** The save is complete: patch the card and close the dialog. */
+  onSaved: (patch: JobPatch) => void;
+  /** Part of the save landed (caption) but the dialog stays open: patch the card only. */
+  onPartialSave: (patch: JobPatch) => void;
 }) {
   const toast = useToast();
   const isScheduled = job.status === "scheduled";
+  const model = editDialogModel(job, viewer);
   const [caption, setCaption] = useState(job.caption ?? "");
+  // The caption as last persisted — a draft whose caption PATCH succeeded but
+  // whose scheduling call failed must not re-PATCH an unchanged caption on retry.
+  const [savedCaption, setSavedCaption] = useState(job.caption);
   const [scheduledForLocal, setScheduledForLocal] = useState(
-    job.scheduledFor ? toDateTimeLocalValue(new Date(job.scheduledFor)) : "",
+    isScheduled && job.scheduledFor ? toDateTimeLocalValue(new Date(job.scheduledFor)) : "",
   );
   const [saving, setSaving] = useState(false);
   // Picker `min` (now + buffer). Lazy useState initializer computes it once at
@@ -250,60 +280,108 @@ function QueueEditDialog({
     toDateTimeLocalValue(new Date(Date.now() + SCHEDULE_BUFFER_MS)),
   );
 
-  const handleSave = useCallback(async () => {
-    if (!caption.trim()) {
+  const readError = async (response: Response, fallback: string): Promise<string> => {
+    const data = (await response.json().catch(() => null)) as { error?: string } | null;
+    return data?.error ?? fallback;
+  };
+
+  const handleSave = async () => {
+    const trimmed = caption.trim();
+    if (!trimmed) {
       toast.error("Caption can't be empty.");
       return;
     }
 
-    const body: {
-      baseCaption: string;
-      scheduledFor?: string;
-    } = { baseCaption: caption.trim() };
-
-    if (isScheduled) {
-      const iso = localDateTimeToUtcIso(scheduledForLocal);
-      if (!iso) {
-        toast.error("Choose a valid date and time.");
+    // A scheduled post always carries a time; a draft only when one was chosen.
+    let scheduledIso: string | null = null;
+    if (isScheduled || scheduledForLocal) {
+      const check = checkScheduleTime(scheduledForLocal, Date.now(), SCHEDULE_BUFFER_MS);
+      if (!check.ok) {
+        toast.error(check.error);
         return;
       }
-      if (new Date(iso).getTime() < Date.now() + SCHEDULE_BUFFER_MS) {
-        toast.error("Scheduled time must be at least a minute in the future.");
-        return;
-      }
-      body.scheduledFor = iso;
+      scheduledIso = check.iso;
     }
 
     setSaving(true);
     try {
-      const response = await fetch(`/api/posts/${job.id}`, {
-        method: "PATCH",
+      if (isScheduled || scheduledIso === null) {
+        // Plain save: scheduled posts send caption + time, drafts just the caption.
+        const response = await fetch(`/api/posts/${job.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            baseCaption: trimmed,
+            ...(scheduledIso ? { scheduledFor: scheduledIso } : {}),
+          }),
+        });
+        if (!response.ok) {
+          toast.error(await readError(response, "Couldn't save your changes."));
+          setSaving(false);
+          return;
+        }
+        const data = await response.json().catch(() => null);
+        const outcome = editOutcome(data);
+        toast.success(outcome.message);
+        onSaved({
+          caption: trimmed,
+          ...(scheduledIso ? { scheduledFor: scheduledIso } : {}),
+          ...outcome.patch,
+        });
+        return;
+      }
+
+      // Schedule a draft: PATCH the caption only if it changed, then publish
+      // with the chosen time. A failed PATCH never reaches publish.
+      if (captionChanged(savedCaption, trimmed)) {
+        const patchResponse = await fetch(`/api/posts/${job.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ baseCaption: trimmed }),
+        });
+        if (!patchResponse.ok) {
+          toast.error(await readError(patchResponse, "Couldn't save your changes."));
+          setSaving(false);
+          return;
+        }
+        setSavedCaption(trimmed);
+        onPartialSave({ caption: trimmed });
+      }
+
+      const publishResponse = await fetch(`/api/posts/${job.id}/publish`, {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ scheduledFor: scheduledIso }),
       });
-      if (!response.ok) {
-        const data = (await response.json().catch(() => null)) as
-          | { error?: string }
-          | null;
-        toast.error(data?.error ?? "Couldn't save your changes.");
+      if (!publishResponse.ok) {
+        // Keep the dialog open with the user's input; the server says why.
+        toast.error(
+          await readError(
+            publishResponse,
+            viewer.requireApproval && viewer.role === "member"
+              ? "Couldn't submit this post for approval."
+              : "Couldn't schedule this post.",
+          ),
+        );
         setSaving(false);
         return;
       }
-      toast.success("Changes saved.");
+      const outcome = publishOutcome(await publishResponse.json().catch(() => null));
+      toast.success(outcome.message);
       onSaved({
-        caption: body.baseCaption,
-        scheduledFor: body.scheduledFor ?? job.scheduledFor,
+        caption: trimmed,
+        ...(outcome.kind === "update" ? outcome.patch : { scheduledFor: scheduledIso }),
       });
     } catch {
       toast.error("Couldn't save your changes.");
       setSaving(false);
     }
-  }, [caption, isScheduled, scheduledForLocal, job.id, job.scheduledFor, onSaved, toast]);
+  };
 
   return (
     <Dialog open onOpenChange={(open) => (!open && !saving ? onClose() : undefined)}>
       <DialogHeader>
-        <DialogTitle>{isScheduled ? "Edit scheduled post" : "Edit draft"}</DialogTitle>
+        <DialogTitle>{model.title}</DialogTitle>
       </DialogHeader>
       <DialogBody className="space-y-4">
         <div className="space-y-1.5">
@@ -315,29 +393,29 @@ function QueueEditDialog({
             rows={4}
           />
         </div>
-        {isScheduled ? (
-          <div className="space-y-1.5">
-            <Label htmlFor="queue-edit-time">Publish at</Label>
-            <input
-              id="queue-edit-time"
-              type="datetime-local"
-              value={scheduledForLocal}
-              min={minScheduleLocal || undefined}
-              onChange={(event) => setScheduledForLocal(event.target.value)}
-              className={cn(fieldBaseClasses, "h-10 px-3 py-2")}
-            />
-            <p className="text-xs text-muted-foreground">
-              Times are in {localTimeZoneLabel()} (your browser&apos;s timezone).
-            </p>
-          </div>
-        ) : null}
+        <div className="space-y-1.5">
+          <Label htmlFor="queue-edit-time">{model.scheduleLabel}</Label>
+          <input
+            id="queue-edit-time"
+            type="datetime-local"
+            value={scheduledForLocal}
+            min={minScheduleLocal || undefined}
+            required={model.scheduleRequired}
+            onChange={(event) => setScheduledForLocal(event.target.value)}
+            className={cn(fieldBaseClasses, "h-10 px-3 py-2")}
+          />
+          <p className="text-xs text-muted-foreground">
+            Times are in {localTimeZoneLabel()} (your browser&apos;s timezone).
+          </p>
+        </div>
+        {model.notice ? <p className="text-sm text-muted-foreground">{model.notice}</p> : null}
       </DialogBody>
       <DialogFooter>
         <Button variant="outline" onClick={onClose} disabled={saving}>
           Cancel
         </Button>
         <Button onClick={handleSave} loading={saving}>
-          Save changes
+          {editSaveLabel(job, viewer, scheduledForLocal !== "")}
         </Button>
       </DialogFooter>
     </Dialog>
@@ -356,6 +434,13 @@ export function QueueView() {
   const [workspaceMemberCount, setWorkspaceMemberCount] = useState<number | null>(null);
   // Approval workflow — the caller's role decides whether Approve/Reject render.
   const [workspaceRole, setWorkspaceRole] = useState<"owner" | "member" | null>(null);
+  // ...and whether the workspace requires owner approval, which decides what a
+  // member's Publish / Edit actually does (lib/queueActions.ts).
+  const [workspaceRequireApproval, setWorkspaceRequireApproval] = useState(false);
+  // Clock for the owner's approve hint (does the proposed time still hold?).
+  // Refreshed on an interval so the hint can't promise a time that has since
+  // passed, and kept out of render so the component stays pure.
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [decidingId, setDecidingId] = useState<string | null>(null);
   // Activity pagination (Task C2) — the Queue fetches independently (its own
   // ?status= filter), so it tracks the cursor locally rather than via
@@ -373,15 +458,21 @@ export function QueueView() {
   // fetched jobs. Deliberately not persisted (YAGNI).
   const [view, setView] = useState<"list" | "calendar">("list");
 
-  const load = useCallback(async () => {
+  // `silent` is the background re-sync after a stale-card error (409/503/404):
+  // a failed silent refresh keeps the list on screen instead of replacing it
+  // with the full-width error state.
+  const load = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent === true;
     try {
       const response = await fetch("/api/posts?status=scheduled,draft");
       if (!response.ok) {
-        setError(
-          response.status === 401
-            ? "Please sign in to view your queue."
-            : "Failed to load your queue.",
-        );
+        if (!silent) {
+          setError(
+            response.status === 401
+              ? "Please sign in to view your queue."
+              : "Failed to load your queue.",
+          );
+        }
         return;
       }
       const data: PostsResponse = await response.json();
@@ -389,8 +480,10 @@ export function QueueView() {
       setNextCursor(data.nextCursor);
       setWorkspaceMemberCount(data.workspaceMemberCount);
       setWorkspaceRole(data.workspaceRole);
+      setWorkspaceRequireApproval(data.workspaceRequireApproval);
+      setNowMs(Date.now());
     } catch {
-      setError("Failed to load your queue.");
+      if (!silent) setError("Failed to load your queue.");
     } finally {
       setLoading(false);
     }
@@ -399,6 +492,11 @@ export function QueueView() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   const handleReload = useCallback(() => {
     setLoading(true);
@@ -439,9 +537,19 @@ export function QueueView() {
     setJobs((prev) => (prev ? prev.filter((j) => j.id !== id) : prev));
   }, []);
 
-  // Approval workflow — owner decides a pending submission. On approve the job
-  // leaves the awaiting state (scheduled or publishing), on reject it's
-  // cancelled; either way it drops out of this scheduled/draft-filtered list.
+  // Update one card in place from a server response (and re-sort: an approved
+  // post moves from the pending group to its scheduled slot).
+  const patchJob = useCallback((id: string, patch: JobPatch) => {
+    setJobs((prev) =>
+      prev ? sortQueue(prev.map((j) => (j.id === id ? applyJobPatch(j, patch) : j))) : prev,
+    );
+  }, []);
+
+  // Approval workflow — owner decides a pending submission. The response says
+  // what happened (decisionOutcome): approving a future-dated post keeps it in
+  // the list as approved + scheduled; publishing-now and rejecting both leave
+  // this scheduled/draft-filtered list. `reviewedUpdatedAt` pins the decision
+  // to the version the owner is looking at (409 CHANGED_SINCE_REVIEW otherwise).
   const handleDecide = useCallback(
     async (job: PostJobDTO, decision: "approve" | "reject") => {
       if (decidingId) return;
@@ -450,10 +558,10 @@ export function QueueView() {
         const response = await fetch(`/api/posts/${job.id}/approval`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ decision }),
+          body: JSON.stringify({ decision, reviewedUpdatedAt: job.updatedAt }),
         });
         const data = (await response.json().catch(() => null)) as
-          | { error?: string; status?: string }
+          | { error?: string }
           | null;
         if (!response.ok) {
           toast.error(
@@ -462,34 +570,31 @@ export function QueueView() {
                 ? "Couldn't approve this post."
                 : "Couldn't reject this post."),
           );
+          // Stale card (already decided, changed since review, publish couldn't
+          // start, gone): re-sync so no dead Approve/Reject buttons remain.
+          if (shouldRefetchAfterError(response.status)) void load({ silent: true });
           return;
         }
-        removeJob(job.id);
-        toast.success(
-          decision === "reject"
-            ? "Post rejected — the author has been notified."
-            : data?.status === "scheduled"
-              ? "Approved — it will publish at its scheduled time."
-              : "Approved — publishing now.",
-        );
+        const outcome = decisionOutcome(decision, data);
+        if (outcome.kind === "remove") removeJob(job.id);
+        else patchJob(job.id, outcome.patch);
+        toast.success(outcome.message);
       } catch {
         toast.error("Couldn't save that decision.");
       } finally {
         setDecidingId(null);
       }
     },
-    [decidingId, removeJob, toast],
+    [decidingId, load, patchJob, removeJob, toast],
   );
 
   // Calendar drag-to-reschedule already PATCHed the server; mirror the change
-  // into local state (and re-sort) so both views agree without a refetch.
-  const applyReschedule = useCallback((id: string, scheduledFor: string) => {
-    setJobs((prev) =>
-      prev
-        ? sortQueue(prev.map((j) => (j.id === id ? { ...j, scheduledFor } : j)))
-        : prev,
-    );
-  }, []);
+  // into local state (and re-sort) so both views agree without a refetch. The
+  // patch also carries a member's re-hold (scheduled -> pending).
+  const applyReschedule = useCallback(
+    (id: string, patch: JobPatch) => patchJob(id, patch),
+    [patchJob],
+  );
 
   // Cancel a scheduled post (ConfirmDialog onConfirm: throw to keep it open on
   // failure, per the dialog's contract).
@@ -519,6 +624,9 @@ export function QueueView() {
     toast.success("Draft deleted.");
   }, [deleteTarget, removeJob, toast]);
 
+  // "Publish now" - or, for a member under approval, "Submit for approval"
+  // (same endpoint; the server decides). publishOutcome reads the answer: a
+  // submission keeps the card as a pending draft, publishing removes it.
   const confirmPublish = useCallback(async () => {
     if (!publishTarget) return;
     const response = await fetch(`/api/posts/${publishTarget.id}/publish`, {
@@ -526,14 +634,32 @@ export function QueueView() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
+    const data = (await response.json().catch(() => null)) as { error?: string } | null;
     if (!response.ok) {
-      const data = (await response.json().catch(() => null)) as { error?: string } | null;
       toast.error(data?.error ?? "Couldn't publish this post.");
+      if (shouldRefetchAfterError(response.status)) {
+        // The card is stale (already awaiting approval, changed, gone, or the
+        // dispatch failed): re-sync and close rather than offer a dead retry.
+        void load({ silent: true });
+        return;
+      }
       throw new Error("PUBLISH_FAILED");
     }
-    removeJob(publishTarget.id);
-    toast.success("Publishing now — track it in Activity.");
-  }, [publishTarget, removeJob, toast]);
+    const outcome = publishOutcome(data);
+    if (outcome.kind === "remove") removeJob(publishTarget.id);
+    else patchJob(publishTarget.id, outcome.patch);
+    toast.success(outcome.message);
+  }, [load, patchJob, publishTarget, removeJob, toast]);
+
+  const viewer: QueueViewer = {
+    role: workspaceRole,
+    requireApproval: workspaceRequireApproval,
+  };
+  const publishCopy = publishConfirmCopy(
+    publishTarget && getQueueCardActions(publishTarget, viewer).primary?.kind === "submit"
+      ? "submit"
+      : "publish",
+  );
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8 md:px-6">
@@ -631,7 +757,8 @@ export function QueueView() {
                     key={job.id}
                     job={job}
                     showAttribution={(workspaceMemberCount ?? 0) > 1}
-                    isOwner={workspaceRole === "owner"}
+                    viewer={viewer}
+                    nowMs={nowMs}
                     onEdit={setEditTarget}
                     onCancel={setCancelTarget}
                     onPublish={setPublishTarget}
@@ -659,19 +786,11 @@ export function QueueView() {
         <QueueEditDialog
           key={editTarget.id}
           job={editTarget}
+          viewer={viewer}
           onClose={() => setEditTarget(null)}
+          onPartialSave={(patch) => patchJob(editTarget.id, patch)}
           onSaved={(patch) => {
-            setJobs((prev) =>
-              prev
-                ? sortQueue(
-                    prev.map((j) =>
-                      j.id === editTarget.id
-                        ? { ...j, caption: patch.caption, scheduledFor: patch.scheduledFor }
-                        : j,
-                    ),
-                  )
-                : prev,
-            );
+            patchJob(editTarget.id, patch);
             setEditTarget(null);
           }}
         />
@@ -695,9 +814,9 @@ export function QueueView() {
         onOpenChange={(open) => {
           if (!open) setPublishTarget(null);
         }}
-        title="Publish this post now?"
-        description="It will be sent to your connected platforms right away instead of waiting."
-        confirmText="Publish now"
+        title={publishCopy.title}
+        description={publishCopy.description}
+        confirmText={publishCopy.confirmText}
         onConfirm={confirmPublish}
       />
 

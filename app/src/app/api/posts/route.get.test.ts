@@ -334,6 +334,22 @@ describe("GET /api/posts — workspace scoping (Team Workspaces, Task 4)", () =>
 
     expect(body.workspaceMemberCount).toBe(4);
   });
+
+  it("includes workspaceRole and workspaceRequireApproval — the Queue's viewer rules (2026-11-01 audit)", async () => {
+    postJobFindManyMock.mockResolvedValue([]);
+
+    getWorkspaceContextMock.mockResolvedValue(
+      makeWorkspaceContext({ role: "member", requireApproval: true }),
+    );
+    let body = (await (await GET(getRequest())).json()) as PostsResponse;
+    expect(body.workspaceRole).toBe("member");
+    expect(body.workspaceRequireApproval).toBe(true);
+
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "owner" }));
+    body = (await (await GET(getRequest())).json()) as PostsResponse;
+    expect(body.workspaceRole).toBe("owner");
+    expect(body.workspaceRequireApproval).toBe(false);
+  });
 });
 
 describe("GET /api/posts — updatedAt (2026-11-01 audit)", () => {

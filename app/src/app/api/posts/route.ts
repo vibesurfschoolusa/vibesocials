@@ -192,6 +192,7 @@ export async function GET(request: Request) {
       // Approval workflow — lets the Queue decide between Approve/Reject
       // controls (owner) and a read-only awaiting badge (member).
       workspaceRole: context.role,
+      workspaceRequireApproval: context.workspace.requireApproval,
       nextCursor,
       jobs: jobs.map((job) => {
         // Task 8 — the raw JSON snapshot narrowed to the display fields the

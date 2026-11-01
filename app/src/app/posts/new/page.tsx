@@ -24,6 +24,12 @@ export default async function NewPostPage() {
     defaultHashtags: context.workspace.defaultHashtags,
   };
 
+  // 2026-11-01 audit: a member's publish is held for an owner's approval on the
+  // server, so the composer's confirmation must not claim it "publishes
+  // immediately". Only the boolean reaches the client.
+  const holdsForApproval =
+    context.role === "member" && context.workspace.requireApproval;
+
   return (
     <div className="mx-auto max-w-2xl px-4 py-8 md:px-6">
       <div className="mb-6">
@@ -33,7 +39,7 @@ export default async function NewPostPage() {
         </p>
       </div>
 
-      <CreatePostForm footerSettings={footerSettings} />
+      <CreatePostForm footerSettings={footerSettings} holdsForApproval={holdsForApproval} />
     </div>
   );
 }

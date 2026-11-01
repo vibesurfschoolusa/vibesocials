@@ -24,6 +24,7 @@ import { useConnections } from "@/hooks/useConnections";
 import { generateBlobKey } from "@/lib/blobKey";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { cn } from "@/lib/cn";
+import { composerPublishConfirmCopy } from "@/lib/composerConfirm";
 import { deriveComposerGate } from "@/lib/composerGate";
 import type { MediaItemDto } from "@/lib/mediaDto";
 import { PLATFORM_ORDER, platformLabel, TIKTOK_PRIVACY_LABELS } from "@/lib/platforms";
@@ -117,9 +118,15 @@ interface CreatePostFormInnerProps {
    * the footer) when this isn't provided.
    */
   footerSettings?: CaptionFooterUser;
+  /**
+   * 2026-11-01 audit — true for a member in a workspace that requires
+   * approval: their publish-now is submitted for review, not published, so the
+   * confirmation says so (see composerPublishConfirmCopy).
+   */
+  holdsForApproval?: boolean;
 }
 
-function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
+function CreatePostFormInner({ footerSettings, holdsForApproval = false }: CreatePostFormInnerProps) {
   const toast = useToast();
   const searchParams = useSearchParams();
 
@@ -763,6 +770,13 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
     );
   }
 
+  // Publish-now confirmation copy — a held member's post is submitted for
+  // review, not published (lib/composerConfirm.ts).
+  const confirmCopy = composerPublishConfirmCopy({
+    holdsForApproval,
+    platforms: selectedPlatforms.map(platformLabel),
+  });
+
   return (
     <Card className="p-6">
       <form onSubmit={handleUploadSubmit} className="space-y-5">
@@ -1164,20 +1178,20 @@ function CreatePostFormInner({ footerSettings }: CreatePostFormInnerProps) {
       <ConfirmDialog
         open={confirmPublishOpen}
         onOpenChange={setConfirmPublishOpen}
-        title={`Publish to ${selectedPlatforms.length} ${selectedPlatforms.length === 1 ? "platform" : "platforms"} now?`}
+        title={confirmCopy.title}
         description={
           <span className="block space-y-1">
-            <span className="block">{selectedPlatforms.map(platformLabel).join(", ")}</span>
+            <span className="block">{confirmCopy.lead}</span>
             {selectedPlatforms.includes("youtube") ? (
               <span className="block">YouTube privacy: {youtubeMetadata.privacyStatus}</span>
             ) : null}
             {selectedPlatforms.includes("tiktok") && tiktokMetadata.privacyLevel ? (
               <span className="block">TikTok privacy: {TIKTOK_PRIVACY_LABELS[tiktokMetadata.privacyLevel] ?? tiktokMetadata.privacyLevel}</span>
             ) : null}
-            <span className="block">This publishes immediately and can&apos;t be undone here.</span>
+            {confirmCopy.trail ? <span className="block">{confirmCopy.trail}</span> : null}
           </span>
         }
-        confirmText="Publish now"
+        confirmText={confirmCopy.confirmText}
         onConfirm={performSubmit}
       />
     </Card>
@@ -1207,6 +1221,13 @@ export interface CreatePostFormProps {
    * callers of `CreatePostForm` keep working unchanged.
    */
   footerSettings?: CaptionFooterUser;
+  /**
+   * 2026-11-01 audit — a member in a workspace that requires approval:
+   * publish-now is submitted for an owner's review rather than published, so
+   * the confirmation dialog says "Submit for approval". Optional; defaults to
+   * the original publish-now confirmation.
+   */
+  holdsForApproval?: boolean;
 }
 
 /**
@@ -1215,10 +1236,10 @@ export interface CreatePostFormProps {
  * so the parent page (`app/posts/new/page.tsx`) doesn't need to know about
  * it — mirrors how `ConnectionsSection` wraps `LinkedInSetupDialog`.
  */
-export function CreatePostForm({ footerSettings }: CreatePostFormProps) {
+export function CreatePostForm({ footerSettings, holdsForApproval }: CreatePostFormProps) {
   return (
     <Suspense fallback={<CreatePostFormSkeleton />}>
-      <CreatePostFormInner footerSettings={footerSettings} />
+      <CreatePostFormInner footerSettings={footerSettings} holdsForApproval={holdsForApproval} />
     </Suspense>
   );
 }

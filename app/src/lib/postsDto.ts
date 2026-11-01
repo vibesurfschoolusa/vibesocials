@@ -131,6 +131,12 @@ export interface PostsResponse {
    */
   workspaceRole: WorkspaceRole;
   /**
+   * Approval workflow — does the active workspace require owner approval for
+   * members' posts? With `workspaceRole` this tells the Queue what a member's
+   * "publish" / edit will actually do (submit for approval vs. go out).
+   */
+  workspaceRequireApproval: boolean;
+  /**
    * Keyset pagination cursor for the NEXT (older) page (activity pagination).
    * An opaque base64url token encoding the last returned job's (createdAt, id)
    * total-order key; pass it back as `?cursor=` to fetch the following page.

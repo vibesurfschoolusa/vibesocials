@@ -8,6 +8,7 @@ import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { platformLabel } from "@/lib/platforms";
 import type { PostJobDTO } from "@/lib/postsDto";
+import { editOutcome, type JobPatch } from "@/lib/queueActions";
 import {
   buildCalendarMonth,
   groupJobsByDay,
@@ -40,8 +41,12 @@ interface QueueCalendarProps {
   jobs: PostJobDTO[];
   /** Open the existing edit dialog — also the keyboard path to reschedule. */
   onEdit: (job: PostJobDTO) => void;
-  /** Applied AFTER a successful PATCH so the list view stays in sync. */
-  onRescheduled: (id: string, scheduledFor: string) => void;
+  /**
+   * Applied AFTER a successful PATCH so the list view stays in sync. The patch
+   * carries the new time and, for a member under approval, the re-hold
+   * (scheduled -> pending) the server answered with.
+   */
+  onRescheduled: (id: string, patch: JobPatch) => void;
 }
 
 /**
@@ -101,8 +106,13 @@ export function QueueCalendar({ jobs, onEdit, onRescheduled }: QueueCalendarProp
         toast.error(data?.error ?? "Couldn't reschedule this post.");
         return;
       }
-      onRescheduled(job.id, nextIso);
-      toast.success("Post rescheduled.");
+      const outcome = editOutcome(await response.json().catch(() => null));
+      onRescheduled(job.id, { scheduledFor: nextIso, ...outcome.patch });
+      toast.success(
+        outcome.patch.approvalState === "pending"
+          ? "Rescheduled — sent back for approval."
+          : "Post rescheduled.",
+      );
     } catch {
       toast.error("Couldn't reschedule this post.");
     } finally {
