@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
+import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { Platform } from "@prisma/client";
@@ -44,24 +45,35 @@ export async function GET(request: NextRequest) {
   const userId = stateCheck.userId;
   const workspaceId = stateCheck.workspaceId;
 
-  // Team Workspaces (Task 6, design §5): re-verify the caller is STILL an
-  // owner of this workspace before writing a connection — ownership could
-  // have changed between the redirect to TikTok and this return trip.
-  if (!(await isWorkspaceOwner(userId, workspaceId))) {
-    settingsUrl.searchParams.set("error", "tiktok_not_workspace_owner");
-    return NextResponse.redirect(settingsUrl);
-  }
-
-  const clientKey = process.env.TIKTOK_CLIENT_KEY;
-  const clientSecret = process.env.TIKTOK_CLIENT_SECRET;
-  const redirectUri = process.env.TIKTOK_REDIRECT_URI;
-
-  if (!clientKey || !clientSecret || !redirectUri) {
-    settingsUrl.searchParams.set("error", "tiktok_not_configured");
-    return NextResponse.redirect(settingsUrl);
-  }
-
   try {
+    // Connection-CSRF guard: the browser finishing this flow must be signed
+    // in as the user who started it. Before the code exchange; writes nothing.
+    const sessionRedirect = await guardOAuthCallbackSession({
+      platform: Platform.tiktok,
+      stateUserId: userId,
+      baseUrl: url.origin,
+    });
+    if (sessionRedirect) {
+      return sessionRedirect;
+    }
+
+    // Team Workspaces (Task 6, design §5): re-verify the caller is STILL an
+    // owner of this workspace before writing a connection — ownership could
+    // have changed between the redirect to TikTok and this return trip.
+    if (!(await isWorkspaceOwner(userId, workspaceId))) {
+      settingsUrl.searchParams.set("error", "tiktok_not_workspace_owner");
+      return NextResponse.redirect(settingsUrl);
+    }
+
+    const clientKey = process.env.TIKTOK_CLIENT_KEY;
+    const clientSecret = process.env.TIKTOK_CLIENT_SECRET;
+    const redirectUri = process.env.TIKTOK_REDIRECT_URI;
+
+    if (!clientKey || !clientSecret || !redirectUri) {
+      settingsUrl.searchParams.set("error", "tiktok_not_configured");
+      return NextResponse.redirect(settingsUrl);
+    }
+
     const tokenResponse = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
       method: "POST",
       headers: {
@@ -162,8 +174,6 @@ export async function GET(request: NextRequest) {
     settingsUrl.searchParams.set("success", "tiktok_connected");
     return NextResponse.redirect(settingsUrl);
   } catch (error) {
-    console.error("[TikTok OAuth] Unexpected error", { error });
-    settingsUrl.searchParams.set("error", "tiktok_unexpected_error");
-    return NextResponse.redirect(settingsUrl);
+    return oauthCallbackFailed({ platform: Platform.tiktok, baseUrl: url.origin, error });
   }
 }

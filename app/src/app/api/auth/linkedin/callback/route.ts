@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { Platform, Prisma } from "@prisma/client";
@@ -78,30 +79,42 @@ export async function GET(request: Request) {
   // the final upsert, same two call sites as before.
   const workspaceId = stateCheck.workspaceId;
 
-  // Re-verify the caller is STILL an owner of this workspace before writing
-  // a connection — ownership could have changed between the redirect to
-  // LinkedIn and this return trip. Checked here (right after state
-  // verification, before the config check and any LinkedIn API calls) so an
-  // unauthorized request fails fast instead of spending a token exchange and
-  // several organization-lookup calls first.
-  if (!(await isWorkspaceOwner(userId, workspaceId))) {
-    return NextResponse.redirect(
-      new URL("/settings?error=linkedin_not_workspace_owner", process.env.NEXTAUTH_URL!)
-    );
-  }
-
-  const clientId = process.env.LINKEDIN_CLIENT_ID;
-  const clientSecret = process.env.LINKEDIN_CLIENT_SECRET;
-  const redirectUri = process.env.LINKEDIN_REDIRECT_URI;
-
-  if (!clientId || !clientSecret || !redirectUri) {
-    console.error("[LinkedIn OAuth] Missing environment variables");
-    return NextResponse.redirect(
-      new URL("/settings?error=linkedin_config_missing", process.env.NEXTAUTH_URL!)
-    );
-  }
-
   try {
+    // Connection-CSRF guard: the browser finishing this flow must be signed
+    // in as the user carried by the SIGNED state (never the unsigned vanity
+    // suffix). Before the code exchange; writes nothing.
+    const sessionRedirect = await guardOAuthCallbackSession({
+      platform: "linkedin",
+      stateUserId: userId,
+      baseUrl: process.env.NEXTAUTH_URL!,
+    });
+    if (sessionRedirect) {
+      return sessionRedirect;
+    }
+
+    // Re-verify the caller is STILL an owner of this workspace before writing
+    // a connection — ownership could have changed between the redirect to
+    // LinkedIn and this return trip. Checked here (right after the session
+    // check, before the config check and any LinkedIn API calls) so an
+    // unauthorized request fails fast instead of spending a token exchange and
+    // several organization-lookup calls first.
+    if (!(await isWorkspaceOwner(userId, workspaceId))) {
+      return NextResponse.redirect(
+        new URL("/settings?error=linkedin_not_workspace_owner", process.env.NEXTAUTH_URL!)
+      );
+    }
+
+    const clientId = process.env.LINKEDIN_CLIENT_ID;
+    const clientSecret = process.env.LINKEDIN_CLIENT_SECRET;
+    const redirectUri = process.env.LINKEDIN_REDIRECT_URI;
+
+    if (!clientId || !clientSecret || !redirectUri) {
+      console.error("[LinkedIn OAuth] Missing environment variables");
+      return NextResponse.redirect(
+        new URL("/settings?error=linkedin_config_missing", process.env.NEXTAUTH_URL!)
+      );
+    }
+
     // Exchange authorization code for access token
     console.log("[LinkedIn OAuth] Exchanging code for token", { userId });
     
@@ -509,9 +522,10 @@ export async function GET(request: Request) {
       new URL("/settings?success=linkedin_connected", process.env.NEXTAUTH_URL!)
     );
   } catch (error) {
-    console.error("[LinkedIn OAuth] Unexpected error:", error);
-    return NextResponse.redirect(
-      new URL("/settings?error=linkedin_unexpected_error", process.env.NEXTAUTH_URL!)
-    );
+    return oauthCallbackFailed({
+      platform: "linkedin",
+      baseUrl: process.env.NEXTAUTH_URL!,
+      error,
+    });
   }
 }

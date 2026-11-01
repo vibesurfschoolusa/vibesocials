@@ -161,17 +161,16 @@ describe("describeOAuthResult — real callback-route codes", () => {
 
   it("buckets other real failure codes as a generic connect failure", () => {
     for (const error of [
-      "facebook_page_unexpected_error",
+      "facebook_page_connect_failed",
       "facebook_page_token_exchange_failed",
-      "tiktok_unexpected_error",
-      "tiktok_not_configured",
-      "x_unexpected_error",
+      "tiktok_connect_failed",
+      "x_connect_failed",
       "x_session_expired",
-      "youtube_db_error",
+      "youtube_connect_failed",
       "youtube_no_channel",
       "linkedin_config_missing",
       "linkedin_token_exchange_failed",
-      "google_business_profile_not_configured",
+      "google_business_profile_connect_failed",
     ]) {
       const result = describeOAuthResult({ error, success: null });
       expect(result?.variant).toBe("danger");
@@ -198,11 +197,11 @@ describe("describeOAuthResult — real callback-route codes", () => {
   // and Facebook's callbacks redirect with `error=access_denied` when the
   // user declines). google_business_profile and instagram additionally
   // redirect a few internal failure branches (missing_code_or_state,
-  // invalid_state, unexpected_error/token_exchange_failed) unprefixed. None
+  // invalid_state, token_exchange_failed) unprefixed. None
   // of these carry a platform prefix, so the platform can't be identified and
   // the "The account" fallback label is used instead of a platform name.
   it("falls back to the generic account label for real unprefixed codes", () => {
-    for (const error of ["missing_code_or_state", "unexpected_error"]) {
+    for (const error of ["missing_code_or_state", "token_exchange_failed"]) {
       const result = describeOAuthResult({ error, success: null });
       expect(result).toEqual({
         variant: "danger",
@@ -233,5 +232,57 @@ describe("describeOAuthResult — real callback-route codes", () => {
       message: "The sign-in couldn't be completed securely. Please try connecting again.",
     });
     expect(result?.message.startsWith("The sign-in")).toBe(true);
+  });
+});
+
+// Audit fixes Task 6: codes added with the OAuth callback session binding
+// (lib/oauthCallbackGuard.ts) and the start/callback error handling.
+describe("describeOAuthResult — session binding and connect-failure codes", () => {
+  const ALL_PLATFORMS: Array<[string, string]> = [
+    ["facebook_page", "Facebook Page"],
+    ["google_business_profile", "Google Business Profile"],
+    ["instagram", "Instagram"],
+    ["linkedin", "LinkedIn"],
+    ["tiktok", "TikTok"],
+    ["x", "X"],
+    ["youtube", "YouTube"],
+  ];
+
+  it("explains oauth_session_mismatch (callback finished under a different signed-in account)", () => {
+    expect(describeOAuthResult({ error: "oauth_session_mismatch", success: null })).toEqual({
+      variant: "danger",
+      message:
+        "That connection was started from a different account. Sign in to the account you want to connect and try again.",
+    });
+  });
+
+  it("maps every <platform>_not_configured code to a label-aware 'not available yet' message", () => {
+    for (const [platform, label] of ALL_PLATFORMS) {
+      expect(
+        describeOAuthResult({ error: `${platform}_not_configured`, success: null }),
+      ).toEqual({
+        variant: "danger",
+        message: `Connecting ${label} isn't available yet. Please try again later.`,
+      });
+    }
+  });
+
+  it("falls back gracefully for an unprefixed not_configured code", () => {
+    expect(describeOAuthResult({ error: "not_configured", success: null })).toEqual({
+      variant: "danger",
+      message: "Connecting this account isn't available yet. Please try again later.",
+    });
+  });
+
+  // <platform>_connect_failed is the callbacks' unexpected-error code
+  // (network/parse/DB): a transient failure, so the generic "couldn't be
+  // connected. Please try again." copy is the intended message.
+  it("maps every <platform>_connect_failed code to the label-aware try-again message", () => {
+    for (const [platform, label] of ALL_PLATFORMS) {
+      expect(describeOAuthResult({ error: `${platform}_connect_failed`, success: null })).toEqual({
+        variant: "danger",
+        message: `${label} couldn't be connected. Please try again.`,
+      });
+    }
   });
 });

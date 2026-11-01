@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createHmac } from "crypto";
 import { prisma } from "@/lib/db";
+import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { Platform } from "@prisma/client";
 
@@ -50,44 +51,56 @@ export async function GET(request: Request) {
     );
   }
 
-  // Load handshake from server-side store (not cookies).
-  const handshake = await prisma.oAuthHandshake.findUnique({
-    where: { token: oauthToken },
-  });
-
-  if (!handshake || handshake.expiresAt <= new Date()) {
-    if (handshake) {
-      await prisma.oAuthHandshake.delete({ where: { token: oauthToken } }).catch(() => {});
-    }
-    console.error("[X OAuth 1.0a] Missing or expired handshake");
-    return NextResponse.redirect(
-      new URL("/settings?error=x_session_expired", process.env.NEXTAUTH_URL!),
-    );
-  }
-
-  const { tokenSecret: oauthTokenSecret, userId, workspaceId } = handshake;
-
-  // Re-verify the caller is STILL an owner of this workspace before writing
-  // a connection — ownership could have changed between the redirect to X
-  // and this return trip.
-  if (!(await isWorkspaceOwner(userId, workspaceId))) {
-    await prisma.oAuthHandshake.delete({ where: { token: oauthToken } }).catch(() => {});
-    return NextResponse.redirect(
-      new URL("/settings?error=x_not_workspace_owner", process.env.NEXTAUTH_URL!),
-    );
-  }
-
-  const consumerKey = process.env.X_CONSUMER_KEY;
-  const consumerSecret = process.env.X_CONSUMER_SECRET;
-
-  if (!consumerKey || !consumerSecret) {
-    console.error("[X OAuth 1.0a] Missing environment variables");
-    return NextResponse.redirect(
-      new URL("/settings?error=x_config_missing", process.env.NEXTAUTH_URL!),
-    );
-  }
-
   try {
+    // Load handshake from server-side store (not cookies).
+    const handshake = await prisma.oAuthHandshake.findUnique({
+      where: { token: oauthToken },
+    });
+
+    if (!handshake || handshake.expiresAt <= new Date()) {
+      if (handshake) {
+        await prisma.oAuthHandshake.delete({ where: { token: oauthToken } }).catch(() => {});
+      }
+      console.error("[X OAuth 1.0a] Missing or expired handshake");
+      return NextResponse.redirect(
+        new URL("/settings?error=x_session_expired", process.env.NEXTAUTH_URL!),
+      );
+    }
+
+    const { tokenSecret: oauthTokenSecret, userId, workspaceId } = handshake;
+
+    // Connection-CSRF guard: the browser finishing this flow must be signed
+    // in as the user who started it (the handshake's user). Before the
+    // verifier exchange; writes nothing (the handshake is left to expire).
+    const sessionRedirect = await guardOAuthCallbackSession({
+      platform: Platform.x,
+      stateUserId: userId,
+      baseUrl: process.env.NEXTAUTH_URL!,
+    });
+    if (sessionRedirect) {
+      return sessionRedirect;
+    }
+
+    // Re-verify the caller is STILL an owner of this workspace before writing
+    // a connection — ownership could have changed between the redirect to X
+    // and this return trip.
+    if (!(await isWorkspaceOwner(userId, workspaceId))) {
+      await prisma.oAuthHandshake.delete({ where: { token: oauthToken } }).catch(() => {});
+      return NextResponse.redirect(
+        new URL("/settings?error=x_not_workspace_owner", process.env.NEXTAUTH_URL!),
+      );
+    }
+
+    const consumerKey = process.env.X_CONSUMER_KEY;
+    const consumerSecret = process.env.X_CONSUMER_SECRET;
+
+    if (!consumerKey || !consumerSecret) {
+      console.error("[X OAuth 1.0a] Missing environment variables");
+      return NextResponse.redirect(
+        new URL("/settings?error=x_config_missing", process.env.NEXTAUTH_URL!),
+      );
+    }
+
     console.log("[X OAuth 1.0a] Exchanging for access token", { userId });
 
     const timestamp = Math.floor(Date.now() / 1000).toString();
@@ -205,10 +218,7 @@ export async function GET(request: Request) {
     return NextResponse.redirect(
       new URL("/settings?success=x_connected", process.env.NEXTAUTH_URL!),
     );
-  } catch (err) {
-    console.error("[X OAuth 1.0a] Unexpected error:", err);
-    return NextResponse.redirect(
-      new URL("/settings?error=x_unexpected_error", process.env.NEXTAUTH_URL!),
-    );
+  } catch (error) {
+    return oauthCallbackFailed({ platform: Platform.x, baseUrl: process.env.NEXTAUTH_URL!, error });
   }
 }

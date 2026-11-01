@@ -20,10 +20,9 @@ export async function GET(request: NextRequest) {
   const redirectUriEnv = process.env.YOUTUBE_REDIRECT_URI;
 
   if (!clientId || !redirectUriEnv) {
-    return NextResponse.json(
-      { error: "YouTube OAuth not configured" },
-      { status: 500 },
-    );
+    const url = new URL("/settings", request.url);
+    url.searchParams.set("error", "youtube_not_configured");
+    return NextResponse.redirect(url);
   }
 
   // Sign the state with the canonical HMAC helper so the callback can trust

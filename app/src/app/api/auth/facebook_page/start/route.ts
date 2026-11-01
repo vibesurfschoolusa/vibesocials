@@ -20,10 +20,9 @@ export async function GET(request: NextRequest) {
   const redirectUri = process.env.FACEBOOK_PAGE_REDIRECT_URI;
 
   if (!clientId || !redirectUri) {
-    return NextResponse.json(
-      { error: "Facebook Page OAuth not configured" },
-      { status: 500 },
-    );
+    const url = new URL("/settings", request.url);
+    url.searchParams.set("error", "facebook_page_not_configured");
+    return NextResponse.redirect(url);
   }
 
   const encodedState = createOAuthState({ userId: user.id, workspaceId: workspace.id });

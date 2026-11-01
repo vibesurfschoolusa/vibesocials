@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
+import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { Platform } from "@prisma/client";
@@ -43,24 +44,35 @@ export async function GET(request: NextRequest) {
   const userId = stateCheck.userId;
   const workspaceId = stateCheck.workspaceId;
 
-  // Team Workspaces (Task 6, design §5): re-verify the caller is STILL an
-  // owner of this workspace before writing a connection — ownership could
-  // have changed between the redirect to Google and this return trip.
-  if (!(await isWorkspaceOwner(userId, workspaceId))) {
-    settingsUrl.searchParams.set("error", "google_business_profile_not_workspace_owner");
-    return NextResponse.redirect(settingsUrl);
-  }
-
-  const clientId = process.env.GOOGLE_GBP_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_GBP_CLIENT_SECRET;
-  const redirectUri = process.env.GOOGLE_GBP_REDIRECT_URI;
-
-  if (!clientId || !clientSecret || !redirectUri) {
-    settingsUrl.searchParams.set("error", "google_business_profile_not_configured");
-    return NextResponse.redirect(settingsUrl);
-  }
-
   try {
+    // Connection-CSRF guard: the browser finishing this flow must be signed
+    // in as the user who started it. Before the code exchange; writes nothing.
+    const sessionRedirect = await guardOAuthCallbackSession({
+      platform: Platform.google_business_profile,
+      stateUserId: userId,
+      baseUrl: url.origin,
+    });
+    if (sessionRedirect) {
+      return sessionRedirect;
+    }
+
+    // Team Workspaces (Task 6, design §5): re-verify the caller is STILL an
+    // owner of this workspace before writing a connection — ownership could
+    // have changed between the redirect to Google and this return trip.
+    if (!(await isWorkspaceOwner(userId, workspaceId))) {
+      settingsUrl.searchParams.set("error", "google_business_profile_not_workspace_owner");
+      return NextResponse.redirect(settingsUrl);
+    }
+
+    const clientId = process.env.GOOGLE_GBP_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_GBP_CLIENT_SECRET;
+    const redirectUri = process.env.GOOGLE_GBP_REDIRECT_URI;
+
+    if (!clientId || !clientSecret || !redirectUri) {
+      settingsUrl.searchParams.set("error", "google_business_profile_not_configured");
+      return NextResponse.redirect(settingsUrl);
+    }
+
     const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: {
@@ -150,8 +162,10 @@ export async function GET(request: NextRequest) {
     settingsUrl.searchParams.set("success", "google_business_profile_connected");
     return NextResponse.redirect(settingsUrl);
   } catch (error) {
-    console.error("[GBP OAuth] Unexpected error", { error });
-    settingsUrl.searchParams.set("error", "unexpected_error");
-    return NextResponse.redirect(settingsUrl);
+    return oauthCallbackFailed({
+      platform: Platform.google_business_profile,
+      baseUrl: url.origin,
+      error,
+    });
   }
 }

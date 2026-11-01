@@ -28,6 +28,16 @@ export function describeOAuthResult(params: {
   const { error, success } = params;
 
   if (error) {
+    // The callback finished in a browser signed in as someone other than the
+    // user who started the flow (lib/oauthCallbackGuard.ts). Not
+    // platform-prefixed; nothing was connected.
+    if (error === "oauth_session_mismatch") {
+      return {
+        variant: "danger",
+        message:
+          "That connection was started from a different account. Sign in to the account you want to connect and try again.",
+      };
+    }
     const label = platformFromCode(error);
     // LinkedIn's own "user declined" redirect uses a fixed linkedin_auth_failed
     // code rather than a "*_denied" one — catch it too so it reads as a
@@ -58,6 +68,19 @@ export function describeOAuthResult(params: {
           : "Only the workspace owner can connect accounts. Ask them to connect it.",
       };
     }
+    // The platform's OAuth app isn't configured on this deployment (start
+    // routes redirect `<platform>_not_configured`). Retrying right away won't
+    // help, so the copy says "later" instead of implying a transient failure.
+    if (error.endsWith("not_configured")) {
+      return {
+        variant: "danger",
+        message: label
+          ? `Connecting ${label} isn't available yet. Please try again later.`
+          : "Connecting this account isn't available yet. Please try again later.",
+      };
+    }
+    // Everything else, including the callbacks' unexpected-error code
+    // `<platform>_connect_failed` (network/parse/DB failure: transient).
     return {
       variant: "danger",
       message: label

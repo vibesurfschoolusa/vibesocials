@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { Platform } from "@prisma/client";
@@ -33,27 +34,38 @@ export async function GET(request: NextRequest) {
   const userId = stateCheck.userId;
   const workspaceId = stateCheck.workspaceId;
 
-  // Team Workspaces (Task 6, design §5): re-verify the caller is STILL an
-  // owner of this workspace before writing a connection — ownership could
-  // have changed between the redirect to Facebook and this return trip.
-  if (!(await isWorkspaceOwner(userId, workspaceId))) {
-    return NextResponse.redirect(
-      new URL("/settings?error=instagram_not_workspace_owner", request.url),
-    );
-  }
-
-  const clientId = process.env.FACEBOOK_APP_ID;
-  const clientSecret = process.env.FACEBOOK_APP_SECRET;
-  const redirectUri = process.env.INSTAGRAM_REDIRECT_URI;
-
-  if (!clientId || !clientSecret || !redirectUri) {
-    console.error("[Instagram OAuth] Missing environment variables");
-    return NextResponse.redirect(
-      new URL("/settings?error=instagram_config_error", request.url),
-    );
-  }
-
   try {
+    // Connection-CSRF guard: the browser finishing this flow must be signed
+    // in as the user who started it. Before the code exchange; writes nothing.
+    const sessionRedirect = await guardOAuthCallbackSession({
+      platform: Platform.instagram,
+      stateUserId: userId,
+      baseUrl: request.url,
+    });
+    if (sessionRedirect) {
+      return sessionRedirect;
+    }
+
+    // Team Workspaces (Task 6, design §5): re-verify the caller is STILL an
+    // owner of this workspace before writing a connection — ownership could
+    // have changed between the redirect to Facebook and this return trip.
+    if (!(await isWorkspaceOwner(userId, workspaceId))) {
+      return NextResponse.redirect(
+        new URL("/settings?error=instagram_not_workspace_owner", request.url),
+      );
+    }
+
+    const clientId = process.env.FACEBOOK_APP_ID;
+    const clientSecret = process.env.FACEBOOK_APP_SECRET;
+    const redirectUri = process.env.INSTAGRAM_REDIRECT_URI;
+
+    if (!clientId || !clientSecret || !redirectUri) {
+      console.error("[Instagram OAuth] Missing environment variables");
+      return NextResponse.redirect(
+        new URL("/settings?error=instagram_config_error", request.url),
+      );
+    }
+
     // 1. Exchange code for short-lived access token
     const tokenUrl = new URL("https://graph.facebook.com/v21.0/oauth/access_token");
     tokenUrl.searchParams.set("client_id", clientId);
@@ -224,9 +236,6 @@ export async function GET(request: NextRequest) {
       new URL("/settings?success=instagram_connected", request.url),
     );
   } catch (error) {
-    console.error("[Instagram OAuth] Unexpected error:", error);
-    return NextResponse.redirect(
-      new URL("/settings?error=instagram_unexpected_error", request.url),
-    );
+    return oauthCallbackFailed({ platform: Platform.instagram, baseUrl: request.url, error });
   }
 }
