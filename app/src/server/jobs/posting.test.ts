@@ -676,7 +676,7 @@ describe("buildPostJobCreateData — caption snapshot for every intent", () => {
   });
 });
 
-describe("resolvePostCaptionSource — job snapshot first, media item fallback", () => {
+describe("resolvePostCaptionSource — the job's snapshot as a unit, media item only for legacy jobs", () => {
   const media = { baseCaption: "Media caption", perPlatformOverrides: { x: "media X" } };
 
   it("uses the job's own caption and overrides when it has them", () => {
@@ -688,13 +688,20 @@ describe("resolvePostCaptionSource — job snapshot first, media item fallback",
     ).toEqual({ baseCaption: "Job caption", perPlatformOverrides: { x: "job X" } });
   });
 
-  it("falls back per field to the media item (legacy immediate jobs have no snapshot)", () => {
+  // Fix round 1 (review IMPORTANT #1): a job with its own caption snapshot
+  // and null overrides means "no overrides" (never set, or cleared by PATCH)
+  // — the shared media item's overrides from the first upload must NOT come
+  // back.
+  it("a job with a caption snapshot and null overrides uses NO overrides, even if the media item has some", () => {
+    expect(
+      resolvePostCaptionSource({ baseCaption: "Job caption", perPlatformOverrides: null }, media),
+    ).toEqual({ baseCaption: "Job caption", perPlatformOverrides: null });
+  });
+
+  it("a legacy job with no snapshot (null caption) falls back to the media item's caption AND overrides", () => {
     expect(
       resolvePostCaptionSource({ baseCaption: null, perPlatformOverrides: null }, media),
     ).toEqual({ baseCaption: "Media caption", perPlatformOverrides: { x: "media X" } });
-    expect(
-      resolvePostCaptionSource({ baseCaption: "Job caption", perPlatformOverrides: null }, media),
-    ).toEqual({ baseCaption: "Job caption", perPlatformOverrides: { x: "media X" } });
   });
 
   it("returns null overrides when neither has any", () => {

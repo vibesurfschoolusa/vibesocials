@@ -202,6 +202,23 @@ describe("retryPlatforms — caption source (Task 4 item 1)", () => {
     expect(ctxFor("x").caption).toBe(buildCaptionWithFooter("media-level X override", WORKSPACE));
     expect(ctxFor("youtube").baseCaption).toBe("Caption from the original upload");
   });
+
+  // Fix round 1 (review IMPORTANT #1): the job's snapshot is a unit — its
+  // caption with null overrides means "no overrides", never the media item's.
+  it("does not re-publish the media item's overrides for a job whose snapshot has none", async () => {
+    db.postJobFindUnique.mockResolvedValue({
+      id: "job-1",
+      workspaceId: WORKSPACE.id,
+      mediaItemId: "media-1",
+      baseCaption: "Typed for this post",
+      perPlatformOverrides: null,
+      publishMetadata: null,
+    });
+
+    await retry(["x"]);
+
+    expect(ctxFor("x").caption).toBe(buildCaptionWithFooter("Typed for this post", WORKSPACE));
+  });
 });
 
 describe("publishToAllPlatforms — YouTube title source (Task 4 item 1)", () => {

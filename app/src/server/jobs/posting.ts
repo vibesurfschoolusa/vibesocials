@@ -490,22 +490,28 @@ export interface PostCaptionSource {
 }
 
 /**
- * Where a post's caption comes from when it is (re)published from the DB: the
- * job's own snapshot first, the shared MediaItem only as a fallback (each field
- * independently) for legacy jobs created before every job snapshotted its
- * caption. One rule for the deferred dispatch, the retry run and YouTube's
- * title, so a reused video never re-publishes another post's caption.
+ * Where a post's caption comes from when it is (re)published from the DB. The
+ * caption and its overrides are ONE snapshot: a job that has its own
+ * `baseCaption` (every job since the 2026-11-01 audit) uses its own
+ * `perPlatformOverrides` as-is — null means "no overrides" (never set, or
+ * cleared by PATCH), never "fall back" to the shared MediaItem's overrides,
+ * which were copied from the first upload and would resurrect text the user
+ * deleted. Only a legacy job with no snapshot (`baseCaption` null) takes both
+ * fields from the MediaItem. One rule for the deferred dispatch, the retry run
+ * and YouTube's title, so a reused video never re-publishes another post's text.
  */
 export function resolvePostCaptionSource(
   job: { baseCaption: string | null; perPlatformOverrides: Prisma.JsonValue | null },
   mediaItem: { baseCaption: string; perPlatformOverrides: Prisma.JsonValue | null },
 ): PostCaptionSource {
+  const source =
+    job.baseCaption !== null
+      ? { baseCaption: job.baseCaption, perPlatformOverrides: job.perPlatformOverrides }
+      : { baseCaption: mediaItem.baseCaption, perPlatformOverrides: mediaItem.perPlatformOverrides };
   return {
-    baseCaption: job.baseCaption ?? mediaItem.baseCaption,
+    baseCaption: source.baseCaption,
     perPlatformOverrides:
-      ((job.perPlatformOverrides ?? mediaItem.perPlatformOverrides) as Partial<
-        Record<Platform, string>
-      > | null) ?? null,
+      (source.perPlatformOverrides as Partial<Record<Platform, string>> | null) ?? null,
   };
 }
 
@@ -547,9 +553,10 @@ export type DeferredDispatchResult =
  *
  * Result creation is guarded by a "no results yet" check so a retried cron step
  * can't duplicate rows. Caption/overrides come from the job's own snapshot
- * (`PostJob.baseCaption` / `perPlatformOverrides`), falling back to the media
- * item — so a scheduled reuse uses the caption the user typed for THIS post, not
- * the shared item's caption. Per-post TikTok/YouTube publishing metadata is
+ * (`PostJob.baseCaption` / `perPlatformOverrides`, as a unit — see
+ * resolvePostCaptionSource), the media item only for legacy jobs without one —
+ * so a scheduled reuse uses the caption the user typed for THIS post, not the
+ * shared item's caption, and overrides cleared by PATCH stay cleared. Per-post TikTok/YouTube publishing metadata is
  * replayed from the job's `publishMetadata` snapshot (review B1) so the deferred
  * publish honors the privacy the user chose at compose time (a scheduled YouTube
  * "private" stays private, not silently escalated to the client-default unlisted).

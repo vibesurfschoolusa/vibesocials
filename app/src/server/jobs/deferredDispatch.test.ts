@@ -172,6 +172,28 @@ describe("prepareDeferredPostJobDispatch", () => {
     }
   });
 
+  // Fix round 1 (review IMPORTANT #1): PATCH clearing a draft's overrides
+  // writes DbNull; the dispatch must then publish with NO overrides, not the
+  // per-platform text the shared media item kept from its first upload.
+  it("does not resurrect the media item's overrides for a job whose snapshot has none", async () => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({
+        baseCaption: "Job snapshot caption",
+        perPlatformOverrides: null,
+        mediaItem: { baseCaption: "Media caption", perPlatformOverrides: { x: "deleted X text" } },
+      }),
+    );
+    connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.event.baseCaption).toBe("Job snapshot caption");
+      expect(result.event.perPlatformOverrides).toBeNull();
+    }
+  });
+
   it("falls back to the media item's caption/overrides when the job has no snapshot", async () => {
     postJobFindUniqueMock.mockResolvedValue(
       makeJob({
