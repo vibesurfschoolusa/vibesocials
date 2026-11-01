@@ -59,15 +59,20 @@ import {
   MediaItemUnavailableError,
   resolvePostCaptionSource,
 } from "./posting";
+import { PostTargetingError } from "@/lib/postTargets";
 
 function makeMediaItem(overrides: Partial<MediaItem> = {}): MediaItem {
   return {
     id: "media-1",
     userId: "user-1",
     workspaceId: "workspace-1",
-    storageLocation: "https://example.public.blob.vercel-storage.com/foo.jpg",
-    originalFilename: "foo.jpg",
-    mimeType: "image/jpeg",
+    storageLocation: "https://example.public.blob.vercel-storage.com/foo.mp4",
+    originalFilename: "foo.mp4",
+    // A VIDEO by default: the fan-out tests use youtube/tiktok connections, and
+    // since the 2026-11-01 audit a platform whose client rejects the media type
+    // is refused / skipped. Video is accepted by every platform except
+    // facebook_page; tests about compatibility set mimeType explicitly.
+    mimeType: "video/mp4",
     sizeBytes: 1024,
     baseCaption: "Original caption",
     perPlatformOverrides: null,
@@ -151,9 +156,10 @@ describe("assertMediaItemReusable (pure workspace/deletedAt guard)", () => {
 
 describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
   const media = {
-    storageLocation: "https://example.public.blob.vercel-storage.com/foo.jpg",
-    originalFilename: "foo.jpg",
-    mimeType: "image/jpeg",
+    storageLocation: "https://example.public.blob.vercel-storage.com/foo.mp4",
+    originalFilename: "foo.mp4",
+    // Video: accepted by every platform these tests fan out to (see makeMediaItem).
+    mimeType: "video/mp4",
     sizeBytes: 1024,
   };
 
@@ -711,5 +717,256 @@ describe("resolvePostCaptionSource — the job's snapshot as a unit, media item 
         { baseCaption: "Media caption", perPlatformOverrides: null },
       ),
     ).toEqual({ baseCaption: "Job caption", perPlatformOverrides: null });
+  });
+});
+
+// 2026-11-01 audit (Task 9) - media compatibility + the TikTok privacy rule at
+// the create-helper level. The stored mimeType of the media is the source of
+// truth for the reuse path; the blobUrl path uses the validated upload mimeType.
+describe("createPostJobOnly - media compatibility + TikTok privacy (2026-11-01 audit)", () => {
+  const imageMedia = {
+    storageLocation: "https://example.public.blob.vercel-storage.com/foo.jpg",
+    originalFilename: "foo.jpg",
+    mimeType: "image/jpeg",
+    sizeBytes: 1024,
+  };
+  const videoMedia = { ...imageMedia, originalFilename: "foo.mp4", mimeType: "video/mp4" };
+
+  beforeEach(() => {
+    mediaItemCreateMock.mockReset();
+    findManyConnectionsMock.mockReset();
+    postJobCreateMock.mockReset();
+    postJobResultCreateMock.mockReset();
+
+    mediaItemCreateMock.mockResolvedValue(makeMediaItem());
+    postJobCreateMock.mockResolvedValue({ id: "job-1" });
+    postJobResultCreateMock.mockImplementation((args: { data: { platform: string } }) =>
+      Promise.resolve({ id: `result-${args.data.platform}` }),
+    );
+  });
+
+  function expectNothingCreated() {
+    expect(mediaItemCreateMock).not.toHaveBeenCalled();
+    expect(postJobCreateMock).not.toHaveBeenCalled();
+    expect(postJobResultCreateMock).not.toHaveBeenCalled();
+  }
+
+  it("rejects an explicit list naming a platform that can't publish the media, creating nothing", async () => {
+    findManyConnectionsMock.mockResolvedValue([
+      makeConnection({ id: "conn-yt", platform: "youtube" }),
+      makeConnection({ id: "conn-x", platform: "x" }),
+    ]);
+
+    const error = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: imageMedia,
+      baseCaption: "hello",
+      targetPlatforms: ["youtube", "x"],
+    }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(PostTargetingError);
+    expect((error as PostTargetingError).code).toBe("PLATFORM_MEDIA_MISMATCH");
+    expect((error as PostTargetingError).platforms).toEqual(["youtube"]);
+    expectNothingCreated();
+  });
+
+  it("rejects an explicit incompatible list for a SCHEDULED post too (intent doesn't matter)", async () => {
+    const error = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: imageMedia,
+      baseCaption: "hello",
+      intent: "scheduled",
+      scheduledFor: new Date(Date.now() + 3_600_000),
+      targetPlatforms: ["tiktok"],
+    }).catch((e: unknown) => e);
+
+    expect((error as PostTargetingError).code).toBe("PLATFORM_MEDIA_MISMATCH");
+    expect(findManyConnectionsMock).not.toHaveBeenCalled();
+    expectNothingCreated();
+  });
+
+  it("skips incompatible connected platforms (no result rows) when no explicit list was sent", async () => {
+    findManyConnectionsMock.mockResolvedValue([
+      makeConnection({ id: "conn-yt", platform: "youtube" }),
+      makeConnection({ id: "conn-x", platform: "x" }),
+      makeConnection({ id: "conn-fb", platform: "facebook_page" }),
+      makeConnection({ id: "conn-tt", platform: "tiktok" }),
+    ]);
+
+    const result = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: imageMedia,
+      baseCaption: "hello",
+    });
+
+    expect(postJobResultCreateMock.mock.calls.map(([arg]) => arg.data.platform)).toEqual([
+      "x",
+      "facebook_page",
+    ]);
+    expect(result.resultIds).toEqual(["result-x", "result-facebook_page"]);
+  });
+
+  it("throws NO_COMPATIBLE_PLATFORMS (not NO_CONNECTIONS) when connections exist but none can publish the media", async () => {
+    findManyConnectionsMock.mockResolvedValue([
+      makeConnection({ id: "conn-yt", platform: "youtube" }),
+    ]);
+
+    const error = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: imageMedia,
+      baseCaption: "hello",
+    }).catch((e: unknown) => e);
+
+    expect((error as PostTargetingError).code).toBe("NO_COMPATIBLE_PLATFORMS");
+    expectNothingCreated();
+  });
+
+  it("requires a TikTok privacy level whenever TikTok is an explicit target - immediate, scheduled and draft", async () => {
+    findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-tt", platform: "tiktok" })]);
+
+    for (const intent of ["immediate", "scheduled", "draft"] as const) {
+      const error = await createPostJobOnly({
+        userId: "user-1",
+        workspaceId: "workspace-1",
+        media: videoMedia,
+        baseCaption: "hello",
+        intent,
+        scheduledFor: intent === "scheduled" ? new Date(Date.now() + 3_600_000) : null,
+        targetPlatforms: ["tiktok"],
+        tiktokMetadata: {
+          privacyLevel: "",
+          disableComment: true,
+          disableDuet: true,
+          disableStitch: true,
+        },
+      }).catch((e: unknown) => e);
+
+      expect((error as PostTargetingError).code, intent).toBe("TIKTOK_PRIVACY_REQUIRED");
+    }
+    expectNothingCreated();
+  });
+
+  it("accepts a deferred TikTok post that carries a privacy level", async () => {
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: videoMedia,
+      baseCaption: "hello",
+      intent: "draft",
+      targetPlatforms: ["tiktok"],
+      tiktokMetadata: {
+        privacyLevel: "SELF_ONLY",
+        disableComment: true,
+        disableDuet: true,
+        disableStitch: true,
+      },
+    });
+
+    expect(postJobCreateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires a TikTok privacy level for an immediate post that implicitly targets a connected TikTok", async () => {
+    findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-tt", platform: "tiktok" })]);
+
+    const error = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: videoMedia,
+      baseCaption: "hello",
+    }).catch((e: unknown) => e);
+
+    expect((error as PostTargetingError).code).toBe("TIKTOK_PRIVACY_REQUIRED");
+    expectNothingCreated();
+  });
+});
+
+describe("createPostJobForExistingMedia - media compatibility uses the stored mimeType (2026-11-01 audit)", () => {
+  beforeEach(() => {
+    findUniqueMock.mockReset();
+    mediaItemUpdateMock.mockReset();
+    executeRawMock.mockReset();
+    findManyConnectionsMock.mockReset();
+    postJobCreateMock.mockReset();
+    postJobResultCreateMock.mockReset();
+
+    mediaItemUpdateMock.mockResolvedValue(makeMediaItem());
+    postJobCreateMock.mockResolvedValue({ id: "job-1" });
+    postJobResultCreateMock.mockImplementation((args: { data: { platform: string } }) =>
+      Promise.resolve({ id: `result-${args.data.platform}` }),
+    );
+  });
+
+  it("rejects an explicit list the stored VIDEO can't go to (Facebook Page is images-only)", async () => {
+    findUniqueMock.mockResolvedValue(makeMediaItem({ mimeType: "video/mp4" }));
+
+    const error = await createPostJobForExistingMedia({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      mediaItemId: "media-1",
+      baseCaption: "hello",
+      targetPlatforms: ["facebook_page", "x"],
+    }).catch((e: unknown) => e);
+
+    expect((error as PostTargetingError).code).toBe("PLATFORM_MEDIA_MISMATCH");
+    expect((error as PostTargetingError).platforms).toEqual(["facebook_page"]);
+    expect(postJobCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an explicit list the stored IMAGE can't go to (YouTube is video-only)", async () => {
+    findUniqueMock.mockResolvedValue(makeMediaItem({ mimeType: "image/png" }));
+
+    const error = await createPostJobForExistingMedia({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      mediaItemId: "media-1",
+      baseCaption: "hello",
+      intent: "draft",
+      targetPlatforms: ["youtube"],
+    }).catch((e: unknown) => e);
+
+    expect((error as PostTargetingError).code).toBe("PLATFORM_MEDIA_MISMATCH");
+    expect(postJobCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("skips incompatible connected platforms (no result rows) when no explicit list was sent", async () => {
+    findUniqueMock.mockResolvedValue(makeMediaItem({ mimeType: "video/mp4" }));
+    findManyConnectionsMock.mockResolvedValue([
+      makeConnection({ id: "conn-yt", platform: "youtube" }),
+      makeConnection({ id: "conn-fb", platform: "facebook_page" }),
+      makeConnection({ id: "conn-x", platform: "x" }),
+    ]);
+
+    const result = await createPostJobForExistingMedia({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      mediaItemId: "media-1",
+      baseCaption: "hello",
+    });
+
+    expect(postJobResultCreateMock.mock.calls.map(([arg]) => arg.data.platform)).toEqual([
+      "youtube",
+      "x",
+    ]);
+    expect(result.resultIds).toEqual(["result-youtube", "result-x"]);
+  });
+
+  it("requires a TikTok privacy level whenever TikTok is an explicit target", async () => {
+    findUniqueMock.mockResolvedValue(makeMediaItem({ mimeType: "video/mp4" }));
+
+    const error = await createPostJobForExistingMedia({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      mediaItemId: "media-1",
+      baseCaption: "hello",
+      intent: "draft",
+      targetPlatforms: ["tiktok"],
+    }).catch((e: unknown) => e);
+
+    expect((error as PostTargetingError).code).toBe("TIKTOK_PRIVACY_REQUIRED");
+    expect(postJobCreateMock).not.toHaveBeenCalled();
   });
 });

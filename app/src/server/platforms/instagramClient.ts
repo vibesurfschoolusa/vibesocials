@@ -2,6 +2,8 @@ import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { SocialConnection } from "@prisma/client";
 
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
+import { truncateGraphemes } from "@/lib/truncate";
 import { markConnectionNeedsReconnect } from "./connectionHealth";
 import { isFacebookAuthErrorBody } from "./facebookPageClient";
 
@@ -65,6 +67,20 @@ export function ensureFreshInstagramToken(
     throw instagramReconnectRequiredError();
   }
   return connection;
+}
+
+/**
+ * Apply Instagram's caption limit (2,200 characters) the same way the preview
+ * does, reading the number from the shared `platformLimits.ts` map. Instagram
+ * rejects a longer caption outright, so without this an over-long caption
+ * failed the whole publish (2026-11-01 audit). Extracted as a pure, exported
+ * function so it can be asserted without mocking the Graph API.
+ */
+export function computeInstagramCaption(caption: string): string {
+  const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS.instagram;
+  // instagram's charLimit is always a number (see platformLimits.ts); the null
+  // check only exists to satisfy the shared `Record<Platform, ...>` type.
+  return charLimit === null ? caption : truncateGraphemes(caption, charLimit, { ellipsis });
 }
 
 export const instagramClient: PlatformClient = {
@@ -134,7 +150,7 @@ export const instagramClient: PlatformClient = {
       
       const containerParams: Record<string, string> = {
         access_token: accessToken,
-        caption: caption,
+        caption: computeInstagramCaption(caption),
       };
 
       if (isVideo) {

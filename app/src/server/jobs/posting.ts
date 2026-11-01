@@ -3,6 +3,8 @@ import { prisma } from "@/lib/db";
 import type { SavedFileInfo } from "@/server/storage";
 import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
 import { postJobStatusForIntent, type PostJobIntent } from "@/lib/scheduling";
+import { platformAcceptsMedia } from "@/lib/platformLimits";
+import { assertPostTargetsValid, narrowConnectionsForPost } from "@/lib/postTargets";
 
 /**
  * Fields shared by every create-post helper controlling WHEN/HOW the job runs
@@ -139,10 +141,10 @@ export class MediaItemUnavailableError extends Error {
  *  - `MEDIA_DELETED` — the row exists and is in-workspace, but its blob has
  *    already been removed (soft-deleted via `deletedAt`).
  */
-export function assertMediaItemReusable(
-  item: Pick<MediaItem, "workspaceId" | "deletedAt"> | null,
+export function assertMediaItemReusable<T extends Pick<MediaItem, "workspaceId" | "deletedAt">>(
+  item: T | null,
   workspaceId: string,
-): void {
+): asserts item is T {
   if (!item || item.workspaceId !== workspaceId) {
     throw new MediaItemUnavailableError("NOT_FOUND", "Media item not found.");
   }
@@ -168,6 +170,13 @@ export async function createPostJobOnly(
   // the caller's personal ones — any member's post reaches every platform
   // the shared workspace has connected.
   // Healthy connections only — needsReconnect would just fail at the provider.
+  //
+  // 2026-11-01 audit (Task 9): an EXPLICIT platform list is validated for every
+  // intent — against this media's type (a platform whose client rejects it is a
+  // PostTargetingError, not a doomed result row) and the TikTok privacy rule —
+  // before anything is written. Throws PostTargetingError.
+  assertPostTargetsValid(targetPlatforms, media.mimeType, params.tiktokMetadata);
+
   const socialConnections =
     intent === "immediate"
       ? await prisma.socialConnection.findMany({
@@ -176,10 +185,17 @@ export async function createPostJobOnly(
       : [];
 
   // Task 7 — narrow to the caller's chosen subset when given; `undefined`
-  // means "every connection" (legacy/default behavior, byte-for-byte).
-  const targeted = targetPlatforms
-    ? socialConnections.filter((c) => targetPlatforms.includes(c.platform))
-    : socialConnections;
+  // means "every connection" (legacy/default behavior) — now minus the
+  // connections whose client can't publish this media (2026-11-01 audit).
+  const targeted =
+    intent === "immediate"
+      ? narrowConnectionsForPost({
+          connections: socialConnections,
+          targetPlatforms,
+          mimeType: media.mimeType,
+          tiktokMetadata: params.tiktokMetadata,
+        })
+      : [];
 
   if (intent === "immediate" && targeted.length === 0) {
     throw new Error("NO_CONNECTIONS");
@@ -388,6 +404,11 @@ export async function createPostJobForExistingMedia(
   });
   assertMediaItemReusable(mediaItem, workspaceId);
 
+  // 2026-11-01 audit (Task 9): the stored item's mimeType — not anything the
+  // client sent — decides which platforms can publish it. See the blobUrl
+  // sibling above.
+  assertPostTargetsValid(targetPlatforms, mediaItem.mimeType, params.tiktokMetadata);
+
   // Immediate reuse materializes the fan-out now (and requires a connection);
   // scheduled/draft reuse defers result creation to run time (§6.3). Team
   // Workspaces (Task 5): the workspace's healthy connections, not the caller's.
@@ -399,10 +420,17 @@ export async function createPostJobForExistingMedia(
       : [];
 
   // Task 7 — narrow to the caller's chosen subset when given; `undefined`
-  // means "every connection" (legacy/default behavior, byte-for-byte).
-  const targeted = targetPlatforms
-    ? socialConnections.filter((c) => targetPlatforms.includes(c.platform))
-    : socialConnections;
+  // means "every connection" (legacy/default behavior) minus the connections
+  // whose client can't publish this media (2026-11-01 audit).
+  const targeted =
+    intent === "immediate"
+      ? narrowConnectionsForPost({
+          connections: socialConnections,
+          targetPlatforms,
+          mimeType: mediaItem.mimeType,
+          tiktokMetadata: params.tiktokMetadata,
+        })
+      : [];
 
   if (intent === "immediate" && targeted.length === 0) {
     throw new Error("NO_CONNECTIONS");
@@ -566,7 +594,9 @@ export async function prepareDeferredPostJobDispatch(
 ): Promise<DeferredDispatchResult> {
   const job = await prisma.postJob.findUnique({
     where: { id: postJobId },
-    include: { mediaItem: { select: { baseCaption: true, perPlatformOverrides: true } } },
+    include: {
+      mediaItem: { select: { baseCaption: true, perPlatformOverrides: true, mimeType: true } },
+    },
   });
 
   if (!job) {
@@ -587,9 +617,14 @@ export async function prepareDeferredPostJobDispatch(
   // recorded one; `undefined`/empty means "all connections" (legacy
   // behavior). This also correctly subsumes the old "no connections at all"
   // case below: an empty `connections` filters to an empty `eligible` either way.
+  //
+  // 2026-11-01 audit (Task 9): with NO chosen list, "all connections" skips the
+  // ones whose client can't publish this media (a YouTube result for an image
+  // could only ever fail). An explicit list was validated against the media at
+  // create time and is left exactly as chosen.
   const eligible = target?.length
     ? connections.filter((c) => target.includes(c.platform))
-    : connections;
+    : connections.filter((c) => platformAcceptsMedia(c.platform, job.mediaItem.mimeType));
 
   if (eligible.length === 0) {
     // No eligible connections at run time → fail the job (mirrors

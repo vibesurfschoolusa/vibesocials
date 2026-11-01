@@ -80,6 +80,7 @@ vi.mock("@/server/jobs/failPendingResults", async () => {
   return { ...actual, failPendingPostJobResults: failPendingMock };
 });
 
+import { PostTargetingError } from "@/lib/postTargets";
 import { MediaItemUnavailableError } from "@/server/jobs/posting";
 import { POST } from "./route";
 
@@ -689,8 +690,10 @@ describe("POST /api/posts — per-post privacy persistence + validation (review 
   });
 
   it("accepts tiktokMetadata WITHOUT a privacyLevel for a scheduled post and normalizes it to empty", async () => {
-    // The composer only requires an explicit TikTok privacy for immediate posts,
-    // so a scheduled/draft post can legitimately carry none — it must not 400.
+    // With no explicit `platforms` list the route can't tell whether TikTok is
+    // a target (a scheduled post resolves its connections at run time), so a
+    // privacy-less tiktokMetadata alone must not 400 here. An explicit list that
+    // names TikTok does - see the Task 9 block below.
     await POST(
       jsonRequest({
         blobUrl: "https://test.public.blob.vercel-storage.com/x",
@@ -1019,5 +1022,221 @@ describe("POST /api/posts — blobUrl media field validation (2026-11-01 audit, 
 
     expect(response.status).toBe(200);
     expect(createPostJobForExistingMediaMock).toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/posts - platform/media compatibility + TikTok privacy (2026-11-01 audit, Task 9)", () => {
+  const BLOB = "https://test.public.blob.vercel-storage.com/x";
+  const FUTURE = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const TIKTOK_WITH_PRIVACY = {
+    privacyLevel: "SELF_ONLY",
+    disableComment: true,
+    disableDuet: true,
+    disableStitch: true,
+  };
+
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({
+      postJobId: "job-1",
+      mediaItemId: "media-1",
+      resultIds: [],
+    });
+    createPostJobForExistingMediaMock.mockResolvedValue({
+      postJobId: "job-2",
+      mediaItemId: "media-9",
+      resultIds: [],
+    });
+  });
+
+  describe("media compatibility of an explicit platforms list", () => {
+    it("400s naming every requested platform that can't publish the media, creating nothing", async () => {
+      const response = await POST(
+        jsonRequest({
+          blobUrl: BLOB,
+          mimeType: "image/png",
+          baseCaption: "hi",
+          platforms: ["youtube", "x", "tiktok"],
+          tiktokMetadata: TIKTOK_WITH_PRIVACY,
+        }),
+      );
+
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as { error: string; code: string; platforms: string[] };
+      expect(body.code).toBe("PLATFORM_MEDIA_MISMATCH");
+      expect(body.platforms).toEqual(["youtube", "tiktok"]);
+      expect(body.error).toContain("YouTube");
+      expect(body.error).toContain("TikTok");
+      expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+      expect(inngestSendMock).not.toHaveBeenCalled();
+    });
+
+    it("400s a video sent to an images-only platform (Facebook Page)", async () => {
+      const response = await POST(
+        jsonRequest({ blobUrl: BLOB, mimeType: "video/mp4", baseCaption: "hi", platforms: ["facebook_page"] }),
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        code: "PLATFORM_MEDIA_MISMATCH",
+        platforms: ["facebook_page"],
+      });
+      expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    });
+
+    it("applies to scheduled and draft posts too", async () => {
+      for (const extra of [{ draft: true }, { scheduledFor: FUTURE }]) {
+        const response = await POST(
+          jsonRequest({
+            blobUrl: BLOB,
+            mimeType: "image/png",
+            baseCaption: "hi",
+            platforms: ["youtube"],
+            ...extra,
+          }),
+        );
+        expect(response.status).toBe(400);
+      }
+      expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    });
+
+    it("lets a fully compatible list through", async () => {
+      const response = await POST(
+        jsonRequest({ blobUrl: BLOB, mimeType: "image/png", baseCaption: "hi", platforms: ["x", "facebook_page"] }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ targetPlatforms: ["x", "facebook_page"] }),
+      );
+    });
+
+    it("maps a PostTargetingError from the reuse path (stored mimeType) to the same 400", async () => {
+      createPostJobForExistingMediaMock.mockRejectedValue(
+        new PostTargetingError(
+          "PLATFORM_MEDIA_MISMATCH",
+          "These platforms can't publish a video: Facebook Page (images only).",
+          ["facebook_page"],
+        ),
+      );
+
+      const response = await POST(
+        jsonRequest({ mediaItemId: "media-9", baseCaption: "hi", platforms: ["facebook_page"] }),
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "These platforms can't publish a video: Facebook Page (images only).",
+        code: "PLATFORM_MEDIA_MISMATCH",
+        platforms: ["facebook_page"],
+      });
+      expect(inngestSendMock).not.toHaveBeenCalled();
+    });
+
+    it("maps NO_COMPATIBLE_PLATFORMS (no explicit list; nothing connected can publish the media) to 400", async () => {
+      createPostJobOnlyMock.mockRejectedValue(
+        new PostTargetingError(
+          "NO_COMPATIBLE_PLATFORMS",
+          "None of your connected platforms can publish this type of media.",
+          ["youtube"],
+        ),
+      );
+
+      const response = await POST(jsonRequest({ blobUrl: BLOB, mimeType: "image/png", baseCaption: "hi" }));
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ code: "NO_COMPATIBLE_PLATFORMS" });
+    });
+
+    it("sends no explicit list to the helper when none was sent (the helper skips incompatible connections)", async () => {
+      await POST(jsonRequest({ blobUrl: BLOB, mimeType: "image/png", baseCaption: "hi" }));
+
+      expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ targetPlatforms: undefined }),
+      );
+    });
+  });
+
+  describe("TikTok privacy level is required whenever TikTok is a target (ruling R5)", () => {
+    const intents: Array<[string, Record<string, unknown>]> = [
+      ["immediate", {}],
+      ["draft", { draft: true }],
+      ["scheduled", { scheduledFor: FUTURE }],
+    ];
+
+    it.each(intents)("400s a %s post that targets TikTok without any tiktokMetadata", async (_name, extra) => {
+      const response = await POST(
+        jsonRequest({ blobUrl: BLOB, baseCaption: "hi", platforms: ["tiktok"], ...extra }),
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({
+        code: "TIKTOK_PRIVACY_REQUIRED",
+        platforms: ["tiktok"],
+      });
+      expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+      expect(inngestSendMock).not.toHaveBeenCalled();
+    });
+
+    it.each(intents)("400s a %s post that targets TikTok with an empty privacyLevel", async (_name, extra) => {
+      const response = await POST(
+        jsonRequest({
+          blobUrl: BLOB,
+          baseCaption: "hi",
+          platforms: ["youtube", "tiktok"],
+          tiktokMetadata: { privacyLevel: "", disableComment: true },
+          ...extra,
+        }),
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ code: "TIKTOK_PRIVACY_REQUIRED" });
+      expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    });
+
+    it("400s on the reuse path too", async () => {
+      const response = await POST(
+        jsonRequest({ mediaItemId: "media-9", baseCaption: "hi", platforms: ["tiktok"], draft: true }),
+      );
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ code: "TIKTOK_PRIVACY_REQUIRED" });
+      expect(createPostJobForExistingMediaMock).not.toHaveBeenCalled();
+    });
+
+    it.each(intents)("accepts a %s TikTok post that carries an explicit privacy level", async (_name, extra) => {
+      const response = await POST(
+        jsonRequest({
+          blobUrl: BLOB,
+          baseCaption: "hi",
+          platforms: ["tiktok"],
+          tiktokMetadata: TIKTOK_WITH_PRIVACY,
+          ...extra,
+        }),
+      );
+
+      expect(response.status).toBe(200);
+      expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ tiktokMetadata: TIKTOK_WITH_PRIVACY }),
+      );
+    });
+
+    it("does not ask for a TikTok privacy level when TikTok is not a target", async () => {
+      const response = await POST(
+        jsonRequest({ blobUrl: BLOB, baseCaption: "hi", platforms: ["youtube"], draft: true }),
+      );
+
+      expect(response.status).toBe(200);
+    });
+
+    it("maps the helper's TIKTOK_PRIVACY_REQUIRED (implicit TikTok target, no explicit list) to 400", async () => {
+      createPostJobOnlyMock.mockRejectedValue(
+        new PostTargetingError("TIKTOK_PRIVACY_REQUIRED", "tiktokMetadata.privacyLevel is required when posting to TikTok.", ["tiktok"]),
+      );
+
+      const response = await POST(jsonRequest({ blobUrl: BLOB, baseCaption: "hi" }));
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ code: "TIKTOK_PRIVACY_REQUIRED" });
+    });
   });
 });

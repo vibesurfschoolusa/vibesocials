@@ -247,4 +247,53 @@ describe("prepareDeferredPostJobDispatch", () => {
     });
     expect(resultCreateManyMock).not.toHaveBeenCalled();
   });
+
+  // 2026-11-01 audit (Task 9) - with no explicit platform list, the run-time
+  // fan-out skips connections whose client can't publish the media (no result
+  // row, no doomed failure). An explicit snapshot list is left as chosen.
+  it("skips connections that can't publish the media when the snapshot has no target list", async () => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({ mediaItem: { baseCaption: "Media caption", perPlatformOverrides: null, mimeType: "image/png" } }),
+    );
+    connectionFindManyMock.mockResolvedValue([
+      { id: "c-youtube", platform: "youtube" },
+      { id: "c-x", platform: "x" },
+      { id: "c-tiktok", platform: "tiktok" },
+    ]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(resultCreateManyMock).toHaveBeenCalledWith({
+      data: [{ postJobId: "job-1", platform: "x", socialConnectionId: "c-x", status: "pending" }],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("marks the job failed when no connection can publish the media and no target list was chosen", async () => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({ mediaItem: { baseCaption: "Media caption", perPlatformOverrides: null, mimeType: "image/png" } }),
+    );
+    connectionFindManyMock.mockResolvedValue([{ id: "c-youtube", platform: "youtube" }]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(result).toEqual({ ok: false, reason: "NO_CONNECTIONS" });
+    expect(resultCreateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not second-guess an explicit target list, whatever the media type", async () => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({
+        publishMetadata: { targetPlatforms: ["youtube"] },
+        mediaItem: { baseCaption: "Media caption", perPlatformOverrides: null, mimeType: "image/png" },
+      }),
+    );
+    connectionFindManyMock.mockResolvedValue([{ id: "c-youtube", platform: "youtube" }]);
+
+    await prepareDeferredPostJobDispatch("job-1");
+
+    expect(resultCreateManyMock).toHaveBeenCalledWith({
+      data: [{ postJobId: "job-1", platform: "youtube", socialConnectionId: "c-youtube", status: "pending" }],
+    });
+  });
 });

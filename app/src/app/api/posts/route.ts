@@ -9,6 +9,7 @@ import {
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { parsePostMediaFields, type PostMediaFields } from "@/lib/mediaInput";
+import { assertPostTargetsValid, PostTargetingError } from "@/lib/postTargets";
 import { PostJobStatus, Platform, type Prisma } from "@prisma/client";
 import {
   createPostJobForExistingMedia,
@@ -308,6 +309,14 @@ interface CreatePostBody {
   scheduledFor?: unknown;
 }
 
+/** 400 for a rejected platform choice; `code` + `platforms` let a client react without parsing `error`. */
+function postTargetingErrorResponse(error: PostTargetingError) {
+  return NextResponse.json(
+    { error: error.message, code: error.code, platforms: error.platforms },
+    { status: 400 },
+  );
+}
+
 export async function POST(request: Request) {
   const context = await getWorkspaceContext();
 
@@ -437,11 +446,12 @@ export async function POST(request: Request) {
   // Validate TikTok metadata into a clean typed object (previously forwarded raw
   // — now at parity with youtube, and normalized so it can be persisted on
   // scheduled/draft jobs, review B1). `privacyLevel` must be a STRING if present
-  // but may be empty: the composer only requires an explicit level for immediate
-  // posts, so a scheduled/draft post can legitimately carry none — the TikTok
-  // client then applies its SELF_ONLY default at publish (a *chosen* level is
-  // preserved and honored). TikTok's allowed set is per-creator (resolved from
-  // creator-info), so it's not a fixed enum here; the toggles coerce to booleans.
+  // and is normalized to "" when absent; whether "" is acceptable is decided by
+  // the platform-targeting check further down (2026-11-01 audit, ruling R5:
+  // TikTok as a target needs an explicit level for EVERY intent, so nothing
+  // silently publishes as SELF_ONLY). TikTok's allowed set is per-creator
+  // (resolved from creator-info), so it's not a fixed enum here; the toggles
+  // coerce to booleans.
   let tiktokMetadata: TikTokPostMetadata | undefined;
   if (tiktokMetadataRaw != null) {
     if (typeof tiktokMetadataRaw !== "object" || Array.isArray(tiktokMetadataRaw)) {
@@ -492,6 +502,20 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Select at least one platform." }, { status: 400 });
     }
     targetPlatforms = deduped;
+  }
+
+  // 2026-11-01 audit (Task 9): an EXPLICIT platform list is checked before any
+  // row is written — every requested platform must be able to publish this
+  // media (named in the 400 otherwise) and, ruling R5, a TikTok target needs an
+  // explicit privacy level whatever the intent. The reuse path has no mimeType
+  // here (the stored item is the source of truth), so its media check runs in
+  // the create helper and surfaces below as the same PostTargetingError; the
+  // TikTok rule needs no media and is applied here for both paths.
+  try {
+    assertPostTargetsValid(targetPlatforms, mediaFields?.mimeType ?? null, tiktokMetadata);
+  } catch (error: unknown) {
+    if (error instanceof PostTargetingError) return postTargetingErrorResponse(error);
+    throw error;
   }
 
   const location = typeof locationRaw === "string" && locationRaw.trim() ? locationRaw.trim() : undefined;
@@ -714,6 +738,13 @@ export async function POST(request: Request) {
         },
         { status: 400 },
       );
+    }
+
+    // Thrown by the create helpers: the stored media can't go to a requested
+    // platform (reuse path), nothing connected can publish this media, or a
+    // connected TikTok is implicitly targeted without a privacy level.
+    if (error instanceof PostTargetingError) {
+      return postTargetingErrorResponse(error);
     }
 
     if (error instanceof MediaItemUnavailableError) {

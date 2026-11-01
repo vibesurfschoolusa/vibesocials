@@ -1,7 +1,11 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ensureFreshInstagramToken, instagramClient } from "@/server/platforms/instagramClient";
+import {
+  computeInstagramCaption,
+  ensureFreshInstagramToken,
+  instagramClient,
+} from "@/server/platforms/instagramClient";
 
 // Instagram stores a long-lived Facebook PAGE token with no refresh path, so
 // the core behavior to pin is the expiry guard: usable token -> returned
@@ -267,3 +271,57 @@ describe("instagramClient.publishVideo — Graph OAuthException 190", () => {
   });
 });
 
+
+describe("computeInstagramCaption (2,200-character limit, 2026-11-01 audit)", () => {
+  it("leaves a caption at or under the limit untouched", () => {
+    expect(computeInstagramCaption("hello")).toBe("hello");
+    const exactly = "a".repeat(2200);
+    expect(computeInstagramCaption(exactly)).toBe(exactly);
+  });
+
+  it("truncates an over-long caption to 2,200 characters", () => {
+    expect(computeInstagramCaption("a".repeat(2201))).toBe("a".repeat(2200));
+  });
+
+  it("counts graphemes, never splitting an emoji sequence", () => {
+    const family = "\u{1F468}‍\u{1F469}‍\u{1F467}"; // one grapheme, 8 UTF-16 units
+    const result = computeInstagramCaption(family.repeat(2201));
+    expect(result).toBe(family.repeat(2200));
+  });
+});
+
+describe("instagramClient.publishVideo — caption limit", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends the truncated caption to the media container", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchMock = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/ig-account-1/media")) {
+        // Container creation fails once we have the request URL to inspect.
+        return Promise.resolve(new Response("{}", { status: 400 }));
+      }
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await instagramClient
+      .publishVideo({
+        user: { id: "user-1" } as unknown as User,
+        socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+        mediaItem: {
+          mimeType: "image/jpeg",
+          storageLocation: "https://blob.example.com/m",
+          metadata: null,
+        } as unknown as MediaItem,
+        caption: "b".repeat(3000),
+      })
+      .catch(() => null);
+
+    const containerUrl = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(containerUrl.searchParams.get("caption")).toBe("b".repeat(2200));
+  });
+});

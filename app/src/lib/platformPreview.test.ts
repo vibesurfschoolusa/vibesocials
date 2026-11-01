@@ -6,7 +6,7 @@ import { truncateGraphemes } from "./truncate";
 
 describe("buildPlatformPreview", () => {
   it("renders the plain caption for a null-limit platform with no footer/override", () => {
-    const result = buildPlatformPreview({ platform: "instagram", caption: "Hello world" });
+    const result = buildPlatformPreview({ platform: "linkedin", caption: "Hello world" });
     expect(result).toEqual({
       rendered: "Hello world",
       charCount: 11,
@@ -20,7 +20,6 @@ describe("buildPlatformPreview", () => {
     const caption = "a".repeat(5000);
     for (const platform of [
       "youtube",
-      "instagram",
       "linkedin",
       "facebook_page",
       "google_business_profile",
@@ -161,6 +160,25 @@ describe("buildPlatformPreview", () => {
       const result = buildPlatformPreview({ platform: "tiktok", caption });
       expect(result.rendered).toBe(truncateGraphemes(caption, 2200));
       expect(result.rendered).toHaveLength(2200);
+      expect(result.charCount).toBe(2500);
+      expect(result.truncated).toBe(true);
+      expect(result.willTruncate).toBe(true);
+    });
+  });
+
+  describe("Instagram (charLimit 2200, no ellipsis — 2026-11-01 audit)", () => {
+    it("does not truncate a caption at or under 2200 graphemes", () => {
+      const caption = "a".repeat(2200);
+      const result = buildPlatformPreview({ platform: "instagram", caption });
+      expect(result.rendered).toBe(caption);
+      expect(result.limit).toBe(2200);
+      expect(result.willTruncate).toBe(false);
+    });
+
+    it("warns and truncates a caption over 2200 graphemes, matching truncateGraphemes directly", () => {
+      const caption = "a".repeat(2500);
+      const result = buildPlatformPreview({ platform: "instagram", caption });
+      expect(result.rendered).toBe(truncateGraphemes(caption, 2200));
       expect(result.charCount).toBe(2500);
       expect(result.truncated).toBe(true);
       expect(result.willTruncate).toBe(true);
