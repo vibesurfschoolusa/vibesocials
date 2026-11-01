@@ -1,6 +1,6 @@
 import type { ConnectionStatus } from "./connectionsDto";
 
-export type ComposerGate = "loading" | "connect" | "form";
+export type ComposerGate = "loading" | "connect" | "error" | "form";
 
 /**
  * Decides what the composer renders while `useConnections` is in flight,
@@ -11,14 +11,16 @@ export type ComposerGate = "loading" | "connect" | "form";
  *   zero-connection resolution silently discards (the early-return unmounts
  *   the media input mid-compose).
  * - `connect`  — resolved with zero connected platforms: show the connect CTA.
- * - `form`     — at least one connected platform, OR the fetch failed
- *   (`connections` null with loading false). The failure fallback is
- *   deliberate: gating on resolved data alone parks a skeleton on screen
- *   forever when a fetch fails (see the reviews-view lesson), and the form is
- *   the blind-safe default.
+ * - `error`    — the fetch failed (`connections` null with loading false).
+ *   Gating on resolved data alone parks a skeleton on screen forever when a
+ *   fetch fails (see the reviews-view lesson), and — 2026-11-01 audit — the
+ *   form is no safe fallback either: with no platforms known it renders empty
+ *   and every submit fails "Select at least one platform". The composer shows
+ *   an error with a Retry instead. A retry flips this back to `loading`.
+ * - `form`     — at least one connected platform.
  *
- * Resolved data wins over `loading` so a refetch never blanks content the
- * user is already working with.
+ * Resolved data wins over `loading` and over a failed refetch, so a refetch
+ * never blanks content the user is already working with.
  */
 export function deriveComposerGate(
   connections: ConnectionStatus[] | null,
@@ -27,5 +29,5 @@ export function deriveComposerGate(
   if (connections !== null) {
     return connections.some((c) => c.connected) ? "form" : "connect";
   }
-  return loading ? "loading" : "form";
+  return loading ? "loading" : "error";
 }

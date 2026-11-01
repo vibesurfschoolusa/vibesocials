@@ -29,6 +29,11 @@ import { deriveComposerGate } from "@/lib/composerGate";
 import type { MediaItemDto } from "@/lib/mediaDto";
 import { PLATFORM_ORDER, platformLabel, TIKTOK_PRIVACY_LABELS } from "@/lib/platforms";
 import {
+  deriveComposerPlatforms,
+  isTikTokPrivacyMissing,
+  TIKTOK_PRIVACY_REQUIRED_MESSAGE,
+} from "@/lib/postTargets";
+import {
   SCHEDULE_BUFFER_MS,
   localDateTimeToUtcIso,
   localTimeZoneLabel,
@@ -188,6 +193,12 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
 
   // 0-100 while a Blob upload is in flight for the active file; null when idle.
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  // Bumped after a successful post so React remounts the (uncontrolled) file
+  // input (2026-11-01 audit): clearing `uploadFile` state alone leaves the
+  // browser showing the old filename, and re-choosing that same file then fires
+  // no change event - so submit said "Please choose a file to upload." Same
+  // technique as media-library.tsx's `fileInputKey`.
+  const [fileInputKey, setFileInputKey] = useState(0);
 
   // Tracks the in-flight/most recent Blob upload for the CURRENT file, keyed
   // by File identity. This guarantees a given file is uploaded to Vercel
@@ -220,11 +231,12 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
   // deriveComposerGate below, which distinguishes "still loading" from
   // "loaded and empty" and from "failed"; TikTok/YouTube no longer run their
   // own ad-hoc fetches to determine connectedness.
-  const { connections, loading: connectionsLoading } = useConnections();
-  const hasTikTokConnection =
-    connections?.some((c) => c.platform === "tiktok" && c.connected) ?? false;
-  const hasYouTubeConnection =
-    connections?.some((c) => c.platform === "youtube" && c.connected) ?? false;
+  const {
+    connections,
+    loading: connectionsLoading,
+    error: connectionsError,
+    reload: reloadConnections,
+  } = useConnections();
 
   // Roadmap Phase 7 — platforms to show a live preview card for: connected
   // platforms only, in the app's standard display order.
@@ -243,10 +255,26 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
   // finishes loading after mount (it simply appears in `connectedPlatforms`
   // later and, having never been deselected, is selected).
   const [deselected, setDeselected] = useState<Set<Platform>>(new Set());
-  const selectedPlatforms = useMemo(
-    () => connectedPlatforms.filter((p) => !deselected.has(p)),
-    [connectedPlatforms, deselected],
+
+  // Drives the TikTok/YouTube settings gate below and the per-platform media
+  // compatibility, for BOTH the upload and reuse flows: originally gated on
+  // `uploadFile` alone (a real File only exists in the upload flow), so reuse
+  // mode needs the equivalent signal from `reuseItem` instead. `null` until
+  // some media is chosen.
+  const activeMimeType = uploadFile?.type ?? reuseItem?.mimeType ?? null;
+
+  // 2026-11-01 audit: a platform whose client can't publish the chosen media
+  // (YouTube/TikTok are video-only, Facebook Page images-only) is shown
+  // disabled with a reason and left out of `selectedPlatforms`, so it is never
+  // sent, previewed or given settings. Derived from `deselected` + the media -
+  // not written into state - so picking different media restores the user's own
+  // choices. See lib/postTargets.ts / PLATFORM_ACCEPTED_MEDIA.
+  const { choices: platformChoices, selected: selectedPlatforms } = useMemo(
+    () => deriveComposerPlatforms(connectedPlatforms, deselected, activeMimeType),
+    [connectedPlatforms, deselected, activeMimeType],
   );
+  const tiktokSelected = selectedPlatforms.includes("tiktok");
+  const youtubeSelected = selectedPlatforms.includes("youtube");
 
   // Roadmap Phase 2 — load the reuse target, if any. Runs once per distinct
   // `reuseMediaItemId` (a fresh navigation from the media library always
@@ -350,18 +378,24 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
 
     setUploadProgress(0);
 
+    // Set once this upload has settled. A final progress event can be delivered
+    // AFTER the promise resolves; without this it re-showed "Uploading... 100%"
+    // right after the bar had been cleared (2026-11-01 audit).
+    let settled = false;
+
     const promise = upload(uploadKey, file, {
       access: "public",
       handleUploadUrl: "/api/upload",
       // Progress feedback only; does not change upload semantics. Guarded so a
       // stale in-flight upload for a swapped-out file never moves the bar.
       onUploadProgress: (event) => {
-        if (activeUploadRef.current?.file === file) {
+        if (!settled && activeUploadRef.current?.file === file) {
           setUploadProgress(event.percentage);
         }
       },
     }).then(
       (newBlob) => {
+        settled = true;
         const blobInfo: UploadedBlobInfo = {
           url: newBlob.url,
           filename: file.name,
@@ -380,6 +414,7 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
         return blobInfo;
       },
       (err: unknown) => {
+        settled = true;
         if (activeUploadRef.current?.file === file) {
           activeUploadRef.current = null;
           setUploadProgress(null);
@@ -495,10 +530,10 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
         }
         // Task 7 — only attach metadata for a platform still selected for
         // this post; a deselected TikTok/YouTube isn't published to.
-        if (hasTikTokConnection && selectedPlatforms.includes("tiktok")) {
+        if (tiktokSelected) {
           reuseData.tiktokMetadata = tiktokMetadata;
         }
-        if (hasYouTubeConnection && selectedPlatforms.includes("youtube")) {
+        if (youtubeSelected) {
           reuseData.youtubeMetadata = youtubeMetadata;
         }
         postData = reuseData;
@@ -531,10 +566,10 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
 
         // Task 7 — only attach metadata for a platform still selected for
         // this post; a deselected TikTok/YouTube isn't published to.
-        if (hasTikTokConnection && selectedPlatforms.includes("tiktok")) {
+        if (tiktokSelected) {
           blobData.tiktokMetadata = tiktokMetadata;
         }
-        if (hasYouTubeConnection && selectedPlatforms.includes("youtube")) {
+        if (youtubeSelected) {
           blobData.youtubeMetadata = youtubeMetadata;
         }
         postData = blobData;
@@ -587,6 +622,10 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
       setUploadFile(null);
       setUploadedBlob(null);
       activeUploadRef.current = null;
+      // Clear the finished upload's bar and remount the file input, so the old
+      // filename is gone and choosing the same file again fires a change event.
+      setUploadProgress(null);
+      setFileInputKey((key) => key + 1);
       setReuseItem(null);
       setReusePerPlatformOverrides(null);
       setPublishMode("now");
@@ -626,12 +665,16 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
 
     // Task 7 — at least one target platform must stay selected.
     if (selectedPlatforms.length === 0) {
-      setUploadError("Select at least one platform to publish to.");
+      setUploadError(
+        platformChoices.every((choice) => choice.disabledReason !== null)
+          ? "None of your connected platforms can publish this media. Choose a different file."
+          : "Select at least one platform to publish to.",
+      );
       return;
     }
 
     const tiktokCommercialBlocked =
-      hasTikTokConnection &&
+      tiktokSelected &&
       tiktokCommercialEnabled &&
       !tiktokMetadata.brandedContent &&
       !tiktokMetadata.brandOrganic;
@@ -654,20 +697,16 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
       }
     }
 
-    // TikTok privacy level is only *required* for an immediate post to a
-    // SELECTED TikTok connection (scheduled/draft publish with the client's
-    // safe default; a deselected TikTok isn't published to, so it needs no
-    // privacy level here). Runs BEFORE the publish-now confirmation dialog
-    // below so the dialog only ever opens on an already-valid form.
-    const requireTikTokPrivacy = publishMode === "now";
-    if (
-      requireTikTokPrivacy &&
-      hasTikTokConnection &&
-      !deselected.has("tiktok") &&
-      !tiktokMetadata.privacyLevel
-    ) {
-      setTiktokPrivacyError("Please select a privacy level for TikTok");
-      toast.error("Please select a privacy level for TikTok");
+    // Ruling R5 (2026-11-01 audit): a TikTok privacy level is required whenever
+    // TikTok is a SELECTED target, for EVERY intent. It used to be asked for only
+    // on "Publish now", so a scheduled or draft TikTok post silently went out
+    // as SELF_ONLY. A deselected (or media-incompatible) TikTok isn't published
+    // to, so it needs none. POST /api/posts enforces the same rule. Runs BEFORE
+    // the publish-now confirmation dialog below so the dialog only ever opens
+    // on an already-valid form.
+    if (isTikTokPrivacyMissing(selectedPlatforms, tiktokMetadata)) {
+      setTiktokPrivacyError(TIKTOK_PRIVACY_REQUIRED_MESSAGE);
+      toast.error(TIKTOK_PRIVACY_REQUIRED_MESSAGE);
       return;
     }
 
@@ -721,12 +760,6 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
   const isImagePreview = uploadFile?.type.startsWith("image/") ?? false;
   const isVideoPreview = uploadFile?.type.startsWith("video/") ?? false;
 
-  // Drives the TikTok/YouTube settings gate below for BOTH the upload and
-  // reuse flows: originally gated on `uploadFile` alone (a real File only
-  // exists in the upload flow), so reuse mode needs the equivalent signal
-  // from `reuseItem` instead.
-  const activeMimeType = uploadFile?.type ?? reuseItem?.mimeType ?? null;
-
   // Roadmap Phase 7 — same media the sections above already preview, reused
   // (never re-uploaded) for the per-platform preview cards: the reused
   // MediaItem's public blob URL in reuse mode, else the local object-URL
@@ -745,6 +778,28 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
     // Same placeholder the Suspense boundary below shows, so first paint and
     // connections-loading are visually indistinguishable.
     return <CreatePostFormSkeleton />;
+  }
+
+  // The connections request failed (2026-11-01 audit). The form can't help
+  // here: with no platforms known it would render empty and every submit would
+  // fail "Select at least one platform". Say what happened and let the user
+  // retry; a retry flips the gate back to the loading skeleton.
+  if (composerGate === "error") {
+    return (
+      <Card className="p-6">
+        <Alert variant="danger" title="Couldn't load your connections">
+          <div className="flex flex-col items-start gap-3">
+            <p>
+              {connectionsError ?? "Failed to load connections."} We need them to know which
+              platforms you can post to.
+            </p>
+            <Button size="sm" variant="outline" onClick={reloadConnections}>
+              Retry
+            </Button>
+          </div>
+        </Alert>
+      </Card>
+    );
   }
 
   // With nothing connected there is no submit path at all — publish, schedule
@@ -863,6 +918,7 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
             <>
               <Label htmlFor="post-media">Media file (image or video)</Label>
               <Input
+                key={fileInputKey}
                 id="post-media"
                 type="file"
                 accept="video/*,image/*"
@@ -1020,7 +1076,7 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
           </p>
         </div>
 
-        {hasTikTokConnection && !deselected.has("tiktok") && activeMimeType && (
+        {tiktokSelected && activeMimeType && (
           <TikTokPostSettings
             metadata={tiktokMetadata}
             onChange={setTiktokMetadata}
@@ -1030,7 +1086,7 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
             onCommercialContentEnabledChange={setTiktokCommercialEnabled}
           />
         )}
-        {hasYouTubeConnection && !deselected.has("youtube") && activeMimeType && (
+        {youtubeSelected && activeMimeType && (
           <YouTubePostSettings
             metadata={youtubeMetadata}
             onChange={setYoutubeMetadata}
@@ -1045,22 +1101,27 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
           <fieldset className="space-y-1.5">
             <legend className="text-sm font-medium text-foreground">Publish to</legend>
             <div className="flex flex-wrap gap-2">
-              {connectedPlatforms.map((platform) => {
-                const checked = !deselected.has(platform);
+              {platformChoices.map(({ platform, checked, disabledReason }) => {
+                const disabled = disabledReason !== null;
+                const reasonId = `post-platform-${platform}-reason`;
                 return (
                   <label
                     key={platform}
                     className={cn(
-                      "inline-flex cursor-pointer items-center gap-2 rounded-[var(--radius)] border px-3 py-1.5 text-sm transition-colors",
-                      checked
-                        ? "border-primary/40 bg-primary/10 text-foreground"
-                        : "border-input text-muted-foreground hover:text-foreground",
+                      "inline-flex items-center gap-2 rounded-[var(--radius)] border px-3 py-1.5 text-sm transition-colors",
+                      disabled
+                        ? "cursor-not-allowed border-input text-muted-foreground opacity-60"
+                        : checked
+                          ? "cursor-pointer border-primary/40 bg-primary/10 text-foreground"
+                          : "cursor-pointer border-input text-muted-foreground hover:text-foreground",
                     )}
                   >
                     <input
                       type="checkbox"
                       className="h-3.5 w-3.5 rounded border-input accent-[var(--primary)]"
                       checked={checked}
+                      disabled={disabled}
+                      aria-describedby={disabled ? reasonId : undefined}
                       onChange={(event) => {
                         setDeselected((prev) => {
                           const next = new Set(prev);
@@ -1071,13 +1132,20 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
                       }}
                     />
                     {platformLabel(platform)}
+                    {disabled ? (
+                      <span id={reasonId} className="text-xs">
+                        ({disabledReason})
+                      </span>
+                    ) : null}
                   </label>
                 );
               })}
             </div>
             {selectedPlatforms.length === 0 ? (
               <p className="text-xs text-destructive" role="alert">
-                Select at least one platform.
+                {platformChoices.every((choice) => choice.disabledReason !== null)
+                  ? "None of your connected platforms can publish this media."
+                  : "Select at least one platform."}
               </p>
             ) : null}
           </fieldset>
