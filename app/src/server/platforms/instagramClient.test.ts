@@ -1,4 +1,4 @@
-import type { SocialConnection } from "@prisma/client";
+import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ensureFreshInstagramToken, instagramClient } from "@/server/platforms/instagramClient";
@@ -142,3 +142,128 @@ describe("instagramClient.refreshToken", () => {
     expect(arg.data).not.toHaveProperty("refreshToken");
   });
 });
+
+// 2026-11-01 audit (Task 4 item 3): the Graph API reports a dead page token as
+// an OAuthException with code 190 — usually with HTTP 400, not 401. Instagram
+// must treat it as reconnect-required exactly like facebookPageClient does
+// (same shared detection), at every Graph call of the publish flow.
+describe("instagramClient.publishVideo — Graph OAuthException 190", () => {
+  const AUTH_ERROR_BODY = JSON.stringify({
+    error: {
+      message: "Error validating access token: Session has expired.",
+      type: "OAuthException",
+      code: 190,
+      error_subcode: 463,
+    },
+  });
+  const PARAM_ERROR_BODY = JSON.stringify({
+    error: { message: "Invalid parameter", type: "OAuthException", code: 100 },
+  });
+
+  function ctx(mimeType: string) {
+    return {
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+      mediaItem: {
+        mimeType,
+        storageLocation: "https://blob.example.com/m",
+        metadata: null,
+      } as unknown as MediaItem,
+      caption: "hello",
+    };
+  }
+
+  function stubGraph(routes: { container: () => Response; status?: () => Response; publish?: () => Response }) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string | URL) => {
+        const url = String(input);
+        if (url.includes("/media_publish")) return Promise.resolve(routes.publish!());
+        if (url.includes("/ig-account-1/media")) return Promise.resolve(routes.container());
+        if (url.includes("fields=status_code")) return Promise.resolve(routes.status!());
+        throw new Error(`Unexpected fetch in test: ${url}`);
+      }),
+    );
+  }
+
+  function expectFlagged() {
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    const arg = updateMock.mock.calls[0][0] as { where: { id: string }; data: Record<string, unknown> };
+    expect(arg.where).toEqual({ id: "conn-ig" });
+    expect(arg.data.needsReconnect).toBe(true);
+    expect(arg.data.lastRefreshErrorCode).toBe("INSTAGRAM_RECONNECT_REQUIRED");
+    expect(arg.data).not.toHaveProperty("accessToken");
+  }
+
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("maps an HTTP 400 OAuthException 190 from container creation to INSTAGRAM_RECONNECT_REQUIRED and flags", async () => {
+    stubGraph({ container: () => new Response(AUTH_ERROR_BODY, { status: 400 }) });
+
+    const error = await instagramClient
+      .publishVideo(ctx("image/jpeg"))
+      .then(() => null)
+      .catch((e: unknown) => e as Error & { code?: string });
+
+    expect(error?.code).toBe("INSTAGRAM_RECONNECT_REQUIRED");
+    expect(error?.message).not.toContain("Session has expired");
+    expectFlagged();
+  });
+
+  it("maps an HTTP 400 OAuthException 190 from media_publish to the reconnect error and flags", async () => {
+    vi.useFakeTimers();
+    stubGraph({
+      container: () => new Response(JSON.stringify({ id: "container-1" }), { status: 200 }),
+      publish: () => new Response(AUTH_ERROR_BODY, { status: 400 }),
+    });
+
+    const promise = instagramClient
+      .publishVideo(ctx("image/jpeg"))
+      .then(() => null)
+      .catch((e: unknown) => e as Error & { code?: string });
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect((await promise)?.code).toBe("INSTAGRAM_RECONNECT_REQUIRED");
+    expectFlagged();
+  });
+
+  it("stops polling and maps an OAuthException 190 from the video status check to the reconnect error", async () => {
+    vi.useFakeTimers();
+    const statusMock = vi.fn(() => new Response(AUTH_ERROR_BODY, { status: 400 }));
+    stubGraph({
+      container: () => new Response(JSON.stringify({ id: "container-1" }), { status: 200 }),
+      status: statusMock,
+    });
+
+    const promise = instagramClient
+      .publishVideo(ctx("video/mp4"))
+      .then(() => null)
+      .catch((e: unknown) => e as Error & { code?: string });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect((await promise)?.code).toBe("INSTAGRAM_RECONNECT_REQUIRED");
+    expect(statusMock).toHaveBeenCalledTimes(1);
+    expectFlagged();
+  });
+
+  it("keeps a non-auth Graph error (code 100) as INSTAGRAM_CONTAINER_FAILED without flagging", async () => {
+    stubGraph({ container: () => new Response(PARAM_ERROR_BODY, { status: 400 }) });
+
+    const error = await instagramClient
+      .publishVideo(ctx("image/jpeg"))
+      .then(() => null)
+      .catch((e: unknown) => e as Error & { code?: string });
+
+    expect(error?.code).toBe("INSTAGRAM_CONTAINER_FAILED");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+});
+

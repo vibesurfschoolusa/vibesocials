@@ -3,6 +3,7 @@ import type { SocialConnection } from "@prisma/client";
 
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { markConnectionNeedsReconnect } from "./connectionHealth";
+import { isFacebookAuthErrorBody } from "./facebookPageClient";
 
 // COR-5: Instagram token expiry handling.
 //
@@ -38,6 +39,16 @@ function instagramReconnectRequiredError(cause?: unknown): Error & { code: strin
   error.code = INSTAGRAM_RECONNECT_CODE;
   if (cause !== undefined) error.cause = cause;
   return error;
+}
+
+/**
+ * Did the Graph API reject the page token itself? HTTP 401, or — the common
+ * case — an `OAuthException` with code 190 (invalid/expired token), which
+ * Facebook usually sends with HTTP 400. Same detection as facebookPageClient.ts
+ * (shared, not duplicated): both publish through the same Graph API.
+ */
+function isGraphAuthFailure(status: number, body: string): boolean {
+  return status === 401 || isFacebookAuthErrorBody(body);
 }
 
 /**
@@ -157,9 +168,10 @@ export const instagramClient: PlatformClient = {
           status: containerResponse.status,
           error: errorBody,
         });
-        // COR-5: a 401 here means the page token is no longer accepted — map it
-        // to the actionable reconnect error instead of leaking the raw body.
-        if (containerResponse.status === 401) {
+        // COR-5: the page token is no longer accepted (401, or an
+        // OAuthException 190 on any status) — map it to the actionable
+        // reconnect error instead of leaking the raw body.
+        if (isGraphAuthFailure(containerResponse.status, errorBody)) {
           // Roadmap Phase 4: mark before throwing (see connectionHealth.ts).
           await markConnectionNeedsReconnect(socialConnection.id, INSTAGRAM_RECONNECT_CODE);
           throw instagramReconnectRequiredError();
@@ -196,7 +208,20 @@ export const instagramClient: PlatformClient = {
           statusUrl.searchParams.set("access_token", accessToken);
 
           const statusResponse = await fetchWithTimeout(statusUrl.toString());
-          if (statusResponse.ok) {
+          if (!statusResponse.ok) {
+            const statusBody = await statusResponse.text().catch(() => "");
+            // A dead token never recovers by polling: stop and ask for a
+            // reconnect. Any other non-OK status is treated as transient and
+            // polled again (unchanged behavior).
+            if (isGraphAuthFailure(statusResponse.status, statusBody)) {
+              console.error("[Instagram] Status check rejected the access token", {
+                status: statusResponse.status,
+                error: statusBody,
+              });
+              await markConnectionNeedsReconnect(socialConnection.id, INSTAGRAM_RECONNECT_CODE);
+              throw instagramReconnectRequiredError();
+            }
+          } else {
             const statusData = (await statusResponse.json()) as {
               status_code?: string;
             };
@@ -245,8 +270,9 @@ export const instagramClient: PlatformClient = {
           status: publishResponse.status,
           error: errorBody,
         });
-        // COR-5: 401 on publish -> token no longer valid; ask for reconnect.
-        if (publishResponse.status === 401) {
+        // COR-5: token no longer valid (401, or OAuthException 190 on any
+        // status) -> ask for reconnect.
+        if (isGraphAuthFailure(publishResponse.status, errorBody)) {
           // Roadmap Phase 4: mark before throwing (see connectionHealth.ts).
           await markConnectionNeedsReconnect(socialConnection.id, INSTAGRAM_RECONNECT_CODE);
           throw instagramReconnectRequiredError();

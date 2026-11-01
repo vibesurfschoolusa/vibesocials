@@ -30,7 +30,8 @@ function facebookPageReconnectRequiredError(): Error & { code: string } {
  * True when a Graph API error body is an auth failure that only a reconnect
  * can fix: an `OAuthException` with code 190 (invalid/expired access token).
  * Facebook frequently returns these with HTTP 400, so status alone is not
- * enough. Exported for tests.
+ * enough. Shared with instagramClient.ts (same Graph API, same dead-token
+ * signal); exported for tests.
  */
 export function isFacebookAuthErrorBody(body: string): boolean {
   try {
