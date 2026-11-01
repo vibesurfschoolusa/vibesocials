@@ -80,6 +80,7 @@ function makeUser(overrides: Partial<User> = {}): User {
     name: "Klaus",
     passwordHash: null,
     emailVerifiedAt: null,
+    googleLinkedAt: null,
     notifyOnPostComplete: true,
     sessionVersion: 0,
     createdAt: new Date("2020-01-01T00:00:00Z"),

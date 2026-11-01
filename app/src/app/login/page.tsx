@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GoogleSignInButton } from "@/components/google-sign-in-button";
+import { loginOAuthErrorMessage } from "@/lib/loginOAuthError";
 import { authPageHref, safeCallbackPath } from "@/lib/safeRedirect";
 
 function LoginPageInner() {
@@ -22,12 +23,11 @@ function LoginPageInner() {
   const callbackUrl = safeCallbackPath(searchParams.get("callbackUrl"));
   const registered = searchParams.get("registered") === "1";
   // NextAuth redirects OAuth failures here as ?error=<code> (pages.signIn for
-  // transient OAuth errors, pages.error for AccessDenied refusals). Rendered
-  // without the code itself; AccessDenied is deterministic (retrying the same
-  // Google account can never succeed — see lib/googleSso.ts refusal rules),
-  // so its copy points at the password form instead of "try again". Neither
-  // message leaks whether an account exists.
-  const oauthError = searchParams.get("error");
+  // transient OAuth errors, pages.error for AccessDenied refusals), and the
+  // Google signIn callback sends a refused password-account link here with
+  // its own code. Rendered without the code itself — see
+  // lib/loginOAuthError.ts for the copy and why it leaks nothing.
+  const oauthErrorMessage = loginOAuthErrorMessage(searchParams.get("error"));
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -94,11 +94,9 @@ function LoginPageInner() {
                 Account created — sign in below.
               </Alert>
             ) : null}
-            {oauthError && !error ? (
+            {oauthErrorMessage && !error ? (
               <Alert variant="danger" className="mb-4">
-                {oauthError === "AccessDenied"
-                  ? "We couldn't sign you in with that Google account — use your email and password below instead."
-                  : "Sign-in didn't complete. Please try again."}
+                {oauthErrorMessage}
               </Alert>
             ) : null}
             <form onSubmit={handleSubmit} className="space-y-4">

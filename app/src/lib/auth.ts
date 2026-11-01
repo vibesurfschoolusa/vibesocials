@@ -7,6 +7,7 @@ import bcrypt from "bcryptjs";
 import { prisma } from "./db";
 import { normalizeEmail } from "./email";
 import { findOrCreateGoogleSsoUser, googleSsoConfig } from "./googleSso";
+import { GOOGLE_PASSWORD_ACCOUNT_ERROR } from "./loginOAuthError";
 import { checkRateLimit } from "./rateLimit";
 
 // Login throttles (all fail-closed). Keyed per (email, IP) rather than per
@@ -145,13 +146,16 @@ export const authOptions: NextAuthOptions = {
     // callback raises AccessDenied, which v4 does NOT forward to pages.signIn
     // (only OAuthSignin/OAuthCallback/... are) — without this, a refused
     // Google sign-in lands on the unbranded /api/auth/error page. The login
-    // page renders any ?error= generically.
+    // page maps ?error= codes to copy (lib/loginOAuthError.ts).
     error: "/login",
   },
   callbacks: {
     // Google sign-ins resolve to OUR User row (created on first sign-in) or
-    // are refused outright — see lib/googleSso.ts for the verified-email
-    // linking rules. On success the resolved row's id/sessionVersion are
+    // are refused — see lib/googleSso.ts for the verified-email linking
+    // rules. A refusal to link into a password account redirects to the
+    // login page's specific copy (a signIn callback may return a URL); any
+    // other refusal returns false (AccessDenied → generic copy).
+    // On success the resolved row's id/sessionVersion are
     // stamped ONTO `user`: NextAuth v4 hands this same object to the jwt
     // callback below, so the one generic `if (user)` branch mints the token
     // from OUR prisma id (raw OAuth `user.id` is Google's subject, and the
@@ -163,15 +167,19 @@ export const authOptions: NextAuthOptions = {
       const oidc = profile as
         | { email?: string; name?: string; email_verified?: boolean }
         | undefined;
-      const dbUser = await findOrCreateGoogleSsoUser({
+      const result = await findOrCreateGoogleSsoUser({
         email: oidc?.email,
         name: oidc?.name,
         emailVerified: oidc?.email_verified,
       });
-      if (!dbUser) return false;
+      if (!result.ok) {
+        return result.reason === "password_account"
+          ? `/login?error=${GOOGLE_PASSWORD_ACCOUNT_ERROR}`
+          : false;
+      }
       const mutable = user as { id?: string; sessionVersion?: number };
-      mutable.id = dbUser.id;
-      mutable.sessionVersion = dbUser.sessionVersion;
+      mutable.id = result.user.id;
+      mutable.sessionVersion = result.user.sessionVersion;
       return true;
     },
     async jwt({ token, user }) {

@@ -23,22 +23,80 @@ export function googleSsoConfig(): {
   return { clientId, clientSecret };
 }
 
+type GoogleSsoLinkCandidate = Pick<User, "passwordHash" | "googleLinkedAt" | "emailVerifiedAt">;
+type GoogleSsoCreatePlan = {
+  action: "create";
+  data: { googleLinkedAt: Date; emailVerifiedAt: Date };
+};
+type GoogleSsoExistingPlan =
+  | { action: "allow" }
+  | { action: "link"; data: { googleLinkedAt: Date; emailVerifiedAt?: Date } };
+
 /**
- * Resolve a Google sign-in to OUR User row, creating one on first sign-in.
- * Returns `null` to REFUSE the sign-in (NextAuth signIn callback → false):
+ * What a VERIFIED Google sign-in may do with the account (if any) that owns
+ * its normalized email. Pure: `findOrCreateGoogleSsoUser` applies the result.
  *
- * - No email, or `email_verified` !== true → refused. Linking by email is only
- *   safe because Google attests mailbox ownership; an unverified email could
- *   take over an existing password account.
- * - Existing UNVERIFIED account WITH a password → refused (pre-hijack guard):
- *   registration doesn't require email verification, so that row may have
- *   been seeded by someone else who knows its password — silently linking
- *   would hand the mailbox owner an account with a password backdoor. The
- *   mailbox owner's recovery is the forgot-password flow (which proves the
- *   mailbox, replaces the password, and bumps sessionVersion).
- * - Existing verified account (or passwordless row): linked by normalized
- *   email; `emailVerifiedAt` stamped if still null (a Google sign-in is proof
- *   of mailbox ownership, same standard as our own verify link).
+ * - No account: create one, linked and verified now.
+ * - Already linked (`googleLinkedAt` set): allow, no write.
+ * - Not linked, no password: link — stamp `googleLinkedAt`, and
+ *   `emailVerifiedAt` if still null (a Google sign-in proves the mailbox, the
+ *   same standard as our own verify link).
+ * - Not linked, WITH a password: refuse (`null`). Auto-linking would let
+ *   whoever controls the Google account into a password account it never
+ *   proved it owns — and registration needs no email verification, so that
+ *   row may have been seeded by someone else (pre-hijack). The owner signs in
+ *   with their password instead; a mailbox owner who doesn't know it uses
+ *   forgot-password, which proves the mailbox and replaces the password.
+ */
+export function planGoogleSsoLink(existing: null, now: Date): GoogleSsoCreatePlan;
+export function planGoogleSsoLink(
+  existing: GoogleSsoLinkCandidate,
+  now: Date,
+): GoogleSsoExistingPlan | null;
+export function planGoogleSsoLink(
+  existing: GoogleSsoLinkCandidate | null,
+  now: Date,
+): GoogleSsoCreatePlan | GoogleSsoExistingPlan | null;
+export function planGoogleSsoLink(
+  existing: GoogleSsoLinkCandidate | null,
+  now: Date,
+): GoogleSsoCreatePlan | GoogleSsoExistingPlan | null {
+  if (!existing) {
+    return { action: "create", data: { googleLinkedAt: now, emailVerifiedAt: now } };
+  }
+  if (existing.googleLinkedAt) {
+    return { action: "allow" };
+  }
+  if (existing.passwordHash) {
+    return null;
+  }
+  return {
+    action: "link",
+    data: existing.emailVerifiedAt
+      ? { googleLinkedAt: now }
+      : { googleLinkedAt: now, emailVerifiedAt: now },
+  };
+}
+
+/** Why a Google sign-in was refused (drives the login page copy). */
+export type GoogleSsoRefusal =
+  /** No email, or Google doesn't attest it (`email_verified` !== true). */
+  | "unverified_email"
+  /** The email belongs to a password account never linked to Google. */
+  | "password_account";
+
+export type GoogleSsoResult =
+  | { ok: true; user: User }
+  | { ok: false; reason: GoogleSsoRefusal };
+
+/**
+ * Resolve a Google sign-in to OUR User row, creating one on first sign-in, or
+ * refuse it (NextAuth signIn callback → false / a login-page redirect):
+ *
+ * - No email, or `email_verified` !== true → refused (`unverified_email`).
+ *   Linking by email is only safe because Google attests mailbox ownership.
+ * - Otherwise the linking rules of `planGoogleSsoLink`, applied to the row
+ *   that owns the normalized email (`password_account` when it refuses).
  * - New user: created with `passwordHash: null` (SSO-only until they run the
  *   forgot-password flow), atomically with their personal workspace — same
  *   transaction shape as the register route (design doc §2), so
@@ -48,46 +106,50 @@ export async function findOrCreateGoogleSsoUser(input: {
   email?: string | null;
   name?: string | null;
   emailVerified?: boolean;
-}): Promise<User | null> {
+}): Promise<GoogleSsoResult> {
   if (!input.email || input.emailVerified !== true) {
-    return null;
+    return { ok: false, reason: "unverified_email" };
   }
   const email = normalizeEmail(input.email);
+  const now = new Date();
 
   const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) {
-    if (!existing.emailVerifiedAt && existing.passwordHash) {
-      // Pre-hijack guard — see the doc comment above.
-      return null;
+    const plan = planGoogleSsoLink(existing, now);
+    if (!plan) {
+      return { ok: false, reason: "password_account" };
     }
-    if (!existing.emailVerifiedAt) {
-      return prisma.user.update({
-        where: { id: existing.id },
-        data: { emailVerifiedAt: new Date() },
-      });
+    if (plan.action === "allow") {
+      return { ok: true, user: existing };
     }
-    return existing;
+    const linked = await prisma.user.update({
+      where: { id: existing.id },
+      data: plan.data,
+    });
+    return { ok: true, user: linked };
   }
 
+  const plan = planGoogleSsoLink(null, now);
   try {
-    return await prisma.$transaction(async (tx) => {
-      const created = await tx.user.create({
+    const created = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
         data: {
           email,
           name: input.name?.trim() || null,
           passwordHash: null,
-          emailVerifiedAt: new Date(),
+          ...plan.data,
         },
       });
-      await provisionPersonalWorkspace(tx, created);
-      return created;
+      await provisionPersonalWorkspace(tx, user);
+      return user;
     });
+    return { ok: true, user: created };
   } catch (error) {
     // Unique-email race (P2002, same detection as the register route): a
     // concurrent sign-in — or a concurrent password REGISTRATION — created
     // the row between our find and create. Re-run the resolution so the
     // winner's row goes through the exact linking rules above (a concurrent
-    // unverified password registration must still be refused, not adopted).
+    // password registration must still be refused, not adopted).
     const code =
       error && typeof error === "object" && "code" in error
         ? String((error as { code?: unknown }).code)

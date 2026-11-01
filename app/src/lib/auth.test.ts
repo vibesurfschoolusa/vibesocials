@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CheckRateLimitOptions, RateLimitResult } from "./rateLimit";
 
-const { findUniqueMock, checkRateLimitMock, compareMock } = vi.hoisted(() => ({
-  findUniqueMock: vi.fn(),
-  checkRateLimitMock: vi.fn(),
-  compareMock: vi.fn(),
-}));
+const { findUniqueMock, checkRateLimitMock, compareMock, findOrCreateGoogleSsoUserMock } =
+  vi.hoisted(() => ({
+    findUniqueMock: vi.fn(),
+    checkRateLimitMock: vi.fn(),
+    compareMock: vi.fn(),
+    findOrCreateGoogleSsoUserMock: vi.fn(),
+  }));
 
 vi.mock("./db", () => ({
   prisma: { user: { findUnique: findUniqueMock } },
@@ -16,17 +18,19 @@ vi.mock("./rateLimit", () => ({
   checkRateLimit: checkRateLimitMock,
 }));
 
-// Google SSO is out of scope here; keep the provider unregistered.
+// The Google provider stays unregistered (no env); the signIn callback is
+// exercised directly with a mocked resolver.
 vi.mock("./googleSso", () => ({
   googleSsoConfig: () => null,
-  findOrCreateGoogleSsoUser: vi.fn(),
+  findOrCreateGoogleSsoUser: findOrCreateGoogleSsoUserMock,
 }));
 
 vi.mock("bcryptjs", () => ({
   default: { compare: compareMock },
 }));
 
-import { authorizeCredentials, LOGIN_DUMMY_PASSWORD_HASH } from "./auth";
+import { authOptions, authorizeCredentials, LOGIN_DUMMY_PASSWORD_HASH } from "./auth";
+import { GOOGLE_PASSWORD_ACCOUNT_ERROR } from "./loginOAuthError";
 
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
 const ONE_HOUR = 60 * 60 * 1000;
@@ -227,5 +231,52 @@ describe("authorizeCredentials — rate limits", () => {
     expect(
       await authorizeCredentials({ email: USER.email, password: "right" }, reqFrom("1.2.3.4")),
     ).toBeNull();
+  });
+});
+
+describe("authOptions.callbacks.signIn — Google SSO refusals", () => {
+  type SignInArgs = Parameters<NonNullable<typeof authOptions.callbacks>["signIn"] & object>[0];
+  const signIn = (args: Partial<SignInArgs>) =>
+    authOptions.callbacks!.signIn!(args as SignInArgs);
+  const google = { provider: "google", type: "oauth", providerAccountId: "g-1" } as const;
+  const profile = { email: "a@b.co", name: "A", email_verified: true };
+
+  beforeEach(() => {
+    findOrCreateGoogleSsoUserMock.mockReset();
+  });
+
+  it("passes credentials sign-ins straight through", async () => {
+    expect(await signIn({ user: { id: "u1" }, account: null })).toBe(true);
+    expect(findOrCreateGoogleSsoUserMock).not.toHaveBeenCalled();
+  });
+
+  it("redirects a refused password-account link to the login page's specific copy", async () => {
+    findOrCreateGoogleSsoUserMock.mockResolvedValue({ ok: false, reason: "password_account" });
+
+    const result = await signIn({ user: { id: "google-sub" }, account: google, profile });
+
+    expect(result).toBe(`/login?error=${GOOGLE_PASSWORD_ACCOUNT_ERROR}`);
+    expect(findOrCreateGoogleSsoUserMock).toHaveBeenCalledWith({
+      email: "a@b.co",
+      name: "A",
+      emailVerified: true,
+    });
+  });
+
+  it("refuses an unverified Google email with plain false (generic AccessDenied copy)", async () => {
+    findOrCreateGoogleSsoUserMock.mockResolvedValue({ ok: false, reason: "unverified_email" });
+
+    expect(await signIn({ user: { id: "google-sub" }, account: google, profile })).toBe(false);
+  });
+
+  it("stamps OUR user id + sessionVersion onto the NextAuth user on success", async () => {
+    findOrCreateGoogleSsoUserMock.mockResolvedValue({
+      ok: true,
+      user: { id: "db-user", sessionVersion: 4 },
+    });
+    const user = { id: "google-sub" } as { id: string; sessionVersion?: number };
+
+    expect(await signIn({ user, account: google, profile })).toBe(true);
+    expect(user).toEqual({ id: "db-user", sessionVersion: 4 });
   });
 });
