@@ -260,8 +260,11 @@ model PostJob {
   // `perPlatformOverrides` snapshot the composer content for EVERY job (all
   // intents since the 2026-11-01 audit; deferred-only before) so it is durable
   // and editable (PATCH) without mutating the shared MediaItem; immediate posts
-  // also carry it in the event payload. The cron/promote/retry read
-  // `?? mediaItem.*` as a fallback for legacy rows (resolvePostCaptionSource).
+  // also carry it in the event payload. The cron/promote/retry resolve caption
+  // + overrides as ONE unit (resolvePostCaptionSource): a job with its own
+  // `baseCaption` uses its own `perPlatformOverrides` as-is (null = no
+  // overrides); only when `baseCaption` is null (a legacy row) do BOTH come
+  // from the MediaItem.
   scheduledFor         DateTime?
   baseCaption          String?
   perPlatformOverrides Json?
