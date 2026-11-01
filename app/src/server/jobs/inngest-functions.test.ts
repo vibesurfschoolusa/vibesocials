@@ -560,6 +560,93 @@ describe("retryPlatforms — a retry step only publishes a still-pending result"
   });
 });
 
+// Final review M2: the publish-to-<platform> steps never re-checked their
+// result. If `inngest.send` threw after Inngest had actually accepted the
+// event (e.g. a response timeout), the route already failed the results
+// (DISPATCH_FAILED) and answered 503 — yet the run still published, overwrote
+// `failed` with `success`, and a user who pressed Retry (or re-posted) got a
+// second post. Each step now re-reads its result like the R8a retry steps.
+describe("publishToAllPlatforms — a publish step only publishes a still-pending result (M2)", () => {
+  function publishRun(platforms: Platform[]) {
+    db.postJobFindUnique.mockResolvedValue({ id: "job-1", workspaceId: WORKSPACE.id });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null });
+    db.connectionFindMany.mockResolvedValue(platforms.map((p) => ({ id: `conn-${p}`, platform: p })));
+    return handlerOf(publishToAllPlatforms)({
+      event: {
+        name: "post/publish.requested",
+        data: { postJobId: "job-1", userId: "user-1", mediaItemId: "media-1", baseCaption: "c", perPlatformOverrides: null },
+      },
+      step: fakeStep(),
+    }) as Promise<{ status: string; results: Array<{ platform: Platform; status: string }> }>;
+  }
+
+  beforeEach(() => {
+    stubResults(["x", "youtube"]);
+  });
+
+  it.each(["failed", "success"] as const)(
+    "skips (no platform call, no result write) a result that is already %s",
+    async (status) => {
+      db.resultFindUnique.mockImplementation(({ where }: { where: { id: string } }) =>
+        Promise.resolve({ status: where.id === "result-x" ? status : "pending" }),
+      );
+
+      const out = await publishRun(["x", "youtube"]);
+
+      expect(db.resultFindUnique).toHaveBeenCalledWith({
+        where: { id: "result-x" },
+        select: { status: true, socialConnectionId: true },
+      });
+      expect(publishCtxs.map((c) => c.socialConnection.platform)).toEqual(["youtube"]);
+      expect(db.resultUpdate.mock.calls.map((c) => (c[0] as { where: { id: string } }).where.id)).toEqual([
+        "result-youtube",
+      ]);
+      expect(out.results).toEqual([
+        { platform: "x", status: "skipped" },
+        { platform: "youtube", status: "success" },
+      ]);
+    },
+  );
+
+  it("skips a result that no longer exists", async () => {
+    db.resultFindUnique.mockResolvedValue(null);
+
+    const out = await publishRun(["x"]);
+
+    expect(publishCtxs).toHaveLength(0);
+    expect(db.resultUpdate).not.toHaveBeenCalled();
+    expect(out.results).toEqual([{ platform: "x", status: "skipped" }]);
+  });
+
+  it("publishes a result that is still pending", async () => {
+    db.resultFindUnique.mockResolvedValue({ status: "pending", socialConnectionId: "conn-x" });
+
+    const out = await publishRun(["x"]);
+
+    expect(db.resultFindUnique).toHaveBeenCalledWith({
+      where: { id: "result-x" },
+      select: { status: true, socialConnectionId: true },
+    });
+    expect(publishCtxs.map((c) => c.socialConnection.platform)).toEqual(["x"]);
+    expect(resultWrites()).toEqual([
+      expect.objectContaining({ status: "success", externalPostId: "ext-x", ...HEARTBEAT }),
+    ]);
+    expect(out.results).toEqual([{ platform: "x", status: "success" }]);
+  });
+
+  it("finalize still recomputes the job from the DB when every step skipped (the route already failed them)", async () => {
+    stubResults(["x", "youtube"], "failed");
+    db.resultFindUnique.mockResolvedValue({ status: "failed", socialConnectionId: null });
+
+    const out = await publishRun(["x", "youtube"]);
+
+    expect(publishCtxs).toHaveLength(0);
+    expect(db.resultUpdate).not.toHaveBeenCalled();
+    expect(db.postJobUpdate).toHaveBeenCalledWith({ where: { id: "job-1" }, data: { status: "failed" } });
+    expect(out.status).toBe("failed");
+  });
+});
+
 
 // 2026-11-01 audit, Task 5: PostJobResult.socialConnectionId is nullable
 // (onDelete: SetNull) so Disconnect / Switch account keep publish history. A

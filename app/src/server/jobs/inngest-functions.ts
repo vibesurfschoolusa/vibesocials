@@ -129,6 +129,42 @@ async function repointResultConnection(
   }
 }
 
+/**
+ * A platform step publishes only while its result is still `pending` — the
+ * state the dispatching route (publish) or the retry route (retry) left it in.
+ * Re-read at the start of every `publish-to-<platform>` and `retry-<platform>`
+ * step; returns the row when still pending, else null (logged) and the step
+ * must skip: no platform call, no result write.
+ *
+ * Ruling R8a (retry): an overlapping run may have finalized the result since,
+ * or an onFailure handler failed it (and the user may already have retried it
+ * again). Final review M2 (publish): `inngest.send` can throw AFTER Inngest
+ * accepted the event (e.g. a response timeout) — the route then fails the
+ * results (DISPATCH_FAILED) and answers 503, yet this run still starts.
+ * Publishing in either case would overwrite `failed` with `success` and, once
+ * the user retried or re-posted, post twice.
+ */
+async function readStillPendingResult(
+  resultRecordId: string,
+  context: { step: "publish" | "retry"; postJobId: string; platform: Platform },
+): Promise<{ socialConnectionId: string | null } | null> {
+  const current = await prisma.postJobResult.findUnique({
+    where: { id: resultRecordId },
+    select: { status: true, socialConnectionId: true },
+  });
+  if (current?.status !== "pending") {
+    const label = context.step === "retry" ? "Retry" : "Publish";
+    logger.warn(`[Inngest] ${label} step skipped: result is no longer pending`, {
+      postJobId: context.postJobId,
+      platform: context.platform,
+      resultRecordId,
+      status: current?.status ?? "missing",
+    });
+    return null;
+  }
+  return current;
+}
+
 // Helper to publish to a single platform. Loads the connection fresh so tokens
 // are never serialized through step.run() memoization.
 async function publishToPlatform({
@@ -444,6 +480,17 @@ export const publishToAllPlatforms = inngest.createFunction(
 
       // Each platform upload is a separate step - this allows checkpointing
       const result = await step.run(`publish-to-${connection.platform}`, async () => {
+        // Final review M2: only a still-`pending` result is published — the
+        // route may already have failed it after an ambiguous dispatch error.
+        const current = await readStillPendingResult(resultRecord.id, {
+          step: "publish",
+          postJobId,
+          platform: connection.platform,
+        });
+        if (!current) {
+          return { platform: connection.platform, status: "skipped" };
+        }
+
         return publishToPlatform({
           connectionRef: connection,
           mediaItem: setupData.mediaItem,
@@ -470,7 +517,9 @@ export const publishToAllPlatforms = inngest.createFunction(
       // platform just ran, so no result is `pending` and the recompute reduces
       // to the original `some(success) ? completed : failed` — behavior-
       // preserving. Reading from the DB keeps it correct if only some platforms
-      // had run (the case the retry path relies on).
+      // had run (the case the retry path relies on) or a step SKIPPED a result
+      // something else already settled (M2) — or re-queued: a retry the user
+      // started meanwhile leaves it `pending`, which reads `in_progress`.
       const dbResults = await prisma.postJobResult.findMany({
         where: { postJobId },
         select: { status: true },
@@ -845,17 +894,12 @@ export const retryPlatforms = inngest.createFunction(
         // the retry route claimed. An overlapping run may have finalized it
         // since, or an onFailure handler failed it (and the user may already
         // have retried it again) — publishing then would post twice.
-        const current = await prisma.postJobResult.findUnique({
-          where: { id: resultRecord.id },
-          select: { status: true, socialConnectionId: true },
+        const current = await readStillPendingResult(resultRecord.id, {
+          step: "retry",
+          postJobId,
+          platform,
         });
-        if (current?.status !== "pending") {
-          logger.warn("[Inngest] Retry step skipped: result is no longer pending", {
-            postJobId,
-            platform,
-            resultRecordId: resultRecord.id,
-            status: current?.status ?? "missing",
-          });
+        if (!current) {
           return { platform, status: "skipped" };
         }
 
