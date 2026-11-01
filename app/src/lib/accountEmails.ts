@@ -1,5 +1,7 @@
 import { Resend } from "resend";
 
+import { logger } from "@/lib/logger";
+
 /**
  * Account lifecycle (scale-readiness spec §A) — password-reset and
  * email-verification emails.
@@ -116,9 +118,10 @@ export function buildVerifyEmail(opts: BuildAccountEmailOptions): AccountEmail {
  * `RESEND_API_KEY` set (the default today) this is a complete no-op that
  * constructs no client and makes no network call, returning `false`. Every
  * failure mode (missing key, Resend construction/send error) is caught and
- * logged — it NEVER throws into the caller. Returns `true` only when the send
- * was actually dispatched, so callers can log/observe delivery without ever
- * branching their user-facing response on it (SEC-1: no existence oracle).
+ * logged — it NEVER throws into the caller. Returns `true` only when Resend
+ * accepted the send (a resolved `{ error }` result counts as a failure), so
+ * callers can log/observe delivery without ever branching their user-facing
+ * response on it (SEC-1: no existence oracle).
  */
 export async function deliverAccountEmail(to: string, email: AccountEmail): Promise<boolean> {
   const apiKey = process.env.RESEND_API_KEY;
@@ -134,13 +137,22 @@ export async function deliverAccountEmail(to: string, email: AccountEmail): Prom
 
   try {
     const resend = new Resend(apiKey);
-    await resend.emails.send({
+    // Resend 6.x reports an API rejection (bad key, unverified sender,
+    // quota...) by RESOLVING { data: null, error } — it does not throw.
+    const { error } = await resend.emails.send({
       from,
       to,
       subject: email.subject,
       html: email.html,
       text: email.text,
     });
+    if (error) {
+      logger.error("[Account] Resend rejected account email", {
+        subject: email.subject,
+        error: { name: error.name, message: error.message, statusCode: error.statusCode },
+      });
+      return false;
+    }
     return true;
   } catch (error) {
     // Best-effort: swallow + log. Never throw — an auth route must complete

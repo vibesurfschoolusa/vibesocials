@@ -20,11 +20,17 @@ vi.mock("resend", () => ({
   Resend: ResendMock,
 }));
 
+const { loggerErrorMock } = vi.hoisted(() => ({ loggerErrorMock: vi.fn() }));
+vi.mock("@/lib/logger", () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: loggerErrorMock },
+}));
+
 import { sendEmail } from "@/server/notifications/email";
 
 beforeEach(() => {
   sendMock.mockReset();
   ResendMock.mockClear();
+  loggerErrorMock.mockReset();
   sendMock.mockResolvedValue({ data: { id: "email_123" }, error: null });
 });
 
@@ -105,5 +111,35 @@ describe("sendEmail", () => {
       "[Notifications] Failed to send email",
       expect.objectContaining({ error: expect.objectContaining({ message: "bad key" }) }),
     );
+  });
+
+  // Resend 6.x resolves { data: null, error } on an API rejection instead of
+  // throwing — that used to be silently treated as sent.
+  it("logs via the logger (no recipient address) — and does not throw — when Resend resolves an error result", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    sendMock.mockResolvedValueOnce({
+      data: null,
+      error: { name: "daily_quota_exceeded", message: "Daily quota exceeded.", statusCode: 429 },
+      headers: null,
+    });
+
+    await expect(
+      sendEmail({ to: "user@example.com", subject: "Hi", html: "<p>hi</p>" }),
+    ).resolves.toBeUndefined();
+
+    expect(loggerErrorMock).toHaveBeenCalledTimes(1);
+    expect(loggerErrorMock).toHaveBeenCalledWith("[Notifications] Resend rejected email", {
+      subject: "Hi",
+      error: { name: "daily_quota_exceeded", message: "Daily quota exceeded.", statusCode: 429 },
+    });
+    expect(JSON.stringify(loggerErrorMock.mock.calls)).not.toContain("user@example.com");
+  });
+
+  it("does not log an error for a successful send", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+
+    await sendEmail({ to: "user@example.com", subject: "Hi", html: "<p>hi</p>" });
+
+    expect(loggerErrorMock).not.toHaveBeenCalled();
   });
 });

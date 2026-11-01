@@ -1,5 +1,7 @@
 import { Resend } from "resend";
 
+import { logger } from "@/lib/logger";
+
 /**
  * Roadmap Phase 6 — thin, fail-safe transport over Resend.
  *
@@ -8,8 +10,9 @@ import { Resend } from "resend";
  * network call. This is the hard safety invariant for the whole notifications
  * feature: callers (see `server/notifications/postOutcomeEmail.ts`) must be able
  * to fire-and-forget this without it ever throwing, delaying, or otherwise
- * affecting their own flow. Every failure mode (missing key, Resend API error,
- * network error) is caught here and only logged.
+ * affecting their own flow. Every failure mode (missing key, Resend API error
+ * — thrown or returned as `{ error }` — network error) is caught here and only
+ * logged.
  */
 
 const DEFAULT_FROM = "Vibe Socials <onboarding@resend.dev>";
@@ -34,7 +37,15 @@ export async function sendEmail({ to, subject, html }: SendEmailParams): Promise
 
   try {
     const resend = new Resend(apiKey);
-    await resend.emails.send({ from, to, subject, html });
+    // Resend 6.x reports an API rejection (bad key, unverified sender,
+    // quota...) by RESOLVING { data: null, error } — it does not throw.
+    const { error } = await resend.emails.send({ from, to, subject, html });
+    if (error) {
+      logger.error("[Notifications] Resend rejected email", {
+        subject,
+        error: { name: error.name, message: error.message, statusCode: error.statusCode },
+      });
+    }
   } catch (error) {
     // Best-effort: swallow + log. Never throw — the caller (a post-outcome
     // notification) must complete regardless of whether the email actually

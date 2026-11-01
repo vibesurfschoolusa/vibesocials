@@ -17,6 +17,11 @@ vi.mock("resend", () => ({
   Resend: ResendMock,
 }));
 
+const { loggerErrorMock } = vi.hoisted(() => ({ loggerErrorMock: vi.fn() }));
+vi.mock("@/lib/logger", () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: loggerErrorMock },
+}));
+
 import {
   buildPasswordResetEmail,
   buildVerifyEmail,
@@ -93,6 +98,7 @@ describe("deliverAccountEmail", () => {
   beforeEach(() => {
     sendMock.mockReset();
     ResendMock.mockClear();
+    loggerErrorMock.mockReset();
     sendMock.mockResolvedValue({ data: { id: "email_123" }, error: null });
   });
 
@@ -147,5 +153,33 @@ describe("deliverAccountEmail", () => {
     await expect(deliverAccountEmail("user@example.com", email)).resolves.toBe(false);
 
     expect(consoleSpy).toHaveBeenCalled();
+  });
+
+  // Resend 6.x does NOT throw on an API rejection (bad key, invalid sender,
+  // quota...): it resolves { data: null, error }. That used to count as sent.
+  it("returns false and logs via the logger (no recipient address) when Resend resolves an error result", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    sendMock.mockResolvedValueOnce({
+      data: null,
+      error: { name: "invalid_from_address", message: "Invalid `from` field.", statusCode: 422 },
+      headers: null,
+    });
+
+    await expect(deliverAccountEmail("user@example.com", email)).resolves.toBe(false);
+
+    expect(loggerErrorMock).toHaveBeenCalledTimes(1);
+    expect(loggerErrorMock).toHaveBeenCalledWith("[Account] Resend rejected account email", {
+      subject: "Hi",
+      error: { name: "invalid_from_address", message: "Invalid `from` field.", statusCode: 422 },
+    });
+    expect(JSON.stringify(loggerErrorMock.mock.calls)).not.toContain("user@example.com");
+  });
+
+  it("does not log an error for a successful send", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+
+    await expect(deliverAccountEmail("user@example.com", email)).resolves.toBe(true);
+
+    expect(loggerErrorMock).not.toHaveBeenCalled();
   });
 });
