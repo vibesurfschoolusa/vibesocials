@@ -107,8 +107,15 @@ export function needsApproval(input: {
 /**
  * What `POST /api/posts/[id]/publish` does for this caller + job:
  *  - `proceed` — the normal publish/schedule path (whose own status guards
- *    still 409 a running or finished job).
- *  - `awaiting_approval` — the post is already held; publishing it is refused.
+ *    still 409 a running or finished job). If the post is still pending (e.g.
+ *    held before the owner turned approval off), the claim releases the hold
+ *    in the same write — see {@link releaseApprovalHoldData}.
+ *  - `awaiting_approval` — a member's post is already held; publishing it is
+ *    refused.
+ *  - `approve_instead` — ruling R10: an OWNER publishing or scheduling a held
+ *    post while approval is on. Refused: it must be decided through the
+ *    approval route (Approve / Reject), which records the decision and tells
+ *    the member.
  *  - `submit` — a plain draft, or a scheduled post nobody approved, is SUBMITTED
  *    for approval instead of published. A scheduled row is judged by its status
  *    (not by `submittedForApprovalAt`), so even a submitted-but-unapproved
@@ -118,12 +125,50 @@ export function publishApprovalAction(input: {
   requireApproval: boolean;
   role: Role;
   job: ApprovalFacts;
-}): "proceed" | "awaiting_approval" | "submit" {
+}): "proceed" | "awaiting_approval" | "approve_instead" | "submit" {
   const { requireApproval, role, job } = input;
-  if (!needsApproval({ requireApproval, role, approvedAt: job.approvedAt })) return "proceed";
-  if (isHeldForApproval(job)) return "awaiting_approval";
-  if (job.status === "draft" || job.status === "scheduled") return "submit";
+  if (needsApproval({ requireApproval, role, approvedAt: job.approvedAt })) {
+    if (isHeldForApproval(job)) return "awaiting_approval";
+    if (job.status === "draft" || job.status === "scheduled") return "submit";
+    return "proceed";
+  }
+  if (requireApproval && role === "owner" && isHeldForApproval(job)) return "approve_instead";
   return "proceed";
+}
+
+/**
+ * The approval columns a publish-route claim (schedule or publish-now) writes
+ * alongside its status change (ruling R10). A post that still reads "pending"
+ * when the route lets it go out — held before approval was turned off, or a
+ * scheduled row the pre-fix route left submitted-but-unapproved — has its
+ * submission cleared in the SAME conditional write: otherwise it would become
+ * a scheduled + submitted + unapproved row, which the cron never claims (R6).
+ * `approvedAt` stays null (nobody approved it). Anything else is untouched — an
+ * owner's approval record is history worth keeping.
+ */
+export function releaseApprovalHoldData(
+  job: ApprovalFacts,
+): { submittedForApprovalAt?: null; approvedAt?: null } {
+  return deriveApprovalState(job) === "pending"
+    ? { submittedForApprovalAt: null, approvedAt: null }
+    : {};
+}
+
+/** The statuses an owner's approval decision can be applied to. */
+export const APPROVAL_DECIDABLE_STATUSES = ["draft", "scheduled"] as const satisfies readonly PostJobStatus[];
+
+/**
+ * Can an owner decide this post right now? A held draft — or, the ruling R10
+ * backstop, a `scheduled` row still carrying an undecided submission (only
+ * the pre-fix publish route produced those; the cron never claims them, so
+ * without this they could never be published or cancelled from the UI). A
+ * submitted row that is already running or finished has nothing to decide.
+ */
+export function isAwaitingApprovalDecision(job: ApprovalFacts): boolean {
+  return (
+    (APPROVAL_DECIDABLE_STATUSES as readonly PostJobStatus[]).includes(job.status) &&
+    deriveApprovalState(job) === "pending"
+  );
 }
 
 /**

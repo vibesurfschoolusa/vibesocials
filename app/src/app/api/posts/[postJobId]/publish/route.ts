@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import {
   holdForApprovalData,
   publishApprovalAction,
+  releaseApprovalHoldData,
   submissionScheduledFor,
 } from "@/lib/approval";
 import {
@@ -50,7 +51,15 @@ interface PublishBody {
  * (`publishApprovalAction`). A post already awaiting approval 409s
  * `AWAITING_APPROVAL`; a plain draft or an unapproved scheduled post is
  * SUBMITTED for approval instead (202 `{ status: "draft", approvalState:
- * "pending" }`, owners emailed, nothing dispatched). Owners are unaffected.
+ * "pending" }`, owners emailed, nothing dispatched).
+ *
+ * Held posts (ruling R10, final review M1): an OWNER can't publish or schedule
+ * a held post while approval is on — 409 `AWAITING_APPROVAL`, approve or reject
+ * it instead. With approval off, anyone may, and the claim clears the
+ * submission in the same write (`releaseApprovalHoldData`) — leaving it set
+ * made a scheduled + submitted + unapproved row the cron never claims and the
+ * approval route couldn't decide. Both claims are pinned to the version read
+ * (`updatedAt`), since what they write depends on its approval columns.
  */
 export async function POST(request: NextRequest, context: PostJobRouteContext) {
   const workspaceContext = await getWorkspaceContext();
@@ -118,6 +127,16 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     );
   }
 
+  if (approvalAction === "approve_instead") {
+    return NextResponse.json(
+      {
+        code: "AWAITING_APPROVAL",
+        error: "This post is waiting for approval — approve or reject it instead.",
+      },
+      { status: 409 },
+    );
+  }
+
   // Submit for approval instead of publishing/scheduling. Needs no verified
   // email or connection yet: nothing goes out until an owner approves, and
   // the approval route re-checks both.
@@ -171,6 +190,11 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     );
   }
 
+  // A post still pending approval that is allowed through here (approval was
+  // turned off since it was submitted) stops being "awaiting approval" in the
+  // same write as its claim (ruling R10); {} for everything else.
+  const releaseHold = releaseApprovalHoldData(job);
+
   // Path 1 — schedule a draft for later (a scheduled job reschedules via PATCH).
   if (wantsSchedule) {
     if (job.status !== "draft") {
@@ -185,9 +209,18 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
     }
 
+    // Pinned to the version read (status AND updatedAt): what this writes
+    // depends on that version's approval columns, so a member submitting the
+    // draft in between must make it miss (409) — not leave it scheduled
+    // + submitted + unapproved, which the cron never claims.
     const { count } = await prisma.postJob.updateMany({
-      where: { id: postJobId, workspaceId: workspaceContext.workspace.id, status: "draft" },
-      data: { status: "scheduled", scheduledFor: validation.date },
+      where: {
+        id: postJobId,
+        workspaceId: workspaceContext.workspace.id,
+        status: "draft",
+        updatedAt: job.updatedAt,
+      },
+      data: { status: "scheduled", scheduledFor: validation.date, ...releaseHold },
     });
 
     if (count === 0) {
@@ -238,23 +271,22 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     );
   }
 
-  // A member under approval reached here only because the post they READ was
-  // approved; pin the claim to that exact version (updatedAt), so an edit that
-  // re-held it — or changed its text — in the meantime makes the claim match
-  // nothing (409 below) instead of publishing unreviewed content.
-  const memberUnderApproval =
-    workspaceContext.workspace.requireApproval && workspaceContext.role === "member";
-
   // Atomic claim {draft|scheduled} → in_progress. Only one caller wins — this
   // also blocks the cron from double-claiming a scheduled job we're publishing.
+  // Pinned to the exact version read (updatedAt): the approval decision above
+  // was made from it. A member under approval got here only because the post
+  // they READ was approved, so an edit that re-held it — or changed its text —
+  // in the meantime makes the claim match nothing (409 below) instead of
+  // publishing unreviewed content; likewise a submission landing in between
+  // can't be published past, or left set on a released hold (ruling R10).
   const { count } = await prisma.postJob.updateMany({
     where: {
       id: postJobId,
       workspaceId: workspaceContext.workspace.id,
       status: { in: [...MUTABLE_POST_JOB_STATUSES] },
-      ...(memberUnderApproval ? { updatedAt: job.updatedAt } : {}),
+      updatedAt: job.updatedAt,
     },
-    data: { status: "in_progress" },
+    data: { status: "in_progress", ...releaseHold },
   });
 
   if (count === 0) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  APPROVAL_DECIDABLE_STATUSES,
   approvalOutcome,
   cancelData,
   canDecideApproval,
@@ -9,9 +10,11 @@ import {
   deriveApprovalState,
   editApprovalEffect,
   holdForApprovalData,
+  isAwaitingApprovalDecision,
   isHeldForApproval,
   needsApproval,
   publishApprovalAction,
+  releaseApprovalHoldData,
   shouldHoldForApproval,
   submissionScheduledFor,
 } from "./approval";
@@ -156,11 +159,26 @@ describe("needsApproval", () => {
 
 describe("publishApprovalAction", () => {
   it.each([
-    // Owners are never affected — whatever the job.
+    // Owners publish their own and members' posts freely...
     { name: "owner, plain draft", role: "owner", requireApproval: true, job: PLAIN_DRAFT, expected: "proceed" },
-    { name: "owner, pending", role: "owner", requireApproval: true, job: PENDING, expected: "proceed" },
     { name: "owner, scheduled unapproved", role: "owner", requireApproval: true, job: SCHEDULED_UNAPPROVED, expected: "proceed" },
-    // Approval off: members publish freely.
+    // ...except a HELD post while approval is on (ruling R10): publishing or
+    // scheduling it would leave it submitted-but-unapproved — the cron never
+    // claims that — so the owner must Approve / Reject it instead.
+    { name: "owner, pending, approval on", role: "owner", requireApproval: true, job: PENDING, expected: "approve_instead" },
+    // R10 is about held DRAFTS; a stray scheduled+submitted row is decidable
+    // through the approval route but an owner's publish isn't refused.
+    {
+      name: "owner, scheduled submitted-but-unapproved, approval on",
+      role: "owner",
+      requireApproval: true,
+      job: SCHEDULED_SUBMITTED_UNAPPROVED,
+      expected: "proceed",
+    },
+    // Approval off: everyone publishes freely — a post held before it was
+    // turned off included (the route clears the hold in the same write).
+    { name: "owner, pending, approval off", role: "owner", requireApproval: false, job: PENDING, expected: "proceed" },
+    { name: "member, pending, approval off", role: "member", requireApproval: false, job: PENDING, expected: "proceed" },
     { name: "member, approval off", role: "member", requireApproval: false, job: PLAIN_DRAFT, expected: "proceed" },
     // Bypass (a): a member's plain draft is submitted, not published.
     { name: "member, plain draft", role: "member", requireApproval: true, job: PLAIN_DRAFT, expected: "submit" },
@@ -181,6 +199,57 @@ describe("publishApprovalAction", () => {
     { name: "member, completed", role: "member", requireApproval: true, job: COMPLETED, expected: "proceed" },
   ] as const)("$name → $expected", ({ role, requireApproval, job, expected }) => {
     expect(publishApprovalAction({ role, requireApproval, job })).toBe(expected);
+  });
+});
+
+// Ruling R10: when the publish route DOES let a still-pending post go out
+// (approval turned off since it was submitted), its claim clears the
+// submission in the same write — a scheduled row left submitted-but-unapproved
+// is never claimed by the cron and can't be decided as a draft.
+describe("releaseApprovalHoldData", () => {
+  it.each([
+    { name: "a pending draft", job: PENDING, data: { submittedForApprovalAt: null, approvedAt: null } },
+    // A stray scheduled+submitted row (pre-fix publish route) is released too.
+    {
+      name: "a scheduled submitted-but-unapproved row",
+      job: SCHEDULED_SUBMITTED_UNAPPROVED,
+      data: { submittedForApprovalAt: null, approvedAt: null },
+    },
+    { name: "a plain draft (nothing to release)", job: PLAIN_DRAFT, data: {} },
+    { name: "an unapproved scheduled post that was never submitted", job: SCHEDULED_UNAPPROVED, data: {} },
+    // An owner's decision is history worth keeping: never cleared here.
+    { name: "an approved scheduled post (keeps its approval record)", job: SCHEDULED_APPROVED, data: {} },
+  ] as const)("$name", ({ job, data }) => {
+    expect(releaseApprovalHoldData(job)).toEqual(data);
+  });
+
+  it("a released hold reads back as no approval at all", () => {
+    expect(
+      deriveApprovalState({ ...PENDING, status: "scheduled", ...releaseApprovalHoldData(PENDING) }),
+    ).toBe("none");
+  });
+});
+
+// Ruling R10 backstop: the approval route decides a held draft AND a scheduled
+// row still carrying an undecided submission (left behind by the pre-fix
+// publish route), so no such row is stuck.
+describe("isAwaitingApprovalDecision", () => {
+  it.each([
+    { name: "a pending draft", job: PENDING, expected: true },
+    { name: "a scheduled submitted-but-unapproved row", job: SCHEDULED_SUBMITTED_UNAPPROVED, expected: true },
+    { name: "a plain draft", job: PLAIN_DRAFT, expected: false },
+    { name: "an unapproved scheduled post never submitted", job: SCHEDULED_UNAPPROVED, expected: false },
+    { name: "an approved scheduled post", job: SCHEDULED_APPROVED, expected: false },
+    { name: "a rejected post", job: facts({ status: "cancelled", submittedForApprovalAt: T }), expected: false },
+    // Already running / finished: nothing left to decide.
+    { name: "an in-progress submitted row", job: facts({ status: "in_progress", submittedForApprovalAt: T }), expected: false },
+    { name: "a completed submitted row", job: facts({ status: "completed", submittedForApprovalAt: T }), expected: false },
+  ] as const)("$name → $expected", ({ job, expected }) => {
+    expect(isAwaitingApprovalDecision(job)).toBe(expected);
+  });
+
+  it("the decidable statuses are exactly draft and scheduled", () => {
+    expect([...APPROVAL_DECIDABLE_STATUSES]).toEqual(["draft", "scheduled"]);
   });
 });
 

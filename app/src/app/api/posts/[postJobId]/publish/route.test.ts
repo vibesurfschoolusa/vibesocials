@@ -508,3 +508,145 @@ describe("POST /api/posts/[postJobId]/publish — approval enforcement (2026-11-
     expect(inngestSendMock).toHaveBeenCalledTimes(1);
   });
 });
+
+// Ruling R10 (final review M1): publishing or scheduling a HELD post through
+// this route used to write `scheduled` / `in_progress` and leave
+// `submittedForApprovalAt` set. A scheduled+submitted+unapproved row is never
+// claimed by the cron (R6) and couldn't be approved (the decision claim
+// required a draft), so the post never went out and nothing in the UI could
+// recover it.
+describe("POST /api/posts/[postJobId]/publish — held posts (ruling R10)", () => {
+  const HELD = () => jobRow({ submittedForApprovalAt: SUBMITTED });
+
+  describe("approval ON + an OWNER", () => {
+    beforeEach(() => {
+      getWorkspaceContextMock.mockResolvedValue(
+        makeWorkspaceContext({ role: "owner", requireApproval: true }),
+      );
+      findFirstMock.mockResolvedValue(HELD());
+    });
+
+    it.each([
+      ["publish now", {}],
+      ["schedule", { scheduledFor: FUTURE }],
+    ])("%s → 409 AWAITING_APPROVAL (approve or reject instead), no state change", async (_label, body) => {
+      const res = await POST(req(body), ctx("job-1"));
+
+      expect(res.status).toBe(409);
+      await expect(res.json()).resolves.toEqual({
+        code: "AWAITING_APPROVAL",
+        error: "This post is waiting for approval — approve or reject it instead.",
+      });
+      expect(updateManyMock).not.toHaveBeenCalled();
+      expect(connectionCountMock).not.toHaveBeenCalled();
+      expect(prepareDispatchMock).not.toHaveBeenCalled();
+      expect(inngestSendMock).not.toHaveBeenCalled();
+      expect(notifyOwnersMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe.each([
+    ["an owner", "owner"],
+    ["a member", "member"],
+  ] as const)("approval OFF + %s", (_label, role) => {
+    beforeEach(() => {
+      getWorkspaceContextMock.mockResolvedValue(
+        makeWorkspaceContext({ role, requireApproval: false }),
+      );
+      findFirstMock.mockResolvedValue(HELD());
+    });
+
+    it("schedules it and clears the submission in the SAME conditional write", async () => {
+      const res = await POST(req({ scheduledFor: FUTURE }), ctx("job-1"));
+
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toEqual({
+        ok: true,
+        status: "scheduled",
+        scheduledFor: new Date(FUTURE).toISOString(),
+      });
+      expect(updateManyMock).toHaveBeenCalledTimes(1);
+      expect(updateManyMock).toHaveBeenCalledWith({
+        where: { id: "job-1", workspaceId: "ws-1", status: "draft", updatedAt: UPDATED },
+        data: {
+          status: "scheduled",
+          scheduledFor: new Date(FUTURE),
+          submittedForApprovalAt: null,
+          approvedAt: null,
+        },
+      });
+      expect(inngestSendMock).not.toHaveBeenCalled();
+    });
+
+    it("publishes it now and clears the submission in the SAME conditional claim", async () => {
+      const res = await POST(req({}), ctx("job-1"));
+
+      expect(res.status).toBe(202);
+      expect(updateManyMock).toHaveBeenCalledTimes(1);
+      expect(updateManyMock).toHaveBeenCalledWith({
+        where: {
+          id: "job-1",
+          workspaceId: "ws-1",
+          status: { in: ["scheduled", "draft"] },
+          updatedAt: UPDATED,
+        },
+        data: { status: "in_progress", submittedForApprovalAt: null, approvedAt: null },
+      });
+      expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("409s without dispatching when the post changed after it was read (claim misses)", async () => {
+      updateManyMock.mockResolvedValue({ count: 0 });
+
+      const res = await POST(req({}), ctx("job-1"));
+
+      expect(res.status).toBe(409);
+      expect(prepareDispatchMock).not.toHaveBeenCalled();
+      expect(inngestSendMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // The schedule claim decides from the approval columns it READ, so it must
+  // land only on that version: a member submitting the same draft in between
+  // would otherwise become scheduled-but-unapproved (stuck) again.
+  it("pins a plain draft's schedule claim to the version it read (updatedAt), clearing nothing", async () => {
+    findFirstMock.mockResolvedValue(jobRow());
+
+    const res = await POST(req({ scheduledFor: FUTURE }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: "job-1", workspaceId: "ws-1", status: "draft", updatedAt: UPDATED },
+      data: { status: "scheduled", scheduledFor: new Date(FUTURE) },
+    });
+  });
+
+  it("pins an owner's publish-now claim to the version it read too", async () => {
+    getWorkspaceContextMock.mockResolvedValue(
+      makeWorkspaceContext({ role: "owner", requireApproval: true }),
+    );
+    findFirstMock.mockResolvedValue(jobRow());
+
+    await POST(req({}), ctx("job-1"));
+
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: {
+        id: "job-1",
+        workspaceId: "ws-1",
+        status: { in: ["scheduled", "draft"] },
+        updatedAt: UPDATED,
+      },
+      data: { status: "in_progress" },
+    });
+  });
+
+  it("409s NOT_A_DRAFT when the pinned schedule claim misses (changed in the meantime)", async () => {
+    findFirstMock.mockResolvedValue(jobRow());
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req({ scheduledFor: FUTURE }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe("NOT_A_DRAFT");
+  });
+});

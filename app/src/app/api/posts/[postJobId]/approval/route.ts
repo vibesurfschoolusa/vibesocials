@@ -1,11 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import {
+  APPROVAL_DECIDABLE_STATUSES,
   canDecideApproval,
   changedSinceReview,
   decideApproval,
   deriveApprovalState,
-  isHeldForApproval,
+  isAwaitingApprovalDecision,
 } from "@/lib/approval";
 import { prisma } from "@/lib/db";
 import {
@@ -62,9 +63,12 @@ const MUTATE_RATE_LIMIT = {
  * publishing. Rejecting cancels the post and leaves `approvedAt` null, which is
  * what `deriveApprovalState` reads back as "rejected".
  *
- * Every transition is an ATOMIC conditional `updateMany` on `status: "draft"`,
- * so a concurrent decide/publish/cancel can't double-dispatch. The member's
- * decision email is fire-and-forget: it must never fail the decision.
+ * Every transition is an ATOMIC conditional `updateMany` on a still-undecided
+ * submission (`isAwaitingApprovalDecision`: a held draft, or — the ruling R10
+ * backstop — a `scheduled` row the pre-fix publish route left submitted but
+ * unapproved, which the cron never claims), so a concurrent
+ * decide/publish/cancel can't double-dispatch. The member's decision email is
+ * fire-and-forget: it must never fail the decision.
  *
  * 2026-11-01 audit:
  *  - Approving into an immediate publish applies the same verified-email gate
@@ -158,7 +162,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     );
   }
 
-  if (!canDecideApproval({ role: workspaceContext.role, state })) {
+  // A submission that is already running or finished reads "pending" too, but
+  // there is nothing left to decide — only a draft or scheduled row is.
+  if (!canDecideApproval({ role: workspaceContext.role, state }) || !isAwaitingApprovalDecision(job)) {
     return NextResponse.json(
       {
         error: "This post isn't awaiting approval.",
@@ -190,14 +196,17 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     );
   }
 
-  // Atomic claim: only a still-`draft` row at the version just read
-  // transitions, so a concurrent decision, publish or cancel can't
+  // Atomic claim: only a still-undecided submission (draft, or a scheduled row
+  // left submitted-but-unapproved — ruling R10 backstop) at the version just
+  // read transitions, so a concurrent decision, publish or cancel can't
   // double-dispatch and a concurrent edit can't be decided unseen.
   const { count } = await prisma.postJob.updateMany({
     where: {
       id: postJobId,
       workspaceId: workspaceContext.workspace.id,
-      status: "draft",
+      status: { in: [...APPROVAL_DECIDABLE_STATUSES] },
+      submittedForApprovalAt: { not: null },
+      approvedAt: null,
       updatedAt: job.updatedAt,
     },
     data: approving
@@ -210,12 +219,12 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   });
 
   if (count === 0) {
-    // Lost the write: if the post is still held, it was edited mid-request.
+    // Lost the write: if the post is still undecided, it was edited mid-request.
     const current = await prisma.postJob.findFirst({
       where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
       select: { status: true, submittedForApprovalAt: true, approvedAt: true },
     });
-    if (current && isHeldForApproval(current)) {
+    if (current && isAwaitingApprovalDecision(current)) {
       return NextResponse.json(CHANGED_SINCE_REVIEW_BODY, { status: 409 });
     }
     return NextResponse.json(

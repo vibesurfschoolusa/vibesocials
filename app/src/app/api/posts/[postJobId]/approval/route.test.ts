@@ -80,6 +80,20 @@ function pendingJob(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * The decision claim: a still-undecided submission — a held draft or (ruling
+ * R10 backstop) a scheduled row left submitted-but-unapproved — at exactly the
+ * version that was read.
+ */
+const CLAIM_WHERE = {
+  id: "job-1",
+  workspaceId: "ws-1",
+  status: { in: ["draft", "scheduled"] },
+  submittedForApprovalAt: { not: null },
+  approvedAt: null,
+  updatedAt: REVIEWED,
+};
+
 const ORIGINAL_RESEND_API_KEY = process.env.RESEND_API_KEY;
 afterEach(() => {
   if (ORIGINAL_RESEND_API_KEY === undefined) delete process.env.RESEND_API_KEY;
@@ -175,7 +189,7 @@ describe("POST /api/posts/[postJobId]/approval", () => {
     expect(res.status).toBe(200);
     expect(body.status).toBe("scheduled");
     expect(updateManyMock).toHaveBeenCalledWith({
-      where: { id: "job-1", workspaceId: "ws-1", status: "draft", updatedAt: REVIEWED },
+      where: CLAIM_WHERE,
       data: {
         status: "scheduled",
         approvedAt: expect.any(Date),
@@ -194,7 +208,7 @@ describe("POST /api/posts/[postJobId]/approval", () => {
     expect(res.status).toBe(200);
     expect(body.status).toBe("in_progress");
     expect(updateManyMock).toHaveBeenCalledWith({
-      where: { id: "job-1", workspaceId: "ws-1", status: "draft", updatedAt: REVIEWED },
+      where: CLAIM_WHERE,
       data: {
         status: "in_progress",
         approvedAt: expect.any(Date),
@@ -234,7 +248,7 @@ describe("POST /api/posts/[postJobId]/approval", () => {
     expect(res.status).toBe(200);
     expect(body.status).toBe("cancelled");
     expect(updateManyMock).toHaveBeenCalledWith({
-      where: { id: "job-1", workspaceId: "ws-1", status: "draft", updatedAt: REVIEWED },
+      where: CLAIM_WHERE,
       data: { status: "cancelled" },
     });
     expect(inngestSendMock).not.toHaveBeenCalled();
@@ -371,7 +385,7 @@ describe("POST /api/posts/[postJobId]/approval — CHANGED_SINCE_REVIEW (2026-11
     expect((await res.json()).code).toBe("CHANGED_SINCE_REVIEW");
     expect(updateManyMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: "job-1", workspaceId: "ws-1", status: "draft", updatedAt: REVIEWED },
+        where: CLAIM_WHERE,
       }),
     );
     expect(prepareDispatchMock).not.toHaveBeenCalled();
@@ -389,6 +403,88 @@ describe("POST /api/posts/[postJobId]/approval — CHANGED_SINCE_REVIEW (2026-11
     expect(res.status).toBe(409);
     expect((await res.json()).code).toBe("NOT_PENDING_APPROVAL");
   });
+});
+
+// Ruling R10 backstop (final review M1): the pre-fix publish route could leave
+// a post `scheduled` + submitted + unapproved. The cron never claims such a row
+// (R6) and the decision claim used to require `status: "draft"`, so Approve /
+// Reject 409'd and the post was stuck forever. Such a row is now decidable.
+describe("POST /api/posts/[postJobId]/approval — a scheduled row still awaiting a decision (ruling R10)", () => {
+  const stuck = (overrides: Record<string, unknown> = {}) =>
+    pendingJob({ status: "scheduled", scheduledFor: FUTURE, ...overrides });
+
+  it("approve, time still ahead → stays scheduled at its time, now approved (the cron can claim it)", async () => {
+    findFirstMock.mockResolvedValue(stuck());
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({
+      ok: true,
+      decision: "approve",
+      status: "scheduled",
+      approvalState: "approved",
+      scheduledFor: FUTURE.toISOString(),
+    });
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: CLAIM_WHERE,
+      data: { status: "scheduled", approvedAt: expect.any(Date), approvedByUserId: "user-1" },
+    });
+    expect(prepareDispatchMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("approve, time already passed → publishes now", async () => {
+    findFirstMock.mockResolvedValue(stuck({ scheduledFor: PAST }));
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ status: "in_progress", approvalState: "approved" });
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: CLAIM_WHERE,
+      data: { status: "in_progress", approvedAt: expect.any(Date), approvedByUserId: "user-1" },
+    });
+    expect(prepareDispatchMock).toHaveBeenCalledWith("job-1");
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reject → cancelled (reads back rejected), nothing published", async () => {
+    findFirstMock.mockResolvedValue(stuck());
+
+    const res = await POST(req({ decision: "reject" }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({ status: "cancelled", approvalState: "rejected" });
+    expect(updateManyMock).toHaveBeenCalledWith({ where: CLAIM_WHERE, data: { status: "cancelled" } });
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("losing the write to a concurrent edit of the still-undecided row → CHANGED_SINCE_REVIEW", async () => {
+    findFirstMock
+      .mockResolvedValueOnce(stuck())
+      .mockResolvedValueOnce(stuck({ updatedAt: new Date("2026-07-26T09:45:00Z") }));
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe("CHANGED_SINCE_REVIEW");
+  });
+
+  it.each(["in_progress", "completed", "failed"])(
+    "a submitted-but-unapproved row that is already %s is not decidable (409, no write)",
+    async (status) => {
+      findFirstMock.mockResolvedValue(pendingJob({ status }));
+
+      const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+      expect(res.status).toBe(409);
+      expect((await res.json()).code).toBe("NOT_PENDING_APPROVAL");
+      expect(updateManyMock).not.toHaveBeenCalled();
+      expect(inngestSendMock).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("POST /api/posts/[postJobId]/approval — email verification (2026-11-01 audit)", () => {
