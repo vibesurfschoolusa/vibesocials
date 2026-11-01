@@ -29,7 +29,8 @@ describe("toMediaItemDto — lastUsedAt mapping", () => {
 
   it("maps a missing (unselected) lastUsedAt to null, same as explicit null", () => {
     // Mirrors GET /api/media/[id], whose `select` doesn't include lastUsedAt.
-    const { lastUsedAt: _omit, ...withoutLastUsedAt } = makeSource({ lastUsedAt: null });
+    const withoutLastUsedAt: Partial<MediaItemDtoSource> = makeSource({ lastUsedAt: null });
+    delete withoutLastUsedAt.lastUsedAt;
     const dto = toMediaItemDto(withoutLastUsedAt as MediaItemDtoSource);
     expect(dto.lastUsedAt).toBeNull();
   });

@@ -80,7 +80,7 @@ const ROUTES: Array<[string, Call]> = [
   ["POST /api/reviews/draft-response", (r) => draftResponsePOST(r)],
   [
     "POST /api/reviews/[reviewId]/reply",
-    (r) => reviewReplyPOST(r, { params: Promise.resolve({ reviewId: "rev-1" }) }),
+    (r) => reviewReplyPOST(r),
   ],
   ["POST /api/settings", (r) => settingsPOST(r)],
   ["POST /api/upload", (r) => uploadPOST(r)],

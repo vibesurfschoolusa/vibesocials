@@ -48,7 +48,7 @@ function RegisterPageInner() {
         setLoading(false);
         return;
       }
-    } catch (_err) {
+    } catch {
       setError("Unexpected error while registering.");
       setLoading(false);
       return;

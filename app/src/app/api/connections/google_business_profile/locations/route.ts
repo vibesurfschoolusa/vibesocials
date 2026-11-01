@@ -56,7 +56,7 @@ async function refreshAccessToken(
  * Workspaces — design §1: GBP location selection is owner-only, not just
  * member-readable).
  */
-export async function GET(_request: Request) {
+export async function GET() {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) {
     return contextOrError;

@@ -7,7 +7,7 @@ import { toMediaItemDto } from "@/lib/mediaDto";
 import { MAX_MEDIA_BYTES, isImageOrVideoMimeType } from "@/lib/mediaInput";
 import { getWorkspaceContext } from "@/lib/workspace";
 
-export async function GET(_request: Request) {
+export async function GET() {
   const context = await getWorkspaceContext();
 
   if (!context) {

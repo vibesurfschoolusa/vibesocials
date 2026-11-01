@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { getTikTokCreatorInfo } from "@/server/platforms/tiktokClient";
@@ -9,7 +9,7 @@ import { getTikTokCreatorInfo } from "@/server/platforms/tiktokClient";
  * account (Team Workspaces — any member may read, same as connection
  * health generally). Required by TikTok Developer Guidelines before posting.
  */
-export async function GET(req: NextRequest) {
+export async function GET() {
   const context = await getWorkspaceContext();
   if (!context) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

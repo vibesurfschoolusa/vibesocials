@@ -46,10 +46,6 @@ function multipartRequest(): Request {
   });
 }
 
-// GET never reads `_request`, so an empty stub is enough (mirrors
-// media/[id]/route.test.ts's `dummyRequest`).
-const dummyGetRequest = {} as Request;
-
 beforeEach(() => {
   findManyMock.mockReset();
   createMock.mockReset();
@@ -231,7 +227,7 @@ describe("GET /api/media", () => {
   it("401s and never queries when unauthenticated", async () => {
     getWorkspaceContextMock.mockResolvedValue(null);
 
-    const response = await GET(dummyGetRequest);
+    const response = await GET();
 
     expect(response.status).toBe(401);
     expect(findManyMock).not.toHaveBeenCalled();
@@ -241,7 +237,7 @@ describe("GET /api/media", () => {
     getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-shared" }));
     findManyMock.mockResolvedValue([]);
 
-    await GET(dummyGetRequest);
+    await GET();
 
     expect(findManyMock).toHaveBeenCalledWith(
       expect.objectContaining({ where: { workspaceId: "ws-shared", deletedAt: null } }),
@@ -274,7 +270,7 @@ describe("GET /api/media", () => {
       },
     ]);
 
-    const response = await GET(dummyGetRequest);
+    const response = await GET();
     const body = (await response.json()) as { items: Array<{ lastUsedAt: string | null }> };
 
     expect(response.status).toBe(200);

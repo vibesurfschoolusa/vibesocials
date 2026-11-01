@@ -223,7 +223,7 @@ export function MediaLibrary() {
 
       const list = Array.isArray(data?.items) ? data!.items : [];
       setItems(list);
-    } catch (_err) {
+    } catch {
       setError("Unexpected error while loading media items.");
     } finally {
       setLoading(false);

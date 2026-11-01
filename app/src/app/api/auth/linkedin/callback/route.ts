@@ -171,7 +171,7 @@ export async function GET(request: Request) {
           picture: null,
         };
       }
-    } catch (error) {
+    } catch {
       console.warn("[LinkedIn OAuth] Could not fetch profile (no profile scopes)");
     }
 

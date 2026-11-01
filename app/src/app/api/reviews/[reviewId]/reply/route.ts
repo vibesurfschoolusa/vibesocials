@@ -10,10 +10,7 @@ export const dynamic = "force-dynamic";
  * review. Any member may reply (Team Workspaces — design §1: "Reply to
  * Google reviews (incl. AI draft)" is member-level).
  */
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ reviewId: string }> }
-) {
+export async function POST(request: Request) {
   try {
     const context = await getWorkspaceContext();
 
@@ -21,7 +18,6 @@ export async function POST(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { reviewId } = await params;
     const body = await readJsonObject(request);
     if (!body) {
       return invalidJsonBodyResponse();
