@@ -31,7 +31,6 @@ import { appendJobsPage } from "@/lib/postsPagination";
 import {
   applyJobPatch,
   approveHint,
-  captionChanged,
   checkScheduleTime,
   decisionOutcome,
   editDialogModel,
@@ -39,12 +38,14 @@ import {
   editSaveLabel,
   getQueueCardActions,
   publishConfirmCopy,
+  publishNeedsApproval,
   publishOutcome,
   queueStatusBadge,
   shouldRefetchAfterError,
   type JobPatch,
   type QueueViewer,
 } from "@/lib/queueActions";
+import { scheduleDraft } from "@/lib/scheduleDraft";
 import {
   SCHEDULE_BUFFER_MS,
   localTimeZoneLabel,
@@ -243,9 +244,10 @@ function QueueCard({
  * Edit dialog for a scheduled/draft post. Remounted per target (keyed by job
  * id) so its local caption/time state always initializes from the current job.
  * A scheduled job edits its caption + `scheduledFor` in one PATCH. A draft edits
- * its caption and may be given a time ("Schedule for"): that PATCHes the caption
- * only if it changed, then promotes the draft with `POST …/publish { scheduledFor }`
- * — which, for a member in an approval workspace, SUBMITS it for approval.
+ * its caption and may be given a time ("Schedule for"): `scheduleDraft`
+ * (lib/scheduleDraft.ts) PATCHes the caption only if it changed, then promotes
+ * the draft with `POST …/publish { scheduledFor }` — which, for a member in an
+ * approval workspace, SUBMITS it for approval.
  */
 function QueueEditDialog({
   job,
@@ -253,6 +255,7 @@ function QueueEditDialog({
   onClose,
   onSaved,
   onPartialSave,
+  onStale,
 }: {
   job: PostJobDTO;
   viewer: QueueViewer;
@@ -261,6 +264,8 @@ function QueueEditDialog({
   onSaved: (patch: JobPatch) => void;
   /** Part of the save landed (caption) but the dialog stays open: patch the card only. */
   onPartialSave: (patch: JobPatch) => void;
+  /** The server's state for this post is unknown (unreadable reply): re-sync the list. */
+  onStale: () => void;
 }) {
   const toast = useToast();
   const isScheduled = job.status === "scheduled";
@@ -279,11 +284,6 @@ function QueueEditDialog({
   const [minScheduleLocal] = useState(() =>
     toDateTimeLocalValue(new Date(Date.now() + SCHEDULE_BUFFER_MS)),
   );
-
-  const readError = async (response: Response, fallback: string): Promise<string> => {
-    const data = (await response.json().catch(() => null)) as { error?: string } | null;
-    return data?.error ?? fallback;
-  };
 
   const handleSave = async () => {
     const trimmed = caption.trim();
@@ -316,7 +316,8 @@ function QueueEditDialog({
           }),
         });
         if (!response.ok) {
-          toast.error(await readError(response, "Couldn't save your changes."));
+          const errorData = (await response.json().catch(() => null)) as { error?: string } | null;
+          toast.error(errorData?.error ?? "Couldn't save your changes.");
           setSaving(false);
           return;
         }
@@ -331,47 +332,30 @@ function QueueEditDialog({
         return;
       }
 
-      // Schedule a draft: PATCH the caption only if it changed, then publish
-      // with the chosen time. A failed PATCH never reaches publish.
-      if (captionChanged(savedCaption, trimmed)) {
-        const patchResponse = await fetch(`/api/posts/${job.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ baseCaption: trimmed }),
-        });
-        if (!patchResponse.ok) {
-          toast.error(await readError(patchResponse, "Couldn't save your changes."));
-          setSaving(false);
-          return;
-        }
-        setSavedCaption(trimmed);
-        onPartialSave({ caption: trimmed });
-      }
-
-      const publishResponse = await fetch(`/api/posts/${job.id}/publish`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scheduledFor: scheduledIso }),
+      // Schedule a draft (lib/scheduleDraft.ts owns the sequence and its tests).
+      const result = await scheduleDraft({
+        fetchFn: (url, init) => fetch(url, init),
+        jobId: job.id,
+        caption: trimmed,
+        originalCaption: savedCaption,
+        scheduledForIso: scheduledIso,
+        submitsForApproval: publishNeedsApproval(job, viewer),
       });
-      if (!publishResponse.ok) {
-        // Keep the dialog open with the user's input; the server says why.
-        toast.error(
-          await readError(
-            publishResponse,
-            viewer.requireApproval && viewer.role === "member"
-              ? "Couldn't submit this post for approval."
-              : "Couldn't schedule this post.",
-          ),
-        );
+      if (result.kind === "failed") {
+        // Keep the dialog open with the user's input; the server says why. If
+        // the caption PATCH landed, reflect it on the card and remember it so a
+        // retry doesn't re-PATCH an unchanged caption.
+        if (result.captionSaved) {
+          setSavedCaption(trimmed);
+          onPartialSave({ caption: trimmed });
+        }
+        toast.error(result.error);
+        if (result.reason === "unreadable_response") onStale();
         setSaving(false);
         return;
       }
-      const outcome = publishOutcome(await publishResponse.json().catch(() => null));
-      toast.success(outcome.message);
-      onSaved({
-        caption: trimmed,
-        ...(outcome.kind === "update" ? outcome.patch : { scheduledFor: scheduledIso }),
-      });
+      toast.success(result.message);
+      onSaved(result.patch);
     } catch {
       toast.error("Couldn't save your changes.");
       setSaving(false);
@@ -789,6 +773,7 @@ export function QueueView() {
           viewer={viewer}
           onClose={() => setEditTarget(null)}
           onPartialSave={(patch) => patchJob(editTarget.id, patch)}
+          onStale={() => void load({ silent: true })}
           onSaved={(patch) => {
             patchJob(editTarget.id, patch);
             setEditTarget(null);
