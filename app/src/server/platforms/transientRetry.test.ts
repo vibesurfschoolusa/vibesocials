@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
 
-import { isTransientPublishError, withTransientRetries } from "./transientRetry";
+import { isTransientPublishError, MIN_RETRY_WINDOW_MS, withTransientRetries } from "./transientRetry";
 
 /** Node fetch's network failure: `TypeError("fetch failed")` with a coded cause. */
 function fetchFailed(code: string): TypeError {
@@ -137,3 +137,51 @@ describe("withTransientRetries", () => {
     expect(delays).toEqual([2000, 8000]);
   });
 });
+
+// 2026-11-01 audit (Task 4 items 7 + 10): a retry re-runs the WHOLE platform
+// publish (download, upload, processing poll), so it may only start when the
+// step's remaining budget can still hold a meaningful attempt.
+describe("withTransientRetries — step budget", () => {
+  const noSleep = async () => {};
+
+  it("does not retry when the backoff plus a minimum attempt window would cross the deadline", async () => {
+    const err = statusError(503);
+    const fn = vi.fn().mockRejectedValue(err);
+    // 2s backoff + 60s window needed; only 61s left.
+    const deadline = 1_000_000 + 2_000 + MIN_RETRY_WINDOW_MS - 1;
+
+    await expect(
+      withTransientRetries(fn, { sleep: noSleep, deadline, now: () => 1_000_000 }),
+    ).rejects.toBe(err);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries while enough budget remains, then stops when it runs short", async () => {
+    let clock = 0;
+    const fn = vi.fn(async () => {
+      clock += 50_000; // each attempt burns 50s
+      throw statusError(502);
+    });
+    // Attempt 1 ends at 50s: 2s + 60s fits before 130s -> retry. Attempt 2 ends
+    // at ~102s: 8s + 60s does not fit -> rethrow instead of a third attempt.
+    await expect(
+      withTransientRetries(fn, {
+        sleep: async (ms) => { clock += ms; },
+        deadline: 130_000,
+        now: () => clock,
+      }),
+    ).rejects.toMatchObject({ status: 502 });
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("is unchanged without a deadline (3 attempts)", async () => {
+    const fn = vi.fn().mockRejectedValue(statusError(500));
+    await withTransientRetries(fn, { sleep: noSleep }).catch(() => {});
+    expect(fn).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps the minimum attempt window at 60s", () => {
+    expect(MIN_RETRY_WINDOW_MS).toBe(60_000);
+  });
+});
+

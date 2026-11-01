@@ -36,6 +36,13 @@ export interface PublishContext {
    * means "use mediaItem.baseCaption".
    */
   baseCaption?: string;
+  /**
+   * Epoch ms by which this platform step must stop talking to the platform
+   * (publishBudget.ts). Stamped once per step by publishToPlatform and shared
+   * by its in-step retries; clients with long phases (X, TikTok) bound their
+   * requests and polling by it. Absent = unbounded (direct callers, tests).
+   */
+  deadline?: number;
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
 }

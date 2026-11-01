@@ -2,6 +2,7 @@ import type { Platform } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
+import { PUBLISH_STEP_BUDGET_MS } from "@/server/platforms/publishBudget";
 import type { PublishContext } from "@/server/platforms/types";
 
 // Handler-level tests for the publish pipeline's Inngest functions. vitest
@@ -230,6 +231,62 @@ describe("publishToAllPlatforms — YouTube title source (Task 4 item 1)", () =>
 
     expect(ctxFor("youtube").baseCaption).toBe("Typed for this post");
     expect(ctxFor("youtube").caption).toBe(buildCaptionWithFooter("Typed for this post", WORKSPACE));
+  });
+});
+
+// Task 4 items 7 + 10: each platform step gets ONE deadline, stamped before
+// its first attempt, which every in-step retry shares.
+describe("publishToPlatform — per-step deadline (Task 4 items 7 + 10)", () => {
+  it("stamps a deadline PUBLISH_STEP_BUDGET_MS after the step starts and hands it to the client", async () => {
+    db.postJobFindUnique.mockResolvedValue({ id: "job-1", workspaceId: WORKSPACE.id });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null });
+    db.connectionFindMany.mockResolvedValue([{ id: "conn-x", platform: "x" }]);
+    stubResults(["x"]);
+
+    const before = Date.now();
+    await handlerOf(publishToAllPlatforms)({
+      event: {
+        name: "post/publish.requested",
+        data: { postJobId: "job-1", userId: "user-1", mediaItemId: "media-1", baseCaption: "c", perPlatformOverrides: null },
+      },
+      step: fakeStep(),
+    });
+    const after = Date.now();
+
+    const { deadline } = ctxFor("x");
+    expect(deadline).toBeGreaterThanOrEqual(before + PUBLISH_STEP_BUDGET_MS);
+    expect(deadline).toBeLessThanOrEqual(after + PUBLISH_STEP_BUDGET_MS);
+  });
+
+  it("every in-step retry of the same step shares that one deadline", async () => {
+    db.postJobFindUnique.mockResolvedValue({ id: "job-1", workspaceId: WORKSPACE.id });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null });
+    db.connectionFindMany.mockResolvedValue([{ id: "conn-x", platform: "x" }]);
+    stubResults(["x"]);
+    const deadlines: Array<number | undefined> = [];
+    getPlatformClientMock.mockImplementation(() => ({
+      publishVideo: vi.fn(async (ctx: PublishContext) => {
+        deadlines.push(ctx.deadline);
+        if (deadlines.length === 1) throw Object.assign(new Error("busy"), { status: 503 });
+        return { externalPostId: "ext-x" };
+      }),
+    }));
+    vi.useFakeTimers();
+
+    const run = handlerOf(publishToAllPlatforms)({
+      event: {
+        name: "post/publish.requested",
+        data: { postJobId: "job-1", userId: "user-1", mediaItemId: "media-1", baseCaption: "c", perPlatformOverrides: null },
+      },
+      step: fakeStep(),
+    });
+    await vi.advanceTimersByTimeAsync(2_000); // the 2s in-step backoff
+    await run;
+    vi.useRealTimers();
+
+    expect(deadlines).toHaveLength(2);
+    expect(deadlines[0]).toEqual(expect.any(Number));
+    expect(deadlines[1]).toBe(deadlines[0]);
   });
 });
 

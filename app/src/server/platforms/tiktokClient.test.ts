@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { truncateGraphemes } from "@/lib/truncate";
 
+import { MIN_REQUEST_WINDOW_MS, PUBLISH_BUDGET_EXCEEDED_CODE, PUBLISH_STEP_BUDGET_MS } from "./publishBudget";
+import { isTransientPublishError, withTransientRetries } from "./transientRetry";
 import type { PublishContext } from "./types";
 import {
   computeChunkPlan,
@@ -391,6 +393,78 @@ describe("pollTikTokPublishStatus", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  // Task 4 item 10: the poll is the tail of a TikTok step; with a step
+  // deadline it must never START a wait + status check that cannot finish
+  // before the deadline — it stops early with TIKTOK_PUBLISH_PENDING instead.
+  it("stops polling before the step deadline (TIKTOK_PUBLISH_PENDING), not after 24 attempts", async () => {
+    let clock = 1_000_000;
+    const fetchMock = vi.fn(async () => statusResponse("PROCESSING_UPLOAD"));
+    vi.stubGlobal("fetch", fetchMock);
+    const deadline = clock + 22_000;
+
+    const error = await caught(
+      poll({
+        deadline,
+        now: () => clock,
+        sleep: async (ms: number) => { clock += ms; },
+      }),
+    );
+
+    expect(error?.code).toBe("TIKTOK_PUBLISH_PENDING");
+    // A wait + check is started only with >= interval + MIN_REQUEST_WINDOW_MS
+    // left: checks at +5s, +10s, +15s; at +15s only 7s remain -> stop.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(clock).toBeLessThanOrEqual(deadline);
+    expect(deadline - clock).toBeLessThan(TIKTOK_POLL_INTERVAL_MS + MIN_REQUEST_WINDOW_MS);
+  });
+
+  it("clamps each status check's timeout to the time left (a hung check ends by the deadline)", async () => {
+    vi.useFakeTimers();
+    const deadline = Date.now() + 12_000;
+    // A status request that never answers until it is aborted.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(
+        (_input, init) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      ),
+    );
+
+    let settledAt = 0;
+    const promise = caught(
+      pollTikTokPublishStatus({ accessToken: "a", publishId: "p", connectionId: "c", deadline }),
+    ).then((e) => {
+      settledAt = Date.now();
+      return e;
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    // Unclamped, the one check (started at +5s) would hang for its full 30s.
+    expect((await promise)?.code).toBe("TIKTOK_PUBLISH_PENDING");
+    expect(settledAt).toBeLessThanOrEqual(deadline);
+  });
+
+  it("never lets a transient-looking error escape the poll phase (an in-step retry must not restart a publish TikTok may be processing)", async () => {
+    const connectRefused = new TypeError("fetch failed", {
+      cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("busy", { status: 503 }))
+      .mockResolvedValueOnce(new Response("slow down", { status: 429 }))
+      .mockRejectedValue(connectRefused);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await caught(poll());
+
+    expect(error?.code).toBe("TIKTOK_PUBLISH_PENDING");
+    expect(isTransientPublishError(error)).toBe(false);
   });
 
   it("maps a 401 from the status endpoint to TIKTOK_RECONNECT_REQUIRED and flags the connection", async () => {
@@ -898,6 +972,92 @@ describe("tiktokClient.publishVideo", () => {
 
     expect(error?.code).toBe("TIKTOK_INIT_FAILED");
     expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  // Task 4 item 10 — step budget.
+  it("refuses to start once the step budget is spent (no TikTok call, nothing posted)", async () => {
+    const fetchMock = stubFetch({});
+
+    const error = await caught(
+      tiktokClient.publishVideo({ ...makeCtx(), deadline: Date.now() + MIN_REQUEST_WINDOW_MS - 1 }),
+    );
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("worst case: a slow download + upload and a video that never finishes processing still end by the step deadline", async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    const deadline = start + PUBLISH_STEP_BUDGET_MS;
+    /** Resolve after `ms` of (fake) time — or reject if the request is aborted first. */
+    const slow = (ms: number, make: () => Response) => (init?: RequestInit) =>
+      new Promise<Response>((resolve, reject) => {
+        const timer = setTimeout(() => resolve(make()), ms);
+        init?.signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(new DOMException("aborted", "AbortError"));
+        });
+      });
+    const routes: Record<string, (init?: RequestInit) => Promise<Response>> = {
+      "creator_info/query": async () => creatorInfoOk(),
+      "blob.example.com": slow(110_000, videoBlob),
+      "video/init": async () => initOk(),
+      "upload.tiktok.example": slow(40_000, uploadOk),
+      "status/fetch": async () => jsonResponse({ data: { status: "PROCESSING_UPLOAD" } }),
+    };
+    const fetchMock = vi.fn<typeof fetch>((input, init) => {
+      const url = String(input);
+      const route = Object.entries(routes).find(([fragment]) => url.includes(fragment));
+      if (!route) throw new Error(`Unexpected fetch in test: ${url}`);
+      return route[1](init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    let settledAt = 0;
+    const promise = caught(tiktokClient.publishVideo({ ...makeCtx(), deadline })).then((e) => {
+      settledAt = Date.now();
+      return e;
+    });
+    await vi.advanceTimersByTimeAsync(400_000);
+    const error = await promise;
+
+    // Polling began ~150s in; unbounded, 24 x 5s would have run to ~270s.
+    expect(error?.code).toBe("TIKTOK_PUBLISH_PENDING");
+    expect(settledAt).toBeLessThanOrEqual(deadline);
+    expect(settledAt - start).toBeLessThan(240_000);
+  });
+
+  it("an in-step retry reuses the token the first attempt refreshed (never re-spends a rotated refresh token)", async () => {
+    vi.useFakeTimers();
+    let downloads = 0;
+    const fetchMock = stubFetch({
+      "oauth/token": () =>
+        jsonResponse({ access_token: "fresh-access-token", refresh_token: "rotated-refresh", expires_in: 86_400 }),
+      "creator_info/query": creatorInfoOk,
+      // Attempt 1 refreshes, then hits a retryable 503 (before anything is
+      // posted); withTransientRetries re-runs publishVideo with the same ctx.
+      "blob.example.com": () =>
+        ++downloads === 1 ? new Response("unavailable", { status: 503 }) : videoBlob(),
+      "video/init": initOk,
+      "upload.tiktok.example": uploadOk,
+      "status/fetch": () => jsonResponse({ data: { status: "PUBLISH_COMPLETE" } }),
+    });
+    const ctx = makeCtx(makeConnection({ expiresAt: new Date(Date.now() + 60 * 1000) }));
+
+    const promise = withTransientRetries(() => tiktokClient.publishVideo(ctx), {
+      sleep: async () => {},
+    });
+    await vi.advanceTimersByTimeAsync(TIKTOK_POLL_INTERVAL_MS);
+
+    await expect(promise).resolves.toEqual({ externalPostId: "publish-123" });
+    const tokenCalls = fetchMock.mock.calls.filter((c) => String(c[0]).includes("oauth/token"));
+    expect(tokenCalls).toHaveLength(1);
+    const creatorCalls = fetchMock.mock.calls.filter((c) => String(c[0]).includes("creator_info"));
+    expect(creatorCalls).toHaveLength(2);
+    expect(
+      ((creatorCalls[1][1] as RequestInit).headers as Record<string, string>).Authorization,
+    ).toBe("Bearer fresh-access-token");
   });
 
   it("maps a 401 from the status poll to TIKTOK_RECONNECT_REQUIRED mid-publish", async () => {

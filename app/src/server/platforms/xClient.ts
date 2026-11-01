@@ -4,9 +4,55 @@ import crypto from "crypto";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
 import { assertOk } from "@/lib/assertOk";
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
+
+import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
+
+/** Upper bound on waiting for X to process an uploaded video (with or without a step deadline). */
+export const X_PROCESSING_MAX_WAIT_MS = 120_000;
+/** X's `check_after_secs` is clamped to [1s, 15s] between STATUS checks. */
+export const X_STATUS_MAX_INTERVAL_MS = 15_000;
+const X_STATUS_MIN_INTERVAL_MS = 1_000;
+/** Timeout of one STATUS check. */
+const X_STATUS_TIMEOUT_MS = 15_000;
+/** Step time kept back after processing for creating the tweet (v1, then the v2 fallback). */
+export const X_TWEET_RESERVE_MS = 20_000;
+/** Per-request timeouts (each further clamped to the step's time left). */
+const X_DOWNLOAD_TIMEOUT_MS = 120_000;
+const X_UPLOAD_TIMEOUT_MS = 120_000;
+
+/*
+ * STEP BUDGET (2026-11-01 audit, Task 4 item 7). One X step must end well
+ * inside Vercel's 300s per-invocation cap. publishToPlatform stamps a deadline
+ * PUBLISH_STEP_BUDGET_MS = 225s after the step starts (publishBudget.ts) and
+ * passes it as ctx.deadline; the worst case per phase:
+ *
+ *   download                  <= min(120s, time left), whole transfer
+ *   INIT / FINALIZE           each <= min(30s, time left)
+ *   APPEND chunks / image     each <= min(120s, time left)
+ *   STATUS polling            ends by stopBy = min(start + 120s
+ *                             (X_PROCESSING_MAX_WAIT_MS), deadline - 20s
+ *                             (X_TWEET_RESERVE_MS)): a wait (check_after_secs
+ *                             clamped to [1s, 15s]) is only started if it plus a
+ *                             >= 5s check fit before stopBy, and each check
+ *                             (<= 15s) is clamped to it; else
+ *                             X_VIDEO_PROCESSING_TIMEOUT — no tweet was created,
+ *                             so a retry cannot double-post
+ *   tweet create (v1 -> v2)   each <= min(30s, time left)
+ *   in-step retries           2s / 8s backoff, only with >= 60s left
+ *                             (MIN_RETRY_WINDOW_MS); the retried attempt is
+ *                             clamped to the same deadline
+ *   no request starts with < 5s left (PUBLISH_TIME_BUDGET_EXCEEDED: nothing sent)
+ *
+ * => all X I/O ends by the deadline (225s): every phase that can start late is
+ *    clamped to it. After it only the PostJobResult write runs (ms), so the step
+ *    ends < 240s. Small JSON bodies are read after their headers and are not
+ *    separately timed (same as every client).
+ * Before: polling alone allowed 60 x (check_after_secs + a 30s request) > 300s,
+ * and each in-step retry restarted download + upload + polling from scratch.
+ */
 
 // COR-2/COR-3: xClient uses oauth-1.0a request signing (see `oauth.authorize`
 // calls below). fetchWithTimeout passes `init` through unchanged except for
@@ -65,7 +111,8 @@ async function uploadMedia(
   accessToken: string,
   accessTokenSecret: string,
   mediaUrl: string,
-  mimeType: string
+  mimeType: string,
+  deadline: number | undefined,
 ): Promise<string> {
   console.log("[X OAuth 1.0a] Starting media upload", { mediaUrl, mimeType });
 
@@ -73,10 +120,11 @@ async function uploadMedia(
   // fetchWithTimeout's own timeoutMs only bounds the connection + response
   // headers; pass AbortSignal.timeout as init.signal to also bound the
   // arrayBuffer() body transfer (see the fetchWithTimeout docstring).
+  const downloadTimeoutMs = budgetedTimeout(X_DOWNLOAD_TIMEOUT_MS, deadline);
   const mediaResponse = await fetchWithTimeout(
     mediaUrl,
-    { signal: AbortSignal.timeout(120_000) },
-    120_000,
+    { signal: AbortSignal.timeout(downloadTimeoutMs) },
+    downloadTimeoutMs,
   );
   await assertOk(mediaResponse, {
     code: "X_MEDIA_DOWNLOAD_FAILED",
@@ -109,7 +157,7 @@ async function uploadMedia(
 
   // Videos require chunked upload (INIT -> APPEND -> FINALIZE)
   if (isVideo) {
-    return await uploadVideoChunked(oauth, token, uploadUrl, mediaBuffer, mimeType);
+    return await uploadVideoChunked(oauth, token, uploadUrl, mediaBuffer, mimeType, deadline);
   }
 
   // Images can use simple base64 upload
@@ -136,7 +184,7 @@ async function uploadMedia(
         media_data: mediaBase64,
       }),
     },
-    120_000,
+    budgetedTimeout(X_UPLOAD_TIMEOUT_MS, deadline),
   );
 
   await assertOk(uploadResponse, {
@@ -163,7 +211,8 @@ async function uploadVideoChunked(
   token: { key: string; secret: string },
   uploadUrl: string,
   mediaBuffer: Buffer,
-  mimeType: string
+  mimeType: string,
+  deadline: number | undefined,
 ): Promise<string> {
   const totalBytes = mediaBuffer.length;
   const chunkSize = 5 * 1024 * 1024; // 5MB chunks
@@ -187,14 +236,18 @@ async function uploadVideoChunked(
   };
 
   const initAuthHeader = oauth.toHeader(oauth.authorize(initData, token));
-  const initResponse = await fetchWithTimeout(uploadUrl, {
-    method: "POST",
-    headers: {
-      ...initAuthHeader,
-      "Content-Type": "application/x-www-form-urlencoded",
+  const initResponse = await fetchWithTimeout(
+    uploadUrl,
+    {
+      method: "POST",
+      headers: {
+        ...initAuthHeader,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams(initData.data),
     },
-    body: new URLSearchParams(initData.data),
-  });
+    budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+  );
 
   await assertOk(initResponse, {
     code: "X_VIDEO_INIT_FAILED",
@@ -240,7 +293,7 @@ async function uploadVideoChunked(
         },
         body: new URLSearchParams(appendData.data),
       },
-      120_000,
+      budgetedTimeout(X_UPLOAD_TIMEOUT_MS, deadline),
     );
 
     await assertOk(appendResponse, {
@@ -264,14 +317,18 @@ async function uploadVideoChunked(
   };
 
   const finalizeAuthHeader = oauth.toHeader(oauth.authorize(finalizeData, token));
-  const finalizeResponse = await fetchWithTimeout(uploadUrl, {
-    method: "POST",
-    headers: {
-      ...finalizeAuthHeader,
-      "Content-Type": "application/x-www-form-urlencoded",
+  const finalizeResponse = await fetchWithTimeout(
+    uploadUrl,
+    {
+      method: "POST",
+      headers: {
+        ...finalizeAuthHeader,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams(finalizeData.data),
     },
-    body: new URLSearchParams(finalizeData.data),
-  });
+    budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+  );
 
   await assertOk(finalizeResponse, {
     code: "X_VIDEO_FINALIZE_FAILED",
@@ -293,21 +350,52 @@ async function uploadVideoChunked(
 
   // If video is still processing, poll STATUS until complete
   if (finalizeResult.processing_info) {
-    await waitForVideoProcessing(oauth, token, uploadUrl, mediaId, finalizeResult.processing_info);
+    await waitForVideoProcessing(
+      oauth,
+      token,
+      uploadUrl,
+      mediaId,
+      finalizeResult.processing_info,
+      deadline,
+    );
   }
 
   return finalizeResult.media_id_string;
 }
 
+/** X's media processing did not finish in time; no tweet was created. */
+function xProcessingTimeoutError(): Error & { code: string } {
+  const error = new Error(
+    "X is still processing the video. No post was created — please retry in a few minutes.",
+  ) as Error & { code: string };
+  error.code = "X_VIDEO_PROCESSING_TIMEOUT";
+  return error;
+}
+
+/** X reported the media processing as failed. */
+function xProcessingFailedError(): Error & { code: string } {
+  const error = new Error(
+    "X reported an error while processing the uploaded video",
+  ) as Error & { code: string };
+  error.code = "X_VIDEO_PROCESSING_FAILED";
+  return error;
+}
+
 /**
- * Poll STATUS endpoint until video processing is complete
+ * Poll STATUS until X has processed the video. Bounded (see STEP BUDGET at the
+ * top of this file): polling ends by `stopBy` — at most X_PROCESSING_MAX_WAIT_MS
+ * from now, and X_TWEET_RESERVE_MS before the step deadline. Each wait is
+ * clamped to [1s, 15s] and only started if it plus a >= 5s check fit before
+ * `stopBy`; each check is clamped to it. Running out throws
+ * X_VIDEO_PROCESSING_TIMEOUT before any tweet exists.
  */
 async function waitForVideoProcessing(
   oauth: OAuth,
   token: { key: string; secret: string },
   uploadUrl: string,
   mediaId: string,
-  initialProcessingInfo: { state: string; check_after_secs?: number }
+  initialProcessingInfo: { state: string; check_after_secs?: number },
+  deadline: number | undefined,
 ): Promise<void> {
   let processingInfo: {
     state: string;
@@ -315,16 +403,29 @@ async function waitForVideoProcessing(
     progress_percent?: number;
     error?: { message: string; code: number };
   } = initialProcessingInfo;
-  let attempts = 0;
-  const maxAttempts = 60; // Max 5 minutes (60 * 5s average)
+  // Polling must end early enough to leave the tweet its reserve.
+  const stopBy = Math.min(
+    Date.now() + X_PROCESSING_MAX_WAIT_MS,
+    deadline === undefined ? Number.POSITIVE_INFINITY : deadline - X_TWEET_RESERVE_MS,
+  );
+  let checks = 0;
 
-  while (
-    (processingInfo.state === "pending" || processingInfo.state === "in_progress") &&
-    attempts < maxAttempts
-  ) {
-    const checkAfter = processingInfo.check_after_secs || 5;
-    console.log(`[X OAuth 1.0a] Video processing (${processingInfo.state}), waiting ${checkAfter}s... (attempt ${attempts + 1}/${maxAttempts})`);
-    await new Promise((resolve) => setTimeout(resolve, checkAfter * 1000));
+  while (processingInfo.state === "pending" || processingInfo.state === "in_progress") {
+    const waitMs = Math.min(
+      X_STATUS_MAX_INTERVAL_MS,
+      Math.max(X_STATUS_MIN_INTERVAL_MS, (processingInfo.check_after_secs ?? 5) * 1000),
+    );
+    // Only start a wait + check that can finish before `stopBy`.
+    if (remainingMs(stopBy) < waitMs + MIN_REQUEST_WINDOW_MS) {
+      console.warn("[X OAuth 1.0a] Video still processing when the wait budget ran out", {
+        mediaId,
+        checks,
+        state: processingInfo.state,
+      });
+      throw xProcessingTimeoutError();
+    }
+    console.log(`[X OAuth 1.0a] Video processing (${processingInfo.state}), waiting ${waitMs}ms... (check ${checks + 1})`);
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
 
     // Check STATUS
     const statusData = {
@@ -338,13 +439,18 @@ async function waitForVideoProcessing(
 
     const statusAuthHeader = oauth.toHeader(oauth.authorize(statusData, token));
     const statusUrl = `${uploadUrl}?${new URLSearchParams(statusData.data)}`;
-    
-    const statusResponse = await fetchWithTimeout(statusUrl, {
-      method: "GET",
-      headers: {
-        ...statusAuthHeader,
+
+    const statusResponse = await fetchWithTimeout(
+      statusUrl,
+      {
+        method: "GET",
+        headers: {
+          ...statusAuthHeader,
+        },
       },
-    });
+      Math.min(X_STATUS_TIMEOUT_MS, Math.max(remainingMs(stopBy), MIN_REQUEST_WINDOW_MS)),
+    );
+    checks++;
 
     await assertOk(statusResponse, {
       code: "X_VIDEO_STATUS_CHECK_FAILED",
@@ -368,17 +474,14 @@ async function waitForVideoProcessing(
 
     processingInfo = statusResult.processing_info;
 
-    if (processingInfo.error) {
+    if (processingInfo.error || processingInfo.state === "failed") {
       // COR-3: processingInfo.error.message is upstream-controlled content;
       // log it server-side but never surface it via PostJobResult.errorMessage.
       console.error("[X OAuth 1.0a] Video processing reported an error", {
+        state: processingInfo.state,
         processingError: processingInfo.error,
       });
-      const error = new Error(
-        "X reported an error while processing the uploaded video",
-      ) as Error & { code: string };
-      error.code = "X_VIDEO_PROCESSING_FAILED";
-      throw error;
+      throw xProcessingFailedError();
     }
 
     if (processingInfo.state === "succeeded") {
@@ -389,18 +492,12 @@ async function waitForVideoProcessing(
     if (processingInfo.progress_percent !== undefined) {
       console.log(`[X OAuth 1.0a] Video processing progress: ${processingInfo.progress_percent}%`);
     }
-
-    attempts++;
-  }
-
-  if (attempts >= maxAttempts) {
-    throw new Error("Video processing timed out after 5 minutes");
   }
 }
 
 export const xClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
-    const { socialConnection, mediaItem, caption } = ctx;
+    const { socialConnection, mediaItem, caption, deadline } = ctx;
 
     const accessToken = socialConnection.accessToken;
     const accessTokenSecret = socialConnection.refreshToken; // Stored as refreshToken
@@ -454,7 +551,8 @@ export const xClient: PlatformClient = {
       accessToken,
       accessTokenSecret,
       mediaUrl,
-      mediaItem.mimeType || ""
+      mediaItem.mimeType || "",
+      deadline,
     );
 
     // X tweet character limit is 280 (see lib/platformLimits.ts). If caption
@@ -502,14 +600,20 @@ export const xClient: PlatformClient = {
 
     // No assertOk here: a !ok v1 response is an intentional fallback signal
     // (try the v2 endpoint next), not a terminal failure — see below.
-    const v1Response = await fetchWithTimeout(v1Url, {
-      method: "POST",
-      headers: {
-        ...v1AuthHeader,
-        "Content-Type": "application/x-www-form-urlencoded",
+    // Budget-checked before sending: an exhausted budget throws here, with
+    // no tweet created (safe to retry).
+    const v1Response = await fetchWithTimeout(
+      v1Url,
+      {
+        method: "POST",
+        headers: {
+          ...v1AuthHeader,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams(v1Params),
       },
-      body: new URLSearchParams(v1Params),
-    });
+      budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+    );
 
     if (v1Response.ok) {
       const v1Result = (await v1Response.json()) as { id_str: string };
@@ -544,14 +648,18 @@ export const xClient: PlatformClient = {
     // Generate OAuth authorization header
     const authHeader = oauth.toHeader(oauth.authorize(requestData, token));
 
-    const tweetResponse = await fetchWithTimeout(tweetUrl, {
-      method: "POST",
-      headers: {
-        ...authHeader,
-        "Content-Type": "application/json",
+    const tweetResponse = await fetchWithTimeout(
+      tweetUrl,
+      {
+        method: "POST",
+        headers: {
+          ...authHeader,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(tweetPayload),
       },
-      body: JSON.stringify(tweetPayload),
-    });
+      budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+    );
 
     // v1Response's status/body are already logged above (line ~495); assertOk
     // additionally logs tweetResponse's own status + body server-side.

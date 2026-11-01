@@ -1,11 +1,12 @@
 import type { Prisma, SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS, TIKTOK_DEFAULT_CAPTION } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 
 import { isTerminalRefreshFailure, markConnectionNeedsReconnect } from "./connectionHealth";
+import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
 import type { PlatformClient, PublishContext, PublishResult, TikTokCreatorInfo } from "./types";
 
 /** Minimal shape of TikTok's creator_info response (only the fields we read). */
@@ -82,10 +83,47 @@ const TIKTOK_DEFAULT_TOKEN_TTL_SECONDS = 86_400;
 
 /**
  * Publish-status poll budget: 24 attempts x 5s = ~120s. TikTok commonly needs
- * well over the old 10 x 3s = 30s to pull/process an upload.
+ * well over the old 10 x 3s = 30s to pull/process an upload. With a step
+ * deadline the poll also stops early (see the step budget below).
  */
 export const TIKTOK_POLL_MAX_ATTEMPTS = 24;
 export const TIKTOK_POLL_INTERVAL_MS = 5_000;
+
+/** Per-request timeouts (each further clamped to the step's time left). */
+const TIKTOK_STATUS_TIMEOUT_MS = 30_000;
+const TIKTOK_INIT_TIMEOUT_MS = 30_000;
+const TIKTOK_DOWNLOAD_TIMEOUT_MS = 120_000;
+const TIKTOK_CHUNK_UPLOAD_TIMEOUT_MS = 120_000;
+
+/*
+ * STEP BUDGET (2026-11-01 audit, Task 4 item 10). One TikTok step must end
+ * well inside Vercel's 300s per-invocation cap. publishToPlatform stamps a
+ * deadline PUBLISH_STEP_BUDGET_MS = 225s after the step starts
+ * (publishBudget.ts) and passes it as ctx.deadline; the worst case per phase:
+ *
+ *   token refresh       <= 30s; first thing an attempt does, and a retry only
+ *                       starts with >= 60s left (MIN_RETRY_WINDOW_MS) — and
+ *                       reuses the refreshed token, so it does not refresh again
+ *   creator_info, init  each <= min(30s, time left)
+ *   download            <= min(120s, time left), whole transfer
+ *   chunk PUTs          each <= min(120s, time left)
+ *   status poll         nominally 24 x (5s wait + <= 30s check); a wait + check
+ *                       is only started if >= 5s + 5s remain, and the check is
+ *                       clamped to the time left -> ends by the deadline with
+ *                       TIKTOK_PUBLISH_PENDING ("check TikTok before retrying")
+ *   in-step retries     2s / 8s backoff, only with >= 60s left; the retried
+ *                       attempt is clamped to the same deadline. The poll phase
+ *                       only ever throws NON-transient errors (it absorbs 429/
+ *                       5xx/network itself), so a retry never restarts a publish
+ *                       TikTok may already be processing.
+ *   no request starts with < 5s left (PUBLISH_TIME_BUDGET_EXCEEDED: nothing sent)
+ *
+ * => all TikTok I/O ends by the deadline (225s): every phase that can start
+ *    late is clamped to it. After it only the PostJobResult write runs (ms),
+ *    so the step ends < 240s. Small JSON bodies are read after their headers
+ *    and are not separately timed (same as every client).
+ * Before: 24 x (5s + up to 30s) = 840s of polling alone, x3 attempts.
+ */
 
 /** Max bytes per TikTok FILE_UPLOAD chunk (TikTok allows 5MB to 64MB; we use 10MB). */
 export const TIKTOK_MAX_CHUNK_SIZE = 10 * 1024 * 1024; // 10MB
@@ -392,6 +430,10 @@ export interface PollTikTokPublishStatusOptions {
   sleep?: (ms: number) => Promise<void>;
   maxAttempts?: number;
   intervalMs?: number;
+  /** The step's deadline (epoch ms): never start a wait + check that cannot end before it. */
+  deadline?: number;
+  /** Clock seam for tests. */
+  now?: () => number;
 }
 
 /**
@@ -399,10 +441,13 @@ export interface PollTikTokPublishStatusOptions {
  * complete outcome; every other outcome throws so the job records a failure:
  *  - FAILED -> `TIKTOK_PUBLISH_FAILED` (with TikTok's `fail_reason` when present)
  *  - 401 -> `TIKTOK_RECONNECT_REQUIRED` (connection flagged)
- *  - budget exhausted (24 x 5s = ~120s) -> `TIKTOK_PUBLISH_PENDING`: TikTok has
- *    not confirmed or denied the post, so it may still appear on the account.
+ *  - budget exhausted (24 x 5s = ~120s, or the step `deadline` is near) ->
+ *    `TIKTOK_PUBLISH_PENDING`: TikTok has not confirmed or denied the post, so
+ *    it may still appear on the account.
  * Transient fetch/parse/HTTP errors within a single iteration are logged and
- * retried on the next one; they must NOT be mistaken for a terminal outcome.
+ * retried on the next one; they must NOT be mistaken for a terminal outcome —
+ * and never escape, so withTransientRetries can never restart a publish TikTok
+ * may already be processing.
  */
 export async function pollTikTokPublishStatus(
   options: PollTikTokPublishStatusOptions,
@@ -414,9 +459,13 @@ export async function pollTikTokPublishStatus(
     sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
     maxAttempts = TIKTOK_POLL_MAX_ATTEMPTS,
     intervalMs = TIKTOK_POLL_INTERVAL_MS,
+    deadline,
+    now = Date.now,
   } = options;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    // Step budget: only wait + check when both can finish before the deadline.
+    if (remainingMs(deadline, now()) < intervalMs + MIN_REQUEST_WINDOW_MS) break;
     await sleep(intervalMs);
 
     let publishStatus: string | undefined;
@@ -433,7 +482,7 @@ export async function pollTikTokPublishStatus(
           },
           body: JSON.stringify({ publish_id: publishId }),
         },
-        30_000,
+        Math.min(TIKTOK_STATUS_TIMEOUT_MS, Math.max(remainingMs(deadline, now()), 1)),
       );
 
       if (statusRes.status === 401) {
@@ -497,15 +546,22 @@ export async function pollTikTokPublishStatus(
  * Fetch TikTok creator info - REQUIRED by TikTok Developer Guidelines
  * Must be called before posting to get privacy options, interaction settings, and posting limits
  */
-export async function getTikTokCreatorInfo(accessToken: string): Promise<TikTokCreatorInfo> {
-  const response = await fetchWithTimeout(`${TIKTOK_API_BASE}/v2/post/publish/creator_info/query/`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
+export async function getTikTokCreatorInfo(
+  accessToken: string,
+  timeoutMs: number = DEFAULT_FETCH_TIMEOUT_MS,
+): Promise<TikTokCreatorInfo> {
+  const response = await fetchWithTimeout(
+    `${TIKTOK_API_BASE}/v2/post/publish/creator_info/query/`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({}),
     },
-    body: JSON.stringify({}),
-  });
+    timeoutMs,
+  );
 
   await assertOk(response, {
     code: "TIKTOK_CREATOR_INFO_FAILED",
@@ -537,12 +593,16 @@ export const tiktokClient: PlatformClient = {
   refreshToken: refreshTikTokToken,
 
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
-    const { mediaItem, caption } = ctx;
+    const { mediaItem, caption, deadline } = ctx;
 
     // TikTok access tokens last ~24h: refresh a stale/expiring one BEFORE any
     // API call (a terminal refresh failure flags the connection and throws
     // TIKTOK_RECONNECT_REQUIRED; a transient one throws unflagged).
     const socialConnection = await ensureFreshTikTokToken(ctx.socialConnection);
+    // An in-step retry (withTransientRetries) calls publishVideo again with
+    // this same ctx: hand it the refreshed connection so it neither refreshes
+    // again nor re-spends the refresh token TikTok may just have rotated.
+    ctx.socialConnection = socialConnection;
 
     const accessToken = socialConnection.accessToken;
     if (!accessToken) {
@@ -554,8 +614,11 @@ export const tiktokClient: PlatformClient = {
     // REQUIRED: Call creator_info API before posting to verify account status
     // This is mandatory per TikTok Developer Guidelines
     console.log('[TikTok] Fetching creator info to verify account status...');
+    // Budget check outside the try below: an exhausted budget is not a
+    // creator_info failure (nothing is sent; see the STEP BUDGET note above).
+    const creatorInfoTimeoutMs = budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline);
     try {
-      const creatorInfo = await getTikTokCreatorInfo(accessToken);
+      const creatorInfo = await getTikTokCreatorInfo(accessToken, creatorInfoTimeoutMs);
       console.log('[TikTok] Creator info retrieved:', {
         username: creatorInfo.creatorUsername,
         privacyOptions: creatorInfo.privacyLevelOptions,
@@ -599,10 +662,11 @@ export const tiktokClient: PlatformClient = {
     // headers; pass AbortSignal.timeout as init.signal to also bound the
     // arrayBuffer() body transfer (see the fetchWithTimeout docstring).
     const videoUrl = mediaItem.storageLocation;
+    const downloadTimeoutMs = budgetedTimeout(TIKTOK_DOWNLOAD_TIMEOUT_MS, deadline);
     const videoResponse = await fetchWithTimeout(
       videoUrl,
-      { signal: AbortSignal.timeout(120_000) },
-      120_000,
+      { signal: AbortSignal.timeout(downloadTimeoutMs) },
+      downloadTimeoutMs,
     );
     await assertOk(videoResponse, {
       code: "TIKTOK_FETCH_VIDEO_FAILED",
@@ -672,7 +736,7 @@ export const tiktokClient: PlatformClient = {
           },
         }),
       },
-      30_000,
+      budgetedTimeout(TIKTOK_INIT_TIMEOUT_MS, deadline),
     );
 
     // A 401 means the access token is no longer valid -> reconnect.
@@ -732,7 +796,9 @@ export const tiktokClient: PlatformClient = {
           },
           body: chunk,
         },
-        120_000,
+        // Throws before sending when the budget is spent: the upload is then
+        // incomplete, and TikTok never publishes an incomplete upload.
+        budgetedTimeout(TIKTOK_CHUNK_UPLOAD_TIMEOUT_MS, deadline),
       );
 
       await assertOk(uploadRes, {
@@ -752,6 +818,7 @@ export const tiktokClient: PlatformClient = {
       accessToken,
       publishId,
       connectionId: socialConnection.id,
+      deadline,
     });
 
     console.log('[TikTok] Video published successfully', {

@@ -1,5 +1,7 @@
 import { FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
 
+import { remainingMs } from "./publishBudget";
+
 /**
  * `cause.code`s of a Node fetch failure that PROVE the connection was never
  * established — so the platform cannot have received, let alone committed,
@@ -61,6 +63,14 @@ export function isTransientPublishError(error: unknown): boolean {
 /** Backoff schedule between attempts: attempt1 --2s--> attempt2 --8s--> attempt3. */
 const BACKOFF_MS = [2_000, 8_000] as const;
 
+/**
+ * A retry re-runs the WHOLE platform publish (download, upload, processing
+ * poll), so it is only started when at least this much of the step's budget is
+ * left after the backoff (2026-11-01 audit). A shorter retry would mostly hit
+ * the deadline and replace the real error with a budget/timeout one.
+ */
+export const MIN_RETRY_WINDOW_MS = 60_000;
+
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
@@ -69,15 +79,27 @@ const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
  * final transient error are rethrown unchanged so `PostJobResult.errorCode`
  * / `errorMessage` keep their existing meaning.
  *
+ * With a step `deadline` (publishBudget.ts), a retry is only started when its
+ * backoff plus {@link MIN_RETRY_WINDOW_MS} still fits before it; otherwise the
+ * current error is rethrown. Each retried attempt is itself bounded by the same
+ * deadline (the clients clamp to it), so retries never stretch a step past it.
+ *
  * Lives OUTSIDE Inngest's retry machinery on purpose: `publishToAllPlatforms`
  * is `retries: 0` because function-level replays can double-post; this helper
  * bounds retries to the one platform call that provably failed.
  */
 export async function withTransientRetries<T>(
   fn: () => Promise<T>,
-  opts?: { sleep?: (ms: number) => Promise<void> },
+  opts?: {
+    sleep?: (ms: number) => Promise<void>;
+    /** Epoch ms by which the step must be done (see publishBudget.ts). */
+    deadline?: number;
+    /** Clock seam for tests. */
+    now?: () => number;
+  },
 ): Promise<T> {
   const sleep = opts?.sleep ?? realSleep;
+  const now = opts?.now ?? Date.now;
   let lastError: unknown;
   for (let attempt = 0; attempt <= BACKOFF_MS.length; attempt++) {
     try {
@@ -87,7 +109,11 @@ export async function withTransientRetries<T>(
       if (!isTransientPublishError(error) || attempt === BACKOFF_MS.length) {
         throw error;
       }
-      await sleep(BACKOFF_MS[attempt]);
+      const backoff = BACKOFF_MS[attempt];
+      if (remainingMs(opts?.deadline, now()) < backoff + MIN_RETRY_WINDOW_MS) {
+        throw error;
+      }
+      await sleep(backoff);
     }
   }
   throw lastError; // unreachable; satisfies control-flow analysis

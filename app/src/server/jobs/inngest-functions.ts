@@ -4,6 +4,7 @@ import { inngest } from "@/lib/inngest";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { getPlatformClient } from "@/server/platforms";
+import { publishDeadline } from "@/server/platforms/publishBudget";
 import { withTransientRetries } from "@/server/platforms/transientRetry";
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
 import {
@@ -114,6 +115,10 @@ async function publishToPlatform({
   tiktokMetadata,
   youtubeMetadata,
 }: PublishToPlatformArgs): Promise<{ platform: Platform; status: string; error?: string }> {
+  // ONE deadline for this step, stamped before anything else and shared by
+  // every in-step retry: the platform work must end inside Vercel's 300s
+  // per-invocation cap with time left to record the result (publishBudget.ts).
+  const deadline = publishDeadline();
   const client = getPlatformClient(connectionRef.platform);
 
   if (!client) {
@@ -167,6 +172,7 @@ async function publishToPlatform({
       mediaItem: mediaItem as unknown as MediaItem,
       caption,
       baseCaption,
+      deadline,
     };
 
     // Add TikTok metadata if publishing to TikTok
@@ -185,9 +191,11 @@ async function publishToPlatform({
     // excluded and why this must NOT be
     // an Inngest-level retry (the function is retries: 0 to prevent
     // double-posting). Covers the user-triggered retry flow too — it also
-    // funnels through publishToPlatform.
-    const publishResult = await withTransientRetries(() =>
-      client.publishVideo(publishContext),
+    // funnels through publishToPlatform. A retry only starts while enough of
+    // the step's budget is left (see MIN_RETRY_WINDOW_MS).
+    const publishResult = await withTransientRetries(
+      () => client.publishVideo(publishContext),
+      { deadline },
     );
 
     logger.info(`[Inngest] ${connection.platform} success`, {
