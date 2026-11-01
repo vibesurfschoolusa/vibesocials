@@ -12,14 +12,14 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GoogleSignInButton } from "@/components/google-sign-in-button";
+import { authPageHref, safeCallbackPath } from "@/lib/safeRedirect";
 
 function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  // Sanitize once: only accept an internal path so we never redirect off-site
-  // or hit a protocol-relative URL ("//evil.example.com").
-  const raw = searchParams.get("callbackUrl");
-  const callbackUrl = raw && raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";
+  // Sanitize once: only a same-origin relative path is ever followed (no
+  // "//host", "/\host", control characters... — see lib/safeRedirect.ts).
+  const callbackUrl = safeCallbackPath(searchParams.get("callbackUrl"));
   const registered = searchParams.get("registered") === "1";
   // NextAuth redirects OAuth failures here as ?error=<code> (pages.signIn for
   // transient OAuth errors, pages.error for AccessDenied refusals). Rendered
@@ -161,7 +161,7 @@ function LoginPageInner() {
             <p className="mt-6 text-center text-sm text-muted-foreground">
               Need an account?{" "}
               <Link
-                href={callbackUrl === "/" ? "/register" : `/register?callbackUrl=${encodeURIComponent(callbackUrl)}`}
+                href={authPageHref("/register", callbackUrl)}
                 className="font-semibold text-primary outline-none hover:underline focus-visible:underline"
               >
                 Create one

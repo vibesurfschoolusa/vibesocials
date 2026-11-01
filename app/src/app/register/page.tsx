@@ -12,14 +12,14 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GoogleSignInButton } from "@/components/google-sign-in-button";
+import { authPageHref, safeCallbackPath } from "@/lib/safeRedirect";
 
 function RegisterPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  // Sanitize once: only accept an internal path so we never redirect off-site
-  // or hit a protocol-relative URL ("//evil.example.com").
-  const raw = searchParams.get("callbackUrl");
-  const callbackUrl = raw && raw.startsWith("/") && !raw.startsWith("//") ? raw : "/";
+  // Sanitize once: only a same-origin relative path is ever followed (no
+  // "//host", "/\host", control characters... — see lib/safeRedirect.ts).
+  const callbackUrl = safeCallbackPath(searchParams.get("callbackUrl"));
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -173,7 +173,7 @@ function RegisterPageInner() {
             <p className="mt-6 text-center text-sm text-muted-foreground">
               Already have an account?{" "}
               <Link
-                href="/login"
+                href={authPageHref("/login", callbackUrl)}
                 className="font-semibold text-primary outline-none hover:underline focus-visible:underline"
               >
                 Log in
