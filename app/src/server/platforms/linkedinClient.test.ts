@@ -172,24 +172,47 @@ describe("refreshLinkedInToken", () => {
     expect(updateMock).not.toHaveBeenCalled();
   });
 
-  it("throws sanitized LINKEDIN_TOKEN_REFRESH_FAILED without leaking the upstream body or updating", async () => {
+  it("throws sanitized LINKEDIN_TOKEN_REFRESH_FAILED without leaking the upstream body or updating (transient 503)", async () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const upstreamBody = "invalid_grant: refresh token expired SECRET123";
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const upstreamBody = "upstream unavailable SECRET123";
     const fetchMock = vi
       .fn()
-      .mockResolvedValue(new Response(upstreamBody, { status: 400, statusText: "Bad Request" }));
+      .mockResolvedValue(new Response(upstreamBody, { status: 503, statusText: "Service Unavailable" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const error = await refreshLinkedInToken(makeConnection())
       .then(() => null)
-      .catch((e: unknown) => e as Error & { code?: string });
+      .catch((e: unknown) => e as Error & { code?: string; status?: number });
 
     expect(error?.code).toBe("LINKEDIN_TOKEN_REFRESH_FAILED");
+    expect(error?.status).toBe(503);
     expect(error?.message).not.toContain(upstreamBody);
-    expect(error?.message).toContain("400");
+    expect(error?.message).toContain("503");
     expect(updateMock).not.toHaveBeenCalled();
     // Raw upstream body reaches the server logs, not the user-facing message.
     expect(JSON.stringify(consoleSpy.mock.calls)).toContain(upstreamBody);
+  });
+
+  it("flags needsReconnect and throws LINKEDIN_RECONNECT_REQUIRED on a terminal 400 invalid_grant (sanitized cause)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const upstreamBody = JSON.stringify({ error: "invalid_grant", error_description: "SECRET123 revoked" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(upstreamBody, { status: 400 })));
+
+    const error = await refreshLinkedInToken(makeConnection({ id: "conn-77" }))
+      .then(() => null)
+      .catch((e: unknown) => e as Error & { code?: string; cause?: Error & { code?: string } });
+
+    expect(error?.code).toBe("LINKEDIN_RECONNECT_REQUIRED");
+    expect(error?.cause?.code).toBe("LINKEDIN_TOKEN_REFRESH_FAILED");
+    expect(error?.message).not.toContain("SECRET123");
+    expect(error?.cause?.message).not.toContain("SECRET123");
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    const arg = updateMock.mock.calls[0][0] as { where: { id: string }; data: Record<string, unknown> };
+    expect(arg.where).toEqual({ id: "conn-77" });
+    expect(arg.data.needsReconnect).toBe(true);
+    expect(arg.data).not.toHaveProperty("accessToken");
+    expect(arg.data).not.toHaveProperty("refreshToken");
   });
 });
 
@@ -302,3 +325,66 @@ describe("ensureFreshLinkedInToken", () => {
     expect(arg.data).not.toHaveProperty("refreshToken");
   });
 });
+
+// 2026-11-01 audit (Task 4 item 2): a refresh failure flags needsReconnect
+// ONLY when it is terminal (HTTP 400/401, e.g. invalid_grant — the shared
+// isTerminalRefreshFailure rule). Rate limits, LinkedIn outages, network blips
+// and our own config problems must leave a working connection unflagged.
+describe("ensureFreshLinkedInToken — non-terminal refresh failures", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  async function ensureError(connection = makeConnection()) {
+    return ensureFreshLinkedInToken(connection)
+      .then(() => null)
+      .catch((e: unknown) => e as Error & { code?: string; status?: number });
+  }
+
+  it.each([
+    ["429 rate limited", 429, { error: "rate_limited" }],
+    ["500", 500, "<html>oops</html>"],
+    ["503", 503, { error: "temporarily_unavailable" }],
+    ["401 invalid_client (our OAuth client, not the user's grant)", 401, { error: "invalid_client" }],
+  ] as const)("%s: rethrows the status-carrying refresh error WITHOUT flagging", async (_l, status, body) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(typeof body === "string" ? body : JSON.stringify(body), { status }),
+      ),
+    );
+
+    const error = await ensureError();
+
+    expect(error?.code).toBe("LINKEDIN_TOKEN_REFRESH_FAILED");
+    // status is carried so withTransientRetries can retry 429/5xx in-step.
+    expect(error?.status).toBe(status);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("propagates a network failure unchanged and does not flag", async () => {
+    const networkError = new TypeError("fetch failed");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(networkError));
+
+    const error = await ensureError();
+
+    expect(error).toBe(networkError);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("does not flag when OUR OAuth credentials are missing (deployment problem, not the user's grant)", async () => {
+    vi.stubEnv("LINKEDIN_CLIENT_ID", "");
+    vi.stubEnv("LINKEDIN_CLIENT_SECRET", "");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await ensureError();
+
+    expect(error?.code).toBe("LINKEDIN_MISSING_OAUTH_CREDENTIALS");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+});
+

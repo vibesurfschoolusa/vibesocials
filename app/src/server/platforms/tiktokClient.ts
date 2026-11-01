@@ -5,7 +5,7 @@ import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS, TIKTOK_DEFAULT_CAPTION } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 
-import { markConnectionNeedsReconnect } from "./connectionHealth";
+import { isTerminalRefreshFailure, markConnectionNeedsReconnect } from "./connectionHealth";
 import type { PlatformClient, PublishContext, PublishResult, TikTokCreatorInfo } from "./types";
 
 /** Minimal shape of TikTok's creator_info response (only the fields we read). */
@@ -216,25 +216,6 @@ function isExpiredOrExpiringSoon(expiresAt: Date | string | null | undefined): b
 }
 
 /**
- * Is this failed refresh TERMINAL (the grant is dead; the user must reconnect)
- * as opposed to transient (retry later, do NOT flag)? Same classification the
- * Google/LinkedIn refreshes are moving to ("flag only on terminal 400/401"):
- *  - 429 / 5xx: transient, regardless of body.
- *  - `invalid_client`: OUR client key/secret is wrong — a deployment problem,
- *    not a dead grant; flagging would mark every user's connection dead.
- *  - HTTP 400 / 401: terminal.
- *  - `invalid_grant` (e.g. HTTP 200 carrying an error body, or any other
- *    non-5xx status): terminal.
- *  - anything else (403, 404, a 200 with no recognizable error, ...): not flagged.
- */
-function isTerminalRefreshFailure(status: number, oauthError: string | undefined): boolean {
-  if (oauthError === "invalid_client") return false;
-  if (status === 429 || status >= 500) return false;
-  if (status === 400 || status === 401) return true;
-  return oauthError === "invalid_grant";
-}
-
-/**
  * Refresh a TikTok access token using the stored refresh token and persist the
  * result. Also exposed as `tiktokClient.refreshToken`, which is what the daily
  * connection-health sweep calls.
@@ -253,7 +234,8 @@ function isTerminalRefreshFailure(status: number, oauthError: string | undefined
  *
  * Failure handling (flag fields are written ONLY by markConnectionNeedsReconnect,
  * never in the same update as tokens):
- *  - terminal (see isTerminalRefreshFailure) / no refresh token stored:
+ *  - terminal (the shared isTerminalRefreshFailure rule in connectionHealth.ts,
+ *    also used by the Google/LinkedIn refreshes) / no refresh token stored:
  *    flag needsReconnect, throw `TIKTOK_RECONNECT_REQUIRED`.
  *  - 429 / 5xx / other non-terminal responses: throw `TIKTOK_TOKEN_REFRESH_FAILED`
  *    (sanitized, carries `status` so withTransientRetries can retry 429/5xx)

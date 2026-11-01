@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { markConnectionNeedsReconnect } from "@/server/platforms/connectionHealth";
+import {
+  isTerminalRefreshFailure,
+  markConnectionNeedsReconnect,
+  readOAuthErrorCode,
+} from "@/server/platforms/connectionHealth";
 
 // Mirrors googleTokens.test.ts: vi.mock + vi.hoisted are hoisted above
 // imports, and markConnectionNeedsReconnect resolves prisma via
@@ -73,5 +77,54 @@ describe("markConnectionNeedsReconnect", () => {
     ).resolves.toBeUndefined();
 
     expect(consoleSpy).toHaveBeenCalled();
+  });
+});
+
+// 2026-11-01 audit (Task 4 item 2): ONE classification for every OAuth
+// refresh (Google, LinkedIn, TikTok). Only a terminal failure — the grant is
+// dead — may flag needsReconnect; anything that a later attempt could succeed
+// at must leave the connection alone.
+describe("isTerminalRefreshFailure", () => {
+  it.each([
+    ["400 invalid_grant", 400, "invalid_grant", true],
+    ["400 with no parseable OAuth error", 400, undefined, true],
+    ["401 invalid_token", 401, "invalid_token", true],
+    ["200 carrying invalid_grant (TikTok error-in-body)", 200, "invalid_grant", true],
+    ["403 invalid_grant (non-5xx, grant is dead)", 403, "invalid_grant", true],
+    ["429 rate limited", 429, undefined, false],
+    ["429 even with invalid_grant in the body", 429, "invalid_grant", false],
+    ["500", 500, undefined, false],
+    ["502 even with invalid_grant in the body", 502, "invalid_grant", false],
+    ["503", 503, undefined, false],
+    ["401 invalid_client (our client credentials, not the user's grant)", 401, "invalid_client", false],
+    ["400 invalid_client", 400, "invalid_client", false],
+    ["403 with no OAuth error", 403, undefined, false],
+    ["404", 404, undefined, false],
+  ] as const)("%s", (_label, status, oauthError, terminal) => {
+    expect(isTerminalRefreshFailure(status, oauthError)).toBe(terminal);
+  });
+});
+
+describe("readOAuthErrorCode", () => {
+  it("reads the OAuth `error` code from a JSON token-endpoint body", async () => {
+    const res = new Response(JSON.stringify({ error: "invalid_grant", error_description: "x" }), {
+      status: 400,
+    });
+    await expect(readOAuthErrorCode(res)).resolves.toBe("invalid_grant");
+  });
+
+  it("leaves the response body unread so the caller can still consume it", async () => {
+    const res = new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+    await readOAuthErrorCode(res);
+    await expect(res.text()).resolves.toContain("invalid_grant");
+  });
+
+  it.each([
+    ["a non-JSON body", "<html>bad gateway</html>"],
+    ["JSON without an error field", JSON.stringify({ message: "nope" })],
+    ["a non-string error field", JSON.stringify({ error: { code: 190 } })],
+    ["an empty body", ""],
+  ])("is undefined for %s", async (_label, body) => {
+    await expect(readOAuthErrorCode(new Response(body, { status: 400 }))).resolves.toBeUndefined();
   });
 });

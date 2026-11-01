@@ -3,7 +3,11 @@ import type { SocialConnection } from "@prisma/client";
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
-import { markConnectionNeedsReconnect } from "./connectionHealth";
+import {
+  isTerminalRefreshFailure,
+  markConnectionNeedsReconnect,
+  readOAuthErrorCode,
+} from "./connectionHealth";
 
 // Server-only: touches prisma and Google OAuth client secrets.
 //
@@ -27,7 +31,11 @@ const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
  * - `GOOGLE_NO_REFRESH_TOKEN` if the connection has no stored refresh token.
  * - `GOOGLE_MISSING_OAUTH_CREDENTIALS` if OAuth client env vars are absent.
  * - `GOOGLE_TOKEN_REFRESH_FAILED` if the token endpoint returns a non-2xx (via
- *   {@link assertOk}; the upstream body is logged server-side but not surfaced).
+ *   {@link assertOk}, carrying `status`; the upstream body is logged
+ *   server-side but not surfaced). Only a TERMINAL failure (HTTP 400/401 such
+ *   as invalid_grant — `isTerminalRefreshFailure`) also marks the connection
+ *   `needsReconnect`; 429 / 5xx / invalid_client do not.
+ * Network errors propagate unchanged and never flag.
  */
 export async function refreshGoogleToken(
   connection: SocialConnection,
@@ -84,32 +92,43 @@ export async function refreshGoogleToken(
     }),
   });
 
+  // Classify BEFORE assertOk consumes the body (readOAuthErrorCode reads a clone).
+  const terminal =
+    !response.ok &&
+    isTerminalRefreshFailure(response.status, await readOAuthErrorCode(response));
+
   try {
     await assertOk(response, {
       code: "GOOGLE_TOKEN_REFRESH_FAILED",
       prefix: "Failed to refresh Google access token",
     });
   } catch (error) {
-    // Roadmap Phase 4: a non-2xx here is the real invalid_grant signal — mark
-    // needsReconnect before rethrowing the sanitized error (see
-    // connectionHealth.ts). Flag fields only; never touches accessToken/
-    // refreshToken.
-    //
     // Health H1: `assertOk` above already `console.error`s the raw upstream
     // status/body server-side (by design — see assertOk.ts), but WITHOUT a
     // connection id attached. That's precisely why an invalid_grant on one
     // user's reviews connection was hard to find in a shared log stream:
-    // nothing tied the failure to a specific connection. This is the
-    // structured, connection-correlated counterpart — connection id + the
+    // nothing tied the failure to a specific connection. These are the
+    // structured, connection-correlated counterparts — connection id + the
     // sanitized error code only, never the tokens — and (via the logger) also
-    // reaches Sentry as a real, filterable error event once monitoring is
-    // enabled.
-    logger.error("[GoogleTokens] Token refresh failed; marking connection for reconnect", {
+    // reach Sentry as filterable events once monitoring is enabled.
+    const logContext = {
       connectionId: connection.id,
       platform: connection.platform,
+      status: response.status,
       code: (error as Error & { code?: string }).code ?? "GOOGLE_TOKEN_REFRESH_FAILED",
       error,
-    });
+    };
+    if (!terminal) {
+      // 2026-11-01 audit: 429 / 5xx / invalid_client are NOT a dead grant —
+      // rethrow the sanitized, status-carrying error unflagged (429/5xx stay
+      // retryable in-step via withTransientRetries; the next run tries again).
+      logger.warn("[GoogleTokens] Token refresh failed transiently; connection left healthy", logContext);
+      throw error;
+    }
+    // Roadmap Phase 4: a terminal 400/401 (e.g. invalid_grant) is the real
+    // "grant is dead" signal — mark needsReconnect before rethrowing (see
+    // connectionHealth.ts). Flag fields only; never accessToken/refreshToken.
+    logger.error("[GoogleTokens] Token refresh failed; marking connection for reconnect", logContext);
     await markConnectionNeedsReconnect(connection.id, "GOOGLE_TOKEN_REFRESH_FAILED");
     throw error;
   }

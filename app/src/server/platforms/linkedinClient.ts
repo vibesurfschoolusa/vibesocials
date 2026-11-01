@@ -3,7 +3,11 @@ import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { markConnectionNeedsReconnect } from "./connectionHealth";
+import {
+  isTerminalRefreshFailure,
+  markConnectionNeedsReconnect,
+  readOAuthErrorCode,
+} from "./connectionHealth";
 
 /**
  * LinkedIn API client for posting images and videos
@@ -75,9 +79,15 @@ function linkedinReconnectRequiredError(cause?: unknown): Error & { code: string
  *
  * Throws (with `error.code`):
  * - `LINKEDIN_NO_REFRESH_TOKEN` if the connection has no stored refresh token.
- * - `LINKEDIN_MISSING_OAUTH_CREDENTIALS` if the OAuth client env vars are absent.
- * - `LINKEDIN_TOKEN_REFRESH_FAILED` (sanitized, via assertOk) on a non-2xx; the
- *   upstream body is logged server-side but never surfaced to the user.
+ * - `LINKEDIN_MISSING_OAUTH_CREDENTIALS` if the OAuth client env vars are absent
+ *   (a deployment problem — never flags the connection).
+ * - `LINKEDIN_RECONNECT_REQUIRED` on a TERMINAL non-2xx (HTTP 400/401, e.g.
+ *   invalid_grant — the shared `isTerminalRefreshFailure` rule), after marking
+ *   `needsReconnect`; the sanitized refresh error rides along as `cause`.
+ * - `LINKEDIN_TOKEN_REFRESH_FAILED` (sanitized, via assertOk, carrying
+ *   `status`) on any other non-2xx — 429 / 5xx / invalid_client — WITHOUT
+ *   flagging. The upstream body is logged server-side, never surfaced.
+ * Network errors propagate unchanged and never flag.
  */
 export async function refreshLinkedInToken(
   connection: SocialConnection,
@@ -116,10 +126,34 @@ export async function refreshLinkedInToken(
     }),
   });
 
-  await assertOk(response, {
-    code: "LINKEDIN_TOKEN_REFRESH_FAILED",
-    prefix: "Failed to refresh LinkedIn access token",
-  });
+  // Classify BEFORE assertOk consumes the body (readOAuthErrorCode reads a clone).
+  const terminal =
+    !response.ok &&
+    isTerminalRefreshFailure(response.status, await readOAuthErrorCode(response));
+
+  try {
+    await assertOk(response, {
+      code: "LINKEDIN_TOKEN_REFRESH_FAILED",
+      prefix: "Failed to refresh LinkedIn access token",
+    });
+  } catch (error) {
+    if (!terminal) {
+      // 2026-11-01 audit: 429 / 5xx / invalid_client are NOT a dead grant —
+      // rethrow the sanitized, status-carrying error unflagged (429/5xx stay
+      // retryable in-step via withTransientRetries).
+      console.warn("[LinkedIn] Token refresh failed transiently; connection left healthy", {
+        connectionId: connection.id,
+        status: response.status,
+      });
+      throw error;
+    }
+    // Roadmap Phase 4: a terminal 400/401 (e.g. invalid_grant) means the grant
+    // is dead — mark before throwing the actionable reconnect error (flag
+    // fields only; never accessToken/refreshToken), keeping the sanitized
+    // refresh error as `cause` for server logs.
+    await markConnectionNeedsReconnect(connection.id, LINKEDIN_RECONNECT_CODE);
+    throw linkedinReconnectRequiredError(error);
+  }
 
   const tokenData = (await response.json()) as {
     access_token: string;
@@ -159,9 +193,11 @@ export async function refreshLinkedInToken(
 /**
  * Ensure the connection's access token is usable before publishing. If it is
  * expired/near-expiry: refresh it when a refresh_token is stored (partner apps),
- * otherwise throw LINKEDIN_RECONNECT_REQUIRED. Any refresh failure is likewise
- * surfaced as LINKEDIN_RECONNECT_REQUIRED (the actionable outcome), preserving
- * the original error as `cause` for server logs. Returns the (possibly
+ * otherwise throw LINKEDIN_RECONNECT_REQUIRED. A refresh failure propagates as
+ * {@link refreshLinkedInToken} classified it: a terminal one is already the
+ * flagged LINKEDIN_RECONNECT_REQUIRED (original error as `cause`); a transient
+ * one (429 / 5xx / network) or a config problem stays unflagged so a blip never
+ * marks a working connection dead (2026-11-01 audit). Returns the (possibly
  * refreshed) connection. Exported for unit tests.
  */
 export async function ensureFreshLinkedInToken(
@@ -172,16 +208,7 @@ export async function ensureFreshLinkedInToken(
   }
 
   if (connection.refreshToken) {
-    try {
-      return await refreshLinkedInToken(connection);
-    } catch (error) {
-      // Roadmap Phase 4: the refresh attempt failed — mark needsReconnect
-      // before throwing the actionable reconnect error (see
-      // connectionHealth.ts). Flag fields only; never touches
-      // accessToken/refreshToken.
-      await markConnectionNeedsReconnect(connection.id, LINKEDIN_RECONNECT_CODE);
-      throw linkedinReconnectRequiredError(error);
-    }
+    return refreshLinkedInToken(connection);
   }
 
   // Roadmap Phase 4: expired with no refresh token stored (the common

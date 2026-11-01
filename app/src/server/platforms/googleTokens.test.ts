@@ -227,3 +227,73 @@ describe("refreshGoogleToken", () => {
     expect(arg.data).not.toHaveProperty("refreshToken");
   });
 });
+
+// 2026-11-01 audit (Task 4 item 2): only a TERMINAL refresh failure (HTTP
+// 400/401, e.g. invalid_grant) flags needsReconnect. A rate limit, a Google
+// outage or a network blip must not mark a working connection dead.
+describe("refreshGoogleToken — failure classification", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  function failWith(status: number, body: unknown) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(typeof body === "string" ? body : JSON.stringify(body), { status }),
+      ),
+    );
+  }
+
+  async function refreshError() {
+    return refreshGoogleToken(makeConnection({ id: "conn-c" }))
+      .then(() => null)
+      .catch((e: unknown) => e as Error & { code?: string; status?: number });
+  }
+
+  it.each([
+    ["429 rate limited", 429, { error: "rate_limit_exceeded" }],
+    ["500", 500, "<html>oops</html>"],
+    ["503", 503, { error: "backend_error" }],
+    ["502 even with invalid_grant in the body", 502, { error: "invalid_grant" }],
+    ["401 invalid_client (our OAuth client, not the user's grant)", 401, { error: "invalid_client" }],
+  ] as const)("%s: throws the sanitized, status-carrying error WITHOUT flagging", async (_l, status, body) => {
+    failWith(status, body);
+
+    const error = await refreshError();
+
+    expect(error?.code).toBe("GOOGLE_TOKEN_REFRESH_FAILED");
+    // status is carried so withTransientRetries can retry 429/5xx in-step.
+    expect(error?.status).toBe(status);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["400 invalid_grant", 400, { error: "invalid_grant", error_description: "Token has been expired or revoked." }],
+    ["401 with an unparseable body", 401, "Unauthorized"],
+  ] as const)("%s: flags needsReconnect (flag fields only)", async (_l, status, body) => {
+    failWith(status, body);
+
+    const error = await refreshError();
+
+    expect(error?.code).toBe("GOOGLE_TOKEN_REFRESH_FAILED");
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    const arg = updateMock.mock.calls[0][0] as { where: { id: string }; data: Record<string, unknown> };
+    expect(arg.where).toEqual({ id: "conn-c" });
+    expect(arg.data.needsReconnect).toBe(true);
+    expect(arg.data).not.toHaveProperty("accessToken");
+    expect(arg.data).not.toHaveProperty("refreshToken");
+  });
+
+  it("propagates a network failure unchanged and does not flag", async () => {
+    const networkError = new TypeError("fetch failed");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(networkError));
+
+    const error = await refreshError();
+
+    expect(error).toBe(networkError);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+});
+
