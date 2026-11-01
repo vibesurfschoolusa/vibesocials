@@ -2,9 +2,10 @@ import { withAuth } from "next-auth/middleware";
 import { NextResponse } from "next/server";
 
 /**
- * Central auth gate for app pages.
+ * Central auth gate for app pages — Next 16's `proxy` file convention (the
+ * renamed `middleware`; the default export and `config.matcher` work the same).
  *
- * API routes handle their own 401s (session + workspace checks). This middleware
+ * API routes handle their own 401s (session + workspace checks). This proxy
  * only protects document navigations so a new page cannot ship without an auth
  * redirect. Public routes and the signed-out marketing home (`/`) stay open.
  *
@@ -12,7 +13,7 @@ import { NextResponse } from "next/server";
  * sent to login with callbackUrl preserved (same as the page-level gate).
  */
 export default withAuth(
-  function middleware(_req) {
+  function proxy() {
     return NextResponse.next();
   },
   {
@@ -44,9 +45,9 @@ export default withAuth(
         }
 
         // Require a JWT with a user id claim. sessionVersion is re-checked in
-        // the jwt callback / getCurrentUser (middleware cannot hit the DB on
-        // the edge); a null/empty token after password reset fails here once
-        // the cookie is cleared by a session fetch.
+        // the jwt callback / getCurrentUser (this gate stays DB-free: it runs
+        // on every matched request); a null/empty token after password reset
+        // fails here once the cookie is cleared by a session fetch.
         return !!token?.id || !!token?.sub;
       },
     },

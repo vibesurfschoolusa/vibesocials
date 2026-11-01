@@ -6,7 +6,7 @@ import Link from "next/link";
  * Meta's App Review requires a reachable "Data Deletion Instructions URL", and
  * TikTok/Google reviewers look for the same thing. It must be publicly readable
  * WITHOUT signing in — hence the `/data-deletion` prefix in both
- * `middleware.ts`'s isPublicPath and `nav.ts`'s PUBLIC_ROUTE_PREFIXES (the
+ * `proxy.ts`'s isPublicPath and `nav.ts`'s PUBLIC_ROUTE_PREFIXES (the
  * latter also keeps the marketing-style layout, with no app shell).
  */
 export const metadata = {
