@@ -19,6 +19,7 @@ import {
 import { refreshConnectionToken } from "./connectionRefresh";
 import { refreshGoogleToken } from "./googleTokens";
 import {
+  blobInterruptionDetails,
   isBlobStreamInterrupted,
   isTransientUploadFailure,
   LARGE_UPLOAD_CHUNK_WINDOW_MS,
@@ -645,7 +646,10 @@ async function uploadChunks(args: {
           // session and reads from there (a little later after a drop). A blob that refuses the
           // read still fails.
           if (remainingMs(deadline) < needed) return await pause(null);
-          if (isBlobStreamInterrupted(error)) return await pause(YOUTUBE_TRANSIENT_RESUME_DELAY_MS);
+          if (isBlobStreamInterrupted(error)) {
+            console.warn("[YouTube] Reading the stored video stopped part-way through; pausing", blobInterruptionDetails(error));
+            return await pause(YOUTUBE_TRANSIENT_RESUME_DELAY_MS);
+          }
           throw error;
         }
         // Reading takes time too: the chunk (and, for the last, the status query after it) must still fit.
@@ -696,8 +700,11 @@ async function uploadChunks(args: {
         // That covers a chunk that was aborted at the deadline and a request that was never
         // sent because the budget ran out (PUBLISH_TIME_BUDGET_EXCEEDED leaves under 5 s).
         // Failing here would record the result failed and drop the state with everything
-        // uploaded so far.
-        if (!isFinal && remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS) return await pause(null);
+        // uploaded so far. A bug (a TypeError that is not undici's network failure) is not a
+        // chunk without an answer: it surfaces below even this close to the deadline.
+        if (!isFinal && remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS && isTransientUploadFailure(error)) {
+          return await pause(null);
+        }
         if (wasNeverSent(error)) throw error;
 
         let answer: UploadStatus;

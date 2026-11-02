@@ -164,6 +164,18 @@ export function isBlobStreamInterrupted(error: unknown): boolean {
   return (error as { code?: unknown } | null)?.code === BLOB_STREAM_INTERRUPTED_CODE;
 }
 
+/**
+ * What a client logs when it pauses on a dropped blob body: the code and the underlying cause's
+ * message. Every failure of the reader is tagged as a drop, so the cause is what tells a flaky
+ * connection from a bug. Any URL in the message is replaced, so no blob URL reaches the logs.
+ */
+export function blobInterruptionDetails(error: unknown): { code: unknown; cause?: string } {
+  const { code, cause } = (error ?? {}) as { code?: unknown; cause?: unknown };
+  if (cause === undefined) return { code };
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return { code, cause: message.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, "<url>") };
+}
+
 type CodedError = Error & { code: string; status?: number };
 
 function codedError(

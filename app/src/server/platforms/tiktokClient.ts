@@ -16,6 +16,7 @@ import {
 } from "./connectionHealth";
 import { refreshConnectionToken } from "./connectionRefresh";
 import {
+  blobInterruptionDetails,
   isBlobStreamInterrupted,
   isTransientUploadFailure,
   LARGE_UPLOAD_CHUNK_WINDOW_MS,
@@ -1137,7 +1138,10 @@ async function publishStreamed(args: {
         // been sent, so this is not a failure of the upload. The next step reopens the blob at the
         // same chunk (a little later after a drop). A blob that refuses the read still fails.
         if (remainingMs(deadline) < needed) return await pause(null);
-        if (isBlobStreamInterrupted(error)) return await pause(TIKTOK_TRANSIENT_RESUME_DELAY_MS);
+        if (isBlobStreamInterrupted(error)) {
+          console.warn("[TikTok] Reading the stored video stopped part-way through; pausing", blobInterruptionDetails(error));
+          return await pause(TIKTOK_TRANSIENT_RESUME_DELAY_MS);
+        }
         throw error;
       }
       // Reading takes time too: the chunk (and, for the last, the poll after it) must still fit.

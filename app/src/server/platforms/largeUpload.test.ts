@@ -11,6 +11,7 @@ vi.mock("@/lib/logger", () => ({ logger }));
 import {
   BLOB_READ_FAILED_CODE,
   BLOB_STREAM_INTERRUPTED_CODE,
+  blobInterruptionDetails,
   DEFAULT_LARGE_UPLOAD_PLATFORMS,
   isTransientUploadFailure,
   LARGE_UPLOAD_CHUNK_WINDOW_MS,
@@ -625,5 +626,35 @@ describe("usesLargeUploadPath", () => {
     const args = { ...base, env: undefined };
     expect(usesLargeUploadPath({ ...args, platform: "linkedin" })).toBe(true);
     expect(usesLargeUploadPath({ ...args, platform: "youtube" })).toBe(false);
+  });
+});
+
+describe("blobInterruptionDetails", () => {
+  it("names the code and the underlying cause, so a pause on a dropped body can be diagnosed", () => {
+    const error = Object.assign(new Error("Reading the stored video stopped part-way through."), {
+      code: BLOB_STREAM_INTERRUPTED_CODE,
+      cause: new TypeError("terminated"),
+    });
+    expect(blobInterruptionDetails(error)).toEqual({ code: BLOB_STREAM_INTERRUPTED_CODE, cause: "terminated" });
+  });
+
+  it("never logs a URL that the cause quotes", () => {
+    const error = Object.assign(new Error("x"), {
+      code: BLOB_STREAM_INTERRUPTED_CODE,
+      cause: new Error("socket hang up at https://store.public.blob.vercel-storage.com/v.mp4?token=abc"),
+    });
+    const details = JSON.stringify(blobInterruptionDetails(error));
+    expect(details).not.toContain("://");
+    expect(details).not.toContain("token=abc");
+    expect(details).toContain("socket hang up at <url>");
+  });
+
+  it("copes with a cause that is not an Error, and with no cause at all", () => {
+    expect(blobInterruptionDetails(Object.assign(new Error("x"), { code: "C", cause: "boom" }))).toEqual({
+      code: "C",
+      cause: "boom",
+    });
+    expect(blobInterruptionDetails(Object.assign(new Error("x"), { code: "C" }))).toEqual({ code: "C" });
+    expect(blobInterruptionDetails(null)).toEqual({ code: undefined });
   });
 });

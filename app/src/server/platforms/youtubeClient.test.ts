@@ -1512,6 +1512,25 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
       expect(upload.statusQueries()).toHaveLength(1); // only the one at the start of the step
     });
 
+    it("a chunk that fails with a bug TypeError near the deadline still surfaces (it does not pause and hide it)", async () => {
+      const { store } = fakeStore(sessionAt(CHUNK));
+      const bug = new TypeError("x is not a function");
+      // 225 s at the start; the PUT takes all but 25 s before it throws: under the 60 s window.
+      const upload = stubUpload({ session: [incomplete(CHUNK - 1), after(STEP - 25_000, failWith(bug))] });
+
+      expect(await failure(bigCtx(store, { deadline: NOW + STEP }))).toBe(bug);
+      expect(upload.puts()).toHaveLength(1);
+    });
+
+    it("a chunk that times out near the deadline still pauses at once (a timeout is not a bug)", async () => {
+      const { store, saved } = fakeStore(sessionAt(CHUNK));
+      const upload = stubUpload({ session: [incomplete(CHUNK - 1), after(STEP - 25_000, timeout())] });
+
+      expect(await run(bigCtx(store, { deadline: NOW + STEP }))).toEqual({ continuation: { resumeAt: null } });
+      expect(upload.puts()).toHaveLength(1);
+      expect(saved()?.data).toEqual({ totalBytes: TOTAL, confirmedBytes: CHUNK });
+    });
+
     it("a status query that fails with a TypeError that is not undici's network failure surfaces instead of pausing", async () => {
       const { store } = fakeStore();
       const bug = new TypeError("x is not a function");
@@ -2105,6 +2124,11 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
       expect(upload.puts()).toHaveLength(0);
       expect(saved()).toEqual({ kind: YOUTUBE_UPLOAD_STATE_KIND, ...sessionAt(CHUNK) });
       expect(mocks.clear).not.toHaveBeenCalled();
+      // The pause says why, so repeated drops (or a bug in the reader) can be told apart in the logs.
+      expect(vi.mocked(console.warn)).toHaveBeenCalledWith(
+        expect.stringContaining("[YouTube]"),
+        { code: "BLOB_STREAM_INTERRUPTED", cause: "terminated" },
+      );
     });
 
     it("a body cut off by the step deadline pauses at once, not 30 s later", async () => {

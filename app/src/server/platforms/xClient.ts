@@ -11,6 +11,7 @@ import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState
 
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import {
+  blobInterruptionDetails,
   isBlobStreamInterrupted,
   isTransientUploadFailure,
   LARGE_UPLOAD_CHUNK_WINDOW_MS,
@@ -1181,7 +1182,10 @@ async function publishChunked(args: {
             // counted). The next step reopens the blob at the same segment (a little later after a
             // drop). A blob that refuses the read still fails.
             if (remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS) return await pause(null);
-            if (isBlobStreamInterrupted(error)) return await pause(X_TRANSIENT_RESUME_DELAY_MS);
+            if (isBlobStreamInterrupted(error)) {
+              console.warn("[X] Reading the stored video stopped part-way through; pausing", blobInterruptionDetails(error));
+              return await pause(X_TRANSIENT_RESUME_DELAY_MS);
+            }
             throw error;
           }
           // Reading takes time too: the segment must still fit.

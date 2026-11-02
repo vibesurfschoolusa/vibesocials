@@ -15,6 +15,7 @@ import {
 import { refreshConnectionToken } from "./connectionRefresh";
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import {
+  blobInterruptionDetails,
   isBlobStreamInterrupted,
   isTransientUploadFailure,
   LARGE_UPLOAD_CHUNK_WINDOW_MS,
@@ -1351,7 +1352,10 @@ async function publishMultipart(args: {
           // sent, so this is not a failure of the upload. The next step reopens the blob at the same
           // part (a little later after a drop). A blob that refuses the read still fails.
           if (remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS) return await pause(null);
-          if (isBlobStreamInterrupted(error)) return await pause(LINKEDIN_TRANSIENT_RESUME_DELAY_MS);
+          if (isBlobStreamInterrupted(error)) {
+            console.warn("[LinkedIn] Reading the stored video stopped part-way through; pausing", blobInterruptionDetails(error));
+            return await pause(LINKEDIN_TRANSIENT_RESUME_DELAY_MS);
+          }
           throw error;
         }
         // Reading takes time too: the part must still fit.
