@@ -65,9 +65,16 @@ interface DeferredPostFields {
   scheduledFor?: string;
 }
 
+// 2026-11-01 audit (M3): the workspace this page was rendered for. The active
+// workspace is a cookie shared by every tab, so the server compares this with
+// the cookie's workspace and refuses (409 WORKSPACE_CHANGED) when they differ.
+interface WorkspaceBoundFields {
+  workspaceId?: string;
+}
+
 // Request body posted to /api/posts. Metadata fields are added conditionally
 // based on which platforms are connected.
-interface CreatePostRequest extends DeferredPostFields {
+interface CreatePostRequest extends DeferredPostFields, WorkspaceBoundFields {
   blobUrl: string;
   filename: string;
   mimeType: string;
@@ -84,7 +91,7 @@ interface CreatePostRequest extends DeferredPostFields {
 // MediaItem instead of a fresh blobUrl upload. Same optional metadata fields
 // as CreatePostRequest; POST /api/posts branches on which of blobUrl /
 // mediaItemId is present.
-interface CreatePostReuseRequest extends DeferredPostFields {
+interface CreatePostReuseRequest extends DeferredPostFields, WorkspaceBoundFields {
   mediaItemId: string;
   baseCaption: string;
   location?: string;
@@ -119,9 +126,19 @@ interface CreatePostFormInnerProps {
    * confirmation says so (see composerPublishConfirmCopy).
    */
   holdsForApproval?: boolean;
+  /**
+   * 2026-11-01 audit (M3) — the id of the workspace this page was rendered for
+   * (app/posts/new/page.tsx). Sent with the create request so the server can
+   * refuse when the active-workspace cookie was switched in another tab.
+   */
+  workspaceId?: string;
 }
 
-function CreatePostFormInner({ footerSettings, holdsForApproval = false }: CreatePostFormInnerProps) {
+function CreatePostFormInner({
+  footerSettings,
+  holdsForApproval = false,
+  workspaceId,
+}: CreatePostFormInnerProps) {
   const toast = useToast();
   const searchParams = useSearchParams();
 
@@ -518,6 +535,7 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
           // Task 7 — chosen platform subset for this post.
           platforms: selectedPlatforms,
           ...deferred,
+          workspaceId,
         };
 
         if (reusePerPlatformOverrides) {
@@ -557,6 +575,7 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
           // Task 7 — chosen platform subset for this post.
           platforms: selectedPlatforms,
           ...deferred,
+          workspaceId,
         };
 
         // Task 7 — only attach metadata for a platform still selected for
@@ -586,6 +605,13 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
       // Nothing was created: keep the form so the user can fix and resend.
       if (!outcome.resetForm) {
         toast.error(outcome.toast);
+        // 2026-11-01 audit (M3): the workspace was switched in another tab, so
+        // pressing Post again can only 409 again until the page is reloaded.
+        // A toast fades; pin the server's message in the form's error banner.
+        // The form itself is left exactly as it is (file, caption, platforms).
+        if (outcome.kind === "workspace_changed") {
+          setUploadError(outcome.toast);
+        }
         setUploadLoading(false);
         return;
       }
@@ -1302,6 +1328,13 @@ export interface CreatePostFormProps {
    * the original publish-now confirmation.
    */
   holdsForApproval?: boolean;
+  /**
+   * 2026-11-01 audit (M3) — id of the workspace the page was rendered for,
+   * sent with the create request so a workspace switched in another tab is
+   * refused (409) rather than posted into. Optional; absent keeps the old
+   * cookie-only behaviour.
+   */
+  workspaceId?: string;
 }
 
 /**
@@ -1310,10 +1343,18 @@ export interface CreatePostFormProps {
  * so the parent page (`app/posts/new/page.tsx`) doesn't need to know about
  * it — mirrors how `ConnectionsSection` wraps `LinkedInSetupDialog`.
  */
-export function CreatePostForm({ footerSettings, holdsForApproval }: CreatePostFormProps) {
+export function CreatePostForm({
+  footerSettings,
+  holdsForApproval,
+  workspaceId,
+}: CreatePostFormProps) {
   return (
     <Suspense fallback={<CreatePostFormSkeleton />}>
-      <CreatePostFormInner footerSettings={footerSettings} holdsForApproval={holdsForApproval} />
+      <CreatePostFormInner
+        footerSettings={footerSettings}
+        holdsForApproval={holdsForApproval}
+        workspaceId={workspaceId}
+      />
     </Suspense>
   );
 }

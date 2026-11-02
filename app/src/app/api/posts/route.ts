@@ -9,6 +9,12 @@ import {
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { parsePostMediaFields, type PostMediaFields } from "@/lib/mediaInput";
+import {
+  INVALID_WORKSPACE_ID_CODE,
+  INVALID_WORKSPACE_ID_MESSAGE,
+  WORKSPACE_CHANGED_CODE,
+  WORKSPACE_CHANGED_MESSAGE,
+} from "@/lib/workspaceChanged";
 import { assertPostTargetsValid, PostTargetingError } from "@/lib/postTargets";
 import { PostJobStatus, Platform, type Prisma } from "@prisma/client";
 import {
@@ -324,6 +330,9 @@ interface CreatePostBody {
   // the cron claims it when due). Absent both = immediate (today's behavior).
   draft?: unknown;
   scheduledFor?: unknown;
+  // 2026-11-01 audit (M3): the workspace the composer was rendered for. Optional
+  // for API compatibility; when present it must equal the active workspace.
+  workspaceId?: unknown;
 }
 
 /** 400 for a rejected platform choice; `code` + `platforms` let a client react without parsing `error`. */
@@ -382,6 +391,30 @@ export async function POST(request: Request) {
     return invalidJsonBodyResponse();
   }
   const body = parsedBody as CreatePostBody;
+
+  // 2026-11-01 audit (M3): the active workspace is a cookie shared by every
+  // tab, so a switch in another tab re-points THIS tab's request — a member's
+  // "Submit for approval?" would publish live as the owner of the new
+  // workspace. The composer sends the workspace id it was rendered for; refuse
+  // on a mismatch. Deliberately the FIRST check after the body is read: nothing
+  // below (blob URL canonicalisation, media/job rows, notifications, the
+  // publish event) may run for a request meant for another workspace. An absent
+  // field keeps today's behaviour for API clients; JSON `null` is present, so
+  // it is rejected like any other non-string.
+  if (body.workspaceId !== undefined) {
+    if (typeof body.workspaceId !== "string") {
+      return NextResponse.json(
+        { error: INVALID_WORKSPACE_ID_MESSAGE, code: INVALID_WORKSPACE_ID_CODE },
+        { status: 400 },
+      );
+    }
+    if (body.workspaceId !== context.workspace.id) {
+      return NextResponse.json(
+        { error: WORKSPACE_CHANGED_MESSAGE, code: WORKSPACE_CHANGED_CODE },
+        { status: 409 },
+      );
+    }
+  }
 
   const hasBlobUrl = typeof body?.blobUrl === "string" && body.blobUrl.trim().length > 0;
   const hasMediaItemId =

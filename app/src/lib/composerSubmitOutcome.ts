@@ -10,8 +10,15 @@
  *   Post press → a second job, and retrying the first one later published the
  *   same content twice. So the form resets exactly like a success and the user
  *   is sent to Activity to retry the job that exists.
+ * - `workspace_changed` — 409 `{ code: "WORKSPACE_CHANGED" }` (2026-11-01 audit,
+ *   M3): the workspace cookie changed in another tab, so the server refused
+ *   before writing anything. Nothing was created and the form is kept (the
+ *   user's file and caption survive), but resending can never succeed until the
+ *   page is reloaded, so the composer pins the message instead of only toasting.
  * - `error` — nothing was created: keep the form so the user can fix and resend.
  */
+
+import { WORKSPACE_CHANGED_CODE, WORKSPACE_CHANGED_MESSAGE } from "./workspaceChanged";
 
 /** How the composer was asked to publish (mirrors create-post-form.tsx). */
 export type ComposerPublishMode = "now" | "schedule" | "draft";
@@ -19,6 +26,7 @@ export type ComposerPublishMode = "now" | "schedule" | "draft";
 export type ComposerSubmitOutcome =
   | { kind: "success"; resetForm: true; heldForApproval: boolean; toast: string }
   | { kind: "dispatch_failed"; resetForm: true; toast: string }
+  | { kind: "workspace_changed"; resetForm: false; toast: string }
   | { kind: "error"; resetForm: false; toast: string };
 
 export const COMPOSER_DISPATCH_FAILED_MESSAGE =
@@ -60,14 +68,20 @@ export function composerSubmitOutcome(input: {
 
   const message = field(body, "message");
   const error = field(body, "error");
-  return {
-    kind: "error",
-    resetForm: false,
-    toast:
-      typeof message === "string" && message
-        ? message
-        : typeof error === "string" && error
-          ? error
-          : FALLBACK_ERROR,
-  };
+  const serverText =
+    typeof message === "string" && message
+      ? message
+      : typeof error === "string" && error
+        ? error
+        : null;
+
+  if (field(body, "code") === WORKSPACE_CHANGED_CODE) {
+    return {
+      kind: "workspace_changed",
+      resetForm: false,
+      toast: serverText ?? WORKSPACE_CHANGED_MESSAGE,
+    };
+  }
+
+  return { kind: "error", resetForm: false, toast: serverText ?? FALLBACK_ERROR };
 }

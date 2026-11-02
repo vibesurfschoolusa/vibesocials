@@ -39,7 +39,14 @@ export default async function NewPostPage() {
         </p>
       </div>
 
-      <CreatePostForm footerSettings={footerSettings} holdsForApproval={holdsForApproval} />
+      {/* 2026-11-01 audit (M3): the composer sends the workspace it was rendered
+          for, so a switch in another tab is refused (409) instead of publishing
+          into the new workspace. */}
+      <CreatePostForm
+        footerSettings={footerSettings}
+        holdsForApproval={holdsForApproval}
+        workspaceId={context.workspace.id}
+      />
     </div>
   );
 }

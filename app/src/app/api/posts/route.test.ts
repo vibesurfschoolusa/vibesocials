@@ -1372,3 +1372,128 @@ describe("POST /api/posts - platform/media compatibility + TikTok privacy (2026-
     });
   });
 });
+
+describe("POST /api/posts — workspace changed in another tab (2026-11-01 audit, M3)", () => {
+  const BLOB = "https://test.public.blob.vercel-storage.com/vid.mp4";
+  const MESSAGE = "You switched workspace in another tab. Reload this page before posting.";
+
+  function blobBody(extra: Record<string, unknown> = {}) {
+    return { blobUrl: BLOB, filename: "vid.mp4", mimeType: "video/mp4", sizeBytes: 123, baseCaption: "hello", ...extra };
+  }
+
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: [] });
+    createPostJobForExistingMediaMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: [] });
+  });
+
+  function expectNothingWritten() {
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    expect(createPostJobForExistingMediaMock).not.toHaveBeenCalled();
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
+    expect(notifyOwnersMock).not.toHaveBeenCalled();
+    expect(failPendingMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  }
+
+  it("the stale-tab scenario: the page rendered W2 (member, approval on) but the cookie now says W1 (owner) — 409, nothing published", async () => {
+    // The cookie now resolves the user as OWNER of ws-1 (approval off): without
+    // the check this body would publish immediately onto ws-1's accounts.
+    getWorkspaceContextMock.mockResolvedValue(
+      makeWorkspaceContext({ workspaceId: "ws-1", role: "owner", requireApproval: false }),
+    );
+
+    const response = await POST(jsonRequest(blobBody({ workspaceId: "ws-2" })));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({ error: MESSAGE, code: "WORKSPACE_CHANGED" });
+    expectNothingWritten();
+  });
+
+  it("409s on the mediaItemId reuse path too, writing nothing", async () => {
+    const response = await POST(
+      jsonRequest({ mediaItemId: "media-9", baseCaption: "hello", workspaceId: "ws-2" }),
+    );
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED" });
+    expectNothingWritten();
+  });
+
+  it("409s for a draft and a scheduled post as well (every intent creates a row)", async () => {
+    for (const extra of [{ draft: true }, { scheduledFor: "2099-01-01T00:00:00.000Z" }]) {
+      const response = await POST(jsonRequest(blobBody({ workspaceId: "ws-2", ...extra })));
+      expect(response.status).toBe(409);
+    }
+    expectNothingWritten();
+  });
+
+  it("checks the workspace before any other body validation (a stale tab hears about the switch, not a stray 400)", async () => {
+    const noMedia = await POST(jsonRequest({ baseCaption: "hello", workspaceId: "ws-2" }));
+    expect(noMedia.status).toBe(409);
+
+    const badBlob = await POST(
+      jsonRequest(blobBody({ blobUrl: "https://evil.example.com/x.mp4", workspaceId: "ws-2" })),
+    );
+    expect(badBlob.status).toBe(409);
+
+    const noCaption = await POST(jsonRequest(blobBody({ baseCaption: "", workspaceId: "ws-2" })));
+    expect(noCaption.status).toBe(409);
+    expectNothingWritten();
+  });
+
+  it("an empty-string workspaceId is a mismatch, not 'absent'", async () => {
+    const response = await POST(jsonRequest(blobBody({ workspaceId: "" })));
+
+    expect(response.status).toBe(409);
+    expectNothingWritten();
+  });
+
+  it("proceeds when workspaceId matches the active workspace, creating the job in it", async () => {
+    const response = await POST(jsonRequest(blobBody({ workspaceId: "ws-1" })));
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "ws-1" }));
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("proceeds on the reuse path when workspaceId matches", async () => {
+    const response = await POST(
+      jsonRequest({ mediaItemId: "media-9", baseCaption: "hello", workspaceId: "ws-1" }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(createPostJobForExistingMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "ws-1" }),
+    );
+  });
+
+  it("proceeds exactly as before when workspaceId is absent (API compatibility)", async () => {
+    const response = await POST(jsonRequest(blobBody()));
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "ws-1" }));
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["a number", 5],
+    ["null", null],
+    ["a boolean", true],
+    ["an array", ["ws-1"]],
+    ["an object", { id: "ws-1" }],
+  ])("returns 400 INVALID_WORKSPACE_ID for a workspaceId that is %s, writing nothing", async (_label, workspaceId) => {
+    const response = await POST(jsonRequest(blobBody({ workspaceId })));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ code: "INVALID_WORKSPACE_ID" });
+    expectNothingWritten();
+  });
+
+  it("still requires auth first: an unauthenticated mismatch is a 401, not a 409", async () => {
+    getWorkspaceContextMock.mockResolvedValue(null);
+
+    const response = await POST(jsonRequest(blobBody({ workspaceId: "ws-2" })));
+
+    expect(response.status).toBe(401);
+  });
+});

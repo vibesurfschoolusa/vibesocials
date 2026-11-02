@@ -5,6 +5,7 @@ import {
   composerSubmitOutcome,
   type ComposerSubmitOutcome,
 } from "./composerSubmitOutcome";
+import { WORKSPACE_CHANGED_MESSAGE } from "./workspaceChanged";
 
 const success = (toast: string, heldForApproval = false): ComposerSubmitOutcome => ({
   kind: "success",
@@ -57,5 +58,50 @@ describe("composerSubmitOutcome", () => {
     expect(COMPOSER_DISPATCH_FAILED_MESSAGE).toBe(
       "Saved, but publishing couldn't start — retry it from Activity.",
     );
+  });
+});
+
+// 2026-11-01 audit (M3): the page was rendered for another workspace than the
+// one the cookie now names, so the server refused (409) before writing anything.
+describe("composerSubmitOutcome — workspace changed in another tab (M3)", () => {
+  it("shows the server's message, keeps the form, and flags the outcome so the composer can pin it", () => {
+    const message = "You switched workspace in another tab. Reload this page before posting.";
+
+    expect(
+      composerSubmitOutcome({
+        ok: false,
+        mode: "now",
+        body: { error: message, code: "WORKSPACE_CHANGED" },
+      }),
+    ).toEqual({ kind: "workspace_changed", resetForm: false, toast: message });
+  });
+
+  it("falls back to the canned reload message when the 409 body carries the code but no readable error", () => {
+    expect(
+      composerSubmitOutcome({ ok: false, mode: "draft", body: { code: "WORKSPACE_CHANGED" } }),
+    ).toEqual({ kind: "workspace_changed", resetForm: false, toast: WORKSPACE_CHANGED_MESSAGE });
+  });
+
+  it("pins the reload copy the server also sends", () => {
+    expect(WORKSPACE_CHANGED_MESSAGE).toBe(
+      "You switched workspace in another tab. Reload this page before posting.",
+    );
+  });
+
+  it("never resets the form for it, in any mode", () => {
+    for (const mode of ["now", "schedule", "draft"] as const) {
+      const outcome = composerSubmitOutcome({
+        ok: false,
+        mode,
+        body: { error: "x", code: "WORKSPACE_CHANGED" },
+      });
+      expect(outcome.resetForm).toBe(false);
+    }
+  });
+
+  it("does not treat an unrelated error body as a workspace change", () => {
+    expect(
+      composerSubmitOutcome({ ok: false, mode: "now", body: { error: "Nope", code: "SOMETHING_ELSE" } }),
+    ).toEqual({ kind: "error", resetForm: false, toast: "Nope" });
   });
 });
