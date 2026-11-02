@@ -5,7 +5,8 @@ import type { Platform } from "@prisma/client";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { editApprovalEffect, holdForApprovalData } from "@/lib/approval";
-import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
+import { findOverlongCaption, pickPlatformOverrides } from "@/lib/captionLimits";
+import { captionTooLongResponse, invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { toPostJobDetailDto, toPostJobResultSummaryDto } from "@/lib/postsDto";
 import {
@@ -125,6 +126,8 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
   const body = parsedBody as PatchBody;
 
   const data: Prisma.PostJobUpdateInput = {};
+  // The overrides as stored: `null` = explicit clear, `undefined` = not edited.
+  let perPlatformOverrides: Partial<Record<Platform, string>> | null | undefined;
 
   if (body.baseCaption !== undefined) {
     if (typeof body.baseCaption !== "string" || !body.baseCaption.trim()) {
@@ -133,6 +136,10 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
         { status: 400 },
       );
     }
+    // 2026-11-01 scale audit (jobs, event size): same cap as POST /api/posts - this text
+    // is what a later publish event carries.
+    const overlongBase = findOverlongCaption({ baseCaption: body.baseCaption });
+    if (overlongBase) return captionTooLongResponse(overlongBase);
     data.baseCaption = body.baseCaption;
   }
 
@@ -148,12 +155,20 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
         { status: 400 },
       );
     }
-    data.perPlatformOverrides =
+    // 2026-11-01 scale audit (jobs, event size): keys that are not a platform are dropped
+    // (only platform keys are ever published) and the cap is checked on the rest.
+    // `perPlatformOverrides` (not the raw body value) is what is stored and what
+    // the re-hold email below shows.
+    perPlatformOverrides =
       body.perPlatformOverrides === null
+        ? null
+        : pickPlatformOverrides(body.perPlatformOverrides as Record<string, string>);
+    const overlongOverride = findOverlongCaption({ perPlatformOverrides });
+    if (overlongOverride) return captionTooLongResponse(overlongOverride);
+    data.perPlatformOverrides =
+      perPlatformOverrides === null
         ? Prisma.DbNull
-        : (body.perPlatformOverrides as Partial<
-            Record<Platform, string>
-          > as unknown as Prisma.InputJsonValue);
+        : (perPlatformOverrides as unknown as Prisma.InputJsonValue);
   }
 
   // Ownership + status in one read (404 vs 409 disambiguation, plus the
@@ -259,8 +274,8 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
         {
           baseCaption: editedCaption ?? existing.baseCaption,
           perPlatformOverrides:
-            body.perPlatformOverrides !== undefined
-              ? (body.perPlatformOverrides as Prisma.JsonValue | null)
+            perPlatformOverrides !== undefined
+              ? (perPlatformOverrides as Prisma.JsonValue | null)
               : existing.perPlatformOverrides,
           publishMetadata: existing.publishMetadata,
         },

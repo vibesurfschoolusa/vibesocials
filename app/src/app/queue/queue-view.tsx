@@ -22,8 +22,10 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
+import { CaptionCounter } from "@/components/caption-counter";
 import { MediaThumb } from "@/components/media-thumb";
 import { QueueCalendar } from "./queue-calendar";
+import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { cn } from "@/lib/cn";
 import {
   PLATFORM_CAPTIONS_HEADING,
@@ -295,6 +297,9 @@ function QueueEditDialog({
   const isScheduled = job.status === "scheduled";
   const model = editDialogModel(job, viewer);
   const [caption, setCaption] = useState(job.caption ?? "");
+  // 2026-11-01 scale audit (jobs, event size): over the 10,000-character cap, which
+  // PATCH /api/posts/[id] rejects - blocks Save (lib/captionLimits.ts).
+  const captionOver = captionCounter(caption).over;
   // The caption as last persisted — a draft whose caption PATCH succeeded but
   // whose scheduling call failed must not re-PATCH an unchanged caption on retry.
   const [savedCaption, setSavedCaption] = useState(job.caption);
@@ -313,6 +318,10 @@ function QueueEditDialog({
     const trimmed = caption.trim();
     if (!trimmed) {
       toast.error("Caption can't be empty.");
+      return;
+    }
+    if (captionOver) {
+      toast.error(captionTooLongMessage("Caption"));
       return;
     }
 
@@ -399,7 +408,10 @@ function QueueEditDialog({
             value={caption}
             onChange={(event) => setCaption(event.target.value)}
             rows={4}
+            aria-invalid={captionOver || undefined}
+            aria-describedby="queue-edit-caption-count"
           />
+          <CaptionCounter id="queue-edit-caption-count" text={caption} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="queue-edit-time">{model.scheduleLabel}</Label>
@@ -422,7 +434,7 @@ function QueueEditDialog({
         <Button variant="outline" onClick={onClose} disabled={saving}>
           Cancel
         </Button>
-        <Button onClick={handleSave} loading={saving}>
+        <Button onClick={handleSave} loading={saving} disabled={captionOver}>
           {editSaveLabel(job, viewer, scheduledForLocal !== "")}
         </Button>
       </DialogFooter>

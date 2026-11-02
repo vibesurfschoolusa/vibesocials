@@ -6,7 +6,8 @@ import {
   EMAIL_VERIFY_REQUIRED_MESSAGE,
   isEmailVerifiedForPublish,
 } from "@/lib/emailVerified";
-import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
+import { findOverlongCaption, pickPlatformOverrides } from "@/lib/captionLimits";
+import { captionTooLongResponse, invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { parsePostMediaFields, type PostMediaFields } from "@/lib/mediaInput";
 import {
@@ -484,6 +485,10 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+  // 2026-11-01 scale audit (jobs, event size): the caption rides in the publish event
+  // and in every step output, so its length is capped before any write.
+  const overlongBase = findOverlongCaption({ baseCaption: baseCaptionRaw });
+  if (overlongBase) return captionTooLongResponse(overlongBase);
 
   let perPlatformOverrides: Partial<Record<Platform, string>> | undefined;
   if (overridesRaw != null) {
@@ -496,7 +501,13 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
-    perPlatformOverrides = overridesRaw as Partial<Record<Platform, string>>;
+    // 2026-11-01 scale audit (jobs, event size): only platform keys are ever published
+    // (`overrides?.[platform]`), so any other key is dropped here - what bounds
+    // the event at 1 base + 7 overrides x 10,000 characters - and the cap is
+    // checked on what is left.
+    perPlatformOverrides = pickPlatformOverrides(overridesRaw);
+    const overlongOverride = findOverlongCaption({ perPlatformOverrides });
+    if (overlongOverride) return captionTooLongResponse(overlongOverride);
   }
 
   let youtubeMetadata: YouTubePostMetadata | undefined;

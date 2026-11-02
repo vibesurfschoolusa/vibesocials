@@ -13,6 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 
+import { CaptionCounter } from "@/components/caption-counter";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +31,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { generateBlobKey } from "@/lib/blobKey";
+import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import {
   appendMediaPage,
   daysUntilRemoval,
@@ -204,6 +206,9 @@ export function MediaLibrary() {
 
   const [file, setFile] = useState<File | null>(null);
   const [baseCaption, setBaseCaption] = useState("");
+  // 2026-11-01 scale audit (jobs, event size): over the 10,000-character cap, which
+  // POST /api/media rejects - blocks Upload (lib/captionLimits.ts).
+  const captionOver = captionCounter(baseCaption).over;
   const [uploading, setUploading] = useState(false);
   // 0-100 while a Blob upload is in flight; null when idle. Mirrors
   // create-post-form.tsx's identically-named upload-progress state.
@@ -301,6 +306,12 @@ export function MediaLibrary() {
     // never reaches the blob store.
     if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) {
       toast.error("Only image or video files can be added to the library.");
+      return;
+    }
+
+    // Same reason: an over-long caption would 400 AFTER the upload.
+    if (captionOver) {
+      toast.error(captionTooLongMessage("Caption"));
       return;
     }
 
@@ -450,10 +461,13 @@ export function MediaLibrary() {
                 onChange={(event) => setBaseCaption(event.target.value)}
                 rows={3}
                 placeholder="Optional base caption to reuse across posts"
+                aria-invalid={captionOver || undefined}
+                aria-describedby="media-caption-count"
               />
+              <CaptionCounter id="media-caption-count" text={baseCaption} />
             </div>
             <div className="flex justify-end">
-              <Button type="submit" loading={uploading}>
+              <Button type="submit" loading={uploading} disabled={captionOver}>
                 Upload
               </Button>
             </div>

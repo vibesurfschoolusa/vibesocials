@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 
 import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "@/lib/blobUrl";
 import { prisma } from "@/lib/db";
-import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
+import { findOverlongCaption } from "@/lib/captionLimits";
+import { captionTooLongResponse, invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { toMediaItemDto } from "@/lib/mediaDto";
 import { MAX_MEDIA_BYTES, isImageOrVideoMimeType } from "@/lib/mediaInput";
 import { decodePostsCursor, encodePostsCursor } from "@/lib/postsDto";
@@ -164,6 +165,11 @@ export async function POST(request: Request) {
     ? body.filename.trim()
     : "upload";
   const baseCaption = typeof body.baseCaption === "string" ? body.baseCaption.trim() : "";
+  // 2026-11-01 scale audit (jobs, event size): the library caption is replayed into the
+  // composer and from there into a publish event, so it is capped like a post's
+  // caption - measured on the trimmed value, which is what is stored.
+  const overlongCaption = findOverlongCaption({ baseCaption });
+  if (overlongCaption) return captionTooLongResponse(overlongCaption);
 
   // Team Workspaces (Task 4): stamps the caller's ACTIVE workspace directly
   // (replaces the Task 2 `resolveWorkspaceForUser` bridge, which always

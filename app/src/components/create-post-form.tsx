@@ -10,6 +10,7 @@ import { PlatformPreviewList } from "./composer/platform-preview";
 import { LocationAutocomplete } from "./location-autocomplete";
 import { TikTokPostSettings } from "./tiktok-post-settings";
 import { YouTubePostSettings } from "./youtube-post-settings";
+import { CaptionCounter } from "@/components/caption-counter";
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -23,6 +24,7 @@ import { useToast } from "@/components/ui/toast";
 import { useConnections } from "@/hooks/useConnections";
 import { generateBlobKey } from "@/lib/blobKey";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
+import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { cn } from "@/lib/cn";
 import { composerPublishConfirmCopy } from "@/lib/composerConfirm";
 import { deriveComposerGate } from "@/lib/composerGate";
@@ -121,6 +123,9 @@ function CreatePostFormInner({
 
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadCaption, setUploadCaption] = useState("");
+  // 2026-11-01 scale audit (jobs, event size): over the 10,000-character cap, which
+  // POST /api/posts rejects - blocks the submit (lib/captionLimits.ts).
+  const captionOver = captionCounter(uploadCaption).over;
   const [uploadLocation, setUploadLocation] = useState("");
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -626,6 +631,13 @@ function CreatePostFormInner({
       return;
     }
 
+    // 2026-11-01 scale audit (jobs, event size): POST /api/posts 400s a caption over the
+    // cap; the submit button is already disabled, this covers any other path.
+    if (captionOver) {
+      setUploadError(captionTooLongMessage("Caption"));
+      return;
+    }
+
     // Task 7 — at least one target platform must stay selected.
     if (selectedPlatforms.length === 0) {
       setUploadError(
@@ -1029,13 +1041,19 @@ function CreatePostFormInner({
               </Button>
             </div>
           </div>
+          {/* 2026-11-01 scale audit (jobs, event size): no `maxLength` - it would
+              silently truncate a paste; the counter + disabled submit make
+              the cap visible instead. */}
           <Textarea
             id="post-caption"
             value={uploadCaption}
             onChange={(event) => setUploadCaption(event.target.value)}
             rows={3}
             placeholder="What do you want to say with this post?"
+            aria-invalid={captionOver || undefined}
+            aria-describedby="post-caption-count"
           />
+          <CaptionCounter id="post-caption-count" text={uploadCaption} />
         </div>
 
         <div className="space-y-1.5">
@@ -1201,7 +1219,7 @@ function CreatePostFormInner({
             {/* No `disabled` for the zero-connection case: the gate above
                 returns early, so the form only renders once at least one
                 platform is connected. */}
-            <Button type="submit" loading={uploadLoading}>
+            <Button type="submit" loading={uploadLoading} disabled={captionOver}>
               {uploadLoading
                 ? publishMode === "draft"
                   ? "Saving…"

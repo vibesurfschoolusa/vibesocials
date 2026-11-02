@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { CAPTION_TOO_LONG_CODE, captionTooLongMessage } from "@/lib/captionLimits";
+
 /** The 400 body every JSON route returns when `readJsonObject` yields null. */
 export const INVALID_JSON_BODY_ERROR = "Invalid JSON body";
 
@@ -41,4 +43,16 @@ export async function readJsonObject(
 /** `400 { error: "Invalid JSON body" }` — the response paired with `readJsonObject`. */
 export function invalidJsonBodyResponse(): NextResponse {
   return NextResponse.json({ error: INVALID_JSON_BODY_ERROR }, { status: 400 });
+}
+
+/**
+ * 2026-11-01 scale audit (jobs, event size): `400 { code: "CAPTION_TOO_LONG", error }`
+ * for a caption over MAX_CAPTION_CHARS. `field` is the name
+ * `findOverlongCaption` returned (`baseCaption`, `perPlatformOverrides.<platform>`).
+ */
+export function captionTooLongResponse(field: string): NextResponse {
+  return NextResponse.json(
+    { error: captionTooLongMessage(field), code: CAPTION_TOO_LONG_CODE },
+    { status: 400 },
+  );
 }

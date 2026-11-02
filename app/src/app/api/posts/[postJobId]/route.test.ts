@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import type { NextRequest } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -551,5 +552,82 @@ describe("DELETE /api/posts/[postJobId]", () => {
     const res = await DELETE(req(null), ctx("job-1"));
     expect(res.status).toBe(409);
     expect((await res.json()).code).toBe("NOT_DELETABLE");
+  });
+});
+
+// 2026-11-01 scale audit (jobs, event size): the edit path stores the caption and the
+// overrides a later publish event will carry, so it is capped like the create
+// route (see POST /api/posts).
+describe("PATCH /api/posts/[postJobId] — caption length cap and override keys (2026-11-01 scale audit)", () => {
+  const OVER = "a".repeat(10_001);
+  const AT_CAP = "a".repeat(10_000);
+
+  function expectNothingRead() {
+    expect(findFirstMock).not.toHaveBeenCalled();
+    expect(updateManyMock).not.toHaveBeenCalled();
+    expect(notifyOwnersMock).not.toHaveBeenCalled();
+  }
+
+  it("returns 400 CAPTION_TOO_LONG for a 10,001-character baseCaption, before any read or write", async () => {
+    const res = await PATCH(req({ baseCaption: OVER }), ctx("job-1"));
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      code: "CAPTION_TOO_LONG",
+      error: "baseCaption is too long (max 10,000 characters).",
+    });
+    expectNothingRead();
+  });
+
+  it("returns 400 CAPTION_TOO_LONG for a 10,001-character perPlatformOverrides.x, naming the field", async () => {
+    const res = await PATCH(req({ perPlatformOverrides: { x: OVER } }), ctx("job-1"));
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({
+      code: "CAPTION_TOO_LONG",
+      error: "perPlatformOverrides.x is too long (max 10,000 characters).",
+    });
+    expectNothingRead();
+  });
+
+  it("accepts a baseCaption and an override of exactly 10,000 characters", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+
+    const res = await PATCH(
+      req({ baseCaption: AT_CAP, perPlatformOverrides: { x: AT_CAP } }),
+      ctx("job-1"),
+    );
+
+    expect(res.status).toBe(200);
+    expect(updateManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { baseCaption: AT_CAP, perPlatformOverrides: { x: AT_CAP } },
+      }),
+    );
+  });
+
+  it("drops perPlatformOverrides keys that are not a platform before storing", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+
+    const res = await PATCH(
+      req({ perPlatformOverrides: { x: "hi", foo: "bar", legacy: OVER } }),
+      ctx("job-1"),
+    );
+
+    expect(res.status).toBe(200);
+    expect(updateManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { perPlatformOverrides: { x: "hi" } } }),
+    );
+  });
+
+  it("still clears the overrides on an explicit null", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+
+    const res = await PATCH(req({ perPlatformOverrides: null }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    expect(updateManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { perPlatformOverrides: Prisma.DbNull } }),
+    );
   });
 });

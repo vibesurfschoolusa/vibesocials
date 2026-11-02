@@ -1542,3 +1542,157 @@ describe("POST /api/posts — workspace changed in another tab (2026-11-01 audit
     expect(response.status).toBe(401);
   });
 });
+
+// 2026-11-01 scale audit (jobs, event size): a publish event carries the caption plus up
+// to 7 per-platform overrides, and nothing capped their length, so an oversized
+// caption could exceed Inngest's event / step-output size limits.
+describe("POST /api/posts — caption length cap and override keys (2026-11-01 scale audit)", () => {
+  const BLOB = "https://test.public.blob.vercel-storage.com/vid.mp4";
+  const OVER = "a".repeat(10_001);
+  const AT_CAP = "a".repeat(10_000);
+
+  function blobBody(extra: Record<string, unknown> = {}) {
+    return { blobUrl: BLOB, filename: "vid.mp4", mimeType: "video/mp4", sizeBytes: 123, baseCaption: "hello", ...extra };
+  }
+
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: [] });
+    createPostJobForExistingMediaMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: [] });
+  });
+
+  function expectNothingWritten() {
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    expect(createPostJobForExistingMediaMock).not.toHaveBeenCalled();
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
+    expect(notifyOwnersMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  }
+
+  it("returns 400 CAPTION_TOO_LONG for a 10,001-character baseCaption, writing and sending nothing", async () => {
+    const response = await POST(jsonRequest(blobBody({ baseCaption: OVER })));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      code: "CAPTION_TOO_LONG",
+      error: "baseCaption is too long (max 10,000 characters).",
+    });
+    expectNothingWritten();
+  });
+
+  it("returns 400 CAPTION_TOO_LONG for a 10,001-character perPlatformOverrides.x, naming the field", async () => {
+    const response = await POST(jsonRequest(blobBody({ perPlatformOverrides: { x: OVER } })));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      code: "CAPTION_TOO_LONG",
+      error: "perPlatformOverrides.x is too long (max 10,000 characters).",
+    });
+    expectNothingWritten();
+  });
+
+  it("applies the cap on the mediaItemId reuse path too", async () => {
+    const base = await POST(jsonRequest({ mediaItemId: "media-9", baseCaption: OVER }));
+    expect(base.status).toBe(400);
+    await expect(base.json()).resolves.toMatchObject({ code: "CAPTION_TOO_LONG" });
+
+    const override = await POST(
+      jsonRequest({ mediaItemId: "media-9", baseCaption: "hi", perPlatformOverrides: { linkedin: OVER } }),
+    );
+    expect(override.status).toBe(400);
+    await expect(override.json()).resolves.toMatchObject({
+      code: "CAPTION_TOO_LONG",
+      error: "perPlatformOverrides.linkedin is too long (max 10,000 characters).",
+    });
+    expectNothingWritten();
+  });
+
+  it("applies the cap to a draft and a scheduled post as well (every intent stores the caption)", async () => {
+    for (const extra of [{ draft: true }, { scheduledFor: "2099-01-01T00:00:00.000Z" }]) {
+      const response = await POST(jsonRequest(blobBody({ baseCaption: OVER, ...extra })));
+      expect(response.status).toBe(400);
+    }
+    expectNothingWritten();
+  });
+
+  it("accepts a baseCaption and an override of exactly 10,000 characters", async () => {
+    const response = await POST(
+      jsonRequest(blobBody({ baseCaption: AT_CAP, perPlatformOverrides: { x: AT_CAP } })),
+    );
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ baseCaption: AT_CAP, perPlatformOverrides: { x: AT_CAP } }),
+    );
+  });
+
+  it("counts UTF-16 code units: 5,000 emoji pass, 5,001 are rejected", async () => {
+    const ok = await POST(jsonRequest(blobBody({ baseCaption: "😀".repeat(5_000) })));
+    expect(ok.status).toBe(200);
+
+    createPostJobOnlyMock.mockClear();
+    const tooLong = await POST(jsonRequest(blobBody({ baseCaption: "😀".repeat(5_001) })));
+    expect(tooLong.status).toBe(400);
+    await expect(tooLong.json()).resolves.toMatchObject({ code: "CAPTION_TOO_LONG" });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("drops perPlatformOverrides keys that are not a platform before storing and publishing", async () => {
+    const response = await POST(
+      jsonRequest(blobBody({ perPlatformOverrides: { x: "hi", foo: "bar" } })),
+    );
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ perPlatformOverrides: { x: "hi" } }),
+    );
+    expect(inngestSendMock).toHaveBeenCalledWith({
+      id: "publish-job-1",
+      name: "post/publish.requested",
+      data: expect.objectContaining({ perPlatformOverrides: { x: "hi" } }),
+    });
+  });
+
+  it("drops non-platform keys on the reuse path too", async () => {
+    await POST(
+      jsonRequest({
+        mediaItemId: "media-9",
+        baseCaption: "hi",
+        perPlatformOverrides: { linkedin: "li", foo: "bar" },
+      }),
+    );
+
+    expect(createPostJobForExistingMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({ perPlatformOverrides: { linkedin: "li" } }),
+    );
+  });
+
+  it("does not let an over-long NON-platform key block the post (it is dropped before the cap is checked)", async () => {
+    const response = await POST(
+      jsonRequest(blobBody({ perPlatformOverrides: { x: "hi", legacy: OVER } })),
+    );
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ perPlatformOverrides: { x: "hi" } }),
+    );
+  });
+
+  it("bounds the publish event: 8 captions of 10,000 characters plus a junk key stay under 80,000 caption characters", async () => {
+    const overrides = Object.fromEntries(
+      ["tiktok", "youtube", "x", "linkedin", "instagram", "google_business_profile", "facebook_page"].map(
+        (p) => [p, AT_CAP],
+      ),
+    );
+    await POST(jsonRequest(blobBody({ baseCaption: AT_CAP, perPlatformOverrides: { ...overrides, junk: AT_CAP } })));
+
+    const sent = inngestSendMock.mock.calls[0][0] as {
+      data: { baseCaption: string; perPlatformOverrides: Record<string, string> };
+    };
+    expect(Object.keys(sent.data.perPlatformOverrides)).toHaveLength(7);
+    expect(sent.data.perPlatformOverrides).not.toHaveProperty("junk");
+    const total =
+      sent.data.baseCaption.length +
+      Object.values(sent.data.perPlatformOverrides).reduce((n, v) => n + v.length, 0);
+    expect(total).toBe(80_000);
+  });
+});

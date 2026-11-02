@@ -306,6 +306,52 @@ describe("POST /api/media", () => {
     });
   });
 
+  // 2026-11-01 scale audit (jobs, event size): the library caption is replayed into the
+  // composer and then a publish event, so it is capped like a post's caption.
+  describe("caption length cap (2026-11-01 scale audit)", () => {
+    const base = {
+      blobUrl: "https://test.public.blob.vercel-storage.com/x",
+      mimeType: "image/png",
+      sizeBytes: 10,
+    };
+
+    beforeEach(() => {
+      createMock.mockResolvedValue({ id: "media-4", createdAt: new Date("2026-01-01T00:00:00Z") });
+    });
+
+    it("returns 400 CAPTION_TOO_LONG for a 10,001-character baseCaption and stores nothing", async () => {
+      const response = await POST(jsonRequest({ ...base, baseCaption: "a".repeat(10_001) }));
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        code: "CAPTION_TOO_LONG",
+        error: "baseCaption is too long (max 10,000 characters).",
+      });
+      expect(createMock).not.toHaveBeenCalled();
+    });
+
+    it("measures the TRIMMED caption (the value that is stored)", async () => {
+      const padded = await POST(jsonRequest({ ...base, baseCaption: `  ${"a".repeat(10_000)}  ` }));
+
+      expect(padded.status).toBe(201);
+      expect(createMock).toHaveBeenCalledWith({
+        data: expect.objectContaining({ baseCaption: "a".repeat(10_000) }),
+      });
+
+      createMock.mockClear();
+      const over = await POST(jsonRequest({ ...base, baseCaption: ` ${"a".repeat(10_001)} ` }));
+      expect(over.status).toBe(400);
+      expect(createMock).not.toHaveBeenCalled();
+    });
+
+    it("accepts a baseCaption of exactly 10,000 characters", async () => {
+      const response = await POST(jsonRequest({ ...base, baseCaption: "a".repeat(10_000) }));
+
+      expect(response.status).toBe(201);
+      expect(createMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("stamps the caller's ACTIVE workspace (not necessarily their personal one)", async () => {
     getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-team" }));
     // toMediaItemDto (applied to the response) requires a real createdAt —
