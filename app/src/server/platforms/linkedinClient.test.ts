@@ -2949,6 +2949,50 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       },
     );
 
+    it("a restart whose registration answer is cut off while its body is read (2xx, then `terminated`) pauses 30 s, no restart counted", async () => {
+      const bodyCutOff: Reply = () =>
+        new Response(new ReadableStream({ start: (c) => c.error(new TypeError("terminated")) }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      const { store, saved } = fakeStore(uploadState(1, { urlsExpireAt: NOW + 1_000 }));
+      const li = stubLinkedIn({ register: [bodyCutOff, registerReply({ n: 2 })] });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual(paused(NOW + RESUME_DELAY));
+      expect(li.sequence()).toEqual(["register"]);
+      expect(saved()).toEqual({ kind: LINKEDIN_UPLOAD_STATE_KIND, ...uploadState(1, { urlsExpireAt: NOW + 1_000 }) });
+
+      // The next step registers again, and the restart is counted once.
+      await run(bigCtx(store));
+      expect(li.registers()).toHaveLength(2);
+      expect(saved()?.data).toMatchObject({ asset: assetUrn(2), restarts: 1 });
+    });
+
+    it("the very first registration whose answer is cut off while its body is read still fails LINKEDIN_VIDEO_UPLOAD_FAILED", async () => {
+      const bodyCutOff: Reply = () =>
+        new Response(new ReadableStream({ start: (c) => c.error(new TypeError("terminated")) }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      const { store, mocks } = fakeStore();
+      stubLinkedIn({ register: [bodyCutOff] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error?.code).toBe("LINKEDIN_VIDEO_UPLOAD_FAILED");
+      expect(error?.message).toMatch(/nothing was posted/i);
+      expect(mocks.save).not.toHaveBeenCalled();
+    });
+
+    it("a restart whose registration answer is not JSON still fails rather than pausing", async () => {
+      const { store } = fakeStore(uploadState(1, { urlsExpireAt: NOW + 1_000 }));
+      stubLinkedIn({ register: [reply(200, "<html>not json</html>")] });
+
+      expect((await failure(bigCtx(store)))?.code).toBe("LINKEDIN_VIDEO_UPLOAD_FAILED");
+    });
+
     it("a restart whose registration keeps getting no answer is never counted twice", async () => {
       const { store, saved, saves } = fakeStore(uploadState(1, { urlsExpireAt: NOW + 1_000, restarts: 1 }));
       const li = stubLinkedIn({

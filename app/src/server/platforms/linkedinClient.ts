@@ -1038,6 +1038,10 @@ async function attemptRequest(
  * asset, the media artifact and the parts LinkedIn wants, as a fresh session at part 0. The call
  * commits nothing. A 429 is RATE_LIMITED, a 401 goes through the guarded reconnect flag, and any
  * other error status is LINKEDIN_VIDEO_UPLOAD_FAILED (carrying its `status`).
+ *
+ * A 2xx whose body cannot be read is LINKEDIN_VIDEO_UPLOAD_FAILED too, except for a `restart`
+ * whose body was cut off on the way (isTransientUploadFailure): that failure is rethrown as is,
+ * so the restart pauses and registers again in the next step.
  */
 async function registerMultipartUpload(args: {
   accessToken: string;
@@ -1045,8 +1049,10 @@ async function registerMultipartUpload(args: {
   totalBytes: number;
   connection: TokenSnapshot;
   deadline: number | undefined;
+  /** Parts were already uploaded under an earlier registration, which this one replaces. */
+  restart: boolean;
 }): Promise<LinkedInMultipartSession> {
-  const { accessToken, ownerUrn, totalBytes, connection, deadline } = args;
+  const { accessToken, ownerUrn, totalBytes, connection, deadline, restart } = args;
 
   const response = await fetchWithTimeout(
     `${LINKEDIN_ASSETS_URL}?action=registerUpload`,
@@ -1091,7 +1097,10 @@ async function registerMultipartUpload(args: {
   let body: unknown;
   try {
     body = await response.json();
-  } catch {
+  } catch (error) {
+    // A restart's answer that was cut off says nothing about the registration: the caller
+    // pauses and asks again. The first registration fails here as it always has.
+    if (restart && isTransientUploadFailure(error)) throw error;
     throw uploadFailed("LinkedIn didn't return a usable multipart upload for this video. Nothing was posted.");
   }
   return readMultipartRegistration(body, totalBytes);
@@ -1240,6 +1249,7 @@ async function publishMultipart(args: {
       totalBytes,
       connection,
       deadline,
+      restart: restarts > 0,
     });
     const session: LinkedInMultipartSession = { data: { ...registered.data, restarts }, secret: registered.secret };
     await save(session);
