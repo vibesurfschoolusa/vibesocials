@@ -202,6 +202,12 @@ export async function sendEmail(
   logger.error("[Notifications] Resend rejected email", {
     subject,
     // Resend's message is its own text, but strip the recipient in case it echoes it.
-    error: { name: error.name, message: withoutRecipient(error.message, to), statusCode: error.statusCode },
+    // 2026-11-02 phase 2 final review: a JSON error body can carry no string `message`
+    // at all, so coerce it; the logging path must never throw out of `sendEmail`.
+    error: {
+      name: error.name,
+      message: withoutRecipient(String(error.message ?? ""), to),
+      statusCode: error.statusCode,
+    },
   });
 }

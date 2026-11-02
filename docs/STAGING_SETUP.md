@@ -186,12 +186,17 @@ changes the Inngest functions in `app/src/server/jobs/inngest-functions.ts`
 releases.
 
 1. **Ship one phase at a time.** Deploy and verify phase 1 (the `20261101*`
-   migrations) first. Then deploy phase 2 (the `20261102*` migrations). Do not
-   push both in one build.
+   migrations) first. Then deploy phase 2 (the `20261102*` migrations). Deploy
+   phase 3 (the `20261103*` migrations) only after phase 2 is deployed and
+   verified, and on its own. Do not push two phases in one build.
 2. **Before promoting a deploy that changes Inngest functions:**
    - Pause `scheduled-post-scanner` in the Inngest dashboard a couple of minutes
      ahead. If you cannot pause it, confirm that no scanner run is active and
      that no post is due within about 5 minutes.
+   - After pausing, open the runs list of `scheduled-post-scanner` and confirm
+     that **no run is Running or Paused** before you promote. Inngest's pause
+     can hold or cancel a run that is already active, so a run that is still
+     Running or Paused can straddle the deploy. If one is, wait for it to end.
    - Avoid 04:40-05:20 UTC, the window of the `connection-health-sweep`
      (cron `45 4 * * *`).
    - Resume the scanner at least 5 minutes after the Inngest sync. That gives
@@ -200,9 +205,10 @@ releases.
    Why: events sent by the old scanner carry no event id, so a scanner run that
    straddles the deploy can re-send them, and an old run that is still in flight
    can publish alongside a new one.
-3. **After every deploy, check that the Inngest sync took effect.** In the
-   Inngest dashboard (or from the response of
-   `PUT https://<domain>/api/inngest`), confirm the functions show the new
+3. **After every deploy, check that the Inngest sync took effect.** The
+   function configuration can be verified **only in the Inngest dashboard**:
+   `PUT https://<domain>/api/inngest` returns just `{ message, modified }`, not
+   the configuration. In the dashboard, confirm the functions show the new
    configuration:
    - `publish-to-all-platforms`: concurrency, priority and idempotency
      (`event.data.postJobId`), with `retries: 3`;
@@ -212,13 +218,18 @@ releases.
      `connection-health-sweep`);
    - a registered `refresh-connection`.
 
-   If anything is missing, force a resync.
+   If anything is missing, force a resync (dashboard "Resync", or
+   `PUT https://<domain>/api/inngest`), then check the dashboard again.
 4. **Rollback.**
    - Prefer rolling forward.
-   - If you roll back, immediately force an Inngest resync (dashboard "Resync",
-     or `PUT https://<domain>/api/inngest`). Then confirm
-     `publish-to-all-platforms` shows `retries: 0` again. Older code has no
-     claim guard, so phase 2's `retries: 3` must not stay registered against it.
+   - If you roll back, pause `scheduled-post-scanner` before you roll back, and
+     resume it at least 5 minutes after the resync, the same as step 2 (including
+     the check that no run is Running or Paused).
+   - Immediately after the rollback, force an Inngest resync (dashboard
+     "Resync", or `PUT https://<domain>/api/inngest`). Then confirm in the
+     dashboard that `publish-to-all-platforms` shows `retries: 0` again. Older
+     code has no claim guard, so phase 2's `retries: 3` must not stay registered
+     against it.
    - Expected side effects of a rollback: deferred posts that wake on old code
      send a "Pending" email, and the 2 h reconciler later marks them stalled.
 

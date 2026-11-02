@@ -466,6 +466,26 @@ describe("sendEmail - no recipient address in any log line", () => {
     expectNoRecipient();
   });
 
+  // 2026-11-02 phase 2 final review: Resend can answer with a JSON error body that
+  // has no string `message`. That must not throw a TypeError out of `sendEmail`.
+  it.each([
+    ["missing", undefined, ""],
+    ["a number", 42, "42"],
+  ])("a Resend error whose message is %s does not throw", async (_label, message, logged) => {
+    sendMock.mockResolvedValueOnce({
+      data: null,
+      error: { statusCode: 422, name: "validation_error", message },
+      headers: null,
+    });
+
+    await expect(sendEmail(params)).resolves.toBeUndefined();
+
+    expect(loggerErrorMock).toHaveBeenCalledTimes(1);
+    const [, context] = loggerErrorMock.mock.calls[0] as [string, { error: { message: string } }];
+    expect(context.error.message).toBe(logged);
+    expectNoRecipient();
+  });
+
   it("the disabled-sender line (no RESEND_API_KEY) carries no recipient either", async () => {
     vi.stubEnv("RESEND_API_KEY", "");
 
