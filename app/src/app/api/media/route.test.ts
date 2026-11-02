@@ -6,9 +6,10 @@ import { makeWorkspaceContext } from "../__test-helpers__/workspaceContextMock";
 // settings/route.test.ts / media/[id]/route.test.ts / posts/route.test.ts).
 // route.ts imports `@/lib/db` and `@/lib/workspace` at module scope, so both
 // must be mocked before route.ts is imported below.
-const { findManyMock, createMock, getWorkspaceContextMock } = vi.hoisted(() => ({
+const { findManyMock, createMock, countMock, getWorkspaceContextMock } = vi.hoisted(() => ({
   findManyMock: vi.fn(),
   createMock: vi.fn(),
+  countMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
 }));
 
@@ -17,6 +18,9 @@ vi.mock("@/lib/db", () => ({
     mediaItem: {
       findMany: findManyMock,
       create: createMock,
+      // Only here so a regression that adds a COUNT to the list endpoint is
+      // caught (the paged GET must detect "more" via take: limit + 1 alone).
+      count: countMock,
     },
   },
 }));
@@ -27,6 +31,8 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/workspace", () => ({
   getWorkspaceContext: getWorkspaceContextMock,
 }));
+
+import { decodePostsCursor, encodePostsCursor } from "@/lib/postsDto";
 
 import { GET, POST } from "./route";
 
@@ -49,6 +55,7 @@ function multipartRequest(): Request {
 beforeEach(() => {
   findManyMock.mockReset();
   createMock.mockReset();
+  countMock.mockReset();
   getWorkspaceContextMock.mockReset();
   getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
 });
@@ -223,11 +230,41 @@ describe("POST /api/media", () => {
   });
 });
 
+/** GET request for the paged list; `query` is the raw query string (no `?`). */
+function getRequest(query = ""): Request {
+  return new Request(`http://localhost/api/media${query ? `?${query}` : ""}`);
+}
+
+/**
+ * `count` raw rows shaped like the route's `select`, newest first. Each row is
+ * one second older than the previous, so row `i` is strictly older than row
+ * `i - 1` and the (createdAt desc, id desc) order is unambiguous.
+ */
+function makeRows(count: number) {
+  const base = new Date("2026-06-01T00:00:00.000Z").getTime();
+  return Array.from({ length: count }, (_, i) => ({
+    id: `media-${String(i).padStart(3, "0")}`,
+    storageLocation: `https://blob.example/${i}.png`,
+    originalFilename: `${i}.png`,
+    mimeType: "image/png",
+    sizeBytes: 10 + i,
+    baseCaption: "",
+    perPlatformOverrides: null,
+    createdAt: new Date(base - i * 1000),
+    lastUsedAt: null,
+  }));
+}
+
+interface ListBody {
+  items: Array<{ id: string; lastUsedAt: string | null }>;
+  nextCursor: string | null;
+}
+
 describe("GET /api/media", () => {
   it("401s and never queries when unauthenticated", async () => {
     getWorkspaceContextMock.mockResolvedValue(null);
 
-    const response = await GET();
+    const response = await GET(getRequest());
 
     expect(response.status).toBe(401);
     expect(findManyMock).not.toHaveBeenCalled();
@@ -237,7 +274,7 @@ describe("GET /api/media", () => {
     getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-shared" }));
     findManyMock.mockResolvedValue([]);
 
-    await GET();
+    await GET(getRequest());
 
     expect(findManyMock).toHaveBeenCalledWith(
       expect.objectContaining({ where: { workspaceId: "ws-shared", deletedAt: null } }),
@@ -270,16 +307,195 @@ describe("GET /api/media", () => {
       },
     ]);
 
-    const response = await GET();
-    const body = (await response.json()) as { items: Array<{ lastUsedAt: string | null }> };
+    const response = await GET(getRequest());
+    const body = (await response.json()) as ListBody;
 
     expect(response.status).toBe(200);
     expect(findManyMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", deletedAt: null },
-      orderBy: { createdAt: "desc" },
+      // 2026-11-01 scale audit (W11): total order + over-fetch-by-one page.
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 61,
       select: expect.objectContaining({ lastUsedAt: true }),
     });
     expect(body.items[0].lastUsedAt).toBe("2026-01-02T00:00:00.000Z");
     expect(body.items[1].lastUsedAt).toBeNull();
+  });
+
+  // 2026-11-01 scale audit (W11): the list used to return the whole library
+  // (16.7 MB at 50k items, over Vercel's 4.5 MB response cap). It now pages by
+  // keyset on (createdAt desc, id desc), 60 per page.
+  describe("pagination (keyset, 60 per page)", () => {
+    it("returns a full first page of 60 plus a nextCursor when 61 rows come back", async () => {
+      findManyMock.mockResolvedValue(makeRows(61));
+
+      const response = await GET(getRequest());
+      const body = (await response.json()) as ListBody;
+
+      expect(response.status).toBe(200);
+      expect(body.items).toHaveLength(60);
+      // The probe row (index 60) is dropped, never returned.
+      expect(body.items.map((i) => i.id)).not.toContain("media-060");
+      expect(body.nextCursor).toEqual(expect.any(String));
+    });
+
+    it("points nextCursor at the LAST returned row (not the probe row)", async () => {
+      const rows = makeRows(61);
+      findManyMock.mockResolvedValue(rows);
+
+      const response = await GET(getRequest());
+      const body = (await response.json()) as ListBody;
+
+      expect(decodePostsCursor(body.nextCursor as string)).toEqual({
+        createdAt: rows[59].createdAt,
+        id: rows[59].id,
+      });
+      expect(body.nextCursor).toBe(encodePostsCursor(rows[59].createdAt, rows[59].id));
+    });
+
+    it("returns nextCursor: null on the last (short) page", async () => {
+      findManyMock.mockResolvedValue(makeRows(5));
+
+      const response = await GET(getRequest());
+      const body = (await response.json()) as ListBody;
+
+      expect(response.status).toBe(200);
+      expect(body.items).toHaveLength(5);
+      expect(body.nextCursor).toBeNull();
+    });
+
+    it("returns nextCursor: null when the library is EXACTLY one page (60 rows, no probe row)", async () => {
+      findManyMock.mockResolvedValue(makeRows(60));
+
+      const response = await GET(getRequest());
+      const body = (await response.json()) as ListBody;
+
+      expect(body.items).toHaveLength(60);
+      expect(body.nextCursor).toBeNull();
+    });
+
+    it("returns an empty page with nextCursor: null for an empty library", async () => {
+      findManyMock.mockResolvedValue([]);
+
+      const response = await GET(getRequest());
+      const body = (await response.json()) as ListBody;
+
+      expect(body).toEqual({ items: [], nextCursor: null });
+    });
+
+    it("limit=10 fetches take: 11 and returns 10 items with a cursor on the 10th", async () => {
+      const rows = makeRows(11);
+      findManyMock.mockResolvedValue(rows);
+
+      const response = await GET(getRequest("limit=10"));
+      const body = (await response.json()) as ListBody;
+
+      expect(findManyMock).toHaveBeenCalledWith(expect.objectContaining({ take: 11 }));
+      expect(body.items).toHaveLength(10);
+      expect(body.nextCursor).toBe(encodePostsCursor(rows[9].createdAt, rows[9].id));
+    });
+
+    it("clamps limit=500 to the 60 maximum (take: 61)", async () => {
+      findManyMock.mockResolvedValue(makeRows(61));
+
+      const response = await GET(getRequest("limit=500"));
+      const body = (await response.json()) as ListBody;
+
+      expect(findManyMock).toHaveBeenCalledWith(expect.objectContaining({ take: 61 }));
+      expect(body.items).toHaveLength(60);
+    });
+
+    it("defaults to 60 per page when no limit is given", async () => {
+      findManyMock.mockResolvedValue([]);
+
+      await GET(getRequest());
+
+      expect(findManyMock).toHaveBeenCalledWith(expect.objectContaining({ take: 61 }));
+    });
+
+    it.each([["abc"], ["0"], ["-5"], ["1.5"], [""]])(
+      "returns 400 INVALID_LIMIT (and never queries) for limit=%j",
+      async (raw) => {
+        const response = await GET(getRequest(`limit=${raw}`));
+
+        expect(response.status).toBe(400);
+        const body = (await response.json()) as { error?: string; code?: string };
+        expect(body.code).toBe("INVALID_LIMIT");
+        expect(typeof body.error).toBe("string");
+        expect(findManyMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ["undecodable garbage", "!!!not-a-cursor!!!"],
+      ["valid base64url with no separator", Buffer.from("no-separator-here").toString("base64url")],
+      ["a bad timestamp", Buffer.from("not-a-date|media-1").toString("base64url")],
+      ["an empty id", Buffer.from("2026-06-01T00:00:00.000Z|").toString("base64url")],
+    ])("returns 400 INVALID_CURSOR (and never queries) for %s", async (_label, cursor) => {
+      const response = await GET(getRequest(`cursor=${encodeURIComponent(cursor)}`));
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "Invalid cursor",
+        code: "INVALID_CURSOR",
+      });
+      expect(findManyMock).not.toHaveBeenCalled();
+    });
+
+    it("pages by (createdAt desc, id desc): the keyset where ties on createdAt break by id", async () => {
+      const cursorCreatedAt = new Date("2026-06-01T00:00:00.000Z");
+      const cursor = encodePostsCursor(cursorCreatedAt, "media-050");
+      findManyMock.mockResolvedValue([]);
+
+      await GET(getRequest(`cursor=${encodeURIComponent(cursor)}`));
+
+      expect(findManyMock).toHaveBeenCalledWith({
+        where: {
+          workspaceId: "ws-1",
+          deletedAt: null,
+          OR: [
+            { createdAt: { lt: cursorCreatedAt } },
+            { createdAt: cursorCreatedAt, id: { lt: "media-050" } },
+          ],
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 61,
+        select: expect.any(Object),
+      });
+    });
+
+    it("keeps the workspace + deletedAt scope when a cursor is present (no cross-tenant paging)", async () => {
+      getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-other" }));
+      findManyMock.mockResolvedValue([]);
+      const cursor = encodePostsCursor(new Date("2026-06-01T00:00:00.000Z"), "media-050");
+
+      await GET(getRequest(`cursor=${encodeURIComponent(cursor)}`));
+
+      expect(findManyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ workspaceId: "ws-other", deletedAt: null }),
+        }),
+      );
+    });
+
+    it("treats an empty cursor param as the first page (no keyset predicate)", async () => {
+      findManyMock.mockResolvedValue([]);
+
+      const response = await GET(getRequest("cursor="));
+
+      expect(response.status).toBe(200);
+      expect(findManyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { workspaceId: "ws-1", deletedAt: null } }),
+      );
+    });
+
+    it("never issues a COUNT — 'more pages' comes from take: limit + 1 alone", async () => {
+      findManyMock.mockResolvedValue(makeRows(61));
+
+      await GET(getRequest());
+
+      expect(countMock).not.toHaveBeenCalled();
+      expect(findManyMock).toHaveBeenCalledTimes(1);
+    });
   });
 });

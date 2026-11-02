@@ -5,23 +5,91 @@ import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { toMediaItemDto } from "@/lib/mediaDto";
 import { MAX_MEDIA_BYTES, isImageOrVideoMimeType } from "@/lib/mediaInput";
+import { decodePostsCursor, encodePostsCursor } from "@/lib/postsDto";
 import { getWorkspaceContext } from "@/lib/workspace";
+import type { Prisma } from "@prisma/client";
 
-export async function GET() {
+/**
+ * Library page size: both the default and the maximum `?limit=`. 60 items at
+ * ~330 B of DTO each is ~20 KB a page, far under Vercel's 4.5 MB response cap.
+ * (Not exported: a Next route module may only export handlers + route config.)
+ */
+const MEDIA_PAGE_SIZE = 60;
+
+export async function GET(request: Request) {
   const context = await getWorkspaceContext();
 
   if (!context) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const url = new URL(request.url);
+
+  // 2026-11-01 scale audit (W11): this endpoint returned the WHOLE library
+  // with no `take` — 16.7 MB at 50k items, over Vercel's 4.5 MB function
+  // response cap, so the media page failed for large workspaces. It now pages
+  // by keyset. Validate `limit` and `cursor` BEFORE any DB work so a bad value
+  // is a clean 400 with zero queries.
+  //
+  // `limit`: absent -> the default; digits only otherwise (so "abc", "1.5",
+  // "-5" and "" are all rejected); < 1 is rejected; > MEDIA_PAGE_SIZE is
+  // clamped down, never an error.
+  const limitParam = url.searchParams.get("limit");
+  let limit = MEDIA_PAGE_SIZE;
+  if (limitParam !== null) {
+    const parsed = /^\d+$/.test(limitParam) ? Number(limitParam) : 0;
+    if (parsed < 1) {
+      return NextResponse.json(
+        { error: "limit must be a positive integer", code: "INVALID_LIMIT" },
+        { status: 400 },
+      );
+    }
+    limit = Math.min(parsed, MEDIA_PAGE_SIZE);
+  }
+
+  // `cursor`: an opaque token from a previous page's `nextCursor`; absent or
+  // empty means "first page". It is the same (createdAt, id) keyset token
+  // GET /api/posts uses — see encode/decodePostsCursor in lib/postsDto.ts.
+  const cursorParam = url.searchParams.get("cursor");
+  let cursor: { createdAt: Date; id: string } | null = null;
+  if (cursorParam) {
+    cursor = decodePostsCursor(cursorParam);
+    if (!cursor) {
+      return NextResponse.json(
+        { error: "Invalid cursor", code: "INVALID_CURSOR" },
+        { status: 400 },
+      );
+    }
+  }
+
+  const where: Prisma.MediaItemWhereInput = {
+    workspaceId: context.workspace.id,
+    deletedAt: null,
+  };
+  // Keyset predicate for the (createdAt desc, id desc) total order: the page
+  // AFTER the cursor (C, I) is every row strictly older in that order —
+  // createdAt < C, or the same createdAt with a smaller id. Positional, not
+  // row-based: it stays correct even if the cursor's own row was deleted (or
+  // new items were uploaded) between pages. ANDed with the scope above.
+  if (cursor) {
+    where.OR = [
+      { createdAt: { lt: cursor.createdAt } },
+      { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+    ];
+  }
+
   // Library view: shared by every member of the workspace (design §1 — "use
   // library" isn't restricted to own uploads), excluding soft-deleted media
   // (blob removed / user-deleted). Projects a display-only DTO (drops userId
   // + internal columns; keeps storageLocation for thumbnails). See
-  // src/lib/mediaDto.ts.
-  const items = await prisma.mediaItem.findMany({
-    where: { workspaceId: context.workspace.id, deletedAt: null },
-    orderBy: { createdAt: "desc" },
+  // src/lib/mediaDto.ts. Served by @@index([workspaceId, deletedAt,
+  // createdAt, id]) on MediaItem, so a page needs no sort.
+  const rows = await prisma.mediaItem.findMany({
+    where,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    // Over-fetch ONE row to learn whether an older page exists without a
+    // COUNT: if the probe row came back there is more, and it is dropped.
+    take: limit + 1,
     select: {
       id: true,
       storageLocation: true,
@@ -35,7 +103,12 @@ export async function GET() {
     },
   });
 
-  return NextResponse.json({ items: items.map(toMediaItemDto) }, { status: 200 });
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page[page.length - 1];
+  const nextCursor = hasMore && last ? encodePostsCursor(last.createdAt, last.id) : null;
+
+  return NextResponse.json({ items: page.map(toMediaItemDto), nextCursor }, { status: 200 });
 }
 
 export async function POST(request: Request) {

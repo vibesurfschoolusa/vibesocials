@@ -219,6 +219,8 @@ export function toPostJobResultSummaryDto(result: PostJobResult): PostJobResultS
 
 /**
  * Keyset pagination cursor helpers for `GET /api/posts` (activity pagination).
+ * They are generic over any `(createdAt, id)` total order, so `GET /api/media`
+ * reuses them as-is (2026-11-01 scale audit (W11)).
  *
  * The cursor is an opaque, URL-safe token over the (createdAt, id) total-order
  * key the endpoint pages by (`orderBy: [{ createdAt: "desc" }, { id: "desc" }]`).

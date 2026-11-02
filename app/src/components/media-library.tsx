@@ -30,7 +30,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { generateBlobKey } from "@/lib/blobKey";
-import { daysUntilRemoval } from "@/lib/mediaDto";
+import {
+  appendMediaPage,
+  daysUntilRemoval,
+  prependMediaItem,
+  removeMediaItem,
+} from "@/lib/mediaDto";
 import { RETENTION_DAYS } from "@/server/jobs/mediaRetention";
 
 interface MediaItemDto {
@@ -46,6 +51,8 @@ interface MediaItemDto {
 
 interface ListResponse {
   items: MediaItemDto[];
+  /** Opaque `?cursor=` token for the next (older) page; null on the last page. */
+  nextCursor: string | null;
 }
 
 interface CreateResponse {
@@ -188,6 +195,12 @@ export function MediaLibrary() {
   const [items, setItems] = useState<MediaItemDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // 2026-11-01 scale audit (W11): GET /api/media is paged (60 per page).
+  // `nextCursor` is the opaque token for the next, older page — null once the
+  // last page is loaded (which hides "Load more"); `loadingMore` guards and
+  // spins that button.
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const [file, setFile] = useState<File | null>(null);
   const [baseCaption, setBaseCaption] = useState("");
@@ -221,8 +234,11 @@ export function MediaLibrary() {
         return;
       }
 
+      // First page only: replaces the list (this also serves Retry). Later
+      // pages are appended by handleLoadMore below.
       const list = Array.isArray(data?.items) ? data!.items : [];
       setItems(list);
+      setNextCursor(typeof data?.nextCursor === "string" ? data.nextCursor : null);
     } catch {
       setError("Unexpected error while loading media items.");
     } finally {
@@ -240,6 +256,37 @@ export function MediaLibrary() {
     setError(null);
     void fetchItems();
   }, [fetchItems]);
+
+  // Fetches the next OLDER page and appends it, de-duped by id (a locally
+  // prepended upload can also appear on a later page). The cursor is a
+  // position in (createdAt desc, id desc), not a row reference, so deleting or
+  // uploading items between pages neither skips nor repeats anything. A failed
+  // fetch keeps the loaded list AND the cursor so the button stays for a retry.
+  const handleLoadMore = useCallback(async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const response = await fetch(`/api/media?cursor=${encodeURIComponent(nextCursor)}`);
+      const data = (await response.json().catch(() => null)) as
+        | ListResponse
+        | { error?: string }
+        | null;
+
+      if (!response.ok) {
+        toast.error((data as { error?: string } | null)?.error ?? "Failed to load more media.");
+        return;
+      }
+
+      const page = data as ListResponse | null;
+      const list = Array.isArray(page?.items) ? page.items : [];
+      setItems((prev) => appendMediaPage(prev, list));
+      setNextCursor(typeof page?.nextCursor === "string" ? page.nextCursor : null);
+    } catch {
+      toast.error("Unexpected error while loading more media.");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [nextCursor, loadingMore, toast]);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -290,7 +337,8 @@ export function MediaLibrary() {
       }
 
       const created = (data as CreateResponse).mediaItem;
-      setItems((prev) => [created, ...prev]);
+      // No re-fetch: the new upload is the newest item, so it goes on top.
+      setItems((prev) => prependMediaItem(prev, created));
       setFile(null);
       setBaseCaption("");
       setFileInputKey((key) => key + 1);
@@ -340,8 +388,9 @@ export function MediaLibrary() {
       throw new Error("DELETE_FAILED");
     }
 
-    // No re-fetch of the whole list — just remove it client-side.
-    setItems((prev) => prev.filter((existing) => existing.id !== target.id));
+    // No re-fetch of the list — just remove it client-side. nextCursor stays
+    // valid even if `target` was the last loaded row (see handleLoadMore).
+    setItems((prev) => removeMediaItem(prev, target.id));
     toast.success("Media deleted.");
   }, [deleteTarget, toast]);
 
@@ -441,23 +490,34 @@ export function MediaLibrary() {
               </Button>
             </div>
           </Alert>
-        ) : items.length === 0 ? (
+        ) : items.length === 0 && nextCursor === null ? (
+          // Empty only when nothing is loaded AND no older page remains: after
+          // deleting every loaded item there can still be more behind the cursor.
           <EmptyState
             icon={<Images />}
             title="No media yet"
             description="Upload from Create post, or use the form above, to build your library."
           />
         ) : (
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-            {items.map((item) => (
-              <MediaCard
-                key={item.id}
-                item={item}
-                onReuse={handleReuse}
-                onDeleteRequest={handleDeleteRequest}
-              />
-            ))}
-          </div>
+          <>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+              {items.map((item) => (
+                <MediaCard
+                  key={item.id}
+                  item={item}
+                  onReuse={handleReuse}
+                  onDeleteRequest={handleDeleteRequest}
+                />
+              ))}
+            </div>
+            {nextCursor !== null ? (
+              <div className="mt-4 flex justify-center">
+                <Button variant="outline" size="sm" loading={loadingMore} onClick={handleLoadMore}>
+                  Load more
+                </Button>
+              </div>
+            ) : null}
+          </>
         )}
       </section>
 

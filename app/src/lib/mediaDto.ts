@@ -84,3 +84,48 @@ export function daysUntilRemoval(
   const msLeft = last + retentionDays * 24 * 60 * 60 * 1000 - now.getTime();
   return Math.max(0, Math.ceil(msLeft / (24 * 60 * 60 * 1000)));
 }
+
+/**
+ * Client-side list transforms for the paged media library
+ * (2026-11-01 scale audit (W11)).
+ *
+ * `GET /api/media` pages by keyset, and the library also adds (upload) and
+ * removes (delete) items locally rather than re-fetching. Between two page
+ * fetches the underlying list can change, so the one invariant these helpers
+ * hold is: the rendered list NEVER contains two items with the same `id`
+ * (a duplicate React key and a visibly doubled card). Keyset paging already
+ * avoids skipping or repeating rows when items are inserted or deleted between
+ * pages; the de-dupe is the belt-and-braces for the local mutations (an item
+ * prepended after upload that a later page also carries). Generic over
+ * `{ id }` so they stay pure and framework-free (unit-tested in node).
+ */
+
+/**
+ * Append a freshly-fetched OLDER page beneath the items already on screen,
+ * dropping any id already present (existing rows come first, so the on-screen
+ * copy wins) and any repeat within the page itself.
+ */
+export function appendMediaPage<T extends { id: string }>(existing: T[], page: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const item of [...existing, ...page]) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    out.push(item);
+  }
+  return out;
+}
+
+/**
+ * Put a just-uploaded item at the top (the list is newest first). If an item
+ * with the same id is already loaded, the fresh copy replaces it at the top
+ * rather than rendering twice.
+ */
+export function prependMediaItem<T extends { id: string }>(existing: T[], created: T): T[] {
+  return [created, ...existing.filter((item) => item.id !== created.id)];
+}
+
+/** Remove a deleted item locally; a no-op when that id isn't loaded. */
+export function removeMediaItem<T extends { id: string }>(existing: T[], id: string): T[] {
+  return existing.filter((item) => item.id !== id);
+}
