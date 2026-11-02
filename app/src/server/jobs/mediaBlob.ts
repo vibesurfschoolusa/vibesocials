@@ -11,9 +11,19 @@ export type BlobDeleteOutcome = "deleted" | "kept_shared";
 /**
  * How long one blob `del()` may run before it is aborted. `del(urlOrPathname,
  * options?)` takes the `abortSignal` of `BlobCommandOptions`, an "AbortSignal to
- * cancel the running request" (@vercel/blob 2.8.2 type declarations). 10 s keeps
- * a retention item (lock wait + count + delete + commit) inside the "one 15 s
- * item" bound that mediaRetentionBatch.ts budgets for.
+ * cancel the running request" (@vercel/blob 2.8.2 type declarations).
+ *
+ * The abort comes from an AbortController aborted with NO reason, never from
+ * `AbortSignal.timeout()`: the SDK's request loop gives up only on a
+ * DOMException named "AbortError", which is what a reason-less `abort()` leaves
+ * as the reason; `AbortSignal.timeout()` aborts with a "TimeoutError", which the
+ * SDK treats as a retryable failure and re-sends (async-retry, 10 retries with
+ * backoff by default), so the delete would outlive the timeout. With the
+ * AbortError the SDK fails fast with `BlobRequestAbortedError`.
+ *
+ * That makes 10 s the bound on the request. Prisma's 15 s transaction timeout in
+ * mediaRetentionBatch.ts stays the outer bound of a whole item (lock wait + count
+ * + delete + commit).
  */
 export const BLOB_DELETE_TIMEOUT_MS = 10_000;
 
@@ -38,10 +48,13 @@ export const BLOB_DELETE_TIMEOUT_MS = 10_000;
  * caller's transaction rolls back (the row stays live) — same contract as
  * before.
  *
- * 2026-11-02 scale audit (jobs): `del` is bounded by
- * {@link BLOB_DELETE_TIMEOUT_MS}. A hung Blob request used to hold the row lock,
- * the advisory lock and a pooled connection until the invocation was killed; the
- * abort now throws like any failed `del`, so the same rollback applies.
+ * 2026-11-02 scale audit (jobs): `del` is aborted after
+ * {@link BLOB_DELETE_TIMEOUT_MS} (an AbortController, see that constant for why
+ * not `AbortSignal.timeout`). A hung Blob request used to hold the row lock, the
+ * advisory lock and a pooled connection until the invocation was killed; the
+ * SDK now rejects with `BlobRequestAbortedError`, which throws like any failed
+ * `del`, so the same rollback applies. Prisma's transaction timeout (15 s for a
+ * retention item) remains the outer bound.
  */
 export async function deleteBlobUnlessShared(
   tx: MediaBlobTx,
@@ -71,6 +84,14 @@ export async function deleteBlobUnlessShared(
     return "kept_shared";
   }
 
-  await del(key, { abortSignal: AbortSignal.timeout(BLOB_DELETE_TIMEOUT_MS) });
+  // Created here, after the lock and the count, so a shared blob (which returns
+  // above) starts no timer and the clock covers only the request itself.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), BLOB_DELETE_TIMEOUT_MS);
+  try {
+    await del(key, { abortSignal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
   return "deleted";
 }

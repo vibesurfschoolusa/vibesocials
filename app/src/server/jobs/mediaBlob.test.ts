@@ -173,8 +173,37 @@ describe("deleteBlobUnlessShared", () => {
 // abort throws like any failed `del`, so the caller's transaction rolls back and
 // the row stays live. The guard itself (lenient key, advisory lock, count over
 // [key, raw]) is unchanged.
+//
+// The signal must come from an AbortController aborted with NO reason, not from
+// AbortSignal.timeout(): @vercel/blob's requestApi gives up only on a DOMException
+// named "AbortError", so an AbortSignal.timeout() abort (a "TimeoutError") is
+// retried by the SDK's async-retry (10 retries with backoff by default) and the
+// delete would run on far past the timeout. A reason-less controller.abort() has
+// an AbortError reason, and the SDK fails fast with BlobRequestAbortedError.
 describe("deleteBlobUnlessShared bounds the blob delete", () => {
+  /** `del` that hangs until its signal aborts, then fails like the SDK does. */
+  function hangingDel() {
+    const seen: { signal?: AbortSignal } = {};
+    delMock.mockImplementation(
+      (_key: string, options: { abortSignal: AbortSignal }) =>
+        new Promise<void>((_resolve, reject) => {
+          seen.signal = options.abortSignal;
+          options.abortSignal.addEventListener("abort", () => {
+            reject(
+              Object.assign(new Error("Request was aborted."), { name: "BlobRequestAbortedError" }),
+            );
+          });
+        }),
+    );
+    return seen;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -182,21 +211,67 @@ describe("deleteBlobUnlessShared bounds the blob delete", () => {
     expect(BLOB_DELETE_TIMEOUT_MS).toBe(10_000);
   });
 
-  it("passes del() an AbortSignal.timeout(10_000)", async () => {
-    const signal = AbortSignal.timeout(10_000);
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(signal);
+  it("aborts the signal passed to del() after 10 s, with an AbortError reason (the one the SDK honours)", async () => {
+    const seen = hangingDel();
+    const { tx } = makeTx([{ id: "a", storageLocation: U, deletedAt: null }]);
+
+    const outcome = deleteBlobUnlessShared(tx, { id: "a", storageLocation: U }).then(
+      () => null,
+      (error: unknown) => error as Error,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(delMock).toHaveBeenCalledTimes(1);
+    expect(seen.signal).toBeInstanceOf(AbortSignal);
+    expect(seen.signal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(BLOB_DELETE_TIMEOUT_MS - 1);
+    expect(seen.signal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(seen.signal?.aborted).toBe(true);
+    // @vercel/blob bails out of its retries only on a DOMException named "AbortError";
+    // AbortSignal.timeout() would abort with a "TimeoutError" and be retried.
+    expect(seen.signal?.reason).toBeInstanceOf(DOMException);
+    expect((seen.signal?.reason as DOMException).name).toBe("AbortError");
+
+    expect((await outcome)?.name).toBe("BlobRequestAbortedError");
+  });
+
+  it("does not use AbortSignal.timeout (its TimeoutError abort is retried by the SDK, not honoured)", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     const { tx } = makeTx([{ id: "a", storageLocation: U, deletedAt: null }]);
 
     await deleteBlobUnlessShared(tx, { id: "a", storageLocation: U });
 
-    expect(timeoutSpy).toHaveBeenCalledTimes(1);
-    expect(timeoutSpy).toHaveBeenCalledWith(10_000);
-    expect(delMock).toHaveBeenCalledTimes(1);
-    expect(delMock).toHaveBeenCalledWith(U, { abortSignal: signal });
+    expect(timeoutSpy).not.toHaveBeenCalled();
+    expect(delMock).toHaveBeenCalledWith(U, TIMED);
   });
 
-  it("creates the signal only when it will delete (a shared blob starts no timer)", async () => {
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+  it("clears the timer when del() resolves first: no pending timer, and the signal is never aborted", async () => {
+    let signal: AbortSignal | undefined;
+    delMock.mockImplementation(async (_key: string, options: { abortSignal: AbortSignal }) => {
+      signal = options.abortSignal;
+    });
+    const { tx } = makeTx([{ id: "a", storageLocation: U, deletedAt: null }]);
+
+    await expect(deleteBlobUnlessShared(tx, { id: "a", storageLocation: U })).resolves.toBe("deleted");
+
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(BLOB_DELETE_TIMEOUT_MS * 2);
+    expect(signal?.aborted).toBe(false);
+  });
+
+  it("clears the timer when del() rejects first (any failure), and rethrows that failure", async () => {
+    const failure = new Error("network error");
+    delMock.mockRejectedValueOnce(failure);
+    const { tx } = makeTx([{ id: "a", storageLocation: U, deletedAt: null }]);
+
+    await expect(deleteBlobUnlessShared(tx, { id: "a", storageLocation: U })).rejects.toBe(failure);
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("starts no timer and no signal for a shared blob (it never calls del)", async () => {
     const { tx } = makeTx([
       { id: "a", storageLocation: U, deletedAt: null },
       { id: "b", storageLocation: U, deletedAt: null },
@@ -204,22 +279,50 @@ describe("deleteBlobUnlessShared bounds the blob delete", () => {
 
     await expect(deleteBlobUnlessShared(tx, { id: "b", storageLocation: U })).resolves.toBe("kept_shared");
 
-    expect(timeoutSpy).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
     expect(delMock).not.toHaveBeenCalled();
   });
 
-  it("rejects when the delete aborts (AbortError), so the caller's transaction rolls back", async () => {
-    const abort = Object.assign(new Error("The operation was aborted due to timeout"), {
-      name: "TimeoutError",
-    });
-    delMock.mockRejectedValueOnce(abort);
-    const { tx } = makeTx([{ id: "a", storageLocation: U, deletedAt: null }]);
+  it("an aborted del() rejects, never returns 'deleted', and the caller's transaction rolls back (the row stays live)", async () => {
+    hangingDel();
+    const rows: Row[] = [{ id: "a", storageLocation: U, deletedAt: null }];
+    const { tx } = makeTx(rows);
+    // Prisma's $transaction: the callback's rejection rolls every write back.
+    const transaction = async <T>(callback: () => Promise<T>): Promise<T> => {
+      const before = rows.map((row) => ({ ...row }));
+      try {
+        return await callback();
+      } catch (error) {
+        rows.splice(0, rows.length, ...before);
+        throw error;
+      }
+    };
 
-    await expect(deleteBlobUnlessShared(tx, { id: "a", storageLocation: U })).rejects.toBe(abort);
+    let result: string | undefined;
+    const outcome = transaction(async () => {
+      rows[0].deletedAt = new Date("2026-11-02T00:00:00Z"); // the caller marks the row first
+      result = await deleteBlobUnlessShared(tx, { id: "a", storageLocation: U });
+    }).then(
+      () => null,
+      (error: unknown) => error as Error,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rows[0].deletedAt).not.toBeNull(); // still inside the transaction
 
+    await vi.advanceTimersByTimeAsync(BLOB_DELETE_TIMEOUT_MS);
+
+    expect((await outcome)?.name).toBe("BlobRequestAbortedError");
+    expect(result).toBeUndefined();
+    expect(rows[0].deletedAt).toBeNull();
+  });
+
+  it("rejects with an AbortError the SDK might throw as a DOMException too, unchanged", async () => {
     const abortError = new DOMException("This operation was aborted", "AbortError");
     delMock.mockRejectedValueOnce(abortError);
+    const { tx } = makeTx([{ id: "a", storageLocation: U, deletedAt: null }]);
+
     await expect(deleteBlobUnlessShared(tx, { id: "a", storageLocation: U })).rejects.toBe(abortError);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("keeps the guard unchanged: lenient key for the lock, the delete and the count over [key, raw]", async () => {
