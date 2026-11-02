@@ -105,8 +105,8 @@ describe("prepareDeferredPostJobDispatch", () => {
 
     expect(resultCreateManyMock).toHaveBeenCalledWith({
       data: [
-        { postJobId: "job-1", platform: "tiktok", socialConnectionId: "c-tiktok", status: "pending" },
-        { postJobId: "job-1", platform: "youtube", socialConnectionId: "c-youtube", status: "pending" },
+        { postJobId: "job-1", workspaceId: "workspace-1", platform: "tiktok", socialConnectionId: "c-tiktok", status: "pending" },
+        { postJobId: "job-1", workspaceId: "workspace-1", platform: "youtube", socialConnectionId: "c-youtube", status: "pending" },
       ],
     });
     expect(result).toEqual({
@@ -241,7 +241,7 @@ describe("prepareDeferredPostJobDispatch", () => {
     const result = await prepareDeferredPostJobDispatch("job-1");
 
     expect(resultCreateManyMock).toHaveBeenCalledWith({
-      data: [{ postJobId: "job-1", platform: "youtube", socialConnectionId: "c-youtube", status: "pending" }],
+      data: [{ postJobId: "job-1", workspaceId: "workspace-1", platform: "youtube", socialConnectionId: "c-youtube", status: "pending" }],
     });
     expect(result.ok).toBe(true);
   });
@@ -278,7 +278,7 @@ describe("prepareDeferredPostJobDispatch", () => {
     const result = await prepareDeferredPostJobDispatch("job-1");
 
     expect(resultCreateManyMock).toHaveBeenCalledWith({
-      data: [{ postJobId: "job-1", platform: "x", socialConnectionId: "c-x", status: "pending" }],
+      data: [{ postJobId: "job-1", workspaceId: "workspace-1", platform: "x", socialConnectionId: "c-x", status: "pending" }],
     });
     expect(result.ok).toBe(true);
   });
@@ -307,7 +307,7 @@ describe("prepareDeferredPostJobDispatch", () => {
     await prepareDeferredPostJobDispatch("job-1");
 
     expect(resultCreateManyMock).toHaveBeenCalledWith({
-      data: [{ postJobId: "job-1", platform: "youtube", socialConnectionId: "c-youtube", status: "pending" }],
+      data: [{ postJobId: "job-1", workspaceId: "workspace-1", platform: "youtube", socialConnectionId: "c-youtube", status: "pending" }],
     });
   });
 });

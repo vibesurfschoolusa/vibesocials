@@ -77,6 +77,7 @@ describe("toPostJobResultSummaryDto — results whose connection was removed", (
     claimedAt: null,
     deferredUntil: null,
     metricsCheckedAt: null,
+    workspaceId: "workspace-1",
     createdAt: new Date("2026-01-01T00:01:00Z"),
     updatedAt: new Date("2026-01-01T00:01:30Z"),
   });

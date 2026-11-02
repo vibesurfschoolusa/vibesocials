@@ -3,6 +3,7 @@ import { Prisma, type Platform } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
+import { logger } from "@/lib/logger";
 import { nextPacificMidnight, rateLimitedError } from "@/server/platforms/rateLimited";
 import { PUBLISH_STEP_BUDGET_MS } from "@/server/platforms/publishBudget";
 import type { PublishContext } from "@/server/platforms/types";
@@ -35,6 +36,7 @@ const {
   consumeSlotMock,
   exhaustBudgetMock,
   deliverNotificationMock,
+  healResultWorkspaceIdsMock,
 } = vi.hoisted(() => ({
   getPlatformClientMock: vi.fn(),
   failPendingMock: vi.fn(),
@@ -44,6 +46,7 @@ const {
   consumeSlotMock: vi.fn(),
   exhaustBudgetMock: vi.fn(),
   deliverNotificationMock: vi.fn(),
+  healResultWorkspaceIdsMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -87,6 +90,12 @@ vi.mock("@/server/jobs/resultClaim", async (importOriginal) => {
   return { ...actual, releaseClaimForDeferral: releaseSpy };
 });
 vi.mock("@vercel/blob", () => ({ del: vi.fn() }));
+// The hourly workspace heal has its own suite (resultWorkspaceHeal.test.ts); the
+// sweep tests only need to see when it runs and how its failure is handled.
+vi.mock("@/server/jobs/resultWorkspaceHeal", () => ({
+  RESULT_WORKSPACE_HEAL_BATCH: 1000,
+  healResultWorkspaceIds: healResultWorkspaceIdsMock,
+}));
 // The email builder / Resend transport have their own suites; sendNotification's
 // job is the Inngest options and the step boundary.
 vi.mock("@/server/notifications/postOutcomeEmail", () => ({
@@ -2558,6 +2567,8 @@ describe("stalePostJobSweep - deferral exclusion and singleton", () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     db.postJobUpdateMany.mockResolvedValue({ count: 0 });
+    healResultWorkspaceIdsMock.mockReset();
+    healResultWorkspaceIdsMock.mockResolvedValue({ healed: 0 });
   });
 
   afterEach(() => {
@@ -2583,6 +2594,70 @@ describe("stalePostJobSweep - deferral exclusion and singleton", () => {
   it("runs one sweep at a time (singleton skip)", () => {
     expect(optsOf().id).toBe("stale-post-job-sweep");
     expect(optsOf().singleton).toEqual({ mode: "skip" });
+  });
+});
+
+// 2026-11-01 scale audit (db M5): rows the previous deployment writes while the
+// workspaceId migrations run carry a NULL workspaceId; the hourly sweep heals
+// them, in its own step, so a heal failure can never fail the stale-job sweep.
+describe("stalePostJobSweep - result workspace heal step", () => {
+  const NOW = Date.parse("2026-11-02T10:30:00.000Z");
+  const run = (step = fakeStep()) =>
+    handlerOf(stalePostJobSweep)({ event: { name: "inngest/scheduled.timer", data: {} }, step });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    db.postJobUpdateMany.mockResolvedValue({ count: 0 });
+    healResultWorkspaceIdsMock.mockReset();
+    healResultWorkspaceIdsMock.mockResolvedValue({ healed: 0 });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("runs fail-stale-post-jobs, then heal-result-workspace", async () => {
+    const step = fakeStep();
+    await run(step);
+
+    expect(step.order).toEqual(["run:fail-stale-post-jobs", "run:heal-result-workspace"]);
+    expect(healResultWorkspaceIdsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns the heal count as the step output", async () => {
+    healResultWorkspaceIdsMock.mockResolvedValue({ healed: 12 });
+    const step = fakeStep();
+    await run(step);
+
+    expect(step.outputs["heal-result-workspace"]).toEqual({ healed: 12 });
+  });
+
+  it("logs a heal error and still completes the sweep", async () => {
+    const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => undefined);
+    try {
+      healResultWorkspaceIdsMock.mockRejectedValue(new Error("db down"));
+      db.postJobUpdateMany.mockResolvedValue({ count: 2 });
+      const step = fakeStep();
+
+      await expect(run(step)).resolves.toMatchObject({ swept: 2 });
+
+      expect(step.order).toEqual(["run:fail-stale-post-jobs", "run:heal-result-workspace"]);
+      expect(step.outputs["heal-result-workspace"]).toEqual({ healed: 0 });
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy.mock.calls[0][0]).toContain("[StaleSweep]");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("does not reach the heal when the stale-job step itself fails", async () => {
+    db.postJobUpdateMany.mockRejectedValue(new Error("db down"));
+    const step = fakeStep();
+
+    await expect(run(step)).rejects.toThrow("db down");
+
+    expect(healResultWorkspaceIdsMock).not.toHaveBeenCalled();
   });
 });
 

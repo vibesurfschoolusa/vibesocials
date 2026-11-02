@@ -197,6 +197,9 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
     expect(postJobResultCreateMock).toHaveBeenCalledWith({
       data: {
         postJobId: "job-1",
+        // 2026-11-01 scale audit (db M5): the denormalized workspace, so
+        // publish-health reads a workspace-scoped index instead of joining PostJob.
+        workspaceId: "workspace-1",
         platform: "youtube",
         socialConnectionId: "conn-yt",
         status: "pending",
@@ -240,6 +243,11 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
 
     expect(postJobResultCreateMock).toHaveBeenCalledTimes(2);
     expect(result.resultIds).toEqual(["result-x", "result-youtube"]);
+    // Every result of the fan-out carries the workspace, not just the first.
+    expect(postJobResultCreateMock.mock.calls.map(([arg]) => arg.data.workspaceId)).toEqual([
+      "workspace-1",
+      "workspace-1",
+    ]);
   });
 
   // Team Workspaces (Task 5): pin the workspaceId stamping on BOTH rows this
@@ -531,6 +539,9 @@ describe("createPostJobForExistingMedia (Task 7 — per-post platform targeting)
     expect(postJobResultCreateMock).toHaveBeenCalledWith({
       data: {
         postJobId: "job-1",
+        // 2026-11-01 scale audit (db M5): the denormalized workspace, so
+        // publish-health reads a workspace-scoped index instead of joining PostJob.
+        workspaceId: "workspace-1",
         platform: "youtube",
         socialConnectionId: "conn-yt",
         status: "pending",
@@ -576,6 +587,11 @@ describe("createPostJobForExistingMedia (Task 7 — per-post platform targeting)
 
     expect(postJobResultCreateMock).toHaveBeenCalledTimes(2);
     expect(result.resultIds).toEqual(["result-x", "result-youtube"]);
+    // Every result of the fan-out carries the workspace, not just the first.
+    expect(postJobResultCreateMock.mock.calls.map(([arg]) => arg.data.workspaceId)).toEqual([
+      "workspace-1",
+      "workspace-1",
+    ]);
   });
 });
 

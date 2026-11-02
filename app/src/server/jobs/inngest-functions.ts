@@ -39,6 +39,7 @@ import {
   publishConcurrency,
   refreshConnectionConcurrency,
 } from "@/server/jobs/publishFlowControl";
+import { healResultWorkspaceIds } from "@/server/jobs/resultWorkspaceHeal";
 import {
   STALE_ELIGIBLE_STATUSES,
   staleCutoff,
@@ -1547,6 +1548,11 @@ export const youtubePostMetricsSync = inngest.createFunction(
  * record *why* — the per-platform error lives on PostJobResult and an orphan has
  * none — so these surface exactly like the other resultless failures already in
  * prod. Runs at :30 to stay clear of the metrics sync on the hour.
+ *
+ * Steps: `fail-stale-post-jobs`, then `heal-result-workspace` (2026-11-01 scale
+ * audit, db M5): copies the job's workspace onto up to 1,000 results that the
+ * previous deployment created without one (resultWorkspaceHeal.ts). The heal is
+ * housekeeping, so its error is logged and never fails the sweep.
  */
 export const stalePostJobSweep = inngest.createFunction(
   {
@@ -1592,7 +1598,22 @@ export const stalePostJobSweep = inngest.createFunction(
       return { swept: count, cutoff: cutoff.toISOString() };
     });
 
-    return summary;
+    const heal = await step.run("heal-result-workspace", async () => {
+      try {
+        const { healed } = await healResultWorkspaceIds();
+        if (healed > 0) {
+          logger.info("[StaleSweep] healed results without a workspaceId", { healed });
+        }
+        return { healed };
+      } catch (error) {
+        // A failed heal must not fail (or retry) the stale-job sweep; the next
+        // hourly run takes the same rows.
+        logger.error("[StaleSweep] could not heal PostJobResult.workspaceId", { error });
+        return { healed: 0 };
+      }
+    });
+
+    return { ...summary, healed: heal.healed };
   },
 );
 

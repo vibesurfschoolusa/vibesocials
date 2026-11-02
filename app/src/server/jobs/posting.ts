@@ -259,6 +259,9 @@ export async function createPostJobOnly(
                 tx.postJobResult.create({
                   data: {
                     postJobId: job.id,
+                    // 2026-11-01 scale audit (db M5): the denormalized workspace
+                    // publish-health counts by; same value as the job's.
+                    workspaceId,
                     platform: connection.platform,
                     socialConnectionId: connection.id,
                     status: "pending",
@@ -491,6 +494,8 @@ export async function createPostJobForExistingMedia(
               tx.postJobResult.create({
                 data: {
                   postJobId: job.id,
+                  // 2026-11-01 scale audit (db M5): see createPostJobOnly.
+                  workspaceId,
                   platform: connection.platform,
                   socialConnectionId: connection.id,
                   status: "pending",
@@ -762,6 +767,8 @@ export async function prepareDeferredPostJobDispatch(
     await prisma.postJobResult.createMany({
       data: eligible.map((c) => ({
         postJobId,
+        // 2026-11-01 scale audit (db M5): the job's workspace, denormalized.
+        workspaceId: job.workspaceId,
         platform: c.platform,
         socialConnectionId: c.id,
         status: "pending" as const,

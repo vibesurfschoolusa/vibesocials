@@ -391,6 +391,20 @@ model PostJobResult {
   // updateMany, so @updatedAt is NOT bumped: publish-health reads updatedAt as
   // "when the result finished". Nullable: the previous deployment ignores it.
   metricsCheckedAt   DateTime?
+  // 2026-11-01 scale audit (db M5, web W16): the owning job's workspace,
+  // denormalized so publish-health counts a workspace's recent results from the
+  // [workspaceId, updatedAt] index below instead of joining PostJob (~400 ms for
+  // every workspace, 0.4-0.9 s for a 50k-post one). Deliberately NOT a relation or
+  // foreign key: results already die with their job (PostJob cascade), and an FK
+  // would validate the whole table under SHARE ROW EXCLUSIVE locks on both tables
+  // while it is built. Nullable so the previous deployment, which does not set it,
+  // keeps inserting. Every result-creating write sets it (posting.ts). Existing
+  // rows are filled by migration 20261103100100_backfill_post_job_result_workspace_id;
+  // rows the previous deployment writes in between (or during a rollback) carry
+  // NULL until the hourly stale sweep heals them (resultWorkspaceHeal.ts). Both
+  // are raw UPDATEs that never touch updatedAt: publish-health reads it as "when
+  // the result finished", and an updateMany would bump @updatedAt.
+  workspaceId        String?
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
@@ -419,6 +433,10 @@ model PostJobResult {
   // 2026-11-01 scale audit (jobs): the metrics sync now filters by platform and
   // status and orders by metricsCheckedAt (least recently checked first).
   @@index([platform, status, metricsCheckedAt])
+  // 2026-11-01 scale audit (db M5): publish-health's grouped COUNT filters by
+  // workspaceId and ranges over updatedAt (the finish time). The heal step also
+  // finds its NULL rows through it.
+  @@index([workspaceId, updatedAt])
 }
 
 // Fixed-window rate-limit counters (see src/lib/rateLimit.ts).
