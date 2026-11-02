@@ -2,6 +2,7 @@ import type { SocialConnection } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { refreshGoogleToken } from "@/server/platforms/googleTokens";
+import { MIN_REQUEST_WINDOW_MS, PUBLISH_BUDGET_EXCEEDED_CODE } from "@/server/platforms/publishBudget";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest; refreshGoogleToken
 // resolves prisma via `await import("@/lib/db")` at call time, so it receives
@@ -297,3 +298,70 @@ describe("refreshGoogleToken — failure classification", () => {
   });
 });
 
+
+// 2026-11-01 scale audit (platform limits / step budget, Task 7): a token refresh
+// that runs inside a platform step (or inside Task 8's per-connection lock) must
+// not push that step past its deadline, so its request timeout is clamped to the
+// time left and a request is never started with under 5 s left.
+describe("refreshGoogleToken — step deadline", () => {
+  const NOW = Date.parse("2026-11-01T12:00:00Z");
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // A fresh Response per call: a body can only be read once.
+  const okFetch = () =>
+    vi.fn(() =>
+      Promise.resolve(
+        tokenResponse({ access_token: "new-access-token", expires_in: 3600, token_type: "Bearer" }),
+      ),
+    );
+
+  /** The timeout every fetchWithTimeout call armed (its timer's delay). */
+  const requestTimeouts = (spy: { mock: { calls: unknown[][] } }) =>
+    spy.mock.calls.map((c) => c[1] as number);
+
+  it("clamps the token request's timeout to the time left (a deadline 8 s away -> <= 8 s)", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    await refreshGoogleToken(makeConnection(), { deadline: NOW + 8_000 });
+
+    const timeouts = requestTimeouts(setTimeoutSpy);
+    expect(timeouts).toHaveLength(1);
+    expect(timeouts[0]).toBeLessThanOrEqual(8_000);
+    expect(timeouts[0]).toBeGreaterThanOrEqual(MIN_REQUEST_WINDOW_MS);
+  });
+
+  it("keeps the 30 s default when the deadline is far away or absent", async () => {
+    vi.stubGlobal("fetch", okFetch());
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    await refreshGoogleToken(makeConnection(), { deadline: NOW + 200_000 });
+    await refreshGoogleToken(makeConnection());
+
+    expect(requestTimeouts(setTimeoutSpy)).toEqual([30_000, 30_000]);
+  });
+
+  it("refuses to start with under 5 s left: PUBLISH_TIME_BUDGET_EXCEEDED, no request, no write, no reconnect flag", async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await refreshGoogleToken(makeConnection(), {
+      deadline: NOW + MIN_REQUEST_WINDOW_MS - 1,
+    }).then(
+      () => null,
+      (e: unknown) => e as Error & { code?: string },
+    );
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+});

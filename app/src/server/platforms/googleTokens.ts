@@ -1,13 +1,14 @@
 import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
 import {
   isTerminalRefreshFailure,
   markConnectionNeedsReconnect,
   readOAuthErrorCode,
 } from "./connectionHealth";
+import { budgetedTimeout } from "./publishBudget";
 
 // Server-only: touches prisma and Google OAuth client secrets.
 //
@@ -36,9 +37,17 @@ const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
  *   as invalid_grant — `isTerminalRefreshFailure`) also marks the connection
  *   `needsReconnect`; 429 / 5xx / invalid_client do not.
  * Network errors propagate unchanged and never flag.
+ *
+ * `opts.deadline` (epoch ms, publishBudget.ts): 2026-11-01 scale audit (step
+ * budget, Task 7) - a refresh that runs inside a platform step must not push the
+ * step past its deadline, so the token request timeout is clamped to the time
+ * left, and with under MIN_REQUEST_WINDOW_MS left it throws
+ * `PUBLISH_TIME_BUDGET_EXCEEDED` BEFORE any request, write or reconnect flag.
+ * Without a deadline the request keeps its 30 s default.
  */
 export async function refreshGoogleToken(
   connection: SocialConnection,
+  opts?: { deadline?: number },
 ): Promise<SocialConnection> {
   const refreshToken = connection.refreshToken;
   if (!refreshToken) {
@@ -75,22 +84,29 @@ export async function refreshGoogleToken(
     throw error;
   }
 
+  // Throws (before anything is sent) when the step budget is spent.
+  const timeoutMs = budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, opts?.deadline);
+
   logger.info("[GoogleTokens] Refreshing access token", {
     connectionId: connection.id,
   });
 
-  const response = await fetchWithTimeout(GOOGLE_TOKEN_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
+  const response = await fetchWithTimeout(
+    GOOGLE_TOKEN_ENDPOINT,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token",
+      }),
     },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken,
-      grant_type: "refresh_token",
-    }),
-  });
+    timeoutMs,
+  );
 
   // Classify BEFORE assertOk consumes the body (readOAuthErrorCode reads a clone).
   const terminal =

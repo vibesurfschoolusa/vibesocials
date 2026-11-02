@@ -7,6 +7,11 @@ import {
   linkedinClient,
   refreshLinkedInToken,
 } from "@/server/platforms/linkedinClient";
+import {
+  MIN_REQUEST_WINDOW_MS,
+  PUBLISH_BUDGET_EXCEEDED_CODE,
+  PUBLISH_STEP_BUDGET_MS,
+} from "@/server/platforms/publishBudget";
 import { withTransientRetries } from "@/server/platforms/transientRetry";
 
 // Mirrors googleTokens.test.ts: vi.mock + vi.hoisted are hoisted above imports,
@@ -574,6 +579,310 @@ describe("linkedinClient.publishVideo — rate limits (RATE_LIMITED)", () => {
       const error = await failure(linkedinClient.publishVideo(ctx("image/jpeg")));
 
       expect(error?.code).toBe("LINKEDIN_IMAGE_UPLOAD_FAILED");
+    });
+  });
+});
+
+// 2026-11-01 scale audit (step budget, Task 7): every LinkedIn request - the token
+// refresh, the media download, register, upload and ugcPosts - ends by the step
+// deadline, and none is started with under 5 s left.
+describe("linkedinClient — step deadline", () => {
+  const NOW = Date.parse("2026-11-01T12:00:00Z");
+  const UPLOAD_URL = "https://upload.linkedin.example/u";
+  type CodedError = Error & { code?: string };
+
+  const registered = () =>
+    new Response(
+      JSON.stringify({
+        value: {
+          asset: "urn:li:digitalmediaAsset:1",
+          uploadMechanism: {
+            "com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest": { uploadUrl: UPLOAD_URL },
+          },
+        },
+      }),
+      { status: 200 },
+    );
+  const blobOk = () => new Response(new Uint8Array([1, 2, 3, 4]));
+  const uploadOk = () => new Response("", { status: 201 });
+  const postOk = () => new Response(JSON.stringify({ id: "urn:li:share:1" }), { status: 201 });
+
+  function ctx(mimeType: string, deadline?: number) {
+    return {
+      user: { id: "user-1" },
+      socialConnection: makeConnection({ id: "conn-li", expiresAt: new Date(Date.now() + 3_600_000) }),
+      mediaItem: {
+        mimeType,
+        storageLocation: "https://blob.example.com/m",
+        originalFilename: "m",
+      },
+      caption: "hello",
+      deadline,
+    } as unknown as Parameters<typeof linkedinClient.publishVideo>[0];
+  }
+
+  const failure = (promise: Promise<unknown>) =>
+    promise.then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+
+  /** Resolve after `ms` of (fake) time, or reject if the request is aborted first. */
+  const slow = (ms: number, make: () => Response) => (init?: RequestInit) =>
+    new Promise<Response>((resolve, reject) => {
+      const timer = setTimeout(() => resolve(make()), ms);
+      init?.signal?.addEventListener("abort", () => {
+        clearTimeout(timer);
+        reject(new DOMException("aborted", "AbortError"));
+      });
+    });
+  /** Never answers: settles only when the request is aborted. */
+  const hang = (init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+    });
+
+  type Route = (init?: RequestInit) => Promise<Response>;
+  function stubRoutes(overrides: { blob?: Route; register?: Route; upload?: Route; post?: Route } = {}) {
+    const fetchMock = vi.fn<typeof fetch>((input, init) => {
+      const url = String(input);
+      if (url.includes("blob.example.com")) return (overrides.blob ?? (async () => blobOk()))(init);
+      if (url.includes("assets?action=registerUpload")) {
+        return (overrides.register ?? (async () => registered()))(init);
+      }
+      if (url === UPLOAD_URL) return (overrides.upload ?? (async () => uploadOk()))(init);
+      if (url.includes("/v2/ugcPosts")) return (overrides.post ?? (async () => postOk()))(init);
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+  const callsTo = (fetchMock: ReturnType<typeof stubRoutes>, fragment: string) =>
+    fetchMock.mock.calls.filter((c) => String(c[0]).includes(fragment));
+
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe("publishVideo", () => {
+    it.each([
+      ["video", "video/mp4"],
+      ["image", "image/jpeg"],
+    ])("refuses to start a %s publish once the step budget is spent (no request at all)", async (_label, mimeType) => {
+      const fetchMock = stubRoutes();
+
+      const error = await failure(
+        linkedinClient.publishVideo(ctx(mimeType, Date.now() + MIN_REQUEST_WINDOW_MS - 1)),
+      );
+
+      expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("refuses to refresh an expired token with under 5 s left (no token request)", async () => {
+      const fetchMock = stubRoutes();
+      const expired = { ...ctx("video/mp4", Date.now() + MIN_REQUEST_WINDOW_MS - 1) };
+      expired.socialConnection = makeConnection({ expiresAt: new Date("2020-01-01T00:00:00Z") });
+
+      const error = await failure(linkedinClient.publishVideo(expired));
+
+      expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("clamps every request of a video publish to the time left (download, register, upload, ugcPosts <= 12 s)", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW);
+      const fetchMock = stubRoutes();
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const abortTimeoutSpy = vi.spyOn(AbortSignal, "timeout");
+
+      await expect(linkedinClient.publishVideo(ctx("video/mp4", NOW + 12_000))).resolves.toEqual({
+        externalPostId: "urn:li:share:1",
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      const timeouts = setTimeoutSpy.mock.calls.map((c) => c[1] as number);
+      expect(timeouts).toHaveLength(4);
+      for (const timeout of timeouts) {
+        expect(timeout).toBeLessThanOrEqual(12_000);
+        expect(timeout).toBeGreaterThanOrEqual(MIN_REQUEST_WINDOW_MS);
+      }
+      // The download also carries a whole-transfer bound (its body is read after the headers).
+      expect(abortTimeoutSpy).toHaveBeenCalledTimes(1);
+      expect(abortTimeoutSpy.mock.calls[0][0]).toBeLessThanOrEqual(12_000);
+    });
+
+    it("clamps every request of an image publish to the time left (register, download, upload, ugcPosts <= 12 s)", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW);
+      const fetchMock = stubRoutes();
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const abortTimeoutSpy = vi.spyOn(AbortSignal, "timeout");
+
+      await expect(linkedinClient.publishVideo(ctx("image/jpeg", NOW + 12_000))).resolves.toEqual({
+        externalPostId: "urn:li:share:1",
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      const timeouts = setTimeoutSpy.mock.calls.map((c) => c[1] as number);
+      expect(timeouts).toHaveLength(4);
+      for (const timeout of timeouts) {
+        expect(timeout).toBeLessThanOrEqual(12_000);
+        expect(timeout).toBeGreaterThanOrEqual(MIN_REQUEST_WINDOW_MS);
+      }
+      expect(abortTimeoutSpy).toHaveBeenCalledTimes(1);
+      expect(abortTimeoutSpy.mock.calls[0][0]).toBeLessThanOrEqual(12_000);
+    });
+
+    it("worst case: slow download + register and a hung upload PUT still settle by the step deadline", async () => {
+      vi.useFakeTimers();
+      const start = Date.now();
+      const deadline = start + PUBLISH_STEP_BUDGET_MS;
+      const fetchMock = stubRoutes({
+        blob: slow(118_000, blobOk),
+        register: slow(25_000, registered),
+        upload: hang,
+      });
+
+      let settledAt = 0;
+      const promise = failure(linkedinClient.publishVideo(ctx("video/mp4", deadline))).then((e) => {
+        settledAt = Date.now();
+        return e;
+      });
+      await vi.advanceTimersByTimeAsync(400_000);
+      const error = await promise;
+
+      // The video downloaded and registered by 143 s; the upload hung and was
+      // cut off at the deadline (unclamped it would run to 143 + 120 = 263 s).
+      expect(error?.code).toBe("FETCH_TIMEOUT");
+      expect(callsTo(fetchMock, UPLOAD_URL)).toHaveLength(1);
+      expect(callsTo(fetchMock, "/v2/ugcPosts")).toHaveLength(0);
+      expect(settledAt).toBeLessThanOrEqual(deadline);
+      expect(settledAt - start).toBeLessThan(240_000);
+    });
+
+    it("worst case: a hung ugcPosts commit is cut off by the deadline and reported PUBLISH_UNCONFIRMED", async () => {
+      vi.useFakeTimers();
+      const start = Date.now();
+      const deadline = start + PUBLISH_STEP_BUDGET_MS;
+      stubRoutes({
+        blob: slow(118_000, blobOk),
+        register: slow(25_000, registered),
+        upload: slow(60_000, uploadOk),
+        post: hang,
+      });
+
+      let settledAt = 0;
+      const promise = failure(linkedinClient.publishVideo(ctx("video/mp4", deadline))).then((e) => {
+        settledAt = Date.now();
+        return e;
+      });
+      await vi.advanceTimersByTimeAsync(400_000);
+      const error = await promise;
+
+      // 118 + 25 + 60 = 203 s elapsed; ugcPosts gets the 22 s left, not 30 s.
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(settledAt).toBeLessThanOrEqual(deadline);
+    });
+
+    it("a ugcPosts that would start with under 5 s left is refused (retry-safe), never reported unconfirmed", async () => {
+      vi.useFakeTimers();
+      const start = Date.now();
+      // The upload answers after 22 s of the 26 s: ugcPosts would get 4 s.
+      const fetchMock = stubRoutes({ upload: slow(22_000, uploadOk) });
+
+      const promise = failure(linkedinClient.publishVideo(ctx("image/jpeg", start + 26_000)));
+      await vi.advanceTimersByTimeAsync(30_000);
+      const error = await promise;
+
+      expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+      expect(callsTo(fetchMock, "/v2/ugcPosts")).toHaveLength(0);
+    });
+  });
+
+  describe("token refresh", () => {
+    const refreshOk = () =>
+      vi.fn().mockResolvedValue(tokenResponse({ access_token: "fresh-access-token", expires_in: 5_184_000 }));
+    const expiredConnection = () => makeConnection({ expiresAt: new Date("2020-01-01T00:00:00Z") });
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(NOW);
+    });
+
+    it("refreshLinkedInToken clamps the token request to the time left (a deadline 8 s away -> <= 8 s)", async () => {
+      vi.stubGlobal("fetch", refreshOk());
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+      await refreshLinkedInToken(makeConnection(), { deadline: NOW + 8_000 });
+
+      const timeouts = setTimeoutSpy.mock.calls.map((c) => c[1] as number);
+      expect(timeouts).toHaveLength(1);
+      expect(timeouts[0]).toBeLessThanOrEqual(8_000);
+      expect(timeouts[0]).toBeGreaterThanOrEqual(MIN_REQUEST_WINDOW_MS);
+    });
+
+    it("refreshLinkedInToken keeps the 30 s default without a deadline", async () => {
+      vi.stubGlobal("fetch", refreshOk());
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+      await refreshLinkedInToken(makeConnection());
+
+      expect(setTimeoutSpy.mock.calls.map((c) => c[1])).toEqual([30_000]);
+    });
+
+    it("refreshLinkedInToken refuses to start with under 5 s left: no request, no write, no reconnect flag", async () => {
+      const fetchMock = refreshOk();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const error = await failure(
+        refreshLinkedInToken(makeConnection(), { deadline: NOW + MIN_REQUEST_WINDOW_MS - 1 }),
+      );
+
+      expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("ensureFreshLinkedInToken passes its deadline to the refresh (8 s away -> request <= 8 s)", async () => {
+      vi.stubGlobal("fetch", refreshOk());
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+      const refreshed = await ensureFreshLinkedInToken(expiredConnection(), NOW + 8_000);
+
+      expect(refreshed.accessToken).toBe("fresh-access-token");
+      const timeouts = setTimeoutSpy.mock.calls.map((c) => c[1] as number);
+      expect(timeouts).toHaveLength(1);
+      expect(timeouts[0]).toBeLessThanOrEqual(8_000);
+    });
+
+    it("ensureFreshLinkedInToken refuses to refresh with under 5 s left", async () => {
+      const fetchMock = refreshOk();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const error = await failure(
+        ensureFreshLinkedInToken(expiredConnection(), NOW + MIN_REQUEST_WINDOW_MS - 1),
+      );
+
+      expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("ensureFreshLinkedInToken leaves a fresh token alone even with the budget spent", async () => {
+      const fetchMock = refreshOk();
+      vi.stubGlobal("fetch", fetchMock);
+      const fresh = makeConnection({ expiresAt: new Date(NOW + 3_600_000) });
+
+      await expect(ensureFreshLinkedInToken(fresh, NOW - 1)).resolves.toBe(fresh);
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 });

@@ -33,6 +33,13 @@ interface YouTubeVideoResource {
 const YOUTUBE_TITLE_MAX_GRAPHEMES = 100;
 
 /**
+ * Per-request timeouts, each further clamped to the time left in the step by
+ * budgetedTimeout (2026-11-01 scale audit, step budget, Task 7).
+ */
+const YOUTUBE_DOWNLOAD_TIMEOUT_MS = 120_000;
+const YOUTUBE_UPLOAD_TIMEOUT_MS = 120_000;
+
+/**
  * The video title: the POST's own base caption (no footer) — the job's
  * snapshot via `ctx.baseCaption`, the shared MediaItem's only for legacy jobs
  * — else the full caption, truncated to YouTube's 100-grapheme limit. The
@@ -55,7 +62,7 @@ export const youtubeClient: PlatformClient = {
     // Check if token needs refresh
     if (socialConnection.expiresAt && socialConnection.expiresAt < new Date()) {
       console.log("[YouTube] Access token expired, refreshing...");
-      socialConnection = await refreshGoogleToken(socialConnection);
+      socialConnection = await refreshGoogleToken(socialConnection, { deadline });
     }
 
     const accessToken = socialConnection.accessToken;
@@ -85,12 +92,15 @@ export const youtubeClient: PlatformClient = {
     // Fetch the video from Vercel Blob.
     // fetchWithTimeout's own timeoutMs only bounds the connection + response
     // headers; pass AbortSignal.timeout as init.signal to also bound the
-    // arrayBuffer() body transfer (see the fetchWithTimeout docstring).
+    // arrayBuffer() body transfer (see the fetchWithTimeout docstring). Both are
+    // the same value, clamped to the remaining step budget; a spent budget throws
+    // PUBLISH_TIME_BUDGET_EXCEEDED before the request (nothing is sent).
     const mediaUrl = mediaItem.storageLocation;
+    const downloadTimeoutMs = budgetedTimeout(YOUTUBE_DOWNLOAD_TIMEOUT_MS, deadline);
     const mediaResponse = await fetchWithTimeout(
       mediaUrl,
-      { signal: AbortSignal.timeout(120_000) },
-      120_000,
+      { signal: AbortSignal.timeout(downloadTimeoutMs) },
+      downloadTimeoutMs,
     );
     await assertOk(mediaResponse, {
       code: "YOUTUBE_FETCH_MEDIA_FAILED",
@@ -232,7 +242,7 @@ export const youtubeClient: PlatformClient = {
           },
           body,
         },
-        budgetedTimeout(120_000, deadline),
+        budgetedTimeout(YOUTUBE_UPLOAD_TIMEOUT_MS, deadline),
       ),
     );
 

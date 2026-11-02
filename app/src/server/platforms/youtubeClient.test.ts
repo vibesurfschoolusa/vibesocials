@@ -3,11 +3,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 
-import { MIN_REQUEST_WINDOW_MS, PUBLISH_BUDGET_EXCEEDED_CODE } from "./publishBudget";
+import { MIN_REQUEST_WINDOW_MS, PUBLISH_BUDGET_EXCEEDED_CODE, PUBLISH_STEP_BUDGET_MS } from "./publishBudget";
 import { nextPacificMidnight, PACIFIC_RESET_GRACE_MS } from "./rateLimited";
 import { withTransientRetries } from "./transientRetry";
 import type { PublishContext } from "./types";
 import { computeYouTubeTitle, youtubeClient } from "./youtubeClient";
+
+// refreshGoogleToken persists through `await import("@/lib/db")` at call time,
+// so it receives this mock. No real database is touched.
+const { updateMock } = vi.hoisted(() => ({ updateMock: vi.fn() }));
+
+vi.mock("@/lib/db", () => ({
+  prisma: {
+    socialConnection: {
+      update: updateMock,
+    },
+  },
+}));
 
 // 2026-11-01 audit (Task 4 item 1): the YouTube title is the POST's own base
 // caption (no footer) — the job's snapshot first, the shared MediaItem's only
@@ -256,5 +268,175 @@ describe("youtubeClient.publishVideo — commit call (videos.insert)", () => {
     const timeouts = setTimeoutSpy.mock.calls.map((c) => c[1]);
     // The insert's timer is the one clamped to the ~30 s left (not its 120 s default).
     expect(timeouts.some((ms) => typeof ms === "number" && ms <= 30_000 && ms > MIN_REQUEST_WINDOW_MS)).toBe(true);
+  });
+});
+
+// 2026-11-01 scale audit (step budget, Task 7): every YouTube request - the token
+// refresh, the media download and videos.insert - ends by the step deadline, and
+// none is started with under 5 s left. Vercel kills the invocation at 300 s;
+// the step must end well inside it (publishBudget.ts).
+describe("youtubeClient.publishVideo — step deadline", () => {
+  type CodedError = Error & { code?: string };
+  const failure = (ctx: PublishContext) =>
+    youtubeClient.publishVideo(ctx).then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+
+  const NOW = Date.parse("2026-11-01T12:00:00Z");
+  const TOKEN_URL_FRAGMENT = "oauth2.googleapis.com/token";
+  const expiredCtx = (overrides: Partial<PublishContext> = {}) => {
+    const base = ytCtx(overrides);
+    return {
+      ...base,
+      socialConnection: { ...base.socialConnection, expiresAt: new Date("2020-01-01T00:00:00Z") },
+    } as PublishContext;
+  };
+  const tokenOk = () =>
+    new Response(JSON.stringify({ access_token: "fresh-token", expires_in: 3600, token_type: "Bearer" }), {
+      status: 200,
+    });
+  const insertOk = () => new Response(JSON.stringify({ id: "vid-1", snippet: { title: "t" } }), { status: 200 });
+  const blobOk = () => new Response(new Uint8Array([1, 2, 3, 4]));
+
+  /** Resolve after `ms` of (fake) time - or reject if the request is aborted first. */
+  const slow = (ms: number, make: () => Response) => (init?: RequestInit) =>
+    new Promise<Response>((resolve, reject) => {
+      const timer = setTimeout(() => resolve(make()), ms);
+      init?.signal?.addEventListener("abort", () => {
+        clearTimeout(timer);
+        reject(new DOMException("aborted", "AbortError"));
+      });
+    });
+  /** Never answers: settles only when the request is aborted. */
+  const hang = (init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+    });
+
+  function stubRoutes(routes: Record<string, (init?: RequestInit) => Promise<Response>>) {
+    const fetchMock = vi.fn<typeof fetch>((input, init) => {
+      const url = String(input);
+      const route = Object.entries(routes).find(([fragment]) => url.includes(fragment));
+      if (!route) throw new Error(`Unexpected fetch in test: ${url}`);
+      return route[1](init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  beforeEach(() => {
+    updateMock.mockReset();
+    updateMock.mockImplementation((args: { data: Record<string, unknown> }) =>
+      Promise.resolve({ id: "conn-yt", platform: "youtube", refreshToken: "refresh-token", ...args.data }),
+    );
+    vi.stubEnv("GOOGLE_GBP_CLIENT_ID", "test-client-id");
+    vi.stubEnv("GOOGLE_GBP_CLIENT_SECRET", "test-client-secret");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("refuses to start once the step budget is spent (no request at all)", async () => {
+    const fetchMock = stubYouTube(() => new Response("{}", { status: 200 }));
+
+    const error = await failure(ytCtx({ deadline: Date.now() + MIN_REQUEST_WINDOW_MS - 1 }));
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses to refresh an expired token with under 5 s left (no token request)", async () => {
+    const fetchMock = stubYouTube(() => new Response("{}", { status: 200 }));
+
+    const error = await failure(expiredCtx({ deadline: Date.now() + MIN_REQUEST_WINDOW_MS - 1 }));
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("clamps the token refresh, the download and the insert to the time left (each <= 12 s)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const fetchMock = stubRoutes({
+      [TOKEN_URL_FRAGMENT]: async () => tokenOk(),
+      "blob.example.com": async () => blobOk(),
+      [INSERT_URL_FRAGMENT]: async () => insertOk(),
+    });
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const abortTimeoutSpy = vi.spyOn(AbortSignal, "timeout");
+
+    await expect(youtubeClient.publishVideo(expiredCtx({ deadline: NOW + 12_000 }))).resolves.toEqual({
+      externalPostId: "vid-1",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const timeouts = setTimeoutSpy.mock.calls.map((c) => c[1] as number);
+    // refresh (30 s default), download (120 s default), insert (120 s default)
+    expect(timeouts).toHaveLength(3);
+    for (const timeout of timeouts) {
+      expect(timeout).toBeLessThanOrEqual(12_000);
+      expect(timeout).toBeGreaterThanOrEqual(MIN_REQUEST_WINDOW_MS);
+    }
+    // The download's whole-transfer bound (the body is read after the headers).
+    expect(abortTimeoutSpy).toHaveBeenCalledTimes(1);
+    expect(abortTimeoutSpy.mock.calls[0][0]).toBeLessThanOrEqual(12_000);
+  });
+
+  it("worst case: slow refresh + download and a hung insert still settle by the step deadline", async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    const deadline = start + PUBLISH_STEP_BUDGET_MS;
+    const fetchMock = stubRoutes({
+      [TOKEN_URL_FRAGMENT]: slow(25_000, tokenOk),
+      "blob.example.com": slow(119_000, blobOk),
+      [INSERT_URL_FRAGMENT]: hang,
+    });
+
+    let settledAt = 0;
+    const promise = failure(expiredCtx({ deadline })).then((e) => {
+      settledAt = Date.now();
+      return e;
+    });
+    await vi.advanceTimersByTimeAsync(400_000);
+    const error = await promise;
+
+    // Refresh + download took 144 s; the insert hung and was cut off at the
+    // deadline (unclamped it would run to 144 + 120 = 264 s).
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes(INSERT_URL_FRAGMENT))).toHaveLength(1);
+    expect(settledAt).toBeLessThanOrEqual(deadline);
+    expect(settledAt - start).toBeLessThan(240_000);
+  });
+
+  it("a download started late (an in-step retry) is cut off at the deadline, not at its own 120 s", async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    // withTransientRetries only retries with >= 60 s left: ~61 s remain here.
+    const deadline = start + 61_000;
+    const fetchMock = stubRoutes({
+      "blob.example.com": hang,
+      [INSERT_URL_FRAGMENT]: async () => insertOk(),
+    });
+
+    let settledAt = 0;
+    const promise = failure(ytCtx({ deadline })).then((e) => {
+      settledAt = Date.now();
+      return e;
+    });
+    await vi.advanceTimersByTimeAsync(400_000);
+    const error = await promise;
+
+    expect(error?.code).toBe("FETCH_TIMEOUT");
+    expect(settledAt).toBeLessThanOrEqual(deadline);
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes(INSERT_URL_FRAGMENT))).toHaveLength(0);
   });
 });

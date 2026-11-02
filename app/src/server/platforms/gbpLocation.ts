@@ -1,6 +1,7 @@
 import { assertOk } from "@/lib/assertOk";
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
+import { budgetedTimeout } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 
 // Server-only: resolves a Google Business Profile location resource name.
@@ -29,10 +30,19 @@ const BUSINESS_INFO_BASE =
  * - `GBP_ACCOUNTS_LIST_FAILED` if the accounts list request fails.
  * - `GBP_STORE_CODE_NOT_FOUND` if no location matches the store code.
  * - `GBP_STORE_CODE_NOT_UNIQUE` if more than one location matches.
+ * - `PUBLISH_TIME_BUDGET_EXCEEDED` if `deadline` leaves under 5 s for the next
+ *   lookup (nothing is sent).
+ *
+ * `deadline` (epoch ms, publishBudget.ts): 2026-11-01 scale audit (step budget,
+ * Task 7) - a store-code search makes one request for the accounts and one per
+ * account, so every request timeout is clamped to the time left and none is
+ * started with under 5 s left. A full resource name needs no request, so it is
+ * returned whatever is left. Without a deadline each request keeps its 30 s default.
  */
 export async function resolveGbpLocationName(
   accessToken: string,
   locationNameOrStoreCode: string,
+  deadline?: number,
 ): Promise<string> {
   const trimmed = locationNameOrStoreCode.trim();
 
@@ -49,6 +59,7 @@ export async function resolveGbpLocationName(
   const accountsRes = await fetchWithTimeout(
     `${ACCOUNT_MANAGEMENT_BASE}/accounts`,
     { headers: authHeaders },
+    budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
   );
 
   // 2026-11-01 scale audit (platform limits): a 429 is RATE_LIMITED, not a failed list.
@@ -77,7 +88,11 @@ export async function resolveGbpLocationName(
     url.searchParams.set("readMask", "name,storeCode,title");
     url.searchParams.set("filter", `storeCode="${trimmed}"`);
 
-    const locationsRes = await fetchWithTimeout(url, { headers: authHeaders });
+    const locationsRes = await fetchWithTimeout(
+      url,
+      { headers: authHeaders },
+      budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+    );
 
     // Not a soft per-account failure: skipping a throttled account would end as
     // a misleading GBP_STORE_CODE_NOT_FOUND.

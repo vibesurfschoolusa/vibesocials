@@ -3,12 +3,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { googleBusinessProfileClient } from "@/server/platforms/googleBusinessProfileClient";
+import {
+  MIN_REQUEST_WINDOW_MS,
+  PUBLISH_BUDGET_EXCEEDED_CODE,
+  PUBLISH_STEP_BUDGET_MS,
+} from "@/server/platforms/publishBudget";
 import { withTransientRetries } from "@/server/platforms/transientRetry";
 import type { PublishContext } from "@/server/platforms/types";
 
 // Google Business Profile photo publishing. No real Google endpoint and no
 // database: every call goes through a stubbed global fetch (googleTokens.ts
-// resolves prisma lazily and is not reached with a fresh token).
+// resolves prisma lazily - through this mock - and only when a token expired).
+const { updateMock } = vi.hoisted(() => ({ updateMock: vi.fn() }));
+
+vi.mock("@/lib/db", () => ({
+  prisma: {
+    socialConnection: {
+      update: updateMock,
+    },
+  },
+}));
+
 const NOW = Date.parse("2026-11-01T12:00:00Z");
 
 function makeContext(): PublishContext {
@@ -180,5 +195,191 @@ describe("googleBusinessProfileClient.publishVideo — commit call (POST .../med
     expect((await failure(googleBusinessProfileClient.publishVideo(makeContext())))?.code).toBe(
       "GBP_CREATE_MEDIA_FAILED",
     );
+  });
+});
+
+// 2026-11-01 scale audit (step budget, Task 7): every GBP request - the token
+// refresh, the store-code lookups and the media create - ends by the step
+// deadline, and none is started with under 5 s left.
+describe("googleBusinessProfileClient.publishVideo — step deadline", () => {
+  const MEDIA_URL_FRAGMENT = "mybusiness.googleapis.com/v4/accounts/111/locations/999/media";
+  const TOKEN_URL_FRAGMENT = "oauth2.googleapis.com/token";
+  const ACCOUNTS_URL_FRAGMENT = "mybusinessaccountmanagement.googleapis.com/v1/accounts";
+  const LOCATIONS_URL_FRAGMENT = "mybusinessbusinessinformation.googleapis.com";
+  // Any media create (the matching account differs per test).
+  const ANY_MEDIA_URL_FRAGMENT = "mybusiness.googleapis.com/v4/";
+
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  const tokenOk = () => json({ access_token: "fresh-token", expires_in: 3600, token_type: "Bearer" });
+  const mediaOk = () => json({ name: "accounts/111/locations/999/media/m1" });
+  const noLocations = () => json({ locations: [] });
+  const matchingLocation = () => json({ locations: [{ name: "locations/999", storeCode: "STORE-1" }] });
+  const accountsList = (count: number) =>
+    json({ accounts: Array.from({ length: count }, (_, i) => ({ name: `accounts/${111 + i}` })) });
+
+  /** The default context, with the connection's expiry / location overridden. */
+  function ctx(
+    overrides: { deadline?: number; expired?: boolean; locationName?: string } = {},
+  ): PublishContext {
+    const base = makeContext();
+    return {
+      ...base,
+      deadline: overrides.deadline,
+      socialConnection: {
+        ...base.socialConnection,
+        expiresAt: overrides.expired ? new Date("2020-01-01T00:00:00Z") : null,
+        metadata: { locationName: overrides.locationName ?? "accounts/111/locations/999" },
+      } as SocialConnection,
+    };
+  }
+
+  /** Resolve after `ms` of (fake) time, or reject if the request is aborted first. */
+  const slow = (ms: number, make: () => Response) => (init?: RequestInit) =>
+    new Promise<Response>((resolve, reject) => {
+      const timer = setTimeout(() => resolve(make()), ms);
+      init?.signal?.addEventListener("abort", () => {
+        clearTimeout(timer);
+        reject(new DOMException("aborted", "AbortError"));
+      });
+    });
+  /** Never answers: settles only when the request is aborted. */
+  const hang = (init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+    });
+
+  type Route = (init?: RequestInit) => Promise<Response>;
+  function stubRoutes(routes: Record<string, Route>) {
+    const fetchMock = vi.fn<typeof fetch>((input, init) => {
+      const url = String(input);
+      const route = Object.entries(routes).find(([fragment]) => url.includes(fragment));
+      if (!route) throw new Error(`Unexpected fetch in test: ${url}`);
+      return route[1](init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  beforeEach(() => {
+    updateMock.mockReset();
+    updateMock.mockImplementation((args: { data: Record<string, unknown> }) =>
+      // The persisted row keeps the connection's metadata (the store code the refresh test publishes with).
+      Promise.resolve({ ...makeContext().socialConnection, metadata: { locationName: "STORE-1" }, ...args.data }),
+    );
+    vi.stubEnv("GOOGLE_GBP_CLIENT_ID", "test-client-id");
+    vi.stubEnv("GOOGLE_GBP_CLIENT_SECRET", "test-client-secret");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("refuses to start once the step budget is spent (no request at all)", async () => {
+    const fetchMock = stubRoutes({ [MEDIA_URL_FRAGMENT]: async () => mediaOk() });
+
+    const error = await failure(
+      googleBusinessProfileClient.publishVideo(ctx({ deadline: Date.now() + MIN_REQUEST_WINDOW_MS - 1 })),
+    );
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses to refresh an expired token with under 5 s left (no token request)", async () => {
+    const fetchMock = stubRoutes({ [TOKEN_URL_FRAGMENT]: async () => tokenOk() });
+
+    const error = await failure(
+      googleBusinessProfileClient.publishVideo(
+        ctx({ expired: true, deadline: Date.now() + MIN_REQUEST_WINDOW_MS - 1 }),
+      ),
+    );
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("clamps the token refresh, both store-code lookups and the media create to the time left (each <= 12 s)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const fetchMock = stubRoutes({
+      [TOKEN_URL_FRAGMENT]: async () => tokenOk(),
+      [ACCOUNTS_URL_FRAGMENT]: async () => accountsList(1),
+      [LOCATIONS_URL_FRAGMENT]: async () => matchingLocation(),
+      [MEDIA_URL_FRAGMENT]: async () => mediaOk(),
+    });
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    await expect(
+      googleBusinessProfileClient.publishVideo(
+        ctx({ expired: true, locationName: "STORE-1", deadline: NOW + 12_000 }),
+      ),
+    ).resolves.toEqual({ externalPostId: "accounts/111/locations/999/media/m1" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    const timeouts = setTimeoutSpy.mock.calls.map((c) => c[1] as number);
+    // token refresh, accounts list, location lookup, media create
+    expect(timeouts).toHaveLength(4);
+    for (const timeout of timeouts) {
+      expect(timeout).toBeLessThanOrEqual(12_000);
+      expect(timeout).toBeGreaterThanOrEqual(MIN_REQUEST_WINDOW_MS);
+    }
+  });
+
+  it("worst case: slow store-code lookups across many accounts still settle by the step deadline", async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    const deadline = start + PUBLISH_STEP_BUDGET_MS;
+    const fetchMock = stubRoutes({
+      [ACCOUNTS_URL_FRAGMENT]: async () => accountsList(12),
+      [LOCATIONS_URL_FRAGMENT]: slow(29_000, noLocations),
+      [ANY_MEDIA_URL_FRAGMENT]: async () => mediaOk(),
+    });
+
+    let settledAt = 0;
+    const promise = failure(
+      googleBusinessProfileClient.publishVideo(ctx({ locationName: "STORE-1", deadline })),
+    ).then((e) => {
+      settledAt = Date.now();
+      return e;
+    });
+    await vi.advanceTimersByTimeAsync(500_000);
+    const error = await promise;
+
+    // 12 lookups x 29 s = 348 s unbounded; the 8th was cut off at the deadline.
+    expect(error?.code).toBe("FETCH_TIMEOUT");
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes(ANY_MEDIA_URL_FRAGMENT))).toHaveLength(0);
+    expect(settledAt).toBeLessThanOrEqual(deadline);
+    expect(settledAt - start).toBeLessThan(240_000);
+  });
+
+  it("worst case: slow lookups and a hung media create still settle by the step deadline", async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    const deadline = start + PUBLISH_STEP_BUDGET_MS;
+    let lookups = 0;
+    const fetchMock = stubRoutes({
+      [ACCOUNTS_URL_FRAGMENT]: async () => accountsList(7),
+      // The last of 7 accounts holds the store code: 7 x 29 s = 203 s.
+      [LOCATIONS_URL_FRAGMENT]: (init) => slow(29_000, ++lookups === 7 ? matchingLocation : noLocations)(init),
+      [ANY_MEDIA_URL_FRAGMENT]: hang,
+    });
+
+    let settledAt = 0;
+    const promise = failure(
+      googleBusinessProfileClient.publishVideo(ctx({ locationName: "STORE-1", deadline })),
+    ).then((e) => {
+      settledAt = Date.now();
+      return e;
+    });
+    await vi.advanceTimersByTimeAsync(500_000);
+    const error = await promise;
+
+    // The media create got the 22 s left (not its 30 s default).
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes(ANY_MEDIA_URL_FRAGMENT))).toHaveLength(1);
+    expect(settledAt).toBeLessThanOrEqual(deadline);
+    expect(settledAt - start).toBeLessThan(240_000);
   });
 });

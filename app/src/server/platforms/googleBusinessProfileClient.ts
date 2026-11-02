@@ -1,11 +1,12 @@
 import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
 import { resolveGbpLocationName } from "./gbpLocation";
 import { refreshGoogleToken } from "./googleTokens";
 import { commitRequest } from "./commitCall";
+import { budgetedTimeout } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
@@ -25,12 +26,14 @@ import type { PlatformClient, PublishContext, PublishResult } from "./types";
 export const googleBusinessProfileClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
     let { socialConnection } = ctx;
-    const { mediaItem } = ctx;
+    const { mediaItem, deadline } = ctx;
 
-    // Check if token needs refresh
+    // Check if token needs refresh. 2026-11-01 scale audit (step budget, Task 7):
+    // every request below ends by the step deadline (ctx.deadline) and none is
+    // started with under 5 s left (PUBLISH_TIME_BUDGET_EXCEEDED, nothing sent).
     if (socialConnection.expiresAt && socialConnection.expiresAt < new Date()) {
       console.log("[GBP] Access token expired, refreshing...");
-      socialConnection = await refreshGoogleToken(socialConnection);
+      socialConnection = await refreshGoogleToken(socialConnection, { deadline });
     }
 
     const accessToken = socialConnection.accessToken;
@@ -48,7 +51,7 @@ export const googleBusinessProfileClient: PlatformClient = {
       });
     }
 
-    const { locationName } = await ensureLocationName(socialConnection, accessToken);
+    const { locationName } = await ensureLocationName(socialConnection, accessToken, deadline);
 
     console.log("[GBP] Starting media creation", {
       locationName,
@@ -66,22 +69,28 @@ export const googleBusinessProfileClient: PlatformClient = {
     // 2026-11-01 scale audit (jobs H6, Review Focus 5): POST .../media is the
     // commit call. A 5xx, a timeout or a dropped connection after it was sent is
     // PUBLISH_UNCONFIRMED (the media item may exist) and is never re-run; a 4xx /
-    // 429 is returned and handled below as before.
+    // 429 is returned and handled below as before. The timeout is clamped to
+    // the remaining step budget; a spent budget throws
+    // PUBLISH_TIME_BUDGET_EXCEEDED BEFORE the request is sent (safe to retry).
     const createRes = await commitRequest("google_business_profile", () =>
-      fetchWithTimeout(`https://mybusiness.googleapis.com/v4/${locationName}/media`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          mediaFormat,
-          sourceUrl: mediaItem.storageLocation, // Public Vercel Blob URL
-          locationAssociation: {
-            category,
+      fetchWithTimeout(
+        `https://mybusiness.googleapis.com/v4/${locationName}/media`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
           },
-        }),
-      }),
+          body: JSON.stringify({
+            mediaFormat,
+            sourceUrl: mediaItem.storageLocation, // Public Vercel Blob URL
+            locationAssociation: {
+              category,
+            },
+          }),
+        },
+        budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+      ),
     );
 
     // 2026-11-01 scale audit (platform limits): GBP answers an excess (300 QPM
@@ -114,6 +123,7 @@ export const googleBusinessProfileClient: PlatformClient = {
 async function ensureLocationName(
   socialConnection: SocialConnection,
   accessToken: string,
+  deadline?: number,
 ): Promise<{ locationName: string }> {
   const metadata = (socialConnection.metadata as { locationName?: unknown } | null) ?? {};
   const raw = metadata.locationName;
@@ -129,6 +139,6 @@ async function ensureLocationName(
   // resolveGbpLocationName handles both a full "accounts/..." resource name
   // (returned as-is) and a Store code from Advanced settings (resolved via the
   // account/location listing).
-  const locationName = await resolveGbpLocationName(accessToken, raw.trim());
+  const locationName = await resolveGbpLocationName(accessToken, raw.trim(), deadline);
   return { locationName };
 }

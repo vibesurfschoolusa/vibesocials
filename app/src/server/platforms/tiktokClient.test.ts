@@ -801,6 +801,108 @@ describe("ensureFreshTikTokToken", () => {
   });
 });
 
+// 2026-11-01 scale audit (step budget, Task 7): a refresh that runs inside a
+// platform step (or inside Task 8's per-connection lock) must not push the step
+// past its deadline, so its request is clamped to the time left and is never
+// started with under 5 s left.
+describe("TikTok token refresh — step deadline", () => {
+  const NOW = Date.parse("2026-11-01T12:00:00Z");
+  const expired = () => makeConnection({ expiresAt: new Date("2020-01-01T00:00:00Z") });
+  const refreshOk = () =>
+    vi.fn().mockResolvedValue(jsonResponse({ access_token: "fresh-access-token", expires_in: 86_400 }));
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+
+  it("refreshTikTokToken clamps the token request to the time left (a deadline 8 s away -> <= 8 s)", async () => {
+    vi.stubGlobal("fetch", refreshOk());
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    await refreshTikTokToken(makeConnection(), { deadline: NOW + 8_000 });
+
+    const timeouts = setTimeoutSpy.mock.calls.map((c) => c[1] as number);
+    expect(timeouts).toHaveLength(1);
+    expect(timeouts[0]).toBeLessThanOrEqual(8_000);
+    expect(timeouts[0]).toBeGreaterThanOrEqual(MIN_REQUEST_WINDOW_MS);
+  });
+
+  it("refreshTikTokToken keeps the 30 s default without a deadline", async () => {
+    vi.stubGlobal("fetch", refreshOk());
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    await refreshTikTokToken(makeConnection());
+
+    expect(setTimeoutSpy.mock.calls.map((c) => c[1])).toEqual([30_000]);
+  });
+
+  it("refreshTikTokToken refuses to start with under 5 s left: no request, no write, no reconnect flag", async () => {
+    const fetchMock = refreshOk();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await caught(refreshTikTokToken(makeConnection(), { deadline: NOW + MIN_REQUEST_WINDOW_MS - 1 }));
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("ensureFreshTikTokToken passes its deadline to the refresh (8 s away -> request <= 8 s)", async () => {
+    vi.stubGlobal("fetch", refreshOk());
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const refreshed = await ensureFreshTikTokToken(expired(), NOW + 8_000);
+
+    expect(refreshed.accessToken).toBe("fresh-access-token");
+    const timeouts = setTimeoutSpy.mock.calls.map((c) => c[1] as number);
+    expect(timeouts).toHaveLength(1);
+    expect(timeouts[0]).toBeLessThanOrEqual(8_000);
+  });
+
+  it("ensureFreshTikTokToken refuses to refresh with under 5 s left", async () => {
+    const fetchMock = refreshOk();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await caught(ensureFreshTikTokToken(expired(), NOW + MIN_REQUEST_WINDOW_MS - 1));
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("ensureFreshTikTokToken leaves a fresh token alone even with the budget spent", async () => {
+    const fetchMock = refreshOk();
+    vi.stubGlobal("fetch", fetchMock);
+    const fresh = makeConnection({ expiresAt: new Date(NOW + 3_600_000) });
+
+    await expect(ensureFreshTikTokToken(fresh, NOW - 1)).resolves.toBe(fresh);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("publishVideo passes the step deadline to the refresh of an expired token (under 5 s left -> no request)", async () => {
+    const fetchMock = refreshOk();
+    vi.stubGlobal("fetch", fetchMock);
+    const ctx = {
+      user: { id: "user-1" },
+      socialConnection: expired(),
+      mediaItem: {
+        id: "media-1",
+        mimeType: "video/mp4",
+        originalFilename: "clip.mp4",
+        storageLocation: "https://blob.example.com/clip.mp4",
+      },
+      caption: "hi",
+      deadline: NOW + MIN_REQUEST_WINDOW_MS - 1,
+    } as unknown as PublishContext;
+
+    const error = await caught(tiktokClient.publishVideo(ctx));
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("tiktokClient.refreshToken (connection-health sweep wiring)", () => {
   it("exposes refreshToken so the daily sweep (which skips clients without one) refreshes TikTok", () => {
     expect(typeof tiktokClient.refreshToken).toBe("function");

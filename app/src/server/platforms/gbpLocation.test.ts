@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resolveGbpLocationName } from "@/server/platforms/gbpLocation";
+import { MIN_REQUEST_WINDOW_MS, PUBLISH_BUDGET_EXCEEDED_CODE } from "@/server/platforms/publishBudget";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -148,5 +149,101 @@ describe("resolveGbpLocationName", () => {
 
       expect(error?.code).toBe("GBP_STORE_CODE_NOT_FOUND");
     });
+  });
+});
+
+// 2026-11-01 scale audit (step budget, Task 7): the store-code lookup makes one
+// request for the accounts and one per account, so a business with many
+// accounts could outrun the step. Each lookup is clamped to the time left and
+// none is started with under 5 s left.
+describe("resolveGbpLocationName — step deadline", () => {
+  const NOW = Date.parse("2026-11-01T12:00:00Z");
+  type CodedError = Error & { code?: string };
+  const failure = (promise: Promise<unknown>) =>
+    promise.then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Two accounts, neither holding the store code. */
+  function stubTwoAccounts(onFetch?: (url: string) => void) {
+    const fetchMock = vi.fn((input: string | URL) => {
+      const url = input.toString();
+      onFetch?.(url);
+      return Promise.resolve(
+        url.includes("/locations")
+          ? jsonResponse({ locations: [] })
+          : jsonResponse({ accounts: [{ name: "accounts/111" }, { name: "accounts/222" }] }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("clamps every lookup's timeout to the time left (a deadline 8 s away -> each <= 8 s)", async () => {
+    stubTwoAccounts();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    await failure(resolveGbpLocationName("token-abc", "STORE-1", NOW + 8_000));
+
+    const timeouts = setTimeoutSpy.mock.calls.map((c) => c[1] as number);
+    // accounts list + one lookup per account
+    expect(timeouts).toHaveLength(3);
+    for (const timeout of timeouts) {
+      expect(timeout).toBeLessThanOrEqual(8_000);
+      expect(timeout).toBeGreaterThanOrEqual(MIN_REQUEST_WINDOW_MS);
+    }
+  });
+
+  it("keeps the 30 s default per lookup without a deadline", async () => {
+    stubTwoAccounts();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    await failure(resolveGbpLocationName("token-abc", "STORE-1"));
+
+    expect(setTimeoutSpy.mock.calls.map((c) => c[1])).toEqual([30_000, 30_000, 30_000]);
+  });
+
+  it("refuses to start the accounts request with under 5 s left", async () => {
+    const fetchMock = stubTwoAccounts();
+
+    const error = await failure(
+      resolveGbpLocationName("token-abc", "STORE-1", NOW + MIN_REQUEST_WINDOW_MS - 1),
+    );
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("stops looking up accounts once the budget is spent mid-search (each lookup checks the time left)", async () => {
+    // The accounts list answers after 4 s of the 8 s left: the first location
+    // lookup would start with 4 s (< 5 s) left and must not be sent.
+    const fetchMock = stubTwoAccounts((url) => {
+      if (!url.includes("/locations")) vi.setSystemTime(NOW + 4_000);
+    });
+
+    const error = await failure(resolveGbpLocationName("token-abc", "STORE-1", NOW + 8_000));
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns a full resource name as-is even with the budget spent (no request needed)", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      resolveGbpLocationName("token-abc", "accounts/111/locations/999", NOW - 1),
+    ).resolves.toBe("accounts/111/locations/999");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

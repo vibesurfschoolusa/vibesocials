@@ -1,12 +1,13 @@
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { SocialConnection } from "@prisma/client";
 
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 import { markConnectionNeedsReconnect } from "./connectionHealth";
 import { isFacebookAuthErrorBody } from "./facebookPageClient";
 import { commitRequest } from "./commitCall";
+import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 
 // COR-5: Instagram token expiry handling.
@@ -30,6 +31,22 @@ const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // treat tokens within 5 min of ex
 // Roadmap Phase 4: the code marked via markConnectionNeedsReconnect() at every
 // site below that throws this error (expiry guard + 401 mapping).
 const INSTAGRAM_RECONNECT_CODE = "INSTAGRAM_RECONNECT_REQUIRED";
+
+// 2026-11-01 scale audit (step budget, Task 7): the container poll runs INSIDE
+// the publish step, which must end by ctx.deadline (publishBudget.ts, 225 s of
+// Vercel's 300 s). Today it polls every 5 s, up to 30 times (~150 s, plus each
+// check's own time); Meta's guidance is once a minute for at most 5 minutes
+// (https://developers.facebook.com/docs/instagram-platform/content-publishing),
+// which needs polling across steps with step.sleep - phase 3, not this task.
+export const INSTAGRAM_POLL_INTERVAL_MS = 5_000;
+export const INSTAGRAM_POLL_MAX_ATTEMPTS = 30;
+/**
+ * Time kept free after the poll for the media_publish call (a 30 s request,
+ * clamped to what is left). The poll stops while this much is still left and
+ * ends with INSTAGRAM_VIDEO_TIMEOUT: nothing was published at that point, so a
+ * retry is safe.
+ */
+export const INSTAGRAM_PUBLISH_RESERVE_MS = 20_000;
 
 function isExpiredOrExpiringSoon(expiresAt: Date | null | undefined): boolean {
   if (!expiresAt) return false; // no expiry recorded -> cannot judge; let publish proceed
@@ -85,10 +102,110 @@ export function computeInstagramCaption(caption: string): string {
   return charLimit === null ? caption : truncateGraphemes(caption, charLimit, { ellipsis });
 }
 
+export interface WaitForInstagramContainerOptions {
+  containerId: string;
+  accessToken: string;
+  /** Flagged needsReconnect if the status check shows the page token is dead. */
+  connectionId: string;
+  /** The step deadline (epoch ms): polling stops with INSTAGRAM_PUBLISH_RESERVE_MS still left before it. */
+  deadline?: number;
+  /** Test seam: defaults to a real timer. */
+  sleep?: (ms: number) => Promise<void>;
+  /** Clock seam for tests. */
+  now?: () => number;
+}
+
+/**
+ * Poll a REELS container until Instagram has processed the video (FINISHED).
+ * Resolves only then; every other outcome throws:
+ *  - ERROR -> `INSTAGRAM_VIDEO_PROCESSING_ERROR`
+ *  - a dead page token (401 / OAuthException 190) -> `INSTAGRAM_RECONNECT_REQUIRED`
+ *    (connection flagged)
+ *  - a Meta throttle -> RATE_LIMITED (polling again would only extend the limit)
+ *  - still processing after INSTAGRAM_POLL_MAX_ATTEMPTS checks, or when the step
+ *    `deadline` leaves no room for another wait + check before the
+ *    INSTAGRAM_PUBLISH_RESERVE_MS kept for media_publish -> `INSTAGRAM_VIDEO_TIMEOUT`.
+ *    Nothing has been published at that point, so a retry is safe.
+ * Any other non-OK status is treated as transient and polled again. Each status
+ * request is clamped to the time left BEFORE the reserve, so a slow check cannot
+ * eat the media_publish window.
+ */
+export async function waitForInstagramContainer(
+  options: WaitForInstagramContainerOptions,
+): Promise<void> {
+  const {
+    containerId,
+    accessToken,
+    connectionId,
+    deadline,
+    sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    now = Date.now,
+  } = options;
+
+  // Time the poll may still use: what is left of the step minus the reserve.
+  // Unbounded (Infinity) without a deadline.
+  const pollWindowMs = () => remainingMs(deadline, now()) - INSTAGRAM_PUBLISH_RESERVE_MS;
+
+  for (let attempt = 0; attempt < INSTAGRAM_POLL_MAX_ATTEMPTS; attempt++) {
+    // Only wait + check when both fit before the reserve (the check needs a
+    // usable request window).
+    if (pollWindowMs() < INSTAGRAM_POLL_INTERVAL_MS + MIN_REQUEST_WINDOW_MS) break;
+    await sleep(INSTAGRAM_POLL_INTERVAL_MS);
+    // A wait that overran leaves no usable window for the check.
+    const checkWindowMs = pollWindowMs();
+    if (checkWindowMs < MIN_REQUEST_WINDOW_MS) break;
+
+    const statusUrl = new URL(`https://graph.facebook.com/v21.0/${containerId}`);
+    statusUrl.searchParams.set("fields", "status_code");
+    statusUrl.searchParams.set("access_token", accessToken);
+
+    const statusResponse = await fetchWithTimeout(
+      statusUrl.toString(),
+      undefined,
+      Math.min(DEFAULT_FETCH_TIMEOUT_MS, checkWindowMs),
+    );
+    // A throttled poll stops here; polling again would only extend the limit.
+    const statusLimited = await classifyRateLimit("instagram", statusResponse);
+    if (statusLimited) throw statusLimited;
+
+    if (!statusResponse.ok) {
+      const statusBody = await statusResponse.text().catch(() => "");
+      // A dead token never recovers by polling: stop and ask for a
+      // reconnect. Any other non-OK status is treated as transient and
+      // polled again (unchanged behavior).
+      if (isGraphAuthFailure(statusResponse.status, statusBody)) {
+        console.error("[Instagram] Status check rejected the access token", {
+          status: statusResponse.status,
+          error: statusBody,
+        });
+        await markConnectionNeedsReconnect(connectionId, INSTAGRAM_RECONNECT_CODE);
+        throw instagramReconnectRequiredError();
+      }
+    } else {
+      const statusData = (await statusResponse.json()) as {
+        status_code?: string;
+      };
+
+      console.log("[Instagram] Video status:", statusData.status_code);
+
+      if (statusData.status_code === "FINISHED") return;
+      if (statusData.status_code === "ERROR") {
+        const error = new Error("Instagram video processing failed") as Error & { code: string };
+        error.code = "INSTAGRAM_VIDEO_PROCESSING_ERROR";
+        throw error;
+      }
+    }
+  }
+
+  const error = new Error("Instagram video processing timeout") as Error & { code: string };
+  error.code = "INSTAGRAM_VIDEO_TIMEOUT";
+  throw error;
+}
+
 export const instagramClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
     let { socialConnection } = ctx;
-    const { mediaItem, caption } = ctx;
+    const { mediaItem, caption, deadline } = ctx;
 
     // COR-5: fail fast with a clear reconnect error if the page token has
     // aged out, rather than letting the Graph API return a cryptic OAuth error.
@@ -176,9 +293,13 @@ export const instagramClient: PlatformClient = {
         hasLocation: !!locationId,
       });
 
-      const containerResponse = await fetchWithTimeout(containerUrl.toString(), {
-        method: "POST",
-      });
+      // Every request below ends by the step deadline and none is started with
+      // under 5 s left: PUBLISH_TIME_BUDGET_EXCEEDED, nothing sent (Task 7).
+      const containerResponse = await fetchWithTimeout(
+        containerUrl.toString(),
+        { method: "POST" },
+        budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+      );
 
       // 2026-11-01 scale audit (platform limits): a Meta throttle (code 4, 17,
       // 32, 613, 80001, 80002 or HTTP 429) is RATE_LIMITED, not a container failure.
@@ -218,60 +339,15 @@ export const instagramClient: PlatformClient = {
       // Step 2: Wait for media processing
       if (isVideo) {
         console.log("[Instagram] Waiting for video processing...");
-        
-        let isReady = false;
-        let attempts = 0;
-        const maxAttempts = 30; // 30 attempts * 5 seconds = 2.5 minutes max
 
-        while (!isReady && attempts < maxAttempts) {
-          await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5 seconds
-
-          const statusUrl = new URL(`https://graph.facebook.com/v21.0/${containerId}`);
-          statusUrl.searchParams.set("fields", "status_code");
-          statusUrl.searchParams.set("access_token", accessToken);
-
-          const statusResponse = await fetchWithTimeout(statusUrl.toString());
-          // A throttled poll stops here; polling again would only extend the limit.
-          const statusLimited = await classifyRateLimit("instagram", statusResponse);
-          if (statusLimited) throw statusLimited;
-
-          if (!statusResponse.ok) {
-            const statusBody = await statusResponse.text().catch(() => "");
-            // A dead token never recovers by polling: stop and ask for a
-            // reconnect. Any other non-OK status is treated as transient and
-            // polled again (unchanged behavior).
-            if (isGraphAuthFailure(statusResponse.status, statusBody)) {
-              console.error("[Instagram] Status check rejected the access token", {
-                status: statusResponse.status,
-                error: statusBody,
-              });
-              await markConnectionNeedsReconnect(socialConnection.id, INSTAGRAM_RECONNECT_CODE);
-              throw instagramReconnectRequiredError();
-            }
-          } else {
-            const statusData = (await statusResponse.json()) as {
-              status_code?: string;
-            };
-
-            console.log("[Instagram] Video status:", statusData.status_code);
-
-            if (statusData.status_code === "FINISHED") {
-              isReady = true;
-            } else if (statusData.status_code === "ERROR") {
-              const error = new Error("Instagram video processing failed") as Error & { code: string };
-              error.code = "INSTAGRAM_VIDEO_PROCESSING_ERROR";
-              throw error;
-            }
-          }
-
-          attempts++;
-        }
-
-        if (!isReady) {
-          const error = new Error("Instagram video processing timeout") as Error & { code: string };
-          error.code = "INSTAGRAM_VIDEO_TIMEOUT";
-          throw error;
-        }
+        // Bounded by the step deadline: stops with INSTAGRAM_VIDEO_TIMEOUT while
+        // INSTAGRAM_PUBLISH_RESERVE_MS is still left for media_publish.
+        await waitForInstagramContainer({
+          containerId,
+          accessToken,
+          connectionId: socialConnection.id,
+          deadline,
+        });
 
         console.log("[Instagram] Video processing complete");
       } else {
@@ -290,11 +366,15 @@ export const instagramClient: PlatformClient = {
       // 2026-11-01 scale audit (jobs H6, Review Focus 5): media_publish is the
       // commit call. A 5xx, a timeout or a dropped connection after it was sent
       // is PUBLISH_UNCONFIRMED (the post may be live) and is never re-run; a
-      // 4xx / 429 is returned and handled below as before.
+      // 4xx / 429 is returned and handled below as before. The timeout is clamped
+      // to the remaining step budget; a spent budget throws
+      // PUBLISH_TIME_BUDGET_EXCEEDED BEFORE the request is sent (safe to retry).
       const publishResponse = await commitRequest("instagram", () =>
-        fetchWithTimeout(publishUrl.toString(), {
-          method: "POST",
-        }),
+        fetchWithTimeout(
+          publishUrl.toString(),
+          { method: "POST" },
+          budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+        ),
       );
 
       // Includes code 9 / subcode 2207042: the 100-posts-per-24h publishing cap.

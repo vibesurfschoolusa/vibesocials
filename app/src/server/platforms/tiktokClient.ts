@@ -103,7 +103,7 @@ const TIKTOK_CHUNK_UPLOAD_TIMEOUT_MS = 120_000;
  * deadline PUBLISH_STEP_BUDGET_MS = 225s after the step starts
  * (publishBudget.ts) and passes it as ctx.deadline; the worst case per phase:
  *
- *   token refresh       <= 30s; first thing an attempt does, and a retry only
+ *   token refresh       <= min(30s, time left); first thing an attempt does, and a retry only
  *                       starts with >= 60s left (MIN_RETRY_WINDOW_MS) — and
  *                       reuses the refreshed token, so it does not refresh again
  *   creator_info, init  each <= min(30s, time left)
@@ -283,9 +283,16 @@ function isExpiredOrExpiringSoon(expiresAt: Date | string | null | undefined): b
  *    when they prove the connection was never made — see transientRetry.ts).
  *  - missing env credentials: throw `TIKTOK_MISSING_OAUTH_CREDENTIALS` without
  *    flagging (deployment problem, not a per-connection one).
+ *
+ * `opts.deadline` (epoch ms, publishBudget.ts; 2026-11-01 scale audit, step
+ * budget, Task 7): the token request timeout is clamped to the time left, and
+ * with under 5 s left it throws `PUBLISH_TIME_BUDGET_EXCEEDED` BEFORE any request
+ * or write (and never flags the connection). Without a deadline the request
+ * keeps its 30 s default.
  */
 export async function refreshTikTokToken(
   connection: SocialConnection,
+  opts?: { deadline?: number },
 ): Promise<SocialConnection> {
   const refreshToken = connection.refreshToken;
   if (!refreshToken) {
@@ -308,20 +315,27 @@ export async function refreshTikTokToken(
     throw error;
   }
 
+  // Throws (before anything is sent) when the step budget is spent.
+  const timeoutMs = budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, opts?.deadline);
+
   console.log("[TikTok] Refreshing access token", { connectionId: connection.id });
 
-  const response = await fetchWithTimeout(TIKTOK_TOKEN_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
+  const response = await fetchWithTimeout(
+    TIKTOK_TOKEN_ENDPOINT,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        client_key: clientKey,
+        client_secret: clientSecret,
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+      }),
     },
-    body: new URLSearchParams({
-      client_key: clientKey,
-      client_secret: clientSecret,
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-    }),
-  });
+    timeoutMs,
+  );
 
   // Parse defensively: a proxy/5xx page is not JSON, and TikTok can report an
   // OAuth error in the body of an HTTP 200.
@@ -407,15 +421,17 @@ export async function refreshTikTokToken(
  * cannot be judged, so the connection is returned unchanged. Failures
  * propagate as thrown by refreshTikTokToken (terminal -> flagged reconnect
  * error; transient -> unflagged, retryable). Returns the (possibly refreshed)
- * connection. Exported for unit tests.
+ * connection. `deadline` (epoch ms) bounds the refresh request (see
+ * {@link refreshTikTokToken}). Exported for unit tests.
  */
 export async function ensureFreshTikTokToken(
   connection: SocialConnection,
+  deadline?: number,
 ): Promise<SocialConnection> {
   if (!isExpiredOrExpiringSoon(connection.expiresAt)) {
     return connection;
   }
-  return refreshTikTokToken(connection);
+  return refreshTikTokToken(connection, { deadline });
 }
 
 /** TikTok's `fail_reason` values are snake_case enums; anything else is not echoed. */
@@ -605,7 +621,7 @@ export const tiktokClient: PlatformClient = {
     // TikTok access tokens last ~24h: refresh a stale/expiring one BEFORE any
     // API call (a terminal refresh failure flags the connection and throws
     // TIKTOK_RECONNECT_REQUIRED; a transient one throws unflagged).
-    const socialConnection = await ensureFreshTikTokToken(ctx.socialConnection);
+    const socialConnection = await ensureFreshTikTokToken(ctx.socialConnection, deadline);
     // An in-step retry (withTransientRetries) calls publishVideo again with
     // this same ctx: hand it the refreshed connection so it neither refreshes
     // again nor re-spends the refresh token TikTok may just have rotated.

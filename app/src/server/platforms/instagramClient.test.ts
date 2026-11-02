@@ -5,8 +5,17 @@ import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import {
   computeInstagramCaption,
   ensureFreshInstagramToken,
+  INSTAGRAM_POLL_INTERVAL_MS,
+  INSTAGRAM_POLL_MAX_ATTEMPTS,
+  INSTAGRAM_PUBLISH_RESERVE_MS,
   instagramClient,
+  waitForInstagramContainer,
 } from "@/server/platforms/instagramClient";
+import {
+  MIN_REQUEST_WINDOW_MS,
+  PUBLISH_BUDGET_EXCEEDED_CODE,
+  PUBLISH_STEP_BUDGET_MS,
+} from "@/server/platforms/publishBudget";
 import { withTransientRetries } from "@/server/platforms/transientRetry";
 
 // Instagram stores a long-lived Facebook PAGE token with no refresh path, so
@@ -540,5 +549,310 @@ describe("instagramClient.publishVideo — rate limits (RATE_LIMITED)", () => {
 
       expect((await publishFailure())?.code).toBe("INSTAGRAM_CONTAINER_FAILED");
     });
+  });
+});
+
+// 2026-11-01 scale audit (step budget, Task 7): the in-step container poll
+// (5 s x up to 30) is bounded by the step deadline. It stops while
+// INSTAGRAM_PUBLISH_RESERVE_MS is still left for media_publish and ends with
+// INSTAGRAM_VIDEO_TIMEOUT - nothing was published at that point, so a retry is
+// safe. (Meta's once-a-minute / 5 min guidance needs polling across steps with
+// step.sleep: phase 3.)
+describe("waitForInstagramContainer", () => {
+  type CodedError = Error & { code?: string };
+  const failure = (promise: Promise<unknown>) =>
+    promise.then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+
+  const status = (statusCode: string) => new Response(JSON.stringify({ status_code: statusCode }), { status: 200 });
+
+  /** A manual clock: `sleep` advances it, so a poll loop runs without real waiting. */
+  function makeClock(start = Date.parse("2026-11-01T12:00:00Z")) {
+    let time = start;
+    return {
+      now: () => time,
+      sleep: async (ms: number) => {
+        time += ms;
+      },
+    };
+  }
+
+  function stubStatus(answer: (call: number) => Response) {
+    let call = 0;
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(answer(++call)));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  const baseOptions = { containerId: "container-1", accessToken: "page-token", connectionId: "conn-ig" };
+
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uses the documented poll constants", () => {
+    expect(INSTAGRAM_POLL_INTERVAL_MS).toBe(5_000);
+    expect(INSTAGRAM_POLL_MAX_ATTEMPTS).toBe(30);
+    expect(INSTAGRAM_PUBLISH_RESERVE_MS).toBe(20_000);
+  });
+
+  it("resolves once the container is FINISHED, after one interval per check", async () => {
+    const clock = makeClock();
+    const start = clock.now();
+    const fetchMock = stubStatus((call) => status(call < 3 ? "IN_PROGRESS" : "FINISHED"));
+
+    await waitForInstagramContainer({ ...baseOptions, sleep: clock.sleep, now: clock.now });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(clock.now() - start).toBe(3 * INSTAGRAM_POLL_INTERVAL_MS);
+  });
+
+  it("throws INSTAGRAM_VIDEO_PROCESSING_ERROR when Instagram reports ERROR", async () => {
+    const clock = makeClock();
+    stubStatus(() => status("ERROR"));
+
+    const error = await failure(waitForInstagramContainer({ ...baseOptions, sleep: clock.sleep, now: clock.now }));
+
+    expect(error?.code).toBe("INSTAGRAM_VIDEO_PROCESSING_ERROR");
+  });
+
+  it("without a deadline, gives up after INSTAGRAM_POLL_MAX_ATTEMPTS checks with INSTAGRAM_VIDEO_TIMEOUT", async () => {
+    const clock = makeClock();
+    const fetchMock = stubStatus(() => status("IN_PROGRESS"));
+
+    const error = await failure(waitForInstagramContainer({ ...baseOptions, sleep: clock.sleep, now: clock.now }));
+
+    expect(error?.code).toBe("INSTAGRAM_VIDEO_TIMEOUT");
+    expect(fetchMock).toHaveBeenCalledTimes(INSTAGRAM_POLL_MAX_ATTEMPTS);
+  });
+
+  it("keeps polling after a transient non-auth HTTP error", async () => {
+    const clock = makeClock();
+    const fetchMock = stubStatus((call) => (call === 1 ? new Response("{}", { status: 500 }) : status("FINISHED")));
+
+    await waitForInstagramContainer({ ...baseOptions, sleep: clock.sleep, now: clock.now });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("flags the connection it was given and throws the reconnect error on a dead token", async () => {
+    const clock = makeClock();
+    stubStatus(() => new Response("{}", { status: 401 }));
+
+    const error = await failure(waitForInstagramContainer({ ...baseOptions, sleep: clock.sleep, now: clock.now }));
+
+    expect(error?.code).toBe("INSTAGRAM_RECONNECT_REQUIRED");
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    expect((updateMock.mock.calls[0][0] as { where: { id: string } }).where).toEqual({ id: "conn-ig" });
+  });
+
+  it("with 40 s left and a container stuck IN_PROGRESS, stops with INSTAGRAM_VIDEO_TIMEOUT while the publish reserve is still left", async () => {
+    const clock = makeClock();
+    const deadline = clock.now() + 40_000;
+    const fetchMock = stubStatus(() => status("IN_PROGRESS"));
+
+    const error = await failure(
+      waitForInstagramContainer({ ...baseOptions, deadline, sleep: clock.sleep, now: clock.now }),
+    );
+
+    expect(error?.code).toBe("INSTAGRAM_VIDEO_TIMEOUT");
+    // At least the media_publish reserve is still there for a retry-free hand-off.
+    expect(deadline - clock.now()).toBeGreaterThanOrEqual(INSTAGRAM_PUBLISH_RESERVE_MS);
+    // 40 s - 20 s reserve = 20 s of polling: checks at +5 s, +10 s and +15 s
+    // (each needs the 5 s wait and a >= 5 s request window before the reserve).
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    // media_publish is never requested by the poll.
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes("media_publish"))).toHaveLength(0);
+  });
+
+  it("clamps each status request to the time left before the publish reserve", async () => {
+    const clock = makeClock();
+    const deadline = clock.now() + 40_000;
+    stubStatus(() => status("IN_PROGRESS"));
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    await failure(waitForInstagramContainer({ ...baseOptions, deadline, sleep: clock.sleep, now: clock.now }));
+
+    // Before the reserve there are 15 s, 10 s and 5 s left at the three checks
+    // (never the 30 s default): the check cannot eat the reserve.
+    expect(setTimeoutSpy.mock.calls.map((c) => c[1])).toEqual([15_000, 10_000, 5_000]);
+  });
+
+  it("does not poll at all when the reserve plus one wait and request would not fit", async () => {
+    const clock = makeClock();
+    const deadline = clock.now() + INSTAGRAM_PUBLISH_RESERVE_MS + INSTAGRAM_POLL_INTERVAL_MS + MIN_REQUEST_WINDOW_MS - 1;
+    const fetchMock = stubStatus(() => status("FINISHED"));
+
+    const error = await failure(
+      waitForInstagramContainer({ ...baseOptions, deadline, sleep: clock.sleep, now: clock.now }),
+    );
+
+    expect(error?.code).toBe("INSTAGRAM_VIDEO_TIMEOUT");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("instagramClient.publishVideo — step deadline", () => {
+  type CodedError = Error & { code?: string };
+  const failure = (promise: Promise<unknown>) =>
+    promise.then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+
+  function ctx(mimeType: string, deadline?: number) {
+    return {
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+      mediaItem: {
+        mimeType,
+        storageLocation: "https://blob.example.com/m",
+        metadata: null,
+      } as unknown as MediaItem,
+      caption: "hello",
+      deadline,
+    };
+  }
+
+  const containerOk = () => new Response(JSON.stringify({ id: "container-1" }), { status: 200 });
+  const inProgress = () => new Response(JSON.stringify({ status_code: "IN_PROGRESS" }), { status: 200 });
+  const finished = () => new Response(JSON.stringify({ status_code: "FINISHED" }), { status: 200 });
+  const publishOk = () => new Response(JSON.stringify({ id: "media-1" }), { status: 200 });
+
+  /** Resolve after `ms` of (fake) time, or reject if the request is aborted first. */
+  const slow = (ms: number, make: () => Response) => (init?: RequestInit) =>
+    new Promise<Response>((resolve, reject) => {
+      const timer = setTimeout(() => resolve(make()), ms);
+      init?.signal?.addEventListener("abort", () => {
+        clearTimeout(timer);
+        reject(new DOMException("aborted", "AbortError"));
+      });
+    });
+  /** Never answers: settles only when the request is aborted. */
+  const hang = (init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+    });
+
+  type Route = (init?: RequestInit) => Promise<Response>;
+  function stubRoutes(routes: { container?: Route; status?: Route; publish?: Route }) {
+    const fetchMock = vi.fn<typeof fetch>((input, init) => {
+      const url = String(input);
+      if (url.includes("/media_publish")) return (routes.publish ?? (async () => publishOk()))(init);
+      if (url.includes("/ig-account-1/media")) return (routes.container ?? (async () => containerOk()))(init);
+      if (url.includes("fields=status_code")) return (routes.status ?? (async () => finished()))(init);
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+  const callsTo = (fetchMock: ReturnType<typeof stubRoutes>, fragment: string) =>
+    fetchMock.mock.calls.filter((c) => String(c[0]).includes(fragment));
+
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    ["reel", "video/mp4"],
+    ["image", "image/jpeg"],
+  ])("refuses to start a %s publish once the step budget is spent (no request at all)", async (_label, mimeType) => {
+    const fetchMock = stubRoutes({});
+
+    const error = await failure(
+      instagramClient.publishVideo(ctx(mimeType, Date.now() + MIN_REQUEST_WINDOW_MS - 1)),
+    );
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("clamps the container call and media_publish to the time left (12 s -> 12 s, then 3 s later 9 s)", async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    const fetchMock = stubRoutes({});
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const promise = instagramClient.publishVideo(ctx("image/jpeg", start + 12_000));
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    await expect(promise).resolves.toEqual({ externalPostId: "media-1" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // container timeout, the 3 s image wait, then the media_publish timeout
+    expect(setTimeoutSpy.mock.calls.map((c) => c[1])).toEqual([12_000, 3_000, 9_000]);
+  });
+
+  it("an image media_publish that would start with under 5 s left is refused (retry-safe), never reported unconfirmed", async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    // 3 s image wait leaves 4.999 s of the 7.999 s: below the 5 s request window.
+    const fetchMock = stubRoutes({});
+
+    const promise = failure(instagramClient.publishVideo(ctx("image/jpeg", start + 3_000 + MIN_REQUEST_WINDOW_MS - 1)));
+    await vi.advanceTimersByTimeAsync(3_000);
+    const error = await promise;
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(callsTo(fetchMock, "/media_publish")).toHaveLength(0);
+  });
+
+  it("worst case: slow status checks on a container that never finishes end with INSTAGRAM_VIDEO_TIMEOUT before the publish reserve", async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    const deadline = start + PUBLISH_STEP_BUDGET_MS;
+    const fetchMock = stubRoutes({ status: slow(20_000, inProgress) });
+
+    let settledAt = 0;
+    const promise = failure(instagramClient.publishVideo(ctx("video/mp4", deadline))).then((e) => {
+      settledAt = Date.now();
+      return e;
+    });
+    await vi.advanceTimersByTimeAsync(400_000);
+    const error = await promise;
+
+    // Unbounded this is 30 x (5 s + 20 s) = 750 s of polling.
+    expect(error?.code).toBe("INSTAGRAM_VIDEO_TIMEOUT");
+    expect(deadline - settledAt).toBeGreaterThanOrEqual(INSTAGRAM_PUBLISH_RESERVE_MS);
+    expect(callsTo(fetchMock, "/media_publish")).toHaveLength(0);
+  });
+
+  it("worst case: a container that finishes late and a hung media_publish still settle by the step deadline", async () => {
+    vi.useFakeTimers();
+    const start = Date.now();
+    const deadline = start + PUBLISH_STEP_BUDGET_MS;
+    let checks = 0;
+    const fetchMock = stubRoutes({
+      // 8 checks of 5 s + 20 s: FINISHED arrives at 200 s, 25 s before the deadline.
+      status: (init) => slow(20_000, ++checks < 8 ? inProgress : finished)(init),
+      publish: hang,
+    });
+
+    let settledAt = 0;
+    const promise = failure(instagramClient.publishVideo(ctx("video/mp4", deadline))).then((e) => {
+      settledAt = Date.now();
+      return e;
+    });
+    await vi.advanceTimersByTimeAsync(400_000);
+    const error = await promise;
+
+    // media_publish got the 25 s left (not its 30 s default) and was cut off at the deadline.
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(callsTo(fetchMock, "/media_publish")).toHaveLength(1);
+    expect(settledAt).toBeLessThanOrEqual(deadline);
+    expect(settledAt - start).toBeLessThan(240_000);
   });
 });

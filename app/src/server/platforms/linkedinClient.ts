@@ -2,13 +2,14 @@ import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import {
   isTerminalRefreshFailure,
   markConnectionNeedsReconnect,
   readOAuthErrorCode,
 } from "./connectionHealth";
 import { commitRequest } from "./commitCall";
+import { budgetedTimeout } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 
 /**
@@ -56,6 +57,14 @@ interface LinkedInAssetUploadResponse {
 const LINKEDIN_TOKEN_ENDPOINT = "https://www.linkedin.com/oauth/v2/accessToken";
 const LINKEDIN_DEFAULT_TOKEN_TTL_SECONDS = 5_184_000; // LinkedIn access tokens last ~60 days
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // treat tokens within 5 min of expiry as expired
+
+// 2026-11-01 scale audit (step budget, Task 7): per-request timeouts. Each is
+// clamped to the time left in the step (ctx.deadline) by budgetedTimeout, and a
+// request is never started with under 5 s left (PUBLISH_TIME_BUDGET_EXCEEDED,
+// nothing sent). The token refresh, register and ugcPosts calls use
+// DEFAULT_FETCH_TIMEOUT_MS (30 s).
+const LINKEDIN_DOWNLOAD_TIMEOUT_MS = 120_000;
+const LINKEDIN_UPLOAD_TIMEOUT_MS = 120_000;
 // Roadmap Phase 4: the code marked via markConnectionNeedsReconnect() at every
 // site below that throws this error (expiry guard + 401 mapping).
 const LINKEDIN_RECONNECT_CODE = "LINKEDIN_RECONNECT_REQUIRED";
@@ -90,9 +99,15 @@ function linkedinReconnectRequiredError(cause?: unknown): Error & { code: string
  *   `status`) on any other non-2xx — 429 / 5xx / invalid_client — WITHOUT
  *   flagging. The upstream body is logged server-side, never surfaced.
  * Network errors propagate unchanged and never flag.
+ *
+ * `opts.deadline` (epoch ms, publishBudget.ts): the token request timeout is
+ * clamped to the time left, and with under 5 s left it throws
+ * `PUBLISH_TIME_BUDGET_EXCEEDED` BEFORE any request or write (and never flags the
+ * connection). Without a deadline the request keeps its 30 s default.
  */
 export async function refreshLinkedInToken(
   connection: SocialConnection,
+  opts?: { deadline?: number },
 ): Promise<SocialConnection> {
   const refreshToken = connection.refreshToken;
   if (!refreshToken) {
@@ -113,20 +128,27 @@ export async function refreshLinkedInToken(
     throw error;
   }
 
+  // Throws (before anything is sent) when the step budget is spent.
+  const timeoutMs = budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, opts?.deadline);
+
   console.log("[LinkedIn] Refreshing access token", { connectionId: connection.id });
 
-  const response = await fetchWithTimeout(LINKEDIN_TOKEN_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
+  const response = await fetchWithTimeout(
+    LINKEDIN_TOKEN_ENDPOINT,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        client_id: clientId,
+        client_secret: clientSecret,
+      }),
     },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: clientId,
-      client_secret: clientSecret,
-    }),
-  });
+    timeoutMs,
+  );
 
   // Classify BEFORE assertOk consumes the body (readOAuthErrorCode reads a clone).
   const terminal =
@@ -200,17 +222,19 @@ export async function refreshLinkedInToken(
  * flagged LINKEDIN_RECONNECT_REQUIRED (original error as `cause`); a transient
  * one (429 / 5xx / network) or a config problem stays unflagged so a blip never
  * marks a working connection dead (2026-11-01 audit). Returns the (possibly
- * refreshed) connection. Exported for unit tests.
+ * refreshed) connection. `deadline` (epoch ms) bounds the refresh request (see
+ * {@link refreshLinkedInToken}). Exported for unit tests.
  */
 export async function ensureFreshLinkedInToken(
   connection: SocialConnection,
+  deadline?: number,
 ): Promise<SocialConnection> {
   if (!isExpiredOrExpiringSoon(connection.expiresAt)) {
     return connection;
   }
 
   if (connection.refreshToken) {
-    return refreshLinkedInToken(connection);
+    return refreshLinkedInToken(connection, { deadline });
   }
 
   // Roadmap Phase 4: expired with no refresh token stored (the common
@@ -223,7 +247,8 @@ async function uploadImage(
   accessToken: string,
   ownerUrn: string,
   imageUrl: string,
-  connectionId: string
+  connectionId: string,
+  deadline?: number,
 ): Promise<string> {
   console.log("[LinkedIn] Starting image upload", { imageUrl });
 
@@ -249,7 +274,8 @@ async function uploadImage(
           ],
         },
       }),
-    }
+    },
+    budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
   );
 
   // 2026-11-01 scale audit (platform limits): LinkedIn answers a limit with
@@ -289,11 +315,13 @@ async function uploadImage(
   // Step 2: Download image from blob storage.
   // fetchWithTimeout's own timeoutMs only bounds the connection + response
   // headers; pass AbortSignal.timeout as init.signal to also bound the
-  // arrayBuffer() body transfer (see the fetchWithTimeout docstring).
+  // arrayBuffer() body transfer (see the fetchWithTimeout docstring). Both are
+  // the same budgeted value (step deadline, Task 7).
+  const imageDownloadTimeoutMs = budgetedTimeout(LINKEDIN_DOWNLOAD_TIMEOUT_MS, deadline);
   const imageResponse = await fetchWithTimeout(
     imageUrl,
-    { signal: AbortSignal.timeout(120_000) },
-    120_000,
+    { signal: AbortSignal.timeout(imageDownloadTimeoutMs) },
+    imageDownloadTimeoutMs,
   );
   await assertOk(imageResponse, {
     code: "LINKEDIN_IMAGE_DOWNLOAD_FAILED",
@@ -311,7 +339,7 @@ async function uploadImage(
       },
       body: imageBuffer,
     },
-    120_000,
+    budgetedTimeout(LINKEDIN_UPLOAD_TIMEOUT_MS, deadline),
   );
 
   const imageUploadLimited = await classifyRateLimit("linkedin", uploadResponse);
@@ -331,18 +359,21 @@ async function uploadVideo(
   ownerUrn: string,
   videoUrl: string,
   filename: string,
-  connectionId: string
+  connectionId: string,
+  deadline?: number,
 ): Promise<string> {
   console.log("[LinkedIn] Starting video upload", { videoUrl, filename });
 
   // Step 1: Download video from blob storage.
   // fetchWithTimeout's own timeoutMs only bounds the connection + response
   // headers; pass AbortSignal.timeout as init.signal to also bound the
-  // arrayBuffer() body transfer (see the fetchWithTimeout docstring).
+  // arrayBuffer() body transfer (see the fetchWithTimeout docstring). Both are
+  // the same budgeted value (step deadline, Task 7).
+  const videoDownloadTimeoutMs = budgetedTimeout(LINKEDIN_DOWNLOAD_TIMEOUT_MS, deadline);
   const videoResponse = await fetchWithTimeout(
     videoUrl,
-    { signal: AbortSignal.timeout(120_000) },
-    120_000,
+    { signal: AbortSignal.timeout(videoDownloadTimeoutMs) },
+    videoDownloadTimeoutMs,
   );
   await assertOk(videoResponse, {
     code: "LINKEDIN_VIDEO_DOWNLOAD_FAILED",
@@ -380,7 +411,8 @@ async function uploadVideo(
           ],
         },
       }),
-    }
+    },
+    budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
   );
 
   const videoRegisterLimited = await classifyRateLimit("linkedin", registerResponse);
@@ -428,7 +460,7 @@ async function uploadVideo(
       },
       body: videoBuffer,
     },
-    120_000,
+    budgetedTimeout(LINKEDIN_UPLOAD_TIMEOUT_MS, deadline),
   );
 
   const videoUploadLimited = await classifyRateLimit("linkedin", uploadResponse);
@@ -473,7 +505,8 @@ async function createPost(
   caption: string,
   connectionId: string,
   mediaUrn?: string,
-  isVideo: boolean = false
+  isVideo: boolean = false,
+  deadline?: number,
 ): Promise<string> {
   console.log("[LinkedIn] Creating post", {
     authorUrn,
@@ -552,17 +585,23 @@ async function createPost(
   // 2026-11-01 scale audit (jobs H6, Review Focus 5): POST /v2/ugcPosts is the
   // commit call. A 5xx, a timeout or a dropped connection after it was sent is
   // PUBLISH_UNCONFIRMED (the post may be live) and is never re-run; a 4xx / 429
-  // is returned and handled below as before.
+  // is returned and handled below as before. The timeout is clamped to the
+  // remaining step budget; a spent budget throws PUBLISH_TIME_BUDGET_EXCEEDED
+  // BEFORE the request is sent (safe to retry).
   const response = await commitRequest("linkedin", () =>
-    fetchWithTimeout("https://api.linkedin.com/v2/ugcPosts", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-        "X-Restli-Protocol-Version": "2.0.0",
+    fetchWithTimeout(
+      "https://api.linkedin.com/v2/ugcPosts",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "X-Restli-Protocol-Version": "2.0.0",
+        },
+        body: JSON.stringify(postBody),
       },
-      body: JSON.stringify(postBody),
-    }),
+      budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+    ),
   );
 
   const postLimited = await classifyRateLimit("linkedin", response);
@@ -598,11 +637,11 @@ async function createPost(
 export const linkedinClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
     let { socialConnection } = ctx;
-    const { mediaItem, caption } = ctx;
+    const { mediaItem, caption, deadline } = ctx;
 
     // COR-5: refresh the token when a refresh_token is stored (partner apps),
     // otherwise fail with a clear reconnect error — before we use the token.
-    socialConnection = await ensureFreshLinkedInToken(socialConnection);
+    socialConnection = await ensureFreshLinkedInToken(socialConnection, deadline);
 
     const accessToken = socialConnection.accessToken;
     if (!accessToken) {
@@ -662,10 +701,11 @@ export const linkedinClient: PlatformClient = {
           authorUrn,
           mediaUrl,
           mediaItem.originalFilename,
-          socialConnection.id
+          socialConnection.id,
+          deadline,
         );
       } else if (mediaItem.mimeType.startsWith("image/")) {
-        mediaUrn = await uploadImage(accessToken, authorUrn, mediaUrl, socialConnection.id);
+        mediaUrn = await uploadImage(accessToken, authorUrn, mediaUrl, socialConnection.id, deadline);
       }
 
       // Create the post
@@ -681,7 +721,8 @@ export const linkedinClient: PlatformClient = {
         caption,
         socialConnection.id,
         mediaUrn,
-        isVideo
+        isVideo,
+        deadline,
       );
 
       console.log("[LinkedIn] Publish successful", { postId });
