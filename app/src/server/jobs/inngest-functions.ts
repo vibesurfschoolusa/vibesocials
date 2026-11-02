@@ -250,7 +250,7 @@ async function claimOrSkip(
  * - wait: release the claim with `deferredUntil` (resultClaim.ts) and report
  *   `deferred`; the run sleeps and calls this platform's step again
  *   (platformSteps.ts). The result stays `pending`.
- * - give up (retries spent, or the platform wants more than 24 h): finalize it
+ * - give up (retries spent, or the platform wants more than 26 h): finalize it
  *   failed with a message that tells the user to retry later.
  * - the claim is gone (someone failed or finished the result meanwhile): nothing
  *   to wait for, report `skipped`.
@@ -1212,7 +1212,11 @@ export const retryPlatforms = inngest.createFunction(
  *    memoized step output; the step returns only counts and ids. A re-run is safe:
  *    materialize is idempotent (results are created only if none exist yet), each
  *    event has the stable id `publish-<postJobId>`, and `publishToAllPlatforms`
- *    has `idempotency: event.data.postJobId`, so a second send triggers no run.
+ *    has `idempotency: event.data.postJobId`, so a second send of an event THIS
+ *    code sent triggers no run. That dedupe covers only events sent by this code:
+ *    events the pre-phase-2 scanner sent carry no id, which is why the release
+ *    runbook (docs/STAGING_SETUP.md, "Releasing pipeline changes (Inngest)")
+ *    pauses the scanner around deploys.
  *  - `notify-noconn-batch-<i>` is one `step.sendEvent` of the owner notifications
  *    for jobs that had no connection at run time (marked `failed` inside the
  *    chunk step, mirroring the existing no-connections path; reuses the same

@@ -10,7 +10,7 @@
 --
 --   WHERE "platform" = 'youtube' AND "status" = 'success'
 --     AND "externalPostId" IS NOT NULL
---     AND ("metricsCheckedAt" IS NULL OR "metricsCheckedAt" < <now - 1 h>)
+--     AND ("metricsCheckedAt" IS NULL OR "metricsCheckedAt" < <now - 50 min>)
 --   ORDER BY "metricsCheckedAt" ASC NULLS FIRST, "createdAt" DESC LIMIT 200
 --
 -- Additive only: one nullable column (no default, so no table rewrite) and one

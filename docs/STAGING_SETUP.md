@@ -178,6 +178,50 @@ latency to each of them.
   `finished_at`). Fix whatever made it fail first; `--rolled-back` only lets the
   next deploy run it again.
 
+#### Releasing pipeline changes (Inngest)
+
+Added after the 2026-11-02 phase 2 final review. Use this whenever a deploy
+changes the Inngest functions in `app/src/server/jobs/inngest-functions.ts`
+(their configuration, steps or event ids), and always for the scale-phase
+releases.
+
+1. **Ship one phase at a time.** Deploy and verify phase 1 (the `20261101*`
+   migrations) first. Then deploy phase 2 (the `20261102*` migrations). Do not
+   push both in one build.
+2. **Before promoting a deploy that changes Inngest functions:**
+   - Pause `scheduled-post-scanner` in the Inngest dashboard a couple of minutes
+     ahead. If you cannot pause it, confirm that no scanner run is active and
+     that no post is due within about 5 minutes.
+   - Avoid 04:40-05:20 UTC, the window of the `connection-health-sweep`
+     (cron `45 4 * * *`).
+   - Resume the scanner at least 5 minutes after the Inngest sync. That gives
+     every old-code step time to end within its 300 s limit.
+
+   Why: events sent by the old scanner carry no event id, so a scanner run that
+   straddles the deploy can re-send them, and an old run that is still in flight
+   can publish alongside a new one.
+3. **After every deploy, check that the Inngest sync took effect.** In the
+   Inngest dashboard (or from the response of
+   `PUT https://<domain>/api/inngest`), confirm the functions show the new
+   configuration:
+   - `publish-to-all-platforms`: concurrency, priority and idempotency
+     (`event.data.postJobId`), with `retries: 3`;
+   - `send-notification`: the throttle (8 per second);
+   - the singleton crons (`scheduled-post-scanner`, `media-retention-sweep`,
+     `youtube-post-metrics-sync`, `stale-post-job-sweep`,
+     `connection-health-sweep`);
+   - a registered `refresh-connection`.
+
+   If anything is missing, force a resync.
+4. **Rollback.**
+   - Prefer rolling forward.
+   - If you roll back, immediately force an Inngest resync (dashboard "Resync",
+     or `PUT https://<domain>/api/inngest`). Then confirm
+     `publish-to-all-platforms` shows `retries: 0` again. Older code has no
+     claim guard, so phase 2's `retries: 3` must not stay registered against it.
+   - Expected side effects of a rollback: deferred posts that wake on old code
+     send a "Pending" email, and the 2 h reconciler later marks them stalled.
+
 ## Sandbox platform apps
 
 For OAuth posting flows in staging, do not reuse production social-app

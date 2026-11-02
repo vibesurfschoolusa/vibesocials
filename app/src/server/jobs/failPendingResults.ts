@@ -35,8 +35,10 @@ export const PUBLISH_UNCONFIRMED = {
 
 /**
  * Recompute a job's status over ALL its results and store it, serialized per job
- * (2026-11-01 scale audit, jobs H6). Every finalizer goes through here: the
- * `finalize-job` / `finalize-retry` steps and {@link failPendingPostJobResults}.
+ * (2026-11-01 scale audit, jobs H6). Every run-side finalizer goes through here:
+ * the `finalize-job` / `finalize-retry` steps and {@link failPendingPostJobResults}.
+ * The exceptions are the 2 h stuck-job reconciler and the 6 h stale sweep: they
+ * write the job status with conditional `updateMany` statements, without this lock.
  *
  * Several runs of one job can now finalize at once (the retry function no longer
  * holds a `postJobId` concurrency key). A bare read-then-write would let a

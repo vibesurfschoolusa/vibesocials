@@ -176,8 +176,10 @@ async function withMaterializeRetries<T>(
  * that still throws goes to `errorIds` and stays `in_progress` for the reconciler.
  * Everything here is idempotent (`prepareDeferredPostJobDispatch` creates results
  * only when none exist), so a retry, or a re-run of the whole chunk (a scan that
- * straddles a deploy), duplicates no rows; the stable event id then dedupes the
- * second publish (Review Focus 3).
+ * straddles a deploy), duplicates no rows. The stable event id then dedupes the
+ * second publish only for events sent by this code (Review Focus 3): events the
+ * pre-phase-2 scanner sent carry no id, so a scan that straddles that deploy can
+ * re-send them (the release runbook in docs/STAGING_SETUP.md pauses the scanner).
  *
  * The events can be large and are NOT step output: only
  * {@link materializeAndDispatchChunk} calls this, and it returns counts and ids.
@@ -282,7 +284,10 @@ export interface ChunkDispatchResult {
  * `in_progress` for the reconciler, as before; the other sub-batches still send. A
  * re-run of the step is safe: materialize is idempotent and the event ids
  * (`publish-<postJobId>`) are stable, with `idempotency: event.data.postJobId` on
- * `publishToAllPlatforms`, so a second send of an event triggers no second run.
+ * `publishToAllPlatforms`, so a second send of an event this code sent triggers no
+ * second run. That dedupe covers only events sent by this code: events the
+ * pre-phase-2 scanner sent carry no id (hence the scanner pause in the release
+ * runbook, docs/STAGING_SETUP.md).
  */
 export async function materializeAndDispatchChunk(
   postJobIds: string[],
