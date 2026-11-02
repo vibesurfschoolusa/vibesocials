@@ -40,9 +40,15 @@ export const LARGE_UPLOAD_CHUNK_WINDOW_MS = 60_000;
 export const LARGE_UPLOAD_REQUEST_TIMEOUT_MS = 120_000;
 
 /**
- * The most media (64 MiB) a chunked upload holds in memory for one request. A
+ * The most media (64 MiB) a chunked upload reads from the blob for one request. A
  * part the vendor chooses (LinkedIn) that is larger than this is refused before
  * any upload starts.
+ *
+ * Memory is about twice this while the part uploads: undici's fetch copies a
+ * Buffer request body (`extractBody` slices the bytes into a new Uint8Array), so
+ * the buffer we read and undici's copy are both held until the request ends. A
+ * 64 MiB part peaks at about 128 MiB per step, plus the one source chunk the blob
+ * stream holds.
  */
 export const LARGE_UPLOAD_MAX_PART_BYTES = 67_108_864;
 
