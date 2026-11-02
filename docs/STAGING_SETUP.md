@@ -59,7 +59,9 @@ Neon rather than pointing at production:
    production branch, named e.g. `staging`. Neon branches are copy-on-write, so
    this is cheap and fully isolated from production.
 2. Copy the branch connection string. Use the **pooled** host (contains
-   `-pooler`) for the app; the direct host is for migrations/DDL if you need it.
+   `-pooler`) for the app; the direct host is for migrations/DDL if you need it
+   (production does the same, see
+   [Production database connections](#production-database-connections-pooled-and-direct)).
 3. Apply migrations to the branch (never `migrate dev` against shared data):
 
    ```bash
@@ -104,11 +106,50 @@ right environment so preview deploys never touch production:
 - `DATABASE_URL`: **Production** -> the production Neon branch; **Preview** -> a
   staging/preview Neon branch, never production. This is the deployed-side
   equivalent of the local guard.
+- `DIRECT_URL`: **Production** -> the production Neon branch's **direct**
+  (non-pooler) host. Optional; used only by migrations. See
+  [Production database connections](#production-database-connections-pooled-and-direct)
+  below.
 - `NEXTAUTH_URL`: differs per environment (production domain vs the generated
   preview URL); register the matching OAuth redirect URIs for each.
 - All secrets (`NEXTAUTH_SECRET`, platform tokens, `RESEND_API_KEY`, blob and
   Sentry tokens) live in Vercel, not in the repo. `app/.env.example` is the
   authoritative list of every variable the app reads.
+
+## Production database connections (pooled and direct)
+
+Added after the 2026-11-01 scale audit. Production uses two connection strings
+for the same Neon branch:
+
+- **`DATABASE_URL` is the pooled host** (the hostname contains `-pooler`). Every
+  serverless function instance shares Neon's PgBouncer instead of opening its
+  own Postgres connections. Use this exact query string:
+
+  ```
+  ?sslmode=require&connection_limit=5&pool_timeout=20&connect_timeout=15
+  ```
+
+  Do **not** add `pgbouncer=true`. The app only takes transaction-scoped
+  advisory locks (`pg_advisory_xact_lock` inside transactions) and never uses
+  `SET`, `LISTEN`, temp tables, or session advisory locks, so it is safe on the
+  transaction-mode pooler as is. (`connection_limit=5` is for Fluid compute,
+  where one instance serves many requests; use 1-3 without it.)
+- **`DIRECT_URL` is the direct host** (the same hostname **without**
+  `-pooler`). Prisma Migrate takes a session-level advisory lock and runs its
+  schema engine over one connection, which a transaction-mode pooler can break.
+  `app/scripts/migrate-on-vercel-prod.mjs` therefore runs
+  `prisma migrate deploy` with `DIRECT_URL` when it is set, and logs
+  `[migrate-on-vercel-prod] using DIRECT_URL` (it logs the variable name, never
+  the value). With `DIRECT_URL` unset it falls back to `DATABASE_URL`, exactly
+  as before, so setting it is optional. The running app never reads it.
+
+Set `DIRECT_URL` for the **Production** environment only. Preview builds skip
+migrations (see the script's header), so they do not need it.
+
+Keep the **Vercel function region equal to the Neon region** (Project Settings
+-> Functions -> Function Region, vs. the region shown on the Neon project).
+Every request makes several database round trips; a cross-region hop adds its
+latency to each of them.
 
 ## Sandbox platform apps
 

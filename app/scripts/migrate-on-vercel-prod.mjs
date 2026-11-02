@@ -21,5 +21,16 @@ if (process.env.VERCEL_ENV !== "production") {
   process.exit(0);
 }
 
+// 2026-11-01 scale audit: production DATABASE_URL is the Neon POOLED host
+// (-pooler, PgBouncer in transaction mode), but Prisma Migrate needs a direct
+// connection for its advisory lock and schema engine. When DIRECT_URL (the
+// non-pooler host) is set, migrate with that; otherwise fall back to
+// DATABASE_URL, so a project without DIRECT_URL behaves exactly as before.
+// Only the variable NAME is logged, never the connection string.
+const urlSource = process.env.DIRECT_URL ? "DIRECT_URL" : "DATABASE_URL";
+console.log(`[migrate-on-vercel-prod] using ${urlSource}`);
 console.log("[migrate-on-vercel-prod] production build — running prisma migrate deploy…");
-execSync("npx prisma migrate deploy", { stdio: "inherit" });
+execSync("npx prisma migrate deploy", {
+  stdio: "inherit",
+  env: { ...process.env, DATABASE_URL: process.env.DIRECT_URL || process.env.DATABASE_URL },
+});

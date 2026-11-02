@@ -160,6 +160,10 @@ model WorkspaceInvite {
   createdAt   DateTime  @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // 2026-11-01 scale audit: invite GET/POST/DELETE and member-removal revoke
+  // filter by workspace + not-yet-revoked.
+  @@index([workspaceId, revokedAt])
 }
 
 // Account lifecycle (scale-readiness spec §A). Short-lived, single-use tokens
@@ -217,6 +221,9 @@ model SocialConnection {
   // One connected account per platform per workspace (was per-user
   // pre-workspaces); members of a workspace share the same connection.
   @@unique([workspaceId, platform], name: "workspaceId_platform")
+  // 2026-11-01 scale audit: User -> SocialConnection ON DELETE CASCADE seeks by
+  // userId; without an index each user delete scans the table.
+  @@index([userId])
 }
 
 model MediaItem {
@@ -246,6 +253,17 @@ model MediaItem {
   postJobs  PostJob[]
 
   @@index([workspaceId])
+  // 2026-11-01 scale audit: the media library list
+  // (`where workspaceId, deletedAt: null ORDER BY createdAt DESC, id DESC`) is
+  // served and ordered by this index, so a keyset page needs no sort. `id` is
+  // the tiebreaker that makes the order total. Supersedes @@index([workspaceId])
+  // above, which stays for now (no drops in this phase).
+  @@index([workspaceId, deletedAt, createdAt, id])
+  // 2026-11-01 scale audit: deleteBlobUnlessShared counts the OTHER live rows
+  // that share a storageLocation before it removes the blob.
+  @@index([storageLocation])
+  // 2026-11-01 scale audit: User -> MediaItem ON DELETE CASCADE seeks by userId.
+  @@index([userId])
 }
 
 model PostJob {
@@ -306,6 +324,14 @@ model PostJob {
   // Approval workflow: the Queue's "awaiting approval" lookup filters on
   // workspace + submittedForApprovalAt IS NOT NULL.
   @@index([workspaceId, submittedForApprovalAt])
+  // 2026-11-01 scale audit: media delete and retention counts look up jobs by
+  // mediaItemId + status; also backs MediaItem -> PostJob ON DELETE CASCADE.
+  @@index([mediaItemId, status])
+  // 2026-11-01 scale audit: Queue `?status=scheduled,draft` filters by
+  // workspace + status and orders by createdAt.
+  @@index([workspaceId, status, createdAt])
+  // 2026-11-01 scale audit: User -> PostJob ON DELETE CASCADE seeks by userId.
+  @@index([userId])
 }
 
 model PostJobResult {
@@ -335,6 +361,17 @@ model PostJobResult {
   // externalPostId), NOT via this relation, so a retry that changes the result's
   // externalPostId can leave >1 historical metric pointing here harmlessly.
   metrics          PostMetric[]
+
+  // 2026-11-01 scale audit: every per-job read, update and include (Activity,
+  // Queue, each publish step) filters by postJobId; also backs PostJob ->
+  // PostJobResult ON DELETE CASCADE. Without it each was a full table scan.
+  @@index([postJobId, platform])
+  // 2026-11-01 scale audit: SocialConnection delete (Disconnect / Switch
+  // account) runs ON DELETE SET NULL against this column.
+  @@index([socialConnectionId])
+  // 2026-11-01 scale audit: the hourly YouTube metrics selector filters by
+  // platform and orders/ranges by createdAt.
+  @@index([platform, createdAt])
 }
 
 // Fixed-window rate-limit counters (see src/lib/rateLimit.ts).
@@ -412,4 +449,11 @@ model PostMetric {
   // intentionally left in place (its removal is a later cleanup, not part of
   // this migration — see migration.sql).
   @@index([workspaceId])
+  // 2026-11-01 scale audit: PostJobResult delete runs ON DELETE SET NULL
+  // against this column.
+  @@index([postJobResultId])
+  // 2026-11-01 scale audit: User -> PostMetric ON DELETE CASCADE seeks by
+  // userId. Re-adds the index that 20260712120000 dropped when workspaceId
+  // replaced it for the dashboard reads.
+  @@index([userId])
 }
