@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { canonicalBlobUrl, isAllowedBlobUrl, ownBlobStoreId } from "./blobUrl";
+import {
+  canonicalBlobUrl,
+  guardBlobKey,
+  isAllowedBlobUrl,
+  MAX_BLOB_URL_LENGTH,
+  ownBlobStoreId,
+} from "./blobUrl";
 
 // Hermetic: a developer shell that exports BLOB_READ_WRITE_TOKEN must not pin
 // the store for the host-agnostic tests below. Tests that want a store set it.
@@ -173,6 +179,53 @@ describe("canonicalBlobUrl", () => {
       expect(once).not.toBeNull();
       expect(canonicalBlobUrl(once as string)).toBe(once);
     }
+  });
+});
+
+// Final review (M2): the write paths had no length cap, so a stored URL could
+// be arbitrarily long. The cap is checked on the TRIMMED input, so it is the
+// length that would actually be stored.
+describe("MAX_BLOB_URL_LENGTH", () => {
+  const PREFIX = "https://abc123.public.blob.vercel-storage.com/";
+  // An otherwise valid, already-canonical own-host URL of exactly `length` chars.
+  const urlOfLength = (length: number) => PREFIX + "a".repeat(length - PREFIX.length);
+
+  it("is 2048", () => {
+    expect(MAX_BLOB_URL_LENGTH).toBe(2048);
+  });
+
+  it("accepts a URL of exactly MAX_BLOB_URL_LENGTH characters", () => {
+    const url = urlOfLength(MAX_BLOB_URL_LENGTH);
+    expect(url).toHaveLength(2048);
+    expect(canonicalBlobUrl(url)).toBe(url);
+  });
+
+  it("rejects a URL one character longer", () => {
+    const url = urlOfLength(MAX_BLOB_URL_LENGTH + 1);
+    expect(url).toHaveLength(2049);
+    expect(canonicalBlobUrl(url)).toBeNull();
+  });
+
+  it("measures the trimmed input, so padding does not count against the cap", () => {
+    const url = urlOfLength(MAX_BLOB_URL_LENGTH);
+    expect(canonicalBlobUrl(`  ${url}\n`)).toBe(url);
+    expect(canonicalBlobUrl(`${url}a`)).toBeNull();
+  });
+
+  it("applies to other allowed hosts too (loopback and BLOB_ALLOWED_HOSTS)", () => {
+    const pad = (prefix: string, length: number) => prefix + "a".repeat(length - prefix.length);
+    expect(canonicalBlobUrl(pad("http://localhost:9366/", 2048))).not.toBeNull();
+    expect(canonicalBlobUrl(pad("http://localhost:9366/", 2049))).toBeNull();
+    vi.stubEnv("BLOB_ALLOWED_HOSTS", "cdn.example.com");
+    expect(canonicalBlobUrl(pad("https://cdn.example.com/", 2048))).not.toBeNull();
+    expect(canonicalBlobUrl(pad("https://cdn.example.com/", 2049))).toBeNull();
+  });
+
+  it("does not stop the shared-blob guard from keying a stored over-long legacy value", () => {
+    // A row stored before the cap can be longer. canonicalBlobUrl() refuses it, so
+    // the guard falls back to the raw value (exact-match comparison) rather than throwing.
+    const long = urlOfLength(MAX_BLOB_URL_LENGTH + 10);
+    expect(guardBlobKey(long)).toBe(long);
   });
 });
 

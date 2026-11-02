@@ -32,7 +32,7 @@ vi.mock("@/lib/workspace", () => ({
   getWorkspaceContext: getWorkspaceContextMock,
 }));
 
-import { BLOB_URL_REJECTED_MESSAGE } from "@/lib/blobUrl";
+import { BLOB_URL_REJECTED_MESSAGE, MAX_BLOB_URL_LENGTH } from "@/lib/blobUrl";
 import { decodePostsCursor, encodePostsCursor } from "@/lib/postsDto";
 
 import { GET, POST } from "./route";
@@ -236,6 +236,21 @@ describe("POST /api/media", () => {
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({ error: BLOB_URL_REJECTED_MESSAGE });
       expect(createMock).not.toHaveBeenCalled();
+    });
+
+    it("returns 400 with the allowed-host message and stores nothing for a blobUrl longer than MAX_BLOB_URL_LENGTH", async () => {
+      const response = await POST(jsonRequest(body(U + "a".repeat(MAX_BLOB_URL_LENGTH - U.length + 1))));
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: BLOB_URL_REJECTED_MESSAGE });
+      expect(createMock).not.toHaveBeenCalled();
+    });
+
+    it("still accepts a blobUrl of exactly MAX_BLOB_URL_LENGTH characters", async () => {
+      const response = await POST(jsonRequest(body(U + "a".repeat(MAX_BLOB_URL_LENGTH - U.length))));
+
+      expect(response.status).toBe(201);
+      expect(createMock).toHaveBeenCalledTimes(1);
     });
 
     it("stores the trimmed canonical URL for a whitespace-padded blobUrl", async () => {

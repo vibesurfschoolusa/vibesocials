@@ -30,6 +30,13 @@ import {
   COMPOSER_DISPATCH_FAILED_MESSAGE,
   composerSubmitOutcome,
 } from "@/lib/composerSubmitOutcome";
+import {
+  buildReusePostBody,
+  buildUploadPostBody,
+  type CreatePostRequest,
+  type CreatePostReuseRequest,
+  type DeferredPostFields,
+} from "@/lib/createPostRequest";
 import type { MediaItemDto } from "@/lib/mediaDto";
 import { PLATFORM_ORDER, platformLabel, TIKTOK_PRIVACY_LABELS } from "@/lib/platforms";
 import {
@@ -56,51 +63,6 @@ interface UploadedBlobInfo {
 // immediate flow; `schedule` sends a `scheduledFor` (UTC ISO); `draft` sends
 // `draft: true`. Both deferred modes create no results / send no event now.
 type PublishMode = "now" | "schedule" | "draft";
-
-// Fields shared by both create bodies for the deferred modes.
-interface DeferredPostFields {
-  /** Present + true → save as draft. */
-  draft?: boolean;
-  /** Present → schedule for this UTC ISO time. */
-  scheduledFor?: string;
-}
-
-// 2026-11-01 audit (M3): the workspace this page was rendered for. The active
-// workspace is a cookie shared by every tab, so the server compares this with
-// the cookie's workspace and refuses (409 WORKSPACE_CHANGED) when they differ.
-interface WorkspaceBoundFields {
-  workspaceId?: string;
-}
-
-// Request body posted to /api/posts. Metadata fields are added conditionally
-// based on which platforms are connected.
-interface CreatePostRequest extends DeferredPostFields, WorkspaceBoundFields {
-  blobUrl: string;
-  filename: string;
-  mimeType: string;
-  sizeBytes: number;
-  baseCaption: string;
-  location?: string;
-  tiktokMetadata?: TikTokPostMetadata;
-  youtubeMetadata?: YouTubePostMetadata;
-  /** Task 7 — chosen subset of connected platforms to publish to. */
-  platforms?: Platform[];
-}
-
-// Roadmap Phase 2 — request body for the reuse path: an already-persisted
-// MediaItem instead of a fresh blobUrl upload. Same optional metadata fields
-// as CreatePostRequest; POST /api/posts branches on which of blobUrl /
-// mediaItemId is present.
-interface CreatePostReuseRequest extends DeferredPostFields, WorkspaceBoundFields {
-  mediaItemId: string;
-  baseCaption: string;
-  location?: string;
-  perPlatformOverrides?: Partial<Record<Platform, string>>;
-  tiktokMetadata?: TikTokPostMetadata;
-  youtubeMetadata?: YouTubePostMetadata;
-  /** Task 7 — chosen subset of connected platforms to publish to. */
-  platforms?: Platform[];
-}
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -130,8 +92,10 @@ interface CreatePostFormInnerProps {
    * 2026-11-01 audit (M3) — the id of the workspace this page was rendered for
    * (app/posts/new/page.tsx). Sent with the create request so the server can
    * refuse when the active-workspace cookie was switched in another tab.
+   * Required (final review, T9): a caller that forgets it would silently turn
+   * the protection off, so the compiler rejects that instead.
    */
-  workspaceId?: string;
+  workspaceId: string;
 }
 
 function CreatePostFormInner({
@@ -528,28 +492,20 @@ function CreatePostFormInner({
 
       if (reuseItem) {
         // Roadmap Phase 2 — reuse: no upload, attach the existing MediaItem.
-        const reuseData: CreatePostReuseRequest = {
+        postData = buildReusePostBody({
           mediaItemId: reuseItem.id,
           baseCaption: uploadCaption,
-          location: uploadLocation.trim() || undefined,
+          location: uploadLocation,
           // Task 7 — chosen platform subset for this post.
           platforms: selectedPlatforms,
-          ...deferred,
+          deferred,
           workspaceId,
-        };
-
-        if (reusePerPlatformOverrides) {
-          reuseData.perPlatformOverrides = reusePerPlatformOverrides;
-        }
-        // Task 7 — only attach metadata for a platform still selected for
-        // this post; a deselected TikTok/YouTube isn't published to.
-        if (tiktokSelected) {
-          reuseData.tiktokMetadata = tiktokMetadata;
-        }
-        if (youtubeSelected) {
-          reuseData.youtubeMetadata = youtubeMetadata;
-        }
-        postData = reuseData;
+          perPlatformOverrides: reusePerPlatformOverrides,
+          // Task 7 — only attach metadata for a platform still selected for
+          // this post; a deselected TikTok/YouTube isn't published to.
+          tiktokMetadata: tiktokSelected ? tiktokMetadata : undefined,
+          youtubeMetadata: youtubeSelected ? youtubeMetadata : undefined,
+        });
       } else {
         // Unreachable given the guard in handleUploadSubmit (this branch only
         // runs when reuseItem is falsy, and that guard already required
@@ -565,28 +521,19 @@ function CreatePostFormInner({
         // file; only uploads if it hasn't been (or needs to be re-) uploaded.
         const blob = await ensureUploaded(uploadFile);
 
-        const blobData: CreatePostRequest = {
-          blobUrl: blob.url,
-          filename: blob.filename,
-          mimeType: blob.mimeType,
-          sizeBytes: blob.sizeBytes,
+        postData = buildUploadPostBody({
+          blob,
           baseCaption: uploadCaption,
-          location: uploadLocation.trim() || undefined,
+          location: uploadLocation,
           // Task 7 — chosen platform subset for this post.
           platforms: selectedPlatforms,
-          ...deferred,
+          deferred,
           workspaceId,
-        };
-
-        // Task 7 — only attach metadata for a platform still selected for
-        // this post; a deselected TikTok/YouTube isn't published to.
-        if (tiktokSelected) {
-          blobData.tiktokMetadata = tiktokMetadata;
-        }
-        if (youtubeSelected) {
-          blobData.youtubeMetadata = youtubeMetadata;
-        }
-        postData = blobData;
+          // Task 7 — only attach metadata for a platform still selected for
+          // this post; a deselected TikTok/YouTube isn't published to.
+          tiktokMetadata: tiktokSelected ? tiktokMetadata : undefined,
+          youtubeMetadata: youtubeSelected ? youtubeMetadata : undefined,
+        });
       }
 
       const response = await fetch("/api/posts", {
@@ -1331,10 +1278,11 @@ export interface CreatePostFormProps {
   /**
    * 2026-11-01 audit (M3) — id of the workspace the page was rendered for,
    * sent with the create request so a workspace switched in another tab is
-   * refused (409) rather than posted into. Optional; absent keeps the old
-   * cookie-only behaviour.
+   * refused (409) rather than posted into. Required (final review, T9) so the
+   * compiler enforces it for every caller; the API field itself stays optional
+   * for other clients.
    */
-  workspaceId?: string;
+  workspaceId: string;
 }
 
 /**

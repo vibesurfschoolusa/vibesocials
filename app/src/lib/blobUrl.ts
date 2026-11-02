@@ -147,6 +147,14 @@ function normalizePercentEncoding(pathname: string): string {
 }
 
 /**
+ * Longest blob URL (after trimming) that may be stored as a
+ * `MediaItem.storageLocation`. Real Vercel Blob URLs and the e2e mock's are well
+ * under 300 characters; the cap only keeps an arbitrarily long client-supplied
+ * value out of the table, its indexes and the delete guard's `IN (...)` lookups.
+ */
+export const MAX_BLOB_URL_LENGTH = 2048;
+
+/**
  * Returns the ONE canonical spelling of an allowed blob URL, or `null` when the
  * URL is not acceptable as a stored `MediaItem.storageLocation`.
  *
@@ -157,9 +165,10 @@ function normalizePercentEncoding(pathname: string): string {
  * delete their own row, and get the teammate's file deleted. Every write path
  * therefore stores this canonical form and rejects what cannot be canonicalized.
  *
- * Rejected (`null`): anything `isAllowedBlobUrl` refuses, credentials, a query
- * or fragment (even an empty `?` / `#`), and an explicit non-default port on a
- * non-local host. Local dev hosts keep their port, because the e2e mock blob
+ * Rejected (`null`): anything `isAllowedBlobUrl` refuses, a trimmed input
+ * longer than {@link MAX_BLOB_URL_LENGTH}, credentials, a query or fragment
+ * (even an empty `?` / `#`), and an explicit non-default port on a non-local
+ * host. Local dev hosts keep their port, because the e2e mock blob
  * server hands out `http://localhost:9366/<key>`. WHATWG parsing drops a
  * default port, so `https://host:443/p` is indistinguishable from
  * `https://host/p` and canonicalizes to the latter.
@@ -172,6 +181,9 @@ export function canonicalBlobUrl(url: string): string | null {
     return null;
   }
   const trimmed = url.trim();
+  if (trimmed.length > MAX_BLOB_URL_LENGTH) {
+    return null;
+  }
   if (!isAllowedBlobUrl(trimmed)) {
     return null;
   }

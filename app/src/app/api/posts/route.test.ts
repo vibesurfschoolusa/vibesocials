@@ -80,7 +80,7 @@ vi.mock("@/server/jobs/failPendingResults", async () => {
   return { ...actual, failPendingPostJobResults: failPendingMock };
 });
 
-import { BLOB_URL_REJECTED_MESSAGE } from "@/lib/blobUrl";
+import { BLOB_URL_REJECTED_MESSAGE, MAX_BLOB_URL_LENGTH } from "@/lib/blobUrl";
 import { PostTargetingError } from "@/lib/postTargets";
 import { MediaItemUnavailableError } from "@/server/jobs/posting";
 import { POST } from "./route";
@@ -1011,6 +1011,21 @@ describe("POST /api/posts — canonical blob URLs (2026-11-01 audit, M2)", () =>
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: BLOB_URL_REJECTED_MESSAGE });
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 with the allowed-host message and creates nothing for a blobUrl longer than MAX_BLOB_URL_LENGTH", async () => {
+    const response = await POST(jsonRequest(body(U + "a".repeat(MAX_BLOB_URL_LENGTH - U.length + 1))));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: BLOB_URL_REJECTED_MESSAGE });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("still accepts a blobUrl of exactly MAX_BLOB_URL_LENGTH characters", async () => {
+    const response = await POST(jsonRequest(body(U + "a".repeat(MAX_BLOB_URL_LENGTH - U.length))));
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledTimes(1);
   });
 
   it("stores the trimmed canonical URL for a whitespace-padded blobUrl (this path used to store it untrimmed)", async () => {

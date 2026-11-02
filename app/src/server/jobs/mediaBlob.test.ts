@@ -191,10 +191,10 @@ describe("deleteBlobUnlessShared lenient key (ruling R6)", () => {
     // JS trim() strips these but WHATWG URL parsing does not (it only strips C0
     // controls and spaces), and the migration's \s never matches U+FEFF. POST
     // /api/posts used to store body.blobUrl untrimmed, so such rows can exist.
-    ["a leading U+FEFF (BOM)", `﻿${OWN}`],
-    ["a trailing U+00A0 (no-break space)", `${OWN} `],
-    ["a trailing U+2028 (line separator)", `${OWN} `],
-    ["a leading U+00A0 and a query", ` ${OWN}?x=1`],
+    ["a leading U+FEFF (BOM)", `\uFEFF${OWN}`],
+    ["a trailing U+00A0 (no-break space)", `${OWN}\u00A0`],
+    ["a trailing U+2028 (line separator)", `${OWN}\u2028`],
+    ["a leading U+00A0 and a query", `\u00A0${OWN}?x=1`],
   ];
 
   it.each(variants)("keeps the blob when the deleted row has %s and a canonical own-store row is live", async (_label, variant) => {

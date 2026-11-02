@@ -1,6 +1,20 @@
+import { Platform } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
-import { PLATFORM_CAPTIONS_HEADING, platformCaptionEntries } from "./platforms";
+import { PLATFORM_CAPTIONS_HEADING, PLATFORM_ORDER, platformCaptionEntries } from "./platforms";
+
+// Final review (T7): platformCaptionEntries() lists captions in PLATFORM_ORDER
+// and drops anything not in it, so a platform added to the Prisma enum but not to
+// PLATFORM_ORDER would publish its caption override without the approving owner
+// ever seeing it. This fails the build at that moment instead.
+describe("PLATFORM_ORDER", () => {
+  it("contains every value of the Prisma Platform enum", () => {
+    const missing = Object.values(Platform).filter(
+      (platform) => !PLATFORM_ORDER.includes(platform),
+    );
+    expect(missing).toEqual([]);
+  });
+});
 
 // 2026-11-01 audit (M1): the Queue card and the approval email both list the
 // per-platform captions an owner is approving; this is their shared "which
