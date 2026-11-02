@@ -1,5 +1,7 @@
 import type { Instrumentation } from "next";
 
+import { redactBreadcrumb, redactOutgoingSpan } from "@/lib/sentryRedaction";
+
 // Health track H1 — server/edge Sentry init (Next.js instrumentation hook,
 // stable since Next 15; see https://nextjs.org/docs/app/guides/instrumentation).
 //
@@ -37,6 +39,14 @@ export async function register(): Promise<void> {
       // keeps Sentry's OWN auto-instrumentation from ever picking up an
       // Authorization/Cookie header by default.
       sendDefaultPii: false,
+      // 2026-11-02 scale audit (jobs B3): Sentry's automatic instrumentation of
+      // outgoing fetch / http requests records each request's URL, query included,
+      // in a breadcrumb (attached to every logged error) and, for traced requests,
+      // in span attributes. Upload sessions (the YouTube resumable session URI,
+      // TikTok's upload_url, LinkedIn's part URLs) are capability URLs, so URLs are
+      // redacted before either leaves the process (lib/sentryRedaction.ts).
+      beforeBreadcrumb: redactBreadcrumb,
+      beforeSendSpan: redactOutgoingSpan,
     });
   }
 }

@@ -31,6 +31,14 @@ via source-map upload.
 - **`src/instrumentation.ts`** — server/edge init. `register()` returns
   immediately if `SENTRY_DSN` is unset; `onRequestError` returns immediately
   under the same condition.
+- **`src/lib/sentryRedaction.ts`** — wired into the server/edge init
+  (`beforeBreadcrumb`, `beforeSendSpan`). Sentry's automatic instrumentation
+  records the URL of every outgoing request, query included, in breadcrumbs and
+  span attributes; upload sessions (the YouTube resumable session URI, TikTok's
+  `upload_url`, LinkedIn's part URLs) are capability URLs. So an outgoing URL
+  keeps only scheme, host and path (no query, fragment or credentials), and the
+  path of an upload URL (`upload` in the host, a `tiktokapis.com` host, or
+  `/upload/` or `/dms-uploads/` in the path) becomes `/[redacted]`.
 - **`src/instrumentation-client.ts`** — browser init. `Sentry.init(...)` is
   only called if `NEXT_PUBLIC_SENTRY_DSN` is set.
 - **`next.config.ts`** — `withSentryConfig` (the build-time wrapper that
