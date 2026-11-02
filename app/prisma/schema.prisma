@@ -260,8 +260,11 @@ model MediaItem {
   // above, which stays for now (no drops in this phase).
   @@index([workspaceId, deletedAt, createdAt, id])
   // 2026-11-01 scale audit: deleteBlobUnlessShared counts the OTHER live rows
-  // that share a storageLocation before it removes the blob.
-  @@index([storageLocation])
+  // that share a storageLocation before it removes the blob, and the retention
+  // sweep does the same. Both look the column up by equality only (`=` / `IN`),
+  // so this is a HASH index: unlike a btree it has no index-row size limit, so a
+  // very long stored URL can never make CREATE INDEX (or a later insert) fail.
+  @@index([storageLocation], type: Hash)
   // 2026-11-01 scale audit: User -> MediaItem ON DELETE CASCADE seeks by userId.
   @@index([userId])
 }

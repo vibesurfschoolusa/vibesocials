@@ -20,7 +20,11 @@
 CREATE INDEX "MediaItem_workspaceId_deletedAt_createdAt_id_idx" ON "MediaItem"("workspaceId", "deletedAt", "createdAt", "id");
 
 -- CreateIndex
-CREATE INDEX "MediaItem_storageLocation_idx" ON "MediaItem"("storageLocation");
+-- A HASH index on purpose: the shared-blob guard and the retention sweep only
+-- look this column up by equality (= / IN), and a btree entry is capped at about
+-- 2.7 KB, so a long stored URL would make CREATE INDEX (and later inserts) fail.
+-- A hash index has no such row-size limit.
+CREATE INDEX "MediaItem_storageLocation_idx" ON "MediaItem" USING HASH ("storageLocation");
 
 -- CreateIndex
 CREATE INDEX "MediaItem_userId_idx" ON "MediaItem"("userId");

@@ -13,14 +13,22 @@
 -- deployment while this one builds) are covered at delete time by the guard's
 -- lenient key (guardBlobKey in src/lib/blobUrl.ts).
 --
--- For http(s) rows only (anything else, such as a local file path, is left
--- alone), mirroring canonicalBlobUrl() for the cases it can be done in SQL:
+-- For http(s) rows on a Vercel Blob host or a loopback host only, mirroring
+-- canonicalBlobUrl() for the cases it can be done in SQL:
 --   1. drop everything from the first "?" or "#";
 --   2. trim surrounding whitespace (after step 1, so "U ?x=1" ends up as "U");
 --   3. lower-case the scheme and host (an authority carrying "user:pw@" is
 --      left as it is: credentials are case-sensitive);
 --   4. remove a literal ":443" from an https host.
 -- Path dot-segments and percent-encoding are not rewritten here.
+--
+-- Host scope: a row is rewritten only when its host (the authority without any
+-- "user:pw@" and without a port, lower-cased) is "*.blob.vercel-storage.com" or
+-- one of localhost / 127.0.0.1 / [::1]. Rows on any other host are left byte
+-- for byte: those are custom CDNs listed in BLOB_ALLOWED_HOSTS, where a query
+-- string such as "?v=2" can select the object, so dropping it here would
+-- repoint the row with no backup. The guard's lenient key still covers such
+-- rows at delete time.
 --
 -- Data-only; no schema change. Idempotent: the result is a fixed point of the
 -- expression (a second run finds nothing to change), and the UPDATE only
@@ -53,6 +61,11 @@ FROM (
       WHERE "storageLocation" ~* '^\s*https?://'
     ) AS t
   ) AS s
+  -- Host scope (see the header): Vercel Blob hosts and loopback only.
+  WHERE lower(regexp_replace(regexp_replace(s."authority", '^.*@', ''), ':[0-9]*$', ''))
+          ~ '\.blob\.vercel-storage\.com$'
+     OR lower(regexp_replace(regexp_replace(s."authority", '^.*@', ''), ':[0-9]*$', ''))
+          IN ('localhost', '127.0.0.1', '[::1]')
 ) AS c
 WHERE m."id" = c."id"
   AND c."canonical" IS NOT NULL
