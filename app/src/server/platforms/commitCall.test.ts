@@ -269,7 +269,7 @@ describe("readCommitBody — a 2xx commit whose body cannot be read is PUBLISH_U
   });
 });
 
-// 2026-11-02 scale audit (jobs, R30): a 2xx commit body that parsed but lacks the
+// 2026-11-02 scale audit (jobs): a 2xx commit body that parsed but lacks the
 // post id the client returns as externalPostId means the platform said "created"
 // and we cannot say which post it is. Not a failure to retry: PUBLISH_UNCONFIRMED.
 describe("requireCommitId", () => {

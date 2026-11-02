@@ -228,7 +228,7 @@ describe("googleBusinessProfileClient.publishVideo — commit call (POST .../med
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  // 2026-11-02 scale audit (jobs, R30): the media create answered 2xx ("created")
+  // 2026-11-02 scale audit (jobs): the media create answered 2xx ("created")
   // but the parsed body has no resource `name`: PUBLISH_UNCONFIRMED, not a
   // success with a null externalPostId.
   it.each([

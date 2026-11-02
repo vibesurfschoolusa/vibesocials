@@ -28,7 +28,7 @@ import { isNeverConnectedFetchError } from "./transientRetry";
 //   2xx, body unreadable / not parseable  PUBLISH_UNCONFIRMED (readCommitBody:
 //                                         the platform answered "created")
 //   2xx, parsed body without the post id  PUBLISH_UNCONFIRMED (requireCommitId,
-//                                         2026-11-02 scale audit R30)
+//                                         2026-11-02 scale audit)
 
 export type PublishUnconfirmedError = Error & { code: typeof PUBLISH_UNCONFIRMED_CODE };
 
@@ -119,7 +119,7 @@ export async function readCommitBody<T>(
 }
 
 /**
- * 2026-11-02 scale audit (jobs, R30): the id a client returns as `externalPostId`,
+ * 2026-11-02 scale audit (jobs): the id a client returns as `externalPostId`,
  * read from the parsed body of a 2xx commit response.
  *
  * The platform said "created" but did not tell us which post, so the post may be

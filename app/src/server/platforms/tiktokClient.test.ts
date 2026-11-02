@@ -501,7 +501,7 @@ describe("pollTikTokPublishStatus", () => {
     expect(isTransientPublishError(error)).toBe(false);
   });
 
-  // 2026-11-02 scale audit (R24): the poll runs AFTER the final chunk went up, so
+  // 2026-11-02 scale audit: the poll runs AFTER the final chunk went up, so
   // TikTok may already be posting. A 401 there still flags (guarded) but is never
   // a reconnect-and-retry, which can double-post: it is PUBLISH_UNCONFIRMED.
   describe("a 401 from the status endpoint (after the commit)", () => {
@@ -1194,10 +1194,10 @@ describe("tiktokClient.publishVideo", () => {
     expect(updateCalls()[0].data).not.toHaveProperty("refreshToken");
   });
 
-  // 2026-11-02 scale audit (R24): the flag is guarded by the tokens the rejected
+  // 2026-11-02 scale audit: the flag is guarded by the tokens the rejected
   // call used. If another process rotated them meanwhile, nothing is flagged and
   // the call fails with a plain, retryable CONNECTION_TOKEN_CHANGED.
-  describe("a rejected token whose stored tokens changed meanwhile (R24)", () => {
+  describe("a rejected token whose stored tokens changed meanwhile", () => {
     const rotated = { accessToken: "rotated-access", refreshToken: "rotated-refresh" };
 
     it("creator_info 401: CONNECTION_TOKEN_CHANGED and no flag", async () => {
@@ -1400,7 +1400,7 @@ describe("tiktokClient.publishVideo", () => {
 
   // The final chunk already went up, so TikTok may be posting: a 401 from the
   // status poll is PUBLISH_UNCONFIRMED (never a reconnect-and-retry), whether or
-  // not the connection could be flagged (2026-11-02 scale audit, R24).
+  // not the connection could be flagged (2026-11-02 scale audit).
   it("maps a 401 from the status poll to PUBLISH_UNCONFIRMED mid-publish, and flags the connection", async () => {
     vi.useFakeTimers();
     stubFetch({

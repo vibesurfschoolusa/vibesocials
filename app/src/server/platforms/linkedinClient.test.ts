@@ -648,11 +648,11 @@ describe("linkedinClient.publishVideo — rate limits (RATE_LIMITED)", () => {
     expect((await failure(linkedinClient.publishVideo(ctx("video/mp4"))))?.code).toBe("RATE_LIMITED");
   });
 
-  // 2026-11-02 scale audit (jobs, token refresh, R24): a 401 flags the connection
+  // 2026-11-02 scale audit (jobs, token refresh): a 401 flags the connection
   // only when the stored tokens are still the ones the rejected call sent. When
   // another process refreshed them (or the user reconnected) meanwhile, nothing is
   // flagged and the call fails with the plain, retryable CONNECTION_TOKEN_CHANGED.
-  describe("401 reconnect flags are guarded by the rejected tokens (R24)", () => {
+  describe("401 reconnect flags are guarded by the rejected tokens", () => {
     const unauthorized = () => new Response("{}", { status: 401 });
     const rotated = { accessToken: "rotated-access-token", refreshToken: "refresh-abc" };
 
@@ -702,11 +702,11 @@ describe("linkedinClient.publishVideo — rate limits (RATE_LIMITED)", () => {
     });
   });
 
-  // 2026-11-02 scale audit (jobs, R30): ugcPosts answers 201 with the post id in
+  // 2026-11-02 scale audit (jobs): ugcPosts answers 201 with the post id in
   // the `x-restli-id` header (https://learn.microsoft.com/en-us/linkedin/compliance/integrations/shares/ugc-post-api).
   // The header wins; the body `id` is read only when the header is absent; a 2xx
   // with neither is PUBLISH_UNCONFIRMED (the platform said "created").
-  describe("2xx ugcPosts id (R30)", () => {
+  describe("2xx ugcPosts id", () => {
     const ugcPostCalls = (fetchMock: ReturnType<typeof stubLinkedIn>) =>
       fetchMock.mock.calls.filter((c) => String(c[0]).includes("/v2/ugcPosts"));
 

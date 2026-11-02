@@ -542,7 +542,7 @@ describe("xClient.publishVideo — rate limits (RATE_LIMITED)", () => {
       expect(v2Calls(fetchMock)).toHaveLength(1);
     });
 
-    // 2026-11-02 scale audit (jobs, R30): a 2xx tweet create whose parsed body
+    // 2026-11-02 scale audit (jobs): a 2xx tweet create whose parsed body
     // lacks the id is PUBLISH_UNCONFIRMED (the platform said "created"), and v1.1
     // still does not fall back to v2.
     it.each([

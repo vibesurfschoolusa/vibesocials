@@ -266,7 +266,7 @@ export const youtubeClient: PlatformClient = {
 
     // The insert answered 2xx, so the video may exist: an unreadable body is
     // PUBLISH_UNCONFIRMED, not a failure to retry (final review F4). So is a body
-    // that parsed but has no video id (2026-11-02 scale audit, R30): the former
+    // that parsed but has no video id (2026-11-02 scale audit): the former
     // plain YOUTUBE_NO_VIDEO_ID failure invited a retry, which uploads it twice.
     const result = await readCommitBody<{
       id?: unknown;

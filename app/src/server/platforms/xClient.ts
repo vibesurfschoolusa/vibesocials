@@ -644,7 +644,7 @@ export const xClient: PlatformClient = {
     if (v1Response.ok) {
       // v1.1 answered 2xx, so the tweet may be live: an unreadable body is
       // PUBLISH_UNCONFIRMED, and we do not fall back to v2 (final review F4). So is
-      // a body that parsed but has no `id_str` (2026-11-02 scale audit, R30).
+      // a body that parsed but has no `id_str` (2026-11-02 scale audit).
       const v1Result = await readCommitBody<{ id_str?: unknown } | null>("x", v1Response, "json");
       const v1TweetId = requireCommitId("x", v1Result?.id_str, "id_str");
       console.log("[X OAuth 1.0a] Tweet created successfully via v1.1", {
@@ -711,7 +711,7 @@ export const xClient: PlatformClient = {
 
     // v2 answered 2xx, so the tweet may be live: an unreadable body is
     // PUBLISH_UNCONFIRMED (final review F4), and so is a body that parsed but has
-    // no `data.id` (2026-11-02 scale audit, R30).
+    // no `data.id` (2026-11-02 scale audit).
     const tweetResult = await readCommitBody<{
       data?: { id?: unknown; text?: string } | null;
     } | null>("x", tweetResponse, "json");

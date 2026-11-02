@@ -441,7 +441,7 @@ export const instagramClient: PlatformClient = {
 
       // media_publish answered 2xx, so the post may be live: an unreadable body
       // is PUBLISH_UNCONFIRMED, not a failure to retry (final review F4). So is a
-      // body that parsed but has no post id (2026-11-02 scale audit, R30).
+      // body that parsed but has no post id (2026-11-02 scale audit).
       const publishData = await readCommitBody<{ id?: unknown } | null>(
         "instagram",
         publishResponse,

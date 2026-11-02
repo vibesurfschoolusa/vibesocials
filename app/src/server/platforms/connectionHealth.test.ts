@@ -201,7 +201,7 @@ describe("tokenRefreshSupersededError", () => {
   });
 });
 
-// 2026-11-02 scale audit (jobs, token refresh, R24): an ordinary API call that the
+// 2026-11-02 scale audit (jobs, token refresh): an ordinary API call that the
 // platform answered with a 401 flags the connection only when the stored tokens
 // are still the ones that call used. Another process may have rotated them, or
 // the user may have reconnected, between our read of the row and the call.

@@ -113,7 +113,7 @@ export const googleBusinessProfileClient: PlatformClient = {
 
     // The media create answered 2xx, so the item may exist: an unreadable body
     // is PUBLISH_UNCONFIRMED, not a failure to retry (final review F4). So is a
-    // body that parsed but has no resource `name` (2026-11-02 scale audit, R30).
+    // body that parsed but has no resource `name` (2026-11-02 scale audit).
     const created = await readCommitBody<{ name?: unknown } | null>(
       "google_business_profile",
       createRes,

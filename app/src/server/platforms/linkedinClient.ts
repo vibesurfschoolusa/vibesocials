@@ -661,7 +661,7 @@ async function createPost(
     throw error;
   }
 
-  // 2026-11-02 scale audit (jobs, R30): ugcPosts answers "201 Created" with the id
+  // 2026-11-02 scale audit (jobs): ugcPosts answers "201 Created" with the id
   // in the `x-restli-id` header
   // (https://learn.microsoft.com/en-us/linkedin/compliance/integrations/shares/ugc-post-api),
   // so a 201 with an empty body and the header is a success. The body is read only

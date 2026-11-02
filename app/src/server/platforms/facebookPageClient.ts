@@ -143,7 +143,7 @@ export const facebookPageClient: PlatformClient = {
 
     // photos answered 2xx, so the photo may be live: an unreadable body is
     // PUBLISH_UNCONFIRMED, not a failure to retry (final review F4). So is a body
-    // that parsed but names neither `id` nor `post_id` (2026-11-02 scale audit, R30).
+    // that parsed but names neither `id` nor `post_id` (2026-11-02 scale audit).
     const data = await readCommitBody<{ id?: unknown; post_id?: unknown } | null>(
       "facebook_page",
       response,

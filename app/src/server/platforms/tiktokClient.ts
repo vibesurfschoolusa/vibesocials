@@ -570,7 +570,7 @@ export async function pollTikTokPublishStatus(
     // Decide OUTSIDE the try/catch above so terminal outcomes are not
     // swallowed by the transient-error handler.
     if (unauthorized) {
-      // 2026-11-02 scale audit (jobs, token refresh, R24): this comes AFTER the
+      // 2026-11-02 scale audit (jobs, token refresh): this comes AFTER the
       // commit (the final chunk is up and TikTok may be posting), so the user must
       // not be told to reconnect and retry: that can post twice. Flag (guarded by
       // the tokens used here) so the dashboard shows Reconnect, but report the

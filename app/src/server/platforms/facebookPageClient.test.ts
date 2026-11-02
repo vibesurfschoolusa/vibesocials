@@ -189,7 +189,7 @@ describe("facebookPageClient.publishVideo", () => {
     expect(updateMock).toHaveBeenCalledTimes(1);
   });
 
-  // 2026-11-02 scale audit (jobs, token refresh, R24): the flag is guarded by the
+  // 2026-11-02 scale audit (jobs, token refresh): the flag is guarded by the
   // tokens the rejected /photos call sent. When another process changed them (the
   // user reconnected), nothing is flagged and the call fails with the plain,
   // retryable CONNECTION_TOKEN_CHANGED.
@@ -409,7 +409,7 @@ describe("facebookPageClient.publishVideo — commit call (POST /{page}/photos)"
     expect(updateMock).not.toHaveBeenCalled();
   });
 
-  // 2026-11-02 scale audit (jobs, R30): photos answered 2xx ("created") but the
+  // 2026-11-02 scale audit (jobs): photos answered 2xx ("created") but the
   // parsed body has no post id: PUBLISH_UNCONFIRMED, not a success with a null
   // externalPostId. `id` wins; `post_id` is read only when `id` is absent.
   it.each([

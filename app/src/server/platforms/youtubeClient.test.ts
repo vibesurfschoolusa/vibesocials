@@ -258,7 +258,7 @@ describe("youtubeClient.publishVideo — commit call (videos.insert)", () => {
     expect(insertCalls(fetchMock)).toHaveLength(1);
   });
 
-  // 2026-11-02 scale audit (jobs, R30): the insert answered 2xx ("created") but
+  // 2026-11-02 scale audit (jobs): the insert answered 2xx ("created") but
   // the parsed body has no video id. The old plain YOUTUBE_NO_VIDEO_ID failure
   // invited a retry (a second upload): it is PUBLISH_UNCONFIRMED now.
   it.each([

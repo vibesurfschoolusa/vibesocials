@@ -46,7 +46,7 @@ vi.mock("@/lib/db", () => ({
 // What the database holds when a guarded flag re-reads the tokens: the ones
 // makeConnection() builds, so by default the flag finds them unchanged and writes.
 const STORED_TOKENS = { accessToken: "page-access-token", refreshToken: null };
-// 2026-11-02 scale audit (R24): another process changed the tokens meanwhile.
+// 2026-11-02 scale audit: another process changed the tokens meanwhile.
 const ROTATED_TOKENS = { accessToken: "rotated-page-token", refreshToken: null };
 
 beforeEach(() => {
@@ -171,7 +171,7 @@ describe("instagramClient.refreshToken", () => {
   });
 });
 
-describe("instagramClient.refreshToken - superseded (R24)", () => {
+describe("instagramClient.refreshToken - superseded", () => {
   // The health sweep calls refreshToken through refreshConnectionToken, which
   // catches TOKEN_REFRESH_SUPERSEDED and returns the stored row. It must NOT
   // surface CONNECTION_TOKEN_CHANGED (that is the publish path's code).
@@ -311,11 +311,11 @@ describe("instagramClient.publishVideo — Graph OAuthException 190", () => {
     expect(updateMock).not.toHaveBeenCalled();
   });
 
-  // 2026-11-02 scale audit (jobs, token refresh, R24): every flag is guarded by
+  // 2026-11-02 scale audit (jobs, token refresh): every flag is guarded by
   // the tokens the rejected call sent. When another process changed them (the
   // user reconnected), nothing is flagged and the call fails with the plain,
   // retryable CONNECTION_TOKEN_CHANGED instead of INSTAGRAM_RECONNECT_REQUIRED.
-  describe("a rejected token whose stored tokens changed meanwhile (R24)", () => {
+  describe("a rejected token whose stored tokens changed meanwhile", () => {
     const failureOf = (promise: Promise<unknown>) =>
       promise.then(
         () => null,
@@ -692,7 +692,7 @@ describe("instagramClient.publishVideo — rate limits (RATE_LIMITED)", () => {
       expect(publish).toHaveBeenCalledTimes(1);
     });
 
-    // 2026-11-02 scale audit (jobs, R30): media_publish answered 2xx ("created")
+    // 2026-11-02 scale audit (jobs): media_publish answered 2xx ("created")
     // but the parsed body has no post id: PUBLISH_UNCONFIRMED, not a success with
     // an undefined externalPostId.
     it.each([
@@ -853,7 +853,7 @@ describe("waitForInstagramContainer", () => {
     expect((updateMock.mock.calls[0][0] as { where: { id: string } }).where).toEqual({ id: "conn-ig" });
   });
 
-  it("does not flag, and throws CONNECTION_TOKEN_CHANGED, when the stored tokens changed since the poll started (R24)", async () => {
+  it("does not flag, and throws CONNECTION_TOKEN_CHANGED, when the stored tokens changed since the poll started", async () => {
     const clock = makeClock();
     findUniqueMock.mockResolvedValue(ROTATED_TOKENS);
     stubStatus(() => new Response("{}", { status: 401 }));
