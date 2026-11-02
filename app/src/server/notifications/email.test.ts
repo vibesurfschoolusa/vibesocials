@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
 // googleTokens.test.ts). Mocking the `resend` package itself means no real
@@ -20,9 +20,14 @@ vi.mock("resend", () => ({
   Resend: ResendMock,
 }));
 
-const { loggerErrorMock } = vi.hoisted(() => ({ loggerErrorMock: vi.fn() }));
+const { loggerErrorMock, loggerWarnMock, loggerInfoMock, loggerDebugMock } = vi.hoisted(() => ({
+  loggerErrorMock: vi.fn(),
+  loggerWarnMock: vi.fn(),
+  loggerInfoMock: vi.fn(),
+  loggerDebugMock: vi.fn(),
+}));
 vi.mock("@/lib/logger", () => ({
-  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: loggerErrorMock },
+  logger: { debug: loggerDebugMock, info: loggerInfoMock, warn: loggerWarnMock, error: loggerErrorMock },
 }));
 
 import { RetryAfterError } from "inngest";
@@ -37,6 +42,9 @@ beforeEach(() => {
   sendMock.mockReset();
   ResendMock.mockClear();
   loggerErrorMock.mockReset();
+  loggerWarnMock.mockReset();
+  loggerInfoMock.mockReset();
+  loggerDebugMock.mockReset();
   sendMock.mockResolvedValue({ data: { id: "email_123" }, error: null });
 });
 
@@ -320,5 +328,150 @@ describe("isRetryableEmailError", () => {
     expect(isRetryableEmailError(new Error("x"))).toBe(false);
     expect(isRetryableEmailError("x")).toBe(false);
     expect(isRetryableEmailError(undefined)).toBe(false);
+  });
+});
+
+// Final review F9 (M5): an email address is personal data and must not end up in
+// log aggregation (Sentry, Vercel logs). No log line of email.ts may carry the
+// recipient, not as a field and not echoed inside an error message; the subject
+// (and an error's name or status) is what identifies the send.
+describe("sendEmail - no recipient address in any log line", () => {
+  const RECIPIENT = "Jane.Doe+news@example.com";
+  const params = { to: RECIPIENT, subject: "Your post went live", html: "<p>hi</p>" };
+  const echoing = `Invalid recipient ${RECIPIENT} for this account`;
+
+  let consoleError: MockInstance;
+  let consoleWarn: MockInstance;
+  let consoleLog: MockInstance;
+
+  beforeEach(() => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  /** Everything any logger or console call received, Errors expanded (their fields are not enumerable). */
+  function everythingLogged(): string {
+    const calls = [
+      ...consoleError.mock.calls,
+      ...consoleWarn.mock.calls,
+      ...consoleLog.mock.calls,
+      ...loggerErrorMock.mock.calls,
+      ...loggerWarnMock.mock.calls,
+      ...loggerInfoMock.mock.calls,
+      ...loggerDebugMock.mock.calls,
+    ];
+    return JSON.stringify(calls, (_key, value: unknown) =>
+      value instanceof Error
+        ? { name: value.name, message: value.message, stack: value.stack, cause: value.cause }
+        : value,
+    );
+  }
+
+  const expectNoRecipient = () => {
+    const logged = everythingLogged().toLowerCase();
+    expect(logged).not.toContain(RECIPIENT.toLowerCase());
+    expect(logged).not.toContain("example.com");
+  };
+
+  const resolvedRejection = (statusCode: number | null, name: string) => ({
+    data: null,
+    error: { name, message: echoing, statusCode },
+    headers: null,
+  });
+
+  it("a Resend constructor error logs the subject, not the recipient", async () => {
+    ResendMock.mockImplementationOnce(function () {
+      throw new Error(echoing);
+    });
+
+    await sendEmail(params);
+
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(consoleError.mock.calls)).toContain("Your post went live");
+    expectNoRecipient();
+  });
+
+  it("a thrown send error (swallowed) logs the subject, not the recipient", async () => {
+    sendMock.mockRejectedValueOnce(new Error(echoing));
+
+    await sendEmail(params);
+
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(consoleError.mock.calls)).toContain("Your post went live");
+    expectNoRecipient();
+  });
+
+  it("a thrown send error that the step will retry logs the subject, not the recipient", async () => {
+    sendMock.mockRejectedValueOnce(new Error(echoing));
+
+    await expect(sendEmail(params, { throwOnRetryable: true })).rejects.toBeInstanceOf(EmailRetryableError);
+
+    expect(loggerWarnMock).toHaveBeenCalledTimes(1);
+    expectNoRecipient();
+  });
+
+  it.each([
+    [429, "rate_limit_exceeded"],
+    [503, "application_error"],
+    [null, "application_error"],
+    [409, "concurrent_idempotent_requests"],
+  ])("a resolved %s %s error that the step will retry logs no recipient", async (statusCode, name) => {
+    sendMock.mockResolvedValueOnce(resolvedRejection(statusCode, name));
+
+    await expect(sendEmail(params, { throwOnRetryable: true })).rejects.toBeDefined();
+
+    expect(loggerWarnMock).toHaveBeenCalledTimes(1);
+    expectNoRecipient();
+  });
+
+  it("an already-sent idempotency key (409) logs the subject, not the recipient", async () => {
+    sendMock.mockResolvedValueOnce(resolvedRejection(409, "invalid_idempotent_request"));
+
+    await sendEmail(params, { throwOnRetryable: true, idempotencyKey: "k" });
+
+    expect(loggerWarnMock).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(loggerWarnMock.mock.calls)).toContain("Your post went live");
+    expectNoRecipient();
+  });
+
+  it("a rejected email (422) logs the subject and the error name and status, not the recipient", async () => {
+    sendMock.mockResolvedValueOnce(resolvedRejection(422, "validation_error"));
+
+    await sendEmail(params);
+
+    expect(loggerErrorMock).toHaveBeenCalledTimes(1);
+    const [, context] = loggerErrorMock.mock.calls[0] as [string, { subject: string; error: { name: string; statusCode: number } }];
+    expect(context.subject).toBe("Your post went live");
+    expect(context.error).toMatchObject({ name: "validation_error", statusCode: 422 });
+    expectNoRecipient();
+  });
+
+  it("strips every occurrence of the recipient from an echoing message, whatever its case", async () => {
+    sendMock.mockResolvedValueOnce({
+      data: null,
+      error: {
+        name: "validation_error",
+        message: `${RECIPIENT.toUpperCase()} bounced; retry ${RECIPIENT} later`,
+        statusCode: 422,
+      },
+      headers: null,
+    });
+
+    await sendEmail(params);
+
+    const [, context] = loggerErrorMock.mock.calls[0] as [string, { error: { message: string } }];
+    expect(context.error.message).toBe("[recipient] bounced; retry [recipient] later");
+    expectNoRecipient();
+  });
+
+  it("the disabled-sender line (no RESEND_API_KEY) carries no recipient either", async () => {
+    vi.stubEnv("RESEND_API_KEY", "");
+
+    await sendEmail(params);
+
+    expect(consoleLog).toHaveBeenCalledTimes(1);
+    expectNoRecipient();
   });
 });

@@ -34,6 +34,21 @@ export const PUBLISH_UNCONFIRMED = {
 } as const satisfies PendingResultFailure;
 
 /**
+ * Prisma `maxWait` of the recompute transaction: how long to wait for a pooled
+ * connection to open it. Prisma's default is 2 s, which a busy 5-connection
+ * serverless pool can exceed during a burst of finalizers (final review F7).
+ */
+export const RECOMPUTE_TX_MAX_WAIT_MS = 5_000;
+
+/**
+ * Prisma `timeout` of the recompute transaction, counted from when it opened.
+ * The work is one row lock, one read and one write, but the lock can queue behind
+ * another finalizer of the same job, so Prisma's 5 s default is too tight; 10 s
+ * still ends well inside the step's budget (final review F7).
+ */
+export const RECOMPUTE_TX_TIMEOUT_MS = 10_000;
+
+/**
  * Recompute a job's status over ALL its results and store it, serialized per job
  * (2026-11-01 scale audit, jobs H6). Every run-side finalizer goes through here:
  * the `finalize-job` / `finalize-retry` steps and {@link failPendingPostJobResults}.
@@ -55,25 +70,28 @@ export const PUBLISH_UNCONFIRMED = {
 export async function recomputeAndStorePostJobStatus(
   postJobId: string,
 ): Promise<{ status: PostJobStatus; successCount: number }> {
-  return prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT 1 FROM "PostJob" WHERE "id" = ${postJobId} FOR UPDATE`;
+  return prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT 1 FROM "PostJob" WHERE "id" = ${postJobId} FOR UPDATE`;
 
-    const results = await tx.postJobResult.findMany({
-      where: { postJobId },
-      select: { status: true },
-    });
-    const status = recomputePostJobStatus(results);
+      const results = await tx.postJobResult.findMany({
+        where: { postJobId },
+        select: { status: true },
+      });
+      const status = recomputePostJobStatus(results);
 
-    await tx.postJob.update({
-      where: { id: postJobId },
-      data: { status },
-    });
+      await tx.postJob.update({
+        where: { id: postJobId },
+        data: { status },
+      });
 
-    return {
-      status,
-      successCount: results.filter((result) => result.status === "success").length,
-    };
-  });
+      return {
+        status,
+        successCount: results.filter((result) => result.status === "success").length,
+      };
+    },
+    { maxWait: RECOMPUTE_TX_MAX_WAIT_MS, timeout: RECOMPUTE_TX_TIMEOUT_MS },
+  );
 }
 
 /**

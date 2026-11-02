@@ -19,6 +19,8 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
+import { logger } from "@/lib/logger";
+
 import { claimResult, finalizeClaimedResult, releaseClaimForDeferral } from "./resultClaim";
 
 const NOW = new Date("2026-11-02T10:00:00.000Z");
@@ -244,7 +246,7 @@ describe("finalizeClaimedResult", () => {
     );
   });
 
-  it("returns false and logs a warning (without throwing) when the claim is no longer held (P2025)", async () => {
+  it("returns false and logs a warning (without throwing) when a failure's claim is no longer held (P2025)", async () => {
     updateMock.mockRejectedValue(
       new Prisma.PrismaClientKnownRequestError("Record to update not found.", {
         code: "P2025",
@@ -253,12 +255,95 @@ describe("finalizeClaimedResult", () => {
     );
 
     const wrote = await finalizeClaimedResult("r1", "run-1", {
-      status: "success",
-      externalPostId: "ext-1",
+      status: "failed",
+      errorCode: "X_TWEET_FAILED",
+      errorMessage: "nope",
     });
 
     expect(wrote).toBe(false);
     expect(console.warn).toHaveBeenCalled();
+  });
+
+  // Final review F6 (M1): a success write that finds the claim gone means the post
+  // IS live but the row says otherwise (for example PUBLISH_UNCONFIRMED). The log
+  // line is the only trace to reconcile it by, so it is an ERROR and it carries
+  // the provider's post id (plus platform and ids). Never tokens or emails.
+  describe("a lost success write (the post is live, the row does not say so)", () => {
+    const p2025 = () =>
+      new Prisma.PrismaClientKnownRequestError("Record to update not found.", {
+        code: "P2025",
+        clientVersion: "test",
+      });
+
+    beforeEach(() => {
+      vi.spyOn(logger, "error").mockImplementation(() => {});
+      vi.spyOn(logger, "warn").mockImplementation(() => {});
+      updateMock.mockRejectedValue(p2025());
+      findUniqueMock.mockResolvedValue({ platform: "x", postJobId: "job-1", status: "failed" });
+    });
+
+    it("returns false without throwing", async () => {
+      const wrote = await finalizeClaimedResult("r1", "run-1", { status: "success", externalPostId: "ext-1" });
+
+      expect(wrote).toBe(false);
+    });
+
+    it("logs at error level with the externalPostId, platform, result id and run id", async () => {
+      await finalizeClaimedResult("r1", "run-1", { status: "success", externalPostId: "ext-1" });
+
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("no longer holds its claim"),
+        expect.objectContaining({
+          externalPostId: "ext-1",
+          platform: "x",
+          resultId: "r1",
+          postJobId: "job-1",
+          runId: "run-1",
+        }),
+      );
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it("still logs the externalPostId at error level when the platform lookup itself fails", async () => {
+      findUniqueMock.mockRejectedValue(new Error("connection reset"));
+
+      const wrote = await finalizeClaimedResult("r1", "run-1", { status: "success", externalPostId: "ext-9" });
+
+      expect(wrote).toBe(false);
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ externalPostId: "ext-9", resultId: "r1", runId: "run-1" }),
+      );
+    });
+
+    it("logs a success with no provider id (null) too", async () => {
+      await finalizeClaimedResult("r1", "run-1", { status: "success", externalPostId: null });
+
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ externalPostId: null, resultId: "r1" }),
+      );
+    });
+
+    it("never logs tokens or email addresses", async () => {
+      await finalizeClaimedResult("r1", "run-1", { status: "success", externalPostId: "ext-1" });
+
+      const logged = JSON.stringify(vi.mocked(logger.error).mock.calls);
+      expect(logged).not.toMatch(/token|secret|password|@/i);
+    });
+
+    it("a failure that loses its claim stays a warning, not an error", async () => {
+      await finalizeClaimedResult("r1", "run-1", {
+        status: "failed",
+        errorCode: "X_TWEET_FAILED",
+        errorMessage: "nope",
+      });
+
+      expect(logger.error).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(findUniqueMock).not.toHaveBeenCalled();
+    });
   });
 
   it("rethrows any other database error", async () => {

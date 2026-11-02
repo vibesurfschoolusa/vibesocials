@@ -988,7 +988,12 @@ describe("platform steps claim their result before calling the platform (jobs H6
 
     expect(publishCtxs).toHaveLength(1);
     expect(out.results).toEqual([{ platform: "x", status: "success" }]);
-    expect(console.warn).toHaveBeenCalled();
+    // Final review F6: the post is live but the row does not say so, so this is an
+    // ERROR that carries the provider's post id (the only trace to reconcile by).
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("no longer holds its claim"),
+      expect.objectContaining({ externalPostId: "ext-x", resultId: "result-x", runId: "run-1" }),
+    );
   });
 
   // Fix round 1 (review Critical 2): the success write used to sit inside the

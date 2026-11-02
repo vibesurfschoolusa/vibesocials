@@ -28,6 +28,8 @@ vi.mock("@/lib/db", () => ({
 import {
   DISPATCH_FAILURE,
   PUBLISH_UNCONFIRMED,
+  RECOMPUTE_TX_MAX_WAIT_MS,
+  RECOMPUTE_TX_TIMEOUT_MS,
   failPendingPostJobResults,
   recomputeAndStorePostJobStatus,
 } from "./failPendingResults";
@@ -290,6 +292,26 @@ describe("recomputeAndStorePostJobStatus", () => {
     expect(resultFindManyMock.mock.invocationCallOrder[0]).toBeLessThan(
       postJobUpdateMock.mock.invocationCallOrder[0],
     );
+  });
+
+  // Final review F7 (M3): Prisma's defaults (maxWait 2 s, timeout 5 s) are too tight
+  // for a transaction that may queue behind another finalizer's row lock on a
+  // small pool, and implicit. The options are explicit.
+  it("opens the transaction with maxWait 5 s and a 10 s timeout", async () => {
+    resultFindManyMock.mockResolvedValue([{ status: "success" }]);
+
+    await recomputeAndStorePostJobStatus("job-1");
+
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+    expect(transactionMock.mock.calls[0][1]).toEqual({ maxWait: 5_000, timeout: 10_000 });
+    expect(RECOMPUTE_TX_MAX_WAIT_MS).toBe(5_000);
+    expect(RECOMPUTE_TX_TIMEOUT_MS).toBe(10_000);
+  });
+
+  it("opens the transaction with the same options when failPendingPostJobResults recomputes", async () => {
+    await failPendingPostJobResults("job-1", DISPATCH_FAILURE);
+
+    expect(transactionMock.mock.calls[0][1]).toEqual({ maxWait: 5_000, timeout: 10_000 });
   });
 
   it("returns the recomputed status and the number of successful results", async () => {

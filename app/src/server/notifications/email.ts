@@ -103,6 +103,31 @@ function classifyResendFailure({
   return "rejected";
 }
 
+/**
+ * `text` with every occurrence of the recipient address replaced (case
+ * insensitive). Used for upstream error messages before they are logged: an email
+ * address is personal data and must not reach the logs (final review F9).
+ */
+function withoutRecipient(text: string, to: string): string {
+  if (!to) return text;
+  const needle = to.toLowerCase();
+  const haystack = text.toLowerCase();
+  let result = "";
+  let from = 0;
+  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, from)) {
+    result += text.slice(from, at) + "[recipient]";
+    from = at + needle.length;
+  }
+  return result + text.slice(from);
+}
+
+/** An error reduced to its name and message, minus the recipient, for logging. */
+function loggableError(error: unknown, to: string): { name: string; message: string } {
+  return error instanceof Error
+    ? { name: error.name, message: withoutRecipient(error.message, to) }
+    : { name: typeof error, message: withoutRecipient(String(error), to) };
+}
+
 export async function sendEmail(
   { to, subject, html }: SendEmailParams,
   { idempotencyKey, throwOnRetryable = false }: SendEmailOptions = {},
@@ -123,7 +148,8 @@ export async function sendEmail(
     resend = new Resend(apiKey);
   } catch (error) {
     // A bad key is configuration, not a transient failure: never retried.
-    console.error("[Notifications] Failed to send email", { to, subject, error });
+    // No log line here carries the recipient address (final review F9).
+    console.error("[Notifications] Failed to send email", { subject, error: loggableError(error, to) });
     return;
   }
 
@@ -140,8 +166,8 @@ export async function sendEmail(
     }
     // Best-effort: swallow + log. Never throw — the caller (a post-outcome
     // notification) must complete regardless of whether the email actually
-    // went out.
-    console.error("[Notifications] Failed to send email", { to, subject, error });
+    // went out. The recipient address is never logged (final review F9).
+    console.error("[Notifications] Failed to send email", { subject, error: loggableError(error, to) });
     return;
   }
 
@@ -175,6 +201,7 @@ export async function sendEmail(
 
   logger.error("[Notifications] Resend rejected email", {
     subject,
-    error: { name: error.name, message: error.message, statusCode: error.statusCode },
+    // Resend's message is its own text, but strip the recipient in case it echoes it.
+    error: { name: error.name, message: withoutRecipient(error.message, to), statusCode: error.statusCode },
   });
 }

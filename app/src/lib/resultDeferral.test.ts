@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { deferralKindFromErrorCode, describeDeferral } from "./resultDeferral";
+import { deferralKindFromErrorCode, describeDeferral, selectDeferrals } from "./resultDeferral";
 
 // 2026-11-01 scale audit (platform limits): a result that waits out a platform
 // limit stays `pending`; the Activity card tells the user why and until when.
@@ -36,5 +36,44 @@ describe("describeDeferral", () => {
       return "later";
     });
     expect(seen).toEqual([until]);
+  });
+});
+
+// Final review F3 (I1): the Activity card reads `result.deferral.kind` for every
+// result this selects. A response without the field (an older server during a
+// rolling deploy, a cached payload) gives `undefined`, which a `!== null` check
+// let through and then crashed the whole card on `.kind`.
+describe("selectDeferrals", () => {
+  const deferral = { kind: "rate_limited" as const, until: "2026-11-02T08:05:00.000Z" };
+  const none = new Set<"x" | "youtube">();
+
+  it("keeps the results that carry a deferral", () => {
+    const results = [
+      { platform: "x" as const, deferral },
+      { platform: "youtube" as const, deferral: null },
+    ];
+
+    expect(selectDeferrals(results, none)).toEqual([results[0]]);
+  });
+
+  it("does not select a result whose deferral is null", () => {
+    expect(selectDeferrals([{ platform: "x" as const, deferral: null }], none)).toEqual([]);
+  });
+
+  it("does not select a result whose deferral is missing (undefined), so the card cannot crash on .kind", () => {
+    const legacy = { platform: "x" as const } as { platform: "x"; deferral?: typeof deferral | null };
+
+    expect(() => selectDeferrals([legacy], none)).not.toThrow();
+    expect(selectDeferrals([legacy], none)).toEqual([]);
+    expect(selectDeferrals([{ platform: "x" as const, deferral: undefined }], none)).toEqual([]);
+  });
+
+  it("skips platforms that are mid-retry (their optimistic pending state hides the wait)", () => {
+    const results = [
+      { platform: "x" as const, deferral },
+      { platform: "youtube" as const, deferral },
+    ];
+
+    expect(selectDeferrals(results, new Set(["x" as const]))).toEqual([results[1]]);
   });
 });

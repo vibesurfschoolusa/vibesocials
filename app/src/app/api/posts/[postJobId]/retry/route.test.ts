@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeWorkspaceContext } from "../../../__test-helpers__/workspaceContextMock";
 
@@ -15,6 +15,7 @@ const {
   connectionFindUniqueMock,
   inngestSendMock,
   checkRateLimitMock,
+  recomputeStatusMock,
 } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
   postJobFindFirstMock: vi.fn(),
@@ -23,6 +24,7 @@ const {
   connectionFindUniqueMock: vi.fn(),
   inngestSendMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
+  recomputeStatusMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -35,12 +37,20 @@ vi.mock("@/lib/db", () => ({
 
 vi.mock("@/lib/inngest", () => ({ inngest: { send: inngestSendMock } }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
+// Final review F10: the enqueue-failure path recomputes the job's status under the
+// row lock (failPendingResults.ts), which needs a transaction this file's db mock
+// does not provide, so the helper itself is mocked.
+vi.mock("@/server/jobs/failPendingResults", () => ({
+  recomputeAndStorePostJobStatus: recomputeStatusMock,
+}));
 // Team Workspaces (Task 4): getCurrentUser -> getWorkspaceContext, and the
 // reconnect preflight now reads `context.workspace.id` directly instead of
 // re-resolving via resolveWorkspaceForUser (the Task 2 bridge this replaces).
 vi.mock("@/lib/workspace", () => ({
   getWorkspaceContext: getWorkspaceContextMock,
 }));
+
+import { logger } from "@/lib/logger";
 
 import { POST, parseRetryBody } from "./route";
 
@@ -73,6 +83,7 @@ beforeEach(() => {
   connectionFindUniqueMock.mockReset();
   inngestSendMock.mockReset();
   checkRateLimitMock.mockReset();
+  recomputeStatusMock.mockReset();
 
   // Sensible defaults for the happy path; individual tests override.
   getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
@@ -80,6 +91,7 @@ beforeEach(() => {
   postJobUpdateMock.mockResolvedValue({});
   inngestSendMock.mockResolvedValue(undefined);
   connectionFindUniqueMock.mockResolvedValue({ needsReconnect: false });
+  recomputeStatusMock.mockResolvedValue({ status: "failed", successCount: 0 });
 });
 
 describe("parseRetryBody (pure)", () => {
@@ -350,6 +362,93 @@ describe("POST /api/posts/[postJobId]/retry", () => {
         errorCode: "RETRY_ENQUEUE_FAILED",
         errorMessage: "Couldn't start the retry. Please try again.",
       },
+    });
+  });
+
+  // Final review F10 (M6): the route set the job `in_progress` before the enqueue
+  // failed. Reverting the rows to `failed` leaves the job in_progress with no run
+  // to move it, until the 2 h reconciler. The recompute (row-locked, over ALL
+  // results, so a row a live run still holds keeps the job in_progress) fixes it.
+  describe("when the enqueue fails, the job status is recomputed after the revert", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function failEnqueue() {
+      postJobFindFirstMock.mockResolvedValue(
+        makeJob([{ platform: "tiktok", status: "failed" }, { platform: "youtube", status: "failed" }]),
+      );
+      resultUpdateManyMock.mockResolvedValue({ count: 2 });
+      inngestSendMock.mockRejectedValue(new Error("response timeout"));
+      vi.spyOn(console, "error").mockImplementation(() => {});
+    }
+
+    it("recomputes the job once, after the unclaimed rows were reverted", async () => {
+      failEnqueue();
+
+      const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+
+      expect(res.status).toBe(500);
+      expect(recomputeStatusMock).toHaveBeenCalledTimes(1);
+      expect(recomputeStatusMock).toHaveBeenCalledWith("job-1");
+      // The revert is the second updateMany (after the failed -> pending claims).
+      const revertOrder = resultUpdateManyMock.mock.invocationCallOrder.at(-1)!;
+      expect(revertOrder).toBeLessThan(recomputeStatusMock.mock.invocationCallOrder[0]);
+    });
+
+    it("still recomputes when no row was reverted (a live run claimed them all): the job stays in_progress by the recompute's own rule", async () => {
+      failEnqueue();
+      // Two claims succeed (tiktok, youtube), then the revert matches nothing.
+      resultUpdateManyMock
+        .mockReset()
+        .mockResolvedValueOnce({ count: 1 })
+        .mockResolvedValueOnce({ count: 1 })
+        .mockResolvedValueOnce({ count: 0 });
+
+      const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+
+      expect(res.status).toBe(500);
+      expect(resultUpdateManyMock).toHaveBeenCalledTimes(3);
+      expect(recomputeStatusMock).toHaveBeenCalledWith("job-1");
+    });
+
+    it("keeps the 500 RETRY_ENQUEUE_FAILED response when the recompute itself throws, and logs it", async () => {
+      failEnqueue();
+      recomputeStatusMock.mockRejectedValue(new Error("deadlock detected"));
+      const loggerError = vi.spyOn(logger, "error").mockImplementation(() => {});
+
+      const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+      const body = (await res.json()) as { code?: string; error?: string };
+
+      expect(res.status).toBe(500);
+      expect(body).toEqual({
+        error: "Couldn't start the retry. Please try again.",
+        code: "RETRY_ENQUEUE_FAILED",
+      });
+      expect(loggerError).toHaveBeenCalledWith(
+        expect.stringContaining("recompute"),
+        expect.objectContaining({ postJobId: "job-1" }),
+      );
+    });
+
+    it("does not recompute when the enqueue succeeds", async () => {
+      postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
+      resultUpdateManyMock.mockResolvedValue({ count: 1 });
+
+      const res = await POST(req({ platform: "tiktok" }), ctx("job-1"));
+
+      expect(res.status).toBe(202);
+      expect(recomputeStatusMock).not.toHaveBeenCalled();
+    });
+
+    it("does not recompute when nothing was claimed (409), nothing changed", async () => {
+      postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
+      resultUpdateManyMock.mockResolvedValue({ count: 0 });
+
+      const res = await POST(req({ platform: "tiktok" }), ctx("job-1"));
+
+      expect(res.status).toBe(409);
+      expect(recomputeStatusMock).not.toHaveBeenCalled();
     });
   });
 

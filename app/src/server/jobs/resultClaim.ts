@@ -98,9 +98,12 @@ export async function claimResult(
  *   truth. This is safe because a new attempt has to clear (retry route) or take
  *   (a fresh claim) the claim before it can act, which ends this run's write.
  *
- * Returns false (and logs a warning) when the claim is no longer held — the
- * result was reset, failed or finalized by someone else — instead of throwing:
- * a thrown error would only make the step fail again.
+ * Returns false (and logs) when the claim is no longer held — the result was
+ * reset, failed or finalized by someone else — instead of throwing: a thrown
+ * error would only make the step fail again. A lost FAILURE is a warning. A lost
+ * SUCCESS is an error (final review F6, M1): the post is live but the row does
+ * not say so (it may read PUBLISH_UNCONFIRMED), and that log line, with the
+ * provider's post id, is the only trace to reconcile it by.
  */
 export async function finalizeClaimedResult(
   resultId: string,
@@ -120,15 +123,53 @@ export async function finalizeClaimedResult(
     return true;
   } catch (error) {
     if (isRecordNotFound(error)) {
-      logger.warn("[Inngest] Result not written: this run no longer holds its claim", {
-        resultId,
-        runId,
-        outcome: data.status,
-      });
+      if (data.status === "success") {
+        await logLostSuccess(resultId, runId, data.externalPostId);
+      } else {
+        logger.warn("[Inngest] Result not written: this run no longer holds its claim", {
+          resultId,
+          runId,
+          outcome: data.status,
+        });
+      }
       return false;
     }
     throw error;
   }
+}
+
+/**
+ * Log, at error level, a confirmed success that could not be recorded because the
+ * claim was gone (final review F6). The caller's `externalPostId` is the key to
+ * reconcile the post by; the platform and job id are read back best-effort (the
+ * write that just failed gives no row), and a failed read must not lose the line.
+ * Ids only: no tokens, no emails, no captions.
+ */
+async function logLostSuccess(
+  resultId: string,
+  runId: string,
+  externalPostId: string | null,
+): Promise<void> {
+  let platform: string | null = null;
+  let postJobId: string | null = null;
+  try {
+    const row = await prisma.postJobResult.findUnique({
+      where: { id: resultId },
+      select: { platform: true, postJobId: true },
+    });
+    platform = row?.platform ?? null;
+    postJobId = row?.postJobId ?? null;
+  } catch {
+    // Best effort: the line below still carries the result id and the post id.
+  }
+  logger.error("[Inngest] Post is live but its result was not recorded: this run no longer holds its claim", {
+    resultId,
+    postJobId,
+    platform,
+    runId,
+    externalPostId,
+    outcome: "success",
+  });
 }
 
 /**

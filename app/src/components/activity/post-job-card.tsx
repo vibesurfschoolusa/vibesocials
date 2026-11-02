@@ -15,7 +15,7 @@ import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { platformPostUrl } from "@/lib/platformPostUrl";
 import type { PostJobDTO } from "@/lib/postsDto";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
-import { describeDeferral } from "@/lib/resultDeferral";
+import { describeDeferral, selectDeferrals } from "@/lib/resultDeferral";
 import { PlatformResultBadge } from "./platform-result";
 import { PostMetricStats } from "./post-metric-stats";
 
@@ -150,11 +150,10 @@ export function PostJobCard({
 
   // Platform limits (2026-11-01 scale audit): a pending result that is waiting out
   // a rate limit or quota says why and until when. Server-derived, so it follows
-  // the polled `job`; a result being retried optimistically shows none.
-  const deferrals = results.filter(
-    (result): result is typeof result & { deferral: NonNullable<typeof result.deferral> } =>
-      result.deferral !== null && !pending.has(result.platform),
-  );
+  // the polled `job`; a result being retried optimistically shows none. A payload
+  // that lacks the field (`undefined`) shows none too instead of crashing the card
+  // (final review F3).
+  const deferrals = selectDeferrals(results, pending);
 
   const failedPlatforms = results
     .filter((result) => result.status === "failed")

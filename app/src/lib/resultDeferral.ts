@@ -6,6 +6,8 @@
  * can import it.
  */
 
+import type { Platform } from "@prisma/client";
+
 /** Why a pending result is waiting. */
 export type DeferralKind = "daily_limit" | "rate_limited";
 
@@ -39,4 +41,30 @@ export function describeDeferral(
   return kind === "daily_limit"
     ? `${label} daily limit reached — will publish after ${format(until)}`
     : `${label} rate limit reached — will retry after ${format(until)}`;
+}
+
+/** What `PostJobResultDTO.deferral` carries while a result waits. */
+export interface ResultDeferral {
+  kind: DeferralKind;
+  /** ISO-8601 instant the run will try again. */
+  until: string;
+}
+
+/**
+ * The results the Activity card lists a deferral line for (final review F3, I1):
+ * those that carry a deferral and are not mid-retry (`optimistic`, whose pending
+ * state hides the wait). `deferral` is `null` for a result that is not waiting,
+ * but it is `undefined` when the payload predates the field (an older server
+ * during a rolling deploy, a cached response). A strict `!== null` let that
+ * through and crashed the whole card on `.kind`, so this treats both as "no
+ * deferral" (`!= null`).
+ */
+export function selectDeferrals<R extends { platform: Platform; deferral?: ResultDeferral | null }>(
+  results: readonly R[],
+  optimistic: ReadonlySet<Platform>,
+): Array<R & { deferral: ResultDeferral }> {
+  return results.filter(
+    (result): result is R & { deferral: ResultDeferral } =>
+      result.deferral != null && !optimistic.has(result.platform),
+  );
 }

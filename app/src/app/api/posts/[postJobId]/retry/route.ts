@@ -10,8 +10,10 @@ import {
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { logger } from "@/lib/logger";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { recomputeAndStorePostJobStatus } from "@/server/jobs/failPendingResults";
 import { buildRetryEvent } from "@/server/jobs/posting";
 import type { Platform } from "@prisma/client";
 
@@ -306,6 +308,18 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
         errorMessage: "Couldn't start the retry. Please try again.",
       },
     });
+    // Final review F10: the job went `in_progress` above and nothing will move it
+    // now, so it would sit there until the 2 h reconciler. Recompute it over ALL its
+    // results (row-locked): reverted rows read `failed`, and a row a live run still
+    // holds keeps the job `in_progress`. A failure here must not change the 500.
+    try {
+      await recomputeAndStorePostJobStatus(postJobId);
+    } catch (recomputeError) {
+      logger.error("[retry] failed to recompute the job status after reverting the claim", {
+        postJobId,
+        error: recomputeError,
+      });
+    }
     return NextResponse.json(
       { error: "Couldn't start the retry. Please try again.", code: "RETRY_ENQUEUE_FAILED" },
       { status: 500 },
