@@ -212,7 +212,10 @@ export function canonicalBlobUrl(url: string): string | null {
 export function guardBlobKey(raw: string): string {
   let parsed: URL;
   try {
-    parsed = new URL(raw);
+    // JS trim() first, like canonicalBlobUrl: WHATWG parsing only strips C0
+    // controls and plain spaces, not U+FEFF / U+00A0 / U+2028 padding that old
+    // POST /api/posts rows can carry.
+    parsed = new URL(raw.trim());
   } catch {
     return raw;
   }

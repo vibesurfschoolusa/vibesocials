@@ -188,6 +188,13 @@ describe("deleteBlobUnlessShared lenient key (ruling R6)", () => {
     ["another store's private host", `https://zzz999.private.blob.vercel-storage.com/${KEY}`],
     ["another store's host with a query, a port and an upper-case scheme", `HTTPS://ZZZ999.public.blob.vercel-storage.com:8443/${KEY}?x=1`],
     ["an own-store private host", `https://${STORE}.private.blob.vercel-storage.com/${KEY}`],
+    // JS trim() strips these but WHATWG URL parsing does not (it only strips C0
+    // controls and spaces), and the migration's \s never matches U+FEFF. POST
+    // /api/posts used to store body.blobUrl untrimmed, so such rows can exist.
+    ["a leading U+FEFF (BOM)", `﻿${OWN}`],
+    ["a trailing U+00A0 (no-break space)", `${OWN} `],
+    ["a trailing U+2028 (line separator)", `${OWN} `],
+    ["a leading U+00A0 and a query", ` ${OWN}?x=1`],
   ];
 
   it.each(variants)("keeps the blob when the deleted row has %s and a canonical own-store row is live", async (_label, variant) => {
