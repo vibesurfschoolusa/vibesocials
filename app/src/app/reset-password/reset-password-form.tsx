@@ -45,6 +45,7 @@ export function ResetPasswordForm() {
 
   useEffect(() => {
     const fromHash = window.location.hash.slice(1);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reads the URL hash on mount (client-only); pre-existing pattern newly flagged by react-hooks 7.1 (required by eslint-config-next 16.4)
     setToken(fromHash.length > 0 ? fromHash : null);
     setTokenReady(true);
   }, []);

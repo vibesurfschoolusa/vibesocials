@@ -35,6 +35,7 @@ export function TikTokPostSettings({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/immutability -- calls a hoisted function declaration from a mount effect; pre-existing pattern newly flagged by react-hooks 7.1 (required by eslint-config-next 16.4)
     fetchCreatorInfo();
   }, []);
 

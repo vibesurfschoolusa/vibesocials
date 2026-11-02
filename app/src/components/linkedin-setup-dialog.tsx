@@ -65,6 +65,7 @@ export function LinkedInSetupDialog() {
     setIsConnecting(true);
 
     // Redirect to LinkedIn OAuth start with the vanity name/ID as a query param.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- intentional full-page navigation to an API route that issues the OAuth redirect; router.push does not fit
     window.location.href = `/api/auth/linkedin/start?vanity_name=${encodeURIComponent(cleanVanityName)}`;
   };
 

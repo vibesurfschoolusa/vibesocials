@@ -66,6 +66,7 @@ export function AccountMenu() {
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- loads workspaces when the menu opens; pre-existing pattern newly flagged by react-hooks 7.1 (required by eslint-config-next 16.4)
     setWorkspacesLoading(true);
 
     (async () => {

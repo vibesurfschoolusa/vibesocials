@@ -321,6 +321,7 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
   // an inline media preview without touching the upload flow.
   useEffect(() => {
     if (!uploadFile) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs derived preview state with the attached file; pre-existing pattern newly flagged by react-hooks 7.1 (required by eslint-config-next 16.4)
       setPreviewUrl(null);
       return;
     }
@@ -332,6 +333,7 @@ function CreatePostFormInner({ footerSettings, holdsForApproval = false }: Creat
   // Clear the inline TikTok privacy validation once a level is chosen.
   useEffect(() => {
     if (tiktokMetadata.privacyLevel) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clears validation once a level is chosen; pre-existing pattern newly flagged by react-hooks 7.1 (required by eslint-config-next 16.4)
       setTiktokPrivacyError(null);
     }
   }, [tiktokMetadata.privacyLevel]);

@@ -231,6 +231,7 @@ export function MediaLibrary() {
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- load-on-mount effect; pre-existing pattern newly flagged by react-hooks 7.1 (required by eslint-config-next 16.4)
     void fetchItems();
   }, [fetchItems]);
 
