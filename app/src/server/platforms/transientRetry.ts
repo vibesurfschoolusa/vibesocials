@@ -1,6 +1,7 @@
 import { FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
 
 import { remainingMs } from "./publishBudget";
+import { RATE_LIMITED_CODE } from "./rateLimited";
 
 /**
  * `cause.code`s of a Node fetch failure that PROVE the connection was never
@@ -35,7 +36,9 @@ function isNeverConnectedFetchError(error: TypeError): boolean {
  * Should this publish-path failure be retried in-step?
  *
  * YES — the request provably did not commit on the platform:
- *  - HTTP 429 / 5xx responses (`assertOk` attaches `status`)
+ *  - HTTP 429 / 5xx responses (`assertOk` attaches `status`). A platform API
+ *    429 is classified first and becomes RATE_LIMITED (below); a 429 from a
+ *    call that is not classified, such as a token endpoint, still lands here.
  *  - network failures that never connected (see NEVER_CONNECTED_CODES)
  *
  * NO — everything else, deliberately:
@@ -46,6 +49,9 @@ function isNeverConnectedFetchError(error: TypeError): boolean {
  *  - FETCH_TIMEOUT: the platform may have received and committed the request;
  *    retrying risks a double post. (fetchWithTimeout's timer only covers
  *    connection + headers, but that is exactly the ambiguous window.)
+ *  - RATE_LIMITED (2026-11-01 scale audit, platform limits): a classified 429 /
+ *    quota response (rateLimited.ts) is waited out until its `retryAt`, not
+ *    hammered again 2s and 8s later — which would only extend the limit.
  *  - 4xx (except 429): auth/validation — retrying cannot help.
  *  - token/reconnect error codes: terminal until the user reconnects.
  */
@@ -54,6 +60,9 @@ export function isTransientPublishError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const err = error as { status?: unknown; code?: unknown };
   if (err.code === FETCH_TIMEOUT_CODE) return false;
+  // Checked before `status`: a RateLimitedError must never be retried in-step,
+  // whatever other fields it ends up carrying.
+  if (err.code === RATE_LIMITED_CODE) return false;
   if (typeof err.status === "number") {
     return err.status === 429 || err.status >= 500;
   }

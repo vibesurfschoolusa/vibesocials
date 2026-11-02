@@ -3,6 +3,7 @@ import type { SocialConnection } from "@prisma/client";
 
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { markConnectionNeedsReconnect } from "./connectionHealth";
+import { classifyRateLimit } from "./rateLimited";
 
 // Token-material reality (see app/api/auth/facebook_page/callback/route.ts):
 // `accessToken` is a Facebook PAGE access token minted from a long-lived user
@@ -93,6 +94,12 @@ export const facebookPageClient: PlatformClient = {
       },
       body,
     });
+
+    // 2026-11-01 scale audit (platform limits): a Meta throttle (code 4, 17, 32,
+    // 613, 80001 or HTTP 429) is RATE_LIMITED, with the wait from the
+    // X-Business-Use-Case-Usage header, not FACEBOOK_PAGE_PUBLISH_FAILED.
+    const limited = await classifyRateLimit("facebook_page", response);
+    if (limited) throw limited;
 
     if (!response.ok) {
       // COR-3 discipline (matches instagramClient.ts): raw upstream bodies go

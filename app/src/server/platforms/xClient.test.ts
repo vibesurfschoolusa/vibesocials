@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { truncateGraphemes } from "@/lib/truncate";
 
 import { PUBLISH_BUDGET_EXCEEDED_CODE, PUBLISH_STEP_BUDGET_MS } from "./publishBudget";
+import { withTransientRetries } from "./transientRetry";
 import type { PublishContext } from "./types";
 import {
   computeTweetText,
@@ -258,3 +259,175 @@ describe("xClient.publishVideo — media-processing poll + step budget", () => {
   });
 });
 
+
+// 2026-11-01 scale audit (platform limits, V13): X answers an exhausted limit
+// with HTTP 429 and `x-rate-limit-reset` (epoch seconds). Every X API call is
+// classified into a RATE_LIMITED error — never an in-step retry, never the
+// generic *_FAILED code — except the v1.1 statuses/update call, which keeps
+// falling back to v2 on any non-5xx error.
+describe("xClient.publishVideo — rate limits (RATE_LIMITED)", () => {
+  type Route = () => Response;
+  const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json", ...headers },
+    });
+  const limited = (headers: Record<string, string> = {}) => new Response("", { status: 429, headers });
+
+  function ctx(mimeType: string): PublishContext {
+    return {
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: {
+        id: "conn-x",
+        platform: "x",
+        accessToken: "access-token",
+        refreshToken: "access-token-secret",
+      } as unknown as SocialConnection,
+      mediaItem: {
+        mimeType,
+        storageLocation: "https://blob.example.com/m",
+        sizeBytes: 4,
+        originalFilename: "m",
+      } as unknown as MediaItem,
+      caption: "hello",
+    };
+  }
+
+  /** Route by URL + command; anything not given succeeds. */
+  function stubX(routes: {
+    image?: Route;
+    init?: Route;
+    append?: Route;
+    finalize?: Route;
+    status?: Route;
+    v1?: Route;
+    v2?: Route;
+  }) {
+    const fetchMock = vi.fn<typeof fetch>((input, init) => {
+      const url = String(input);
+      const body =
+        typeof init?.body === "string" || init?.body instanceof URLSearchParams ? String(init.body) : "";
+      if (url.includes("blob.example.com")) return Promise.resolve(new Response(new Uint8Array([1, 2, 3, 4])));
+      if (url.includes("command=STATUS")) {
+        return Promise.resolve((routes.status ?? (() => json({ processing_info: { state: "succeeded" } })))());
+      }
+      if (url.includes("upload.twitter.com")) {
+        if (body.includes("command=INIT")) return Promise.resolve((routes.init ?? (() => json({ media_id_string: "m1" })))());
+        if (body.includes("command=APPEND")) {
+          return Promise.resolve((routes.append ?? (() => new Response(null, { status: 204 })))());
+        }
+        if (body.includes("command=FINALIZE")) {
+          return Promise.resolve(
+            (routes.finalize ?? (() => json({ media_id_string: "m1" })))(),
+          );
+        }
+        return Promise.resolve((routes.image ?? (() => json({ media_id_string: "m1" })))());
+      }
+      if (url.includes("statuses/update.json")) {
+        return Promise.resolve((routes.v1 ?? (() => json({ errors: [] }, 403)))());
+      }
+      if (url.includes("/2/tweets")) {
+        return Promise.resolve((routes.v2 ?? (() => json({ data: { id: "tweet-2", text: "x" } }, 201)))());
+      }
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  async function failure(c: PublishContext) {
+    return xClient.publishVideo(c).then(
+      () => null,
+      (e: unknown) => e as Error & { code?: string; kind?: string; retryAt?: number | null; platform?: string },
+    );
+  }
+
+  beforeEach(() => {
+    vi.stubEnv("X_CONSUMER_KEY", "consumer-key");
+    vi.stubEnv("X_CONSUMER_SECRET", "consumer-secret");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("v2 tweet 429 -> RATE_LIMITED with retryAt from x-rate-limit-reset", async () => {
+    const resetSec = Math.floor(Date.now() / 1000) + 600;
+    stubX({ v2: () => limited({ "x-rate-limit-reset": String(resetSec) }) });
+
+    const error = await failure(ctx("image/jpeg"));
+
+    expect(error).toMatchObject({
+      code: "RATE_LIMITED",
+      platform: "x",
+      kind: "rate_limited",
+      retryAt: resetSec * 1000,
+    });
+    expect(error?.message).toBe("X is limiting requests right now.");
+  });
+
+  it("v1.1 statuses/update still falls back to v2 on a 429 (untouched call site)", async () => {
+    const fetchMock = stubX({ v1: () => limited(), v2: () => json({ data: { id: "tweet-2", text: "x" } }, 201) });
+
+    await expect(xClient.publishVideo(ctx("image/jpeg"))).resolves.toEqual({ externalPostId: "tweet-2" });
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("/2/tweets"))).toBe(true);
+  });
+
+  it("a v2 tweet failure that is not a rate limit keeps X_TWEET_FAILED", async () => {
+    stubX({ v2: () => json({ title: "Forbidden" }, 403) });
+
+    expect((await failure(ctx("image/jpeg")))?.code).toBe("X_TWEET_FAILED");
+  });
+
+  it("image upload 429 -> RATE_LIMITED, not X_IMAGE_UPLOAD_FAILED", async () => {
+    const fetchMock = stubX({ image: () => limited({ "Retry-After": "120" }) });
+
+    const error = await failure(ctx("image/jpeg"));
+
+    expect(error?.code).toBe("RATE_LIMITED");
+    expect(error?.retryAt).toBeGreaterThan(Date.now());
+    expect(fetchMock.mock.calls.some((c) => /statuses\/update|\/2\/tweets/.test(String(c[0])))).toBe(false);
+  });
+
+  it("video INIT 429 -> RATE_LIMITED, not X_VIDEO_INIT_FAILED", async () => {
+    stubX({ init: () => limited() });
+    expect((await failure(ctx("video/mp4")))?.code).toBe("RATE_LIMITED");
+  });
+
+  it("video APPEND 429 -> RATE_LIMITED, not X_VIDEO_APPEND_FAILED", async () => {
+    stubX({ append: () => limited() });
+    expect((await failure(ctx("video/mp4")))?.code).toBe("RATE_LIMITED");
+  });
+
+  it("video FINALIZE 429 -> RATE_LIMITED, not X_VIDEO_FINALIZE_FAILED", async () => {
+    stubX({ finalize: () => limited() });
+    expect((await failure(ctx("video/mp4")))?.code).toBe("RATE_LIMITED");
+  });
+
+  it("video STATUS 429 -> RATE_LIMITED, not X_VIDEO_STATUS_CHECK_FAILED", async () => {
+    vi.useFakeTimers();
+    stubX({
+      finalize: () => json({ media_id_string: "m1", processing_info: { state: "pending", check_after_secs: 1 } }),
+      status: () => limited(),
+    });
+
+    const promise = failure(ctx("video/mp4"));
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect((await promise)?.code).toBe("RATE_LIMITED");
+  });
+
+  it("a 429 is not retried in-step: the platform is called once", async () => {
+    const fetchMock = stubX({ v2: () => limited() });
+
+    await expect(
+      withTransientRetries(() => xClient.publishVideo(ctx("image/jpeg")), { sleep: async () => {} }),
+    ).rejects.toMatchObject({ code: "RATE_LIMITED" });
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes("/2/tweets"))).toHaveLength(1);
+  });
+});

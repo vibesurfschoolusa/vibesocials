@@ -233,3 +233,66 @@ describe("facebookPageClient.refreshToken", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+// 2026-11-01 scale audit (platform limits, V11): Meta throttles Page calls with
+// a body `error.code` and reports the wait in `X-Business-Use-Case-Usage`
+// (`estimated_time_to_regain_access`, in minutes).
+describe("facebookPageClient.publishVideo — rate limits (RATE_LIMITED)", () => {
+  type LimitedError = Error & { code?: string; kind?: string; retryAt?: number | null; platform?: string };
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("photos 400 code 32 with a 3 minute business-use-case header -> retryAt = now + 180 s", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-01T12:00:00Z"));
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: { type: "OAuthException", code: 32, message: "m" } }), {
+        status: 400,
+        headers: {
+          "X-Business-Use-Case-Usage": JSON.stringify({
+            "page-1": [{ type: "pages", estimated_time_to_regain_access: 3 }],
+          }),
+        },
+      }),
+    );
+
+    const error = await facebookPageClient.publishVideo(makeContext()).then(
+      () => null,
+      (e: unknown) => e as LimitedError,
+    );
+
+    expect(error).toMatchObject({
+      code: "RATE_LIMITED",
+      platform: "facebook_page",
+      kind: "rate_limited",
+      retryAt: Date.parse("2026-11-01T12:00:00Z") + 180_000,
+    });
+    expect(error?.message).toBe("Facebook Page is limiting requests right now.");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("an HTTP 429 with Retry-After is rate limited too", async () => {
+    fetchMock.mockResolvedValue(new Response("", { status: 429, headers: { "Retry-After": "60" } }));
+
+    const error = await facebookPageClient.publishVideo(makeContext()).then(
+      () => null,
+      (e: unknown) => e as LimitedError,
+    );
+
+    expect(error?.code).toBe("RATE_LIMITED");
+    expect(error?.retryAt).toBeGreaterThan(Date.now());
+  });
+
+  it("a non-throttle Graph error keeps FACEBOOK_PAGE_PUBLISH_FAILED", async () => {
+    fetchMock.mockResolvedValue(response(400, { error: { type: "GraphMethodException", code: 100 } }));
+
+    const error = await facebookPageClient.publishVideo(makeContext()).then(
+      () => null,
+      (e: unknown) => e as LimitedError,
+    );
+
+    expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+  });
+});

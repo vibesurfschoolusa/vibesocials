@@ -8,6 +8,7 @@ import {
   markConnectionNeedsReconnect,
   readOAuthErrorCode,
 } from "./connectionHealth";
+import { classifyRateLimit } from "./rateLimited";
 
 /**
  * LinkedIn API client for posting images and videos
@@ -250,6 +251,11 @@ async function uploadImage(
     }
   );
 
+  // 2026-11-01 scale audit (platform limits): LinkedIn answers a limit with
+  // HTTP 429; that is RATE_LIMITED, not a *_FAILED code.
+  const imageRegisterLimited = await classifyRateLimit("linkedin", registerResponse);
+  if (imageRegisterLimited) throw imageRegisterLimited;
+
   if (!registerResponse.ok) {
     const errorText = await registerResponse.text().catch(() => "Unable to read error");
     console.error("[LinkedIn] Image registration failed", {
@@ -306,6 +312,9 @@ async function uploadImage(
     },
     120_000,
   );
+
+  const imageUploadLimited = await classifyRateLimit("linkedin", uploadResponse);
+  if (imageUploadLimited) throw imageUploadLimited;
 
   await assertOk(uploadResponse, {
     code: "LINKEDIN_IMAGE_UPLOAD_FAILED",
@@ -373,6 +382,9 @@ async function uploadVideo(
     }
   );
 
+  const videoRegisterLimited = await classifyRateLimit("linkedin", registerResponse);
+  if (videoRegisterLimited) throw videoRegisterLimited;
+
   if (!registerResponse.ok) {
     const errorText = await registerResponse.text().catch(() => "Unable to read error");
     console.error("[LinkedIn] Video registration failed", {
@@ -417,6 +429,9 @@ async function uploadVideo(
     },
     120_000,
   );
+
+  const videoUploadLimited = await classifyRateLimit("linkedin", uploadResponse);
+  if (videoUploadLimited) throw videoUploadLimited;
 
   await assertOk(uploadResponse, {
     code: "LINKEDIN_VIDEO_UPLOAD_FAILED",
@@ -542,6 +557,9 @@ async function createPost(
     },
     body: JSON.stringify(postBody),
   });
+
+  const postLimited = await classifyRateLimit("linkedin", response);
+  if (postLimited) throw postLimited;
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => "Unable to read error");

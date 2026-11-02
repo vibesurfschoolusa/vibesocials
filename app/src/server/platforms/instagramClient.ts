@@ -6,6 +6,7 @@ import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 import { markConnectionNeedsReconnect } from "./connectionHealth";
 import { isFacebookAuthErrorBody } from "./facebookPageClient";
+import { classifyRateLimit } from "./rateLimited";
 
 // COR-5: Instagram token expiry handling.
 //
@@ -178,6 +179,11 @@ export const instagramClient: PlatformClient = {
         method: "POST",
       });
 
+      // 2026-11-01 scale audit (platform limits): a Meta throttle (code 4, 17,
+      // 32, 613, 80001, 80002 or HTTP 429) is RATE_LIMITED, not a container failure.
+      const containerLimited = await classifyRateLimit("instagram", containerResponse);
+      if (containerLimited) throw containerLimited;
+
       if (!containerResponse.ok) {
         const errorBody = await containerResponse.text().catch(() => "Unable to read error body");
         console.error("[Instagram] Container creation failed", {
@@ -224,6 +230,10 @@ export const instagramClient: PlatformClient = {
           statusUrl.searchParams.set("access_token", accessToken);
 
           const statusResponse = await fetchWithTimeout(statusUrl.toString());
+          // A throttled poll stops here; polling again would only extend the limit.
+          const statusLimited = await classifyRateLimit("instagram", statusResponse);
+          if (statusLimited) throw statusLimited;
+
           if (!statusResponse.ok) {
             const statusBody = await statusResponse.text().catch(() => "");
             // A dead token never recovers by polling: stop and ask for a
@@ -279,6 +289,10 @@ export const instagramClient: PlatformClient = {
       const publishResponse = await fetchWithTimeout(publishUrl.toString(), {
         method: "POST",
       });
+
+      // Includes code 9 / subcode 2207042: the 100-posts-per-24h publishing cap.
+      const publishLimited = await classifyRateLimit("instagram", publishResponse);
+      if (publishLimited) throw publishLimited;
 
       if (!publishResponse.ok) {
         const errorBody = await publishResponse.text().catch(() => "Unable to read error body");

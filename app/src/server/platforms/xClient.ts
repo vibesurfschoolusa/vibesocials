@@ -9,6 +9,7 @@ import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 
 import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
+import { classifyRateLimit } from "./rateLimited";
 
 /** Upper bound on waiting for X to process an uploaded video (with or without a step deadline). */
 export const X_PROCESSING_MAX_WAIT_MS = 120_000;
@@ -187,6 +188,10 @@ async function uploadMedia(
     budgetedTimeout(X_UPLOAD_TIMEOUT_MS, deadline),
   );
 
+  // 2026-11-01 scale audit (platform limits): a 429 is RATE_LIMITED, not *_FAILED.
+  const imageLimited = await classifyRateLimit("x", uploadResponse);
+  if (imageLimited) throw imageLimited;
+
   await assertOk(uploadResponse, {
     code: "X_IMAGE_UPLOAD_FAILED",
     prefix: "X media upload failed",
@@ -249,6 +254,9 @@ async function uploadVideoChunked(
     budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
   );
 
+  const initLimited = await classifyRateLimit("x", initResponse);
+  if (initLimited) throw initLimited;
+
   await assertOk(initResponse, {
     code: "X_VIDEO_INIT_FAILED",
     prefix: "X video upload initialization failed",
@@ -296,6 +304,9 @@ async function uploadVideoChunked(
       budgetedTimeout(X_UPLOAD_TIMEOUT_MS, deadline),
     );
 
+    const appendLimited = await classifyRateLimit("x", appendResponse);
+    if (appendLimited) throw appendLimited;
+
     await assertOk(appendResponse, {
       code: "X_VIDEO_APPEND_FAILED",
       prefix: `X video APPEND failed (segment ${segmentIndex})`,
@@ -329,6 +340,9 @@ async function uploadVideoChunked(
     },
     budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
   );
+
+  const finalizeLimited = await classifyRateLimit("x", finalizeResponse);
+  if (finalizeLimited) throw finalizeLimited;
 
   await assertOk(finalizeResponse, {
     code: "X_VIDEO_FINALIZE_FAILED",
@@ -451,6 +465,9 @@ async function waitForVideoProcessing(
       Math.min(X_STATUS_TIMEOUT_MS, Math.max(remainingMs(stopBy), MIN_REQUEST_WINDOW_MS)),
     );
     checks++;
+
+    const statusLimited = await classifyRateLimit("x", statusResponse);
+    if (statusLimited) throw statusLimited;
 
     await assertOk(statusResponse, {
       code: "X_VIDEO_STATUS_CHECK_FAILED",
@@ -660,6 +677,11 @@ export const xClient: PlatformClient = {
       },
       budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
     );
+
+    // The v1.1 call above is deliberately NOT classified (any non-5xx error
+    // falls back to v2). The v2 call is the last word: a 429 here is RATE_LIMITED.
+    const tweetLimited = await classifyRateLimit("x", tweetResponse);
+    if (tweetLimited) throw tweetLimited;
 
     // v1Response's status/body are already logged above (line ~495); assertOk
     // additionally logs tweetResponse's own status + body server-side.

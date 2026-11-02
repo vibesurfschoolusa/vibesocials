@@ -5,6 +5,7 @@ import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
 import { resolveGbpLocationName } from "./gbpLocation";
 import { refreshGoogleToken } from "./googleTokens";
+import { classifyRateLimit } from "./rateLimited";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
 // Google Business Profile client (photos that appear on Google Maps)
@@ -78,6 +79,11 @@ export const googleBusinessProfileClient: PlatformClient = {
         }),
       },
     );
+
+    // 2026-11-01 scale audit (platform limits): GBP answers an excess (300 QPM
+    // per API, 10 edits/min per profile) with HTTP 429 -> RATE_LIMITED.
+    const limited = await classifyRateLimit("google_business_profile", createRes);
+    if (limited) throw limited;
 
     await assertOk(createRes, {
       code: "GBP_CREATE_MEDIA_FAILED",

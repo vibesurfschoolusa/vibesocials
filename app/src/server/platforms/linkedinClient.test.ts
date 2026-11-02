@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ensureFreshLinkedInToken,
+  linkedinClient,
   refreshLinkedInToken,
 } from "@/server/platforms/linkedinClient";
 
@@ -388,3 +389,108 @@ describe("ensureFreshLinkedInToken — non-terminal refresh failures", () => {
   });
 });
 
+
+// 2026-11-01 scale audit (platform limits, V16): LinkedIn rate-limits with HTTP
+// 429. Every publish-path call (register image/video, upload PUT, ugcPosts) is
+// classified before the client builds its own *_FAILED error; the token
+// endpoint's existing transient handling is untouched.
+describe("linkedinClient.publishVideo — rate limits (RATE_LIMITED)", () => {
+  type LimitedError = Error & { code?: string; kind?: string; retryAt?: number | null; platform?: string };
+
+  const UPLOAD_URL = "https://upload.linkedin.example/u";
+  const registered = () =>
+    new Response(
+      JSON.stringify({
+        value: {
+          asset: "urn:li:digitalmediaAsset:1",
+          uploadMechanism: {
+            "com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest": { uploadUrl: UPLOAD_URL },
+          },
+        },
+      }),
+      { status: 200 },
+    );
+  const limited = (headers: Record<string, string> = {}) => new Response("", { status: 429, headers });
+
+  function ctx(mimeType: string) {
+    return {
+      user: { id: "user-1" },
+      socialConnection: makeConnection({ id: "conn-li", expiresAt: new Date(Date.now() + 3_600_000) }),
+      mediaItem: {
+        mimeType,
+        storageLocation: "https://blob.example.com/m",
+        originalFilename: "m",
+      },
+      caption: "hello",
+    } as unknown as Parameters<typeof linkedinClient.publishVideo>[0];
+  }
+
+  function stubLinkedIn(routes: { register?: () => Response; upload?: () => Response; post?: () => Response }) {
+    const fetchMock = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.includes("blob.example.com")) return Promise.resolve(new Response(new Uint8Array([1, 2, 3, 4])));
+      if (url.includes("assets?action=registerUpload")) return Promise.resolve((routes.register ?? registered)());
+      if (url === UPLOAD_URL) return Promise.resolve((routes.upload ?? (() => new Response("", { status: 201 })))());
+      if (url.includes("/v2/ugcPosts")) {
+        return Promise.resolve((routes.post ?? (() => new Response(JSON.stringify({ id: "urn:li:share:1" }), { status: 201 })))());
+      }
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  const failure = (promise: Promise<unknown>) =>
+    promise.then(
+      () => null,
+      (e: unknown) => e as LimitedError,
+    );
+
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it("ugcPosts 429 -> RATE_LIMITED, not LINKEDIN_POST_CREATION_FAILED", async () => {
+    stubLinkedIn({ post: () => limited({ "Retry-After": "300" }) });
+
+    const error = await failure(linkedinClient.publishVideo(ctx("image/jpeg")));
+
+    expect(error).toMatchObject({ code: "RATE_LIMITED", platform: "linkedin", kind: "rate_limited" });
+    expect(error?.message).toBe("LinkedIn is limiting requests right now.");
+    expect(error?.retryAt).toBeGreaterThan(Date.now());
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("ugcPosts 429 without Retry-After -> retryAt null (the run's backoff applies)", async () => {
+    stubLinkedIn({ post: () => limited() });
+    expect((await failure(linkedinClient.publishVideo(ctx("image/jpeg"))))?.retryAt).toBeNull();
+  });
+
+  it("a non-429 ugcPosts failure keeps LINKEDIN_POST_CREATION_FAILED", async () => {
+    stubLinkedIn({ post: () => new Response("{}", { status: 422 }) });
+    expect((await failure(linkedinClient.publishVideo(ctx("image/jpeg"))))?.code).toBe(
+      "LINKEDIN_POST_CREATION_FAILED",
+    );
+  });
+
+  it("image registerUpload 429 -> RATE_LIMITED, not LINKEDIN_IMAGE_REGISTRATION_FAILED", async () => {
+    stubLinkedIn({ register: () => limited() });
+    expect((await failure(linkedinClient.publishVideo(ctx("image/jpeg"))))?.code).toBe("RATE_LIMITED");
+  });
+
+  it("image upload PUT 429 -> RATE_LIMITED, not LINKEDIN_IMAGE_UPLOAD_FAILED", async () => {
+    stubLinkedIn({ upload: () => limited() });
+    expect((await failure(linkedinClient.publishVideo(ctx("image/jpeg"))))?.code).toBe("RATE_LIMITED");
+  });
+
+  it("video registerUpload 429 -> RATE_LIMITED, not LINKEDIN_VIDEO_REGISTRATION_FAILED", async () => {
+    stubLinkedIn({ register: () => limited() });
+    expect((await failure(linkedinClient.publishVideo(ctx("video/mp4"))))?.code).toBe("RATE_LIMITED");
+  });
+
+  it("video upload PUT 429 -> RATE_LIMITED, not LINKEDIN_VIDEO_UPLOAD_FAILED", async () => {
+    stubLinkedIn({ upload: () => limited() });
+    expect((await failure(linkedinClient.publishVideo(ctx("video/mp4"))))?.code).toBe("RATE_LIMITED");
+  });
+});

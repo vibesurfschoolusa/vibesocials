@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
 
+import { rateLimitedError } from "./rateLimited";
 import { isTransientPublishError, MIN_RETRY_WINDOW_MS, withTransientRetries } from "./transientRetry";
 
 /** Node fetch's network failure: `TypeError("fetch failed")` with a coded cause. */
@@ -83,6 +84,18 @@ describe("isTransientPublishError", () => {
     expect(isTransientPublishError(new Error("something else"))).toBe(false);
     expect(isTransientPublishError(undefined)).toBe(false);
   });
+
+  // 2026-11-01 scale audit (platform limits): a classified limit is waited out
+  // by a durable sleep (retryAt), never by the 2s/8s in-step retry.
+  it("never retries a RateLimitedError, even one that carries a 429 status", () => {
+    expect(isTransientPublishError(rateLimitedError("x", "rate_limited", Date.now() + 60_000))).toBe(
+      false,
+    );
+    const with429 = Object.assign(rateLimitedError("x", "rate_limited", null), { status: 429 });
+    expect(isTransientPublishError(with429)).toBe(false);
+    const with503 = Object.assign(rateLimitedError("youtube", "youtube_quota", null), { status: 503 });
+    expect(isTransientPublishError(with503)).toBe(false);
+  });
 });
 
 describe("withTransientRetries", () => {
@@ -120,6 +133,15 @@ describe("withTransientRetries", () => {
     const fn = vi.fn().mockRejectedValue(dropped);
     await expect(withTransientRetries(fn, { sleep: async () => {} })).rejects.toBe(dropped);
     expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls fn once for a RateLimitedError and rethrows it unchanged", async () => {
+    const limited = Object.assign(rateLimitedError("tiktok", "rate_limited", 123), { status: 429 });
+    const fn = vi.fn().mockRejectedValue(limited);
+    const sleep = vi.fn(async () => {});
+    await expect(withTransientRetries(fn, { sleep })).rejects.toBe(limited);
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
   });
 
   it("rethrows a non-transient failure immediately", async () => {

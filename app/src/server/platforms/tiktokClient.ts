@@ -7,6 +7,7 @@ import { truncateGraphemes } from "@/lib/truncate";
 
 import { isTerminalRefreshFailure, markConnectionNeedsReconnect } from "./connectionHealth";
 import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
+import { classifyRateLimit, isRateLimitedError } from "./rateLimited";
 import type { PlatformClient, PublishContext, PublishResult, TikTokCreatorInfo } from "./types";
 
 /** Minimal shape of TikTok's creator_info response (only the fields we read). */
@@ -563,6 +564,11 @@ export async function getTikTokCreatorInfo(
     timeoutMs,
   );
 
+  // 2026-11-01 scale audit (platform limits): HTTP 429, or `rate_limit_exceeded`
+  // in the body, is RATE_LIMITED rather than TIKTOK_CREATOR_INFO_FAILED.
+  const limited = await classifyRateLimit("tiktok", response);
+  if (limited) throw limited;
+
   await assertOk(response, {
     code: "TIKTOK_CREATOR_INFO_FAILED",
     prefix: "Failed to fetch TikTok creator info",
@@ -633,6 +639,9 @@ export const tiktokClient: PlatformClient = {
       }
     } catch (creatorInfoError: unknown) {
       console.error('[TikTok] Failed to fetch creator info:', creatorInfoError);
+      // Keep the typed rate-limit error (platform / kind / retryAt) intact
+      // instead of re-wrapping it below as a plain creator_info failure.
+      if (isRateLimitedError(creatorInfoError)) throw creatorInfoError;
       const cause = creatorInfoError as Error & { code?: string; status?: number };
       // A 401 means the access token is no longer valid -> reconnect.
       if (cause.status === 401) {
@@ -739,6 +748,11 @@ export const tiktokClient: PlatformClient = {
       budgetedTimeout(TIKTOK_INIT_TIMEOUT_MS, deadline),
     );
 
+    // HTTP 429, or `rate_limit_exceeded` in the body of a 200, is RATE_LIMITED.
+    // Classified from a clone, so the body is still parsed below.
+    const initLimited = await classifyRateLimit("tiktok", initRes);
+    if (initLimited) throw initLimited;
+
     // A 401 means the access token is no longer valid -> reconnect.
     if (initRes.status === 401) {
       await throwTikTokReconnect(socialConnection.id, "video/init");
@@ -800,6 +814,9 @@ export const tiktokClient: PlatformClient = {
         // incomplete, and TikTok never publishes an incomplete upload.
         budgetedTimeout(TIKTOK_CHUNK_UPLOAD_TIMEOUT_MS, deadline),
       );
+
+      const chunkLimited = await classifyRateLimit("tiktok", uploadRes);
+      if (chunkLimited) throw chunkLimited;
 
       await assertOk(uploadRes, {
         code: "TIKTOK_UPLOAD_FAILED",

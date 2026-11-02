@@ -1,6 +1,8 @@
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
+import { classifyRateLimit } from "./rateLimited";
+
 // Server-only: resolves a Google Business Profile location resource name.
 //
 // Consolidates the store-code resolver duplicated in googleBusinessProfileClient.ts
@@ -49,6 +51,10 @@ export async function resolveGbpLocationName(
     { headers: authHeaders },
   );
 
+  // 2026-11-01 scale audit (platform limits): a 429 is RATE_LIMITED, not a failed list.
+  const accountsLimited = await classifyRateLimit("google_business_profile", accountsRes);
+  if (accountsLimited) throw accountsLimited;
+
   await assertOk(accountsRes, {
     code: "GBP_ACCOUNTS_LIST_FAILED",
     prefix:
@@ -72,6 +78,11 @@ export async function resolveGbpLocationName(
     url.searchParams.set("filter", `storeCode="${trimmed}"`);
 
     const locationsRes = await fetchWithTimeout(url, { headers: authHeaders });
+
+    // Not a soft per-account failure: skipping a throttled account would end as
+    // a misleading GBP_STORE_CODE_NOT_FOUND.
+    const locationsLimited = await classifyRateLimit("google_business_profile", locationsRes);
+    if (locationsLimited) throw locationsLimited;
 
     if (!locationsRes.ok) {
       // Soft failure: skip this account and keep searching the others.

@@ -1078,4 +1078,116 @@ describe("tiktokClient.publishVideo", () => {
     expect(updateCalls()).toHaveLength(1);
     expect(updateCalls()[0].data.needsReconnect).toBe(true);
   });
+
+  // 2026-11-01 scale audit (platform limits, V14): TikTok's rate_limit_exceeded
+  // is an HTTP 429 and also arrives as `error.code` in a body. Both become
+  // RATE_LIMITED; the publish-status poll (which absorbs errors by design) is
+  // not classified.
+  describe("rate limits (RATE_LIMITED)", () => {
+    it("classifies a creator_info 429 (Retry-After) as RATE_LIMITED, keeping kind and retryAt", async () => {
+      stubFetch({
+        "creator_info/query": () =>
+          new Response("", { status: 429, headers: { "Retry-After": "120" } }),
+      });
+
+      const error = (await caught(tiktokClient.publishVideo(makeCtx()))) as CodedError & {
+        kind?: string;
+        platform?: string;
+        retryAt?: number | null;
+      };
+
+      expect(error?.code).toBe("RATE_LIMITED");
+      expect(error?.platform).toBe("tiktok");
+      expect(error?.kind).toBe("rate_limited");
+      expect(error?.retryAt).toBeGreaterThan(Date.now());
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("video/init 429 -> RATE_LIMITED, not TIKTOK_INIT_FAILED", async () => {
+      stubFetch({
+        "creator_info/query": creatorInfoOk,
+        "blob.example.com": videoBlob,
+        "video/init": () => jsonResponse({ error: { code: "rate_limit_exceeded" } }, 429),
+      });
+
+      const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+      expect(error?.code).toBe("RATE_LIMITED");
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("video/init 200 whose body error.code is rate_limit_exceeded -> RATE_LIMITED, not TIKTOK_INIT_ERROR", async () => {
+      stubFetch({
+        "creator_info/query": creatorInfoOk,
+        "blob.example.com": videoBlob,
+        "video/init": () =>
+          jsonResponse({ error: { code: "rate_limit_exceeded", message: "slow down", log_id: "L" } }, 200),
+      });
+
+      const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+      expect(error?.code).toBe("RATE_LIMITED");
+    });
+
+    it("a chunk PUT 429 -> RATE_LIMITED, not TIKTOK_UPLOAD_FAILED", async () => {
+      stubFetch({
+        "creator_info/query": creatorInfoOk,
+        "blob.example.com": videoBlob,
+        "video/init": initOk,
+        "upload.tiktok.example": () => new Response("", { status: 429 }),
+      });
+
+      const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+      expect(error?.code).toBe("RATE_LIMITED");
+    });
+
+    it("is not retried in-step", async () => {
+      const fetchMock = stubFetch({
+        "creator_info/query": creatorInfoOk,
+        "blob.example.com": videoBlob,
+        "video/init": () => jsonResponse({ error: { code: "rate_limit_exceeded" } }, 429),
+      });
+
+      const error = await caught(
+        withTransientRetries(() => tiktokClient.publishVideo(makeCtx()), { sleep: async () => {} }),
+      );
+
+      expect(error?.code).toBe("RATE_LIMITED");
+      expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes("video/init"))).toHaveLength(1);
+    });
+
+    it("leaves the status poll untouched: a 429 there is absorbed and polling continues", async () => {
+      vi.useFakeTimers();
+      const statuses = [
+        () => new Response("", { status: 429 }),
+        () => jsonResponse({ data: { status: "PUBLISH_COMPLETE" } }),
+      ];
+      stubFetch({
+        "creator_info/query": creatorInfoOk,
+        "blob.example.com": videoBlob,
+        "video/init": initOk,
+        "upload.tiktok.example": uploadOk,
+        "status/fetch": () => (statuses.shift() ?? statuses[0])(),
+      });
+
+      const promise = tiktokClient.publishVideo(makeCtx());
+      await vi.advanceTimersByTimeAsync(TIKTOK_POLL_INTERVAL_MS * 2);
+
+      await expect(promise).resolves.toEqual({ externalPostId: "publish-123" });
+    });
+
+    it("leaves the token endpoint untouched: a refresh 429 keeps TIKTOK_TOKEN_REFRESH_FAILED and its status", async () => {
+      stubFetch({ "oauth/token": () => jsonResponse({ error: "rate_limited" }, 429) });
+
+      const error = await caught(
+        tiktokClient.publishVideo(
+          makeCtx(makeConnection({ expiresAt: new Date("2020-01-01T00:00:00Z") })),
+        ),
+      );
+
+      expect(error?.code).toBe("TIKTOK_TOKEN_REFRESH_FAILED");
+      expect(error?.status).toBe(429);
+    });
+  });
 });

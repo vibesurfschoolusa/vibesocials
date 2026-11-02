@@ -5,6 +5,7 @@ import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { truncateGraphemes } from "@/lib/truncate";
 
 import { refreshGoogleToken } from "./googleTokens";
+import { classifyRateLimit } from "./rateLimited";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
 // Minimal shape of the YouTube `videos.insert` request body we construct.
@@ -224,6 +225,12 @@ export const youtubeClient: PlatformClient = {
       },
       120_000,
     );
+
+    // 2026-11-01 scale audit (platform limits): quotaExceeded / uploadLimitExceeded
+    // / rate limits become RATE_LIMITED (with the Pacific-midnight reset), not
+    // YOUTUBE_UPLOAD_FAILED.
+    const limited = await classifyRateLimit("youtube", uploadResponse);
+    if (limited) throw limited;
 
     await assertOk(uploadResponse, {
       code: "YOUTUBE_UPLOAD_FAILED",

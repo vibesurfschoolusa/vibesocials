@@ -325,3 +325,126 @@ describe("instagramClient.publishVideo — caption limit", () => {
     expect(containerUrl.searchParams.get("caption")).toBe("b".repeat(2200));
   });
 });
+
+// 2026-11-01 scale audit (platform limits, V11/V12): Meta throttles with a
+// body `error.code` (4, 17, 32, 613, 80001, 80002) on HTTP 400, not 429. Those
+// become RATE_LIMITED; Instagram's publishing cap (code 9 / subcode 2207042)
+// is a daily_limit; suspected spam (code 4 / subcode 2207051) is NOT a limit.
+describe("instagramClient.publishVideo — rate limits (RATE_LIMITED)", () => {
+  const graphError = (code: number, subcode?: number, headers: Record<string, string> = {}) =>
+    new Response(
+      JSON.stringify({
+        error: { message: "m", type: "OAuthException", code, error_subcode: subcode },
+      }),
+      { status: 400, headers },
+    );
+
+  function ctx(mimeType: string) {
+    return {
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+      mediaItem: {
+        mimeType,
+        storageLocation: "https://blob.example.com/m",
+        metadata: null,
+      } as unknown as MediaItem,
+      caption: "hello",
+    };
+  }
+
+  function stubGraph(routes: { container: () => Response; status?: () => Response; publish?: () => Response }) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string | URL) => {
+        const url = String(input);
+        if (url.includes("/media_publish")) return Promise.resolve(routes.publish!());
+        if (url.includes("/ig-account-1/media")) return Promise.resolve(routes.container());
+        if (url.includes("fields=status_code")) return Promise.resolve(routes.status!());
+        throw new Error(`Unexpected fetch in test: ${url}`);
+      }),
+    );
+  }
+
+  type LimitedError = Error & { code?: string; kind?: string; retryAt?: number | null; platform?: string };
+  const failure = (promise: Promise<unknown>) =>
+    promise.then(
+      () => null,
+      (e: unknown) => e as LimitedError,
+    );
+
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("container 400 code 80002 -> RATE_LIMITED, not INSTAGRAM_CONTAINER_FAILED, and no reconnect flag", async () => {
+    stubGraph({ container: () => graphError(80002) });
+
+    const error = await failure(instagramClient.publishVideo(ctx("image/jpeg")));
+
+    expect(error).toMatchObject({ code: "RATE_LIMITED", platform: "instagram", kind: "rate_limited" });
+    expect(error?.message).toBe("Instagram is limiting requests right now.");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the business-use-case estimate (minutes) as retryAt", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-01T12:00:00Z"));
+    stubGraph({
+      container: () =>
+        graphError(80002, undefined, {
+          "X-Business-Use-Case-Usage": JSON.stringify({
+            "ig-account-1": [{ type: "instagram", estimated_time_to_regain_access: 4 }],
+          }),
+        }),
+    });
+
+    const error = await failure(instagramClient.publishVideo(ctx("image/jpeg")));
+
+    expect(error?.retryAt).toBe(Date.parse("2026-11-01T12:00:00Z") + 4 * 60_000);
+  });
+
+  it("media_publish 400 code 9 / subcode 2207042 -> RATE_LIMITED daily_limit (24 h)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-01T12:00:00Z"));
+    stubGraph({
+      container: () => new Response(JSON.stringify({ id: "container-1" }), { status: 200 }),
+      publish: () => graphError(9, 2207042),
+    });
+
+    const promise = failure(instagramClient.publishVideo(ctx("image/jpeg")));
+    await vi.advanceTimersByTimeAsync(3_000);
+    const error = await promise;
+
+    expect(error).toMatchObject({ code: "RATE_LIMITED", kind: "daily_limit" });
+    expect(error?.retryAt).toBe(Date.parse("2026-11-01T12:00:03Z") + 24 * 60 * 60_000);
+  });
+
+  it("a rate limit during the video status poll stops polling with RATE_LIMITED", async () => {
+    vi.useFakeTimers();
+    const statusMock = vi.fn(() => graphError(4));
+    stubGraph({
+      container: () => new Response(JSON.stringify({ id: "container-1" }), { status: 200 }),
+      status: statusMock,
+    });
+
+    const promise = failure(instagramClient.publishVideo(ctx("video/mp4")));
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect((await promise)?.code).toBe("RATE_LIMITED");
+    expect(statusMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("suspected spam (code 4 / subcode 2207051) is not a rate limit: INSTAGRAM_CONTAINER_FAILED", async () => {
+    stubGraph({ container: () => graphError(4, 2207051) });
+
+    const error = await failure(instagramClient.publishVideo(ctx("image/jpeg")));
+
+    expect(error?.code).toBe("INSTAGRAM_CONTAINER_FAILED");
+  });
+});
