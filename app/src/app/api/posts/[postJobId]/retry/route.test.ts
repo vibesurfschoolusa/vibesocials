@@ -281,6 +281,41 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     });
   });
 
+  // 2026-11-01 scale audit (jobs H6), fix round 1: `inngest.send` can throw AFTER
+  // Inngest accepted the event. The retry run then starts, claims the result and
+  // calls the platform while the route reverts the claim it just made. The
+  // revert must leave a row a run has already claimed alone, otherwise the
+  // run's success write is rejected and a live post reads "Couldn't start the
+  // retry" - inviting a second retry, i.e. a second post.
+  it("when the enqueue fails, reverts only the rows no run has claimed (claimRunId null)", async () => {
+    postJobFindFirstMock.mockResolvedValue(
+      makeJob([{ platform: "tiktok", status: "failed" }, { platform: "youtube", status: "failed" }]),
+    );
+    resultUpdateManyMock.mockResolvedValue({ count: 1 });
+    inngestSendMock.mockRejectedValue(new Error("response timeout"));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+    const body = (await res.json()) as { code?: string };
+    consoleError.mockRestore();
+
+    expect(res.status).toBe(500);
+    expect(body.code).toBe("RETRY_ENQUEUE_FAILED");
+    expect(resultUpdateManyMock).toHaveBeenLastCalledWith({
+      where: {
+        postJobId: "job-1",
+        platform: { in: ["tiktok", "youtube"] },
+        status: "pending",
+        claimRunId: null,
+      },
+      data: {
+        status: "failed",
+        errorCode: "RETRY_ENQUEUE_FAILED",
+        errorMessage: "Couldn't start the retry. Please try again.",
+      },
+    });
+  });
+
   it("resolves the reconnect-preflight connection lookup from the context's workspace, not resolveWorkspaceForUser (Task 2 bridge removed)", async () => {
     postJobFindFirstMock.mockResolvedValue(
       makeJob([{ platform: "instagram", status: "failed" }]),

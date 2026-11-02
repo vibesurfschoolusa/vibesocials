@@ -1,6 +1,7 @@
+import type { PostJobResultStatus } from "@prisma/client";
+
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { PUBLISH_UNCONFIRMED_CODE } from "@/lib/publishOutcomes";
 
 /**
  * 2026-11-01 scale audit (jobs H6): the per-result publish claim.
@@ -72,10 +73,14 @@ export async function claimResult(
  *
  * The write matches only while `runId` still holds the claim:
  * - a failure needs the result to be `pending`;
- * - a success also replaces this run's own PUBLISH_UNCONFIRMED mark (U7): a
- *   timed-out invocation can keep running after the reconciler or an onFailure
- *   handler marked its result unconfirmed, and once the platform confirms the
- *   post the truth should replace "may already be live".
+ * - a confirmed success also overwrites a `failed` row (ruling R17). Anything
+ *   that failed the row while this run still held the claim - the reconciler's
+ *   or an onFailure handler's PUBLISH_UNCONFIRMED mark (U7: a timed-out
+ *   invocation can keep running), the retry route reverting an enqueue it
+ *   thought failed, old code reverting rows during version skew - was written
+ *   without knowing the post went out, and the platform's confirmation is the
+ *   truth. This is safe because a new attempt has to clear (retry route) or take
+ *   (a fresh claim) the claim before it can act, which ends this run's write.
  *
  * Returns false (and logs a warning) when the claim is no longer held — the
  * result was reset, failed or finalized by someone else — instead of throwing:
@@ -88,14 +93,7 @@ export async function finalizeClaimedResult(
 ): Promise<boolean> {
   const where =
     data.status === "success"
-      ? {
-          id: resultId,
-          claimRunId: runId,
-          OR: [
-            { status: "pending" as const },
-            { status: "failed" as const, errorCode: PUBLISH_UNCONFIRMED_CODE },
-          ],
-        }
+      ? { id: resultId, claimRunId: runId, status: { in: ["pending", "failed"] satisfies PostJobResultStatus[] } }
       : { id: resultId, claimRunId: runId, status: "pending" as const };
 
   try {

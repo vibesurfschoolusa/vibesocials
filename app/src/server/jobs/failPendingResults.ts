@@ -50,7 +50,7 @@ export const PUBLISH_UNCONFIRMED = {
  *
  * Shared by every route that dispatches `post/publish.requested` (on an
  * `inngest.send` failure) and the publish functions' Inngest `onFailure`
- * handlers — hence the parameterized failure. Mirrors retryPlatforms'
+ * handlers — hence the parameterized failure — and by retryPlatforms'
  * fail-media-unavailable step in inngest-functions.ts.
  *
  * `options.platforms` (Task 4 fix round 1, ruling R8b) narrows the write to

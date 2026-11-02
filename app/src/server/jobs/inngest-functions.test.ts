@@ -661,11 +661,7 @@ describe("publishToAllPlatforms — a publish step only publishes a still-pendin
     expect(publishCtxs.map((c) => c.socialConnection.platform)).toEqual(["x"]);
     expect(db.resultUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: {
-          id: "result-x",
-          claimRunId: "run-1",
-          OR: [{ status: "pending" }, { status: "failed", errorCode: "PUBLISH_UNCONFIRMED" }],
-        },
+        where: { id: "result-x", claimRunId: "run-1", status: { in: ["pending", "failed"] } },
       }),
     );
     expect(resultWrites()).toEqual([
@@ -730,9 +726,16 @@ describe("platform steps claim their result before calling the platform (jobs H6
       return row ? { ...row } : null;
     });
     db.resultUpdate.mockImplementation(
-      async ({ where, data }: { where: { id: string; claimRunId: string }; data: { status: string } }) => {
+      async ({
+        where,
+        data,
+      }: {
+        where: { id: string; claimRunId: string; status: string | { in: string[] } };
+        data: { status: string };
+      }) => {
         const row = rows.get(where.id);
-        if (!row || row.claimRunId !== where.claimRunId || row.status !== "pending") {
+        const allowed = typeof where.status === "string" ? [where.status] : where.status.in;
+        if (!row || row.claimRunId !== where.claimRunId || !allowed.includes(row.status)) {
           throw p2025();
         }
         row.status = data.status;
@@ -885,6 +888,34 @@ describe("platform steps claim their result before calling the platform (jobs H6
     expect(console.warn).toHaveBeenCalled();
   });
 
+  // Fix round 1 (review Critical 2): the success write used to sit inside the
+  // same try as the platform call. A DB error on that write (a pool timeout, a
+  // dropped connection) fell into the catch, which recorded the LIVE post as a
+  // retryable failure carrying the raw Prisma error - and a retry posts twice.
+  // Now it propagates: the run fails, onFailure marks the claimed row
+  // PUBLISH_UNCONFIRMED (and after Task 2 the step's retry finds its own claim
+  // and does the same).
+  it.each([
+    ["publish step", publishAs],
+    ["retry step", retryAs],
+  ])("%s: a failing success write propagates and is never recorded as a retryable failure", async (_label, run) => {
+    stubResultStore({ "result-x": {} });
+    const poolTimeout = Object.assign(
+      new Error("Timed out fetching a new connection from the connection pool"),
+      { code: "P2024" },
+    );
+    db.resultUpdate.mockRejectedValue(poolTimeout);
+
+    await expect(run("run-1")).rejects.toThrow("Timed out fetching a new connection");
+
+    expect(publishCtxs).toHaveLength(1);
+    // The one and only result write attempted was the success; no `failed` write
+    // followed it.
+    expect(resultWrites()).toEqual([
+      expect.objectContaining({ status: "success", externalPostId: "ext-x" }),
+    ]);
+  });
+
   it("claims before every write, including the failures that never reach the platform", async () => {
     stubResultStore({ "result-x": {} });
     getPlatformClientMock.mockImplementation(() => null);
@@ -898,6 +929,50 @@ describe("platform steps claim their result before calling the platform (jobs H6
       expect.objectContaining({ status: "failed", errorCode: "CLIENT_NOT_FOUND", ...HEARTBEAT }),
     ]);
     expect(out.results).toEqual([{ platform: "x", status: "failed", error: "No client" }]);
+  });
+});
+
+// Fix round 1 (review Important 1): the retry run's `fail-media-unavailable`
+// step used to fail every `pending` row of its platforms with MEDIA_UNAVAILABLE,
+// claimed or not - so a retry run that found the media gone overwrote a live
+// claimant (the original run mid-call), whose success write then found nothing
+// to update. It now goes through failPendingPostJobResults, which marks claimed
+// rows PUBLISH_UNCONFIRMED and fails only the unclaimed ones with this reason.
+describe("retryPlatforms — fail-media-unavailable (claim-aware)", () => {
+  it.each([
+    ["the media item is soft-deleted", { id: "media-1", baseCaption: "c", perPlatformOverrides: null, deletedAt: new Date() }],
+    ["the media item is gone", null],
+  ])("fails the re-queued platforms through the shared helper when %s", async (_label, media) => {
+    db.postJobFindUnique.mockResolvedValue({
+      id: "job-1", workspaceId: WORKSPACE.id, mediaItemId: "media-1",
+      baseCaption: "c", perPlatformOverrides: null, publishMetadata: null,
+    });
+    db.mediaItemFindUnique.mockResolvedValue(media);
+    db.connectionFindMany.mockResolvedValue([{ id: "conn-x", platform: "x" }]);
+    stubResults(["x", "youtube"]);
+    failPendingMock.mockResolvedValue({ failedCount: 1, unconfirmedCount: 0, status: "failed" });
+    const step = fakeStep();
+
+    const out = await handlerOf(retryPlatforms)({
+      event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms: ["x", "youtube"] } },
+      step,
+    });
+
+    expect(step.run).toHaveBeenCalledWith("fail-media-unavailable", expect.any(Function));
+    expect(failPendingMock).toHaveBeenCalledTimes(1);
+    expect(failPendingMock).toHaveBeenCalledWith(
+      "job-1",
+      {
+        errorCode: "MEDIA_UNAVAILABLE",
+        errorMessage: "The media for this post is no longer available. Recreate the post.",
+      },
+      { platforms: ["x", "youtube"] },
+    );
+    // No direct, claim-blind write of its own, and nothing is published.
+    expect(db.resultUpdateMany).not.toHaveBeenCalled();
+    expect(db.postJobUpdate).not.toHaveBeenCalled();
+    expect(publishCtxs).toHaveLength(0);
+    expect(out).toEqual({ postJobId: "job-1", error: "Media unavailable" });
   });
 });
 

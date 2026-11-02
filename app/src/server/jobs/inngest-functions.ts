@@ -45,6 +45,7 @@ import { Prisma } from "@prisma/client";
 import type { MediaItem, Platform, User } from "@prisma/client";
 import type {
   PublishContext,
+  PublishResult,
   TikTokPostMetadata,
   YouTubePostMetadata,
 } from "@/server/platforms/types";
@@ -207,6 +208,14 @@ async function publishToPlatform({
     return { platform: connectionRef.platform, status: "failed", error: "No client" };
   }
 
+  // Only the platform call (and the failures that happen before it) live in the
+  // try below. Once `publishVideo` returned, the post is live: recording it is
+  // done AFTER the try/catch, so a database error on that write propagates
+  // instead of being caught and written down as a retryable failure (which would
+  // let a retry post twice). The run then fails and onFailure marks the claimed
+  // row PUBLISH_UNCONFIRMED; with Task 2's step retries the retried step finds
+  // its own claim and does the same (2026-11-01 scale audit, jobs H6).
+  let publishResult: PublishResult;
   try {
     // Reload inside the step so tokens stay in-process only (db.ts opens seals).
     const connection = await prisma.socialConnection.findUnique({
@@ -270,20 +279,10 @@ async function publishToPlatform({
     // double-posting). Covers the user-triggered retry flow too — it also
     // funnels through publishToPlatform. A retry only starts while enough of
     // the step's budget is left (see MIN_RETRY_WINDOW_MS).
-    const publishResult = await withTransientRetries(
+    publishResult = await withTransientRetries(
       () => client.publishVideo(publishContext),
       { deadline },
     );
-
-    logger.info(`[Inngest] ${connection.platform} success`, {
-      platform: connection.platform,
-      externalPostId: publishResult.externalPostId,
-    });
-    await finalizeClaimedResult(resultRecordId, runId, {
-      status: "success",
-      externalPostId: publishResult.externalPostId ?? null,
-    });
-    return { platform: connection.platform, status: "success" };
   } catch (error: unknown) {
     const err = error as Error & { code?: string };
     logger.error(`[Inngest] Platform ${connectionRef.platform} failed to publish`, {
@@ -299,12 +298,28 @@ async function publishToPlatform({
     });
     return { platform: connectionRef.platform, status: "failed", error: err.message };
   }
+
+  logger.info(`[Inngest] ${connectionRef.platform} success`, {
+    platform: connectionRef.platform,
+    externalPostId: publishResult.externalPostId,
+  });
+  await finalizeClaimedResult(resultRecordId, runId, {
+    status: "success",
+    externalPostId: publishResult.externalPostId ?? null,
+  });
+  return { platform: connectionRef.platform, status: "success" };
 }
 
 /** Recorded on every result a dead publish/retry run left `pending` (Task 4 item 7). */
 export const PUBLISH_INTERRUPTED = {
   errorCode: "PUBLISH_INTERRUPTED",
   errorMessage: "Publishing was interrupted. Please retry.",
+} as const satisfies PendingResultFailure;
+
+/** Recorded on the re-queued results of a retry whose media was removed meanwhile. */
+const MEDIA_UNAVAILABLE = {
+  errorCode: "MEDIA_UNAVAILABLE",
+  errorMessage: "The media for this post is no longer available. Recreate the post.",
 } as const satisfies PendingResultFailure;
 
 /** The parts of Inngest's `inngest/function.failed` payload this handler reads. */
@@ -867,24 +882,13 @@ export const retryPlatforms = inngest.createFunction(
     // row here means the workspace was deleted concurrently (or DB
     // corruption) — equally "shouldn't happen" as a missing user/mediaItem.
     if (!user || !workspace || !mediaItem || !captionSource || mediaItem.deletedAt !== null) {
+      // Through the shared helper (2026-11-01 scale audit, jobs H6): a row
+      // another run has CLAIMED (the original publish run, mid-call) may be live,
+      // so it is marked PUBLISH_UNCONFIRMED - which that run's confirmed success
+      // still overwrites - instead of MEDIA_UNAVAILABLE. The job is recomputed
+      // over ALL results exactly as this step used to.
       await step.run("fail-media-unavailable", async () => {
-        await prisma.postJobResult.updateMany({
-          where: { postJobId, platform: { in: platforms }, status: "pending" },
-          data: {
-            status: "failed",
-            errorCode: "MEDIA_UNAVAILABLE",
-            errorMessage:
-              "The media for this post is no longer available. Recreate the post.",
-          },
-        });
-        const dbResults = await prisma.postJobResult.findMany({
-          where: { postJobId },
-          select: { status: true },
-        });
-        await prisma.postJob.update({
-          where: { id: postJobId },
-          data: { status: recomputePostJobStatus(dbResults) },
-        });
+        await failPendingPostJobResults(postJobId, MEDIA_UNAVAILABLE, { platforms });
       });
       return { postJobId, error: "Media unavailable" };
     }

@@ -261,6 +261,13 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   // the job to in_progress or to enqueue the retry run, those rows would be stuck
   // `pending` forever with no run to terminalize them — and un-retryable (the
   // claim requires `failed`). So revert them to `failed` on any error here.
+  //
+  // `inngest.send` can throw AFTER Inngest accepted the event, so the retry run
+  // may already be running. The revert therefore touches only rows no run has
+  // claimed (`claimRunId: null`, 2026-11-01 scale audit jobs H6): a claimed row
+  // belongs to a run that is, or was, calling the platform, and reverting it to
+  // `failed` would tell the user "couldn't start" about a post that may be live
+  // (inviting a second post). Its run records the real outcome.
   try {
     // Parent job re-enters the running state while the retried platforms publish.
     await prisma.postJob.update({
@@ -276,7 +283,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   } catch (error) {
     console.error("[retry] failed to enqueue retry run; reverting claim", error);
     await prisma.postJobResult.updateMany({
-      where: { postJobId, platform: { in: eligible }, status: "pending" },
+      where: { postJobId, platform: { in: eligible }, status: "pending", claimRunId: null },
       data: {
         status: "failed",
         errorCode: "RETRY_ENQUEUE_FAILED",

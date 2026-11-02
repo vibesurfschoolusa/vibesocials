@@ -118,10 +118,12 @@ describe("finalizeClaimedResult", () => {
     });
   });
 
-  // U7: a timed-out invocation may keep running after the reconciler marked its
-  // result PUBLISH_UNCONFIRMED. Once the platform confirms the post, the truth
-  // replaces the "couldn't confirm" mark - but only for the run that made it.
-  it("lets a confirmed success replace this run's own PUBLISH_UNCONFIRMED mark", async () => {
+  // R17: a confirmed success wins over ANY failure written while this run still
+  // holds the claim - the reconciler's / onFailure's PUBLISH_UNCONFIRMED (U7: a
+  // timed-out invocation can keep running), the retry route's enqueue-failure
+  // revert, or old code reverting rows during version skew. A new attempt has to
+  // clear or take the claim before it can act, so the claim is the guard.
+  it("lets a confirmed success replace a failure written while this run still holds the claim", async () => {
     updateMock.mockResolvedValue({});
 
     const wrote = await finalizeClaimedResult("r1", "run-1", {
@@ -131,12 +133,94 @@ describe("finalizeClaimedResult", () => {
 
     expect(wrote).toBe(true);
     expect(updateMock).toHaveBeenCalledWith({
-      where: {
-        id: "r1",
-        claimRunId: "run-1",
-        OR: [{ status: "pending" }, { status: "failed", errorCode: "PUBLISH_UNCONFIRMED" }],
-      },
+      where: { id: "r1", claimRunId: "run-1", status: { in: ["pending", "failed"] } },
       data: { status: "success", externalPostId: "ext-1", ...HEARTBEAT },
+    });
+  });
+
+  describe("against a stored row (the where is evaluated, not just compared)", () => {
+    type Row = { id: string; status: string; errorCode: string | null; claimRunId: string | null };
+    let row: Row;
+
+    function p2025() {
+      return new Prisma.PrismaClientKnownRequestError("Record to update not found.", {
+        code: "P2025",
+        clientVersion: "test",
+      });
+    }
+
+    beforeEach(() => {
+      updateMock.mockImplementation(
+        async ({
+          where,
+          data,
+        }: {
+          where: { id: string; claimRunId: string; status: string | { in: string[] } };
+          data: Record<string, unknown>;
+        }) => {
+          const allowed = typeof where.status === "string" ? [where.status] : where.status.in;
+          if (where.id !== row.id || where.claimRunId !== row.claimRunId || !allowed.includes(row.status)) {
+            throw p2025();
+          }
+          Object.assign(row, { ...data, postJob: undefined });
+          return {};
+        },
+      );
+    });
+
+    it.each([
+      ["the retry route's enqueue-failure revert", "RETRY_ENQUEUE_FAILED"],
+      ["a PUBLISH_UNCONFIRMED mark", "PUBLISH_UNCONFIRMED"],
+      ["a PUBLISH_INTERRUPTED mark", "PUBLISH_INTERRUPTED"],
+    ])("a row reverted to failed by %s, still claimed by run-1, is overwritten with run-1's success", async (_label, errorCode) => {
+      row = { id: "r1", status: "failed", errorCode, claimRunId: "run-1" };
+
+      const wrote = await finalizeClaimedResult("r1", "run-1", {
+        status: "success",
+        externalPostId: "ext-1",
+      });
+
+      expect(wrote).toBe(true);
+      expect(row).toMatchObject({ status: "success", claimRunId: "run-1" });
+    });
+
+    it("another run's success does not overwrite it (the claim is what guards)", async () => {
+      row = { id: "r1", status: "failed", errorCode: "RETRY_ENQUEUE_FAILED", claimRunId: "run-1" };
+
+      const wrote = await finalizeClaimedResult("r1", "run-2", {
+        status: "success",
+        externalPostId: "ext-2",
+      });
+
+      expect(wrote).toBe(false);
+      expect(row.status).toBe("failed");
+    });
+
+    it("a row whose claim was cleared (a new retry took over) is not overwritten", async () => {
+      row = { id: "r1", status: "pending", errorCode: null, claimRunId: null };
+
+      const wrote = await finalizeClaimedResult("r1", "run-1", {
+        status: "success",
+        externalPostId: "ext-1",
+      });
+
+      expect(wrote).toBe(false);
+      expect(row.status).toBe("pending");
+    });
+
+    it("a failure still needs the row to be pending: it never overwrites a failed or successful row", async () => {
+      for (const status of ["failed", "success"]) {
+        row = { id: "r1", status, errorCode: "PUBLISH_UNCONFIRMED", claimRunId: "run-1" };
+
+        const wrote = await finalizeClaimedResult("r1", "run-1", {
+          status: "failed",
+          errorCode: "X_TWEET_FAILED",
+          errorMessage: "nope",
+        });
+
+        expect(wrote).toBe(false);
+        expect(row.status).toBe(status);
+      }
     });
   });
 
