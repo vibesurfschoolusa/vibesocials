@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  CONNECTION_TOKEN_CHANGED_CODE,
   TOKEN_REFRESH_SUPERSEDED_CODE,
+  connectionTokenChangedError,
+  flagRejectedToken,
   isTerminalRefreshFailure,
   markConnectionNeedsReconnect,
   readOAuthErrorCode,
@@ -195,6 +198,74 @@ describe("tokenRefreshSupersededError", () => {
     expect(error).toBeInstanceOf(Error);
     expect(error.code).toBe("TOKEN_REFRESH_SUPERSEDED");
     expect(error.message).not.toMatch(/token.*[A-Za-z0-9]{20,}/);
+  });
+});
+
+// 2026-11-02 scale audit (jobs, token refresh, R24): an ordinary API call that the
+// platform answered with a 401 flags the connection only when the stored tokens
+// are still the ones that call used. Another process may have rotated them, or
+// the user may have reconnected, between our read of the row and the call.
+describe("flagRejectedToken", () => {
+  const snapshot = { id: "conn-1", accessToken: "access-1", refreshToken: "refresh-1" };
+
+  it("writes the three flag fields and reports 'flagged' when the stored tokens still match", async () => {
+    findUniqueMock.mockResolvedValue({ accessToken: "access-1", refreshToken: "refresh-1" });
+
+    await expect(flagRejectedToken(snapshot, "TIKTOK_RECONNECT_REQUIRED")).resolves.toBe("flagged");
+
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    const arg = updateMock.mock.calls[0][0] as {
+      where: { id: string };
+      data: Record<string, unknown>;
+    };
+    expect(arg.where).toEqual({ id: "conn-1" });
+    expect(Object.keys(arg.data).sort()).toEqual([
+      "lastRefreshErrorCode",
+      "needsReconnect",
+      "refreshFailedAt",
+    ]);
+    expect(arg.data.needsReconnect).toBe(true);
+    expect(arg.data.lastRefreshErrorCode).toBe("TIKTOK_RECONNECT_REQUIRED");
+  });
+
+  it("writes nothing and reports 'superseded' when the stored tokens differ", async () => {
+    findUniqueMock.mockResolvedValue({ accessToken: "rotated", refreshToken: "refresh-1" });
+
+    await expect(flagRejectedToken(snapshot, "TIKTOK_RECONNECT_REQUIRED")).resolves.toBe("superseded");
+
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("compares a null refresh token too (Instagram, Facebook Page)", async () => {
+    findUniqueMock.mockResolvedValue({ accessToken: "access-1", refreshToken: null });
+
+    await expect(
+      flagRejectedToken({ id: "conn-1", accessToken: "access-1", refreshToken: null }, "X"),
+    ).resolves.toBe("flagged");
+    await expect(
+      flagRejectedToken({ id: "conn-1", accessToken: "access-1", refreshToken: "refresh-1" }, "X"),
+    ).resolves.toBe("superseded");
+  });
+
+  it("reports 'error' when the re-read fails, and writes nothing", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    findUniqueMock.mockRejectedValue(new Error("connection refused"));
+
+    await expect(flagRejectedToken(snapshot, "X")).resolves.toBe("error");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("connectionTokenChangedError", () => {
+  it("carries the CONNECTION_TOKEN_CHANGED code and a fixed, token-free retry message", () => {
+    const error = connectionTokenChangedError();
+
+    expect(CONNECTION_TOKEN_CHANGED_CODE).toBe("CONNECTION_TOKEN_CHANGED");
+    expect(error).toBeInstanceOf(Error);
+    expect(error.code).toBe("CONNECTION_TOKEN_CHANGED");
+    expect(error.message).toBe(
+      "This connection was refreshed or reconnected while publishing. Please retry.",
+    );
   });
 });
 

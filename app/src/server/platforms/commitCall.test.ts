@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 
-import { commitRequest, publishUnconfirmedError, readCommitBody } from "./commitCall";
+import { commitRequest, publishUnconfirmedError, readCommitBody, requireCommitId } from "./commitCall";
 import { PUBLISH_BUDGET_EXCEEDED_CODE, publishBudgetExceededError } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 import { isTransientPublishError } from "./transientRetry";
@@ -266,5 +266,44 @@ describe("readCommitBody — a 2xx commit whose body cannot be read is PUBLISH_U
     const error = await rejection(readCommitBody("x", new Response("SECRET_UPSTREAM_BODY", { status: 200 }), "json"));
 
     expect(error?.message).not.toContain("SECRET_UPSTREAM_BODY");
+  });
+});
+
+// 2026-11-02 scale audit (jobs, R30): a 2xx commit body that parsed but lacks the
+// post id the client returns as externalPostId means the platform said "created"
+// and we cannot say which post it is. Not a failure to retry: PUBLISH_UNCONFIRMED.
+describe("requireCommitId", () => {
+  it("returns a non-empty string id unchanged", () => {
+    expect(requireCommitId("x", "abc", "data.id")).toBe("abc");
+  });
+
+  it.each([
+    ["undefined", undefined],
+    ["an empty string", ""],
+    ["a number", 42],
+    ["null", null],
+    ["an object", { id: "abc" }],
+  ])("%s throws PUBLISH_UNCONFIRMED with a cause naming the field", (_label, value) => {
+    let thrown: Unconfirmed | null = null;
+    try {
+      requireCommitId("youtube", value, "id");
+    } catch (e) {
+      thrown = e as Unconfirmed;
+    }
+
+    expect(thrown?.code).toBe(PUBLISH_UNCONFIRMED_CODE);
+    expect(thrown?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect((thrown?.cause as Error).message).toBe("2xx commit body without id");
+  });
+
+  it("the thrown error is never transient: the in-step retry must not re-run the commit", () => {
+    let thrown: unknown;
+    try {
+      requireCommitId("x", undefined, "id_str");
+    } catch (e) {
+      thrown = e;
+    }
+
+    expect(isTransientPublishError(thrown)).toBe(false);
   });
 });

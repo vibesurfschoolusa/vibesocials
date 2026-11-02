@@ -5,11 +5,13 @@ import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeo
 import { PLATFORM_CAPTION_LIMITS, TIKTOK_DEFAULT_CAPTION } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 
-import { commitRequest } from "./commitCall";
+import { commitRequest, publishUnconfirmedError } from "./commitCall";
 import {
+  connectionTokenChangedError,
+  flagRejectedToken,
   flagTerminalRefreshFailure,
   isTerminalRefreshFailure,
-  markConnectionNeedsReconnect,
+  type TokenSnapshot,
 } from "./connectionHealth";
 import { refreshConnectionToken } from "./connectionRefresh";
 import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
@@ -75,7 +77,7 @@ const TIKTOK_API_BASE = "https://open.tiktokapis.com";
 const TIKTOK_TOKEN_ENDPOINT = `${TIKTOK_API_BASE}/v2/oauth/token/`;
 
 /**
- * Code thrown (and recorded via markConnectionNeedsReconnect) whenever TikTok
+ * Code thrown (and recorded via flagRejectedToken / flagTerminalRefreshFailure) whenever TikTok
  * tells us the connection's credentials are dead: a 401 from any API call
  * during publish, or a terminal refresh failure. Follows the
  * `*_RECONNECT_REQUIRED` convention (see connectionHealth.ts).
@@ -242,16 +244,34 @@ function tiktokReconnectRequiredError(): Error & { code: string } {
 }
 
 /**
- * TikTok rejected the access token (401). Flag the connection so the user sees
- * "reconnect" copy, then throw the reconnect code. Flag fields only — never
- * touches accessToken/refreshToken (see connectionHealth.ts).
+ * Flag the connection after TikTok rejected the access token (401), guarded by
+ * the tokens that call used (2026-11-02 scale audit, jobs, token refresh):
+ * another process may have refreshed them (TikTok rotates the refresh token) or
+ * the user may have reconnected since this publish read its row. Flag fields
+ * only - never touches accessToken/refreshToken (see connectionHealth.ts).
+ * Returns "superseded" when the stored tokens differ and nothing was written.
  */
-async function throwTikTokReconnect(connectionId: string, where: string): Promise<never> {
+async function flagTikTokRejection(
+  connection: TokenSnapshot,
+  where: string,
+): Promise<"flagged" | "superseded" | "error"> {
   console.error("[TikTok] Access token rejected; marking connection for reconnect", {
-    connectionId,
+    connectionId: connection.id,
     where,
   });
-  await markConnectionNeedsReconnect(connectionId, TIKTOK_RECONNECT_CODE);
+  return flagRejectedToken(connection, TIKTOK_RECONNECT_CODE);
+}
+
+/**
+ * TikTok rejected the access token (401) BEFORE anything was committed. Flag the
+ * connection so the user sees "reconnect" copy, then throw the reconnect code; or,
+ * when the stored tokens changed since this call read them, flag nothing and
+ * throw the plain, retryable CONNECTION_TOKEN_CHANGED.
+ */
+async function throwTikTokReconnect(connection: TokenSnapshot, where: string): Promise<never> {
+  if ((await flagTikTokRejection(connection, where)) === "superseded") {
+    throw connectionTokenChangedError();
+  }
   throw tiktokReconnectRequiredError();
 }
 
@@ -463,8 +483,11 @@ function sanitizeFailReason(reason: unknown): string | null {
 export interface PollTikTokPublishStatusOptions {
   accessToken: string;
   publishId: string;
-  /** Used to flag the connection if TikTok answers 401 mid-poll. */
-  connectionId: string;
+  /**
+   * The connection and the tokens this poll sends. Used to flag it, guarded by
+   * those tokens, if TikTok answers 401 mid-poll.
+   */
+  connection: TokenSnapshot;
   /** Test seam: defaults to a real timer. */
   sleep?: (ms: number) => Promise<void>;
   maxAttempts?: number;
@@ -479,7 +502,9 @@ export interface PollTikTokPublishStatusOptions {
  * Poll TikTok's publish status until the post is confirmed. Resolves ONLY on a
  * complete outcome; every other outcome throws so the job records a failure:
  *  - FAILED -> `TIKTOK_PUBLISH_FAILED` (with TikTok's `fail_reason` when present)
- *  - 401 -> `TIKTOK_RECONNECT_REQUIRED` (connection flagged)
+ *  - 401 -> `PUBLISH_UNCONFIRMED` (connection flagged when its tokens are
+ *    unchanged). The poll runs after the final chunk was committed and TikTok may
+ *    be posting, so a reconnect-and-retry there could double-post.
  *  - budget exhausted (24 x 5s = ~120s, or the step `deadline` is near) ->
  *    `TIKTOK_PUBLISH_PENDING`: TikTok has not confirmed or denied the post, so
  *    it may still appear on the account.
@@ -494,7 +519,7 @@ export async function pollTikTokPublishStatus(
   const {
     accessToken,
     publishId,
-    connectionId,
+    connection,
     sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
     maxAttempts = TIKTOK_POLL_MAX_ATTEMPTS,
     intervalMs = TIKTOK_POLL_INTERVAL_MS,
@@ -545,7 +570,13 @@ export async function pollTikTokPublishStatus(
     // Decide OUTSIDE the try/catch above so terminal outcomes are not
     // swallowed by the transient-error handler.
     if (unauthorized) {
-      await throwTikTokReconnect(connectionId, "publish/status/fetch");
+      // 2026-11-02 scale audit (jobs, token refresh, R24): this comes AFTER the
+      // commit (the final chunk is up and TikTok may be posting), so the user must
+      // not be told to reconnect and retry: that can post twice. Flag (guarded by
+      // the tokens used here) so the dashboard shows Reconnect, but report the
+      // outcome as unknown whether or not the flag was written.
+      await flagTikTokRejection(connection, "publish/status/fetch");
+      throw publishUnconfirmedError("tiktok", new Error("publish/status/fetch answered HTTP 401"));
     }
 
     const decision = decidePollOutcome(publishStatus);
@@ -683,7 +714,7 @@ export const tiktokClient: PlatformClient = {
       const cause = creatorInfoError as Error & { code?: string; status?: number };
       // A 401 means the access token is no longer valid -> reconnect.
       if (cause.status === 401) {
-        await throwTikTokReconnect(socialConnection.id, "creator_info/query");
+        await throwTikTokReconnect(socialConnection, "creator_info/query");
       }
       const error = new Error(
         `TikTok creator_info check failed: ${cause.message}`,
@@ -793,7 +824,7 @@ export const tiktokClient: PlatformClient = {
 
     // A 401 means the access token is no longer valid -> reconnect.
     if (initRes.status === 401) {
-      await throwTikTokReconnect(socialConnection.id, "video/init");
+      await throwTikTokReconnect(socialConnection, "video/init");
     }
 
     await assertOk(initRes, {
@@ -805,7 +836,7 @@ export const tiktokClient: PlatformClient = {
     const initErrorCode = initJson?.error?.code;
     // TikTok can also report an invalid token as an error code in the body.
     if (initErrorCode === "access_token_invalid") {
-      await throwTikTokReconnect(socialConnection.id, "video/init");
+      await throwTikTokReconnect(socialConnection, "video/init");
     }
     if (initErrorCode && initErrorCode !== "ok") {
       console.error("[TikTok] video init error payload", initJson);
@@ -880,7 +911,7 @@ export const tiktokClient: PlatformClient = {
     await pollTikTokPublishStatus({
       accessToken,
       publishId,
-      connectionId: socialConnection.id,
+      connection: socialConnection,
       deadline,
     });
 

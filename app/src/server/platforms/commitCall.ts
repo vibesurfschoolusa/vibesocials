@@ -27,6 +27,8 @@ import { isNeverConnectedFetchError } from "./transientRetry";
 //                                         429 (rateLimited.ts) or fails as before
 //   2xx, body unreadable / not parseable  PUBLISH_UNCONFIRMED (readCommitBody:
 //                                         the platform answered "created")
+//   2xx, parsed body without the post id  PUBLISH_UNCONFIRMED (requireCommitId,
+//                                         2026-11-02 scale audit R30)
 
 export type PublishUnconfirmedError = Error & { code: typeof PUBLISH_UNCONFIRMED_CODE };
 
@@ -114,4 +116,18 @@ export async function readCommitBody<T>(
   } catch (error) {
     throw publishUnconfirmedError(platform, error);
   }
+}
+
+/**
+ * 2026-11-02 scale audit (jobs, R30): the id a client returns as `externalPostId`,
+ * read from the parsed body of a 2xx commit response.
+ *
+ * The platform said "created" but did not tell us which post, so the post may be
+ * live and the job must not offer a blind retry (a second post): that is
+ * PUBLISH_UNCONFIRMED, with a `cause` naming the missing `field`. Returns the id
+ * when it is a non-empty string.
+ */
+export function requireCommitId(platform: Platform, value: unknown, field: string): string {
+  if (typeof value === "string" && value.length > 0) return value;
+  throw publishUnconfirmedError(platform, new Error(`2xx commit body without ${field}`));
 }

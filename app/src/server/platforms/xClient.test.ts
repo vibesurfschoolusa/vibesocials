@@ -542,6 +542,47 @@ describe("xClient.publishVideo — rate limits (RATE_LIMITED)", () => {
       expect(v2Calls(fetchMock)).toHaveLength(1);
     });
 
+    // 2026-11-02 scale audit (jobs, R30): a 2xx tweet create whose parsed body
+    // lacks the id is PUBLISH_UNCONFIRMED (the platform said "created"), and v1.1
+    // still does not fall back to v2.
+    it.each([
+      ["{}", () => json({}, 200)],
+      ["an empty id_str", () => json({ id_str: "" }, 200)],
+      ["a numeric id_str", () => json({ id_str: 5 }, 200)],
+      ["a JSON null body", () => new Response("null", { status: 200 })],
+    ] as const)("v1.1 2xx with %s (no id_str) -> PUBLISH_UNCONFIRMED, v2 NOT requested", async (_name, make) => {
+      const fetchMock = stubX({ v1: make });
+
+      const error = await failure(ctx("image/jpeg"));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+      expect(v1Calls(fetchMock)).toHaveLength(1);
+      expect(v2Calls(fetchMock)).toHaveLength(0);
+    });
+
+    it.each([
+      ["{}", () => json({}, 201)],
+      ["{ data: {} }", () => json({ data: {} }, 201)],
+      ["{ data: null }", () => json({ data: null }, 201)],
+      ["an empty data.id", () => json({ data: { id: "" } }, 201)],
+      ["a JSON null body", () => new Response("null", { status: 201 })],
+    ] as const)("v2 2xx with %s (no data.id, after a v1.1 rejection) -> PUBLISH_UNCONFIRMED, requested once", async (_name, make) => {
+      const fetchMock = stubX({ v1: () => json({ errors: [] }, 403), v2: make });
+
+      const error = await failure(ctx("image/jpeg"));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+      expect(v2Calls(fetchMock)).toHaveLength(1);
+    });
+
+    it("v1.1 2xx with an id_str succeeds with it", async () => {
+      stubX({ v1: () => json({ id_str: "tweet-1" }, 200) });
+
+      await expect(xClient.publishVideo(ctx("image/jpeg"))).resolves.toEqual({ externalPostId: "tweet-1" });
+    });
+
     it("v1.1 403 -> falls back to v2 (unchanged)", async () => {
       const fetchMock = stubX({
         v1: () => json({ errors: [{ code: 187 }] }, 403),

@@ -648,6 +648,123 @@ describe("linkedinClient.publishVideo — rate limits (RATE_LIMITED)", () => {
     expect((await failure(linkedinClient.publishVideo(ctx("video/mp4"))))?.code).toBe("RATE_LIMITED");
   });
 
+  // 2026-11-02 scale audit (jobs, token refresh, R24): a 401 flags the connection
+  // only when the stored tokens are still the ones the rejected call sent. When
+  // another process refreshed them (or the user reconnected) meanwhile, nothing is
+  // flagged and the call fails with the plain, retryable CONNECTION_TOKEN_CHANGED.
+  describe("401 reconnect flags are guarded by the rejected tokens (R24)", () => {
+    const unauthorized = () => new Response("{}", { status: 401 });
+    const rotated = { accessToken: "rotated-access-token", refreshToken: "refresh-abc" };
+
+    it.each([
+      ["image register", "image/jpeg", { register: unauthorized }],
+      ["video register", "video/mp4", { register: unauthorized }],
+      ["ugcPosts", "image/jpeg", { post: unauthorized }],
+    ] as const)("%s 401 with unchanged tokens flags and throws LINKEDIN_RECONNECT_REQUIRED", async (_site, mime, routes) => {
+      stubLinkedIn(routes);
+
+      const error = await failure(linkedinClient.publishVideo(ctx(mime)));
+
+      expect(error?.code).toBe("LINKEDIN_RECONNECT_REQUIRED");
+      expect(updateMock).toHaveBeenCalledTimes(1);
+      const arg = updateMock.mock.calls[0][0] as { where: { id: string }; data: Record<string, unknown> };
+      expect(arg.where).toEqual({ id: "conn-li" });
+      expect(arg.data.needsReconnect).toBe(true);
+      expect(arg.data.lastRefreshErrorCode).toBe("LINKEDIN_RECONNECT_REQUIRED");
+    });
+
+    it.each([
+      ["image register", "image/jpeg", { register: unauthorized }],
+      ["video register", "video/mp4", { register: unauthorized }],
+      ["ugcPosts", "image/jpeg", { post: unauthorized }],
+    ] as const)("%s 401 with changed tokens throws CONNECTION_TOKEN_CHANGED and flags nothing", async (_site, mime, routes) => {
+      findUniqueMock.mockResolvedValue(rotated);
+      stubLinkedIn(routes);
+
+      const error = await failure(linkedinClient.publishVideo(ctx(mime)));
+
+      expect(error?.code).toBe("CONNECTION_TOKEN_CHANGED");
+      expect(error?.message).toBe(
+        "This connection was refreshed or reconnected while publishing. Please retry.",
+      );
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("compares against the tokens this publish used, read from the row it was handed", async () => {
+      stubLinkedIn({ register: unauthorized });
+
+      await failure(linkedinClient.publishVideo(ctx("image/jpeg")));
+
+      expect(findUniqueMock).toHaveBeenCalledWith({
+        where: { id: "conn-li" },
+        select: { accessToken: true, refreshToken: true },
+      });
+    });
+  });
+
+  // 2026-11-02 scale audit (jobs, R30): ugcPosts answers 201 with the post id in
+  // the `x-restli-id` header (https://learn.microsoft.com/en-us/linkedin/compliance/integrations/shares/ugc-post-api).
+  // The header wins; the body `id` is read only when the header is absent; a 2xx
+  // with neither is PUBLISH_UNCONFIRMED (the platform said "created").
+  describe("2xx ugcPosts id (R30)", () => {
+    const ugcPostCalls = (fetchMock: ReturnType<typeof stubLinkedIn>) =>
+      fetchMock.mock.calls.filter((c) => String(c[0]).includes("/v2/ugcPosts"));
+
+    it("201 with the x-restli-id header and an EMPTY body is a success", async () => {
+      stubLinkedIn({
+        post: () =>
+          new Response("", { status: 201, headers: { "x-restli-id": "urn:li:share:1" } }),
+      });
+
+      await expect(linkedinClient.publishVideo(ctx("image/jpeg"))).resolves.toEqual({
+        externalPostId: "urn:li:share:1",
+      });
+    });
+
+    it("prefers the header over a body id", async () => {
+      stubLinkedIn({
+        post: () =>
+          new Response(JSON.stringify({ id: "urn:li:share:body" }), {
+            status: 201,
+            headers: { "x-restli-id": "urn:li:share:header" },
+          }),
+      });
+
+      await expect(linkedinClient.publishVideo(ctx("image/jpeg"))).resolves.toEqual({
+        externalPostId: "urn:li:share:header",
+      });
+    });
+
+    it("falls back to the body id when the header is absent", async () => {
+      stubLinkedIn({
+        post: () => new Response(JSON.stringify({ id: "urn:li:share:body" }), { status: 201 }),
+      });
+
+      await expect(linkedinClient.publishVideo(ctx("image/jpeg"))).resolves.toEqual({
+        externalPostId: "urn:li:share:body",
+      });
+    });
+
+    it.each([
+      ["no header and {}", () => new Response("{}", { status: 201 })],
+      ["no header and an empty id", () => new Response(JSON.stringify({ id: "" }), { status: 201 })],
+      ["no header and a numeric id", () => new Response(JSON.stringify({ id: 7 }), { status: 201 })],
+      ["no header and a JSON null body", () => new Response("null", { status: 201 })],
+      [
+        "an empty header and {}",
+        () => new Response("{}", { status: 201, headers: { "x-restli-id": "" } }),
+      ],
+    ] as const)("a 2xx ugcPosts with %s -> PUBLISH_UNCONFIRMED, requested once", async (_name, make) => {
+      const fetchMock = stubLinkedIn({ post: make });
+
+      const error = await failure(linkedinClient.publishVideo(ctx("image/jpeg")));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+      expect(ugcPostCalls(fetchMock)).toHaveLength(1);
+    });
+  });
+
   // 2026-11-01 scale audit (jobs H6, Review Focus 5): `POST /v2/ugcPosts` is the
   // commit call. A 5xx, a timeout or a dropped connection there may already have
   // created the post, so it is PUBLISH_UNCONFIRMED and is never re-run. The

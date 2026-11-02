@@ -2,8 +2,8 @@ import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { SocialConnection } from "@prisma/client";
 
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { markConnectionNeedsReconnect } from "./connectionHealth";
-import { commitRequest, readCommitBody } from "./commitCall";
+import { connectionTokenChangedError, flagRejectedToken } from "./connectionHealth";
+import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import { classifyRateLimit } from "./rateLimited";
 
 // Token-material reality (see app/api/auth/facebook_page/callback/route.ts):
@@ -121,12 +121,17 @@ export const facebookPageClient: PlatformClient = {
       });
       // Token no longer accepted -> the actionable reconnect error, and flag
       // the connection so the dashboard/settings Reconnect affordance lights
-      // up instead of the user retrying a dead token forever.
+      // up instead of the user retrying a dead token forever. The flag is
+      // guarded by the tokens this call sent (2026-11-02 scale audit, jobs,
+      // token refresh): if the stored tokens changed since this publish read the
+      // row (the user reconnected), nothing is flagged and the plain, retryable
+      // CONNECTION_TOKEN_CHANGED is thrown.
       if (response.status === 401 || isFacebookAuthErrorBody(errorBody)) {
-        await markConnectionNeedsReconnect(
-          socialConnection.id,
+        const flagged = await flagRejectedToken(
+          socialConnection,
           FACEBOOK_PAGE_RECONNECT_CODE,
         );
+        if (flagged === "superseded") throw connectionTokenChangedError();
         throw facebookPageReconnectRequiredError();
       }
       const error = new Error(
@@ -137,9 +142,18 @@ export const facebookPageClient: PlatformClient = {
     }
 
     // photos answered 2xx, so the photo may be live: an unreadable body is
-    // PUBLISH_UNCONFIRMED, not a failure to retry (final review F4).
-    const data = await readCommitBody<{ id?: string }>("facebook_page", response, "json");
-    const externalPostId = data.id ?? null;
+    // PUBLISH_UNCONFIRMED, not a failure to retry (final review F4). So is a body
+    // that parsed but names neither `id` nor `post_id` (2026-11-02 scale audit, R30).
+    const data = await readCommitBody<{ id?: unknown; post_id?: unknown } | null>(
+      "facebook_page",
+      response,
+      "json",
+    );
+    const externalPostId = requireCommitId(
+      "facebook_page",
+      data?.id ?? data?.post_id,
+      "id or post_id",
+    );
 
     console.log("[FacebookPage] Photo published successfully", {
       pageId,

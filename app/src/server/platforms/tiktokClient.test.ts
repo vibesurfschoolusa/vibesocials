@@ -303,6 +303,7 @@ describe("decidePollOutcome", () => {
 
 describe("pollTikTokPublishStatus", () => {
   const noSleep = () => Promise.resolve();
+  const pollConnection = { id: "conn-1", accessToken: "access-token", refreshToken: "refresh-1" };
 
   function statusResponse(status: string, failReason?: string): Response {
     return jsonResponse({
@@ -315,7 +316,7 @@ describe("pollTikTokPublishStatus", () => {
     return pollTikTokPublishStatus({
       accessToken: "access-token",
       publishId: "publish-1",
-      connectionId: "conn-1",
+      connection: pollConnection,
       sleep: noSleep,
       ...overrides,
     });
@@ -466,7 +467,12 @@ describe("pollTikTokPublishStatus", () => {
 
     let settledAt = 0;
     const promise = caught(
-      pollTikTokPublishStatus({ accessToken: "a", publishId: "p", connectionId: "c", deadline }),
+      pollTikTokPublishStatus({
+        accessToken: "a",
+        publishId: "p",
+        connection: { id: "c", accessToken: "a", refreshToken: null },
+        deadline,
+      }),
     ).then((e) => {
       settledAt = Date.now();
       return e;
@@ -495,21 +501,48 @@ describe("pollTikTokPublishStatus", () => {
     expect(isTransientPublishError(error)).toBe(false);
   });
 
-  it("maps a 401 from the status endpoint to TIKTOK_RECONNECT_REQUIRED and flags the connection", async () => {
-    vi.stubGlobal(
-      "fetch",
+  // 2026-11-02 scale audit (R24): the poll runs AFTER the final chunk went up, so
+  // TikTok may already be posting. A 401 there still flags (guarded) but is never
+  // a reconnect-and-retry, which can double-post: it is PUBLISH_UNCONFIRMED.
+  describe("a 401 from the status endpoint (after the commit)", () => {
+    const unauthorized = () =>
       vi.fn().mockResolvedValue(
         jsonResponse({ error: { code: "access_token_invalid", message: "bad token" } }, 401),
-      ),
-    );
+      );
 
-    const error = await caught(poll({ connectionId: "conn-42" }));
+    it("flags the connection (tokens unchanged) but throws PUBLISH_UNCONFIRMED, not the reconnect code", async () => {
+      vi.stubGlobal("fetch", unauthorized());
+      findUniqueMock.mockResolvedValue({ accessToken: "access-token", refreshToken: "refresh-1" });
 
-    expect(error?.code).toBe(RECONNECT_CODE);
-    expect(updateCalls()).toHaveLength(1);
-    expect(updateCalls()[0].where).toEqual({ id: "conn-42" });
-    expect(updateCalls()[0].data.needsReconnect).toBe(true);
-    expect(updateCalls()[0].data.lastRefreshErrorCode).toBe(RECONNECT_CODE);
+      const error = await caught(
+        poll({ connection: { id: "conn-42", accessToken: "access-token", refreshToken: "refresh-1" } }),
+      );
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+      expect(updateCalls()).toHaveLength(1);
+      expect(updateCalls()[0].where).toEqual({ id: "conn-42" });
+      expect(updateCalls()[0].data.needsReconnect).toBe(true);
+      expect(updateCalls()[0].data.lastRefreshErrorCode).toBe(RECONNECT_CODE);
+    });
+
+    it("does not flag when the stored tokens changed, and still throws PUBLISH_UNCONFIRMED", async () => {
+      vi.stubGlobal("fetch", unauthorized());
+      findUniqueMock.mockResolvedValue({ accessToken: "rotated-access", refreshToken: "refresh-1" });
+
+      const error = await caught(poll());
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(updateCalls()).toHaveLength(0);
+    });
+
+    it("is not transient: an in-step retry must not restart a publish TikTok may be processing", async () => {
+      vi.stubGlobal("fetch", unauthorized());
+
+      const error = await caught(poll());
+
+      expect(isTransientPublishError(error)).toBe(false);
+    });
   });
 });
 
@@ -1161,6 +1194,82 @@ describe("tiktokClient.publishVideo", () => {
     expect(updateCalls()[0].data).not.toHaveProperty("refreshToken");
   });
 
+  // 2026-11-02 scale audit (R24): the flag is guarded by the tokens the rejected
+  // call used. If another process rotated them meanwhile, nothing is flagged and
+  // the call fails with a plain, retryable CONNECTION_TOKEN_CHANGED.
+  describe("a rejected token whose stored tokens changed meanwhile (R24)", () => {
+    const rotated = { accessToken: "rotated-access", refreshToken: "rotated-refresh" };
+
+    it("creator_info 401: CONNECTION_TOKEN_CHANGED and no flag", async () => {
+      findUniqueMock.mockResolvedValue(rotated);
+      stubFetch({
+        "creator_info/query": () =>
+          jsonResponse({ error: { code: "access_token_invalid", message: "expired" } }, 401),
+      });
+
+      const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+      expect(error?.code).toBe("CONNECTION_TOKEN_CHANGED");
+      expect(updateCalls()).toHaveLength(0);
+    });
+
+    it("video/init 401: CONNECTION_TOKEN_CHANGED and no flag", async () => {
+      findUniqueMock.mockResolvedValue(rotated);
+      stubFetch({
+        "creator_info/query": creatorInfoOk,
+        "blob.example.com": videoBlob,
+        "video/init": () =>
+          jsonResponse({ error: { code: "access_token_invalid", message: "expired" } }, 401),
+      });
+
+      const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+      expect(error?.code).toBe("CONNECTION_TOKEN_CHANGED");
+      expect(updateCalls()).toHaveLength(0);
+    });
+
+    it("video/init body access_token_invalid: CONNECTION_TOKEN_CHANGED and no flag", async () => {
+      findUniqueMock.mockResolvedValue(rotated);
+      stubFetch({
+        "creator_info/query": creatorInfoOk,
+        "blob.example.com": videoBlob,
+        "video/init": () =>
+          jsonResponse({ error: { code: "access_token_invalid", message: "expired" } }, 200),
+      });
+
+      const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+      expect(error?.code).toBe("CONNECTION_TOKEN_CHANGED");
+      expect(updateCalls()).toHaveLength(0);
+    });
+
+    it("the guard re-reads the tokens this call used (the refreshed connection, not the stale ctx row)", async () => {
+      // The pre-publish refresh persisted new tokens; the guard must compare with those.
+      const refreshed = makeConnection({
+        accessToken: "fresh-access-token",
+        refreshToken: "fresh-refresh-token",
+      });
+      refreshConnectionTokenMock.mockResolvedValue(refreshed);
+      findUniqueMock.mockResolvedValue({
+        accessToken: "fresh-access-token",
+        refreshToken: "fresh-refresh-token",
+      });
+      stubFetch({
+        "creator_info/query": () =>
+          jsonResponse({ error: { code: "access_token_invalid", message: "expired" } }, 401),
+      });
+
+      const error = await caught(
+        tiktokClient.publishVideo(
+          makeCtx(makeConnection({ expiresAt: new Date(Date.now() + 60 * 1000) })),
+        ),
+      );
+
+      expect(error?.code).toBe(RECONNECT_CODE);
+      expect(updateCalls()).toHaveLength(1);
+    });
+  });
+
   it("maps a 401 from video/init to TIKTOK_RECONNECT_REQUIRED and flags the connection", async () => {
     stubFetch({
       "creator_info/query": creatorInfoOk,
@@ -1289,7 +1398,10 @@ describe("tiktokClient.publishVideo", () => {
     ).toBe("Bearer fresh-access-token");
   });
 
-  it("maps a 401 from the status poll to TIKTOK_RECONNECT_REQUIRED mid-publish", async () => {
+  // The final chunk already went up, so TikTok may be posting: a 401 from the
+  // status poll is PUBLISH_UNCONFIRMED (never a reconnect-and-retry), whether or
+  // not the connection could be flagged (2026-11-02 scale audit, R24).
+  it("maps a 401 from the status poll to PUBLISH_UNCONFIRMED mid-publish, and flags the connection", async () => {
     vi.useFakeTimers();
     stubFetch({
       "creator_info/query": creatorInfoOk,
@@ -1303,9 +1415,28 @@ describe("tiktokClient.publishVideo", () => {
     await vi.advanceTimersByTimeAsync(TIKTOK_POLL_INTERVAL_MS);
 
     const error = await promise;
-    expect(error?.code).toBe(RECONNECT_CODE);
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
     expect(updateCalls()).toHaveLength(1);
     expect(updateCalls()[0].data.needsReconnect).toBe(true);
+  });
+
+  it("a 401 from the status poll with changed tokens is still PUBLISH_UNCONFIRMED and flags nothing", async () => {
+    vi.useFakeTimers();
+    findUniqueMock.mockResolvedValue({ accessToken: "rotated-access", refreshToken: "rotated-refresh" });
+    stubFetch({
+      "creator_info/query": creatorInfoOk,
+      "blob.example.com": videoBlob,
+      "video/init": initOk,
+      "upload.tiktok.example": uploadOk,
+      "status/fetch": () => jsonResponse({ error: { code: "access_token_invalid" } }, 401),
+    });
+
+    const promise = caught(tiktokClient.publishVideo(makeCtx()));
+    await vi.advanceTimersByTimeAsync(TIKTOK_POLL_INTERVAL_MS);
+
+    const error = await promise;
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(updateCalls()).toHaveLength(0);
   });
 
   // 2026-11-01 scale audit (platform limits, V14): TikTok's rate_limit_exceeded

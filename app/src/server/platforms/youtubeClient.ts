@@ -4,7 +4,7 @@ import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { truncateGraphemes } from "@/lib/truncate";
 
-import { commitRequest, readCommitBody } from "./commitCall";
+import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import { refreshConnectionToken } from "./connectionRefresh";
 import { refreshGoogleToken } from "./googleTokens";
 import { budgetedTimeout } from "./publishBudget";
@@ -265,28 +265,22 @@ export const youtubeClient: PlatformClient = {
     });
 
     // The insert answered 2xx, so the video may exist: an unreadable body is
-    // PUBLISH_UNCONFIRMED, not a failure to retry (final review F4).
+    // PUBLISH_UNCONFIRMED, not a failure to retry (final review F4). So is a body
+    // that parsed but has no video id (2026-11-02 scale audit, R30): the former
+    // plain YOUTUBE_NO_VIDEO_ID failure invited a retry, which uploads it twice.
     const result = await readCommitBody<{
-      id?: string;
+      id?: unknown;
       snippet?: {
         title?: string;
       };
-    }>("youtube", uploadResponse, "json");
+    } | null>("youtube", uploadResponse, "json");
 
-    const videoId = result.id;
-    if (!videoId) {
-      console.error("[YouTube] No video ID in response", result);
-      const error = new Error("YouTube did not return a video ID") as Error & { code: string };
-      error.code = "YOUTUBE_NO_VIDEO_ID";
-      throw error;
-    }
-
-    const uploadData = result;
+    const videoId = requireCommitId("youtube", result?.id, "id");
 
     console.log("[YouTube] Video uploaded successfully", {
-      videoId: uploadData.id,
-      videoUrl: `https://www.youtube.com/watch?v=${uploadData.id}`,
-      title: uploadData.snippet?.title,
+      videoId,
+      videoUrl: `https://www.youtube.com/watch?v=${videoId}`,
+      title: result?.snippet?.title,
     });
 
     // Note: YouTube API does not support setting recordingDetails (location) via API
@@ -300,7 +294,7 @@ export const youtubeClient: PlatformClient = {
     }
 
     return {
-      externalPostId: uploadData.id,
+      externalPostId: videoId,
     };
   },
 

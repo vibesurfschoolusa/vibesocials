@@ -13,8 +13,9 @@ import type { PublishContext } from "@/server/platforms/types";
 // auth-failure mapping: HTTP 401 or an OAuthException code 190 body -> the
 // coded reconnect error + needsReconnect flag; any other failure -> the
 // sanitized FACEBOOK_PAGE_PUBLISH_FAILED without the raw upstream body.
-const { updateMock, fetchMock } = vi.hoisted(() => ({
+const { updateMock, findUniqueMock, fetchMock } = vi.hoisted(() => ({
   updateMock: vi.fn(),
+  findUniqueMock: vi.fn(),
   fetchMock: vi.fn(),
 }));
 
@@ -22,6 +23,8 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     socialConnection: {
       update: updateMock,
+      // The guarded reconnect flag re-reads the stored tokens (connectionHealth.ts).
+      findUnique: findUniqueMock,
     },
   },
 }));
@@ -33,6 +36,10 @@ vi.mock("@/lib/fetchWithTimeout", () => ({
 beforeEach(() => {
   updateMock.mockReset();
   updateMock.mockResolvedValue({});
+  // By default the database still holds the tokens makeConnection() builds, so
+  // the guarded flag finds them unchanged and writes.
+  findUniqueMock.mockReset();
+  findUniqueMock.mockResolvedValue({ accessToken: "page-access-token", refreshToken: null });
   fetchMock.mockReset();
   // Silence the client's operational console output in test logs.
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -180,6 +187,36 @@ describe("facebookPageClient.publishVideo", () => {
 
     expect(error?.code).toBe("FACEBOOK_PAGE_RECONNECT_REQUIRED");
     expect(updateMock).toHaveBeenCalledTimes(1);
+  });
+
+  // 2026-11-02 scale audit (jobs, token refresh, R24): the flag is guarded by the
+  // tokens the rejected /photos call sent. When another process changed them (the
+  // user reconnected), nothing is flagged and the call fails with the plain,
+  // retryable CONNECTION_TOKEN_CHANGED.
+  it.each([
+    ["HTTP 401", () => response(401, { error: { type: "OAuthException", code: 190 } })],
+    [
+      "an HTTP 400 OAuthException 190",
+      () => response(400, { error: { type: "OAuthException", code: 190, message: "expired" } }),
+    ],
+  ] as const)("%s with changed stored tokens throws CONNECTION_TOKEN_CHANGED and flags nothing", async (_name, make) => {
+    findUniqueMock.mockResolvedValue({ accessToken: "rotated-page-token", refreshToken: null });
+    fetchMock.mockResolvedValue(make());
+
+    const error = await facebookPageClient
+      .publishVideo(makeContext({ id: "conn-99" }))
+      .then(() => null)
+      .catch((e: unknown) => e as Error & { code?: string });
+
+    expect(error?.code).toBe("CONNECTION_TOKEN_CHANGED");
+    expect(error?.message).toBe(
+      "This connection was refreshed or reconnected while publishing. Please retry.",
+    );
+    expect(findUniqueMock).toHaveBeenCalledWith({
+      where: { id: "conn-99" },
+      select: { accessToken: true, refreshToken: true },
+    });
+    expect(updateMock).not.toHaveBeenCalled();
   });
 
   it("keeps non-auth failures as sanitized FACEBOOK_PAGE_PUBLISH_FAILED without the raw body, and does NOT mark needsReconnect", async () => {
@@ -370,6 +407,41 @@ describe("facebookPageClient.publishVideo — commit call (POST /{page}/photos)"
     expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  // 2026-11-02 scale audit (jobs, R30): photos answered 2xx ("created") but the
+  // parsed body has no post id: PUBLISH_UNCONFIRMED, not a success with a null
+  // externalPostId. `id` wins; `post_id` is read only when `id` is absent.
+  it.each([
+    ["{}", {}],
+    ["an empty id and no post_id", { id: "" }],
+    ["a numeric id", { id: 12 }],
+    ["a JSON null body", null],
+  ] as const)("a 2xx photos response with %s -> PUBLISH_UNCONFIRMED, requested once", async (_name, body) => {
+    fetchMock.mockResolvedValue(response(200, JSON.stringify(body)));
+
+    const error = await failure();
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("a 2xx photos response with only post_id succeeds with it as externalPostId", async () => {
+    fetchMock.mockResolvedValue(response(200, { post_id: "p1" }));
+
+    await expect(facebookPageClient.publishVideo(makeContext())).resolves.toEqual({
+      externalPostId: "p1",
+    });
+  });
+
+  it("prefers id over post_id", async () => {
+    fetchMock.mockResolvedValue(response(200, { id: "photo-1", post_id: "p1" }));
+
+    await expect(facebookPageClient.publishVideo(makeContext())).resolves.toEqual({
+      externalPostId: "photo-1",
+    });
   });
 
   it("a 4xx keeps FACEBOOK_PAGE_PUBLISH_FAILED, and a 401 keeps the reconnect error", async () => {

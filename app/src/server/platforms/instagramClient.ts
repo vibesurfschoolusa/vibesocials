@@ -4,9 +4,14 @@ import type { SocialConnection } from "@prisma/client";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
-import { markConnectionNeedsReconnect } from "./connectionHealth";
+import {
+  connectionTokenChangedError,
+  flagRejectedToken,
+  flagTerminalRefreshFailure,
+  type TokenSnapshot,
+} from "./connectionHealth";
 import { isFacebookAuthErrorBody } from "./facebookPageClient";
-import { commitRequest, readCommitBody } from "./commitCall";
+import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 
@@ -28,8 +33,8 @@ import { classifyRateLimit } from "./rateLimited";
 // actually used for publishing, surfaced as a clean, coded reconnect error.
 
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // treat tokens within 5 min of expiry as expired
-// Roadmap Phase 4: the code marked via markConnectionNeedsReconnect() at every
-// site below that throws this error (expiry guard + 401 mapping).
+// Roadmap Phase 4: the code flagged (flagRejectedToken / flagTerminalRefreshFailure)
+// at every site below that throws this error (expiry guard + 401 mapping).
 const INSTAGRAM_RECONNECT_CODE = "INSTAGRAM_RECONNECT_REQUIRED";
 
 // 2026-11-01 scale audit (step budget, Task 7): the container poll runs INSIDE
@@ -60,6 +65,36 @@ function instagramReconnectRequiredError(cause?: unknown): Error & { code: strin
   error.code = INSTAGRAM_RECONNECT_CODE;
   if (cause !== undefined) error.cause = cause;
   return error;
+}
+
+/**
+ * The page token was rejected: flag the connection and throw the actionable
+ * reconnect error. The flag is guarded by the tokens the rejected call used
+ * (2026-11-02 scale audit, jobs, token refresh): if another process changed them
+ * since this publish read the row (the user reconnected), NOTHING is flagged and
+ * the plain, retryable CONNECTION_TOKEN_CHANGED is thrown. Not for
+ * instagramClient.refreshToken: a refresher flags through
+ * flagTerminalRefreshFailure, which throws TOKEN_REFRESH_SUPERSEDED.
+ */
+async function throwInstagramReconnect(connection: TokenSnapshot): Promise<never> {
+  if ((await flagRejectedToken(connection, INSTAGRAM_RECONNECT_CODE)) === "superseded") {
+    throw connectionTokenChangedError();
+  }
+  throw instagramReconnectRequiredError();
+}
+
+/**
+ * The expiry guard (ensureFreshInstagramToken) refused the stored `expiresAt`:
+ * flag the connection, guarded by the tokens this publish read, and rethrow the
+ * guard's reconnect error. Nothing was sent to Meta, but the row may be stale: if
+ * the stored tokens changed since (the user reconnected), nothing is flagged and
+ * the retryable CONNECTION_TOKEN_CHANGED is thrown instead.
+ */
+async function flagExpiredToken(connection: TokenSnapshot, guardError: unknown): Promise<never> {
+  if ((await flagRejectedToken(connection, INSTAGRAM_RECONNECT_CODE)) === "superseded") {
+    throw connectionTokenChangedError();
+  }
+  throw guardError;
 }
 
 /**
@@ -105,8 +140,11 @@ export function computeInstagramCaption(caption: string): string {
 export interface WaitForInstagramContainerOptions {
   containerId: string;
   accessToken: string;
-  /** Flagged needsReconnect if the status check shows the page token is dead. */
-  connectionId: string;
+  /**
+   * The connection and the page token this poll sends. Flagged needsReconnect,
+   * guarded by those tokens, if the status check shows the page token is dead.
+   */
+  connection: TokenSnapshot;
   /** The step deadline (epoch ms): polling stops with INSTAGRAM_PUBLISH_RESERVE_MS still left before it. */
   deadline?: number;
   /** Test seam: defaults to a real timer. */
@@ -120,7 +158,8 @@ export interface WaitForInstagramContainerOptions {
  * Resolves only then; every other outcome throws:
  *  - ERROR -> `INSTAGRAM_VIDEO_PROCESSING_ERROR`
  *  - a dead page token (401 / OAuthException 190) -> `INSTAGRAM_RECONNECT_REQUIRED`
- *    (connection flagged)
+ *    (connection flagged), or `CONNECTION_TOKEN_CHANGED` (nothing flagged) when
+ *    the stored tokens are no longer the ones this poll used
  *  - a Meta throttle -> RATE_LIMITED (polling again would only extend the limit)
  *  - still processing after INSTAGRAM_POLL_MAX_ATTEMPTS checks, or when the step
  *    `deadline` leaves no room for another wait + check before the
@@ -136,7 +175,7 @@ export async function waitForInstagramContainer(
   const {
     containerId,
     accessToken,
-    connectionId,
+    connection,
     deadline,
     sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
     now = Date.now,
@@ -178,8 +217,7 @@ export async function waitForInstagramContainer(
           status: statusResponse.status,
           error: statusBody,
         });
-        await markConnectionNeedsReconnect(connectionId, INSTAGRAM_RECONNECT_CODE);
-        throw instagramReconnectRequiredError();
+        await throwInstagramReconnect(connection);
       }
     } else {
       const statusData = (await statusResponse.json()) as {
@@ -214,8 +252,9 @@ export const instagramClient: PlatformClient = {
     try {
       socialConnection = ensureFreshInstagramToken(socialConnection);
     } catch (error) {
-      await markConnectionNeedsReconnect(socialConnection.id, INSTAGRAM_RECONNECT_CODE);
-      throw error;
+      // Guarded like every other flag: the stored expiresAt this guard judged may
+      // be stale (the user reconnected since this publish read the row).
+      await flagExpiredToken(socialConnection, error);
     }
 
     const accessToken = socialConnection.accessToken;
@@ -316,9 +355,8 @@ export const instagramClient: PlatformClient = {
         // OAuthException 190 on any status) — map it to the actionable
         // reconnect error instead of leaking the raw body.
         if (isGraphAuthFailure(containerResponse.status, errorBody)) {
-          // Roadmap Phase 4: mark before throwing (see connectionHealth.ts).
-          await markConnectionNeedsReconnect(socialConnection.id, INSTAGRAM_RECONNECT_CODE);
-          throw instagramReconnectRequiredError();
+          // Roadmap Phase 4: flag before throwing (guarded, see throwInstagramReconnect).
+          await throwInstagramReconnect(socialConnection);
         }
         // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
         const error = new Error(
@@ -345,7 +383,7 @@ export const instagramClient: PlatformClient = {
         await waitForInstagramContainer({
           containerId,
           accessToken,
-          connectionId: socialConnection.id,
+          connection: socialConnection,
           deadline,
         });
 
@@ -390,9 +428,8 @@ export const instagramClient: PlatformClient = {
         // COR-5: token no longer valid (401, or OAuthException 190 on any
         // status) -> ask for reconnect.
         if (isGraphAuthFailure(publishResponse.status, errorBody)) {
-          // Roadmap Phase 4: mark before throwing (see connectionHealth.ts).
-          await markConnectionNeedsReconnect(socialConnection.id, INSTAGRAM_RECONNECT_CODE);
-          throw instagramReconnectRequiredError();
+          // Roadmap Phase 4: flag before throwing (guarded, see throwInstagramReconnect).
+          await throwInstagramReconnect(socialConnection);
         }
         // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
         const error = new Error(
@@ -403,12 +440,15 @@ export const instagramClient: PlatformClient = {
       }
 
       // media_publish answered 2xx, so the post may be live: an unreadable body
-      // is PUBLISH_UNCONFIRMED, not a failure to retry (final review F4).
-      const publishData = await readCommitBody<{
-        id: string;
-      }>("instagram", publishResponse, "json");
+      // is PUBLISH_UNCONFIRMED, not a failure to retry (final review F4). So is a
+      // body that parsed but has no post id (2026-11-02 scale audit, R30).
+      const publishData = await readCommitBody<{ id?: unknown } | null>(
+        "instagram",
+        publishResponse,
+        "json",
+      );
 
-      const mediaId = publishData.id;
+      const mediaId = requireCommitId("instagram", publishData?.id, "id");
 
       console.log("[Instagram] Media published successfully", {
         mediaId,
@@ -432,8 +472,11 @@ export const instagramClient: PlatformClient = {
     try {
       return ensureFreshInstagramToken(connection);
     } catch (error) {
-      // Roadmap Phase 4: mark before throwing (see connectionHealth.ts).
-      await markConnectionNeedsReconnect(connection.id, INSTAGRAM_RECONNECT_CODE);
+      // Roadmap Phase 4: flag before throwing. A refresher (the health sweep calls
+      // this through refreshConnectionToken), so the flag is guarded by the stored
+      // tokens and throws TOKEN_REFRESH_SUPERSEDED, which the helper turns into the
+      // stored row, when they changed (2026-11-01 scale audit, jobs, token refresh).
+      await flagTerminalRefreshFailure(connection, INSTAGRAM_RECONNECT_CODE);
       throw error;
     }
   },

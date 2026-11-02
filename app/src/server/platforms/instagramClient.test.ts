@@ -28,19 +28,32 @@ import { withTransientRetries } from "@/server/platforms/transientRetry";
 // testable. But instagramClient.ts now imports connectionHealth.ts (which
 // resolves prisma via `await import("@/lib/db")` at call time), so the mock
 // below is required for the refreshToken() tests further down.
-const { updateMock } = vi.hoisted(() => ({ updateMock: vi.fn() }));
+const { updateMock, findUniqueMock } = vi.hoisted(() => ({
+  updateMock: vi.fn(),
+  findUniqueMock: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
     socialConnection: {
       update: updateMock,
+      // The guarded reconnect flag re-reads the stored tokens (connectionHealth.ts).
+      findUnique: findUniqueMock,
     },
   },
 }));
 
+// What the database holds when a guarded flag re-reads the tokens: the ones
+// makeConnection() builds, so by default the flag finds them unchanged and writes.
+const STORED_TOKENS = { accessToken: "page-access-token", refreshToken: null };
+// 2026-11-02 scale audit (R24): another process changed the tokens meanwhile.
+const ROTATED_TOKENS = { accessToken: "rotated-page-token", refreshToken: null };
+
 beforeEach(() => {
   updateMock.mockReset();
   updateMock.mockResolvedValue({});
+  findUniqueMock.mockReset();
+  findUniqueMock.mockResolvedValue(STORED_TOKENS);
 });
 
 afterEach(() => {
@@ -155,6 +168,23 @@ describe("instagramClient.refreshToken", () => {
     expect(arg.data.lastRefreshErrorCode).toBe("INSTAGRAM_RECONNECT_REQUIRED");
     expect(arg.data).not.toHaveProperty("accessToken");
     expect(arg.data).not.toHaveProperty("refreshToken");
+  });
+});
+
+describe("instagramClient.refreshToken - superseded (R24)", () => {
+  // The health sweep calls refreshToken through refreshConnectionToken, which
+  // catches TOKEN_REFRESH_SUPERSEDED and returns the stored row. It must NOT
+  // surface CONNECTION_TOKEN_CHANGED (that is the publish path's code).
+  it("throws TOKEN_REFRESH_SUPERSEDED and flags nothing when the stored tokens already changed", async () => {
+    findUniqueMock.mockResolvedValue(ROTATED_TOKENS);
+
+    const error = await instagramClient
+      .refreshToken!(makeConnection({ id: "conn-99" })) // expiresAt in the past
+      .then(() => null)
+      .catch((e: unknown) => e as Error & { code?: string });
+
+    expect(error?.code).toBe("TOKEN_REFRESH_SUPERSEDED");
+    expect(updateMock).not.toHaveBeenCalled();
   });
 });
 
@@ -279,6 +309,112 @@ describe("instagramClient.publishVideo — Graph OAuthException 190", () => {
 
     expect(error?.code).toBe("INSTAGRAM_CONTAINER_FAILED");
     expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  // 2026-11-02 scale audit (jobs, token refresh, R24): every flag is guarded by
+  // the tokens the rejected call sent. When another process changed them (the
+  // user reconnected), nothing is flagged and the call fails with the plain,
+  // retryable CONNECTION_TOKEN_CHANGED instead of INSTAGRAM_RECONNECT_REQUIRED.
+  describe("a rejected token whose stored tokens changed meanwhile (R24)", () => {
+    const failureOf = (promise: Promise<unknown>) =>
+      promise.then(
+        () => null,
+        (e: unknown) => e as Error & { code?: string },
+      );
+
+    beforeEach(() => {
+      findUniqueMock.mockResolvedValue(ROTATED_TOKENS);
+    });
+
+    it("container creation 401: CONNECTION_TOKEN_CHANGED and no flag", async () => {
+      stubGraph({ container: () => new Response("{}", { status: 401 }) });
+
+      const error = await failureOf(instagramClient.publishVideo(ctx("image/jpeg")));
+
+      expect(error?.code).toBe("CONNECTION_TOKEN_CHANGED");
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("container creation OAuthException 190: CONNECTION_TOKEN_CHANGED and no flag", async () => {
+      stubGraph({ container: () => new Response(AUTH_ERROR_BODY, { status: 400 }) });
+
+      const error = await failureOf(instagramClient.publishVideo(ctx("image/jpeg")));
+
+      expect(error?.code).toBe("CONNECTION_TOKEN_CHANGED");
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("media_publish 401: CONNECTION_TOKEN_CHANGED and no flag", async () => {
+      vi.useFakeTimers();
+      stubGraph({
+        container: () => new Response(JSON.stringify({ id: "container-1" }), { status: 200 }),
+        publish: () => new Response("{}", { status: 401 }),
+      });
+
+      const promise = failureOf(instagramClient.publishVideo(ctx("image/jpeg")));
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      expect((await promise)?.code).toBe("CONNECTION_TOKEN_CHANGED");
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("media_publish OAuthException 190: CONNECTION_TOKEN_CHANGED and no flag", async () => {
+      vi.useFakeTimers();
+      stubGraph({
+        container: () => new Response(JSON.stringify({ id: "container-1" }), { status: 200 }),
+        publish: () => new Response(AUTH_ERROR_BODY, { status: 400 }),
+      });
+
+      const promise = failureOf(instagramClient.publishVideo(ctx("image/jpeg")));
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      expect((await promise)?.code).toBe("CONNECTION_TOKEN_CHANGED");
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("video status poll 401: CONNECTION_TOKEN_CHANGED and no flag", async () => {
+      vi.useFakeTimers();
+      stubGraph({
+        container: () => new Response(JSON.stringify({ id: "container-1" }), { status: 200 }),
+        status: () => new Response("{}", { status: 401 }),
+      });
+
+      const promise = failureOf(instagramClient.publishVideo(ctx("video/mp4")));
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect((await promise)?.code).toBe("CONNECTION_TOKEN_CHANGED");
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("the expiry guard at publish time: CONNECTION_TOKEN_CHANGED and no flag", async () => {
+      // An expired stored expiresAt, but the row was refreshed or reconnected since.
+      stubGraph({ container: () => new Response("{}", { status: 500 }) });
+
+      const error = await failureOf(
+        instagramClient.publishVideo({
+          ...ctx("image/jpeg"),
+          socialConnection: makeConnection({ id: "conn-ig" }), // expiresAt in the past
+        }),
+      );
+
+      expect(error?.code).toBe("CONNECTION_TOKEN_CHANGED");
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("the expiry guard at publish time flags (tokens unchanged) and keeps INSTAGRAM_RECONNECT_REQUIRED", async () => {
+    stubGraph({ container: () => new Response("{}", { status: 500 }) });
+
+    const error = await instagramClient
+      .publishVideo({
+        ...ctx("image/jpeg"),
+        socialConnection: makeConnection({ id: "conn-ig" }), // expiresAt in the past
+      })
+      .then(() => null)
+      .catch((e: unknown) => e as Error & { code?: string });
+
+    expect(error?.code).toBe("INSTAGRAM_RECONNECT_REQUIRED");
+    expectFlagged();
   });
 });
 
@@ -556,6 +692,39 @@ describe("instagramClient.publishVideo — rate limits (RATE_LIMITED)", () => {
       expect(publish).toHaveBeenCalledTimes(1);
     });
 
+    // 2026-11-02 scale audit (jobs, R30): media_publish answered 2xx ("created")
+    // but the parsed body has no post id: PUBLISH_UNCONFIRMED, not a success with
+    // an undefined externalPostId.
+    it.each([
+      ["{}", "{}"],
+      ["an empty id", JSON.stringify({ id: "" })],
+      ["a numeric id", JSON.stringify({ id: 17 })],
+      ["a JSON null body", "null"],
+    ])("a 2xx media_publish with %s -> PUBLISH_UNCONFIRMED, published once", async (_name, body) => {
+      const publish = vi.fn(() => new Response(body, { status: 200 }));
+      stubGraph({ container: containerOk, publish });
+
+      const error = await publishFailure();
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("a 2xx media_publish with an id succeeds with it as externalPostId", async () => {
+      stubGraph({
+        container: containerOk,
+        publish: () => new Response(JSON.stringify({ id: "media-1" }), { status: 200 }),
+      });
+      vi.useFakeTimers();
+
+      const promise = instagramClient.publishVideo(ctx("image/jpeg"));
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      await expect(promise).resolves.toEqual({ externalPostId: "media-1" });
+    });
+
     it("media_publish 400 keeps INSTAGRAM_PUBLISH_FAILED", async () => {
       stubGraph({ container: containerOk, publish: () => new Response("{}", { status: 400 }) });
 
@@ -613,7 +782,11 @@ describe("waitForInstagramContainer", () => {
     return fetchMock;
   }
 
-  const baseOptions = { containerId: "container-1", accessToken: "page-token", connectionId: "conn-ig" };
+  const baseOptions = {
+    containerId: "container-1",
+    accessToken: "page-access-token",
+    connection: { id: "conn-ig", accessToken: "page-access-token", refreshToken: null },
+  };
 
   beforeEach(() => {
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -678,6 +851,17 @@ describe("waitForInstagramContainer", () => {
     expect(error?.code).toBe("INSTAGRAM_RECONNECT_REQUIRED");
     expect(updateMock).toHaveBeenCalledTimes(1);
     expect((updateMock.mock.calls[0][0] as { where: { id: string } }).where).toEqual({ id: "conn-ig" });
+  });
+
+  it("does not flag, and throws CONNECTION_TOKEN_CHANGED, when the stored tokens changed since the poll started (R24)", async () => {
+    const clock = makeClock();
+    findUniqueMock.mockResolvedValue(ROTATED_TOKENS);
+    stubStatus(() => new Response("{}", { status: 401 }));
+
+    const error = await failure(waitForInstagramContainer({ ...baseOptions, sleep: clock.sleep, now: clock.now }));
+
+    expect(error?.code).toBe("CONNECTION_TOKEN_CHANGED");
+    expect(updateMock).not.toHaveBeenCalled();
   });
 
   it("with 40 s left and a container stuck IN_PROGRESS, stops with INSTAGRAM_VIDEO_TIMEOUT while the publish reserve is still left", async () => {

@@ -34,6 +34,28 @@ export function tokenRefreshSupersededError(): Error & { code: string } {
 }
 
 /**
+ * Code of the error a publish client throws when the platform rejected its
+ * token (401) but the stored tokens are no longer the ones that call used, so
+ * the connection was NOT flagged ({@link flagRejectedToken} returned
+ * "superseded"). A plain, retryable failure: the call was rejected, so nothing
+ * was posted, and the retry re-reads the connection.
+ */
+export const CONNECTION_TOKEN_CHANGED_CODE = "CONNECTION_TOKEN_CHANGED";
+
+/**
+ * 2026-11-02 scale audit (jobs, token refresh): thrown in place of a platform's
+ * `*_RECONNECT_REQUIRED` when the guarded flag was refused. Fixed, token-free
+ * message.
+ */
+export function connectionTokenChangedError(): Error & { code: string } {
+  const error = new Error(
+    "This connection was refreshed or reconnected while publishing. Please retry.",
+  ) as Error & { code: string };
+  error.code = CONNECTION_TOKEN_CHANGED_CODE;
+  return error;
+}
+
+/**
  * Mark a `SocialConnection` as needing reconnect after a terminal auth
  * failure. Writes ONLY `needsReconnect` + the two diagnostic fields — NEVER
  * `accessToken`/`refreshToken` — preserving the never-overwrite-refreshToken
@@ -104,6 +126,9 @@ export async function markConnectionNeedsReconnect(
   }
 }
 
+/** The row a client used for a call: its id and the tokens that call sent. */
+export type TokenSnapshot = { id: string; accessToken: string; refreshToken: string | null };
+
 /**
  * Flag a connection after a refresh's TERMINAL failure, guarded by the tokens
  * that refresh used (`connection` is the row it read them from). Resolves when
@@ -114,13 +139,36 @@ export async function markConnectionNeedsReconnect(
  * because the connection is working.
  */
 export async function flagTerminalRefreshFailure(
-  connection: { id: string; accessToken: string; refreshToken: string | null },
+  connection: TokenSnapshot,
   code: string,
 ): Promise<void> {
   const result = await markConnectionNeedsReconnect(connection.id, code, {
     expected: { accessToken: connection.accessToken, refreshToken: connection.refreshToken },
   });
   if (result === "superseded") throw tokenRefreshSupersededError();
+}
+
+/**
+ * 2026-11-02 scale audit (jobs, token refresh): flag a connection after an
+ * ordinary API call was answered with a 401 (or Graph code 190), guarded by the
+ * tokens THAT call sent. Another process may have refreshed the tokens, or the
+ * user reconnected, after the client read its row; flagging then would mark a
+ * working connection dead and email its owners.
+ *
+ * Returns "flagged" (written), "superseded" (the stored tokens differ: nothing
+ * written, the caller throws {@link connectionTokenChangedError}) or "error" (the
+ * re-read or the write failed, logged; the caller still throws its reconnect
+ * error, as it did before the guard). Every `*Client.ts` flags through this or
+ * {@link flagTerminalRefreshFailure}, never through markConnectionNeedsReconnect
+ * directly.
+ */
+export async function flagRejectedToken(
+  connection: TokenSnapshot,
+  code: string,
+): Promise<"flagged" | "superseded" | "error"> {
+  return markConnectionNeedsReconnect(connection.id, code, {
+    expected: { accessToken: connection.accessToken, refreshToken: connection.refreshToken },
+  });
 }
 
 /**

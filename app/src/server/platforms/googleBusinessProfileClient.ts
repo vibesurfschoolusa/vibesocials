@@ -6,7 +6,7 @@ import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeo
 import { refreshConnectionToken } from "./connectionRefresh";
 import { resolveGbpLocationName } from "./gbpLocation";
 import { refreshGoogleToken } from "./googleTokens";
-import { commitRequest, readCommitBody } from "./commitCall";
+import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import { budgetedTimeout } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
@@ -112,9 +112,14 @@ export const googleBusinessProfileClient: PlatformClient = {
     });
 
     // The media create answered 2xx, so the item may exist: an unreadable body
-    // is PUBLISH_UNCONFIRMED, not a failure to retry (final review F4).
-    const created = await readCommitBody<{ name?: string }>("google_business_profile", createRes, "json");
-    const externalPostId = created.name ?? null;
+    // is PUBLISH_UNCONFIRMED, not a failure to retry (final review F4). So is a
+    // body that parsed but has no resource `name` (2026-11-02 scale audit, R30).
+    const created = await readCommitBody<{ name?: unknown } | null>(
+      "google_business_profile",
+      createRes,
+      "json",
+    );
+    const externalPostId = requireCommitId("google_business_profile", created?.name, "name");
 
     console.log("[GBP] Media created successfully", {
       externalPostId,

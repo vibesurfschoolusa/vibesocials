@@ -228,6 +228,24 @@ describe("googleBusinessProfileClient.publishVideo — commit call (POST .../med
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  // 2026-11-02 scale audit (jobs, R30): the media create answered 2xx ("created")
+  // but the parsed body has no resource `name`: PUBLISH_UNCONFIRMED, not a
+  // success with a null externalPostId.
+  it.each([
+    ["{}", "{}"],
+    ["an empty name", JSON.stringify({ name: "" })],
+    ["a numeric name", JSON.stringify({ name: 3 })],
+    ["a JSON null body", "null"],
+  ])("a 2xx media create with %s -> PUBLISH_UNCONFIRMED, requested once", async (_name, body) => {
+    const fetchMock = stubMediaCreate(() => new Response(body, { status: 200 }));
+
+    const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("a 429 is still RATE_LIMITED and a 403 still GBP_CREATE_MEDIA_FAILED", async () => {
     stubMediaCreate(() => new Response("", { status: 429 }));
     expect((await failure(googleBusinessProfileClient.publishVideo(makeContext())))?.code).toBe("RATE_LIMITED");

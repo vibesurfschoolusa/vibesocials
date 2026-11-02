@@ -258,6 +258,25 @@ describe("youtubeClient.publishVideo — commit call (videos.insert)", () => {
     expect(insertCalls(fetchMock)).toHaveLength(1);
   });
 
+  // 2026-11-02 scale audit (jobs, R30): the insert answered 2xx ("created") but
+  // the parsed body has no video id. The old plain YOUTUBE_NO_VIDEO_ID failure
+  // invited a retry (a second upload): it is PUBLISH_UNCONFIRMED now.
+  it.each([
+    ["{}", "{}"],
+    ["an empty id", JSON.stringify({ id: "" })],
+    ["a numeric id", JSON.stringify({ id: 9 })],
+    ["a JSON null body", "null"],
+  ])("a 2xx insert with %s -> PUBLISH_UNCONFIRMED (not YOUTUBE_NO_VIDEO_ID), insert fetched once", async (_name, body) => {
+    const fetchMock = stubYouTube(() => new Response(body, { status: 200 }));
+
+    const error = await failure();
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.code).not.toBe("YOUTUBE_NO_VIDEO_ID");
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect(insertCalls(fetchMock)).toHaveLength(1);
+  });
+
   it("an insert 4xx keeps YOUTUBE_UPLOAD_FAILED with its status", async () => {
     stubYouTube(() => new Response("{}", { status: 400 }));
 

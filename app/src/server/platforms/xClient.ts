@@ -8,7 +8,7 @@ import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeo
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 
-import { commitRequest, readCommitBody } from "./commitCall";
+import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 
@@ -643,13 +643,15 @@ export const xClient: PlatformClient = {
 
     if (v1Response.ok) {
       // v1.1 answered 2xx, so the tweet may be live: an unreadable body is
-      // PUBLISH_UNCONFIRMED, and we do not fall back to v2 (final review F4).
-      const v1Result = await readCommitBody<{ id_str: string }>("x", v1Response, "json");
+      // PUBLISH_UNCONFIRMED, and we do not fall back to v2 (final review F4). So is
+      // a body that parsed but has no `id_str` (2026-11-02 scale audit, R30).
+      const v1Result = await readCommitBody<{ id_str?: unknown } | null>("x", v1Response, "json");
+      const v1TweetId = requireCommitId("x", v1Result?.id_str, "id_str");
       console.log("[X OAuth 1.0a] Tweet created successfully via v1.1", {
-        tweetId: v1Result.id_str,
+        tweetId: v1TweetId,
       });
       return {
-        externalPostId: v1Result.id_str,
+        externalPostId: v1TweetId,
       };
     }
 
@@ -708,21 +710,20 @@ export const xClient: PlatformClient = {
     });
 
     // v2 answered 2xx, so the tweet may be live: an unreadable body is
-    // PUBLISH_UNCONFIRMED (final review F4).
+    // PUBLISH_UNCONFIRMED (final review F4), and so is a body that parsed but has
+    // no `data.id` (2026-11-02 scale audit, R30).
     const tweetResult = await readCommitBody<{
-      data: {
-        id: string;
-        text: string;
-      };
-    }>("x", tweetResponse, "json");
+      data?: { id?: unknown; text?: string } | null;
+    } | null>("x", tweetResponse, "json");
+    const tweetId = requireCommitId("x", tweetResult?.data?.id, "data.id");
 
     console.log("[X OAuth 1.0a] Tweet created successfully", {
-      tweetId: tweetResult.data.id,
-      tweetUrl: `https://twitter.com/i/web/status/${tweetResult.data.id}`,
+      tweetId,
+      tweetUrl: `https://twitter.com/i/web/status/${tweetId}`,
     });
 
     return {
-      externalPostId: tweetResult.data.id,
+      externalPostId: tweetId,
     };
   },
 

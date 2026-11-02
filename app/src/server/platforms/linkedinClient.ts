@@ -4,13 +4,15 @@ import type { SocialConnection } from "@prisma/client";
 import { assertOk } from "@/lib/assertOk";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import {
+  connectionTokenChangedError,
+  flagRejectedToken,
   flagTerminalRefreshFailure,
   isTerminalRefreshFailure,
-  markConnectionNeedsReconnect,
   readOAuthErrorCode,
+  type TokenSnapshot,
 } from "./connectionHealth";
 import { refreshConnectionToken } from "./connectionRefresh";
-import { commitRequest, readCommitBody } from "./commitCall";
+import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import { budgetedTimeout } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 
@@ -67,8 +69,8 @@ const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // treat tokens within 5 min of ex
 // DEFAULT_FETCH_TIMEOUT_MS (30 s).
 const LINKEDIN_DOWNLOAD_TIMEOUT_MS = 120_000;
 const LINKEDIN_UPLOAD_TIMEOUT_MS = 120_000;
-// Roadmap Phase 4: the code marked via markConnectionNeedsReconnect() at every
-// site below that throws this error (expiry guard + 401 mapping).
+// Roadmap Phase 4: the code flagged (flagRejectedToken / flagTerminalRefreshFailure)
+// at every site below that throws this error (expiry guard + 401 mapping).
 const LINKEDIN_RECONNECT_CODE = "LINKEDIN_RECONNECT_REQUIRED";
 
 function isExpiredOrExpiringSoon(expiresAt: Date | null | undefined): boolean {
@@ -83,6 +85,21 @@ function linkedinReconnectRequiredError(cause?: unknown): Error & { code: string
   error.code = LINKEDIN_RECONNECT_CODE;
   if (cause !== undefined) error.cause = cause;
   return error;
+}
+
+/**
+ * LinkedIn answered 401 to a publish call: the access token is no longer valid.
+ * Flag the connection (Roadmap Phase 4: flag fields only, see connectionHealth.ts)
+ * and throw the actionable reconnect error. The flag is guarded by the tokens the
+ * rejected call sent (2026-11-02 scale audit, jobs, token refresh): if another
+ * process refreshed them, or the user reconnected, since this publish read the row,
+ * NOTHING is flagged and the plain, retryable CONNECTION_TOKEN_CHANGED is thrown.
+ */
+async function throwLinkedInReconnect(connection: TokenSnapshot): Promise<never> {
+  if ((await flagRejectedToken(connection, LINKEDIN_RECONNECT_CODE)) === "superseded") {
+    throw connectionTokenChangedError();
+  }
+  throw linkedinReconnectRequiredError();
 }
 
 /**
@@ -267,7 +284,7 @@ async function uploadImage(
   accessToken: string,
   ownerUrn: string,
   imageUrl: string,
-  connectionId: string,
+  connection: TokenSnapshot,
   deadline?: number,
 ): Promise<string> {
   console.log("[LinkedIn] Starting image upload", { imageUrl });
@@ -311,9 +328,8 @@ async function uploadImage(
     });
     // COR-5: 401 means the access token is no longer valid -> reconnect.
     if (registerResponse.status === 401) {
-      // Roadmap Phase 4: mark before throwing (see connectionHealth.ts).
-      await markConnectionNeedsReconnect(connectionId, LINKEDIN_RECONNECT_CODE);
-      throw linkedinReconnectRequiredError();
+      // Roadmap Phase 4: flag before throwing (guarded, see throwLinkedInReconnect).
+      await throwLinkedInReconnect(connection);
     }
     // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
     const error = new Error(
@@ -379,7 +395,7 @@ async function uploadVideo(
   ownerUrn: string,
   videoUrl: string,
   filename: string,
-  connectionId: string,
+  connection: TokenSnapshot,
   deadline?: number,
 ): Promise<string> {
   console.log("[LinkedIn] Starting video upload", { videoUrl, filename });
@@ -446,9 +462,8 @@ async function uploadVideo(
     });
     // COR-5: 401 means the access token is no longer valid -> reconnect.
     if (registerResponse.status === 401) {
-      // Roadmap Phase 4: mark before throwing (see connectionHealth.ts).
-      await markConnectionNeedsReconnect(connectionId, LINKEDIN_RECONNECT_CODE);
-      throw linkedinReconnectRequiredError();
+      // Roadmap Phase 4: flag before throwing (guarded, see throwLinkedInReconnect).
+      await throwLinkedInReconnect(connection);
     }
     // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
     const error = new Error(
@@ -523,7 +538,7 @@ async function createPost(
   accessToken: string,
   authorUrn: string,
   caption: string,
-  connectionId: string,
+  connection: TokenSnapshot,
   mediaUrn?: string,
   isVideo: boolean = false,
   deadline?: number,
@@ -635,9 +650,8 @@ async function createPost(
     });
     // COR-5: 401 means the access token is no longer valid -> reconnect.
     if (response.status === 401) {
-      // Roadmap Phase 4: mark before throwing (see connectionHealth.ts).
-      await markConnectionNeedsReconnect(connectionId, LINKEDIN_RECONNECT_CODE);
-      throw linkedinReconnectRequiredError();
+      // Roadmap Phase 4: flag before throwing (guarded, see throwLinkedInReconnect).
+      await throwLinkedInReconnect(connection);
     }
     // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
     const error = new Error(
@@ -647,10 +661,28 @@ async function createPost(
     throw error;
   }
 
-  // ugcPosts answered 2xx, so the post may be live: an unreadable body is
-  // PUBLISH_UNCONFIRMED, not a failure to retry (final review F4).
-  const responseData = await readCommitBody<{ id: string }>("linkedin", response, "json");
-  const postId = responseData.id;
+  // 2026-11-02 scale audit (jobs, R30): ugcPosts answers "201 Created" with the id
+  // in the `x-restli-id` header
+  // (https://learn.microsoft.com/en-us/linkedin/compliance/integrations/shares/ugc-post-api),
+  // so a 201 with an empty body and the header is a success. The body is read only
+  // when the header is absent.
+  const headerId = response.headers.get("x-restli-id");
+  let postId: string;
+  if (headerId) {
+    // Not read: release the connection instead of leaving the body unread.
+    void response.body?.cancel().catch(() => {});
+    postId = headerId;
+  } else {
+    // ugcPosts answered 2xx, so the post may be live: an unreadable body is
+    // PUBLISH_UNCONFIRMED, not a failure to retry (final review F4), and so is a
+    // body that parsed but has no id.
+    const responseData = await readCommitBody<{ id?: unknown } | null>(
+      "linkedin",
+      response,
+      "json",
+    );
+    postId = requireCommitId("linkedin", responseData?.id, "x-restli-id header or id");
+  }
 
   console.log("[LinkedIn] Post created successfully", { postId });
   return postId;
@@ -723,11 +755,11 @@ export const linkedinClient: PlatformClient = {
           authorUrn,
           mediaUrl,
           mediaItem.originalFilename,
-          socialConnection.id,
+          socialConnection,
           deadline,
         );
       } else if (mediaItem.mimeType.startsWith("image/")) {
-        mediaUrn = await uploadImage(accessToken, authorUrn, mediaUrl, socialConnection.id, deadline);
+        mediaUrn = await uploadImage(accessToken, authorUrn, mediaUrl, socialConnection, deadline);
       }
 
       // Create the post
@@ -741,7 +773,7 @@ export const linkedinClient: PlatformClient = {
         accessToken,
         authorUrn,
         caption,
-        socialConnection.id,
+        socialConnection,
         mediaUrn,
         isVideo,
         deadline,
