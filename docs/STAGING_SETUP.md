@@ -233,6 +233,38 @@ releases.
    - Expected side effects of a rollback: deferred posts that wake on old code
      send a "Pending" email, and the 2 h reconciler later marks them stalled.
 
+#### Enabling large-video uploads (phase 3)
+
+Phase 3 can upload a video above 50 MiB in bounded chunks across several steps,
+for YouTube, TikTok, X and LinkedIn, instead of loading the whole file into one
+step's memory. `LARGE_UPLOAD_PLATFORMS` (a comma list of `youtube`, `x`,
+`tiktok`, `linkedin`; see `app/.env.example`) decides which platforms use it.
+**It is empty by default, so the new path is off everywhere and every platform
+keeps today's buffered upload.** An empty or invalid value means none, `none`
+means none, and unknown names are ignored.
+
+It is off by default because the streamed paths rely on vendor behaviour we
+could not confirm from the vendors' documentation: whether Vercel Blob answers
+a `Range` request, how long a YouTube upload session lives, X's v1.1 APPEND
+limits, whether LinkedIn accepts a multipart upload for 50 to 200 MB, and how
+TikTok reports an out-of-sync chunk. A ~100 MB test video on each platform's
+sandbox account is the confirmation, so enable the platforms one at a time,
+after the promotion:
+
+1. Set `LARGE_UPLOAD_PLATFORMS=<platform>` (for example `youtube`) in the Vercel
+   production environment and redeploy. The value is read at the next deploy.
+2. Publish one ~100 MB video to that platform from its sandbox/test account (see
+   "Sandbox platform apps" below).
+3. Check that the post went out, with the full video playable on the platform.
+   Then add the next platform to the list (`youtube,tiktok`, and so on) and
+   repeat from step 1.
+
+On a failure, remove that platform from the list (or set `none`) and redeploy.
+The platform goes back to the buffered upload. A result that already has saved
+upload state for its run stays on the new path, so switching a platform off never
+strands an upload that has started. A rollback in the middle of an upload leaves
+those results `pending`; the 2 h reconciler fails them as stalled.
+
 ## Sandbox platform apps
 
 For OAuth posting flows in staging, do not reuse production social-app
