@@ -10,6 +10,7 @@ vi.mock("@/lib/logger", () => ({ logger }));
 
 import {
   BLOB_READ_FAILED_CODE,
+  BLOB_STREAM_INTERRUPTED_CODE,
   DEFAULT_LARGE_UPLOAD_PLATFORMS,
   isTransientUploadFailure,
   LARGE_UPLOAD_CHUNK_WINDOW_MS,
@@ -111,9 +112,10 @@ describe("constants", () => {
     expect(LARGE_UPLOAD_MAX_PART_BYTES).toBe(67_108_864);
   });
 
-  it("names the two error codes", () => {
+  it("names the error codes", () => {
     expect(MEDIA_SIZE_MISMATCH_CODE).toBe("MEDIA_SIZE_MISMATCH");
     expect(BLOB_READ_FAILED_CODE).toBe("BLOB_READ_FAILED");
+    expect(BLOB_STREAM_INTERRUPTED_CODE).toBe("BLOB_STREAM_INTERRUPTED");
   });
 });
 
@@ -302,6 +304,12 @@ describe("openBlobChunkStream", () => {
       ).rejects.toMatchObject({ code: BLOB_READ_FAILED_CODE, status });
     });
 
+    it.each([403, 404, 416])("a %i on the Range request is a refusal, not a transient failure", async (status) => {
+      fetchMock.mockResolvedValueOnce(new Response("nope", { status }));
+      const error = await openBlobChunkStream(URL, { offset: OFFSET, totalBytes: TOTAL }).catch((e: unknown) => e);
+      expect(isTransientUploadFailure(error)).toBe(false);
+    });
+
     it("never puts the blob URL in the error message", async () => {
       fetchMock.mockResolvedValueOnce(new Response("nope", { status: 404 }));
       const error = await openBlobChunkStream(URL, { offset: OFFSET, totalBytes: TOTAL }).catch(
@@ -390,7 +398,9 @@ describe("openBlobChunkStream", () => {
       expect(stream.position).toBe(0);
     });
 
-    it("wraps a body error in BLOB_READ_FAILED and keeps the cause", async () => {
+    // The headers were good and part of the body came: the connection dropped. Nothing of the
+    // read was handed out, so the caller's place is intact and a later step can read it again.
+    it("a body that fails part-way through is BLOB_STREAM_INTERRUPTED, a transient failure that keeps the cause", async () => {
       const total = 3_000_000;
       fetchMock.mockResolvedValueOnce(
         full200(lazySource({ start: 0, total, failAt: 1_000_000 }), total),
@@ -399,8 +409,49 @@ describe("openBlobChunkStream", () => {
       const stream = await openBlobChunkStream(URL, { offset: 0, totalBytes: total });
       const error = await stream.read(total).catch((e: unknown) => e as Error & { code: string });
 
-      expect((error as { code: string }).code).toBe(BLOB_READ_FAILED_CODE);
+      expect((error as { code: string }).code).toBe(BLOB_STREAM_INTERRUPTED_CODE);
       expect((error as { cause?: unknown }).cause).toBeInstanceOf(TypeError);
+      expect(isTransientUploadFailure(error)).toBe(true);
+      expect(stream.position).toBe(0);
+      // The stream is spent: every later read fails the same way.
+      await expect(stream.read(1)).rejects.toBe(error);
+    });
+
+    it("a body aborted by the step deadline is BLOB_STREAM_INTERRUPTED too (the caller sees its deadline and pauses)", async () => {
+      fetchMock.mockResolvedValueOnce(
+        range206({
+          stream: new ReadableStream<Uint8Array>({
+            pull(controller) {
+              controller.error(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+            },
+          }),
+          pulled: () => 0,
+          cancelled: () => false,
+        }),
+      );
+
+      const stream = await openBlobChunkStream(URL, { offset: OFFSET, totalBytes: TOTAL });
+
+      await expect(stream.read(MIB)).rejects.toMatchObject({ code: BLOB_STREAM_INTERRUPTED_CODE });
+    });
+
+    it("a body that fails while the bytes before the offset are skipped (Range ignored) is BLOB_STREAM_INTERRUPTED", async () => {
+      fetchMock.mockResolvedValueOnce(full200(lazySource({ start: 0, total: TOTAL, failAt: 2_000_000 })));
+
+      await expect(openBlobChunkStream(URL, { offset: OFFSET, totalBytes: TOTAL })).rejects.toMatchObject({
+        code: BLOB_STREAM_INTERRUPTED_CODE,
+      });
+    });
+
+    it("a body that ends cleanly before the recorded size stays BLOB_READ_FAILED: the blob is not the size it claims", async () => {
+      const total = 3_000_000;
+      fetchMock.mockResolvedValueOnce(full200(lazySource({ start: 0, total: 2_000_000 }), total));
+
+      const stream = await openBlobChunkStream(URL, { offset: 0, totalBytes: total });
+      const error = await stream.read(total).catch((e: unknown) => e);
+
+      expect(error).toMatchObject({ code: BLOB_READ_FAILED_CODE });
+      expect(isTransientUploadFailure(error)).toBe(false);
     });
 
     it("reads nothing for a zero-byte request and rejects an invalid size", async () => {
@@ -449,6 +500,7 @@ describe("isTransientUploadFailure", () => {
     ["no step budget left to send", Object.assign(new Error("budget"), { code: PUBLISH_BUDGET_EXCEEDED_CODE })],
     ["a 500", Object.assign(new Error("HTTP 500"), { status: 500 })],
     ["a 503", Object.assign(new Error("HTTP 503"), { status: 503 })],
+    ["a blob body that dropped part-way through", Object.assign(new Error("x"), { code: "BLOB_STREAM_INTERRUPTED" })],
   ])("counts %s", (_name, error) => {
     expect(isTransientUploadFailure(error)).toBe(true);
   });

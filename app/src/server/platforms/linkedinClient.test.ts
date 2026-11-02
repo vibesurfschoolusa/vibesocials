@@ -1408,6 +1408,8 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       blobAdvance?: number;
       /** The blob's answer says it holds this many bytes. */
       blobClaimsTotal?: number;
+      /** The blob's body hands out a little, then fails with this (the connection dropped mid-body). */
+      blobBodyFailure?: unknown;
     } = {},
   ) {
     const total = opts.total ?? TOTAL;
@@ -1440,6 +1442,24 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
         const range = /^bytes=(\d+)-$/.exec(headersOf(init)["Range"] ?? "");
         const start = range ? Number(range[1]) : 0;
         const claimed = opts.blobClaimsTotal ?? total;
+        if (opts.blobBodyFailure !== undefined) {
+          const bodyError = opts.blobBodyFailure;
+          let sent = false;
+          const body = new ReadableStream<Uint8Array>(
+            {
+              pull(controller) {
+                if (sent) return controller.error(bodyError);
+                sent = true;
+                controller.enqueue(new Uint8Array(1_000));
+              },
+            },
+            { highWaterMark: 0 },
+          );
+          return new Response(body, {
+            status: 206,
+            headers: { "Content-Range": `bytes ${start}-${claimed - 1}/${claimed}` },
+          });
+        }
         return range
           ? new Response(lazyBlobBody(start, total), {
               status: 206,
@@ -2044,6 +2064,31 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
 
       expect(result).toEqual(paused(null));
       expect(li.sequence()).toEqual(["blob"]);
+      expect(saved()?.data.nextPart).toBe(1);
+    });
+
+    it("pauses 30 s, with the saved place intact, when the blob's body drops part-way through (nothing was sent)", async () => {
+      const { store, saved } = fakeStore(uploadState(1));
+      const li = stubLinkedIn({ blobBodyFailure: new TypeError("terminated") });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual(paused(NOW + RESUME_DELAY));
+      expect(li.sequence()).toEqual(["blob"]);
+      expect(saved()).toEqual({ kind: LINKEDIN_UPLOAD_STATE_KIND, ...uploadState(1) });
+    });
+
+    it("pauses at once, not 30 s later, when the blob's body is cut off by the step deadline", async () => {
+      const { store, saved } = fakeStore(uploadState(1));
+      const li = stubLinkedIn({
+        blobAdvance: STEP - 30_000,
+        blobBodyFailure: new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+      });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual(paused(null));
+      expect(li.puts()).toHaveLength(0);
       expect(saved()?.data.nextPart).toBe(1);
     });
 

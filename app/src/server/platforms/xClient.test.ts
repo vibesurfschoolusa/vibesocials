@@ -827,6 +827,8 @@ describe("xClient.publishVideo — streamed chunked upload (jobs B3, M3)", () =>
       blobClaimsTotal?: number;
       /** The blob request fails with this. */
       blobFailure?: unknown;
+      /** The blob's body hands out a little, then fails with this (the connection dropped mid-body). */
+      blobBodyFailure?: unknown;
     } = {},
   ) {
     const total = opts.total ?? TOTAL;
@@ -860,6 +862,24 @@ describe("xClient.publishVideo — streamed chunked upload (jobs B3, M3)", () =>
         const range = /^bytes=(\d+)-$/.exec(headersOf(init)["Range"] ?? "");
         const start = range ? Number(range[1]) : 0;
         const claimed = opts.blobClaimsTotal ?? total;
+        if (opts.blobBodyFailure !== undefined) {
+          const bodyError = opts.blobBodyFailure;
+          let sent = false;
+          const body = new ReadableStream<Uint8Array>(
+            {
+              pull(controller) {
+                if (sent) return controller.error(bodyError);
+                sent = true;
+                controller.enqueue(new Uint8Array(1_000));
+              },
+            },
+            { highWaterMark: 0 },
+          );
+          return new Response(body, {
+            status: 206,
+            headers: { "Content-Range": `bytes ${start}-${claimed - 1}/${claimed}` },
+          });
+        }
         return range
           ? new Response(lazyBlobBody(start, total), {
               status: 206,
@@ -2157,6 +2177,17 @@ describe("xClient.publishVideo — streamed chunked upload (jobs B3, M3)", () =>
   });
 
   describe("the blob", () => {
+    it("a body that drops part-way through pauses 30 s, nothing sent and no failure counted against the segment", async () => {
+      const { store, saves } = fakeStore(appendState(10));
+      const x = stubX({ blobBodyFailure: new TypeError("terminated") });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual(paused(NOW + RESUME_DELAY_MS));
+      expect(x.appends()).toHaveLength(0);
+      expect(saves().at(-1)).toEqual(appendState(10).data);
+    });
+
     it("an unreadable blob fails the upload before any segment is sent", async () => {
       const { store, mocks } = fakeStore(appendState(10));
       const x = stubX({ blobStatus: 404 });

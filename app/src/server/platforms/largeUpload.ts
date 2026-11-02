@@ -49,8 +49,19 @@ export const LARGE_UPLOAD_MAX_PART_BYTES = 67_108_864;
 /** The blob's size is not the size recorded for the media. Nothing was uploaded. */
 export const MEDIA_SIZE_MISMATCH_CODE = "MEDIA_SIZE_MISMATCH";
 
-/** The blob could not be read: an unexpected status, an unusable range, or a body that failed or ended early. */
+/**
+ * The blob refused or could not serve the read: an unexpected status (a 4xx on the Range request,
+ * say), an unusable range, or a body that ended cleanly before the recorded size. Not transient.
+ */
 export const BLOB_READ_FAILED_CODE = "BLOB_READ_FAILED";
+
+/**
+ * The blob's body failed part-way through, after good headers: the connection dropped, or the
+ * step's deadline aborted it. Nothing of the read was handed out, so nothing of it was sent and the
+ * caller's saved place is intact: transient (see {@link isTransientUploadFailure}). The caller
+ * pauses at once when its step is out of time, and a little later otherwise.
+ */
+export const BLOB_STREAM_INTERRUPTED_CODE = "BLOB_STREAM_INTERRUPTED";
 
 /**
  * Platforms that have a chunked upload path. The switch below can only name
@@ -123,7 +134,8 @@ export function usesLargeUploadPath(args: {
  * clients (YouTube, TikTok, X, LinkedIn).
  *
  * Only undici's own network failures count among the TypeErrors (`fetch failed`, `terminated`):
- * any other TypeError is a bug and must surface. A 4xx, a rate limit or an error we do not
+ * any other TypeError is a bug and must surface. A blob body that dropped part-way through
+ * ({@link BLOB_STREAM_INTERRUPTED_CODE}) counts too. A 4xx, a rate limit or an error we do not
  * recognise says something definite and is not this.
  */
 export function isTransientUploadFailure(error: unknown): boolean {
@@ -132,8 +144,18 @@ export function isTransientUploadFailure(error: unknown): boolean {
   return (
     code === FETCH_TIMEOUT_CODE ||
     code === PUBLISH_BUDGET_EXCEEDED_CODE ||
+    code === BLOB_STREAM_INTERRUPTED_CODE ||
     (typeof status === "number" && status >= 500)
   );
+}
+
+/**
+ * Did reading the blob fail because its body dropped part-way through (and not because the blob
+ * refused the read)? A streamed client pauses on this instead of failing the upload: the chunk it
+ * was reading was never sent.
+ */
+export function isBlobStreamInterrupted(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === BLOB_STREAM_INTERRUPTED_CODE;
 }
 
 type CodedError = Error & { code: string; status?: number };
@@ -166,7 +188,8 @@ export interface BlobChunkStream {
    * The next `bytes` bytes. It returns fewer only at the end of the blob (and an
    * empty buffer after it); a body that ends before the recorded size throws
    * {@link BLOB_READ_FAILED_CODE} instead of returning a short read that would
-   * look like the end. Reads must not overlap.
+   * look like the end, and a body that fails part-way through throws
+   * {@link BLOB_STREAM_INTERRUPTED_CODE}. Reads must not overlap.
    */
   read(bytes: number): Promise<Buffer>;
   /** Absolute offset in the blob of the next byte `read` returns. */
@@ -232,11 +255,15 @@ class BlobBodyStream implements BlobChunkStream {
         done += count;
       }
     } catch (error) {
-      // A partly consumed stream can't be resumed: every later read fails the same way.
+      // A partly consumed stream can't be resumed: every later read fails the same way. A body
+      // that ended early (BLOB_READ_FAILED, from pull) says the blob is not the size it claims; any
+      // other failure of the reader is the body dropping mid-way, which a later read can get past.
       this.failure =
         (error as Partial<CodedError> | null)?.code === BLOB_READ_FAILED_CODE
           ? (error as CodedError)
-          : blobReadFailed("Reading the stored video failed part-way through.", { cause: error });
+          : codedError(BLOB_STREAM_INTERRUPTED_CODE, "Reading the stored video stopped part-way through.", {
+              cause: error,
+            });
       throw this.failure;
     }
   }
@@ -278,7 +305,8 @@ async function discardBody(response: Response): Promise<void> {
  * A total or length that isn't `totalBytes` throws {@link MEDIA_SIZE_MISMATCH_CODE};
  * any other answer throws {@link BLOB_READ_FAILED_CODE} (with `status`), all before
  * a single byte is uploaded. A failure of the request itself is rethrown as is, so
- * the transient-retry rules classify it. The reader is pulled only when `read`
+ * the transient-retry rules classify it. A body that drops while the first `offset`
+ * bytes are skipped throws {@link BLOB_STREAM_INTERRUPTED_CODE}, as a read does. The reader is pulled only when `read`
  * needs bytes, so memory stays at the read plus one source chunk whatever the
  * blob's size.
  */

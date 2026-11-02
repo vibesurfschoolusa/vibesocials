@@ -16,6 +16,7 @@ import {
 } from "./connectionHealth";
 import { refreshConnectionToken } from "./connectionRefresh";
 import {
+  isBlobStreamInterrupted,
   isTransientUploadFailure,
   LARGE_UPLOAD_CHUNK_WINDOW_MS,
   openBlobChunkStream,
@@ -1132,9 +1133,11 @@ async function publishStreamed(args: {
       try {
         body = await readChunk(start, end);
       } catch (error) {
-        // Reading runs into the deadline: nothing has been sent, so this is not a failure of
-        // the upload. The next step reopens the blob at the same chunk.
+        // Reading runs into the deadline, or the blob's body drops part-way through: nothing has
+        // been sent, so this is not a failure of the upload. The next step reopens the blob at the
+        // same chunk (a little later after a drop). A blob that refuses the read still fails.
         if (remainingMs(deadline) < needed) return await pause(null);
+        if (isBlobStreamInterrupted(error)) return await pause(TIKTOK_TRANSIENT_RESUME_DELAY_MS);
         throw error;
       }
       // Reading takes time too: the chunk (and, for the last, the poll after it) must still fit.

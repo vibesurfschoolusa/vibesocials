@@ -19,6 +19,7 @@ import {
 import { refreshConnectionToken } from "./connectionRefresh";
 import { refreshGoogleToken } from "./googleTokens";
 import {
+  isBlobStreamInterrupted,
   isTransientUploadFailure,
   LARGE_UPLOAD_CHUNK_WINDOW_MS,
   LARGE_UPLOAD_REQUEST_TIMEOUT_MS,
@@ -580,7 +581,22 @@ async function uploadChunks(args: {
       if (remainingMs(deadline) < needed) return await pause(null);
 
       if (held === null) chunk = null; // let the finished buffer go before reading the next
-      const current: HeldChunk = held ?? (await readChunk(endsAt - confirmedBytes));
+      let current: HeldChunk;
+      if (held !== null) {
+        current = held;
+      } else {
+        try {
+          current = await readChunk(endsAt - confirmedBytes);
+        } catch (error) {
+          // Reading runs into the deadline, or the blob's body drops part-way through: nothing of
+          // the chunk was sent, so this is not a failure of the upload. The next step asks the
+          // session and reads from there (a little later after a drop). A blob that refuses the
+          // read still fails.
+          if (remainingMs(deadline) < needed) return await pause(null);
+          if (isBlobStreamInterrupted(error)) return await pause(YOUTUBE_TRANSIENT_RESUME_DELAY_MS);
+          throw error;
+        }
+      }
       chunk = current;
       // Read into Buffer.allocUnsafe (largeUpload.ts), so it is ArrayBuffer-backed: the
       // cast only narrows the type `subarray` widens.

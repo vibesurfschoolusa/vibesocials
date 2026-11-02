@@ -2828,23 +2828,31 @@ describe("tiktokClient.publishVideo — streamed FILE_UPLOAD (jobs B3)", () => {
       expect((saved()?.data as StateData).nextChunk).toBe(1);
     });
 
-    it("a blob read that fails with plenty of time left is a failure (BLOB_READ_FAILED), not a pause", async () => {
-      const { store } = fakeStore(stateAt(1));
+    it("a blob body that drops part-way through with plenty of time left pauses 30 s with the saved place intact (nothing was sent)", async () => {
+      const { store, saved } = fakeStore(stateAt(1));
       const upload = stubTikTok();
-      upload.fetchMock.mockImplementation(async () =>
-        new Response(
-          new ReadableStream<Uint8Array>({
-            pull(controller) {
-              controller.error(new TypeError("terminated"));
+      upload.fetchMock.mockImplementation(async () => {
+        let sent = false;
+        return new Response(
+          new ReadableStream<Uint8Array>(
+            {
+              pull(controller) {
+                if (sent) return controller.error(new TypeError("terminated"));
+                sent = true;
+                controller.enqueue(new Uint8Array(1_000));
+              },
             },
-          }),
+            { highWaterMark: 0 },
+          ),
           { status: 206, headers: { "Content-Range": `bytes ${CHUNK}-${TOTAL - 1}/${TOTAL}` } },
-        ),
-      );
+        );
+      });
 
-      const error = await failure(bigCtx(store, { deadline: Date.now() + STEP }));
+      const result = await run(bigCtx(store, { deadline: Date.now() + STEP }));
 
-      expect(error?.code).toBe("BLOB_READ_FAILED");
+      expect(result).toEqual(pausedFor(TRANSIENT_RESUME_DELAY));
+      expect(upload.puts()).toHaveLength(0);
+      expect(saved()).toEqual({ kind: TIKTOK_UPLOAD_STATE_KIND, ...stateAt(1) });
     });
 
     it("a 429 saves the position and throws RATE_LIMITED; the deferral resumes from there", async () => {
@@ -2918,6 +2926,14 @@ describe("tiktokClient.publishVideo — streamed FILE_UPLOAD (jobs B3)", () => {
       const error = await failure(bigCtx(store));
 
       expect(error).toMatchObject({ code: "BLOB_READ_FAILED", status: 404 });
+      expect(upload.puts()).toHaveLength(0);
+    });
+
+    it("a blob that refuses the Range read of a resumed upload (a 4xx) still fails, it does not pause", async () => {
+      const { store } = fakeStore(stateAt(2));
+      const upload = stubTikTok({ blobStatus: 403 });
+
+      expect(await failure(bigCtx(store))).toMatchObject({ code: "BLOB_READ_FAILED", status: 403 });
       expect(upload.puts()).toHaveLength(0);
     });
 

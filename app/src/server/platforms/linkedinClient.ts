@@ -15,6 +15,7 @@ import {
 import { refreshConnectionToken } from "./connectionRefresh";
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import {
+  isBlobStreamInterrupted,
   isTransientUploadFailure,
   LARGE_UPLOAD_CHUNK_WINDOW_MS,
   LARGE_UPLOAD_MAX_PART_BYTES,
@@ -1336,9 +1337,11 @@ async function publishMultipart(args: {
         try {
           body = await readPart(part.firstByte, length);
         } catch (error) {
-          // Reading runs into the deadline: nothing was sent, so this is not a failure of the
-          // upload. The next step reopens the blob at the same part.
+          // Reading runs into the deadline, or the blob's body drops part-way through: nothing was
+          // sent, so this is not a failure of the upload. The next step reopens the blob at the same
+          // part (a little later after a drop). A blob that refuses the read still fails.
           if (remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS) return await pause(null);
+          if (isBlobStreamInterrupted(error)) return await pause(LINKEDIN_TRANSIENT_RESUME_DELAY_MS);
           throw error;
         }
         // Reading takes time too: the part must still fit.

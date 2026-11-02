@@ -11,6 +11,7 @@ import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState
 
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import {
+  isBlobStreamInterrupted,
   isTransientUploadFailure,
   LARGE_UPLOAD_CHUNK_WINDOW_MS,
   openBlobChunkStream,
@@ -1175,9 +1176,12 @@ async function publishChunked(args: {
           try {
             segment = await readSegment(offset, length);
           } catch (error) {
-            // Reading runs into the deadline: nothing was sent, so this is not a failure of the
-            // upload. The next step reopens the blob at the same segment.
+            // Reading runs into the deadline, or the blob's body drops part-way through: nothing
+            // was sent, so this is not a failure of the upload (nor of the segment: no retry is
+            // counted). The next step reopens the blob at the same segment (a little later after a
+            // drop). A blob that refuses the read still fails.
             if (remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS) return await pause(null);
+            if (isBlobStreamInterrupted(error)) return await pause(X_TRANSIENT_RESUME_DELAY_MS);
             throw error;
           }
           // Reading takes time too: the segment must still fit.

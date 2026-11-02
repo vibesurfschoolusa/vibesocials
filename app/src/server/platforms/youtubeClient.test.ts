@@ -687,7 +687,15 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
    * answers to PUTs on the session URI, in order (status queries and chunks alike).
    */
   function stubUpload(
-    opts: { total?: number; start?: Reply[]; session?: Reply[]; blobStatus?: number; blobAdvance?: number } = {},
+    opts: {
+      total?: number;
+      start?: Reply[];
+      session?: Reply[];
+      blobStatus?: number;
+      blobAdvance?: number;
+      /** The blob's body hands out a little, then fails with this (the connection dropped mid-body). */
+      blobBodyFailure?: unknown;
+    } = {},
   ) {
     const total = opts.total ?? TOTAL;
     const starts = [...(opts.start ?? [startOk()])];
@@ -699,6 +707,24 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
         const start = range ? Number(range[1]) : 0;
         if (opts.blobStatus !== undefined) return new Response(null, { status: opts.blobStatus });
         if (opts.blobAdvance !== undefined) advance(opts.blobAdvance); // a slow blob read
+        if (opts.blobBodyFailure !== undefined) {
+          const bodyError = opts.blobBodyFailure;
+          let sent = false;
+          const body = new ReadableStream<Uint8Array>(
+            {
+              pull(controller) {
+                if (sent) return controller.error(bodyError);
+                sent = true;
+                controller.enqueue(new Uint8Array(1_000));
+              },
+            },
+            { highWaterMark: 0 },
+          );
+          return new Response(body, {
+            status: 206,
+            headers: { "Content-Range": `bytes ${start}-${total - 1}/${total}` },
+          });
+        }
         return range
           ? new Response(lazyBlobBody(start, total), {
               status: 206,
@@ -1921,6 +1947,41 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
   });
 
   describe("blob reads", () => {
+    it("a body that drops part-way through pauses 30 s with the saved session intact (nothing of the chunk was sent)", async () => {
+      const { store, saved, mocks } = fakeStore(sessionAt(CHUNK));
+      const upload = stubUpload({ session: [incomplete(CHUNK - 1)], blobBodyFailure: new TypeError("terminated") });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual(pausedFor(TRANSIENT_RESUME_DELAY));
+      expect(upload.puts()).toHaveLength(0);
+      expect(saved()).toEqual({ kind: YOUTUBE_UPLOAD_STATE_KIND, ...sessionAt(CHUNK) });
+      expect(mocks.clear).not.toHaveBeenCalled();
+    });
+
+    it("a body cut off by the step deadline pauses at once, not 30 s later", async () => {
+      const { store, saved } = fakeStore(sessionAt(CHUNK));
+      const upload = stubUpload({
+        session: [incomplete(CHUNK - 1)],
+        blobAdvance: STEP - 30_000,
+        blobBodyFailure: new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+      });
+
+      const result = await run(bigCtx(store, { deadline: NOW + STEP }));
+
+      expect(result).toEqual({ continuation: { resumeAt: null } });
+      expect(upload.puts()).toHaveLength(0);
+      expect(saved()?.data).toEqual({ totalBytes: TOTAL, confirmedBytes: CHUNK });
+    });
+
+    it("a blob that refuses the Range read (a 4xx) still fails, it does not pause", async () => {
+      const { store } = fakeStore(sessionAt(CHUNK));
+      const upload = stubUpload({ session: [incomplete(CHUNK - 1)], blobStatus: 403 });
+
+      expect(await failure(bigCtx(store))).toMatchObject({ code: "BLOB_READ_FAILED", status: 403 });
+      expect(upload.puts()).toHaveLength(0);
+    });
+
     it("a blob that cannot be read fails before a single chunk is sent", async () => {
       const { store } = fakeStore();
       const upload = stubUpload({ blobStatus: 500 });
