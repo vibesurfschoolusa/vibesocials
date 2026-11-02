@@ -10,7 +10,7 @@ import {
   readOAuthErrorCode,
 } from "./connectionHealth";
 import { refreshConnectionToken } from "./connectionRefresh";
-import { commitRequest } from "./commitCall";
+import { commitRequest, readCommitBody } from "./commitCall";
 import { budgetedTimeout } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 
@@ -647,7 +647,9 @@ async function createPost(
     throw error;
   }
 
-  const responseData = await response.json();
+  // ugcPosts answered 2xx, so the post may be live: an unreadable body is
+  // PUBLISH_UNCONFIRMED, not a failure to retry (final review F4).
+  const responseData = await readCommitBody<{ id: string }>("linkedin", response, "json");
   const postId = responseData.id;
 
   console.log("[LinkedIn] Post created successfully", { postId });

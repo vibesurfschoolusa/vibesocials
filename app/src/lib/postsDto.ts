@@ -9,6 +9,7 @@ import type {
 } from "@prisma/client";
 
 import type { ApprovalState } from "./approval";
+import { PUBLISH_UNCONFIRMED_CODE, TIKTOK_PUBLISH_PENDING_CODE } from "./publishOutcomes";
 import type { DeferralKind } from "./resultDeferral";
 
 /**
@@ -58,7 +59,8 @@ export interface PostJobResultDTO {
    * True for a `failed` result whose commit call could not be confirmed
    * (2026-11-01 scale audit, jobs H6): the post may already be live, so the
    * Activity card says so inline, before the Retry button. Derived from the
-   * stored `errorCode` (PUBLISH_UNCONFIRMED), which is NOT exposed itself.
+   * stored `errorCode` (PUBLISH_UNCONFIRMED, or TikTok's TIKTOK_PUBLISH_PENDING,
+   * see {@link isUnconfirmedResult}), which is NOT exposed itself.
    */
   unconfirmed: boolean;
   /**
@@ -67,6 +69,23 @@ export interface PostJobResultDTO {
    * metric's durable identity — so it survives a connection delete.
    */
   metric: PostMetricDTO | null;
+}
+
+/**
+ * Is this stored result one whose post may already be live
+ * ({@link PostJobResultDTO.unconfirmed})? Only a `failed` result counts. Its
+ * `errorCode` is PUBLISH_UNCONFIRMED (a commit call whose outcome is unknown) or
+ * TikTok's TIKTOK_PUBLISH_PENDING (TikTok has neither confirmed nor denied it).
+ * Pure; the code itself never reaches the client (SEC-1).
+ */
+export function isUnconfirmedResult(result: {
+  status: PostJobResultStatus;
+  errorCode: string | null;
+}): boolean {
+  return (
+    result.status === "failed" &&
+    (result.errorCode === PUBLISH_UNCONFIRMED_CODE || result.errorCode === TIKTOK_PUBLISH_PENDING_CODE)
+  );
 }
 
 /** A single post job and its per-platform fan-out results. */

@@ -529,6 +529,33 @@ describe("instagramClient.publishVideo — rate limits (RATE_LIMITED)", () => {
       expect(await publishFailure()).toBe(neverConnected);
     });
 
+    // Final review F4 (I2): a 2xx media_publish means the post may be live, so a
+    // success body that cannot be read or parsed is PUBLISH_UNCONFIRMED.
+    it.each([
+      ["invalid JSON", () => new Response("<html>ok</html>", { status: 200 })],
+      [
+        "a body that errors mid-read",
+        () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.error(new TypeError("terminated"));
+              },
+            }),
+            { status: 200 },
+          ),
+      ],
+    ] as const)("a 2xx media_publish with %s -> PUBLISH_UNCONFIRMED, published once", async (_name, make) => {
+      const publish = vi.fn(make);
+      stubGraph({ container: containerOk, publish });
+
+      const error = await publishFailure();
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+      expect(publish).toHaveBeenCalledTimes(1);
+    });
+
     it("media_publish 400 keeps INSTAGRAM_PUBLISH_FAILED", async () => {
       stubGraph({ container: containerOk, publish: () => new Response("{}", { status: 400 }) });
 

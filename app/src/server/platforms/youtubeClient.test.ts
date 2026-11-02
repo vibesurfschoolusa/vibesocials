@@ -116,6 +116,14 @@ function stubYouTube(insert: () => Response | Promise<Response>) {
   return fetchMock;
 }
 
+/** A 2xx body that errors while it is being read (the connection drops mid-body). */
+const erroringBody = () =>
+  new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.error(new TypeError("terminated"));
+    },
+  });
+
 const insertCalls = (fetchMock: ReturnType<typeof stubYouTube>) =>
   fetchMock.mock.calls.filter((c) => String(c[0]).includes(INSERT_URL_FRAGMENT));
 
@@ -232,6 +240,22 @@ describe("youtubeClient.publishVideo — commit call (videos.insert)", () => {
     stubYouTube(() => Promise.reject(neverConnected));
 
     expect(await failure()).toBe(neverConnected);
+  });
+
+  // Final review F4 (I2): a 2xx insert means the video may exist, so a success
+  // body that cannot be read or parsed is PUBLISH_UNCONFIRMED, never a plain
+  // failure that invites a retry (a second upload).
+  it.each([
+    ["invalid JSON", () => new Response("<html>ok</html>", { status: 200 })],
+    ["a body that errors mid-read", () => new Response(erroringBody(), { status: 200 })],
+  ] as const)("a 2xx insert with %s -> PUBLISH_UNCONFIRMED, insert fetched once", async (_name, make) => {
+    const fetchMock = stubYouTube(make);
+
+    const error = await failure();
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect(insertCalls(fetchMock)).toHaveLength(1);
   });
 
   it("an insert 4xx keeps YOUTUBE_UPLOAD_FAILED with its status", async () => {

@@ -202,6 +202,32 @@ describe("googleBusinessProfileClient.publishVideo — commit call (POST .../med
     expect(await failure(googleBusinessProfileClient.publishVideo(makeContext()))).toBe(neverConnected);
   });
 
+  // Final review F4 (I2): a 2xx media create means the item may exist, so a
+  // success body that cannot be read or parsed is PUBLISH_UNCONFIRMED.
+  it.each([
+    ["invalid JSON", () => new Response("<html>ok</html>", { status: 200 })],
+    [
+      "a body that errors mid-read",
+      () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.error(new TypeError("terminated"));
+            },
+          }),
+          { status: 200 },
+        ),
+    ],
+  ] as const)("a 2xx media create with %s -> PUBLISH_UNCONFIRMED, requested once", async (_name, make) => {
+    const fetchMock = stubMediaCreate(make);
+
+    const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("a 429 is still RATE_LIMITED and a 403 still GBP_CREATE_MEDIA_FAILED", async () => {
     stubMediaCreate(() => new Response("", { status: 429 }));
     expect((await failure(googleBusinessProfileClient.publishVideo(makeContext())))?.code).toBe("RATE_LIMITED");

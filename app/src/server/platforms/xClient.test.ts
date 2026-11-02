@@ -439,6 +439,13 @@ describe("xClient.publishVideo — rate limits (RATE_LIMITED)", () => {
   // twice). A v1.1 4xx/429 was rejected, so v2 is still tried; a v2 429 after
   // the media uploaded is RATE_LIMITED (the post waits), not unconfirmed.
   describe("commit calls (v1.1 statuses/update, v2 POST /2/tweets)", () => {
+    /** A 2xx body that errors while it is being read (the connection drops mid-body). */
+    const erroringBody = () =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new TypeError("terminated"));
+        },
+      });
     const urlCalls = (fetchMock: ReturnType<typeof stubX>, fragment: string) =>
       fetchMock.mock.calls.filter((c) => String(c[0]).includes(fragment));
     const v1Calls = (fetchMock: ReturnType<typeof stubX>) => urlCalls(fetchMock, "statuses/update.json");
@@ -505,6 +512,34 @@ describe("xClient.publishVideo — rate limits (RATE_LIMITED)", () => {
       stubXRejecting("statuses/update.json", neverConnected);
 
       expect(await failure(ctx("image/jpeg"))).toBe(neverConnected);
+    });
+
+    // Final review F4 (I2): a 2xx tweet create means the tweet may be live, so a
+    // success body that cannot be read or parsed is PUBLISH_UNCONFIRMED (and v1.1
+    // does not fall back to v2, which would post it again).
+    it.each([
+      ["invalid JSON", () => new Response("<html>ok</html>", { status: 200 })],
+      ["a body that errors mid-read", () => new Response(erroringBody(), { status: 200 })],
+    ] as const)("v1.1 2xx with %s -> PUBLISH_UNCONFIRMED, v2 NOT requested", async (_name, make) => {
+      const fetchMock = stubX({ v1: make });
+
+      const error = await failure(ctx("image/jpeg"));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(v1Calls(fetchMock)).toHaveLength(1);
+      expect(v2Calls(fetchMock)).toHaveLength(0);
+    });
+
+    it.each([
+      ["invalid JSON", () => new Response("<html>ok</html>", { status: 201 })],
+      ["a body that errors mid-read", () => new Response(erroringBody(), { status: 201 })],
+    ] as const)("v2 2xx with %s (after a v1.1 rejection) -> PUBLISH_UNCONFIRMED, requested once", async (_name, make) => {
+      const fetchMock = stubX({ v1: () => json({ errors: [] }, 403), v2: make });
+
+      const error = await failure(ctx("image/jpeg"));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(v2Calls(fetchMock)).toHaveLength(1);
     });
 
     it("v1.1 403 -> falls back to v2 (unchanged)", async () => {

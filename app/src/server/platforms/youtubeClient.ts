@@ -4,7 +4,7 @@ import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { truncateGraphemes } from "@/lib/truncate";
 
-import { commitRequest } from "./commitCall";
+import { commitRequest, readCommitBody } from "./commitCall";
 import { refreshConnectionToken } from "./connectionRefresh";
 import { refreshGoogleToken } from "./googleTokens";
 import { budgetedTimeout } from "./publishBudget";
@@ -264,12 +264,14 @@ export const youtubeClient: PlatformClient = {
       prefix: "YouTube upload failed",
     });
 
-    const result = (await uploadResponse.json()) as {
+    // The insert answered 2xx, so the video may exist: an unreadable body is
+    // PUBLISH_UNCONFIRMED, not a failure to retry (final review F4).
+    const result = await readCommitBody<{
       id?: string;
       snippet?: {
         title?: string;
       };
-    };
+    }>("youtube", uploadResponse, "json");
 
     const videoId = result.id;
     if (!videoId) {

@@ -766,6 +766,27 @@ describe("GET /api/posts — unconfirmed publish", () => {
     expect(x.errorMessage).toBe(UNCONFIRMED_MESSAGE);
   });
 
+  // Final review F4 (I2): TikTok's own "not confirmed or denied" outcome is the
+  // same situation (the video may still be processing), so it warns inline too.
+  it("a failed TIKTOK_PUBLISH_PENDING result -> unconfirmed: true", async () => {
+    const [tiktok] = await resultsOf([
+      result({ platform: "tiktok", errorCode: "TIKTOK_PUBLISH_PENDING", errorMessage: "TikTok may still be processing" }),
+    ]);
+
+    expect(tiktok.unconfirmed).toBe(true);
+    expect(tiktok.status).toBe("failed");
+    expect(tiktok).not.toHaveProperty("errorCode");
+  });
+
+  it("only a failed TIKTOK_PUBLISH_PENDING result is unconfirmed: a pending or successful one is not", async () => {
+    const results = await resultsOf([
+      result({ platform: "tiktok", status: "pending", errorCode: "TIKTOK_PUBLISH_PENDING" }),
+      result({ platform: "youtube", status: "success", externalPostId: "vid", errorCode: "TIKTOK_PUBLISH_PENDING" }),
+    ]);
+
+    expect(results.map((r) => r.unconfirmed)).toEqual([false, false]);
+  });
+
   it("any other failure -> unconfirmed: false", async () => {
     const results = await resultsOf([
       result({ platform: "x", errorCode: "X_TWEET_FAILED" }),

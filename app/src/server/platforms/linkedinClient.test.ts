@@ -711,6 +711,32 @@ describe("linkedinClient.publishVideo — rate limits (RATE_LIMITED)", () => {
       expect(await failure(linkedinClient.publishVideo(ctx("image/jpeg")))).toBe(neverConnected);
     });
 
+    // Final review F4 (I2): a 2xx ugcPosts means the post may be live, so a
+    // success body that cannot be read or parsed is PUBLISH_UNCONFIRMED.
+    it.each([
+      ["invalid JSON", () => new Response("<html>ok</html>", { status: 201 })],
+      [
+        "a body that errors mid-read",
+        () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.error(new TypeError("terminated"));
+              },
+            }),
+            { status: 201 },
+          ),
+      ],
+    ] as const)("a 2xx ugcPosts with %s -> PUBLISH_UNCONFIRMED, requested once", async (_name, make) => {
+      const fetchMock = stubLinkedIn({ post: make });
+
+      const error = await failure(linkedinClient.publishVideo(ctx("image/jpeg")));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+      expect(ugcPostCalls(fetchMock)).toHaveLength(1);
+    });
+
     it("ugcPosts 401 keeps the reconnect error and flags the connection", async () => {
       stubLinkedIn({ post: () => new Response("{}", { status: 401 }) });
 

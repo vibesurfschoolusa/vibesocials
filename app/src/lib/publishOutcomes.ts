@@ -13,3 +13,11 @@ export const PUBLISH_UNCONFIRMED_CODE = "PUBLISH_UNCONFIRMED";
 
 export const PUBLISH_UNCONFIRMED_MESSAGE =
   "We couldn't confirm this post. It may already be live — check the platform before you retry.";
+
+/**
+ * The error code a TikTok result carries when TikTok has neither confirmed nor
+ * denied the post (the video "may still be processing"; tiktokClient.ts). Like
+ * {@link PUBLISH_UNCONFIRMED_CODE}, the post may already be live, so the Activity
+ * card warns before the Retry button (final review F4).
+ */
+export const TIKTOK_PUBLISH_PENDING_CODE = "TIKTOK_PUBLISH_PENDING";

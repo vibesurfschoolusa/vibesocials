@@ -6,7 +6,7 @@ import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 import { markConnectionNeedsReconnect } from "./connectionHealth";
 import { isFacebookAuthErrorBody } from "./facebookPageClient";
-import { commitRequest } from "./commitCall";
+import { commitRequest, readCommitBody } from "./commitCall";
 import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 
@@ -402,9 +402,11 @@ export const instagramClient: PlatformClient = {
         throw error;
       }
 
-      const publishData = (await publishResponse.json()) as {
+      // media_publish answered 2xx, so the post may be live: an unreadable body
+      // is PUBLISH_UNCONFIRMED, not a failure to retry (final review F4).
+      const publishData = await readCommitBody<{
         id: string;
-      };
+      }>("instagram", publishResponse, "json");
 
       const mediaId = publishData.id;
 

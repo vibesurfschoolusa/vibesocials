@@ -1,7 +1,7 @@
 import type { PostJobResult } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
-import { decodePostsCursor, encodePostsCursor, toPostJobResultSummaryDto } from "./postsDto";
+import { decodePostsCursor, encodePostsCursor, isUnconfirmedResult, toPostJobResultSummaryDto } from "./postsDto";
 
 /**
  * Pure unit tests for the keyset pagination cursor helpers (activity
@@ -91,4 +91,25 @@ describe("toPostJobResultSummaryDto — results whose connection was removed", (
     expect(toPostJobResultSummaryDto(row(null))).toEqual(expected);
     expect(toPostJobResultSummaryDto(row("conn-1"))).toEqual(expected);
   });
+});
+
+// 2026-11-01 scale audit (jobs H6) + final review F4: a failed result whose commit
+// call could not be confirmed tells the Activity card to warn inline. TikTok's
+// TIKTOK_PUBLISH_PENDING ("not confirmed or denied") is the same situation.
+describe("isUnconfirmedResult", () => {
+  it.each(["PUBLISH_UNCONFIRMED", "TIKTOK_PUBLISH_PENDING"])("a failed result with %s is unconfirmed", (errorCode) => {
+    expect(isUnconfirmedResult({ status: "failed", errorCode })).toBe(true);
+  });
+
+  it.each(["pending", "success"] as const)("a %s result is never unconfirmed, whatever its code", (status) => {
+    expect(isUnconfirmedResult({ status, errorCode: "PUBLISH_UNCONFIRMED" })).toBe(false);
+    expect(isUnconfirmedResult({ status, errorCode: "TIKTOK_PUBLISH_PENDING" })).toBe(false);
+  });
+
+  it.each([null, "X_TWEET_FAILED", "RATE_LIMITED", "PUBLISH_INTERRUPTED", "PUBLISH_STALLED", "TIKTOK_UPLOAD_FAILED"])(
+    "a failed result with %j is not unconfirmed",
+    (errorCode) => {
+      expect(isUnconfirmedResult({ status: "failed", errorCode })).toBe(false);
+    },
+  );
 });

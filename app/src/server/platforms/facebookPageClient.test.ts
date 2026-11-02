@@ -345,6 +345,33 @@ describe("facebookPageClient.publishVideo — commit call (POST /{page}/photos)"
     expect(await failure()).toBe(neverConnected);
   });
 
+  // Final review F4 (I2): a 2xx photos response means the photo may be live, so a
+  // success body that cannot be read or parsed is PUBLISH_UNCONFIRMED.
+  it.each([
+    ["invalid JSON", () => new Response("<html>ok</html>", { status: 200 })],
+    [
+      "a body that errors mid-read",
+      () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.error(new TypeError("terminated"));
+            },
+          }),
+          { status: 200 },
+        ),
+    ],
+  ] as const)("a 2xx photos response with %s -> PUBLISH_UNCONFIRMED, requested once", async (_name, make) => {
+    fetchMock.mockResolvedValue(make());
+
+    const error = await failure();
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
   it("a 4xx keeps FACEBOOK_PAGE_PUBLISH_FAILED, and a 401 keeps the reconnect error", async () => {
     fetchMock.mockResolvedValue(response(400, { error: { type: "GraphMethodException", code: 100 } }));
     expect((await failure())?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");

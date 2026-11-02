@@ -3,7 +3,7 @@ import type { SocialConnection } from "@prisma/client";
 
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { markConnectionNeedsReconnect } from "./connectionHealth";
-import { commitRequest } from "./commitCall";
+import { commitRequest, readCommitBody } from "./commitCall";
 import { classifyRateLimit } from "./rateLimited";
 
 // Token-material reality (see app/api/auth/facebook_page/callback/route.ts):
@@ -136,7 +136,9 @@ export const facebookPageClient: PlatformClient = {
       throw error;
     }
 
-    const data = (await response.json()) as { id?: string };
+    // photos answered 2xx, so the photo may be live: an unreadable body is
+    // PUBLISH_UNCONFIRMED, not a failure to retry (final review F4).
+    const data = await readCommitBody<{ id?: string }>("facebook_page", response, "json");
     const externalPostId = data.id ?? null;
 
     console.log("[FacebookPage] Photo published successfully", {

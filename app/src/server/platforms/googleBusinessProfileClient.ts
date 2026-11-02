@@ -6,7 +6,7 @@ import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeo
 import { refreshConnectionToken } from "./connectionRefresh";
 import { resolveGbpLocationName } from "./gbpLocation";
 import { refreshGoogleToken } from "./googleTokens";
-import { commitRequest } from "./commitCall";
+import { commitRequest, readCommitBody } from "./commitCall";
 import { budgetedTimeout } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
@@ -111,7 +111,9 @@ export const googleBusinessProfileClient: PlatformClient = {
       prefix: "Failed to create media item in Google Business Profile",
     });
 
-    const created = (await createRes.json()) as { name?: string };
+    // The media create answered 2xx, so the item may exist: an unreadable body
+    // is PUBLISH_UNCONFIRMED, not a failure to retry (final review F4).
+    const created = await readCommitBody<{ name?: string }>("google_business_profile", createRes, "json");
     const externalPostId = created.name ?? null;
 
     console.log("[GBP] Media created successfully", {

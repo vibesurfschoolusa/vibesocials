@@ -25,6 +25,8 @@ import { isNeverConnectedFetchError } from "./transientRetry";
 //   never-connected fetch TypeError       rethrown unchanged (provably not sent)
 //   429 and other 4xx                     returned: the caller classifies the
 //                                         429 (rateLimited.ts) or fails as before
+//   2xx, body unreadable / not parseable  PUBLISH_UNCONFIRMED (readCommitBody:
+//                                         the platform answered "created")
 
 export type PublishUnconfirmedError = Error & { code: typeof PUBLISH_UNCONFIRMED_CODE };
 
@@ -88,4 +90,28 @@ export async function commitRequest(
     throw publishUnconfirmedError(platform, serverErrorCause(response));
   }
   return response;
+}
+
+/**
+ * Read the success body of a 2xx commit response (final review F4, I2).
+ *
+ * The platform has already said "created", so the post may be live. If the body
+ * then cannot be read (the connection drops mid-body, a gateway answers 200 with
+ * HTML) or parsed, that is not a failure we can retry: a plain error would end in
+ * "failed, please retry" and a second post. Any error here is therefore
+ * PUBLISH_UNCONFIRMED, with the read or parse error kept as the `cause`.
+ *
+ * Use it only for the commit call's success body. A missing field in a body that
+ * did parse is the caller's own check, as before.
+ */
+export async function readCommitBody<T>(
+  platform: Platform,
+  res: Response,
+  parse: "json" | "text",
+): Promise<T> {
+  try {
+    return (parse === "json" ? await res.json() : await res.text()) as T;
+  } catch (error) {
+    throw publishUnconfirmedError(platform, error);
+  }
 }

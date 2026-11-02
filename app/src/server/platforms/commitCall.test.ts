@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 
-import { commitRequest, publishUnconfirmedError } from "./commitCall";
+import { commitRequest, publishUnconfirmedError, readCommitBody } from "./commitCall";
 import { PUBLISH_BUDGET_EXCEEDED_CODE, publishBudgetExceededError } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 import { isTransientPublishError } from "./transientRetry";
@@ -191,5 +191,80 @@ describe("commitRequest — rejections are returned to the caller", () => {
     await rejection(commitRequest("google_business_profile", send));
 
     expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Review F4 (I2): the commit call answered 2xx, so the post may already be live.
+// If reading or parsing the success body then fails, the outcome is unknown, not
+// "failed": a plain error would invite a retry that double-posts.
+describe("readCommitBody — a 2xx commit whose body cannot be read is PUBLISH_UNCONFIRMED", () => {
+  it("parses a JSON body", async () => {
+    const body = await readCommitBody<{ id: string }>("x", new Response('{"id":"42"}', { status: 200 }), "json");
+
+    expect(body).toEqual({ id: "42" });
+  });
+
+  it("returns a text body", async () => {
+    const body = await readCommitBody<string>("linkedin", new Response("urn:li:share:1", { status: 201 }), "text");
+
+    expect(body).toBe("urn:li:share:1");
+  });
+
+  it("invalid JSON throws PUBLISH_UNCONFIRMED with the parse error as the cause", async () => {
+    const error = await rejection(readCommitBody("youtube", new Response("<html>gateway</html>", { status: 200 }), "json"));
+
+    expect(error?.code).toBe(PUBLISH_UNCONFIRMED_CODE);
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect(error?.cause).toBeInstanceOf(SyntaxError);
+  });
+
+  it("an empty 2xx body is not valid JSON either: PUBLISH_UNCONFIRMED", async () => {
+    const error = await rejection(readCommitBody("instagram", new Response("", { status: 200 }), "json"));
+
+    expect(error?.code).toBe(PUBLISH_UNCONFIRMED_CODE);
+  });
+
+  it("a body stream that errors mid-read throws PUBLISH_UNCONFIRMED (json)", async () => {
+    const reset = new Error("terminated");
+    const res = { json: () => Promise.reject(reset) } as unknown as Response;
+
+    const error = await rejection(readCommitBody("facebook_page", res, "json"));
+
+    expect(error?.code).toBe(PUBLISH_UNCONFIRMED_CODE);
+    expect(error?.cause).toBe(reset);
+  });
+
+  it("a body stream that errors mid-read throws PUBLISH_UNCONFIRMED (text)", async () => {
+    const reset = new Error("terminated");
+    const res = { text: () => Promise.reject(reset) } as unknown as Response;
+
+    const error = await rejection(readCommitBody("google_business_profile", res, "text"));
+
+    expect(error?.code).toBe(PUBLISH_UNCONFIRMED_CODE);
+    expect(error?.cause).toBe(reset);
+  });
+
+  it("a synchronous throw from the reader is caught too", async () => {
+    const res = {
+      json: () => {
+        throw new Error("boom");
+      },
+    } as unknown as Response;
+
+    const error = await rejection(readCommitBody("x", res, "json"));
+
+    expect(error?.code).toBe(PUBLISH_UNCONFIRMED_CODE);
+  });
+
+  it("the thrown error is never transient: the in-step retry must not re-run the commit", async () => {
+    const error = await rejection(readCommitBody("x", new Response("nope", { status: 200 }), "json"));
+
+    expect(isTransientPublishError(error)).toBe(false);
+  });
+
+  it("does not leak the upstream body into the error message", async () => {
+    const error = await rejection(readCommitBody("x", new Response("SECRET_UPSTREAM_BODY", { status: 200 }), "json"));
+
+    expect(error?.message).not.toContain("SECRET_UPSTREAM_BODY");
   });
 });

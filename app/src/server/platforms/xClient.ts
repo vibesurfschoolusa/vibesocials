@@ -8,7 +8,7 @@ import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeo
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 
-import { commitRequest } from "./commitCall";
+import { commitRequest, readCommitBody } from "./commitCall";
 import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 
@@ -642,7 +642,9 @@ export const xClient: PlatformClient = {
     );
 
     if (v1Response.ok) {
-      const v1Result = (await v1Response.json()) as { id_str: string };
+      // v1.1 answered 2xx, so the tweet may be live: an unreadable body is
+      // PUBLISH_UNCONFIRMED, and we do not fall back to v2 (final review F4).
+      const v1Result = await readCommitBody<{ id_str: string }>("x", v1Response, "json");
       console.log("[X OAuth 1.0a] Tweet created successfully via v1.1", {
         tweetId: v1Result.id_str,
       });
@@ -705,12 +707,14 @@ export const xClient: PlatformClient = {
       prefix: "X tweet creation failed",
     });
 
-    const tweetResult = (await tweetResponse.json()) as {
+    // v2 answered 2xx, so the tweet may be live: an unreadable body is
+    // PUBLISH_UNCONFIRMED (final review F4).
+    const tweetResult = await readCommitBody<{
       data: {
         id: string;
         text: string;
       };
-    };
+    }>("x", tweetResponse, "json");
 
     console.log("[X OAuth 1.0a] Tweet created successfully", {
       tweetId: tweetResult.data.id,
