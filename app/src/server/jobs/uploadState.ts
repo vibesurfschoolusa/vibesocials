@@ -56,9 +56,11 @@ export const UPLOAD_STATE_PLAINTEXT_URL_CODE = "UPLOAD_STATE_PLAINTEXT_URL";
 
 /**
  * The `kind` of a YouTube resumable-upload session (youtubeClient.ts saves and
- * loads under it). `publishToPlatform` looks for state of this kind to tell a
- * session that is already running from one that still has to start, because only
- * starting one spends a slot of the daily upload counter (youtubeQuota.ts).
+ * loads under it). `publishToPlatform` looks for state of this kind with a sealed
+ * `secret` to tell a session that is already running from one that still has to
+ * start, because only starting one spends a slot of the daily upload counter
+ * (youtubeQuota.ts). State without a secret is the tombstone of an expired
+ * session: the restart count only, and a new session to start.
  */
 export const YOUTUBE_UPLOAD_STATE_KIND = "youtube_resumable";
 

@@ -558,12 +558,14 @@ async function publishToPlatform({
     //
     // 2026-11-02 scale audit (jobs, chunked uploads): a session spans several
     // steps. Only the step that starts it spends a slot; a continuation (-c<n>) and
-    // a rate-limit retry (-rl<n>) of a session this run already saved state for
-    // spend nothing. Without state for this run - the first step, a retry run, or
-    // a state that was lost - the client starts a new session, which costs a slot.
+    // a rate-limit retry (-rl<n>) of a session this run already saved, sealed, spend
+    // nothing. Without a sealed session for this run - the first step, a retry run,
+    // a state that was lost, or the tombstone an expired session leaves (the restart
+    // count, no secret: youtubeClient.ts) - the client starts a new session, which
+    // costs a slot.
     if (connection.platform === "youtube") {
-      const session = await uploadState.load(YOUTUBE_UPLOAD_STATE_KIND);
-      if (session === null) {
+      const session = await uploadState.load<unknown, unknown>(YOUTUBE_UPLOAD_STATE_KIND);
+      if (session === null || session.secret === undefined) {
         const slot = await consumeYouTubeUploadSlot();
         if (!slot.allowed) {
           refusedByOurBudget = true;

@@ -119,6 +119,15 @@ export const YOUTUBE_MAX_CHUNK_RECOVERIES_PER_STEP = 2;
  */
 export const YOUTUBE_TRANSIENT_RESUME_DELAY_MS = 30_000;
 
+/**
+ * New sessions one result may start after the first because the session was gone (a 404 from
+ * the status query). Each new session spends a slot of the app-wide daily upload counter
+ * (youtubeQuota.ts), so a session that keeps disappearing must not burn one slot per
+ * continuation: the next 404 is YOUTUBE_UPLOAD_FAILED. The same cap as LinkedIn's
+ * LINKEDIN_MAX_UPLOAD_RESTARTS.
+ */
+export const YOUTUBE_MAX_SESSION_RESTARTS = 2;
+
 const YOUTUBE_RESUMABLE_START_URL = "https://www.googleapis.com/upload/youtube/v3/videos";
 
 /** Bytes of the video read from `start`, held while they are sent (and resent after a partial 308). */
@@ -131,6 +140,31 @@ interface HeldChunk {
 interface YouTubeResumableData {
   totalBytes: number;
   confirmedBytes: number;
+  /** New sessions started after the first (see {@link YOUTUBE_MAX_SESSION_RESTARTS}); absent means 0. */
+  sessionRestarts?: number;
+}
+
+/**
+ * What a step saves when the session is gone: only the restart count, with no secret and no URL.
+ * The next step finds no sealed session, so publishToPlatform spends a slot for it and the client
+ * starts the new session, carrying the count.
+ */
+interface YouTubeRestartTombstone {
+  sessionRestarts: number;
+}
+
+/** Either saved shape, as `load` hands it back: nothing in it is trusted until checked. */
+type SavedYouTubeData = Partial<Record<keyof YouTubeResumableData, unknown>>;
+
+/** The restart count a saved state carries: a whole number of at least 0, else 0. */
+function sessionRestartsOf(data: SavedYouTubeData | null | undefined): number {
+  const value = data?.sessionRestarts;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+/** The readable progress of a session: the restart count only when there has been one. */
+function progressData(totalBytes: number, confirmedBytes: number, sessionRestarts: number): YouTubeResumableData {
+  return sessionRestarts > 0 ? { totalBytes, confirmedBytes, sessionRestarts } : { totalBytes, confirmedBytes };
 }
 
 /** What a step saves sealed: the session URI is a capability URL. */
@@ -453,23 +487,40 @@ async function queryUploadStatus(args: SessionRequest): Promise<UploadStatus> {
 }
 
 /**
- * Act on a status answer: finish (complete), or drop an expired session so the
- * next step starts a new one, or hand back the position to resume from.
+ * Act on a status answer: finish (complete), or replace an expired session with a
+ * tombstone so the next step starts a new one, or hand back the position to resume from.
  *
- * An expired session is cleared and the step continues instead of starting the new
- * session itself: the new session spends a slot of the daily upload counter
- * (youtubeQuota.ts), and only publishToPlatform spends slots - it does so for a
- * step that finds no saved state.
+ * An expired session is not restarted in this step: the new session spends a slot of the
+ * daily upload counter (youtubeQuota.ts), and only publishToPlatform spends slots - it does
+ * so for a step that finds no sealed session. The tombstone (the restart count, no secret,
+ * no URL) is that step's signal, and it carries the count: after
+ * {@link YOUTUBE_MAX_SESSION_RESTARTS} restarts the next expiry fails the upload. Nothing
+ * was posted: a session that is gone never completed.
  */
 async function settleStatus(
   answer: UploadStatus,
   store: UploadStateStore,
   totalBytes: number,
+  sessionRestarts: number,
 ): Promise<{ done: PublishResult } | { confirmedBytes: number }> {
   if (answer.kind === "complete") return { done: await completedUpload(answer.response) };
   if (answer.kind === "expired") {
-    await store.clear();
-    console.warn("[YouTube] The upload session expired; a new one starts in the next step", { totalBytes });
+    if (sessionRestarts >= YOUTUBE_MAX_SESSION_RESTARTS) {
+      console.error("[YouTube] The upload session was lost again after the last allowed restart", {
+        totalBytes,
+        sessionRestarts,
+      });
+      throw youtubeUploadError(
+        "YouTube kept losing the upload session before the video was uploaded. Nothing was posted — please retry.",
+      );
+    }
+    await store.save<YouTubeRestartTombstone>(YOUTUBE_UPLOAD_STATE_KIND, {
+      data: { sessionRestarts: sessionRestarts + 1 },
+    });
+    console.warn("[YouTube] The upload session expired; a new one starts in the next step", {
+      totalBytes,
+      sessionRestarts: sessionRestarts + 1,
+    });
     return { done: continueNow() };
   }
   return { confirmedBytes: answer.confirmedBytes };
@@ -527,8 +578,9 @@ async function uploadChunks(args: {
   sessionUri: string;
   totalBytes: number;
   confirmedBytes: number;
+  sessionRestarts: number;
 }): Promise<PublishResult> {
-  const { ctx, accessToken, store, sessionUri, totalBytes } = args;
+  const { ctx, accessToken, store, sessionUri, totalBytes, sessionRestarts } = args;
   const { mediaItem, deadline } = ctx;
   const session: SessionRequest = { sessionUri, accessToken, totalBytes, deadline };
 
@@ -540,7 +592,7 @@ async function uploadChunks(args: {
 
   const saveProgress = () =>
     store.save<YouTubeResumableData, YouTubeResumableSecret>(YOUTUBE_UPLOAD_STATE_KIND, {
-      data: { totalBytes, confirmedBytes },
+      data: progressData(totalBytes, confirmedBytes, sessionRestarts),
       secret: { sessionUri },
     });
 
@@ -681,7 +733,7 @@ async function uploadChunks(args: {
           }
         }
 
-        const settled = await settleStatus(answer, store, totalBytes);
+        const settled = await settleStatus(answer, store, totalBytes, sessionRestarts);
         if ("done" in settled) return settled.done;
         confirmedBytes = settled.confirmedBytes;
         // The last chunk's outcome is known (incomplete), but resending it is bounded like any recovery.
@@ -734,32 +786,35 @@ async function uploadChunks(args: {
  * step's output is lost after it continued, the same step number runs again with the
  * state already there and must resume, not start a second session.
  *
- * - No state: start a session and save it AT ONCE, before the first chunk. The
- *   session costs one slot of the daily upload counter, spent by publishToPlatform
- *   when it finds no state; a rate limit on a chunk then resumes the saved session
- *   instead of costing a second slot.
+ * - No sealed session (no state, or the tombstone of an expired one): start a session and
+ *   save it AT ONCE, before the first chunk, carrying the tombstone's restart count. The
+ *   session costs one slot of the daily upload counter, spent by publishToPlatform when it
+ *   finds no sealed session; a rate limit on a chunk then resumes the saved session instead
+ *   of costing a second slot.
  * - State: ask the session where it stands, then send chunks from there. A query that gets
  *   no answer continues {@link YOUTUBE_TRANSIENT_RESUME_DELAY_MS} later with the state as it is.
- * - State that cannot be used (another size, no readable session URI) is treated like
- *   an expired session: dropped, and the next step starts over.
+ * - A sealed session that cannot be used (another size, a URI that is not https) is
+ *   dropped, and the next step starts over.
  */
 async function publishResumable(args: {
   ctx: PublishContext;
   accessToken: string;
   store: UploadStateStore;
-  saved: UploadSnapshot<YouTubeResumableData, YouTubeResumableSecret> | null;
+  saved: UploadSnapshot<SavedYouTubeData, YouTubeResumableSecret> | null;
 }): Promise<PublishResult> {
   const { ctx, accessToken, store, saved } = args;
   const totalBytes = ctx.mediaItem.sizeBytes;
+  const sessionRestarts = sessionRestartsOf(saved?.data);
 
-  if (saved === null) {
+  // The same test publishToPlatform makes before it spends a slot: no sealed session saved.
+  if (saved === null || saved.secret === undefined) {
     const sessionUri = await startUploadSession({ ctx, accessToken, totalBytes });
     await store.save<YouTubeResumableData, YouTubeResumableSecret>(YOUTUBE_UPLOAD_STATE_KIND, {
-      data: { totalBytes, confirmedBytes: 0 },
+      data: progressData(totalBytes, 0, sessionRestarts),
       secret: { sessionUri },
     });
-    console.log("[YouTube] Resumable upload session started", { totalBytes });
-    return uploadChunks({ ctx, accessToken, store, sessionUri, totalBytes, confirmedBytes: 0 });
+    console.log("[YouTube] Resumable upload session started", { totalBytes, sessionRestarts });
+    return uploadChunks({ ctx, accessToken, store, sessionUri, totalBytes, confirmedBytes: 0, sessionRestarts });
   }
 
   const sessionUri = saved.secret?.sessionUri;
@@ -790,7 +845,7 @@ async function publishResumable(args: {
     });
     return continueAfter(YOUTUBE_TRANSIENT_RESUME_DELAY_MS);
   }
-  const settled = await settleStatus(answer, store, totalBytes);
+  const settled = await settleStatus(answer, store, totalBytes, sessionRestarts);
   if ("done" in settled) return settled.done;
 
   console.log("[YouTube] Resuming the upload", { confirmedBytes: settled.confirmedBytes, totalBytes });
@@ -801,6 +856,7 @@ async function publishResumable(args: {
     sessionUri,
     totalBytes,
     confirmedBytes: settled.confirmedBytes,
+    sessionRestarts,
   });
 }
 
@@ -815,7 +871,7 @@ export const youtubeClient: PlatformClient = {
     // The saved state alone decides, so it is read before anything else.
     const store = ctx.uploadState;
     const saved = store
-      ? await store.load<YouTubeResumableData, YouTubeResumableSecret>(YOUTUBE_UPLOAD_STATE_KIND)
+      ? await store.load<SavedYouTubeData, YouTubeResumableSecret>(YOUTUBE_UPLOAD_STATE_KIND)
       : null;
     const resumable =
       store !== undefined &&

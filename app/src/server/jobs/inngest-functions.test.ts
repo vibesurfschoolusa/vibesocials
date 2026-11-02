@@ -3092,6 +3092,40 @@ describe("chunked uploads - continuation steps (jobs)", () => {
       expect(consumeSlotMock).toHaveBeenCalledTimes(2);
     });
 
+    // A YouTube session restart leaves a tombstone: readable data with the restart count and no
+    // sealed secret (youtubeClient.ts). What decides the slot is whether a sealed session is saved.
+    it("is spent once for the new session behind a tombstone (state with no sealed secret), and never for a live session", async () => {
+      const saved = memoryUploadStates();
+      platformCalls({
+        youtube: async (call, ctx) => {
+          if (call === 1) {
+            await ctx.uploadState!.save(KIND, { data: { confirmed: 5 }, secret: { sessionUri: SESSION_URI } });
+            return CONTINUE_NOW;
+          }
+          if (call === 2) {
+            // The session is gone: the tombstone replaces it.
+            await ctx.uploadState!.save(KIND, { data: { sessionRestarts: 1 } });
+            return CONTINUE_NOW;
+          }
+          if (call === 3) {
+            // The step after the tombstone starts the new session.
+            await ctx.uploadState!.save(KIND, { data: { confirmed: 0, sessionRestarts: 1 }, secret: { sessionUri: SESSION_URI } });
+            return CONTINUE_NOW;
+          }
+          return { externalPostId: "ext-youtube" };
+        },
+      });
+
+      const out = await publishRun(["youtube"]);
+
+      // The first step (no state) and the step after the tombstone: two sessions, two slots.
+      expect(consumeSlotMock).toHaveBeenCalledTimes(2);
+      expect(out.results).toEqual([{ platform: "youtube", status: "success" }]);
+      for (const snapshot of saved.values()) {
+        expect(JSON.stringify((snapshot as { data: unknown }).data)).not.toContain("://");
+      }
+    });
+
     it("does not look at the store, or spend a slot, for another platform", async () => {
       memoryUploadStates();
       platformCalls({});
@@ -3624,6 +3658,35 @@ describe("chunked uploads - continuation steps (jobs)", () => {
       expect(consumeSlotMock).toHaveBeenCalledTimes(2);
       expect(out.results).toEqual([{ platform: "youtube", status: "success" }]);
       expect(resultWrites().at(-1)).toMatchObject({ status: "success", externalPostId: "yt-300" });
+    });
+
+    it("a session lost three times fails YOUTUBE_UPLOAD_FAILED after two restarts: three sessions, three slots, nothing posted", async () => {
+      const saved = memoryUploadStates();
+      // Each session takes four chunks (one step), then is gone when the next step asks it.
+      const google = stubGoogle({ afterChunk: (n) => (n % 4 === 0 ? google.expireSession() : undefined) });
+      const step = fakeStep();
+
+      const out = await youtubeRun(step);
+
+      // Start, 404 (tombstone 1), start, 404 (tombstone 2), start, 404: past the cap.
+      expect(orderOf(step)).toEqual([
+        "run:publish-to-youtube",
+        "run:publish-to-youtube-c1",
+        "run:publish-to-youtube-c2",
+        "run:publish-to-youtube-c3",
+        "run:publish-to-youtube-c4",
+        "run:publish-to-youtube-c5",
+      ]);
+      expect(google.calls.starts).toBe(3);
+      expect(consumeSlotMock).toHaveBeenCalledTimes(3);
+      expect(failedWrites()).toHaveLength(1);
+      expect(failedWrites()[0]).toMatchObject({ errorCode: "YOUTUBE_UPLOAD_FAILED" });
+      expect(out.results).toEqual([expect.objectContaining({ platform: "youtube", status: "failed" })]);
+      // No tombstone or progress save put the session URI in the readable data.
+      for (const snapshot of saved.values()) {
+        expect(JSON.stringify((snapshot as { data: unknown }).data)).not.toContain("://");
+      }
+      expect(JSON.stringify(step.outputs)).not.toContain(SESSION_SECRET);
     });
 
     it("a rate limit on a chunk waits on the -rl ids and resumes the SAME session: no second slot, no second start", async () => {

@@ -14,6 +14,7 @@ import {
   computeYouTubeTitle,
   YOUTUBE_FINAL_CHUNK_MIN_WINDOW_MS,
   YOUTUBE_MAX_CHUNK_RECOVERIES_PER_STEP,
+  YOUTUBE_MAX_SESSION_RESTARTS,
   YOUTUBE_RESUMABLE_CHUNK_BYTES,
   YOUTUBE_STATUS_TIMEOUT_MS,
   YOUTUBE_TRANSIENT_RESUME_DELAY_MS,
@@ -1252,24 +1253,37 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
     });
   });
 
+  // 2026-11-02 scale audit: each new session spends a slot of the app-wide daily upload counter
+  // (publishToPlatform spends it for a step that finds no sealed session). A 404 does not clear
+  // the state: it saves a tombstone - readable data with the restart count, no secret, no URL - so
+  // a systematic 404 costs at most YOUTUBE_MAX_SESSION_RESTARTS extra slots, then fails.
   describe("an expired session (status 404)", () => {
-    it("clears the state and returns a continuation: the NEXT step starts the new session (and spends its slot)", async () => {
+    const tombstone = (sessionRestarts: number) => ({ kind: YOUTUBE_UPLOAD_STATE_KIND, data: { sessionRestarts } });
+
+    it("pins the cap: two restarts per result", () => {
+      expect(YOUTUBE_MAX_SESSION_RESTARTS).toBe(2);
+    });
+
+    it("saves a tombstone (the restart count, no secret, no URL) and returns a continuation: the NEXT step starts the new session", async () => {
       const { store, mocks, saved } = fakeStore(sessionAt(2 * CHUNK));
       const upload = stubUpload({ session: [reply(404)] });
 
       const result = await run(bigCtx(store));
 
       expect(result).toEqual({ continuation: { resumeAt: null } });
-      expect(mocks.clear).toHaveBeenCalledTimes(1);
-      expect(saved()).toBeNull();
+      expect(saved()).toEqual(tombstone(1));
+      expect(mocks.save.mock.calls.at(-1)?.[1]).toEqual({ data: { sessionRestarts: 1 } });
+      expect(JSON.stringify(saved())).not.toContain("://");
+      expect(JSON.stringify(saved())).not.toContain("SESSION-SECRET");
+      expect(mocks.clear).not.toHaveBeenCalled();
       // This step started nothing: no new session, no chunk, no blob read.
       expect(upload.starts()).toHaveLength(0);
       expect(upload.puts()).toHaveLength(0);
       expect(upload.blobGets()).toHaveLength(0);
     });
 
-    it("the next step, finding no state, starts a new session from byte 0", async () => {
-      const { store } = fakeStore(sessionAt(2 * CHUNK));
+    it("the next step, finding the tombstone, starts a new session from byte 0 and carries the restart count", async () => {
+      const { store, mocks } = fakeStore(sessionAt(2 * CHUNK));
       stubUpload({ session: [reply(404)] });
       await run(bigCtx(store));
       vi.unstubAllGlobals();
@@ -1281,12 +1295,80 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
       expect(next.starts()).toHaveLength(1);
       expect(next.statusQueries()).toHaveLength(0);
       expect(contentRange(next.puts()[0][1] as RequestInit)).toBe(`bytes 0-${CHUNK - 1}/${TOTAL}`);
+      // The new session is saved at once, sealed, with the count in the readable data.
+      expect(mocks.save.mock.calls[1]?.[1]).toEqual({
+        data: { totalBytes: TOTAL, confirmedBytes: 0, sessionRestarts: 1 },
+        secret: { sessionUri: SESSION_URI },
+      });
     });
 
-    it("drops saved state it cannot use (another size, no session URI, an http URI, no size) the same way", async () => {
+    it("restarts twice, then a third 404 fails YOUTUBE_UPLOAD_FAILED: nothing was posted", async () => {
+      const { store } = fakeStore();
+      const sessionsStarted: number[] = [];
+
+      // Session 1, then sessions 2 and 3 started from a tombstone: each takes one chunk, and is
+      // gone when the next step asks it where it stands.
+      for (const restartsBefore of [0, 1, 2]) {
+        const started = stubUpload({ session: [after(STEP - 50_000, acceptChunk)] });
+        expect(await run(bigCtx(store, { deadline: Date.now() + STEP }))).toEqual({ continuation: { resumeAt: null } });
+        sessionsStarted.push(started.starts().length);
+        vi.unstubAllGlobals();
+        if (restartsBefore === 2) break;
+
+        stubUpload({ session: [reply(404)] });
+        expect(await run(bigCtx(store))).toEqual({ continuation: { resumeAt: null } });
+        expect((await store.load(YOUTUBE_UPLOAD_STATE_KIND))?.data).toEqual({ sessionRestarts: restartsBefore + 1 });
+        vi.unstubAllGlobals();
+      }
+      expect(sessionsStarted).toEqual([1, 1, 1]);
+
+      // The third session's loss is one too many.
+      const last = stubUpload({ session: [reply(404)] });
+      const error = await failure(bigCtx(store));
+      expect(error).toMatchObject({ code: "YOUTUBE_UPLOAD_FAILED" });
+      expect(error?.status).toBeUndefined();
+      expect(error?.message).toMatch(/nothing was posted/i);
+      expect(last.starts()).toHaveLength(0);
+    });
+
+    it("a session saved after two restarts that is lost again fails at once, without a tombstone", async () => {
+      const { store, mocks } = fakeStore({
+        data: { totalBytes: TOTAL, confirmedBytes: CHUNK, sessionRestarts: 2 },
+        secret: { sessionUri: SESSION_URI },
+      });
+      const upload = stubUpload({ session: [reply(404)] });
+
+      expect(await failure(bigCtx(store))).toMatchObject({ code: "YOUTUBE_UPLOAD_FAILED" });
+      expect(mocks.save).not.toHaveBeenCalled();
+      expect(upload.starts()).toHaveLength(0);
+    });
+
+    it("the count survives the progress saves of a restarted session (here, before a rate limit)", async () => {
+      const { store, saved } = fakeStore({ data: { sessionRestarts: 1 } });
+      stubUpload({ session: [acceptChunk, reply(429)] });
+
+      expect((await failure(bigCtx(store)))?.code).toBe("RATE_LIMITED");
+      expect(saved()?.data).toEqual({ totalBytes: TOTAL, confirmedBytes: CHUNK, sessionRestarts: 1 });
+    });
+
+    it("a state without a sealed session (a tombstone, or data alone) starts a new session at once: its slot was already spent", async () => {
+      for (const sealedless of [{ data: { sessionRestarts: 1 } }, { data: { totalBytes: TOTAL, confirmedBytes: 0 } }]) {
+        const { store, mocks } = fakeStore(sealedless);
+        const upload = stubUpload({ session: accepts(6) });
+
+        const result = await run(bigCtx(store));
+
+        expect(result).toEqual({ externalPostId: "v1" });
+        expect(upload.starts()).toHaveLength(1);
+        expect(upload.statusQueries()).toHaveLength(0);
+        expect(mocks.clear).not.toHaveBeenCalled();
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("drops saved state it cannot use (another size, an http URI, no size) the same way", async () => {
       for (const unusable of [
         { data: { totalBytes: TOTAL + 1, confirmedBytes: 0 }, secret: { sessionUri: SESSION_URI } },
-        { data: { totalBytes: TOTAL, confirmedBytes: 0 } },
         { data: { totalBytes: TOTAL, confirmedBytes: 0 }, secret: { sessionUri: "http://insecure.example/x" } },
         { data: {}, secret: { sessionUri: SESSION_URI } },
       ]) {
@@ -1302,15 +1384,15 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
       }
     });
 
-    it("a 404 on the status query after a failed chunk does the same", async () => {
+    it("a 404 on the status query after a failed chunk saves the tombstone too", async () => {
       const { store, mocks, saved } = fakeStore();
       const upload = stubUpload({ session: [reply(503), reply(404)] });
 
       const result = await run(bigCtx(store));
 
       expect(result).toEqual({ continuation: { resumeAt: null } });
-      expect(mocks.clear).toHaveBeenCalledTimes(1);
-      expect(saved()).toBeNull();
+      expect(saved()).toEqual(tombstone(1));
+      expect(mocks.clear).not.toHaveBeenCalled();
       expect(upload.starts()).toHaveLength(1);
     });
   });
