@@ -131,13 +131,14 @@ export async function POST(request: Request) {
     return invalidJsonBodyResponse();
   }
 
-  const rawBlobUrl = typeof body.blobUrl === "string" ? body.blobUrl.trim() : "";
-  if (!rawBlobUrl) {
+  const rawBlobUrl = typeof body.blobUrl === "string" ? body.blobUrl : "";
+  if (!rawBlobUrl.trim()) {
     return NextResponse.json({ error: "blobUrl is required" }, { status: 400 });
   }
   // 2026-11-01 audit (M2): store ONE canonical spelling per file so the
   // shared-blob guard (deleteBlobUnlessShared) can't be bypassed by a variant
   // URL (`?x=1`, upper-case host, ...). `null` = not allowed or not canonical.
+  // canonicalBlobUrl trims, so the raw value is passed as sent.
   const blobUrl = canonicalBlobUrl(rawBlobUrl);
   if (!blobUrl) {
     return NextResponse.json({ error: BLOB_URL_REJECTED_MESSAGE }, { status: 400 });

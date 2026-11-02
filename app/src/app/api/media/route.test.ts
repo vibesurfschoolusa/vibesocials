@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeWorkspaceContext } from "../__test-helpers__/workspaceContextMock";
 
@@ -59,6 +59,13 @@ beforeEach(() => {
   countMock.mockReset();
   getWorkspaceContextMock.mockReset();
   getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
+  // Hermetic: the blob-store pin reads these; tests that want it set them.
+  vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
+  vi.stubEnv("BLOB_STORE_ID", "");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("POST /api/media", () => {
@@ -246,6 +253,40 @@ describe("POST /api/media", () => {
       expect(response.status).toBe(201);
       expect(createMock).toHaveBeenCalledWith({
         data: expect.objectContaining({ storageLocation: U }),
+      });
+    });
+
+    describe("own blob store pin (ruling R6)", () => {
+      const FOREIGN = U.replace("https://test.", "https://zzz999.");
+
+      it("rejects another store's Vercel Blob URL when the own store is known", async () => {
+        vi.stubEnv("BLOB_READ_WRITE_TOKEN", "vercel_blob_rw_test_secretvalue");
+
+        const response = await POST(jsonRequest(body(FOREIGN)));
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toEqual({ error: BLOB_URL_REJECTED_MESSAGE });
+        expect(createMock).not.toHaveBeenCalled();
+      });
+
+      it("accepts an own-store URL in mixed case and stores it lower-cased", async () => {
+        vi.stubEnv("BLOB_READ_WRITE_TOKEN", "vercel_blob_rw_test_secretvalue");
+
+        const response = await POST(jsonRequest(body(U.replace("https://test.", "HTTPS://TeSt."))));
+
+        expect(response.status).toBe(201);
+        expect(createMock).toHaveBeenCalledWith({
+          data: expect.objectContaining({ storageLocation: U }),
+        });
+      });
+
+      it("accepts a foreign-store URL when no token or store id is configured (today's behaviour)", async () => {
+        const response = await POST(jsonRequest(body(FOREIGN)));
+
+        expect(response.status).toBe(201);
+        expect(createMock).toHaveBeenCalledWith({
+          data: expect.objectContaining({ storageLocation: FOREIGN }),
+        });
       });
     });
   });

@@ -58,6 +58,9 @@ beforeEach(() => {
   vi.stubEnv("XAI_VISION_MODEL", "");
   vi.stubEnv("OPENAI_TEXT_MODEL", "");
   vi.stubEnv("OPENAI_VISION_MODEL", "");
+  // Hermetic: the allowed-host check pins to the own blob store when known.
+  vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
+  vi.stubEnv("BLOB_STORE_ID", "");
   getWorkspaceContextMock.mockResolvedValue(CONTEXT);
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   fetchMock = vi.fn().mockImplementation(async () => providerOk());

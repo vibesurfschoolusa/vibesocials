@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // 2026-11-01 audit (M2): `deleteBlobUnlessShared` compared raw storageLocation
 // strings, so a legacy row spelled `U `, `HTTPS://HOST/...` or `...:443/...`
@@ -39,6 +39,13 @@ function makeTx(rows: Row[]) {
 
 beforeEach(() => {
   delMock.mockReset();
+  // Hermetic: tests that depend on the own store set it themselves.
+  vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
+  vi.stubEnv("BLOB_STORE_ID", "");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("deleteBlobUnlessShared", () => {
@@ -153,5 +160,129 @@ describe("deleteBlobUnlessShared", () => {
     await deleteBlobUnlessShared(tx, { id: "a", storageLocation: U });
 
     expect(order).toEqual(["lock", "count"]);
+  });
+});
+
+// 2026-11-01 audit (M2, ruling R6): a stored value that canonicalBlobUrl()
+// REJECTS (credentials, a non-default port, a query/fragment, or another
+// store's host) used to fall back to its raw spelling, so the count saw no twin
+// and the guard `del()`-ed the teammate's blob. The guard now derives a lenient
+// key first.
+describe("deleteBlobUnlessShared lenient key (ruling R6)", () => {
+  const STORE = "abc123";
+  const KEY = "1700000000000-ab12cd34-photo-Xy9Zq1.png";
+  const OWN = `https://${STORE}.public.blob.vercel-storage.com/${KEY}`;
+
+  beforeEach(() => {
+    vi.stubEnv("BLOB_READ_WRITE_TOKEN", `vercel_blob_rw_${STORE}_secretvalue`);
+  });
+
+  const variants: Array<[string, string]> = [
+    ["a query string", `${OWN}?x=1`],
+    ["a fragment", `${OWN}#f`],
+    ["a query and a fragment", `${OWN}?x=1#f`],
+    ["credentials", `https://u:p@${STORE}.public.blob.vercel-storage.com/${KEY}`],
+    ["a username only", `https://u@${STORE}.public.blob.vercel-storage.com/${KEY}`],
+    ["a non-default port", `https://${STORE}.public.blob.vercel-storage.com:8443/${KEY}`],
+    ["another store's public host", `https://zzz999.public.blob.vercel-storage.com/${KEY}`],
+    ["another store's private host", `https://zzz999.private.blob.vercel-storage.com/${KEY}`],
+    ["another store's host with a query, a port and an upper-case scheme", `HTTPS://ZZZ999.public.blob.vercel-storage.com:8443/${KEY}?x=1`],
+    ["an own-store private host", `https://${STORE}.private.blob.vercel-storage.com/${KEY}`],
+  ];
+
+  it.each(variants)("keeps the blob when the deleted row has %s and a canonical own-store row is live", async (_label, variant) => {
+    const { tx, executeRaw, count } = makeTx([
+      { id: "a", storageLocation: OWN, deletedAt: null },
+      { id: "b", storageLocation: variant, deletedAt: null },
+    ]);
+
+    await expect(deleteBlobUnlessShared(tx, { id: "b", storageLocation: variant })).resolves.toBe(
+      "kept_shared",
+    );
+
+    expect(delMock).not.toHaveBeenCalled();
+    expect(executeRaw.mock.calls[0].slice(1)).toEqual([OWN]);
+    expect(count).toHaveBeenCalledWith({
+      where: { storageLocation: { in: [OWN, variant] }, id: { not: "b" }, deletedAt: null },
+    });
+  });
+
+  it("deletes the own-store canonical URL, not a foreign-store spelling, when it is the last reference", async () => {
+    const foreign = `https://zzz999.public.blob.vercel-storage.com/${KEY}?x=1`;
+    const { tx } = makeTx([{ id: "b", storageLocation: foreign, deletedAt: null }]);
+
+    await expect(deleteBlobUnlessShared(tx, { id: "b", storageLocation: foreign })).resolves.toBe(
+      "deleted",
+    );
+
+    expect(delMock).toHaveBeenCalledTimes(1);
+    expect(delMock).toHaveBeenCalledWith(OWN);
+  });
+
+  it("still matches a canonical twin when the stored value is an own-store canonical URL", async () => {
+    const { tx } = makeTx([
+      { id: "a", storageLocation: OWN, deletedAt: null },
+      { id: "b", storageLocation: OWN, deletedAt: null },
+    ]);
+
+    await expect(deleteBlobUnlessShared(tx, { id: "b", storageLocation: OWN })).resolves.toBe("kept_shared");
+  });
+
+  it("strips credentials, query and port but keeps the port on local dev hosts", async () => {
+    const mock = "http://localhost:9366/x.png";
+    const variant = "http://u:p@LOCALHOST:9366/x.png?pathname=x#f";
+    const { tx, executeRaw } = makeTx([{ id: "a", storageLocation: mock, deletedAt: null }]);
+
+    await expect(deleteBlobUnlessShared(tx, { id: "b", storageLocation: variant })).resolves.toBe(
+      "kept_shared",
+    );
+
+    expect(executeRaw.mock.calls[0].slice(1)).toEqual([mock]);
+    expect(delMock).not.toHaveBeenCalled();
+  });
+
+  it("uses the raw value when it cannot be parsed as a URL", async () => {
+    const { tx, executeRaw, count } = makeTx([]);
+
+    await expect(deleteBlobUnlessShared(tx, { id: "a", storageLocation: "not a url" })).resolves.toBe("deleted");
+
+    expect(executeRaw.mock.calls[0].slice(1)).toEqual(["not a url"]);
+    expect(count).toHaveBeenCalledWith({
+      where: { storageLocation: { in: ["not a url"] }, id: { not: "a" }, deletedAt: null },
+    });
+    expect(delMock).toHaveBeenCalledWith("not a url");
+  });
+
+  it("falls back to the raw value when the cleaned URL is still not canonicalizable (disallowed host)", async () => {
+    const legacy = "https://x.example/blob-key?x=1";
+    const { tx, executeRaw } = makeTx([]);
+
+    await expect(deleteBlobUnlessShared(tx, { id: "a", storageLocation: legacy })).resolves.toBe("deleted");
+
+    expect(executeRaw.mock.calls[0].slice(1)).toEqual([legacy]);
+    expect(delMock).toHaveBeenCalledWith(legacy);
+  });
+
+  describe("when the own store id is unknown", () => {
+    beforeEach(() => {
+      vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
+    });
+
+    it("still strips credentials, query, fragment and port, but does not rewrite the host", async () => {
+      const variant = `https://u:p@${STORE}.public.blob.vercel-storage.com:8443/${KEY}?x=1#f`;
+      const { tx } = makeTx([{ id: "a", storageLocation: OWN, deletedAt: null }]);
+
+      await expect(deleteBlobUnlessShared(tx, { id: "b", storageLocation: variant })).resolves.toBe(
+        "kept_shared",
+      );
+      expect(delMock).not.toHaveBeenCalled();
+
+      const foreign = `https://zzz999.public.blob.vercel-storage.com/${KEY}`;
+      const other = makeTx([{ id: "a", storageLocation: OWN, deletedAt: null }]);
+      await expect(deleteBlobUnlessShared(other.tx, { id: "b", storageLocation: foreign })).resolves.toBe(
+        "deleted",
+      );
+      expect(delMock).toHaveBeenCalledWith(foreign);
+    });
   });
 });

@@ -1,6 +1,17 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { canonicalBlobUrl, isAllowedBlobUrl } from "./blobUrl";
+import { canonicalBlobUrl, isAllowedBlobUrl, ownBlobStoreId } from "./blobUrl";
+
+// Hermetic: a developer shell that exports BLOB_READ_WRITE_TOKEN must not pin
+// the store for the host-agnostic tests below. Tests that want a store set it.
+beforeEach(() => {
+  vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
+  vi.stubEnv("BLOB_STORE_ID", "");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("isAllowedBlobUrl", () => {
   afterEach(() => {
@@ -67,8 +78,7 @@ describe("canonicalBlobUrl", () => {
 
   it("trims surrounding whitespace", () => {
     expect(canonicalBlobUrl(` ${U}`)).toBe(U);
-    expect(canonicalBlobUrl(`${U}
-`)).toBe(U);
+    expect(canonicalBlobUrl(`${U}\n`)).toBe(U);
     expect(canonicalBlobUrl(`  ${U}  `)).toBe(U);
   });
 
@@ -163,5 +173,99 @@ describe("canonicalBlobUrl", () => {
       expect(once).not.toBeNull();
       expect(canonicalBlobUrl(once as string)).toBe(once);
     }
+  });
+});
+
+// 2026-11-01 audit (M2, ruling R6): the Vercel Blob API may resolve a URL by the
+// token's store plus the pathname, so the same pathname under ANOTHER store's
+// host must not be accepted as ours.
+describe("ownBlobStoreId", () => {
+  it("is null when neither BLOB_READ_WRITE_TOKEN nor BLOB_STORE_ID is set", () => {
+    expect(ownBlobStoreId()).toBeNull();
+  });
+
+  it("is the 4th underscore segment of the read-write token, lower-cased", () => {
+    vi.stubEnv("BLOB_READ_WRITE_TOKEN", "vercel_blob_rw_AbC123_secretvalue");
+    expect(ownBlobStoreId()).toBe("abc123");
+  });
+
+  it("trims the token", () => {
+    vi.stubEnv("BLOB_READ_WRITE_TOKEN", "  vercel_blob_rw_abc123_secretvalue \n");
+    expect(ownBlobStoreId()).toBe("abc123");
+  });
+
+  it("falls back to BLOB_STORE_ID (a leading store_ is stripped) when the token has no store segment", () => {
+    vi.stubEnv("BLOB_READ_WRITE_TOKEN", "garbage");
+    vi.stubEnv("BLOB_STORE_ID", "store_AbC123");
+    expect(ownBlobStoreId()).toBe("abc123");
+    vi.stubEnv("BLOB_STORE_ID", " abc123 ");
+    expect(ownBlobStoreId()).toBe("abc123");
+  });
+
+  it("prefers the token over BLOB_STORE_ID", () => {
+    vi.stubEnv("BLOB_READ_WRITE_TOKEN", "vercel_blob_rw_fromtoken_secret");
+    vi.stubEnv("BLOB_STORE_ID", "store_fromenv");
+    expect(ownBlobStoreId()).toBe("fromtoken");
+  });
+
+  it("treats blank values as unknown", () => {
+    vi.stubEnv("BLOB_READ_WRITE_TOKEN", "   ");
+    vi.stubEnv("BLOB_STORE_ID", "store_");
+    expect(ownBlobStoreId()).toBeNull();
+    vi.stubEnv("BLOB_READ_WRITE_TOKEN", "vercel_blob_rw__secret");
+    expect(ownBlobStoreId()).toBeNull();
+  });
+});
+
+describe("own-store pinning (isAllowedBlobUrl / canonicalBlobUrl)", () => {
+  const OWN = "https://abc123.public.blob.vercel-storage.com/1700000000000-ab12cd34-cat.png";
+  const FOREIGN = "https://zzz999.public.blob.vercel-storage.com/1700000000000-ab12cd34-cat.png";
+
+  describe("with the own store known", () => {
+    beforeEach(() => {
+      vi.stubEnv("BLOB_READ_WRITE_TOKEN", "vercel_blob_rw_abc123_secretvalue");
+    });
+
+    it("accepts the own store's public and private hosts, compared case-insensitively", () => {
+      expect(isAllowedBlobUrl(OWN)).toBe(true);
+      expect(isAllowedBlobUrl(OWN.replace("abc123.public", "abc123.private"))).toBe(true);
+      expect(isAllowedBlobUrl(OWN.replace("abc123", "ABC123"))).toBe(true);
+      expect(canonicalBlobUrl(OWN.replace("https://abc123", "HTTPS://AbC123"))).toBe(OWN);
+    });
+
+    it("rejects another store's Vercel Blob host, public or private", () => {
+      expect(isAllowedBlobUrl(FOREIGN)).toBe(false);
+      expect(isAllowedBlobUrl(FOREIGN.replace("zzz999.public", "zzz999.private"))).toBe(false);
+      expect(canonicalBlobUrl(FOREIGN)).toBeNull();
+    });
+
+    it("rejects store-less Vercel Blob hosts and look-alike prefixes", () => {
+      expect(isAllowedBlobUrl("https://public.blob.vercel-storage.com/x.png")).toBe(false);
+      expect(isAllowedBlobUrl("https://blob.vercel-storage.com/x.png")).toBe(false);
+      expect(isAllowedBlobUrl("https://xabc123.public.blob.vercel-storage.com/x.png")).toBe(false);
+      expect(isAllowedBlobUrl("https://abc123.public.blob.vercel-storage.com.evil.example/x.png")).toBe(false);
+      expect(isAllowedBlobUrl("https://abc123.evil.public.blob.vercel-storage.com/x.png")).toBe(false);
+    });
+
+    it("leaves local dev hosts and BLOB_ALLOWED_HOSTS unaffected", () => {
+      vi.stubEnv("BLOB_ALLOWED_HOSTS", "cdn.example.com,zzz999.public.blob.vercel-storage.com");
+      expect(isAllowedBlobUrl("http://localhost:9366/x.png")).toBe(true);
+      expect(isAllowedBlobUrl("http://127.0.0.1:9366/x.png")).toBe(true);
+      expect(isAllowedBlobUrl("https://cdn.example.com/x.mp4")).toBe(true);
+      // An operator who lists a foreign Blob host explicitly keeps it.
+      expect(isAllowedBlobUrl(FOREIGN)).toBe(true);
+    });
+  });
+
+  it("pins from BLOB_STORE_ID too", () => {
+    vi.stubEnv("BLOB_STORE_ID", "store_abc123");
+    expect(isAllowedBlobUrl(OWN)).toBe(true);
+    expect(isAllowedBlobUrl(FOREIGN)).toBe(false);
+  });
+
+  it("keeps today's behaviour (any Vercel Blob host) when the own store is unknown", () => {
+    expect(isAllowedBlobUrl(OWN)).toBe(true);
+    expect(isAllowedBlobUrl(FOREIGN)).toBe(true);
+    expect(canonicalBlobUrl(FOREIGN)).toBe(FOREIGN);
   });
 });

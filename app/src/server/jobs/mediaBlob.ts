@@ -1,7 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { del } from "@vercel/blob";
 
-import { canonicalBlobUrl } from "@/lib/blobUrl";
+import { guardBlobKey } from "@/lib/blobUrl";
 
 /** The slice of a Prisma transaction client {@link deleteBlobUnlessShared} needs. */
 export type MediaBlobTx = Pick<Prisma.TransactionClient, "$executeRaw" | "mediaItem">;
@@ -11,7 +11,8 @@ export type BlobDeleteOutcome = "deleted" | "kept_shared";
 /**
  * Removes a MediaItem's blob from storage ONLY when no other live
  * (non-purged, i.e. `deletedAt: null`) MediaItem — in ANY workspace — still
- * points at the same `storageLocation`.
+ * points at the same canonical blob URL (its `storageLocation` or a variant
+ * spelling of it, see {@link guardBlobKey}).
  *
  * `POST /api/media` accepts any allowed blob URL, so two rows (even in
  * different workspaces) can reference one file; deleting the blob when either
@@ -32,13 +33,15 @@ export async function deleteBlobUnlessShared(
   tx: MediaBlobTx,
   media: { id: string; storageLocation: string },
 ): Promise<BlobDeleteOutcome> {
-  // 2026-11-01 audit (M2): compare CANONICAL URLs. Legacy rows written before
-  // the write paths canonicalized (stray whitespace, an upper-case host, `:443`)
-  // are other spellings of the same file; matching raw strings let a member
-  // `del()` a teammate's blob through such a row. The lock, the lookup and the
-  // delete all use the canonical key. The raw value is matched too, so a row
-  // whose stored value cannot be canonicalized keeps the old exact-match rule.
-  const key = canonicalBlobUrl(media.storageLocation) ?? media.storageLocation;
+  // 2026-11-01 audit (M2): compare CANONICAL URLs, leniently. Legacy rows can
+  // hold other spellings of the same file (stray whitespace, an upper-case host,
+  // `:443`, but also a query, credentials, a port, or another store's host with
+  // our pathname), and matching raw strings let a member `del()` a teammate's
+  // blob through such a row. guardBlobKey() maps every spelling to one key; the
+  // lock, the lookup and the delete all use it. The raw value is matched too, so
+  // a value that cannot be keyed (unparseable, disallowed host) keeps the old
+  // exact-match rule.
+  const key = guardBlobKey(media.storageLocation);
   const spellings = key === media.storageLocation ? [key] : [key, media.storageLocation];
 
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;

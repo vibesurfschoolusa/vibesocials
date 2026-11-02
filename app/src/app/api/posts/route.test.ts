@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeWorkspaceContext } from "../__test-helpers__/workspaceContextMock";
 
@@ -103,6 +103,9 @@ function jsonRequest(body: unknown): Request {
 }
 
 beforeEach(() => {
+  // Hermetic: the blob-store pin reads these; tests that want it set them.
+  vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
+  vi.stubEnv("BLOB_STORE_ID", "");
   getWorkspaceContextMock.mockReset();
   checkRateLimitMock.mockReset();
   createPostJobOnlyMock.mockReset();
@@ -139,6 +142,10 @@ beforeEach(() => {
   notifyOwnersMock.mockResolvedValue(undefined);
   failPendingMock.mockReset();
   failPendingMock.mockResolvedValue({ failedCount: 1, status: "failed" });
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("POST /api/posts — rate limiting", () => {
@@ -1007,8 +1014,7 @@ describe("POST /api/posts — canonical blob URLs (2026-11-01 audit, M2)", () =>
   });
 
   it("stores the trimmed canonical URL for a whitespace-padded blobUrl (this path used to store it untrimmed)", async () => {
-    const response = await POST(jsonRequest(body(` ${U}
-`)));
+    const response = await POST(jsonRequest(body(` ${U}\n`)));
 
     expect(response.status).toBe(200);
     expect(createPostJobOnlyMock).toHaveBeenCalledWith(
@@ -1023,6 +1029,40 @@ describe("POST /api/posts — canonical blob URLs (2026-11-01 audit, M2)", () =>
     expect(createPostJobOnlyMock).toHaveBeenCalledWith(
       expect.objectContaining({ media: expect.objectContaining({ storageLocation: U }) }),
     );
+  });
+
+  describe("own blob store pin (ruling R6)", () => {
+    const FOREIGN = U.replace("https://test.", "https://zzz999.");
+
+    it("rejects another store's Vercel Blob URL when the own store is known", async () => {
+      vi.stubEnv("BLOB_READ_WRITE_TOKEN", "vercel_blob_rw_test_secretvalue");
+
+      const response = await POST(jsonRequest(body(FOREIGN)));
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: BLOB_URL_REJECTED_MESSAGE });
+      expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    });
+
+    it("accepts an own-store URL in mixed case and stores it lower-cased", async () => {
+      vi.stubEnv("BLOB_READ_WRITE_TOKEN", "vercel_blob_rw_test_secretvalue");
+
+      const response = await POST(jsonRequest(body(U.replace("https://test.", "HTTPS://TeSt."))));
+
+      expect(response.status).toBe(200);
+      expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ media: expect.objectContaining({ storageLocation: U }) }),
+      );
+    });
+
+    it("accepts a foreign-store URL when no token or store id is configured (today's behaviour)", async () => {
+      const response = await POST(jsonRequest(body(FOREIGN)));
+
+      expect(response.status).toBe(200);
+      expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ media: expect.objectContaining({ storageLocation: FOREIGN }) }),
+      );
+    });
   });
 });
 

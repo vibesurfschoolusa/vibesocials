@@ -5,9 +5,13 @@
 -- (trimmed) and POST /api/posts stored it untrimmed, so one file could be
 -- registered under several spellings ("U", "U?x=1", "HTTPS://HOST/...",
 -- "https://host:443/...", " U") and a variant row's delete removed a
--- teammate's blob. Both write paths now store canonicalBlobUrl(); this brings
--- the existing rows to the same form, so rows that point at one file compare
--- equal again.
+-- teammate's blob. Both write paths now store canonicalBlobUrl(); this
+-- normalizes the common variants of the existing rows to the same form, so rows
+-- that point at one file compare equal again. It is not exhaustive: rows it
+-- cannot or does not rewrite (credentials, a non-default port, another store's
+-- host, dot segments, percent-escapes, and variants written by the previous
+-- deployment while this one builds) are covered at delete time by the guard's
+-- lenient key (guardBlobKey in src/lib/blobUrl.ts).
 --
 -- For http(s) rows only (anything else, such as a local file path, is left
 -- alone), mirroring canonicalBlobUrl() for the cases it can be done in SQL:

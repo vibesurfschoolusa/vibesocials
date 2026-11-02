@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeWorkspaceContext } from "../../__test-helpers__/workspaceContextMock";
 
@@ -76,7 +76,14 @@ function makeItemRow(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 beforeEach(() => {
+  // Hermetic: the shared-blob guard rewrites Vercel Blob hosts to the own store.
+  vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
+  vi.stubEnv("BLOB_STORE_ID", "");
   findFirstMock.mockReset();
   transactionMock.mockReset();
   postJobCountMock.mockReset();

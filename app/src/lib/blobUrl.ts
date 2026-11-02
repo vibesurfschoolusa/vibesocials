@@ -16,6 +16,13 @@
  * - Hosts listed in `BLOB_ALLOWED_HOSTS` (comma-separated), for custom CDNs
  *
  * Protocol: https for remote hosts; http allowed only for loopback.
+ *
+ * Own-store pin (2026-11-01 audit, M2): when this deployment's Blob store id is
+ * known (see {@link ownBlobStoreId}), a Vercel Blob URL is allowed only on that
+ * store's host. The Blob API can resolve a URL by the token's store plus the
+ * pathname, so the same pathname under another store's host must not be
+ * accepted as ours (it would be a distinct string for the shared-blob guard
+ * but name our file). Without a known store id the check is unchanged.
  */
 
 const VERCEL_BLOB_SUFFIXES = [
@@ -29,6 +36,33 @@ function extraAllowedHosts(): string[] {
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
+}
+
+/**
+ * This deployment's Vercel Blob store id, lower-cased, or `null` when unknown.
+ *
+ * Derived exactly as `@vercel/blob` derives it (dist/chunk-XKVPKJPO.js):
+ * `BLOB_READ_WRITE_TOKEN` is `vercel_blob_rw_<storeId>_<secret>`, so the id is
+ * its 4th underscore-separated segment; otherwise `BLOB_STORE_ID` with a
+ * leading `store_` stripped. The library builds public URLs as
+ * `https://<storeId>.public.blob.vercel-storage.com/<pathname>`.
+ */
+export function ownBlobStoreId(): string | null {
+  const fromToken = process.env.BLOB_READ_WRITE_TOKEN?.trim().split("_")[3]?.trim();
+  if (fromToken) {
+    return fromToken.toLowerCase();
+  }
+  const raw = process.env.BLOB_STORE_ID?.trim() ?? "";
+  const fromEnv = raw.startsWith("store_") ? raw.slice("store_".length).trim() : raw;
+  return fromEnv ? fromEnv.toLowerCase() : null;
+}
+
+/** The only Vercel Blob hosts of store `storeId` (lower-case). */
+function ownStoreHosts(storeId: string): string[] {
+  return [
+    `${storeId}.public.blob.vercel-storage.com`,
+    `${storeId}.private.blob.vercel-storage.com`,
+  ];
 }
 
 function isVercelBlobHost(hostname: string): boolean {
@@ -75,7 +109,12 @@ export function isAllowedBlobUrl(url: string): boolean {
   }
 
   if (isVercelBlobHost(host)) {
-    return true;
+    const storeId = ownBlobStoreId();
+    // Store known: only its own hosts. A foreign Blob host falls through, so an
+    // operator who lists it in BLOB_ALLOWED_HOSTS still gets it.
+    if (storeId === null || ownStoreHosts(storeId).includes(host)) {
+      return true;
+    }
   }
 
   if (isLocal) {
@@ -153,6 +192,42 @@ export function canonicalBlobUrl(url: string): string | null {
     return null;
   }
   return `${parsed.protocol}//${parsed.host}${normalizePercentEncoding(parsed.pathname)}`;
+}
+
+/**
+ * The key the shared-blob guard (`deleteBlobUnlessShared`) locks on, counts
+ * against and deletes. A LENIENT canonical form: where {@link canonicalBlobUrl}
+ * rejects a spelling (and a stored legacy row can still hold one), this strips
+ * the part that makes it a different string instead, so the row still meets its
+ * canonical twin.
+ *
+ * 2026-11-01 audit (M2, ruling R6): parse the raw value (unparseable: use it
+ * as is); clear search, hash, username and password; clear the port unless the
+ * host is a local dev host; when the host is any Vercel Blob host and our own
+ * store id is known, point it at `<ownStoreId>.public.blob.vercel-storage.com`
+ * (the Blob API may resolve by token store + pathname, so another store's host
+ * with our pathname IS our file); then {@link canonicalBlobUrl} the result, and
+ * fall back to the raw value when that still returns `null`.
+ */
+export function guardBlobKey(raw: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return raw;
+  }
+  parsed.search = "";
+  parsed.hash = "";
+  parsed.username = "";
+  parsed.password = "";
+  if (!isLocalDevHost(parsed.hostname)) {
+    parsed.port = "";
+  }
+  const storeId = ownBlobStoreId();
+  if (storeId !== null && isVercelBlobHost(parsed.hostname)) {
+    parsed.hostname = `${storeId}.public.blob.vercel-storage.com`;
+  }
+  return canonicalBlobUrl(parsed.href) ?? raw;
 }
 
 /** User-facing error copy shared by media + posts create routes. */

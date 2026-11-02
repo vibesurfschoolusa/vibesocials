@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Handler-level test for the daily media retention sweep's blob deletion. The
 // sweep and `DELETE /api/media/[id]` share `deleteBlobUnlessShared`; this pins
@@ -41,7 +41,14 @@ function runSweep(): Promise<SweepSummary> {
   return handler({ step });
 }
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 beforeEach(() => {
+  // Hermetic: the shared-blob guard rewrites Vercel Blob hosts to the own store.
+  vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
+  vi.stubEnv("BLOB_STORE_ID", "");
   for (const mock of Object.values(db)) mock.mockReset();
   delMock.mockReset();
   vi.spyOn(console, "log").mockImplementation(() => {});
