@@ -1,6 +1,12 @@
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { recomputePostJobStatus } from "@/server/jobs/postStatus";
+import {
+  buildPublishEvent,
+  prepareDeferredPostJobDispatch,
+  type PublishEvent,
+} from "@/server/jobs/posting";
 
 /**
  * Roadmap Phase 5 — DB-backed cron due-scanner claim logic (§6.2).
@@ -12,8 +18,27 @@ import { recomputePostJobStatus } from "@/server/jobs/postStatus";
  * prisma, mirroring the route-test convention.
  */
 
-/** Max due jobs claimed per scan; the every-minute cadence drains any backlog. */
-export const DUE_SCAN_BATCH = 100;
+/**
+ * Max due jobs claimed per scan; the every-minute cadence drains any backlog.
+ *
+ * 2026-11-01 scale audit (jobs H6): 1000, up from 100, so a 500-post burst is
+ * claimed by ONE tick. The old two-steps-per-job dispatch made that unaffordable
+ * (2,002 steps against Inngest's 1,000-step run limit,
+ * https://www.inngest.com/docs/usage-limits/inngest); the scanner now materializes
+ * and sends in chunks of {@link MATERIALIZE_CHUNK_SIZE}, at most 2 + 3 x 20 steps.
+ */
+export const DUE_SCAN_BATCH = 1000;
+
+/**
+ * Claimed jobs materialized per `materialize-batch-<i>` step, and so the events
+ * per `dispatch-batch-<i>` send. 2026-11-01 scale audit (jobs H6): a worst-case
+ * publish event (7 per-platform captions of 2,200 characters) is about 70 KB, so
+ * 50 of them (~3.5 MB) fit the 4 MiB step-output limit
+ * (https://www.inngest.com/docs/usage-limits/inngest) and, with room to spare, a
+ * batched send's total request size, whose limit is unconfirmed. One send of all
+ * 1000 would not.
+ */
+export const MATERIALIZE_CHUNK_SIZE = 50;
 
 /**
  * How long a job may sit in `in_progress` before the reconcilers assume the
@@ -74,6 +99,73 @@ export async function claimDueScheduledJobs(
     SELECT "id" FROM claimed ORDER BY "scheduledFor" ASC`;
 
   return claimed.map((row) => row.id);
+}
+
+/** What {@link materializeClaimedJobs} hands to the scanner's batched sends. */
+export interface MaterializedBatch {
+  /** `post/publish.requested` events (stable id, `immediate: false`), one per ok job. */
+  publishEvents: PublishEvent[];
+  /** Jobs marked `failed` for lack of an eligible connection, with their owner to notify. */
+  noConnections: Array<{ postJobId: string; userId: string }>;
+  /** Claimed jobs that no longer exist (deleted between the claim and the materialize). */
+  notFound: string[];
+  /** Jobs whose materialize threw. They stay `in_progress` for the stuck-job reconciler. */
+  errorIds: string[];
+}
+
+/**
+ * Materialize a chunk of claimed jobs (the body of one `materialize-batch-<i>`
+ * step): create each job's per-platform results from the connections that exist
+ * now and build its publish event, exactly as the per-job step did.
+ *
+ * Jobs are handled one by one, each in its own try/catch (review Minor #1): one job
+ * that throws (a DB blip) must not strand the rest of the chunk, which are already
+ * `in_progress` and are never re-claimed (the claim only re-queries `scheduled`). A
+ * thrown job goes to `errorIds` and stays `in_progress` for the reconciler, as
+ * before. Everything here is idempotent (`prepareDeferredPostJobDispatch` creates
+ * results only when none exist), so a re-run, e.g. a scan that straddles a deploy,
+ * duplicates no rows; the stable event id then dedupes the second publish
+ * (Review Focus 3).
+ *
+ * The output is step output, so it holds ids and event data only: no tokens, no
+ * email addresses.
+ */
+export async function materializeClaimedJobs(postJobIds: string[]): Promise<MaterializedBatch> {
+  const batch: MaterializedBatch = {
+    publishEvents: [],
+    noConnections: [],
+    notFound: [],
+    errorIds: [],
+  };
+
+  for (const postJobId of postJobIds) {
+    try {
+      const prep = await prepareDeferredPostJobDispatch(postJobId);
+      if (prep.ok) {
+        // The scanner is not "Post now": `immediate: false` keeps the run at
+        // priority 0 behind user-triggered publishes.
+        batch.publishEvents.push(buildPublishEvent(prep.event, { immediate: false }));
+      } else if (prep.reason === "NO_CONNECTIONS") {
+        // The job is already marked failed; look up whom to tell.
+        const owner = await prisma.postJob.findUnique({
+          where: { id: postJobId },
+          select: { userId: true },
+        });
+        if (owner) {
+          batch.noConnections.push({ postJobId, userId: owner.userId });
+        } else {
+          batch.notFound.push(postJobId);
+        }
+      } else {
+        batch.notFound.push(postJobId);
+      }
+    } catch (error) {
+      logger.error("[Inngest] Scheduled materialize failed", { postJobId, error });
+      batch.errorIds.push(postJobId);
+    }
+  }
+
+  return batch;
 }
 
 /**

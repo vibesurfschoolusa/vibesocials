@@ -5,31 +5,47 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   queryRawMock,
   findManyMock,
+  findUniqueMock,
   updateManyMock,
   resultFindManyMock,
   resultUpdateManyMock,
+  prepareDeferredMock,
 } = vi.hoisted(() => ({
   queryRawMock: vi.fn(),
   findManyMock: vi.fn(),
+  findUniqueMock: vi.fn(),
   updateManyMock: vi.fn(),
   resultFindManyMock: vi.fn(),
   resultUpdateManyMock: vi.fn(),
+  prepareDeferredMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
     $queryRaw: queryRawMock,
-    postJob: { findMany: findManyMock, updateMany: updateManyMock },
+    postJob: {
+      findMany: findManyMock,
+      findUnique: findUniqueMock,
+      updateMany: updateManyMock,
+    },
     postJobResult: {
       findMany: resultFindManyMock,
       updateMany: resultUpdateManyMock,
     },
   },
 }));
+// The deferred-dispatch DB work is stubbed (posting.test.ts covers it); the REAL
+// event builder stays in place so the events' ids and shape are asserted for real.
+vi.mock("@/server/jobs/posting", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/jobs/posting")>()),
+  prepareDeferredPostJobDispatch: prepareDeferredMock,
+}));
 
 import {
   claimDueScheduledJobs,
   DUE_SCAN_BATCH,
+  MATERIALIZE_CHUNK_SIZE,
+  materializeClaimedJobs,
   reconcileStuckInProgressJobs,
   STUCK_IN_PROGRESS_MS,
 } from "./scheduledScanner";
@@ -40,9 +56,21 @@ const NOW = new Date("2026-07-10T12:00:00.000Z");
 beforeEach(() => {
   queryRawMock.mockReset();
   findManyMock.mockReset();
+  findUniqueMock.mockReset();
   updateManyMock.mockReset();
   resultFindManyMock.mockReset();
   resultUpdateManyMock.mockReset();
+  prepareDeferredMock.mockReset();
+});
+
+// 2026-11-01 scale audit (jobs H6): a 500-post burst used to take minutes to
+// dispatch (2 sequential steps per job, 100 claimed per tick). One tick now claims
+// up to 1000 and materializes them in chunks of 50.
+describe("scanner batch constants", () => {
+  it("claims up to 1000 due jobs per tick and materializes 50 per step", () => {
+    expect(DUE_SCAN_BATCH).toBe(1000);
+    expect(MATERIALIZE_CHUNK_SIZE).toBe(50);
+  });
 });
 
 describe("claimDueScheduledJobs", () => {
@@ -230,5 +258,95 @@ describe("reconcileStuckInProgressJobs", () => {
         where: { id: { in: ["r-claimed"] }, status: "pending", claimRunId: { not: null } },
       }),
     );
+  });
+});
+
+describe("materializeClaimedJobs", () => {
+  beforeEach(() => {
+    // A job that throws is logged (and surfaced); keep the test output quiet.
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  /** A prepared-dispatch result for `id`, shaped like prepareDeferredPostJobDispatch's. */
+  function okFor(id: string) {
+    return {
+      ok: true as const,
+      event: {
+        postJobId: id,
+        userId: `user-${id}`,
+        workspaceId: `ws-${id}`,
+        mediaItemId: `media-${id}`,
+        baseCaption: `caption ${id}`,
+        perPlatformOverrides: null,
+      },
+    };
+  }
+
+  it("builds a scheduled (immediate: false) publish event with a stable id per ok job and isolates a job that throws", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) => {
+      if (id === "b") throw new Error("pool timeout");
+      return okFor(id);
+    });
+
+    const out = await materializeClaimedJobs(["a", "b", "c"]);
+
+    expect(out.publishEvents.map((e) => e.id)).toEqual(["publish-a", "publish-c"]);
+    expect(out.publishEvents.every((e) => e.name === "post/publish.requested")).toBe(true);
+    expect(out.publishEvents.every((e) => e.data.immediate === false)).toBe(true);
+    // The event carries the job's workspace, so the per-workspace concurrency key resolves.
+    expect(out.publishEvents[0]?.data).toMatchObject({
+      postJobId: "a",
+      userId: "user-a",
+      workspaceId: "ws-a",
+    });
+    // The failed job stays in_progress for the stuck-job reconciler.
+    expect(out.errorIds).toEqual(["b"]);
+    expect(out.noConnections).toEqual([]);
+    expect(out.notFound).toEqual([]);
+    expect(prepareDeferredMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("puts a NO_CONNECTIONS job in noConnections with its owner's userId", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) =>
+      id === "n" ? { ok: false, reason: "NO_CONNECTIONS" } : okFor(id),
+    );
+    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+
+    const out = await materializeClaimedJobs(["a", "n"]);
+
+    expect(out.noConnections).toEqual([{ postJobId: "n", userId: "owner-1" }]);
+    expect(out.publishEvents.map((e) => e.id)).toEqual(["publish-a"]);
+    expect(findUniqueMock).toHaveBeenCalledTimes(1);
+    expect(findUniqueMock).toHaveBeenCalledWith({
+      where: { id: "n" },
+      select: { userId: true },
+    });
+  });
+
+  it("puts a NOT_FOUND job in notFound and sends nothing for it", async () => {
+    prepareDeferredMock.mockResolvedValue({ ok: false, reason: "NOT_FOUND" });
+
+    const out = await materializeClaimedJobs(["gone"]);
+
+    expect(out).toEqual({ publishEvents: [], noConnections: [], notFound: ["gone"], errorIds: [] });
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("reports an owner lookup that throws as an error, and one deleted since as not found", async () => {
+    prepareDeferredMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
+    findUniqueMock.mockRejectedValueOnce(new Error("pool timeout")).mockResolvedValueOnce(null);
+
+    const out = await materializeClaimedJobs(["x", "y"]);
+
+    expect(out.errorIds).toEqual(["x"]);
+    expect(out.notFound).toEqual(["y"]);
+    expect(out.noConnections).toEqual([]);
+  });
+
+  it("returns an empty batch for no ids without touching the database", async () => {
+    const out = await materializeClaimedJobs([]);
+
+    expect(out).toEqual({ publishEvents: [], noConnections: [], notFound: [], errorIds: [] });
+    expect(prepareDeferredMock).not.toHaveBeenCalled();
   });
 });

@@ -25,15 +25,11 @@ const db = vi.hoisted(() => ({
   /** The `SELECT ... FOR UPDATE` row lock of the finalize recompute. */
   executeRaw: vi.fn(),
 }));
-const { getPlatformClientMock, failPendingMock, recomputeSpy, claimDueMock, reconcileMock, prepareDeferredMock } =
-  vi.hoisted(() => ({
-    getPlatformClientMock: vi.fn(),
-    failPendingMock: vi.fn(),
-    recomputeSpy: vi.fn(),
-    claimDueMock: vi.fn(),
-    reconcileMock: vi.fn(),
-    prepareDeferredMock: vi.fn(),
-  }));
+const { getPlatformClientMock, failPendingMock, recomputeSpy } = vi.hoisted(() => ({
+  getPlatformClientMock: vi.fn(),
+  failPendingMock: vi.fn(),
+  recomputeSpy: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -73,23 +69,11 @@ vi.mock("@/server/jobs/failPendingResults", async (importOriginal) => {
   };
 });
 
-// The scanner's own claim/reconcile queries and the deferred-dispatch DB work are
-// stubbed (their suites cover them); the REAL event builder stays in place.
-vi.mock("@/server/jobs/scheduledScanner", () => ({
-  claimDueScheduledJobs: claimDueMock,
-  reconcileStuckInProgressJobs: reconcileMock,
-}));
-vi.mock("@/server/jobs/posting", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/server/jobs/posting")>()),
-  prepareDeferredPostJobDispatch: prepareDeferredMock,
-}));
-
 import {
   failInterruptedPublishRun,
   failInterruptedRetryRun,
   publishToAllPlatforms,
   retryPlatforms,
-  scheduledPostScanner,
 } from "./inngest-functions";
 import { PUBLISH_PRIORITY, publishConcurrency } from "./publishFlowControl";
 
@@ -148,9 +132,6 @@ beforeEach(() => {
   getPlatformClientMock.mockReset();
   failPendingMock.mockReset();
   recomputeSpy.mockClear();
-  claimDueMock.mockReset();
-  reconcileMock.mockReset();
-  prepareDeferredMock.mockReset();
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -1364,38 +1345,5 @@ describe("publish functions - finalize through the locked recompute, notify with
 
     expect(publishCtxs.map((c) => c.socialConnection.platform).sort()).toEqual(["x", "youtube"]);
     expect(out.status).toBe("completed");
-  });
-});
-
-// 2026-11-01 scale audit (jobs H6 + H1): the scanner dispatches through the same
-// builder as the routes, so its events carry the stable id and the workspace, and
-// are NOT "Post now" (priority 0, behind user-triggered publishes). Task 3
-// replaces this per-job send.
-describe("scheduledPostScanner - the publish event it dispatches", () => {
-  it("sends the builder's event: stable id, the job's workspaceId, immediate false", async () => {
-    claimDueMock.mockResolvedValue(["job-7"]);
-    reconcileMock.mockResolvedValue({ reconciled: 0 });
-    const eventData = {
-      postJobId: "job-7",
-      userId: "user-1",
-      workspaceId: "ws-7",
-      mediaItemId: "media-7",
-      baseCaption: "scheduled",
-      perPlatformOverrides: null,
-    };
-    prepareDeferredMock.mockResolvedValue({ ok: true, event: eventData });
-    const step = fakeStep();
-
-    await handlerOf(scheduledPostScanner)({
-      event: { name: "inngest/scheduled.timer", data: {} },
-      step,
-    });
-
-    expect(step.sendEvent).toHaveBeenCalledTimes(1);
-    expect(step.sendEvent).toHaveBeenCalledWith("publish-job-7", {
-      id: "publish-job-7",
-      name: "post/publish.requested",
-      data: { ...eventData, immediate: false },
-    });
   });
 });
