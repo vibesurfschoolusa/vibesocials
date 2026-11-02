@@ -3,6 +3,7 @@ import type { SocialConnection } from "@prisma/client";
 
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { markConnectionNeedsReconnect } from "./connectionHealth";
+import { commitRequest } from "./commitCall";
 import { classifyRateLimit } from "./rateLimited";
 
 // Token-material reality (see app/api/auth/facebook_page/callback/route.ts):
@@ -87,13 +88,19 @@ export const facebookPageClient: PlatformClient = {
       access_token: accessToken,
     });
 
-    const response = await fetchWithTimeout(endpoint.toString(), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body,
-    });
+    // 2026-11-01 scale audit (jobs H6, Review Focus 5): POST /{page}/photos is
+    // the commit call. A 5xx, a timeout or a dropped connection after it was
+    // sent is PUBLISH_UNCONFIRMED (the photo may be live) and is never re-run; a
+    // 4xx / 429 is returned and handled below as before.
+    const response = await commitRequest("facebook_page", () =>
+      fetchWithTimeout(endpoint.toString(), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body,
+      }),
+    );
 
     // 2026-11-01 scale audit (platform limits): a Meta throttle (code 4, 17, 32,
     // 613, 80001 or HTTP 429) is RATE_LIMITED, with the wait from the

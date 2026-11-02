@@ -5,6 +5,7 @@ import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
 import { resolveGbpLocationName } from "./gbpLocation";
 import { refreshGoogleToken } from "./googleTokens";
+import { commitRequest } from "./commitCall";
 import { classifyRateLimit } from "./rateLimited";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
@@ -62,9 +63,12 @@ export const googleBusinessProfileClient: PlatformClient = {
     const category = "ADDITIONAL";
 
     // Try creating media by providing the sourceUrl directly in the request
-    const createRes = await fetchWithTimeout(
-      `https://mybusiness.googleapis.com/v4/${locationName}/media`,
-      {
+    // 2026-11-01 scale audit (jobs H6, Review Focus 5): POST .../media is the
+    // commit call. A 5xx, a timeout or a dropped connection after it was sent is
+    // PUBLISH_UNCONFIRMED (the media item may exist) and is never re-run; a 4xx /
+    // 429 is returned and handled below as before.
+    const createRes = await commitRequest("google_business_profile", () =>
+      fetchWithTimeout(`https://mybusiness.googleapis.com/v4/${locationName}/media`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -77,7 +81,7 @@ export const googleBusinessProfileClient: PlatformClient = {
             category,
           },
         }),
-      },
+      }),
     );
 
     // 2026-11-01 scale audit (platform limits): GBP answers an excess (300 QPM

@@ -1,6 +1,7 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { truncateGraphemes } from "@/lib/truncate";
 
 import { MIN_REQUEST_WINDOW_MS, PUBLISH_BUDGET_EXCEEDED_CODE, PUBLISH_STEP_BUDGET_MS } from "./publishBudget";
@@ -1188,6 +1189,144 @@ describe("tiktokClient.publishVideo", () => {
 
       expect(error?.code).toBe("TIKTOK_TOKEN_REFRESH_FAILED");
       expect(error?.status).toBe(429);
+    });
+  });
+
+  // 2026-11-01 scale audit (jobs H6, Review Focus 5): Direct Post publishes as
+  // soon as the upload completes, so only the FINAL chunk PUT is the commit
+  // call. A 5xx / timeout / dropped connection there is PUBLISH_UNCONFIRMED and
+  // is never re-run; earlier chunks publish nothing and stay retryable.
+  describe("commit call (the final chunk PUT)", () => {
+    /** 30 MB: three 10 MB chunks (computeChunkPlan floors size / chunk size). */
+    const video30Mb = () => new Response(new Uint8Array(30 * MB), { status: 200 });
+    const chunkPuts = (fetchMock: ReturnType<typeof stubFetch>) =>
+      fetchMock.mock.calls.filter((c) => String(c[0]).includes("upload.tiktok.example"));
+    const urlCalls = (fetchMock: ReturnType<typeof stubFetch>, fragment: string) =>
+      fetchMock.mock.calls.filter((c) => String(c[0]).includes(fragment));
+
+    /** Routes for a three-chunk upload; `put(n)` answers the n-th chunk PUT (1-based). */
+    function stubThreeChunks(put: (n: number) => Response) {
+      let puts = 0;
+      return stubFetch({
+        "creator_info/query": creatorInfoOk,
+        "blob.example.com": video30Mb,
+        "video/init": initOk,
+        "upload.tiktok.example": () => put(++puts),
+        "status/fetch": () => jsonResponse({ data: { status: "PUBLISH_COMPLETE" } }),
+      });
+    }
+
+    it("sanity: the 30 MB video is three chunks", () => {
+      expect(computeChunkPlan(30 * MB).totalChunks).toBe(3);
+    });
+
+    it("a 503 on chunk 1 of 3 -> TIKTOK_UPLOAD_FAILED with status 503 (still retryable), uploading no further", async () => {
+      const fetchMock = stubThreeChunks((n) => (n === 1 ? new Response("busy", { status: 503 }) : uploadOk()));
+
+      const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+      expect(error?.code).toBe("TIKTOK_UPLOAD_FAILED");
+      expect(error?.status).toBe(503);
+      expect(isTransientPublishError(error)).toBe(true);
+      expect(chunkPuts(fetchMock)).toHaveLength(1);
+    });
+
+    it("a 503 on a middle chunk (2 of 3) is equally retryable", async () => {
+      stubThreeChunks((n) => (n === 2 ? new Response("busy", { status: 503 }) : uploadOk()));
+
+      const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+      expect(error?.code).toBe("TIKTOK_UPLOAD_FAILED");
+      expect(error?.status).toBe(503);
+    });
+
+    it("a 503 on the final chunk -> PUBLISH_UNCONFIRMED, without polling", async () => {
+      const fetchMock = stubThreeChunks((n) => (n === 3 ? new Response("busy", { status: 503 }) : uploadOk()));
+
+      const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+      expect(isTransientPublishError(error)).toBe(false);
+      expect(chunkPuts(fetchMock)).toHaveLength(3);
+      expect(urlCalls(fetchMock, "status/fetch")).toHaveLength(0);
+    });
+
+    it("a 503 on the final chunk is not re-run by the in-step retry: one init, three PUTs", async () => {
+      const fetchMock = stubThreeChunks((n) => (n === 3 ? new Response("busy", { status: 503 }) : uploadOk()));
+
+      const error = await caught(
+        withTransientRetries(() => tiktokClient.publishVideo(makeCtx()), { sleep: async () => {} }),
+      );
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(urlCalls(fetchMock, "video/init")).toHaveLength(1);
+      expect(chunkPuts(fetchMock)).toHaveLength(3);
+    });
+
+    it("a single-chunk upload's only PUT is the final chunk: a 503 there -> PUBLISH_UNCONFIRMED", async () => {
+      stubFetch({
+        "creator_info/query": creatorInfoOk,
+        "blob.example.com": videoBlob,
+        "video/init": initOk,
+        "upload.tiktok.example": () => new Response("busy", { status: 503 }),
+      });
+
+      expect((await caught(tiktokClient.publishVideo(makeCtx())))?.code).toBe("PUBLISH_UNCONFIRMED");
+    });
+
+    it("a connection dropped after the final chunk was sent -> PUBLISH_UNCONFIRMED", async () => {
+      stubThreeChunks((n) => {
+        if (n === 3) throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
+        return uploadOk();
+      });
+
+      expect((await caught(tiktokClient.publishVideo(makeCtx())))?.code).toBe("PUBLISH_UNCONFIRMED");
+    });
+
+    it("a timeout on the final chunk -> PUBLISH_UNCONFIRMED", async () => {
+      stubThreeChunks((n) => {
+        if (n === 3) throw Object.assign(new Error("Request timed out after 120000ms"), { code: "FETCH_TIMEOUT" });
+        return uploadOk();
+      });
+
+      expect((await caught(tiktokClient.publishVideo(makeCtx())))?.code).toBe("PUBLISH_UNCONFIRMED");
+    });
+
+    it("a final chunk that never connected is rethrown unchanged (provably not sent)", async () => {
+      const neverConnected = new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } });
+      stubThreeChunks((n) => {
+        if (n === 3) throw neverConnected;
+        return uploadOk();
+      });
+
+      expect(await caught(tiktokClient.publishVideo(makeCtx()))).toBe(neverConnected);
+    });
+
+    it("a final chunk 429 is still RATE_LIMITED, and a 400 still TIKTOK_UPLOAD_FAILED", async () => {
+      stubThreeChunks((n) => (n === 3 ? new Response("", { status: 429 }) : uploadOk()));
+      expect((await caught(tiktokClient.publishVideo(makeCtx())))?.code).toBe("RATE_LIMITED");
+
+      stubThreeChunks((n) => (n === 3 ? new Response("bad", { status: 400 }) : uploadOk()));
+      const error = await caught(tiktokClient.publishVideo(makeCtx()));
+      expect(error?.code).toBe("TIKTOK_UPLOAD_FAILED");
+      expect(error?.status).toBe(400);
+    });
+
+    it("a budget spent before the final chunk -> PUBLISH_TIME_BUDGET_EXCEEDED, not unconfirmed, nothing sent", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-11-01T12:00:00Z"));
+      const start = Date.now();
+      const fetchMock = stubThreeChunks((n) => {
+        // Chunk 2 "takes" long enough that less than the minimum request window is left.
+        if (n === 2) vi.setSystemTime(start + 100_000 - MIN_REQUEST_WINDOW_MS + 1);
+        return uploadOk();
+      });
+
+      const error = await caught(tiktokClient.publishVideo({ ...makeCtx(), deadline: start + 100_000 }));
+
+      expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+      expect(chunkPuts(fetchMock)).toHaveLength(2);
     });
   });
 });

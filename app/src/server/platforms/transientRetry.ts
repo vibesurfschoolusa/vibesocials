@@ -1,4 +1,5 @@
 import { FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
+import { PUBLISH_UNCONFIRMED_CODE } from "@/lib/publishOutcomes";
 
 import { remainingMs } from "./publishBudget";
 import { RATE_LIMITED_CODE } from "./rateLimited";
@@ -24,8 +25,12 @@ const NEVER_CONNECTED_CODES: ReadonlySet<string> = new Set([
  * connect failure surfaces as an `AggregateError` cause that carries the code
  * too. Any other TypeError — a connection reset mid-request, a socket closed
  * after the body was sent, a programming error — is NOT provable.
+ *
+ * Exported for commitCall.ts: a commit call that fails this way was provably
+ * not sent and is rethrown as is, while any other failure there is
+ * PUBLISH_UNCONFIRMED.
  */
-function isNeverConnectedFetchError(error: TypeError): boolean {
+export function isNeverConnectedFetchError(error: TypeError): boolean {
   const cause = (error as { cause?: unknown }).cause;
   if (!cause || typeof cause !== "object") return false;
   const code = (cause as { code?: unknown }).code;
@@ -49,6 +54,10 @@ function isNeverConnectedFetchError(error: TypeError): boolean {
  *  - FETCH_TIMEOUT: the platform may have received and committed the request;
  *    retrying risks a double post. (fetchWithTimeout's timer only covers
  *    connection + headers, but that is exactly the ambiguous window.)
+ *  - PUBLISH_UNCONFIRMED (2026-11-01 scale audit, jobs H6): a commit call
+ *    (commitCall.ts) that returned 5xx, timed out or lost its connection after
+ *    sending may already have posted. It is the one request a retry must never
+ *    repeat, so the in-step retry only ever re-runs upload phases.
  *  - RATE_LIMITED (2026-11-01 scale audit, platform limits): a classified 429 /
  *    quota response (rateLimited.ts) is waited out until its `retryAt`, not
  *    hammered again 2s and 8s later — which would only extend the limit.
@@ -63,6 +72,8 @@ export function isTransientPublishError(error: unknown): boolean {
   // Checked before `status`: a RateLimitedError must never be retried in-step,
   // whatever other fields it ends up carrying.
   if (err.code === RATE_LIMITED_CODE) return false;
+  // Likewise: whatever else it carries, an unconfirmed commit is never re-run.
+  if (err.code === PUBLISH_UNCONFIRMED_CODE) return false;
   if (typeof err.status === "number") {
     return err.status === 429 || err.status >= 500;
   }

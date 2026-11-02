@@ -2,8 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 
 import { FETCH_TIMEOUT_CODE } from "@/lib/fetchWithTimeout";
 
+import { publishUnconfirmedError } from "./commitCall";
 import { rateLimitedError } from "./rateLimited";
-import { isTransientPublishError, MIN_RETRY_WINDOW_MS, withTransientRetries } from "./transientRetry";
+import {
+  isNeverConnectedFetchError,
+  isTransientPublishError,
+  MIN_RETRY_WINDOW_MS,
+  withTransientRetries,
+} from "./transientRetry";
 
 /** Node fetch's network failure: `TypeError("fetch failed")` with a coded cause. */
 function fetchFailed(code: string): TypeError {
@@ -98,6 +104,30 @@ describe("isTransientPublishError", () => {
   });
 });
 
+// 2026-11-01 scale audit (jobs H6, Task 6): commitRequest exports the
+// "provably never connected" test it shares with the retry rule.
+describe("isNeverConnectedFetchError", () => {
+  it.each(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ENETUNREACH", "EHOSTUNREACH", "UND_ERR_CONNECT_TIMEOUT"])(
+    "is true for a fetch failure caused by %s",
+    (code) => {
+      expect(isNeverConnectedFetchError(fetchFailed(code))).toBe(true);
+    },
+  );
+
+  it("is true when the code sits on a plain-object cause or an AggregateError cause", () => {
+    expect(isNeverConnectedFetchError(new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } }))).toBe(true);
+    const aggregate = Object.assign(new AggregateError([], ""), { code: "ENOTFOUND" });
+    expect(isNeverConnectedFetchError(new TypeError("fetch failed", { cause: aggregate }))).toBe(true);
+  });
+
+  it("is false for a mid-request drop, a missing cause or a cause without a string code", () => {
+    expect(isNeverConnectedFetchError(fetchFailed("ECONNRESET"))).toBe(false);
+    expect(isNeverConnectedFetchError(new TypeError("fetch failed"))).toBe(false);
+    expect(isNeverConnectedFetchError(new TypeError("fetch failed", { cause: "ECONNREFUSED" }))).toBe(false);
+    expect(isNeverConnectedFetchError(new TypeError("fetch failed", { cause: { code: 111 } }))).toBe(false);
+  });
+});
+
 describe("withTransientRetries", () => {
   it("returns the first success without retrying", async () => {
     const fn = vi.fn().mockResolvedValue("ok");
@@ -142,6 +172,27 @@ describe("withTransientRetries", () => {
     await expect(withTransientRetries(fn, { sleep })).rejects.toBe(limited);
     expect(fn).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
+  });
+
+  // 2026-11-01 scale audit (jobs H6, Task 6): an ambiguous commit call must never
+  // be re-run, so PUBLISH_UNCONFIRMED is not transient — whatever else it carries.
+  it("calls fn once for PUBLISH_UNCONFIRMED and rethrows it unchanged", async () => {
+    const unconfirmed = publishUnconfirmedError("youtube", statusError(502));
+    const fn = vi.fn().mockRejectedValue(unconfirmed);
+    const sleep = vi.fn(async () => {});
+
+    await expect(withTransientRetries(fn, { sleep })).rejects.toBe(unconfirmed);
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("calls fn once for PUBLISH_UNCONFIRMED even when it also carries a retryable status", async () => {
+    const unconfirmed = Object.assign(publishUnconfirmedError("x"), { status: 503 });
+    const fn = vi.fn().mockRejectedValue(unconfirmed);
+
+    await expect(withTransientRetries(fn, { sleep: async () => {} })).rejects.toBe(unconfirmed);
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(isTransientPublishError(unconfirmed)).toBe(false);
   });
 
   it("rethrows a non-transient failure immediately", async () => {

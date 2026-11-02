@@ -8,6 +8,7 @@ import {
   markConnectionNeedsReconnect,
   readOAuthErrorCode,
 } from "./connectionHealth";
+import { commitRequest } from "./commitCall";
 import { classifyRateLimit } from "./rateLimited";
 
 /**
@@ -548,15 +549,21 @@ async function createPost(
   // Log full post body for debugging
   console.log("[LinkedIn] Full post body:", JSON.stringify(postBody, null, 2));
 
-  const response = await fetchWithTimeout("https://api.linkedin.com/v2/ugcPosts", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-      "X-Restli-Protocol-Version": "2.0.0",
-    },
-    body: JSON.stringify(postBody),
-  });
+  // 2026-11-01 scale audit (jobs H6, Review Focus 5): POST /v2/ugcPosts is the
+  // commit call. A 5xx, a timeout or a dropped connection after it was sent is
+  // PUBLISH_UNCONFIRMED (the post may be live) and is never re-run; a 4xx / 429
+  // is returned and handled below as before.
+  const response = await commitRequest("linkedin", () =>
+    fetchWithTimeout("https://api.linkedin.com/v2/ugcPosts", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        "X-Restli-Protocol-Version": "2.0.0",
+      },
+      body: JSON.stringify(postBody),
+    }),
+  );
 
   const postLimited = await classifyRateLimit("linkedin", response);
   if (postLimited) throw postLimited;

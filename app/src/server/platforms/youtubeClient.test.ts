@@ -1,7 +1,11 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
+
+import { MIN_REQUEST_WINDOW_MS, PUBLISH_BUDGET_EXCEEDED_CODE } from "./publishBudget";
 import { nextPacificMidnight, PACIFIC_RESET_GRACE_MS } from "./rateLimited";
+import { withTransientRetries } from "./transientRetry";
 import type { PublishContext } from "./types";
 import { computeYouTubeTitle, youtubeClient } from "./youtubeClient";
 
@@ -47,44 +51,52 @@ describe("computeYouTubeTitle", () => {
   });
 });
 
+function ytCtx(overrides: Partial<PublishContext> = {}): PublishContext {
+  return {
+    user: { id: "user-1" } as unknown as User,
+    socialConnection: {
+      id: "conn-yt",
+      platform: "youtube",
+      accessToken: "access-token",
+      refreshToken: "refresh-token",
+      expiresAt: null,
+    } as unknown as SocialConnection,
+    mediaItem: {
+      mimeType: "video/mp4",
+      storageLocation: "https://blob.example.com/v.mp4",
+      sizeBytes: 4,
+      originalFilename: "v.mp4",
+      baseCaption: "title",
+      metadata: null,
+    } as unknown as MediaItem,
+    caption: "hello",
+    ...overrides,
+  };
+}
+
+const INSERT_URL_FRAGMENT = "googleapis.com/upload/youtube/v3/videos";
+
+function stubYouTube(insert: () => Response | Promise<Response>) {
+  const fetchMock = vi.fn<typeof fetch>((input) => {
+    const url = String(input);
+    if (url.includes("blob.example.com")) {
+      return Promise.resolve(new Response(new Uint8Array([1, 2, 3, 4])));
+    }
+    if (url.includes(INSERT_URL_FRAGMENT)) return Promise.resolve(insert());
+    throw new Error(`Unexpected fetch in test: ${url}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+const insertCalls = (fetchMock: ReturnType<typeof stubYouTube>) =>
+  fetchMock.mock.calls.filter((c) => String(c[0]).includes(INSERT_URL_FRAGMENT));
+
 // 2026-11-01 scale audit (platform limits, V9/V10): a YouTube quota response is
 // classified into RATE_LIMITED (kind youtube_quota) that carries the next
 // Pacific-midnight reset, instead of the generic YOUTUBE_UPLOAD_FAILED.
 describe("youtubeClient.publishVideo — rate limits (RATE_LIMITED)", () => {
-  function ctx(): PublishContext {
-    return {
-      user: { id: "user-1" } as unknown as User,
-      socialConnection: {
-        id: "conn-yt",
-        platform: "youtube",
-        accessToken: "access-token",
-        refreshToken: "refresh-token",
-        expiresAt: null,
-      } as unknown as SocialConnection,
-      mediaItem: {
-        mimeType: "video/mp4",
-        storageLocation: "https://blob.example.com/v.mp4",
-        sizeBytes: 4,
-        originalFilename: "v.mp4",
-        baseCaption: "title",
-        metadata: null,
-      } as unknown as MediaItem,
-      caption: "hello",
-    };
-  }
-
-  function stubYouTube(insert: () => Response) {
-    const fetchMock = vi.fn<typeof fetch>((input) => {
-      const url = String(input);
-      if (url.includes("blob.example.com")) {
-        return Promise.resolve(new Response(new Uint8Array([1, 2, 3, 4])));
-      }
-      if (url.includes("googleapis.com/upload/youtube/v3/videos")) return Promise.resolve(insert());
-      throw new Error(`Unexpected fetch in test: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    return fetchMock;
-  }
+  const ctx = ytCtx;
 
   const googleError = (status: number, reason: string, headers: Record<string, string> = {}) =>
     new Response(
@@ -137,5 +149,112 @@ describe("youtubeClient.publishVideo — rate limits (RATE_LIMITED)", () => {
   it("any other failure keeps YOUTUBE_UPLOAD_FAILED", async () => {
     stubYouTube(() => googleError(403, "forbidden"));
     expect((await failure())?.code).toBe("YOUTUBE_UPLOAD_FAILED");
+  });
+});
+
+// 2026-11-01 scale audit (jobs H6, Review Focus 5): `videos.insert` is the commit
+// call. An ambiguous outcome is PUBLISH_UNCONFIRMED and never re-run; a budget
+// refusal before sending stays an ordinary retryable failure.
+describe("youtubeClient.publishVideo — commit call (videos.insert)", () => {
+  type CodedError = Error & { code?: string };
+  const failure = (ctx: PublishContext = ytCtx()) =>
+    youtubeClient.publishVideo(ctx).then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("insert 502 -> PUBLISH_UNCONFIRMED, and the insert is fetched once", async () => {
+    const fetchMock = stubYouTube(() => new Response("bad gateway", { status: 502 }));
+
+    const error = await failure();
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect(insertCalls(fetchMock)).toHaveLength(1);
+  });
+
+  it("insert 502 is not re-run by the in-step retry", async () => {
+    const fetchMock = stubYouTube(() => new Response("bad gateway", { status: 502 }));
+
+    await expect(
+      withTransientRetries(() => youtubeClient.publishVideo(ytCtx()), { sleep: async () => {} }),
+    ).rejects.toMatchObject({ code: "PUBLISH_UNCONFIRMED" });
+    expect(insertCalls(fetchMock)).toHaveLength(1);
+  });
+
+  it("a connection reset after the request was sent -> PUBLISH_UNCONFIRMED", async () => {
+    stubYouTube(() => Promise.reject(new TypeError("fetch failed", { cause: { code: "ECONNRESET" } })));
+
+    expect((await failure())?.code).toBe("PUBLISH_UNCONFIRMED");
+  });
+
+  it("a connection that was never made is rethrown unchanged (provably not sent, retryable)", async () => {
+    const neverConnected = new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } });
+    stubYouTube(() => Promise.reject(neverConnected));
+
+    expect(await failure()).toBe(neverConnected);
+  });
+
+  it("an insert 4xx keeps YOUTUBE_UPLOAD_FAILED with its status", async () => {
+    stubYouTube(() => new Response("{}", { status: 400 }));
+
+    const error = await failure();
+
+    expect(error?.code).toBe("YOUTUBE_UPLOAD_FAILED");
+    expect(error).toMatchObject({ status: 400 });
+  });
+
+  it("an insert 429 is still classified RATE_LIMITED (commitRequest returns it)", async () => {
+    stubYouTube(() => new Response("", { status: 429 }));
+
+    expect((await failure())?.code).toBe("RATE_LIMITED");
+  });
+
+  it("a deadline 4 s away -> PUBLISH_TIME_BUDGET_EXCEEDED and no insert request", async () => {
+    const fetchMock = stubYouTube(() => new Response("{}", { status: 200 }));
+    const deadline = Date.now() + 4_000;
+    expect(4_000).toBeLessThan(MIN_REQUEST_WINDOW_MS);
+
+    const error = await failure(ytCtx({ deadline }));
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(insertCalls(fetchMock)).toHaveLength(0);
+  });
+
+  it("a budget refusal stays an ordinary retryable failure, never PUBLISH_UNCONFIRMED", async () => {
+    stubYouTube(() => new Response("{}", { status: 200 }));
+
+    const error = await failure(ytCtx({ deadline: Date.now() + 1_000 }));
+
+    expect(error?.code).not.toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+  });
+
+  it("clamps the insert timeout to the time left in the step budget", async () => {
+    const fetchMock = stubYouTube(
+      () => new Response(JSON.stringify({ id: "vid-1", snippet: { title: "t" } }), { status: 200 }),
+    );
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    await expect(youtubeClient.publishVideo(ytCtx({ deadline: Date.now() + 30_000 }))).resolves.toEqual({
+      externalPostId: "vid-1",
+    });
+
+    expect(insertCalls(fetchMock)).toHaveLength(1);
+    const timeouts = setTimeoutSpy.mock.calls.map((c) => c[1]);
+    // The insert's timer is the one clamped to the ~30 s left (not its 120 s default).
+    expect(timeouts.some((ms) => typeof ms === "number" && ms <= 30_000 && ms > MIN_REQUEST_WINDOW_MS)).toBe(true);
   });
 });

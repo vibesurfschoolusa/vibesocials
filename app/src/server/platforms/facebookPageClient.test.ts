@@ -1,6 +1,7 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import {
   facebookPageClient,
   isFacebookAuthErrorBody,
@@ -294,5 +295,62 @@ describe("facebookPageClient.publishVideo — rate limits (RATE_LIMITED)", () =>
     );
 
     expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+  });
+});
+
+// 2026-11-01 scale audit (jobs H6, Review Focus 5): `POST /{page}/photos` is the
+// commit call. A 5xx, a timeout or a dropped connection there may already have
+// posted the photo, so it is PUBLISH_UNCONFIRMED and is never re-run.
+describe("facebookPageClient.publishVideo — commit call (POST /{page}/photos)", () => {
+  type CodedError = Error & { code?: string };
+  const failure = () =>
+    facebookPageClient.publishVideo(makeContext()).then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+
+  it("photos timeout (FETCH_TIMEOUT) -> PUBLISH_UNCONFIRMED, requested once", async () => {
+    const timeout = Object.assign(new Error("Request timed out after 30000ms"), { code: "FETCH_TIMEOUT" });
+    fetchMock.mockRejectedValue(timeout);
+
+    const error = await failure();
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect((error as { cause?: unknown }).cause).toBe(timeout);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("photos 503 -> PUBLISH_UNCONFIRMED, without flagging the connection", async () => {
+    fetchMock.mockResolvedValue(response(503, "<html>Service Unavailable</html>"));
+
+    const error = await failure();
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("a connection dropped after the request was sent -> PUBLISH_UNCONFIRMED", async () => {
+    fetchMock.mockRejectedValue(new TypeError("fetch failed", { cause: { code: "ECONNRESET" } }));
+
+    expect((await failure())?.code).toBe("PUBLISH_UNCONFIRMED");
+  });
+
+  it("a connection that was never made is rethrown unchanged (provably not sent)", async () => {
+    const neverConnected = new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } });
+    fetchMock.mockRejectedValue(neverConnected);
+
+    expect(await failure()).toBe(neverConnected);
+  });
+
+  it("a 4xx keeps FACEBOOK_PAGE_PUBLISH_FAILED, and a 401 keeps the reconnect error", async () => {
+    fetchMock.mockResolvedValue(response(400, { error: { type: "GraphMethodException", code: 100 } }));
+    expect((await failure())?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+
+    fetchMock.mockResolvedValue(response(401, { error: { type: "OAuthException", code: 190 } }));
+    expect((await failure())?.code).toBe("FACEBOOK_PAGE_RECONNECT_REQUIRED");
+    expect(updateMock).toHaveBeenCalledTimes(1);
   });
 });

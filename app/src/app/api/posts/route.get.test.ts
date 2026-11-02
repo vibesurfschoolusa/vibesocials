@@ -728,3 +728,74 @@ describe("GET /api/posts — result deferral", () => {
     expect(JSON.stringify(results)).not.toContain("DAILY_LIMIT");
   });
 });
+
+// 2026-11-01 scale audit (jobs H6, Task 6): a result whose commit call could not
+// be confirmed (PUBLISH_UNCONFIRMED) tells the Activity card to warn inline
+// before the user retries, without exposing the internal `errorCode`.
+describe("GET /api/posts — unconfirmed publish", () => {
+  const UNCONFIRMED_MESSAGE =
+    "We couldn't confirm this post. It may already be live — check the platform before you retry.";
+
+  function jobWith(results: Array<Record<string, unknown>>) {
+    return { ...jobWithYouTube(), status: "failed", results };
+  }
+
+  async function resultsOf(results: Array<Record<string, unknown>>) {
+    postJobFindManyMock.mockResolvedValue([jobWith(results)]);
+    const res = await GET(getRequest());
+    return ((await res.json()) as PostsResponse).jobs[0].results;
+  }
+
+  const result = (partial: Record<string, unknown>) => ({
+    platform: "x",
+    status: "failed",
+    externalPostId: null,
+    errorMessage: "Something failed",
+    errorCode: "X_TWEET_FAILED",
+    deferredUntil: null,
+    ...partial,
+  });
+
+  it("a failed PUBLISH_UNCONFIRMED result -> unconfirmed: true", async () => {
+    const [x] = await resultsOf([
+      result({ errorCode: "PUBLISH_UNCONFIRMED", errorMessage: UNCONFIRMED_MESSAGE }),
+    ]);
+
+    expect(x.unconfirmed).toBe(true);
+    expect(x.status).toBe("failed");
+    expect(x.errorMessage).toBe(UNCONFIRMED_MESSAGE);
+  });
+
+  it("any other failure -> unconfirmed: false", async () => {
+    const results = await resultsOf([
+      result({ platform: "x", errorCode: "X_TWEET_FAILED" }),
+      result({ platform: "youtube", errorCode: "RATE_LIMITED" }),
+      result({ platform: "tiktok", errorCode: "PUBLISH_INTERRUPTED" }),
+      result({ platform: "linkedin", errorCode: null }),
+    ]);
+
+    expect(results.map((r) => r.unconfirmed)).toEqual([false, false, false, false]);
+  });
+
+  it("only a failed result is unconfirmed: a pending or successful one carrying the code is not", async () => {
+    const results = await resultsOf([
+      result({ platform: "x", status: "pending", errorCode: "PUBLISH_UNCONFIRMED" }),
+      result({ platform: "youtube", status: "success", externalPostId: "vid", errorCode: "PUBLISH_UNCONFIRMED" }),
+    ]);
+
+    expect(results.map((r) => r.unconfirmed)).toEqual([false, false]);
+  });
+
+  it("is a boolean on every result and never exposes errorCode", async () => {
+    const results = await resultsOf([
+      result({ platform: "x", errorCode: "PUBLISH_UNCONFIRMED" }),
+      result({ platform: "youtube", status: "success", errorCode: null, errorMessage: null }),
+    ]);
+
+    for (const r of results) {
+      expect(typeof r.unconfirmed).toBe("boolean");
+      expect(r).not.toHaveProperty("errorCode");
+    }
+    expect(JSON.stringify(results)).not.toContain("PUBLISH_UNCONFIRMED");
+  });
+});

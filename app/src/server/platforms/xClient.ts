@@ -8,6 +8,7 @@ import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeo
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 
+import { commitRequest } from "./commitCall";
 import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 
@@ -615,21 +616,29 @@ export const xClient: PlatformClient = {
 
     console.log("[X OAuth 1.0a] Trying v1.1 statuses/update endpoint");
 
-    // No assertOk here: a !ok v1 response is an intentional fallback signal
+    // No assertOk here: a 4xx v1 response is an intentional fallback signal
     // (try the v2 endpoint next), not a terminal failure — see below.
     // Budget-checked before sending: an exhausted budget throws here, with
     // no tweet created (safe to retry).
-    const v1Response = await fetchWithTimeout(
-      v1Url,
-      {
-        method: "POST",
-        headers: {
-          ...v1AuthHeader,
-          "Content-Type": "application/x-www-form-urlencoded",
+    //
+    // 2026-11-01 scale audit (jobs H6, Review Focus 5): v1.1 is a COMMIT call.
+    // A 5xx, a timeout or a dropped connection after it was sent may already
+    // have posted the tweet, so commitRequest throws PUBLISH_UNCONFIRMED and we
+    // do NOT fall back to v2 (that would post it a second time). Only a
+    // rejection the platform answered (4xx, 429) returns and falls back.
+    const v1Response = await commitRequest("x", () =>
+      fetchWithTimeout(
+        v1Url,
+        {
+          method: "POST",
+          headers: {
+            ...v1AuthHeader,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams(v1Params),
         },
-        body: new URLSearchParams(v1Params),
-      },
-      budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+        budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+      ),
     );
 
     if (v1Response.ok) {
@@ -642,7 +651,8 @@ export const xClient: PlatformClient = {
       };
     }
 
-    // If v1.1 fails, try v2 API
+    // v1.1 REJECTED the request (4xx/429; a 5xx never gets here), so nothing was
+    // posted: try v2.
     const v1ErrorBody = await v1Response.text().catch(() => "");
     console.log("[X OAuth 1.0a] v1.1 failed, trying v2 API", {
       status: v1Response.status,
@@ -665,21 +675,26 @@ export const xClient: PlatformClient = {
     // Generate OAuth authorization header
     const authHeader = oauth.toHeader(oauth.authorize(requestData, token));
 
-    const tweetResponse = await fetchWithTimeout(
-      tweetUrl,
-      {
-        method: "POST",
-        headers: {
-          ...authHeader,
-          "Content-Type": "application/json",
+    // v2 is a commit call too: 5xx / timeout / dropped connection after sending
+    // is PUBLISH_UNCONFIRMED.
+    const tweetResponse = await commitRequest("x", () =>
+      fetchWithTimeout(
+        tweetUrl,
+        {
+          method: "POST",
+          headers: {
+            ...authHeader,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(tweetPayload),
         },
-        body: JSON.stringify(tweetPayload),
-      },
-      budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+        budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+      ),
     );
 
-    // The v1.1 call above is deliberately NOT classified (any non-5xx error
-    // falls back to v2). The v2 call is the last word: a 429 here is RATE_LIMITED.
+    // The v1.1 call above is deliberately NOT classified (any 4xx falls back to
+    // v2). The v2 call is the last word: a 429 here is RATE_LIMITED, so the post
+    // waits (commitRequest returns 429s untouched).
     const tweetLimited = await classifyRateLimit("x", tweetResponse);
     if (tweetLimited) throw tweetLimited;
 

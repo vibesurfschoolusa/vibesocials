@@ -6,6 +6,7 @@ import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 import { markConnectionNeedsReconnect } from "./connectionHealth";
 import { isFacebookAuthErrorBody } from "./facebookPageClient";
+import { commitRequest } from "./commitCall";
 import { classifyRateLimit } from "./rateLimited";
 
 // COR-5: Instagram token expiry handling.
@@ -286,9 +287,15 @@ export const instagramClient: PlatformClient = {
 
       console.log("[Instagram] Publishing media container");
 
-      const publishResponse = await fetchWithTimeout(publishUrl.toString(), {
-        method: "POST",
-      });
+      // 2026-11-01 scale audit (jobs H6, Review Focus 5): media_publish is the
+      // commit call. A 5xx, a timeout or a dropped connection after it was sent
+      // is PUBLISH_UNCONFIRMED (the post may be live) and is never re-run; a
+      // 4xx / 429 is returned and handled below as before.
+      const publishResponse = await commitRequest("instagram", () =>
+        fetchWithTimeout(publishUrl.toString(), {
+          method: "POST",
+        }),
+      );
 
       // Includes code 9 / subcode 2207042: the 100-posts-per-24h publishing cap.
       const publishLimited = await classifyRateLimit("instagram", publishResponse);

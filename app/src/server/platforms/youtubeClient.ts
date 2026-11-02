@@ -4,7 +4,9 @@ import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { truncateGraphemes } from "@/lib/truncate";
 
+import { commitRequest } from "./commitCall";
 import { refreshGoogleToken } from "./googleTokens";
+import { budgetedTimeout } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
@@ -48,7 +50,7 @@ export function computeYouTubeTitle(
 export const youtubeClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
     let { socialConnection } = ctx;
-    const { mediaItem, caption } = ctx;
+    const { mediaItem, caption, deadline } = ctx;
 
     // Check if token needs refresh
     if (socialConnection.expiresAt && socialConnection.expiresAt < new Date()) {
@@ -212,18 +214,26 @@ export const youtubeClient: PlatformClient = {
     // Upload to YouTube
     // Include recordingDetails in parts if location is provided
     const apiParts = locationData ? "snippet,status,recordingDetails" : "snippet,status";
-    const uploadResponse = await fetchWithTimeout(
-      `https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=${apiParts}`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": `multipart/related; boundary=${boundary}`,
-          "Content-Length": body.length.toString(),
+    // 2026-11-01 scale audit (jobs H6, Review Focus 5): videos.insert is the
+    // commit call. A 5xx, a timeout or a dropped connection after it was sent
+    // is PUBLISH_UNCONFIRMED (the video may exist) and is never re-run; a 4xx or
+    // 429 is returned and classified below as before. The timeout is clamped to
+    // the step's remaining budget, and a spent budget throws
+    // PUBLISH_TIME_BUDGET_EXCEEDED BEFORE the request is sent (safe to retry).
+    const uploadResponse = await commitRequest("youtube", () =>
+      fetchWithTimeout(
+        `https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=${apiParts}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": `multipart/related; boundary=${boundary}`,
+            "Content-Length": body.length.toString(),
+          },
+          body,
         },
-        body,
-      },
-      120_000,
+        budgetedTimeout(120_000, deadline),
+      ),
     );
 
     // 2026-11-01 scale audit (platform limits): quotaExceeded / uploadLimitExceeded

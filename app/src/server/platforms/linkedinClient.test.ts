@@ -1,11 +1,13 @@
 import type { SocialConnection } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import {
   ensureFreshLinkedInToken,
   linkedinClient,
   refreshLinkedInToken,
 } from "@/server/platforms/linkedinClient";
+import { withTransientRetries } from "@/server/platforms/transientRetry";
 
 // Mirrors googleTokens.test.ts: vi.mock + vi.hoisted are hoisted above imports,
 // and refreshLinkedInToken resolves prisma via `await import("@/lib/db")` at
@@ -492,5 +494,86 @@ describe("linkedinClient.publishVideo — rate limits (RATE_LIMITED)", () => {
   it("video upload PUT 429 -> RATE_LIMITED, not LINKEDIN_VIDEO_UPLOAD_FAILED", async () => {
     stubLinkedIn({ upload: () => limited() });
     expect((await failure(linkedinClient.publishVideo(ctx("video/mp4"))))?.code).toBe("RATE_LIMITED");
+  });
+
+  // 2026-11-01 scale audit (jobs H6, Review Focus 5): `POST /v2/ugcPosts` is the
+  // commit call. A 5xx, a timeout or a dropped connection there may already have
+  // created the post, so it is PUBLISH_UNCONFIRMED and is never re-run. The
+  // register / upload calls before it publish nothing and are untouched.
+  describe("commit call (POST /v2/ugcPosts)", () => {
+    const ugcPostCalls = (fetchMock: ReturnType<typeof stubLinkedIn>) =>
+      fetchMock.mock.calls.filter((c) => String(c[0]).includes("/v2/ugcPosts"));
+
+    /** Every call succeeds except ugcPosts, which `post` answers (or rejects). */
+    function stubUgcPostRejecting(error: unknown) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: string | URL) => {
+          const url = String(input);
+          if (url.includes("blob.example.com")) return Promise.resolve(new Response(new Uint8Array([1, 2, 3, 4])));
+          if (url.includes("assets?action=registerUpload")) return Promise.resolve(registered());
+          if (url === UPLOAD_URL) return Promise.resolve(new Response("", { status: 201 }));
+          if (url.includes("/v2/ugcPosts")) return Promise.reject(error);
+          throw new Error(`Unexpected fetch in test: ${url}`);
+        }),
+      );
+    }
+
+    it("ugcPosts 503 -> PUBLISH_UNCONFIRMED, requested once", async () => {
+      const fetchMock = stubLinkedIn({ post: () => new Response("busy", { status: 503 }) });
+
+      const error = await failure(linkedinClient.publishVideo(ctx("image/jpeg")));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+      expect(ugcPostCalls(fetchMock)).toHaveLength(1);
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("ugcPosts 503 is not re-run by the in-step retry: one registration, one post", async () => {
+      const fetchMock = stubLinkedIn({ post: () => new Response("busy", { status: 503 }) });
+
+      await expect(
+        withTransientRetries(() => linkedinClient.publishVideo(ctx("image/jpeg")), { sleep: async () => {} }),
+      ).rejects.toMatchObject({ code: "PUBLISH_UNCONFIRMED" });
+      expect(ugcPostCalls(fetchMock)).toHaveLength(1);
+      expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes("registerUpload"))).toHaveLength(1);
+    });
+
+    it("a ugcPosts timeout -> PUBLISH_UNCONFIRMED", async () => {
+      stubUgcPostRejecting(Object.assign(new Error("Request timed out after 30000ms"), { code: "FETCH_TIMEOUT" }));
+
+      expect((await failure(linkedinClient.publishVideo(ctx("image/jpeg"))))?.code).toBe("PUBLISH_UNCONFIRMED");
+    });
+
+    it("a connection dropped after ugcPosts was sent -> PUBLISH_UNCONFIRMED", async () => {
+      stubUgcPostRejecting(new TypeError("fetch failed", { cause: { code: "ECONNRESET" } }));
+
+      expect((await failure(linkedinClient.publishVideo(ctx("image/jpeg"))))?.code).toBe("PUBLISH_UNCONFIRMED");
+    });
+
+    it("a ugcPosts that never connected is rethrown unchanged (provably not sent)", async () => {
+      const neverConnected = new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } });
+      stubUgcPostRejecting(neverConnected);
+
+      expect(await failure(linkedinClient.publishVideo(ctx("image/jpeg")))).toBe(neverConnected);
+    });
+
+    it("ugcPosts 401 keeps the reconnect error and flags the connection", async () => {
+      stubLinkedIn({ post: () => new Response("{}", { status: 401 }) });
+
+      const error = await failure(linkedinClient.publishVideo(ctx("image/jpeg")));
+
+      expect(error?.code).toBe("LINKEDIN_RECONNECT_REQUIRED");
+      expect(updateMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("a 5xx on an earlier call (the image upload PUT) is NOT unconfirmed", async () => {
+      stubLinkedIn({ upload: () => new Response("busy", { status: 503 }) });
+
+      const error = await failure(linkedinClient.publishVideo(ctx("image/jpeg")));
+
+      expect(error?.code).toBe("LINKEDIN_IMAGE_UPLOAD_FAILED");
+    });
   });
 });

@@ -55,6 +55,13 @@ export interface PostJobResultDTO {
    */
   deferral: { kind: DeferralKind; until: string } | null;
   /**
+   * True for a `failed` result whose commit call could not be confirmed
+   * (2026-11-01 scale audit, jobs H6): the post may already be live, so the
+   * Activity card says so inline, before the Retry button. Derived from the
+   * stored `errorCode` (PUBLISH_UNCONFIRMED), which is NOT exposed itself.
+   */
+  unconfirmed: boolean;
+  /**
    * Latest engagement snapshot for this result, or null when none has been
    * fetched yet (YouTube-only in v1). Joined by (platform, externalPostId) — the
    * metric's durable identity — so it survives a connection delete.

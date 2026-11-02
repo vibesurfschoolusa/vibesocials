@@ -5,6 +5,7 @@ import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeo
 import { PLATFORM_CAPTION_LIMITS, TIKTOK_DEFAULT_CAPTION } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 
+import { commitRequest } from "./commitCall";
 import { isTerminalRefreshFailure, markConnectionNeedsReconnect } from "./connectionHealth";
 import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
 import { classifyRateLimit, isRateLimitedError } from "./rateLimited";
@@ -800,20 +801,28 @@ export const tiktokClient: PlatformClient = {
         bytes: `${start}-${end - 1}/${size}`,
       });
 
-      const uploadRes = await fetchWithTimeout(
-        uploadUrl,
-        {
-          method: "PUT",
-          headers: {
-            "Content-Range": `bytes ${start}-${end - 1}/${size}`,
-            "Content-Type": mediaItem.mimeType,
+      const sendChunk = () =>
+        fetchWithTimeout(
+          uploadUrl,
+          {
+            method: "PUT",
+            headers: {
+              "Content-Range": `bytes ${start}-${end - 1}/${size}`,
+              "Content-Type": mediaItem.mimeType,
+            },
+            body: chunk,
           },
-          body: chunk,
-        },
-        // Throws before sending when the budget is spent: the upload is then
-        // incomplete, and TikTok never publishes an incomplete upload.
-        budgetedTimeout(TIKTOK_CHUNK_UPLOAD_TIMEOUT_MS, deadline),
-      );
+          // Throws before sending when the budget is spent: the upload is then
+          // incomplete, and TikTok never publishes an incomplete upload.
+          budgetedTimeout(TIKTOK_CHUNK_UPLOAD_TIMEOUT_MS, deadline),
+        );
+      // 2026-11-01 scale audit (jobs H6, Review Focus 5): Direct Post publishes
+      // as soon as the upload completes, so ONLY the final chunk PUT is the
+      // commit call. A 5xx / timeout / dropped connection there is
+      // PUBLISH_UNCONFIRMED and is never re-run; the earlier chunks publish
+      // nothing and stay retryable (TIKTOK_UPLOAD_FAILED carries the status).
+      const isFinalChunk = chunkIndex === totalChunks - 1;
+      const uploadRes = isFinalChunk ? await commitRequest("tiktok", sendChunk) : await sendChunk();
 
       const chunkLimited = await classifyRateLimit("tiktok", uploadRes);
       if (chunkLimited) throw chunkLimited;

@@ -32,6 +32,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { isValidPerPlatformOverrides, validateScheduledFor, type PostJobIntent } from "@/lib/scheduling";
 import { deriveApprovalState, shouldHoldForApproval } from "@/lib/approval";
 import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
+import { PUBLISH_UNCONFIRMED_CODE } from "@/lib/publishOutcomes";
 import { deferralKindFromErrorCode } from "@/lib/resultDeferral";
 import type { PostsResponse } from "@/lib/postsDto";
 import {
@@ -293,6 +294,11 @@ export async function GET(request: Request) {
                       until: result.deferredUntil.toISOString(),
                     }
                   : null,
+              // 2026-11-01 scale audit (jobs H6): the commit call's outcome is
+              // unknown, so the card warns inline. Only a failed result counts;
+              // errorCode itself stays server-side (SEC-1).
+              unconfirmed:
+                result.status === "failed" && result.errorCode === PUBLISH_UNCONFIRMED_CODE,
               metric: metricRow
                 ? {
                     views: metricRow.views,

@@ -1,6 +1,7 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { truncateGraphemes } from "@/lib/truncate";
 
 import { PUBLISH_BUDGET_EXCEEDED_CODE, PUBLISH_STEP_BUDGET_MS } from "./publishBudget";
@@ -429,5 +430,149 @@ describe("xClient.publishVideo — rate limits (RATE_LIMITED)", () => {
       withTransientRetries(() => xClient.publishVideo(ctx("image/jpeg")), { sleep: async () => {} }),
     ).rejects.toMatchObject({ code: "RATE_LIMITED" });
     expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes("/2/tweets"))).toHaveLength(1);
+  });
+
+  // 2026-11-01 scale audit (jobs H6, Review Focus 5): v1.1 statuses/update and
+  // v2 POST /2/tweets are X's commit calls. Once media is uploaded, a 5xx /
+  // timeout / dropped connection on either may already have posted, so it is
+  // PUBLISH_UNCONFIRMED and v1.1 no longer falls back to v2 (it could post
+  // twice). A v1.1 4xx/429 was rejected, so v2 is still tried; a v2 429 after
+  // the media uploaded is RATE_LIMITED (the post waits), not unconfirmed.
+  describe("commit calls (v1.1 statuses/update, v2 POST /2/tweets)", () => {
+    const urlCalls = (fetchMock: ReturnType<typeof stubX>, fragment: string) =>
+      fetchMock.mock.calls.filter((c) => String(c[0]).includes(fragment));
+    const v1Calls = (fetchMock: ReturnType<typeof stubX>) => urlCalls(fetchMock, "statuses/update.json");
+    const v2Calls = (fetchMock: ReturnType<typeof stubX>) => urlCalls(fetchMock, "/2/tweets");
+    const mediaUploads = (fetchMock: ReturnType<typeof stubX>) => urlCalls(fetchMock, "upload.twitter.com");
+
+    /** Make the stubbed fetch reject for one URL fragment (everything else keeps its route). */
+    function stubXRejecting(fragment: string, error: unknown) {
+      const inner = stubX({});
+      const fetchMock = vi.fn<typeof fetch>((input, init) => {
+        if (String(input).includes(fragment)) return Promise.reject(error);
+        return inner(input, init);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    it("v1.1 502 -> PUBLISH_UNCONFIRMED, and v2 is NOT requested (v1.1 may already have posted)", async () => {
+      const fetchMock = stubX({ v1: () => json({ errors: [] }, 502) });
+
+      const error = await failure(ctx("image/jpeg"));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+      expect(v1Calls(fetchMock)).toHaveLength(1);
+      expect(v2Calls(fetchMock)).toHaveLength(0);
+    });
+
+    it("v1.1 500 is not re-run by the in-step retry either", async () => {
+      const fetchMock = stubX({ v1: () => json({ errors: [] }, 500) });
+
+      await expect(
+        withTransientRetries(() => xClient.publishVideo(ctx("image/jpeg")), { sleep: async () => {} }),
+      ).rejects.toMatchObject({ code: "PUBLISH_UNCONFIRMED" });
+      expect(mediaUploads(fetchMock)).toHaveLength(1);
+      expect(v1Calls(fetchMock)).toHaveLength(1);
+      expect(v2Calls(fetchMock)).toHaveLength(0);
+    });
+
+    it("v1.1 connection dropped after sending -> PUBLISH_UNCONFIRMED, v2 NOT requested", async () => {
+      const fetchMock = stubXRejecting(
+        "statuses/update.json",
+        new TypeError("fetch failed", { cause: { code: "ECONNRESET" } }),
+      );
+
+      const error = await failure(ctx("image/jpeg"));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(v2Calls(fetchMock)).toHaveLength(0);
+    });
+
+    it("v1.1 timeout -> PUBLISH_UNCONFIRMED, v2 NOT requested", async () => {
+      const timeout = Object.assign(new Error("Request timed out after 30000ms"), { code: "FETCH_TIMEOUT" });
+      const fetchMock = stubXRejecting("statuses/update.json", timeout);
+
+      const error = await failure(ctx("image/jpeg"));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(v2Calls(fetchMock)).toHaveLength(0);
+    });
+
+    it("v1.1 never connected -> the same TypeError, rethrown (provably not sent)", async () => {
+      const neverConnected = new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } });
+      stubXRejecting("statuses/update.json", neverConnected);
+
+      expect(await failure(ctx("image/jpeg"))).toBe(neverConnected);
+    });
+
+    it("v1.1 403 -> falls back to v2 (unchanged)", async () => {
+      const fetchMock = stubX({
+        v1: () => json({ errors: [{ code: 187 }] }, 403),
+        v2: () => json({ data: { id: "tweet-2", text: "x" } }, 201),
+      });
+
+      await expect(xClient.publishVideo(ctx("image/jpeg"))).resolves.toEqual({ externalPostId: "tweet-2" });
+      expect(v1Calls(fetchMock)).toHaveLength(1);
+      expect(v2Calls(fetchMock)).toHaveLength(1);
+    });
+
+    it("v1.1 429 -> falls back to v2 (unchanged)", async () => {
+      const fetchMock = stubX({ v1: () => limited(), v2: () => json({ data: { id: "tweet-2", text: "x" } }, 201) });
+
+      await expect(xClient.publishVideo(ctx("image/jpeg"))).resolves.toEqual({ externalPostId: "tweet-2" });
+      expect(v2Calls(fetchMock)).toHaveLength(1);
+    });
+
+    it("v2 502 after a v1.1 rejection -> PUBLISH_UNCONFIRMED, requested once", async () => {
+      const fetchMock = stubX({ v1: () => json({ errors: [] }, 403), v2: () => json({}, 502) });
+
+      const error = await failure(ctx("image/jpeg"));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(v2Calls(fetchMock)).toHaveLength(1);
+    });
+
+    it("v2 timeout -> PUBLISH_UNCONFIRMED", async () => {
+      const timeout = Object.assign(new Error("Request timed out after 30000ms"), { code: "FETCH_TIMEOUT" });
+      stubXRejecting("/2/tweets", timeout);
+
+      expect((await failure(ctx("image/jpeg")))?.code).toBe("PUBLISH_UNCONFIRMED");
+    });
+
+    it("media uploaded, then v2 tweet 429 -> RATE_LIMITED (not unconfirmed)", async () => {
+      const resetSec = Math.floor(Date.now() / 1000) + 900;
+      const fetchMock = stubX({
+        v1: () => json({ errors: [{ code: 88 }] }, 429),
+        v2: () => limited({ "x-rate-limit-reset": String(resetSec) }),
+      });
+
+      const error = await failure(ctx("image/jpeg"));
+
+      expect(error).toMatchObject({ code: "RATE_LIMITED", platform: "x", retryAt: resetSec * 1000 });
+      expect(error?.code).not.toBe("PUBLISH_UNCONFIRMED");
+      expect(mediaUploads(fetchMock)).toHaveLength(1);
+      expect(v2Calls(fetchMock)).toHaveLength(1);
+    });
+
+    it("a budget too small for the tweet -> PUBLISH_TIME_BUDGET_EXCEEDED before v1.1 is sent", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-11-01T12:00:00Z"));
+      const start = Date.now();
+      const fetchMock = stubX({
+        // The media upload "takes" 60 s of the clock, leaving 3 s of a 63 s budget.
+        image: () => {
+          vi.setSystemTime(start + 60_000);
+          return json({ media_id_string: "m1" });
+        },
+      });
+
+      const error = await failure({ ...ctx("image/jpeg"), deadline: start + 63_000 });
+
+      expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+      expect(v1Calls(fetchMock)).toHaveLength(0);
+      expect(v2Calls(fetchMock)).toHaveLength(0);
+    });
   });
 });

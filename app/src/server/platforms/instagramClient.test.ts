@@ -1,11 +1,13 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import {
   computeInstagramCaption,
   ensureFreshInstagramToken,
   instagramClient,
 } from "@/server/platforms/instagramClient";
+import { withTransientRetries } from "@/server/platforms/transientRetry";
 
 // Instagram stores a long-lived Facebook PAGE token with no refresh path, so
 // the core behavior to pin is the expiry guard: usable token -> returned
@@ -446,5 +448,97 @@ describe("instagramClient.publishVideo — rate limits (RATE_LIMITED)", () => {
     const error = await failure(instagramClient.publishVideo(ctx("image/jpeg")));
 
     expect(error?.code).toBe("INSTAGRAM_CONTAINER_FAILED");
+  });
+
+  // 2026-11-01 scale audit (jobs H6, Review Focus 5): `media_publish` is the
+  // commit call. An ambiguous outcome there is PUBLISH_UNCONFIRMED and is never
+  // re-run (a re-run would build a second container and post again).
+  describe("commit call (media_publish)", () => {
+    const containerOk = () => new Response(JSON.stringify({ id: "container-1" }), { status: 200 });
+
+    /** Run an image publish to completion, stepping past the 3 s image-processing wait. */
+    async function publishFailure(ctxValue = ctx("image/jpeg")) {
+      vi.useFakeTimers();
+      const promise = failure(instagramClient.publishVideo(ctxValue));
+      await vi.advanceTimersByTimeAsync(3_000);
+      return promise;
+    }
+
+    it("media_publish 500 -> PUBLISH_UNCONFIRMED, without flagging the connection", async () => {
+      const publish = vi.fn(() => new Response("{}", { status: 500 }));
+      stubGraph({ container: containerOk, publish });
+
+      const error = await publishFailure();
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+      expect(publish).toHaveBeenCalledTimes(1);
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("media_publish 500 is not re-run by the in-step retry: one container, one publish", async () => {
+      vi.useFakeTimers();
+      const container = vi.fn(containerOk);
+      const publish = vi.fn(() => new Response("{}", { status: 500 }));
+      stubGraph({ container, publish });
+
+      const promise = failure(
+        withTransientRetries(() => instagramClient.publishVideo(ctx("image/jpeg")), { sleep: async () => {} }),
+      );
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      expect((await promise)?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(container).toHaveBeenCalledTimes(1);
+      expect(publish).toHaveBeenCalledTimes(1);
+    });
+
+    it("a connection dropped after media_publish was sent -> PUBLISH_UNCONFIRMED", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: string | URL) => {
+          if (String(input).includes("/media_publish")) {
+            return Promise.reject(new TypeError("fetch failed", { cause: { code: "ECONNRESET" } }));
+          }
+          return Promise.resolve(containerOk());
+        }),
+      );
+
+      expect((await publishFailure())?.code).toBe("PUBLISH_UNCONFIRMED");
+    });
+
+    it("a media_publish that never connected is rethrown unchanged (provably not sent)", async () => {
+      const neverConnected = new TypeError("fetch failed", { cause: { code: "ENOTFOUND" } });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: string | URL) =>
+          String(input).includes("/media_publish")
+            ? Promise.reject(neverConnected)
+            : Promise.resolve(containerOk()),
+        ),
+      );
+
+      expect(await publishFailure()).toBe(neverConnected);
+    });
+
+    it("media_publish 400 keeps INSTAGRAM_PUBLISH_FAILED", async () => {
+      stubGraph({ container: containerOk, publish: () => new Response("{}", { status: 400 }) });
+
+      expect((await publishFailure())?.code).toBe("INSTAGRAM_PUBLISH_FAILED");
+    });
+
+    it("media_publish 401 keeps the reconnect error and still flags the connection", async () => {
+      stubGraph({ container: containerOk, publish: () => new Response("{}", { status: 401 }) });
+
+      const error = await publishFailure();
+
+      expect(error?.code).toBe("INSTAGRAM_RECONNECT_REQUIRED");
+      expect(updateMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("a 5xx on the container call (before the commit) is NOT unconfirmed", async () => {
+      stubGraph({ container: () => new Response("{}", { status: 500 }) });
+
+      expect((await publishFailure())?.code).toBe("INSTAGRAM_CONTAINER_FAILED");
+    });
   });
 });

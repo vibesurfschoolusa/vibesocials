@@ -14,6 +14,7 @@ import { cn } from "@/lib/cn";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { platformPostUrl } from "@/lib/platformPostUrl";
 import type { PostJobDTO } from "@/lib/postsDto";
+import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { describeDeferral } from "@/lib/resultDeferral";
 import { PlatformResultBadge } from "./platform-result";
 import { PostMetricStats } from "./post-metric-stats";
@@ -159,12 +160,24 @@ export function PostJobCard({
     .filter((result) => result.status === "failed")
     .map((result) => result.platform);
 
+  // 2026-11-01 scale audit (jobs H6): a failed result whose commit call could not
+  // be confirmed may already be live. Its warning is shown inline, ahead of the
+  // Retry button, not inside the collapsed "Show errors" list below — a retry
+  // can post it a second time. Hidden while that retry is in flight, like errors.
+  const unconfirmed = results.filter(
+    (result) =>
+      result.status === "failed" &&
+      result.unconfirmed &&
+      !pending.has(result.platform),
+  );
+
   // Hide a failure's stored error message while it's being retried (we've
-  // optimistically cleared it).
+  // optimistically cleared it). Unconfirmed results are listed above instead.
   const failures = results.filter(
     (result) =>
       result.status === "failed" &&
       result.errorMessage &&
+      !result.unconfirmed &&
       !pending.has(result.platform),
   );
 
@@ -316,6 +329,20 @@ export function PostJobCard({
       ) : null}
 
       {youtubeResult ? <PostMetricStats metric={youtubeResult.metric} /> : null}
+
+      {unconfirmed.length > 0 ? (
+        <ul className="mt-3 space-y-1.5">
+          {unconfirmed.map((result) => (
+            <li
+              key={result.platform}
+              className="rounded-[var(--radius)] border border-warning/25 bg-warning/10 px-3 py-2 text-xs text-foreground"
+            >
+              <span className="font-semibold">{platformLabel(result.platform)}:</span>{" "}
+              {PUBLISH_UNCONFIRMED_MESSAGE}
+            </li>
+          ))}
+        </ul>
+      ) : null}
 
       {failedPlatforms.length > 0 ? (
         <div className="mt-3 flex flex-wrap items-center gap-2">

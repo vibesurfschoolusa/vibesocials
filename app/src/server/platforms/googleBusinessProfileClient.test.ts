@@ -1,7 +1,9 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { googleBusinessProfileClient } from "@/server/platforms/googleBusinessProfileClient";
+import { withTransientRetries } from "@/server/platforms/transientRetry";
 import type { PublishContext } from "@/server/platforms/types";
 
 // Google Business Profile photo publishing. No real Google endpoint and no
@@ -115,5 +117,68 @@ describe("googleBusinessProfileClient.publishVideo — rate limits (RATE_LIMITED
     const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
 
     expect(error).toMatchObject({ code: "RATE_LIMITED", retryAt: null });
+  });
+});
+
+// 2026-11-01 scale audit (jobs H6, Review Focus 5): `POST .../media` is the
+// commit call. A 5xx, a timeout or a dropped connection there may already have
+// created the media item, so it is PUBLISH_UNCONFIRMED and is never re-run.
+describe("googleBusinessProfileClient.publishVideo — commit call (POST .../media)", () => {
+  it("media create 500 -> PUBLISH_UNCONFIRMED, requested once", async () => {
+    const fetchMock = stubMediaCreate(() => new Response("internal", { status: 500 }));
+
+    const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("media create 500 is not re-run by the in-step retry", async () => {
+    const fetchMock = stubMediaCreate(() => new Response("internal", { status: 500 }));
+
+    await expect(
+      withTransientRetries(() => googleBusinessProfileClient.publishVideo(makeContext()), { sleep: async () => {} }),
+    ).rejects.toMatchObject({ code: "PUBLISH_UNCONFIRMED" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a connection dropped after the request was sent -> PUBLISH_UNCONFIRMED", async () => {
+    stubMediaCreate(() => {
+      throw new TypeError("fetch failed", { cause: { code: "ECONNRESET" } });
+    });
+
+    expect((await failure(googleBusinessProfileClient.publishVideo(makeContext())))?.code).toBe(
+      "PUBLISH_UNCONFIRMED",
+    );
+  });
+
+  it("a timeout -> PUBLISH_UNCONFIRMED", async () => {
+    stubMediaCreate(() => {
+      throw Object.assign(new Error("Request timed out after 30000ms"), { code: "FETCH_TIMEOUT" });
+    });
+
+    expect((await failure(googleBusinessProfileClient.publishVideo(makeContext())))?.code).toBe(
+      "PUBLISH_UNCONFIRMED",
+    );
+  });
+
+  it("a connection that was never made is rethrown unchanged (provably not sent)", async () => {
+    const neverConnected = new TypeError("fetch failed", { cause: { code: "ENOTFOUND" } });
+    stubMediaCreate(() => {
+      throw neverConnected;
+    });
+
+    expect(await failure(googleBusinessProfileClient.publishVideo(makeContext()))).toBe(neverConnected);
+  });
+
+  it("a 429 is still RATE_LIMITED and a 403 still GBP_CREATE_MEDIA_FAILED", async () => {
+    stubMediaCreate(() => new Response("", { status: 429 }));
+    expect((await failure(googleBusinessProfileClient.publishVideo(makeContext())))?.code).toBe("RATE_LIMITED");
+
+    stubMediaCreate(() => new Response("denied", { status: 403 }));
+    expect((await failure(googleBusinessProfileClient.publishVideo(makeContext())))?.code).toBe(
+      "GBP_CREATE_MEDIA_FAILED",
+    );
   });
 });
