@@ -35,12 +35,16 @@ export const RATE_LIMIT_BACKOFF_MS = [60_000, 900_000, 3_600_000] as const;
 export const MIN_RATE_LIMIT_WAIT_MS = 30_000;
 
 /**
- * The longest wait before giving up: 24 h. `sleepUntil` itself allows a year
- * (https://www.inngest.com/docs/usage-limits/inngest), but a result that is
- * still `pending` a day later is better failed, with a "retry later" the user
- * can act on, than left to sit.
+ * The longest wait before giving up: 26 h (2026-11-01 scale audit, ruling R23).
+ * `sleepUntil` itself allows a year (https://www.inngest.com/docs/usage-limits/inngest),
+ * but a result that is still `pending` after a day or so is better failed, with
+ * a "retry later" the user can act on, than left to sit. It is not 24 h because
+ * YouTube's quota resets at the next midnight Pacific (plus the 5 min grace),
+ * which is up to 25 h 5 min away on the fall-back day: a 24 h cap would fail the
+ * whole overnight backlog of YouTube posts that day instead of waiting for the
+ * reset. 26 h leaves an hour of slack over that.
  */
-export const MAX_RATE_LIMIT_WAIT_MS = 86_400_000;
+export const MAX_RATE_LIMIT_WAIT_MS = 93_600_000;
 
 /**
  * When a limited platform should be tried again: the platform's own `retryAt`
@@ -50,7 +54,7 @@ export const MAX_RATE_LIMIT_WAIT_MS = 86_400_000;
  * `attempt` is the attempt that was just limited (0 for the first). Gives up
  * after {@link MAX_RATE_LIMIT_RETRIES} waits, so the 4th consecutive limit
  * (attempt 3) ends the result, and when the platform asks to wait more than
- * {@link MAX_RATE_LIMIT_WAIT_MS}.
+ * {@link MAX_RATE_LIMIT_WAIT_MS} (26 h).
  */
 export function resolveDeferral(
   err: RateLimitedError,

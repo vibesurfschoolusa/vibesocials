@@ -232,19 +232,36 @@ export function pacificDayKey(now: Date): string {
 }
 
 /**
- * The next 00:00 Pacific strictly after `now`, when YouTube's quota resets.
+ * 00:00 Pacific on a calendar date (`day` may run past the month's end; the date
+ * arithmetic normalizes it).
  *
- * Built from the Pacific calendar date and the zone database's offset, never a
- * fixed -7 / -8 h: on the DST change days the day is 25 or 23 h long. The
- * changes happen at 02:00, so 00:00 itself always exists and is unambiguous;
- * the offset is looked up twice because the first guess uses the offset at
- * "00:00 as if UTC", which can be the other side of a change.
+ * Built from the date and the zone database's offset, never a fixed -7 / -8 h:
+ * on the DST change days the day is 25 or 23 h long. The changes happen at
+ * 02:00, so 00:00 itself always exists and is unambiguous; the offset is looked
+ * up twice because the first guess uses the offset at "00:00 as if UTC", which
+ * can be the other side of a change.
  */
-export function nextPacificMidnight(now: Date): Date {
-  const today = pacificWallClock(now.getTime());
-  const midnightAsUtc = Date.UTC(today.year, today.month - 1, today.day + 1, 0, 0, 0);
+function pacificMidnightOn(year: number, month: number, day: number): Date {
+  const midnightAsUtc = Date.UTC(year, month - 1, day, 0, 0, 0);
   const firstGuess = midnightAsUtc - pacificOffsetMs(midnightAsUtc);
   return new Date(midnightAsUtc - pacificOffsetMs(firstGuess));
+}
+
+/** The next 00:00 Pacific strictly after `now`, when YouTube's quota resets. */
+export function nextPacificMidnight(now: Date): Date {
+  const today = pacificWallClock(now.getTime());
+  return pacificMidnightOn(today.year, today.month, today.day + 1);
+}
+
+/**
+ * The most recent 00:00 Pacific at or before `now`: the first instant of the
+ * Pacific day `now` falls in. A quota refusal in the first minutes after it is
+ * Google's reset lagging our clock, not a spent budget (inngest-functions.ts
+ * deferRateLimitedResult; 2026-11-01 scale audit, ruling R23).
+ */
+export function currentPacificMidnight(now: Date): Date {
+  const today = pacificWallClock(now.getTime());
+  return pacificMidnightOn(today.year, today.month, today.day);
 }
 
 /** Reasons under `error.errors[].reason` and `error.details[].reason`, normalized. */

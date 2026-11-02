@@ -3,7 +3,7 @@ import { Prisma, type Platform } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
-import { rateLimitedError } from "@/server/platforms/rateLimited";
+import { nextPacificMidnight, rateLimitedError } from "@/server/platforms/rateLimited";
 import { PUBLISH_STEP_BUDGET_MS } from "@/server/platforms/publishBudget";
 import type { PublishContext } from "@/server/platforms/types";
 
@@ -1475,11 +1475,9 @@ describe("platform rate limits - durable deferral (platform limits)", () => {
     }) as Promise<RunOut>;
   }
 
-  const limited = (
-    platform: Platform,
-    retryAt: number | null,
-    kind: "rate_limited" | "daily_limit" | "youtube_quota" = "rate_limited",
-  ) => rateLimitedError(platform, kind, retryAt);
+  type RateLimitKindName = "rate_limited" | "daily_limit" | "youtube_quota";
+  const limited = (platform: Platform, retryAt: number | null, kind: RateLimitKindName = "rate_limited") =>
+    rateLimitedError(platform, kind, retryAt);
 
   const failedWrites = () => resultWrites().filter((w) => w.status === "failed");
 
@@ -1599,10 +1597,27 @@ describe("platform rate limits - durable deferral (platform limits)", () => {
       ]);
     });
 
-    it("gives up at once, finalized failed, when the platform asks to wait more than 24 hours", async () => {
+    it("waits for a platform that asks for 25 hours (the cap is 26 h, ruling R23)", async () => {
+      platformCalls({
+        x: (call) => {
+          if (call === 1) throw limited("x", T + 25 * HOUR);
+          return { externalPostId: "ext-x" };
+        },
+      });
+
+      const out = await publishRun(["x"]);
+
+      expect(releaseSpy).toHaveBeenCalledWith("result-x", "run-1", {
+        until: new Date(T + 25 * HOUR),
+        errorCode: "RATE_LIMITED",
+      });
+      expect(out.results).toEqual([{ platform: "x", status: "success" }]);
+    });
+
+    it("gives up at once, finalized failed, when the platform asks to wait more than 26 hours", async () => {
       const calls = platformCalls({
         x: () => {
-          throw limited("x", T + 25 * HOUR);
+          throw limited("x", T + 27 * HOUR);
         },
       });
       const step = fakeStep();
@@ -1774,8 +1789,8 @@ describe("platform rate limits - durable deferral (platform limits)", () => {
       expect(exhaustBudgetMock).not.toHaveBeenCalled();
     });
 
-    it("gives up (rather than sleeping past a day) when the budget resets more than 24 h away", async () => {
-      consumeSlotMock.mockResolvedValue({ allowed: false, resetAt: new Date(T + 24 * HOUR) });
+    it("gives up (rather than sleeping past the 26 h cap) when the budget resets more than 26 h away", async () => {
+      consumeSlotMock.mockResolvedValue({ allowed: false, resetAt: new Date(T + 27 * HOUR) });
       platformCalls({});
       const step = fakeStep();
 
@@ -1843,6 +1858,158 @@ describe("platform rate limits - durable deferral (platform limits)", () => {
       await publishRun(["youtube"]);
 
       expect(consumeSlotMock).not.toHaveBeenCalled();
+    });
+
+    // Ruling R23 (b): Google's quota resets at midnight Pacific, but its clock may
+    // lag ours by a few minutes. A quotaExceeded in the first 5 minutes of the
+    // Pacific day is that lag, not a spent budget: it must not trip the NEW day's
+    // counter (which would block every workspace for a day), and the wait is only
+    // until the day's own reset plus the grace.
+    describe("an early-morning refusal is Google's reset lagging (ruling R23)", () => {
+      /** The next Pacific midnight plus the grace, as the classifier sets a quota error's retryAt. */
+      const classifierRetryAt = (nowIso: string) =>
+        nextPacificMidnight(new Date(nowIso)).getTime() + GRACE;
+
+      it("Google's 403 quotaExceeded at 00:02 PST: no exhaust call, deferred to 00:05 PST today", async () => {
+        const now = "2026-11-02T08:02:00Z";
+        vi.setSystemTime(Date.parse(now));
+        platformCalls({
+          youtube: (call) => {
+            if (call === 1) throw limited("youtube", classifierRetryAt(now), "youtube_quota");
+            return { externalPostId: "ext-youtube" };
+          },
+        });
+        const step = fakeStep();
+
+        const out = await publishRun(["youtube"], step);
+
+        // The classifier would have said tomorrow 00:05 PST (2026-11-03T08:05Z).
+        expect(classifierRetryAt(now)).toBe(Date.parse("2026-11-03T08:05:00Z"));
+        expect(exhaustBudgetMock).not.toHaveBeenCalled();
+        expect(releaseSpy).toHaveBeenCalledTimes(1);
+        expect(releaseSpy).toHaveBeenCalledWith("result-youtube", "run-1", {
+          until: new Date("2026-11-02T08:05:00Z"),
+          errorCode: "DAILY_LIMIT",
+        });
+        expect(step.sleepUntil).toHaveBeenCalledWith(
+          "publish-to-youtube-wait-rl1",
+          new Date("2026-11-02T08:05:00Z"),
+        );
+        expect(out.results).toEqual([{ platform: "youtube", status: "success" }]);
+      });
+
+      it("keeps the 30 s minimum wait when the lag window is nearly over", async () => {
+        const now = "2026-11-02T08:04:50Z";
+        vi.setSystemTime(Date.parse(now));
+        platformCalls({
+          youtube: (call) => {
+            if (call === 1) throw limited("youtube", classifierRetryAt(now), "youtube_quota");
+            return { externalPostId: "ext-youtube" };
+          },
+        });
+
+        await publishRun(["youtube"]);
+
+        expect(exhaustBudgetMock).not.toHaveBeenCalled();
+        expect(releaseSpy).toHaveBeenCalledWith("result-youtube", "run-1", {
+          until: new Date("2026-11-02T08:05:20Z"), // now + 30 s, not 08:05:00
+          errorCode: "DAILY_LIMIT",
+        });
+      });
+
+      it("our own budget refusal at 00:02 PST is treated the same way", async () => {
+        const now = "2026-11-02T08:02:00Z";
+        vi.setSystemTime(Date.parse(now));
+        consumeSlotMock.mockResolvedValueOnce({
+          allowed: false,
+          resetAt: nextPacificMidnight(new Date(now)),
+        });
+        platformCalls({});
+
+        await publishRun(["youtube"]);
+
+        expect(exhaustBudgetMock).not.toHaveBeenCalled();
+        expect(releaseSpy).toHaveBeenCalledWith("result-youtube", "run-1", {
+          until: new Date("2026-11-02T08:05:00Z"),
+          errorCode: "DAILY_LIMIT",
+        });
+      });
+
+      it("from 00:05 PST on, a quotaExceeded is real: it trips the counter and waits for tomorrow's reset", async () => {
+        const now = "2026-11-02T08:05:00Z";
+        vi.setSystemTime(Date.parse(now));
+        platformCalls({
+          youtube: (call) => {
+            if (call === 1) throw limited("youtube", classifierRetryAt(now), "youtube_quota");
+            return { externalPostId: "ext-youtube" };
+          },
+        });
+
+        await publishRun(["youtube"]);
+
+        expect(exhaustBudgetMock).toHaveBeenCalledTimes(1);
+        expect(releaseSpy).toHaveBeenCalledWith("result-youtube", "run-1", {
+          until: new Date("2026-11-03T08:05:00Z"),
+          errorCode: "DAILY_LIMIT",
+        });
+      });
+
+      it("only a youtube_quota refusal is affected: a plain rate limit and a channel upload limit keep their retryAt", async () => {
+        const now = "2026-11-02T08:02:00Z";
+        vi.setSystemTime(Date.parse(now));
+        const rateLimitedAt = Date.parse("2026-11-02T08:10:00Z");
+        const channelResetAt = classifierRetryAt(now);
+        const outcomes: Array<[RateLimitKindName, number]> = [];
+        for (const [kind, retryAt] of [
+          ["rate_limited", rateLimitedAt],
+          ["daily_limit", channelResetAt],
+        ] as const) {
+          releaseSpy.mockClear();
+          platformCalls({
+            youtube: (call) => {
+              if (call === 1) throw limited("youtube", retryAt, kind);
+              return { externalPostId: "ext-youtube" };
+            },
+          });
+          await publishRun(["youtube"]);
+          outcomes.push([
+            kind,
+            (releaseSpy.mock.calls[0][2] as { until: Date }).until.getTime(),
+          ]);
+        }
+
+        expect(outcomes).toEqual([
+          ["rate_limited", rateLimitedAt],
+          ["daily_limit", channelResetAt],
+        ]);
+        expect(exhaustBudgetMock).not.toHaveBeenCalled();
+      });
+    });
+
+    // Ruling R23 (a): the next reset can be 25 h 35 min away on the fall-back day;
+    // a woken overnight backlog must wait for it, not fail.
+    it("on the fall-back day, a refusal at 00:30 PDT waits for the next reset plus the grace and does not give up", async () => {
+      vi.setSystemTime(Date.parse("2027-11-07T07:30:00Z"));
+      const resetAt = nextPacificMidnight(new Date("2027-11-07T07:30:00Z"));
+      expect(resetAt.toISOString()).toBe("2027-11-08T08:00:00.000Z");
+      consumeSlotMock.mockResolvedValueOnce({ allowed: false, resetAt });
+      const calls = platformCalls({});
+      const step = fakeStep();
+
+      const out = await publishRun(["youtube"], step);
+
+      // The wait is longer than a day, so the old 24 h cap would have failed it.
+      const until = new Date("2027-11-08T08:05:00Z");
+      expect(until.getTime() - Date.parse("2027-11-07T07:30:00Z")).toBeGreaterThan(24 * HOUR);
+      expect(releaseSpy).toHaveBeenCalledWith("result-youtube", "run-1", {
+        until,
+        errorCode: "DAILY_LIMIT",
+      });
+      expect(step.sleepUntil).toHaveBeenCalledWith("publish-to-youtube-wait-rl1", until);
+      expect(failedWrites()).toEqual([]);
+      expect(exhaustBudgetMock).not.toHaveBeenCalled();
+      expect(calls.youtube).toBe(1);
+      expect(out.results).toEqual([{ platform: "youtube", status: "success" }]);
     });
   });
 
@@ -2032,5 +2199,192 @@ describe("stalePostJobSweep - deferral exclusion and singleton", () => {
   it("runs one sweep at a time (singleton skip)", () => {
     expect(optsOf().id).toBe("stale-post-job-sweep");
     expect(optsOf().singleton).toEqual({ mode: "skip" });
+  });
+});
+
+// Fix round 1 (Important 1): `notify-outcome` used to be sent after every
+// finalize. With a deferral that is wrong: a retry run that finalizes while
+// another platform's result is still asleep would email "YouTube: Pending", and
+// the original run would email again ~20 h later. The event is now sent only when
+// the memoized finalize result is a terminal outcome (`completed` / `failed`),
+// which is deterministic across replays; the step id `notify-outcome` is unchanged.
+describe("outcome email - only for a terminal job status (fix round 1, Important 1)", () => {
+  const T = Date.parse("2026-11-02T10:00:00.000Z");
+  const HOUR = 3_600_000;
+
+  const publishEvent = {
+    name: "post/publish.requested",
+    data: { postJobId: "job-1", userId: "user-1", mediaItemId: "media-1", baseCaption: "c", perPlatformOverrides: null },
+  };
+
+  /** The `postJob` row both functions read (a superset: publish needs less than retry). */
+  function seedJob() {
+    db.postJobFindUnique.mockResolvedValue({
+      id: "job-1", workspaceId: WORKSPACE.id, mediaItemId: "media-1",
+      baseCaption: "c", perPlatformOverrides: null, publishMetadata: null,
+    });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null, mimeType: "video/mp4" });
+  }
+
+  /** Result lookups served from the in-memory table: ids by platform, statuses for the recompute. */
+  function serveResultsFrom(rows: Map<string, { status: string }>) {
+    db.resultFindMany.mockImplementation(({ select }: { select: Record<string, boolean> }) =>
+      Promise.resolve(
+        [...rows.entries()].map(([id, row]) =>
+          select.platform ? { id, platform: id.replace("result-", "") } : { status: row.status },
+        ),
+      ),
+    );
+  }
+
+  type RunOut = { status: string; results: Array<{ platform: Platform; status: string }> };
+
+  function publish(platforms: Platform[], step: FakeStep, runId = "run-1") {
+    seedJob();
+    db.connectionFindMany.mockResolvedValue(platforms.map((p) => ({ id: `conn-${p}`, platform: p })));
+    return handlerOf(publishToAllPlatforms)({ runId, event: publishEvent, step }) as Promise<RunOut>;
+  }
+
+  function retry(platforms: Platform[], step: FakeStep, runId = "run-1") {
+    seedJob();
+    db.connectionFindMany.mockResolvedValue(platforms.map((p) => ({ id: `conn-${p}`, platform: p })));
+    return handlerOf(retryPlatforms)({
+      runId,
+      event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms } },
+      step,
+    }) as Promise<RunOut>;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe.each([
+    ["publishToAllPlatforms", publish, "finalize-job"],
+    ["retryPlatforms", retry, "finalize-retry"],
+  ] as const)("%s", (_name, run, finalizeId) => {
+    it.each([
+      ["completed", false],
+      ["failed", true],
+    ] as const)("sends the email, once, after %s", async (finalStatus, platformFails) => {
+      const rows = stubResultStore({ "result-x": {} });
+      serveResultsFrom(rows);
+      if (platformFails) {
+        getPlatformClientMock.mockImplementation(() => ({
+          publishVideo: vi.fn(async () => {
+            throw Object.assign(new Error("nope"), { code: "X_TWEET_FAILED", status: 403 });
+          }),
+        }));
+      }
+      const step = fakeStep();
+
+      await run(["x"], step);
+
+      expect(step.outputs[finalizeId]).toMatchObject({ finalStatus });
+      expect(step.sendEvent).toHaveBeenCalledTimes(1);
+      expect(step.sendEvent).toHaveBeenCalledWith("notify-outcome", {
+        id: "notify-job-1-run-1",
+        name: "notification.requested",
+        data: { userId: "user-1", postJobId: "job-1" },
+      });
+      expect(step.order.slice(-2)).toEqual([`run:${finalizeId}`, "sendEvent:notify-outcome"]);
+    });
+
+    it("sends NO event when the job is still in_progress (another result is pending)", async () => {
+      // x succeeds in this run; youtube is another run's result, still pending.
+      const rows = stubResultStore({
+        "result-x": {},
+        "result-youtube": { status: "pending", deferredUntil: new Date(T + 20 * HOUR), errorCode: "DAILY_LIMIT" },
+      });
+      serveResultsFrom(rows);
+      const step = fakeStep();
+
+      const out = await run(["x"], step);
+
+      expect(rows.get("result-x")).toMatchObject({ status: "success" });
+      expect(step.outputs[finalizeId]).toMatchObject({ finalStatus: "in_progress", successCount: 1 });
+      expect(out.status).toBe("in_progress");
+      expect(step.sendEvent).not.toHaveBeenCalled();
+      expect(step.order.some((entry) => entry.startsWith("sendEvent:"))).toBe(false);
+      // The finalize itself still ran (the job's status is recorded).
+      expect(step.order).toContain(`run:${finalizeId}`);
+    });
+  });
+
+  // The review's flow, end to end: X fails and YouTube defers 20 h; the user retries
+  // X while YouTube sleeps; 20 h later YouTube publishes.
+  it("X fails, YouTube defers, the user retries X: the retry run is silent and the original run sends the one email", async () => {
+    const rows = stubResultStore({ "result-x": {}, "result-youtube": {} });
+    serveResultsFrom(rows);
+    consumeSlotMock.mockResolvedValueOnce({ allowed: false, resetAt: new Date(T + 20 * HOUR) });
+    const calls: Record<string, number> = {};
+    getPlatformClientMock.mockImplementation((platform: Platform) => ({
+      publishVideo: vi.fn(async (ctx: PublishContext) => {
+        publishCtxs.push(ctx);
+        calls[platform] = (calls[platform] ?? 0) + 1;
+        if (platform === "x" && calls.x === 1) {
+          throw Object.assign(new Error("nope"), { code: "X_TWEET_FAILED", status: 403 });
+        }
+        return { externalPostId: `ext-${platform}` };
+      }),
+    }));
+    const original = fakeStep();
+    const retryStep = fakeStep();
+    const retried: { out?: RunOut } = {};
+    original.sleepUntil.mockImplementation(async (id: string) => {
+      original.order.push(`sleepUntil:${id}`);
+      // While YouTube sleeps: the retry route re-queues the failed X, and its run goes.
+      Object.assign(rows.get("result-x")!, { status: "pending", claimRunId: null, errorCode: null });
+      retried.out = await retry(["x"], retryStep, "run-2");
+    });
+
+    const originalOut = await publish(["x", "youtube"], original);
+
+    // The retry run finalized with YouTube still pending: in_progress, and silent.
+    expect(retried.out?.results).toEqual([{ platform: "x", status: "success" }]);
+    expect(retryStep.outputs["finalize-retry"]).toMatchObject({ finalStatus: "in_progress" });
+    expect(retryStep.sendEvent).not.toHaveBeenCalled();
+    // The original run settles YouTube, finalizes `completed`, and emails once, last.
+    expect(original.order).toEqual([
+      "run:fetch-data",
+      "run:publish-to-x",
+      "run:publish-to-youtube",
+      "sleepUntil:publish-to-youtube-wait-rl1",
+      "run:publish-to-youtube-rl1",
+      "run:finalize-job",
+      "sendEvent:notify-outcome",
+    ]);
+    expect(original.outputs["finalize-job"]).toMatchObject({ finalStatus: "completed", successCount: 2 });
+    expect(original.sendEvent).toHaveBeenCalledTimes(1);
+    expect(original.sendEvent).toHaveBeenCalledWith(
+      "notify-outcome",
+      expect.objectContaining({ id: "notify-job-1-run-1" }),
+    );
+    expect(originalOut.status).toBe("completed");
+  });
+
+  it("the original run on its own: YouTube defers then succeeds - still one email, after the final finalize", async () => {
+    const rows = stubResultStore({ "result-x": {}, "result-youtube": {} });
+    serveResultsFrom(rows);
+    consumeSlotMock.mockResolvedValueOnce({ allowed: false, resetAt: new Date(T + 20 * HOUR) });
+    getPlatformClientMock.mockImplementation((platform: Platform) => ({
+      publishVideo: vi.fn(async () => ({ externalPostId: `ext-${platform}` })),
+    }));
+    const step = fakeStep();
+
+    await publish(["x", "youtube"], step);
+
+    expect(step.sendEvent).toHaveBeenCalledTimes(1);
+    expect(step.order.filter((entry) => entry.startsWith("run:finalize"))).toEqual(["run:finalize-job"]);
+    expect(step.order.slice(-2)).toEqual(["run:finalize-job", "sendEvent:notify-outcome"]);
+    expect(step.order.indexOf("run:publish-to-youtube-rl1")).toBeLessThan(
+      step.order.indexOf("run:finalize-job"),
+    );
+    expect(step.outputs["finalize-job"]).toMatchObject({ finalStatus: "completed" });
   });
 });

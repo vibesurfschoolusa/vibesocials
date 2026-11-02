@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   classifyRateLimit,
+  currentPacificMidnight,
   isRateLimitedError,
   metaRetryAt,
   nextPacificMidnight,
@@ -205,6 +206,75 @@ describe("nextPacificMidnight — sweep across the DST change days", () => {
         second: "2-digit",
       }).format(next);
       expect(clock).toBe("00:00:00");
+    }
+  });
+});
+
+// 2026-11-01 scale audit (platform limits, ruling R23): a YouTube quota refusal in
+// the first minutes of a Pacific day is Google's reset lagging, not a spent
+// budget. The run needs the day's own midnight to tell: the most recent one.
+describe("currentPacificMidnight", () => {
+  it.each([
+    ["the day before the fall-back day (PDT)", "2026-10-31T12:00:00Z", "2026-10-31T07:00:00Z"],
+    ["00:30 PDT on the fall-back day (before 2am)", "2026-11-01T07:30:00Z", "2026-11-01T07:00:00Z"],
+    ["the repeated 1am hour (01:30 PST)", "2026-11-01T09:30:00Z", "2026-11-01T07:00:00Z"],
+    ["after the fall-back change (04:00 PST)", "2026-11-01T12:00:00Z", "2026-11-01T07:00:00Z"],
+    ["23:59:59 PST on the fall-back day", "2026-11-02T07:59:59Z", "2026-11-01T07:00:00Z"],
+    ["00:02 PST the day after", "2026-11-02T08:02:00Z", "2026-11-02T08:00:00Z"],
+    ["00:30 PDT on the NEXT fall-back day (2027-11-07)", "2027-11-07T07:30:00Z", "2027-11-07T07:00:00Z"],
+    ["00:02 PST after the next fall-back day", "2027-11-08T08:02:00Z", "2027-11-08T08:00:00Z"],
+    ["23:59:59 PST before the spring-forward day", "2027-03-14T07:59:59Z", "2027-03-13T08:00:00Z"],
+    ["the spring-forward day, 00:00 PST sharp", "2027-03-14T08:00:00Z", "2027-03-14T08:00:00Z"],
+    ["after the spring-forward change (05:00 PDT)", "2027-03-14T12:00:00Z", "2027-03-14T08:00:00Z"],
+    ["23:59:59 PDT on the spring-forward day", "2027-03-15T06:59:59Z", "2027-03-14T08:00:00Z"],
+    ["the day after spring forward, 00:00 PDT sharp", "2027-03-15T07:00:00Z", "2027-03-15T07:00:00Z"],
+    ["a plain summer day", "2026-07-15T20:00:00Z", "2026-07-15T07:00:00Z"],
+    ["a year boundary", "2027-01-01T03:00:00Z", "2026-12-31T08:00:00Z"],
+  ])("%s: %s -> %s", (_label, nowIso, expectedIso) => {
+    expect(currentPacificMidnight(new Date(nowIso)).toISOString()).toBe(
+      new Date(expectedIso).toISOString(),
+    );
+  });
+
+  it("is at or before now: exactly at Pacific midnight it returns that midnight", () => {
+    expect(currentPacificMidnight(new Date("2026-11-01T07:00:00Z")).toISOString()).toBe(
+      "2026-11-01T07:00:00.000Z",
+    );
+    expect(currentPacificMidnight(new Date("2026-11-01T06:59:59.999Z")).toISOString()).toBe(
+      "2026-10-31T07:00:00.000Z",
+    );
+  });
+});
+
+// Independent of the vectors above: sweep every half hour around both DST
+// changes (and the next fall-back) and check the defining property.
+describe("currentPacificMidnight — sweep across the DST change days", () => {
+  it.each([
+    ["fall back 2026-11-01", Date.UTC(2026, 9, 30, 0, 0, 0)],
+    ["spring forward 2027-03-14", Date.UTC(2027, 2, 12, 0, 0, 0)],
+    ["fall back 2027-11-07", Date.UTC(2027, 10, 5, 0, 0, 0)],
+  ])("%s: the result is the first instant of the Pacific day containing now", (_label, start) => {
+    for (let t = start; t < start + 5 * DAY; t += 30 * MIN) {
+      const now = new Date(t);
+      const current = currentPacificMidnight(now);
+      // At or before now, within the day (25 h at most on the fall-back day).
+      expect(current.getTime()).toBeLessThanOrEqual(t);
+      expect(t - current.getTime()).toBeLessThan(25 * 60 * MIN);
+      // It is the very first instant of now's Pacific day...
+      expect(pacificDayKey(current)).toBe(pacificDayKey(now));
+      expect(pacificDayKey(new Date(current.getTime() - 1))).not.toBe(pacificDayKey(now));
+      // ...the Pacific clock reads 00:00 there...
+      const clock = new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/Los_Angeles",
+        hourCycle: "h23",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }).format(current);
+      expect(clock).toBe("00:00:00");
+      // ...and the next midnight is the one after it.
+      expect(nextPacificMidnight(now).getTime()).toBe(nextPacificMidnight(current).getTime());
+      expect(nextPacificMidnight(now).getTime()).toBeGreaterThan(t);
     }
   });
 });

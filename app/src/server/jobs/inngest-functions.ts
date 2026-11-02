@@ -55,6 +55,7 @@ import {
 } from "@/server/jobs/platformSteps";
 import { refreshGoogleToken } from "@/server/platforms/googleTokens";
 import {
+  currentPacificMidnight,
   isRateLimitedError,
   PACIFIC_RESET_GRACE_MS,
   rateLimitedError,
@@ -247,6 +248,13 @@ async function claimOrSkip(
  * A `youtube_quota` error that came from Google itself (not from our own counter,
  * which is already spent) trips the day's counter, so the other jobs defer to the
  * reset instead of each spending an upload that Google refuses.
+ *
+ * Ruling R23: Google's quota resets at midnight Pacific, but its clock may lag
+ * ours. A `youtube_quota` refusal (Google's 403 or our own counter) in the first
+ * `PACIFIC_RESET_GRACE_MS` of the Pacific day is that lag, not a spent budget:
+ * it must NOT trip the new day's counter (which would block every workspace for
+ * a day), and the wait is only until today's midnight plus the grace, not
+ * tomorrow's (resolveDeferral still applies its 30 s minimum).
  */
 async function deferRateLimitedResult(args: {
   error: RateLimitedError;
@@ -259,18 +267,25 @@ async function deferRateLimitedResult(args: {
 }): Promise<PlatformStepOutcome> {
   const { error, attempt, platform, resultRecordId, runId, fromOurBudget } = args;
 
-  if (error.kind === "youtube_quota" && !fromOurBudget) {
-    try {
-      await exhaustYouTubeUploadBudget();
-    } catch (exhaustError) {
-      // An optimization only: Google's own refusal still applies without it.
-      logger.warn("[Inngest] Could not mark the YouTube upload budget as used up", {
-        error: exhaustError,
-      });
+  const now = Date.now();
+  let limited = error;
+  if (error.kind === "youtube_quota") {
+    const lagEndsAt = currentPacificMidnight(new Date(now)).getTime() + PACIFIC_RESET_GRACE_MS;
+    if (now < lagEndsAt) {
+      limited = rateLimitedError(error.platform, error.kind, lagEndsAt);
+    } else if (!fromOurBudget) {
+      try {
+        await exhaustYouTubeUploadBudget();
+      } catch (exhaustError) {
+        // An optimization only: Google's own refusal still applies without it.
+        logger.warn("[Inngest] Could not mark the YouTube upload budget as used up", {
+          error: exhaustError,
+        });
+      }
     }
   }
 
-  const decision = resolveDeferral(error, attempt, Date.now());
+  const decision = resolveDeferral(limited, attempt, now);
 
   if ("giveUp" in decision) {
     const failure = giveUpFailure(platform, error.kind);
@@ -279,7 +294,7 @@ async function deferRateLimitedResult(args: {
       resultRecordId,
       kind: error.kind,
       attempt,
-      retryAt: error.retryAt,
+      retryAt: limited.retryAt,
     });
     await finalizeClaimedResult(resultRecordId, runId, { status: "failed", ...failure });
     return { platform, status: "failed", error: failure.errorMessage };
@@ -466,6 +481,15 @@ async function publishToPlatform({
     externalPostId: publishResult.externalPostId ?? null,
   });
   return { platform: connectionRef.platform, status: "success" };
+}
+
+/**
+ * Is this the job's final word? The finalize recompute yields `in_progress`
+ * while any result is still `pending` (a platform waiting out a rate limit), and
+ * `completed` / `failed` once none is. Only those two are worth an outcome email.
+ */
+function isTerminalOutcome(status: string): boolean {
+  return status === "completed" || status === "failed";
 }
 
 /** Recorded on every result a dead publish/retry run left `pending` (Task 4 item 7). */
@@ -760,14 +784,21 @@ export const publishToAllPlatforms = inngest.createFunction(
     // The event id is scoped to this run (2026-11-01 scale audit, jobs H6): a
     // re-executed send of THIS run's notification is deduplicated, while a later
     // retry run of the job (a new outcome) still notifies.
-    try {
-      await step.sendEvent("notify-outcome", {
-        id: `notify-${postJobId}-${runId}`,
-        name: "notification.requested",
-        data: { userId, postJobId },
-      });
-    } catch (err) {
-      logger.error("[Inngest] Failed to enqueue post-outcome notification (ignored)", { postJobId, error: err });
+    // Only a TERMINAL outcome is announced (fix round 1, platform limits): a
+    // result still waiting out a platform limit leaves the job `in_progress`, and
+    // a "YouTube: Pending" email now would be followed by a second one when it
+    // settles. The decision reads the memoized finalize output, so it is the same
+    // on every replay; the step id is unchanged.
+    if (isTerminalOutcome(finalResult.finalStatus)) {
+      try {
+        await step.sendEvent("notify-outcome", {
+          id: `notify-${postJobId}-${runId}`,
+          name: "notification.requested",
+          data: { userId, postJobId },
+        });
+      } catch (err) {
+        logger.error("[Inngest] Failed to enqueue post-outcome notification (ignored)", { postJobId, error: err });
+      }
     }
 
     logger.info("[Inngest] Job completed", { postJobId, ...finalResult });
@@ -1186,15 +1217,21 @@ export const retryPlatforms = inngest.createFunction(
     // initial publish path above — a retry reaching a terminal state is itself a
     // new outcome worth emailing. Same REQUIRED try/catch: once the step's
     // retries are spent, an un-swallowed enqueue error would falsely fail a retry
-    // run whose platforms already published. Same run-scoped event id.
-    try {
-      await step.sendEvent("notify-outcome", {
-        id: `notify-${postJobId}-${runId}`,
-        name: "notification.requested",
-        data: { userId, postJobId },
-      });
-    } catch (err) {
-      logger.error("[Inngest] Failed to enqueue post-outcome notification (ignored)", { postJobId, error: err });
+    // run whose platforms already published. Same run-scoped event id. Same
+    // terminal-only gate as the publish path: a retry that finalizes while another
+    // platform of the job is still waiting out a limit (the original run asleep)
+    // leaves the job `in_progress` and sends nothing; whichever run settles the
+    // last result announces the outcome.
+    if (isTerminalOutcome(finalResult.finalStatus)) {
+      try {
+        await step.sendEvent("notify-outcome", {
+          id: `notify-${postJobId}-${runId}`,
+          name: "notification.requested",
+          data: { userId, postJobId },
+        });
+      } catch (err) {
+        logger.error("[Inngest] Failed to enqueue post-outcome notification (ignored)", { postJobId, error: err });
+      }
     }
 
     console.log("[Inngest] Retry job completed", { postJobId, ...finalResult });

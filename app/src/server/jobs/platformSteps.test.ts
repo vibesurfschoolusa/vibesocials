@@ -22,7 +22,9 @@ describe("deferral bounds", () => {
     // GBP's documented exponential backoff (plan V17).
     expect([...RATE_LIMIT_BACKOFF_MS]).toEqual([60_000, 900_000, 3_600_000]);
     expect(MIN_RATE_LIMIT_WAIT_MS).toBe(30_000);
-    expect(MAX_RATE_LIMIT_WAIT_MS).toBe(86_400_000);
+    // 26 h (ruling R23): YouTube's reset is up to 25 h 5 min away on the fall-back
+    // day (the next Pacific midnight plus the 5 min grace), so a day is too short.
+    expect(MAX_RATE_LIMIT_WAIT_MS).toBe(93_600_000);
   });
 });
 
@@ -50,13 +52,18 @@ describe("resolveDeferral", () => {
     expect(resolveDeferral(limited(T + HOUR), 7, T)).toEqual({ giveUp: true });
   });
 
-  it("gives up when the platform asks for more than 24 h", () => {
-    expect(resolveDeferral(limited(T + 25 * HOUR), 0, T)).toEqual({ giveUp: true });
-    expect(resolveDeferral(limited(T + 24 * HOUR + 1), 0, T)).toEqual({ giveUp: true });
+  it("gives up when the platform asks for more than 26 h", () => {
+    expect(resolveDeferral(limited(T + 27 * HOUR), 0, T)).toEqual({ giveUp: true });
+    expect(resolveDeferral(limited(T + 26 * HOUR + 1), 0, T)).toEqual({ giveUp: true });
   });
 
-  it("waits exactly 24 h when that is what the platform asks for", () => {
-    expect(resolveDeferral(limited(T + 24 * HOUR), 0, T)).toEqual({ retryAt: T + 24 * HOUR });
+  // Ruling R23: YouTube's reset can be 25 h 5 min away (fall-back day, plus grace).
+  it("waits for a platform that asks for 25 h, and for exactly 26 h", () => {
+    expect(resolveDeferral(limited(T + 25 * HOUR), 0, T)).toEqual({ retryAt: T + 25 * HOUR });
+    expect(resolveDeferral(limited(T + 25 * HOUR + 5 * 60_000), 0, T)).toEqual({
+      retryAt: T + 25 * HOUR + 5 * 60_000,
+    });
+    expect(resolveDeferral(limited(T + 26 * HOUR), 0, T)).toEqual({ retryAt: T + 26 * HOUR });
   });
 
   it("never waits less than 30 s, even for a hint that is nearly (or already) due", () => {
