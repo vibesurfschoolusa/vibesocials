@@ -1,4 +1,4 @@
-import type { PostJobResultStatus } from "@prisma/client";
+import { Prisma, type PostJobResultStatus } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
@@ -16,6 +16,11 @@ import { logger } from "@/lib/logger";
  * `PostJobResult.claimRunId` is the Inngest `runId` of the step about to call
  * the platform. A claim is only ever held inside one step (<= 300 s), so a
  * `pending` row that still has one afterwards lost its run mid-call.
+ *
+ * 2026-11-02 scale audit (jobs, chunked uploads): an upload that spans several
+ * steps keeps that rule. Each step claims the result at its start and every
+ * `continue` releases the claim (releaseClaimForContinuation) before the step
+ * ends; the saved upload state (uploadState.ts) is what carries it over.
  */
 
 /** What {@link claimResult} found. */
@@ -98,6 +103,10 @@ export async function claimResult(
  *   truth. This is safe because a new attempt has to clear (retry route) or take
  *   (a fresh claim) the claim before it can act, which ends this run's write.
  *
+ * Either outcome also clears the saved upload state (`uploadState`, a chunked
+ * upload's progress and sealed capability URLs): the upload is over, and a failed
+ * one starts from scratch when the user retries.
+ *
  * Returns false (and logs) when the claim is no longer held — the result was
  * reset, failed or finalized by someone else — instead of throwing: a thrown
  * error would only make the step fail again. A lost FAILURE is a warning. A lost
@@ -118,7 +127,11 @@ export async function finalizeClaimedResult(
   try {
     await prisma.postJobResult.update({
       where,
-      data: { ...data, postJob: { update: { updatedAt: new Date() } } },
+      data: {
+        ...data,
+        uploadState: Prisma.DbNull,
+        postJob: { update: { updatedAt: new Date() } },
+      },
     });
     return true;
   } catch (error) {
@@ -188,7 +201,9 @@ async function logLostSuccess(
  * Like the finalize it bumps the job heartbeat in the same write, and matches
  * only while `runId` still holds the claim on a `pending` result. Returns false
  * (and logs a warning) when it no longer does - the result was failed or
- * finished by someone else - so the caller stops waiting for it.
+ * finished by someone else - so the caller stops waiting for it. It keeps
+ * `uploadState`: an upload that was rate-limited between two chunks resumes from
+ * its saved state.
  */
 export async function releaseClaimForDeferral(
   resultId: string,
@@ -214,6 +229,51 @@ export async function releaseClaimForDeferral(
         resultId,
         runId,
         errorCode: deferral.errorCode,
+      });
+      return false;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Hand a claimed result back between two steps of one chunked upload
+ * (2026-11-02 scale audit, jobs). The client made progress and saved its state
+ * (uploadState.ts); the run calls the platform step again - after a durable
+ * sleep when the platform asked to wait - and that step claims the result anew
+ * ({@link claimResult}).
+ *
+ * One write clears the claim and bumps the job heartbeat. That is all: no
+ * `deferredUntil` and no `errorCode`, so the Activity card shows an ordinary
+ * "publishing" result and not rate-limit copy, and the saved upload state is kept.
+ * The claim must not outlive the step for the same reason a deferral's must not:
+ * a claimed row that outlives its step is failed PUBLISH_UNCONFIRMED. An unclaimed
+ * `pending` one between two steps provably holds no post, because the commit call
+ * and the work after it always run inside one claimed step.
+ *
+ * Matches only while `runId` still holds the claim on a `pending` result. Returns
+ * false (and logs a warning) when it no longer does - the result was failed or
+ * finished by someone else - so the caller stops continuing it.
+ */
+export async function releaseClaimForContinuation(
+  resultId: string,
+  runId: string,
+): Promise<boolean> {
+  try {
+    await prisma.postJobResult.update({
+      where: { id: resultId, claimRunId: runId, status: "pending" },
+      data: {
+        claimRunId: null,
+        claimedAt: null,
+        postJob: { update: { updatedAt: new Date() } },
+      },
+    });
+    return true;
+  } catch (error) {
+    if (isRecordNotFound(error)) {
+      logger.warn("[Inngest] Continuation not recorded: this run no longer holds its claim", {
+        resultId,
+        runId,
       });
       return false;
     }

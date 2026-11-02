@@ -1,5 +1,7 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 
+import type { UploadStateStore } from "@/server/jobs/uploadState";
+
 export interface TikTokPostMetadata {
   privacyLevel: string;
   disableComment: boolean;
@@ -43,12 +45,33 @@ export interface PublishContext {
    * requests and polling by it. Absent = unbounded (direct callers, tests).
    */
   deadline?: number;
+  /**
+   * Where a chunked upload keeps its progress between steps (uploadState.ts).
+   * Always set by publishToPlatform; a client treats an absent store (a direct
+   * caller, a test) as "do today's whole upload inside this one step".
+   */
+  uploadState?: UploadStateStore;
+  /**
+   * 0 in a platform's first step of the run, n in its n-th continuation step
+   * (`<stepId>-c<n>`, platformSteps.ts). Absent = 0.
+   */
+  continuation?: number;
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
 }
 
 export interface PublishResult {
   externalPostId?: string | null;
+  /**
+   * The client made progress and has more to do: chunks left, processing not
+   * done, or too little step time left for the commit call. It MUST have saved
+   * its state in `ctx.uploadState` first. publishToPlatform releases the claim
+   * and the run calls the platform again in a continuation step. `resumeAt` is
+   * the epoch ms the next step should start no sooner than; null means "call
+   * again now". Never set together with a post: the commit call and the work
+   * after it finish inside one step.
+   */
+  continuation?: { resumeAt: number | null };
 }
 
 export interface PlatformClient {

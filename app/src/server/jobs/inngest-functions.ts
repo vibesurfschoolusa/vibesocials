@@ -57,16 +57,24 @@ import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/pub
 import {
   claimResult,
   finalizeClaimedResult,
+  releaseClaimForContinuation,
   releaseClaimForDeferral,
 } from "@/server/jobs/resultClaim";
 import {
   deferralErrorCode,
   giveUpFailure,
+  MAX_CONTINUATIONS_PER_RESULT,
+  resolveContinuation,
   resolveDeferral,
   runPlatformStepsWithDeferrals,
   type PlatformStepOutcome,
   type PlatformStepPlan,
 } from "@/server/jobs/platformSteps";
+import {
+  createUploadStateStore,
+  UPLOAD_INCOMPLETE,
+  YOUTUBE_UPLOAD_STATE_KIND,
+} from "@/server/jobs/uploadState";
 import {
   CONNECTION_GONE_CODE,
   CONNECTION_RECONNECT_REQUIRED_CODE,
@@ -129,6 +137,12 @@ interface PublishToPlatformArgs {
    * (platformSteps.ts): decides how long the next wait is, or whether to give up.
    */
   attempt: number;
+  /**
+   * 0 in a platform's first step of the run, n in its n-th continuation step
+   * (`<stepId>-c<n>`, platformSteps.ts): a large upload that did not fit one step
+   * and resumes from its saved state (uploadState.ts).
+   */
+  continuation: number;
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
 }
@@ -179,7 +193,7 @@ async function refreshJobHeartbeat(postJobId: string): Promise<void> {
       data: { updatedAt: new Date() },
     });
   } catch (error) {
-    logger.warn("[Inngest] Could not refresh the job heartbeat after a rate-limit wait", {
+    logger.warn("[Inngest] Could not refresh the job heartbeat before a resumed step", {
       postJobId,
       error,
     });
@@ -214,13 +228,26 @@ async function refreshJobHeartbeat(postJobId: string): Promise<void> {
  * heartbeat (`PostJob.updatedAt`) to be older than the sweeps' windows, so the
  * heartbeat is refreshed BEFORE the claim: while the result is still deferred
  * the sweeps skip the job, and from the claim on they see a fresh heartbeat.
+ *
+ * `continuation` > 0 (2026-11-02 scale audit, jobs, chunked uploads) is a step
+ * that resumes a large upload (`<stepId>-c<n>`). It claims exactly like attempt 0:
+ * the previous step released its claim when it continued, so the result is
+ * `pending` and unclaimed, and a claim this run still holds can only be a dead
+ * earlier try of THIS step - `held_by_this_run`, so PUBLISH_UNCONFIRMED, as above.
+ * It refreshes the heartbeat first for the same reason as a rate-limit wait.
  */
 async function claimOrSkip(
   resultRecordId: string,
   runId: string,
-  context: { step: "publish" | "retry"; postJobId: string; platform: Platform; attempt: number },
+  context: {
+    step: "publish" | "retry";
+    postJobId: string;
+    platform: Platform;
+    attempt: number;
+    continuation: number;
+  },
 ): Promise<PlatformStepOutcome | null> {
-  if (context.attempt > 0) await refreshJobHeartbeat(context.postJobId);
+  if (context.attempt > 0 || context.continuation > 0) await refreshJobHeartbeat(context.postJobId);
 
   const outcome = await claimResult(resultRecordId, runId);
   if (outcome === "claimed") return null;
@@ -333,13 +360,66 @@ async function deferRateLimitedResult(args: {
   return { platform, status: "deferred", retryAt: until.toISOString() };
 }
 
+/**
+ * A platform step uploaded part of a large video and has more to do
+ * (2026-11-02 scale audit, jobs, chunked uploads). Its client already saved its
+ * state (uploadState.ts). Decide whether another step is allowed and record it:
+ *
+ * - allowed: release the claim in the one write that also bumps the job heartbeat
+ *   (resultClaim.ts `releaseClaimForContinuation`) and report `continue`; the run
+ *   starts `<stepId>-c<n>` straight away, or sleeps first when the platform asked
+ *   to wait. The result stays `pending` and holds no claim in between; no
+ *   deferral or error code is recorded, so the Activity card shows no rate-limit
+ *   copy.
+ * - this was already the last allowed continuation (MAX_CONTINUATIONS_PER_RESULT):
+ *   finalize it failed UPLOAD_INCOMPLETE. Nothing was posted: the commit call is
+ *   the last thing an upload does and it never crosses a step boundary.
+ * - the claim is gone (someone failed or finished the result meanwhile): nothing
+ *   to continue, report `skipped`.
+ *
+ * The step's end time is read here, inside the step, so the memoized outcome
+ * decides the order and the sleep on every replay (platformSteps.ts).
+ */
+async function continueUpload(args: {
+  platform: Platform;
+  resultRecordId: string;
+  runId: string;
+  continuation: number;
+  resumeAt: number | null;
+}): Promise<PlatformStepOutcome> {
+  const { platform, resultRecordId, runId, continuation, resumeAt } = args;
+
+  if (continuation >= MAX_CONTINUATIONS_PER_RESULT) {
+    logger.warn(`[Inngest] ${platform} upload is still unfinished after ${continuation} continuation steps; failing it`, {
+      platform,
+      resultRecordId,
+      continuation,
+    });
+    await finalizeClaimedResult(resultRecordId, runId, { status: "failed", ...UPLOAD_INCOMPLETE });
+    return { platform, status: "failed", error: UPLOAD_INCOMPLETE.errorMessage };
+  }
+
+  const next = resolveContinuation(resumeAt, Date.now());
+  const released = await releaseClaimForContinuation(resultRecordId, runId);
+  if (!released) return { platform, status: "skipped" };
+
+  logger.info(`[Inngest] ${platform} upload continues in another step`, {
+    platform,
+    resultRecordId,
+    continuation: continuation + 1,
+    sleep: next.sleep,
+  });
+  return { platform, status: "continue", ...next };
+}
+
 // Helper to publish to a single platform. Loads the connection fresh so tokens
 // are never serialized through step.run() memoization. The caller has already
 // claimed the result for `runId` (claimOrSkip); every result write here is made
 // under that claim (finalizeClaimedResult), which also bumps the job heartbeat.
 // A rate limit or quota refusal is not a failure: it defers the result
 // (deferRateLimitedResult) and the run waits and calls this again with the next
-// `attempt`.
+// `attempt`. A large upload that does not fit one step continues
+// (continueUpload) and the run calls this again with the next `continuation`.
 async function publishToPlatform({
   connectionRef,
   mediaItem,
@@ -349,6 +429,7 @@ async function publishToPlatform({
   resultRecordId,
   runId,
   attempt,
+  continuation,
   tiktokMetadata,
   youtubeMetadata,
 }: PublishToPlatformArgs): Promise<PlatformStepOutcome> {
@@ -357,6 +438,14 @@ async function publishToPlatform({
   // per-invocation cap with time left to record the result (publishBudget.ts).
   const deadline = publishDeadline();
   const client = getPlatformClient(connectionRef.platform);
+  // Where a chunked upload keeps its progress between steps (uploadState.ts):
+  // always handed to the client, built for THIS result, run and platform, so every
+  // step of an upload (-c<n>, -rl<n>) sees the same state and a retry run does not.
+  const uploadState = createUploadStateStore({
+    resultId: resultRecordId,
+    runId,
+    platform: connectionRef.platform,
+  });
 
   if (!client) {
     await finalizeClaimedResult(resultRecordId, runId, {
@@ -419,6 +508,8 @@ async function publishToPlatform({
       caption,
       baseCaption,
       deadline,
+      uploadState,
+      continuation,
     };
 
     // Add TikTok metadata if publishing to TikTok
@@ -432,20 +523,29 @@ async function publishToPlatform({
     }
 
     // YouTube's `videos.insert` has its own daily budget (100 a day by default,
-    // resetting at midnight Pacific; youtubeQuota.ts). Spend ONE slot per attempt,
-    // after the claim and the connection checks, so a result that never reaches
-    // YouTube costs none, and OUTSIDE withTransientRetries below, so an in-step
-    // retry never spends a second. With none left the API is not called: the
-    // result waits for the reset (plus its grace), as a daily limit.
+    // resetting at midnight Pacific; youtubeQuota.ts). Spend ONE slot per upload
+    // SESSION, after the claim and the connection checks, so a result that never
+    // reaches YouTube costs none, and OUTSIDE withTransientRetries below, so an
+    // in-step retry never spends a second. With none left the API is not called:
+    // the result waits for the reset (plus its grace), as a daily limit.
+    //
+    // 2026-11-02 scale audit (jobs, chunked uploads): a session spans several
+    // steps. Only the step that starts it spends a slot; a continuation (-c<n>) and
+    // a rate-limit retry (-rl<n>) of a session this run already saved state for
+    // spend nothing. Without state for this run - the first step, a retry run, or
+    // a state that was lost - the client starts a new session, which costs a slot.
     if (connection.platform === "youtube") {
-      const slot = await consumeYouTubeUploadSlot();
-      if (!slot.allowed) {
-        refusedByOurBudget = true;
-        throw rateLimitedError(
-          "youtube",
-          "youtube_quota",
-          slot.resetAt.getTime() + PACIFIC_RESET_GRACE_MS,
-        );
+      const session = await uploadState.load(YOUTUBE_UPLOAD_STATE_KIND);
+      if (session === null) {
+        const slot = await consumeYouTubeUploadSlot();
+        if (!slot.allowed) {
+          refusedByOurBudget = true;
+          throw rateLimitedError(
+            "youtube",
+            "youtube_quota",
+            slot.resetAt.getTime() + PACIFIC_RESET_GRACE_MS,
+          );
+        }
       }
     }
 
@@ -486,6 +586,19 @@ async function publishToPlatform({
       errorMessage: err.message || "Failed to publish to platform.",
     });
     return { platform: connectionRef.platform, status: "failed", error: err.message };
+  }
+
+  // The client made progress and has more to upload: it saved its state, so hand
+  // the claim back and let the run call it again. Not a post: nothing is recorded
+  // as published, and the commit call has not been made.
+  if (publishResult.continuation) {
+    return continueUpload({
+      platform: connectionRef.platform,
+      resultRecordId,
+      runId,
+      continuation,
+      resumeAt: publishResult.continuation.resumeAt,
+    });
   }
 
   logger.info(`[Inngest] ${connectionRef.platform} success`, {
@@ -747,7 +860,7 @@ export const publishToAllPlatforms = inngest.createFunction(
       plans.push({
         platform: connection.platform,
         stepId: `publish-to-${connection.platform}`,
-        run: async (attempt) => {
+        run: async (attempt, continuation) => {
           // Final review M2 + jobs H6: only the run that claims a still-`pending`
           // result publishes it — the route may already have failed it after an
           // ambiguous dispatch error, and a duplicate run may be ahead of us.
@@ -756,6 +869,7 @@ export const publishToAllPlatforms = inngest.createFunction(
             postJobId,
             platform: connection.platform,
             attempt,
+            continuation,
           });
           if (early) return early;
 
@@ -778,6 +892,7 @@ export const publishToAllPlatforms = inngest.createFunction(
             resultRecordId: resultRecord.id,
             runId,
             attempt,
+            continuation,
             tiktokMetadata,
             youtubeMetadata,
           });
@@ -800,12 +915,13 @@ export const publishToAllPlatforms = inngest.createFunction(
       plans.push({
         platform: resultRecord.platform,
         stepId: `publish-to-${resultRecord.platform}`,
-        run: async (attempt) => {
+        run: async (attempt, continuation) => {
           const early = await claimOrSkip(resultRecord.id, runId, {
             step: "publish",
             postJobId,
             platform: resultRecord.platform,
             attempt,
+            continuation,
           });
           if (early) return early;
 
@@ -1149,7 +1265,7 @@ export const retryPlatforms = inngest.createFunction(
       plans.push({
         platform,
         stepId: `retry-${platform}`,
-        run: async (attempt): Promise<PlatformStepOutcome> => {
+        run: async (attempt, continuation): Promise<PlatformStepOutcome> => {
           // Ruling R8a + jobs H6: publish only if this run claims the result the
           // retry route re-queued as `pending`. An overlapping run may have
           // finalized it since, an onFailure handler may have failed it (and the
@@ -1160,6 +1276,7 @@ export const retryPlatforms = inngest.createFunction(
             postJobId,
             platform,
             attempt,
+            continuation,
           });
           if (early) return early;
 
@@ -1206,6 +1323,7 @@ export const retryPlatforms = inngest.createFunction(
             resultRecordId: resultRecord.id,
             runId,
             attempt,
+            continuation,
             tiktokMetadata: ttMeta,
             youtubeMetadata: ytMeta,
           });

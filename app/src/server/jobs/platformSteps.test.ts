@@ -1,12 +1,17 @@
+import { NonRetriableError } from "inngest";
 import { describe, expect, it, vi } from "vitest";
 
 import { rateLimitedError } from "@/server/platforms/rateLimited";
 
 import {
+  MAX_CONTINUATIONS_PER_RESULT,
+  MAX_CONTINUATION_WAIT_MS,
   MAX_RATE_LIMIT_RETRIES,
   MAX_RATE_LIMIT_WAIT_MS,
+  MIN_CONTINUATION_SLEEP_MS,
   MIN_RATE_LIMIT_WAIT_MS,
   RATE_LIMIT_BACKOFF_MS,
+  resolveContinuation,
   resolveDeferral,
   runPlatformStepsWithDeferrals,
   type PlatformStepOutcome,
@@ -19,6 +24,10 @@ const HOUR = 3_600_000;
 describe("deferral bounds", () => {
   it("pins the documented values", () => {
     expect(MAX_RATE_LIMIT_RETRIES).toBe(3);
+    // X at 0.25 MB/s needs about 20 steps and LinkedIn's 128 parts plus processing
+    // about 23 (plan Task 7); 7 platforms x (40 + 40 sleeps + 6 rate-limit steps)
+    // stays under Inngest's 1,000 steps per run.
+    expect(MAX_CONTINUATIONS_PER_RESULT).toBe(40);
     // GBP's documented exponential backoff (plan V17).
     expect([...RATE_LIMIT_BACKOFF_MS]).toEqual([60_000, 900_000, 3_600_000]);
     expect(MIN_RATE_LIMIT_WAIT_MS).toBe(30_000);
@@ -77,6 +86,42 @@ describe("resolveDeferral", () => {
   });
 });
 
+// 2026-11-02 scale audit (jobs, chunked uploads): when a continuing platform is
+// due. The instant is read ONCE, inside the step that reports it, and memoized.
+describe("resolveContinuation", () => {
+  it("pins the documented values", () => {
+    expect(MIN_CONTINUATION_SLEEP_MS).toBe(1_000);
+    expect(MAX_CONTINUATION_WAIT_MS).toBe(900_000);
+  });
+
+  it("null means now: due at the step's end, no sleep", () => {
+    expect(resolveContinuation(null, T)).toEqual({ resumeAt: iso(T), sleep: false });
+  });
+
+  it("sleeps until the instant the client asked for when it is at least a second away", () => {
+    expect(resolveContinuation(T + 60_000, T)).toEqual({ resumeAt: iso(T + 60_000), sleep: true });
+    expect(resolveContinuation(T + 1_000, T)).toEqual({ resumeAt: iso(T + 1_000), sleep: true });
+  });
+
+  it("does not sleep for a shorter wait, but still reports when it is due", () => {
+    expect(resolveContinuation(T + 999, T)).toEqual({ resumeAt: iso(T + 999), sleep: false });
+  });
+
+  it("never reports an instant in the past", () => {
+    expect(resolveContinuation(T - 60_000, T)).toEqual({ resumeAt: iso(T), sleep: false });
+  });
+
+  it("caps the wait at 15 minutes", () => {
+    expect(resolveContinuation(T + 5 * HOUR, T)).toEqual({ resumeAt: iso(T + 900_000), sleep: true });
+    expect(resolveContinuation(T + 900_000, T)).toEqual({ resumeAt: iso(T + 900_000), sleep: true });
+  });
+
+  it("treats an unusable instant (NaN) like null", () => {
+    expect(resolveContinuation(Number.NaN, T)).toEqual({ resumeAt: iso(T), sleep: false });
+    expect(resolveContinuation(Number.POSITIVE_INFINITY, T)).toEqual({ resumeAt: iso(T), sleep: false });
+  });
+});
+
 type FakeStep = {
   run: ReturnType<typeof vi.fn>;
   sleepUntil: ReturnType<typeof vi.fn>;
@@ -125,6 +170,33 @@ function plan(
     run: vi.fn(async (attempt: number) => {
       attempts.push(attempt);
       return script[attempt] ?? ok(platform);
+    }),
+  };
+}
+
+const cont = (
+  platform: PlatformStepOutcome["platform"],
+  at: number,
+  sleep: boolean,
+): PlatformStepOutcome => ({ platform, status: "continue", resumeAt: iso(at), sleep });
+
+/**
+ * A plan whose n-th CALL (0-based, whatever its attempt and continuation) returns
+ * `script[n]`; `calls` records the `(attempt, continuation)` pairs it was run with.
+ */
+function scripted(
+  platform: PlatformStepPlan["platform"],
+  script: PlatformStepOutcome[],
+  stepId = `publish-to-${platform}`,
+): PlatformStepPlan & { calls: Array<[number, number]> } {
+  const calls: Array<[number, number]> = [];
+  return {
+    platform,
+    stepId,
+    calls,
+    run: vi.fn(async (attempt: number, continuation: number) => {
+      calls.push([attempt, continuation]);
+      return script[calls.length - 1] ?? ok(platform);
     }),
   };
 }
@@ -275,6 +347,188 @@ describe("runPlatformStepsWithDeferrals", () => {
   });
 });
 
+// 2026-11-02 scale audit (jobs, chunked uploads): a platform step that made
+// progress but has more to do reports `continue` (inngest-functions.ts
+// publishToPlatform) and the run calls it again in `<stepId>-c<n>`, after
+// `<stepId>-wait-c<n>` when it asked to wait. Continuations and rate-limit
+// deferrals share one queue, ordered by the instant each platform is next due.
+describe("runPlatformStepsWithDeferrals - continuation steps", () => {
+  it("runs a continuing platform again as -c1, sleeping first only when it asked to", async () => {
+    const step = fakeStep();
+    const x = scripted("x", [cont("x", T + 1_000, false), ok("x")]);
+    const youtube = scripted("youtube", [cont("youtube", T + 60_000, true), ok("youtube")]);
+
+    const out = await runPlatformStepsWithDeferrals(asStep(step), [x, youtube]);
+
+    expect(step.order).toEqual([
+      "run:publish-to-x",
+      "run:publish-to-youtube",
+      "run:publish-to-x-c1",
+      "sleep:publish-to-youtube-wait-c1",
+      "run:publish-to-youtube-c1",
+    ]);
+    expect(step.sleepUntil).toHaveBeenCalledTimes(1);
+    expect(step.sleepUntil).toHaveBeenCalledWith("publish-to-youtube-wait-c1", new Date(T + 60_000));
+    expect(out).toEqual([ok("x"), ok("youtube")]);
+  });
+
+  it("runs the continuation step with (attempt, continuation) = (0, 1)", async () => {
+    const step = fakeStep();
+    const x = scripted("x", [cont("x", T, false), ok("x")]);
+
+    await runPlatformStepsWithDeferrals(asStep(step), [x]);
+
+    expect(x.calls).toEqual([
+      [0, 0],
+      [0, 1],
+    ]);
+    expect(x.run).toHaveBeenLastCalledWith(0, 1);
+  });
+
+  it("numbers repeated continuations -c1, -c2, ... and keeps the sleeps in their own -wait-c<n> ids", async () => {
+    const step = fakeStep();
+    const x = scripted("x", [
+      cont("x", T, false),
+      cont("x", T + 30_000, true),
+      cont("x", T + 31_000, false),
+      ok("x"),
+    ]);
+
+    await runPlatformStepsWithDeferrals(asStep(step), [x]);
+
+    expect(step.order).toEqual([
+      "run:publish-to-x",
+      "run:publish-to-x-c1",
+      "sleep:publish-to-x-wait-c2",
+      "run:publish-to-x-c2",
+      "run:publish-to-x-c3",
+    ]);
+  });
+
+  it("builds the ids from each plan's stepId, so the retry function keeps retry-<platform>", async () => {
+    const step = fakeStep();
+    const x = scripted("x", [cont("x", T + 5_000, true), ok("x")], "retry-x");
+
+    await runPlatformStepsWithDeferrals(asStep(step), [x]);
+
+    expect(step.order).toEqual(["run:retry-x", "sleep:retry-x-wait-c1", "run:retry-x-c1"]);
+  });
+
+  // The two counters are independent and only ever grow, so an id is never reused.
+  it("counts -c<n> and -rl<n> independently: continue, deferred, continue, success", async () => {
+    const step = fakeStep();
+    const x = scripted("x", [
+      cont("x", T, false),
+      deferred("x", T + HOUR),
+      cont("x", T + HOUR, false),
+      ok("x"),
+    ]);
+
+    const out = await runPlatformStepsWithDeferrals(asStep(step), [x]);
+
+    expect(step.order).toEqual([
+      "run:publish-to-x",
+      "run:publish-to-x-c1",
+      "sleep:publish-to-x-wait-rl1",
+      "run:publish-to-x-rl1",
+      "run:publish-to-x-c2",
+    ]);
+    // The -rl1 attempt is the 1st wait and the 1st continuation behind it: (1, 1).
+    expect(x.calls).toEqual([
+      [0, 0],
+      [0, 1],
+      [1, 1],
+      [1, 2],
+    ]);
+    expect(out).toEqual([ok("x")]);
+  });
+
+  it("orders continuing and deferred platforms together by the instant each is due, plan order breaking a tie", async () => {
+    const step = fakeStep();
+    const plans = [
+      scripted("x", [cont("x", T + 50_000, true), ok("x")]),
+      scripted("linkedin", [deferred("linkedin", T + 20_000), ok("linkedin")]),
+      scripted("youtube", [cont("youtube", T + 20_000, true), ok("youtube")]),
+    ];
+
+    await runPlatformStepsWithDeferrals(asStep(step), plans);
+
+    expect(step.order.slice(3)).toEqual([
+      // linkedin and youtube are due together: plan order puts linkedin first.
+      "sleep:publish-to-linkedin-wait-rl1",
+      "run:publish-to-linkedin-rl1",
+      "sleep:publish-to-youtube-wait-c1",
+      "run:publish-to-youtube-c1",
+      "sleep:publish-to-x-wait-c1",
+      "run:publish-to-x-c1",
+    ]);
+  });
+
+  it("interleaves two platforms that keep continuing at once", async () => {
+    const step = fakeStep();
+    const plans = [
+      scripted("x", [cont("x", T + 1, false), cont("x", T + 3, false), ok("x")]),
+      scripted("youtube", [cont("youtube", T + 2, false), cont("youtube", T + 4, false), ok("youtube")]),
+    ];
+
+    await runPlatformStepsWithDeferrals(asStep(step), plans);
+
+    expect(step.order).toEqual([
+      "run:publish-to-x",
+      "run:publish-to-youtube",
+      "run:publish-to-x-c1",
+      "run:publish-to-youtube-c1",
+      "run:publish-to-x-c2",
+      "run:publish-to-youtube-c2",
+    ]);
+    expect(step.sleepUntil).not.toHaveBeenCalled();
+  });
+
+  it("allows exactly MAX_CONTINUATIONS_PER_RESULT continuation steps", async () => {
+    const step = fakeStep();
+    const script = Array.from({ length: MAX_CONTINUATIONS_PER_RESULT }, () => cont("x", T, false));
+    const x = scripted("x", [...script, ok("x")]);
+
+    const out = await runPlatformStepsWithDeferrals(asStep(step), [x]);
+
+    expect(step.order.at(-1)).toBe(`run:publish-to-x-c${MAX_CONTINUATIONS_PER_RESULT}`);
+    expect(x.calls).toHaveLength(MAX_CONTINUATIONS_PER_RESULT + 1);
+    expect(out).toEqual([ok("x")]);
+  });
+
+  // A plan reports `continue` only while publishToPlatform still allows another
+  // step, so a 41st is a contract violation. Stop (and let onFailure fail the
+  // pending result) instead of looping toward Inngest's 1,000-step limit.
+  it("throws a NonRetriableError before a 41st continuation step", async () => {
+    const step = fakeStep();
+    const x = scripted(
+      "x",
+      Array.from({ length: MAX_CONTINUATIONS_PER_RESULT + 1 }, () => cont("x", T, false)),
+    );
+
+    const failure = await runPlatformStepsWithDeferrals(asStep(step), [x]).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(NonRetriableError);
+    expect((failure as Error).message).toMatch(/continu/i);
+    expect(step.order).not.toContain(`run:publish-to-x-c${MAX_CONTINUATIONS_PER_RESULT + 1}`);
+    expect(step.order.at(-1)).toBe(`run:publish-to-x-c${MAX_CONTINUATIONS_PER_RESULT}`);
+    expect(x.calls).toHaveLength(MAX_CONTINUATIONS_PER_RESULT + 1);
+  });
+
+  it("counts the cap per platform, not per run", async () => {
+    const step = fakeStep();
+    const long = (platform: "x" | "youtube") =>
+      scripted(platform, [
+        ...Array.from({ length: MAX_CONTINUATIONS_PER_RESULT }, () => cont(platform, T, false)),
+        ok(platform),
+      ]);
+
+    const out = await runPlatformStepsWithDeferrals(asStep(step), [long("x"), long("youtube")]);
+
+    expect(out).toEqual([ok("x"), ok("youtube")]);
+  });
+});
+
 // 2026-11-02 scale audit (jobs): Inngest does not resume a function, it RE-ENTERS
 // it from the top for every step and hands each already-finished step its recorded
 // output. So the orchestrator must be a pure function of the recorded outputs: the
@@ -393,7 +647,72 @@ describe("runPlatformStepsWithDeferrals replay (memoization)", () => {
     expect(reentry.fresh).toEqual({ runs: 1, sleeps: 0 });
     expect(x.run).not.toHaveBeenCalled();
     expect(youtube.run).toHaveBeenCalledTimes(1);
-    expect(youtube.run).toHaveBeenCalledWith(1);
+    expect(youtube.run).toHaveBeenCalledWith(1, 0);
     expect(outcomes).toEqual([ok("x"), ok("youtube")]);
+  });
+
+  it("replays a continuation sequence (-c<n>, -wait-c<n>, mixed with a deferral) with no new run or sleep, the same ids and the same targets", async () => {
+    const memo = new Map<string, unknown>();
+    const x = scripted("x", [
+      cont("x", T + 1_000, false),
+      cont("x", T + 90_000, true),
+      deferred("x", T + 3 * HOUR),
+      ok("x"),
+    ]);
+    const youtube = scripted("youtube", [cont("youtube", T + 2_000, true), ok("youtube")]);
+    const plans = [x, youtube];
+
+    const first = replayingStep(memo);
+    const firstOutcomes = await runPlatformStepsWithDeferrals(asReplaying(first), plans);
+
+    expect(first.calls.map((call) => `${call.kind}:${call.id}`)).toEqual([
+      "run:publish-to-x",
+      "run:publish-to-youtube",
+      "run:publish-to-x-c1",
+      "sleep:publish-to-youtube-wait-c1",
+      "run:publish-to-youtube-c1",
+      "sleep:publish-to-x-wait-c2",
+      "run:publish-to-x-c2",
+      "sleep:publish-to-x-wait-rl1",
+      "run:publish-to-x-rl1",
+    ]);
+    expect(firstOutcomes).toEqual([ok("x"), ok("youtube")]);
+    expect(first.fresh).toEqual({ runs: 6, sleeps: 3 });
+    expect(x.calls).toHaveLength(4);
+    expect(youtube.calls).toHaveLength(2);
+
+    // Re-entry: the orchestrator starts from scratch against the same memo.
+    const second = replayingStep(memo);
+    const secondOutcomes = await runPlatformStepsWithDeferrals(asReplaying(second), plans);
+
+    expect(second.calls).toEqual(first.calls);
+    expect(second.fresh).toEqual({ runs: 0, sleeps: 0 });
+    // No plan ran again: the memoized outcomes decided everything.
+    expect(x.calls).toHaveLength(4);
+    expect(youtube.calls).toHaveLength(2);
+    expect(secondOutcomes).toEqual(firstOutcomes);
+  });
+
+  it("re-entering mid-continuation (the memo ends after a sleep) re-issues the same ids and runs only the new -c<n> step", async () => {
+    const memo = new Map<string, unknown>();
+    // Only the -c1 step is live: the plan's first call is the one after the sleep.
+    const x = scripted("x", [ok("x")]);
+
+    memo.set("publish-to-x", cont("x", T + 90_000, true));
+    memo.set("publish-to-x-wait-c1", null);
+
+    const reentry = replayingStep(memo);
+    const outcomes = await runPlatformStepsWithDeferrals(asReplaying(reentry), [x]);
+
+    expect(reentry.calls.map((call) => `${call.kind}:${call.id}`)).toEqual([
+      "run:publish-to-x",
+      "sleep:publish-to-x-wait-c1",
+      "run:publish-to-x-c1",
+    ]);
+    expect(reentry.calls[1].until).toBe(iso(T + 90_000));
+    expect(reentry.fresh).toEqual({ runs: 1, sleeps: 0 });
+    expect(x.run).toHaveBeenCalledTimes(1);
+    expect(x.run).toHaveBeenCalledWith(0, 1);
+    expect(outcomes).toEqual([ok("x")]);
   });
 });

@@ -21,7 +21,12 @@ vi.mock("@/lib/db", () => ({
 
 import { logger } from "@/lib/logger";
 
-import { claimResult, finalizeClaimedResult, releaseClaimForDeferral } from "./resultClaim";
+import {
+  claimResult,
+  finalizeClaimedResult,
+  releaseClaimForContinuation,
+  releaseClaimForDeferral,
+} from "./resultClaim";
 
 const NOW = new Date("2026-11-02T10:00:00.000Z");
 
@@ -105,6 +110,8 @@ describe("claimResult", () => {
 
 describe("finalizeClaimedResult", () => {
   const HEARTBEAT = { postJob: { update: { updatedAt: expect.any(Date) } } };
+  // Either outcome ends the upload, so the saved state goes with it (uploadState.ts).
+  const CLEARS_STATE = { uploadState: Prisma.DbNull };
 
   it("writes a failure only while this run still holds the claim on a pending result", async () => {
     updateMock.mockResolvedValue({});
@@ -123,6 +130,7 @@ describe("finalizeClaimedResult", () => {
         status: "failed",
         errorCode: "X_TWEET_FAILED",
         errorMessage: "nope",
+        ...CLEARS_STATE,
         ...HEARTBEAT,
       },
     });
@@ -144,7 +152,7 @@ describe("finalizeClaimedResult", () => {
     expect(wrote).toBe(true);
     expect(updateMock).toHaveBeenCalledWith({
       where: { id: "r1", claimRunId: "run-1", status: { in: ["pending", "failed"] } },
-      data: { status: "success", externalPostId: "ext-1", ...HEARTBEAT },
+      data: { status: "success", externalPostId: "ext-1", ...CLEARS_STATE, ...HEARTBEAT },
     });
   });
 
@@ -241,7 +249,7 @@ describe("finalizeClaimedResult", () => {
 
     expect(updateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: { status: "success", externalPostId: null, ...HEARTBEAT },
+        data: { status: "success", externalPostId: null, ...CLEARS_STATE, ...HEARTBEAT },
       }),
     );
   });
@@ -416,6 +424,17 @@ describe("releaseClaimForDeferral", () => {
     ).rejects.toThrow("connection reset");
   });
 
+  // The saved upload state belongs to the result for as long as the upload runs:
+  // a deferral between two chunks must NOT throw it away.
+  it("keeps the upload state: its data has no uploadState key", async () => {
+    updateMock.mockResolvedValue({});
+
+    await releaseClaimForDeferral("r1", "run-1", { until, errorCode: "RATE_LIMITED" });
+
+    const { data } = updateMock.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(Object.keys(data)).not.toContain("uploadState");
+  });
+
   it("a released result can be claimed again, which ends the deferral", async () => {
     // The release leaves the row pending with no claim holder; claimResult's
     // conditional write matches exactly that and clears the deferral.
@@ -427,6 +446,70 @@ describe("releaseClaimForDeferral", () => {
         where: { id: "r1", status: "pending", claimRunId: null },
         data: expect.objectContaining({ deferredUntil: null }),
       }),
+    );
+  });
+});
+
+// 2026-11-02 scale audit (jobs, chunked uploads): a platform step that uploaded
+// part of a large video hands its claim back and the run calls it again in a
+// later step. Unlike a deferral it records no wait and no error code - the
+// Activity card must not show rate-limit copy for a healthy upload - and it keeps
+// the saved upload state.
+describe("releaseClaimForContinuation", () => {
+  function p2025() {
+    return new Prisma.PrismaClientKnownRequestError("Record to update not found.", {
+      code: "P2025",
+      clientVersion: "test",
+    });
+  }
+
+  it("clears the claim and bumps the job heartbeat in one write, only while this run holds the claim on a pending result", async () => {
+    updateMock.mockResolvedValue({});
+
+    const released = await releaseClaimForContinuation("r1", "run-1");
+
+    expect(released).toBe(true);
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    expect(updateMock).toHaveBeenCalledWith({
+      where: { id: "r1", claimRunId: "run-1", status: "pending" },
+      data: {
+        claimRunId: null,
+        claimedAt: null,
+        postJob: { update: { updatedAt: expect.any(Date) } },
+      },
+    });
+  });
+
+  it("sets no deferral and no error code, and leaves the upload state alone", async () => {
+    updateMock.mockResolvedValue({});
+
+    await releaseClaimForContinuation("r1", "run-1");
+
+    const { data } = updateMock.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(Object.keys(data).sort()).toEqual(["claimRunId", "claimedAt", "postJob"]);
+  });
+
+  it("returns false and logs a warning (without throwing) when the claim is no longer held (P2025)", async () => {
+    updateMock.mockRejectedValue(p2025());
+
+    const released = await releaseClaimForContinuation("r1", "run-1");
+
+    expect(released).toBe(false);
+    expect(console.warn).toHaveBeenCalled();
+  });
+
+  it("rethrows any other database error", async () => {
+    updateMock.mockRejectedValue(new Error("connection reset"));
+
+    await expect(releaseClaimForContinuation("r1", "run-1")).rejects.toThrow("connection reset");
+  });
+
+  it("a released result can be claimed again by the continuation step", async () => {
+    updateManyMock.mockResolvedValue({ count: 1 });
+
+    expect(await claimResult("r1", "run-1", NOW)).toBe("claimed");
+    expect(updateManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "r1", status: "pending", claimRunId: null } }),
     );
   });
 });

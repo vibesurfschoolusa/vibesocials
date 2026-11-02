@@ -405,6 +405,22 @@ model PostJobResult {
   // are raw UPDATEs that never touch updatedAt: publish-health reads it as "when
   // the result finished", and an updateMany would bump @updatedAt.
   workspaceId        String?
+  // 2026-11-02 scale audit (jobs, chunked uploads): where a large video upload
+  // stands between two Inngest steps, so a platform step can stop at its 225 s
+  // budget and the next one (`<stepId>-c<n>`) resume it. Shape (uploadState.ts):
+  // { v, runId, platform, kind, savedAt, data, secret? }. `data` is progress and
+  // ids only; `secret` is the capability URLs (YouTube session URI, TikTok
+  // upload_url, LinkedIn part URLs and metadata) as sealSecret() ciphertext
+  // (tokenCrypto.ts), the way SocialConnection tokens are sealed, so no URL is
+  // readable in the table, a dump or a log. State of another runId is ignored,
+  // so a retry starts fresh. Writes are claim-scoped (updateMany where claimRunId
+  // is the run's and status is still pending), so a run that lost its claim cannot
+  // write. Cleared by finalizeClaimedResult (both outcomes) and by the retry
+  // route's re-queue; kept across a rate-limit deferral and a continuation. A row
+  // the reconciler or an onFailure handler fails keeps its (sealed, run-scoped,
+  // by then expired) state until a retry clears it. The previous deployment
+  // ignores the column: it neither reads nor writes it.
+  uploadState        Json?
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 

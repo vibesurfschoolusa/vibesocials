@@ -78,6 +78,7 @@ describe("toPostJobResultSummaryDto — results whose connection was removed", (
     deferredUntil: null,
     metricsCheckedAt: null,
     workspaceId: "workspace-1",
+    uploadState: null,
     createdAt: new Date("2026-01-01T00:01:00Z"),
     updatedAt: new Date("2026-01-01T00:01:30Z"),
   });
@@ -91,6 +92,22 @@ describe("toPostJobResultSummaryDto — results whose connection was removed", (
     };
     expect(toPostJobResultSummaryDto(row(null))).toEqual(expected);
     expect(toPostJobResultSummaryDto(row("conn-1"))).toEqual(expected);
+  });
+
+  // 2026-11-02 scale audit (jobs, chunked uploads): `uploadState` holds the sealed
+  // capability URLs of an upload in progress. Both posts routes map whole result
+  // rows through this function, so it must stay an allow-list.
+  it("never carries the saved upload state of an upload in progress", () => {
+    const withState: PostJobResult = {
+      ...row("conn-1"),
+      status: "pending",
+      uploadState: { v: 1, runId: "run-1", data: { confirmed: 5 }, secret: "enc:v1:AAAA" },
+    };
+
+    const dto = toPostJobResultSummaryDto(withState);
+
+    expect(Object.keys(dto).sort()).toEqual(["errorMessage", "externalPostId", "platform", "status"]);
+    expect(JSON.stringify(dto)).not.toContain("enc:v1");
   });
 });
 

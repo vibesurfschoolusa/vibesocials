@@ -15,7 +15,7 @@ import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { recomputeAndStorePostJobStatus } from "@/server/jobs/failPendingResults";
 import { buildRetryEvent } from "@/server/jobs/posting";
-import type { Platform } from "@prisma/client";
+import { Prisma, type Platform } from "@prisma/client";
 
 interface RetryRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -225,6 +225,9 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   // the result's publish claim (claimRunId / claimedAt, 2026-11-01 scale audit,
   // jobs H6): a result that failed — including one marked PUBLISH_UNCONFIRMED —
   // carries its dead run's claim, and the retry run must be able to take its own.
+  // It also drops any saved upload state (2026-11-02 scale audit, jobs, chunked
+  // uploads): the retry run uploads from the start, and the old state holds
+  // sealed capability URLs of a session that is over.
   //
   // KNOWN LIMITATION (accepted for v1): this cannot stop a provider false
   // negative — if a platform actually published but we recorded `failed`
@@ -244,6 +247,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
           claimedAt: null,
           // ...and any deferral a dead run left on it (platform limits).
           deferredUntil: null,
+          uploadState: Prisma.DbNull,
         },
       });
       return { platform, claimed: count > 0 };

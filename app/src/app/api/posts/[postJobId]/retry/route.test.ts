@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import type { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -281,7 +282,9 @@ describe("POST /api/posts/[postJobId]/retry", () => {
       where: { postJobId: "job-1", platform: "tiktok", status: "failed" },
       // A retry starts a fresh attempt: it also releases any earlier run's claim
       // (2026-11-01 scale audit, jobs H6) so the retry run can claim the result,
-      // and clears a deferral a dead run left behind (platform limits).
+      // and clears a deferral a dead run left behind (platform limits). It also
+      // drops the dead run's saved upload state (chunked uploads): the retry run
+      // starts the upload over, and the state holds capability URLs.
       data: {
         status: "pending",
         errorCode: null,
@@ -289,6 +292,7 @@ describe("POST /api/posts/[postJobId]/retry", () => {
         claimRunId: null,
         claimedAt: null,
         deferredUntil: null,
+        uploadState: Prisma.DbNull,
       },
     });
     expect(postJobUpdateMock).toHaveBeenCalledWith({
