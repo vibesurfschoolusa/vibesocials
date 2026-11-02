@@ -155,10 +155,13 @@ for the same Neon branch:
 Set `DIRECT_URL` for the **Production** environment only. Preview builds skip
 migrations (see the script's header), so they do not need it.
 
-Keep the **Vercel function region equal to the Neon region** (Project Settings
--> Functions -> Function Region, vs. the region shown on the Neon project).
-Every request makes several database round trips; a cross-region hop adds its
-latency to each of them.
+Keep the **Vercel function region equal to the Neon region**. The production
+database is in AWS us-west-2 (Oregon), so `app/vercel.json` pins every function
+to `pdx1` (Portland, the same AWS region) with `"regions": ["pdx1"]`, which
+overrides the dashboard setting (Project Settings -> Functions -> Function
+Region). If the database ever moves, change that value to match. Every request
+makes several database round trips; a cross-region hop adds its latency to each
+of them.
 
 ### Release checklist
 
@@ -246,6 +249,16 @@ releases.
 
    If anything is missing, force a resync (dashboard "Resync", or
    `PUT https://<domain>/api/inngest`), then check the dashboard again.
+
+   The sync is all or nothing. Inngest rejects the whole app, keeping the old
+   configuration of every function, when one function declares a concurrency
+   limit above the plan's ("has higher concurrency limits (20) than your plan
+   limit of 5"). Every limit in the code is therefore clamped to
+   `INNGEST_PLAN_CONCURRENCY` (default 5, the free plan). After upgrading the
+   Inngest plan, set it in Vercel to the new plan's limit (for example 100 on
+   Pro) and redeploy; the design limits (publish 20 per workspace and 80 in
+   all, `refresh-connection` 10) then apply. The GitHub "Inngest sync" workflow
+   prints Inngest's answer, so a rejected sync shows there as a failed run.
 4. **Rollback.**
    - Prefer rolling forward.
    - If you roll back, pause `scheduled-post-scanner` before you roll back, and
