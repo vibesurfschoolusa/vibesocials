@@ -63,15 +63,29 @@ const INSTAGRAM_RECONNECT_CODE = "INSTAGRAM_RECONNECT_REQUIRED";
 // used without the page token, which is never stored), so it is saved in plain
 // `data`. The claim is released between steps and re-taken by the next one; the
 // commit call (media_publish) and everything after it never cross a step boundary.
-// Whether to create or to check is decided by the saved state alone, never by
-// `ctx.continuation`: a step whose output was lost is re-run with the state already
-// there and checks the same container instead of creating a second one.
+// Whether to create or to check is decided by the saved state alone (and its age),
+// never by `ctx.continuation`: a step whose output was lost is re-run with the state
+// already there and checks the same container instead of creating a second one.
+//
+// A container does not outlive a long wait: Meta discards one that is not published
+// within 24 hours (EXPIRED). The state is therefore dropped when media_publish is
+// refused for the daily publishing cap (a definitive refusal that defers the result by
+// 24 h), and a saved container older than INSTAGRAM_CONTAINER_MAX_AGE_MS is replaced
+// by a new one instead of being checked. Either way nothing was posted, so the
+// deferred attempt just creates a fresh container.
 /** The gap between two status checks, and so the wait before each one. */
 export const INSTAGRAM_STATUS_CHECK_INTERVAL_MS = 60_000;
 /** Status checks a container is given before the publish fails INSTAGRAM_VIDEO_TIMEOUT (nothing was published). */
 export const INSTAGRAM_STATUS_MAX_CHECKS = 5;
 /** The `kind` of the upload state a REELS publish saves between steps (uploadState.ts). */
 export const INSTAGRAM_CONTAINER_STATE_KIND = "instagram_container";
+/**
+ * A saved container older than this is replaced, not checked. Meta reports EXPIRED for a
+ * container "not published within 24 hours"
+ * (https://developers.facebook.com/docs/instagram-platform/content-publishing); 23 h
+ * leaves an hour of slack for clock differences and the wait before the next step.
+ */
+export const INSTAGRAM_CONTAINER_MAX_AGE_MS = 23 * 3_600_000;
 
 // 2026-11-01 scale audit (step budget, Task 7): the in-step container poll, now
 // used only when no upload-state store is given (a direct caller, a test), runs
@@ -341,6 +355,32 @@ function readContainerState(data: unknown): InstagramContainerState | null {
   return { containerId, createdAt: typeof createdAt === "string" ? createdAt : "", checks };
 }
 
+/**
+ * Is the saved container too old to be worth checking? A `createdAt` that is missing or
+ * cannot be read counts as stale: with no age to trust, a new container is the safe side
+ * (nothing is published before media_publish). A future `createdAt` (clock skew) is not stale.
+ */
+function isStaleContainer(state: InstagramContainerState): boolean {
+  const createdAt = Date.parse(state.createdAt);
+  return Number.isNaN(createdAt) || Date.now() - createdAt > INSTAGRAM_CONTAINER_MAX_AGE_MS;
+}
+
+/**
+ * Drop the saved container so the next step creates a new one. Best effort: the new
+ * container's state overwrites it, and a stale one is detected again by its age, so a
+ * failed clear must not fail a step that has nothing wrong with its publish.
+ */
+async function dropSavedContainer(store: UploadStateStore): Promise<void> {
+  try {
+    await store.clear();
+  } catch (error) {
+    console.warn("[Instagram] Could not clear the saved container state", {
+      name: error instanceof Error ? error.name : typeof error,
+      code: (error as { code?: unknown } | null)?.code,
+    });
+  }
+}
+
 /** Ask the run to call this platform again once the next status check is due. */
 function continueInAMinute(): PublishResult {
   return { continuation: { resumeAt: Date.now() + INSTAGRAM_STATUS_CHECK_INTERVAL_MS } };
@@ -476,11 +516,19 @@ async function createInstagramContainer(args: {
     );
   }
 
-  const containerData = (await containerResponse.json()) as {
-    id: string;
-  };
-
-  const containerId = containerData.id;
+  const containerData = (await containerResponse.json().catch(() => null)) as { id?: unknown } | null;
+  const containerId = containerData?.id;
+  // A 2xx without an id is not a container: saving it would send every later step to check
+  // (or publish) `undefined`, or create another orphan each time. Nothing was published.
+  if (typeof containerId !== "string" || containerId.length === 0) {
+    console.error("[Instagram] Container creation answered without a container id", {
+      status: containerResponse.status,
+    });
+    throw instagramCodedError(
+      "INSTAGRAM_CONTAINER_FAILED",
+      "Instagram container creation failed (no container id in the answer)",
+    );
+  }
 
   console.log("[Instagram] Container created", { containerId });
   return containerId;
@@ -498,8 +546,10 @@ async function publishInstagramContainer(args: {
   connection: SocialConnection;
   deadline: number | undefined;
   username: string | undefined;
+  /** The saved container state, when this publish keeps one (a REELS video polled across steps). */
+  store: UploadStateStore | undefined;
 }): Promise<PublishResult> {
-  const { igAccountId, containerId, accessToken, connection, deadline, username } = args;
+  const { igAccountId, containerId, accessToken, connection, deadline, username, store } = args;
 
   const publishUrl = new URL(`https://graph.facebook.com/v21.0/${igAccountId}/media_publish`);
   publishUrl.searchParams.set("creation_id", containerId);
@@ -523,7 +573,14 @@ async function publishInstagramContainer(args: {
 
   // Includes code 9 / subcode 2207042: the 100-posts-per-24h publishing cap.
   const publishLimited = await classifyRateLimit("instagram", publishResponse);
-  if (publishLimited) throw publishLimited;
+  if (publishLimited) {
+    // The cap refuses the publish outright (nothing was posted) and defers the result by
+    // 24 h, by when this container would be discarded by Meta: drop it, so the deferred
+    // attempt creates a new one instead of finding it EXPIRED. Any other throttle waits
+    // far less than a container's life and keeps it.
+    if (publishLimited.kind === "daily_limit" && store) await dropSavedContainer(store);
+    throw publishLimited;
+  }
 
   if (!publishResponse.ok) {
     const errorBody = await publishResponse.text().catch(() => "Unable to read error body");
@@ -632,9 +689,18 @@ export const instagramClient: PlatformClient = {
       // state (see the header). Images, and callers without a store, wait inside
       // the one step as before.
       const store = isVideo ? ctx.uploadState : undefined;
-      const saved = store
+      let saved = store
         ? readContainerState((await store.load<unknown>(INSTAGRAM_CONTAINER_STATE_KIND))?.data)
         : null;
+      if (store && saved && isStaleContainer(saved)) {
+        // Meta discards a container after 24 h; a long deferral can outlast it. Replace it.
+        console.log("[Instagram] Saved container is too old to publish; creating a new one", {
+          containerId: saved.containerId,
+          createdAt: saved.createdAt,
+        });
+        await dropSavedContainer(store);
+        saved = null;
+      }
 
       let containerId: string;
       if (store && saved) {
@@ -698,6 +764,7 @@ export const instagramClient: PlatformClient = {
         connection: socialConnection,
         deadline,
         username: metadata.username,
+        store,
       });
     } catch (error: unknown) {
       console.error("[Instagram] Publish error", error);

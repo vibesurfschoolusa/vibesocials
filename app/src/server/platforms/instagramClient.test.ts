@@ -5,6 +5,7 @@ import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import {
   computeInstagramCaption,
   ensureFreshInstagramToken,
+  INSTAGRAM_CONTAINER_MAX_AGE_MS,
   INSTAGRAM_POLL_INTERVAL_MS,
   INSTAGRAM_POLL_MAX_ATTEMPTS,
   INSTAGRAM_PUBLISH_RESERVE_MS,
@@ -967,11 +968,13 @@ describe("instagramClient.publishVideo — container polling across steps", () =
     };
   }
 
-  const stateWith = (checks: number): ContainerState => ({
+  /** A saved state whose container was created `ageMs` ago (a minute by default). */
+  const stateWith = (checks: number, ageMs = 60_000): ContainerState => ({
     containerId: "container-1",
-    createdAt: new Date(NOW - 60_000).toISOString(),
+    createdAt: new Date(NOW - ageMs).toISOString(),
     checks,
   });
+  const HOUR = 3_600_000;
 
   function ctx(store: UploadStateStore | undefined, extra: { deadline?: number; mimeType?: string } = {}) {
     return {
@@ -1013,6 +1016,7 @@ describe("instagramClient.publishVideo — container polling across steps", () =
     vi.setSystemTime(NOW);
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -1023,6 +1027,10 @@ describe("instagramClient.publishVideo — container polling across steps", () =
   it("uses Meta's recommended cadence: once a minute, at most five checks", () => {
     expect(INSTAGRAM_STATUS_CHECK_INTERVAL_MS).toBe(60_000);
     expect(INSTAGRAM_STATUS_MAX_CHECKS).toBe(5);
+  });
+
+  it("treats a saved container as stale after 23 h, an hour short of Meta's 24 h expiry", () => {
+    expect(INSTAGRAM_CONTAINER_MAX_AGE_MS).toBe(23 * HOUR);
   });
 
   describe("the first step (no saved state)", () => {
@@ -1073,6 +1081,37 @@ describe("instagramClient.publishVideo — container polling across steps", () =
 
       expect(error?.code).toBe("RATE_LIMITED");
       expect(mocks.save).not.toHaveBeenCalled();
+    });
+
+    // A container answer without a usable id used to be saved as `containerId: undefined`;
+    // the next step then started over, over and over, leaving a container behind each time.
+    it.each([
+      ["no id", "{}"],
+      ["an empty id", JSON.stringify({ id: "" })],
+      ["a numeric id", JSON.stringify({ id: 17 })],
+      ["a null id", JSON.stringify({ id: null })],
+      ["a JSON null body", "null"],
+      ["a body that is not JSON", "<html>ok</html>"],
+    ])("a 200 container answer with %s is INSTAGRAM_CONTAINER_FAILED and saves nothing", async (_name, body) => {
+      const { store, mocks } = makeStore();
+      const graph = stubGraph({ container: () => new Response(body, { status: 200 }) });
+
+      const error = await failure(instagramClient.publishVideo(ctx(store)));
+
+      expect(error?.code).toBe("INSTAGRAM_CONTAINER_FAILED");
+      expect(mocks.save).not.toHaveBeenCalled();
+      expect(graph.status).not.toHaveBeenCalled();
+      expect(graph.publish).not.toHaveBeenCalled();
+    });
+
+    it("a 200 container answer without an id fails an image publish too, before media_publish", async () => {
+      const { store } = makeStore();
+      const graph = stubGraph({ container: () => new Response("{}", { status: 200 }) });
+
+      const error = await failure(instagramClient.publishVideo(ctx(store, { mimeType: "image/jpeg" })));
+
+      expect(error?.code).toBe("INSTAGRAM_CONTAINER_FAILED");
+      expect(graph.publish).not.toHaveBeenCalled();
     });
 
     it("a failed save propagates: the step fails, the platform is never asked to publish", async () => {
@@ -1259,6 +1298,122 @@ describe("instagramClient.publishVideo — container polling across steps", () =
     });
   });
 
+  // A container is discarded by Meta 24 h after it was created (EXPIRED, "not published
+  // within 24 hours"), and a deferral can last that long. A saved container older than
+  // INSTAGRAM_CONTAINER_MAX_AGE_MS is never checked: it is cleared and replaced.
+  describe("a saved container that is too old", () => {
+    const secondContainer = () => new Response(JSON.stringify({ id: "container-2" }), { status: 200 });
+
+    it("23 h and 1 ms old: cleared and replaced by a new container, with no status check on the old one", async () => {
+      const { store, mocks, savedData } = makeStore(stateWith(1, INSTAGRAM_CONTAINER_MAX_AGE_MS + 1));
+      const graph = stubGraph({ container: secondContainer });
+
+      const result = await instagramClient.publishVideo(ctx(store));
+
+      expect(mocks.clear).toHaveBeenCalledTimes(1);
+      expect(graph.container).toHaveBeenCalledTimes(1);
+      expect(graph.status).not.toHaveBeenCalled();
+      expect(graph.publish).not.toHaveBeenCalled();
+      expect(result).toEqual(continuation);
+      expect(savedData()).toEqual({
+        containerId: "container-2",
+        createdAt: new Date(NOW).toISOString(),
+        checks: 0,
+      });
+    });
+
+    it("22 h 59 min old: the saved container is still checked", async () => {
+      const { store, mocks } = makeStore(stateWith(1, 23 * HOUR - 60_000));
+      const graph = stubGraph({ status: () => status("FINISHED") });
+
+      await expect(instagramClient.publishVideo(ctx(store))).resolves.toEqual({ externalPostId: "media-1" });
+
+      expect(graph.container).not.toHaveBeenCalled();
+      expect(graph.status).toHaveBeenCalledTimes(1);
+      expect(mocks.clear).not.toHaveBeenCalled();
+    });
+
+    it("exactly 23 h old is not yet stale (older than, not at least)", async () => {
+      const { store } = makeStore(stateWith(1, INSTAGRAM_CONTAINER_MAX_AGE_MS));
+      const graph = stubGraph({ status: () => status("IN_PROGRESS") });
+
+      await instagramClient.publishVideo(ctx(store));
+
+      expect(graph.container).not.toHaveBeenCalled();
+      expect(graph.status).toHaveBeenCalledTimes(1);
+    });
+
+    it("an old container on its last check is replaced rather than timed out", async () => {
+      const { store } = makeStore(stateWith(INSTAGRAM_STATUS_MAX_CHECKS - 1, 24 * HOUR));
+      const graph = stubGraph({ container: secondContainer });
+
+      const result = await instagramClient.publishVideo(ctx(store));
+
+      expect(result).toEqual(continuation);
+      expect(graph.status).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["not a date", "not a date"],
+      ["empty", ""],
+      ["missing", undefined],
+      ["a number", NOW - 60_000],
+      ["null", null],
+    ])("a createdAt that is %s counts as stale: a new container is created", async (_name, createdAt) => {
+      const { store, savedData } = makeStore({ containerId: "container-1", checks: 1, createdAt });
+      const graph = stubGraph({ container: secondContainer });
+
+      const result = await instagramClient.publishVideo(ctx(store));
+
+      expect(result).toEqual(continuation);
+      expect(graph.container).toHaveBeenCalledTimes(1);
+      expect(graph.status).not.toHaveBeenCalled();
+      expect(savedData()).toMatchObject({ containerId: "container-2", checks: 0 });
+    });
+
+    it("a createdAt in the future (clock skew) is not stale", async () => {
+      const { store } = makeStore(stateWith(1, -5 * 60_000));
+      const graph = stubGraph({ status: () => status("IN_PROGRESS") });
+
+      await instagramClient.publishVideo(ctx(store));
+
+      expect(graph.container).not.toHaveBeenCalled();
+      expect(graph.status).toHaveBeenCalledTimes(1);
+    });
+
+    it("a clear that fails does not fail the step: the new container's state replaces the old one", async () => {
+      const { store, mocks, savedData } = makeStore(stateWith(1, 24 * HOUR));
+      mocks.clear.mockRejectedValueOnce(new Error("database blip"));
+      stubGraph({ container: secondContainer });
+
+      const result = await instagramClient.publishVideo(ctx(store));
+
+      expect(result).toEqual(continuation);
+      expect(savedData()).toMatchObject({ containerId: "container-2", checks: 0 });
+    });
+
+    it("a status-check throttle whose wait runs past 23 h ends in a new container at the deferred attempt", async () => {
+      const { store, savedData } = makeStore(stateWith(2));
+      const graph = stubGraph({
+        status: () => graphError(80002),
+        container: secondContainer,
+      });
+
+      const error = await failure(instagramClient.publishVideo(ctx(store)));
+      expect(error?.code).toBe("RATE_LIMITED");
+      expect(savedData()).toEqual(stateWith(2));
+
+      // The deferred attempt runs more than 23 h later.
+      vi.setSystemTime(NOW + 23 * HOUR + 60_000);
+      const next = await instagramClient.publishVideo(ctx(store));
+
+      expect(graph.container).toHaveBeenCalledTimes(1);
+      expect(graph.status).toHaveBeenCalledTimes(1);
+      expect(next.continuation).toBeDefined();
+      expect(savedData()).toMatchObject({ containerId: "container-2", checks: 0 });
+    });
+  });
+
   describe("the commit call (media_publish after FINISHED) keeps its rules", () => {
     it("a 5xx is PUBLISH_UNCONFIRMED and is not retried", async () => {
       const { store } = makeStore(stateWith(1));
@@ -1277,21 +1432,78 @@ describe("instagramClient.publishVideo — container polling across steps", () =
       expect((await failure(instagramClient.publishVideo(ctx(store))))?.code).toBe("PUBLISH_UNCONFIRMED");
     });
 
-    it("the 100-posts-a-day cap is a RATE_LIMITED deferral and the state is kept for the later attempt", async () => {
-      const { store, mocks, savedData } = makeStore(stateWith(1));
-      stubGraph({
-        publish: () =>
-          new Response(
-            JSON.stringify({ error: { message: "m", type: "OAuthException", code: 9, error_subcode: 2207042 } }),
-            { status: 400 },
-          ),
-      });
+    const dailyCap = () =>
+      new Response(
+        JSON.stringify({ error: { message: "m", type: "OAuthException", code: 9, error_subcode: 2207042 } }),
+        { status: 400 },
+      );
+
+    // The 100-posts-a-day cap defers the result by 24 h. The refusal is definitive (nothing
+    // was posted) and the container would be older than Meta's 24 h by the deferred attempt,
+    // so the saved state is cleared and that attempt creates a new container.
+    it("the 100-posts-a-day cap is a RATE_LIMITED daily_limit deferral and the saved container is cleared", async () => {
+      const { store, mocks, saved } = makeStore(stateWith(1));
+      stubGraph({ publish: dailyCap });
 
       const error = await failure(instagramClient.publishVideo(ctx(store)));
 
       expect(error).toMatchObject({ code: "RATE_LIMITED", kind: "daily_limit" });
+      expect(mocks.clear).toHaveBeenCalledTimes(1);
+      expect(saved()).toBeNull();
+    });
+
+    it("a daily-cap refusal is still RATE_LIMITED when clearing the state fails", async () => {
+      const { store, mocks } = makeStore(stateWith(1));
+      mocks.clear.mockRejectedValueOnce(new Error("database blip"));
+      stubGraph({ publish: dailyCap });
+
+      const error = await failure(instagramClient.publishVideo(ctx(store)));
+
+      expect(error).toMatchObject({ code: "RATE_LIMITED", kind: "daily_limit" });
+    });
+
+    it("an ordinary media_publish throttle keeps the saved container for the later attempt", async () => {
+      const { store, mocks, savedData } = makeStore(stateWith(1));
+      stubGraph({ publish: () => graphError(80002) });
+
+      const error = await failure(instagramClient.publishVideo(ctx(store)));
+
+      expect(error).toMatchObject({ code: "RATE_LIMITED", kind: "rate_limited" });
       expect(mocks.clear).not.toHaveBeenCalled();
       expect(savedData()).toEqual(stateWith(1));
+    });
+
+    it("after the daily cap, the deferred attempt creates a NEW container and publishes it", async () => {
+      const { store, savedData } = makeStore(stateWith(1));
+      let published = 0;
+      const graph = stubGraph({
+        container: () => new Response(JSON.stringify({ id: "container-2" }), { status: 200 }),
+        publish: () => (++published === 1 ? dailyCap() : publishOk()),
+      });
+
+      // The step that saw FINISHED and hit the cap.
+      expect(await failure(instagramClient.publishVideo(ctx(store)))).toMatchObject({
+        code: "RATE_LIMITED",
+        kind: "daily_limit",
+      });
+      // 24 h later: the old container is gone from the state, so a new one is made.
+      vi.setSystemTime(NOW + 24 * HOUR);
+      const created = await instagramClient.publishVideo(ctx(store));
+      expect(created.continuation).toEqual({ resumeAt: NOW + 24 * HOUR + 60_000 });
+      expect(savedData()).toMatchObject({ containerId: "container-2", checks: 0 });
+      // One minute later it is FINISHED and published.
+      vi.setSystemTime(NOW + 24 * HOUR + 60_000);
+      const done = await instagramClient.publishVideo(ctx(store));
+
+      expect(done).toEqual({ externalPostId: "media-1" });
+      expect(graph.container).toHaveBeenCalledTimes(1);
+      // One check on the old container (FINISHED, then refused), one on the new one.
+      expect(graph.status).toHaveBeenCalledTimes(2);
+      expect(graph.publish).toHaveBeenCalledTimes(2);
+      const urls = vi.mocked(globalThis.fetch).mock.calls.map((c) => String(c[0]));
+      expect(urls.filter((u) => u.includes("/container-2?"))).toHaveLength(1);
+      const lastPublish = urls.filter((u) => u.includes("/media_publish")).at(-1)!;
+      expect(new URL(lastPublish).searchParams.get("creation_id")).toBe("container-2");
     });
 
     it("a rejected token flags the connection", async () => {

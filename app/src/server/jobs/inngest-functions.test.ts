@@ -3054,13 +3054,21 @@ describe("chunked uploads - continuation steps (jobs)", () => {
   // the step that sees FINISHED calls media_publish.
   describe("Instagram container polling across steps (jobs L5)", () => {
     const PAGE_TOKEN = "page-token-for-instagram-e2e";
-    const containerOk = () => new Response(JSON.stringify({ id: "container-1" }), { status: 200 });
+    const containerOk = (n: number) => new Response(JSON.stringify({ id: `container-${n}` }), { status: 200 });
+    const dailyCap = () =>
+      new Response(
+        JSON.stringify({ error: { message: "m", type: "OAuthException", code: 9, error_subcode: 2207042 } }),
+        { status: 400 },
+      );
     const statusOf = (code: string) => new Response(JSON.stringify({ status_code: code }), { status: 200 });
     const throttled = () =>
       new Response(JSON.stringify({ error: { message: "m", type: "OAuthException", code: 80002 } }), { status: 400 });
 
-    /** The Graph API: the status answers are given in order; the last one repeats. */
-    function stubGraph(statuses: Array<() => Response>) {
+    /**
+     * The Graph API: containers are numbered in creation order; the status answers are
+     * given in order, the last one repeating; media_publish succeeds unless `publishes` says otherwise.
+     */
+    function stubGraph(statuses: Array<() => Response>, publishes: Array<() => Response> = []) {
       let checks = 0;
       const calls = { container: 0, status: 0, publish: 0 };
       vi.stubGlobal(
@@ -3069,11 +3077,11 @@ describe("chunked uploads - continuation steps (jobs)", () => {
           const url = String(input);
           if (url.includes("/media_publish")) {
             calls.publish += 1;
-            return new Response(JSON.stringify({ id: "media-1" }), { status: 200 });
+            return publishes[calls.publish - 1]?.() ?? new Response(JSON.stringify({ id: "media-1" }), { status: 200 });
           }
           if (url.includes("/ig-account-1/media")) {
             calls.container += 1;
-            return containerOk();
+            return containerOk(calls.container);
           }
           if (url.includes("fields=status_code")) {
             calls.status += 1;
@@ -3213,6 +3221,44 @@ describe("chunked uploads - continuation steps (jobs)", () => {
       expect(releaseSpy).toHaveBeenCalledTimes(1);
       // The container is never replaced, and the throttled query is the third request.
       expect(graph).toEqual({ container: 1, status: 3, publish: 1 });
+      expect(out.results).toEqual([{ platform: "instagram", status: "success" }]);
+    });
+
+    // The 100-posts-a-day cap defers the result by 24 h, past Meta's 24 h container life.
+    // The refusal is definitive (nothing was posted), so the saved container is dropped and
+    // the deferred attempt creates a new one.
+    it("after the daily cap, the deferred attempt (-rl1) creates a NEW container, waits for it, and publishes it", async () => {
+      const saved = memoryUploadStates();
+      const graph = stubGraph([() => statusOf("FINISHED")], [dailyCap]);
+      const step = fakeStep();
+
+      const out = await instagramRun(step);
+
+      expect(step.order).toEqual([
+        "run:fetch-data",
+        "run:publish-to-instagram",
+        "sleepUntil:publish-to-instagram-wait-c1",
+        "run:publish-to-instagram-c1",
+        "sleepUntil:publish-to-instagram-wait-rl1",
+        "run:publish-to-instagram-rl1",
+        "sleepUntil:publish-to-instagram-wait-c2",
+        "run:publish-to-instagram-c2",
+        "run:finalize-job",
+        "sendEvent:notify-outcome",
+      ]);
+      expect(step.outputs["publish-to-instagram-c1"]).toMatchObject({ platform: "instagram", status: "deferred" });
+      expect(releaseSpy).toHaveBeenCalledTimes(1);
+      expect(releaseContinuationSpy).toHaveBeenCalledTimes(2);
+      // Two containers, one status check each, two media_publish calls (the first refused).
+      expect(graph).toEqual({ container: 2, status: 2, publish: 2 });
+      const urls = vi.mocked(globalThis.fetch).mock.calls.map((c) => String(c[0]));
+      const published = urls.filter((u) => u.includes("/media_publish"));
+      expect(new URL(published[0]).searchParams.get("creation_id")).toBe("container-1");
+      expect(new URL(published[1]).searchParams.get("creation_id")).toBe("container-2");
+      expect(saved.size).toBe(1);
+      expect(JSON.stringify([...saved.values()])).toContain("container-2");
+      expect(JSON.stringify([...saved.values()])).not.toContain("container-1");
+      expect(failedWrites()).toEqual([]);
       expect(out.results).toEqual([{ platform: "instagram", status: "success" }]);
     });
 
