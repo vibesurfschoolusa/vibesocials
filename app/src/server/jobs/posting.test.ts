@@ -57,6 +57,7 @@ import {
   createPostJobForExistingMedia,
   createPostJobOnly,
   MediaItemUnavailableError,
+  resolvePlatformCaptions,
   resolvePostCaptionSource,
 } from "./posting";
 import { PostTargetingError } from "@/lib/postTargets";
@@ -717,6 +718,117 @@ describe("resolvePostCaptionSource — the job's snapshot as a unit, media item 
         { baseCaption: "Media caption", perPlatformOverrides: null },
       ),
     ).toEqual({ baseCaption: "Job caption", perPlatformOverrides: null });
+  });
+});
+
+// 2026-11-01 audit (M1): an owner approves what will PUBLISH, so the per-platform
+// texts shown to them come from the very same caption source the publish path
+// uses (resolvePostCaptionSource), narrowed to the platforms that will post.
+describe("resolvePlatformCaptions — the override texts the publish path will use (2026-11-01 audit, M1)", () => {
+  const media = { baseCaption: "Media caption", perPlatformOverrides: { x: "media X" } };
+  const job = (overrides: Record<string, unknown> = {}) => ({
+    baseCaption: "Job caption",
+    perPlatformOverrides: { linkedin: "Hidden text" },
+    ...overrides,
+  });
+
+  it("returns the job's override texts", () => {
+    expect(resolvePlatformCaptions(job(), media)).toEqual({ linkedin: "Hidden text" });
+  });
+
+  it("is null when the job has no overrides (null or an empty object)", () => {
+    expect(resolvePlatformCaptions(job({ perPlatformOverrides: null }), media)).toBeNull();
+    expect(resolvePlatformCaptions(job({ perPlatformOverrides: {} }), media)).toBeNull();
+  });
+
+  it("never resurrects the media item's overrides for a job with its own caption snapshot", () => {
+    // Same snapshot-as-a-unit rule as resolvePostCaptionSource: null = none.
+    expect(resolvePlatformCaptions(job({ perPlatformOverrides: null }), media)).toBeNull();
+  });
+
+  it("a legacy job with no snapshot (null caption) takes the media item's overrides", () => {
+    expect(
+      resolvePlatformCaptions({ baseCaption: null, perPlatformOverrides: null }, media),
+    ).toEqual({ x: "media X" });
+  });
+
+  it("tolerates a missing media item row", () => {
+    expect(resolvePlatformCaptions(job(), null)).toEqual({ linkedin: "Hidden text" });
+    expect(
+      resolvePlatformCaptions({ baseCaption: null, perPlatformOverrides: null }, undefined),
+    ).toBeNull();
+  });
+
+  it("drops empty texts (the publisher falls back to the base caption for them)", () => {
+    expect(
+      resolvePlatformCaptions(job({ perPlatformOverrides: { linkedin: "", x: "Kept" } }), media),
+    ).toEqual({ x: "Kept" });
+    expect(
+      resolvePlatformCaptions(job({ perPlatformOverrides: { linkedin: "" } }), media),
+    ).toBeNull();
+  });
+
+  it("ignores keys that are not platforms (the publisher never reads them)", () => {
+    expect(
+      resolvePlatformCaptions(
+        job({ perPlatformOverrides: { myspace: "Inert", linkedin: "Hidden text" } }),
+        media,
+      ),
+    ).toEqual({ linkedin: "Hidden text" });
+  });
+
+  describe("target platforms", () => {
+    const overrides = { linkedin: "LinkedIn text", x: "X text", youtube: "YouTube text" };
+
+    it("keeps only the platforms in the job's publishMetadata.targetPlatforms", () => {
+      expect(
+        resolvePlatformCaptions(
+          job({
+            perPlatformOverrides: overrides,
+            publishMetadata: { targetPlatforms: ["x", "youtube"] },
+          }),
+          media,
+        ),
+      ).toEqual({ x: "X text", youtube: "YouTube text" });
+    });
+
+    it("is null when no override belongs to a targeted platform", () => {
+      expect(
+        resolvePlatformCaptions(
+          job({
+            perPlatformOverrides: { linkedin: "LinkedIn text" },
+            publishMetadata: { targetPlatforms: ["x"] },
+          }),
+          media,
+        ),
+      ).toBeNull();
+    });
+
+    it("uses the platforms of the job's results once they exist (what actually publishes / retries)", () => {
+      expect(
+        resolvePlatformCaptions(
+          job({
+            perPlatformOverrides: overrides,
+            // The snapshot named three platforms, but only two results exist.
+            publishMetadata: { targetPlatforms: ["linkedin", "x", "youtube"] },
+            results: [{ platform: "x" }, { platform: "youtube" }],
+          }),
+          media,
+        ),
+      ).toEqual({ x: "X text", youtube: "YouTube text" });
+    });
+
+    it("treats an empty targetPlatforms and no results as 'all connections' - every override key shows", () => {
+      expect(
+        resolvePlatformCaptions(
+          job({ perPlatformOverrides: overrides, publishMetadata: { targetPlatforms: [] }, results: [] }),
+          media,
+        ),
+      ).toEqual(overrides);
+      expect(
+        resolvePlatformCaptions(job({ perPlatformOverrides: overrides, publishMetadata: null }), media),
+      ).toEqual(overrides);
+    });
   });
 });
 

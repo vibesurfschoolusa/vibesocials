@@ -30,6 +30,7 @@ function jobFixture(overrides: { id?: string; status?: string } = {}) {
     publish: null,
     createdBy: null,
     approvalState: "none",
+    platformCaptions: null,
     ...overrides,
   };
 }

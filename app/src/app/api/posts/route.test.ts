@@ -523,10 +523,53 @@ describe("POST /api/posts — scheduling + drafts (Roadmap Phase 5)", () => {
         workspaceName: "Acme",
         submitter: expect.objectContaining({ id: "member-1", name: "Sam", email: "sam@example.com" }),
         caption: "Held caption",
+        platformCaptions: null,
       });
       // Notified only once the hold is stamped on the row.
       expect(postJobUpdateMock.mock.invocationCallOrder[0]).toBeLessThan(
         notifyOwnersMock.mock.invocationCallOrder[0],
+      );
+    });
+
+    // 2026-11-01 audit (M1): the owners must see the per-platform texts that
+    // will publish behind an innocuous base caption.
+    it("tells the owners the per-platform captions of the targeted platforms (2026-11-01 audit, M1)", async () => {
+      getWorkspaceContextMock.mockResolvedValue(
+        makeWorkspaceContext({ role: "member", requireApproval: true }),
+      );
+
+      await POST(
+        jsonRequest({
+          blobUrl: "https://test.public.blob.vercel-storage.com/x",
+          baseCaption: "Happy Friday from the team!",
+          perPlatformOverrides: { linkedin: "Hidden text", x: "Not targeted" },
+          platforms: ["linkedin", "youtube"],
+        }),
+      );
+
+      expect(notifyOwnersMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          caption: "Happy Friday from the team!",
+          platformCaptions: { linkedin: "Hidden text" },
+        }),
+      );
+    });
+
+    it("tells the owners every override when the post targets all connections", async () => {
+      getWorkspaceContextMock.mockResolvedValue(
+        makeWorkspaceContext({ role: "member", requireApproval: true }),
+      );
+
+      await POST(
+        jsonRequest({
+          blobUrl: "https://test.public.blob.vercel-storage.com/x",
+          baseCaption: "hi",
+          perPlatformOverrides: { linkedin: "Hidden text", x: "X text" },
+        }),
+      );
+
+      expect(notifyOwnersMock).toHaveBeenCalledWith(
+        expect.objectContaining({ platformCaptions: { linkedin: "Hidden text", x: "X text" } }),
       );
     });
 

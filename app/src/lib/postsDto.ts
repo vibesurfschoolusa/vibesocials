@@ -83,6 +83,16 @@ export interface PostJobDTO {
    * associated media item's caption.
    */
   caption: string | null;
+  /**
+   * Per-platform caption overrides that REPLACE the base caption on those
+   * platforms when the post publishes (2026-11-01 audit, M1). Derived
+   * server-side from the same caption source the publish path uses
+   * (`resolvePlatformCaptions`), limited to the platforms the job targets, so an
+   * approving owner sees exactly the text that will go out — not only the base
+   * `caption`. `null` when the post has none. Raw override text (the workspace
+   * footer is appended at publish time).
+   */
+  platformCaptions: Partial<Record<Platform, string>> | null;
   results: PostJobResultDTO[];
   /** Attached media for thumbnails (public blob URL — already exposed via /api/media). */
   media: { url: string; mimeType: string } | null;

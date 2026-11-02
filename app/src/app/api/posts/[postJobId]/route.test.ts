@@ -297,7 +297,16 @@ describe("PATCH /api/posts/[postJobId]", () => {
     expect(res.status).toBe(404);
     expect(findFirstMock).toHaveBeenCalledWith({
       where: { id: "foreign-job", workspaceId: "ws-1" },
-      select: { status: true, submittedForApprovalAt: true, approvedAt: true, baseCaption: true },
+      select: {
+        status: true,
+        submittedForApprovalAt: true,
+        approvedAt: true,
+        baseCaption: true,
+        // 2026-11-01 audit (M1): everything resolvePlatformCaptions reads.
+        perPlatformOverrides: true,
+        publishMetadata: true,
+        mediaItem: { select: { baseCaption: true, perPlatformOverrides: true } },
+      },
     });
   });
 });
@@ -362,7 +371,56 @@ describe("PATCH /api/posts/[postJobId] — approval enforcement (2026-11-01 audi
       workspaceName: "Acme",
       submitter: expect.objectContaining({ id: "member-1", name: "Sam" }),
       caption: "Unreviewed text",
+      platformCaptions: null,
     });
+  });
+
+  // 2026-11-01 audit (M1): the case the finding names - a member re-holds a
+  // post by editing its overrides, and the owners must see the NEW texts.
+  it("emails the owners the per-platform captions the post will publish with", async () => {
+    findFirstMock.mockResolvedValue(
+      existingRow({
+        status: "scheduled",
+        perPlatformOverrides: { linkedin: "Old text" },
+        publishMetadata: { targetPlatforms: ["linkedin"] },
+      }),
+    );
+
+    await PATCH(req({ perPlatformOverrides: { linkedin: "Edited hidden text", x: "Not targeted" } }), ctx("job-1"));
+
+    expect(notifyOwnersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caption: "Original caption",
+        platformCaptions: { linkedin: "Edited hidden text" },
+      }),
+    );
+  });
+
+  it("emails the stored per-platform captions when the edit leaves them alone", async () => {
+    findFirstMock.mockResolvedValue(
+      existingRow({ status: "scheduled", perPlatformOverrides: { linkedin: "Stored text" } }),
+    );
+
+    await PATCH(req({ baseCaption: "Only the base changed" }), ctx("job-1"));
+
+    expect(notifyOwnersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caption: "Only the base changed",
+        platformCaptions: { linkedin: "Stored text" },
+      }),
+    );
+  });
+
+  it("emails no per-platform captions when the edit clears the overrides", async () => {
+    findFirstMock.mockResolvedValue(
+      existingRow({ status: "scheduled", perPlatformOverrides: { linkedin: "Stored text" } }),
+    );
+
+    await PATCH(req({ perPlatformOverrides: null }), ctx("job-1"));
+
+    expect(notifyOwnersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ platformCaptions: null }),
+    );
   });
 
   it("re-holds a reschedule too, keeping the new time on the held draft", async () => {

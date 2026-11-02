@@ -25,7 +25,12 @@ import { useToast } from "@/components/ui/toast";
 import { MediaThumb } from "@/components/media-thumb";
 import { QueueCalendar } from "./queue-calendar";
 import { cn } from "@/lib/cn";
-import { platformLabel, TIKTOK_PRIVACY_LABELS } from "@/lib/platforms";
+import {
+  PLATFORM_CAPTIONS_HEADING,
+  platformCaptionEntries,
+  platformLabel,
+  TIKTOK_PRIVACY_LABELS,
+} from "@/lib/platforms";
 import type { PostJobDTO, PostsResponse } from "@/lib/postsDto";
 import { appendJobsPage } from "@/lib/postsPagination";
 import {
@@ -118,6 +123,10 @@ function QueueCard({
   const actions = getQueueCardActions(job, viewer);
   const badge = queueStatusBadge(job);
   const title = job.caption?.trim() || "Untitled post";
+  // 2026-11-01 audit (M1): the per-platform texts that REPLACE the base caption
+  // on publish. Shown on every card that has them, most importantly to the owner
+  // deciding on a pending post - approving means approving these too.
+  const platformCaptions = platformCaptionEntries(job.platformCaptions);
 
   return (
     <Card className="p-4 sm:p-5">
@@ -158,6 +167,21 @@ function QueueCard({
             {job.publish?.youtubePrivacy ? ` · YouTube: ${job.publish.youtubePrivacy}` : ""}
             {job.publish?.tiktokPrivacy ? ` · TikTok: ${TIKTOK_PRIVACY_LABELS[job.publish.tiktokPrivacy] ?? job.publish.tiktokPrivacy}` : ""}
           </p>
+          {platformCaptions.length > 0 ? (
+            <div className="mt-2 rounded-md border border-border bg-muted/40 p-2.5">
+              <p className="text-xs font-medium text-foreground">{PLATFORM_CAPTIONS_HEADING}</p>
+              <ul className="mt-1 space-y-1">
+                {platformCaptions.map((entry) => (
+                  <li
+                    key={entry.platform}
+                    className="whitespace-pre-wrap break-words text-xs text-muted-foreground"
+                  >
+                    <span className="font-medium text-foreground">{entry.label}:</span> {entry.text}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
         <Badge variant={badge.tone}>{badge.label}</Badge>
       </div>

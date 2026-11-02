@@ -15,6 +15,7 @@ import {
   createPostJobForExistingMedia,
   createPostJobOnly,
   MediaItemUnavailableError,
+  resolvePlatformCaptions,
 } from "@/server/jobs/posting";
 import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
@@ -114,10 +115,21 @@ export async function GET(request: Request) {
         updatedAt: true,
         scheduledFor: true,
         baseCaption: true,
+        // 2026-11-01 audit (M1): with the media item's caption + overrides and
+        // `publishMetadata` / `results` below, everything `resolvePlatformCaptions`
+        // reads to show the approver what will publish.
+        perPlatformOverrides: true,
         // Approval workflow — feeds the derived `approvalState` DTO field.
         submittedForApprovalAt: true,
         approvedAt: true,
-        mediaItem: { select: { baseCaption: true, storageLocation: true, mimeType: true } },
+        mediaItem: {
+          select: {
+            baseCaption: true,
+            perPlatformOverrides: true,
+            storageLocation: true,
+            mimeType: true,
+          },
+        },
         // Task 8 — compose-time publish snapshot (Task 7's `publishMetadata`),
         // surfaced read-only via the `publish` DTO field below.
         publishMetadata: true,
@@ -226,6 +238,9 @@ export async function GET(request: Request) {
           // editing them never mutates shared reused media; fall back to the
           // media item's caption for immediate/older jobs.
           caption: job.baseCaption ?? job.mediaItem?.baseCaption ?? null,
+          // 2026-11-01 audit (M1): the per-platform texts the publish path will
+          // use - the owner approves these too, not only `caption`.
+          platformCaptions: resolvePlatformCaptions(job, job.mediaItem),
           // Display-only thumbnail source (SEC-1: storageLocation is a public
           // blob URL, already exposed via /api/media — no new secret surface).
           media: job.mediaItem
@@ -658,6 +673,17 @@ export async function POST(request: Request) {
         workspaceName: context.workspace.name,
         submitter: context.user,
         caption: baseCaptionRaw,
+        // 2026-11-01 audit (M1): the job just snapshotted exactly these
+        // overrides and targets (buildPostJobCreateData), so the owners are
+        // shown what the publish path will read back.
+        platformCaptions: resolvePlatformCaptions(
+          {
+            baseCaption: baseCaptionRaw,
+            perPlatformOverrides: perPlatformOverrides ?? null,
+            publishMetadata: targetPlatforms ? { targetPlatforms } : null,
+          },
+          null,
+        ),
       });
     }
 

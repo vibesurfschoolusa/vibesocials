@@ -38,9 +38,14 @@ vi.mock("@/lib/db", () => ({
     socialConnection: { count: connectionCountMock },
   },
 }));
-vi.mock("@/server/jobs/posting", () => ({
-  prepareDeferredPostJobDispatch: prepareDispatchMock,
-}));
+// Keep the REAL caption helpers (resolvePlatformCaptions, used for the owners'
+// approval-request email); only the DB-touching dispatch is mocked.
+vi.mock("@/server/jobs/posting", async () => {
+  const actual = await vi.importActual<typeof import("@/server/jobs/posting")>(
+    "@/server/jobs/posting",
+  );
+  return { ...actual, prepareDeferredPostJobDispatch: prepareDispatchMock };
+});
 vi.mock("@/server/notifications/approvalRequested", () => ({
   notifyOwnersOfApprovalRequest: notifyOwnersMock,
 }));
@@ -152,6 +157,10 @@ describe("POST /api/posts/[postJobId]/publish", () => {
         submittedForApprovalAt: true,
         approvedAt: true,
         baseCaption: true,
+        // 2026-11-01 audit (M1): everything resolvePlatformCaptions reads.
+        perPlatformOverrides: true,
+        publishMetadata: true,
+        mediaItem: { select: { baseCaption: true, perPlatformOverrides: true } },
         updatedAt: true,
       },
     });
@@ -350,7 +359,29 @@ describe("POST /api/posts/[postJobId]/publish — approval enforcement (2026-11-
       workspaceName: "Acme",
       submitter: expect.objectContaining({ id: "member-1", name: "Sam", email: "sam@example.com" }),
       caption: "Member's caption",
+      platformCaptions: null,
     });
+  });
+
+  // 2026-11-01 audit (M1): the owners are shown the per-platform texts that
+  // will publish, limited to the platforms the post targets.
+  it("tells the owners the per-platform captions of the targeted platforms", async () => {
+    findFirstMock.mockResolvedValue(
+      jobRow({
+        perPlatformOverrides: { linkedin: "Hidden text", x: "Not targeted" },
+        publishMetadata: { targetPlatforms: ["linkedin", "youtube"] },
+        mediaItem: { baseCaption: "Media caption", perPlatformOverrides: { x: "Old media text" } },
+      }),
+    );
+
+    await POST(req({}), ctx("job-1"));
+
+    expect(notifyOwnersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caption: "Member's caption",
+        platformCaptions: { linkedin: "Hidden text" },
+      }),
+    );
   });
 
   it("a member scheduling a plain draft submits it with the requested time (not scheduled)", async () => {

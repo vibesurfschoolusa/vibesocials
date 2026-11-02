@@ -385,6 +385,86 @@ describe("GET /api/posts — updatedAt (2026-11-01 audit)", () => {
   });
 });
 
+describe("GET /api/posts — platformCaptions (2026-11-01 audit, M1)", () => {
+  /** A held draft: no results yet, the targets live in the publish snapshot. */
+  function draftWithOverrides(overrides: Record<string, unknown> = {}) {
+    return {
+      ...jobWithYouTube(),
+      status: "draft",
+      results: [],
+      perPlatformOverrides: { linkedin: "Hidden text" },
+      publishMetadata: null,
+      ...overrides,
+    };
+  }
+
+  async function firstJob() {
+    const res = await GET(getRequest());
+    return ((await res.json()) as PostsResponse).jobs[0];
+  }
+
+  it("selects the job's AND the media item's perPlatformOverrides - everything resolvePostCaptionSource reads", async () => {
+    await GET(getRequest());
+
+    const { select } = postJobFindManyMock.mock.calls[0][0];
+    expect(select.baseCaption).toBe(true);
+    expect(select.perPlatformOverrides).toBe(true);
+    expect(select.mediaItem.select.baseCaption).toBe(true);
+    expect(select.mediaItem.select.perPlatformOverrides).toBe(true);
+  });
+
+  it("exposes the override texts the publish path will use", async () => {
+    postJobFindManyMock.mockResolvedValue([draftWithOverrides()]);
+
+    const job = await firstJob();
+
+    expect(job.platformCaptions).toEqual({ linkedin: "Hidden text" });
+    // The base caption is unchanged - the overrides are additional.
+    expect(job.caption).toBe("hello");
+  });
+
+  it("is null for a job with no overrides", async () => {
+    postJobFindManyMock.mockResolvedValue([draftWithOverrides({ perPlatformOverrides: null })]);
+
+    expect((await firstJob()).platformCaptions).toBeNull();
+  });
+
+  it("only lists the platforms the job targets", async () => {
+    postJobFindManyMock.mockResolvedValue([
+      draftWithOverrides({
+        perPlatformOverrides: { linkedin: "Hidden text", x: "X text" },
+        publishMetadata: { targetPlatforms: ["x"] },
+      }),
+    ]);
+
+    expect((await firstJob()).platformCaptions).toEqual({ x: "X text" });
+  });
+
+  it("does not resurrect the shared media item's overrides for a job with its own caption snapshot", async () => {
+    postJobFindManyMock.mockResolvedValue([
+      draftWithOverrides({
+        perPlatformOverrides: null,
+        mediaItem: {
+          baseCaption: "media cap",
+          perPlatformOverrides: { linkedin: "Old media text" },
+          storageLocation: "https://blob.example.com/media-1.mp4",
+          mimeType: "video/mp4",
+        },
+      }),
+    ]);
+
+    expect((await firstJob()).platformCaptions).toBeNull();
+  });
+
+  it("is null for a job whose media row is gone", async () => {
+    postJobFindManyMock.mockResolvedValue([
+      draftWithOverrides({ perPlatformOverrides: null, mediaItem: null }),
+    ]);
+
+    expect((await firstJob()).platformCaptions).toBeNull();
+  });
+});
+
 describe("GET /api/posts — createdBy attribution round-trip (Team Workspaces, Task 4)", () => {
   it("maps the joined user's name onto createdBy", async () => {
     postJobFindManyMock.mockResolvedValue([jobWithYouTube()]); // user: { name: "Alice", ... }

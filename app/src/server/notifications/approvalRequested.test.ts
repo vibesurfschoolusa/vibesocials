@@ -19,6 +19,7 @@ const PARAMS = {
   workspaceName: "Acme",
   submitter: { id: "member-1", name: "Sam", email: "sam@example.com" },
   caption: "Sunset session this Friday",
+  platformCaptions: null,
 };
 
 const ORIGINAL_NEXTAUTH_URL = process.env.NEXTAUTH_URL;
@@ -62,6 +63,25 @@ describe("notifyOwnersOfApprovalRequest", () => {
     expect(sent.html).toContain("Sam");
     expect(sent.html).toContain("Sunset session this Friday");
     expect(sent.html).toContain("https://vibesocials.wtf/queue");
+  });
+
+  it("puts the per-platform captions in the email body, HTML-escaped (2026-11-01 audit, M1)", async () => {
+    await notifyOwnersOfApprovalRequest({
+      ...PARAMS,
+      platformCaptions: { linkedin: "Hidden <b>text</b>" },
+    });
+
+    const sent = sendEmailMock.mock.calls[0][0];
+    expect(sent.html).toContain("Platform-specific captions");
+    expect(sent.html).toContain("LinkedIn");
+    expect(sent.html).toContain("Hidden &lt;b&gt;text&lt;/b&gt;");
+    expect(sent.html).not.toContain("<b>text</b>");
+  });
+
+  it("adds no per-platform section when the post has none", async () => {
+    await notifyOwnersOfApprovalRequest(PARAMS);
+
+    expect(sendEmailMock.mock.calls[0][0].html).not.toContain("Platform-specific captions");
   });
 
   it("names the submitter by their email local-part when they have no display name", async () => {

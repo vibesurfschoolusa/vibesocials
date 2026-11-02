@@ -30,6 +30,35 @@ export function platformLabel(platform: Platform): string {
   return PLATFORM_LABELS[platform] ?? platform;
 }
 
+/** Heading over the per-platform captions in the Queue card and the approval email. */
+export const PLATFORM_CAPTIONS_HEADING = "Platform-specific captions";
+
+/** One per-platform caption, ready to render as `{label}: {text}`. */
+export interface PlatformCaptionEntry {
+  platform: Platform;
+  label: string;
+  text: string;
+}
+
+/**
+ * 2026-11-01 audit (M1): the per-platform captions an approver is shown (the
+ * Queue card and the approval-request email), in the app's stable platform
+ * order. Empty texts are skipped — the publisher falls back to the base caption
+ * for them — and `null`/`undefined` (a post with no overrides) yields `[]`, so
+ * callers render the section only when the result is non-empty. The map comes
+ * from `PostJobDTO.platformCaptions`, which the server derives from the same
+ * caption source the publish path uses.
+ */
+export function platformCaptionEntries(
+  platformCaptions: Partial<Record<Platform, string>> | null | undefined,
+): PlatformCaptionEntry[] {
+  if (!platformCaptions) return [];
+  return PLATFORM_ORDER.flatMap((platform) => {
+    const text = platformCaptions[platform];
+    return text ? [{ platform, label: platformLabel(platform), text }] : [];
+  });
+}
+
 /**
  * Product maturity notes for the UI (sandbox modes, partial analytics, etc.).
  * Display-only; never carries secrets. Empty string means production-ready

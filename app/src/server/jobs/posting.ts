@@ -1,4 +1,4 @@
-import type { MediaItem, Platform, Prisma } from "@prisma/client";
+import { Platform, type MediaItem, type Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import type { SavedFileInfo } from "@/server/storage";
 import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
@@ -540,6 +540,71 @@ export function resolvePostCaptionSource(
     perPlatformOverrides:
       (source.perPlatformOverrides as Partial<Record<Platform, string>> | null) ?? null,
   };
+}
+
+/** The platforms a post can publish to — the only override keys the publisher reads. */
+const KNOWN_PLATFORMS: ReadonlySet<string> = new Set(Object.values(Platform));
+
+/**
+ * The platforms a job will publish to, or `null` when that can't be known yet.
+ * Once the job has results (an immediate post, or a deferred one after its run-
+ * time dispatch) those ARE the publish — and retry — targets. Before that, the
+ * compose-time `publishMetadata.targetPlatforms` snapshot is what
+ * {@link prepareDeferredPostJobDispatch} replays. With neither, the deferred
+ * dispatch publishes to whatever connections exist at run time, which nothing
+ * can know in advance.
+ */
+function jobPublishTargets(job: {
+  publishMetadata?: Prisma.JsonValue | null;
+  results?: ReadonlyArray<{ platform: Platform }>;
+}): readonly Platform[] | null {
+  if (job.results?.length) return job.results.map((result) => result.platform);
+  const snapshot = (job.publishMetadata ?? null) as PublishMetadataSnapshot | null;
+  return snapshot?.targetPlatforms?.length ? snapshot.targetPlatforms : null;
+}
+
+/**
+ * 2026-11-01 audit (M1): the per-platform texts that will actually publish, for
+ * showing to the owner who approves the post. An owner used to approve the base
+ * caption only, while the publish path also used `perPlatformOverrides` nobody
+ * had seen. This reads the overrides from {@link resolvePostCaptionSource} —
+ * the very source the deferred dispatch, the retry and YouTube's title use — so
+ * what the approver sees is what goes out, then narrows them like the
+ * publisher does: only platforms the job targets (see `jobPublishTargets`; when
+ * the targets can't be known, EVERY override shows, which over-informs rather
+ * than hides), only real platforms, and only non-empty texts (the publisher
+ * falls back to the base caption for an empty one). Returns the raw override
+ * text — the workspace footer is appended at publish time — or `null` when
+ * nothing would be replaced.
+ */
+export function resolvePlatformCaptions(
+  job: {
+    baseCaption: string | null;
+    perPlatformOverrides: Prisma.JsonValue | null;
+    publishMetadata?: Prisma.JsonValue | null;
+    results?: ReadonlyArray<{ platform: Platform }>;
+  },
+  mediaItem:
+    | { baseCaption: string; perPlatformOverrides: Prisma.JsonValue | null }
+    | null
+    | undefined,
+): Partial<Record<Platform, string>> | null {
+  // A job whose media row is gone has no legacy fallback to read.
+  const { perPlatformOverrides } = resolvePostCaptionSource(
+    job,
+    mediaItem ?? { baseCaption: "", perPlatformOverrides: null },
+  );
+  if (!perPlatformOverrides) return null;
+
+  const targets = jobPublishTargets(job);
+  const captions: Partial<Record<Platform, string>> = {};
+  for (const [key, text] of Object.entries(perPlatformOverrides)) {
+    if (!KNOWN_PLATFORMS.has(key) || typeof text !== "string" || !text) continue;
+    const platform = key as Platform;
+    if (targets && !targets.includes(platform)) continue;
+    captions[platform] = text;
+  }
+  return Object.keys(captions).length > 0 ? captions : null;
 }
 
 /** Event payload for `post/publish.requested` (the shape `publishToAllPlatforms` reads). */

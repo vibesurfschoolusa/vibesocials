@@ -41,6 +41,7 @@ function job(partial: Partial<PostJobDTO> = {}): PostJobDTO {
     // stand-in like every other field here.
     createdBy: null,
     approvalState: "none" as const,
+    platformCaptions: null,
     ...partial,
   };
 }

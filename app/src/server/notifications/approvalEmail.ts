@@ -1,3 +1,7 @@
+import type { Platform } from "@prisma/client";
+
+import { PLATFORM_CAPTIONS_HEADING, platformCaptionEntries } from "@/lib/platforms";
+
 /**
  * Approval workflow emails (2026-07-26 plan, Task 3). Pure builders — the
  * transport is the fail-safe sendEmail(). Same conventions as
@@ -28,11 +32,36 @@ function captionBlock(caption: string): string {
   )}</blockquote>`;
 }
 
+/**
+ * 2026-11-01 audit (M1): the per-platform texts that replace the base caption
+ * on their platforms. They are what is being approved, so each is shown in
+ * full (unlike the base caption's 240-character preview) and HTML-escaped.
+ * Empty string when the post has none.
+ */
+function platformCaptionsBlock(
+  platformCaptions: Partial<Record<Platform, string>> | null | undefined,
+): string {
+  const entries = platformCaptionEntries(platformCaptions);
+  if (entries.length === 0) return "";
+  const items = entries.map(
+    (entry) =>
+      `<li style="margin:6px 0;white-space:pre-wrap"><strong>${escapeHtml(entry.label)}:</strong> ${escapeHtml(
+        entry.text,
+      )}</li>`,
+  );
+  return [
+    `<p><strong>${PLATFORM_CAPTIONS_HEADING}</strong> — these replace the caption above on their platforms:</p>`,
+    `<ul style="margin:12px 0;padding-left:20px">${items.join("")}</ul>`,
+  ].join("\n");
+}
+
 /** Sent to every workspace OWNER when a member submits a post for approval. */
 export function buildApprovalRequestedEmail(params: {
   submitterName: string;
   workspaceName: string;
   caption: string;
+  /** Per-platform overrides that will publish with the post; omit/null/empty for none. */
+  platformCaptions?: Partial<Record<Platform, string>> | null;
   /** `process.env.NEXTAUTH_URL`. Omit/null to render the email with no link. */
   appBaseUrl: string | null;
 }): { subject: string; html: string } {
@@ -48,10 +77,13 @@ export function buildApprovalRequestedEmail(params: {
     html: [
       `<p>${submitter} submitted a post in <strong>${workspace}</strong> and it is waiting for your approval.</p>`,
       captionBlock(params.caption),
+      platformCaptionsBlock(params.platformCaptions),
       `<p>It will not publish until you approve it.</p>`,
       cta,
       `<p>— Vibe Socials</p>`,
-    ].join("\n"),
+    ]
+      .filter((part) => part !== "")
+      .join("\n"),
   };
 }
 

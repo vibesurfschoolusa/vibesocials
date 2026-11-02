@@ -14,6 +14,7 @@ import {
   MUTABLE_POST_JOB_STATUSES,
   validateScheduledFor,
 } from "@/lib/scheduling";
+import { resolvePlatformCaptions } from "@/server/jobs/posting";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
 
 interface PostJobRouteContext {
@@ -161,7 +162,17 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
   // job in a different workspace 404s here exactly like "doesn't exist".
   const existing = await prisma.postJob.findFirst({
     where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
-    select: { status: true, submittedForApprovalAt: true, approvedAt: true, baseCaption: true },
+    select: {
+      status: true,
+      submittedForApprovalAt: true,
+      approvedAt: true,
+      baseCaption: true,
+      // 2026-11-01 audit (M1): everything resolvePlatformCaptions reads, so the
+      // re-hold email shows the owners the per-platform texts too.
+      perPlatformOverrides: true,
+      publishMetadata: true,
+      mediaItem: { select: { baseCaption: true, perPlatformOverrides: true } },
+    },
   });
 
   if (!existing) {
@@ -235,12 +246,26 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
   }
 
   if (approvalEffect === "rehold") {
+    // 2026-11-01 audit (M1): the post as it is NOW - this request's edits laid
+    // over the row it replaced - so the owners see the per-platform texts that
+    // will publish (including ones this very edit just changed or cleared).
+    const editedCaption = typeof body.baseCaption === "string" ? body.baseCaption : null;
     await notifyOwnersOfApprovalRequest({
       workspaceId: workspaceContext.workspace.id,
       workspaceName: workspaceContext.workspace.name,
       submitter: workspaceContext.user,
-      caption:
-        typeof body.baseCaption === "string" ? body.baseCaption : (existing.baseCaption ?? ""),
+      caption: editedCaption ?? existing.baseCaption ?? "",
+      platformCaptions: resolvePlatformCaptions(
+        {
+          baseCaption: editedCaption ?? existing.baseCaption,
+          perPlatformOverrides:
+            body.perPlatformOverrides !== undefined
+              ? (body.perPlatformOverrides as Prisma.JsonValue | null)
+              : existing.perPlatformOverrides,
+          publishMetadata: existing.publishMetadata,
+        },
+        existing.mediaItem,
+      ),
     });
   }
 

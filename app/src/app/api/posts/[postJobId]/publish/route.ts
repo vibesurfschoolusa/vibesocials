@@ -17,7 +17,7 @@ import { inngest } from "@/lib/inngest";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
-import { prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
+import { prepareDeferredPostJobDispatch, resolvePlatformCaptions } from "@/server/jobs/posting";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
 import { MUTABLE_POST_JOB_STATUSES, validateScheduledFor } from "@/lib/scheduling";
 
@@ -106,6 +106,11 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       submittedForApprovalAt: true,
       approvedAt: true,
       baseCaption: true,
+      // 2026-11-01 audit (M1): everything resolvePlatformCaptions reads, so the
+      // submission email shows the owners the per-platform texts too.
+      perPlatformOverrides: true,
+      publishMetadata: true,
+      mediaItem: { select: { baseCaption: true, perPlatformOverrides: true } },
       updatedAt: true,
     },
   });
@@ -177,6 +182,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       workspaceName: workspaceContext.workspace.name,
       submitter: workspaceContext.user,
       caption: job.baseCaption ?? "",
+      platformCaptions: resolvePlatformCaptions(job, job.mediaItem),
     });
 
     return NextResponse.json(

@@ -1,3 +1,5 @@
+import type { Platform } from "@prisma/client";
+
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { buildApprovalRequestedEmail } from "@/server/notifications/approvalEmail";
@@ -20,6 +22,13 @@ export async function notifyOwnersOfApprovalRequest(params: {
   workspaceName: string;
   submitter: { id: string; name: string | null; email: string };
   caption: string;
+  /**
+   * 2026-11-01 audit (M1): the per-platform texts that will publish with the
+   * post (`resolvePlatformCaptions`), or `null` for none. Required so a caller
+   * can't forget them - the owner approves what goes out, not just the base
+   * caption.
+   */
+  platformCaptions: Partial<Record<Platform, string>> | null;
 }): Promise<void> {
   try {
     const owners = await prisma.workspaceMember.findMany({
@@ -36,6 +45,7 @@ export async function notifyOwnersOfApprovalRequest(params: {
       submitterName,
       workspaceName: params.workspaceName,
       caption: params.caption,
+      platformCaptions: params.platformCaptions,
       appBaseUrl: process.env.NEXTAUTH_URL ?? null,
     });
 
