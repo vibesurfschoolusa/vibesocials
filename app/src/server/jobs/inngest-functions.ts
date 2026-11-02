@@ -6,12 +6,12 @@ import { getPlatformClient } from "@/server/platforms";
 import { publishDeadline } from "@/server/platforms/publishBudget";
 import { withTransientRetries } from "@/server/platforms/transientRetry";
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
-import { deleteBlobUnlessShared } from "@/server/jobs/mediaBlob";
 import {
-  RETENTION_DAYS,
-  TERMINAL_POST_JOB_STATUSES,
-  isMediaSweepEligible,
-} from "@/server/jobs/mediaRetention";
+  RETENTION_MAX_BATCHES_PER_RUN,
+  sweepExpiredMediaBatch,
+  type RetentionBatchResult,
+  type RetentionCursor,
+} from "@/server/jobs/mediaRetentionBatch";
 import {
   failPendingPostJobResults,
   recomputeAndStorePostJobStatus,
@@ -821,7 +821,7 @@ export const publishToAllPlatforms = inngest.createFunction(
 );
 
 /**
- * Roadmap Phase 1 — daily media retention sweep.
+ * Roadmap Phase 1 — hourly, batched media retention sweep.
  *
  * Because blobs now persist past posting, this cron bounds Blob storage: it
  * finds *posted*, stale media that no active/scheduled job still needs, removes
@@ -836,125 +836,63 @@ export const publishToAllPlatforms = inngest.createFunction(
  * today (no code attaches a PostJob to a pre-existing MediaItem). The reuse phase
  * MUST add row-level locking — `SELECT ... FOR UPDATE` on the MediaItem in BOTH
  * the sweep and the reuse path (or a Serializable transaction) — to close it.
- * The candidate set is capped per run and drains over the daily cadence.
+ *
+ * 2026-11-01 scale audit (jobs, media retention): the daily sweep deleted at
+ * most 500 items per run while about 10,000 a day become eligible at the
+ * reference load, so storage grew without bound. It now runs hourly at :15 and
+ * drains the backlog in batches (mediaRetentionBatch.ts):
+ *  - `sweep-batch-<i>` is one keyset-paged batch of 200 candidates, resumed from
+ *    the previous batch's cursor, with its own 150 s in-step budget. A batch that
+ *    comes back short (or empty) ends the run; the loop is capped at 15 batches
+ *    (3,000 items an hour, about 72,000 a day, against about 10,000 a day of
+ *    inflow). The step id is the loop index, so it is deterministic on replay.
+ *  - the per-item transaction (FOR UPDATE, eligibility re-check, deletedAt write,
+ *    deleteBlobUnlessShared) is the daily sweep's, unchanged.
+ * `singleton: { mode: "skip" }` skips a tick that arrives while the previous run
+ * is still draining (https://www.inngest.com/docs/guides/singleton); the next
+ * hour's run starts from the beginning of the list and picks up what is left.
+ * SEC: step outputs are counts and one (createdAt, id) cursor - never a
+ * storageLocation.
  */
 export const mediaRetentionSweep = inngest.createFunction(
-  { id: "media-retention-sweep", name: "Media Retention Sweep" },
-  { cron: "0 3 * * *" },
+  {
+    id: "media-retention-sweep",
+    name: "Media Retention Sweep",
+    singleton: { mode: "skip" },
+  },
+  { cron: "15 * * * *" },
   async ({ step }) => {
-    const summary = await step.run("sweep-expired-media", async () => {
-      const now = new Date();
-      const cutoff = new Date(now.getTime() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
+    let after: RetentionCursor | null = null;
+    let batches = 0;
+    let candidates = 0;
+    let swept = 0;
+    let skipped = 0;
+    let errors = 0;
+    let exhausted = false;
 
-      // Coarse candidate filter (let the DB narrow the set): not already swept,
-      // posted at least once, no non-terminal referencing job, and stale by age
-      // (lastUsedAt when stamped, else createdAt). The authoritative rule and the
-      // race-closing re-check run per item inside the transaction below.
-      const candidates = await prisma.mediaItem.findMany({
-        where: {
-          deletedAt: null,
-          postJobs: {
-            some: {},
-            none: { status: { notIn: [...TERMINAL_POST_JOB_STATUSES] } },
-          },
-          OR: [
-            { lastUsedAt: { lt: cutoff } },
-            { lastUsedAt: null, createdAt: { lt: cutoff } },
-          ],
-        },
-        // Cap per run so a large first-deploy backlog (every pre-existing posted
-        // item is a candidate once, blobs already gone) can't exceed the function
-        // budget in one invocation; the daily cadence drains the rest.
-        take: 500,
-        select: { id: true },
-      });
+    for (let i = 0; i < RETENTION_MAX_BATCHES_PER_RUN; i++) {
+      const cursor: RetentionCursor | null = after;
+      const batch: RetentionBatchResult = await step.run(`sweep-batch-${i}`, () =>
+        sweepExpiredMediaBatch({ after: cursor }),
+      );
+      batches += 1;
+      candidates += batch.candidates;
+      swept += batch.swept;
+      skipped += batch.skipped;
+      errors += batch.errors;
 
-      let swept = 0;
-      let skipped = 0;
-      let errors = 0;
-
-      for (const candidate of candidates) {
-        try {
-          const outcome = await prisma.$transaction(
-            async (tx) => {
-              // Lock the MediaItem row before re-checking, so a concurrent reuse
-              // (which takes the same FOR UPDATE lock in createPostJobForExistingMedia)
-              // serializes with us: after this returns we see any reuse that
-              // committed first, and a reuse that arrives after waits until we
-              // commit the soft-delete. Closes the check-then-act reuse race.
-              await tx.$executeRaw`SELECT id FROM "MediaItem" WHERE id = ${candidate.id} FOR UPDATE`;
-
-              const media = await tx.mediaItem.findUnique({
-                where: { id: candidate.id },
-                select: {
-                  storageLocation: true,
-                  deletedAt: true,
-                  lastUsedAt: true,
-                  createdAt: true,
-                  _count: { select: { postJobs: true } },
-                },
-              });
-              if (!media) return "skipped";
-
-              // Fresh, in-transaction re-check of the race-sensitive predicate.
-              const nonTerminalJobs = await tx.postJob.count({
-                where: {
-                  mediaItemId: candidate.id,
-                  status: { notIn: [...TERMINAL_POST_JOB_STATUSES] },
-                },
-              });
-
-              const eligible = isMediaSweepEligible({
-                deletedAt: media.deletedAt,
-                hasNonTerminalJob: nonTerminalJobs > 0,
-                hasAnyJob: media._count.postJobs > 0,
-                lastUsedAt: media.lastUsedAt,
-                createdAt: media.createdAt,
-                now,
-                retentionDays: RETENTION_DAYS,
-              });
-              if (!eligible) return "skipped";
-
-              // Mark the row first, then remove the blob: if `del` throws the
-              // whole transaction rolls back, so we never record a delete we did
-              // not actually perform. (`del` is idempotent for a missing blob.)
-              // The blob is removed only when no OTHER live MediaItem (any
-              // workspace) references the same URL — `POST /api/media` lets two
-              // rows point at one file, and sweeping one must not destroy the
-              // other's media (2026-11-01 audit, Task 8).
-              await tx.mediaItem.update({
-                where: { id: candidate.id },
-                data: { deletedAt: now },
-              });
-              await deleteBlobUnlessShared(tx, {
-                id: candidate.id,
-                storageLocation: media.storageLocation,
-              });
-              return "swept";
-            },
-            { timeout: 15000 },
-          );
-
-          if (outcome === "swept") swept += 1;
-          else skipped += 1;
-        } catch (error) {
-          errors += 1;
-          logger.error("[Inngest] Failed to sweep media item", {
-            mediaItemId: candidate.id,
-            error,
-          });
-        }
+      if (batch.exhausted) {
+        exhausted = true;
+        break;
       }
+      // Not exhausted but no cursor cannot happen (a non-exhausted batch handled
+      // at least one row); stop rather than restart from the beginning.
+      if (!batch.next) break;
+      after = batch.next;
+    }
 
-      console.log("[Inngest] Media retention sweep complete", {
-        candidates: candidates.length,
-        swept,
-        skipped,
-        errors,
-      });
-      return { candidates: candidates.length, swept, skipped, errors };
-    });
-
+    const summary = { batches, candidates, swept, skipped, errors, exhausted };
+    logger.info("[Inngest] Media retention sweep complete", summary);
     return summary;
   },
 );
@@ -1733,7 +1671,7 @@ export const stalePostJobSweep = inngest.createFunction(
  * Email exactly-once: eligibility requires `needsReconnect === false`, so a
  * connection that flips is skipped by every later sweep; a transient failure
  * leaves the flag false, sends nothing, and is simply retried tomorrow. Cron slot
- * 04:45 UTC - cadence map: media-retention 03:00, scheduled-scanner every
+ * 04:45 UTC - cadence map: media-retention hourly :15, scheduled-scanner every
  * minute, youtube-metrics hourly :00, stale-post-sweep hourly :30.
  *
  * SEC: step outputs are ids and counts only - never connection rows (tokens).

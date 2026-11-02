@@ -1,111 +1,231 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Handler-level test for the daily media retention sweep's blob deletion. The
-// sweep and `DELETE /api/media/[id]` share `deleteBlobUnlessShared`; this pins
-// that the sweep ALSO never destroys a blob another live MediaItem still uses
-// (2026-11-01 audit, Task 8). vi.mock is hoisted above the imports.
-const db = vi.hoisted(() => ({
-  findMany: vi.fn(),
-  findUnique: vi.fn(),
-  update: vi.fn(),
-  count: vi.fn(),
-  postJobCount: vi.fn(),
-  executeRaw: vi.fn(),
-  transaction: vi.fn(),
-}));
-const { delMock } = vi.hoisted(() => ({ delMock: vi.fn() }));
+// Handler-level test for the hourly media retention sweep (2026-11-01 scale
+// audit, jobs). The handler only loops `sweep-batch-<i>` steps over
+// `sweepExpiredMediaBatch`; the batch itself (query, per-item transaction, blob
+// deletion) is covered by mediaRetentionBatch.test.ts, where the shared-blob
+// cases moved. vi.mock is hoisted above the imports: no database, Vercel Blob
+// or Inngest is reached.
+const { batchMock } = vi.hoisted(() => ({ batchMock: vi.fn() }));
 
-vi.mock("@/lib/db", () => ({
-  prisma: {
-    mediaItem: { findMany: db.findMany },
-    $transaction: db.transaction,
-  },
-}));
+vi.mock("@/lib/db", () => ({ prisma: {} }));
 vi.mock("@/server/platforms", () => ({ getPlatformClient: vi.fn() }));
-vi.mock("@vercel/blob", () => ({ del: delMock }));
+vi.mock("@vercel/blob", () => ({ del: vi.fn() }));
 vi.mock("@/server/jobs/failPendingResults", () => ({ failPendingPostJobResults: vi.fn() }));
+vi.mock("@/server/jobs/mediaRetentionBatch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/jobs/mediaRetentionBatch")>()),
+  sweepExpiredMediaBatch: batchMock,
+}));
 
-import { mediaRetentionSweep } from "./inngest-functions";
+import { inngestFunctions, mediaRetentionSweep } from "./inngest-functions";
+import {
+  RETENTION_BATCH_SIZE,
+  RETENTION_MAX_BATCHES_PER_RUN,
+  type RetentionCursor,
+} from "./mediaRetentionBatch";
 
-const STALE = new Date("2025-01-01T00:00:00Z");
+type BatchResult = {
+  candidates: number;
+  swept: number;
+  skipped: number;
+  errors: number;
+  next: RetentionCursor | null;
+  exhausted: boolean;
+};
+type RunSummary = {
+  batches: number;
+  candidates: number;
+  swept: number;
+  skipped: number;
+  errors: number;
+  exhausted: boolean;
+};
 
-type SweepSummary = { candidates: number; swept: number; skipped: number; errors: number };
-
-function runSweep(): Promise<SweepSummary> {
-  const step = {
-    run: async (_id: string, cb: () => Promise<unknown>) => cb(),
+/** Stand-in for Inngest's `step`: runs inline, JSON-round-trips outputs like memoization, records ids. */
+function fakeStep() {
+  const ids: string[] = [];
+  return {
+    ids,
+    run: vi.fn(async (id: string, cb: () => unknown) => {
+      ids.push(id);
+      const out = await cb();
+      return out === undefined ? undefined : JSON.parse(JSON.stringify(out));
+    }),
   };
+}
+type FakeStep = ReturnType<typeof fakeStep>;
+
+function runSweep(step: FakeStep): Promise<RunSummary> {
   const handler = (mediaRetentionSweep as unknown as {
-    fn: (args: { step: typeof step }) => Promise<SweepSummary>;
+    fn: (args: { step: FakeStep }) => Promise<RunSummary>;
   }).fn;
   return handler({ step });
 }
 
-afterEach(() => {
-  vi.unstubAllEnvs();
+const cursor = (i: number): RetentionCursor => ({
+  createdAt: new Date(Date.UTC(2025, 0, 1, 0, 0, i)).toISOString(),
+  id: `media-${i}`,
+});
+const fullBatch = (i: number): BatchResult => ({
+  candidates: RETENTION_BATCH_SIZE,
+  swept: RETENTION_BATCH_SIZE - 2,
+  skipped: 1,
+  errors: 1,
+  next: cursor(i),
+  exhausted: false,
 });
 
 beforeEach(() => {
-  // Hermetic: the shared-blob guard rewrites Vercel Blob hosts to the own store.
-  vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
-  vi.stubEnv("BLOB_STORE_ID", "");
-  for (const mock of Object.values(db)) mock.mockReset();
-  delMock.mockReset();
+  batchMock.mockReset();
   vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
-
-  db.findMany.mockResolvedValue([{ id: "media-1" }]);
-  db.findUnique.mockResolvedValue({
-    storageLocation: "https://example.public.blob.vercel-storage.com/a.mp4",
-    deletedAt: null,
-    lastUsedAt: STALE,
-    createdAt: STALE,
-    _count: { postJobs: 1 },
-  });
-  db.postJobCount.mockResolvedValue(0);
-  db.count.mockResolvedValue(0);
-  db.transaction.mockImplementation(async (callback: (tx: unknown) => unknown) =>
-    callback({
-      $executeRaw: db.executeRaw,
-      postJob: { count: db.postJobCount },
-      mediaItem: { findUnique: db.findUnique, update: db.update, count: db.count },
-    }),
-  );
 });
 
-describe("mediaRetentionSweep blob deletion", () => {
-  it("soft-deletes the row and removes the blob when nothing else references the URL", async () => {
-    const summary = await runSweep();
+describe("mediaRetentionSweep - registration", () => {
+  const optsOf = () => (mediaRetentionSweep as unknown as { opts: Record<string, unknown> }).opts;
+  // What Inngest's serve() registers for the function (private in the SDK's
+  // types, public at runtime).
+  const registered = () => {
+    const { getConfig } = mediaRetentionSweep as unknown as {
+      getConfig(opts: { baseUrl: URL; appPrefix: string }): Array<{ id: string; triggers: unknown }>;
+    };
+    return getConfig
+      .call(mediaRetentionSweep, {
+        baseUrl: new URL("https://app.example/api/inngest"),
+        appPrefix: "vibe-socials",
+      })
+      .find((config) => config.id === "vibe-socials-media-retention-sweep");
+  };
 
-    expect(summary).toMatchObject({ candidates: 1, swept: 1, skipped: 0, errors: 0 });
-    expect(db.update).toHaveBeenCalledTimes(1);
-    expect(delMock).toHaveBeenCalledWith("https://example.public.blob.vercel-storage.com/a.mp4");
+  it("keeps its function id (a contract with in-flight runs)", () => {
+    expect(optsOf().id).toBe("media-retention-sweep");
+    expect(registered()).toBeDefined();
   });
 
-  it("soft-deletes the row but KEEPS the blob when another live MediaItem shares the URL", async () => {
-    db.count.mockResolvedValue(1);
+  it("runs hourly at :15", () => {
+    expect(registered()?.triggers).toEqual([{ cron: "15 * * * *" }]);
+  });
 
-    const summary = await runSweep();
+  it("is a singleton: a tick that arrives while a sweep is still draining is skipped", () => {
+    expect(optsOf().singleton).toEqual({ mode: "skip" });
+  });
 
-    expect(summary).toMatchObject({ candidates: 1, swept: 1, skipped: 0, errors: 0 });
-    expect(db.update).toHaveBeenCalledTimes(1);
-    expect(db.count).toHaveBeenCalledWith({
-      where: {
-        storageLocation: { in: ["https://example.public.blob.vercel-storage.com/a.mp4"] },
-        id: { not: "media-1" },
-        deletedAt: null,
-      },
+  it("is registered with the Inngest handler", () => {
+    expect(inngestFunctions).toContain(mediaRetentionSweep);
+  });
+});
+
+describe("mediaRetentionSweep - the batch loop", () => {
+  it("stops at the first exhausted batch: batch 0 not exhausted, batch 1 exhausted -> exactly 2 steps", async () => {
+    batchMock
+      .mockResolvedValueOnce(fullBatch(1))
+      .mockResolvedValueOnce({
+        candidates: 40,
+        swept: 40,
+        skipped: 0,
+        errors: 0,
+        next: cursor(2),
+        exhausted: true,
+      } satisfies BatchResult);
+    const step = fakeStep();
+
+    const summary = await runSweep(step);
+
+    expect(step.ids).toEqual(["sweep-batch-0", "sweep-batch-1"]);
+    expect(batchMock).toHaveBeenCalledTimes(2);
+    expect(summary).toEqual({
+      batches: 2,
+      candidates: RETENTION_BATCH_SIZE + 40,
+      swept: RETENTION_BATCH_SIZE - 2 + 40,
+      skipped: 1,
+      errors: 1,
+      exhausted: true,
     });
-    expect(delMock).not.toHaveBeenCalled();
   });
 
-  it("touches neither the row nor the blob when the item is no longer eligible", async () => {
-    db.postJobCount.mockResolvedValue(1); // a non-terminal job appeared
+  it("runs a single step when there is nothing to sweep", async () => {
+    batchMock.mockResolvedValueOnce({
+      candidates: 0,
+      swept: 0,
+      skipped: 0,
+      errors: 0,
+      next: null,
+      exhausted: true,
+    } satisfies BatchResult);
+    const step = fakeStep();
 
-    const summary = await runSweep();
+    const summary = await runSweep(step);
 
-    expect(summary).toMatchObject({ swept: 0, skipped: 1 });
-    expect(db.update).not.toHaveBeenCalled();
-    expect(delMock).not.toHaveBeenCalled();
+    expect(step.ids).toEqual(["sweep-batch-0"]);
+    expect(summary).toMatchObject({ batches: 1, candidates: 0, exhausted: true });
+  });
+
+  it("threads each batch's cursor into the next: the first starts at null", async () => {
+    batchMock
+      .mockResolvedValueOnce(fullBatch(1))
+      .mockResolvedValueOnce(fullBatch(2))
+      .mockResolvedValueOnce({ ...fullBatch(3), exhausted: true });
+
+    await runSweep(fakeStep());
+
+    expect(batchMock.mock.calls.map(([opts]) => opts)).toEqual([
+      { after: null },
+      { after: cursor(1) },
+      { after: cursor(2) },
+    ]);
+  });
+
+  it("caps a run at 15 batch steps when the backlog never exhausts", async () => {
+    let i = 0;
+    batchMock.mockImplementation(async () => fullBatch(++i));
+    const step = fakeStep();
+
+    const summary = await runSweep(step);
+
+    expect(RETENTION_MAX_BATCHES_PER_RUN).toBe(15);
+    expect(step.ids).toEqual(Array.from({ length: 15 }, (_, n) => `sweep-batch-${n}`));
+    expect(batchMock).toHaveBeenCalledTimes(15);
+    expect(summary).toMatchObject({
+      batches: 15,
+      candidates: 15 * RETENTION_BATCH_SIZE,
+      exhausted: false,
+    });
+  });
+
+  it("does not restart from the beginning when a batch reports no cursor but is not exhausted", async () => {
+    batchMock.mockResolvedValue({
+      candidates: 0,
+      swept: 0,
+      skipped: 0,
+      errors: 0,
+      next: null,
+      exhausted: false,
+    } satisfies BatchResult);
+    const step = fakeStep();
+
+    const summary = await runSweep(step);
+
+    expect(step.ids).toEqual(["sweep-batch-0"]);
+    expect(summary.exhausted).toBe(false);
+  });
+
+  it("leaves row-level failures to the batch: an errored item is counted, not thrown", async () => {
+    batchMock.mockResolvedValueOnce({
+      candidates: 5,
+      swept: 3,
+      skipped: 1,
+      errors: 1,
+      next: cursor(5),
+      exhausted: true,
+    } satisfies BatchResult);
+
+    await expect(runSweep(fakeStep())).resolves.toMatchObject({ swept: 3, skipped: 1, errors: 1 });
+  });
+
+  it("propagates a thrown batch (a failed candidate query) so Inngest retries that step", async () => {
+    batchMock.mockRejectedValueOnce(new Error("db down"));
+
+    await expect(runSweep(fakeStep())).rejects.toThrow("db down");
   });
 });

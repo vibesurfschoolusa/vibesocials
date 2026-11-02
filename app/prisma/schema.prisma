@@ -267,6 +267,12 @@ model MediaItem {
   @@index([storageLocation], type: Hash)
   // 2026-11-01 scale audit: User -> MediaItem ON DELETE CASCADE seeks by userId.
   @@index([userId])
+  // 2026-11-01 scale audit (jobs, media retention): the hourly retention sweep
+  // keyset-pages `deletedAt IS NULL AND createdAt < cutoff ORDER BY createdAt, id`
+  // (every eligible row satisfies createdAt < cutoff, because lastUsedAt >=
+  // createdAt), so this index serves the filter, the order and the cursor
+  // without a sort or a scan of the already-swept rows.
+  @@index([deletedAt, createdAt, id])
 }
 
 model PostJob {
