@@ -26,6 +26,7 @@ vi.mock("@/lib/db", () => ({
 }));
 
 import {
+  CONNECTION_GONE_FAILURE,
   DISPATCH_FAILURE,
   PUBLISH_UNCONFIRMED,
   RECOMPUTE_TX_MAX_WAIT_MS,
@@ -61,6 +62,36 @@ describe("DISPATCH_FAILURE", () => {
     expect(DISPATCH_FAILURE).toEqual({
       errorCode: "DISPATCH_FAILED",
       errorMessage: "Couldn't start publishing. Please try again.",
+    });
+  });
+});
+
+describe("CONNECTION_GONE_FAILURE", () => {
+  it("is the code + message publishToPlatform already writes for a removed connection", () => {
+    expect(CONNECTION_GONE_FAILURE).toEqual({
+      errorCode: "CONNECTION_GONE",
+      errorMessage: "This platform connection was removed. Reconnect and retry.",
+    });
+  });
+
+  it("fails unclaimed pending results with it, and a claimed one stays PUBLISH_UNCONFIRMED", async () => {
+    await failPendingPostJobResults("job-1", CONNECTION_GONE_FAILURE);
+
+    expect(resultUpdateManyMock).toHaveBeenCalledWith({
+      where: { postJobId: "job-1", status: "pending", claimRunId: null },
+      data: {
+        status: "failed",
+        errorCode: "CONNECTION_GONE",
+        errorMessage: "This platform connection was removed. Reconnect and retry.",
+      },
+    });
+    expect(resultUpdateManyMock).toHaveBeenCalledWith({
+      where: { postJobId: "job-1", status: "pending", claimRunId: { not: null } },
+      data: {
+        status: "failed",
+        errorCode: PUBLISH_UNCONFIRMED_CODE,
+        errorMessage: PUBLISH_UNCONFIRMED_MESSAGE,
+      },
     });
   });
 });

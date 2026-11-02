@@ -23,6 +23,17 @@ export const DISPATCH_FAILURE = {
 } as const satisfies PendingResultFailure;
 
 /**
+ * What a result is failed with when its connection was removed (Disconnect /
+ * Switch account) after the job was dispatched (2026-11-02 scale audit,
+ * correctness L1). The same code and copy `publishToPlatform` writes when the
+ * connection vanishes between the setup step and the publish.
+ */
+export const CONNECTION_GONE_FAILURE = {
+  errorCode: "CONNECTION_GONE",
+  errorMessage: "This platform connection was removed. Reconnect and retry.",
+} as const satisfies PendingResultFailure;
+
+/**
  * What a result that a platform step CLAIMED but never finished is failed with
  * (2026-11-01 scale audit, jobs H6). The claim means the step started and the
  * platform call may have gone through, so "failed, please retry" would invite a

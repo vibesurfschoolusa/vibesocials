@@ -13,6 +13,7 @@ import {
   type RetentionCursor,
 } from "@/server/jobs/mediaRetentionBatch";
 import {
+  CONNECTION_GONE_FAILURE,
   failPendingPostJobResults,
   recomputeAndStorePostJobStatus,
   type PendingResultFailure,
@@ -134,9 +135,10 @@ interface PublishToPlatformArgs {
 /**
  * Point a still-`pending` result at the connection that will publish it.
  * `PostJobResult.socialConnectionId` is SET NULL when its connection is removed
- * (the history outlives Disconnect / Switch account); a retry through the
- * workspace's current connection re-links it, and a result that already points
- * there is left alone. Bookkeeping only, so a failure (e.g. the connection
+ * (the history outlives Disconnect / Switch account); a retry, or a publish run
+ * that finds the platform reconnected since dispatch, publishes through the
+ * workspace's current connection and re-links it, and a result that already
+ * points there is left alone. Bookkeeping only, so a failure (e.g. the connection
  * vanished since the setup step -> FK violation) is logged and swallowed:
  * `publishToPlatform` reloads the connection itself and reports a clean
  * CONNECTION_GONE failure, which a thrown error here would pre-empt.
@@ -156,7 +158,7 @@ async function repointResultConnection(
       data: { socialConnectionId: connectionId },
     });
   } catch (error) {
-    logger.warn("[Inngest] Could not repoint a retried result at the current connection", {
+    logger.warn("[Inngest] Could not repoint a result at the current connection", {
       resultRecordId,
       connectionId,
       error,
@@ -382,8 +384,7 @@ async function publishToPlatform({
     if (!connection) {
       await finalizeClaimedResult(resultRecordId, runId, {
         status: "failed",
-        errorCode: "CONNECTION_GONE",
-        errorMessage: "This platform connection was removed. Reconnect and retry.",
+        ...CONNECTION_GONE_FAILURE,
       });
       return {
         platform: connectionRef.platform,
@@ -675,9 +676,14 @@ export const publishToAllPlatforms = inngest.createFunction(
         throw new NonRetriableError("Missing required data");
       }
 
+      // 2026-11-02 scale audit (correctness L1): the plan below is built from
+      // these rows, not from the connections - a result outlives its connection
+      // (Disconnect clears `socialConnectionId`). The connection id is carried so
+      // the publish step only repoints a result that does not already point at the
+      // connection it publishes through. Ids only: no tokens.
       const resultRecords = await prisma.postJobResult.findMany({
         where: { postJobId },
-        select: { id: true, platform: true },
+        select: { id: true, platform: true, socialConnectionId: true },
       });
 
       return {
@@ -690,11 +696,15 @@ export const publishToAllPlatforms = inngest.createFunction(
     });
 
     if (!setupData.socialConnections.length) {
+      // 2026-11-02 scale audit (correctness L1): every connection was removed
+      // after dispatch. The job used to be marked `failed` while its results stayed
+      // `pending` for good (no sweep looks at a failed job). Fail them too, through
+      // the shared helper: unclaimed results get CONNECTION_GONE, one a platform
+      // step already claimed becomes PUBLISH_UNCONFIRMED, and the job is recomputed
+      // under its row lock (`failed`, also with no results at all). No outcome email,
+      // as before.
       await step.run("mark-failed-no-connections", async () => {
-        await prisma.postJob.update({
-          where: { id: postJobId },
-          data: { status: "failed" },
-        });
+        await failPendingPostJobResults(postJobId, CONNECTION_GONE_FAILURE);
       });
       return { error: "No connections" };
     }
@@ -706,16 +716,18 @@ export const publishToAllPlatforms = inngest.createFunction(
     const fullBaseCaption = buildCaptionWithFooter(baseCaption, setupData.workspace);
     const overrides = perPlatformOverrides as Partial<Record<Platform, string>> | null;
 
-    logger.info(`[Inngest] Publishing to ${setupData.socialConnections.length} platforms`, {
-      postJobId,
-      count: setupData.socialConnections.length,
-    });
-
     // Process each platform as a separate step (allows longer execution per
     // platform). The steps are planned here and run by runPlatformStepsWithDeferrals
     // (platformSteps.ts): every platform once, in this order, then each one a
     // platform rate-limited again after its wait (2026-11-01 scale audit, platform
     // limits), so a sleeping YouTube never delays LinkedIn.
+    //
+    // 2026-11-02 scale audit (correctness L1): one step per RESULT row, not per
+    // current connection. Disconnect keeps a job's result rows, so a connection
+    // removed after dispatch used to leave its result unvisited and `pending` until
+    // the sweeps. The order comes from the memoized fetch-data output, so a replay
+    // plans the same step ids: results that have a connection first, in the
+    // connections' order (as before), then results without one, in result order.
     const plans: PlatformStepPlan[] = [];
 
     for (const connection of setupData.socialConnections) {
@@ -746,6 +758,16 @@ export const publishToAllPlatforms = inngest.createFunction(
           });
           if (early) return early;
 
+          // The result's connection may have been removed since dispatch and the
+          // platform reconnected (Disconnect + connect, or Switch account): it
+          // publishes through the workspace's CURRENT connection, so point it
+          // there, as a retry does. A result that already points at it needs no
+          // write; an output memoized before `socialConnectionId` was selected has
+          // no such field, and repointResultConnection then checks the database.
+          if (resultRecord.socialConnectionId !== connection.id) {
+            await repointResultConnection(resultRecord.id, connection.id);
+          }
+
           return publishToPlatform({
             connectionRef: connection,
             mediaItem: setupData.mediaItem,
@@ -761,6 +783,44 @@ export const publishToAllPlatforms = inngest.createFunction(
         },
       });
     }
+
+    // Results whose platform has no connection any more. Each still gets its
+    // `publish-to-<platform>` step, which claims the result like any other (so a
+    // result that is no longer pending, or that another run holds, is left alone)
+    // and fails it CONNECTION_GONE: nothing is published, so no platform is called.
+    const plannedPlatforms = new Set<Platform>(
+      setupData.socialConnections.map((connection) => connection.platform),
+    );
+    for (const resultRecord of setupData.resultRecords) {
+      // One step per platform: `publish-to-<platform>` must stay a unique id.
+      if (plannedPlatforms.has(resultRecord.platform)) continue;
+      plannedPlatforms.add(resultRecord.platform);
+
+      plans.push({
+        platform: resultRecord.platform,
+        stepId: `publish-to-${resultRecord.platform}`,
+        run: async (attempt) => {
+          const early = await claimOrSkip(resultRecord.id, runId, {
+            step: "publish",
+            postJobId,
+            platform: resultRecord.platform,
+            attempt,
+          });
+          if (early) return early;
+
+          await finalizeClaimedResult(resultRecord.id, runId, {
+            status: "failed",
+            ...CONNECTION_GONE_FAILURE,
+          });
+          return { platform: resultRecord.platform, status: "failed", error: "Connection gone" };
+        },
+      });
+    }
+
+    logger.info(`[Inngest] Publishing to ${plans.length} platforms`, {
+      postJobId,
+      count: plans.length,
+    });
 
     const results = await runPlatformStepsWithDeferrals(step, plans);
 

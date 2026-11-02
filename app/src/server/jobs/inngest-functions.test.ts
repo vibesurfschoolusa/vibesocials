@@ -106,6 +106,7 @@ vi.mock("@/server/jobs/failPendingResults", async (importOriginal) => {
 });
 
 import { EmailRetryableError } from "@/server/notifications/email";
+import { CONNECTION_GONE_FAILURE } from "./failPendingResults";
 import {
   failInterruptedPublishRun,
   failInterruptedRetryRun,
@@ -227,12 +228,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** Result rows: `select: { id, platform }` lookups get ids; status lookups get statuses. */
+/**
+ * Result rows: `select: { id, platform, ... }` lookups get ids (each pointing at
+ * its platform's current connection); status lookups get statuses.
+ */
 function stubResults(platforms: Platform[], status: "success" | "failed" = "success") {
   db.resultFindMany.mockImplementation(({ select }: { select: Record<string, boolean> }) =>
     Promise.resolve(
       select.platform
-        ? platforms.map((p) => ({ id: `result-${p}`, platform: p }))
+        ? platforms.map((p) => ({ id: `result-${p}`, platform: p, socialConnectionId: `conn-${p}` }))
         : platforms.map(() => ({ status })),
     ),
   );
@@ -739,6 +743,7 @@ describe("publishToAllPlatforms — a publish step only publishes a still-pendin
   );
 
   it("skips a result that no longer exists", async () => {
+    stubResults(["x"]);
     loseClaimFor("result-x", null);
 
     const out = await publishRun(["x"]);
@@ -749,6 +754,7 @@ describe("publishToAllPlatforms — a publish step only publishes a still-pendin
   });
 
   it("publishes a result that is still pending", async () => {
+    stubResults(["x"]);
     const out = await publishRun(["x"]);
 
     expect(claimWrites()).toEqual([{ id: "result-x", claimRunId: "run-1" }]);
@@ -1197,6 +1203,370 @@ describe("retryPlatforms — a result whose connection was removed (Task 5)", ()
       }),
     ]);
     expect(out.results).toEqual([{ platform: "x", status: "failed", error: "No connection" }]);
+  });
+});
+
+// 2026-11-02 scale audit (correctness L1): Disconnect keeps the result rows
+// (socialConnectionId -> NULL), but the publish run used to be planned from the
+// workspace's CURRENT connections, so a result whose connection was removed after
+// dispatch was never visited and stayed `pending` until the sweeps. The run is now
+// planned from the result rows: each one publishes through its platform's current
+// connection, and one with none is claimed and failed CONNECTION_GONE.
+describe("publishToAllPlatforms - a result whose connection was removed after dispatch (correctness L1)", () => {
+  const publishEvent = {
+    name: "post/publish.requested",
+    data: { postJobId: "job-1", userId: "user-1", mediaItemId: "media-1", baseCaption: "c", perPlatformOverrides: null },
+  };
+  const GONE_MESSAGE = "This platform connection was removed. Reconnect and retry.";
+
+  type RunOut = {
+    status?: string;
+    error?: string;
+    results?: Array<{ platform: Platform; status: string; error?: string }>;
+  };
+
+  /**
+   * A run whose `fetch-data` sees `connections` (the workspace's connections now)
+   * and `results` (the job's result rows, in row order; `socialConnectionId` is what
+   * each row points at). The rows live in an in-memory table (stubResultStore), so
+   * the claim, the finalize writes and the status recompute all see each other.
+   */
+  function setUpRun(args: {
+    connections: Platform[];
+    results: Array<[Platform, Partial<StoredResult>]>;
+  }) {
+    db.postJobFindUnique.mockResolvedValue({ id: "job-1", workspaceId: WORKSPACE.id });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null });
+    db.connectionFindMany.mockResolvedValue(
+      args.connections.map((p) => ({ id: `conn-${p}`, platform: p })),
+    );
+    const rows = stubResultStore(
+      Object.fromEntries(args.results.map(([platform, row]) => [`result-${platform}`, row])),
+    );
+    db.resultFindMany.mockImplementation(({ select }: { select: Record<string, boolean> }) =>
+      Promise.resolve(
+        [...rows].map(([id, row]) =>
+          select.platform
+            ? { id, platform: id.slice("result-".length), socialConnectionId: row.socialConnectionId }
+            : { status: row.status },
+        ),
+      ),
+    );
+    return rows;
+  }
+
+  function run(step = fakeStep()) {
+    return handlerOf(publishToAllPlatforms)({ event: publishEvent, step }) as Promise<RunOut>;
+  }
+
+  /** The platform steps of a run, in order. */
+  function platformSteps(step: FakeStep) {
+    return step.order.filter((s) => s.startsWith("run:publish-to-"));
+  }
+
+  /** Writes that point a result at a (new) connection - not claims or finalizes. */
+  function repointWrites() {
+    return db.resultUpdateMany.mock.calls
+      .map((c) => c[0] as { where: unknown; data: Record<string, unknown> })
+      .filter((arg) => "socialConnectionId" in arg.data);
+  }
+
+  /** A fetch-data output as a run in flight before this change memoized it. */
+  function stepReplaying(memoized: Record<string, unknown>) {
+    const step = fakeStep();
+    const live = step.run.getMockImplementation()!;
+    step.run.mockImplementation(async (id: string, cb: () => unknown) => {
+      if (!(id in memoized)) return live(id, cb);
+      step.order.push(`run:${id}`);
+      return memoized[id];
+    });
+    return step;
+  }
+
+  describe("one connection removed", () => {
+    beforeEach(() => {
+      setUpRun({
+        connections: ["x"],
+        results: [
+          ["x", { socialConnectionId: "conn-x" }],
+          ["linkedin", { socialConnectionId: null }],
+        ],
+      });
+    });
+
+    it("gives the removed platform's result its own publish step, after the connected ones", async () => {
+      const step = fakeStep();
+
+      await run(step);
+
+      expect(step.order).toEqual([
+        "run:fetch-data",
+        "run:publish-to-x",
+        "run:publish-to-linkedin",
+        "run:finalize-job",
+        "sendEvent:notify-outcome",
+      ]);
+    });
+
+    it("claims it, makes no platform call, and finalizes it failed CONNECTION_GONE", async () => {
+      const out = await run();
+
+      expect(claimWrites()).toEqual([
+        { id: "result-x", claimRunId: "run-1" },
+        { id: "result-linkedin", claimRunId: "run-1" },
+      ]);
+      // Only X reached a platform; LinkedIn's connection was never even loaded.
+      expect(publishCtxs.map((c) => c.socialConnection.platform)).toEqual(["x"]);
+      expect(getPlatformClientMock).toHaveBeenCalledTimes(1);
+      expect(db.connectionFindUnique).toHaveBeenCalledTimes(1);
+      expect(resultWrites()).toEqual([
+        expect.objectContaining({ status: "success", externalPostId: "ext-x", ...HEARTBEAT }),
+        expect.objectContaining({
+          status: "failed",
+          errorCode: "CONNECTION_GONE",
+          errorMessage: GONE_MESSAGE,
+          ...HEARTBEAT,
+        }),
+      ]);
+      expect(resultWrites()[1]).toMatchObject(CONNECTION_GONE_FAILURE);
+      expect(out.results).toEqual([
+        { platform: "x", status: "success" },
+        { platform: "linkedin", status: "failed", error: "Connection gone" },
+      ]);
+    });
+
+    it("finalizes the job completed (X went live) and sends the outcome email once", async () => {
+      const step = fakeStep();
+
+      const out = await run(step);
+
+      expect(recomputeSpy).toHaveBeenCalledTimes(1);
+      expect(db.postJobUpdate).toHaveBeenCalledWith({ where: { id: "job-1" }, data: { status: "completed" } });
+      expect(out.status).toBe("completed");
+      expect(step.sendEvent).toHaveBeenCalledTimes(1);
+      expect(step.sendEvent).toHaveBeenCalledWith("notify-outcome", expect.objectContaining({ id: "notify-job-1-run-1" }));
+    });
+
+    it("does not repoint it (there is no connection to point at)", async () => {
+      await run();
+
+      expect(repointWrites()).toEqual([]);
+    });
+
+    it("memoizes ids only: each result's id, platform and connection id, no tokens", async () => {
+      const step = fakeStep();
+
+      await run(step);
+
+      expect(db.resultFindMany).toHaveBeenNthCalledWith(1, {
+        where: { postJobId: "job-1" },
+        select: { id: true, platform: true, socialConnectionId: true },
+      });
+      const fetched = step.outputs["fetch-data"] as { resultRecords: unknown; socialConnections: unknown };
+      expect(fetched.socialConnections).toEqual([{ id: "conn-x", platform: "x" }]);
+      expect(fetched.resultRecords).toEqual([
+        { id: "result-x", platform: "x", socialConnectionId: "conn-x" },
+        { id: "result-linkedin", platform: "linkedin", socialConnectionId: null },
+      ]);
+    });
+  });
+
+  describe("the order of the platform steps", () => {
+    it("keeps today's connection order for results that have a connection", async () => {
+      setUpRun({
+        connections: ["linkedin", "x"],
+        results: [
+          ["x", { socialConnectionId: "conn-x" }],
+          ["linkedin", { socialConnectionId: "conn-linkedin" }],
+        ],
+      });
+      const step = fakeStep();
+
+      await run(step);
+
+      expect(platformSteps(step)).toEqual(["run:publish-to-linkedin", "run:publish-to-x"]);
+    });
+
+    it("puts results without a connection after those with one, in result order", async () => {
+      setUpRun({
+        connections: ["youtube"],
+        results: [
+          ["x", { socialConnectionId: null }],
+          ["youtube", { socialConnectionId: "conn-youtube" }],
+          ["linkedin", { socialConnectionId: null }],
+          ["tiktok", { socialConnectionId: null }],
+        ],
+      });
+      const step = fakeStep();
+
+      const out = await run(step);
+
+      expect(platformSteps(step)).toEqual([
+        "run:publish-to-youtube",
+        "run:publish-to-x",
+        "run:publish-to-linkedin",
+        "run:publish-to-tiktok",
+      ]);
+      expect(out.results?.map((r) => [r.platform, r.status])).toEqual([
+        ["youtube", "success"],
+        ["x", "failed"],
+        ["linkedin", "failed"],
+        ["tiktok", "failed"],
+      ]);
+    });
+
+    it("replays an old-shape fetch-data output (connections and results alike, no connection ids) with today's ids", async () => {
+      setUpRun({
+        connections: ["x", "linkedin"],
+        results: [
+          ["x", { socialConnectionId: "conn-x" }],
+          ["linkedin", { socialConnectionId: "conn-linkedin" }],
+        ],
+      });
+      const step = stepReplaying({
+        "fetch-data": {
+          user: { id: "user-1" },
+          workspace: WORKSPACE,
+          mediaItem: { id: "media-1", baseCaption: "c", deletedAt: null },
+          socialConnections: [
+            { id: "conn-x", platform: "x" },
+            { id: "conn-linkedin", platform: "linkedin" },
+          ],
+          resultRecords: [
+            { id: "result-x", platform: "x" },
+            { id: "result-linkedin", platform: "linkedin" },
+          ],
+        },
+      });
+
+      const out = await run(step);
+
+      expect(db.postJobFindUnique).not.toHaveBeenCalled();
+      expect(step.order).toEqual([
+        "run:fetch-data",
+        "run:publish-to-x",
+        "run:publish-to-linkedin",
+        "run:finalize-job",
+        "sendEvent:notify-outcome",
+      ]);
+      expect(publishCtxs.map((c) => c.socialConnection.platform)).toEqual(["x", "linkedin"]);
+      // The old shape cannot say what a result points at, so the step asks the
+      // database - and finds nothing to repoint.
+      expect(repointWrites()).toEqual([]);
+      expect(out.status).toBe("completed");
+    });
+  });
+
+  describe("every connection removed", () => {
+    it.each([
+      ["with result rows", [["x", { socialConnectionId: null }], ["linkedin", { socialConnectionId: null }]] as Array<[Platform, Partial<StoredResult>]>],
+      ["with no result rows at all", [] as Array<[Platform, Partial<StoredResult>]>],
+    ])("fails the job's pending results through failPendingPostJobResults %s", async (_label, results) => {
+      setUpRun({ connections: [], results });
+      const step = fakeStep();
+
+      const out = await run(step);
+
+      expect(step.order).toEqual(["run:fetch-data", "run:mark-failed-no-connections"]);
+      expect(failPendingMock).toHaveBeenCalledTimes(1);
+      expect(failPendingMock).toHaveBeenCalledWith("job-1", CONNECTION_GONE_FAILURE);
+      expect(failPendingMock.mock.calls[0][1]).toEqual({
+        errorCode: "CONNECTION_GONE",
+        errorMessage: GONE_MESSAGE,
+      });
+      // The status is the helper's recompute, not a bare write of `failed`.
+      expect(db.postJobUpdate).not.toHaveBeenCalled();
+      expect(db.resultUpdate).not.toHaveBeenCalled();
+      expect(publishCtxs).toHaveLength(0);
+      expect(out).toEqual({ error: "No connections" });
+    });
+
+    it("sends no outcome email, as before", async () => {
+      setUpRun({ connections: [], results: [["x", { socialConnectionId: null }]] });
+      const step = fakeStep();
+
+      await run(step);
+
+      expect(step.sendEvent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a result whose connection was replaced", () => {
+    it.each([
+      ["a null connection id (the old connection was deleted)", null],
+      ["the id of a connection that is no longer the workspace's", "conn-x-old"],
+    ])("repoints a result with %s at the current connection before publishing", async (_label, staleId) => {
+      setUpRun({ connections: ["x"], results: [["x", { socialConnectionId: staleId }]] });
+
+      const out = await run();
+
+      expect(repointWrites()).toEqual([
+        { where: { id: "result-x", status: "pending" }, data: { socialConnectionId: "conn-x" } },
+      ]);
+      const publishVideo = getPlatformClientMock.mock.results[0].value.publishVideo as ReturnType<typeof vi.fn>;
+      expect(db.resultUpdateMany.mock.invocationCallOrder[1]).toBeLessThan(publishVideo.mock.invocationCallOrder[0]);
+      expect(publishCtxs.map((c) => c.socialConnection.id)).toEqual(["conn-x"]);
+      expect(out.results).toEqual([{ platform: "x", status: "success" }]);
+    });
+
+    it("does not rewrite a result that already points at the current connection", async () => {
+      setUpRun({ connections: ["x"], results: [["x", { socialConnectionId: "conn-x" }]] });
+
+      await run();
+
+      // Nothing to look up either: the memoized fetch-data output already says so.
+      expect(repointWrites()).toEqual([]);
+      expect(db.resultFindUnique).not.toHaveBeenCalled();
+    });
+
+    it("does not repoint a result its claim lost (another run owns it)", async () => {
+      setUpRun({
+        connections: ["x"],
+        results: [["x", { socialConnectionId: null, claimRunId: "run-other" }]],
+      });
+
+      const out = await run();
+
+      expect(repointWrites()).toEqual([]);
+      expect(publishCtxs).toHaveLength(0);
+      expect(out.results).toEqual([{ platform: "x", status: "skipped" }]);
+    });
+  });
+
+  describe("a result without a connection that is no longer claimable", () => {
+    it("is skipped with nothing written when it already finished (the route failed it after a dispatch error)", async () => {
+      setUpRun({
+        connections: ["x"],
+        results: [
+          ["x", { socialConnectionId: "conn-x" }],
+          ["linkedin", { socialConnectionId: null, status: "failed" }],
+        ],
+      });
+
+      const out = await run();
+
+      expect(out.results).toEqual([
+        { platform: "x", status: "success" },
+        { platform: "linkedin", status: "skipped" },
+      ]);
+      expect(resultWrites()).toHaveLength(1);
+    });
+
+    it("records PUBLISH_UNCONFIRMED, not CONNECTION_GONE, when the step meets its own earlier claim", async () => {
+      // YouTube is still connected (so this is not the no-connections path) but has
+      // no result row; X's connection is gone and its result is already claimed.
+      setUpRun({
+        connections: ["youtube"],
+        results: [["x", { socialConnectionId: null, claimRunId: "run-1" }]],
+      });
+
+      const out = await run();
+
+      expect(resultWrites()).toEqual([
+        expect.objectContaining({ status: "failed", errorCode: "PUBLISH_UNCONFIRMED" }),
+      ]);
+      expect(out.results?.map((r) => [r.platform, r.status])).toEqual([["x", "failed"]]);
+    });
   });
 });
 
@@ -2310,10 +2680,12 @@ describe("outcome email - only for a terminal job status (fix round 1, Important
     });
 
     it("sends NO event when the job is still in_progress (another result is pending)", async () => {
-      // x succeeds in this run; youtube is another run's result, still pending.
+      // x succeeds in this run; youtube is another run's result: still pending,
+      // and claimed by that run (a publish run claims every pending result it can
+      // reach, so one nobody holds would be taken and settled here).
       const rows = stubResultStore({
         "result-x": {},
-        "result-youtube": { status: "pending", deferredUntil: new Date(T + 20 * HOUR), errorCode: "DAILY_LIMIT" },
+        "result-youtube": { status: "pending", claimRunId: "run-other" },
       });
       serveResultsFrom(rows);
       const step = fakeStep();
