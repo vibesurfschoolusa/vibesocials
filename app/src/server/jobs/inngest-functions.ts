@@ -412,6 +412,33 @@ async function continueUpload(args: {
   return { platform, status: "continue", ...next };
 }
 
+/**
+ * 2026-11-02 scale audit (jobs B3): a platform error can quote a capability URL (a
+ * fetch error names the URL it failed on, an upstream message can echo one), and an
+ * error's message reaches the result row, the log and the step output. Every
+ * http(s) URL is replaced up to the next space.
+ */
+const URL_IN_TEXT = /https?:\/\/\S+/gi;
+
+function scrubUrls(text: string): string {
+  return text.replace(URL_IN_TEXT, "[url]");
+}
+
+/**
+ * A copy of `err` for the log with URLs scrubbed from its message and stack, and
+ * only its `code` and `status` kept. It stays an Error so the logger still hands
+ * Sentry a real exception to group on.
+ */
+function scrubbedError(err: Error & { code?: string; status?: unknown }): Error {
+  const copy = Object.assign(new Error(scrubUrls(err.message ?? "")), {
+    code: err.code,
+    status: err.status,
+  });
+  copy.name = err.name;
+  copy.stack = err.stack === undefined ? undefined : scrubUrls(err.stack);
+  return copy;
+}
+
 // Helper to publish to a single platform. Loads the connection fresh so tokens
 // are never serialized through step.run() memoization. The caller has already
 // claimed the result for `runId` (claimOrSkip); every result write here is made
@@ -574,24 +601,41 @@ async function publishToPlatform({
       });
     }
     const err = error as Error & { code?: string };
+    const message = scrubUrls(err.message ?? "");
     logger.error(`[Inngest] Platform ${connectionRef.platform} failed to publish`, {
       platform: connectionRef.platform,
       resultRecordId,
       code: err.code,
-      error: err,
+      error: scrubbedError(err),
     });
     await finalizeClaimedResult(resultRecordId, runId, {
       status: "failed",
       errorCode: err.code ?? "PUBLISH_FAILED",
-      errorMessage: err.message || "Failed to publish to platform.",
+      errorMessage: message || "Failed to publish to platform.",
     });
-    return { platform: connectionRef.platform, status: "failed", error: err.message };
+    return { platform: connectionRef.platform, status: "failed", error: message };
+  }
+
+  // A client that returns a post id has made its commit call: the post is live. A
+  // `continuation` next to it is a client bug, and acting on it would run the
+  // platform again (a second post), so the post id wins and the result is recorded
+  // as the success it is.
+  const postIsLive = typeof publishResult.externalPostId === "string" && publishResult.externalPostId !== "";
+  if (publishResult.continuation && postIsLive) {
+    logger.error(
+      `[Inngest] ${connectionRef.platform} returned a continuation together with a post id; recording the post as published`,
+      {
+        platform: connectionRef.platform,
+        resultRecordId,
+        externalPostId: publishResult.externalPostId,
+      },
+    );
   }
 
   // The client made progress and has more to upload: it saved its state, so hand
   // the claim back and let the run call it again. Not a post: nothing is recorded
   // as published, and the commit call has not been made.
-  if (publishResult.continuation) {
+  if (publishResult.continuation && !postIsLive) {
     return continueUpload({
       platform: connectionRef.platform,
       resultRecordId,

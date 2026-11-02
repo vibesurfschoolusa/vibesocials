@@ -24,6 +24,7 @@ import {
   MAX_UPLOAD_STATE_BYTES,
   RESULT_CLAIM_LOST_CODE,
   UPLOAD_INCOMPLETE,
+  UPLOAD_STATE_PLAINTEXT_URL_CODE,
   UPLOAD_STATE_TOO_LARGE_CODE,
   UPLOAD_STATE_VERSION,
   createUploadStateStore,
@@ -69,6 +70,7 @@ describe("constants", () => {
     expect(MAX_UPLOAD_STATE_BYTES).toBe(524_288);
     expect(RESULT_CLAIM_LOST_CODE).toBe("RESULT_CLAIM_LOST");
     expect(UPLOAD_STATE_TOO_LARGE_CODE).toBe("UPLOAD_STATE_TOO_LARGE");
+    expect(UPLOAD_STATE_PLAINTEXT_URL_CODE).toBe("UPLOAD_STATE_PLAINTEXT_URL");
   });
 
   it("words UPLOAD_INCOMPLETE so the user knows nothing was posted", () => {
@@ -171,6 +173,47 @@ describe("createUploadStateStore - save", () => {
     await createUploadStateStore(ARGS).save("x_chunked", { data: { blob: "x".repeat(400 * 1024) } });
 
     expect(updateManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  // 2026-11-02 scale audit (jobs B3): `data` is stored readable. A capability URL
+  // saved there by mistake would sit in the table in plaintext, so the store
+  // refuses it; URLs belong only in the sealed `secret`.
+  describe("a URL in the readable data", () => {
+    const plaintextUrl = async (data: unknown) =>
+      (await createUploadStateStore(ARGS)
+        .save("youtube_resumable", { data, secret: { sessionUri: SESSION_URI } })
+        .catch((error: unknown) => error)) as Error & { code?: string };
+
+    it.each([
+      ["a top-level field", { sessionUri: SESSION_URI }],
+      ["a nested field", { session: { uri: SESSION_URI } }],
+      ["an array element", { parts: [{ url: SESSION_URI }] }],
+      ["a plain string", SESSION_URI],
+      ["a non-https scheme", { uploadUrl: "ftp://upload.example/x" }],
+    ])("is refused with UPLOAD_STATE_PLAINTEXT_URL, and nothing is written (%s)", async (_label, data) => {
+      const failure = await plaintextUrl(data);
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure.code).toBe("UPLOAD_STATE_PLAINTEXT_URL");
+      expect(updateManyMock).not.toHaveBeenCalled();
+    });
+
+    it("does not put the URL in the error it throws", async () => {
+      const failure = await plaintextUrl({ sessionUri: SESSION_URI });
+
+      expect(String(failure.message)).not.toContain(SESSION_URI);
+      expect(String(failure.message)).not.toContain("upload.example");
+      expect(failure.message).toMatch(/nothing was posted/i);
+    });
+
+    it("accepts data with no URL, and a secret that holds one", async () => {
+      await createUploadStateStore(ARGS).save("youtube_resumable", {
+        data: { totalBytes: 100, confirmedBytes: 0, note: "http is fine as a word" },
+        secret: { sessionUri: SESSION_URI },
+      });
+
+      expect(updateManyMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("does not put the capability URL in the error it throws", async () => {

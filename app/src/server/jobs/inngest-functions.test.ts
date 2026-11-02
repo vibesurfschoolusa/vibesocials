@@ -2905,6 +2905,142 @@ describe("chunked uploads - continuation steps (jobs)", () => {
     });
   });
 
+  // 2026-11-02 scale audit (jobs B3): a post id means the commit call went through,
+  // so the post is live. Continuing then would run the platform again and post twice.
+  describe("a client result carrying both a continuation and a post id", () => {
+    const both = { externalPostId: "ext-x", continuation: { resumeAt: null } };
+
+    it("is finalized as success and never continued, with an error-level log", async () => {
+      const calls = platformCalls({ x: () => both });
+      const errorLog = vi.spyOn(logger, "error");
+      const step = fakeStep();
+
+      const out = await publishRun(["x"], step);
+
+      expect(calls.x).toBe(1);
+      expect(releaseContinuationSpy).not.toHaveBeenCalled();
+      expect(step.order).not.toContain("run:publish-to-x-c1");
+      expect(resultWrites()).toEqual([
+        { status: "success", externalPostId: "ext-x", ...CLEARS_STATE, ...HEARTBEAT },
+      ]);
+      expect(out.results).toEqual([{ platform: "x", status: "success" }]);
+      expect(errorLog).toHaveBeenCalledTimes(1);
+      expect(errorLog).toHaveBeenCalledWith(
+        expect.stringMatching(/continuation.*post id|post id.*continuation/i),
+        expect.objectContaining({ platform: "x", resultRecordId: "result-x", externalPostId: "ext-x" }),
+      );
+    });
+
+    it("does the same in a continuation step", async () => {
+      const calls = platformCalls({ x: (call) => (call === 1 ? CONTINUE_NOW : both) });
+      const step = fakeStep();
+
+      const out = await publishRun(["x"], step);
+
+      expect(calls.x).toBe(2);
+      expect(step.order).not.toContain("run:publish-to-x-c2");
+      expect(releaseContinuationSpy).toHaveBeenCalledTimes(1);
+      expect(out.results).toEqual([{ platform: "x", status: "success" }]);
+    });
+
+    it.each([
+      ["null", null],
+      ["undefined", undefined],
+      ["an empty string", ""],
+    ])("still continues when the post id is %s (nothing is live)", async (_label, externalPostId) => {
+      const calls = platformCalls({
+        x: (call) => (call === 1 ? { externalPostId, continuation: { resumeAt: null } } : { externalPostId: "ext-x" }),
+      });
+      const errorLog = vi.spyOn(logger, "error");
+
+      const out = await publishRun(["x"]);
+
+      expect(calls.x).toBe(2);
+      expect(releaseContinuationSpy).toHaveBeenCalledTimes(1);
+      expect(errorLog).not.toHaveBeenCalled();
+      expect(out.results).toEqual([{ platform: "x", status: "success" }]);
+    });
+  });
+
+  // 2026-11-02 scale audit (jobs B3): an error message can carry a capability URL (a
+  // fetch error quotes the URL it failed on). It is replaced before it reaches the
+  // result row, the log or the step output.
+  describe("an error message that holds a URL", () => {
+    const leaky = (url: string) =>
+      Object.assign(new Error(`PUT ${url} failed: socket hang up`), { code: "X_VIDEO_APPEND_FAILED" });
+
+    it("is scrubbed from the result's errorMessage, the step output and the logs", async () => {
+      platformCalls({
+        x: () => {
+          throw leaky(SESSION_URI);
+        },
+      });
+      const step = fakeStep();
+
+      const out = await publishRun(["x"], step);
+
+      expect(failedWrites()).toEqual([
+        {
+          status: "failed",
+          errorCode: "X_VIDEO_APPEND_FAILED",
+          errorMessage: "PUT [url] failed: socket hang up",
+          ...CLEARS_STATE,
+          ...HEARTBEAT,
+        },
+      ]);
+      expect(out.results).toEqual([
+        { platform: "x", status: "failed", error: "PUT [url] failed: socket hang up" },
+      ]);
+      expect(JSON.stringify(step.outputs)).not.toContain("upload.example");
+      const logged = JSON.stringify(
+        [console.log, console.info, console.warn, console.error].map((fn) => vi.mocked(fn).mock.calls),
+      );
+      expect(logged).not.toContain("upload.example");
+      expect(logged).not.toContain("capability-1");
+      // The rest of the failure is still logged.
+      expect(logged).toContain("X_VIDEO_APPEND_FAILED");
+    });
+
+    it("replaces every http and https URL, to the next space, and leaves other text alone", async () => {
+      platformCalls({
+        x: () => {
+          throw Object.assign(
+            new Error("a https://u.example/a?x=1 b HTTP://u.example/b c http://u.example/c; done"),
+            { code: "X_VIDEO_APPEND_FAILED" },
+          );
+        },
+      });
+
+      await publishRun(["x"]);
+
+      expect(failedWrites()[0]).toMatchObject({ errorMessage: "a [url] b [url] c [url] done" });
+    });
+
+    it("keeps a message without a URL exactly as it was", async () => {
+      platformCalls({
+        x: () => {
+          throw Object.assign(new Error("Plain failure (status 400)"), { code: "X_TWEET_FAILED" });
+        },
+      });
+
+      await publishRun(["x"]);
+
+      expect(failedWrites()[0]).toMatchObject({ errorMessage: "Plain failure (status 400)" });
+    });
+
+    it("still falls back to the generic message for an error with no message", async () => {
+      platformCalls({
+        x: () => {
+          throw Object.assign(new Error(""), { code: "X_TWEET_FAILED" });
+        },
+      });
+
+      await publishRun(["x"]);
+
+      expect(failedWrites()[0]).toMatchObject({ errorMessage: "Failed to publish to platform." });
+    });
+  });
+
   describe("the YouTube upload budget (one slot per upload session)", () => {
     const KIND = "youtube_resumable";
 

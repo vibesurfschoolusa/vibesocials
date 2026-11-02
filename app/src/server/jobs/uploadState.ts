@@ -16,7 +16,8 @@ import type { PendingResultFailure } from "@/server/jobs/failPendingResults";
  *
  *   { v, runId, platform, kind, savedAt, data, secret? }
  *
- * - `data` is progress and ids only (offsets, a media id, a part number).
+ * - `data` is progress and ids only (offsets, a media id, a part number). `save`
+ *   refuses a `data` that holds a URL (`://`), so a capability URL cannot land here.
  * - `secret` is `sealSecret(JSON.stringify(...))` (tokenCrypto.ts), the way
  *   SocialConnection tokens are sealed. Capability URLs - the YouTube session
  *   URI, TikTok's `upload_url`, LinkedIn's part URLs and multipart `metadata` -
@@ -45,6 +46,13 @@ export const RESULT_CLAIM_LOST_CODE = "RESULT_CLAIM_LOST";
 
 /** `save` refused a state over {@link MAX_UPLOAD_STATE_BYTES}. Nothing was posted. */
 export const UPLOAD_STATE_TOO_LARGE_CODE = "UPLOAD_STATE_TOO_LARGE";
+
+/**
+ * `save` refused a state whose readable `data` holds a URL (anything with `://`).
+ * Capability URLs go only in the sealed `secret`; one in `data` would sit in the
+ * table in plaintext. Nothing was posted.
+ */
+export const UPLOAD_STATE_PLAINTEXT_URL_CODE = "UPLOAD_STATE_PLAINTEXT_URL";
 
 /**
  * The `kind` of a YouTube resumable-upload session (Task 10's client saves under
@@ -78,7 +86,11 @@ export interface UploadSnapshot<D, S = never> {
  */
 export interface UploadStateStore {
   load<D, S = never>(kind: string): Promise<UploadSnapshot<D, S> | null>;
-  /** Claim-scoped. Throws RESULT_CLAIM_LOST or UPLOAD_STATE_TOO_LARGE: both are failures before anything was posted. */
+  /**
+   * Claim-scoped. Throws RESULT_CLAIM_LOST, UPLOAD_STATE_TOO_LARGE or
+   * UPLOAD_STATE_PLAINTEXT_URL (a URL in `data`): all are failures before anything
+   * was posted.
+   */
   save<D, S = never>(kind: string, snapshot: UploadSnapshot<D, S>): Promise<void>;
   clear(): Promise<void>;
 }
@@ -168,6 +180,17 @@ export function createUploadStateStore(args: {
     },
 
     async save<D, S = never>(kind: string, snapshot: UploadSnapshot<D, S>): Promise<void> {
+      // 2026-11-02 scale audit (jobs B3): `data` is stored readable, so a capability
+      // URL in it (the YouTube session URI, TikTok's upload_url, LinkedIn's part
+      // URLs) would be a plaintext write capability in the table. `://` is in every
+      // such URL. The check is on the serialized form, so a URL nested anywhere in
+      // `data` is caught. The error says nothing about the value.
+      if ((JSON.stringify(snapshot.data) ?? "").includes("://")) {
+        throw uploadStateError(
+          UPLOAD_STATE_PLAINTEXT_URL_CODE,
+          "The upload could not be tracked. Nothing was posted — please retry.",
+        );
+      }
       const stored: StoredUploadState = {
         v: UPLOAD_STATE_VERSION,
         runId,
