@@ -1,7 +1,7 @@
 import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { FETCH_TIMEOUT_CODE, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PUBLISH_UNCONFIRMED_CODE } from "@/lib/publishOutcomes";
 import { truncateGraphemes } from "@/lib/truncate";
 import {
@@ -320,6 +320,18 @@ function wasNeverSent(error: unknown): boolean {
   return (error as { code?: unknown } | null)?.code === PUBLISH_BUDGET_EXCEEDED_CODE;
 }
 
+/**
+ * Did a request fail in a way that says nothing about the upload: a 5xx, a timeout, a
+ * dropped or refused connection, or no time to send it? The same request can simply
+ * be made again later. A 4xx, a rate limit or an unreadable answer is not this: it
+ * says something definite.
+ */
+function isTransientRequestFailure(error: unknown): boolean {
+  if (wasNeverSent(error) || error instanceof TypeError) return true;
+  const { code, status } = (error ?? {}) as { code?: unknown; status?: unknown };
+  return code === FETCH_TIMEOUT_CODE || (typeof status === "number" && status >= 500);
+}
+
 /** The session URI is sent the bearer token, so it must be an https URL. */
 function isHttpsUrl(value: string): boolean {
   try {
@@ -497,7 +509,9 @@ async function statusAfterAmbiguousFinalChunk(
  *   last (the commit call) only with {@link YOUTUBE_FINAL_CHUNK_MIN_WINDOW_MS} left.
  * - A 308 that confirms less than was sent resends the rest from the same buffer.
  * - A chunk that fails without an answer is checked with a status query, then resumed
- *   from what the session holds. For the last chunk that query decides the outcome.
+ *   from what the session holds. For the last chunk that query decides the outcome. For
+ *   any other chunk a step that is out of time (under LARGE_UPLOAD_CHUNK_WINDOW_MS left),
+ *   or whose query gets no answer, saves and continues instead of failing.
  * - A quota or rate limit saves the progress, then throws RATE_LIMITED: the deferred
  *   step resumes from the session, which costs no new slot.
  */
@@ -601,6 +615,14 @@ async function uploadChunks(args: {
           }
         }
       } catch (error) {
+        // A chunk that is not the last commits nothing, so running into the deadline is not a
+        // failure of the upload: with no time left to send another chunk (or to ask the session),
+        // the step saves and continues, and the next one begins with the status query anyway.
+        // That covers a chunk that was aborted at the deadline and a request that was never
+        // sent because the budget ran out (PUBLISH_TIME_BUDGET_EXCEEDED leaves under 5 s).
+        // Failing here would record the result failed and drop the state with everything
+        // uploaded so far.
+        if (!isFinal && remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS) return await pause();
         if (wasNeverSent(error)) throw error;
 
         let answer: UploadStatus;
@@ -616,7 +638,21 @@ async function uploadChunks(args: {
             status: (error as { status?: unknown } | null)?.status,
             code: (error as { code?: unknown } | null)?.code,
           });
-          answer = await queryUploadStatus(session);
+          try {
+            answer = await queryUploadStatus(session);
+          } catch (statusError) {
+            // Nothing was committed and the query only reads: if it gets no answer (a 5xx, a
+            // timeout, a dropped connection), the next step asks again with a whole budget
+            // instead of this one failing on a transient error it has no time to retry.
+            if (!isTransientRequestFailure(statusError)) throw statusError;
+            console.warn("[YouTube] The status query got no answer; the next step asks again", {
+              confirmedBytes,
+              totalBytes,
+              status: (statusError as { status?: unknown } | null)?.status,
+              code: (statusError as { code?: unknown } | null)?.code,
+            });
+            return await pause();
+          }
         }
 
         const settled = await settleStatus(answer, store, totalBytes);
