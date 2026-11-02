@@ -21,6 +21,7 @@ import {
   TIKTOK_MAX_FINAL_CHUNK_SIZE,
   TIKTOK_POLL_INTERVAL_MS,
   TIKTOK_POLL_MAX_ATTEMPTS,
+  TIKTOK_TRANSIENT_RESUME_DELAY_MS,
   TIKTOK_UPLOAD_STATE_KIND,
   TIKTOK_UPLOAD_URL_SAFETY_MS,
   TIKTOK_UPLOAD_URL_TTL_MS,
@@ -1968,7 +1969,11 @@ describe("tiktokClient.publishVideo — streamed FILE_UPLOAD (jobs B3)", () => {
 
   const run = (ctx: PublishContext) => tiktokClient.publishVideo(ctx);
   const failure = (ctx: PublishContext) => caught(run(ctx));
+  /** Out of step time: the next step starts at once. */
   const paused = { continuation: { resumeAt: null } };
+  /** A failure that says nothing about the upload: the next step starts `ms` from now. */
+  const pausedFor = (ms: number) => ({ continuation: { resumeAt: Date.now() + ms } });
+  const TRANSIENT_RESUME_DELAY = 30_000;
 
   /** The `[first, last]` of every chunk PUT, in order. */
   const rangesOf = (calls: Array<Parameters<typeof fetch>>) =>
@@ -2016,6 +2021,7 @@ describe("tiktokClient.publishVideo — streamed FILE_UPLOAD (jobs B3)", () => {
     expect(TIKTOK_UPLOAD_URL_TTL_MS).toBe(3_600_000);
     expect(TIKTOK_UPLOAD_URL_SAFETY_MS).toBe(600_000);
     expect(TIKTOK_FINAL_CHUNK_MIN_WINDOW_MS).toBe(150_000);
+    expect(TIKTOK_TRANSIENT_RESUME_DELAY_MS).toBe(TRANSIENT_RESUME_DELAY);
     expect(TIKTOK_MAX_CHUNK_SIZE).toBe(10 * MIB);
     expect(TOTAL).toBeGreaterThan(LARGE_VIDEO_THRESHOLD_BYTES);
     expect(computeChunkPlan(TOTAL).totalChunks).toBe(TOTAL_CHUNKS);
@@ -2746,14 +2752,15 @@ describe("tiktokClient.publishVideo — streamed FILE_UPLOAD (jobs B3)", () => {
       ["a 502", () => reply(502, "bad gateway")],
       ["a timeout", () => timeout()],
       ["a dropped connection", () => connectionReset()],
+      ["a body cut off by undici", () => failWith(new TypeError("terminated"))],
       ["a connection that never reached TikTok", () => failWith(new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } }))],
-    ] as const)("%s saves and continues; the same chunk is retried in the next step", async (_name, bad) => {
+    ] as const)("%s saves and continues 30 s later; the same chunk is retried in the next step", async (_name, bad) => {
       const { store, saved } = fakeStore();
       const upload = stubTikTok({ puts: [acceptChunk, acceptChunk, bad()] });
 
       const result = await run(bigCtx(store, { deadline: Date.now() + STEP }));
 
-      expect(result).toEqual(paused);
+      expect(result).toEqual(pausedFor(TRANSIENT_RESUME_DELAY));
       expect(upload.puts()).toHaveLength(3); // no second try in this step
       expect((saved()?.data as StateData).nextChunk).toBe(2);
       expect((saved()?.secret as { uploadUrl: string }).uploadUrl).toBe(URL_1);
@@ -2891,6 +2898,15 @@ describe("tiktokClient.publishVideo — streamed FILE_UPLOAD (jobs B3)", () => {
       stubTikTok({ puts: [failWith(new RangeError("boom"))] });
 
       expect(await failure(bigCtx(store))).toBeInstanceOf(RangeError);
+    });
+
+    it("a TypeError that is not undici's network failure is a bug: it surfaces instead of pausing", async () => {
+      const { store, mocks } = fakeStore(stateAt(1));
+      const bug = new TypeError("x is not a function");
+      stubTikTok({ puts: [failWith(bug)] });
+
+      expect(await failure(bigCtx(store))).toBe(bug);
+      expect(mocks.save).not.toHaveBeenCalled();
     });
   });
 

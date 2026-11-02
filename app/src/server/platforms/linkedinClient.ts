@@ -2,7 +2,7 @@ import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
-import { DEFAULT_FETCH_TIMEOUT_MS, FETCH_TIMEOUT_CODE, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 import {
   connectionTokenChangedError,
@@ -15,6 +15,7 @@ import {
 import { refreshConnectionToken } from "./connectionRefresh";
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import {
+  isTransientUploadFailure,
   LARGE_UPLOAD_CHUNK_WINDOW_MS,
   LARGE_UPLOAD_MAX_PART_BYTES,
   LARGE_UPLOAD_REQUEST_TIMEOUT_MS,
@@ -22,12 +23,7 @@ import {
   usesLargeUploadPath,
   type BlobChunkStream,
 } from "./largeUpload";
-import {
-  budgetedTimeout,
-  MIN_REQUEST_WINDOW_MS,
-  PUBLISH_BUDGET_EXCEEDED_CODE,
-  remainingMs,
-} from "./publishBudget";
+import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
 import { classifyRateLimit, isRateLimitedError } from "./rateLimited";
 
 /**
@@ -1012,23 +1008,6 @@ function readSavedUpload(
 }
 
 /**
- * Did a request fail in a way that says nothing about the upload: a 5xx, a timeout, a dropped
- * connection, or no time to send it? The same request can simply be made again later. Only
- * undici's own network failures count among the TypeErrors (`fetch failed`, `terminated`): any
- * other TypeError is a bug and must surface. A 4xx, a rate limit or an error we do not recognise
- * says something definite.
- */
-function isTransientRequestFailure(error: unknown): boolean {
-  if (error instanceof TypeError) return error.message === "fetch failed" || error.message === "terminated";
-  const { code, status } = (error ?? {}) as { code?: unknown; status?: unknown };
-  return (
-    code === FETCH_TIMEOUT_CODE ||
-    code === PUBLISH_BUDGET_EXCEEDED_CODE ||
-    (typeof status === "number" && status >= 500)
-  );
-}
-
-/**
  * Send a request that commits nothing and sort what comes back: a 429 is RATE_LIMITED (thrown),
  * a 5xx is a failure that carries its `status`, an error from the request itself is a failure,
  * anything else is the response for the caller to read. `send` is called once.
@@ -1161,7 +1140,7 @@ async function checkAssetStatus(args: {
     ),
   );
   if ("failure" in attempt) {
-    if (!isTransientRequestFailure(attempt.failure)) throw attempt.failure;
+    if (!isTransientUploadFailure(attempt.failure)) throw attempt.failure;
     return { kind: "unanswered" };
   }
 
@@ -1183,7 +1162,7 @@ async function checkAssetStatus(args: {
   try {
     body = await response.json();
   } catch (error) {
-    if (isTransientRequestFailure(error)) return { kind: "unanswered" };
+    if (isTransientUploadFailure(error)) return { kind: "unanswered" };
     return { kind: "unreadable", reason: "the status answer was not JSON" };
   }
 
@@ -1330,7 +1309,7 @@ async function publishMultipart(args: {
         // Parts are already uploaded, and the registration commits nothing: with no answer the
         // restart stays pending (the saved state is unchanged, so the retry counts it once).
         // The very first registration of an upload, with nothing uploaded yet, is not this.
-        if (!isTransientRequestFailure(error)) throw error;
+        if (!isTransientUploadFailure(error)) throw error;
         console.warn("[LinkedIn] The new registration got no answer; the next step tries it again", {
           status: (error as { status?: unknown } | null)?.status,
           code: (error as { code?: unknown } | null)?.code,
@@ -1377,7 +1356,7 @@ async function publishMultipart(args: {
           // A part commits nothing: with no answer (or no time to ask) the step saves and
           // continues, and the next one sends the same part again. Failing here would drop the
           // state with everything uploaded so far.
-          if (!isTransientRequestFailure(attempt.failure)) throw attempt.failure;
+          if (!isTransientUploadFailure(attempt.failure)) throw attempt.failure;
           console.warn("[LinkedIn] A part got no answer; the next step sends it again", {
             part: index + 1,
             parts: partCount,
@@ -1450,7 +1429,7 @@ async function publishMultipart(args: {
         ),
       );
       if ("failure" in attempt) {
-        if (!isTransientRequestFailure(attempt.failure)) throw attempt.failure;
+        if (!isTransientUploadFailure(attempt.failure)) throw attempt.failure;
         console.warn("[LinkedIn] The completion got no answer; the next step asks again", {
           status: (attempt.failure as { status?: unknown } | null)?.status,
           code: (attempt.failure as { code?: unknown } | null)?.code,

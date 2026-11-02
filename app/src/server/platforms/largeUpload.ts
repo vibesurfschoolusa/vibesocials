@@ -1,9 +1,9 @@
 import type { Platform } from "@prisma/client";
 
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { FETCH_TIMEOUT_CODE, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
 
-import { budgetedTimeout, PUBLISH_STEP_BUDGET_MS } from "./publishBudget";
+import { budgetedTimeout, PUBLISH_BUDGET_EXCEEDED_CODE, PUBLISH_STEP_BUDGET_MS } from "./publishBudget";
 
 /**
  * 2026-11-02 scale audit (jobs B3): primitives for uploading a large video
@@ -114,6 +114,26 @@ export function usesLargeUploadPath(args: {
   if (!args.mimeType.startsWith("video/")) return false;
   if (!(args.sizeBytes > LARGE_VIDEO_THRESHOLD_BYTES)) return false;
   return largeUploadPlatforms(args.env).has(args.platform);
+}
+
+/**
+ * Did a request of a chunked upload fail in a way that says nothing about the upload: a 5xx, a
+ * timeout, a dropped connection, or no time left to send it? The same request can simply be made
+ * again later, so the step saves its place and pauses instead of failing. Shared by the streamed
+ * clients (YouTube, TikTok, X, LinkedIn).
+ *
+ * Only undici's own network failures count among the TypeErrors (`fetch failed`, `terminated`):
+ * any other TypeError is a bug and must surface. A 4xx, a rate limit or an error we do not
+ * recognise says something definite and is not this.
+ */
+export function isTransientUploadFailure(error: unknown): boolean {
+  if (error instanceof TypeError) return error.message === "fetch failed" || error.message === "terminated";
+  const { code, status } = (error ?? {}) as { code?: unknown; status?: unknown };
+  return (
+    code === FETCH_TIMEOUT_CODE ||
+    code === PUBLISH_BUDGET_EXCEEDED_CODE ||
+    (typeof status === "number" && status >= 500)
+  );
 }
 
 type CodedError = Error & { code: string; status?: number };

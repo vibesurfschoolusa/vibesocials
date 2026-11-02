@@ -1,7 +1,7 @@
 import type { Prisma, SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
-import { DEFAULT_FETCH_TIMEOUT_MS, FETCH_TIMEOUT_CODE, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS, TIKTOK_DEFAULT_CAPTION } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
@@ -16,17 +16,13 @@ import {
 } from "./connectionHealth";
 import { refreshConnectionToken } from "./connectionRefresh";
 import {
+  isTransientUploadFailure,
   LARGE_UPLOAD_CHUNK_WINDOW_MS,
   openBlobChunkStream,
   usesLargeUploadPath,
   type BlobChunkStream,
 } from "./largeUpload";
-import {
-  budgetedTimeout,
-  MIN_REQUEST_WINDOW_MS,
-  PUBLISH_BUDGET_EXCEEDED_CODE,
-  remainingMs,
-} from "./publishBudget";
+import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
 import { classifyRateLimit, isRateLimitedError } from "./rateLimited";
 import type { PlatformClient, PublishContext, PublishResult, TikTokCreatorInfo } from "./types";
 
@@ -271,6 +267,14 @@ export const TIKTOK_FINAL_CHUNK_MIN_WINDOW_MS = 150_000;
  */
 const TIKTOK_MAX_RENEWALS_PER_STEP = 1;
 
+/**
+ * When a chunk that is not the last gets no usable answer (see isTransientUploadFailure in
+ * largeUpload.ts) with step time left, the step saves its place and the next one starts this long
+ * after: a short pause, so an outage does not burn the continuations (platformSteps.ts) in a few
+ * seconds. A step that is simply out of time continues at once.
+ */
+export const TIKTOK_TRANSIENT_RESUME_DELAY_MS = 30_000;
+
 /** What a step saves as readable progress. No URL may be in it (uploadState.ts). */
 interface TikTokUploadData {
   publishId: string;
@@ -336,22 +340,6 @@ function tiktokUploadError(message: string, status?: number): Error & { code: st
   error.code = "TIKTOK_UPLOAD_FAILED";
   if (status !== undefined) error.status = status;
   return error;
-}
-
-/**
- * Did a chunk request fail in a way that says nothing about the upload: a 5xx, a
- * timeout, a dropped or refused connection, or no time left to send it? The same chunk
- * can simply be sent again in the next step. A 4xx, a rate limit or an error we do not
- * recognize is not this: it says something definite.
- */
-function isTransientChunkFailure(error: unknown): boolean {
-  if (error instanceof TypeError) return true;
-  const { code, status } = (error ?? {}) as { code?: unknown; status?: unknown };
-  return (
-    code === FETCH_TIMEOUT_CODE ||
-    code === PUBLISH_BUDGET_EXCEEDED_CODE ||
-    (typeof status === "number" && status >= 500)
-  );
 }
 
 /**
@@ -1023,7 +1011,9 @@ async function requestUploadInit(args: {
  *   every accepted chunk.
  * - A chunk that is not the last commits nothing, so a 5xx, a timeout, a dropped
  *   connection, or running into the deadline saves and continues; the same chunk is sent
- *   again in the next step. A 206 advances; a 416 resyncs to the position TikTok reports
+ *   again in the next step, {@link TIKTOK_TRANSIENT_RESUME_DELAY_MS} later when the step still
+ *   had time for it (at once when it ran out). A TypeError that is not undici's network failure
+ *   is a bug and surfaces. A 206 advances; a 416 resyncs to the position TikTok reports
  *   (see {@link resyncedChunk}); a 403 (the URL expired) starts a new upload from chunk 0;
  *   anything else is TIKTOK_UPLOAD_FAILED. A rate limit saves, then throws RATE_LIMITED.
  * - The last chunk goes through commitRequest (a 5xx or a timeout there is
@@ -1087,14 +1077,22 @@ async function publishStreamed(args: {
   // Held in an object so the finally block sees the stream a closure opened.
   const source: { stream: BlobChunkStream | null } = { stream: null };
 
-  const pause = async (): Promise<PublishResult> => {
+  /** Save and hand the claim back: the run calls this client again, no sooner than `delayMs` from now. */
+  const pause = async (delayMs: number | null): Promise<PublishResult> => {
     await saveSession(current);
     console.log("[TikTok] Streamed upload continues in another step", {
       nextChunk: current.nextChunk,
       totalChunks,
     });
-    return { continuation: { resumeAt: null } };
+    return { continuation: { resumeAt: delayMs === null ? null : Date.now() + delayMs } };
   };
+
+  /**
+   * A chunk that is not the last got no usable answer. Out of step time to send another one, the
+   * next step starts at once; with time left, a little later.
+   */
+  const pauseAfterFailure = () =>
+    pause(remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS ? null : TIKTOK_TRANSIENT_RESUME_DELAY_MS);
 
   /** The bytes `start..end-1` of the video (one open stream, read in order; reopened at `start` after a jump). */
   const readChunk = async (start: number, end: number): Promise<Buffer<ArrayBuffer>> => {
@@ -1119,7 +1117,7 @@ async function publishStreamed(args: {
       const isFinal = index === totalChunks - 1;
 
       const needed = isFinal ? TIKTOK_FINAL_CHUNK_MIN_WINDOW_MS : LARGE_UPLOAD_CHUNK_WINDOW_MS;
-      if (remainingMs(deadline) < needed) return await pause();
+      if (remainingMs(deadline) < needed) return await pause(null);
 
       // The URL is about to expire (and the final chunk has not been sent): start over on a new one.
       const urlLeftMs = TIKTOK_UPLOAD_URL_TTL_MS - (Date.now() - current.initAt);
@@ -1136,11 +1134,11 @@ async function publishStreamed(args: {
       } catch (error) {
         // Reading runs into the deadline: nothing has been sent, so this is not a failure of
         // the upload. The next step reopens the blob at the same chunk.
-        if (remainingMs(deadline) < needed) return await pause();
+        if (remainingMs(deadline) < needed) return await pause(null);
         throw error;
       }
       // Reading takes time too: the chunk (and, for the last, the poll after it) must still fit.
-      if (remainingMs(deadline) < needed) return await pause();
+      if (remainingMs(deadline) < needed) return await pause(null);
 
       const uploadUrl = current.uploadUrl;
       const send = () =>
@@ -1169,14 +1167,14 @@ async function publishStreamed(args: {
         // A chunk that is not the last commits nothing: with no answer (or no time to ask) the
         // step saves and continues, and the next one sends the same chunk again. Failing here
         // would record the result failed and drop the state with everything uploaded so far.
-        if (!isFinal && isTransientChunkFailure(error)) {
+        if (!isFinal && isTransientUploadFailure(error)) {
           console.warn("[TikTok] A chunk got no answer; the next step sends it again", {
             chunk: index + 1,
             totalChunks,
             status: (error as { status?: unknown } | null)?.status,
             code: (error as { code?: unknown } | null)?.code,
           });
-          return await pause();
+          return await pauseAfterFailure();
         }
         throw error;
       }
@@ -1188,7 +1186,7 @@ async function publishStreamed(args: {
           totalChunks,
           status: response.status,
         });
-        return await pause();
+        return await pauseAfterFailure();
       }
 
       // Only a refusal can be a rate limit. A 2xx was taken: the final chunk then goes to the

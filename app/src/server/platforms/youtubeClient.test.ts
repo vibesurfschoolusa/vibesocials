@@ -16,6 +16,7 @@ import {
   YOUTUBE_MAX_CHUNK_RECOVERIES_PER_STEP,
   YOUTUBE_RESUMABLE_CHUNK_BYTES,
   YOUTUBE_STATUS_TIMEOUT_MS,
+  YOUTUBE_TRANSIENT_RESUME_DELAY_MS,
   youtubeClient,
 } from "./youtubeClient";
 
@@ -776,6 +777,9 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
       () => null,
       (e: unknown) => e as CodedError,
     );
+  const TRANSIENT_RESUME_DELAY = 30_000;
+  /** A failure that says nothing about the upload: the next step starts `ms` from now. */
+  const pausedFor = (ms: number) => ({ continuation: { resumeAt: Date.now() + ms } });
 
   /** The sampled bytes of a chunk PUT's body are the video's bytes from `first`. */
   function expectBodyFrom(call: Parameters<typeof fetch> | undefined, first: number) {
@@ -1301,6 +1305,10 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
   });
 
   describe("a chunk that gets no usable answer (not the last)", () => {
+    it("pins the wait after a failure that says nothing about the upload: 30 s", () => {
+      expect(YOUTUBE_TRANSIENT_RESUME_DELAY_MS).toBe(TRANSIENT_RESUME_DELAY);
+    });
+
     it.each([
       ["a 503", () => reply(503, "unavailable")],
       ["a timeout", timeout],
@@ -1322,26 +1330,43 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
       expect(upload.blobGets()).toHaveLength(1);
     });
 
-    it(`recovers ${YOUTUBE_MAX_CHUNK_RECOVERIES_PER_STEP} times in a step; the next failure saves and continues without asking again`, async () => {
+    it(`recovers ${YOUTUBE_MAX_CHUNK_RECOVERIES_PER_STEP} times in a step; the next failure saves and continues 30 s later without asking again`, async () => {
       const { store, saved } = fakeStore();
       const upload = stubUpload({ session: [reply(503), incomplete(), reply(503), incomplete(), reply(503)] });
 
       const result = await run(bigCtx(store));
 
-      expect(result).toEqual({ continuation: { resumeAt: null } });
+      expect(result).toEqual(pausedFor(TRANSIENT_RESUME_DELAY));
       expect(upload.puts()).toHaveLength(3);
       expect(upload.statusQueries()).toHaveLength(2);
       expect(saved()?.data).toEqual({ totalBytes: TOTAL, confirmedBytes: 0 });
     });
 
-    it("a 308 that confirms nothing new counts as a recovery, so it cannot loop", async () => {
+    it("a 308 that confirms nothing new counts as a recovery, so it cannot loop (and the next step waits 30 s)", async () => {
       const { store } = fakeStore();
       const upload = stubUpload({ session: [incomplete(), incomplete(), incomplete()] });
 
       const result = await run(bigCtx(store));
 
-      expect(result).toEqual({ continuation: { resumeAt: null } });
+      expect(result).toEqual(pausedFor(TRANSIENT_RESUME_DELAY));
       expect(upload.puts()).toHaveLength(3);
+    });
+
+    it("a chunk that fails with a TypeError that is not undici's network failure is a bug: it surfaces, with no status query", async () => {
+      const { store } = fakeStore(sessionAt(CHUNK));
+      const bug = new TypeError("x is not a function");
+      const upload = stubUpload({ session: [incomplete(CHUNK - 1), failWith(bug)] });
+
+      expect(await failure(bigCtx(store))).toBe(bug);
+      expect(upload.statusQueries()).toHaveLength(1); // only the one at the start of the step
+    });
+
+    it("a status query that fails with a TypeError that is not undici's network failure surfaces instead of pausing", async () => {
+      const { store } = fakeStore();
+      const bug = new TypeError("x is not a function");
+      stubUpload({ session: [reply(503), failWith(bug)] });
+
+      expect(await failure(bigCtx(store))).toBe(bug);
     });
 
     it("a status query that fails with a 4xx after a bad chunk is an ordinary failure (nothing was committed)", async () => {
@@ -1440,14 +1465,15 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
       ["a 502", () => reply(502, "bad gateway")],
       ["a timeout", () => timeout()],
       ["a dropped connection", () => connectionReset()],
-    ] as const)("%s on the recovery status query saves and continues (the next step asks again) instead of failing the upload", async (_name, bad) => {
+      ["a body cut off by undici", () => failWith(new TypeError("terminated"))],
+    ] as const)("%s on the recovery status query saves and continues 30 s later (the next step asks again) instead of failing the upload", async (_name, bad) => {
       const { store, saved, mocks } = fakeStore();
       // Plenty of time for the status query, so it is asked; it fails.
       const upload = stubUpload({ session: [after(STEP - 100_000, reply(503)), bad()] });
 
       const result = await run(bigCtx(store, { deadline: NOW + STEP }));
 
-      expect(result).toEqual(paused);
+      expect(result).toEqual(pausedFor(TRANSIENT_RESUME_DELAY));
       expect(upload.statusQueries()).toHaveLength(1);
       expect(saved()?.data).toEqual(progress(0));
       expect(mocks.clear).not.toHaveBeenCalled();
@@ -1456,7 +1482,7 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
     it("and the next step resumes from the session", async () => {
       const { store } = fakeStore();
       stubUpload({ session: [reply(503), reply(503)] });
-      expect(await run(bigCtx(store, { deadline: NOW + STEP }))).toEqual(paused);
+      expect(await run(bigCtx(store, { deadline: NOW + STEP }))).toEqual(pausedFor(TRANSIENT_RESUME_DELAY));
       vi.unstubAllGlobals();
       vi.setSystemTime(NOW);
 
@@ -1603,7 +1629,7 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
       expect(upload.blobGets()).toHaveLength(1);
     });
 
-    it("resends a bounded number of times: once the recoveries are spent it saves and continues (nothing was committed)", async () => {
+    it("resends a bounded number of times: once the recoveries are spent it saves and continues 30 s later (nothing was committed)", async () => {
       const { store, saved } = atLastChunk();
       const upload = stubUpload({
         session: [
@@ -1619,7 +1645,7 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
 
       const result = await run(bigCtx(store));
 
-      expect(result).toEqual({ continuation: { resumeAt: null } });
+      expect(result).toEqual(pausedFor(TRANSIENT_RESUME_DELAY));
       expect(upload.puts()).toHaveLength(3);
       expect(saved()?.data).toEqual({ totalBytes: TOTAL, confirmedBytes: LAST_START + MIB });
     });

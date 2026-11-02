@@ -1,7 +1,7 @@
 import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
-import { FETCH_TIMEOUT_CODE, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PUBLISH_UNCONFIRMED_CODE } from "@/lib/publishOutcomes";
 import { truncateGraphemes } from "@/lib/truncate";
 import {
@@ -19,6 +19,7 @@ import {
 import { refreshConnectionToken } from "./connectionRefresh";
 import { refreshGoogleToken } from "./googleTokens";
 import {
+  isTransientUploadFailure,
   LARGE_UPLOAD_CHUNK_WINDOW_MS,
   LARGE_UPLOAD_REQUEST_TIMEOUT_MS,
   openBlobChunkStream,
@@ -108,6 +109,14 @@ export const YOUTUBE_FINAL_CHUNK_MIN_WINDOW_MS = 90_000;
  * continues in a new step instead of asking again.
  */
 export const YOUTUBE_MAX_CHUNK_RECOVERIES_PER_STEP = 2;
+
+/**
+ * When the step has to stop because a request got no usable answer (see isTransientUploadFailure
+ * in largeUpload.ts) or the chunk recoveries are spent, it saves its place and the next one starts
+ * this long after: a short pause, so an outage does not burn the continuations (platformSteps.ts)
+ * in a few seconds. A step that is simply out of time continues at once.
+ */
+export const YOUTUBE_TRANSIENT_RESUME_DELAY_MS = 30_000;
 
 const YOUTUBE_RESUMABLE_START_URL = "https://www.googleapis.com/upload/youtube/v3/videos";
 
@@ -320,18 +329,6 @@ function wasNeverSent(error: unknown): boolean {
   return (error as { code?: unknown } | null)?.code === PUBLISH_BUDGET_EXCEEDED_CODE;
 }
 
-/**
- * Did a request fail in a way that says nothing about the upload: a 5xx, a timeout, a
- * dropped or refused connection, or no time to send it? The same request can simply
- * be made again later. A 4xx, a rate limit or an unreadable answer is not this: it
- * says something definite.
- */
-function isTransientRequestFailure(error: unknown): boolean {
-  if (wasNeverSent(error) || error instanceof TypeError) return true;
-  const { code, status } = (error ?? {}) as { code?: unknown; status?: unknown };
-  return code === FETCH_TIMEOUT_CODE || (typeof status === "number" && status >= 500);
-}
-
 /** The session URI is sent the bearer token, so it must be an https URL. */
 function isHttpsUrl(value: string): boolean {
   try {
@@ -343,7 +340,12 @@ function isHttpsUrl(value: string): boolean {
 
 /** Ask the run to call this platform again straight away. */
 function continueNow(): PublishResult {
-  return { continuation: { resumeAt: null } };
+  return continueAfter(null);
+}
+
+/** Ask the run to call this platform again, no sooner than `delayMs` from now (null: straight away). */
+function continueAfter(delayMs: number | null): PublishResult {
+  return { continuation: { resumeAt: delayMs === null ? null : Date.now() + delayMs } };
 }
 
 /**
@@ -510,8 +512,10 @@ async function statusAfterAmbiguousFinalChunk(
  * - A 308 that confirms less than was sent resends the rest from the same buffer.
  * - A chunk that fails without an answer is checked with a status query, then resumed
  *   from what the session holds. For the last chunk that query decides the outcome. For
- *   any other chunk a step that is out of time (under LARGE_UPLOAD_CHUNK_WINDOW_MS left),
- *   or whose query gets no answer, saves and continues instead of failing.
+ *   any other chunk a step that is out of time (under LARGE_UPLOAD_CHUNK_WINDOW_MS left)
+ *   saves and continues at once; one whose query gets no answer, or whose recoveries are
+ *   spent, saves and continues {@link YOUTUBE_TRANSIENT_RESUME_DELAY_MS} later. A TypeError
+ *   that is not undici's network failure is a bug and surfaces.
  * - A quota or rate limit saves the progress, then throws RATE_LIMITED: the deferred
  *   step resumes from the session, which costs no new slot.
  */
@@ -539,10 +543,11 @@ async function uploadChunks(args: {
       secret: { sessionUri },
     });
 
-  const pause = async (): Promise<PublishResult> => {
+  /** Save and hand the claim back: the run calls this client again, no sooner than `delayMs` from now. */
+  const pause = async (delayMs: number | null): Promise<PublishResult> => {
     await saveProgress();
     console.log("[YouTube] Resumable upload continues in another step", { confirmedBytes, totalBytes });
-    return continueNow();
+    return continueAfter(delayMs);
   };
 
   /** The next `length` bytes of the video, read from `confirmedBytes` (one open stream, read in order). */
@@ -572,7 +577,7 @@ async function uploadChunks(args: {
       const isFinal = endsAt >= totalBytes;
 
       const needed = isFinal ? YOUTUBE_FINAL_CHUNK_MIN_WINDOW_MS : LARGE_UPLOAD_CHUNK_WINDOW_MS;
-      if (remainingMs(deadline) < needed) return await pause();
+      if (remainingMs(deadline) < needed) return await pause(null);
 
       if (held === null) chunk = null; // let the finished buffer go before reading the next
       const current: HeldChunk = held ?? (await readChunk(endsAt - confirmedBytes));
@@ -622,7 +627,7 @@ async function uploadChunks(args: {
         // sent because the budget ran out (PUBLISH_TIME_BUDGET_EXCEEDED leaves under 5 s).
         // Failing here would record the result failed and drop the state with everything
         // uploaded so far.
-        if (!isFinal && remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS) return await pause();
+        if (!isFinal && remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS) return await pause(null);
         if (wasNeverSent(error)) throw error;
 
         let answer: UploadStatus;
@@ -630,8 +635,11 @@ async function uploadChunks(args: {
           if ((error as { code?: unknown } | null)?.code !== PUBLISH_UNCONFIRMED_CODE) throw error;
           answer = await statusAfterAmbiguousFinalChunk(session, error as Error);
         } else {
+          // A TypeError that is not undici's network failure (or any other error we do not
+          // recognise) is a bug, not a chunk without an answer: it surfaces.
+          if (!isTransientUploadFailure(error)) throw error;
           problems += 1;
-          if (problems > YOUTUBE_MAX_CHUNK_RECOVERIES_PER_STEP) return await pause();
+          if (problems > YOUTUBE_MAX_CHUNK_RECOVERIES_PER_STEP) return await pause(YOUTUBE_TRANSIENT_RESUME_DELAY_MS);
           console.warn("[YouTube] A chunk got no usable answer; asking the session where it stands", {
             confirmedBytes,
             totalBytes,
@@ -644,14 +652,14 @@ async function uploadChunks(args: {
             // Nothing was committed and the query only reads: if it gets no answer (a 5xx, a
             // timeout, a dropped connection), the next step asks again with a whole budget
             // instead of this one failing on a transient error it has no time to retry.
-            if (!isTransientRequestFailure(statusError)) throw statusError;
+            if (!isTransientUploadFailure(statusError)) throw statusError;
             console.warn("[YouTube] The status query got no answer; the next step asks again", {
               confirmedBytes,
               totalBytes,
               status: (statusError as { status?: unknown } | null)?.status,
               code: (statusError as { code?: unknown } | null)?.code,
             });
-            return await pause();
+            return await pause(YOUTUBE_TRANSIENT_RESUME_DELAY_MS);
           }
         }
 
@@ -659,7 +667,9 @@ async function uploadChunks(args: {
         if ("done" in settled) return settled.done;
         confirmedBytes = settled.confirmedBytes;
         // The last chunk's outcome is known (incomplete), but resending it is bounded like any recovery.
-        if (isFinal && ++problems > YOUTUBE_MAX_CHUNK_RECOVERIES_PER_STEP) return await pause();
+        if (isFinal && ++problems > YOUTUBE_MAX_CHUNK_RECOVERIES_PER_STEP) {
+          return await pause(YOUTUBE_TRANSIENT_RESUME_DELAY_MS);
+        }
         continue;
       }
 
@@ -669,7 +679,9 @@ async function uploadChunks(args: {
         confirmedBytes = advanced;
         console.log("[YouTube] Resumable chunk accepted", { confirmedBytes, totalBytes });
         // A 308 that confirms nothing new would be resent forever; it counts like a failure.
-        if (!progressed && ++problems > YOUTUBE_MAX_CHUNK_RECOVERIES_PER_STEP) return await pause();
+        if (!progressed && ++problems > YOUTUBE_MAX_CHUNK_RECOVERIES_PER_STEP) {
+          return await pause(YOUTUBE_TRANSIENT_RESUME_DELAY_MS);
+        }
         continue;
       }
 

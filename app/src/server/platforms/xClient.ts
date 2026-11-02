@@ -4,24 +4,20 @@ import crypto from "crypto";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
 import { assertOk } from "@/lib/assertOk";
-import { DEFAULT_FETCH_TIMEOUT_MS, FETCH_TIMEOUT_CODE, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import {
+  isTransientUploadFailure,
   LARGE_UPLOAD_CHUNK_WINDOW_MS,
   openBlobChunkStream,
   usesLargeUploadPath,
   type BlobChunkStream,
 } from "./largeUpload";
-import {
-  budgetedTimeout,
-  MIN_REQUEST_WINDOW_MS,
-  PUBLISH_BUDGET_EXCEEDED_CODE,
-  remainingMs,
-} from "./publishBudget";
+import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
 import { classifyRateLimit, isRateLimitedError } from "./rateLimited";
 
 /** Upper bound on waiting for X to process an uploaded video (with or without a step deadline). */
@@ -847,23 +843,6 @@ function readSavedUpload(
 }
 
 /**
- * Did a request fail in a way that says nothing about the upload: a 5xx, a timeout, a dropped
- * connection, or no time to send it? The same request can simply be made again later. Only
- * undici's own network failures count among the TypeErrors (`fetch failed`, `terminated`):
- * any other TypeError is a bug and must surface. A 4xx, a rate limit or an error we do not
- * recognise says something definite.
- */
-function isTransientRequestFailure(error: unknown): boolean {
-  if (error instanceof TypeError) return error.message === "fetch failed" || error.message === "terminated";
-  const { code, status } = (error ?? {}) as { code?: unknown; status?: unknown };
-  return (
-    code === FETCH_TIMEOUT_CODE ||
-    code === PUBLISH_BUDGET_EXCEEDED_CODE ||
-    (typeof status === "number" && status >= 500)
-  );
-}
-
-/**
  * Send a request that commits nothing and sort what comes back: a 429 is RATE_LIMITED
  * (thrown), a 5xx is a failure that carries its `status`, an error from the request itself is
  * a failure, anything else is the response for the caller to read. `send` is called once.
@@ -1120,7 +1099,7 @@ async function publishChunked(args: {
    * it is tried once more in the next step, a little later; the second failure is final.
    */
   const retryOrFail = async (failure: unknown, exhausted: () => Error): Promise<PublishResult> => {
-    if (!isTransientRequestFailure(failure)) throw failure;
+    if (!isTransientUploadFailure(failure)) throw failure;
     const answered = typeof (failure as { status?: unknown } | null)?.status === "number";
     if (!answered && remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS) return await pause(null);
     if (current.failedSegmentRetries >= X_MAX_REQUEST_RETRIES) throw exhausted();
@@ -1159,7 +1138,7 @@ async function publishChunked(args: {
       }),
     );
     if ("failure" in attempt) {
-      if (!isTransientRequestFailure(attempt.failure)) throw attempt.failure;
+      if (!isTransientUploadFailure(attempt.failure)) throw attempt.failure;
       return await unanswered(attempt.failure);
     }
 
@@ -1171,7 +1150,7 @@ async function publishChunked(args: {
     try {
       body = (await attempt.response.json()) as { processing_info?: XProcessingInfo } | null;
     } catch (error) {
-      if (isTransientRequestFailure(error)) return await unanswered(error);
+      if (isTransientUploadFailure(error)) return await unanswered(error);
       throw xUploadError(
         "X_VIDEO_STATUS_CHECK_FAILED",
         "X video processing status check failed: X's answer could not be read",

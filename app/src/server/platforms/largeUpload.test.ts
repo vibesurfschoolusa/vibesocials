@@ -11,6 +11,7 @@ vi.mock("@/lib/logger", () => ({ logger }));
 import {
   BLOB_READ_FAILED_CODE,
   DEFAULT_LARGE_UPLOAD_PLATFORMS,
+  isTransientUploadFailure,
   LARGE_UPLOAD_CHUNK_WINDOW_MS,
   LARGE_UPLOAD_MAX_PART_BYTES,
   LARGE_UPLOAD_REQUEST_TIMEOUT_MS,
@@ -436,6 +437,35 @@ describe("openBlobChunkStream", () => {
   ])("rejects %s before fetching", async (_name, offset, totalBytes) => {
     await expect(openBlobChunkStream(URL, { offset, totalBytes })).rejects.toBeInstanceOf(RangeError);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("isTransientUploadFailure", () => {
+  it.each([
+    ["undici's network failure", new TypeError("fetch failed", { cause: { code: "ECONNRESET" } })],
+    ["a connection that was never made", new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } })],
+    ["a body cut off by undici", new TypeError("terminated")],
+    ["a timeout", Object.assign(new Error("Request timed out after 120000ms"), { code: "FETCH_TIMEOUT" })],
+    ["no step budget left to send", Object.assign(new Error("budget"), { code: PUBLISH_BUDGET_EXCEEDED_CODE })],
+    ["a 500", Object.assign(new Error("HTTP 500"), { status: 500 })],
+    ["a 503", Object.assign(new Error("HTTP 503"), { status: 503 })],
+  ])("counts %s", (_name, error) => {
+    expect(isTransientUploadFailure(error)).toBe(true);
+  });
+
+  it.each([
+    ["a programming TypeError", new TypeError("x is not a function")],
+    ["a stream misuse TypeError", new TypeError("Invalid state: the stream is locked")],
+    ["a RangeError", new RangeError("boom")],
+    ["a 4xx", Object.assign(new Error("HTTP 404"), { status: 404 })],
+    ["a 429", Object.assign(new Error("HTTP 429"), { status: 429 })],
+    ["a coded failure that says something definite", Object.assign(new Error("x"), { code: "BLOB_READ_FAILED" })],
+    ["a status that is not a number", Object.assign(new Error("x"), { status: "503" })],
+    ["null", null],
+    ["undefined", undefined],
+    ["a string", "fetch failed"],
+  ])("does not count %s", (_name, error) => {
+    expect(isTransientUploadFailure(error)).toBe(false);
   });
 });
 
