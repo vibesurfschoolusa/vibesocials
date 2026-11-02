@@ -596,6 +596,8 @@ async function uploadChunks(args: {
           if (isBlobStreamInterrupted(error)) return await pause(YOUTUBE_TRANSIENT_RESUME_DELAY_MS);
           throw error;
         }
+        // Reading takes time too: the chunk (and, for the last, the status query after it) must still fit.
+        if (remainingMs(deadline) < needed) return await pause(null);
       }
       chunk = current;
       // Read into Buffer.allocUnsafe (largeUpload.ts), so it is ArrayBuffer-backed: the
@@ -736,7 +738,8 @@ async function uploadChunks(args: {
  *   session costs one slot of the daily upload counter, spent by publishToPlatform
  *   when it finds no state; a rate limit on a chunk then resumes the saved session
  *   instead of costing a second slot.
- * - State: ask the session where it stands, then send chunks from there.
+ * - State: ask the session where it stands, then send chunks from there. A query that gets
+ *   no answer continues {@link YOUTUBE_TRANSIENT_RESUME_DELAY_MS} later with the state as it is.
  * - State that cannot be used (another size, no readable session URI) is treated like
  *   an expired session: dropped, and the next step starts over.
  */
@@ -772,11 +775,22 @@ async function publishResumable(args: {
     return continueNow();
   }
 
-  const settled = await settleStatus(
-    await queryUploadStatus({ sessionUri, accessToken, totalBytes, deadline: ctx.deadline }),
-    store,
-    totalBytes,
-  );
+  let answer: UploadStatus;
+  try {
+    answer = await queryUploadStatus({ sessionUri, accessToken, totalBytes, deadline: ctx.deadline });
+  } catch (error) {
+    // The query only reads, and the session holds what was uploaded: with no answer (a 5xx, a
+    // timeout, a dropped connection) the next step asks again, the saved state untouched. Failing
+    // here would drop the state, and the retry would spend a new slot on a new session.
+    if (!isTransientUploadFailure(error)) throw error;
+    console.warn("[YouTube] The status query got no answer; the next step asks again", {
+      totalBytes,
+      status: (error as { status?: unknown } | null)?.status,
+      code: (error as { code?: unknown } | null)?.code,
+    });
+    return continueAfter(YOUTUBE_TRANSIENT_RESUME_DELAY_MS);
+  }
+  const settled = await settleStatus(answer, store, totalBytes);
   if ("done" in settled) return settled.done;
 
   console.log("[YouTube] Resuming the upload", { confirmedBytes: settled.confirmedBytes, totalBytes });

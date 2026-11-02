@@ -1181,11 +1181,54 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
       expect(upload.puts()).toHaveLength(0);
     });
 
-    it("a failing status query is YOUTUBE_UPLOAD_FAILED with its status (nothing was committed)", async () => {
-      const { store } = fakeStore(sessionAt(CHUNK));
-      stubUpload({ session: [reply(500, "oops")] });
+    // The opening status query only reads, and the session holds everything uploaded so far:
+    // failing here would drop the state, and the retry would spend a new slot of the daily
+    // upload counter on a new session. It is asked again 30 s later instead, as the status
+    // query after a failed chunk is.
+    it.each([
+      ["a 500", () => reply(500, "oops")],
+      ["a 503", () => reply(503, "unavailable")],
+      ["a timeout", () => timeout()],
+      ["a dropped connection", () => connectionReset()],
+      ["a body cut off by undici", () => failWith(new TypeError("terminated"))],
+    ] as const)("%s on the opening status query continues 30 s later, the saved session untouched", async (_name, bad) => {
+      const { store, mocks, saved } = fakeStore(sessionAt(CHUNK));
+      const upload = stubUpload({ session: [bad()] });
 
-      expect(await failure(bigCtx(store))).toMatchObject({ code: "YOUTUBE_UPLOAD_FAILED", status: 500 });
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual(pausedFor(TRANSIENT_RESUME_DELAY));
+      expect(mocks.clear).not.toHaveBeenCalled();
+      expect(mocks.save).not.toHaveBeenCalled();
+      expect(saved()).toEqual({ kind: YOUTUBE_UPLOAD_STATE_KIND, ...sessionAt(CHUNK) });
+      expect(upload.starts()).toHaveLength(0);
+      expect(upload.puts()).toHaveLength(0);
+      expect(upload.blobGets()).toHaveLength(0);
+    });
+
+    it("a 5xx on the opening status query is not retried in-step: the next step asks again", async () => {
+      const { store } = fakeStore(sessionAt(CHUNK));
+      const upload = stubUpload({ session: [reply(503), reply(503), reply(503)] });
+
+      const result = await withTransientRetries(() => run(bigCtx(store)), { sleep: async () => {} });
+
+      expect(result).toEqual(pausedFor(TRANSIENT_RESUME_DELAY));
+      expect(upload.statusQueries()).toHaveLength(1);
+    });
+
+    it("a 4xx on the opening status query is still YOUTUBE_UPLOAD_FAILED with its status (nothing was committed)", async () => {
+      const { store } = fakeStore(sessionAt(CHUNK));
+      stubUpload({ session: [reply(400, "{}")] });
+
+      expect(await failure(bigCtx(store))).toMatchObject({ code: "YOUTUBE_UPLOAD_FAILED", status: 400 });
+    });
+
+    it("a TypeError that is not undici's network failure on the opening status query surfaces", async () => {
+      const { store } = fakeStore(sessionAt(CHUNK));
+      const bug = new TypeError("x is not a function");
+      stubUpload({ session: [failWith(bug)] });
+
+      expect(await failure(bigCtx(store))).toBe(bug);
     });
 
     it("a rate-limited status query is RATE_LIMITED, and the saved session is left as it was", async () => {
@@ -1471,6 +1514,29 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
       expect(result).toEqual(paused);
       expect(upload.puts()).toHaveLength(0);
       expect(saved()?.data).toEqual(progress(0));
+    });
+
+    it("re-checks the window after reading a chunk: a slow read that leaves 50 s pauses before the PUT", async () => {
+      const { store, saved } = fakeStore(sessionAt(CHUNK));
+      // 225 s at the start; the blob read takes 175 s, leaving 50 s: under the 60 s a chunk needs.
+      const upload = stubUpload({ session: [incomplete(CHUNK - 1)], blobAdvance: STEP - 50_000 });
+
+      const result = await run(bigCtx(store, { deadline: NOW + STEP }));
+
+      expect(result).toEqual(paused);
+      expect(upload.puts()).toHaveLength(0);
+      expect(saved()?.data).toEqual(progress(CHUNK));
+    });
+
+    it("the last chunk re-checks its own window after the read: 80 s left (under 90 s) pauses before the commit call", async () => {
+      const { store, saved } = fakeStore(sessionAt(LAST_START));
+      const upload = stubUpload({ session: [incomplete(LAST_START - 1)], blobAdvance: STEP - 80_000 });
+
+      const result = await run(bigCtx(store, { deadline: NOW + STEP }));
+
+      expect(result).toEqual(paused);
+      expect(upload.puts()).toHaveLength(0);
+      expect(saved()?.data).toEqual(progress(LAST_START));
     });
 
     it("a connection that never reached YouTube with under 60 s left pauses; with time left it is still rethrown unchanged for the in-step retry", async () => {
