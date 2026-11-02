@@ -1715,9 +1715,13 @@ export const stalePostJobSweep = inngest.createFunction(
  *    from it, so a page that runs after UTC midnight still dedupes with its
  *    siblings.
  *  - `page-<i>` reads up to HEALTH_SWEEP_PAGE_SIZE ids (`select: { id: true }`:
- *    no token column is ever loaded), ordered by id and resumed after the last
- *    id of the previous page, so rows that stop matching as they are refreshed
- *    cannot make a later page skip any.
+ *    no token column is ever loaded), ordered by id. Page N resumes with the
+ *    keyset condition `id > <last id of page N-1>` AND the sweep's WHERE - NOT a
+ *    Prisma `cursor` + `skip: 1`: a cursor row that stops matching the WHERE (it
+ *    was refreshed since the previous page) would make `skip: 1` drop the next
+ *    real row, and a deleted cursor row returns an empty page and ends the sweep
+ *    early. With `id >` the position is just a value, so rows that change or
+ *    disappear between pages cannot lose or skip any other row.
  *  - `fan-out-<i>` sends that page's events. Each event id is
  *    `refresh-<id>-<UTC YYYY-MM-DD>`, so a re-run of the cron the same day
  *    sends nothing twice (event ids are an idempotency key over 24 h, V1).
@@ -1752,12 +1756,12 @@ export const connectionHealthSweep = inngest.createFunction(
 
     for (let page = 0; ; page++) {
       const ids: string[] = await step.run(`page-${page}`, async () => {
+        const eligible = proactiveRefreshWhere(now);
         const rows = await prisma.socialConnection.findMany({
-          where: proactiveRefreshWhere(now),
+          where: cursor ? { AND: [eligible, { id: { gt: cursor } }] } : eligible,
           select: { id: true },
           orderBy: { id: "asc" },
           take: HEALTH_SWEEP_PAGE_SIZE,
-          ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
         });
         return rows.map((row) => row.id);
       });

@@ -137,7 +137,11 @@ for the same Neon branch:
   advisory locks (`pg_advisory_xact_lock` inside transactions) and never uses
   `SET`, `LISTEN`, temp tables, or session advisory locks, so it is safe on the
   transaction-mode pooler as is. (`connection_limit=5` is for Fluid compute,
-  where one instance serves many requests; use 1–3 if Fluid compute is off.)
+  where one instance serves many requests; use 3 if Fluid compute is off; never
+  below 3, because OAuth refresh holds a lock connection while it reads and
+  writes. `app/src/server/platforms/connectionRefresh.ts` reads the value: it
+  runs at most `min(2, connection_limit - 1)` refresh locks per instance; at
+  `connection_limit=1` it skips the lock and logs a warning.)
 - **`DIRECT_URL` is the direct host** (the same hostname **without**
   `-pooler`). Prisma Migrate takes a session-level advisory lock and runs its
   schema engine over one connection, which a transaction-mode pooler can break.

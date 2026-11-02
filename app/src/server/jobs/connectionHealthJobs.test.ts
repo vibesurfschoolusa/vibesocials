@@ -192,16 +192,18 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
       orderBy: { id: "asc" },
       take: 1000,
     });
-    // The second page resumes after the last id of the first (stable under
-    // concurrent refreshes moving rows out of the WHERE).
+    // The second page resumes with a KEYSET condition (id > the last id of the
+    // first page), not a Prisma cursor: a cursor row that stops matching the
+    // WHERE (it was refreshed) or is deleted would make `skip: 1` drop the next
+    // real row, or return an empty page and end the sweep early.
     expect(findManyMock.mock.calls[1][0]).toEqual({
-      where,
+      where: { AND: [where, { id: { gt: "conn-999" } }] },
       select: { id: true },
       orderBy: { id: "asc" },
       take: 1000,
-      cursor: { id: "conn-999" },
-      skip: 1,
     });
+    expect(findManyMock.mock.calls[1][0]).not.toHaveProperty("cursor");
+    expect(findManyMock.mock.calls[1][0]).not.toHaveProperty("skip");
     expect(step.sendEvent).toHaveBeenCalledTimes(2);
     expect(eventsOf(step, 0)).toHaveLength(1000);
     expect(eventsOf(step, 1)).toHaveLength(3);
@@ -258,8 +260,73 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
 
     await runCron(step);
 
-    expect(findManyMock.mock.calls[1][0].where).toEqual(proactiveRefreshWhere(NOW));
+    expect(findManyMock.mock.calls[1][0].where).toEqual({
+      AND: [proactiveRefreshWhere(NOW), { id: { gt: "conn-999" } }],
+    });
     expect((eventsOf(step, 1) as SentEvent[])[0].id).toBe("refresh-conn-1000-2026-11-01");
+  });
+
+  // An in-memory stand-in for the table: evaluates just what the cron asks for
+  // (the id keyset condition, ordering by id, take), over rows that other
+  // processes keep refreshing out of the WHERE or deleting.
+  describe("keyset paging over a table that changes under the sweep", () => {
+    const pad = (n: number) => `c${String(n).padStart(5, "0")}`;
+    type PageArgs = {
+      where: { AND?: Array<{ id?: { gt: string } }> };
+      take: number;
+      cursor?: unknown;
+      skip?: number;
+    };
+
+    function table(count: number, afterPage: (page: number, returned: string[], rows: Set<string>) => void) {
+      const rows = new Set(Array.from({ length: count }, (_, i) => pad(i)));
+      let page = 0;
+      findManyMock.mockImplementation(async (args: PageArgs) => {
+        expect(args).not.toHaveProperty("cursor");
+        expect(args).not.toHaveProperty("skip");
+        const gt = args.where.AND?.find((clause) => clause.id)?.id?.gt;
+        const returned = [...rows]
+          .sort()
+          .filter((id) => gt === undefined || id > gt)
+          .slice(0, args.take);
+        afterPage(page++, returned, rows);
+        return returned.map((id) => ({ id }));
+      });
+      return rows;
+    }
+
+    const fannedOut = (step: FakeStep) =>
+      step.sendEvent.mock.calls.flatMap((call) => (call[1] as SentEvent[]).map((e) => e.id));
+
+    it("a page-boundary row that is refreshed out of the WHERE (or deleted) before the next page loses no row and does not end the sweep", async () => {
+      // 2,500 rows. After each page, the page's LAST row stops matching: exactly
+      // the row the next page would have used as its cursor.
+      table(2500, (_page, returned, rows) => {
+        rows.delete(returned[returned.length - 1]);
+      });
+      const step = fakeStep();
+
+      const summary = await runCron(step);
+
+      const sent = fannedOut(step);
+      // Every row was fanned out exactly once.
+      expect(new Set(sent).size).toBe(sent.length);
+      expect(sent).toHaveLength(2500);
+      expect(sent[0]).toBe(`refresh-${pad(0)}-2026-11-01`);
+      expect(sent[sent.length - 1]).toBe(`refresh-${pad(2499)}-2026-11-01`);
+      expect(summary).toEqual({ pages: 3, connections: 2500 });
+    });
+
+    it("rows added while the sweep runs are picked up when they sort after the current page", async () => {
+      const rows = table(1500, (page, _returned, live) => {
+        if (page === 0) live.add(pad(9999));
+      });
+
+      await runCron(fakeStep());
+
+      expect(rows.has(pad(9999))).toBe(true);
+      expect(findManyMock).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("a full page followed by an empty page sends nothing for the empty one", async () => {

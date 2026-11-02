@@ -1,16 +1,20 @@
 import type { SocialConnection } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { logger } from "@/lib/logger";
 import { tokenRefreshSupersededError } from "@/server/platforms/connectionHealth";
 import {
   CONNECTION_GONE_CODE,
   CONNECTION_REFRESH_BUSY_CODE,
   CONNECTION_RECONNECT_REQUIRED_CODE,
+  REFRESH_LOCK_MAX_CONCURRENCY,
   REFRESH_LOCK_NAMESPACE,
   REFRESH_LOCK_WAIT_MS,
   REFRESH_TX_MAX_WAIT_MS,
   REFRESH_TX_TIMEOUT_MS,
   refreshConnectionToken,
+  refreshLockCap,
+  resetRefreshLockStateForTests,
 } from "@/server/platforms/connectionRefresh";
 import {
   MIN_REQUEST_WINDOW_MS,
@@ -78,6 +82,10 @@ function statement(call: unknown[]): { sql: string; values: unknown[] } {
 const statements = () => executeRawMock.mock.calls.map(statement);
 
 beforeEach(() => {
+  // The semaphore, the single-flight map and the warn-once flag are process-wide.
+  resetRefreshLockStateForTests();
+  // Neutral pool settings: no connection_limit -> the lock cap is 2.
+  vi.stubEnv("DATABASE_URL", "postgresql://user:pass@localhost:5432/db");
   executeRawMock.mockReset();
   findUniqueMock.mockReset();
   transactionMock.mockReset();
@@ -90,6 +98,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
 });
 
@@ -387,10 +396,10 @@ describe("refreshConnectionToken — the lock transaction expiring", () => {
   });
 });
 
-describe("refreshConnectionToken — two concurrent callers", () => {
+describe("refreshConnectionToken — two instances refreshing the same connection", () => {
   const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-  it("refreshes ONCE: the second caller waits for the lock, then its re-read sees the first caller's new tokens", async () => {
+  it("refreshes ONCE: the second instance waits for the lock, then its re-read sees the first one's new tokens", async () => {
     // The mock serializes the transaction callbacks like the advisory lock does.
     let chain: Promise<unknown> = Promise.resolve();
     transactionMock.mockImplementation((callback: (tx: unknown) => Promise<unknown>) => {
@@ -414,12 +423,15 @@ describe("refreshConnectionToken — two concurrent callers", () => {
     });
 
     // Both callers hold the SAME stale snapshot (two publishes, or a publish
-    // plus the health sweep, loaded the row before either refreshed). The
-    // second starts a macro-task later: Vitest can hand a second dynamic import
-    // of the mocked db module, made in the same tick, the real module.
+    // plus the health sweep, loaded the row before either refreshed). They run
+    // in different serverless instances, so each has its own single-flight map:
+    // the reset between the calls stands in for the second instance. The second
+    // call also starts a macro-task later: Vitest can hand a second dynamic
+    // import of the mocked db module, made in the same tick, the real module.
     const snapshot = makeConnection({ accessToken: "access-1", refreshToken: "refresh-1" });
     const first = refreshConnectionToken(snapshot, refresh);
     await tick();
+    resetRefreshLockStateForTests();
     const second = refreshConnectionToken(snapshot, refresh);
     await tick();
 
@@ -473,5 +485,484 @@ describe("refreshConnectionToken — step deadline", () => {
       deadline: Date.now() + MIN_REQUEST_WINDOW_MS,
     });
     expect(transactionMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 2026-11-01 scale audit (jobs, token refresh), fix round 1 (C1): the lock
+// transaction pins one pooled connection for the whole refresh, while the
+// re-read, the refresher's token write and the guarded flag each need a SECOND
+// connection from the same per-instance pool. Unbounded, the lock transactions
+// of one instance can take the whole pool and starve their own queries (and the
+// publish claim/finalize queries). So the lock transactions are capped per
+// process (a semaphore sized from DATABASE_URL's connection_limit), and
+// concurrent callers for one connection share a single flight.
+describe("refreshLockCap (the per-process cap on lock transactions)", () => {
+  const url = (query: string) => `postgresql://user:pass@host.example/db${query}`;
+
+  it("never exceeds REFRESH_LOCK_MAX_CONCURRENCY (2)", () => {
+    expect(REFRESH_LOCK_MAX_CONCURRENCY).toBe(2);
+  });
+
+  it.each([
+    ["undefined DATABASE_URL", undefined, 2],
+    ["an empty DATABASE_URL", "", 2],
+    ["no connection_limit parameter (Prisma's default pool is at least 3)", url("?sslmode=require"), 2],
+    ["no query string at all", url(""), 2],
+    ["connection_limit=5 (production)", url("?connection_limit=5"), 2],
+    [
+      "the production query string",
+      url("?sslmode=require&connection_limit=5&pool_timeout=20&connect_timeout=15"),
+      2,
+    ],
+    ["connection_limit=3 (the documented floor)", url("?connection_limit=3"), 2],
+    ["connection_limit=2: one connection stays free for the queries", url("?connection_limit=2"), 1],
+    ["connection_limit=1: no lock transaction at all", url("?connection_limit=1"), 0],
+    ["connection_limit=1 among other parameters", url("?sslmode=require&connection_limit=1&pool_timeout=20"), 0],
+    ["a connection_limit that is not a number", url("?connection_limit=abc"), 2],
+    ["an empty connection_limit", url("?connection_limit="), 2],
+    ["connection_limit=0", url("?connection_limit=0"), 2],
+    ["a negative connection_limit", url("?connection_limit=-1"), 2],
+    ["a fractional connection_limit", url("?connection_limit=2.5"), 2],
+    ["garbage that is not a URL", "not a url", 2],
+  ] as const)("%s -> %i", (_label, databaseUrl, expected) => {
+    expect(refreshLockCap(databaseUrl)).toBe(expected);
+  });
+
+  it("is read from DATABASE_URL at call time", async () => {
+    vi.stubEnv("DATABASE_URL", url("?connection_limit=1"));
+    findUniqueMock.mockResolvedValue(makeConnection());
+
+    await refreshConnectionToken(makeConnection(), vi.fn().mockResolvedValue(makeConnection()));
+
+    expect(transactionMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("refreshConnectionToken — at most REFRESH_LOCK_MAX_CONCURRENCY lock transactions per process", () => {
+  const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  /** `$transaction` calls that start at once but whose callback only runs when released. */
+  function gatedTransactions() {
+    const releases: Array<() => void> = [];
+    transactionMock.mockImplementation(
+      (callback: (tx: unknown) => Promise<unknown>) =>
+        new Promise((resolve, reject) => {
+          releases.push(() => callback({ $executeRaw: executeRawMock }).then(resolve, reject));
+        }),
+    );
+    return releases;
+  }
+
+  beforeEach(() => {
+    // Every connection id is stored with the tokens its snapshot carries.
+    findUniqueMock.mockImplementation(async ({ where }: { where: { id: string } }) =>
+      makeConnection({ id: where.id }),
+    );
+  });
+
+  const call = (id: string, refresh = vi.fn().mockResolvedValue(makeConnection())) =>
+    refreshConnectionToken(makeConnection({ id }), refresh);
+
+  it("a third concurrent caller does not start a $transaction until one finishes, and holds no connection while it waits", async () => {
+    const releases = gatedTransactions();
+
+    const a = call("conn-a");
+    await tick();
+    const b = call("conn-b");
+    await tick();
+    const c = call("conn-c");
+    await tick();
+
+    // Two lock transactions are open; the third caller waits in memory.
+    expect(transactionMock).toHaveBeenCalledTimes(REFRESH_LOCK_MAX_CONCURRENCY);
+    expect(executeRawMock).not.toHaveBeenCalled();
+
+    releases[0]();
+    await a;
+    await tick();
+
+    expect(transactionMock).toHaveBeenCalledTimes(3);
+
+    releases[1]();
+    releases[2]();
+    await Promise.all([b, c]);
+    expect(findUniqueMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("frees the slot when a refresh fails", async () => {
+    const releases = gatedTransactions();
+    const failure = new Error("TikTok is down");
+
+    const a = call("conn-a", vi.fn().mockRejectedValue(failure));
+    await tick();
+    const b = call("conn-b");
+    await tick();
+    const c = call("conn-c");
+    await tick();
+    expect(transactionMock).toHaveBeenCalledTimes(2);
+
+    releases[0]();
+    await expect(a).rejects.toBe(failure);
+    await tick();
+
+    expect(transactionMock).toHaveBeenCalledTimes(3);
+    releases[1]();
+    releases[2]();
+    await Promise.all([b, c]);
+  });
+
+  it("connection_limit=2 allows ONE lock transaction at a time", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:pass@host.example/db?connection_limit=2");
+    const releases = gatedTransactions();
+
+    const a = call("conn-a");
+    await tick();
+    const b = call("conn-b");
+    await tick();
+
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+
+    releases[0]();
+    await a;
+    await tick();
+    expect(transactionMock).toHaveBeenCalledTimes(2);
+    releases[1]();
+    await b;
+  });
+
+  it("a waiter past REFRESH_LOCK_WAIT_MS throws CONNECTION_REFRESH_BUSY (503) and never starts a $transaction", async () => {
+    vi.useFakeTimers();
+    const releases = gatedTransactions();
+    const refreshC = vi.fn();
+
+    const a = call("conn-a");
+    await vi.advanceTimersByTimeAsync(0);
+    const b = call("conn-b");
+    await vi.advanceTimersByTimeAsync(0);
+    const c = call("conn-c", refreshC);
+    const cOutcome = c.then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(REFRESH_LOCK_WAIT_MS - 1);
+    // Not yet: still waiting.
+    expect(transactionMock).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(1);
+    const error = await cOutcome;
+
+    expect(error?.code).toBe(CONNECTION_REFRESH_BUSY_CODE);
+    expect(error?.status).toBe(503);
+    expect(transactionMock).toHaveBeenCalledTimes(2);
+    expect(refreshC).not.toHaveBeenCalled();
+
+    // The timed-out waiter left the queue: releasing a slot starts nobody.
+    releases[0]();
+    await a;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(transactionMock).toHaveBeenCalledTimes(2);
+    releases[1]();
+    await b;
+  });
+
+  it("a waiter that gets its slot in time leaves no timer behind", async () => {
+    vi.useFakeTimers();
+    const releases = gatedTransactions();
+
+    const a = call("conn-a");
+    await vi.advanceTimersByTimeAsync(0);
+    const b = call("conn-b");
+    await vi.advanceTimersByTimeAsync(0);
+    const c = call("conn-c");
+    await vi.advanceTimersByTimeAsync(0);
+
+    releases[0]();
+    await a;
+    await vi.advanceTimersByTimeAsync(0);
+    releases[1]();
+    releases[2]();
+    await Promise.all([b, c]);
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("re-checks the step budget after waiting for a slot: PUBLISH_TIME_BUDGET_EXCEEDED, no $transaction for it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-02T10:00:00Z"));
+    const releases = gatedTransactions();
+
+    const a = call("conn-a");
+    await vi.advanceTimersByTimeAsync(0);
+    const b = call("conn-b");
+    await vi.advanceTimersByTimeAsync(0);
+    // 8 s left when it starts waiting; a slot only frees after 5 s, leaving 3 s.
+    const c = refreshConnectionToken(makeConnection({ id: "conn-c" }), vi.fn(), {
+      deadline: Date.now() + 8_000,
+    });
+    const cOutcome = c.then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    releases[0]();
+    await a;
+    const error = await cOutcome;
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(transactionMock).toHaveBeenCalledTimes(2);
+    releases[1]();
+    await b;
+  });
+});
+
+describe("refreshConnectionToken — single-flight per connection in one process", () => {
+  it("two simultaneous callers for the same id make ONE $transaction and ONE refresh, and both get the same row", async () => {
+    findUniqueMock.mockResolvedValue(makeConnection());
+    const refreshed = makeConnection({ accessToken: "access-2" });
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const refresh = vi.fn(async () => {
+      await gate;
+      return refreshed;
+    });
+
+    const first = refreshConnectionToken(makeConnection(), refresh);
+    const second = refreshConnectionToken(makeConnection(), refresh);
+    finish();
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(a).toBe(refreshed);
+    expect(b).toBe(refreshed);
+  });
+
+  it("shares a failure too, and every caller sees the same error", async () => {
+    findUniqueMock.mockResolvedValue(makeConnection());
+    const failure = Object.assign(new Error("expired"), { code: "TIKTOK_RECONNECT_REQUIRED" });
+    const refresh = vi.fn().mockRejectedValue(failure);
+
+    const results = await Promise.allSettled([
+      refreshConnectionToken(makeConnection(), refresh),
+      refreshConnectionToken(makeConnection(), refresh),
+      refreshConnectionToken(makeConnection(), refresh),
+    ]);
+
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    for (const result of results) {
+      expect(result).toEqual({ status: "rejected", reason: failure });
+    }
+  });
+
+  it("clears the entry on settle: a later caller refreshes again (success and failure alike)", async () => {
+    findUniqueMock.mockResolvedValue(makeConnection());
+    const failure = new Error("boom");
+
+    await refreshConnectionToken(makeConnection(), vi.fn().mockResolvedValue(makeConnection()));
+    await expect(
+      refreshConnectionToken(makeConnection(), vi.fn().mockRejectedValue(failure)),
+    ).rejects.toBe(failure);
+    const refresh = vi.fn().mockResolvedValue(makeConnection({ accessToken: "access-3" }));
+    const result = await refreshConnectionToken(makeConnection(), refresh);
+
+    expect(transactionMock).toHaveBeenCalledTimes(3);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(result.accessToken).toBe("access-3");
+  });
+
+  it("does not share across different connection ids", async () => {
+    findUniqueMock.mockImplementation(async ({ where }: { where: { id: string } }) =>
+      makeConnection({ id: where.id }),
+    );
+    const refreshA = vi.fn().mockResolvedValue(makeConnection({ id: "conn-a", accessToken: "a-2" }));
+    const refreshB = vi.fn().mockResolvedValue(makeConnection({ id: "conn-b", accessToken: "b-2" }));
+
+    // The second starts a macro-task later (Vitest can hand a second dynamic
+    // import of the mocked db module, made in the same tick, the real module).
+    const first = refreshConnectionToken(makeConnection({ id: "conn-a" }), refreshA);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    const second = refreshConnectionToken(makeConnection({ id: "conn-b" }), refreshB);
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(transactionMock).toHaveBeenCalledTimes(2);
+    expect(refreshA).toHaveBeenCalledTimes(1);
+    expect(refreshB).toHaveBeenCalledTimes(1);
+    expect(a.accessToken).toBe("a-2");
+    expect(b.accessToken).toBe("b-2");
+  });
+
+  it("a caller with an exhausted budget neither joins nor starts a flight", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-02T10:00:00Z"));
+    findUniqueMock.mockResolvedValue(makeConnection());
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const leader = refreshConnectionToken(
+      makeConnection(),
+      vi.fn(async () => {
+        await gate;
+        return makeConnection();
+      }),
+    );
+
+    const error = await caught(
+      refreshConnectionToken(makeConnection(), vi.fn(), { deadline: Date.now() + 1_000 }),
+    );
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    finish();
+    await leader;
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("refreshConnectionToken — pool timeout (P2024)", () => {
+  const poolTimeout = () =>
+    Object.assign(
+      new Error("Timed out fetching a new connection from the connection pool."),
+      { code: "P2024" },
+    );
+
+  it("before the refresh started (the lock statements): CONNECTION_REFRESH_BUSY, nothing was sent", async () => {
+    executeRawMock.mockRejectedValueOnce(poolTimeout());
+    const refresh = vi.fn();
+
+    const error = await caught(refreshConnectionToken(makeConnection(), refresh));
+
+    expect(error?.code).toBe(CONNECTION_REFRESH_BUSY_CODE);
+    expect(error?.status).toBe(503);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("before the refresh started (the re-read waiting for a second connection): CONNECTION_REFRESH_BUSY", async () => {
+    findUniqueMock.mockRejectedValue(poolTimeout());
+    const refresh = vi.fn();
+
+    const error = await caught(refreshConnectionToken(makeConnection(), refresh));
+
+    expect(error?.code).toBe(CONNECTION_REFRESH_BUSY_CODE);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("when the transaction itself cannot get a connection: CONNECTION_REFRESH_BUSY", async () => {
+    transactionMock.mockRejectedValueOnce(poolTimeout());
+
+    const error = await caught(refreshConnectionToken(makeConnection(), vi.fn()));
+
+    expect(error?.code).toBe(CONNECTION_REFRESH_BUSY_CODE);
+  });
+
+  it("after the refresh started: rethrown as is (a request may have been sent)", async () => {
+    findUniqueMock.mockResolvedValue(makeConnection());
+    const failure = poolTimeout();
+
+    const error = await caught(
+      refreshConnectionToken(makeConnection(), vi.fn().mockRejectedValue(failure)),
+    );
+
+    expect(error).toBe(failure);
+    expect(error?.code).toBe("P2024");
+  });
+});
+
+describe("refreshConnectionToken — connection_limit=1 (no lock transaction)", () => {
+  const LIMIT_ONE = "postgresql://user:pass@host.example/db?sslmode=require&connection_limit=1";
+
+  beforeEach(() => {
+    vi.stubEnv("DATABASE_URL", LIMIT_ONE);
+    vi.spyOn(logger, "warn").mockImplementation(() => {});
+  });
+
+  it("opens no $transaction and takes no lock, but still re-reads and refreshes", async () => {
+    const stored = makeConnection();
+    findUniqueMock.mockResolvedValue(stored);
+    const refreshed = makeConnection({ accessToken: "access-2" });
+    const refresh = vi.fn().mockResolvedValue(refreshed);
+
+    const result = await refreshConnectionToken(makeConnection(), refresh);
+
+    expect(transactionMock).not.toHaveBeenCalled();
+    expect(executeRawMock).not.toHaveBeenCalled();
+    expect(findUniqueMock).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledWith(stored);
+    expect(result).toBe(refreshed);
+  });
+
+  it("still returns the stored row when the tokens changed, and refuses a gone or flagged row", async () => {
+    const stored = makeConnection({ accessToken: "access-2" });
+    findUniqueMock.mockResolvedValueOnce(stored);
+    const refresh = vi.fn();
+    await expect(refreshConnectionToken(makeConnection(), refresh)).resolves.toBe(stored);
+    expect(refresh).not.toHaveBeenCalled();
+
+    findUniqueMock.mockResolvedValueOnce(null);
+    expect((await caught(refreshConnectionToken(makeConnection(), refresh)))?.code).toBe("CONNECTION_GONE");
+    findUniqueMock.mockResolvedValueOnce(makeConnection({ needsReconnect: true }));
+    expect((await caught(refreshConnectionToken(makeConnection(), refresh)))?.code).toBe(
+      "RECONNECT_REQUIRED",
+    );
+  });
+
+  it("still turns a superseded refresh into the stored row", async () => {
+    const afterSupersede = makeConnection({ accessToken: "access-9" });
+    findUniqueMock.mockResolvedValueOnce(makeConnection()).mockResolvedValueOnce(afterSupersede);
+
+    const result = await refreshConnectionToken(
+      makeConnection(),
+      vi.fn().mockRejectedValue(tokenRefreshSupersededError()),
+    );
+
+    expect(result).toBe(afterSupersede);
+  });
+
+  it("maps a pool timeout before the refresh to BUSY here too", async () => {
+    findUniqueMock.mockRejectedValue(
+      Object.assign(new Error("Timed out fetching a new connection"), { code: "P2024" }),
+    );
+
+    const error = await caught(refreshConnectionToken(makeConnection(), vi.fn()));
+
+    expect(error?.code).toBe(CONNECTION_REFRESH_BUSY_CODE);
+  });
+
+  it("logs the warning ONCE per process, not once per refresh", async () => {
+    findUniqueMock.mockResolvedValue(makeConnection());
+
+    await refreshConnectionToken(makeConnection(), vi.fn().mockResolvedValue(makeConnection()));
+    await refreshConnectionToken(makeConnection(), vi.fn().mockResolvedValue(makeConnection()));
+    await refreshConnectionToken(makeConnection(), vi.fn().mockResolvedValue(makeConnection()));
+
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(logger.warn).mock.calls[0][0]).toContain("connection_limit=1");
+    expect(vi.mocked(logger.warn).mock.calls[0][0]).toContain("connection_limit >= 3");
+  });
+
+  it("does not log it when the lock is in use", async () => {
+    vi.stubEnv("DATABASE_URL", "postgresql://user:pass@host.example/db?connection_limit=5");
+    findUniqueMock.mockResolvedValue(makeConnection());
+
+    await refreshConnectionToken(makeConnection(), vi.fn().mockResolvedValue(makeConnection()));
+
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("concurrent callers for one connection still share a single flight", async () => {
+    findUniqueMock.mockResolvedValue(makeConnection());
+    const refresh = vi.fn().mockResolvedValue(makeConnection({ accessToken: "access-2" }));
+
+    const [a, b] = await Promise.all([
+      refreshConnectionToken(makeConnection(), refresh),
+      refreshConnectionToken(makeConnection(), refresh),
+    ]);
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(a).toBe(b);
   });
 });
