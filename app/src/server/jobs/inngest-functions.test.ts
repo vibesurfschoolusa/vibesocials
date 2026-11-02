@@ -6,6 +6,7 @@ import { buildCaptionWithFooter } from "@/lib/captionFooter";
 import { logger } from "@/lib/logger";
 import { nextPacificMidnight, rateLimitedError } from "@/server/platforms/rateLimited";
 import { instagramClient } from "@/server/platforms/instagramClient";
+import { youtubeClient } from "@/server/platforms/youtubeClient";
 import { PUBLISH_STEP_BUDGET_MS } from "@/server/platforms/publishBudget";
 import type { PublishContext } from "@/server/platforms/types";
 
@@ -2635,6 +2636,12 @@ describe("chunked uploads - continuation steps (jobs)", () => {
         return {
           load: async (kind: string) => saved.get(keyOf(kind)) ?? null,
           save: async (kind: string, snapshot: unknown) => {
+            // The real store refuses a URL in the readable data (uploadState.ts).
+            if ((JSON.stringify((snapshot as { data: unknown }).data) ?? "").includes("://")) {
+              throw Object.assign(new Error("The upload could not be tracked."), {
+                code: "UPLOAD_STATE_PLAINTEXT_URL",
+              });
+            }
             saved.set(keyOf(kind), snapshot);
           },
           clear: async () => {
@@ -3439,6 +3446,206 @@ describe("chunked uploads - continuation steps (jobs)", () => {
         { platform: "instagram", status: "success" },
         { platform: "linkedin", status: "success" },
       ]);
+    });
+  });
+
+  // 2026-11-02 scale audit (jobs B3): the REAL YouTube client, driven by a faked Google
+  // API, uploads a 300 MiB video across steps. Each 16 MiB chunk "takes" 50 s of the
+  // fake clock, so four fit in a 225 s step (a fifth would start with 25 s left).
+  describe("YouTube resumable upload across steps (jobs B3)", () => {
+    const MIB = 1024 * 1024;
+    const TOTAL = 300 * MIB; // 18 chunks of 16 MiB and a last one of 12 MiB
+    const SESSION_SECRET = "E2E-SESSION-SECRET";
+    const CHUNK_MS = 50_000;
+
+    /**
+     * Google's side: a session that remembers how many bytes it holds, a blob that serves
+     * ranges of a 300 MiB video lazily, and the numbering of chunk requests (1-based, across
+     * sessions). `chunkAnswer` replaces the answer to one chunk; `afterChunk` runs after it.
+     */
+    function stubGoogle(
+      hooks: { chunkAnswer?: (n: number) => Response | undefined; afterChunk?: (n: number) => void } = {},
+    ) {
+      let session = 0;
+      let received = 0;
+      const expired = new Set<number>();
+      const calls = { starts: 0, statuses: 0, chunks: 0, blobGets: 0, largestChunk: 0 };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL, init?: RequestInit) => {
+          const url = String(input);
+          const headers = (init?.headers ?? {}) as Record<string, string>;
+          if (url.includes("blob.example.com")) {
+            calls.blobGets += 1;
+            const start = Number(/^bytes=(\d+)-$/.exec(headers.Range ?? "")?.[1] ?? 0);
+            let produced = 0;
+            const body = new ReadableStream<Uint8Array>(
+              {
+                pull(controller) {
+                  const size = Math.min(1_000_000, TOTAL - start - produced);
+                  if (size <= 0) return controller.close();
+                  controller.enqueue(new Uint8Array(size).fill(7));
+                  produced += size;
+                },
+              },
+              { highWaterMark: 0 },
+            );
+            return new Response(body, {
+              status: 206,
+              headers: { "Content-Range": `bytes ${start}-${TOTAL - 1}/${TOTAL}` },
+            });
+          }
+          if (url.includes("uploadType=resumable&part=")) {
+            calls.starts += 1;
+            session += 1;
+            received = 0;
+            return new Response(null, {
+              status: 200,
+              headers: {
+                Location: `https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&upload_id=${SESSION_SECRET}-${session}`,
+              },
+            });
+          }
+          const id = Number(new RegExp(`${SESSION_SECRET}-(\\d+)`).exec(url)?.[1]);
+          if (!id) throw new Error(`Unexpected fetch in test: ${url}`);
+          if (expired.has(id)) return new Response(null, { status: 404 });
+
+          const incomplete = () =>
+            new Response(null, { status: 308, headers: received > 0 ? { Range: `bytes=0-${received - 1}` } : {} });
+          if (init?.body == null) {
+            calls.statuses += 1;
+            return received >= TOTAL
+              ? new Response(JSON.stringify({ id: "yt-300" }), { status: 201 })
+              : incomplete();
+          }
+          calls.chunks += 1;
+          const n = calls.chunks;
+          vi.setSystemTime(Date.now() + CHUNK_MS);
+          calls.largestChunk = Math.max(calls.largestChunk, (init.body as Buffer).length);
+          const forced = hooks.chunkAnswer?.(n);
+          if (forced) return forced;
+          const last = Number(/^bytes \d+-(\d+)\//.exec(headers["Content-Range"] ?? "")?.[1]);
+          received = Math.max(received, last + 1);
+          const answer =
+            received >= TOTAL ? new Response(JSON.stringify({ id: "yt-300" }), { status: 201 }) : incomplete();
+          hooks.afterChunk?.(n);
+          return answer;
+        }),
+      );
+      return { calls, expireSession: () => expired.add(session) };
+    }
+
+    function youtubeRun(step = fakeStep()) {
+      db.postJobFindUnique.mockResolvedValue({ id: "job-1", workspaceId: WORKSPACE.id });
+      db.mediaItemFindUnique.mockResolvedValue({
+        id: "media-1",
+        baseCaption: "c",
+        deletedAt: null,
+        mimeType: "video/mp4",
+        storageLocation: "https://blob.example.com/m.mp4",
+        originalFilename: "m.mp4",
+        sizeBytes: TOTAL,
+        metadata: null,
+      });
+      db.connectionFindMany.mockResolvedValue([{ id: "conn-youtube", platform: "youtube" }]);
+      stubResults(["youtube"]);
+      return handlerOf(publishToAllPlatforms)({ event: publishEvent, step }) as Promise<RunOut>;
+    }
+
+    const orderOf = (step: FakeStep) => step.order.filter((entry) => /publish-to-youtube/.test(entry));
+
+    beforeEach(() => {
+      vi.stubEnv("LARGE_UPLOAD_PLATFORMS", "youtube");
+      getPlatformClientMock.mockImplementation(() => youtubeClient);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.unstubAllEnvs();
+    });
+
+    it("uploads 300 MiB in five steps for ONE slot: the session is started once, every later step asks it first, the last one posts", async () => {
+      const saved = memoryUploadStates();
+      const google = stubGoogle();
+      const step = fakeStep();
+
+      const out = await youtubeRun(step);
+
+      expect(orderOf(step)).toEqual([
+        "run:publish-to-youtube",
+        "run:publish-to-youtube-c1",
+        "run:publish-to-youtube-c2",
+        "run:publish-to-youtube-c3",
+        "run:publish-to-youtube-c4",
+      ]);
+      expect(step.sleepUntil).not.toHaveBeenCalled();
+      // 19 chunks (18 x 16 MiB + 12 MiB), none over 16 MiB; one session; a status query at the start of each later step.
+      expect(google.calls).toMatchObject({ starts: 1, chunks: 19, statuses: 4, blobGets: 5 });
+      expect(google.calls.largestChunk).toBe(16 * MIB);
+      expect(consumeSlotMock).toHaveBeenCalledTimes(1);
+      expect(claimWrites()).toHaveLength(5);
+      expect(releaseContinuationSpy).toHaveBeenCalledTimes(4);
+      expect(resultWrites().at(-1)).toEqual({
+        status: "success",
+        externalPostId: "yt-300",
+        ...CLEARS_STATE,
+        ...HEARTBEAT,
+      });
+      expect(failedWrites()).toEqual([]);
+      expect(out.results).toEqual([{ platform: "youtube", status: "success" }]);
+
+      // Only the sealed secret holds the session URI: not the readable data, a step output or a log line.
+      for (const snapshot of saved.values()) {
+        expect(JSON.stringify((snapshot as { data: unknown }).data)).not.toContain("://");
+      }
+      expect(JSON.stringify(step.outputs)).not.toContain(SESSION_SECRET);
+      const logged = JSON.stringify(
+        [console.log, console.info, console.warn, console.error].map((fn) => vi.mocked(fn).mock.calls),
+      );
+      expect(logged).not.toContain(SESSION_SECRET);
+    });
+
+    it("an expired session spends a second slot in the step that starts the new session, not in the one that finds it gone", async () => {
+      memoryUploadStates();
+      const google = stubGoogle({ afterChunk: (n) => (n === 4 ? google.expireSession() : undefined) });
+      const step = fakeStep();
+
+      const out = await youtubeRun(step);
+
+      // Step 0 ends with the session expiring. -c1 learns that (404), drops the state and
+      // continues without starting anything; -c2 starts the new session and spends its slot.
+      expect(orderOf(step).slice(0, 4)).toEqual([
+        "run:publish-to-youtube",
+        "run:publish-to-youtube-c1",
+        "run:publish-to-youtube-c2",
+        "run:publish-to-youtube-c3",
+      ]);
+      expect(google.calls.starts).toBe(2);
+      expect(consumeSlotMock).toHaveBeenCalledTimes(2);
+      expect(out.results).toEqual([{ platform: "youtube", status: "success" }]);
+      expect(resultWrites().at(-1)).toMatchObject({ status: "success", externalPostId: "yt-300" });
+    });
+
+    it("a rate limit on a chunk waits on the -rl ids and resumes the SAME session: no second slot, no second start", async () => {
+      memoryUploadStates();
+      const google = stubGoogle({
+        chunkAnswer: (n) => (n === 6 ? new Response("", { status: 429, headers: { "Retry-After": "120" } }) : undefined),
+      });
+      const step = fakeStep();
+
+      const out = await youtubeRun(step);
+
+      expect(orderOf(step).slice(0, 4)).toEqual([
+        "run:publish-to-youtube",
+        "run:publish-to-youtube-c1",
+        "sleepUntil:publish-to-youtube-wait-rl1",
+        "run:publish-to-youtube-rl1",
+      ]);
+      expect(step.outputs["publish-to-youtube-c1"]).toMatchObject({ platform: "youtube", status: "deferred" });
+      expect(google.calls.starts).toBe(1);
+      expect(consumeSlotMock).toHaveBeenCalledTimes(1);
+      expect(out.results).toEqual([{ platform: "youtube", status: "success" }]);
+      expect(resultWrites().at(-1)).toMatchObject({ status: "success", externalPostId: "yt-300" });
     });
   });
 });

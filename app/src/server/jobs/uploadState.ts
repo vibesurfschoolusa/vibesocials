@@ -55,10 +55,10 @@ export const UPLOAD_STATE_TOO_LARGE_CODE = "UPLOAD_STATE_TOO_LARGE";
 export const UPLOAD_STATE_PLAINTEXT_URL_CODE = "UPLOAD_STATE_PLAINTEXT_URL";
 
 /**
- * The `kind` of a YouTube resumable-upload session (Task 10's client saves under
- * it). `publishToPlatform` looks for state of this kind to tell a session that is
- * already running from one that still has to start, because only starting one
- * spends a slot of the daily upload counter (youtubeQuota.ts).
+ * The `kind` of a YouTube resumable-upload session (youtubeClient.ts saves and
+ * loads under it). `publishToPlatform` looks for state of this kind to tell a
+ * session that is already running from one that still has to start, because only
+ * starting one spends a slot of the daily upload counter (youtubeQuota.ts).
  */
 export const YOUTUBE_UPLOAD_STATE_KIND = "youtube_resumable";
 

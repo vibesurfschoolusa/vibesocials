@@ -2,12 +2,22 @@ import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
+import { YOUTUBE_UPLOAD_STATE_KIND, type UploadStateStore } from "@/server/jobs/uploadState";
 
+import { LARGE_UPLOAD_CHUNK_WINDOW_MS, LARGE_VIDEO_THRESHOLD_BYTES } from "./largeUpload";
 import { MIN_REQUEST_WINDOW_MS, PUBLISH_BUDGET_EXCEEDED_CODE, PUBLISH_STEP_BUDGET_MS } from "./publishBudget";
 import { nextPacificMidnight, PACIFIC_RESET_GRACE_MS } from "./rateLimited";
 import { withTransientRetries } from "./transientRetry";
 import type { PublishContext } from "./types";
-import { computeYouTubeTitle, youtubeClient } from "./youtubeClient";
+import {
+  buildYouTubeVideoResource,
+  computeYouTubeTitle,
+  YOUTUBE_FINAL_CHUNK_MIN_WINDOW_MS,
+  YOUTUBE_MAX_CHUNK_RECOVERIES_PER_STEP,
+  YOUTUBE_RESUMABLE_CHUNK_BYTES,
+  YOUTUBE_STATUS_TIMEOUT_MS,
+  youtubeClient,
+} from "./youtubeClient";
 
 // refreshGoogleToken persists through `await import("@/lib/db")` at call time,
 // so it receives this mock. No real database is touched.
@@ -578,5 +588,1189 @@ describe("youtubeClient — serialized token refresh", () => {
     const timeouts = setTimeoutSpy.mock.calls.map((c) => c[1] as number);
     expect(timeouts).toHaveLength(1);
     expect(timeouts[0]).toBeLessThanOrEqual(8_000);
+  });
+});
+
+// 2026-11-02 scale audit (jobs B3): a video above 50 MiB on an enabled platform
+// uploads through YouTube's resumable protocol, 16 MiB at a time, across steps.
+// Every request is faked; the video is a lazily generated stream (never 90 MiB at
+// once), and the upload state is an in-memory store with the real store's rules.
+describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
+  const MIB = 1024 * 1024;
+  const CHUNK = YOUTUBE_RESUMABLE_CHUNK_BYTES;
+  /** 90 MiB: five 16 MiB chunks, then a 10 MiB last one. */
+  const TOTAL = LARGE_VIDEO_THRESHOLD_BYTES + 40 * MIB;
+  const LAST_START = 5 * CHUNK;
+  const SESSION_URI =
+    "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&upload_id=SESSION-SECRET-1";
+  const START_FRAGMENT = "uploadType=resumable&part=";
+  const SESSION_FRAGMENT = "upload_id=SESSION-SECRET-1";
+  const NOW = Date.parse("2026-11-02T10:00:00.000Z");
+  const STEP = PUBLISH_STEP_BUDGET_MS;
+
+  type Req = { url: string; init: RequestInit };
+  type Reply = (req: Req) => Response | Promise<Response>;
+  type CodedError = Error & { code?: string; status?: number; kind?: string };
+
+  /** The byte the fake blob holds at absolute position `p`. */
+  const byteAt = (p: number) => p % 251;
+
+  /** Bytes `start..total-1` of the video, produced only when the reader asks (no read-ahead). */
+  function lazyBlobBody(start: number, total: number) {
+    let produced = 0;
+    return new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          const size = Math.min(1_000_000, total - start - produced);
+          if (size <= 0) {
+            controller.close();
+            return;
+          }
+          const out = new Uint8Array(size);
+          for (let i = 0; i < size; i += 1) out[i] = byteAt(start + produced + i);
+          controller.enqueue(out);
+          produced += size;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+  }
+
+  const reply =
+    (status: number, body: string | null = null, headers: Record<string, string> = {}): Reply =>
+    () =>
+      new Response(body, { status, headers });
+  const createdBody = (id: string) => JSON.stringify({ id, snippet: { title: "t" } });
+  const created = (id = "v1"): Reply => reply(201, createdBody(id));
+  const incomplete = (lastByte?: number): Reply =>
+    reply(308, null, lastByte === undefined ? {} : { Range: `bytes=0-${lastByte}` });
+  const googleError = (status: number, reason: string): Reply =>
+    reply(status, JSON.stringify({ error: { code: status, message: "m", errors: [{ domain: "youtube.quota", reason }] } }), {
+      "Content-Type": "application/json",
+    });
+  const failWith =
+    (error: unknown): Reply =>
+    () =>
+      Promise.reject(error);
+  const timeout = () => failWith(Object.assign(new Error("Request timed out after 120000ms"), { code: "FETCH_TIMEOUT" }));
+  const connectionReset = () => failWith(new TypeError("fetch failed", { cause: { code: "ECONNRESET" } }));
+  const startOk =
+    (uri = SESSION_URI): Reply =>
+    () =>
+      new Response(null, { status: 200, headers: { Location: uri } });
+
+  const headersOf = (init?: RequestInit) => (init?.headers ?? {}) as Record<string, string>;
+  const contentRange = (init?: RequestInit) => headersOf(init)["Content-Range"];
+
+  /** Accepts a chunk the way YouTube does: 308 with the new Range, or 201 for the last one. */
+  const acceptChunk: Reply = ({ init }) => {
+    const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange(init) ?? "");
+    if (!match) throw new Error(`Not a chunk request: ${contentRange(init)}`);
+    return Number(match[2]) + 1 >= Number(match[3])
+      ? new Response(createdBody("v1"), { status: 201 })
+      : new Response(null, { status: 308, headers: { Range: `bytes=0-${match[2]}` } });
+  };
+  const accepts = (count: number): Reply[] => Array.from({ length: count }, () => acceptChunk);
+
+  /** The clock moves while a request is in flight. */
+  const advance = (ms: number) => vi.setSystemTime(Date.now() + ms);
+  const after =
+    (ms: number, next: Reply): Reply =>
+    (req) => {
+      advance(ms);
+      return next(req);
+    };
+
+  /**
+   * Fakes the blob, the session start and the session URI. `session` is the script of
+   * answers to PUTs on the session URI, in order (status queries and chunks alike).
+   */
+  function stubUpload(opts: { total?: number; start?: Reply[]; session?: Reply[]; blobStatus?: number } = {}) {
+    const total = opts.total ?? TOTAL;
+    const starts = [...(opts.start ?? [startOk()])];
+    const session = [...(opts.session ?? [])];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.includes("blob.example.com")) {
+        const range = /^bytes=(\d+)-$/.exec(headersOf(init)["Range"] ?? "");
+        const start = range ? Number(range[1]) : 0;
+        if (opts.blobStatus !== undefined) return new Response(null, { status: opts.blobStatus });
+        return range
+          ? new Response(lazyBlobBody(start, total), {
+              status: 206,
+              headers: { "Content-Range": `bytes ${start}-${total - 1}/${total}` },
+            })
+          : new Response(lazyBlobBody(0, total), { status: 200, headers: { "Content-Length": String(total) } });
+      }
+      const next = url.includes(START_FRAGMENT)
+        ? starts.shift()
+        : url.includes(SESSION_FRAGMENT)
+          ? session.shift()
+          : undefined;
+      if (!next) throw new Error(`Unexpected fetch in test: ${init?.method ?? "GET"} ${url}`);
+      return next({ url, init: init ?? {} });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const callsTo = (fragment: string) => fetchMock.mock.calls.filter((c) => String(c[0]).includes(fragment));
+    const sessionCalls = () => callsTo(SESSION_FRAGMENT);
+    return {
+      fetchMock,
+      blobGets: () => callsTo("blob.example.com"),
+      starts: () => callsTo(START_FRAGMENT),
+      /** PUTs with a body: the chunks. */
+      puts: () => sessionCalls().filter((c) => (c[1] as RequestInit).body != null),
+      /** PUTs without a body: the status queries. */
+      statusQueries: () => sessionCalls().filter((c) => (c[1] as RequestInit).body == null),
+      sessionCalls,
+    };
+  }
+
+  /** An in-memory store with the real store's rules: a kind, a readable `data` that holds no URL, a secret. */
+  function fakeStore(initial?: { data: unknown; secret?: unknown }) {
+    let current: { kind: string; data: unknown; secret?: unknown } | null = initial
+      ? { kind: YOUTUBE_UPLOAD_STATE_KIND, ...initial }
+      : null;
+    const mocks = {
+      load: vi.fn(async (kind: string) =>
+        current && current.kind === kind
+          ? {
+              data: structuredClone(current.data),
+              ...(current.secret !== undefined ? { secret: structuredClone(current.secret) } : {}),
+            }
+          : null,
+      ),
+      save: vi.fn(async (kind: string, snapshot: { data: unknown; secret?: unknown }) => {
+        if ((JSON.stringify(snapshot.data) ?? "").includes("://")) {
+          throw Object.assign(new Error("The upload could not be tracked."), { code: "UPLOAD_STATE_PLAINTEXT_URL" });
+        }
+        current = { kind, ...structuredClone(snapshot) };
+      }),
+      clear: vi.fn(async () => {
+        current = null;
+      }),
+    };
+    return { store: mocks as unknown as UploadStateStore, mocks, saved: () => current };
+  }
+
+  /** A saved session that holds `confirmedBytes` bytes. */
+  const sessionAt = (confirmedBytes: number, total = TOTAL) => ({
+    data: { totalBytes: total, confirmedBytes },
+    secret: { sessionUri: SESSION_URI },
+  });
+
+  function bigCtx(
+    store: UploadStateStore | undefined,
+    overrides: Partial<PublishContext> = {},
+    sizeBytes = TOTAL,
+  ): PublishContext {
+    const base = ytCtx({ uploadState: store, ...overrides });
+    return { ...base, mediaItem: { ...base.mediaItem, sizeBytes } as MediaItem };
+  }
+
+  const run = (ctx: PublishContext) => youtubeClient.publishVideo(ctx);
+  const failure = (ctx: PublishContext) =>
+    run(ctx).then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+
+  /** The sampled bytes of a chunk PUT's body are the video's bytes from `first`. */
+  function expectBodyFrom(call: Parameters<typeof fetch> | undefined, first: number) {
+    const body = (call?.[1] as RequestInit).body as Buffer;
+    for (const at of [0, 1, Math.floor(body.length / 2), body.length - 1]) {
+      expect(body[at]).toBe(byteAt(first + at));
+    }
+  }
+
+  /** Every console call of the test (the logger writes through console), as one string. */
+  const everythingLogged = () =>
+    JSON.stringify(
+      (["log", "info", "warn", "error", "debug"] as const).map((level) => vi.mocked(console[level]).mock.calls),
+    );
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    vi.stubEnv("LARGE_UPLOAD_PLATFORMS", "youtube");
+    for (const level of ["log", "info", "warn", "error", "debug"] as const) {
+      vi.spyOn(console, level).mockImplementation(() => {});
+    }
+    refreshConnectionTokenMock.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  describe("starting a session (no saved state)", () => {
+    it("POSTs ?uploadType=resumable with X-Upload-Content-Length / -Type and the video resource as the body", async () => {
+      const { store } = fakeStore();
+      const upload = stubUpload({ session: accepts(6) });
+      const ctx = bigCtx(store, { caption: "Holiday #travel #sun" });
+
+      await run(ctx);
+
+      const [url, init] = upload.starts()[0] as [string, RequestInit];
+      expect(upload.starts()).toHaveLength(1);
+      expect(url).toBe("https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status");
+      expect(init.method).toBe("POST");
+      expect(headersOf(init)).toMatchObject({
+        Authorization: "Bearer access-token",
+        "Content-Type": "application/json; charset=UTF-8",
+        "X-Upload-Content-Length": String(TOTAL),
+        "X-Upload-Content-Type": "video/mp4",
+      });
+      expect(JSON.parse(init.body as string)).toEqual(buildYouTubeVideoResource(ctx).metadata);
+      expect(JSON.parse(init.body as string).snippet).toMatchObject({
+        tags: ["travel", "sun"],
+        description: "Holiday #travel #sun",
+      });
+    });
+
+    it("sends the same resource and `part` as the multipart upload does for the same post", async () => {
+      // A location with coordinates makes `part` include recordingDetails, so both are exercised.
+      const post = (uploadState: UploadStateStore | undefined, sizeBytes: number) => {
+        const base = bigCtx(uploadState, { caption: "Trip #a" }, sizeBytes);
+        const metadata = { location: { description: "Lisbon (38.72, -9.14)" } };
+        return { ...base, mediaItem: { ...base.mediaItem, metadata } as MediaItem };
+      };
+      // Multipart: a small video, no store.
+      const small = stubYouTube(() => new Response(JSON.stringify({ id: "vid-1" }), { status: 200 }));
+      await run(post(undefined, 4));
+      const [multipartUrl, multipartInit] = insertCalls(small)[0] as [string, RequestInit];
+      const multipartText = Buffer.from(multipartInit.body as Buffer).toString("utf8");
+      const multipartResource = JSON.parse(
+        /charset=UTF-8\r\n\r\n([\s\S]*?)\r\n--/.exec(multipartText)![1],
+      ) as Record<string, unknown>;
+      vi.unstubAllGlobals();
+
+      // Resumable: a large video with a store.
+      const { store } = fakeStore();
+      const upload = stubUpload({ session: accepts(6) });
+      await run(post(store, TOTAL));
+      const [startUrl, startInit] = upload.starts()[0] as [string, RequestInit];
+
+      expect(multipartResource.recordingDetails).toBeDefined();
+      expect(JSON.parse(startInit.body as string)).toEqual(multipartResource);
+      expect(new URL(startUrl).searchParams.get("part")).toBe("snippet,status,recordingDetails");
+      expect(new URL(startUrl).searchParams.get("part")).toBe(new URL(multipartUrl).searchParams.get("part"));
+    });
+
+    it("saves the session at once - the URI sealed in `secret`, offsets in `data` - before the first chunk is sent", async () => {
+      const { store, mocks } = fakeStore();
+      const upload = stubUpload({ session: accepts(6) });
+
+      await run(bigCtx(store));
+
+      expect(mocks.load).toHaveBeenCalledWith("youtube_resumable");
+      expect(mocks.save.mock.calls[0]).toEqual([
+        "youtube_resumable",
+        { data: { totalBytes: TOTAL, confirmedBytes: 0 }, secret: { sessionUri: SESSION_URI } },
+      ]);
+      expect(YOUTUBE_UPLOAD_STATE_KIND).toBe("youtube_resumable");
+      const saveOrder = mocks.save.mock.invocationCallOrder[0];
+      const firstPut = upload.fetchMock.mock.calls.indexOf(upload.puts()[0]);
+      const start = upload.fetchMock.mock.calls.indexOf(upload.starts()[0]);
+      expect(saveOrder).toBeLessThan(upload.fetchMock.mock.invocationCallOrder[firstPut]);
+      expect(saveOrder).toBeGreaterThan(upload.fetchMock.mock.invocationCallOrder[start]);
+    });
+
+    it("an answer without a Location is YOUTUBE_UPLOAD_FAILED, and nothing is saved or sent", async () => {
+      const { store, mocks } = fakeStore();
+      const upload = stubUpload({ start: [reply(200)] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error?.code).toBe("YOUTUBE_UPLOAD_FAILED");
+      expect(mocks.save).not.toHaveBeenCalled();
+      expect(upload.sessionCalls()).toHaveLength(0);
+    });
+
+    it("a Location that is not an https URL is YOUTUBE_UPLOAD_FAILED (the token is never sent over plain http)", async () => {
+      const { store, mocks } = fakeStore();
+      const upload = stubUpload({ start: [startOk("http://www.googleapis.com/upload?upload_id=x")] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error?.code).toBe("YOUTUBE_UPLOAD_FAILED");
+      expect(mocks.save).not.toHaveBeenCalled();
+      expect(upload.sessionCalls()).toHaveLength(0);
+    });
+
+    it("a quota answer is classified first: RATE_LIMITED youtube_quota until the next Pacific midnight", async () => {
+      const { store, mocks } = fakeStore();
+      stubUpload({ start: [googleError(403, "quotaExceeded")] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error).toMatchObject({ code: "RATE_LIMITED", kind: "youtube_quota" });
+      expect((error as unknown as { retryAt: number }).retryAt).toBe(
+        nextPacificMidnight(new Date(NOW)).getTime() + PACIFIC_RESET_GRACE_MS,
+      );
+      expect(mocks.save).not.toHaveBeenCalled();
+    });
+
+    it("a 5xx on the start is an ordinary failure (retryable), never PUBLISH_UNCONFIRMED: no video exists yet", async () => {
+      const { store } = fakeStore();
+      stubUpload({ start: [reply(503, "unavailable")] });
+
+      expect(await failure(bigCtx(store))).toMatchObject({ code: "YOUTUBE_UPLOAD_FAILED", status: 503 });
+    });
+  });
+
+  describe("chunks", () => {
+    it("uploads 90 MiB as five 16 MiB chunks and a 10 MiB last one, in one step with the whole budget", async () => {
+      const { store } = fakeStore();
+      const upload = stubUpload({ session: accepts(6) });
+
+      const result = await run(bigCtx(store, { deadline: NOW + STEP }));
+
+      expect(result).toEqual({ externalPostId: "v1" });
+      const puts = upload.puts();
+      expect(puts).toHaveLength(6);
+      expect(puts.map((c) => contentRange(c[1] as RequestInit))).toEqual([
+        `bytes 0-${CHUNK - 1}/${TOTAL}`,
+        `bytes ${CHUNK}-${2 * CHUNK - 1}/${TOTAL}`,
+        `bytes ${2 * CHUNK}-${3 * CHUNK - 1}/${TOTAL}`,
+        `bytes ${3 * CHUNK}-${4 * CHUNK - 1}/${TOTAL}`,
+        `bytes ${4 * CHUNK}-${5 * CHUNK - 1}/${TOTAL}`,
+        `bytes ${LAST_START}-${TOTAL - 1}/${TOTAL}`,
+      ]);
+      const lengths = puts.map((c) => ((c[1] as RequestInit).body as Buffer).length);
+      expect(lengths).toEqual([CHUNK, CHUNK, CHUNK, CHUNK, CHUNK, TOTAL - LAST_START]);
+      // Every chunk but the last is a multiple of 256 KiB, and none is over 16 MiB.
+      expect(CHUNK).toBe(16_777_216);
+      for (const length of lengths.slice(0, -1)) expect(length % 262_144).toBe(0);
+      expect(Math.max(...lengths)).toBeLessThanOrEqual(16 * MIB);
+      puts.forEach((call, index) => {
+        expect(call[0]).toBe(SESSION_URI);
+        expect((call[1] as RequestInit).method).toBe("PUT");
+        expect(headersOf(call[1] as RequestInit)).toMatchObject({
+          Authorization: "Bearer access-token",
+          "Content-Length": String(lengths[index]),
+        });
+        expectBodyFrom(call, index * CHUNK);
+      });
+    });
+
+    it("reads the blob with one ranged GET for the whole step, and asks the session nothing on a fresh start", async () => {
+      const { store } = fakeStore();
+      const upload = stubUpload({ session: accepts(6) });
+
+      await run(bigCtx(store));
+
+      expect(upload.blobGets()).toHaveLength(1);
+      expect(headersOf(upload.blobGets()[0][1] as RequestInit)["Range"]).toBe("bytes=0-");
+      expect(upload.statusQueries()).toHaveLength(0);
+      expect(upload.starts()).toHaveLength(1);
+    });
+
+    it("keeps nothing but offsets in the readable state while it uploads: no URL in `data`", async () => {
+      const { store, mocks } = fakeStore();
+      stubUpload({ session: [acceptChunk, reply(429)] });
+
+      await failure(bigCtx(store));
+
+      expect(mocks.save).toHaveBeenCalledTimes(2);
+      for (const [, snapshot] of mocks.save.mock.calls) {
+        expect(JSON.stringify((snapshot as { data: unknown }).data)).not.toContain("://");
+      }
+    });
+
+    it("a partial 308 (Range 1 MiB short of what was sent) resends the remainder from the same buffer", async () => {
+      const { store } = fakeStore();
+      const upload = stubUpload({ session: [incomplete(CHUNK - MIB - 1), ...accepts(6)] });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ externalPostId: "v1" });
+      const puts = upload.puts();
+      expect(puts).toHaveLength(7);
+      expect(contentRange(puts[0][1] as RequestInit)).toBe(`bytes 0-${CHUNK - 1}/${TOTAL}`);
+      expect(contentRange(puts[1][1] as RequestInit)).toBe(`bytes ${CHUNK - MIB}-${CHUNK - 1}/${TOTAL}`);
+      expect(((puts[1][1] as RequestInit).body as Buffer).length).toBe(MIB);
+      expectBodyFrom(puts[1], CHUNK - MIB);
+      // The next chunk continues where the resent one ends - and the blob was read once.
+      expect(contentRange(puts[2][1] as RequestInit)).toBe(`bytes ${CHUNK}-${2 * CHUNK - 1}/${TOTAL}`);
+      expect(upload.blobGets()).toHaveLength(1);
+    });
+
+    it("a 308 with no Range header means the session holds nothing: the chunk is resent whole", async () => {
+      const { store } = fakeStore();
+      const upload = stubUpload({ session: [incomplete(), ...accepts(6)] });
+
+      await run(bigCtx(store));
+
+      const puts = upload.puts();
+      expect(contentRange(puts[0][1] as RequestInit)).toBe(`bytes 0-${CHUNK - 1}/${TOTAL}`);
+      expect(contentRange(puts[1][1] as RequestInit)).toBe(`bytes 0-${CHUNK - 1}/${TOTAL}`);
+      expectBodyFrom(puts[1], 0);
+    });
+
+    it("accepts the Range written without the `bytes=` prefix", async () => {
+      const { store } = fakeStore();
+      const upload = stubUpload({ session: [reply(308, null, { Range: `0-${CHUNK - 1}` }), ...accepts(5)] });
+
+      await run(bigCtx(store));
+
+      expect(contentRange(upload.puts()[1][1] as RequestInit)).toBe(`bytes ${CHUNK}-${2 * CHUNK - 1}/${TOTAL}`);
+    });
+
+    it("a 308 whose Range cannot be read is YOUTUBE_UPLOAD_FAILED (the chunk was not committed)", async () => {
+      const { store } = fakeStore();
+      stubUpload({ session: [reply(308, null, { Range: "garbage" })] });
+
+      expect((await failure(bigCtx(store)))?.code).toBe("YOUTUBE_UPLOAD_FAILED");
+    });
+
+    it("a chunk that is not the last but is answered 201 means the video exists: it is returned, not continued", async () => {
+      const { store } = fakeStore();
+      stubUpload({ session: [created("early")] });
+
+      expect(await run(bigCtx(store))).toEqual({ externalPostId: "early" });
+    });
+
+    it("a rejected chunk (400) is YOUTUBE_UPLOAD_FAILED with its status, not PUBLISH_UNCONFIRMED", async () => {
+      const { store } = fakeStore();
+      stubUpload({ session: [reply(400, "{}")] });
+
+      expect(await failure(bigCtx(store))).toMatchObject({ code: "YOUTUBE_UPLOAD_FAILED", status: 400 });
+    });
+
+    it("a chunk request that never connected is rethrown unchanged (provably unsent)", async () => {
+      const { store } = fakeStore();
+      const neverConnected = new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } });
+      stubUpload({ session: [failWith(neverConnected)] });
+
+      expect(await failure(bigCtx(store))).toBe(neverConnected);
+    });
+  });
+
+  describe("across steps", () => {
+    it("fits two chunks in the first step, saves and continues; the next step asks the session and resumes without a second start", async () => {
+      const { store, mocks, saved } = fakeStore();
+      // Each chunk takes 90 s of the 225 s step: the third would start with 45 s left (< 60 s).
+      const first = stubUpload({ session: [after(90_000, acceptChunk), after(90_000, acceptChunk)] });
+
+      const stepOne = await run(bigCtx(store, { deadline: NOW + STEP }));
+
+      expect(stepOne).toEqual({ continuation: { resumeAt: null } });
+      expect(first.puts()).toHaveLength(2);
+      const progress = { totalBytes: TOTAL, confirmedBytes: 2 * CHUNK };
+      expect(mocks.save.mock.calls.at(-1)?.[1]).toEqual({ data: progress, secret: { sessionUri: SESSION_URI } });
+      expect(saved()).toEqual({ kind: "youtube_resumable", data: progress, secret: { sessionUri: SESSION_URI } });
+      vi.unstubAllGlobals();
+
+      // The next step: a fresh budget, the same store. Its number does not matter.
+      vi.setSystemTime(NOW + 300_000);
+      const second = stubUpload({ session: [incomplete(2 * CHUNK - 1), ...accepts(4)] });
+      const stepTwo = await run(bigCtx(store, { deadline: Date.now() + STEP, continuation: 1 }));
+
+      expect(stepTwo).toEqual({ externalPostId: "v1" });
+      expect(second.starts()).toHaveLength(0);
+      // The first request of the step is the status query: an empty PUT.
+      const query = second.sessionCalls()[0][1] as RequestInit;
+      expect(query.method).toBe("PUT");
+      expect(query.body).toBeUndefined();
+      expect(headersOf(query)).toMatchObject({
+        Authorization: "Bearer access-token",
+        "Content-Range": `bytes */${TOTAL}`,
+      });
+      expect(second.blobGets()).toHaveLength(1);
+      expect(headersOf(second.blobGets()[0][1] as RequestInit)["Range"]).toBe(`bytes=${2 * CHUNK}-`);
+      const puts = second.puts();
+      expect(contentRange(puts[0][1] as RequestInit)).toBe(`bytes ${2 * CHUNK}-${3 * CHUNK - 1}/${TOTAL}`);
+      expectBodyFrom(puts[0], 2 * CHUNK);
+      expect(contentRange(puts.at(-1)![1] as RequestInit)).toBe(`bytes ${LAST_START}-${TOTAL - 1}/${TOTAL}`);
+    });
+
+    it("resumes from what the SESSION holds, not from the saved offset", async () => {
+      // The state says 16 MiB, the session says 32 MiB.
+      const { store } = fakeStore(sessionAt(CHUNK));
+      const upload = stubUpload({ session: [incomplete(2 * CHUNK - 1), ...accepts(4)] });
+
+      await run(bigCtx(store));
+
+      expect(contentRange(upload.puts()[0][1] as RequestInit)).toBe(`bytes ${2 * CHUNK}-${3 * CHUNK - 1}/${TOTAL}`);
+    });
+
+    it("a status query with no Range header means nothing was received: the upload restarts at byte 0 of the SAME session", async () => {
+      const { store } = fakeStore(sessionAt(3 * CHUNK));
+      const upload = stubUpload({ session: [incomplete(), ...accepts(6)] });
+
+      await run(bigCtx(store));
+
+      expect(headersOf(upload.blobGets()[0][1] as RequestInit)["Range"]).toBe("bytes=0-");
+      expect(upload.starts()).toHaveLength(0);
+      expect(contentRange(upload.puts()[0][1] as RequestInit)).toBe(`bytes 0-${CHUNK - 1}/${TOTAL}`);
+    });
+
+    it("decides start or resume from the saved state alone, never from ctx.continuation", async () => {
+      // A step number of 3 with nothing saved starts a session...
+      const empty = fakeStore();
+      const started = stubUpload({ session: accepts(6) });
+      await run(bigCtx(empty.store, { continuation: 3 }));
+      expect(started.starts()).toHaveLength(1);
+      vi.unstubAllGlobals();
+
+      // ...and step 0 with a session saved resumes it (the retry of a step whose output was lost).
+      const saved = fakeStore(sessionAt(CHUNK));
+      const resumed = stubUpload({ session: [incomplete(CHUNK - 1), ...accepts(5)] });
+      await run(bigCtx(saved.store, { continuation: 0 }));
+      expect(resumed.starts()).toHaveLength(0);
+      expect(resumed.statusQueries()).toHaveLength(1);
+    });
+
+    it("finishes without a single chunk when the status query says the upload is already complete", async () => {
+      const { store } = fakeStore(sessionAt(5 * CHUNK));
+      const upload = stubUpload({ session: [created("done-already")] });
+
+      expect(await run(bigCtx(store))).toEqual({ externalPostId: "done-already" });
+      expect(upload.puts()).toHaveLength(0);
+      expect(upload.blobGets()).toHaveLength(0);
+    });
+
+    it("a complete status without a video id is PUBLISH_UNCONFIRMED", async () => {
+      const { store } = fakeStore(sessionAt(5 * CHUNK));
+      stubUpload({ session: [reply(200, "{}")] });
+
+      expect((await failure(bigCtx(store)))?.code).toBe("PUBLISH_UNCONFIRMED");
+    });
+
+    it("a status Range that covers the whole video (yet incomplete) is PUBLISH_UNCONFIRMED: the video may be about to appear", async () => {
+      const { store } = fakeStore(sessionAt(5 * CHUNK));
+      const upload = stubUpload({ session: [incomplete(TOTAL - 1)] });
+
+      expect((await failure(bigCtx(store)))?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(upload.puts()).toHaveLength(0);
+    });
+
+    it("a failing status query is YOUTUBE_UPLOAD_FAILED with its status (nothing was committed)", async () => {
+      const { store } = fakeStore(sessionAt(CHUNK));
+      stubUpload({ session: [reply(500, "oops")] });
+
+      expect(await failure(bigCtx(store))).toMatchObject({ code: "YOUTUBE_UPLOAD_FAILED", status: 500 });
+    });
+
+    it("a rate-limited status query is RATE_LIMITED, and the saved session is left as it was", async () => {
+      const { store, mocks } = fakeStore(sessionAt(CHUNK));
+      stubUpload({ session: [googleError(403, "userRateLimitExceeded")] });
+
+      expect(await failure(bigCtx(store))).toMatchObject({ code: "RATE_LIMITED", kind: "rate_limited" });
+      expect(mocks.clear).not.toHaveBeenCalled();
+    });
+
+    it("keeps resuming a saved session after the platform is switched off, whatever the size (never strands an upload)", async () => {
+      vi.stubEnv("LARGE_UPLOAD_PLATFORMS", "none");
+      const { store } = fakeStore(sessionAt(0, 4 * MIB));
+      const upload = stubUpload({ total: 4 * MIB, session: [incomplete(), created("v1")] });
+
+      const result = await run(bigCtx(store, {}, 4 * MIB));
+
+      expect(result).toEqual({ externalPostId: "v1" });
+      expect(upload.statusQueries()).toHaveLength(1);
+      expect(upload.starts()).toHaveLength(0);
+    });
+  });
+
+  describe("an expired session (status 404)", () => {
+    it("clears the state and returns a continuation: the NEXT step starts the new session (and spends its slot)", async () => {
+      const { store, mocks, saved } = fakeStore(sessionAt(2 * CHUNK));
+      const upload = stubUpload({ session: [reply(404)] });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ continuation: { resumeAt: null } });
+      expect(mocks.clear).toHaveBeenCalledTimes(1);
+      expect(saved()).toBeNull();
+      // This step started nothing: no new session, no chunk, no blob read.
+      expect(upload.starts()).toHaveLength(0);
+      expect(upload.puts()).toHaveLength(0);
+      expect(upload.blobGets()).toHaveLength(0);
+    });
+
+    it("the next step, finding no state, starts a new session from byte 0", async () => {
+      const { store } = fakeStore(sessionAt(2 * CHUNK));
+      stubUpload({ session: [reply(404)] });
+      await run(bigCtx(store));
+      vi.unstubAllGlobals();
+
+      const next = stubUpload({ session: accepts(6) });
+      const result = await run(bigCtx(store, { continuation: 1 }));
+
+      expect(result).toEqual({ externalPostId: "v1" });
+      expect(next.starts()).toHaveLength(1);
+      expect(next.statusQueries()).toHaveLength(0);
+      expect(contentRange(next.puts()[0][1] as RequestInit)).toBe(`bytes 0-${CHUNK - 1}/${TOTAL}`);
+    });
+
+    it("drops saved state it cannot use (another size, no session URI, an http URI, no size) the same way", async () => {
+      for (const unusable of [
+        { data: { totalBytes: TOTAL + 1, confirmedBytes: 0 }, secret: { sessionUri: SESSION_URI } },
+        { data: { totalBytes: TOTAL, confirmedBytes: 0 } },
+        { data: { totalBytes: TOTAL, confirmedBytes: 0 }, secret: { sessionUri: "http://insecure.example/x" } },
+        { data: {}, secret: { sessionUri: SESSION_URI } },
+      ]) {
+        const { store, mocks } = fakeStore(unusable);
+        const upload = stubUpload();
+
+        const result = await run(bigCtx(store));
+
+        expect(result).toEqual({ continuation: { resumeAt: null } });
+        expect(mocks.clear).toHaveBeenCalledTimes(1);
+        expect(upload.fetchMock).not.toHaveBeenCalled();
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("a 404 on the status query after a failed chunk does the same", async () => {
+      const { store, mocks, saved } = fakeStore();
+      const upload = stubUpload({ session: [reply(503), reply(404)] });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ continuation: { resumeAt: null } });
+      expect(mocks.clear).toHaveBeenCalledTimes(1);
+      expect(saved()).toBeNull();
+      expect(upload.starts()).toHaveLength(1);
+    });
+  });
+
+  describe("rate limits", () => {
+    it("a 429 on chunk 2 saves chunk 1 as confirmed, then throws RATE_LIMITED", async () => {
+      const { store, mocks, saved } = fakeStore();
+      stubUpload({ session: [acceptChunk, reply(429, "", { "Retry-After": "120" })] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error).toMatchObject({ code: "RATE_LIMITED", kind: "rate_limited" });
+      expect((error as unknown as { retryAt: number }).retryAt).toBe(NOW + 120_000);
+      expect(mocks.save).toHaveBeenCalledTimes(2); // the session, then this progress
+      expect(saved()).toEqual({
+        kind: "youtube_resumable",
+        data: { totalBytes: TOTAL, confirmedBytes: CHUNK },
+        secret: { sessionUri: SESSION_URI },
+      });
+    });
+
+    it("a quota 403 on the first chunk saves the session as it stands and throws RATE_LIMITED youtube_quota", async () => {
+      const { store, saved } = fakeStore();
+      stubUpload({ session: [googleError(403, "quotaExceeded")] });
+
+      expect(await failure(bigCtx(store))).toMatchObject({ code: "RATE_LIMITED", kind: "youtube_quota" });
+      expect(saved()?.data).toEqual({ totalBytes: TOTAL, confirmedBytes: 0 });
+    });
+
+    it("a rate limit on the LAST chunk saves the progress and throws RATE_LIMITED (the chunk was rejected, not committed)", async () => {
+      const { store, saved } = fakeStore(sessionAt(LAST_START));
+      stubUpload({ session: [incomplete(LAST_START - 1), reply(429)] });
+
+      expect((await failure(bigCtx(store)))?.code).toBe("RATE_LIMITED");
+      expect(saved()?.data).toEqual({ totalBytes: TOTAL, confirmedBytes: LAST_START });
+    });
+
+    it("still throws RATE_LIMITED when saving the progress fails (the next step asks the session anyway)", async () => {
+      const { store, mocks } = fakeStore();
+      stubUpload({ session: [reply(429)] });
+      mocks.save
+        .mockImplementationOnce(async () => {})
+        .mockRejectedValueOnce(Object.assign(new Error("claim gone"), { code: "RESULT_CLAIM_LOST" }));
+
+      expect((await failure(bigCtx(store)))?.code).toBe("RATE_LIMITED");
+    });
+
+    it("the deferred step resumes the saved session: a status query, no second start", async () => {
+      const { store } = fakeStore();
+      stubUpload({ session: [acceptChunk, reply(429)] });
+      await failure(bigCtx(store));
+      vi.unstubAllGlobals();
+
+      const retry = stubUpload({ session: [incomplete(CHUNK - 1), ...accepts(5)] });
+      const result = await run(bigCtx(store, { continuation: 0 }));
+
+      expect(result).toEqual({ externalPostId: "v1" });
+      expect(retry.starts()).toHaveLength(0);
+      expect(headersOf(retry.blobGets()[0][1] as RequestInit)["Range"]).toBe(`bytes=${CHUNK}-`);
+    });
+  });
+
+  describe("a chunk that gets no usable answer (not the last)", () => {
+    it.each([
+      ["a 503", () => reply(503, "unavailable")],
+      ["a timeout", timeout],
+      ["a dropped connection", connectionReset],
+    ] as const)("%s: asks the session where it stands, then resumes from its Range", async (_name, bad) => {
+      const { store } = fakeStore();
+      const upload = stubUpload({
+        // Chunk 1 fails; the session had received 4 MiB of it.
+        session: [bad(), incomplete(4 * MIB - 1), ...accepts(6)],
+      });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ externalPostId: "v1" });
+      expect(upload.statusQueries()).toHaveLength(1);
+      const puts = upload.puts();
+      expect(contentRange(puts[1][1] as RequestInit)).toBe(`bytes ${4 * MIB}-${CHUNK - 1}/${TOTAL}`);
+      expectBodyFrom(puts[1], 4 * MIB);
+      expect(upload.blobGets()).toHaveLength(1);
+    });
+
+    it(`recovers ${YOUTUBE_MAX_CHUNK_RECOVERIES_PER_STEP} times in a step; the next failure saves and continues without asking again`, async () => {
+      const { store, saved } = fakeStore();
+      const upload = stubUpload({ session: [reply(503), incomplete(), reply(503), incomplete(), reply(503)] });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ continuation: { resumeAt: null } });
+      expect(upload.puts()).toHaveLength(3);
+      expect(upload.statusQueries()).toHaveLength(2);
+      expect(saved()?.data).toEqual({ totalBytes: TOTAL, confirmedBytes: 0 });
+    });
+
+    it("a 308 that confirms nothing new counts as a recovery, so it cannot loop", async () => {
+      const { store } = fakeStore();
+      const upload = stubUpload({ session: [incomplete(), incomplete(), incomplete()] });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ continuation: { resumeAt: null } });
+      expect(upload.puts()).toHaveLength(3);
+    });
+
+    it("a status query that fails after a bad chunk is an ordinary failure (nothing was committed)", async () => {
+      const { store } = fakeStore();
+      stubUpload({ session: [reply(503), reply(500)] });
+
+      expect(await failure(bigCtx(store))).toMatchObject({ code: "YOUTUBE_UPLOAD_FAILED", status: 500 });
+    });
+
+    it("a status query that says complete after a bad chunk returns the video", async () => {
+      const { store } = fakeStore();
+      stubUpload({ session: [timeout(), created("surprise")] });
+
+      expect(await run(bigCtx(store))).toEqual({ externalPostId: "surprise" });
+    });
+  });
+
+  describe("the last chunk is the commit call", () => {
+    /** A saved session that holds all but the last 10 MiB. */
+    const atLastChunk = () => fakeStore(sessionAt(LAST_START));
+    const statusAtLast = incomplete(LAST_START - 1);
+
+    it("a 201 is success", async () => {
+      const { store } = atLastChunk();
+      const upload = stubUpload({ session: [statusAtLast, created("final")] });
+
+      expect(await run(bigCtx(store))).toEqual({ externalPostId: "final" });
+      expect(upload.puts()).toHaveLength(1);
+    });
+
+    it.each([
+      ["a 503", () => reply(503, "unavailable")],
+      ["a timeout", timeout],
+      ["a dropped connection", connectionReset],
+    ] as const)("%s, then a status query that says 201 with the video: success with its id, not unconfirmed", async (_name, bad) => {
+      const { store } = atLastChunk();
+      const upload = stubUpload({ session: [statusAtLast, bad(), created("v1")] });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ externalPostId: "v1" });
+      expect(upload.puts()).toHaveLength(1);
+      expect(upload.statusQueries()).toHaveLength(2);
+      expect(contentRange(upload.statusQueries()[1][1] as RequestInit)).toBe(`bytes */${TOTAL}`);
+    });
+
+    it("a 503, then a status query that says 200: success too", async () => {
+      const { store } = atLastChunk();
+      stubUpload({ session: [statusAtLast, reply(503), reply(200, JSON.stringify({ id: "v200" }))] });
+
+      expect(await run(bigCtx(store))).toEqual({ externalPostId: "v200" });
+    });
+
+    it("a 503, then a status query that times out -> PUBLISH_UNCONFIRMED", async () => {
+      const { store } = atLastChunk();
+      stubUpload({ session: [statusAtLast, reply(503), timeout()] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    });
+
+    it("a status query that hangs is cut off at its 15 s timeout, and the result is PUBLISH_UNCONFIRMED", async () => {
+      vi.useRealTimers();
+      vi.useFakeTimers(); // the status timeout itself needs a clock that can be moved
+      vi.setSystemTime(NOW);
+      const { store } = atLastChunk();
+      const hang: Reply = ({ init }) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        });
+      stubUpload({ session: [statusAtLast, reply(503), hang] });
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+      let error: CodedError | null | undefined;
+      const pending = failure(bigCtx(store, { deadline: NOW + STEP })).then((e) => {
+        error = e;
+      });
+      for (let i = 0; i < 40 && error === undefined; i += 1) await vi.advanceTimersByTimeAsync(2_000);
+      await pending;
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(setTimeoutSpy.mock.calls.map((c) => c[1])).toContain(YOUTUBE_STATUS_TIMEOUT_MS);
+    });
+
+    it.each([
+      ["a 404 (the session is gone)", reply(404)],
+      ["a 500", reply(500)],
+      ["a 429", reply(429)],
+      ["a 403 quota", googleError(403, "quotaExceeded")],
+      ["a 201 without an id", reply(201, "{}")],
+      ["a network error", connectionReset()],
+      ["a 308 whose Range is unreadable", reply(308, null, { Range: "garbage" })],
+    ] as const)("a 503, then a status query answering %s -> PUBLISH_UNCONFIRMED (never RATE_LIMITED, never a retry)", async (_name, status) => {
+      const { store } = atLastChunk();
+      const upload = stubUpload({ session: [statusAtLast, reply(503), status] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(upload.puts()).toHaveLength(1);
+    });
+
+    it("a 503, then 308 (the upload is incomplete): resends the rest from the buffer and succeeds", async () => {
+      const { store } = atLastChunk();
+      const upload = stubUpload({
+        session: [statusAtLast, reply(503), incomplete(LAST_START + MIB - 1), created("v2")],
+      });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ externalPostId: "v2" });
+      const puts = upload.puts();
+      expect(puts).toHaveLength(2);
+      expect(contentRange(puts[0][1] as RequestInit)).toBe(`bytes ${LAST_START}-${TOTAL - 1}/${TOTAL}`);
+      expect(contentRange(puts[1][1] as RequestInit)).toBe(`bytes ${LAST_START + MIB}-${TOTAL - 1}/${TOTAL}`);
+      expect(((puts[1][1] as RequestInit).body as Buffer).length).toBe(TOTAL - LAST_START - MIB);
+      expectBodyFrom(puts[1], LAST_START + MIB);
+      expect(upload.blobGets()).toHaveLength(1);
+    });
+
+    it("resends a bounded number of times: once the recoveries are spent it saves and continues (nothing was committed)", async () => {
+      const { store, saved } = atLastChunk();
+      const upload = stubUpload({
+        session: [
+          statusAtLast,
+          reply(503),
+          incomplete(LAST_START - 1),
+          reply(503),
+          incomplete(LAST_START - 1),
+          reply(503),
+          incomplete(LAST_START + MIB - 1),
+        ],
+      });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ continuation: { resumeAt: null } });
+      expect(upload.puts()).toHaveLength(3);
+      expect(saved()?.data).toEqual({ totalBytes: TOTAL, confirmedBytes: LAST_START + MIB });
+    });
+
+    it("a 4xx is a rejection, not a commit: YOUTUBE_UPLOAD_FAILED, and no status query follows", async () => {
+      const { store } = atLastChunk();
+      const upload = stubUpload({ session: [statusAtLast, reply(400, "{}")] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error).toMatchObject({ code: "YOUTUBE_UPLOAD_FAILED", status: 400 });
+      expect(upload.statusQueries()).toHaveLength(1); // only the one at the start of the step
+    });
+
+    it("a 429 is RATE_LIMITED (rejected, not committed) after the progress is saved", async () => {
+      const { store, mocks } = atLastChunk();
+      stubUpload({ session: [statusAtLast, reply(429)] });
+
+      expect((await failure(bigCtx(store)))?.code).toBe("RATE_LIMITED");
+      expect(mocks.save).toHaveBeenCalled();
+    });
+
+    it("a 201 with an unreadable body, or without an id, is PUBLISH_UNCONFIRMED (the video exists)", async () => {
+      for (const body of ["<html>ok</html>", "{}", JSON.stringify({ id: "" })]) {
+        const { store } = atLastChunk();
+        stubUpload({ session: [statusAtLast, reply(201, body)] });
+
+        expect((await failure(bigCtx(store)))?.code).toBe("PUBLISH_UNCONFIRMED");
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("a connection that never reached YouTube is rethrown unchanged: it is provably unsent", async () => {
+      const { store } = atLastChunk();
+      const neverConnected = new TypeError("fetch failed", { cause: { code: "ENOTFOUND" } });
+      stubUpload({ session: [statusAtLast, failWith(neverConnected)] });
+
+      expect(await failure(bigCtx(store))).toBe(neverConnected);
+    });
+
+    it("a 503 with no time left for the status query -> PUBLISH_UNCONFIRMED, and no status request is sent", async () => {
+      const { store } = atLastChunk();
+      const upload = stubUpload({
+        session: [
+          statusAtLast,
+          // The chunk ate the budget: 3 s are left, under the 5 s a request needs.
+          after(STEP - 3_000, reply(503)),
+        ],
+      });
+
+      const error = await failure(bigCtx(store, { deadline: NOW + STEP }));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(upload.statusQueries()).toHaveLength(1); // the one at the start of the step
+    });
+
+    it("starts only with YOUTUBE_FINAL_CHUNK_MIN_WINDOW_MS (90 s) left: 80 s -> continuation, and the last PUT is not sent", async () => {
+      const { store, saved } = atLastChunk();
+      const upload = stubUpload({ session: [statusAtLast] });
+
+      const result = await run(bigCtx(store, { deadline: NOW + 80_000 }));
+
+      expect(result).toEqual({ continuation: { resumeAt: null } });
+      expect(upload.puts()).toHaveLength(0);
+      expect(upload.blobGets()).toHaveLength(0);
+      expect(saved()?.data).toEqual({ totalBytes: TOTAL, confirmedBytes: LAST_START });
+    });
+
+    it("the 90 s edge: 89.999 s is too little, exactly 90 s sends the chunk", async () => {
+      expect(YOUTUBE_FINAL_CHUNK_MIN_WINDOW_MS).toBe(90_000);
+      const tooLate = atLastChunk();
+      const first = stubUpload({ session: [statusAtLast] });
+      expect(await run(bigCtx(tooLate.store, { deadline: NOW + 89_999 }))).toEqual({ continuation: { resumeAt: null } });
+      expect(first.puts()).toHaveLength(0);
+      vi.unstubAllGlobals();
+
+      const justEnough = atLastChunk();
+      const second = stubUpload({ session: [statusAtLast, created()] });
+      expect(await run(bigCtx(justEnough.store, { deadline: NOW + 90_000 }))).toEqual({ externalPostId: "v1" });
+      expect(second.puts()).toHaveLength(1);
+    });
+
+    it("cuts the chunk's own timeout 15 s short of the deadline, so the status query can still be asked", async () => {
+      const { store } = atLastChunk();
+      stubUpload({ session: [statusAtLast, created()] });
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+      await run(bigCtx(store, { deadline: NOW + 100_000 }));
+
+      // The last chunk: min(120 s, 100 s - 15 s). The status query: min(15 s, 100 s).
+      const timers = setTimeoutSpy.mock.calls.map((c) => c[1]);
+      expect(timers).toContain(85_000);
+      expect(timers).toContain(YOUTUBE_STATUS_TIMEOUT_MS);
+    });
+  });
+
+  describe("the step window for chunks that are not the last", () => {
+    it(`needs ${LARGE_UPLOAD_CHUNK_WINDOW_MS / 1000} s left: with 59.999 s the chunk is not read or sent, with exactly 60 s it is`, async () => {
+      const a = fakeStore(sessionAt(0));
+      const early = stubUpload({ session: [incomplete()] });
+      expect(await run(bigCtx(a.store, { deadline: NOW + 59_999 }))).toEqual({ continuation: { resumeAt: null } });
+      expect(early.puts()).toHaveLength(0);
+      expect(early.blobGets()).toHaveLength(0);
+      expect(a.saved()?.data).toEqual({ totalBytes: TOTAL, confirmedBytes: 0 });
+      vi.unstubAllGlobals();
+
+      const b = fakeStore(sessionAt(0));
+      const ok = stubUpload({ session: [incomplete(), ...accepts(6)] });
+      await run(bigCtx(b.store, { deadline: NOW + 60_000 }));
+      expect(ok.puts().length).toBeGreaterThan(0);
+    });
+
+    it("a short window right after the session is started still saves it, so the next step resumes (it never starts a second)", async () => {
+      const { store, saved } = fakeStore();
+      const upload = stubUpload();
+
+      const result = await run(bigCtx(store, { deadline: NOW + 30_000 }));
+
+      expect(result).toEqual({ continuation: { resumeAt: null } });
+      expect(upload.puts()).toHaveLength(0);
+      expect(saved()?.secret).toEqual({ sessionUri: SESSION_URI });
+    });
+  });
+
+  describe("secrets", () => {
+    it("the session URI is never in a console call or an error, across retries, a rate limit and a restart", async () => {
+      const scenarios: Array<{ session: Reply[]; initial?: { data: unknown; secret?: unknown } }> = [
+        { session: [reply(503), incomplete(MIB - 1), ...accepts(6)] },
+        { session: [acceptChunk, reply(429)] },
+        { session: [reply(404)], initial: sessionAt(CHUNK) },
+        { session: [incomplete(LAST_START - 1), reply(503), reply(404)], initial: sessionAt(LAST_START) },
+        { session: [incomplete(), incomplete(), incomplete()] },
+      ];
+      const outcomes: unknown[] = [];
+      for (const scenario of scenarios) {
+        const { store } = fakeStore(scenario.initial);
+        stubUpload({ session: scenario.session });
+        outcomes.push(
+          await run(bigCtx(store)).catch((e: unknown) => ({ code: (e as CodedError).code, message: (e as Error).message })),
+        );
+        vi.unstubAllGlobals();
+      }
+
+      expect(everythingLogged()).not.toContain("SESSION-SECRET");
+      expect(JSON.stringify(outcomes)).not.toContain("SESSION-SECRET");
+      // What is logged is progress.
+      expect(everythingLogged()).toContain("confirmedBytes");
+      expect(everythingLogged()).toContain("totalBytes");
+    });
+
+    it("an access token is never in a log either", async () => {
+      const { store } = fakeStore();
+      stubUpload({ session: accepts(6) });
+
+      await run(bigCtx(store));
+
+      expect(everythingLogged()).not.toContain("access-token");
+    });
+  });
+
+  describe("tokens", () => {
+    const expiringIn = (ms: number, overrides: Partial<PublishContext> = {}, sizeBytes = TOTAL) => {
+      const ctx = bigCtx(overrides.uploadState, overrides, sizeBytes);
+      return {
+        ...ctx,
+        socialConnection: { ...ctx.socialConnection, expiresAt: new Date(NOW + ms) },
+      } as PublishContext;
+    };
+    const refreshed = {
+      id: "conn-yt",
+      platform: "youtube",
+      accessToken: "fresh-token",
+      refreshToken: "refresh-token",
+      expiresAt: new Date(NOW + 3_600_000),
+    };
+
+    it("refreshes a token that would expire before the step ends, so a chunk is never rejected mid-step", async () => {
+      const { store } = fakeStore();
+      refreshConnectionTokenMock.mockResolvedValueOnce(refreshed);
+      const upload = stubUpload({ session: accepts(6) });
+
+      await run(expiringIn(120_000, { uploadState: store, deadline: NOW + STEP }));
+
+      expect(refreshConnectionTokenMock).toHaveBeenCalledTimes(1);
+      expect(headersOf(upload.starts()[0][1] as RequestInit).Authorization).toBe("Bearer fresh-token");
+      expect(headersOf(upload.puts()[0][1] as RequestInit).Authorization).toBe("Bearer fresh-token");
+    });
+
+    it("leaves a token that outlives the step alone", async () => {
+      const { store } = fakeStore();
+      stubUpload({ session: accepts(6) });
+
+      await run(expiringIn(STEP + 60_000, { uploadState: store, deadline: NOW + STEP }));
+
+      expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
+    });
+
+    it("the multipart path keeps refreshing only a token that has already expired", async () => {
+      stubYouTube(() => new Response(JSON.stringify({ id: "vid-1" }), { status: 200 }));
+
+      await run(expiringIn(120_000, { deadline: NOW + STEP }, 4));
+
+      expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("small files and platforms that are not enabled keep the multipart upload", () => {
+    const multipartOnly = (fetchMock: ReturnType<typeof stubYouTube>) => {
+      const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+      expect(urls.filter((u) => u.includes("uploadType=multipart"))).toHaveLength(1);
+      expect(urls.filter((u) => u.includes("uploadType=resumable"))).toHaveLength(0);
+    };
+
+    it("a video of 50 MiB or less sends exactly one multipart request, even with a store and YouTube enabled", async () => {
+      const { store, mocks } = fakeStore();
+      const fetchMock = stubYouTube(() => new Response(JSON.stringify({ id: "vid-1" }), { status: 200 }));
+
+      const result = await run(bigCtx(store, {}, LARGE_VIDEO_THRESHOLD_BYTES));
+
+      expect(result).toEqual({ externalPostId: "vid-1" });
+      multipartOnly(fetchMock);
+      expect(mocks.save).not.toHaveBeenCalled();
+    });
+
+    it("one byte over the threshold starts a resumable session", async () => {
+      const { store } = fakeStore();
+      const size = LARGE_VIDEO_THRESHOLD_BYTES + 1;
+      const upload = stubUpload({ total: size, session: accepts(4) });
+
+      const result = await run(bigCtx(store, {}, size));
+
+      expect(result).toEqual({ externalPostId: "v1" });
+      expect(upload.starts()).toHaveLength(1);
+      expect(upload.puts()).toHaveLength(4);
+    });
+
+    it("a large video on a platform that is not enabled keeps the multipart upload", async () => {
+      vi.stubEnv("LARGE_UPLOAD_PLATFORMS", "x,tiktok");
+      const { store } = fakeStore();
+      const fetchMock = stubYouTube(() => new Response(JSON.stringify({ id: "vid-1" }), { status: 200 }));
+
+      await run(bigCtx(store));
+
+      multipartOnly(fetchMock);
+    });
+
+    it("the default (LARGE_UPLOAD_PLATFORMS unset) keeps the multipart upload", async () => {
+      vi.stubEnv("LARGE_UPLOAD_PLATFORMS", "");
+      const { store } = fakeStore();
+      const fetchMock = stubYouTube(() => new Response(JSON.stringify({ id: "vid-1" }), { status: 200 }));
+
+      await run(bigCtx(store));
+
+      multipartOnly(fetchMock);
+    });
+
+    it("a large video with no store (a direct caller) keeps the multipart upload", async () => {
+      const fetchMock = stubYouTube(() => new Response(JSON.stringify({ id: "vid-1" }), { status: 200 }));
+
+      await run(bigCtx(undefined));
+
+      multipartOnly(fetchMock);
+    });
+
+    it("looks for saved state of its own kind", async () => {
+      const { store, mocks } = fakeStore();
+      stubYouTube(() => new Response(JSON.stringify({ id: "vid-1" }), { status: 200 }));
+
+      await run(bigCtx(store, {}, 4));
+
+      expect(mocks.load).toHaveBeenCalledWith(YOUTUBE_UPLOAD_STATE_KIND);
+    });
+  });
+
+  describe("blob reads", () => {
+    it("a blob that cannot be read fails before a single chunk is sent", async () => {
+      const { store } = fakeStore();
+      const upload = stubUpload({ blobStatus: 500 });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error?.code).toBe("BLOB_READ_FAILED");
+      expect(upload.puts()).toHaveLength(0);
+    });
+
+    it("a blob whose size differs from the recorded one fails MEDIA_SIZE_MISMATCH before any chunk", async () => {
+      const { store } = fakeStore();
+      const upload = stubUpload({ total: TOTAL + 5 });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error?.code).toBe("MEDIA_SIZE_MISMATCH");
+      expect(upload.puts()).toHaveLength(0);
+    });
   });
 });
