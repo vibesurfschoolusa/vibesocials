@@ -1,7 +1,17 @@
 import { NextResponse } from "next/server";
+import {
+  AI_LIMITS,
+  AI_PROVIDER_TIMEOUT_MS,
+  aiInputTooLongResponse,
+  aiTimeoutResponse,
+  aiWorkspaceLimitResponse,
+  checkWorkspaceAiQuota,
+  findOverlongAiField,
+  isAiTimeoutError,
+} from "@/lib/aiGuards";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { getWorkspaceContext } from "@/lib/workspace";
-import { LLM_NOT_CONFIGURED_MESSAGE, resolveLlmConfig } from "@/lib/llm";
+import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
 
 export const dynamic = "force-dynamic";
@@ -10,8 +20,9 @@ export const dynamic = "force-dynamic";
  * POST /api/reviews/draft-response - Generate AI-powered review response.
  * Any member may draft a reply (Team Workspaces — design §1: "Reply to
  * Google reviews (incl. AI draft)" is member-level). No workspace-scoped
- * data is read here (no GBP connection lookup) — rate limiting stays
- * per-CALLING-user, not per-workspace.
+ * data is read here (no GBP connection lookup) — the burst limit stays
+ * per-CALLING-user; the shared daily AI quota (2026-11-01 scale audit, W6) is
+ * per-workspace.
  */
 export async function POST(request: Request) {
   try {
@@ -19,6 +30,28 @@ export async function POST(request: Request) {
 
     if (!context) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const body = await readJsonObject(request);
+    if (!body) {
+      return invalidJsonBodyResponse();
+    }
+    const { starRating } = body;
+
+    // 2026-11-01 scale audit (W6): cap every client string that reaches the
+    // prompt BEFORE any limiter counter is spent. Only string values are used
+    // (an array or object would stringify past the cap).
+    const reviewerName = typeof body.reviewerName === "string" ? body.reviewerName : undefined;
+    const comment = typeof body.comment === "string" ? body.comment : undefined;
+    const businessName = typeof body.businessName === "string" ? body.businessName : undefined;
+    const overlong = findOverlongAiField([
+      { field: "reviewerName", value: reviewerName, max: AI_LIMITS.name },
+      { field: "businessName", value: businessName, max: AI_LIMITS.name },
+      { field: "comment", value: comment, max: AI_LIMITS.reviewComment },
+      { field: "starRating", value: starRating, max: AI_LIMITS.shortField },
+    ]);
+    if (overlong) {
+      return aiInputTooLongResponse(overlong);
     }
 
     // Throttle per user to cap LLM spend; fail closed on limiter outage.
@@ -43,12 +76,6 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = await readJsonObject(request);
-    if (!body) {
-      return invalidJsonBodyResponse();
-    }
-    const { reviewerName, starRating, comment, businessName } = body;
-
     if (!reviewerName || !starRating) {
       return NextResponse.json(
         { error: "Reviewer name and star rating are required" },
@@ -69,6 +96,13 @@ export async function POST(request: Request) {
     const llm = resolveLlmConfig();
     if (!llm) {
       return NextResponse.json({ error: LLM_NOT_CONFIGURED_MESSAGE }, { status: 500 });
+    }
+
+    // 2026-11-01 scale audit (W6): per-workspace daily budget, spent only once
+    // the request is valid and a provider is configured.
+    const quota = await checkWorkspaceAiQuota(context.workspace.id);
+    if (!quota.allowed) {
+      return aiWorkspaceLimitResponse(quota.retryAfterSeconds);
     }
 
     // Determine response tone based on rating
@@ -120,7 +154,9 @@ Generate a professional, warm response to this review.`;
         ],
         temperature: 0.7,
         max_tokens: 200,
+        ...reasoningParams(llm.provider, llm.textModel),
       }),
+      signal: AbortSignal.timeout(AI_PROVIDER_TIMEOUT_MS),
     });
 
     if (!llmResponse.ok) {
@@ -152,6 +188,11 @@ Generate a professional, warm response to this review.`;
       draftResponse,
     });
   } catch (error: unknown) {
+    // Covers the provider fetch and the read of its body (same signal).
+    if (isAiTimeoutError(error)) {
+      console.error("[Draft Response] Provider call timed out");
+      return aiTimeoutResponse();
+    }
     console.error("[Draft Response] Error:", error);
     return NextResponse.json(
       { error: (error as Error).message || "Failed to generate response" },

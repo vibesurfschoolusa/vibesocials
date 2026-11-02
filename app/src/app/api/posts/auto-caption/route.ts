@@ -1,8 +1,18 @@
 import { NextResponse } from "next/server";
 
+import {
+  AI_LIMITS,
+  AI_PROVIDER_TIMEOUT_MS,
+  aiInputTooLongResponse,
+  aiTimeoutResponse,
+  aiWorkspaceLimitResponse,
+  checkWorkspaceAiQuota,
+  findOverlongAiField,
+  isAiTimeoutError,
+} from "@/lib/aiGuards";
 import { BLOB_URL_REJECTED_MESSAGE, isAllowedBlobUrl } from "@/lib/blobUrl";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
-import { LLM_NOT_CONFIGURED_MESSAGE, resolveLlmConfig } from "@/lib/llm";
+import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
 
@@ -33,6 +43,34 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const parsedBody = await readJsonObject(request);
+    if (!parsedBody) {
+      return invalidJsonBodyResponse();
+    }
+    // Fields are validated below (typeof checks); `Partial` keeps that honest.
+    const body = parsedBody as Partial<AutoCaptionRequestBody>;
+
+    const { blobUrl, mimeType, maxLength } = body;
+
+    // 2026-11-01 scale audit (W6): cap every client string that reaches the
+    // provider BEFORE any limiter counter is spent. `platform`/`language`/`tone`
+    // are interpolated into the prompt, so only string values are used (an
+    // array or object would stringify past the cap); `blobUrl` is forwarded to
+    // the provider as the image URL.
+    const platform = typeof body.platform === "string" ? body.platform : undefined;
+    const language = typeof body.language === "string" ? body.language : undefined;
+    const tone = typeof body.tone === "string" ? body.tone : undefined;
+    const overlong = findOverlongAiField([
+      { field: "platform", value: platform, max: AI_LIMITS.shortField },
+      { field: "language", value: language, max: AI_LIMITS.shortField },
+      { field: "tone", value: tone, max: AI_LIMITS.shortField },
+      { field: "mimeType", value: mimeType, max: AI_LIMITS.shortField },
+      { field: "blobUrl", value: blobUrl, max: AI_LIMITS.caption },
+    ]);
+    if (overlong) {
+      return aiInputTooLongResponse(overlong);
+    }
+
     // Throttle per user: vision calls are the most expensive, so keep this tight.
     // Fail closed — a limiter outage must not open unlimited LLM spend.
     const rateLimit = await checkRateLimit({
@@ -55,15 +93,6 @@ export async function POST(request: Request) {
         },
       );
     }
-
-    const parsedBody = await readJsonObject(request);
-    if (!parsedBody) {
-      return invalidJsonBodyResponse();
-    }
-    // Fields are validated below (typeof checks); `Partial` keeps that honest.
-    const body = parsedBody as Partial<AutoCaptionRequestBody>;
-
-    const { blobUrl, mimeType, platform, language, tone, maxLength } = body;
 
     if (!blobUrl || typeof blobUrl !== "string" || !blobUrl.trim()) {
       return NextResponse.json(
@@ -103,7 +132,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: LLM_NOT_CONFIGURED_MESSAGE }, { status: 500 });
     }
 
+    // 2026-11-01 scale audit (W6): per-workspace daily budget, spent only once
+    // the request is valid and a provider is configured.
+    const quota = await checkWorkspaceAiQuota(context.workspace.id);
+    if (!quota.allowed) {
+      return aiWorkspaceLimitResponse(quota.retryAfterSeconds);
+    }
+
     const mediaKind = isImage ? "photo" : "video";
+    const model = isImage ? llm.visionModel : llm.textModel;
 
     const brandPieces: string[] = [];
     if (context.workspace.companyWebsite?.trim()) {
@@ -189,11 +226,13 @@ The media is a short social media video. You do not have direct access to the vi
         Authorization: `Bearer ${llm.apiKey}`,
       },
       body: JSON.stringify({
-        model: isImage ? llm.visionModel : llm.textModel,
+        model,
         messages,
         temperature: 0.8,
         max_tokens: 150,
+        ...reasoningParams(llm.provider, model),
       }),
+      signal: AbortSignal.timeout(AI_PROVIDER_TIMEOUT_MS),
     });
 
     if (!llmResponse.ok) {
@@ -230,6 +269,11 @@ The media is a short social media video. You do not have direct access to the vi
 
     return NextResponse.json({ caption });
   } catch (error: unknown) {
+    // Covers the provider fetch and the read of its body (same signal).
+    if (isAiTimeoutError(error)) {
+      console.error("[Auto Caption] Provider call timed out");
+      return aiTimeoutResponse();
+    }
     console.error("[Auto Caption] Error:", error);
     return NextResponse.json(
       { error: (error as Error).message || "Failed to generate caption from media" },

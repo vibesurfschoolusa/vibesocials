@@ -1,8 +1,18 @@
 import { NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/auth";
+import {
+  AI_LIMITS,
+  AI_PROVIDER_TIMEOUT_MS,
+  aiInputTooLongResponse,
+  aiTimeoutResponse,
+  aiWorkspaceLimitResponse,
+  checkWorkspaceAiQuota,
+  findOverlongAiField,
+  isAiTimeoutError,
+} from "@/lib/aiGuards";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
-import { LLM_NOT_CONFIGURED_MESSAGE, resolveLlmConfig } from "@/lib/llm";
+import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { getWorkspaceContext } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
 
@@ -11,15 +21,34 @@ export const dynamic = "force-dynamic";
  */
 export async function POST(request: Request) {
   try {
-    const user = await getCurrentUser();
+    // 2026-11-01 scale audit (W6): was `getCurrentUser()`. The per-workspace
+    // daily AI quota needs a workspace id, so this resolves the workspace
+    // context (any member may enhance a caption - composing is member-level).
+    // The per-user limit below still keys on the same user id as before.
+    const context = await getWorkspaceContext();
 
-    if (!user) {
+    if (!context) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const body = await readJsonObject(request);
+    if (!body) {
+      return invalidJsonBodyResponse();
+    }
+    const { caption } = body;
+
+    // 2026-11-01 scale audit (W6): cap the prompt text BEFORE any limiter
+    // counter is spent or the provider is called.
+    const overlong = findOverlongAiField([
+      { field: "caption", value: caption, max: AI_LIMITS.caption },
+    ]);
+    if (overlong) {
+      return aiInputTooLongResponse(overlong);
     }
 
     // Fail closed — a limiter outage must not open unlimited LLM spend.
     const rateLimit = await checkRateLimit({
-      userId: user.id,
+      userId: context.user.id,
       route: "posts/enhance-caption",
       limit: 20,
       windowMs: 5 * 60 * 1000,
@@ -39,12 +68,6 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = await readJsonObject(request);
-    if (!body) {
-      return invalidJsonBodyResponse();
-    }
-    const { caption } = body;
-
     if (!caption || typeof caption !== "string" || !caption.trim()) {
       return NextResponse.json({ error: "Caption is required" }, { status: 400 });
     }
@@ -52,6 +75,13 @@ export async function POST(request: Request) {
     const llm = resolveLlmConfig();
     if (!llm) {
       return NextResponse.json({ error: LLM_NOT_CONFIGURED_MESSAGE }, { status: 500 });
+    }
+
+    // 2026-11-01 scale audit (W6): per-workspace daily budget, spent only once
+    // the request is valid and a provider is configured.
+    const quota = await checkWorkspaceAiQuota(context.workspace.id);
+    if (!quota.allowed) {
+      return aiWorkspaceLimitResponse(quota.retryAfterSeconds);
     }
 
     const systemPrompt = `You are a social media expert specializing in creating engaging, SEO-optimized captions for social media posts. Your captions should be:
@@ -88,7 +118,9 @@ Create an enhanced version that's perfect for social media.`;
         ],
         temperature: 0.8,
         max_tokens: 150,
+        ...reasoningParams(llm.provider, llm.textModel),
       }),
+      signal: AbortSignal.timeout(AI_PROVIDER_TIMEOUT_MS),
     });
 
     if (!llmResponse.ok) {
@@ -119,6 +151,11 @@ Create an enhanced version that's perfect for social media.`;
       enhancedCaption,
     });
   } catch (error: unknown) {
+    // Covers the provider fetch and the read of its body (same signal).
+    if (isAiTimeoutError(error)) {
+      console.error("[Enhance Caption] Provider call timed out");
+      return aiTimeoutResponse();
+    }
     console.error("[Enhance Caption] Error:", error);
     return NextResponse.json(
       { error: (error as Error).message || "Failed to enhance caption" },
