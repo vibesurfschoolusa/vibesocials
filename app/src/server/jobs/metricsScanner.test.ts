@@ -23,13 +23,27 @@ beforeEach(() => {
 });
 
 describe("metrics sync constants (2026-11-01 scale audit, jobs)", () => {
-  it("pages 200 results, at most 10 pages and 300 quota units a run, re-checking a video at most hourly", () => {
+  it("pages 200 results, at most 10 pages and 300 quota units a run, re-checking a video after 50 minutes", () => {
     expect(METRICS_PAGE_SIZE).toBe(200);
     expect(METRICS_MAX_PAGES_PER_RUN).toBe(10);
     // 300 units x 24 runs = 7,200 of the shared 10,000-unit daily bucket.
     expect(METRICS_UNITS_PER_RUN).toBe(300);
-    expect(METRICS_MIN_REFRESH_MS).toBe(3_600_000);
+    expect(METRICS_MIN_REFRESH_MS).toBe(3_000_000);
     expect(YOUTUBE_STATS_IDS_PER_CALL).toBe(50);
+  });
+
+  it("re-check interval sits below the hourly cron, so start-time jitter cannot skip a cycle (R27)", () => {
+    // Run N+1 selects with `now' - METRICS_MIN_REFRESH_MS`. At exactly one hour a
+    // result stamped late in run N is eligible only if run N+1 starts as late in
+    // its hour as run N did; the slack makes that always true.
+    const CRON_INTERVAL_MS = 60 * 60 * 1000;
+    expect(METRICS_MIN_REFRESH_MS).toBeLessThan(CRON_INTERVAL_MS);
+    // A result stamped 4 minutes after its tick (a slow page) is still eligible
+    // when the next run starts 4 minutes EARLY relative to its tick (jitter).
+    const MINUTE = 60 * 1000;
+    const stampedAt = 4 * MINUTE;
+    const nextRunStart = CRON_INTERVAL_MS - 4 * MINUTE;
+    expect(stampedAt).toBeLessThan(nextRunStart - METRICS_MIN_REFRESH_MS);
   });
 
   it("no longer exports the fixed newest-100 batch", () => {
@@ -40,7 +54,7 @@ describe("metrics sync constants (2026-11-01 scale audit, jobs)", () => {
 describe("selectYouTubeMetricEligibleResults", () => {
   const NOW = new Date("2026-11-02T13:00:00.000Z");
 
-  it("queries successful YouTube results with a video id that were never checked or not within the hour, least-recently-checked first", async () => {
+  it("queries successful YouTube results with a video id that were never checked or not within the last 50 minutes, least-recently-checked first", async () => {
     findManyMock.mockResolvedValue([]);
 
     await selectYouTubeMetricEligibleResults(undefined, NOW);
@@ -53,7 +67,7 @@ describe("selectYouTubeMetricEligibleResults", () => {
       externalPostId: { not: null },
       OR: [
         { metricsCheckedAt: null },
-        { metricsCheckedAt: { lt: new Date("2026-11-02T12:00:00.000Z") } },
+        { metricsCheckedAt: { lt: new Date("2026-11-02T12:10:00.000Z") } },
       ],
     });
     expect(arg.orderBy).toEqual([
@@ -72,7 +86,7 @@ describe("selectYouTubeMetricEligibleResults", () => {
     });
   });
 
-  it("measures the hour from `now` (METRICS_MIN_REFRESH_MS), defaulting to the current time", async () => {
+  it("measures the 50 minutes from `now` (METRICS_MIN_REFRESH_MS), defaulting to the current time", async () => {
     findManyMock.mockResolvedValue([]);
     const before = Date.now();
 

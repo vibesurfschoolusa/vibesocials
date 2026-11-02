@@ -31,8 +31,17 @@ export const METRICS_MAX_PAGES_PER_RUN = 10;
  */
 export const METRICS_UNITS_PER_RUN = 300;
 
-/** A result checked within this long is not selected again (the cron is hourly). */
-export const METRICS_MIN_REFRESH_MS = 3_600_000;
+/**
+ * A result checked within this long is not selected again. It MUST stay below the
+ * cron interval (hourly): run N+1 selects with `now' - this`, and a result that
+ * run N stamped late in its page is eligible only if `now'` is at least that far
+ * past the stamp. At exactly one hour that is true only when run N+1 starts as
+ * late in its hour as run N did, which start-time jitter makes close to a coin
+ * flip; every miss skips the whole queue for that hour and degrades the cadence
+ * from hourly to 1.5-2 h. 50 minutes leaves 10 minutes of slack under the tick.
+ * (Controller ruling R27.)
+ */
+export const METRICS_MIN_REFRESH_MS = 3_000_000;
 
 /**
  * Video ids per `videos.list` call. UNCONFIRMED: 50 comes from secondary

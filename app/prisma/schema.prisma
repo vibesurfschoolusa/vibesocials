@@ -384,9 +384,10 @@ model PostJobResult {
   // 2026-11-01 scale audit (jobs): when the hourly YouTube metrics sync last
   // ATTEMPTED this result - found, not found or error alike. The sync picks the
   // least-recently-checked results first (NULL first) and skips any checked
-  // within the last hour. PostMetric.fetchedAt cannot order the queue: a deleted
-  // or private video never gets a metric row, so it would sort first forever and
-  // starve the rest. Written by a raw UPDATE (youtubeMetricsSync.ts), not
+  // within the last 50 minutes (METRICS_MIN_REFRESH_MS, below the hourly cron so
+  // start-time jitter cannot skip a cycle). PostMetric.fetchedAt cannot order the
+  // queue: a deleted or private video never gets a metric row, so it would sort
+  // first forever and starve the rest. Written by a raw UPDATE (youtubeMetricsSync.ts), not
   // updateMany, so @updatedAt is NOT bumped: publish-health reads updatedAt as
   // "when the result finished". Nullable: the previous deployment ignores it.
   metricsCheckedAt   DateTime?

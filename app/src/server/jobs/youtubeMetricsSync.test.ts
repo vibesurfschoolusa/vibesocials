@@ -187,6 +187,9 @@ describe("syncYouTubeMetricsPage — batching and stamping", () => {
     expect(sql).toContain('UPDATE "PostJobResult"');
     expect(sql).toContain(`SET "metricsCheckedAt" = (?::timestamptz AT TIME ZONE 'UTC')`);
     expect(sql).not.toContain("updatedAt");
+    // Scoped to the attempted ids: without this clause a regression would stamp
+    // the whole table.
+    expect(sql).toContain('WHERE "id" = ANY(?::text[])');
     expect(updateManyMock).not.toHaveBeenCalled();
   });
 
