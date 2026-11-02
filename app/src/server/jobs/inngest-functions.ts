@@ -1,3 +1,4 @@
+import { NonRetriableError } from "inngest";
 import { inngest } from "@/lib/inngest";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
@@ -13,9 +14,9 @@ import {
 } from "@/server/jobs/mediaRetention";
 import {
   failPendingPostJobResults,
+  recomputeAndStorePostJobStatus,
   type PendingResultFailure,
 } from "@/server/jobs/failPendingResults";
-import { recomputePostJobStatus } from "@/server/jobs/postStatus";
 import {
   claimDueScheduledJobs,
   reconcileStuckInProgressJobs,
@@ -25,9 +26,11 @@ import {
   selectYouTubeMetricEligibleResults,
 } from "@/server/jobs/metricsScanner";
 import {
+  buildPublishEvent,
   prepareDeferredPostJobDispatch,
   resolvePostCaptionSource,
 } from "@/server/jobs/posting";
+import { PUBLISH_PRIORITY, publishConcurrency } from "@/server/jobs/publishFlowControl";
 import {
   STALE_ELIGIBLE_STATUSES,
   staleCutoff,
@@ -274,9 +277,10 @@ async function publishToPlatform({
     // Bounded in-step retry for provably-uncommitted transient failures
     // (429/5xx, network errors that never connected). See transientRetry.ts
     // for why timeouts, mid-request connection drops and 4xx are deliberately
-    // excluded and why this must NOT be
-    // an Inngest-level retry (the function is retries: 0 to prevent
-    // double-posting). Covers the user-triggered retry flow too — it also
+    // excluded. The publish functions now carry `retries: 3` (jobs M4), but a
+    // retried platform step never calls the platform again: it finds its own
+    // claim and records PUBLISH_UNCONFIRMED (claimOrSkip), so Inngest's retries
+    // cannot double-post. Covers the user-triggered retry flow too — it also
     // funnels through publishToPlatform. A retry only starts while enough of
     // the step's budget is left (see MIN_RETRY_WINDOW_MS).
     publishResult = await withTransientRetries(
@@ -348,10 +352,11 @@ function failedRunPostJobId({ event, error }: PublishRunFailureArgs): string | n
 }
 
 /**
- * `onFailure` for publishToAllPlatforms (Task 4 items 7 + 9). It is
- * `retries: 0` (posting is not idempotent), so when a run dies — a step killed
- * at Vercel's 300s per-invocation cap, a thrown setup step — Inngest fails it
- * once and the platforms not yet attempted stay `pending`: the job looked
+ * `onFailure` for publishToAllPlatforms (Task 4 items 7 + 9). When a run dies —
+ * a step that exhausted its `retries: 3` (a step killed at Vercel's 300s
+ * per-invocation cap, a database error that outlasted the retries, a
+ * NonRetriableError from a deterministic setup failure) — Inngest fails it
+ * and the platforms not yet attempted stay `pending`: the job looked
  * "publishing" until the 2h stuck reconciler gave up on it. This fails those
  * still-`pending` results with PUBLISH_INTERRUPTED and recomputes the job's
  * status through the shared failPendingPostJobResults helper. A result a
@@ -412,11 +417,29 @@ export async function failInterruptedRetryRun(args: PublishRunFailureArgs): Prom
   });
 }
 
+/**
+ * Flow control + retries (2026-11-01 scale audit, jobs H6 + H1 + M4):
+ * - `retries: 3` covers the DB-only steps (`fetch-data`, `finalize-job`: idempotent
+ *   reads / a recompute) and the cases an in-step wrapper cannot reach: a
+ *   `finalizeClaimedResult` write that fails after the platform accepted the
+ *   post, and a step killed at 300 s. Both used to fail the run and mark every
+ *   later platform PUBLISH_INTERRUPTED. A retried PLATFORM step meets its own
+ *   claim and records PUBLISH_UNCONFIRMED instead of calling the platform again
+ *   (claimOrSkip), so the retries cannot double-post. A deterministic failure
+ *   ("Missing required data") throws NonRetriableError and is not retried.
+ * - `idempotency` keeps one run per postJobId for 24 h, behind the stable
+ *   `publish-<postJobId>` event id (posting.ts buildPublishEvent).
+ * - `concurrency` is the budget shared with retryPlatforms; `priority` lets a
+ *   "Post now" jump up to 10 minutes of scheduled backlog (publishFlowControl.ts).
+ */
 export const publishToAllPlatforms = inngest.createFunction(
   {
     id: "publish-to-all-platforms",
     name: "Publish to All Platforms",
-    retries: 0,
+    retries: 3,
+    idempotency: "event.data.postJobId",
+    concurrency: publishConcurrency(),
+    priority: PUBLISH_PRIORITY,
     onFailure: failInterruptedPublishRun,
   },
   { event: "post/publish.requested" },
@@ -436,7 +459,8 @@ export const publishToAllPlatforms = inngest.createFunction(
     const setupData = await step.run("fetch-data", async () => {
       const postJob = await prisma.postJob.findUnique({ where: { id: postJobId } });
       if (!postJob) {
-        throw new Error("Missing required data");
+        // Deterministic: the job row is gone, so a retry could not change it.
+        throw new NonRetriableError("Missing required data");
       }
 
       const [user, workspace, mediaItem, socialConnections] = await Promise.all([
@@ -456,7 +480,7 @@ export const publishToAllPlatforms = inngest.createFunction(
       ]);
 
       if (!user || !workspace || !mediaItem) {
-        throw new Error("Missing required data");
+        throw new NonRetriableError("Missing required data");
       }
 
       const resultRecords = await prisma.postJobResult.findMany({
@@ -552,34 +576,29 @@ export const publishToAllPlatforms = inngest.createFunction(
       // had run (the case the retry path relies on) or a step SKIPPED a result
       // something else already settled (M2) — or re-queued: a retry the user
       // started meanwhile leaves it `pending`, which reads `in_progress`.
-      const dbResults = await prisma.postJobResult.findMany({
-        where: { postJobId },
-        select: { status: true },
-      });
-      const finalStatus = recomputePostJobStatus(dbResults);
+      // Under the PostJob row lock (jobs H6): a retry run may finalize the same
+      // job at the same moment. Idempotent, so Inngest may retry the step.
+      const { status, successCount } = await recomputeAndStorePostJobStatus(postJobId);
 
-      await prisma.postJob.update({
-        where: { id: postJobId },
-        data: { status: finalStatus },
-      });
-
-      return {
-        finalStatus,
-        successCount: dbResults.filter((r) => r.status === "success").length,
-      };
+      // `finalStatus` is the memoized step output of in-flight runs: keep the key.
+      return { finalStatus: status, successCount };
     });
 
     // Roadmap Phase 6 (spec §7.2; review B1): fire-and-forget the best-effort
     // post-outcome email. `step.sendEvent` is memoized (exactly-once per finalize)
     // and only enqueues `notification.requested` — it does NOT await
-    // `sendNotification` or email delivery. The try/catch is REQUIRED: this
-    // function is `retries: 0`, so an un-swallowed enqueue transport error would
+    // `sendNotification` or email delivery. The try/catch is REQUIRED: once the
+    // step's retries are spent, an un-swallowed enqueue transport error would
     // mark a fully-successful publish RUN as Failed (every platform already
     // published and `PostJob.status` is already written) — corrupting the signal
     // used to detect real failures. A notification must never affect posting.
     // Mirrors the try/catch scheduledPostScanner wraps its own sendEvent in.
+    // The event id is scoped to this run (2026-11-01 scale audit, jobs H6): a
+    // re-executed send of THIS run's notification is deduplicated, while a later
+    // retry run of the job (a new outcome) still notifies.
     try {
       await step.sendEvent("notify-outcome", {
+        id: `notify-${postJobId}-${runId}`,
         name: "notification.requested",
         data: { userId, postJobId },
       });
@@ -747,15 +766,23 @@ export const mediaRetentionSweep = inngest.createFunction(
  * NOT idempotent) and set `PostJob.status = in_progress`. This function only
  * re-publishes those platforms and recomputes the job status from ALL results.
  *
- * IDEMPOTENCY (defense-in-depth): the `concurrency` key below serializes runs
- * per `postJobId`, so two overlapping retry events for the same job can never
- * re-run the same platform at the same time. The endpoint's conditional claim
- * is the primary guard; this is the second layer. Third (ruling R8a, now the
- * atomic claim of 2026-11-01 scale audit jobs H6): each `retry-<platform>` step
- * claims its result and publishes only while it is `pending` and unclaimed —
- * the concurrency key does not serialize a retry against the original publish
- * run, which may have finalized (or onFailure failed) it, or may not have
- * reached its own step yet.
+ * IDEMPOTENCY: two layers keep a platform from being posted twice.
+ * 1. The endpoint's conditional `failed` -> `pending` claim makes a double-click
+ *    or a concurrent retry request flip each result once.
+ * 2. (Ruling R8a, now the atomic claim of 2026-11-01 scale audit jobs H6) each
+ *    `retry-<platform>` step claims its result and publishes only while it is
+ *    `pending` and unclaimed: against ANOTHER retry run, against the original
+ *    publish run (which may have finalized the result, had an onFailure fail it,
+ *    or not reached its own step yet), and against Inngest's own step retries
+ *    (`retries: 3`: a retried step meets its own claim and records
+ *    PUBLISH_UNCONFIRMED).
+ * The old per-`postJobId` concurrency key is gone: the claim replaced it as the
+ * double-publish guard, and the PostJob row lock in
+ * `recomputeAndStorePostJobStatus` replaced it as the guard against two runs
+ * finalizing the job at once. Retry shares the publish function's per-workspace
+ * and global concurrency budget (publishFlowControl.ts). It has no function
+ * `idempotency`: that would swallow a legitimate second retry of one job; the
+ * per-request event id (posting.ts buildRetryEvent) dedupes a re-sent request.
  *
  * Removed connections (2026-11-01 audit): a result outlives its connection
  * (`socialConnectionId` is SET NULL on Disconnect / Switch account). The retry
@@ -776,17 +803,14 @@ export const retryPlatforms = inngest.createFunction(
   {
     id: "retry-platforms",
     name: "Retry Failed Platforms",
-    retries: 0,
+    // DB-only steps are retried; a platform step meets its own claim and
+    // records PUBLISH_UNCONFIRMED instead of posting again (jobs H6 + M4).
+    retries: 3,
     // Interrupted-run cleanup scoped to THIS run's platforms (Task 4 item 7,
     // ruling R8b) — the original publish run may still own the others.
     onFailure: failInterruptedRetryRun,
-    // Serialize by PostJob: overlapping retries for the same job queue behind
-    // one another instead of double-running a platform (posting isn't
-    // idempotent). Pairs with the endpoint's failed->pending conditional claim.
-    concurrency: {
-      limit: 1,
-      key: "event.data.postJobId",
-    },
+    // The SAME env-scoped keys as publishToAllPlatforms: one shared budget.
+    concurrency: publishConcurrency(),
   },
   { event: "post/retry.requested" },
   async ({ event, step, runId }) => {
@@ -977,31 +1001,23 @@ export const retryPlatforms = inngest.createFunction(
 
     // Recompute PostJob.status from ALL results (the retried platforms plus the
     // ones that already succeeded and were never touched) via the shared rule.
+    // Under the PostJob row lock (jobs H6): another retry run, or the original
+    // publish run, may finalize the same job at the same moment.
     const finalResult = await step.run("finalize-retry", async () => {
-      const dbResults = await prisma.postJobResult.findMany({
-        where: { postJobId },
-        select: { status: true },
-      });
-      const finalStatus = recomputePostJobStatus(dbResults);
+      const { status, successCount } = await recomputeAndStorePostJobStatus(postJobId);
 
-      await prisma.postJob.update({
-        where: { id: postJobId },
-        data: { status: finalStatus },
-      });
-
-      return {
-        finalStatus,
-        successCount: dbResults.filter((r) => r.status === "success").length,
-      };
+      // `finalStatus` is the memoized step output of in-flight runs: keep the key.
+      return { finalStatus: status, successCount };
     });
 
     // Roadmap Phase 6 (spec §7.2; review B1): same fire-and-forget hook as the
     // initial publish path above — a retry reaching a terminal state is itself a
-    // new outcome worth emailing. Same REQUIRED try/catch: this function is also
-    // `retries: 0`, so an un-swallowed enqueue error would falsely fail a retry
-    // run whose platforms already published.
+    // new outcome worth emailing. Same REQUIRED try/catch: once the step's
+    // retries are spent, an un-swallowed enqueue error would falsely fail a retry
+    // run whose platforms already published. Same run-scoped event id.
     try {
       await step.sendEvent("notify-outcome", {
+        id: `notify-${postJobId}-${runId}`,
         name: "notification.requested",
         data: { userId, postJobId },
       });
@@ -1074,10 +1090,13 @@ export const scheduledPostScanner = inngest.createFunction(
         });
 
         if (prep.ok) {
-          await step.sendEvent(`publish-${postJobId}`, {
-            name: "post/publish.requested",
-            data: prep.event,
-          });
+          // The scanner is not "Post now": `immediate: false` keeps the run at
+          // priority 0 behind user-triggered publishes. Task 3 restructures this
+          // send; the builder keeps the event id and workspaceId in one place.
+          await step.sendEvent(
+            `publish-${postJobId}`,
+            buildPublishEvent(prep.event, { immediate: false }),
+          );
           dispatched += 1;
         } else if (prep.reason === "NO_CONNECTIONS") {
           failedNoConnections += 1;

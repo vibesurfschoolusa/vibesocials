@@ -17,7 +17,11 @@ import { inngest } from "@/lib/inngest";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
-import { prepareDeferredPostJobDispatch, resolvePlatformCaptions } from "@/server/jobs/posting";
+import {
+  buildPublishEvent,
+  prepareDeferredPostJobDispatch,
+  resolvePlatformCaptions,
+} from "@/server/jobs/posting";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
 import { MUTABLE_POST_JOB_STATUSES, validateScheduledFor } from "@/lib/scheduling";
 
@@ -320,7 +324,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // event can't be handed to Inngest, fail those results now (job → failed)
   // so it can't hang "publishing", and tell the caller to try again.
   try {
-    await inngest.send({ name: "post/publish.requested", data: prep.event });
+    // Stable event id + "Post now" priority (2026-11-01 scale audit, jobs H6 + H1).
+    await inngest.send(buildPublishEvent(prep.event, { immediate: true }));
   } catch (error) {
     logger.error("[POST /api/posts/[postJobId]/publish] Couldn't dispatch the publish event", {
       error,

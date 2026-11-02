@@ -1,4 +1,4 @@
-import type { MediaItem, SocialConnection } from "@prisma/client";
+import type { MediaItem, Platform, SocialConnection } from "@prisma/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
@@ -53,7 +53,9 @@ vi.mock("@/lib/db", () => {
 import {
   assertMediaItemReusable,
   buildPostJobCreateData,
+  buildPublishEvent,
   buildPublishMetadataSnapshot,
+  buildRetryEvent,
   createPostJobForExistingMedia,
   createPostJobOnly,
   MediaItemUnavailableError,
@@ -1080,5 +1082,66 @@ describe("createPostJobForExistingMedia - media compatibility uses the stored mi
 
     expect((error as PostTargetingError).code).toBe("TIKTOK_PRIVACY_REQUIRED");
     expect(postJobCreateMock).not.toHaveBeenCalled();
+  });
+});
+
+// 2026-11-01 scale audit (jobs H6 + H1): a publish event carries a STABLE id so
+// Inngest drops a duplicate send, plus the `immediate` flag its priority reads.
+describe("buildPublishEvent", () => {
+  const data = {
+    postJobId: "job-1",
+    userId: "user-1",
+    workspaceId: "ws-1",
+    mediaItemId: "media-1",
+    baseCaption: "hello",
+    perPlatformOverrides: null,
+  };
+
+  it("derives the event id from the job, so a re-send of the same job is a duplicate", () => {
+    const event = buildPublishEvent(data, { immediate: false });
+
+    expect(event.id).toBe("publish-job-1");
+    expect(event.name).toBe("post/publish.requested");
+    expect(buildPublishEvent(data, { immediate: true }).id).toBe(event.id);
+  });
+
+  it("stamps the immediate flag onto the data and keeps every other field", () => {
+    expect(buildPublishEvent(data, { immediate: false }).data).toEqual({ ...data, immediate: false });
+    expect(buildPublishEvent(data, { immediate: true }).data).toEqual({ ...data, immediate: true });
+  });
+
+  it("passes extra fields (the posts route's location) through unchanged", () => {
+    const event = buildPublishEvent({ ...data, location: "Berlin" }, { immediate: true });
+
+    expect(event.data.location).toBe("Berlin");
+  });
+
+  it("does not mutate its input", () => {
+    const input = { ...data };
+    buildPublishEvent(input, { immediate: true });
+
+    expect(input).toEqual(data);
+    expect(input).not.toHaveProperty("immediate");
+  });
+});
+
+describe("buildRetryEvent", () => {
+  const data = {
+    postJobId: "job-1",
+    userId: "user-1",
+    workspaceId: "ws-1",
+    platforms: ["x", "tiktok"] as Platform[],
+  };
+
+  it("makes the event id unique per request, so a second retry within 24 h is not deduplicated", () => {
+    expect(buildRetryEvent(data, "abc").id).toBe("retry-job-1-abc");
+    expect(buildRetryEvent(data, "def").id).toBe("retry-job-1-def");
+  });
+
+  it("carries the data as given", () => {
+    const event = buildRetryEvent(data, "abc");
+
+    expect(event.name).toBe("post/retry.requested");
+    expect(event.data).toEqual(data);
   });
 });

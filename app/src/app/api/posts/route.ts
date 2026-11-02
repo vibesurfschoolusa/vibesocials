@@ -18,6 +18,7 @@ import {
 import { assertPostTargetsValid, PostTargetingError } from "@/lib/postTargets";
 import { PostJobStatus, Platform, type Prisma } from "@prisma/client";
 import {
+  buildPublishEvent,
   createPostJobForExistingMedia,
   createPostJobOnly,
   MediaItemUnavailableError,
@@ -731,19 +732,25 @@ export async function POST(request: Request) {
       // committed — if the event can't be handed to Inngest, fail those
       // results (job → failed) so it can't hang "publishing", and say so.
       try {
-        await inngest.send({
-          name: "post/publish.requested",
-          data: {
-            postJobId,
-            userId: context.user.id,
-            mediaItemId,
-            baseCaption: baseCaptionRaw,
-            location,
-            perPlatformOverrides,
-            tiktokMetadata,
-            youtubeMetadata,
-          },
-        });
+        // 2026-11-01 scale audit (jobs H6 + H1): a stable event id (a duplicate
+        // send of this job is dropped), the ACTIVE workspace for the shared
+        // concurrency key, and `immediate` for the "Post now" priority.
+        await inngest.send(
+          buildPublishEvent(
+            {
+              postJobId,
+              userId: context.user.id,
+              workspaceId: context.workspace.id,
+              mediaItemId,
+              baseCaption: baseCaptionRaw,
+              location,
+              perPlatformOverrides: perPlatformOverrides ?? null,
+              tiktokMetadata,
+              youtubeMetadata,
+            },
+            { immediate: true },
+          ),
+        );
       } catch (dispatchError: unknown) {
         logger.error("[POST /api/posts] Couldn't dispatch the publish event", {
           error: dispatchError,

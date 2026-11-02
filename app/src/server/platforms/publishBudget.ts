@@ -4,11 +4,14 @@
  *
  * Vercel caps the Inngest route at 300s per invocation (app/vercel.json), and
  * every `step.run("publish-to-<platform>")` / `retry-<platform>` runs in its
- * own invocation. A step killed at that cap fails the whole `retries: 0` run:
- * the platforms after it are never attempted (the onFailure handler then marks
- * them PUBLISH_INTERRUPTED). So one platform's publish — in-step transient
- * retries included — must end comfortably inside the cap, with time left to
- * record its PostJobResult.
+ * own invocation. A step killed at that cap is retried by Inngest (the publish
+ * functions are `retries: 3`), but the retried step finds its own claim and
+ * records PUBLISH_UNCONFIRMED without calling the platform again (the user is
+ * told to check the platform); if the retries run out the run fails
+ * and the platforms after it are never attempted (the onFailure handler then
+ * marks them PUBLISH_INTERRUPTED). So one platform's publish — in-step
+ * transient retries included — must end comfortably inside the cap, with time
+ * left to record its PostJobResult.
  *
  * publishToPlatform stamps ONE deadline (`publishDeadline()`) before the
  * step's first attempt and threads it through `PublishContext.deadline`.

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { NextResponse, type NextRequest } from "next/server";
 
 import { prisma } from "@/lib/db";
@@ -10,6 +12,7 @@ import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { buildRetryEvent } from "@/server/jobs/posting";
 import type { Platform } from "@prisma/client";
 
 interface RetryRouteContext {
@@ -276,10 +279,21 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     });
 
     // Hand off to the background retry function for exactly the claimed platforms.
-    await inngest.send({
-      name: "post/retry.requested",
-      data: { postJobId, userId: workspaceContext.user.id, platforms: eligible },
-    });
+    // 2026-11-01 scale audit (jobs H6 + H1): the event id is unique per REQUEST
+    // (Inngest keeps an id for 24 h, so a fixed per-job id would swallow a
+    // legitimate second retry of the job), and the ACTIVE workspace feeds the
+    // shared concurrency key.
+    await inngest.send(
+      buildRetryEvent(
+        {
+          postJobId,
+          userId: workspaceContext.user.id,
+          workspaceId: workspaceContext.workspace.id,
+          platforms: eligible,
+        },
+        randomUUID(),
+      ),
+    );
   } catch (error) {
     console.error("[retry] failed to enqueue retry run; reverting claim", error);
     await prisma.postJobResult.updateMany({

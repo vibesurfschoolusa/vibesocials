@@ -84,9 +84,11 @@ const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
  * current error is rethrown. Each retried attempt is itself bounded by the same
  * deadline (the clients clamp to it), so retries never stretch a step past it.
  *
- * Lives OUTSIDE Inngest's retry machinery on purpose: `publishToAllPlatforms`
- * is `retries: 0` because function-level replays can double-post; this helper
- * bounds retries to the one platform call that provably failed.
+ * Lives OUTSIDE Inngest's retry machinery on purpose: the publish functions'
+ * `retries: 3` may re-run a step, but a re-run platform step meets its own
+ * claim and never calls the platform again (resultClaim.ts), so a function-level
+ * replay cannot re-send the post; this helper bounds retries to the one platform
+ * call that provably failed.
  */
 export async function withTransientRetries<T>(
   fn: () => Promise<T>,

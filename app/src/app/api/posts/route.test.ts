@@ -228,16 +228,42 @@ describe("POST /api/posts — blobUrl path (preserved behavior)", () => {
     });
     expect(createPostJobForExistingMediaMock).not.toHaveBeenCalled();
 
+    // 2026-11-01 scale audit (jobs H6 + H1): a stable event id (a duplicate send
+    // of this job is dropped by Inngest), the request's workspace for the shared
+    // concurrency key, and the Post-now priority flag.
     expect(inngestSendMock).toHaveBeenCalledWith({
+      id: "publish-job-1",
       name: "post/publish.requested",
       data: expect.objectContaining({
         postJobId: "job-1",
         userId: "user-1",
+        workspaceId: "ws-1",
+        immediate: true,
         mediaItemId: "media-1",
         baseCaption: "hello world",
         location: "Miami",
       }),
     });
+  });
+
+  it("takes the event's workspaceId from the request's ACTIVE workspace, not from the user", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-shared-9" }));
+    createPostJobOnlyMock.mockResolvedValue({
+      postJobId: "job-1",
+      mediaItemId: "media-1",
+      resultIds: ["r1"],
+    });
+
+    const response = await POST(
+      jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    const [event] = inngestSendMock.mock.calls[0] as [{ id: string; data: Record<string, unknown> }];
+    expect(event.id).toBe("publish-job-1");
+    expect(event.data.workspaceId).toBe("ws-shared-9");
+    expect(event.data.immediate).toBe(true);
   });
 
   it("returns 400 when neither blobUrl nor mediaItemId is present", async () => {
@@ -310,9 +336,12 @@ describe("POST /api/posts — mediaItemId reuse path (Roadmap Phase 2)", () => {
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
 
     expect(inngestSendMock).toHaveBeenCalledWith({
+      id: "publish-job-2",
       name: "post/publish.requested",
       data: expect.objectContaining({
         postJobId: "job-2",
+        workspaceId: "ws-1",
+        immediate: true,
         mediaItemId: "media-9",
         baseCaption: "reused caption",
       }),
@@ -728,6 +757,7 @@ describe("POST /api/posts — per-post privacy persistence + validation (review 
     );
 
     expect(inngestSendMock).toHaveBeenCalledWith({
+      id: "publish-job-1",
       name: "post/publish.requested",
       data: expect.objectContaining({
         tiktokMetadata: {

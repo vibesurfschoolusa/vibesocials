@@ -114,11 +114,25 @@ describe("prepareDeferredPostJobDispatch", () => {
       event: {
         postJobId: "job-1",
         userId: "user-1",
+        workspaceId: "workspace-1",
         mediaItemId: "media-1",
         baseCaption: "Job snapshot caption",
         perPlatformOverrides: null,
       },
     });
+  });
+
+  // 2026-11-01 scale audit (jobs H1): the shared per-workspace concurrency key
+  // (publishFlowControl.ts) is evaluated against event.data.workspaceId, so the
+  // deferred dispatch must carry the job's workspace in its event.
+  it("puts the job's workspaceId in the publish event", async () => {
+    postJobFindUniqueMock.mockResolvedValue(makeJob({ workspaceId: "ws-1" }));
+    connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.event.workspaceId).toBe("ws-1");
   });
 
   it("is idempotent — does NOT recreate results if some already exist", async () => {

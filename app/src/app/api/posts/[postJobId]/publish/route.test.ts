@@ -114,7 +114,16 @@ beforeEach(() => {
   inngestSendMock.mockResolvedValue(undefined);
   prepareDispatchMock.mockResolvedValue({
     ok: true,
-    event: { postJobId: "job-1", userId: "user-1", mediaItemId: "m1", baseCaption: "c", perPlatformOverrides: null },
+    event: {
+      postJobId: "job-1",
+      userId: "user-1",
+      // prepareDeferredPostJobDispatch reads it off the job row (the route has
+      // already scoped that job to the caller's workspace).
+      workspaceId: "ws-1",
+      mediaItemId: "m1",
+      baseCaption: "c",
+      perPlatformOverrides: null,
+    },
   });
 });
 
@@ -210,10 +219,23 @@ describe("POST /api/posts/[postJobId]/publish", () => {
       data: { status: "in_progress" },
     });
     expect(prepareDispatchMock).toHaveBeenCalledWith("job-1");
+    // 2026-11-01 scale audit (jobs H6 + H1): stable event id, the workspace for
+    // the shared concurrency key, and the Post-now priority flag.
     expect(inngestSendMock).toHaveBeenCalledWith({
+      id: "publish-job-1",
       name: "post/publish.requested",
-      data: expect.objectContaining({ postJobId: "job-1" }),
+      data: expect.objectContaining({ postJobId: "job-1", workspaceId: "ws-1", immediate: true }),
     });
+  });
+
+  it("sends the same event id on a second publish of the same job, so Inngest drops the duplicate", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+
+    await POST(req({}), ctx("job-1"));
+    await POST(req({}), ctx("job-1"));
+
+    const ids = inngestSendMock.mock.calls.map(([event]) => (event as { id: string }).id);
+    expect(ids).toEqual(["publish-job-1", "publish-job-1"]);
   });
 
   // The body is optional: publish-now sends none, so an empty / non-JSON /

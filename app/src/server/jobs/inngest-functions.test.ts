@@ -1,3 +1,4 @@
+import { NonRetriableError } from "inngest";
 import { Prisma, type Platform } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -21,11 +22,18 @@ const db = vi.hoisted(() => ({
   resultFindUnique: vi.fn(),
   resultUpdate: vi.fn(),
   resultUpdateMany: vi.fn(),
+  /** The `SELECT ... FOR UPDATE` row lock of the finalize recompute. */
+  executeRaw: vi.fn(),
 }));
-const { getPlatformClientMock, failPendingMock } = vi.hoisted(() => ({
-  getPlatformClientMock: vi.fn(),
-  failPendingMock: vi.fn(),
-}));
+const { getPlatformClientMock, failPendingMock, recomputeSpy, claimDueMock, reconcileMock, prepareDeferredMock } =
+  vi.hoisted(() => ({
+    getPlatformClientMock: vi.fn(),
+    failPendingMock: vi.fn(),
+    recomputeSpy: vi.fn(),
+    claimDueMock: vi.fn(),
+    reconcileMock: vi.fn(),
+    prepareDeferredMock: vi.fn(),
+  }));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -40,12 +48,40 @@ vi.mock("@/lib/db", () => ({
       update: db.resultUpdate,
       updateMany: db.resultUpdateMany,
     },
+    // The finalize steps recompute the job's status in a row-locked transaction
+    // (failPendingResults.ts); its client reads and writes through the same mocks.
+    $transaction: (callback: (tx: unknown) => unknown) =>
+      callback({
+        $executeRaw: db.executeRaw,
+        postJobResult: { findMany: db.resultFindMany },
+        postJob: { update: db.postJobUpdate },
+      }),
   },
 }));
 vi.mock("@/server/platforms", () => ({ getPlatformClient: getPlatformClientMock }));
 vi.mock("@vercel/blob", () => ({ del: vi.fn() }));
-vi.mock("@/server/jobs/failPendingResults", () => ({
-  failPendingPostJobResults: failPendingMock,
+// failPendingPostJobResults is stubbed (its own suite covers it); the locked
+// recompute stays REAL but is wrapped in a spy, so the finalize steps' calls to
+// it can be asserted while their DB reads and writes still run against the mocks.
+vi.mock("@/server/jobs/failPendingResults", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/jobs/failPendingResults")>();
+  recomputeSpy.mockImplementation(actual.recomputeAndStorePostJobStatus);
+  return {
+    ...actual,
+    failPendingPostJobResults: failPendingMock,
+    recomputeAndStorePostJobStatus: recomputeSpy,
+  };
+});
+
+// The scanner's own claim/reconcile queries and the deferred-dispatch DB work are
+// stubbed (their suites cover them); the REAL event builder stays in place.
+vi.mock("@/server/jobs/scheduledScanner", () => ({
+  claimDueScheduledJobs: claimDueMock,
+  reconcileStuckInProgressJobs: reconcileMock,
+}));
+vi.mock("@/server/jobs/posting", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/jobs/posting")>()),
+  prepareDeferredPostJobDispatch: prepareDeferredMock,
 }));
 
 import {
@@ -53,7 +89,9 @@ import {
   failInterruptedRetryRun,
   publishToAllPlatforms,
   retryPlatforms,
+  scheduledPostScanner,
 } from "./inngest-functions";
+import { PUBLISH_PRIORITY, publishConcurrency } from "./publishFlowControl";
 
 const WORKSPACE = { id: "ws-1", companyWebsite: null, defaultHashtags: "#brand" };
 
@@ -109,6 +147,10 @@ beforeEach(() => {
   for (const mock of Object.values(db)) mock.mockReset();
   getPlatformClientMock.mockReset();
   failPendingMock.mockReset();
+  recomputeSpy.mockClear();
+  claimDueMock.mockReset();
+  reconcileMock.mockReset();
+  prepareDeferredMock.mockReset();
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -1089,5 +1131,271 @@ describe("retryPlatforms — a result whose connection was removed (Task 5)", ()
       }),
     ]);
     expect(out.results).toEqual([{ platform: "x", status: "failed", error: "No connection" }]);
+  });
+});
+
+// 2026-11-01 scale audit (jobs H6 + H1 + M4): the publish functions' flow-control
+// and retry options. `retries: 3` is safe because every platform step claims its
+// result first (a retried platform step meets its own claim and records
+// PUBLISH_UNCONFIRMED instead of calling the platform again), and the DB-only
+// steps are idempotent reads / recomputes.
+describe("publish functions - options (event identity, flow control, retries)", () => {
+  const optsOf = (fn: unknown) => (fn as { opts: Record<string, unknown> }).opts;
+
+  it("publishToAllPlatforms: retries 3, one run per postJobId, shared concurrency, Post-now priority", () => {
+    const opts = optsOf(publishToAllPlatforms);
+
+    expect(opts.id).toBe("publish-to-all-platforms");
+    expect(opts.retries).toBe(3);
+    expect(opts.idempotency).toBe("event.data.postJobId");
+    expect(opts.concurrency).toEqual(publishConcurrency());
+    expect(opts.priority).toEqual(PUBLISH_PRIORITY);
+    // Inngest allows at most two concurrency constraints per function (V3).
+    expect((opts.concurrency as unknown[]).length).toBeLessThanOrEqual(2);
+    expect(opts.onFailure).toBe(failInterruptedPublishRun);
+  });
+
+  it("retryPlatforms: retries 3 and the same shared concurrency, no idempotency and no postJobId key", () => {
+    const opts = optsOf(retryPlatforms);
+
+    expect(opts.id).toBe("retry-platforms");
+    expect(opts.retries).toBe(3);
+    expect(opts.concurrency).toEqual(publishConcurrency());
+    expect((opts.concurrency as unknown[]).length).toBeLessThanOrEqual(2);
+    // A function-level key would swallow a legitimate second retry of one job;
+    // the per-request event id already dedupes a re-send of the same request.
+    expect(opts).not.toHaveProperty("idempotency");
+    expect(JSON.stringify(opts.concurrency)).not.toContain("postJobId");
+    expect(opts.onFailure).toBe(failInterruptedRetryRun);
+  });
+
+  it("publish and retry draw on the SAME env-scoped keys, so they share one budget", () => {
+    const keys = (fn: unknown) =>
+      (optsOf(fn).concurrency as Array<{ scope: string; key: string }>).map(({ scope, key }) => [scope, key]);
+
+    expect(keys(publishToAllPlatforms)).toEqual(keys(retryPlatforms));
+    expect(keys(publishToAllPlatforms)).toEqual([
+      ["env", '"publish-ws-" + event.data.workspaceId'],
+      ["env", '"publish-global"'],
+    ]);
+  });
+});
+
+describe("publish functions - deterministic failures are not retried", () => {
+  const publishEvent = {
+    name: "post/publish.requested",
+    data: { postJobId: "job-1", userId: "user-1", mediaItemId: "media-1", baseCaption: "c", perPlatformOverrides: null },
+  };
+
+  it("fetch-data throws a NonRetriableError when the job is gone", async () => {
+    db.postJobFindUnique.mockResolvedValue(null);
+
+    const error = await handlerOf(publishToAllPlatforms)({ event: publishEvent, step: fakeStep() }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(error).toBeInstanceOf(NonRetriableError);
+    expect((error as Error).message).toBe("Missing required data");
+  });
+
+  it.each([
+    ["user", () => db.userFindUnique.mockResolvedValue(null)],
+    ["workspace", () => db.workspaceFindUnique.mockResolvedValue(null)],
+    ["media item", () => db.mediaItemFindUnique.mockResolvedValue(null)],
+  ])("fetch-data throws a NonRetriableError when the %s is gone", async (_what, remove) => {
+    db.postJobFindUnique.mockResolvedValue({ id: "job-1", workspaceId: WORKSPACE.id });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null });
+    db.connectionFindMany.mockResolvedValue([]);
+    db.resultFindMany.mockResolvedValue([]);
+    remove();
+
+    await expect(
+      handlerOf(publishToAllPlatforms)({ event: publishEvent, step: fakeStep() }),
+    ).rejects.toBeInstanceOf(NonRetriableError);
+  });
+
+  it("a transient database error in fetch-data stays retryable", async () => {
+    db.postJobFindUnique.mockRejectedValue(new Error("Timed out fetching a new connection from the pool"));
+
+    const error = await handlerOf(publishToAllPlatforms)({ event: publishEvent, step: fakeStep() }).catch(
+      (e: unknown) => e,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(NonRetriableError);
+  });
+});
+
+describe("publish functions - finalize through the locked recompute, notify with a run-scoped id", () => {
+  const publishEvent = {
+    name: "post/publish.requested",
+    data: { postJobId: "job-1", userId: "user-1", mediaItemId: "media-1", baseCaption: "c", perPlatformOverrides: null },
+  };
+
+  function publishRun(platforms: Platform[], step = fakeStep(), event: HandlerArgs["event"] = publishEvent) {
+    db.postJobFindUnique.mockResolvedValue({ id: "job-1", workspaceId: WORKSPACE.id });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null });
+    db.connectionFindMany.mockResolvedValue(platforms.map((p) => ({ id: `conn-${p}`, platform: p })));
+    stubResults(platforms);
+    return handlerOf(publishToAllPlatforms)({ event, step }) as Promise<{
+      status: string;
+      results: Array<{ platform: Platform; status: string }>;
+    }>;
+  }
+
+  function retryRun(platforms: Platform[], step = fakeStep()) {
+    db.postJobFindUnique.mockResolvedValue({
+      id: "job-1", workspaceId: WORKSPACE.id, mediaItemId: "media-1",
+      baseCaption: "c", perPlatformOverrides: null, publishMetadata: null,
+    });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null, mimeType: "video/mp4" });
+    db.connectionFindMany.mockResolvedValue(platforms.map((p) => ({ id: `conn-${p}`, platform: p })));
+    stubResults(platforms);
+    return handlerOf(retryPlatforms)({
+      event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms } },
+      step,
+    }) as Promise<{ status: string }>;
+  }
+
+  it("finalize-job recomputes through recomputeAndStorePostJobStatus, under the PostJob row lock", async () => {
+    const step = fakeStep();
+
+    const out = await publishRun(["x", "youtube"], step);
+
+    expect(step.run).toHaveBeenCalledWith("finalize-job", expect.any(Function));
+    expect(recomputeSpy).toHaveBeenCalledTimes(1);
+    expect(recomputeSpy).toHaveBeenCalledWith("job-1");
+    // The lock is the transaction's first statement, before the status write.
+    expect(db.executeRaw).toHaveBeenCalledTimes(1);
+    expect(db.executeRaw.mock.invocationCallOrder[0]).toBeLessThan(db.postJobUpdate.mock.invocationCallOrder[0]);
+    expect(db.postJobUpdate).toHaveBeenCalledWith({ where: { id: "job-1" }, data: { status: "completed" } });
+    expect(out.status).toBe("completed");
+  });
+
+  it("finalize-retry recomputes through recomputeAndStorePostJobStatus, under the PostJob row lock", async () => {
+    const step = fakeStep();
+
+    const out = await retryRun(["x", "youtube"], step);
+
+    expect(step.run).toHaveBeenCalledWith("finalize-retry", expect.any(Function));
+    expect(recomputeSpy).toHaveBeenCalledTimes(1);
+    expect(recomputeSpy).toHaveBeenCalledWith("job-1");
+    expect(db.executeRaw.mock.invocationCallOrder[0]).toBeLessThan(db.postJobUpdate.mock.invocationCallOrder[0]);
+    expect(db.postJobUpdate).toHaveBeenCalledWith({ where: { id: "job-1" }, data: { status: "completed" } });
+    expect(out.status).toBe("completed");
+  });
+
+  it("a failed recompute fails the step, so Inngest retries it (it is idempotent)", async () => {
+    recomputeSpy.mockRejectedValueOnce(new Error("Timed out fetching a new connection from the pool"));
+
+    await expect(publishRun(["x"])).rejects.toThrow(/pool/);
+  });
+
+  it("notify-outcome carries a run-scoped event id (publish)", async () => {
+    const step = fakeStep();
+
+    await publishRun(["x"], step);
+
+    expect(step.sendEvent).toHaveBeenCalledWith("notify-outcome", {
+      id: "notify-job-1-run-1",
+      name: "notification.requested",
+      data: { userId: "user-1", postJobId: "job-1" },
+    });
+  });
+
+  it("notify-outcome carries a run-scoped event id (retry)", async () => {
+    const step = fakeStep();
+
+    await retryRun(["x"], step);
+
+    expect(step.sendEvent).toHaveBeenCalledWith("notify-outcome", {
+      id: "notify-job-1-run-1",
+      name: "notification.requested",
+      data: { userId: "user-1", postJobId: "job-1" },
+    });
+  });
+
+  it("a different run of the same job notifies under its own id (a retry is a new outcome)", async () => {
+    const step = fakeStep();
+    db.postJobFindUnique.mockResolvedValue({ id: "job-1", workspaceId: WORKSPACE.id });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null });
+    db.connectionFindMany.mockResolvedValue([{ id: "conn-x", platform: "x" }]);
+    stubResults(["x"]);
+
+    await (publishToAllPlatforms as unknown as {
+      fn: (args: HandlerArgs) => Promise<unknown>;
+    }).fn({ event: publishEvent, step, runId: "run-2" });
+
+    expect(step.sendEvent).toHaveBeenCalledWith(
+      "notify-outcome",
+      expect.objectContaining({ id: "notify-job-1-run-2" }),
+    );
+  });
+
+  // Review Focus 3: events enqueued BEFORE this deploy have no `workspaceId`,
+  // no `immediate` and no event id. Their runs must still publish every platform
+  // exactly once: the handler takes the workspace from the job row, never from
+  // the event, and nothing in it reads the new fields.
+  it("an event without workspaceId, immediate or an id (the pre-deploy shape) still publishes every platform exactly once", async () => {
+    const platforms: Platform[] = ["x", "youtube", "tiktok"];
+    const legacyEvent = {
+      name: "post/publish.requested",
+      data: {
+        postJobId: "job-1",
+        userId: "user-1",
+        mediaItemId: "media-1",
+        baseCaption: "c",
+        perPlatformOverrides: null,
+      },
+    };
+    expect(legacyEvent).not.toHaveProperty("id");
+    expect(legacyEvent.data).not.toHaveProperty("workspaceId");
+    expect(legacyEvent.data).not.toHaveProperty("immediate");
+
+    const out = await publishRun(platforms, fakeStep(), legacyEvent);
+
+    expect(publishCtxs.map((c) => c.socialConnection.platform).sort()).toEqual([...platforms].sort());
+    expect(out.results).toEqual(platforms.map((platform) => ({ platform, status: "success" })));
+    expect(out.status).toBe("completed");
+  });
+
+  it("an old retry event (no workspaceId) still retries its platforms exactly once", async () => {
+    const out = await retryRun(["x", "youtube"]);
+
+    expect(publishCtxs.map((c) => c.socialConnection.platform).sort()).toEqual(["x", "youtube"]);
+    expect(out.status).toBe("completed");
+  });
+});
+
+// 2026-11-01 scale audit (jobs H6 + H1): the scanner dispatches through the same
+// builder as the routes, so its events carry the stable id and the workspace, and
+// are NOT "Post now" (priority 0, behind user-triggered publishes). Task 3
+// replaces this per-job send.
+describe("scheduledPostScanner - the publish event it dispatches", () => {
+  it("sends the builder's event: stable id, the job's workspaceId, immediate false", async () => {
+    claimDueMock.mockResolvedValue(["job-7"]);
+    reconcileMock.mockResolvedValue({ reconciled: 0 });
+    const eventData = {
+      postJobId: "job-7",
+      userId: "user-1",
+      workspaceId: "ws-7",
+      mediaItemId: "media-7",
+      baseCaption: "scheduled",
+      perPlatformOverrides: null,
+    };
+    prepareDeferredMock.mockResolvedValue({ ok: true, event: eventData });
+    const step = fakeStep();
+
+    await handlerOf(scheduledPostScanner)({
+      event: { name: "inngest/scheduled.timer", data: {} },
+      step,
+    });
+
+    expect(step.sendEvent).toHaveBeenCalledTimes(1);
+    expect(step.sendEvent).toHaveBeenCalledWith("publish-job-7", {
+      id: "publish-job-7",
+      name: "post/publish.requested",
+      data: { ...eventData, immediate: false },
+    });
   });
 });

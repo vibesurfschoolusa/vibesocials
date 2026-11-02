@@ -38,9 +38,14 @@ vi.mock("@/lib/db", () => ({
     user: { findUnique: userFindUniqueMock },
   },
 }));
-vi.mock("@/server/jobs/posting", () => ({
-  prepareDeferredPostJobDispatch: prepareDispatchMock,
-}));
+// Keep the REAL event builder (buildPublishEvent); only the DB-touching dispatch
+// preparation is mocked.
+vi.mock("@/server/jobs/posting", async () => {
+  const actual = await vi.importActual<typeof import("@/server/jobs/posting")>(
+    "@/server/jobs/posting",
+  );
+  return { ...actual, prepareDeferredPostJobDispatch: prepareDispatchMock };
+});
 vi.mock("@/server/notifications/email", () => ({ sendEmail: sendEmailMock }));
 // Keep the REAL DISPATCH_FAILURE constant; only the DB-touching helper is mocked.
 vi.mock("@/server/jobs/failPendingResults", async () => {
@@ -125,6 +130,9 @@ beforeEach(() => {
     event: {
       postJobId: "job-1",
       userId: "member-1",
+      // prepareDeferredPostJobDispatch reads it off the job row (the route has
+      // already scoped that job to the caller's workspace).
+      workspaceId: "ws-1",
       mediaItemId: "m1",
       baseCaption: "c",
       perPlatformOverrides: null,
@@ -217,6 +225,18 @@ describe("POST /api/posts/[postJobId]/approval", () => {
     });
     expect(prepareDispatchMock).toHaveBeenCalledWith("job-1");
     expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    // 2026-11-01 scale audit (jobs H6 + H1): stable event id, the workspace for
+    // the shared concurrency key, and the Post-now priority flag.
+    expect(inngestSendMock).toHaveBeenCalledWith({
+      id: "publish-job-1",
+      name: "post/publish.requested",
+      data: expect.objectContaining({
+        postJobId: "job-1",
+        userId: "member-1",
+        workspaceId: "ws-1",
+        immediate: true,
+      }),
+    });
   });
 
   it("publishes now when the chosen time passed while awaiting approval", async () => {

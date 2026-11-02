@@ -20,7 +20,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { SCHEDULE_BUFFER_MS } from "@/lib/scheduling";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
-import { prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
+import { buildPublishEvent, prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
 import { sendEmail } from "@/server/notifications/email";
 import { buildApprovalDecisionEmail } from "@/server/notifications/approvalEmail";
 
@@ -255,7 +255,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     // Inngest, fail the pending results (job → failed) rather than leave it
     // "publishing" forever. The approval itself stands.
     try {
-      await inngest.send({ name: "post/publish.requested", data: prep.event });
+      // Stable event id + "Post now" priority (2026-11-01 scale audit, jobs H6 + H1).
+      await inngest.send(buildPublishEvent(prep.event, { immediate: true }));
     } catch (error) {
       logger.error("[POST /api/posts/[postJobId]/approval] Couldn't dispatch the publish event", {
         error,

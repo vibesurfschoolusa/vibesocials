@@ -34,10 +34,52 @@ export const PUBLISH_UNCONFIRMED = {
 } as const satisfies PendingResultFailure;
 
 /**
+ * Recompute a job's status over ALL its results and store it, serialized per job
+ * (2026-11-01 scale audit, jobs H6). Every finalizer goes through here: the
+ * `finalize-job` / `finalize-retry` steps and {@link failPendingPostJobResults}.
+ *
+ * Several runs of one job can now finalize at once (the retry function no longer
+ * holds a `postJobId` concurrency key). A bare read-then-write would let a
+ * finalizer holding a STALE read write `in_progress` AFTER another wrote
+ * `completed`, and nothing would move the job again until the 2 h reconciler.
+ * The first statement of the transaction therefore takes the PostJob row lock
+ * (`SELECT ... FOR UPDATE`): a second finalizer waits for the first to commit and
+ * then reads the results afresh, so the last write always reflects every result
+ * written before it. Result writes (a platform step's `finalizeClaimedResult`)
+ * do not take this lock, only the PostJob row they bump for the heartbeat.
+ *
+ * A database failure throws, which retries the finalize step (it is idempotent).
+ */
+export async function recomputeAndStorePostJobStatus(
+  postJobId: string,
+): Promise<{ status: PostJobStatus; successCount: number }> {
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT 1 FROM "PostJob" WHERE "id" = ${postJobId} FOR UPDATE`;
+
+    const results = await tx.postJobResult.findMany({
+      where: { postJobId },
+      select: { status: true },
+    });
+    const status = recomputePostJobStatus(results);
+
+    await tx.postJob.update({
+      where: { id: postJobId },
+      data: { status },
+    });
+
+    return {
+      status,
+      successCount: results.filter((result) => result.status === "success").length,
+    };
+  });
+}
+
+/**
  * Fail every still-`pending` PostJobResult of a job, then recompute the job's
  * status over ALL its results with the same rule the publish pipeline uses
- * (`recomputePostJobStatus`), so a job whose run never started — or was cut
- * short — can't sit `in_progress` forever. Results that already finished are
+ * (`recomputePostJobStatus`, through {@link recomputeAndStorePostJobStatus}), so a
+ * job whose run never started — or was cut short — can't sit `in_progress`
+ * forever. Results that already finished are
  * untouched: a platform that went live stays live (the job then reads
  * `completed`, and the failed rows are retryable).
  *
@@ -88,16 +130,9 @@ export async function failPendingPostJobResults(
     },
   });
 
-  const results = await prisma.postJobResult.findMany({
-    where: { postJobId },
-    select: { status: true },
-  });
-  const status = recomputePostJobStatus(results);
-
-  await prisma.postJob.update({
-    where: { id: postJobId },
-    data: { status },
-  });
+  // The row writes above are NOT in the recompute's transaction, so the job lock
+  // is never held while result rows are locked.
+  const { status } = await recomputeAndStorePostJobStatus(postJobId);
 
   return { failedCount, unconfirmedCount, status };
 }

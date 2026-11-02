@@ -611,6 +611,13 @@ export function resolvePlatformCaptions(
 export interface PublishRequestedEventData {
   postJobId: string;
   userId: string;
+  /**
+   * The job's workspace. The publish functions' per-workspace concurrency key is
+   * evaluated against it (publishFlowControl.ts); the handler itself reads the
+   * workspace off the job row, so an event enqueued before this field existed
+   * still publishes.
+   */
+  workspaceId: string;
   mediaItemId: string;
   baseCaption: string;
   perPlatformOverrides: Partial<Record<Platform, string>> | null;
@@ -621,6 +628,49 @@ export interface PublishRequestedEventData {
    */
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
+}
+
+/**
+ * 2026-11-01 scale audit (jobs H6 + H1): build the `post/publish.requested`
+ * event every dispatcher sends. The id is stable per job (`publish-<postJobId>`),
+ * and Inngest keeps an event id for 24 h, so a duplicate send of one job is
+ * stored but triggers no run (https://www.inngest.com/docs/guides/handling-idempotency).
+ * That is right because a job is dispatched at most once: every dispatcher first
+ * moves it out of draft / scheduled / new. `immediate` feeds the function's
+ * priority (PUBLISH_PRIORITY): true for a user's "Post now", false for the
+ * scheduled scanner. Fields beyond {@link PublishRequestedEventData} (the posts
+ * route's `location`) pass through unchanged.
+ */
+export function buildPublishEvent<T extends PublishRequestedEventData>(
+  data: T,
+  opts: { immediate: boolean },
+): { id: string; name: "post/publish.requested"; data: T & { immediate: boolean } } {
+  return {
+    id: `publish-${data.postJobId}`,
+    name: "post/publish.requested",
+    data: { ...data, immediate: opts.immediate },
+  };
+}
+
+/** The event {@link buildPublishEvent} builds. */
+export type PublishEvent = ReturnType<typeof buildPublishEvent>;
+
+/**
+ * 2026-11-01 scale audit (jobs H6): build the `post/retry.requested` event. Unlike
+ * a publish, a job can legitimately be retried more than once within Inngest's
+ * 24 h event-id window, so the id carries a per-request part
+ * (`retry-<postJobId>-<requestId>`, a fresh UUID from the route): it dedupes a
+ * re-send of ONE request, never a second retry.
+ */
+export function buildRetryEvent(
+  data: { postJobId: string; userId: string; workspaceId: string; platforms: Platform[] },
+  requestId: string,
+): { id: string; name: "post/retry.requested"; data: typeof data } {
+  return {
+    id: `retry-${data.postJobId}-${requestId}`,
+    name: "post/retry.requested",
+    data,
+  };
 }
 
 /** Outcome of preparing a deferred (scheduled/draft) job for publishing. */
@@ -726,6 +776,7 @@ export async function prepareDeferredPostJobDispatch(
     event: {
       postJobId,
       userId: job.userId,
+      workspaceId: job.workspaceId,
       mediaItemId: job.mediaItemId,
       baseCaption: captionSource.baseCaption,
       perPlatformOverrides: captionSource.perPlatformOverrides,

@@ -275,10 +275,39 @@ describe("POST /api/posts/[postJobId]/retry", () => {
       where: { id: "job-1" },
       data: { status: "in_progress" },
     });
+    // 2026-11-01 scale audit (jobs H6 + H1): the event id is unique per REQUEST
+    // (Inngest keeps an id for 24 h, so a fixed per-job id would swallow a
+    // legitimate second retry), and the workspace feeds the shared concurrency key.
     expect(inngestSendMock).toHaveBeenCalledWith({
+      id: expect.stringMatching(/^retry-job-1-[0-9a-f-]{36}$/),
       name: "post/retry.requested",
-      data: { postJobId: "job-1", userId: "user-1", platforms: ["tiktok"] },
+      data: { postJobId: "job-1", userId: "user-1", workspaceId: "ws-1", platforms: ["tiktok"] },
     });
+  });
+
+  it("gives every retry request its own event id, so a second retry of one job is not deduplicated", async () => {
+    postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
+    resultUpdateManyMock.mockResolvedValue({ count: 1 });
+
+    await POST(req({ platform: "tiktok" }), ctx("job-1"));
+    await POST(req({ platform: "tiktok" }), ctx("job-1"));
+
+    const ids = inngestSendMock.mock.calls.map(([event]) => (event as { id: string }).id);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).toMatch(/^retry-job-1-[0-9a-f-]{36}$/);
+    expect(ids[1]).toMatch(/^retry-job-1-[0-9a-f-]{36}$/);
+    expect(ids[0]).not.toBe(ids[1]);
+  });
+
+  it("takes the event's workspaceId from the request's ACTIVE workspace", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-shared-9" }));
+    postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
+    resultUpdateManyMock.mockResolvedValue({ count: 1 });
+
+    await POST(req({ platform: "tiktok" }), ctx("job-1"));
+
+    const [event] = inngestSendMock.mock.calls[0] as [{ data: Record<string, unknown> }];
+    expect(event.data.workspaceId).toBe("ws-shared-9");
   });
 
   // 2026-11-01 scale audit (jobs H6), fix round 1: `inngest.send` can throw AFTER
@@ -351,8 +380,9 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     // The all-failed path does not run the per-connection reconnect preflight.
     expect(connectionFindUniqueMock).not.toHaveBeenCalled();
     expect(inngestSendMock).toHaveBeenCalledWith({
+      id: expect.stringMatching(/^retry-job-1-[0-9a-f-]{36}$/),
       name: "post/retry.requested",
-      data: { postJobId: "job-1", userId: "user-1", platforms: ["tiktok", "youtube"] },
+      data: { postJobId: "job-1", userId: "user-1", workspaceId: "ws-1", platforms: ["tiktok", "youtube"] },
     });
   });
 
@@ -374,8 +404,9 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     expect(res.status).toBe(202);
     expect(body.retrying).toEqual(["tiktok"]);
     expect(inngestSendMock).toHaveBeenCalledWith({
+      id: expect.stringMatching(/^retry-job-1-[0-9a-f-]{36}$/),
       name: "post/retry.requested",
-      data: { postJobId: "job-1", userId: "user-1", platforms: ["tiktok"] },
+      data: { postJobId: "job-1", userId: "user-1", workspaceId: "ws-1", platforms: ["tiktok"] },
     });
   });
 });
