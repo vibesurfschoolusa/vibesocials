@@ -1340,32 +1340,49 @@ export const scheduledPostScanner = inngest.createFunction(
  * Triggered by `notification.requested`, sent fire-and-forget from the
  * `publishToAllPlatforms` / `retryPlatforms` finalize steps above via
  * `step.sendEvent` — which only enqueues and does NOT await this function.
- * `retries: 1` gives a single retry for a transient failure (e.g. a blip
- * reaching the DB), but in practice this function cannot fail loudly at all:
- * all of its real work is delegated to `deliverPostOutcomeNotification`,
- * which is itself fully env-gated (no-ops with no DB access when
- * `RESEND_API_KEY` is unset) and never throws (every branch, including a
- * send failure, is caught and logged there). This function's job is only to
- * be the Inngest entry point + step-memoization boundary.
+ * All of its real work is delegated to `deliverPostOutcomeNotification`, which
+ * is itself fully env-gated (no-ops with no DB access when `RESEND_API_KEY` is
+ * unset) and swallows everything except a RETRYABLE delivery failure. This
+ * function's job is the Inngest entry point + step-memoization boundary.
+ *
+ * 2026-11-01 scale audit (jobs, notifications): a burst of outcome emails used to
+ * pass Resend's 10 requests/s team limit and be dropped silently.
+ *  - `throttle` caps run STARTS at 8/s (V5; excess runs queue, they are not
+ *    dropped), leaving 2/s of the team limit for the auth, approval and reconnect
+ *    mail sent outside Inngest (V18).
+ *  - A Resend 429 / 5xx / network error now throws inside `deliver-notification`
+ *    (a `RetryAfterError` or `EmailRetryableError`, V8), so Inngest retries the
+ *    step: `retries: 4` instead of 1.
+ *  - Duplicates: the send is the LAST action of the single memoized
+ *    `deliver-notification` step, so no later step can re-run it. A retry re-runs
+ *    the step only when the send threw (nothing was sent) or its ack was lost, and
+ *    Resend's `Idempotency-Key` (`post-outcome/<runId>`, kept 24 h, V18) makes the
+ *    lost-ack case a no-op. The run id is stable across retries of one run, and a
+ *    later run of the same job (a retry of failed platforms) is a new outcome.
  */
 export const sendNotification = inngest.createFunction(
   {
     id: "send-notification",
     name: "Send Post Outcome Notification",
-    retries: 1,
+    retries: 4,
+    // Resend allows 10 req/s per team (V18); 8/s leaves 2/s for the mail sent outside Inngest.
+    throttle: { limit: 8, period: "1s", burst: 1 },
   },
   { event: "notification.requested" },
-  async ({ event, step }) => {
+  async ({ event, step, runId }) => {
     // `event.data` is untyped (schemaless Inngest client) — assign into typed
     // locals here rather than annotating with `any` (mirrors retryPlatforms).
     const userId: string = event.data.userId;
     const postJobId: string = event.data.postJobId;
 
-    // At-least-once (review Minor #2): if the email sends but Inngest loses the
-    // step ack, `retries: 1` re-invokes this and the user gets a duplicate email
-    // for one outcome. Accepted — best-effort delivery, at most two, no dedupe.
+    // At-least-once: if the email sends but Inngest loses the step ack, the retry
+    // re-runs this step, and Resend dedupes the repeat by this key (no second email).
     await step.run("deliver-notification", async () => {
-      await deliverPostOutcomeNotification({ userId, postJobId });
+      await deliverPostOutcomeNotification({
+        userId,
+        postJobId,
+        idempotencyKey: `post-outcome/${runId}`,
+      });
     });
 
     return { postJobId };
@@ -1669,6 +1686,11 @@ async function refreshOneConnection(socialConnectionId: string): Promise<Connect
  * Email every owner of the connection's workspace that it needs reconnecting
  * (the body of the `notify-owners` step). Re-checks the flag so an owner who
  * reconnected between the two steps is not told to. Returns a COUNT only.
+ *
+ * 2026-11-01 scale audit (jobs, notifications): a retryable Resend failure now
+ * throws out of the step (the function's `retries` re-run it) instead of being
+ * dropped; the per-owner idempotency key keeps the owners already emailed from
+ * being emailed again on that retry.
  */
 async function notifyOwnersToReconnect(socialConnectionId: string): Promise<{ emailed: number }> {
   const connection = await prisma.socialConnection.findUnique({
@@ -1684,7 +1706,7 @@ async function notifyOwnersToReconnect(socialConnectionId: string): Promise<{ em
     }),
     prisma.workspaceMember.findMany({
       where: { workspaceId: connection.workspaceId, role: "owner" },
-      select: { user: { select: { email: true } } },
+      select: { user: { select: { id: true, email: true } } },
     }),
   ]);
   const email = buildReconnectEmail({
@@ -1692,10 +1714,21 @@ async function notifyOwnersToReconnect(socialConnectionId: string): Promise<{ em
     workspaceName: workspace?.name ?? "your workspace",
     appBaseUrl: process.env.NEXTAUTH_URL || null,
   });
+  // One reconnect email per owner per connection per UTC day. A retry of this step
+  // (or a lost ack) re-sends with the same key, which Resend treats as a no-op for
+  // owners already emailed (V18).
+  const utcDay = new Date().toISOString().slice(0, 10);
   let emailed = 0;
   for (const owner of owners) {
-    // sendEmail never throws (fail-safe transport).
-    await sendEmail({ to: owner.user.email, ...email });
+    // A retryable failure (Resend 429 / 5xx / network) throws, failing the step so
+    // Inngest retries it; every other failure is logged and dropped.
+    await sendEmail(
+      { to: owner.user.email, ...email },
+      {
+        idempotencyKey: `reconnect/${socialConnectionId}/${utcDay}/${owner.user.id}`,
+        throwOnRetryable: true,
+      },
+    );
     emailed++;
   }
   return { emailed };

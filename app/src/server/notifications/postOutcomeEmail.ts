@@ -2,7 +2,7 @@ import type { Platform, PostJobResultStatus, PostJobStatus } from "@prisma/clien
 
 import { prisma } from "@/lib/db";
 import { platformLabel } from "@/lib/platforms";
-import { sendEmail } from "@/server/notifications/email";
+import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
 
 /**
  * Roadmap Phase 6 — post-outcome notification email (spec §7.2).
@@ -17,9 +17,10 @@ import { sendEmail } from "@/server/notifications/email";
  *    `sendNotification` Inngest function calls: it re-fetches fresh data from
  *    just `{ userId, postJobId }` (never trusts anything beyond those ids —
  *    see inngest-functions.ts), applies the two pure helpers, and calls
- *    `sendEmail`. It never throws: every branch is a clean early return or a
- *    caught error, so a bad notification can never affect the publish/retry
- *    job that already completed before this runs.
+ *    `sendEmail`. It never throws except for a RETRYABLE delivery failure
+ *    (a Resend 429 / 5xx / network error): every other branch is a clean early
+ *    return or a caught error, so a bad notification can never affect the
+ *    publish/retry job that already completed before this runs.
  */
 
 export interface ShouldSendPostOutcomeEmailParams {
@@ -177,6 +178,11 @@ export function buildPostOutcomeEmail({
 export interface DeliverPostOutcomeNotificationParams {
   userId: string;
   postJobId: string;
+  /**
+   * Resend `Idempotency-Key` for this outcome (`post-outcome/<runId>`): a retry
+   * after a lost ack is a no-op instead of a second email.
+   */
+  idempotencyKey?: string;
 }
 
 /**
@@ -185,15 +191,19 @@ export interface DeliverPostOutcomeNotificationParams {
  * if `shouldSendPostOutcomeEmail` allows it, sends the email built by
  * `buildPostOutcomeEmail`.
  *
- * NEVER throws: missing job, missing user, a DB error, or an email error are
- * all either a clean early return or caught right here. This is
- * defense-in-depth on top of `sendEmail`'s own try/catch and the Inngest
- * function's `retries: 1` — the invariant ("posting is never affected by
- * notifications") is owned end-to-end by this module, not by the caller.
+ * Throws ONLY a retryable delivery failure (`isRetryableEmailError`: a Resend
+ * 429 / 5xx / network error; 2026-11-01 scale audit, jobs notifications), so the
+ * `deliver-notification` step is retried instead of the email being dropped.
+ * Missing job, missing user, a DB error, or any other email error are all either
+ * a clean early return or caught right here. That is defense-in-depth on top of
+ * `sendEmail`'s own try/catch: the invariant ("posting is never affected by
+ * notifications") is owned end-to-end by this module, not by the caller - the
+ * publish/retry job finished before this event was even sent.
  */
 export async function deliverPostOutcomeNotification({
   userId,
   postJobId,
+  idempotencyKey,
 }: DeliverPostOutcomeNotificationParams): Promise<void> {
   try {
     const hasApiKey = Boolean(process.env.RESEND_API_KEY);
@@ -249,8 +259,12 @@ export async function deliverPostOutcomeNotification({
       postJobId,
     });
 
-    await sendEmail({ to: user.email, subject, html });
+    await sendEmail(
+      { to: user.email, subject, html },
+      { idempotencyKey, throwOnRetryable: true },
+    );
   } catch (error) {
+    if (isRetryableEmailError(error)) throw error;
     console.error("[Notifications] Failed to deliver post-outcome email", {
       userId,
       postJobId,

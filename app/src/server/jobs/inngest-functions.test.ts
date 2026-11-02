@@ -34,6 +34,7 @@ const {
   releaseSpy,
   consumeSlotMock,
   exhaustBudgetMock,
+  deliverNotificationMock,
 } = vi.hoisted(() => ({
   getPlatformClientMock: vi.fn(),
   failPendingMock: vi.fn(),
@@ -42,6 +43,7 @@ const {
   releaseSpy: vi.fn(),
   consumeSlotMock: vi.fn(),
   exhaustBudgetMock: vi.fn(),
+  deliverNotificationMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -85,6 +87,11 @@ vi.mock("@/server/jobs/resultClaim", async (importOriginal) => {
   return { ...actual, releaseClaimForDeferral: releaseSpy };
 });
 vi.mock("@vercel/blob", () => ({ del: vi.fn() }));
+// The email builder / Resend transport have their own suites; sendNotification's
+// job is the Inngest options and the step boundary.
+vi.mock("@/server/notifications/postOutcomeEmail", () => ({
+  deliverPostOutcomeNotification: deliverNotificationMock,
+}));
 // failPendingPostJobResults is stubbed (its own suite covers it); the locked
 // recompute stays REAL but is wrapped in a spy, so the finalize steps' calls to
 // it can be asserted while their DB reads and writes still run against the mocks.
@@ -98,11 +105,13 @@ vi.mock("@/server/jobs/failPendingResults", async (importOriginal) => {
   };
 });
 
+import { EmailRetryableError } from "@/server/notifications/email";
 import {
   failInterruptedPublishRun,
   failInterruptedRetryRun,
   publishToAllPlatforms,
   retryPlatforms,
+  sendNotification,
   stalePostJobSweep,
 } from "./inngest-functions";
 import { PUBLISH_PRIORITY, publishConcurrency } from "./publishFlowControl";
@@ -2386,5 +2395,60 @@ describe("outcome email - only for a terminal job status (fix round 1, Important
       step.order.indexOf("run:finalize-job"),
     );
     expect(step.outputs["finalize-job"]).toMatchObject({ finalStatus: "completed" });
+  });
+});
+
+// 2026-11-01 scale audit (jobs, notifications): the outcome mailer is throttled
+// under Resend's 10 req/s team limit (V18) and retries a 429 / 5xx instead of
+// dropping the email (V5, V8).
+describe("sendNotification - throttle, retries and idempotent delivery", () => {
+  const optsOf = () => (sendNotification as unknown as { opts: Record<string, unknown> }).opts;
+  const event = {
+    name: "notification.requested",
+    data: { userId: "user-1", postJobId: "job-1" },
+  };
+
+  beforeEach(() => {
+    deliverNotificationMock.mockReset();
+    deliverNotificationMock.mockResolvedValue(undefined);
+  });
+
+  it("keeps its id and is throttled to 8 run starts a second, with 4 retries", () => {
+    const opts = optsOf();
+
+    expect(opts.id).toBe("send-notification");
+    expect(opts.throttle).toEqual({ limit: 8, period: "1s", burst: 1 });
+    expect(opts.retries).toBe(4);
+  });
+
+  it("delivers inside the deliver-notification step with the run-scoped idempotency key", async () => {
+    const step = fakeStep();
+
+    const out = await handlerOf(sendNotification)({ event, step });
+
+    expect(out).toEqual({ postJobId: "job-1" });
+    expect(step.order).toEqual(["run:deliver-notification"]);
+    expect(deliverNotificationMock).toHaveBeenCalledTimes(1);
+    expect(deliverNotificationMock).toHaveBeenCalledWith({
+      userId: "user-1",
+      postJobId: "job-1",
+      idempotencyKey: "post-outcome/run-1",
+    });
+  });
+
+  it("another run of the same job uses its own key (a retry is a new outcome)", async () => {
+    await handlerOf(sendNotification)({ event, step: fakeStep(), runId: "run-2" });
+
+    expect(deliverNotificationMock).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotencyKey: "post-outcome/run-2" }),
+    );
+  });
+
+  it("a retryable delivery error makes the deliver-notification step reject, so Inngest retries it", async () => {
+    deliverNotificationMock.mockRejectedValueOnce(new EmailRetryableError("Resend send failed (status 503)"));
+
+    await expect(handlerOf(sendNotification)({ event, step: fakeStep() })).rejects.toBeInstanceOf(
+      EmailRetryableError,
+    );
   });
 });

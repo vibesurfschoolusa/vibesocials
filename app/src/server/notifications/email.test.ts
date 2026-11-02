@@ -25,7 +25,13 @@ vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: loggerErrorMock },
 }));
 
-import { sendEmail } from "@/server/notifications/email";
+import { RetryAfterError } from "inngest";
+
+import {
+  EmailRetryableError,
+  isRetryableEmailError,
+  sendEmail,
+} from "@/server/notifications/email";
 
 beforeEach(() => {
   sendMock.mockReset();
@@ -141,5 +147,178 @@ describe("sendEmail", () => {
     await sendEmail({ to: "user@example.com", subject: "Hi", html: "<p>hi</p>" });
 
     expect(loggerErrorMock).not.toHaveBeenCalled();
+  });
+});
+
+// 2026-11-01 scale audit (jobs, notifications): a burst of outcome emails past
+// Resend's 10 req/s team limit used to be dropped silently (every error was
+// logged and swallowed). With `throwOnRetryable` the retryable failures throw so
+// the Inngest step retries; everything else keeps the never-throws contract.
+describe("sendEmail - retryable delivery (throwOnRetryable)", () => {
+  const params = { to: "user@example.com", subject: "Hi", html: "<p>hi</p>" };
+  const opts = { throwOnRetryable: true };
+
+  beforeEach(() => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  const rejection = (statusCode: number | null, name: string) => ({
+    data: null,
+    error: { name, message: `Resend said ${name}`, statusCode },
+    headers: null,
+  });
+
+  it("429 rate_limit_exceeded rejects with a RetryAfterError (2s)", async () => {
+    sendMock.mockResolvedValueOnce(rejection(429, "rate_limit_exceeded"));
+
+    const error = await sendEmail(params, opts).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(RetryAfterError);
+    expect((error as RetryAfterError).retryAfter).toBe("2");
+    expect(isRetryableEmailError(error)).toBe(true);
+  });
+
+  it("5xx rejects with an EmailRetryableError", async () => {
+    sendMock.mockResolvedValueOnce(rejection(503, "application_error"));
+
+    const error = await sendEmail(params, opts).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(EmailRetryableError);
+    expect((error as EmailRetryableError).code).toBe("EMAIL_RETRYABLE");
+    expect(isRetryableEmailError(error)).toBe(true);
+  });
+
+  it("a thrown network error rejects with an EmailRetryableError", async () => {
+    sendMock.mockRejectedValueOnce(new Error("network down"));
+
+    await expect(sendEmail(params, opts)).rejects.toBeInstanceOf(EmailRetryableError);
+  });
+
+  it("an unresolved request (the SDK reports statusCode null) rejects with an EmailRetryableError", async () => {
+    sendMock.mockResolvedValueOnce(rejection(null, "application_error"));
+
+    await expect(sendEmail(params, opts)).rejects.toBeInstanceOf(EmailRetryableError);
+  });
+
+  it("422 resolves (logged, dropped)", async () => {
+    sendMock.mockResolvedValueOnce(rejection(422, "validation_error"));
+
+    await expect(sendEmail(params, opts)).resolves.toBeUndefined();
+
+    expect(loggerErrorMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("409 invalid_idempotent_request resolves: a send with that key already went out", async () => {
+    sendMock.mockResolvedValueOnce(rejection(409, "invalid_idempotent_request"));
+
+    await expect(sendEmail(params, opts)).resolves.toBeUndefined();
+
+    expect(loggerErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("409 concurrent_idempotent_requests rejects with a RetryAfterError", async () => {
+    sendMock.mockResolvedValueOnce(rejection(409, "concurrent_idempotent_requests"));
+
+    await expect(sendEmail(params, opts)).rejects.toBeInstanceOf(RetryAfterError);
+  });
+
+  it("a Resend constructor error is not a transient delivery failure: it resolves", async () => {
+    ResendMock.mockImplementationOnce(function () {
+      throw new Error("bad key");
+    });
+
+    await expect(sendEmail(params, opts)).resolves.toBeUndefined();
+  });
+
+  it("never puts the recipient address in a thrown error", async () => {
+    sendMock.mockResolvedValueOnce(rejection(503, "application_error"));
+    const retryable = await sendEmail(params, opts).catch((e: unknown) => e);
+    sendMock.mockResolvedValueOnce(rejection(429, "rate_limit_exceeded"));
+    const rateLimited = await sendEmail(params, opts).catch((e: unknown) => e);
+
+    for (const error of [retryable, rateLimited]) {
+      expect(JSON.stringify(error, Object.getOwnPropertyNames(error as object))).not.toContain(
+        "user@example.com",
+      );
+    }
+  });
+
+  it("a successful send resolves", async () => {
+    await expect(sendEmail(params, opts)).resolves.toBeUndefined();
+  });
+});
+
+describe("sendEmail - without throwOnRetryable it never throws", () => {
+  const params = { to: "user@example.com", subject: "Hi", html: "<p>hi</p>" };
+
+  beforeEach(() => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  it.each([
+    [429, "rate_limit_exceeded"],
+    [503, "application_error"],
+    [409, "concurrent_idempotent_requests"],
+    [409, "invalid_idempotent_request"],
+    [422, "validation_error"],
+    [null, "application_error"],
+  ])("a resolved %s %s error resolves", async (statusCode, name) => {
+    sendMock.mockResolvedValueOnce({
+      data: null,
+      error: { name, message: "x", statusCode },
+      headers: null,
+    });
+
+    await expect(sendEmail(params)).resolves.toBeUndefined();
+    await expect(sendEmail(params, { idempotencyKey: "k" })).resolves.toBeUndefined();
+  });
+
+  it("a thrown network error resolves", async () => {
+    sendMock.mockRejectedValueOnce(new Error("network down"));
+
+    await expect(sendEmail(params)).resolves.toBeUndefined();
+  });
+});
+
+describe("sendEmail - idempotency key", () => {
+  it("passes idempotencyKey to Resend as the second argument of emails.send", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    vi.stubEnv("NOTIFICATIONS_FROM", "");
+
+    await sendEmail(
+      { to: "user@example.com", subject: "Hi", html: "<p>hi</p>" },
+      { idempotencyKey: "k" },
+    );
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).toHaveBeenCalledWith(
+      {
+        from: "Vibe Socials <onboarding@resend.dev>",
+        to: "user@example.com",
+        subject: "Hi",
+        html: "<p>hi</p>",
+      },
+      { idempotencyKey: "k" },
+    );
+  });
+
+  it("sends with no second argument when no key is given", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+
+    await sendEmail({ to: "user@example.com", subject: "Hi", html: "<p>hi</p>" });
+
+    expect(sendMock.mock.calls[0]).toHaveLength(1);
+  });
+});
+
+describe("isRetryableEmailError", () => {
+  it("is true for EmailRetryableError and RetryAfterError only", () => {
+    expect(isRetryableEmailError(new EmailRetryableError("x"))).toBe(true);
+    expect(isRetryableEmailError(new RetryAfterError("x", 1000))).toBe(true);
+    expect(isRetryableEmailError(new Error("x"))).toBe(false);
+    expect(isRetryableEmailError("x")).toBe(false);
+    expect(isRetryableEmailError(undefined)).toBe(false);
   });
 });

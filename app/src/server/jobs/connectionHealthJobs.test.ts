@@ -41,7 +41,11 @@ vi.mock("@/server/platforms/connectionRefresh", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/platforms/connectionRefresh")>()),
   refreshConnectionToken: refreshConnectionTokenMock,
 }));
-vi.mock("@/server/notifications/email", () => ({ sendEmail: sendEmailMock }));
+// Only the transport is replaced; EmailRetryableError / isRetryableEmailError stay real.
+vi.mock("@/server/notifications/email", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/notifications/email")>()),
+  sendEmail: sendEmailMock,
+}));
 // The page logic has its own suite (youtubeMetricsSync.test.ts); the handler's
 // paging loop is what is under test here.
 vi.mock("@/server/jobs/youtubeMetricsSync", async (importOriginal) => ({
@@ -66,6 +70,7 @@ import {
   proactiveRefreshWhere,
 } from "./connectionHealthSweep";
 import { PUBLISH_STEP_BUDGET_MS } from "@/server/platforms/publishBudget";
+import { EmailRetryableError } from "@/server/notifications/email";
 import { METRICS_MAX_PAGES_PER_RUN, METRICS_UNITS_PER_RUN } from "@/server/jobs/metricsScanner";
 import type { MetricsPageResult as SyncPage } from "@/server/jobs/youtubeMetricsSync";
 
@@ -421,8 +426,8 @@ describe("refreshConnection — one connection", () => {
     });
     workspaceFindUniqueMock.mockResolvedValue({ name: "Acme" });
     membersFindManyMock.mockResolvedValue([
-      { user: { email: "owner-a@example.com" } },
-      { user: { email: "owner-b@example.com" } },
+      { user: { id: "user-a", email: "owner-a@example.com" } },
+      { user: { id: "user-b", email: "owner-b@example.com" } },
     ]);
   });
 
@@ -465,8 +470,35 @@ describe("refreshConnection — one connection", () => {
     expect(workspaceFindUniqueMock).toHaveBeenCalledWith({ where: { id: "ws-1" }, select: { name: true } });
     expect(membersFindManyMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", role: "owner" },
-      select: { user: { select: { email: true } } },
+      select: { user: { select: { id: true, email: true } } },
     });
+  });
+
+  // 2026-11-01 scale audit (jobs, notifications): a Resend 429 / 5xx now fails the
+  // notify-owners step so Inngest retries it, and the per-owner key makes the
+  // retry (or a lost ack) a no-op for owners already emailed (V18).
+  it("FLAGGED: each owner email carries a per-owner, per-UTC-day idempotency key and throws on retryable errors", async () => {
+    clientWith(async () => {
+      row = { ...row!, needsReconnect: true };
+      throw Object.assign(new Error("expired"), { code: "TIKTOK_RECONNECT_REQUIRED" });
+    });
+
+    await run();
+
+    expect(sendEmailMock.mock.calls.map((c) => c[1])).toEqual([
+      { idempotencyKey: "reconnect/conn-1/2026-11-01/user-a", throwOnRetryable: true },
+      { idempotencyKey: "reconnect/conn-1/2026-11-01/user-b", throwOnRetryable: true },
+    ]);
+  });
+
+  it("FLAGGED: a retryable send error fails the notify-owners step (and so is retried)", async () => {
+    clientWith(async () => {
+      row = { ...row!, needsReconnect: true };
+      throw new Error("expired");
+    });
+    sendEmailMock.mockRejectedValueOnce(new EmailRetryableError("Resend send failed (status 503)"));
+
+    await expect(run()).rejects.toBeInstanceOf(EmailRetryableError);
   });
 
   it("never puts tokens or email addresses in step output", async () => {

@@ -17,10 +17,16 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-vi.mock("@/server/notifications/email", () => ({
+// The real EmailRetryableError / isRetryableEmailError stay: the retryable-error
+// rethrow is the behaviour under test.
+vi.mock("@/server/notifications/email", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/notifications/email")>()),
   sendEmail: sendEmailMock,
 }));
 
+import { RetryAfterError } from "inngest";
+
+import { EmailRetryableError } from "@/server/notifications/email";
 import {
   buildPostOutcomeEmail,
   deliverPostOutcomeNotification,
@@ -358,5 +364,78 @@ describe("deliverPostOutcomeNotification", () => {
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     const arg = sendEmailMock.mock.calls[0][0] as { html: string };
     expect(arg.html).not.toContain("/activity");
+  });
+});
+
+// 2026-11-01 scale audit (jobs, notifications): a retryable delivery failure must
+// reach the Inngest step so it retries; nothing else may.
+describe("deliverPostOutcomeNotification - retryable delivery", () => {
+  const sendable = () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    findUniqueUserMock.mockResolvedValue({ email: "user@example.com", notifyOnPostComplete: true });
+    findUniquePostJobMock.mockResolvedValue({
+      status: "completed",
+      results: [{ platform: "tiktok", status: "success", errorMessage: null }],
+    });
+  };
+
+  it("passes the idempotency key and throwOnRetryable to sendEmail", async () => {
+    sendable();
+
+    await deliverPostOutcomeNotification({
+      userId: "user-1",
+      postJobId: "job-1",
+      idempotencyKey: "post-outcome/run-1",
+    });
+
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(sendEmailMock.mock.calls[0][0]).toMatchObject({ to: "user@example.com" });
+    expect(sendEmailMock.mock.calls[0][1]).toEqual({
+      idempotencyKey: "post-outcome/run-1",
+      throwOnRetryable: true,
+    });
+  });
+
+  it("rethrows an EmailRetryableError", async () => {
+    sendable();
+    const failure = new EmailRetryableError("Resend send failed (status 503)");
+    sendEmailMock.mockRejectedValueOnce(failure);
+
+    await expect(
+      deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" }),
+    ).rejects.toBe(failure);
+  });
+
+  it("rethrows a RetryAfterError", async () => {
+    sendable();
+    const failure = new RetryAfterError("Resend rate limited", 2_000);
+    sendEmailMock.mockRejectedValueOnce(failure);
+
+    await expect(
+      deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" }),
+    ).rejects.toBe(failure);
+  });
+
+  it("still swallows any other send error", async () => {
+    sendable();
+    sendEmailMock.mockRejectedValueOnce(new Error("something else"));
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" }),
+    ).resolves.toBeUndefined();
+
+    expect(consoleSpy).toHaveBeenCalled();
+  });
+
+  it("still swallows a database error", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    findUniqueUserMock.mockRejectedValue(new Error("db down"));
+    findUniquePostJobMock.mockResolvedValue({ results: [] });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" }),
+    ).resolves.toBeUndefined();
   });
 });
