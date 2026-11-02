@@ -123,7 +123,11 @@ for the same Neon branch:
 
 - **`DATABASE_URL` is the pooled host** (the hostname contains `-pooler`). Every
   serverless function instance shares Neon's PgBouncer instead of opening its
-  own Postgres connections. Use this exact query string:
+  own Postgres connections. End the URL with exactly this query string. It
+  **replaces** the query string the URL already has, it is not appended to it: a
+  Neon URL pasted from the dashboard already ends in `?sslmode=require`, so
+  adding this block after it would put a second `?` in the URL. Delete the old
+  `?sslmode=require` first.
 
   ```
   ?sslmode=require&connection_limit=5&pool_timeout=20&connect_timeout=15
@@ -133,14 +137,15 @@ for the same Neon branch:
   advisory locks (`pg_advisory_xact_lock` inside transactions) and never uses
   `SET`, `LISTEN`, temp tables, or session advisory locks, so it is safe on the
   transaction-mode pooler as is. (`connection_limit=5` is for Fluid compute,
-  where one instance serves many requests; use 1-3 without it.)
+  where one instance serves many requests; use 1–3 if Fluid compute is off.)
 - **`DIRECT_URL` is the direct host** (the same hostname **without**
   `-pooler`). Prisma Migrate takes a session-level advisory lock and runs its
   schema engine over one connection, which a transaction-mode pooler can break.
   `app/scripts/migrate-on-vercel-prod.mjs` therefore runs
   `prisma migrate deploy` with `DIRECT_URL` when it is set, and logs
-  `[migrate-on-vercel-prod] using DIRECT_URL` (it logs the variable name, never
-  the value). With `DIRECT_URL` unset it falls back to `DATABASE_URL`, exactly
+  `[migrate-on-vercel-prod] using DIRECT_URL` plus
+  `[migrate-on-vercel-prod] target host: <host>` (the variable name and the
+  host only, never the credentials or the query). With `DIRECT_URL` unset it falls back to `DATABASE_URL`, exactly
   as before, so setting it is optional. The running app never reads it.
 
 Set `DIRECT_URL` for the **Production** environment only. Preview builds skip
@@ -150,6 +155,24 @@ Keep the **Vercel function region equal to the Neon region** (Project Settings
 -> Functions -> Function Region, vs. the region shown on the Neon project).
 Every request makes several database round trips; a cross-region hop adds its
 latency to each of them.
+
+### Release checklist
+
+- After a deploy that changes blob handling (upload routes, `blobUrl` checks,
+  `BLOB_*` settings), upload one file through the composer and one through the
+  media library, so both write paths are exercised against the live store.
+- If `prisma migrate deploy` ever fails mid-build, the build stops and every
+  later build fails with P3009 until the failed migration is resolved. Resolve it
+  with the direct connection, then redeploy:
+
+  ```bash
+  DATABASE_URL="<DIRECT_URL value>" npx prisma migrate resolve --rolled-back <migration_name>
+  ```
+
+  `<migration_name>` is the folder name under `app/prisma/migrations/` of the
+  migration that failed (its row in `_prisma_migrations` has no
+  `finished_at`). Fix whatever made it fail first; `--rolled-back` only lets the
+  next deploy run it again.
 
 ## Sandbox platform apps
 

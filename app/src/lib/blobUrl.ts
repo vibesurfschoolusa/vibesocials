@@ -41,11 +41,16 @@ function extraAllowedHosts(): string[] {
 /**
  * This deployment's Vercel Blob store id, lower-cased, or `null` when unknown.
  *
- * Derived exactly as `@vercel/blob` derives it (dist/chunk-XKVPKJPO.js):
- * `BLOB_READ_WRITE_TOKEN` is `vercel_blob_rw_<storeId>_<secret>`, so the id is
- * its 4th underscore-separated segment; otherwise `BLOB_STORE_ID` with a
- * leading `store_` stripped. The library builds public URLs as
- * `https://<storeId>.public.blob.vercel-storage.com/<pathname>`.
+ * Derived the way `handleUpload` does, which is what issues our uploads
+ * (src/app/api/upload/route.ts) and reads only `BLOB_READ_WRITE_TOKEN`:
+ * that token is `vercel_blob_rw_<storeId>_<secret>`, so the id is its 4th
+ * underscore-separated segment. `BLOB_STORE_ID` (with a leading `store_`
+ * stripped) is only the fallback when there is no token. This is NOT how the
+ * SDK's `resolveBlobAuth` (dist/chunk-XKVPKJPO.js) orders things: it prefers
+ * OIDC plus `BLOB_STORE_ID` over the token. If the two name different stores
+ * the deployment is misconfigured; there is no multi-store support (ruling R9),
+ * so set them to the same store or set only the token. The library builds
+ * public URLs as `https://<storeId>.public.blob.vercel-storage.com/<pathname>`.
  */
 export function ownBlobStoreId(): string | null {
   const fromToken = process.env.BLOB_READ_WRITE_TOKEN?.trim().split("_")[3]?.trim();
