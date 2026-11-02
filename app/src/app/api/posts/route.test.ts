@@ -80,6 +80,7 @@ vi.mock("@/server/jobs/failPendingResults", async () => {
   return { ...actual, failPendingPostJobResults: failPendingMock };
 });
 
+import { BLOB_URL_REJECTED_MESSAGE } from "@/lib/blobUrl";
 import { PostTargetingError } from "@/lib/postTargets";
 import { MediaItemUnavailableError } from "@/server/jobs/posting";
 import { POST } from "./route";
@@ -974,6 +975,54 @@ describe("POST /api/posts — malformed bodies (2026-11-01 audit, Task 8)", () =
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ error: "Invalid JSON body" });
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/posts — canonical blob URLs (2026-11-01 audit, M2)", () => {
+  const U = "https://test.public.blob.vercel-storage.com/1700000000000-ab12cd34-vid.mp4";
+
+  function body(blobUrl: string) {
+    return { blobUrl, filename: "vid.mp4", mimeType: "video/mp4", sizeBytes: 123, baseCaption: "hello" };
+  }
+
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({
+      postJobId: "job-1",
+      mediaItemId: "media-1",
+      resultIds: [],
+    });
+  });
+
+  it.each([
+    ["a query string", `${U}?x=1`],
+    ["a fragment", `${U}#f`],
+    ["embedded credentials", U.replace("https://", "https://user:pw@")],
+    ["a non-default explicit port", U.replace(".com/", ".com:8443/")],
+  ])("returns 400 with the allowed-host message and creates nothing for %s", async (_label, blobUrl) => {
+    const response = await POST(jsonRequest(body(blobUrl)));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: BLOB_URL_REJECTED_MESSAGE });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("stores the trimmed canonical URL for a whitespace-padded blobUrl (this path used to store it untrimmed)", async () => {
+    const response = await POST(jsonRequest(body(` ${U}
+`)));
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ media: expect.objectContaining({ storageLocation: U }) }),
+    );
+  });
+
+  it("stores the lower-cased spelling for an upper-case host", async () => {
+    const response = await POST(jsonRequest(body(U.replace("https://test.", "HTTPS://TEST."))));
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ media: expect.objectContaining({ storageLocation: U }) }),
+    );
   });
 });
 

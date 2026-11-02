@@ -32,6 +32,7 @@ vi.mock("@/lib/workspace", () => ({
   getWorkspaceContext: getWorkspaceContextMock,
 }));
 
+import { BLOB_URL_REJECTED_MESSAGE } from "@/lib/blobUrl";
 import { decodePostsCursor, encodePostsCursor } from "@/lib/postsDto";
 
 import { GET, POST } from "./route";
@@ -207,6 +208,46 @@ describe("POST /api/media", () => {
     expect(raw).not.toContain("workspaceId");
     expect(raw).not.toContain("deletedAt");
     expect(raw).not.toContain("metadata");
+  });
+
+  describe("canonical blob URLs (2026-11-01 audit, M2)", () => {
+    const U = "https://test.public.blob.vercel-storage.com/1700000000000-ab12cd34-cat.png";
+    const body = (blobUrl: string) => ({ blobUrl, mimeType: "image/png", sizeBytes: 10 });
+
+    beforeEach(() => {
+      createMock.mockResolvedValue({ id: "media-3", createdAt: new Date("2026-01-01T00:00:00Z") });
+    });
+
+    it.each([
+      ["a query string", `${U}?x=1`],
+      ["a fragment", `${U}#f`],
+      ["embedded credentials", U.replace("https://", "https://user:pw@")],
+      ["a non-default explicit port", U.replace(".com/", ".com:8443/")],
+    ])("returns 400 with the allowed-host message and stores nothing for %s", async (_label, blobUrl) => {
+      const response = await POST(jsonRequest(body(blobUrl)));
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: BLOB_URL_REJECTED_MESSAGE });
+      expect(createMock).not.toHaveBeenCalled();
+    });
+
+    it("stores the trimmed canonical URL for a whitespace-padded blobUrl", async () => {
+      const response = await POST(jsonRequest(body(` ${U}  `)));
+
+      expect(response.status).toBe(201);
+      expect(createMock).toHaveBeenCalledWith({
+        data: expect.objectContaining({ storageLocation: U }),
+      });
+    });
+
+    it("stores the lower-cased spelling for an upper-case host", async () => {
+      const response = await POST(jsonRequest(body(U.replace("https://test.", "HTTPS://TEST."))));
+
+      expect(response.status).toBe(201);
+      expect(createMock).toHaveBeenCalledWith({
+        data: expect.objectContaining({ storageLocation: U }),
+      });
+    });
   });
 
   it("stamps the caller's ACTIVE workspace (not necessarily their personal one)", async () => {

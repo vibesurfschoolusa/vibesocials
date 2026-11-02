@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getWorkspaceContext, getWorkspaceMemberCount } from "@/lib/workspace";
-import { BLOB_URL_REJECTED_MESSAGE, isAllowedBlobUrl } from "@/lib/blobUrl";
+import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "@/lib/blobUrl";
 import {
   EMAIL_VERIFY_REQUIRED_MESSAGE,
   isEmailVerifiedForPublish,
@@ -400,11 +400,16 @@ export async function POST(request: Request) {
   // The blobUrl path creates a MediaItem from the client-supplied metadata, so
   // it is validated (reuse of an existing item ignores these fields).
   let mediaFields: PostMediaFields | undefined;
+  // 2026-11-01 audit (M2): the canonical spelling is what gets stored (this path
+  // used to store `body.blobUrl` untrimmed), so the shared-blob guard
+  // (deleteBlobUnlessShared) can't be bypassed by a variant URL.
+  let storedBlobUrl: string | undefined;
   if (hasBlobUrl) {
-    const blobUrl = (body.blobUrl as string).trim();
-    if (!isAllowedBlobUrl(blobUrl)) {
+    const canonical = canonicalBlobUrl(body.blobUrl as string);
+    if (!canonical) {
       return NextResponse.json({ error: BLOB_URL_REJECTED_MESSAGE }, { status: 400 });
     }
+    storedBlobUrl = canonical;
     const mediaValidation = parsePostMediaFields(body);
     if (!mediaValidation.ok) {
       return NextResponse.json({ error: mediaValidation.error }, { status: 400 });
@@ -614,8 +619,8 @@ export async function POST(request: Request) {
       // only runs when `usingExistingMedia` is false, which — given the
       // earlier guard — guarantees `hasBlobUrl`), but TypeScript can't carry
       // that guarantee through the intermediate boolean, so this narrows
-      // `body.blobUrl` to `string` for the call below.
-      if (typeof body.blobUrl !== "string" || !body.blobUrl.trim() || !mediaFields) {
+      // `storedBlobUrl` to `string` for the call below.
+      if (!storedBlobUrl || !mediaFields) {
         return NextResponse.json(
           { error: "blobUrl is required" },
           { status: 400 },
@@ -626,7 +631,7 @@ export async function POST(request: Request) {
         userId: context.user.id,
         workspaceId: context.workspace.id,
         media: {
-          storageLocation: body.blobUrl,
+          storageLocation: storedBlobUrl,
           originalFilename: mediaFields.filename,
           mimeType: mediaFields.mimeType,
           sizeBytes: mediaFields.sizeBytes,

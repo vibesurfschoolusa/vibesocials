@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { BLOB_URL_REJECTED_MESSAGE, isAllowedBlobUrl } from "@/lib/blobUrl";
+import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "@/lib/blobUrl";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { toMediaItemDto } from "@/lib/mediaDto";
@@ -131,11 +131,15 @@ export async function POST(request: Request) {
     return invalidJsonBodyResponse();
   }
 
-  const blobUrl = typeof body.blobUrl === "string" ? body.blobUrl.trim() : "";
-  if (!blobUrl) {
+  const rawBlobUrl = typeof body.blobUrl === "string" ? body.blobUrl.trim() : "";
+  if (!rawBlobUrl) {
     return NextResponse.json({ error: "blobUrl is required" }, { status: 400 });
   }
-  if (!isAllowedBlobUrl(blobUrl)) {
+  // 2026-11-01 audit (M2): store ONE canonical spelling per file so the
+  // shared-blob guard (deleteBlobUnlessShared) can't be bypassed by a variant
+  // URL (`?x=1`, upper-case host, ...). `null` = not allowed or not canonical.
+  const blobUrl = canonicalBlobUrl(rawBlobUrl);
+  if (!blobUrl) {
     return NextResponse.json({ error: BLOB_URL_REJECTED_MESSAGE }, { status: 400 });
   }
   // The image/video rule is shared with POST /api/posts (lib/mediaInput.ts).

@@ -84,7 +84,7 @@ describe("mediaRetentionSweep blob deletion", () => {
     expect(db.update).toHaveBeenCalledTimes(1);
     expect(db.count).toHaveBeenCalledWith({
       where: {
-        storageLocation: "https://example.public.blob.vercel-storage.com/a.mp4",
+        storageLocation: { in: ["https://example.public.blob.vercel-storage.com/a.mp4"] },
         id: { not: "media-1" },
         deletedAt: null,
       },

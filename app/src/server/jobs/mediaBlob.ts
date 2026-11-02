@@ -1,6 +1,8 @@
 import type { Prisma } from "@prisma/client";
 import { del } from "@vercel/blob";
 
+import { canonicalBlobUrl } from "@/lib/blobUrl";
+
 /** The slice of a Prisma transaction client {@link deleteBlobUnlessShared} needs. */
 export type MediaBlobTx = Pick<Prisma.TransactionClient, "$executeRaw" | "mediaItem">;
 
@@ -19,21 +21,31 @@ export type BlobDeleteOutcome = "deleted" | "kept_shared";
  *
  * MUST run inside the transaction that already marked `media`'s own row as
  * deleted (`deletedAt` set) and holds its `FOR UPDATE` row lock: an
- * advisory lock keyed on the URL then serializes concurrent deletes of rows
- * that share it, so two simultaneous deletes can't each see the other as still
- * live and both skip (which would leak the blob). The loser of the lock sees
- * the winner's commit and deletes the blob. If `del` throws, the caller's
- * transaction rolls back (the row stays live) — same contract as before.
+ * advisory lock keyed on the canonical URL then serializes concurrent deletes
+ * of rows that share it, so two simultaneous deletes can't each see the other
+ * as still live and both skip (which would leak the blob). The loser of the
+ * lock sees the winner's commit and deletes the blob. If `del` throws, the
+ * caller's transaction rolls back (the row stays live) — same contract as
+ * before.
  */
 export async function deleteBlobUnlessShared(
   tx: MediaBlobTx,
   media: { id: string; storageLocation: string },
 ): Promise<BlobDeleteOutcome> {
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${media.storageLocation}))`;
+  // 2026-11-01 audit (M2): compare CANONICAL URLs. Legacy rows written before
+  // the write paths canonicalized (stray whitespace, an upper-case host, `:443`)
+  // are other spellings of the same file; matching raw strings let a member
+  // `del()` a teammate's blob through such a row. The lock, the lookup and the
+  // delete all use the canonical key. The raw value is matched too, so a row
+  // whose stored value cannot be canonicalized keeps the old exact-match rule.
+  const key = canonicalBlobUrl(media.storageLocation) ?? media.storageLocation;
+  const spellings = key === media.storageLocation ? [key] : [key, media.storageLocation];
+
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
 
   const otherLiveReferences = await tx.mediaItem.count({
     where: {
-      storageLocation: media.storageLocation,
+      storageLocation: { in: spellings },
       id: { not: media.id },
       deletedAt: null,
     },
@@ -42,6 +54,6 @@ export async function deleteBlobUnlessShared(
     return "kept_shared";
   }
 
-  await del(media.storageLocation);
+  await del(key);
   return "deleted";
 }

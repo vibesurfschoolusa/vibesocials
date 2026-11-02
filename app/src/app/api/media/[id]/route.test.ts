@@ -386,7 +386,7 @@ describe("DELETE /api/media/[id]", () => {
       await DELETE(dummyRequest, ctx("media-7"));
 
       expect(mediaItemCountMock).toHaveBeenCalledWith({
-        where: { storageLocation: SHARED_URL, id: { not: "media-7" }, deletedAt: null },
+        where: { storageLocation: { in: [SHARED_URL] }, id: { not: "media-7" }, deletedAt: null },
       });
     });
 
