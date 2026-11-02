@@ -61,21 +61,58 @@ function positiveInteger(raw: string | undefined, fallback: number): number {
 }
 
 /**
+ * The highest concurrency limit any one function may declare on the current
+ * Inngest plan. The sync rejects the WHOLE app when one function's limit is
+ * above it ("has higher concurrency limits (20) than your plan limit of 5"), so
+ * the new configuration never registers. 5 is the free plan's limit. After an
+ * upgrade, set `INNGEST_PLAN_CONCURRENCY` to the new plan's limit; the design
+ * limits below then apply unchanged.
+ */
+export const DEFAULT_INNGEST_PLAN_CONCURRENCY = 5;
+
+/** The plan ceiling from `INNGEST_PLAN_CONCURRENCY`, else the free plan's 5. */
+export function inngestPlanConcurrency(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  return positiveInteger(env.INNGEST_PLAN_CONCURRENCY, DEFAULT_INNGEST_PLAN_CONCURRENCY);
+}
+
+/**
  * The two limits, from `PUBLISH_CONCURRENCY_PER_WORKSPACE` and
- * `PUBLISH_CONCURRENCY_GLOBAL`. Each falls back to its default on a missing or
- * invalid value (positive integers only), so a typo in the env never disables
- * flow control.
+ * `PUBLISH_CONCURRENCY_GLOBAL`, each clamped to the plan ceiling. Each falls
+ * back to its default on a missing or invalid value (positive integers only), so
+ * a typo in the env never disables flow control.
  */
 export function publishConcurrencyLimits(
   env: Record<string, string | undefined> = process.env,
 ): PublishConcurrencyLimits {
+  const ceiling = inngestPlanConcurrency(env);
   return {
-    perWorkspace: positiveInteger(
-      env.PUBLISH_CONCURRENCY_PER_WORKSPACE,
-      DEFAULT_PUBLISH_CONCURRENCY_PER_WORKSPACE,
+    perWorkspace: Math.min(
+      positiveInteger(env.PUBLISH_CONCURRENCY_PER_WORKSPACE, DEFAULT_PUBLISH_CONCURRENCY_PER_WORKSPACE),
+      ceiling,
     ),
-    global: positiveInteger(env.PUBLISH_CONCURRENCY_GLOBAL, DEFAULT_PUBLISH_CONCURRENCY_GLOBAL),
+    global: Math.min(
+      positiveInteger(env.PUBLISH_CONCURRENCY_GLOBAL, DEFAULT_PUBLISH_CONCURRENCY_GLOBAL),
+      ceiling,
+    ),
   };
+}
+
+/** `refresh-connection` runs across all connections at once, before the plan ceiling. */
+export const DEFAULT_REFRESH_CONNECTION_CONCURRENCY = 10;
+
+/**
+ * The `concurrency` option of `refresh-connection`: one run per connection, and
+ * a global limit clamped to the plan ceiling.
+ */
+export function refreshConnectionConcurrency(
+  env: Record<string, string | undefined> = process.env,
+): [{ key: string; limit: number }, { limit: number }] {
+  return [
+    { key: "event.data.socialConnectionId", limit: 1 },
+    { limit: Math.min(DEFAULT_REFRESH_CONNECTION_CONCURRENCY, inngestPlanConcurrency(env)) },
+  ];
 }
 
 type EnvScopedConcurrency = { scope: "env"; key: string; limit: number };

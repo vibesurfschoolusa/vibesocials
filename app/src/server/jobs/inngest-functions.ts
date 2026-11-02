@@ -33,7 +33,11 @@ import {
   type MetricsPageResult,
 } from "@/server/jobs/youtubeMetricsSync";
 import { resolvePostCaptionSource } from "@/server/jobs/posting";
-import { PUBLISH_PRIORITY, publishConcurrency } from "@/server/jobs/publishFlowControl";
+import {
+  PUBLISH_PRIORITY,
+  publishConcurrency,
+  refreshConnectionConcurrency,
+} from "@/server/jobs/publishFlowControl";
 import {
   STALE_ELIGIBLE_STATUSES,
   staleCutoff,
@@ -1764,7 +1768,7 @@ export const refreshConnection = inngest.createFunction(
     id: "refresh-connection",
     name: "Refresh Connection",
     retries: 2,
-    concurrency: [{ key: "event.data.socialConnectionId", limit: 1 }, { limit: 10 }],
+    concurrency: refreshConnectionConcurrency(),
   },
   { event: "connection/refresh.requested" },
   async ({ event, step }) => {

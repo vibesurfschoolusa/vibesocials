@@ -64,6 +64,7 @@ import {
   refreshConnection,
   youtubePostMetricsSync,
 } from "./inngest-functions";
+import { inngestPlanConcurrency, refreshConnectionConcurrency } from "./publishFlowControl";
 import {
   GOOGLE_IDLE_REFRESH_MS,
   HEALTH_SWEEP_PAGE_SIZE,
@@ -368,14 +369,35 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
   });
 });
 
+describe("every registered function fits the Inngest plan", () => {
+  it("never sets a concurrency limit above the plan ceiling (the sync rejects the whole app)", () => {
+    const ceiling = inngestPlanConcurrency();
+    for (const fn of inngestFunctions) {
+      const { id, concurrency } = optsOf(fn) as {
+        id: string;
+        concurrency?: number | { limit: number } | Array<{ limit: number }>;
+      };
+      if (concurrency === undefined) continue;
+      const limits =
+        typeof concurrency === "number"
+          ? [concurrency]
+          : (Array.isArray(concurrency) ? concurrency : [concurrency]).map((c) => c.limit);
+      for (const limit of limits) {
+        expect({ id, limit }).toEqual({ id, limit: Math.min(limit, ceiling) });
+      }
+    }
+  });
+});
+
 describe("refreshConnection (refresh-connection) — configuration", () => {
-  it("keeps the contract: id, retries 2, one run per connection and 10 overall, event trigger", () => {
+  it("keeps the contract: id, retries 2, one run per connection and a plan-clamped total, event trigger", () => {
     const opts = optsOf(refreshConnection);
     expect(opts.id).toBe("refresh-connection");
     expect(opts.retries).toBe(2);
+    expect(opts.concurrency).toEqual(refreshConnectionConcurrency());
     expect(opts.concurrency).toEqual([
       { key: "event.data.socialConnectionId", limit: 1 },
-      { limit: 10 },
+      { limit: Math.min(10, inngestPlanConcurrency()) },
     ]);
     expect(registeredConfig(refreshConnection, "refresh-connection")?.triggers).toEqual([
       { event: "connection/refresh.requested" },
