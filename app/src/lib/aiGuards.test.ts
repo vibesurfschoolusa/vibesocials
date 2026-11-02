@@ -28,7 +28,7 @@ describe("AI_LIMITS", () => {
     expect(AI_LIMITS).toEqual({
       caption: 2200,
       shortField: 40,
-      reviewComment: 4000,
+      reviewComment: 5000,
       name: 200,
       workspaceDailyCalls: 200,
     });
@@ -74,12 +74,12 @@ describe("findOverlongAiField", () => {
 
 describe("aiInputTooLongResponse", () => {
   it("is a 400 { code, error } with the field and limit in the message", async () => {
-    const response = aiInputTooLongResponse({ field: "comment", max: 4000 });
+    const response = aiInputTooLongResponse({ field: "comment", max: 5000 });
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
       code: "AI_INPUT_TOO_LONG",
-      error: "comment is too long (max 4000 characters).",
+      error: "comment is too long (max 5000 characters).",
     });
   });
 });

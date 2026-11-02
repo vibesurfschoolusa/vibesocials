@@ -98,7 +98,7 @@ describe("POST /api/reviews/draft-response", () => {
 
   describe("prompt field caps", () => {
     it.each([
-      ["comment", 4000],
+      ["comment", 5000],
       ["reviewerName", 200],
       ["businessName", 200],
       ["starRating", 40],
@@ -120,7 +120,7 @@ describe("POST /api/reviews/draft-response", () => {
       const response = await post({
         reviewerName: "n".repeat(200),
         starRating: "FIVE",
-        comment: "c".repeat(4000),
+        comment: "c".repeat(5000),
         businessName: "b".repeat(200),
       });
 
@@ -129,7 +129,7 @@ describe("POST /api/reviews/draft-response", () => {
     });
 
     it("rejects before any rate-limit counter is spent (length check precedes the limits)", async () => {
-      await post({ ...validBody, comment: "x".repeat(4001) });
+      await post({ ...validBody, comment: "x".repeat(5001) });
 
       expect(checkRateLimitMock).not.toHaveBeenCalled();
     });

@@ -18,8 +18,8 @@ export const AI_LIMITS = {
   caption: 2200,
   /** Short enum-like values: platform, language, tone, star rating, mime type. */
   shortField: 40,
-  /** A customer review's text. */
-  reviewComment: 4000,
+  /** A customer review's text. Google reviews run to about 4,096 characters. */
+  reviewComment: 5000,
   /** Person and business names. */
   name: 200,
   /** AI calls one workspace may make per 24 h, shared by all three routes. */
