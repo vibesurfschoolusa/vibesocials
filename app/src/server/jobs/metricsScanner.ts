@@ -9,8 +9,38 @@ import { prisma } from "@/lib/db";
  * prisma (mirrors `scheduledScanner.claimDueScheduledJobs`).
  */
 
-/** Max results fetched per sync run; the hourly cadence drains any backlog. */
-export const METRICS_SYNC_BATCH = 100;
+/**
+ * 2026-11-01 scale audit (jobs, YouTube metrics): the hourly sync refreshes the
+ * results least recently CHECKED first, 50 ids per `videos.list` call, within a
+ * per-run quota budget. It used to refresh the newest 100 results only, one call
+ * each, so older videos stopped being refreshed.
+ */
+
+/** Results selected per page; a run reads up to {@link METRICS_MAX_PAGES_PER_RUN} pages. */
+export const METRICS_PAGE_SIZE = 200;
+
+/** Pages (`sync-page-<i>` steps) per run: at most 2,000 results an hour. */
+export const METRICS_MAX_PAGES_PER_RUN = 10;
+
+/**
+ * YouTube quota units one run may spend. `videos.list` costs 1 unit a call, so
+ * 300 x 24 runs = 7,200 a day out of the shared 10,000-unit general bucket
+ * (`videos.insert` has its own bucket of 100 calls/day), which leaves the rest
+ * for other callers. Quota resets at midnight Pacific Time.
+ * https://developers.google.com/youtube/v3/determine_quota_cost
+ */
+export const METRICS_UNITS_PER_RUN = 300;
+
+/** A result checked within this long is not selected again (the cron is hourly). */
+export const METRICS_MIN_REFRESH_MS = 3_600_000;
+
+/**
+ * Video ids per `videos.list` call. UNCONFIRMED: 50 comes from secondary
+ * sources, not the official reference (plan U4). A wrong cap only leaves metrics
+ * stale: the call fails and its ids are retried an hour later.
+ * https://developers.google.com/youtube/v3/docs/videos/list
+ */
+export const YOUTUBE_STATS_IDS_PER_CALL = 50;
 
 /** A successful, fetchable YouTube post result. Carries the denormalized identity
  * the metric row stores (userId/platform/externalPostId), so a later connection
@@ -33,28 +63,37 @@ export interface EligibleMetricResult {
 }
 
 /**
- * Select the batch of results eligible for a metric fetch right now: successful
- * `youtube` results with a non-null `externalPostId` (the video id).
+ * Select one page of results eligible for a metric fetch right now: successful
+ * `youtube` results with a non-null `externalPostId` (the video id) that were
+ * never checked or were last checked more than {@link METRICS_MIN_REFRESH_MS}
+ * before `now`.
  *
- * v1 orders by `createdAt desc` and bounds the batch to `take` — so each run
- * refreshes the most-recent posts (the ones whose "current" stats matter most).
- * NOTE (review Minor #3): this batch is GLOBAL across all users (no `userId`
- * scope), so with more than `take` recent YouTube posts in the system a single
- * high-volume user can fill a run and delay other users' refreshes. Effect is
- * staleness only — existing metric rows persist and are still served — never
- * data loss. Fairer scheduling (per-user round-robin, or ordering by metric
- * staleness to drain the long tail) is a deliberate future extension. The query
- * is platform-scoped to `youtube` because that is the only fetcher in v1
+ * 2026-11-01 scale audit (jobs, YouTube metrics): ordered LEAST-RECENTLY-CHECKED
+ * first (`metricsCheckedAt` ascending, never-checked first), then newest post
+ * first. `metricsCheckedAt` is stamped on every attempt - found, not found or
+ * error - so a deleted or private video (which never gets a metric row) moves to
+ * the back of the line after one try instead of sorting first forever, as it
+ * would have by `PostMetric.fetchedAt`. This replaces the v1 "newest 100 posts"
+ * order, which never reached older videos (review Minor #3). The batch is still
+ * GLOBAL across users and workspaces (no scope), so the run's unit budget, not
+ * the selector, bounds the cost. Served by
+ * `@@index([platform, status, metricsCheckedAt])`. The query is
+ * platform-scoped to `youtube` because that is the only fetcher in v1
  * (extension point in the cron).
  */
 export async function selectYouTubeMetricEligibleResults(
-  take: number = METRICS_SYNC_BATCH,
+  take: number = METRICS_PAGE_SIZE,
+  now: Date = new Date(),
 ): Promise<EligibleMetricResult[]> {
   const rows = await prisma.postJobResult.findMany({
     where: {
       platform: "youtube",
       status: "success",
       externalPostId: { not: null },
+      OR: [
+        { metricsCheckedAt: null },
+        { metricsCheckedAt: { lt: new Date(now.getTime() - METRICS_MIN_REFRESH_MS) } },
+      ],
     },
     select: {
       id: true,
@@ -63,7 +102,7 @@ export async function selectYouTubeMetricEligibleResults(
       // column itself).
       postJob: { select: { userId: true, workspaceId: true } },
     },
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ metricsCheckedAt: { sort: "asc", nulls: "first" } }, { createdAt: "desc" }],
     take,
   });
 

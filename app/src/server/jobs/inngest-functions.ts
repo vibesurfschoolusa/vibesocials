@@ -25,9 +25,13 @@ import {
   type ChunkDispatchResult,
 } from "@/server/jobs/scheduledScanner";
 import {
-  METRICS_SYNC_BATCH,
-  selectYouTubeMetricEligibleResults,
+  METRICS_MAX_PAGES_PER_RUN,
+  METRICS_UNITS_PER_RUN,
 } from "@/server/jobs/metricsScanner";
+import {
+  syncYouTubeMetricsPage,
+  type MetricsPageResult,
+} from "@/server/jobs/youtubeMetricsSync";
 import { resolvePostCaptionSource } from "@/server/jobs/posting";
 import { PUBLISH_PRIORITY, publishConcurrency } from "@/server/jobs/publishFlowControl";
 import {
@@ -62,7 +66,6 @@ import {
   CONNECTION_RECONNECT_REQUIRED_CODE,
   refreshConnectionToken,
 } from "@/server/platforms/connectionRefresh";
-import { refreshGoogleToken } from "@/server/platforms/googleTokens";
 import {
   currentPacificMidnight,
   isRateLimitedError,
@@ -74,8 +77,6 @@ import {
   consumeYouTubeUploadSlot,
   exhaustYouTubeUploadBudget,
 } from "@/server/platforms/youtubeQuota";
-import { fetchYouTubeVideoStatistics, hasAnyStatistic } from "@/server/platforms/youtubeMetrics";
-import { Prisma } from "@prisma/client";
 import type { MediaItem, Platform, User } from "@prisma/client";
 import type {
   PublishContext,
@@ -1375,195 +1376,73 @@ export const sendNotification = inngest.createFunction(
  * Roadmap Phase 8 — hourly YouTube post-metrics sync (analytics, §7.3).
  *
  * Best-effort, isolated per item, and STRICTLY read-only w.r.t. posting: this
- * cron only reads engagement counts and upserts `PostMetric` rows — it never
- * touches PostJob/PostJobResult status or re-publishes anything, so it cannot
- * affect posting.
+ * cron only reads engagement counts and upserts `PostMetric` rows (plus stamps
+ * `PostJobResult.metricsCheckedAt`) - it never touches PostJob/PostJobResult
+ * status or re-publishes anything, so it cannot affect posting.
  *
- * Cadence: hourly (`0 * * * *`). `videos.list?part=statistics` costs 1 YouTube
- * quota unit/call, so ≤100 calls/hour (≤2,400/day) sits far under the default
- * 10,000/day project quota. Each run refreshes the most-recent `take` posts
- * (see `selectYouTubeMetricEligibleResults`), which is enough for "current"
- * stats; draining a >100-post tail by metric staleness is a future extension.
+ * 2026-11-01 scale audit (jobs, YouTube metrics): it used to refresh the newest
+ * 100 results globally, one `videos.list` call per video, so older videos stopped
+ * being refreshed. It now works through the results LEAST RECENTLY CHECKED first
+ * (metricsScanner.ts), in pages (youtubeMetricsSync.ts):
+ *  - `sync-page-<i>` is one page of up to 200 results, grouped per workspace
+ *    connection and fetched 50 ids per call (1 quota unit a call, V9). The step id
+ *    is the loop index, so it is deterministic on replay.
+ *  - the run has a budget of 300 units (7,200 a day of the shared 10,000-unit
+ *    general bucket) and at most 10 pages. It ends early on a page that attempted
+ *    nothing (the queue is drained), or on a quota refusal (`stop`), or when the
+ *    units are spent. The units left come from the previous pages' step outputs,
+ *    so a replay computes the same value.
+ * `singleton: { mode: "skip" }` skips a tick that arrives while the previous run
+ * is still going (https://www.inngest.com/docs/guides/singleton): two overlapping
+ * runs would select the same pages and spend the quota twice. A run's work is
+ * resumable by design - what a run did not reach is still the stalest next hour.
  *
- * Structure mirrors `mediaRetentionSweep`: one memoized `step.run` wrapping a
- * per-item try/catch loop, so a single video's network/refresh/upsert failure
- * cannot sink the batch. The upsert is idempotent (keyed on
- * (platform, externalPostId)), so a whole-step retry re-updates rather than
- * duplicates. Tokens are refreshed via the shared Google helper (writes only
- * accessToken/expiry, never refreshToken); a gone / `needsReconnect` connection
- * is skipped, not hammered.
+ * Tokens are refreshed via the shared Google helper under the per-connection lock
+ * (writes only accessToken/expiry, never refreshToken); a gone / `needsReconnect`
+ * connection is skipped, not hammered. SEC: step outputs are counts only.
  *
- * v1 = YouTube ONLY. The selector is platform-scoped to `youtube` and the loop
- * assumes YouTube; the block below is the documented extension point for adding
- * a per-platform fetcher later.
+ * v1 = YouTube ONLY (see the extension point in youtubeMetricsSync.ts).
  */
 export const youtubePostMetricsSync = inngest.createFunction(
-  { id: "youtube-post-metrics-sync", name: "YouTube Post Metrics Sync" },
+  {
+    id: "youtube-post-metrics-sync",
+    name: "YouTube Post Metrics Sync",
+    singleton: { mode: "skip" },
+  },
   { cron: "0 * * * *" },
   async ({ step }) => {
-    const summary = await step.run("sync-youtube-metrics", async () => {
-      const eligible = await selectYouTubeMetricEligibleResults(METRICS_SYNC_BATCH);
+    let unitsLeft = METRICS_UNITS_PER_RUN;
+    let pages = 0;
+    let attempted = 0;
+    let updated = 0;
+    let notFound = 0;
+    let errors = 0;
+    let unitsUsed = 0;
+    let stopped = false;
 
-      // Per-RUN cache: workspaceId -> resolved connection (or null when
-      // unavailable). Dedupes the connection load + token refresh when a
-      // workspace has several videos in the batch, and makes one workspace's
-      // reconnect/refresh failure skip all its items fast without re-hitting
-      // the DB or Google. Function-local, so it resets every run. Team
-      // Workspaces (Task 5): keyed by workspaceId (the shared connection) —
-      // NOT userId, since the eligible item's poster may not be who connected
-      // the platform. `connectorUserId` (the connection's own `userId`, i.e.
-      // whoever connected this YouTube account) is carried alongside the
-      // token so it can be stamped onto the PostMetric row below.
-      const connectionCache = new Map<
-        string,
-        { accessToken: string; connectorUserId: string } | null
-      >();
+    for (let i = 0; i < METRICS_MAX_PAGES_PER_RUN; i++) {
+      const budget = unitsLeft;
+      const page: MetricsPageResult = await step.run(`sync-page-${i}`, () =>
+        syncYouTubeMetricsPage({ unitsLeft: budget }),
+      );
+      pages += 1;
+      attempted += page.attempted;
+      updated += page.updated;
+      notFound += page.notFound;
+      errors += page.errors;
+      unitsUsed += page.unitsUsed;
+      unitsLeft -= page.unitsUsed;
 
-      async function resolveConnection(
-        workspaceId: string,
-      ): Promise<{ accessToken: string; connectorUserId: string } | null> {
-        const cached = connectionCache.get(workspaceId);
-        if (cached !== undefined) {
-          return cached;
-        }
-
-        let resolved: { accessToken: string; connectorUserId: string } | null = null;
-        try {
-          const connection = await prisma.socialConnection.findUnique({
-            where: { workspaceId_platform: { workspaceId, platform: "youtube" } },
-          });
-          // Skip a gone (disconnected) or `needsReconnect`-flagged connection —
-          // do NOT push a known-bad token through refresh.
-          if (connection && !connection.needsReconnect) {
-            let active = connection;
-            if (active.expiresAt && active.expiresAt.getTime() < Date.now()) {
-              // Shared Google refresh: writes ONLY accessToken/expiry, NEVER
-              // refreshToken (see googleTokens.ts). May throw + mark
-              // needsReconnect on invalid_grant — caught here so token stays null.
-              // 2026-11-01 scale audit (jobs, token refresh): under the
-              // per-connection lock, so a publish or the health sweep refreshing
-              // the same connection at once is serialized, and a refresh that
-              // finished first is reused instead of repeated.
-              active = await refreshConnectionToken(active, (current) =>
-                refreshGoogleToken(current),
-              );
-            }
-            if (active.accessToken) {
-              resolved = { accessToken: active.accessToken, connectorUserId: active.userId };
-            }
-          }
-        } catch (error) {
-          logger.error("[Inngest] YouTube metrics: connection resolve failed (skipping workspace)", {
-            workspaceId,
-            error,
-          });
-          resolved = null;
-        }
-
-        connectionCache.set(workspaceId, resolved);
-        return resolved;
+      if (page.stop) {
+        stopped = true;
+        break;
       }
+      // Nothing attempted: the queue is drained (or the budget was already gone).
+      if (page.attempted === 0 || unitsLeft <= 0) break;
+    }
 
-      let updated = 0;
-      let skippedNoConnection = 0;
-      let skippedNotFound = 0;
-      let errors = 0;
-
-      for (const item of eligible) {
-        // Isolate every item: one video's failure (network, token, upsert) must
-        // never sink the batch — mirrors scheduledPostScanner / mediaRetentionSweep.
-        try {
-          const connection = await resolveConnection(item.workspaceId);
-          if (!connection) {
-            skippedNoConnection += 1;
-            continue;
-          }
-
-          const result = await fetchYouTubeVideoStatistics(item.externalPostId, connection.accessToken);
-          if (!result.ok) {
-            errors += 1;
-            continue;
-          }
-          // 200 but the video is gone/inaccessible (empty items) OR present but
-          // carrying no parseable statistics: do NOT overwrite a prior good
-          // snapshot with all-null counts — leave the last-known metric intact
-          // (review Minor #2/#5; `found` alone doesn't prove there's data).
-          if (!result.found || !hasAnyStatistic(result.stats)) {
-            skippedNotFound += 1;
-            continue;
-          }
-
-          // NOTE (review Minor #1, deferred): views/likes/comments are stored as
-          // 32-bit Int. A count exceeding 2,147,483,647 would fail the write (and
-          // be caught below as an item error). Not reachable for this app's
-          // audience; widen these columns to BigInt if it ever serves channels
-          // with billions of views (also convert bigint→Number at the DTO).
-          const now = new Date();
-          await prisma.postMetric.upsert({
-            where: {
-              platform_externalPostId: {
-                platform: "youtube",
-                externalPostId: item.externalPostId,
-              },
-            },
-            create: {
-              // Team Workspaces (Task 5): stamped from the CONNECTION's
-              // connector (whoever connected this YouTube account) rather
-              // than the post's creator — see EligibleMetricResult.userId's
-              // doc comment (metricsScanner.ts) for the "legacy compat"
-              // rationale.
-              userId: connection.connectorUserId,
-              workspaceId: item.workspaceId,
-              platform: "youtube",
-              externalPostId: item.externalPostId,
-              postJobResultId: item.resultId,
-              views: result.stats.views,
-              likes: result.stats.likes,
-              comments: result.stats.comments,
-              // videos.list statistics does not expose shareCount → null (never 0).
-              shares: null,
-              raw: result.raw as Prisma.InputJsonValue,
-              fetchedAt: now,
-            },
-            update: {
-              userId: connection.connectorUserId,
-              postJobResultId: item.resultId,
-              views: result.stats.views,
-              likes: result.stats.likes,
-              comments: result.stats.comments,
-              shares: null,
-              raw: result.raw as Prisma.InputJsonValue,
-              fetchedAt: now,
-            },
-          });
-          updated += 1;
-        } catch (error) {
-          errors += 1;
-          logger.error("[Inngest] YouTube metrics: failed to sync item", {
-            resultId: item.resultId,
-            externalPostId: item.externalPostId,
-            error,
-          });
-        }
-      }
-
-      // EXTENSION POINT (v1 = YouTube only). To add a platform: implement a
-      // per-platform fetcher with the same best-effort contract as
-      // `fetchYouTubeVideoStatistics`, widen the selector's platform filter, and
-      // branch on `item.platform` here. X (paid API tiers), Google Business
-      // Profile (no per-post insight API), and LinkedIn personal shares (expose
-      // little) are intentionally out of scope for v1 (spec §7.3).
-
-      console.log("[Inngest] YouTube metrics sync complete", {
-        eligible: eligible.length,
-        updated,
-        skippedNoConnection,
-        skippedNotFound,
-        errors,
-      });
-      return { eligible: eligible.length, updated, skippedNoConnection, skippedNotFound, errors };
-    });
-
+    const summary = { pages, attempted, updated, notFound, errors, unitsUsed, stopped };
+    logger.info("[Inngest] YouTube metrics sync complete", summary);
     return summary;
   },
 );

@@ -381,6 +381,15 @@ model PostJobResult {
   // wait is not mistaken for a dead run. Nullable, like the claim: the previous
   // deployment simply ignores it.
   deferredUntil      DateTime?
+  // 2026-11-01 scale audit (jobs): when the hourly YouTube metrics sync last
+  // ATTEMPTED this result - found, not found or error alike. The sync picks the
+  // least-recently-checked results first (NULL first) and skips any checked
+  // within the last hour. PostMetric.fetchedAt cannot order the queue: a deleted
+  // or private video never gets a metric row, so it would sort first forever and
+  // starve the rest. Written by a raw UPDATE (youtubeMetricsSync.ts), not
+  // updateMany, so @updatedAt is NOT bumped: publish-health reads updatedAt as
+  // "when the result finished". Nullable: the previous deployment ignores it.
+  metricsCheckedAt   DateTime?
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
@@ -402,8 +411,13 @@ model PostJobResult {
   // account) runs ON DELETE SET NULL against this column.
   @@index([socialConnectionId])
   // 2026-11-01 scale audit: the hourly YouTube metrics selector filters by
-  // platform and orders/ranges by createdAt.
+  // platform and orders/ranges by createdAt. (The selector now orders by
+  // metricsCheckedAt - see the index below; this one is kept: migrations in this
+  // phase are additive only.)
   @@index([platform, createdAt])
+  // 2026-11-01 scale audit (jobs): the metrics sync now filters by platform and
+  // status and orders by metricsCheckedAt (least recently checked first).
+  @@index([platform, status, metricsCheckedAt])
 }
 
 // Fixed-window rate-limit counters (see src/lib/rateLimit.ts).

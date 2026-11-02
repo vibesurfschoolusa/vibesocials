@@ -1,4 +1,5 @@
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { classifyRateLimit } from "@/server/platforms/rateLimited";
 
 /**
  * Roadmap Phase 8 (analytics — post performance, §7.3). YouTube-only metric
@@ -155,5 +156,84 @@ export async function fetchYouTubeVideoStatistics(
       code: "YOUTUBE_METRICS_FETCH_ERROR",
       error: error instanceof Error ? error.message : "Unknown error fetching YouTube statistics",
     };
+  }
+}
+
+/**
+ * Result of {@link fetchYouTubeVideoStatisticsBatch}. Best-effort: NEVER throws.
+ *
+ * - `ok: true`  - the call succeeded. `byId` holds every video YouTube returned;
+ *   a requested id that is ABSENT from it is "not found" (deleted, private or
+ *   otherwise inaccessible) and the caller must leave its last-known metric
+ *   intact. A present video may still carry all-`null` stats (see
+ *   {@link hasAnyStatistic}). `raw` is that video's `items[]` entry.
+ * - `ok: false` - HTTP, network or JSON-parse failure; `code` is sanitized (no
+ *   upstream body). `quotaExceeded` is true when YouTube refused the call for
+ *   quota or rate (HTTP 403 quotaExceeded / dailyLimitExceeded / rateLimitExceeded
+ *   / userRateLimitExceeded, or 429): every further call in this run would be
+ *   refused too, so the caller stops the run.
+ */
+export type YouTubeMetricsBatchResult =
+  | { ok: true; byId: Map<string, { stats: YouTubeStatistics; raw: unknown }> }
+  | { ok: false; code: string; quotaExceeded: boolean };
+
+/**
+ * 2026-11-01 scale audit (jobs, YouTube metrics): fetch the statistics of many
+ * videos in ONE `videos.list?part=statistics&id=a,b,c` call. The call costs 1
+ * quota unit however many ids it carries (https://developers.google.com/youtube/v3/determine_quota_cost),
+ * which is why the hourly sync batches instead of calling once per video. The
+ * caller keeps `videoIds` within YOUTUBE_STATS_IDS_PER_CALL (metricsScanner.ts);
+ * nothing is requested for an empty list. Same auth and best-effort contract as
+ * {@link fetchYouTubeVideoStatistics}.
+ */
+export async function fetchYouTubeVideoStatisticsBatch(
+  videoIds: string[],
+  accessToken: string,
+): Promise<YouTubeMetricsBatchResult> {
+  if (videoIds.length === 0) {
+    return { ok: true, byId: new Map() };
+  }
+
+  try {
+    const url = `${YOUTUBE_VIDEOS_ENDPOINT}?part=statistics&id=${videoIds.map(encodeURIComponent).join(",")}`;
+    const response = await fetchWithTimeout(url, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!response.ok) {
+      // classifyRateLimit reads a CLONE of the body, so it is still readable here.
+      const limited = await classifyRateLimit("youtube", response);
+      // Read the body for SERVER logs only; never surface it (SEC).
+      const body = await response.text().catch(() => "<unable to read response body>");
+      console.error("[YouTubeMetrics] videos.list (batch) returned non-2xx", {
+        videoCount: videoIds.length,
+        status: response.status,
+        body,
+      });
+      return limited
+        ? { ok: false, code: "YOUTUBE_METRICS_QUOTA_EXCEEDED", quotaExceeded: true }
+        : { ok: false, code: "YOUTUBE_METRICS_HTTP_ERROR", quotaExceeded: false };
+    }
+
+    const json = (await response.json()) as unknown;
+    const items = (json as { items?: unknown } | null)?.items;
+    const byId = new Map<string, { stats: YouTubeStatistics; raw: unknown }>();
+    if (Array.isArray(items)) {
+      for (const item of items) {
+        const id = (item as { id?: unknown } | null)?.id;
+        if (typeof id !== "string") {
+          continue;
+        }
+        byId.set(id, { stats: parseYouTubeStatistics({ items: [item] }), raw: item });
+      }
+    }
+    return { ok: true, byId };
+  } catch (error: unknown) {
+    console.error("[YouTubeMetrics] videos.list (batch) threw", {
+      videoCount: videoIds.length,
+      error,
+    });
+    return { ok: false, code: "YOUTUBE_METRICS_FETCH_ERROR", quotaExceeded: false };
   }
 }

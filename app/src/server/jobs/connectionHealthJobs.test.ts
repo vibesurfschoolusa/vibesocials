@@ -12,25 +12,19 @@ const {
   findUniqueMock,
   workspaceFindUniqueMock,
   membersFindManyMock,
-  postMetricUpsertMock,
   getPlatformClientMock,
   refreshConnectionTokenMock,
-  refreshGoogleTokenMock,
   sendEmailMock,
-  selectEligibleMock,
-  fetchStatsMock,
+  syncPageMock,
 } = vi.hoisted(() => ({
   findManyMock: vi.fn(),
   findUniqueMock: vi.fn(),
   workspaceFindUniqueMock: vi.fn(),
   membersFindManyMock: vi.fn(),
-  postMetricUpsertMock: vi.fn(),
   getPlatformClientMock: vi.fn(),
   refreshConnectionTokenMock: vi.fn(),
-  refreshGoogleTokenMock: vi.fn(),
   sendEmailMock: vi.fn(),
-  selectEligibleMock: vi.fn(),
-  fetchStatsMock: vi.fn(),
+  syncPageMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -38,7 +32,6 @@ vi.mock("@/lib/db", () => ({
     socialConnection: { findMany: findManyMock, findUnique: findUniqueMock },
     workspace: { findUnique: workspaceFindUniqueMock },
     workspaceMember: { findMany: membersFindManyMock },
-    postMetric: { upsert: postMetricUpsertMock },
   },
 }));
 vi.mock("@/server/platforms", () => ({ getPlatformClient: getPlatformClientMock }));
@@ -48,15 +41,12 @@ vi.mock("@/server/platforms/connectionRefresh", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/platforms/connectionRefresh")>()),
   refreshConnectionToken: refreshConnectionTokenMock,
 }));
-vi.mock("@/server/platforms/googleTokens", () => ({ refreshGoogleToken: refreshGoogleTokenMock }));
 vi.mock("@/server/notifications/email", () => ({ sendEmail: sendEmailMock }));
-vi.mock("@/server/jobs/metricsScanner", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/server/jobs/metricsScanner")>()),
-  selectYouTubeMetricEligibleResults: selectEligibleMock,
-}));
-vi.mock("@/server/platforms/youtubeMetrics", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/server/platforms/youtubeMetrics")>()),
-  fetchYouTubeVideoStatistics: fetchStatsMock,
+// The page logic has its own suite (youtubeMetricsSync.test.ts); the handler's
+// paging loop is what is under test here.
+vi.mock("@/server/jobs/youtubeMetricsSync", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/jobs/youtubeMetricsSync")>()),
+  syncYouTubeMetricsPage: syncPageMock,
 }));
 vi.mock("@vercel/blob", () => ({ del: vi.fn() }));
 vi.mock("@/server/jobs/failPendingResults", () => ({
@@ -76,6 +66,8 @@ import {
   proactiveRefreshWhere,
 } from "./connectionHealthSweep";
 import { PUBLISH_STEP_BUDGET_MS } from "@/server/platforms/publishBudget";
+import { METRICS_MAX_PAGES_PER_RUN, METRICS_UNITS_PER_RUN } from "@/server/jobs/metricsScanner";
+import type { MetricsPageResult as SyncPage } from "@/server/jobs/youtubeMetricsSync";
 
 type SentEvent = { id: string; name: string; data: Record<string, unknown> };
 
@@ -130,13 +122,10 @@ beforeEach(() => {
     findUniqueMock,
     workspaceFindUniqueMock,
     membersFindManyMock,
-    postMetricUpsertMock,
     getPlatformClientMock,
     refreshConnectionTokenMock,
-    refreshGoogleTokenMock,
     sendEmailMock,
-    selectEligibleMock,
-    fetchStatsMock,
+    syncPageMock,
   ]) {
     mock.mockReset();
   }
@@ -622,89 +611,114 @@ describe("refreshConnection — one connection", () => {
   });
 });
 
-describe("youtubePostMetricsSync — resolveConnection refreshes under the lock", () => {
-  const ITEM = {
-    resultId: "result-1",
-    workspaceId: "ws-1",
-    externalPostId: "video-1",
-    userId: "user-1",
+describe("youtubePostMetricsSync (cron) — least-recently-checked pages within a unit budget", () => {
+  type Summary = {
+    pages: number;
+    attempted: number;
+    updated: number;
+    notFound: number;
+    errors: number;
+    unitsUsed: number;
+    stopped: boolean;
   };
-
-  beforeEach(() => {
-    selectEligibleMock.mockResolvedValue([ITEM]);
-    fetchStatsMock.mockResolvedValue({
-      ok: true,
-      found: true,
-      stats: { views: 10, likes: 2, comments: 1 },
-      raw: {},
-    });
-    postMetricUpsertMock.mockResolvedValue({});
+  const page = (over: Partial<SyncPage> = {}): SyncPage => ({
+    attempted: 200,
+    updated: 190,
+    notFound: 5,
+    errors: 5,
+    unitsUsed: 4,
+    stop: false,
+    ...over,
   });
-
-  const run = () =>
-    handlerOf<{ updated: number; errors: number; skippedNoConnection: number }>(youtubePostMetricsSync)({
+  const run = (step: FakeStep = fakeStep()) =>
+    handlerOf<Summary>(youtubePostMetricsSync)({
       event: { name: "inngest/scheduled.timer", data: {} },
-      step: fakeStep(),
+      step,
     });
 
-  it("an expired YouTube token goes through refreshConnectionToken, and the refreshed token is used", async () => {
-    const expired = {
-      id: "conn-yt",
-      userId: "connector-1",
-      platform: "youtube",
-      accessToken: "expired-token",
-      refreshToken: "refresh-token",
-      expiresAt: new Date("2020-01-01T00:00:00Z"),
-      needsReconnect: false,
-    };
-    findUniqueMock.mockResolvedValue(expired);
-    refreshConnectionTokenMock.mockResolvedValue({ ...expired, accessToken: "fresh-token" });
-
-    const summary = await run();
-
-    expect(refreshConnectionTokenMock).toHaveBeenCalledTimes(1);
-    expect(refreshConnectionTokenMock.mock.calls[0][0]).toBe(expired);
-    // The callback is the shared Google refresh, run on the row the lock re-read.
-    const reread = { ...expired };
-    refreshGoogleTokenMock.mockResolvedValue(reread);
-    await refreshConnectionTokenMock.mock.calls[0][1](reread);
-    expect(refreshGoogleTokenMock).toHaveBeenCalledWith(reread);
-    expect(fetchStatsMock).toHaveBeenCalledWith("video-1", "fresh-token");
-    expect(summary.updated).toBe(1);
+  it("keeps its function id and hourly cron, and is a singleton (a tick during a running sync is skipped)", () => {
+    expect(optsOf(youtubePostMetricsSync).id).toBe("youtube-post-metrics-sync");
+    expect(optsOf(youtubePostMetricsSync).singleton).toEqual({ mode: "skip" });
+    expect(registeredConfig(youtubePostMetricsSync, "youtube-post-metrics-sync")?.triggers).toEqual([
+      { cron: "0 * * * *" },
+    ]);
+    expect(inngestFunctions).toContain(youtubePostMetricsSync);
   });
 
-  it("a fresh token is used as is, without taking the lock", async () => {
-    findUniqueMock.mockResolvedValue({
-      id: "conn-yt",
-      userId: "connector-1",
-      platform: "youtube",
-      accessToken: "good-token",
-      expiresAt: new Date(Date.now() + 3_600_000),
-      needsReconnect: false,
+  it("pages until a page attempts nothing, one deterministic step per page, passing the units left", async () => {
+    syncPageMock
+      .mockResolvedValueOnce(page({ unitsUsed: 4 }))
+      .mockResolvedValueOnce(page({ unitsUsed: 6 }))
+      .mockResolvedValueOnce(page({ attempted: 0, updated: 0, notFound: 0, errors: 0, unitsUsed: 0 }));
+    const step = fakeStep();
+
+    const summary = await run(step);
+
+    expect(step.order).toEqual(["run:sync-page-0", "run:sync-page-1", "run:sync-page-2"]);
+    expect(syncPageMock.mock.calls.map((call) => call[0])).toEqual([
+      { unitsLeft: METRICS_UNITS_PER_RUN },
+      { unitsLeft: METRICS_UNITS_PER_RUN - 4 },
+      { unitsLeft: METRICS_UNITS_PER_RUN - 10 },
+    ]);
+    expect(summary).toEqual({
+      pages: 3,
+      attempted: 400,
+      updated: 380,
+      notFound: 10,
+      errors: 10,
+      unitsUsed: 10,
+      stopped: false,
     });
-
-    await run();
-
-    expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
-    expect(fetchStatsMock).toHaveBeenCalledWith("video-1", "good-token");
   });
 
-  it("a refresh that fails (flagged, gone, busy) skips the workspace instead of failing the batch", async () => {
-    findUniqueMock.mockResolvedValue({
-      id: "conn-yt",
-      userId: "connector-1",
-      platform: "youtube",
-      accessToken: "expired-token",
-      expiresAt: new Date("2020-01-01T00:00:00Z"),
-      needsReconnect: false,
-    });
-    refreshConnectionTokenMock.mockRejectedValue(
-      Object.assign(new Error("busy"), { code: "CONNECTION_REFRESH_BUSY", status: 503 }),
-    );
+  it("stops right after a page that hit the YouTube quota", async () => {
+    syncPageMock.mockResolvedValue(page({ stop: true }));
+    const step = fakeStep();
 
-    const summary = await run();
+    const summary = await run(step);
 
-    expect(summary.skippedNoConnection).toBe(1);
-    expect(fetchStatsMock).not.toHaveBeenCalled();
+    expect(step.order).toEqual(["run:sync-page-0"]);
+    expect(summary.stopped).toBe(true);
+  });
+
+  it("stops when the run's unit budget is spent", async () => {
+    syncPageMock
+      .mockResolvedValueOnce(page({ unitsUsed: 200 }))
+      .mockResolvedValueOnce(page({ unitsUsed: 100 }))
+      .mockResolvedValue(page());
+    const step = fakeStep();
+
+    const summary = await run(step);
+
+    expect(step.order).toEqual(["run:sync-page-0", "run:sync-page-1"]);
+    expect(summary.unitsUsed).toBe(METRICS_UNITS_PER_RUN);
+  });
+
+  it("never runs more than METRICS_MAX_PAGES_PER_RUN pages", async () => {
+    syncPageMock.mockResolvedValue(page({ unitsUsed: 1 }));
+    const step = fakeStep();
+
+    const summary = await run(step);
+
+    expect(step.order).toHaveLength(METRICS_MAX_PAGES_PER_RUN);
+    expect(step.order[METRICS_MAX_PAGES_PER_RUN - 1]).toBe(`run:sync-page-${METRICS_MAX_PAGES_PER_RUN - 1}`);
+    expect(summary.pages).toBe(METRICS_MAX_PAGES_PER_RUN);
+  });
+
+  it("step outputs are counts only (no tokens, no emails, no ids)", async () => {
+    syncPageMock.mockResolvedValueOnce(page()).mockResolvedValueOnce(page({ attempted: 0 }));
+    const step = fakeStep();
+
+    await run(step);
+
+    expect(Object.keys(step.outputs)).toEqual(["sync-page-0", "sync-page-1"]);
+    expect(Object.keys(step.outputs["sync-page-0"] as object).sort()).toEqual([
+      "attempted",
+      "errors",
+      "notFound",
+      "stop",
+      "unitsUsed",
+      "updated",
+    ]);
   });
 });
