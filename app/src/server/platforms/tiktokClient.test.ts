@@ -1508,6 +1508,26 @@ describe("tiktokClient.publishVideo", () => {
       expect(error?.code).toBe("RATE_LIMITED");
     });
 
+    // A 2xx on the final chunk may mean TikTok took the upload and is posting: only the status
+    // poll can say, so a rate-limit code in that body is not a rate limit (a deferral would
+    // upload the video again: a second post).
+    it("a 2xx final chunk PUT whose body says rate_limit_exceeded goes on to the status poll, never RATE_LIMITED", async () => {
+      vi.useFakeTimers();
+      const fetchMock = stubFetch({
+        "creator_info/query": creatorInfoOk,
+        "blob.example.com": videoBlob,
+        "video/init": initOk,
+        "upload.tiktok.example": () => jsonResponse({ error: { code: "rate_limit_exceeded" } }, 201),
+        "status/fetch": () => jsonResponse({ data: { status: "PUBLISH_COMPLETE" } }),
+      });
+
+      const promise = tiktokClient.publishVideo(makeCtx());
+      await vi.advanceTimersByTimeAsync(TIKTOK_POLL_INTERVAL_MS);
+
+      await expect(promise).resolves.toEqual({ externalPostId: "publish-123" });
+      expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes("status/fetch"))).toHaveLength(1);
+    });
+
     it("is not retried in-step", async () => {
       const fetchMock = stubFetch({
         "creator_info/query": creatorInfoOk,
@@ -1666,6 +1686,19 @@ describe("tiktokClient.publishVideo", () => {
       });
 
       expect(await caught(tiktokClient.publishVideo(makeCtx()))).toBe(neverConnected);
+    });
+
+    it("a 2xx on an earlier chunk is never a rate limit, whatever its body says: the upload carries on", async () => {
+      vi.useFakeTimers();
+      const fetchMock = stubThreeChunks((n) =>
+        n === 1 ? jsonResponse({ error: { code: "rate_limit_exceeded" } }, 206) : uploadOk(),
+      );
+
+      const promise = tiktokClient.publishVideo(makeCtx());
+      await vi.advanceTimersByTimeAsync(TIKTOK_POLL_INTERVAL_MS);
+
+      await expect(promise).resolves.toEqual({ externalPostId: "publish-123" });
+      expect(chunkPuts(fetchMock)).toHaveLength(3);
     });
 
     it("a final chunk 429 is still RATE_LIMITED, and a 400 still TIKTOK_UPLOAD_FAILED", async () => {
@@ -2645,13 +2678,43 @@ describe("tiktokClient.publishVideo — streamed FILE_UPLOAD (jobs B3)", () => {
       expect(await failure(bigCtx(b.store))).toMatchObject({ code: "TIKTOK_UPLOAD_FAILED", status: 400 });
     });
 
-    it("a final chunk answered rate_limit_exceeded in the body is RATE_LIMITED too", async () => {
-      const { store } = fakeStore(stateAt(5));
-      stubTikTok({
+    // A 2xx final chunk may have been taken: TikTok could be posting. Only the status poll can
+    // say, so a rate-limit code in its body is never read as RATE_LIMITED (a deferral would
+    // send the upload again: a second post).
+    it("a 2xx final chunk whose body says rate_limit_exceeded goes on to the status poll, never RATE_LIMITED", async () => {
+      const a = fakeStore(stateAt(5));
+      const done = stubTikTok({
         puts: [() => jsonResponse({ error: { code: "rate_limit_exceeded" } }, 200)],
       });
+      expect(await run(bigCtx(a.store))).toEqual({ externalPostId: "publish-1" });
+      expect(done.polls()).toHaveLength(1);
+      vi.unstubAllGlobals();
 
-      expect((await failure(bigCtx(store)))?.code).toBe("RATE_LIMITED");
+      const b = fakeStore(stateAt(5));
+      const pending = stubTikTok({
+        puts: [() => jsonResponse({ error: { code: "rate_limit_exceeded" } }, 201)],
+        status: () => jsonResponse({ data: { status: "PROCESSING_UPLOAD" } }),
+      });
+      expect(await failure(bigCtx(b.store))).toMatchObject({ code: "TIKTOK_PUBLISH_PENDING" });
+      expect(pending.polls().length).toBeGreaterThan(0);
+    });
+
+    it("a non-final chunk keeps its 2xx handling whatever its body says: a 206 advances, a 201 is PUBLISH_UNCONFIRMED", async () => {
+      const limitedBody = (status: number): Reply => () => jsonResponse({ error: { code: "rate_limit_exceeded" } }, status);
+
+      const a = fakeStore(stateAt(4));
+      const advanced = stubTikTok({ puts: [limitedBody(206), acceptChunk] });
+      expect(await run(bigCtx(a.store))).toEqual({ externalPostId: "publish-1" });
+      expect(rangesOf(advanced.puts())).toEqual([
+        [4 * CHUNK, 5 * CHUNK - 1],
+        [FINAL_START, TOTAL - 1],
+      ]);
+      vi.unstubAllGlobals();
+
+      const b = fakeStore(stateAt(4));
+      const early = stubTikTok({ puts: [limitedBody(201), acceptChunk] });
+      expect((await failure(bigCtx(b.store)))?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(early.puts()).toHaveLength(1);
     });
 
     it("a status poll that answers 401 stays PUBLISH_UNCONFIRMED (the connection is flagged, no reconnect-and-retry)", async () => {

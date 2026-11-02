@@ -1191,7 +1191,10 @@ async function publishStreamed(args: {
         return await pause();
       }
 
-      const chunkLimited = await classifyRateLimit("tiktok", response);
+      // Only a refusal can be a rate limit. A 2xx was taken: the final chunk then goes to the
+      // status poll, which decides (TikTok may be posting, and a deferral would upload the video
+      // again), and an earlier chunk keeps its 2xx handling below, whatever its body says.
+      const chunkLimited = response.ok ? null : await classifyRateLimit("tiktok", response);
       if (chunkLimited) throw chunkLimited;
 
       if (!isFinal) {
@@ -1452,7 +1455,9 @@ export const tiktokClient: PlatformClient = {
       const isFinalChunk = chunkIndex === totalChunks - 1;
       const uploadRes = isFinalChunk ? await commitRequest("tiktok", sendChunk) : await sendChunk();
 
-      const chunkLimited = await classifyRateLimit("tiktok", uploadRes);
+      // Only a refusal can be a rate limit: a 2xx chunk was taken, and after the final one the
+      // status poll decides (a deferral would upload the video again: a second post).
+      const chunkLimited = uploadRes.ok ? null : await classifyRateLimit("tiktok", uploadRes);
       if (chunkLimited) throw chunkLimited;
 
       await assertOk(uploadRes, {
