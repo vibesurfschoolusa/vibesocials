@@ -2,7 +2,8 @@ import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
-import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, FETCH_TIMEOUT_CODE, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 import {
   connectionTokenChangedError,
   flagRejectedToken,
@@ -13,8 +14,21 @@ import {
 } from "./connectionHealth";
 import { refreshConnectionToken } from "./connectionRefresh";
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
-import { budgetedTimeout } from "./publishBudget";
-import { classifyRateLimit } from "./rateLimited";
+import {
+  LARGE_UPLOAD_CHUNK_WINDOW_MS,
+  LARGE_UPLOAD_MAX_PART_BYTES,
+  LARGE_UPLOAD_REQUEST_TIMEOUT_MS,
+  openBlobChunkStream,
+  usesLargeUploadPath,
+  type BlobChunkStream,
+} from "./largeUpload";
+import {
+  budgetedTimeout,
+  MIN_REQUEST_WINDOW_MS,
+  PUBLISH_BUDGET_EXCEEDED_CODE,
+  remainingMs,
+} from "./publishBudget";
+import { classifyRateLimit, isRateLimitedError } from "./rateLimited";
 
 /**
  * LinkedIn API client for posting images and videos
@@ -72,6 +86,64 @@ const LINKEDIN_UPLOAD_TIMEOUT_MS = 120_000;
 // Roadmap Phase 4: the code flagged (flagRejectedToken / flagTerminalRefreshFailure)
 // at every site below that throws this error (expiry guard + 401 mapping).
 const LINKEDIN_RECONNECT_CODE = "LINKEDIN_RECONNECT_REQUIRED";
+
+// 2026-11-02 scale audit (jobs B3): a video above LARGE_VIDEO_THRESHOLD_BYTES (largeUpload.ts)
+// on a platform listed in LARGE_UPLOAD_PLATFORMS is registered as a MULTIPART_UPLOAD, read from
+// storage one part at a time and PUT to LinkedIn's part URLs across steps, completed with the
+// parts' ETags, and posted only once LinkedIn reports the asset AVAILABLE. Smaller videos,
+// images, and LinkedIn not enabled keep the whole-file upload below, unchanged.
+//
+// The Assets API page documents this flow under /rest/assets with a Linkedin-Version header and
+// says the Videos API replaces it for videos:
+// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/vector-asset-api
+// This client keeps the /v2 endpoints that the whole-file path and ugcPosts already use. Whether
+// /v2/assets?action=completeMultiPartUpload and GET /v2/assets/{id} behave like the documented
+// /rest ones, and whether MULTIPART_UPLOAD is accepted below the 200 MB the page names, is
+// unconfirmed: a failure there is LINKEDIN_VIDEO_UPLOAD_FAILED, before anything is posted.
+//
+// The part URLs and the register answer's `metadata` are capability values (whoever holds them
+// can write to, or complete, the upload). They are saved only in the sealed `secret` of the
+// upload state (uploadState.ts) and never logged or put in an error.
+
+/** The `kind` of a multipart LinkedIn upload in the saved upload state (uploadState.ts). */
+export const LINKEDIN_UPLOAD_STATE_KIND = "linkedin_multipart";
+
+/**
+ * A step that has parts left to send, with the earliest part URL expiring in less than this (5
+ * min), registers the video again and starts over (nothing was posted). Our own safety margin:
+ * the documented sample gives each part a `urlExpiresAt` but no lifetime.
+ */
+export const LINKEDIN_URL_EXPIRY_SAFETY_MS = 300_000;
+
+/**
+ * Times one upload may start over because its part URLs were about to expire. Each start-over
+ * leaves an unused asset on LinkedIn, so it is bounded; the next one is a failure.
+ */
+export const LINKEDIN_MAX_UPLOAD_RESTARTS = 2;
+
+/** Wait between two checks of the asset's processing status: one check per step, a minute apart. */
+export const LINKEDIN_ASSET_POLL_INTERVAL_MS = 60_000;
+
+/**
+ * How long after the upload was completed the post waits for the asset to become AVAILABLE
+ * (10 min). Our own bound: the page only says processing "might take a few minutes". Past it,
+ * the post is made anyway, which is what the whole-file path does right after its upload.
+ */
+export const LINKEDIN_ASSET_MAX_WAIT_MS = 600_000;
+
+/**
+ * When a request that commits nothing (a part, the completion, a status check) gets no usable
+ * answer, the step saves its place and the next one starts this long after: a short pause, so an
+ * outage does not burn the continuations (platformSteps.ts) in a few seconds.
+ */
+export const LINKEDIN_TRANSIENT_RESUME_DELAY_MS = 30_000;
+
+/** The post (the commit call) starts only with a full request timeout and the minimum window left; else the step continues at once. */
+export const LINKEDIN_POST_MIN_WINDOW_MS = DEFAULT_FETCH_TIMEOUT_MS + MIN_REQUEST_WINDOW_MS;
+
+const LINKEDIN_ASSETS_URL = "https://api.linkedin.com/v2/assets";
+const LINKEDIN_MULTIPART_MECHANISM = "com.linkedin.digitalmedia.uploading.MultipartUpload";
+const LINKEDIN_VIDEO_RECIPE = "urn:li:digitalmediaRecipe:feedshare-video";
 
 function isExpiredOrExpiringSoon(expiresAt: Date | null | undefined): boolean {
   if (!expiresAt) return false; // no expiry recorded -> cannot judge; let publish proceed
@@ -474,8 +546,9 @@ async function uploadVideo(
   }
 
   const registerData = await registerResponse.json();
-  console.log("[LinkedIn] Full video registration response:", JSON.stringify(registerData, null, 2));
-  
+  // 2026-11-02 scale audit (jobs B3): the register answer holds the upload URL, a capability
+  // value, so it is no longer logged whole; the asset URN is logged below.
+
   const uploadUrl = registerData.value?.uploadMechanism?.["com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"]?.uploadUrl;
   const assetUrn = registerData.value?.asset;
   
@@ -688,6 +761,721 @@ async function createPost(
   return postId;
 }
 
+// ---------------------------------------------------------------------------------------------
+// 2026-11-02 scale audit (jobs B3): the multipart upload of a video above 50 MiB.
+// ---------------------------------------------------------------------------------------------
+
+type CodedError = Error & { code: string; status?: number };
+
+function linkedinCodedError(code: string, message: string, status?: number): CodedError {
+  const error = new Error(message) as CodedError;
+  error.code = code;
+  if (status !== undefined) error.status = status;
+  return error;
+}
+
+/** A failure of the upload itself. Its message names no URL and quotes nothing LinkedIn sent. */
+function uploadFailed(message: string, status?: number): CodedError {
+  return linkedinCodedError("LINKEDIN_VIDEO_UPLOAD_FAILED", message, status);
+}
+
+function processingFailed(): CodedError {
+  return linkedinCodedError(
+    "LINKEDIN_VIDEO_PROCESSING_FAILED",
+    "LinkedIn couldn't process the video. Nothing was posted.",
+  );
+}
+
+/** One part of the video: LinkedIn's capability URL, the bytes it takes, and the headers it asked for. */
+interface LinkedInUploadPart {
+  url: string;
+  firstByte: number;
+  lastByte: number;
+  headers: Record<string, string>;
+}
+
+/** What a step saves as readable progress. No URL and no LinkedIn opaque value may be in it (uploadState.ts). */
+interface LinkedInMultipartData {
+  asset: string;
+  mediaArtifact: string;
+  totalBytes: number;
+  partCount: number;
+  /** Index of the next part to send; `etags[i]` is the ETag of part `i`. */
+  nextPart: number;
+  etags: string[];
+  phase: "upload" | "processing";
+  /** Epoch ms the completion was accepted: the clock of the wait for the asset. */
+  completedAt?: number;
+  /** The earliest `urlExpiresAt` of the parts (epoch ms). */
+  urlsExpireAt: number;
+  /** How many times the upload started over because its URLs were about to expire. */
+  restarts: number;
+}
+
+/** What a step saves sealed: capability values. Present until the upload is completed. */
+interface LinkedInMultipartSecret {
+  parts: LinkedInUploadPart[];
+  metadata: string;
+}
+
+/** An upload that has been registered on LinkedIn: where it stands, and (until completed) how to reach it. */
+interface LinkedInMultipartSession {
+  data: LinkedInMultipartData;
+  secret: LinkedInMultipartSecret | null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+const isWholeNumber = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value);
+const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+const isText = (value: unknown): value is string => typeof value === "string" && value !== "";
+
+/** The part URLs are sent the video, so they must be https URLs. */
+function isHttpsUrl(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/** `urn:li:digitalmediaAsset:<id>`; the id is what `GET /assets/{id}` takes. */
+const ASSET_URN = /^urn:li:digitalmediaAsset:([\w-]+)$/;
+
+/** The headers LinkedIn asked for on a part, without any Authorization: the page says a video upload "shouldn't include an OAuth token". */
+function readPartHeaders(raw: unknown): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(asRecord(raw) ?? {})) {
+    if (typeof value === "string" && name.toLowerCase() !== "authorization") headers[name] = value;
+  }
+  return headers;
+}
+
+/**
+ * Do the parts (in byte order) cover the video exactly, with every URL https and every part small
+ * enough to hold in memory? Returns what is wrong, or null.
+ */
+function partsProblem(parts: LinkedInUploadPart[], totalBytes: number): string | null {
+  if (parts.length === 0) return "LinkedIn didn't return any upload parts for this video. Nothing was posted.";
+  let expectedFirst = 0;
+  for (const part of parts) {
+    if (!isHttpsUrl(part.url) || part.firstByte !== expectedFirst || part.lastByte < part.firstByte) {
+      return "LinkedIn's upload parts don't match the video. Nothing was posted.";
+    }
+    if (part.lastByte - part.firstByte + 1 > LARGE_UPLOAD_MAX_PART_BYTES) {
+      return `LinkedIn asked for upload parts larger than this app can hold in memory (${LARGE_UPLOAD_MAX_PART_BYTES / 1_048_576} MiB). Nothing was posted.`;
+    }
+    expectedFirst = part.lastByte + 1;
+  }
+  return expectedFirst === totalBytes ? null : "LinkedIn's upload parts don't match the video. Nothing was posted.";
+}
+
+/**
+ * The upload LinkedIn registered, from the answer to `registerUpload`: the asset, the media
+ * artifact and `metadata`, and the parts (`partUploadRequests`) sorted into byte order. Anything
+ * unusable is LINKEDIN_VIDEO_UPLOAD_FAILED, before a byte is sent. A part larger than
+ * LARGE_UPLOAD_MAX_PART_BYTES is refused here, before the first PUT: it is the memory bound.
+ */
+function readMultipartRegistration(body: unknown, totalBytes: number): LinkedInMultipartSession {
+  const unusable = () =>
+    uploadFailed("LinkedIn didn't return a usable multipart upload for this video. Nothing was posted.");
+
+  const value = asRecord(asRecord(body)?.value);
+  const mechanism = asRecord(asRecord(value?.uploadMechanism)?.[LINKEDIN_MULTIPART_MECHANISM]);
+  const requests = mechanism?.partUploadRequests;
+  const asset = value?.asset;
+  const mediaArtifact = value?.mediaArtifact;
+  const metadata = mechanism?.metadata;
+  if (
+    !Array.isArray(requests) ||
+    typeof asset !== "string" ||
+    !ASSET_URN.test(asset) ||
+    !isText(mediaArtifact) ||
+    !isText(metadata)
+  ) {
+    throw unusable();
+  }
+
+  const parts: LinkedInUploadPart[] = [];
+  let urlsExpireAt = Number.POSITIVE_INFINITY;
+  for (const request of requests) {
+    const part = asRecord(request);
+    const range = asRecord(part?.byteRange);
+    if (
+      !part ||
+      !range ||
+      !isHttpsUrl(part.url) ||
+      !isWholeNumber(range.firstByte) ||
+      !isWholeNumber(range.lastByte) ||
+      !isFiniteNumber(part.urlExpiresAt)
+    ) {
+      throw unusable();
+    }
+    parts.push({
+      url: part.url,
+      firstByte: range.firstByte,
+      lastByte: range.lastByte,
+      headers: readPartHeaders(part.headers),
+    });
+    urlsExpireAt = Math.min(urlsExpireAt, part.urlExpiresAt);
+  }
+  parts.sort((a, b) => a.firstByte - b.firstByte);
+  const problem = partsProblem(parts, totalBytes);
+  if (problem !== null) throw uploadFailed(problem);
+
+  return {
+    data: {
+      asset,
+      mediaArtifact,
+      totalBytes,
+      partCount: parts.length,
+      nextPart: 0,
+      etags: [],
+      phase: "upload",
+      urlsExpireAt,
+      restarts: 0,
+    },
+    secret: { parts, metadata },
+  };
+}
+
+/**
+ * The saved upload, if it can be used for a video of `totalBytes`: its asset, position, ETags,
+ * phase and times must be coherent, and in the upload phase the sealed parts must still cover the
+ * video. Anything else (another size, a bad position, a missing secret, a hand-edited row) is
+ * treated as no state, and the upload starts over.
+ */
+function readSavedUpload(
+  saved: UploadSnapshot<Partial<LinkedInMultipartData>, Partial<LinkedInMultipartSecret>> | null,
+  totalBytes: number,
+): LinkedInMultipartSession | null {
+  const data = saved?.data;
+  if (typeof data !== "object" || data === null) return null;
+  const { asset, mediaArtifact, partCount, nextPart, etags, phase, completedAt, urlsExpireAt, restarts } = data;
+
+  if (typeof asset !== "string" || !ASSET_URN.test(asset) || !isText(mediaArtifact)) return null;
+  if (data.totalBytes !== totalBytes) return null;
+  if (!isWholeNumber(partCount) || partCount < 1) return null;
+  if (!isWholeNumber(nextPart) || nextPart < 0 || nextPart > partCount) return null;
+  if (!Array.isArray(etags) || etags.length !== nextPart || !etags.every(isText)) return null;
+  if (phase !== "upload" && phase !== "processing") return null;
+  if (!isFiniteNumber(urlsExpireAt) || !isWholeNumber(restarts) || restarts < 0) return null;
+
+  const common = { asset, mediaArtifact, totalBytes, partCount, nextPart, etags: [...etags], urlsExpireAt, restarts };
+
+  if (phase === "processing") {
+    // The completion comes after the last part, and stamps its time. Nothing sealed is needed any more.
+    if (nextPart !== partCount || !isFiniteNumber(completedAt)) return null;
+    return { data: { ...common, phase, completedAt }, secret: null };
+  }
+
+  const secret = saved?.secret;
+  if (!isText(secret?.metadata) || !Array.isArray(secret.parts) || secret.parts.length !== partCount) return null;
+  const parts: LinkedInUploadPart[] = [];
+  for (const raw of secret.parts) {
+    const part = asRecord(raw);
+    if (!part || !isHttpsUrl(part.url) || !isWholeNumber(part.firstByte) || !isWholeNumber(part.lastByte)) return null;
+    parts.push({
+      url: part.url,
+      firstByte: part.firstByte,
+      lastByte: part.lastByte,
+      headers: readPartHeaders(part.headers),
+    });
+  }
+  if (partsProblem(parts, totalBytes) !== null) return null;
+  return { data: { ...common, phase }, secret: { parts, metadata: secret.metadata } };
+}
+
+/**
+ * Did a request fail in a way that says nothing about the upload: a 5xx, a timeout, a dropped
+ * connection, or no time to send it? The same request can simply be made again later. Only
+ * undici's own network failures count among the TypeErrors (`fetch failed`, `terminated`): any
+ * other TypeError is a bug and must surface. A 4xx, a rate limit or an error we do not recognise
+ * says something definite.
+ */
+function isTransientRequestFailure(error: unknown): boolean {
+  if (error instanceof TypeError) return error.message === "fetch failed" || error.message === "terminated";
+  const { code, status } = (error ?? {}) as { code?: unknown; status?: unknown };
+  return (
+    code === FETCH_TIMEOUT_CODE ||
+    code === PUBLISH_BUDGET_EXCEEDED_CODE ||
+    (typeof status === "number" && status >= 500)
+  );
+}
+
+/**
+ * Send a request that commits nothing and sort what comes back: a 429 is RATE_LIMITED (thrown),
+ * a 5xx is a failure that carries its `status`, an error from the request itself is a failure,
+ * anything else is the response for the caller to read. `send` is called once.
+ */
+async function attemptRequest(
+  send: () => Promise<Response>,
+): Promise<{ response: Response } | { failure: unknown }> {
+  let response: Response;
+  try {
+    response = await send();
+  } catch (failure) {
+    return { failure };
+  }
+  const limited = await classifyRateLimit("linkedin", response);
+  if (limited) throw limited;
+  if (response.status >= 500) {
+    void response.body?.cancel().catch(() => {});
+    return {
+      failure: Object.assign(new Error(`LinkedIn answered HTTP ${response.status}`), { status: response.status }),
+    };
+  }
+  return { response };
+}
+
+/**
+ * `POST /v2/assets?action=registerUpload` as a MULTIPART_UPLOAD for a video of `totalBytes`: the
+ * asset, the media artifact and the parts LinkedIn wants, as a fresh session at part 0. The call
+ * commits nothing. A 429 is RATE_LIMITED, a 401 goes through the guarded reconnect flag, and any
+ * other error status is LINKEDIN_VIDEO_UPLOAD_FAILED (carrying its `status`).
+ */
+async function registerMultipartUpload(args: {
+  accessToken: string;
+  ownerUrn: string;
+  totalBytes: number;
+  connection: TokenSnapshot;
+  deadline: number | undefined;
+}): Promise<LinkedInMultipartSession> {
+  const { accessToken, ownerUrn, totalBytes, connection, deadline } = args;
+
+  const response = await fetchWithTimeout(
+    `${LINKEDIN_ASSETS_URL}?action=registerUpload`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        "X-Restli-Protocol-Version": "2.0.0",
+      },
+      body: JSON.stringify({
+        registerUploadRequest: {
+          recipes: [LINKEDIN_VIDEO_RECIPE],
+          owner: ownerUrn,
+          serviceRelationships: [
+            {
+              relationshipType: "OWNER",
+              identifier: "urn:li:userGeneratedContent",
+            },
+          ],
+          supportedUploadMechanism: ["MULTIPART_UPLOAD"],
+          fileSize: totalBytes,
+        },
+      }),
+    },
+    budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+  );
+
+  const limited = await classifyRateLimit("linkedin", response);
+  if (limited) throw limited;
+  if (response.status === 401) {
+    void response.body?.cancel().catch(() => {});
+    await throwLinkedInReconnect(connection);
+  }
+  // MULTIPART_UPLOAD below the 200 MB the page names is unconfirmed (see above), so a refusal
+  // here is a failed upload, like the other unconfirmed calls.
+  await assertOk(response, {
+    code: "LINKEDIN_VIDEO_UPLOAD_FAILED",
+    prefix: "LinkedIn multipart upload registration failed",
+  });
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw uploadFailed("LinkedIn didn't return a usable multipart upload for this video. Nothing was posted.");
+  }
+  return readMultipartRegistration(body, totalBytes);
+}
+
+/** What a status check says about the asset. A processing failure is thrown, not returned. */
+type AssetVerdict =
+  | { kind: "available" }
+  | { kind: "waiting" }
+  /** An answer we cannot use: a 404, a body that is not JSON, or no `feedshare-video` recipe in it. */
+  | { kind: "unreadable"; reason: string }
+  /** No answer: a 5xx, a timeout, or a connection that dropped. Asking again is safe. */
+  | { kind: "unanswered" };
+
+/** The recipe statuses that mean LinkedIn stopped without an asset. */
+const LINKEDIN_RECIPE_FAILED_STATUSES: ReadonlySet<string> = new Set(["CLIENT_ERROR", "SERVER_ERROR", "INCOMPLETE"]);
+
+/**
+ * `GET /v2/assets/{id}` (the id is the part of the asset URN after the last colon): the status of
+ * the `feedshare-video` recipe. AVAILABLE is ready; CLIENT_ERROR, SERVER_ERROR and INCOMPLETE are
+ * LINKEDIN_VIDEO_PROCESSING_FAILED; every other status, one we do not know included, is still
+ * processing. It only reads, so it is safe to ask again. A 401 goes through the guarded reconnect
+ * flag, a 429 is RATE_LIMITED, and any other error status is LINKEDIN_VIDEO_UPLOAD_FAILED, apart
+ * from a 404, which is "unreadable" (the unconfirmed /v2 status read may simply not exist).
+ */
+async function checkAssetStatus(args: {
+  accessToken: string;
+  asset: string;
+  connection: TokenSnapshot;
+  deadline: number | undefined;
+}): Promise<AssetVerdict> {
+  const { accessToken, asset, connection, deadline } = args;
+  const assetId = asset.slice(asset.lastIndexOf(":") + 1);
+
+  const attempt = await attemptRequest(() =>
+    fetchWithTimeout(
+      `${LINKEDIN_ASSETS_URL}/${encodeURIComponent(assetId)}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "X-Restli-Protocol-Version": "2.0.0",
+        },
+      },
+      budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+    ),
+  );
+  if ("failure" in attempt) {
+    if (!isTransientRequestFailure(attempt.failure)) throw attempt.failure;
+    return { kind: "unanswered" };
+  }
+
+  const { response } = attempt;
+  if (response.status === 401) {
+    void response.body?.cancel().catch(() => {});
+    await throwLinkedInReconnect(connection);
+  }
+  if (response.status === 404) {
+    void response.body?.cancel().catch(() => {});
+    return { kind: "unreadable", reason: "the status read answered 404" };
+  }
+  await assertOk(response, {
+    code: "LINKEDIN_VIDEO_UPLOAD_FAILED",
+    prefix: "LinkedIn video status check failed",
+  });
+
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch (error) {
+    if (isTransientRequestFailure(error)) return { kind: "unanswered" };
+    return { kind: "unreadable", reason: "the status answer was not JSON" };
+  }
+
+  const recipes = asRecord(body)?.recipes;
+  const recipe = Array.isArray(recipes)
+    ? recipes.map(asRecord).find((candidate) => candidate?.recipe === LINKEDIN_VIDEO_RECIPE)
+    : undefined;
+  const status = recipe?.status;
+  if (typeof status !== "string") {
+    return { kind: "unreadable", reason: "the status answer has no feedshare-video recipe status" };
+  }
+  if (status === "AVAILABLE") return { kind: "available" };
+  if (LINKEDIN_RECIPE_FAILED_STATUSES.has(status)) {
+    console.error("[LinkedIn] Video processing failed", { assetUrn: asset, recipeStatus: status });
+    throw processingFailed();
+  }
+  return { kind: "waiting" };
+}
+
+/**
+ * One step of a multipart upload (2026-11-02 scale audit, jobs B3). Whether to start an upload or
+ * resume one is decided by `resumed` alone - the state `load()` returned - and never by
+ * `ctx.continuation`: if a step's output is lost after it continued, the same step number runs
+ * again with the state already there and must resume, not register a second asset.
+ *
+ * Phases, each saved before the step moves on:
+ * - none: `registerUpload` as a MULTIPART_UPLOAD, saved at once (before the first part).
+ * - upload: parts from `nextPart`, each read from the blob with one Range request for the step and
+ *   PUT, without a token, to its URL with its own headers, while at least
+ *   LARGE_UPLOAD_CHUNK_WINDOW_MS of the step is left; the ETag of each is saved. Then
+ *   `completeMultiPartUpload` with the ETags in part order, once; the sealed part URLs and
+ *   metadata are dropped from the saved state, and the step continues after the poll interval.
+ * - processing: one status check per step. AVAILABLE posts (ugcPosts, the commit call) in the
+ *   same step, with at least LINKEDIN_POST_MIN_WINDOW_MS left, else the step continues at once;
+ *   still processing continues after LINKEDIN_ASSET_POLL_INTERVAL_MS; a failed recipe is
+ *   LINKEDIN_VIDEO_PROCESSING_FAILED. Over LINKEDIN_ASSET_MAX_WAIT_MS since the completion, or
+ *   with a status answer that cannot be read, it posts anyway (the whole-file path posts right
+ *   after its upload), with a warning.
+ *
+ * With the earliest part URL expiring in under LINKEDIN_URL_EXPIRY_SAFETY_MS and parts left, the
+ * video is registered again and uploaded from part 0 (nothing was posted), at most
+ * LINKEDIN_MAX_UPLOAD_RESTARTS times. A part, the completion or a status check that gets no
+ * usable answer (5xx, timeout, dropped connection) pauses for LINKEDIN_TRANSIENT_RESUME_DELAY_MS
+ * and is sent again in the next step; running into the step deadline pauses too. A 429 saves the
+ * position, then throws RATE_LIMITED.
+ */
+async function publishMultipart(args: {
+  ctx: PublishContext;
+  accessToken: string;
+  authorUrn: string;
+  connection: SocialConnection;
+  store: UploadStateStore;
+  resumed: LinkedInMultipartSession | null;
+}): Promise<PublishResult> {
+  const { ctx, accessToken, authorUrn, connection, store, resumed } = args;
+  const { mediaItem, caption, deadline } = ctx;
+  const totalBytes = mediaItem.sizeBytes;
+
+  const save = (session: LinkedInMultipartSession) =>
+    store.save<LinkedInMultipartData, LinkedInMultipartSecret>(
+      LINKEDIN_UPLOAD_STATE_KIND,
+      session.secret === null ? { data: session.data } : { data: session.data, secret: session.secret },
+    );
+
+  /** A new upload on LinkedIn, positioned at part 0 and saved at once. */
+  const beginUpload = async (restarts: number): Promise<LinkedInMultipartSession> => {
+    const registered = await registerMultipartUpload({
+      accessToken,
+      ownerUrn: authorUrn,
+      totalBytes,
+      connection,
+      deadline,
+    });
+    const session: LinkedInMultipartSession = { data: { ...registered.data, restarts }, secret: registered.secret };
+    await save(session);
+    console.log("[LinkedIn] Multipart upload registered", {
+      assetUrn: session.data.asset,
+      parts: session.data.partCount,
+    });
+    return session;
+  };
+
+  let current = resumed ?? (await beginUpload(0));
+  // URLs this very step was given are not checked for expiry: no loop on short-lived URLs. (The
+  // check runs once, at the top; a restart in the middle of the step is not checked again.)
+  const startedHere = resumed === null;
+  // Held in an object so the finally block sees the stream a closure opened.
+  const source: { stream: BlobChunkStream | null } = { stream: null };
+
+  const closeSource = async () => {
+    const stream = source.stream;
+    source.stream = null;
+    await stream?.close();
+  };
+
+  /** Save and hand the claim back: the run calls this client again, no sooner than `delayMs` from now. */
+  const pause = async (delayMs: number | null): Promise<PublishResult> => {
+    await save(current);
+    console.log("[LinkedIn] Multipart upload continues in another step", {
+      phase: current.data.phase,
+      nextPart: current.data.nextPart,
+      parts: current.data.partCount,
+    });
+    return { continuation: { resumeAt: delayMs === null ? null : Date.now() + delayMs } };
+  };
+
+  /** The next `length` bytes of the video from `offset` (one open stream, read in order). */
+  const readPart = async (offset: number, length: number): Promise<Buffer<ArrayBuffer>> => {
+    if (source.stream !== null && source.stream.position !== offset) await closeSource();
+    source.stream ??= await openBlobChunkStream(mediaItem.storageLocation, { offset, totalBytes, deadline });
+    // Read into Buffer.allocUnsafe (largeUpload.ts), so it is ArrayBuffer-backed: the cast only
+    // narrows the type `read` widens.
+    return (await source.stream.read(length)) as Buffer<ArrayBuffer>;
+  };
+
+  try {
+    const { data: progress } = current;
+    if (
+      !startedHere &&
+      progress.phase === "upload" &&
+      progress.nextPart < progress.partCount &&
+      progress.urlsExpireAt - Date.now() < LINKEDIN_URL_EXPIRY_SAFETY_MS
+    ) {
+      // Nothing was posted: the asset left behind is simply never used.
+      if (progress.restarts >= LINKEDIN_MAX_UPLOAD_RESTARTS) {
+        throw uploadFailed(
+          "LinkedIn's upload links kept expiring before the video was uploaded. Nothing was posted — please retry.",
+        );
+      }
+      if (remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS) return await pause(null);
+      console.warn("[LinkedIn] The upload links are about to expire; registering the video again", {
+        assetUrn: progress.asset,
+        nextPart: progress.nextPart,
+        parts: progress.partCount,
+      });
+      await closeSource();
+      current = await beginUpload(progress.restarts + 1);
+    }
+
+    if (current.data.phase === "upload") {
+      const secret = current.secret;
+      if (secret === null) {
+        throw uploadFailed("The upload could not be tracked. Nothing was posted — please retry.");
+      }
+
+      while (current.data.nextPart < current.data.partCount) {
+        const index = current.data.nextPart;
+        const partCount = current.data.partCount;
+        const part = secret.parts[index];
+        const length = part.lastByte - part.firstByte + 1;
+
+        if (remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS) return await pause(null);
+
+        let body: Buffer<ArrayBuffer>;
+        try {
+          body = await readPart(part.firstByte, length);
+        } catch (error) {
+          // Reading runs into the deadline: nothing was sent, so this is not a failure of the
+          // upload. The next step reopens the blob at the same part.
+          if (remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS) return await pause(null);
+          throw error;
+        }
+        // Reading takes time too: the part must still fit.
+        if (remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS) return await pause(null);
+
+        const attempt = await attemptRequest(() =>
+          fetchWithTimeout(
+            part.url,
+            // No Authorization: the page says a video upload "shouldn't include an OAuth token".
+            { method: "PUT", headers: part.headers, body },
+            budgetedTimeout(LARGE_UPLOAD_REQUEST_TIMEOUT_MS, deadline),
+          ),
+        );
+        if ("failure" in attempt) {
+          // A part commits nothing: with no answer (or no time to ask) the step saves and
+          // continues, and the next one sends the same part again. Failing here would drop the
+          // state with everything uploaded so far.
+          if (!isTransientRequestFailure(attempt.failure)) throw attempt.failure;
+          console.warn("[LinkedIn] A part got no answer; the next step sends it again", {
+            part: index + 1,
+            parts: partCount,
+            status: (attempt.failure as { status?: unknown } | null)?.status,
+            code: (attempt.failure as { code?: unknown } | null)?.code,
+          });
+          return await pause(LINKEDIN_TRANSIENT_RESUME_DELAY_MS);
+        }
+
+        const { response } = attempt;
+        void response.body?.cancel().catch(() => {});
+        // The part's own answer is not logged or quoted: it comes from the capability URL.
+        if (!response.ok) {
+          throw uploadFailed(
+            `LinkedIn video upload failed (part ${index + 1} of ${partCount}, status ${response.status})`,
+            response.status,
+          );
+        }
+        const etag = response.headers.get("ETag");
+        if (!etag) {
+          throw uploadFailed(
+            `LinkedIn didn't return an ETag for part ${index + 1} of ${partCount}. Nothing was posted.`,
+          );
+        }
+        current = {
+          ...current,
+          data: { ...current.data, nextPart: index + 1, etags: [...current.data.etags, etag] },
+        };
+        await save(current);
+        console.log("[LinkedIn] Part uploaded", { part: index + 1, parts: partCount });
+      }
+
+      await closeSource();
+
+      // The completion commits nothing yet (the post does), so it starts with a full window left.
+      if (remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS) return await pause(null);
+      const attempt = await attemptRequest(() =>
+        fetchWithTimeout(
+          `${LINKEDIN_ASSETS_URL}?action=completeMultiPartUpload`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+              "X-Restli-Protocol-Version": "2.0.0",
+            },
+            body: JSON.stringify({
+              completeMultipartUploadRequest: {
+                mediaArtifact: current.data.mediaArtifact,
+                metadata: secret.metadata,
+                partUploadResponses: current.data.etags.map((etag) => ({
+                  headers: { ETag: etag },
+                  httpStatusCode: 200,
+                })),
+              },
+            }),
+          },
+          budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+        ),
+      );
+      if ("failure" in attempt) {
+        if (!isTransientRequestFailure(attempt.failure)) throw attempt.failure;
+        console.warn("[LinkedIn] The completion got no answer; the next step asks again", {
+          status: (attempt.failure as { status?: unknown } | null)?.status,
+          code: (attempt.failure as { code?: unknown } | null)?.code,
+        });
+        return await pause(LINKEDIN_TRANSIENT_RESUME_DELAY_MS);
+      }
+      if (attempt.response.status === 401) {
+        void attempt.response.body?.cancel().catch(() => {});
+        await throwLinkedInReconnect(connection);
+      }
+      // An unconfirmed endpoint (see above): a refusal is a failed upload, before any post.
+      await assertOk(attempt.response, {
+        code: "LINKEDIN_VIDEO_UPLOAD_FAILED",
+        prefix: "LinkedIn video upload could not be completed",
+      });
+      void attempt.response.body?.cancel().catch(() => {});
+
+      // The part URLs and the metadata are no longer needed: the saved state drops them.
+      current = { data: { ...current.data, phase: "processing", completedAt: Date.now() }, secret: null };
+      console.log("[LinkedIn] Multipart upload completed; waiting for the asset", {
+        assetUrn: current.data.asset,
+        parts: current.data.partCount,
+      });
+      return await pause(LINKEDIN_ASSET_POLL_INTERVAL_MS);
+    }
+
+    // processing: one status check, then the post.
+    if (remainingMs(deadline) < LARGE_UPLOAD_CHUNK_WINDOW_MS) return await pause(null);
+    const waitOver = Date.now() - (current.data.completedAt ?? Date.now()) >= LINKEDIN_ASSET_MAX_WAIT_MS;
+    const verdict = await checkAssetStatus({ accessToken, asset: current.data.asset, connection, deadline });
+
+    if (verdict.kind === "waiting") {
+      if (!waitOver) return await pause(LINKEDIN_ASSET_POLL_INTERVAL_MS);
+      console.warn("[LinkedIn] The video is still processing after the wait; posting anyway", {
+        assetUrn: current.data.asset,
+      });
+    } else if (verdict.kind === "unanswered") {
+      if (!waitOver) {
+        console.warn("[LinkedIn] The status check got no answer; the next step asks again", {
+          assetUrn: current.data.asset,
+        });
+        return await pause(LINKEDIN_TRANSIENT_RESUME_DELAY_MS);
+      }
+      console.warn("[LinkedIn] The status checks got no answer for the whole wait; posting anyway", {
+        assetUrn: current.data.asset,
+      });
+    } else if (verdict.kind === "unreadable") {
+      console.warn("[LinkedIn] The asset's status could not be read; posting anyway", {
+        assetUrn: current.data.asset,
+        reason: verdict.reason,
+      });
+    }
+
+    // The post is the commit call: it starts with its whole timeout left, and finishes in this step.
+    if (remainingMs(deadline) < LINKEDIN_POST_MIN_WINDOW_MS) return await pause(null);
+    const postId = await createPost(accessToken, authorUrn, caption, connection, current.data.asset, true, deadline);
+    console.log("[LinkedIn] Publish successful", { postId });
+    return { externalPostId: postId };
+  } catch (error) {
+    if (isRateLimitedError(error)) {
+      // The deferral resumes from here. Best effort: a failed save must not hide the rate limit.
+      await save(current).catch((saveError: unknown) => {
+        console.warn("[LinkedIn] Could not save the upload progress before the rate-limit wait", {
+          code: (saveError as { code?: unknown } | null)?.code,
+        });
+      });
+    }
+    throw error;
+  } finally {
+    await closeSource();
+  }
+}
+
 export const linkedinClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
     let { socialConnection } = ctx;
@@ -743,6 +1531,47 @@ export const linkedinClient: PlatformClient = {
       filename: mediaItem.originalFilename,
       authorUrn,
     });
+
+    // 2026-11-02 scale audit (jobs B3): a video above 50 MiB on a platform enabled in
+    // LARGE_UPLOAD_PLATFORMS - or any upload that already has saved state - is uploaded as a
+    // multipart upload, streamed from storage part by part across steps; everything else keeps
+    // the whole-file upload below, unchanged. The saved state alone decides whether this step
+    // starts an upload or resumes one (never `ctx.continuation`), so it is read before anything
+    // is uploaded.
+    const store = ctx.uploadState;
+    const totalBytes = mediaItem.sizeBytes;
+    const sizeIsUsable = Number.isSafeInteger(totalBytes) && totalBytes > 0;
+    const saved =
+      store !== undefined && isVideo && sizeIsUsable
+        ? await store.load<Partial<LinkedInMultipartData>, Partial<LinkedInMultipartSecret>>(
+            LINKEDIN_UPLOAD_STATE_KIND,
+          )
+        : null;
+    const resumed = readSavedUpload(saved, totalBytes);
+    if (saved !== null && resumed === null) {
+      console.warn("[LinkedIn] The saved upload cannot be used; a new upload starts", { size: totalBytes });
+    }
+    if (
+      store !== undefined &&
+      isVideo &&
+      sizeIsUsable &&
+      usesLargeUploadPath({
+        platform: "linkedin",
+        mimeType: mediaItem.mimeType,
+        sizeBytes: totalBytes,
+        hasState: resumed !== null,
+        hasStore: true,
+      })
+    ) {
+      return await publishMultipart({
+        ctx,
+        accessToken,
+        authorUrn,
+        connection: socialConnection,
+        store,
+        resumed,
+      });
+    }
 
     try {
       let mediaUrn: string | undefined;
