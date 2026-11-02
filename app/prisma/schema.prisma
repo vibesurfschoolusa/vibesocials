@@ -444,16 +444,16 @@ model PostMetric {
   // unique per upload, so (platform, externalPostId) is a safe upsert key
   // without userId. This unique also serves as the cron's lookup index.
   @@unique([platform, externalPostId])
-  // Dashboard aggregate / per-workspace reads (Team Workspaces). Replaces the
-  // old @@index([userId]); the DB index `PostMetric_userId_idx` is
-  // intentionally left in place (its removal is a later cleanup, not part of
-  // this migration — see migration.sql).
+  // Dashboard aggregate / per-workspace reads (Team Workspaces). This replaced
+  // the original @@index([userId]) for those reads, and migration 20260712120000
+  // then dropped the DB index `PostMetric_userId_idx`. The userId index is back
+  // below, for the User -> PostMetric cascade only.
   @@index([workspaceId])
   // 2026-11-01 scale audit: PostJobResult delete runs ON DELETE SET NULL
   // against this column.
   @@index([postJobResultId])
   // 2026-11-01 scale audit: User -> PostMetric ON DELETE CASCADE seeks by
-  // userId. Re-adds the index that 20260712120000 dropped when workspaceId
-  // replaced it for the dashboard reads.
+  // userId. Re-created by 20261101160000_scale_indexes after 20260712120000
+  // dropped it.
   @@index([userId])
 }
