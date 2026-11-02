@@ -197,7 +197,8 @@ releases.
    SELECT count(*) FROM "PostJobResult";
    ```
 
-   Phase 3's migrations run during the build. They add a column and build an
+   Phase 3's migrations run during the build. They add two columns
+   (`workspaceId` and `uploadState`) and build an
    index on `"PostJobResult"` with a plain `CREATE INDEX` (which blocks writes to
    the table while it builds). Then they backfill `"workspaceId"` on every row
    in one `UPDATE` (which locks every row it changes until it ends). Both are
@@ -311,8 +312,10 @@ after the promotion:
    512 MB, until a `-c1` step appears.
 5. Check that the post went out, with the full video playable on the platform.
    - **YouTube:** run the query from step 2 again. The counter must have risen by
-     exactly 1 for the one video (one upload session). More than 1 means a session
-     was started twice; stop and investigate before you enable another platform.
+     exactly 1 for the one video (one upload session). The counter is app-wide,
+     so run the test in a quiet window, or subtract any other YouTube results
+     that started during the test. More than 1 left over means a session was
+     started twice; stop and investigate before you enable another platform.
    - **TikTok:** record whether the status poll confirmed the post, or the result
      ended `TIKTOK_PUBLISH_PENDING` ("check TikTok before retrying"). For a
      pending result, check the sandbox account for the video before you do
