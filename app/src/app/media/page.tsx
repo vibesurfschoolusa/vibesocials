@@ -1,12 +1,12 @@
 import { redirect } from "next/navigation";
 
-import { getCurrentUser } from "@/lib/auth";
+import { getWorkspaceContext } from "@/lib/workspace";
 import { MediaLibrary } from "@/components/media-library";
 
 export default async function MediaPage() {
-  const user = await getCurrentUser();
+  const context = await getWorkspaceContext();
 
-  if (!user) {
+  if (!context) {
     redirect(`/login?callbackUrl=${encodeURIComponent("/media")}`);
   }
 
@@ -22,7 +22,10 @@ export default async function MediaPage() {
       </div>
 
       <div className="mt-8">
-        <MediaLibrary />
+        {/* 2026-11-02 scale audit (correctness): the library sends the workspace it
+            was rendered for, so an upload from a stale tab is refused (409)
+            instead of landing in the workspace another tab switched to. */}
+        <MediaLibrary workspaceId={context.workspace.id} />
       </div>
     </div>
   );

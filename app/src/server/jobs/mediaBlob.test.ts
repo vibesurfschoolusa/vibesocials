@@ -7,9 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const { delMock } = vi.hoisted(() => ({ delMock: vi.fn() }));
 vi.mock("@vercel/blob", () => ({ del: delMock }));
 
-import { deleteBlobUnlessShared, type MediaBlobTx } from "./mediaBlob";
+import { BLOB_DELETE_TIMEOUT_MS, deleteBlobUnlessShared, type MediaBlobTx } from "./mediaBlob";
 
 const U = "https://abc123.public.blob.vercel-storage.com/1700000000000-ab12cd34-photo-Xy9Zq1.png";
+
+/** Every `del` is bounded by an abort signal (see "bounds the blob delete" below). */
+const TIMED = { abortSignal: expect.any(AbortSignal) };
 
 type Row = { id: string; storageLocation: string; deletedAt: Date | null };
 
@@ -55,7 +58,7 @@ describe("deleteBlobUnlessShared", () => {
     await expect(deleteBlobUnlessShared(tx, { id: "a", storageLocation: U })).resolves.toBe("deleted");
 
     expect(delMock).toHaveBeenCalledTimes(1);
-    expect(delMock).toHaveBeenCalledWith(U);
+    expect(delMock).toHaveBeenCalledWith(U, TIMED);
   });
 
   it("keeps the blob when another live row references the same URL", async () => {
@@ -77,7 +80,7 @@ describe("deleteBlobUnlessShared", () => {
 
     await expect(deleteBlobUnlessShared(tx, { id: "b", storageLocation: U })).resolves.toBe("deleted");
 
-    expect(delMock).toHaveBeenCalledWith(U);
+    expect(delMock).toHaveBeenCalledWith(U, TIMED);
   });
 
   describe("legacy variant rows (a non-canonical spelling of a file another row holds)", () => {
@@ -112,7 +115,7 @@ describe("deleteBlobUnlessShared", () => {
       );
 
       expect(delMock).toHaveBeenCalledTimes(1);
-      expect(delMock).toHaveBeenCalledWith(U);
+      expect(delMock).toHaveBeenCalledWith(U, TIMED);
     });
 
     it("counts rows stored under either the canonical key or the raw value, deduplicated", async () => {
@@ -142,7 +145,7 @@ describe("deleteBlobUnlessShared", () => {
     expect(count).toHaveBeenCalledWith({
       where: { storageLocation: { in: [legacy] }, id: { not: "a" }, deletedAt: null },
     });
-    expect(delMock).toHaveBeenCalledWith(legacy);
+    expect(delMock).toHaveBeenCalledWith(legacy, TIMED);
   });
 
   it("takes the advisory lock before counting", async () => {
@@ -160,6 +163,76 @@ describe("deleteBlobUnlessShared", () => {
     await deleteBlobUnlessShared(tx, { id: "a", storageLocation: U });
 
     expect(order).toEqual(["lock", "count"]);
+  });
+});
+
+// 2026-11-02 scale audit (jobs): `del()` is the one unbounded call inside the
+// retention sweep's per-item transaction and the single-delete route's. A hung
+// Blob request held the row lock, the advisory lock and a pooled connection until
+// the platform killed the invocation. The delete now carries an AbortSignal; an
+// abort throws like any failed `del`, so the caller's transaction rolls back and
+// the row stays live. The guard itself (lenient key, advisory lock, count over
+// [key, raw]) is unchanged.
+describe("deleteBlobUnlessShared bounds the blob delete", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("pins the delete timeout at 10 s", () => {
+    expect(BLOB_DELETE_TIMEOUT_MS).toBe(10_000);
+  });
+
+  it("passes del() an AbortSignal.timeout(10_000)", async () => {
+    const signal = AbortSignal.timeout(10_000);
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(signal);
+    const { tx } = makeTx([{ id: "a", storageLocation: U, deletedAt: null }]);
+
+    await deleteBlobUnlessShared(tx, { id: "a", storageLocation: U });
+
+    expect(timeoutSpy).toHaveBeenCalledTimes(1);
+    expect(timeoutSpy).toHaveBeenCalledWith(10_000);
+    expect(delMock).toHaveBeenCalledTimes(1);
+    expect(delMock).toHaveBeenCalledWith(U, { abortSignal: signal });
+  });
+
+  it("creates the signal only when it will delete (a shared blob starts no timer)", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const { tx } = makeTx([
+      { id: "a", storageLocation: U, deletedAt: null },
+      { id: "b", storageLocation: U, deletedAt: null },
+    ]);
+
+    await expect(deleteBlobUnlessShared(tx, { id: "b", storageLocation: U })).resolves.toBe("kept_shared");
+
+    expect(timeoutSpy).not.toHaveBeenCalled();
+    expect(delMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects when the delete aborts (AbortError), so the caller's transaction rolls back", async () => {
+    const abort = Object.assign(new Error("The operation was aborted due to timeout"), {
+      name: "TimeoutError",
+    });
+    delMock.mockRejectedValueOnce(abort);
+    const { tx } = makeTx([{ id: "a", storageLocation: U, deletedAt: null }]);
+
+    await expect(deleteBlobUnlessShared(tx, { id: "a", storageLocation: U })).rejects.toBe(abort);
+
+    const abortError = new DOMException("This operation was aborted", "AbortError");
+    delMock.mockRejectedValueOnce(abortError);
+    await expect(deleteBlobUnlessShared(tx, { id: "a", storageLocation: U })).rejects.toBe(abortError);
+  });
+
+  it("keeps the guard unchanged: lenient key for the lock, the delete and the count over [key, raw]", async () => {
+    const variant = `${U}?x=1`;
+    const { tx, executeRaw, count } = makeTx([]);
+
+    await expect(deleteBlobUnlessShared(tx, { id: "b", storageLocation: variant })).resolves.toBe("deleted");
+
+    expect(executeRaw.mock.calls[0].slice(1)).toEqual([U]);
+    expect(count).toHaveBeenCalledWith({
+      where: { storageLocation: { in: [U, variant] }, id: { not: "b" }, deletedAt: null },
+    });
+    expect(delMock).toHaveBeenCalledWith(U, TIMED);
   });
 });
 
@@ -223,7 +296,7 @@ describe("deleteBlobUnlessShared lenient key (ruling R6)", () => {
     );
 
     expect(delMock).toHaveBeenCalledTimes(1);
-    expect(delMock).toHaveBeenCalledWith(OWN);
+    expect(delMock).toHaveBeenCalledWith(OWN, TIMED);
   });
 
   it("still matches a canonical twin when the stored value is an own-store canonical URL", async () => {
@@ -257,7 +330,7 @@ describe("deleteBlobUnlessShared lenient key (ruling R6)", () => {
     expect(count).toHaveBeenCalledWith({
       where: { storageLocation: { in: ["not a url"] }, id: { not: "a" }, deletedAt: null },
     });
-    expect(delMock).toHaveBeenCalledWith("not a url");
+    expect(delMock).toHaveBeenCalledWith("not a url", TIMED);
   });
 
   it("falls back to the raw value when the cleaned URL is still not canonicalizable (disallowed host)", async () => {
@@ -267,7 +340,7 @@ describe("deleteBlobUnlessShared lenient key (ruling R6)", () => {
     await expect(deleteBlobUnlessShared(tx, { id: "a", storageLocation: legacy })).resolves.toBe("deleted");
 
     expect(executeRaw.mock.calls[0].slice(1)).toEqual([legacy]);
-    expect(delMock).toHaveBeenCalledWith(legacy);
+    expect(delMock).toHaveBeenCalledWith(legacy, TIMED);
   });
 
   describe("when the own store id is unknown", () => {
@@ -289,7 +362,7 @@ describe("deleteBlobUnlessShared lenient key (ruling R6)", () => {
       await expect(deleteBlobUnlessShared(other.tx, { id: "b", storageLocation: foreign })).resolves.toBe(
         "deleted",
       );
-      expect(delMock).toHaveBeenCalledWith(foreign);
+      expect(delMock).toHaveBeenCalledWith(foreign, TIMED);
     });
   });
 });

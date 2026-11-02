@@ -34,6 +34,7 @@ vi.mock("@/lib/workspace", () => ({
 
 import { BLOB_URL_REJECTED_MESSAGE, MAX_BLOB_URL_LENGTH } from "@/lib/blobUrl";
 import { decodePostsCursor, encodePostsCursor } from "@/lib/postsDto";
+import { INVALID_WORKSPACE_ID_MESSAGE, WORKSPACE_CHANGED_MESSAGE } from "@/lib/workspaceChanged";
 
 import { GET, POST } from "./route";
 
@@ -349,6 +350,100 @@ describe("POST /api/media", () => {
 
       expect(response.status).toBe(201);
       expect(createMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // 2026-11-02 scale audit (correctness): the active workspace is a cookie every tab
+  // shares, so a switch in tab B re-points tab A's next upload into the other
+  // workspace's library. The media library sends the workspace it was RENDERED
+  // for; the route refuses on a mismatch, with the same contract as POST
+  // /api/posts (lib/workspaceChanged.ts).
+  describe("workspace guard (2026-11-02 scale audit)", () => {
+    const base = {
+      blobUrl: "https://test.public.blob.vercel-storage.com/x",
+      mimeType: "image/png",
+      sizeBytes: 10,
+    };
+
+    beforeEach(() => {
+      createMock.mockResolvedValue({ id: "media-5", createdAt: new Date("2026-01-01T00:00:00Z") });
+    });
+
+    it("returns 409 WORKSPACE_CHANGED for a workspaceId other than the active one, and stores nothing", async () => {
+      const response = await POST(jsonRequest({ ...base, workspaceId: "ws-other" }));
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({
+        error: WORKSPACE_CHANGED_MESSAGE,
+        code: "WORKSPACE_CHANGED",
+      });
+      expect(createMock).not.toHaveBeenCalled();
+    });
+
+    it("returns 400 INVALID_WORKSPACE_ID for a non-string workspaceId (a number, null, an object), and stores nothing", async () => {
+      for (const workspaceId of [7, null, { id: "ws-1" }, ["ws-1"], true]) {
+        const response = await POST(jsonRequest({ ...base, workspaceId }));
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toEqual({
+          error: INVALID_WORKSPACE_ID_MESSAGE,
+          code: "INVALID_WORKSPACE_ID",
+        });
+      }
+      expect(createMock).not.toHaveBeenCalled();
+    });
+
+    it("treats an empty-string workspaceId as a mismatch, not as absent", async () => {
+      const response = await POST(jsonRequest({ ...base, workspaceId: "" }));
+
+      expect(response.status).toBe(409);
+      expect(createMock).not.toHaveBeenCalled();
+    });
+
+    it("is the first check after the body is read: a stale tab hears about the switch, not a stray 400", async () => {
+      const badBlob = await POST(
+        jsonRequest({ blobUrl: "https://evil.example.com/x.png", mimeType: "image/png", sizeBytes: 10, workspaceId: "ws-other" }),
+      );
+      const noBlob = await POST(jsonRequest({ workspaceId: "ws-other" }));
+      const badMime = await POST(jsonRequest({ ...base, mimeType: "application/pdf", workspaceId: "ws-other" }));
+
+      expect([badBlob.status, noBlob.status, badMime.status]).toEqual([409, 409, 409]);
+      expect(createMock).not.toHaveBeenCalled();
+    });
+
+    it("creates the item in the active workspace when workspaceId matches", async () => {
+      const response = await POST(jsonRequest({ ...base, workspaceId: "ws-1" }));
+
+      expect(response.status).toBe(201);
+      expect(createMock).toHaveBeenCalledWith({
+        data: expect.objectContaining({ workspaceId: "ws-1" }),
+      });
+    });
+
+    it("proceeds exactly as before when workspaceId is absent (API compatibility)", async () => {
+      const response = await POST(jsonRequest(base));
+
+      expect(response.status).toBe(201);
+      expect(createMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("never takes the target workspace from the body: the stored workspaceId is the active one", async () => {
+      getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-team" }));
+
+      const response = await POST(jsonRequest({ ...base, workspaceId: "ws-team" }));
+
+      expect(response.status).toBe(201);
+      expect(createMock).toHaveBeenCalledWith({
+        data: expect.objectContaining({ workspaceId: "ws-team" }),
+      });
+    });
+
+    it("answers 401 before looking at workspaceId when unauthenticated", async () => {
+      getWorkspaceContextMock.mockResolvedValue(null);
+
+      const response = await POST(jsonRequest({ ...base, workspaceId: "ws-other" }));
+
+      expect(response.status).toBe(401);
     });
   });
 

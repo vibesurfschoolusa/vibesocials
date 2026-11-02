@@ -19,6 +19,7 @@ import {
 import {
   MIN_REQUEST_WINDOW_MS,
   PUBLISH_BUDGET_EXCEEDED_CODE,
+  publishBudgetExceededError,
 } from "@/server/platforms/publishBudget";
 
 // 2026-11-01 scale audit (jobs, token refresh): the helper opens a Prisma
@@ -819,6 +820,441 @@ describe("refreshConnectionToken — single-flight per connection in one process
     finish();
     await leader;
     expect(transactionMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 2026-11-02 scale audit (jobs, token refresh): the waits the helper adds in front
+// of a refresh were bounded by REFRESH_LOCK_WAIT_MS (20 s) alone, not by the
+// caller's step budget, so a caller 12 s from its deadline could sit in the queue
+// for 20 s, and a single-flight follower could wait out the whole of a leader's
+// flight. Both waits now end by the caller's OWN deadline (less the 5 s a request
+// needs), with PUBLISH_TIME_BUDGET_EXCEEDED - the code that means "nothing was
+// sent, retry" - instead of BUSY when it is the budget that ran out.
+const BUDGET_NOW = new Date("2026-11-02T10:00:00Z");
+
+/** A promise's outcome as it settles, so a test can look at WHEN it settled. */
+function track(promise: Promise<unknown>) {
+  const state: { settled: boolean; error: CodedError | null; value?: unknown } = {
+    settled: false,
+    error: null,
+  };
+  void promise.then(
+    (value) => {
+      state.settled = true;
+      state.value = value;
+    },
+    (e: unknown) => {
+      state.settled = true;
+      state.error = e as CodedError;
+    },
+  );
+  return state;
+}
+
+describe("refreshConnectionToken — the wait for a lock slot is bounded by the caller's budget", () => {
+  /** `$transaction` calls that start at once but whose callback only runs when released. */
+  function gatedTransactions() {
+    const releases: Array<() => void> = [];
+    transactionMock.mockImplementation(
+      (callback: (tx: unknown) => Promise<unknown>) =>
+        new Promise((resolve, reject) => {
+          releases.push(() => callback({ $executeRaw: executeRawMock }).then(resolve, reject));
+        }),
+    );
+    return releases;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BUDGET_NOW);
+    findUniqueMock.mockImplementation(async ({ where }: { where: { id: string } }) =>
+      makeConnection({ id: where.id }),
+    );
+  });
+
+  const callWith = (id: string, opts?: { deadline?: number }, refresh = vi.fn().mockResolvedValue(makeConnection())) =>
+    refreshConnectionToken(makeConnection({ id }), refresh, opts);
+
+  /** Two callers hold both lock slots (cap 2); `finish` lets them go. */
+  async function holdBothSlots() {
+    const releases = gatedTransactions();
+    const a = callWith("conn-a");
+    await vi.advanceTimersByTimeAsync(0);
+    const b = callWith("conn-b");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(transactionMock).toHaveBeenCalledTimes(REFRESH_LOCK_MAX_CONCURRENCY);
+    return {
+      releases,
+      finish: async () => {
+        releases[0]();
+        releases[1]();
+        await Promise.all([a, b]);
+      },
+    };
+  }
+
+  it("with 12 s left and both slots held, gives up with PUBLISH_TIME_BUDGET_EXCEEDED at 7 s (deadline - 5 s), not at 20 s", async () => {
+    const { finish } = await holdBothSlots();
+    const refresh = vi.fn();
+    const c = track(callWith("conn-c", { deadline: Date.now() + 12_000 }, refresh));
+
+    await vi.advanceTimersByTimeAsync(6_999);
+    expect(c.settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(c.settled).toBe(true);
+    expect(c.error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(transactionMock).toHaveBeenCalledTimes(REFRESH_LOCK_MAX_CONCURRENCY);
+
+    await finish();
+  });
+
+  it("the timed-out waiter leaves no timer and no queue entry behind: freeing a slot starts nobody", async () => {
+    const { finish } = await holdBothSlots();
+    const c = track(callWith("conn-c", { deadline: Date.now() + 12_000 }, vi.fn()));
+
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(c.error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(vi.getTimerCount()).toBe(0);
+
+    await finish();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(transactionMock).toHaveBeenCalledTimes(REFRESH_LOCK_MAX_CONCURRENCY);
+  });
+
+  it("with no deadline, still gives up with CONNECTION_REFRESH_BUSY (503) at 20 s", async () => {
+    const { finish } = await holdBothSlots();
+    const c = track(callWith("conn-c", undefined, vi.fn()));
+
+    await vi.advanceTimersByTimeAsync(REFRESH_LOCK_WAIT_MS - 1);
+    expect(c.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(c.error?.code).toBe(CONNECTION_REFRESH_BUSY_CODE);
+    expect(c.error?.status).toBe(503);
+
+    await finish();
+  });
+
+  it("with a deadline far beyond 20 s, the 20 s bound wins: CONNECTION_REFRESH_BUSY at 20 s", async () => {
+    const { finish } = await holdBothSlots();
+    const c = track(callWith("conn-c", { deadline: Date.now() + 120_000 }, vi.fn()));
+
+    await vi.advanceTimersByTimeAsync(REFRESH_LOCK_WAIT_MS - 1);
+    expect(c.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(c.error?.code).toBe(CONNECTION_REFRESH_BUSY_CODE);
+
+    await finish();
+  });
+
+  it("where the budget and the 20 s bound tie (25 s left), the 20 s bound is the one reported: BUSY", async () => {
+    const { finish } = await holdBothSlots();
+    const c = track(
+      callWith("conn-c", { deadline: Date.now() + REFRESH_LOCK_WAIT_MS + MIN_REQUEST_WINDOW_MS }, vi.fn()),
+    );
+
+    await vi.advanceTimersByTimeAsync(REFRESH_LOCK_WAIT_MS);
+
+    expect(c.error?.code).toBe(CONNECTION_REFRESH_BUSY_CODE);
+
+    await finish();
+  });
+
+  it("with 4 s left it rejects immediately (the budget check), starting no timer", async () => {
+    const { finish } = await holdBothSlots();
+    const timersBefore = vi.getTimerCount();
+
+    const error = await caught(callWith("conn-c", { deadline: Date.now() + 4_000 }, vi.fn()));
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(vi.getTimerCount()).toBe(timersBefore);
+
+    await finish();
+  });
+
+  it("with exactly 5 s left and both slots held there is no wait to give: rejects immediately, starting no timer", async () => {
+    const { finish } = await holdBothSlots();
+    const timersBefore = vi.getTimerCount();
+    const c = track(callWith("conn-c", { deadline: Date.now() + MIN_REQUEST_WINDOW_MS }, vi.fn()));
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(c.settled).toBe(true);
+    expect(c.error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(vi.getTimerCount()).toBe(timersBefore);
+    expect(transactionMock).toHaveBeenCalledTimes(REFRESH_LOCK_MAX_CONCURRENCY);
+
+    await finish();
+  });
+
+  it("with exactly 5 s left and a FREE slot it still runs (nothing to wait for)", async () => {
+    const refresh = vi.fn().mockResolvedValue(makeConnection());
+
+    await callWith("conn-a", { deadline: Date.now() + MIN_REQUEST_WINDOW_MS }, refresh);
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("a slot that frees up inside the clamped wait is used, and leaves no timer behind", async () => {
+    const { releases } = await holdBothSlots();
+    const refreshC = vi.fn().mockResolvedValue(makeConnection({ id: "conn-c", accessToken: "c-2" }));
+    const c = callWith("conn-c", { deadline: Date.now() + 30_000 }, refreshC);
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    // Frees one slot; the waiter takes it and opens its own transaction.
+    releases[0]();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(transactionMock).toHaveBeenCalledTimes(3);
+    releases[1]();
+    releases[2]();
+    await c;
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(refreshC).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("refreshConnectionToken — a single-flight follower is bounded by its OWN budget", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BUDGET_NOW);
+    findUniqueMock.mockResolvedValue(makeConnection());
+  });
+
+  /** A leader whose refresh stays in flight until `finish` / `fail` is called. */
+  function startLeader(opts?: { deadline?: number }) {
+    let finish!: (row: SocialConnection) => void;
+    let fail!: (error: Error) => void;
+    const gate = new Promise<SocialConnection>((resolve, reject) => {
+      finish = resolve;
+      fail = reject;
+    });
+    const refresh = vi.fn(() => gate);
+    const promise = refreshConnectionToken(makeConnection(), refresh, opts);
+    return { refresh, promise, finish, fail, state: track(promise) };
+  }
+
+  it("a follower with 8 s left and a leader that never settles rejects PUBLISH_TIME_BUDGET_EXCEEDED by 3 s, and the leader keeps running", async () => {
+    const leader = startLeader();
+    await vi.advanceTimersByTimeAsync(0);
+    const followerRefresh = vi.fn();
+    const follower = track(
+      refreshConnectionToken(makeConnection(), followerRefresh, { deadline: Date.now() + 8_000 }),
+    );
+
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(follower.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(follower.settled).toBe(true);
+    expect(follower.error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    // The follower never refreshes, never opens a transaction, and does not cancel the leader.
+    expect(followerRefresh).not.toHaveBeenCalled();
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+    expect(leader.state.settled).toBe(false);
+    expect(leader.refresh).toHaveBeenCalledTimes(1);
+
+    // The leader finishes later and still resolves its own row.
+    const row = makeConnection({ accessToken: "access-2" });
+    leader.finish(row);
+    await expect(leader.promise).resolves.toBe(row);
+  });
+
+  it("the leader failing after a follower timed out is not an unhandled rejection, and no timer is left", async () => {
+    const leader = startLeader();
+    await vi.advanceTimersByTimeAsync(0);
+    const follower = track(
+      refreshConnectionToken(makeConnection(), vi.fn(), { deadline: Date.now() + 8_000 }),
+    );
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(follower.error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+
+    const failure = new Error("TikTok is down");
+    leader.fail(failure);
+    await expect(leader.promise).rejects.toBe(failure);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("a follower with budget left gets the leader's row when it finishes in time, and leaves no timer behind", async () => {
+    const leader = startLeader();
+    await vi.advanceTimersByTimeAsync(0);
+    const followerRefresh = vi.fn();
+    const follower = refreshConnectionToken(makeConnection(), followerRefresh, {
+      deadline: Date.now() + 60_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    const row = makeConnection({ accessToken: "access-2" });
+    leader.finish(row);
+
+    await expect(follower).resolves.toBe(row);
+    expect(followerRefresh).not.toHaveBeenCalled();
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("a follower with exactly 5 s left has no wait to give: rejects at once, starting no timer", async () => {
+    const leader = startLeader();
+    await vi.advanceTimersByTimeAsync(0);
+    const timersBefore = vi.getTimerCount();
+
+    const follower = track(
+      refreshConnectionToken(makeConnection(), vi.fn(), { deadline: Date.now() + MIN_REQUEST_WINDOW_MS }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(follower.error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(vi.getTimerCount()).toBe(timersBefore);
+    leader.finish(makeConnection());
+    await leader.promise;
+  });
+
+  it("a follower with no deadline still waits for the leader however long it takes", async () => {
+    const leader = startLeader();
+    await vi.advanceTimersByTimeAsync(0);
+    const follower = track(refreshConnectionToken(makeConnection(), vi.fn()));
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(follower.settled).toBe(false);
+
+    const row = makeConnection({ accessToken: "access-2" });
+    leader.finish(row);
+    await leader.promise;
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(follower.value).toBe(row);
+  });
+
+  it("any other leader error is shared with the follower, which starts no flight of its own", async () => {
+    const leader = startLeader();
+    await vi.advanceTimersByTimeAsync(0);
+    const followerRefresh = vi.fn();
+    const follower = track(
+      refreshConnectionToken(makeConnection(), followerRefresh, { deadline: Date.now() + 60_000 }),
+    );
+
+    const failure = Object.assign(new Error("expired"), { code: "TIKTOK_RECONNECT_REQUIRED" });
+    leader.fail(failure);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(follower.error).toBe(failure);
+    expect(followerRefresh).not.toHaveBeenCalled();
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("the leader rejects PUBLISH_TIME_BUDGET_EXCEEDED while a follower has 60 s left: the follower starts its OWN flight (refresh called a second time) and resolves its row", async () => {
+    const leader = startLeader();
+    await vi.advanceTimersByTimeAsync(0);
+    const ownRow = makeConnection({ accessToken: "access-own" });
+    const followerRefresh = vi.fn().mockResolvedValue(ownRow);
+    const follower = refreshConnectionToken(makeConnection(), followerRefresh, {
+      deadline: Date.now() + 60_000,
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(followerRefresh).not.toHaveBeenCalled();
+
+    leader.fail(publishBudgetExceededError());
+    await expect(leader.promise).rejects.toMatchObject({ code: PUBLISH_BUDGET_EXCEEDED_CODE });
+
+    await expect(follower).resolves.toBe(ownRow);
+    expect(leader.refresh).toHaveBeenCalledTimes(1);
+    expect(followerRefresh).toHaveBeenCalledTimes(1);
+    expect(transactionMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("two followers of a leader that ran out of budget share ONE new flight: refresh runs twice in all, not three times", async () => {
+    const leader = startLeader();
+    await vi.advanceTimersByTimeAsync(0);
+    const ownRow = makeConnection({ accessToken: "access-own" });
+    let finishOwn!: () => void;
+    const ownGate = new Promise<void>((resolve) => {
+      finishOwn = resolve;
+    });
+    const firstRefresh = vi.fn(async () => {
+      await ownGate;
+      return ownRow;
+    });
+    const secondRefresh = vi.fn().mockResolvedValue(makeConnection({ accessToken: "access-other" }));
+    const first = refreshConnectionToken(makeConnection(), firstRefresh, { deadline: Date.now() + 60_000 });
+    const second = refreshConnectionToken(makeConnection(), secondRefresh, { deadline: Date.now() + 60_000 });
+
+    leader.fail(publishBudgetExceededError());
+    await vi.advanceTimersByTimeAsync(0);
+    finishOwn();
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(a).toBe(ownRow);
+    expect(b).toBe(ownRow);
+    expect(firstRefresh).toHaveBeenCalledTimes(1);
+    expect(secondRefresh).not.toHaveBeenCalled();
+    expect(transactionMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a follower retries only ONCE: if its own flight also runs out of budget it rejects, with no third flight", async () => {
+    const leader = startLeader();
+    await vi.advanceTimersByTimeAsync(0);
+    const followerRefresh = vi.fn().mockRejectedValue(publishBudgetExceededError());
+    const follower = track(
+      refreshConnectionToken(makeConnection(), followerRefresh, { deadline: Date.now() + 60_000 }),
+    );
+
+    leader.fail(publishBudgetExceededError());
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(follower.error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(followerRefresh).toHaveBeenCalledTimes(1);
+    expect(transactionMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a follower whose own wait already ended is not revived by the leader giving up later", async () => {
+    const leader = startLeader();
+    await vi.advanceTimersByTimeAsync(0);
+    const followerRefresh = vi.fn();
+    const follower = track(
+      refreshConnectionToken(makeConnection(), followerRefresh, { deadline: Date.now() + 9_000 }),
+    );
+
+    // The follower's own wait ends at 4 s; the leader gives up only afterwards.
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(follower.error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    leader.fail(publishBudgetExceededError());
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(followerRefresh).not.toHaveBeenCalled();
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a caller arriving after the leader gave up joins the follower's new flight (the leader's entry was cleared first)", async () => {
+    const leader = startLeader();
+    await vi.advanceTimersByTimeAsync(0);
+    let finishOwn!: () => void;
+    const ownGate = new Promise<void>((resolve) => {
+      finishOwn = resolve;
+    });
+    const ownRow = makeConnection({ accessToken: "access-own" });
+    const followerRefresh = vi.fn(async () => {
+      await ownGate;
+      return ownRow;
+    });
+    const follower = refreshConnectionToken(makeConnection(), followerRefresh, {
+      deadline: Date.now() + 60_000,
+    });
+
+    leader.fail(publishBudgetExceededError());
+    await vi.advanceTimersByTimeAsync(0);
+    const lateRefresh = vi.fn();
+    const late = refreshConnectionToken(makeConnection(), lateRefresh);
+    finishOwn();
+
+    await expect(Promise.all([follower, late])).resolves.toEqual([ownRow, ownRow]);
+    expect(lateRefresh).not.toHaveBeenCalled();
+    expect(followerRefresh).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -274,3 +274,126 @@ describe("runPlatformStepsWithDeferrals", () => {
     ]);
   });
 });
+
+// 2026-11-02 scale audit (jobs): Inngest does not resume a function, it RE-ENTERS
+// it from the top for every step and hands each already-finished step its recorded
+// output. So the orchestrator must be a pure function of the recorded outputs: the
+// same step ids in the same order, and `sleepUntil` targets taken from the
+// recorded outcomes (never from the clock), or a run that slept would diverge on
+// re-entry. This pins that, ahead of the chunked-upload steps that extend the id
+// space (`<id>-c<n>`, `<id>-wait-c<n>`).
+describe("runPlatformStepsWithDeferrals replay (memoization)", () => {
+  type Call = { kind: "run" | "sleep"; id: string; until?: string };
+
+  /**
+   * A replaying `step`: outputs are memoized by id and survive across passes (the
+   * `memo`), a memoized id returns its record WITHOUT invoking the callback (or
+   * sleeping again), and `calls` is the id sequence of the current pass.
+   */
+  function replayingStep(memo: Map<string, unknown>) {
+    const calls: Call[] = [];
+    const fresh = { runs: 0, sleeps: 0 };
+    return {
+      calls,
+      fresh,
+      run: vi.fn(async (id: string, cb: () => unknown) => {
+        calls.push({ kind: "run", id });
+        if (memo.has(id)) return JSON.parse(JSON.stringify(memo.get(id)));
+        fresh.runs += 1;
+        const out = JSON.parse(JSON.stringify(await cb()));
+        memo.set(id, out);
+        return out;
+      }),
+      sleepUntil: vi.fn(async (id: string, until: Date) => {
+        calls.push({ kind: "sleep", id, until: until.toISOString() });
+        if (memo.has(id)) return;
+        fresh.sleeps += 1;
+        memo.set(id, null);
+      }),
+    };
+  }
+
+  const asReplaying = (step: ReturnType<typeof replayingStep>) =>
+    step as unknown as Parameters<typeof runPlatformStepsWithDeferrals>[0];
+
+  it("a second pass over the same memo runs no plan, sleeps no more, issues the identical ids and sleepUntil targets, and returns equal outcomes", async () => {
+    const memo = new Map<string, unknown>();
+    const x = plan("x", [ok("x")]);
+    const youtube = plan("youtube", [deferred("youtube", T + 10 * HOUR), ok("youtube")]);
+    const plans = [x, youtube];
+
+    const first = replayingStep(memo);
+    const firstOutcomes = await runPlatformStepsWithDeferrals(asReplaying(first), plans);
+
+    expect(first.calls).toEqual([
+      { kind: "run", id: "publish-to-x" },
+      { kind: "run", id: "publish-to-youtube" },
+      { kind: "sleep", id: "publish-to-youtube-wait-rl1", until: iso(T + 10 * HOUR) },
+      { kind: "run", id: "publish-to-youtube-rl1" },
+    ]);
+    expect(firstOutcomes).toEqual([ok("x"), ok("youtube")]);
+    expect(first.fresh).toEqual({ runs: 3, sleeps: 1 });
+    expect(x.run).toHaveBeenCalledTimes(1);
+    expect(youtube.run).toHaveBeenCalledTimes(2);
+
+    // Re-entry: the orchestrator starts from scratch against the same memo.
+    const second = replayingStep(memo);
+    const secondOutcomes = await runPlatformStepsWithDeferrals(asReplaying(second), plans);
+
+    expect(second.calls).toEqual(first.calls);
+    expect(second.fresh).toEqual({ runs: 0, sleeps: 0 });
+    expect(x.run).toHaveBeenCalledTimes(1);
+    expect(youtube.run).toHaveBeenCalledTimes(2);
+    expect(secondOutcomes).toEqual(firstOutcomes);
+  });
+
+  it("replays a platform deferred more than once with the same -rl<n> ids and targets", async () => {
+    const memo = new Map<string, unknown>();
+    const plans = [
+      plan("x", [deferred("x", T + HOUR), deferred("x", T + 3 * HOUR), ok("x")]),
+      plan("linkedin", [deferred("linkedin", T + 2 * HOUR), ok("linkedin")]),
+    ];
+
+    const first = replayingStep(memo);
+    const firstOutcomes = await runPlatformStepsWithDeferrals(asReplaying(first), plans);
+    const second = replayingStep(memo);
+    const secondOutcomes = await runPlatformStepsWithDeferrals(asReplaying(second), plans);
+
+    expect(second.calls).toEqual(first.calls);
+    expect(first.calls.filter((call) => call.kind === "sleep")).toEqual([
+      { kind: "sleep", id: "publish-to-x-wait-rl1", until: iso(T + HOUR) },
+      { kind: "sleep", id: "publish-to-linkedin-wait-rl1", until: iso(T + 2 * HOUR) },
+      { kind: "sleep", id: "publish-to-x-wait-rl2", until: iso(T + 3 * HOUR) },
+    ]);
+    expect(second.fresh).toEqual({ runs: 0, sleeps: 0 });
+    expect(secondOutcomes).toEqual(firstOutcomes);
+  });
+
+  it("re-entering after a sleep (memo holds only the earlier steps) re-issues the same ids and runs only what is new", async () => {
+    const memo = new Map<string, unknown>();
+    const x = plan("x", [ok("x")]);
+    const youtube = plan("youtube", [deferred("youtube", T + 10 * HOUR), ok("youtube")]);
+    const plans = [x, youtube];
+
+    // The run got as far as the sleep: pass one is recorded, the retry is not.
+    memo.set("publish-to-x", ok("x"));
+    memo.set("publish-to-youtube", deferred("youtube", T + 10 * HOUR));
+    memo.set("publish-to-youtube-wait-rl1", null);
+
+    const reentry = replayingStep(memo);
+    const outcomes = await runPlatformStepsWithDeferrals(asReplaying(reentry), plans);
+
+    expect(reentry.calls.map((call) => `${call.kind}:${call.id}`)).toEqual([
+      "run:publish-to-x",
+      "run:publish-to-youtube",
+      "sleep:publish-to-youtube-wait-rl1",
+      "run:publish-to-youtube-rl1",
+    ]);
+    expect(reentry.calls[2].until).toBe(iso(T + 10 * HOUR));
+    expect(reentry.fresh).toEqual({ runs: 1, sleeps: 0 });
+    expect(x.run).not.toHaveBeenCalled();
+    expect(youtube.run).toHaveBeenCalledTimes(1);
+    expect(youtube.run).toHaveBeenCalledWith(1);
+    expect(outcomes).toEqual([ok("x"), ok("youtube")]);
+  });
+});

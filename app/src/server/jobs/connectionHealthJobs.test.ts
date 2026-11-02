@@ -480,7 +480,7 @@ describe("refreshConnection — one connection", () => {
     const { result, step } = await run();
 
     expect(result).toEqual({ socialConnectionId: "conn-1", outcome: "flagged", emailed: 2 });
-    expect(step.order).toEqual(["run:refresh", "run:notify-owners"]);
+    expect(step.order).toEqual(["run:refresh", "run:notify-day", "run:notify-owners"]);
     expect(sendEmailMock).toHaveBeenCalledTimes(2);
     expect(sendEmailMock.mock.calls.map((c) => c[0].to)).toEqual([
       "owner-a@example.com",
@@ -511,6 +511,56 @@ describe("refreshConnection — one connection", () => {
       { idempotencyKey: "reconnect/conn-1/2026-11-01/user-a", throwOnRetryable: true },
       { idempotencyKey: "reconnect/conn-1/2026-11-01/user-b", throwOnRetryable: true },
     ]);
+  });
+
+  // 2026-11-02 scale audit (jobs, notifications): the UTC day in the key comes from
+  // the memoized `notify-day` step, so a retry of `notify-owners` after midnight UTC
+  // builds the same key and Resend still treats it as a no-op for owners emailed.
+  it("FLAGGED: notify-day is memoized before notify-owners and its day builds the key, even if the clock moved to the next UTC day", async () => {
+    clientWith(async () => {
+      row = { ...row!, needsReconnect: true };
+      throw Object.assign(new Error("expired"), { code: "TIKTOK_RECONNECT_REQUIRED" });
+    });
+    const step = fakeStep();
+    const runStep = step.run.getMockImplementation()!;
+    step.run.mockImplementation(async (id, cb) => {
+      // A retry that re-enters the function after UTC midnight: the memoized
+      // `notify-day` output is replayed ("2026-11-01"), its callback is not run.
+      if (id === "notify-day") {
+        step.order.push(`run:${id}`);
+        vi.setSystemTime(new Date("2026-11-02T00:00:30.000Z"));
+        return "2026-11-01";
+      }
+      return runStep(id, cb);
+    });
+
+    const { result } = await run(step);
+
+    expect(step.order).toEqual(["run:refresh", "run:notify-day", "run:notify-owners"]);
+    expect(result.emailed).toBe(2);
+    expect(sendEmailMock.mock.calls.map((c) => c[1].idempotencyKey)).toEqual([
+      "reconnect/conn-1/2026-11-01/user-a",
+      "reconnect/conn-1/2026-11-01/user-b",
+    ]);
+  });
+
+  it("FLAGGED: notify-day computes the UTC date of the run (ISO date, no time)", async () => {
+    clientWith(async () => {
+      row = { ...row!, needsReconnect: true };
+      throw new Error("expired");
+    });
+
+    const { step } = await run();
+
+    expect(step.outputs["notify-day"]).toBe("2026-11-01");
+  });
+
+  it("notify-day runs only when the connection was flagged", async () => {
+    clientWith(async (conn) => conn);
+
+    const { step } = await run();
+
+    expect(step.order).toEqual(["run:refresh"]);
   });
 
   it("FLAGGED: a retryable send error fails the notify-owners step (and so is retried)", async () => {

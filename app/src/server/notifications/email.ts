@@ -45,6 +45,17 @@ const RATE_LIMIT_RETRY_AFTER_MS = 2_000;
 const INVALID_IDEMPOTENT_REQUEST = "invalid_idempotent_request";
 const CONCURRENT_IDEMPOTENT_REQUESTS = "concurrent_idempotent_requests";
 
+/**
+ * Resend's quota 429s (https://resend.com/docs/api-reference/errors): the daily
+ * quota "reset[s] at midnight UTC", and the monthly quota is fixed by moving to a
+ * larger plan. Unlike `rate_limit_exceeded` (per second), no retry within an
+ * Inngest step's lifetime can succeed, so these are never retried.
+ */
+const QUOTA_EXCEEDED_NAMES: ReadonlySet<string> = new Set([
+  "daily_quota_exceeded",
+  "monthly_quota_exceeded",
+]);
+
 export interface SendEmailParams {
   to: string;
   subject: string;
@@ -60,7 +71,8 @@ export interface SendEmailOptions {
   /**
    * Throw (instead of log and swallow) a failure that a retry can fix: a
    * `RetryAfterError` for a 429 / in-flight 409, an `EmailRetryableError` for a
-   * 5xx or a network error. Set ONLY by callers inside a retried Inngest step.
+   * 5xx or a network error. A daily or monthly quota 429 is not one of them: it
+   * is logged and dropped. Set ONLY by callers inside a retried Inngest step.
    */
   throwOnRetryable?: boolean;
 }
@@ -85,8 +97,10 @@ type ResendFailure = { name?: string; statusCode?: number | null };
 /**
  * What a Resend rejection means for the caller:
  *  - "already_sent": 409 `invalid_idempotent_request` - a send with this key went out;
- *  - "rate_limited": 429, or 409 `concurrent_idempotent_requests` (the first send
- *    is still in flight) - retry shortly;
+ *  - "quota_exceeded": 429 `daily_quota_exceeded` / `monthly_quota_exceeded` -
+ *    retrying cannot help before midnight UTC or a plan change;
+ *  - "rate_limited": any other 429, or 409 `concurrent_idempotent_requests` (the
+ *    first send is still in flight) - retry shortly;
  *  - "transient": 5xx, or no status at all (the SDK reports an unresolved request
  *    that way) - retry;
  *  - "rejected": any other 4xx - retrying cannot help.
@@ -94,8 +108,11 @@ type ResendFailure = { name?: string; statusCode?: number | null };
 function classifyResendFailure({
   name,
   statusCode,
-}: ResendFailure): "already_sent" | "rate_limited" | "transient" | "rejected" {
+}: ResendFailure): "already_sent" | "quota_exceeded" | "rate_limited" | "transient" | "rejected" {
   if (statusCode === 409 && name === INVALID_IDEMPOTENT_REQUEST) return "already_sent";
+  if (statusCode === 429 && name !== undefined && QUOTA_EXCEEDED_NAMES.has(name)) {
+    return "quota_exceeded";
+  }
   if (statusCode === 429 || (statusCode === 409 && name === CONCURRENT_IDEMPOTENT_REQUESTS)) {
     return "rate_limited";
   }
@@ -187,7 +204,11 @@ export async function sendEmail(
     return;
   }
 
-  if (throwOnRetryable && failure !== "rejected") {
+  // A quota 429 is dropped like any other rejection: it falls through to the
+  // error log below (name and status, no recipient) even under `throwOnRetryable`.
+  // 2026-11-02 scale audit (jobs, notifications): it used to be retried as a rate
+  // limit, burning the step's retries against a quota that cannot reset in time.
+  if (throwOnRetryable && failure !== "rejected" && failure !== "quota_exceeded") {
     logger.warn("[Notifications] Resend send failed; the step will retry", {
       subject,
       error: { name: error.name, statusCode: error.statusCode },

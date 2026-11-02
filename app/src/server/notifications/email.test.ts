@@ -187,6 +187,45 @@ describe("sendEmail - retryable delivery (throwOnRetryable)", () => {
     expect(isRetryableEmailError(error)).toBe(true);
   });
 
+  // 2026-11-02 scale audit (jobs, notifications): Resend's daily quota resets at
+  // midnight UTC and the monthly quota needs a larger plan, so retrying within the
+  // step's lifetime cannot help. They are logged (error level) and dropped, while
+  // the per-second rate_limit_exceeded above keeps its retry.
+  it.each(["daily_quota_exceeded", "monthly_quota_exceeded"])(
+    "429 %s resolves with one error log and is not retried",
+    async (name) => {
+      sendMock.mockResolvedValueOnce(rejection(429, name));
+
+      await expect(sendEmail(params, opts)).resolves.toBeUndefined();
+
+      expect(sendMock).toHaveBeenCalledTimes(1);
+      expect(loggerErrorMock).toHaveBeenCalledTimes(1);
+      expect(loggerErrorMock).toHaveBeenCalledWith(
+        "[Notifications] Resend rejected email",
+        expect.objectContaining({
+          subject: "Hi",
+          error: expect.objectContaining({ name, statusCode: 429 }),
+        }),
+      );
+      expect(JSON.stringify(loggerErrorMock.mock.calls)).not.toContain("user@example.com");
+      expect(loggerWarnMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("a quota error also resolves when the send carries an idempotency key", async () => {
+    sendMock.mockResolvedValueOnce(rejection(429, "daily_quota_exceeded"));
+
+    await expect(
+      sendEmail(params, { ...opts, idempotencyKey: "reconnect/conn-1/2026-11-02/user-a" }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("only a 429 can be a quota error: a 503 named daily_quota_exceeded still retries", async () => {
+    sendMock.mockResolvedValueOnce(rejection(503, "daily_quota_exceeded"));
+
+    await expect(sendEmail(params, opts)).rejects.toBeInstanceOf(EmailRetryableError);
+  });
+
   it("5xx rejects with an EmailRetryableError", async () => {
     sendMock.mockResolvedValueOnce(rejection(503, "application_error"));
 

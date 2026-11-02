@@ -1759,8 +1759,16 @@ async function refreshOneConnection(socialConnectionId: string): Promise<Connect
  * throws out of the step (the function's `retries` re-run it) instead of being
  * dropped; the per-owner idempotency key keeps the owners already emailed from
  * being emailed again on that retry.
+ *
+ * 2026-11-02 scale audit (jobs, notifications): the UTC day in that key is an
+ * argument (the memoized `notify-day` step), not read from the clock here: a
+ * retry after midnight UTC would otherwise build a new key and email the owners
+ * already emailed before midnight a second time.
  */
-async function notifyOwnersToReconnect(socialConnectionId: string): Promise<{ emailed: number }> {
+async function notifyOwnersToReconnect(
+  socialConnectionId: string,
+  utcDay: string,
+): Promise<{ emailed: number }> {
   const connection = await prisma.socialConnection.findUnique({
     where: { id: socialConnectionId },
     select: { platform: true, workspaceId: true, needsReconnect: true },
@@ -1784,8 +1792,8 @@ async function notifyOwnersToReconnect(socialConnectionId: string): Promise<{ em
   });
   // One reconnect email per owner per connection per UTC day. A retry of this step
   // (or a lost ack) re-sends with the same key, which Resend treats as a no-op for
-  // owners already emailed (V18).
-  const utcDay = new Date().toISOString().slice(0, 10);
+  // owners already emailed (V18). `utcDay` is the memoized output of the `notify-day`
+  // step, so a retry that crosses UTC midnight still builds the same key.
   let emailed = 0;
   for (const owner of owners) {
     // A retryable failure (Resend 429 / 5xx / network) throws, failing the step so
@@ -1820,7 +1828,9 @@ async function notifyOwnersToReconnect(socialConnectionId: string): Promise<{ em
  *    needsReconnect), "already_flagged", "not_eligible", "gone", "no_refresh"
  *    (the platform has nothing to refresh) or "transient_error" (retried by
  *    tomorrow's sweep, no email).
- *  - `notify-owners` runs only on "flagged" and emails each workspace owner once.
+ *  - `notify-day` and `notify-owners` run only on "flagged". `notify-day`
+ *    memoizes the UTC date used in the reconnect idempotency keys;
+ *    `notify-owners` emails each workspace owner once.
  * SEC: step outputs are labels and counts only - never tokens or addresses.
  */
 export const refreshConnection = inngest.createFunction(
@@ -1841,8 +1851,13 @@ export const refreshConnection = inngest.createFunction(
 
     let emailed = 0;
     if (outcome === "flagged") {
+      // Memoized so every attempt of `notify-owners` uses the same day (and so the
+      // same idempotency keys), even across UTC midnight.
+      const utcDay: string = await step.run("notify-day", () =>
+        new Date().toISOString().slice(0, 10),
+      );
       const notified = await step.run("notify-owners", () =>
-        notifyOwnersToReconnect(socialConnectionId),
+        notifyOwnersToReconnect(socialConnectionId, utcDay),
       );
       emailed = notified.emailed;
     }

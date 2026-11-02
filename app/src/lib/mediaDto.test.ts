@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   appendMediaPage,
+  buildMediaCreateBody,
   daysUntilRemoval,
   prependMediaItem,
   removeMediaItem,
@@ -140,5 +141,37 @@ describe("client-side library list transforms", () => {
     it("is a no-op for an id that is not loaded (e.g. on a page not fetched yet)", () => {
       expect(ids(removeMediaItem([item("a"), item("b")], "zzz"))).toEqual(["a", "b"]);
     });
+  });
+});
+
+// 2026-11-02 scale audit (correctness): the library posts the id of the workspace
+// it was RENDERED for, so POST /api/media can refuse (409) an upload whose tab
+// went stale after a workspace switch in another tab.
+describe("buildMediaCreateBody", () => {
+  const input = {
+    blobUrl: "https://abc123.public.blob.vercel-storage.com/1700000000000-ab12cd34-cat.png",
+    filename: "cat.png",
+    mimeType: "image/png",
+    sizeBytes: 1234,
+    baseCaption: "hello",
+    workspaceId: "ws-1",
+  };
+
+  it("includes the rendered workspaceId alongside the upload fields", () => {
+    expect(buildMediaCreateBody(input)).toEqual({
+      blobUrl: input.blobUrl,
+      filename: "cat.png",
+      mimeType: "image/png",
+      sizeBytes: 1234,
+      baseCaption: "hello",
+      workspaceId: "ws-1",
+    });
+  });
+
+  it("keeps the caption as typed (the server trims and caps it) and survives a JSON round trip", () => {
+    const body = buildMediaCreateBody({ ...input, baseCaption: "  padded  " });
+
+    expect(body.baseCaption).toBe("  padded  ");
+    expect(JSON.parse(JSON.stringify(body))).toEqual(body);
   });
 });

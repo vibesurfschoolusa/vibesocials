@@ -9,6 +9,15 @@ export type MediaBlobTx = Pick<Prisma.TransactionClient, "$executeRaw" | "mediaI
 export type BlobDeleteOutcome = "deleted" | "kept_shared";
 
 /**
+ * How long one blob `del()` may run before it is aborted. `del(urlOrPathname,
+ * options?)` takes the `abortSignal` of `BlobCommandOptions`, an "AbortSignal to
+ * cancel the running request" (@vercel/blob 2.8.2 type declarations). 10 s keeps
+ * a retention item (lock wait + count + delete + commit) inside the "one 15 s
+ * item" bound that mediaRetentionBatch.ts budgets for.
+ */
+export const BLOB_DELETE_TIMEOUT_MS = 10_000;
+
+/**
  * Removes a MediaItem's blob from storage ONLY when no other live
  * (non-purged, i.e. `deletedAt: null`) MediaItem — in ANY workspace — still
  * points at the same canonical blob URL (its `storageLocation` or a variant
@@ -28,6 +37,11 @@ export type BlobDeleteOutcome = "deleted" | "kept_shared";
  * lock sees the winner's commit and deletes the blob. If `del` throws, the
  * caller's transaction rolls back (the row stays live) — same contract as
  * before.
+ *
+ * 2026-11-02 scale audit (jobs): `del` is bounded by
+ * {@link BLOB_DELETE_TIMEOUT_MS}. A hung Blob request used to hold the row lock,
+ * the advisory lock and a pooled connection until the invocation was killed; the
+ * abort now throws like any failed `del`, so the same rollback applies.
  */
 export async function deleteBlobUnlessShared(
   tx: MediaBlobTx,
@@ -57,6 +71,6 @@ export async function deleteBlobUnlessShared(
     return "kept_shared";
   }
 
-  await del(key);
+  await del(key, { abortSignal: AbortSignal.timeout(BLOB_DELETE_TIMEOUT_MS) });
   return "deleted";
 }

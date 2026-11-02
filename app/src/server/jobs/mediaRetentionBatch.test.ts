@@ -290,7 +290,7 @@ describe("sweepExpiredMediaBatch - blob deletion (moved from mediaRetentionSweep
     expect(summary).toMatchObject({ candidates: 1, swept: 1, skipped: 0, errors: 0 });
     expect(db.update).toHaveBeenCalledTimes(1);
     expect(db.update).toHaveBeenCalledWith({ where: { id: "media-0000" }, data: { deletedAt: NOW } });
-    expect(delMock).toHaveBeenCalledWith(BLOB_URL);
+    expect(delMock).toHaveBeenCalledWith(BLOB_URL, { abortSignal: expect.any(AbortSignal) });
   });
 
   it("locks the row FOR UPDATE inside a 15 s transaction before it re-checks eligibility", async () => {

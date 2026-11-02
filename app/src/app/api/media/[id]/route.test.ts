@@ -321,7 +321,9 @@ describe("DELETE /api/media/[id]", () => {
     expect(updateArgs.data.deletedAt.getTime()).toBeGreaterThanOrEqual(before);
     expect(updateArgs.data.deletedAt.getTime()).toBeLessThanOrEqual(after);
 
-    expect(delMock).toHaveBeenCalledWith("https://x.example/blob-key");
+    expect(delMock).toHaveBeenCalledWith("https://x.example/blob-key", {
+      abortSignal: expect.any(AbortSignal),
+    });
   });
 
   it("returns 500 (and never a partial success) when the blob delete throws inside the transaction", async () => {
@@ -381,7 +383,7 @@ describe("DELETE /api/media/[id]", () => {
 
       expect(response.status).toBe(200);
       expect(delMock).toHaveBeenCalledTimes(1);
-      expect(delMock).toHaveBeenCalledWith(SHARED_URL);
+      expect(delMock).toHaveBeenCalledWith(SHARED_URL, { abortSignal: expect.any(AbortSignal) });
     });
 
     it("counts only OTHER, non-purged rows (any workspace) with the same storageLocation", async () => {

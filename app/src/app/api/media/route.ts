@@ -8,6 +8,12 @@ import { toMediaItemDto } from "@/lib/mediaDto";
 import { MAX_MEDIA_BYTES, isImageOrVideoMimeType } from "@/lib/mediaInput";
 import { decodePostsCursor, encodePostsCursor } from "@/lib/postsDto";
 import { getWorkspaceContext } from "@/lib/workspace";
+import {
+  INVALID_WORKSPACE_ID_CODE,
+  INVALID_WORKSPACE_ID_MESSAGE,
+  WORKSPACE_CHANGED_CODE,
+  WORKSPACE_CHANGED_MESSAGE,
+} from "@/lib/workspaceChanged";
 import type { Prisma } from "@prisma/client";
 
 /**
@@ -130,6 +136,29 @@ export async function POST(request: Request) {
   const body = await readJsonObject(request);
   if (!body) {
     return invalidJsonBodyResponse();
+  }
+
+  // 2026-11-02 scale audit (correctness): the active workspace is a cookie every
+  // tab shares, so a switch in another tab re-points THIS tab's upload into the
+  // new workspace's library. The media library sends the workspace id it was
+  // rendered for; refuse on a mismatch, with the same contract as POST
+  // /api/posts. Deliberately the FIRST check after the body is read: nothing
+  // below may run for a request meant for another workspace. An absent field
+  // keeps today's behaviour for API clients; JSON `null` is present, so it is
+  // rejected like any other non-string.
+  if (body.workspaceId !== undefined) {
+    if (typeof body.workspaceId !== "string") {
+      return NextResponse.json(
+        { error: INVALID_WORKSPACE_ID_MESSAGE, code: INVALID_WORKSPACE_ID_CODE },
+        { status: 400 },
+      );
+    }
+    if (body.workspaceId !== context.workspace.id) {
+      return NextResponse.json(
+        { error: WORKSPACE_CHANGED_MESSAGE, code: WORKSPACE_CHANGED_CODE },
+        { status: 409 },
+      );
+    }
   }
 
   const rawBlobUrl = typeof body.blobUrl === "string" ? body.blobUrl : "";

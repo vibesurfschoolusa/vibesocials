@@ -34,6 +34,7 @@ import { generateBlobKey } from "@/lib/blobKey";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import {
   appendMediaPage,
+  buildMediaCreateBody,
   daysUntilRemoval,
   prependMediaItem,
   removeMediaItem,
@@ -190,7 +191,7 @@ function MediaCard({ item, onReuse, onDeleteRequest }: MediaCardProps) {
   );
 }
 
-export function MediaLibrary() {
+export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
   const toast = useToast();
   const router = useRouter();
 
@@ -328,13 +329,20 @@ export function MediaLibrary() {
       const response = await fetch("/api/media", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          blobUrl: blob.url,
-          filename: file.name,
-          mimeType: file.type,
-          sizeBytes: file.size,
-          baseCaption,
-        }),
+        // 2026-11-02 scale audit (correctness): sends the workspace this page was
+        // rendered for, so an upload from a stale tab (workspace switched in
+        // another tab) is refused with 409 and the server's message is toasted
+        // below, instead of landing in the new workspace's library.
+        body: JSON.stringify(
+          buildMediaCreateBody({
+            blobUrl: blob.url,
+            filename: file.name,
+            mimeType: file.type,
+            sizeBytes: file.size,
+            baseCaption,
+            workspaceId,
+          }),
+        ),
       });
 
       const data = (await response.json().catch(() => null)) as

@@ -3,7 +3,13 @@ import type { PrismaClient, SocialConnection } from "@prisma/client";
 import { logger } from "@/lib/logger";
 
 import { TOKEN_REFRESH_SUPERSEDED_CODE } from "./connectionHealth";
-import { budgetedTimeout } from "./publishBudget";
+import {
+  budgetedTimeout,
+  MIN_REQUEST_WINDOW_MS,
+  PUBLISH_BUDGET_EXCEEDED_CODE,
+  publishBudgetExceededError,
+  remainingMs,
+} from "./publishBudget";
 
 // Server-only: touches prisma.
 //
@@ -43,6 +49,13 @@ import { budgetedTimeout } from "./publishBudget";
 //    skipped (a one-time warning), the refresh runs unserialized across
 //    instances, as it did before this helper.
 //
+// BUDGET-BOUND WAITS (2026-11-02 scale audit, jobs, token refresh). Both waits the
+// helper adds in front of a refresh end by the CALLER's step deadline, not only by
+// REFRESH_LOCK_WAIT_MS: a caller with 12 s left must not queue for 20 s, and a
+// single-flight follower must not wait out the whole of a leader's flight. When it
+// is the budget that ran out the error is PUBLISH_TIME_BUDGET_EXCEEDED (nothing
+// was sent, the step's retry is safe), not CONNECTION_REFRESH_BUSY.
+//
 // X is excluded: it is OAuth 1.0a in this app and never refreshes (xClient.ts).
 // An OAuth 2.0 migration of X must refresh through this helper.
 
@@ -61,6 +74,8 @@ export const REFRESH_LOCK_NAMESPACE = 7301;
  * one of this process's lock slots. A refresh request is bounded at 30 s
  * (DEFAULT_FETCH_TIMEOUT_MS), so a holder that is merely slow finishes well
  * inside this; a holder stuck longer is reported as CONNECTION_REFRESH_BUSY.
+ * The in-memory wait is shorter when the caller's step budget is (see
+ * {@link slotWait}); the transaction-local `lock_timeout` stays at this value.
  */
 export const REFRESH_LOCK_WAIT_MS = 20_000;
 
@@ -170,10 +185,17 @@ function isLockWaitFailure(error: unknown): boolean {
 
 /**
  * Take one of this process's lock slots, or wait in memory (holding no pooled
- * connection) until one frees up. Rejects with CONNECTION_REFRESH_BUSY after
- * REFRESH_LOCK_WAIT_MS. Resolves to the function that gives the slot back.
+ * connection) until one frees up. A free slot is taken at once, whatever `waitMs`.
+ * Otherwise it waits at most `waitMs` and then rejects with `onTimeout()`; with
+ * `waitMs <= 0` there is nothing to wait for and it rejects at once, starting no
+ * timer. Resolves to the function that gives the slot back.
  */
-function acquireSlot(state: RefreshLockState, cap: number): Promise<() => void> {
+function acquireSlot(
+  state: RefreshLockState,
+  cap: number,
+  waitMs: number,
+  onTimeout: () => Error,
+): Promise<() => void> {
   let released = false;
   const release = () => {
     if (released) return;
@@ -187,6 +209,8 @@ function acquireSlot(state: RefreshLockState, cap: number): Promise<() => void> 
     return Promise.resolve(release);
   }
 
+  if (waitMs <= 0) return Promise.reject(onTimeout());
+
   return new Promise((resolve, reject) => {
     const grant = () => {
       clearTimeout(timer);
@@ -196,10 +220,24 @@ function acquireSlot(state: RefreshLockState, cap: number): Promise<() => void> 
     const timer = setTimeout(() => {
       const index = state.waiters.indexOf(grant);
       if (index >= 0) state.waiters.splice(index, 1);
-      reject(busyError());
-    }, REFRESH_LOCK_WAIT_MS);
+      reject(onTimeout());
+    }, waitMs);
     state.waiters.push(grant);
   });
+}
+
+/**
+ * How long a caller may wait for a lock slot: the REFRESH_LOCK_WAIT_MS bound,
+ * clamped to its own budget (`remainingMs(deadline) - MIN_REQUEST_WINDOW_MS`: the
+ * refresh request that follows needs that window). `onTimeout` is the error for
+ * the bound that applies - CONNECTION_REFRESH_BUSY when the 20 s bound is the
+ * shorter (or ties), PUBLISH_TIME_BUDGET_EXCEEDED when the budget is.
+ */
+function slotWait(deadline: number | undefined): { waitMs: number; onTimeout: () => Error } {
+  const budgetMs = remainingMs(deadline) - MIN_REQUEST_WINDOW_MS;
+  return budgetMs < REFRESH_LOCK_WAIT_MS
+    ? { waitMs: budgetMs, onTimeout: publishBudgetExceededError }
+    : { waitMs: REFRESH_LOCK_WAIT_MS, onTimeout: busyError };
 }
 
 /**
@@ -287,7 +325,8 @@ async function runRefresh(
       return await refreshFromStoredRow(prisma, snapshot, refresh, progress);
     }
 
-    const releaseSlot = await acquireSlot(state, cap);
+    const { waitMs, onTimeout } = slotWait(opts?.deadline);
+    const releaseSlot = await acquireSlot(state, cap, waitMs, onTimeout);
     try {
       // Computed AFTER the wait for a slot: throws PUBLISH_TIME_BUDGET_EXCEEDED
       // when the wait used up the step budget, and the transaction may not
@@ -347,12 +386,21 @@ async function runRefresh(
  * get the same row (or the same error). The entry is cleared when the flight
  * settles. Across processes the advisory lock does the serializing.
  *
+ * A follower waits for the leader's flight at most its OWN
+ * `remainingMs(deadline) - MIN_REQUEST_WINDOW_MS`, then rejects
+ * PUBLISH_TIME_BUDGET_EXCEEDED; the leader is not cancelled. If the leader
+ * rejects PUBLISH_TIME_BUDGET_EXCEEDED (ITS budget ran out - nothing was sent) a
+ * follower with budget left starts its own flight, once, after the leader's entry
+ * is cleared; later followers join that flight. Any other leader error is shared.
+ *
  * @returns the connection row to use: the refreshed one, or the stored one when
  *   another process refreshed first (or our flag was refused as superseded).
  *
  * Throws (with `error.code`):
  *  - `PUBLISH_TIME_BUDGET_EXCEEDED` with under MIN_REQUEST_WINDOW_MS left (checked
  *    first, and again after waiting for a lock slot); no transaction is opened.
+ *    Also when the caller's budget (less MIN_REQUEST_WINDOW_MS) ends before a lock
+ *    slot frees up, or before the flight it follows settles.
  *  - `CONNECTION_GONE` when the row no longer exists.
  *  - `RECONNECT_REQUIRED` when the row is already flagged needsReconnect; no
  *    refresh is attempted.
@@ -374,14 +422,87 @@ export async function refreshConnectionToken(
   budgetedTimeout(REFRESH_TX_TIMEOUT_MS, opts?.deadline);
 
   const state = lockState;
-  const inFlight = state.inFlight.get(snapshot.id);
-  if (inFlight) return inFlight;
+  const leader = state.inFlight.get(snapshot.id);
+  if (!leader) return startFlight(state, snapshot, refresh, opts);
 
+  const followed = await followFlight(leader, opts?.deadline);
+  if ("row" in followed) return followed.row;
+
+  // The leader ran out of ITS budget before anything was sent. This follower has
+  // budget left (its own wait did not end first), so it takes over - once.
+  forgetFlight(state, snapshot.id, leader);
+  budgetedTimeout(REFRESH_TX_TIMEOUT_MS, opts?.deadline);
+  const successor = state.inFlight.get(snapshot.id);
+  if (!successor) return startFlight(state, snapshot, refresh, opts);
+
+  // Another follower of the same leader already started the new flight: join it,
+  // and take its answer as final.
+  const again = await followFlight(successor, opts?.deadline);
+  if ("row" in again) return again.row;
+  throw again.leaderBudgetError;
+}
+
+/** Start a flight for `snapshot.id` and register it for this process's other callers. */
+function startFlight(
+  state: RefreshLockState,
+  snapshot: SocialConnection,
+  refresh: (current: SocialConnection) => Promise<SocialConnection>,
+  opts: { deadline?: number } | undefined,
+): Promise<SocialConnection> {
   const flight = runRefresh(state, snapshot, refresh, opts);
   state.inFlight.set(snapshot.id, flight);
-  const clear = () => {
-    if (state.inFlight.get(snapshot.id) === flight) state.inFlight.delete(snapshot.id);
-  };
+  const clear = () => forgetFlight(state, snapshot.id, flight);
   flight.then(clear, clear);
   return flight;
+}
+
+/** Drop `flight`'s entry, unless a newer flight has already replaced it. */
+function forgetFlight(
+  state: RefreshLockState,
+  connectionId: string,
+  flight: Promise<SocialConnection>,
+): void {
+  if (state.inFlight.get(connectionId) === flight) state.inFlight.delete(connectionId);
+}
+
+/** What a follower learns from the leader's flight. */
+type Followed =
+  | { row: SocialConnection }
+  /** The leader rejected PUBLISH_TIME_BUDGET_EXCEEDED: its budget, not the follower's. */
+  | { leaderBudgetError: Error };
+
+/**
+ * Wait for `flight` (another caller's refresh) for at most this follower's own
+ * `remainingMs(deadline) - MIN_REQUEST_WINDOW_MS`, then reject
+ * PUBLISH_TIME_BUDGET_EXCEEDED. The flight itself is never cancelled. Without a
+ * deadline there is no bound. With nothing to wait (<= 0) it rejects at once and
+ * starts no timer. A leader error other than PUBLISH_TIME_BUDGET_EXCEEDED is
+ * rethrown as is (shared).
+ */
+function followFlight(
+  flight: Promise<SocialConnection>,
+  deadline: number | undefined,
+): Promise<Followed> {
+  const waitMs = remainingMs(deadline) - MIN_REQUEST_WINDOW_MS;
+  if (waitMs <= 0) return Promise.reject(publishBudgetExceededError());
+
+  return new Promise<Followed>((resolve, reject) => {
+    const timer = Number.isFinite(waitMs)
+      ? setTimeout(() => reject(publishBudgetExceededError()), waitMs)
+      : undefined;
+    flight.then(
+      (row) => {
+        clearTimeout(timer);
+        resolve({ row });
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        if ((error as { code?: unknown } | null)?.code === PUBLISH_BUDGET_EXCEEDED_CODE) {
+          resolve({ leaderBudgetError: error as Error });
+        } else {
+          reject(error);
+        }
+      },
+    );
+  });
 }

@@ -129,3 +129,30 @@ export function prependMediaItem<T extends { id: string }>(existing: T[], create
 export function removeMediaItem<T extends { id: string }>(existing: T[], id: string): T[] {
   return existing.filter((item) => item.id !== id);
 }
+
+/**
+ * The JSON body the media library POSTs to `/api/media` after the blob upload.
+ *
+ * 2026-11-02 scale audit (correctness): `workspaceId` is the workspace the page
+ * was RENDERED for (not read from the cookie), so the route can answer 409
+ * `WORKSPACE_CHANGED` when another tab switched workspace in between. The caption
+ * is sent as typed; the route trims and caps it. A pure helper so the contract is
+ * unit-tested in node (the component itself has no DOM test).
+ */
+export function buildMediaCreateBody(input: {
+  blobUrl: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  baseCaption: string;
+  workspaceId: string;
+}): Record<string, unknown> {
+  return {
+    blobUrl: input.blobUrl,
+    filename: input.filename,
+    mimeType: input.mimeType,
+    sizeBytes: input.sizeBytes,
+    baseCaption: input.baseCaption,
+    workspaceId: input.workspaceId,
+  };
+}
