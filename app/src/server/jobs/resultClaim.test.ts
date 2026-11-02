@@ -19,7 +19,7 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-import { claimResult, finalizeClaimedResult } from "./resultClaim";
+import { claimResult, finalizeClaimedResult, releaseClaimForDeferral } from "./resultClaim";
 
 const NOW = new Date("2026-11-02T10:00:00.000Z");
 
@@ -48,7 +48,15 @@ describe("claimResult", () => {
     expect(updateManyMock).toHaveBeenCalledTimes(1);
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { id: "r1", status: "pending", claimRunId: null },
-      data: { claimRunId: "run-1", claimedAt: NOW },
+      // Taking the claim also clears a deferral (the wait is over) and the
+      // RATE_LIMITED / DAILY_LIMIT code it carried.
+      data: {
+        claimRunId: "run-1",
+        claimedAt: NOW,
+        deferredUntil: null,
+        errorCode: null,
+        errorMessage: null,
+      },
     });
     expect(findUniqueMock).not.toHaveBeenCalled();
   });
@@ -259,5 +267,81 @@ describe("finalizeClaimedResult", () => {
     await expect(
       finalizeClaimedResult("r1", "run-1", { status: "success", externalPostId: "ext-1" }),
     ).rejects.toThrow("connection reset");
+  });
+});
+
+// 2026-11-01 scale audit (platform limits): a rate-limited platform step does not
+// fail its result, it hands the claim back and lets the run sleep. The result
+// stays `pending`, holds no claim and records until when it waits.
+describe("releaseClaimForDeferral", () => {
+  const HEARTBEAT = { postJob: { update: { updatedAt: expect.any(Date) } } };
+  const until = new Date("2026-11-02T20:00:00.000Z");
+
+  function p2025() {
+    return new Prisma.PrismaClientKnownRequestError("Record to update not found.", {
+      code: "P2025",
+      clientVersion: "test",
+    });
+  }
+
+  it("releases the claim and records the deferral, only while this run holds the claim on a pending result", async () => {
+    updateMock.mockResolvedValue({});
+
+    const released = await releaseClaimForDeferral("r1", "run-1", { until, errorCode: "RATE_LIMITED" });
+
+    expect(released).toBe(true);
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    expect(updateMock).toHaveBeenCalledWith({
+      where: { id: "r1", claimRunId: "run-1", status: "pending" },
+      data: {
+        claimRunId: null,
+        claimedAt: null,
+        deferredUntil: until,
+        errorCode: "RATE_LIMITED",
+        errorMessage: null,
+        ...HEARTBEAT,
+      },
+    });
+  });
+
+  it("records DAILY_LIMIT for a daily limit", async () => {
+    updateMock.mockResolvedValue({});
+
+    await releaseClaimForDeferral("r1", "run-1", { until, errorCode: "DAILY_LIMIT" });
+
+    expect(updateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ errorCode: "DAILY_LIMIT" }) }),
+    );
+  });
+
+  it("returns false and logs a warning (without throwing) when the claim is no longer held (P2025)", async () => {
+    updateMock.mockRejectedValue(p2025());
+
+    const released = await releaseClaimForDeferral("r1", "run-1", { until, errorCode: "RATE_LIMITED" });
+
+    expect(released).toBe(false);
+    expect(console.warn).toHaveBeenCalled();
+  });
+
+  it("rethrows any other database error", async () => {
+    updateMock.mockRejectedValue(new Error("connection reset"));
+
+    await expect(
+      releaseClaimForDeferral("r1", "run-1", { until, errorCode: "RATE_LIMITED" }),
+    ).rejects.toThrow("connection reset");
+  });
+
+  it("a released result can be claimed again, which ends the deferral", async () => {
+    // The release leaves the row pending with no claim holder; claimResult's
+    // conditional write matches exactly that and clears the deferral.
+    updateManyMock.mockResolvedValue({ count: 1 });
+
+    expect(await claimResult("r1", "run-1", NOW)).toBe("claimed");
+    expect(updateManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "r1", status: "pending", claimRunId: null },
+        data: expect.objectContaining({ deferredUntil: null }),
+      }),
+    );
   });
 });

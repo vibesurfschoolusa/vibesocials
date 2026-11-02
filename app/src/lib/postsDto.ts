@@ -9,6 +9,7 @@ import type {
 } from "@prisma/client";
 
 import type { ApprovalState } from "./approval";
+import type { DeferralKind } from "./resultDeferral";
 
 /**
  * Display-safe projection of the PostJob / PostJobResult records surfaced by
@@ -45,6 +46,14 @@ export interface PostJobResultDTO {
   externalPostId: string | null;
   /** Sanitized, human-readable failure reason, else null. */
   errorMessage: string | null;
+  /**
+   * Set only for a `pending` result that is waiting out a platform rate limit or
+   * quota (2026-11-01 scale audit, platform limits): why, and the ISO-8601
+   * instant the run will try again. `null` otherwise, including for a failed
+   * result that still carries an old `deferredUntil`. The stored `errorCode` is
+   * an internal classification and is NOT exposed; `kind` is derived from it.
+   */
+  deferral: { kind: DeferralKind; until: string } | null;
   /**
    * Latest engagement snapshot for this result, or null when none has been
    * fetched yet (YouTube-only in v1). Joined by (platform, externalPostId) — the

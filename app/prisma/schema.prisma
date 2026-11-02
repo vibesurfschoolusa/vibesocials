@@ -366,6 +366,15 @@ model PostJobResult {
   // (and the old deployment) and nothing else needs to know about claims.
   claimRunId         String?
   claimedAt          DateTime?
+  // 2026-11-01 scale audit (platform limits): set while a platform step waits out
+  // a rate limit or quota refusal (RATE_LIMITED / DAILY_LIMIT in errorCode). The
+  // result stays `pending` and holds NO claim; the run sleeps (step.sleepUntil)
+  // until this instant and claims it again, which clears it. The 2 h reconciler
+  // and the 6 h stale sweep skip a job with a pending result whose deferredUntil
+  // is still ahead (or ended less than their window ago), so a ~20 h YouTube
+  // wait is not mistaken for a dead run. Nullable, like the claim: the previous
+  // deployment simply ignores it.
+  deferredUntil      DateTime?
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 

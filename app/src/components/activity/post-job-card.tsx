@@ -14,6 +14,7 @@ import { cn } from "@/lib/cn";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { platformPostUrl } from "@/lib/platformPostUrl";
 import type { PostJobDTO } from "@/lib/postsDto";
+import { describeDeferral } from "@/lib/resultDeferral";
 import { PlatformResultBadge } from "./platform-result";
 import { PostMetricStats } from "./post-metric-stats";
 
@@ -46,6 +47,16 @@ function formatTimestamp(iso: string): string {
     month: "short",
     day: "numeric",
     year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/** A deferral's wake-up instant in the viewer's locale: "Nov 2, 12:05 AM". */
+function formatDeferralTime(date: Date): string {
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
     hour: "numeric",
     minute: "2-digit",
   });
@@ -135,6 +146,14 @@ export function PostJobCard({
     result: PostJobDTO["results"][number],
   ): PostJobResultStatus =>
     pending.has(result.platform) ? "pending" : result.status;
+
+  // Platform limits (2026-11-01 scale audit): a pending result that is waiting out
+  // a rate limit or quota says why and until when. Server-derived, so it follows
+  // the polled `job`; a result being retried optimistically shows none.
+  const deferrals = results.filter(
+    (result): result is typeof result & { deferral: NonNullable<typeof result.deferral> } =>
+      result.deferral !== null && !pending.has(result.platform),
+  );
 
   const failedPlatforms = results
     .filter((result) => result.status === "failed")
@@ -251,6 +270,21 @@ export function PostJobCard({
             />
           ))}
         </div>
+      ) : null}
+
+      {deferrals.length > 0 ? (
+        <ul className="mt-2 space-y-0.5">
+          {deferrals.map((result) => (
+            <li key={result.platform} className="text-xs text-muted-foreground">
+              {describeDeferral(
+                platformLabel(result.platform),
+                result.deferral.kind,
+                new Date(result.deferral.until),
+                formatDeferralTime,
+              )}
+            </li>
+          ))}
+        </ul>
       ) : null}
 
       {job.status === "failed" && results.length === 0 ? (

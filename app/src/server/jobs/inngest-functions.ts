@@ -40,8 +40,30 @@ import { sendEmail } from "@/server/notifications/email";
 import { isProactiveRefreshEligible } from "@/server/jobs/connectionHealthSweep";
 import { platformLabel } from "@/lib/platforms";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
-import { claimResult, finalizeClaimedResult } from "@/server/jobs/resultClaim";
+import {
+  claimResult,
+  finalizeClaimedResult,
+  releaseClaimForDeferral,
+} from "@/server/jobs/resultClaim";
+import {
+  deferralErrorCode,
+  giveUpFailure,
+  resolveDeferral,
+  runPlatformStepsWithDeferrals,
+  type PlatformStepOutcome,
+  type PlatformStepPlan,
+} from "@/server/jobs/platformSteps";
 import { refreshGoogleToken } from "@/server/platforms/googleTokens";
+import {
+  isRateLimitedError,
+  PACIFIC_RESET_GRACE_MS,
+  rateLimitedError,
+  type RateLimitedError,
+} from "@/server/platforms/rateLimited";
+import {
+  consumeYouTubeUploadSlot,
+  exhaustYouTubeUploadBudget,
+} from "@/server/platforms/youtubeQuota";
 import { fetchYouTubeVideoStatistics, hasAnyStatistic } from "@/server/platforms/youtubeMetrics";
 import { Prisma } from "@prisma/client";
 import type { MediaItem, Platform, User } from "@prisma/client";
@@ -85,12 +107,14 @@ interface PublishToPlatformArgs {
   resultRecordId: string;
   /** The Inngest run holding the result's claim (resultClaim.ts); every write is made under it. */
   runId: string;
+  /**
+   * 0 for a platform's first attempt in the run, n after its n-th rate-limit wait
+   * (platformSteps.ts): decides how long the next wait is, or whether to give up.
+   */
+  attempt: number;
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
 }
-
-/** What a platform step reports for its platform (step output; no secrets). */
-type PlatformStepResult = { platform: Platform; status: string; error?: string };
 
 /**
  * Point a still-`pending` result at the connection that will publish it.
@@ -126,6 +150,25 @@ async function repointResultConnection(
 }
 
 /**
+ * Touch the job's `updatedAt`, the heartbeat the 2 h reconciler and the 6 h stale
+ * sweep judge liveness by. Bookkeeping only: a failure is logged and swallowed,
+ * and the claim that follows would fail the same way anyway.
+ */
+async function refreshJobHeartbeat(postJobId: string): Promise<void> {
+  try {
+    await prisma.postJob.updateMany({
+      where: { id: postJobId },
+      data: { updatedAt: new Date() },
+    });
+  } catch (error) {
+    logger.warn("[Inngest] Could not refresh the job heartbeat after a rate-limit wait", {
+      postJobId,
+      error,
+    });
+  }
+}
+
+/**
  * Claim the platform step's result before anything touches the platform
  * (2026-11-01 scale audit, jobs H6). Run at the start of every
  * `publish-to-<platform>` and `retry-<platform>` step; returns null when this
@@ -146,12 +189,21 @@ async function repointResultConnection(
  *   the step that never recorded an outcome (the invocation died mid-call). The
  *   platform may already have the post, so it is NOT called again: the result
  *   is failed PUBLISH_UNCONFIRMED instead (Task 2's step retries rely on this).
+ *
+ * `attempt` > 0 is a step that follows a rate-limit wait (platformSteps.ts): the
+ * result is `pending`, unclaimed and carries `deferredUntil`, and claiming it
+ * ends the deferral. That wait can be most of a day, long enough for the job's
+ * heartbeat (`PostJob.updatedAt`) to be older than the sweeps' windows, so the
+ * heartbeat is refreshed BEFORE the claim: while the result is still deferred
+ * the sweeps skip the job, and from the claim on they see a fresh heartbeat.
  */
 async function claimOrSkip(
   resultRecordId: string,
   runId: string,
-  context: { step: "publish" | "retry"; postJobId: string; platform: Platform },
-): Promise<PlatformStepResult | null> {
+  context: { step: "publish" | "retry"; postJobId: string; platform: Platform; attempt: number },
+): Promise<PlatformStepOutcome | null> {
+  if (context.attempt > 0) await refreshJobHeartbeat(context.postJobId);
+
   const outcome = await claimResult(resultRecordId, runId);
   if (outcome === "claimed") return null;
 
@@ -180,10 +232,82 @@ async function claimOrSkip(
   return { platform: context.platform, status: "skipped" };
 }
 
+/**
+ * A platform said it is rate-limiting this post (2026-11-01 scale audit,
+ * platform limits). Decide whether to wait or to give up, and record either:
+ *
+ * - wait: release the claim with `deferredUntil` (resultClaim.ts) and report
+ *   `deferred`; the run sleeps and calls this platform's step again
+ *   (platformSteps.ts). The result stays `pending`.
+ * - give up (retries spent, or the platform wants more than 24 h): finalize it
+ *   failed with a message that tells the user to retry later.
+ * - the claim is gone (someone failed or finished the result meanwhile): nothing
+ *   to wait for, report `skipped`.
+ *
+ * A `youtube_quota` error that came from Google itself (not from our own counter,
+ * which is already spent) trips the day's counter, so the other jobs defer to the
+ * reset instead of each spending an upload that Google refuses.
+ */
+async function deferRateLimitedResult(args: {
+  error: RateLimitedError;
+  attempt: number;
+  platform: Platform;
+  resultRecordId: string;
+  runId: string;
+  /** The refusal came from our own YouTube counter, not from Google. */
+  fromOurBudget: boolean;
+}): Promise<PlatformStepOutcome> {
+  const { error, attempt, platform, resultRecordId, runId, fromOurBudget } = args;
+
+  if (error.kind === "youtube_quota" && !fromOurBudget) {
+    try {
+      await exhaustYouTubeUploadBudget();
+    } catch (exhaustError) {
+      // An optimization only: Google's own refusal still applies without it.
+      logger.warn("[Inngest] Could not mark the YouTube upload budget as used up", {
+        error: exhaustError,
+      });
+    }
+  }
+
+  const decision = resolveDeferral(error, attempt, Date.now());
+
+  if ("giveUp" in decision) {
+    const failure = giveUpFailure(platform, error.kind);
+    logger.warn(`[Inngest] ${platform} kept rate-limiting; giving up`, {
+      platform,
+      resultRecordId,
+      kind: error.kind,
+      attempt,
+      retryAt: error.retryAt,
+    });
+    await finalizeClaimedResult(resultRecordId, runId, { status: "failed", ...failure });
+    return { platform, status: "failed", error: failure.errorMessage };
+  }
+
+  const until = new Date(decision.retryAt);
+  logger.warn(`[Inngest] ${platform} is rate-limiting; deferring`, {
+    platform,
+    resultRecordId,
+    kind: error.kind,
+    attempt,
+    until: until.toISOString(),
+  });
+  const released = await releaseClaimForDeferral(resultRecordId, runId, {
+    until,
+    errorCode: deferralErrorCode(error.kind),
+  });
+  if (!released) return { platform, status: "skipped" };
+  return { platform, status: "deferred", retryAt: until.toISOString() };
+}
+
 // Helper to publish to a single platform. Loads the connection fresh so tokens
 // are never serialized through step.run() memoization. The caller has already
 // claimed the result for `runId` (claimOrSkip); every result write here is made
 // under that claim (finalizeClaimedResult), which also bumps the job heartbeat.
+// A rate limit or quota refusal is not a failure: it defers the result
+// (deferRateLimitedResult) and the run waits and calls this again with the next
+// `attempt`.
 async function publishToPlatform({
   connectionRef,
   mediaItem,
@@ -192,9 +316,10 @@ async function publishToPlatform({
   userId,
   resultRecordId,
   runId,
+  attempt,
   tiktokMetadata,
   youtubeMetadata,
-}: PublishToPlatformArgs): Promise<PlatformStepResult> {
+}: PublishToPlatformArgs): Promise<PlatformStepOutcome> {
   // ONE deadline for this step, stamped before anything else and shared by
   // every in-step retry: the platform work must end inside Vercel's 300s
   // per-invocation cap with time left to record the result (publishBudget.ts).
@@ -218,6 +343,8 @@ async function publishToPlatform({
   // row PUBLISH_UNCONFIRMED; with Task 2's step retries the retried step finds
   // its own claim and does the same (2026-11-01 scale audit, jobs H6).
   let publishResult: PublishResult;
+  // Set when the refusal below is our own YouTube counter's, not Google's.
+  let refusedByOurBudget = false;
   try {
     // Reload inside the step so tokens stay in-process only (db.ts opens seals).
     const connection = await prisma.socialConnection.findUnique({
@@ -273,6 +400,24 @@ async function publishToPlatform({
       publishContext.youtubeMetadata = youtubeMetadata;
     }
 
+    // YouTube's `videos.insert` has its own daily budget (100 a day by default,
+    // resetting at midnight Pacific; youtubeQuota.ts). Spend ONE slot per attempt,
+    // after the claim and the connection checks, so a result that never reaches
+    // YouTube costs none, and OUTSIDE withTransientRetries below, so an in-step
+    // retry never spends a second. With none left the API is not called: the
+    // result waits for the reset (plus its grace), as a daily limit.
+    if (connection.platform === "youtube") {
+      const slot = await consumeYouTubeUploadSlot();
+      if (!slot.allowed) {
+        refusedByOurBudget = true;
+        throw rateLimitedError(
+          "youtube",
+          "youtube_quota",
+          slot.resetAt.getTime() + PACIFIC_RESET_GRACE_MS,
+        );
+      }
+    }
+
     // Bounded in-step retry for provably-uncommitted transient failures
     // (429/5xx, network errors that never connected). See transientRetry.ts
     // for why timeouts, mid-request connection drops and 4xx are deliberately
@@ -287,6 +432,16 @@ async function publishToPlatform({
       { deadline },
     );
   } catch (error: unknown) {
+    if (isRateLimitedError(error)) {
+      return deferRateLimitedResult({
+        error,
+        attempt,
+        platform: connectionRef.platform,
+        resultRecordId,
+        runId,
+        fromOurBudget: refusedByOurBudget,
+      });
+    }
     const err = error as Error & { code?: string };
     logger.error(`[Inngest] Platform ${connectionRef.platform} failed to publish`, {
       platform: connectionRef.platform,
@@ -518,8 +673,12 @@ export const publishToAllPlatforms = inngest.createFunction(
       count: setupData.socialConnections.length,
     });
 
-    // Process each platform as a separate step (allows longer execution per platform)
-    const results: { platform: Platform; status: string; error?: string }[] = [];
+    // Process each platform as a separate step (allows longer execution per
+    // platform). The steps are planned here and run by runPlatformStepsWithDeferrals
+    // (platformSteps.ts): every platform once, in this order, then each one a
+    // platform rate-limited again after its wait (2026-11-01 scale audit, platform
+    // limits), so a sleeping YouTube never delays LinkedIn.
+    const plans: PlatformStepPlan[] = [];
 
     for (const connection of setupData.socialConnections) {
       const resultRecord = setupData.resultRecords.find(r => r.platform === connection.platform);
@@ -534,32 +693,38 @@ export const publishToAllPlatforms = inngest.createFunction(
         : fullBaseCaption;
 
       // Each platform upload is a separate step - this allows checkpointing
-      const result = await step.run(`publish-to-${connection.platform}`, async () => {
-        // Final review M2 + jobs H6: only the run that claims a still-`pending`
-        // result publishes it — the route may already have failed it after an
-        // ambiguous dispatch error, and a duplicate run may be ahead of us.
-        const early = await claimOrSkip(resultRecord.id, runId, {
-          step: "publish",
-          postJobId,
-          platform: connection.platform,
-        });
-        if (early) return early;
+      plans.push({
+        platform: connection.platform,
+        stepId: `publish-to-${connection.platform}`,
+        run: async (attempt) => {
+          // Final review M2 + jobs H6: only the run that claims a still-`pending`
+          // result publishes it — the route may already have failed it after an
+          // ambiguous dispatch error, and a duplicate run may be ahead of us.
+          const early = await claimOrSkip(resultRecord.id, runId, {
+            step: "publish",
+            postJobId,
+            platform: connection.platform,
+            attempt,
+          });
+          if (early) return early;
 
-        return publishToPlatform({
-          connectionRef: connection,
-          mediaItem: setupData.mediaItem,
-          caption,
-          baseCaption,
-          userId,
-          resultRecordId: resultRecord.id,
-          runId,
-          tiktokMetadata,
-          youtubeMetadata,
-        });
+          return publishToPlatform({
+            connectionRef: connection,
+            mediaItem: setupData.mediaItem,
+            caption,
+            baseCaption,
+            userId,
+            resultRecordId: resultRecord.id,
+            runId,
+            attempt,
+            tiktokMetadata,
+            youtubeMetadata,
+          });
+        },
       });
-
-      results.push(result);
     }
+
+    const results = await runPlatformStepsWithDeferrals(step, plans);
 
     // Final step: Update job status.
     // Roadmap Phase 1: the media blob is intentionally NOT deleted here anymore.
@@ -923,7 +1088,9 @@ export const retryPlatforms = inngest.createFunction(
     const fullBaseCaption = buildCaptionWithFooter(captionSource.baseCaption, workspace);
     const overrides = captionSource.perPlatformOverrides;
 
-    const results: { platform: Platform; status: string; error?: string }[] = [];
+    // Planned here, run by runPlatformStepsWithDeferrals (platformSteps.ts): each
+    // platform once, then each one a platform rate-limited again after its wait.
+    const plans: PlatformStepPlan[] = [];
 
     for (const platform of platforms) {
       const resultRecord = resultRecords.find((r) => r.platform === platform);
@@ -935,68 +1102,74 @@ export const retryPlatforms = inngest.createFunction(
 
       const connection = connections.find((c) => c.platform === platform);
 
-      const result = await step.run(`retry-${platform}`, async () => {
-        // Ruling R8a + jobs H6: publish only if this run claims the result the
-        // retry route re-queued as `pending`. An overlapping run may have
-        // finalized it since, an onFailure handler may have failed it (and the
-        // user may already have retried it again), or the original publish run
-        // may get to it first — publishing then would post twice.
-        const early = await claimOrSkip(resultRecord.id, runId, {
-          step: "retry",
-          postJobId,
-          platform,
-        });
-        if (early) return early;
-
-        if (!connection) {
-          // The platform was disconnected since the original post (the result's
-          // own `socialConnectionId` is null — SetNull keeps the row when its
-          // connection is removed) and the workspace has no usable connection
-          // for it now; there is no token to publish with. Fail with a
-          // reconnect-shaped code so the UI can point the user at Settings.
-          await finalizeClaimedResult(resultRecord.id, runId, {
-            status: "failed",
-            errorCode: "RECONNECT_REQUIRED",
-            errorMessage:
-              "This platform is no longer connected. Reconnect it in Settings and try again.",
+      plans.push({
+        platform,
+        stepId: `retry-${platform}`,
+        run: async (attempt): Promise<PlatformStepOutcome> => {
+          // Ruling R8a + jobs H6: publish only if this run claims the result the
+          // retry route re-queued as `pending`. An overlapping run may have
+          // finalized it since, an onFailure handler may have failed it (and the
+          // user may already have retried it again), or the original publish run
+          // may get to it first — publishing then would post twice.
+          const early = await claimOrSkip(resultRecord.id, runId, {
+            step: "retry",
+            postJobId,
+            platform,
+            attempt,
           });
-          return { platform, status: "failed", error: "No connection" };
-        }
+          if (early) return early;
 
-        // The result's original connection may have been removed (Disconnect /
-        // Switch account -> `socialConnectionId` null) and the platform since
-        // reconnected: this retry publishes through the workspace's CURRENT
-        // connection, so point the result at it.
-        await repointResultConnection(resultRecord.id, connection.id);
+          if (!connection) {
+            // The platform was disconnected since the original post (the result's
+            // own `socialConnectionId` is null — SetNull keeps the row when its
+            // connection is removed) and the workspace has no usable connection
+            // for it now; there is no token to publish with. Fail with a
+            // reconnect-shaped code so the UI can point the user at Settings.
+            await finalizeClaimedResult(resultRecord.id, runId, {
+              status: "failed",
+              errorCode: "RECONNECT_REQUIRED",
+              errorMessage:
+                "This platform is no longer connected. Reconnect it in Settings and try again.",
+            });
+            return { platform, status: "failed", error: "No connection" };
+          }
 
-        const captionOverride = overrides?.[platform] ?? null;
-        const caption = captionOverride
-          ? buildCaptionWithFooter(captionOverride, workspace)
-          : fullBaseCaption;
+          // The result's original connection may have been removed (Disconnect /
+          // Switch account -> `socialConnectionId` null) and the platform since
+          // reconnected: this retry publishes through the workspace's CURRENT
+          // connection, so point the result at it.
+          await repointResultConnection(resultRecord.id, connection.id);
 
-        // Replay publishMetadata from the job when present (immediate jobs now
-        // snapshot it too). Fallback: safest defaults so a retry is never MORE
-        // public than a missing choice (YouTube private, TikTok SELF_ONLY).
-        const ytMeta =
-          publishMetadata?.youtube ??
-          (platform === "youtube" ? { privacyStatus: "private" as const } : undefined);
-        const ttMeta = publishMetadata?.tiktok;
+          const captionOverride = overrides?.[platform] ?? null;
+          const caption = captionOverride
+            ? buildCaptionWithFooter(captionOverride, workspace)
+            : fullBaseCaption;
 
-        return publishToPlatform({
-          connectionRef: connection,
-          mediaItem,
-          caption,
-          baseCaption: captionSource.baseCaption,
-          userId,
-          resultRecordId: resultRecord.id,
-          runId,
-          tiktokMetadata: ttMeta,
-          youtubeMetadata: ytMeta,
-        });
+          // Replay publishMetadata from the job when present (immediate jobs now
+          // snapshot it too). Fallback: safest defaults so a retry is never MORE
+          // public than a missing choice (YouTube private, TikTok SELF_ONLY).
+          const ytMeta =
+            publishMetadata?.youtube ??
+            (platform === "youtube" ? { privacyStatus: "private" as const } : undefined);
+          const ttMeta = publishMetadata?.tiktok;
+
+          return publishToPlatform({
+            connectionRef: connection,
+            mediaItem,
+            caption,
+            baseCaption: captionSource.baseCaption,
+            userId,
+            resultRecordId: resultRecord.id,
+            runId,
+            attempt,
+            tiktokMetadata: ttMeta,
+            youtubeMetadata: ytMeta,
+          });
+        },
       });
-
-      results.push(result);
     }
+
+    const results = await runPlatformStepsWithDeferrals(step, plans);
 
     // Recompute PostJob.status from ALL results (the retried platforms plus the
     // ones that already succeeded and were never touched) via the shared rule.
@@ -1422,7 +1595,14 @@ export const youtubePostMetricsSync = inngest.createFunction(
  * prod. Runs at :30 to stay clear of the metrics sync on the hour.
  */
 export const stalePostJobSweep = inngest.createFunction(
-  { id: "stale-post-job-sweep", name: "Stale Post Job Sweep" },
+  {
+    id: "stale-post-job-sweep",
+    name: "Stale Post Job Sweep",
+    // One sweep at a time (2026-11-01 scale audit, platform limits): a tick that
+    // arrives while the previous sweep is still running is skipped, the next
+    // hour's catches whatever is left (https://www.inngest.com/docs/guides/singleton).
+    singleton: { mode: "skip" },
+  },
   { cron: "30 * * * *" },
   async ({ step }) => {
     const summary = await step.run("fail-stale-post-jobs", async () => {
@@ -1433,10 +1613,18 @@ export const stalePostJobSweep = inngest.createFunction(
       // (not `createdAt`) is the progress signal — a job still working through
       // its platforms bumps it as each platform finishes (finalizeClaimedResult's
       // heartbeat) and so keeps resetting its clock.
+      //
+      // A job with a pending result that is waiting out a platform rate limit or
+      // quota (`deferredUntil` still ahead, or ended less than 6 h ago) is not
+      // stale: its run is asleep, and the wait can be most of a day (2026-11-01
+      // scale audit, platform limits; Review Focus 2). The run's claim at wake-up
+      // clears `deferredUntil` and refreshes the heartbeat, so a job whose run
+      // died stays eligible once the wait is over.
       const { count } = await prisma.postJob.updateMany({
         where: {
           status: { in: [...STALE_ELIGIBLE_STATUSES] },
           updatedAt: { lt: cutoff },
+          results: { none: { status: "pending", deferredUntil: { gte: cutoff } } },
         },
         data: { status: "failed" },
       });

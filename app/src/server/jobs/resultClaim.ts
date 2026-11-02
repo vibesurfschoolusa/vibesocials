@@ -33,6 +33,9 @@ export type ClaimOutcome =
    */
   | "held_by_this_run";
 
+/** Why a result is waiting (`PostJobResult.errorCode` while it is deferred). */
+export type DeferralErrorCode = "RATE_LIMITED" | "DAILY_LIMIT";
+
 /** A platform's final outcome, as written to its PostJobResult row. */
 export type FinalResultData =
   | { status: "success"; externalPostId: string | null }
@@ -42,6 +45,13 @@ export type FinalResultData =
  * Claim a still-`pending`, unclaimed result for `runId`. Exactly one concurrent
  * caller gets `"claimed"`; every other outcome means do not call the platform.
  * When the write matches nothing, the row is read back only to say why.
+ *
+ * Taking the claim ends a deferral (2026-11-01 scale audit, platform limits): a
+ * result the run put to sleep with {@link releaseClaimForDeferral} is `pending`
+ * and unclaimed, so this same write picks it up again, and clears the wait
+ * (`deferredUntil`) and the RATE_LIMITED / DAILY_LIMIT code it carried. A first
+ * claim has nothing to clear (a re-queued retry cleared them already), so the
+ * extra columns are no-ops there.
  */
 export async function claimResult(
   resultId: string,
@@ -50,7 +60,13 @@ export async function claimResult(
 ): Promise<ClaimOutcome> {
   const { count } = await prisma.postJobResult.updateMany({
     where: { id: resultId, status: "pending", claimRunId: null },
-    data: { claimRunId: runId, claimedAt: now },
+    data: {
+      claimRunId: runId,
+      claimedAt: now,
+      deferredUntil: null,
+      errorCode: null,
+      errorMessage: null,
+    },
   });
   if (count === 1) return "claimed";
 
@@ -108,6 +124,55 @@ export async function finalizeClaimedResult(
         resultId,
         runId,
         outcome: data.status,
+      });
+      return false;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Hand a claimed result back while its platform is rate-limited
+ * (2026-11-01 scale audit, platform limits). The result stays `pending`, holds
+ * no claim, and records until when the run will wait (`deferredUntil`) and why
+ * (`errorCode` RATE_LIMITED or DAILY_LIMIT, no message: the card words it from
+ * the code). The run sleeps and claims it again ({@link claimResult}).
+ *
+ * Releasing the claim, not keeping it, is what makes the wait safe: a claim
+ * means "the platform call may be in flight", so a claimed row that outlives
+ * its step is failed PUBLISH_UNCONFIRMED by the reconciler / onFailure handler.
+ * A deferred row is provably not mid-call, and those paths already treat an
+ * unclaimed `pending` row as "never reached the platform".
+ *
+ * Like the finalize it bumps the job heartbeat in the same write, and matches
+ * only while `runId` still holds the claim on a `pending` result. Returns false
+ * (and logs a warning) when it no longer does - the result was failed or
+ * finished by someone else - so the caller stops waiting for it.
+ */
+export async function releaseClaimForDeferral(
+  resultId: string,
+  runId: string,
+  deferral: { until: Date; errorCode: DeferralErrorCode },
+): Promise<boolean> {
+  try {
+    await prisma.postJobResult.update({
+      where: { id: resultId, claimRunId: runId, status: "pending" },
+      data: {
+        claimRunId: null,
+        claimedAt: null,
+        deferredUntil: deferral.until,
+        errorCode: deferral.errorCode,
+        errorMessage: null,
+        postJob: { update: { updatedAt: new Date() } },
+      },
+    });
+    return true;
+  } catch (error) {
+    if (isRecordNotFound(error)) {
+      logger.warn("[Inngest] Deferral not recorded: this run no longer holds its claim", {
+        resultId,
+        runId,
+        errorCode: deferral.errorCode,
       });
       return false;
     }

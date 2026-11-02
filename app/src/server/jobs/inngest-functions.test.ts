@@ -3,6 +3,7 @@ import { Prisma, type Platform } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
+import { rateLimitedError } from "@/server/platforms/rateLimited";
 import { PUBLISH_STEP_BUDGET_MS } from "@/server/platforms/publishBudget";
 import type { PublishContext } from "@/server/platforms/types";
 
@@ -13,6 +14,7 @@ import type { PublishContext } from "@/server/platforms/types";
 const db = vi.hoisted(() => ({
   postJobFindUnique: vi.fn(),
   postJobUpdate: vi.fn(),
+  postJobUpdateMany: vi.fn(),
   userFindUnique: vi.fn(),
   workspaceFindUnique: vi.fn(),
   mediaItemFindUnique: vi.fn(),
@@ -25,15 +27,30 @@ const db = vi.hoisted(() => ({
   /** The `SELECT ... FOR UPDATE` row lock of the finalize recompute. */
   executeRaw: vi.fn(),
 }));
-const { getPlatformClientMock, failPendingMock, recomputeSpy } = vi.hoisted(() => ({
+const {
+  getPlatformClientMock,
+  failPendingMock,
+  recomputeSpy,
+  releaseSpy,
+  consumeSlotMock,
+  exhaustBudgetMock,
+} = vi.hoisted(() => ({
   getPlatformClientMock: vi.fn(),
   failPendingMock: vi.fn(),
   recomputeSpy: vi.fn(),
+  /** Wraps the real releaseClaimForDeferral so its calls can be asserted. */
+  releaseSpy: vi.fn(),
+  consumeSlotMock: vi.fn(),
+  exhaustBudgetMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
-    postJob: { findUnique: db.postJobFindUnique, update: db.postJobUpdate },
+    postJob: {
+      findUnique: db.postJobFindUnique,
+      update: db.postJobUpdate,
+      updateMany: db.postJobUpdateMany,
+    },
     user: { findUnique: db.userFindUnique },
     workspace: { findUnique: db.workspaceFindUnique },
     mediaItem: { findUnique: db.mediaItemFindUnique },
@@ -55,6 +72,18 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 vi.mock("@/server/platforms", () => ({ getPlatformClient: getPlatformClientMock }));
+// The YouTube upload budget is a database counter (its own suite covers it).
+vi.mock("@/server/platforms/youtubeQuota", () => ({
+  consumeYouTubeUploadSlot: consumeSlotMock,
+  exhaustYouTubeUploadBudget: exhaustBudgetMock,
+}));
+// The claim helpers stay REAL (against the mocked prisma); only the release is
+// wrapped in a spy so the deferral it records can be asserted.
+vi.mock("@/server/jobs/resultClaim", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/jobs/resultClaim")>();
+  releaseSpy.mockImplementation(actual.releaseClaimForDeferral);
+  return { ...actual, releaseClaimForDeferral: releaseSpy };
+});
 vi.mock("@vercel/blob", () => ({ del: vi.fn() }));
 // failPendingPostJobResults is stubbed (its own suite covers it); the locked
 // recompute stays REAL but is wrapped in a spy, so the finalize steps' calls to
@@ -74,8 +103,10 @@ import {
   failInterruptedRetryRun,
   publishToAllPlatforms,
   retryPlatforms,
+  stalePostJobSweep,
 } from "./inngest-functions";
 import { PUBLISH_PRIORITY, publishConcurrency } from "./publishFlowControl";
+import { STALE_AFTER_MS } from "./stalePostJobs";
 
 const WORKSPACE = { id: "ws-1", companyWebsite: null, defaultHashtags: "#brand" };
 
@@ -93,12 +124,28 @@ type FakeStep = ReturnType<typeof fakeStep>;
  * back as strings), so a step that leaks a non-serializable value shows up here.
  */
 function fakeStep() {
+  /** `run:<id>` / `sleepUntil:<id>` / `sendEvent:<id>` in call order. */
+  const order: string[] = [];
+  /** Each `step.run` output by step id (what Inngest memoizes). */
+  const outputs: Record<string, unknown> = {};
   return {
-    run: vi.fn(async (_id: string, cb: () => unknown) => {
+    order,
+    outputs,
+    run: vi.fn(async (id: string, cb: () => unknown) => {
+      order.push(`run:${id}`);
       const out = await cb();
-      return out === undefined ? undefined : JSON.parse(JSON.stringify(out));
+      const stored = out === undefined ? undefined : JSON.parse(JSON.stringify(out));
+      outputs[id] = stored;
+      return stored;
     }),
-    sendEvent: vi.fn(async () => ({ ids: [] as string[] })),
+    // Durable sleeps return at once: nothing here waits on a clock.
+    sleepUntil: vi.fn(async (id: string) => {
+      order.push(`sleepUntil:${id}`);
+    }),
+    sendEvent: vi.fn(async (id: string) => {
+      order.push(`sendEvent:${id}`);
+      return { ids: [] as string[] };
+    }),
   };
 }
 
@@ -132,6 +179,12 @@ beforeEach(() => {
   getPlatformClientMock.mockReset();
   failPendingMock.mockReset();
   recomputeSpy.mockClear();
+  releaseSpy.mockClear();
+  consumeSlotMock.mockReset();
+  exhaustBudgetMock.mockReset();
+  // The YouTube upload budget is open unless a test closes it.
+  consumeSlotMock.mockResolvedValue({ allowed: true });
+  exhaustBudgetMock.mockResolvedValue(undefined);
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -346,6 +399,15 @@ describe("publishToPlatform — per-step deadline (Task 4 items 7 + 10)", () => 
     expect(deadlines[0]).toEqual(expect.any(Number));
     expect(deadlines[1]).toBe(deadlines[0]);
   });
+});
+
+/** What claiming a result writes: the claim itself, and the end of any deferral. */
+const CLAIM_DATA = (runId: string) => ({
+  claimRunId: runId,
+  claimedAt: expect.any(Date),
+  deferredUntil: null,
+  errorCode: null,
+  errorMessage: null,
 });
 
 /** Every `postJobResult.update` data payload, in call order. */
@@ -588,7 +650,7 @@ describe("retryPlatforms — a retry step only publishes a still-pending result"
 
       expect(db.resultUpdateMany).toHaveBeenCalledWith({
         where: { id: "result-x", status: "pending", claimRunId: null },
-        data: { claimRunId: "run-1", claimedAt: expect.any(Date) },
+        data: CLAIM_DATA("run-1"),
       });
       expect(publishCtxs.map((c) => c.socialConnection.platform)).toEqual(["youtube"]);
       expect(db.resultUpdate.mock.calls.map((c) => (c[0] as { where: { id: string } }).where.id)).toEqual([
@@ -654,7 +716,7 @@ describe("publishToAllPlatforms — a publish step only publishes a still-pendin
 
       expect(db.resultUpdateMany).toHaveBeenCalledWith({
         where: { id: "result-x", status: "pending", claimRunId: null },
-        data: { claimRunId: "run-1", claimedAt: expect.any(Date) },
+        data: CLAIM_DATA("run-1"),
       });
       expect(publishCtxs.map((c) => c.socialConnection.platform)).toEqual(["youtube"]);
       expect(db.resultUpdate.mock.calls.map((c) => (c[0] as { where: { id: string } }).where.id)).toEqual([
@@ -707,6 +769,69 @@ describe("publishToAllPlatforms — a publish step only publishes a still-pendin
   });
 });
 
+type StoredResult = {
+  status: string;
+  claimRunId: string | null;
+  socialConnectionId: string | null;
+  deferredUntil?: Date | null;
+  errorCode?: string | null;
+};
+
+function p2025() {
+  return new Prisma.PrismaClientKnownRequestError("Record to update not found.", {
+    code: "P2025",
+    clientVersion: "test",
+  });
+}
+
+/**
+ * An in-memory PostJobResult table behind the mocked prisma calls: the claim
+ * write matches only a `pending` unclaimed row, a lost claim reads back the
+ * row's real state, and a finalize write matches only the claim holder.
+ */
+function stubResultStore(seed: Record<string, Partial<StoredResult>>) {
+  const rows = new Map<string, StoredResult>(
+    Object.entries(seed).map(([id, row]) => [
+      id,
+      { status: "pending", claimRunId: null, socialConnectionId: null, ...row },
+    ]),
+  );
+  db.resultUpdateMany.mockImplementation(
+    async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+      const row = rows.get(where.id);
+      if (!row || !("claimRunId" in data)) return { count: 0 };
+      if (row.status !== "pending" || row.claimRunId !== null) return { count: 0 };
+      // The claim also clears a deferral (resultClaim.ts), so apply all of it.
+      Object.assign(row, data);
+      return { count: 1 };
+    },
+  );
+  db.resultFindUnique.mockImplementation(async ({ where }: { where: { id: string } }) => {
+    const row = rows.get(where.id);
+    return row ? { ...row } : null;
+  });
+  db.resultUpdate.mockImplementation(
+    async ({
+      where,
+      data,
+    }: {
+      where: { id: string; claimRunId: string; status: string | { in: string[] } };
+      data: Record<string, unknown>;
+    }) => {
+      const row = rows.get(where.id);
+      const allowed = typeof where.status === "string" ? [where.status] : where.status.in;
+      if (!row || row.claimRunId !== where.claimRunId || !allowed.includes(row.status)) {
+        throw p2025();
+      }
+      // Applies a finalize (status, ...) and a deferral release (claim cleared,
+      // deferredUntil set) alike; the nested job heartbeat is not a column.
+      Object.assign(row, { ...data, postJob: undefined });
+      return {};
+    },
+  );
+  return rows;
+}
+
 // 2026-11-01 scale audit (jobs H6): every platform step CLAIMS its result row
 // with one conditional write before it calls the platform. Two runs of one job
 // - a duplicate event, a late original overlapping a retry - can therefore
@@ -714,60 +839,6 @@ describe("publishToAllPlatforms — a publish step only publishes a still-pendin
 // publish functions to retries: 3) finds its own claim and reports the post as
 // unconfirmed instead of posting again.
 describe("platform steps claim their result before calling the platform (jobs H6)", () => {
-  type StoredResult = { status: string; claimRunId: string | null; socialConnectionId: string | null };
-
-  function p2025() {
-    return new Prisma.PrismaClientKnownRequestError("Record to update not found.", {
-      code: "P2025",
-      clientVersion: "test",
-    });
-  }
-
-  /**
-   * An in-memory PostJobResult table behind the mocked prisma calls: the claim
-   * write matches only a `pending` unclaimed row, a lost claim reads back the
-   * row's real state, and a finalize write matches only the claim holder.
-   */
-  function stubResultStore(seed: Record<string, Partial<StoredResult>>) {
-    const rows = new Map<string, StoredResult>(
-      Object.entries(seed).map(([id, row]) => [
-        id,
-        { status: "pending", claimRunId: null, socialConnectionId: null, ...row },
-      ]),
-    );
-    db.resultUpdateMany.mockImplementation(
-      async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
-        const row = rows.get(where.id);
-        if (!row || !("claimRunId" in data)) return { count: 0 };
-        if (row.status !== "pending" || row.claimRunId !== null) return { count: 0 };
-        row.claimRunId = data.claimRunId as string;
-        return { count: 1 };
-      },
-    );
-    db.resultFindUnique.mockImplementation(async ({ where }: { where: { id: string } }) => {
-      const row = rows.get(where.id);
-      return row ? { ...row } : null;
-    });
-    db.resultUpdate.mockImplementation(
-      async ({
-        where,
-        data,
-      }: {
-        where: { id: string; claimRunId: string; status: string | { in: string[] } };
-        data: { status: string };
-      }) => {
-        const row = rows.get(where.id);
-        const allowed = typeof where.status === "string" ? [where.status] : where.status.in;
-        if (!row || row.claimRunId !== where.claimRunId || !allowed.includes(row.status)) {
-          throw p2025();
-        }
-        row.status = data.status;
-        return {};
-      },
-    );
-    return rows;
-  }
-
   type StepOut = { results: Array<{ platform: Platform; status: string; error?: string }> };
 
   function publishAs(runId: string) {
@@ -1345,5 +1416,621 @@ describe("publish functions - finalize through the locked recompute, notify with
 
     expect(publishCtxs.map((c) => c.socialConnection.platform).sort()).toEqual(["x", "youtube"]);
     expect(out.status).toBe("completed");
+  });
+});
+
+// 2026-11-01 scale audit (platform limits): a platform that answers with a rate
+// limit or quota refusal no longer fails its result. The step hands its claim
+// back, the result stays `pending` with `deferredUntil`, and the RUN sleeps
+// (`step.sleepUntil` frees the concurrency slot) before trying that platform
+// again; the platforms that are not limited publish first.
+describe("platform rate limits - durable deferral (platform limits)", () => {
+  const T = Date.parse("2026-11-02T10:00:00.000Z");
+  const HOUR = 3_600_000;
+  const GRACE = 300_000;
+
+  const publishEvent = {
+    name: "post/publish.requested",
+    data: { postJobId: "job-1", userId: "user-1", mediaItemId: "media-1", baseCaption: "c", perPlatformOverrides: null },
+  };
+
+  /** The platforms' `publishVideo` behaviour, by call: anything unlisted succeeds. */
+  function platformCalls(impls: Partial<Record<Platform, (call: number) => Promise<unknown> | unknown>>) {
+    const calls: Partial<Record<Platform, number>> = {};
+    getPlatformClientMock.mockImplementation((platform: Platform) => ({
+      publishVideo: vi.fn(async (ctx: PublishContext) => {
+        publishCtxs.push(ctx);
+        const call = (calls[platform] = (calls[platform] ?? 0) + 1);
+        const impl = impls[platform];
+        return impl ? impl(call) : { externalPostId: `ext-${platform}` };
+      }),
+    }));
+    return calls;
+  }
+
+  type RunOut = {
+    status: string;
+    results: Array<{ platform: Platform; status: string; error?: string }>;
+  };
+
+  function publishRun(platforms: Platform[], step = fakeStep()) {
+    db.postJobFindUnique.mockResolvedValue({ id: "job-1", workspaceId: WORKSPACE.id });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null });
+    db.connectionFindMany.mockResolvedValue(platforms.map((p) => ({ id: `conn-${p}`, platform: p })));
+    stubResults(platforms);
+    return handlerOf(publishToAllPlatforms)({ event: publishEvent, step }) as Promise<RunOut>;
+  }
+
+  function retryRun(platforms: Platform[], step = fakeStep()) {
+    db.postJobFindUnique.mockResolvedValue({
+      id: "job-1", workspaceId: WORKSPACE.id, mediaItemId: "media-1",
+      baseCaption: "c", perPlatformOverrides: null, publishMetadata: null,
+    });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null, mimeType: "video/mp4" });
+    db.connectionFindMany.mockResolvedValue(platforms.map((p) => ({ id: `conn-${p}`, platform: p })));
+    stubResults(platforms);
+    return handlerOf(retryPlatforms)({
+      event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms } },
+      step,
+    }) as Promise<RunOut>;
+  }
+
+  const limited = (
+    platform: Platform,
+    retryAt: number | null,
+    kind: "rate_limited" | "daily_limit" | "youtube_quota" = "rate_limited",
+  ) => rateLimitedError(platform, kind, retryAt);
+
+  const failedWrites = () => resultWrites().filter((w) => w.status === "failed");
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe("a rate-limited platform step", () => {
+    it("is not failed: its claim is released with the platform's retryAt and the step reports it deferred", async () => {
+      platformCalls({
+        x: (call) => {
+          if (call === 1) throw limited("x", T + 2 * HOUR);
+          return { externalPostId: "ext-x" };
+        },
+      });
+      const step = fakeStep();
+
+      const out = await publishRun(["x"], step);
+
+      // No failed finalize anywhere.
+      expect(failedWrites()).toEqual([]);
+      expect(releaseSpy).toHaveBeenCalledTimes(1);
+      expect(releaseSpy).toHaveBeenCalledWith("result-x", "run-1", {
+        until: new Date(T + 2 * HOUR),
+        errorCode: "RATE_LIMITED",
+      });
+      // ...and the release itself is the one conditional write that records it.
+      expect(db.resultUpdate.mock.calls[0][0]).toEqual({
+        where: { id: "result-x", claimRunId: "run-1", status: "pending" },
+        data: {
+          claimRunId: null,
+          claimedAt: null,
+          deferredUntil: new Date(T + 2 * HOUR),
+          errorCode: "RATE_LIMITED",
+          errorMessage: null,
+          ...HEARTBEAT,
+        },
+      });
+      // The step's (memoized) output is the deferral: platform, status, ISO retryAt. No secrets.
+      expect(step.outputs["publish-to-x"]).toEqual({
+        platform: "x",
+        status: "deferred",
+        retryAt: new Date(T + 2 * HOUR).toISOString(),
+      });
+      // The run then waits for it and publishes.
+      expect(step.sleepUntil).toHaveBeenCalledWith("publish-to-x-wait-rl1", new Date(T + 2 * HOUR));
+      expect(out.results).toEqual([{ platform: "x", status: "success" }]);
+    });
+
+    it("waits out the backoff schedule when the platform gave no retryAt", async () => {
+      platformCalls({
+        x: (call) => {
+          if (call <= 3) throw limited("x", null);
+          return { externalPostId: "ext-x" };
+        },
+      });
+      const step = fakeStep();
+
+      const out = await publishRun(["x"], step);
+
+      expect(releaseSpy.mock.calls.map((c) => (c[2] as { until: Date }).until.getTime())).toEqual([
+        T + 60_000,
+        T + 900_000,
+        T + 3_600_000,
+      ]);
+      expect(step.order).toEqual([
+        "run:fetch-data",
+        "run:publish-to-x",
+        "sleepUntil:publish-to-x-wait-rl1",
+        "run:publish-to-x-rl1",
+        "sleepUntil:publish-to-x-wait-rl2",
+        "run:publish-to-x-rl2",
+        "sleepUntil:publish-to-x-wait-rl3",
+        "run:publish-to-x-rl3",
+        "run:finalize-job",
+        "sendEvent:notify-outcome",
+      ]);
+      expect(out.results).toEqual([{ platform: "x", status: "success" }]);
+    });
+
+    it("gives up on the 4th consecutive limit (attempt 3): finalized failed RATE_LIMITED with the give-up copy", async () => {
+      const calls = platformCalls({
+        x: () => {
+          throw limited("x", T + 2 * HOUR);
+        },
+      });
+      stubResultStore({ "result-x": {} });
+      const step = fakeStep();
+
+      const out = await publishRun(["x"], step);
+
+      expect(calls.x).toBe(4);
+      expect(releaseSpy).toHaveBeenCalledTimes(3);
+      expect(step.order.filter((entry) => entry.startsWith("sleepUntil:"))).toEqual([
+        "sleepUntil:publish-to-x-wait-rl1",
+        "sleepUntil:publish-to-x-wait-rl2",
+        "sleepUntil:publish-to-x-wait-rl3",
+      ]);
+      expect(failedWrites()).toEqual([
+        {
+          status: "failed",
+          errorCode: "RATE_LIMITED",
+          errorMessage: "X kept rate-limiting this post. Retry this platform later.",
+          ...HEARTBEAT,
+        },
+      ]);
+      expect(db.resultUpdate).toHaveBeenLastCalledWith(
+        expect.objectContaining({ where: { id: "result-x", claimRunId: "run-1", status: "pending" } }),
+      );
+      expect(out.results).toEqual([
+        { platform: "x", status: "failed", error: "X kept rate-limiting this post. Retry this platform later." },
+      ]);
+    });
+
+    it("gives up at once, finalized failed, when the platform asks to wait more than 24 hours", async () => {
+      const calls = platformCalls({
+        x: () => {
+          throw limited("x", T + 25 * HOUR);
+        },
+      });
+      const step = fakeStep();
+
+      const out = await publishRun(["x"], step);
+
+      expect(calls.x).toBe(1);
+      expect(releaseSpy).not.toHaveBeenCalled();
+      expect(step.sleepUntil).not.toHaveBeenCalled();
+      expect(failedWrites()).toEqual([
+        expect.objectContaining({
+          errorCode: "RATE_LIMITED",
+          errorMessage: "X kept rate-limiting this post. Retry this platform later.",
+        }),
+      ]);
+      expect(out.results[0].status).toBe("failed");
+    });
+
+    it("clamps a retryAt that is nearly due to 30 seconds from now", async () => {
+      platformCalls({
+        x: (call) => {
+          if (call === 1) throw limited("x", T + 5_000);
+          return { externalPostId: "ext-x" };
+        },
+      });
+
+      await publishRun(["x"]);
+
+      expect(releaseSpy).toHaveBeenCalledWith("result-x", "run-1", {
+        until: new Date(T + 30_000),
+        errorCode: "RATE_LIMITED",
+      });
+    });
+
+    it.each(["x", "tiktok", "linkedin", "instagram"] as const)(
+      "defers %s the same way (TikTok's creator-info refusal is rethrown by its client as the same error)",
+      async (platform) => {
+        platformCalls({
+          [platform]: (call: number) => {
+            if (call === 1) throw limited(platform, T + HOUR);
+            return { externalPostId: `ext-${platform}` };
+          },
+        });
+
+        const out = await publishRun([platform]);
+
+        expect(releaseSpy).toHaveBeenCalledWith(`result-${platform}`, "run-1", {
+          until: new Date(T + HOUR),
+          errorCode: "RATE_LIMITED",
+        });
+        expect(failedWrites()).toEqual([]);
+        expect(out.results).toEqual([{ platform, status: "success" }]);
+      },
+    );
+
+    it("records DAILY_LIMIT for a daily_limit refusal (Instagram's 100 posts per 24 h)", async () => {
+      platformCalls({
+        instagram: (call) => {
+          if (call === 1) throw limited("instagram", T + 23 * HOUR, "daily_limit");
+          return { externalPostId: "ext-instagram" };
+        },
+      });
+
+      await publishRun(["instagram"]);
+
+      expect(releaseSpy).toHaveBeenCalledWith("result-instagram", "run-1", {
+        until: new Date(T + 23 * HOUR),
+        errorCode: "DAILY_LIMIT",
+      });
+    });
+
+    it("finalizes failed DAILY_LIMIT with its own give-up copy when a daily limit never lifts", async () => {
+      platformCalls({
+        instagram: () => {
+          throw limited("instagram", T + 23 * HOUR, "daily_limit");
+        },
+      });
+
+      await publishRun(["instagram"]);
+
+      expect(failedWrites()).toEqual([
+        {
+          status: "failed",
+          errorCode: "DAILY_LIMIT",
+          errorMessage: "Instagram's daily limit is still reached. Retry this platform later.",
+          ...HEARTBEAT,
+        },
+      ]);
+    });
+
+    it("is skipped, with no sleep, when the claim it held is gone by the time it is released", async () => {
+      platformCalls({
+        x: () => {
+          throw limited("x", T + HOUR);
+        },
+      });
+      stubResultStore({ "result-x": {} });
+      // Something else failed the result meanwhile (the reconciler, an onFailure handler).
+      db.resultUpdate.mockRejectedValue(p2025());
+      const step = fakeStep();
+
+      const out = await publishRun(["x"], step);
+
+      expect(releaseSpy).toHaveBeenCalledTimes(1);
+      expect(step.sleepUntil).not.toHaveBeenCalled();
+      expect(out.results).toEqual([{ platform: "x", status: "skipped" }]);
+    });
+  });
+
+  describe("the YouTube upload budget", () => {
+    it("is spent after the claim and before the upload, and only for YouTube", async () => {
+      platformCalls({});
+
+      await publishRun(["x", "youtube"]);
+
+      expect(consumeSlotMock).toHaveBeenCalledTimes(1);
+      // updateMany calls: x's claim, youtube's claim.
+      const youtubeClaim = db.resultUpdateMany.mock.invocationCallOrder[1];
+      const slot = consumeSlotMock.mock.invocationCallOrder[0];
+      const youtubeUpload = publishCtxs.findIndex((c) => c.socialConnection.platform === "youtube");
+      expect(youtubeUpload).toBeGreaterThanOrEqual(0);
+      expect(youtubeClaim).toBeLessThan(slot);
+      // youtube's success write comes after the slot was taken
+      expect(slot).toBeLessThan(db.resultUpdate.mock.invocationCallOrder[1]);
+    });
+
+    it("refuses without calling the API when today's budget is spent: deferred to the reset plus the grace, as a daily limit", async () => {
+      const resetAt = new Date(T + 14 * HOUR);
+      consumeSlotMock.mockResolvedValueOnce({ allowed: false, resetAt });
+      const calls = platformCalls({});
+      const step = fakeStep();
+
+      const out = await publishRun(["youtube"], step);
+
+      // Only the second attempt (after the sleep) uploaded.
+      expect(calls.youtube).toBe(1);
+      expect(releaseSpy).toHaveBeenCalledTimes(1);
+      expect(releaseSpy).toHaveBeenCalledWith("result-youtube", "run-1", {
+        until: new Date(resetAt.getTime() + GRACE),
+        errorCode: "DAILY_LIMIT",
+      });
+      expect(step.outputs["publish-to-youtube"]).toEqual({
+        platform: "youtube",
+        status: "deferred",
+        retryAt: new Date(resetAt.getTime() + GRACE).toISOString(),
+      });
+      expect(failedWrites()).toEqual([]);
+      expect(out.results).toEqual([{ platform: "youtube", status: "success" }]);
+    });
+
+    it("does not call publishVideo at all while the budget stays spent, then gives up as DAILY_LIMIT", async () => {
+      consumeSlotMock.mockResolvedValue({ allowed: false, resetAt: new Date(T + 14 * HOUR) });
+      const calls = platformCalls({});
+
+      const out = await publishRun(["youtube"]);
+
+      expect(calls.youtube).toBeUndefined();
+      expect(consumeSlotMock).toHaveBeenCalledTimes(4);
+      expect(failedWrites()).toEqual([
+        {
+          status: "failed",
+          errorCode: "DAILY_LIMIT",
+          errorMessage: "YouTube's daily limit is still reached. Retry this platform later.",
+          ...HEARTBEAT,
+        },
+      ]);
+      expect(out.results[0].status).toBe("failed");
+      // The refusal came from our own counter, which is already spent.
+      expect(exhaustBudgetMock).not.toHaveBeenCalled();
+    });
+
+    it("gives up (rather than sleeping past a day) when the budget resets more than 24 h away", async () => {
+      consumeSlotMock.mockResolvedValue({ allowed: false, resetAt: new Date(T + 24 * HOUR) });
+      platformCalls({});
+      const step = fakeStep();
+
+      await publishRun(["youtube"], step);
+
+      expect(step.sleepUntil).not.toHaveBeenCalled();
+      expect(failedWrites()).toEqual([expect.objectContaining({ errorCode: "DAILY_LIMIT" })]);
+    });
+
+    it("marks today's budget used up when YouTube itself reports quotaExceeded (once per error)", async () => {
+      platformCalls({
+        youtube: (call) => {
+          if (call === 1) throw limited("youtube", T + 14 * HOUR + GRACE, "youtube_quota");
+          return { externalPostId: "ext-youtube" };
+        },
+      });
+
+      await publishRun(["youtube"]);
+
+      expect(exhaustBudgetMock).toHaveBeenCalledTimes(1);
+      expect(releaseSpy).toHaveBeenCalledWith("result-youtube", "run-1", {
+        until: new Date(T + 14 * HOUR + GRACE),
+        errorCode: "DAILY_LIMIT",
+      });
+    });
+
+    it("does not trip the budget for a plain YouTube rate limit", async () => {
+      platformCalls({
+        youtube: (call) => {
+          if (call === 1) throw limited("youtube", T + HOUR, "rate_limited");
+          return { externalPostId: "ext-youtube" };
+        },
+      });
+
+      await publishRun(["youtube"]);
+
+      expect(exhaustBudgetMock).not.toHaveBeenCalled();
+      expect(releaseSpy).toHaveBeenCalledWith("result-youtube", "run-1", {
+        until: new Date(T + HOUR),
+        errorCode: "RATE_LIMITED",
+      });
+    });
+
+    it("spends ONE slot per attempt even when withTransientRetries retries the call in-step", async () => {
+      platformCalls({
+        youtube: (call) => {
+          if (call === 1) throw Object.assign(new Error("busy"), { status: 503 });
+          return { externalPostId: "ext-youtube" };
+        },
+      });
+
+      const run = publishRun(["youtube"]);
+      await vi.advanceTimersByTimeAsync(2_000); // the 2 s in-step backoff
+      const out = await run;
+
+      expect(publishCtxs).toHaveLength(2);
+      expect(consumeSlotMock).toHaveBeenCalledTimes(1);
+      expect(out.results).toEqual([{ platform: "youtube", status: "success" }]);
+    });
+
+    it("is not spent for a result that fails before reaching the platform (no connection)", async () => {
+      platformCalls({});
+      db.connectionFindUnique.mockResolvedValue(null);
+
+      await publishRun(["youtube"]);
+
+      expect(consumeSlotMock).not.toHaveBeenCalled();
+    });
+  });
+
+  // Review Focus 2: a YouTube result deferred ~20 h while the job's other
+  // platforms already finished.
+  describe("Review Focus 2 - overnight deferral", () => {
+    it("X succeeds, YouTube defers ~20 h and then succeeds: one outcome email, after finalize-job, which follows publish-to-youtube-rl1", async () => {
+      const resetAt = new Date(T + 20 * HOUR);
+      consumeSlotMock.mockResolvedValueOnce({ allowed: false, resetAt });
+      platformCalls({});
+      const rows = stubResultStore({ "result-x": {}, "result-youtube": {} });
+      const step = fakeStep();
+      // What the youtube row looks like while the run sleeps.
+      let whileSleeping: unknown;
+      step.sleepUntil.mockImplementation(async (id: string) => {
+        step.order.push(`sleepUntil:${id}`);
+        whileSleeping = { ...rows.get("result-youtube") };
+      });
+
+      const out = await publishRun(["x", "youtube"], step);
+
+      expect(step.order).toEqual([
+        "run:fetch-data",
+        "run:publish-to-x",
+        "run:publish-to-youtube",
+        "sleepUntil:publish-to-youtube-wait-rl1",
+        "run:publish-to-youtube-rl1",
+        "run:finalize-job",
+        "sendEvent:notify-outcome",
+      ]);
+      expect(step.sendEvent).toHaveBeenCalledTimes(1);
+      // While asleep: still pending, holding no claim (so no PUBLISH_UNCONFIRMED
+      // mark can apply), with the instant it waits for.
+      expect(whileSleeping).toMatchObject({
+        status: "pending",
+        claimRunId: null,
+        deferredUntil: new Date(resetAt.getTime() + GRACE),
+        errorCode: "DAILY_LIMIT",
+      });
+      // After the wake-up the claim ended the deferral and the post went out.
+      expect(rows.get("result-youtube")).toMatchObject({
+        status: "success",
+        claimRunId: "run-1",
+        deferredUntil: null,
+        errorCode: null,
+      });
+      expect(rows.get("result-x")).toMatchObject({ status: "success" });
+      expect(out.results).toEqual([
+        { platform: "x", status: "success" },
+        { platform: "youtube", status: "success" },
+      ]);
+    });
+
+    it("a sleeping YouTube never delays the other platforms: they all publish in the first pass", async () => {
+      consumeSlotMock.mockResolvedValueOnce({ allowed: false, resetAt: new Date(T + 20 * HOUR) });
+      platformCalls({});
+      const step = fakeStep();
+
+      await publishRun(["youtube", "x", "linkedin"], step);
+
+      expect(step.order.slice(1)).toEqual([
+        "run:publish-to-youtube",
+        "run:publish-to-x",
+        "run:publish-to-linkedin",
+        "sleepUntil:publish-to-youtube-wait-rl1",
+        "run:publish-to-youtube-rl1",
+        "run:finalize-job",
+        "sendEvent:notify-outcome",
+      ]);
+    });
+
+    it("the same holds for the retry function: retry-youtube keeps its id, then -wait-rl1 and -rl1, then finalize-retry and one email", async () => {
+      consumeSlotMock.mockResolvedValueOnce({ allowed: false, resetAt: new Date(T + 20 * HOUR) });
+      platformCalls({});
+      const step = fakeStep();
+
+      await retryRun(["x", "youtube"], step);
+
+      expect(step.order).toEqual([
+        "run:fetch-retry-data",
+        "run:retry-x",
+        "run:retry-youtube",
+        "sleepUntil:retry-youtube-wait-rl1",
+        "run:retry-youtube-rl1",
+        "run:finalize-retry",
+        "sendEvent:notify-outcome",
+      ]);
+      expect(step.sendEvent).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("resuming after a sleep", () => {
+    it("bumps the job's heartbeat BEFORE claiming again, so the sweeps cannot take a run that just woke up", async () => {
+      platformCalls({
+        x: (call) => {
+          if (call === 1) throw limited("x", T + 20 * HOUR);
+          return { externalPostId: "ext-x" };
+        },
+      });
+
+      await publishRun(["x"]);
+
+      // Not on the first attempt (the previous step's heartbeat is fresh)...
+      expect(db.postJobUpdateMany).toHaveBeenCalledTimes(1);
+      expect(db.postJobUpdateMany).toHaveBeenCalledWith({
+        where: { id: "job-1" },
+        data: { updatedAt: expect.any(Date) },
+      });
+      // ...only on the attempt after the sleep, and before that attempt's claim.
+      const claimCalls = db.resultUpdateMany.mock.invocationCallOrder;
+      expect(claimCalls).toHaveLength(2);
+      expect(db.postJobUpdateMany.mock.invocationCallOrder[0]).toBeGreaterThan(claimCalls[0]);
+      expect(db.postJobUpdateMany.mock.invocationCallOrder[0]).toBeLessThan(claimCalls[1]);
+    });
+
+    it("a heartbeat failure is logged and does not stop the attempt", async () => {
+      platformCalls({
+        x: (call) => {
+          if (call === 1) throw limited("x", T + HOUR);
+          return { externalPostId: "ext-x" };
+        },
+      });
+      db.postJobUpdateMany.mockRejectedValue(new Error("pool timeout"));
+
+      const out = await publishRun(["x"]);
+
+      expect(out.results).toEqual([{ platform: "x", status: "success" }]);
+      expect(console.warn).toHaveBeenCalled();
+    });
+
+    it("skips (no platform call) when the result was failed meanwhile and so is no longer claimable", async () => {
+      const calls = platformCalls({
+        x: () => {
+          throw limited("x", T + HOUR);
+        },
+      });
+      stubResultStore({ "result-x": {} });
+      const step = fakeStep();
+      // While the run sleeps the reconciler gives up on the (old) job.
+      step.sleepUntil.mockImplementation(async (id: string) => {
+        step.order.push(`sleepUntil:${id}`);
+        db.resultUpdateMany.mockResolvedValue({ count: 0 });
+        db.resultFindUnique.mockResolvedValue({ status: "failed", claimRunId: null });
+      });
+
+      const out = await publishRun(["x"], step);
+
+      expect(calls.x).toBe(1);
+      expect(out.results).toEqual([{ platform: "x", status: "skipped" }]);
+    });
+  });
+});
+
+// Review Focus 2, the sweep side. The 6 h stale sweep fails dispatched jobs whose
+// heartbeat is older than 6 h; a job whose YouTube result sleeps ~20 h has such a
+// heartbeat and must be left alone.
+describe("stalePostJobSweep - deferral exclusion and singleton", () => {
+  const NOW = Date.parse("2026-11-02T10:30:00.000Z");
+  const optsOf = () => (stalePostJobSweep as unknown as { opts: Record<string, unknown> }).opts;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    db.postJobUpdateMany.mockResolvedValue({ count: 0 });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("does not fail a job that has a pending result deferred to a platform limit", async () => {
+    await handlerOf(stalePostJobSweep)({ event: { name: "inngest/scheduled.timer", data: {} }, step: fakeStep() });
+
+    const cutoff = new Date(NOW - STALE_AFTER_MS);
+    expect(db.postJobUpdateMany).toHaveBeenCalledTimes(1);
+    expect(db.postJobUpdateMany).toHaveBeenCalledWith({
+      where: {
+        status: { in: ["pending", "in_progress"] },
+        updatedAt: { lt: cutoff },
+        // Review Focus 2: a deferral still in the future, or ended less than 6 h ago.
+        results: { none: { status: "pending", deferredUntil: { gte: cutoff } } },
+      },
+      data: { status: "failed" },
+    });
+  });
+
+  it("runs one sweep at a time (singleton skip)", () => {
+    expect(optsOf().id).toBe("stale-post-job-sweep");
+    expect(optsOf().singleton).toEqual({ mode: "skip" });
   });
 });

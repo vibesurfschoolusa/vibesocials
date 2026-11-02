@@ -21,6 +21,7 @@ function result(partial: Partial<PostJobResultDTO> = {}): PostJobResultDTO {
     status: "success",
     externalPostId: "vid",
     errorMessage: null,
+    deferral: null,
     metric: null,
     ...partial,
   };

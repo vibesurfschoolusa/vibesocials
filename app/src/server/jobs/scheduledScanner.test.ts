@@ -165,12 +165,57 @@ describe("reconcileStuckInProgressJobs", () => {
         where: {
           status: "in_progress",
           updatedAt: { lt: new Date(NOW.getTime() - STUCK_IN_PROGRESS_MS) },
+          // A result waiting out a platform limit keeps its job alive (below).
+          results: {
+            none: {
+              status: "pending",
+              deferredUntil: { gte: new Date(NOW.getTime() - STUCK_IN_PROGRESS_MS) },
+            },
+          },
         },
       }),
     );
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { id: "stuck-1", status: "in_progress" },
       data: { status: "failed" },
+    });
+  });
+
+  // Review Focus 2 (2026-11-01 scale audit, platform limits): a YouTube result
+  // deferred ~20 h, while the job's other platforms already finished, leaves the
+  // job `in_progress` with an old heartbeat for far longer than 2 h. The run is
+  // asleep, not dead: such a job must never be a reconcile candidate.
+  describe("a job with a result deferred to a platform limit (Review Focus 2)", () => {
+    it("is excluded from the candidates until 2 h after its deferral ends", async () => {
+      findManyMock.mockResolvedValue([]);
+
+      await reconcileStuckInProgressJobs(NOW);
+
+      const { where } = findManyMock.mock.calls[0][0] as {
+        where: { results: { none: { status: string; deferredUntil: { gte: Date } } } };
+      };
+      // `none` of the job's results is pending with deferredUntil >= now - 2 h: a
+      // deferral still in the future (or ended less than 2 h ago, the grace for the
+      // run to wake and claim it) protects the job.
+      expect(where.results.none.status).toBe("pending");
+      expect(where.results.none.deferredUntil.gte).toEqual(new Date("2026-07-10T10:00:00.000Z"));
+    });
+
+    it("honours a custom maxAgeMs for both the heartbeat and the deferral cutoff", async () => {
+      findManyMock.mockResolvedValue([]);
+
+      await reconcileStuckInProgressJobs(NOW, 50, 60_000);
+
+      const cutoff = new Date(NOW.getTime() - 60_000);
+      expect(findManyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            status: "in_progress",
+            updatedAt: { lt: cutoff },
+            results: { none: { status: "pending", deferredUntil: { gte: cutoff } } },
+          },
+        }),
+      );
     });
   });
 

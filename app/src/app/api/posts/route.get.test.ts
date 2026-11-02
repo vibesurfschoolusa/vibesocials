@@ -612,3 +612,119 @@ describe("GET /api/posts — keyset cursor pagination (activity pagination)", ()
     });
   });
 });
+
+// 2026-11-01 scale audit (platform limits): a result waiting out a platform
+// limit stays `pending`; the DTO tells the Activity card why and until when,
+// without exposing the internal `errorCode`.
+describe("GET /api/posts — result deferral", () => {
+  const DEFERRED_UNTIL = new Date("2026-11-02T08:05:00.000Z");
+
+  function jobWith(results: Array<Record<string, unknown>>) {
+    return { ...jobWithYouTube(), status: "in_progress", results };
+  }
+
+  async function resultsOf(results: Array<Record<string, unknown>>) {
+    postJobFindManyMock.mockResolvedValue([jobWith(results)]);
+    const res = await GET(getRequest());
+    return ((await res.json()) as PostsResponse).jobs[0].results;
+  }
+
+  it("selects deferredUntil and errorCode on the results", async () => {
+    postJobFindManyMock.mockResolvedValue([]);
+
+    await GET(getRequest());
+
+    expect(postJobFindManyMock.mock.calls[0][0].select.results.select).toEqual({
+      platform: true,
+      status: true,
+      externalPostId: true,
+      errorMessage: true,
+      deferredUntil: true,
+      errorCode: true,
+    });
+  });
+
+  it("maps a pending result with deferredUntil and DAILY_LIMIT to a daily_limit deferral", async () => {
+    const [youtube] = await resultsOf([
+      {
+        platform: "youtube",
+        status: "pending",
+        externalPostId: null,
+        errorMessage: null,
+        errorCode: "DAILY_LIMIT",
+        deferredUntil: DEFERRED_UNTIL,
+      },
+    ]);
+
+    expect(youtube.deferral).toEqual({ kind: "daily_limit", until: "2026-11-02T08:05:00.000Z" });
+  });
+
+  it("maps RATE_LIMITED (and any other code) to a rate_limited deferral", async () => {
+    const results = await resultsOf([
+      {
+        platform: "x",
+        status: "pending",
+        externalPostId: null,
+        errorMessage: null,
+        errorCode: "RATE_LIMITED",
+        deferredUntil: DEFERRED_UNTIL,
+      },
+      {
+        platform: "tiktok",
+        status: "pending",
+        externalPostId: null,
+        errorMessage: null,
+        errorCode: null,
+        deferredUntil: DEFERRED_UNTIL,
+      },
+    ]);
+
+    expect(results.map((r) => r.deferral)).toEqual([
+      { kind: "rate_limited", until: "2026-11-02T08:05:00.000Z" },
+      { kind: "rate_limited", until: "2026-11-02T08:05:00.000Z" },
+    ]);
+  });
+
+  it("has no deferral for a failed result, even one that still carries a stale deferredUntil", async () => {
+    const results = await resultsOf([
+      {
+        platform: "youtube",
+        status: "failed",
+        externalPostId: null,
+        errorMessage: "YouTube's daily limit is still reached. Retry this platform later.",
+        errorCode: "DAILY_LIMIT",
+        deferredUntil: DEFERRED_UNTIL,
+      },
+      { platform: "x", status: "success", externalPostId: "t1", errorMessage: null, errorCode: null, deferredUntil: null },
+    ]);
+
+    expect(results.map((r) => r.deferral)).toEqual([null, null]);
+  });
+
+  it("has no deferral for a plain pending result (no deferredUntil)", async () => {
+    const [x] = await resultsOf([
+      { platform: "x", status: "pending", externalPostId: null, errorMessage: null, errorCode: null, deferredUntil: null },
+    ]);
+
+    expect(x.deferral).toBeNull();
+  });
+
+  it("never exposes errorCode or deferredUntil on a result", async () => {
+    const results = await resultsOf([
+      {
+        platform: "youtube",
+        status: "pending",
+        externalPostId: null,
+        errorMessage: null,
+        errorCode: "DAILY_LIMIT",
+        deferredUntil: DEFERRED_UNTIL,
+      },
+    ]);
+
+    for (const result of results) {
+      expect(result).not.toHaveProperty("errorCode");
+      expect(result).not.toHaveProperty("deferredUntil");
+    }
+    expect(JSON.stringify(results)).not.toContain("DAILY_LIMIT");
+  });
+});

@@ -32,6 +32,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { isValidPerPlatformOverrides, validateScheduledFor, type PostJobIntent } from "@/lib/scheduling";
 import { deriveApprovalState, shouldHoldForApproval } from "@/lib/approval";
 import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
+import { deferralKindFromErrorCode } from "@/lib/resultDeferral";
 import type { PostsResponse } from "@/lib/postsDto";
 import {
   toPostJobDetailDto,
@@ -151,6 +152,11 @@ export async function GET(request: Request) {
             status: true,
             externalPostId: true,
             errorMessage: true,
+            // Platform limits: with the status they say a result is waiting out a
+            // rate limit or quota. `errorCode` is read only to tell a daily limit
+            // from a rate limit; it never reaches the DTO (SEC-1).
+            deferredUntil: true,
+            errorCode: true,
           },
           orderBy: { platform: "asc" },
         },
@@ -278,6 +284,15 @@ export async function GET(request: Request) {
               status: result.status,
               externalPostId: result.externalPostId,
               errorMessage: result.errorMessage,
+              // Only a pending result is waiting; a failed one that still has an
+              // old deferredUntil (its run died) is not.
+              deferral:
+                result.status === "pending" && result.deferredUntil
+                  ? {
+                      kind: deferralKindFromErrorCode(result.errorCode),
+                      until: result.deferredUntil.toISOString(),
+                    }
+                  : null,
               metric: metricRow
                 ? {
                     views: metricRow.views,

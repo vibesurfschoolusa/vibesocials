@@ -240,6 +240,8 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
           errorMessage: null,
           claimRunId: null,
           claimedAt: null,
+          // ...and any deferral a dead run left on it (platform limits).
+          deferredUntil: null,
         },
       });
       return { platform, claimed: count > 0 };

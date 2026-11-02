@@ -75,6 +75,7 @@ describe("toPostJobResultSummaryDto — results whose connection was removed", (
     errorMessage: null,
     claimRunId: null,
     claimedAt: null,
+    deferredUntil: null,
     createdAt: new Date("2026-01-01T00:01:00Z"),
     updatedAt: new Date("2026-01-01T00:01:30Z"),
   });

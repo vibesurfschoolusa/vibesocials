@@ -268,8 +268,16 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     expect(resultUpdateManyMock).toHaveBeenCalledWith({
       where: { postJobId: "job-1", platform: "tiktok", status: "failed" },
       // A retry starts a fresh attempt: it also releases any earlier run's claim
-      // (2026-11-01 scale audit, jobs H6) so the retry run can claim the result.
-      data: { status: "pending", errorCode: null, errorMessage: null, claimRunId: null, claimedAt: null },
+      // (2026-11-01 scale audit, jobs H6) so the retry run can claim the result,
+      // and clears a deferral a dead run left behind (platform limits).
+      data: {
+        status: "pending",
+        errorCode: null,
+        errorMessage: null,
+        claimRunId: null,
+        claimedAt: null,
+        deferredUntil: null,
+      },
     });
     expect(postJobUpdateMock).toHaveBeenCalledWith({
       where: { id: "job-1" },

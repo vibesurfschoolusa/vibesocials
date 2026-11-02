@@ -330,6 +330,13 @@ export async function materializeAndDispatchChunk(
  * retry"). Only an unclaimed one, which provably never reached the platform, is
  * PUBLISH_STALLED ("you can retry"). 2026-11-01 scale audit (jobs H6).
  *
+ * A job with a pending result that is waiting out a platform rate limit or quota
+ * (`deferredUntil` still ahead, or ended less than `maxAgeMs` ago) is not a
+ * candidate: its run is asleep, not dead, and the wait can be most of a day
+ * (2026-11-01 scale audit, platform limits; Review Focus 2). Once the wait is
+ * over the run claims the result again, which clears `deferredUntil`; if the run
+ * died instead, the job becomes a candidate `maxAgeMs` after the wait ended.
+ *
  * Conditional `updateMany` keeps concurrent reconcilers safe.
  */
 export async function reconcileStuckInProgressJobs(
@@ -339,7 +346,11 @@ export async function reconcileStuckInProgressJobs(
 ): Promise<{ reconciled: number }> {
   const cutoff = new Date(now.getTime() - maxAgeMs);
   const candidates = await prisma.postJob.findMany({
-    where: { status: "in_progress", updatedAt: { lt: cutoff } },
+    where: {
+      status: "in_progress",
+      updatedAt: { lt: cutoff },
+      results: { none: { status: "pending", deferredUntil: { gte: cutoff } } },
+    },
     select: { id: true },
     orderBy: { updatedAt: "asc" },
     take,
