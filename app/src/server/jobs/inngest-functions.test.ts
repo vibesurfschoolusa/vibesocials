@@ -1,4 +1,4 @@
-import type { Platform } from "@prisma/client";
+import { Prisma, type Platform } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
@@ -57,7 +57,12 @@ import {
 
 const WORKSPACE = { id: "ws-1", companyWebsite: null, defaultHashtags: "#brand" };
 
-type HandlerArgs = { event: { name: string; data: Record<string, unknown> }; step: FakeStep };
+type HandlerArgs = {
+  event: { name: string; data: Record<string, unknown> };
+  step: FakeStep;
+  /** The Inngest run id (the identity a platform step claims its result under). */
+  runId?: string;
+};
 type FakeStep = ReturnType<typeof fakeStep>;
 
 /**
@@ -75,9 +80,13 @@ function fakeStep() {
   };
 }
 
-/** The function's handler. `fn` is private in Inngest's types but plain at runtime. */
+/**
+ * The function's handler. `fn` is private in Inngest's types but plain at
+ * runtime. Runs as `run-1` unless a test passes its own `runId`.
+ */
 function handlerOf(fn: unknown): (args: HandlerArgs) => Promise<unknown> {
-  return (fn as { fn: (args: HandlerArgs) => Promise<unknown> }).fn;
+  const handler = (fn as { fn: (args: HandlerArgs) => Promise<unknown> }).fn;
+  return (args) => handler({ runId: "run-1", ...args });
 }
 
 function connectionRow(platform: Platform) {
@@ -119,10 +128,13 @@ beforeEach(() => {
     Promise.resolve(connectionRow(where.id.replace("conn-", "") as Platform)),
   );
   db.resultUpdate.mockResolvedValue({});
-  db.resultUpdateMany.mockResolvedValue({ count: 0 });
-  // A retry step re-reads its result before publishing (ruling R8a); by
-  // default the row is still the `pending` the retry route claimed.
-  db.resultFindUnique.mockResolvedValue({ status: "pending" });
+  // Every platform step first claims its result with one conditional
+  // updateMany (resultClaim.ts); by default the claim is won. (A repoint write
+  // also goes through updateMany and ignores the count.)
+  db.resultUpdateMany.mockResolvedValue({ count: 1 });
+  // Read back only when a claim is lost (claimResult) and, on a retry, for the
+  // result's current connection; by default an unclaimed `pending` row.
+  db.resultFindUnique.mockResolvedValue({ status: "pending", claimRunId: null });
   db.postJobUpdate.mockResolvedValue({});
 });
 
@@ -491,10 +503,38 @@ describe("onFailure — interrupted publish runs (Task 4 items 7 + 9)", () => {
   });
 });
 
-// Fix round 1 (ruling R8a): a retry step re-reads its PostJobResult when it
-// starts and only publishes while it is still `pending`. If an overlapping
-// run already finalized it (or an onFailure handler failed it so the user
-// could retry again), publishing would post twice.
+/**
+ * Make one result's claim fail the way the database would: the conditional
+ * claim write (resultClaim.ts) matches nothing, and the row then reads back as
+ * `row` (null = the row is gone). Every other result is claimed normally.
+ */
+function loseClaimFor(
+  resultId: string,
+  row: { status: string; claimRunId: string | null } | null,
+) {
+  db.resultUpdateMany.mockImplementation(({ where }: { where: { id: string } }) =>
+    Promise.resolve({ count: where.id === resultId ? 0 : 1 }),
+  );
+  db.resultFindUnique.mockImplementation(({ where }: { where: { id: string } }) =>
+    Promise.resolve(
+      where.id === resultId ? row : { status: "pending", claimRunId: null, socialConnectionId: null },
+    ),
+  );
+}
+
+/** The claim writes of this test (result id + the run that claimed), in call order. */
+function claimWrites(): Array<{ id: string; claimRunId: unknown }> {
+  return db.resultUpdateMany.mock.calls
+    .map((c) => c[0] as { where: { id: string }; data: Record<string, unknown> })
+    .filter((arg) => "claimRunId" in arg.data)
+    .map((arg) => ({ id: arg.where.id, claimRunId: arg.data.claimRunId }));
+}
+
+// Fix round 1 (ruling R8a), now enforced by the atomic claim (2026-11-01 scale
+// audit, jobs H6): a retry step claims its PostJobResult when it starts and
+// only publishes while the result is still `pending` and unclaimed. If an
+// overlapping run already finalized it (or an onFailure handler failed it so
+// the user could retry again), publishing would post twice.
 describe("retryPlatforms — a retry step only publishes a still-pending result", () => {
   function retryRun(platforms: Platform[]) {
     return handlerOf(retryPlatforms)({
@@ -519,15 +559,13 @@ describe("retryPlatforms — a retry step only publishes a still-pending result"
   it.each(["failed", "success"] as const)(
     "skips (no platform call, no result write) a result that is already %s",
     async (status) => {
-      db.resultFindUnique.mockImplementation(({ where }: { where: { id: string } }) =>
-        Promise.resolve({ status: where.id === "result-x" ? status : "pending" }),
-      );
+      loseClaimFor("result-x", { status, claimRunId: null });
 
       const out = await retryRun(["x", "youtube"]);
 
-      expect(db.resultFindUnique).toHaveBeenCalledWith({
-        where: { id: "result-x" },
-        select: { status: true, socialConnectionId: true },
+      expect(db.resultUpdateMany).toHaveBeenCalledWith({
+        where: { id: "result-x", status: "pending", claimRunId: null },
+        data: { claimRunId: "run-1", claimedAt: expect.any(Date) },
       });
       expect(publishCtxs.map((c) => c.socialConnection.platform)).toEqual(["youtube"]);
       expect(db.resultUpdate.mock.calls.map((c) => (c[0] as { where: { id: string } }).where.id)).toEqual([
@@ -541,7 +579,7 @@ describe("retryPlatforms — a retry step only publishes a still-pending result"
   );
 
   it("skips a result that no longer exists", async () => {
-    db.resultFindUnique.mockResolvedValue(null);
+    loseClaimFor("result-x", null);
 
     const out = await retryRun(["x"]);
 
@@ -552,7 +590,7 @@ describe("retryPlatforms — a retry step only publishes a still-pending result"
 
   it("does not even write the no-connection failure over a result another run finalized", async () => {
     db.connectionFindMany.mockResolvedValue([]);
-    db.resultFindUnique.mockResolvedValue({ status: "success" });
+    loseClaimFor("result-x", { status: "success", claimRunId: "run-2" });
 
     await retryRun(["x"]);
 
@@ -565,7 +603,7 @@ describe("retryPlatforms — a retry step only publishes a still-pending result"
 // event (e.g. a response timeout), the route already failed the results
 // (DISPATCH_FAILED) and answered 503 — yet the run still published, overwrote
 // `failed` with `success`, and a user who pressed Retry (or re-posted) got a
-// second post. Each step now re-reads its result like the R8a retry steps.
+// second post. Each step now claims its result like the R8a retry steps.
 describe("publishToAllPlatforms — a publish step only publishes a still-pending result (M2)", () => {
   function publishRun(platforms: Platform[]) {
     db.postJobFindUnique.mockResolvedValue({ id: "job-1", workspaceId: WORKSPACE.id });
@@ -587,15 +625,13 @@ describe("publishToAllPlatforms — a publish step only publishes a still-pendin
   it.each(["failed", "success"] as const)(
     "skips (no platform call, no result write) a result that is already %s",
     async (status) => {
-      db.resultFindUnique.mockImplementation(({ where }: { where: { id: string } }) =>
-        Promise.resolve({ status: where.id === "result-x" ? status : "pending" }),
-      );
+      loseClaimFor("result-x", { status, claimRunId: null });
 
       const out = await publishRun(["x", "youtube"]);
 
-      expect(db.resultFindUnique).toHaveBeenCalledWith({
-        where: { id: "result-x" },
-        select: { status: true, socialConnectionId: true },
+      expect(db.resultUpdateMany).toHaveBeenCalledWith({
+        where: { id: "result-x", status: "pending", claimRunId: null },
+        data: { claimRunId: "run-1", claimedAt: expect.any(Date) },
       });
       expect(publishCtxs.map((c) => c.socialConnection.platform)).toEqual(["youtube"]);
       expect(db.resultUpdate.mock.calls.map((c) => (c[0] as { where: { id: string } }).where.id)).toEqual([
@@ -609,7 +645,7 @@ describe("publishToAllPlatforms — a publish step only publishes a still-pendin
   );
 
   it("skips a result that no longer exists", async () => {
-    db.resultFindUnique.mockResolvedValue(null);
+    loseClaimFor("result-x", null);
 
     const out = await publishRun(["x"]);
 
@@ -619,15 +655,19 @@ describe("publishToAllPlatforms — a publish step only publishes a still-pendin
   });
 
   it("publishes a result that is still pending", async () => {
-    db.resultFindUnique.mockResolvedValue({ status: "pending", socialConnectionId: "conn-x" });
-
     const out = await publishRun(["x"]);
 
-    expect(db.resultFindUnique).toHaveBeenCalledWith({
-      where: { id: "result-x" },
-      select: { status: true, socialConnectionId: true },
-    });
+    expect(claimWrites()).toEqual([{ id: "result-x", claimRunId: "run-1" }]);
     expect(publishCtxs.map((c) => c.socialConnection.platform)).toEqual(["x"]);
+    expect(db.resultUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          id: "result-x",
+          claimRunId: "run-1",
+          OR: [{ status: "pending" }, { status: "failed", errorCode: "PUBLISH_UNCONFIRMED" }],
+        },
+      }),
+    );
     expect(resultWrites()).toEqual([
       expect.objectContaining({ status: "success", externalPostId: "ext-x", ...HEARTBEAT }),
     ]);
@@ -636,7 +676,8 @@ describe("publishToAllPlatforms — a publish step only publishes a still-pendin
 
   it("finalize still recomputes the job from the DB when every step skipped (the route already failed them)", async () => {
     stubResults(["x", "youtube"], "failed");
-    db.resultFindUnique.mockResolvedValue({ status: "failed", socialConnectionId: null });
+    db.resultUpdateMany.mockResolvedValue({ count: 0 });
+    db.resultFindUnique.mockResolvedValue({ status: "failed", claimRunId: null });
 
     const out = await publishRun(["x", "youtube"]);
 
@@ -647,6 +688,218 @@ describe("publishToAllPlatforms — a publish step only publishes a still-pendin
   });
 });
 
+// 2026-11-01 scale audit (jobs H6): every platform step CLAIMS its result row
+// with one conditional write before it calls the platform. Two runs of one job
+// - a duplicate event, a late original overlapping a retry - can therefore
+// never both call the same platform, and a retried step (Task 2 raises the
+// publish functions to retries: 3) finds its own claim and reports the post as
+// unconfirmed instead of posting again.
+describe("platform steps claim their result before calling the platform (jobs H6)", () => {
+  type StoredResult = { status: string; claimRunId: string | null; socialConnectionId: string | null };
+
+  function p2025() {
+    return new Prisma.PrismaClientKnownRequestError("Record to update not found.", {
+      code: "P2025",
+      clientVersion: "test",
+    });
+  }
+
+  /**
+   * An in-memory PostJobResult table behind the mocked prisma calls: the claim
+   * write matches only a `pending` unclaimed row, a lost claim reads back the
+   * row's real state, and a finalize write matches only the claim holder.
+   */
+  function stubResultStore(seed: Record<string, Partial<StoredResult>>) {
+    const rows = new Map<string, StoredResult>(
+      Object.entries(seed).map(([id, row]) => [
+        id,
+        { status: "pending", claimRunId: null, socialConnectionId: null, ...row },
+      ]),
+    );
+    db.resultUpdateMany.mockImplementation(
+      async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+        const row = rows.get(where.id);
+        if (!row || !("claimRunId" in data)) return { count: 0 };
+        if (row.status !== "pending" || row.claimRunId !== null) return { count: 0 };
+        row.claimRunId = data.claimRunId as string;
+        return { count: 1 };
+      },
+    );
+    db.resultFindUnique.mockImplementation(async ({ where }: { where: { id: string } }) => {
+      const row = rows.get(where.id);
+      return row ? { ...row } : null;
+    });
+    db.resultUpdate.mockImplementation(
+      async ({ where, data }: { where: { id: string; claimRunId: string }; data: { status: string } }) => {
+        const row = rows.get(where.id);
+        if (!row || row.claimRunId !== where.claimRunId || row.status !== "pending") {
+          throw p2025();
+        }
+        row.status = data.status;
+        return {};
+      },
+    );
+    return rows;
+  }
+
+  type StepOut = { results: Array<{ platform: Platform; status: string; error?: string }> };
+
+  function publishAs(runId: string) {
+    return handlerOf(publishToAllPlatforms)({
+      runId,
+      event: {
+        name: "post/publish.requested",
+        data: { postJobId: "job-1", userId: "user-1", mediaItemId: "media-1", baseCaption: "c", perPlatformOverrides: null },
+      },
+      step: fakeStep(),
+    }) as Promise<StepOut>;
+  }
+
+  function retryAs(runId: string) {
+    return handlerOf(retryPlatforms)({
+      runId,
+      event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms: ["x"] } },
+      step: fakeStep(),
+    }) as Promise<StepOut>;
+  }
+
+  /** Hold the platform call open until `release()` so a second run can arrive mid-call. */
+  function gatePlatformCall() {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    getPlatformClientMock.mockImplementation(() => ({
+      publishVideo: vi.fn(async (ctx: PublishContext) => {
+        publishCtxs.push(ctx);
+        await gate;
+        return { externalPostId: "ext-x" };
+      }),
+    }));
+    return release;
+  }
+
+  beforeEach(() => {
+    db.postJobFindUnique.mockResolvedValue({
+      id: "job-1", workspaceId: WORKSPACE.id, mediaItemId: "media-1",
+      baseCaption: "c", perPlatformOverrides: null, publishMetadata: null,
+    });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", perPlatformOverrides: null, deletedAt: null });
+    db.connectionFindMany.mockResolvedValue([{ id: "conn-x", platform: "x" }]);
+    stubResults(["x"]);
+  });
+
+  it("two runs of the same job call the platform once - the second skips while the first is mid-call", async () => {
+    stubResultStore({ "result-x": {} });
+    const release = gatePlatformCall();
+
+    const first = publishAs("run-1");
+    await vi.waitFor(() => expect(publishCtxs).toHaveLength(1));
+    const second = await publishAs("run-2");
+    release();
+    const firstOut = await first;
+
+    expect(publishCtxs).toHaveLength(1);
+    expect(claimWrites()).toEqual([
+      { id: "result-x", claimRunId: "run-1" },
+      { id: "result-x", claimRunId: "run-2" },
+    ]);
+    expect(second.results).toEqual([{ platform: "x", status: "skipped" }]);
+    expect(firstOut.results).toEqual([{ platform: "x", status: "success" }]);
+    // The skipping run never wrote the result.
+    expect(db.resultUpdate).toHaveBeenCalledTimes(1);
+    expect(db.resultUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: "result-x", claimRunId: "run-1" }),
+      }),
+    );
+  });
+
+  it("two runs racing from the start still call the platform once", async () => {
+    stubResultStore({ "result-x": {} });
+
+    const outs = await Promise.all([publishAs("run-1"), publishAs("run-2")]);
+
+    expect(publishCtxs).toHaveLength(1);
+    expect(outs.map((o) => o.results[0].status).sort()).toEqual(["skipped", "success"]);
+  });
+
+  it.each([
+    ["a retry run claims the result before the original run reaches its step", retryAs, publishAs],
+    ["the original run claims the result before the retry run reaches its step", publishAs, retryAs],
+  ])("%s: the first claimant publishes and the other skips", async (_label, firstRun, otherRun) => {
+    stubResultStore({ "result-x": {} });
+    const release = gatePlatformCall();
+
+    const first = firstRun("run-first");
+    await vi.waitFor(() => expect(publishCtxs).toHaveLength(1));
+    const other = await otherRun("run-other");
+    release();
+    const firstOut = await first;
+
+    expect(publishCtxs).toHaveLength(1);
+    expect(other.results).toEqual([{ platform: "x", status: "skipped" }]);
+    expect(firstOut.results).toEqual([{ platform: "x", status: "success" }]);
+  });
+
+  it("a step that finds its OWN claim (a dead earlier attempt) does not call the platform and records PUBLISH_UNCONFIRMED", async () => {
+    stubResultStore({ "result-x": { claimRunId: "run-1" } });
+
+    const out = await publishAs("run-1");
+
+    expect(publishCtxs).toHaveLength(0);
+    expect(db.resultUpdate).toHaveBeenCalledTimes(1);
+    expect(db.resultUpdate).toHaveBeenCalledWith({
+      where: { id: "result-x", claimRunId: "run-1", status: "pending" },
+      data: {
+        status: "failed",
+        errorCode: "PUBLISH_UNCONFIRMED",
+        errorMessage:
+          "We couldn't confirm this post. It may already be live — check the platform before you retry.",
+        ...HEARTBEAT,
+      },
+    });
+    expect(out.results).toEqual([{ platform: "x", status: "failed", error: "Publish unconfirmed" }]);
+  });
+
+  it("does the same on the retry path", async () => {
+    stubResultStore({ "result-x": { claimRunId: "run-1" } });
+
+    const out = await retryAs("run-1");
+
+    expect(publishCtxs).toHaveLength(0);
+    expect(resultWrites()).toEqual([
+      expect.objectContaining({ status: "failed", errorCode: "PUBLISH_UNCONFIRMED", ...HEARTBEAT }),
+    ]);
+    expect(out.results).toEqual([{ platform: "x", status: "failed", error: "Publish unconfirmed" }]);
+  });
+
+  it("does not throw when the claim is gone by the time the result is written (the post was already made)", async () => {
+    stubResultStore({ "result-x": {} });
+    db.resultUpdate.mockRejectedValue(p2025());
+
+    const out = await publishAs("run-1");
+
+    expect(publishCtxs).toHaveLength(1);
+    expect(out.results).toEqual([{ platform: "x", status: "success" }]);
+    expect(console.warn).toHaveBeenCalled();
+  });
+
+  it("claims before every write, including the failures that never reach the platform", async () => {
+    stubResultStore({ "result-x": {} });
+    getPlatformClientMock.mockImplementation(() => null);
+
+    const out = await publishAs("run-1");
+
+    expect(db.resultUpdateMany.mock.invocationCallOrder[0]).toBeLessThan(
+      db.resultUpdate.mock.invocationCallOrder[0],
+    );
+    expect(resultWrites()).toEqual([
+      expect.objectContaining({ status: "failed", errorCode: "CLIENT_NOT_FOUND", ...HEARTBEAT }),
+    ]);
+    expect(out.results).toEqual([{ platform: "x", status: "failed", error: "No client" }]);
+  });
+});
 
 // 2026-11-01 audit, Task 5: PostJobResult.socialConnectionId is nullable
 // (onDelete: SetNull) so Disconnect / Switch account keep publish history. A
@@ -660,6 +913,15 @@ describe("retryPlatforms — a result whose connection was removed (Task 5)", ()
       event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms } },
       step: fakeStep(),
     }) as Promise<{ results: Array<{ platform: Platform; status: string; error?: string }> }>;
+  }
+
+  /** Make the repoint write fail (an FK violation); the claim write still succeeds. */
+  function failRepointWrites() {
+    db.resultUpdateMany.mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+      "socialConnectionId" in data
+        ? Promise.reject(new Error("fk violation"))
+        : Promise.resolve({ count: 1 }),
+    );
   }
 
   /** Writes that point a result at a (new) connection — not status finalizes. */
@@ -712,7 +974,7 @@ describe("retryPlatforms — a result whose connection was removed (Task 5)", ()
 
     it("still publishes when the repoint write itself fails (bookkeeping only)", async () => {
       db.resultFindUnique.mockResolvedValue({ status: "pending", socialConnectionId: null });
-      db.resultUpdateMany.mockRejectedValue(new Error("fk violation"));
+      failRepointWrites();
 
       const out = await retryRun(["x"]);
 
@@ -722,7 +984,7 @@ describe("retryPlatforms — a result whose connection was removed (Task 5)", ()
 
     it("reports a clean CONNECTION_GONE failure if the connection vanishes before the publish step", async () => {
       db.resultFindUnique.mockResolvedValue({ status: "pending", socialConnectionId: null });
-      db.resultUpdateMany.mockRejectedValue(new Error("fk violation"));
+      failRepointWrites();
       db.connectionFindUnique.mockResolvedValue(null);
 
       const out = await retryRun(["x"]);

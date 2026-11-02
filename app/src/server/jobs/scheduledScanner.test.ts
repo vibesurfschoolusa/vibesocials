@@ -33,6 +33,7 @@ import {
   reconcileStuckInProgressJobs,
   STUCK_IN_PROGRESS_MS,
 } from "./scheduledScanner";
+import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 
 const NOW = new Date("2026-07-10T12:00:00.000Z");
 
@@ -138,8 +139,8 @@ describe("reconcileStuckInProgressJobs", () => {
     findManyMock.mockResolvedValue([{ id: "stuck-2" }]);
     resultFindManyMock
       .mockResolvedValueOnce([
-        { id: "r1", status: "pending" },
-        { id: "r2", status: "success" },
+        { id: "r1", status: "pending", claimRunId: null },
+        { id: "r2", status: "success", claimRunId: "run-1" },
       ])
       .mockResolvedValueOnce([
         { status: "failed" },
@@ -151,14 +152,83 @@ describe("reconcileStuckInProgressJobs", () => {
     const out = await reconcileStuckInProgressJobs(NOW);
 
     expect(out.reconciled).toBe(1);
-    expect(resultUpdateManyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: { in: ["r1"] }, status: "pending" },
-      }),
-    );
+    expect(resultFindManyMock).toHaveBeenNthCalledWith(1, {
+      where: { postJobId: "stuck-2" },
+      select: { id: true, status: true, claimRunId: true },
+    });
+    expect(resultUpdateManyMock).toHaveBeenCalledTimes(1);
+    expect(resultUpdateManyMock).toHaveBeenCalledWith({
+      where: { id: { in: ["r1"] }, status: "pending", claimRunId: null },
+      data: {
+        status: "failed",
+        errorCode: "PUBLISH_STALLED",
+        errorMessage: "Publish did not complete (stalled). You can retry this platform.",
+      },
+    });
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { id: "stuck-2", status: "in_progress" },
       data: { status: "completed" },
     });
+  });
+
+  // 2026-11-01 scale audit (jobs H6): a pending result with a claim had its
+  // platform step start - the call may have reached the platform before the run
+  // died. "Stalled, retry it" would invite a second post, so a claimed row is
+  // marked PUBLISH_UNCONFIRMED ("may already be live"); only an unclaimed row,
+  // which provably never reached the platform, is PUBLISH_STALLED.
+  it("marks a stuck job's claimed pending result PUBLISH_UNCONFIRMED and its unclaimed one PUBLISH_STALLED", async () => {
+    findManyMock.mockResolvedValue([{ id: "stuck-3" }]);
+    resultFindManyMock
+      .mockResolvedValueOnce([
+        { id: "r-claimed", status: "pending", claimRunId: "run-1" },
+        { id: "r-unclaimed", status: "pending", claimRunId: null },
+        { id: "r-done", status: "success", claimRunId: "run-1" },
+      ])
+      .mockResolvedValueOnce([
+        { status: "failed" },
+        { status: "failed" },
+        { status: "success" },
+      ]);
+    resultUpdateManyMock.mockResolvedValue({ count: 1 });
+    updateManyMock.mockResolvedValue({ count: 1 });
+
+    const out = await reconcileStuckInProgressJobs(NOW);
+
+    expect(out.reconciled).toBe(1);
+    expect(resultUpdateManyMock).toHaveBeenCalledTimes(2);
+    expect(resultUpdateManyMock).toHaveBeenCalledWith({
+      where: { id: { in: ["r-claimed"] }, status: "pending", claimRunId: { not: null } },
+      data: {
+        status: "failed",
+        errorCode: "PUBLISH_UNCONFIRMED",
+        errorMessage: PUBLISH_UNCONFIRMED_MESSAGE,
+      },
+    });
+    expect(resultUpdateManyMock).toHaveBeenCalledWith({
+      where: { id: { in: ["r-unclaimed"] }, status: "pending", claimRunId: null },
+      data: {
+        status: "failed",
+        errorCode: "PUBLISH_STALLED",
+        errorMessage: "Publish did not complete (stalled). You can retry this platform.",
+      },
+    });
+  });
+
+  it("skips the write for a kind that has no pending rows", async () => {
+    findManyMock.mockResolvedValue([{ id: "stuck-4" }]);
+    resultFindManyMock
+      .mockResolvedValueOnce([{ id: "r-claimed", status: "pending", claimRunId: "run-1" }])
+      .mockResolvedValueOnce([{ status: "failed" }]);
+    resultUpdateManyMock.mockResolvedValue({ count: 1 });
+    updateManyMock.mockResolvedValue({ count: 1 });
+
+    await reconcileStuckInProgressJobs(NOW);
+
+    expect(resultUpdateManyMock).toHaveBeenCalledTimes(1);
+    expect(resultUpdateManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: { in: ["r-claimed"] }, status: "pending", claimRunId: { not: null } },
+      }),
+    );
   });
 });

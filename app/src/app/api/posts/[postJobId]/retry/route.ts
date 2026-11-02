@@ -216,7 +216,10 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   // IDEMPOTENCY GUARD: atomically claim each candidate (failed -> pending).
   // Only rows still in `failed` flip; a concurrent/duplicate retry that already
   // claimed a platform sees `count === 0` for it and it's dropped — so the same
-  // platform can never be published twice by OUR retries.
+  // platform can never be published twice by OUR retries. The flip also clears
+  // the result's publish claim (claimRunId / claimedAt, 2026-11-01 scale audit,
+  // jobs H6): a result that failed — including one marked PUBLISH_UNCONFIRMED —
+  // carries its dead run's claim, and the retry run must be able to take its own.
   //
   // KNOWN LIMITATION (accepted for v1): this cannot stop a provider false
   // negative — if a platform actually published but we recorded `failed`
@@ -228,7 +231,13 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     candidates.map(async (platform) => {
       const { count } = await prisma.postJobResult.updateMany({
         where: { postJobId, platform, status: "failed" },
-        data: { status: "pending", errorCode: null, errorMessage: null },
+        data: {
+          status: "pending",
+          errorCode: null,
+          errorMessage: null,
+          claimRunId: null,
+          claimedAt: null,
+        },
       });
       return { platform, claimed: count > 0 };
     }),

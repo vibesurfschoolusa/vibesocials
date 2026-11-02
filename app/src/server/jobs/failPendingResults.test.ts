@@ -16,7 +16,8 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-import { DISPATCH_FAILURE, failPendingPostJobResults } from "./failPendingResults";
+import { DISPATCH_FAILURE, PUBLISH_UNCONFIRMED, failPendingPostJobResults } from "./failPendingResults";
+import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 
 beforeEach(() => {
   resultUpdateManyMock.mockReset();
@@ -37,12 +38,22 @@ describe("DISPATCH_FAILURE", () => {
   });
 });
 
+describe("PUBLISH_UNCONFIRMED", () => {
+  it("is built from the shared publishOutcomes code + message", () => {
+    expect(PUBLISH_UNCONFIRMED).toEqual({
+      errorCode: PUBLISH_UNCONFIRMED_CODE,
+      errorMessage: PUBLISH_UNCONFIRMED_MESSAGE,
+    });
+    expect(PUBLISH_UNCONFIRMED_CODE).toBe("PUBLISH_UNCONFIRMED");
+  });
+});
+
 describe("failPendingPostJobResults", () => {
-  it("fails only the job's still-pending results, with the given code + message", async () => {
+  it("fails only the job's still-pending UNCLAIMED results, with the given code + message", async () => {
     await failPendingPostJobResults("job-1", DISPATCH_FAILURE);
 
     expect(resultUpdateManyMock).toHaveBeenCalledWith({
-      where: { postJobId: "job-1", status: "pending" },
+      where: { postJobId: "job-1", status: "pending", claimRunId: null },
       data: {
         status: "failed",
         errorCode: "DISPATCH_FAILED",
@@ -58,7 +69,7 @@ describe("failPendingPostJobResults", () => {
     });
 
     expect(resultUpdateManyMock).toHaveBeenCalledWith({
-      where: { postJobId: "job-9", status: "pending" },
+      where: { postJobId: "job-9", status: "pending", claimRunId: null },
       data: {
         status: "failed",
         errorCode: "PUBLISH_INTERRUPTED",
@@ -68,6 +79,7 @@ describe("failPendingPostJobResults", () => {
   });
 
   it("recomputes the job status over ALL its results after the update", async () => {
+    resultUpdateManyMock.mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 2 });
     resultFindManyMock.mockResolvedValue([{ status: "failed" }, { status: "failed" }]);
 
     const outcome = await failPendingPostJobResults("job-1", DISPATCH_FAILURE);
@@ -84,11 +96,11 @@ describe("failPendingPostJobResults", () => {
       where: { id: "job-1" },
       data: { status: "failed" },
     });
-    expect(outcome).toEqual({ failedCount: 2, status: "failed" });
+    expect(outcome).toEqual({ failedCount: 2, unconfirmedCount: 0, status: "failed" });
   });
 
   it("keeps a partial success completed (a platform that already went live stays live)", async () => {
-    resultUpdateManyMock.mockResolvedValue({ count: 1 });
+    resultUpdateManyMock.mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 1 });
     resultFindManyMock.mockResolvedValue([{ status: "success" }, { status: "failed" }]);
 
     const outcome = await failPendingPostJobResults("job-1", DISPATCH_FAILURE);
@@ -97,7 +109,7 @@ describe("failPendingPostJobResults", () => {
       where: { id: "job-1" },
       data: { status: "completed" },
     });
-    expect(outcome).toEqual({ failedCount: 1, status: "completed" });
+    expect(outcome).toEqual({ failedCount: 1, unconfirmedCount: 0, status: "completed" });
   });
 
   // Task 4 fix round 1 (ruling R8b): a retry run that dies may only fail the
@@ -110,11 +122,30 @@ describe("failPendingPostJobResults", () => {
     );
 
     expect(resultUpdateManyMock).toHaveBeenCalledWith({
-      where: { postJobId: "job-1", status: "pending", platform: { in: ["x", "tiktok"] } },
+      where: {
+        postJobId: "job-1",
+        status: "pending",
+        claimRunId: null,
+        platform: { in: ["x", "tiktok"] },
+      },
       data: {
         status: "failed",
         errorCode: "PUBLISH_INTERRUPTED",
         errorMessage: "Publishing was interrupted. Please retry.",
+      },
+    });
+    // ...and the claimed rows of those platforms only.
+    expect(resultUpdateManyMock).toHaveBeenCalledWith({
+      where: {
+        postJobId: "job-1",
+        status: "pending",
+        claimRunId: { not: null },
+        platform: { in: ["x", "tiktok"] },
+      },
+      data: {
+        status: "failed",
+        errorCode: "PUBLISH_UNCONFIRMED",
+        errorMessage: PUBLISH_UNCONFIRMED_MESSAGE,
       },
     });
   });
@@ -139,9 +170,9 @@ describe("failPendingPostJobResults", () => {
   it("without the option (every existing caller), does not filter by platform", async () => {
     await failPendingPostJobResults("job-1", DISPATCH_FAILURE, {});
 
-    expect(resultUpdateManyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { postJobId: "job-1", status: "pending" } }),
-    );
+    for (const [arg] of resultUpdateManyMock.mock.calls) {
+      expect(arg.where).not.toHaveProperty("platform");
+    }
   });
 
   it("never leaves an empty fan-out in_progress (no results → failed)", async () => {
@@ -155,5 +186,57 @@ describe("failPendingPostJobResults", () => {
       data: { status: "failed" },
     });
     expect(outcome.status).toBe("failed");
+  });
+
+  // 2026-11-01 scale audit (jobs H6): a result whose platform step has CLAIMED it
+  // may be mid-call to the platform. Failing it with the caller's reason ("please
+  // retry") would invite a second post of something that may already be live, so
+  // claimed rows are marked PUBLISH_UNCONFIRMED instead and only unclaimed rows
+  // - provably never sent - get the caller's failure.
+  describe("claimed and unclaimed results", () => {
+    it("marks claimed pending rows PUBLISH_UNCONFIRMED first, then fails the unclaimed ones with the caller's reason", async () => {
+      resultUpdateManyMock.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 2 });
+
+      await failPendingPostJobResults("job-1", DISPATCH_FAILURE);
+
+      expect(resultUpdateManyMock).toHaveBeenCalledTimes(2);
+      expect(resultUpdateManyMock).toHaveBeenNthCalledWith(1, {
+        where: { postJobId: "job-1", status: "pending", claimRunId: { not: null } },
+        data: {
+          status: "failed",
+          errorCode: "PUBLISH_UNCONFIRMED",
+          errorMessage: PUBLISH_UNCONFIRMED_MESSAGE,
+        },
+      });
+      expect(resultUpdateManyMock).toHaveBeenNthCalledWith(2, {
+        where: { postJobId: "job-1", status: "pending", claimRunId: null },
+        data: {
+          status: "failed",
+          errorCode: "DISPATCH_FAILED",
+          errorMessage: "Couldn't start publishing. Please try again.",
+        },
+      });
+    });
+
+    it("returns both counts", async () => {
+      resultUpdateManyMock.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 2 });
+      resultFindManyMock.mockResolvedValue([
+        { status: "failed" },
+        { status: "failed" },
+        { status: "failed" },
+      ]);
+
+      const outcome = await failPendingPostJobResults("job-1", DISPATCH_FAILURE);
+
+      expect(outcome).toEqual({ failedCount: 2, unconfirmedCount: 1, status: "failed" });
+    });
+
+    it("recomputes the job only after both writes", async () => {
+      await failPendingPostJobResults("job-1", DISPATCH_FAILURE);
+
+      expect(resultUpdateManyMock.mock.invocationCallOrder[1]).toBeLessThan(
+        resultFindManyMock.mock.invocationCallOrder[0],
+      );
+    });
   });
 });

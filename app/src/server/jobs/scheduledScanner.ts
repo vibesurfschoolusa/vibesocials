@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { recomputePostJobStatus } from "@/server/jobs/postStatus";
 
 /**
@@ -85,6 +86,12 @@ export async function claimDueScheduledJobs(
  *    any still-`pending` results failed so recompute can complete).
  *  - If there are no results: mark the job `failed`.
  *
+ * A still-`pending` result a platform step CLAIMED (`claimRunId` set; the claim
+ * only lives inside one step, <= 300 s) lost its run mid-call and may already be
+ * live, so it is marked PUBLISH_UNCONFIRMED ("check the platform before you
+ * retry"). Only an unclaimed one, which provably never reached the platform, is
+ * PUBLISH_STALLED ("you can retry"). 2026-11-01 scale audit (jobs H6).
+ *
  * Conditional `updateMany` keeps concurrent reconcilers safe.
  */
 export async function reconcileStuckInProgressJobs(
@@ -104,7 +111,7 @@ export async function reconcileStuckInProgressJobs(
   for (const job of candidates) {
     const results = await prisma.postJobResult.findMany({
       where: { postJobId: job.id },
-      select: { id: true, status: true },
+      select: { id: true, status: true, claimRunId: true },
     });
 
     if (results.length === 0) {
@@ -116,10 +123,24 @@ export async function reconcileStuckInProgressJobs(
       continue;
     }
 
-    const pendingIds = results.filter((r) => r.status === "pending").map((r) => r.id);
-    if (pendingIds.length > 0) {
+    const pending = results.filter((r) => r.status === "pending");
+    const claimedIds = pending.filter((r) => r.claimRunId != null).map((r) => r.id);
+    const unclaimedIds = pending.filter((r) => r.claimRunId == null).map((r) => r.id);
+    // The claim state is re-asserted in each write, so a result claimed (or
+    // re-queued) since the read above is left to its run.
+    if (claimedIds.length > 0) {
       await prisma.postJobResult.updateMany({
-        where: { id: { in: pendingIds }, status: "pending" },
+        where: { id: { in: claimedIds }, status: "pending", claimRunId: { not: null } },
+        data: {
+          status: "failed",
+          errorCode: PUBLISH_UNCONFIRMED_CODE,
+          errorMessage: PUBLISH_UNCONFIRMED_MESSAGE,
+        },
+      });
+    }
+    if (unclaimedIds.length > 0) {
+      await prisma.postJobResult.updateMany({
+        where: { id: { in: unclaimedIds }, status: "pending", claimRunId: null },
         data: {
           status: "failed",
           errorCode: "PUBLISH_STALLED",

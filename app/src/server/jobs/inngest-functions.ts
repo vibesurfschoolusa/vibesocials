@@ -37,6 +37,8 @@ import { buildReconnectEmail } from "@/server/notifications/reconnectEmail";
 import { sendEmail } from "@/server/notifications/email";
 import { isProactiveRefreshEligible } from "@/server/jobs/connectionHealthSweep";
 import { platformLabel } from "@/lib/platforms";
+import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
+import { claimResult, finalizeClaimedResult } from "@/server/jobs/resultClaim";
 import { refreshGoogleToken } from "@/server/platforms/googleTokens";
 import { fetchYouTubeVideoStatistics, hasAnyStatistic } from "@/server/platforms/youtubeMetrics";
 import { Prisma } from "@prisma/client";
@@ -78,44 +80,35 @@ interface PublishToPlatformArgs {
   baseCaption: string;
   userId: string;
   resultRecordId: string;
+  /** The Inngest run holding the result's claim (resultClaim.ts); every write is made under it. */
+  runId: string;
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
 }
 
-/** A platform's final outcome, as written to its PostJobResult row. */
-type FinalResultData =
-  | { status: "success"; externalPostId: string | null }
-  | { status: "failed"; errorCode: string; errorMessage: string };
-
-/**
- * Write a platform's final PostJobResult AND, in the same nested write, bump
- * the parent PostJob's `updatedAt` (Task 4 item 6). That timestamp is the
- * heartbeat the stale sweep (`stalePostJobSweep`, 6h) and the stuck-in_progress
- * reconciler (`reconcileStuckInProgressJobs`, 2h) judge progress by; platform
- * steps used to write only the result row, so a slow-but-alive run never
- * touched its job and could be swept as stalled mid-flight.
- */
-async function finalizeResult(resultRecordId: string, data: FinalResultData): Promise<void> {
-  await prisma.postJobResult.update({
-    where: { id: resultRecordId },
-    data: { ...data, postJob: { update: { updatedAt: new Date() } } },
-  });
-}
+/** What a platform step reports for its platform (step output; no secrets). */
+type PlatformStepResult = { platform: Platform; status: string; error?: string };
 
 /**
  * Point a still-`pending` result at the connection that will publish it.
  * `PostJobResult.socialConnectionId` is SET NULL when its connection is removed
  * (the history outlives Disconnect / Switch account); a retry through the
- * workspace's current connection re-links it. Bookkeeping only, so a failure
- * (e.g. the connection vanished since the setup step -> FK violation) is logged
- * and swallowed: `publishToPlatform` reloads the connection itself and reports a
- * clean CONNECTION_GONE failure, which a thrown error here would pre-empt.
+ * workspace's current connection re-links it, and a result that already points
+ * there is left alone. Bookkeeping only, so a failure (e.g. the connection
+ * vanished since the setup step -> FK violation) is logged and swallowed:
+ * `publishToPlatform` reloads the connection itself and reports a clean
+ * CONNECTION_GONE failure, which a thrown error here would pre-empt.
  */
 async function repointResultConnection(
   resultRecordId: string,
   connectionId: string,
 ): Promise<void> {
   try {
+    const current = await prisma.postJobResult.findUnique({
+      where: { id: resultRecordId },
+      select: { socialConnectionId: true },
+    });
+    if (current?.socialConnectionId === connectionId) return;
     await prisma.postJobResult.updateMany({
       where: { id: resultRecordId, status: "pending" },
       data: { socialConnectionId: connectionId },
@@ -130,43 +123,64 @@ async function repointResultConnection(
 }
 
 /**
- * A platform step publishes only while its result is still `pending` — the
- * state the dispatching route (publish) or the retry route (retry) left it in.
- * Re-read at the start of every `publish-to-<platform>` and `retry-<platform>`
- * step; returns the row when still pending, else null (logged) and the step
- * must skip: no platform call, no result write.
+ * Claim the platform step's result before anything touches the platform
+ * (2026-11-01 scale audit, jobs H6). Run at the start of every
+ * `publish-to-<platform>` and `retry-<platform>` step; returns null when this
+ * run now holds the claim and may publish, else the step's final output — no
+ * platform call is ever made after a non-null return.
  *
- * Ruling R8a (retry): an overlapping run may have finalized the result since,
- * or an onFailure handler failed it (and the user may already have retried it
- * again). Final review M2 (publish): `inngest.send` can throw AFTER Inngest
- * accepted the event (e.g. a response timeout) — the route then fails the
- * results (DISPATCH_FAILED) and answers 503, yet this run still starts.
- * Publishing in either case would overwrite `failed` with `success` and, once
- * the user retried or re-posted, post twice.
+ * - `not_pending` / `held_by_other_run` -> `skipped`, nothing written. Ruling
+ *   R8a (retry): an overlapping run may have finalized the result since, or an
+ *   onFailure handler failed it (and the user may already have retried it
+ *   again). Final review M2 (publish): `inngest.send` can throw AFTER Inngest
+ *   accepted the event (e.g. a response timeout) — the route then fails the
+ *   results (DISPATCH_FAILED) and answers 503, yet this run still starts. H6:
+ *   two runs of one job (a duplicate event, a retry overlapping a late
+ *   original) race for the same result; only the first claimant publishes.
+ *   Publishing in any of these cases would overwrite `failed` with `success`
+ *   or post twice.
+ * - `held_by_this_run` -> this run claimed the result in an earlier attempt of
+ *   the step that never recorded an outcome (the invocation died mid-call). The
+ *   platform may already have the post, so it is NOT called again: the result
+ *   is failed PUBLISH_UNCONFIRMED instead (Task 2's step retries rely on this).
  */
-async function readStillPendingResult(
+async function claimOrSkip(
   resultRecordId: string,
+  runId: string,
   context: { step: "publish" | "retry"; postJobId: string; platform: Platform },
-): Promise<{ socialConnectionId: string | null } | null> {
-  const current = await prisma.postJobResult.findUnique({
-    where: { id: resultRecordId },
-    select: { status: true, socialConnectionId: true },
-  });
-  if (current?.status !== "pending") {
-    const label = context.step === "retry" ? "Retry" : "Publish";
-    logger.warn(`[Inngest] ${label} step skipped: result is no longer pending`, {
+): Promise<PlatformStepResult | null> {
+  const outcome = await claimResult(resultRecordId, runId);
+  if (outcome === "claimed") return null;
+
+  const label = context.step === "retry" ? "Retry" : "Publish";
+  if (outcome === "held_by_this_run") {
+    logger.warn(`[Inngest] ${label} step found its own earlier claim; recording the result as unconfirmed`, {
       postJobId: context.postJobId,
       platform: context.platform,
       resultRecordId,
-      status: current?.status ?? "missing",
+      runId,
     });
-    return null;
+    await finalizeClaimedResult(resultRecordId, runId, {
+      status: "failed",
+      errorCode: PUBLISH_UNCONFIRMED_CODE,
+      errorMessage: PUBLISH_UNCONFIRMED_MESSAGE,
+    });
+    return { platform: context.platform, status: "failed", error: "Publish unconfirmed" };
   }
-  return current;
+
+  logger.warn(`[Inngest] ${label} step skipped: result is not claimable`, {
+    postJobId: context.postJobId,
+    platform: context.platform,
+    resultRecordId,
+    outcome,
+  });
+  return { platform: context.platform, status: "skipped" };
 }
 
 // Helper to publish to a single platform. Loads the connection fresh so tokens
-// are never serialized through step.run() memoization.
+// are never serialized through step.run() memoization. The caller has already
+// claimed the result for `runId` (claimOrSkip); every result write here is made
+// under that claim (finalizeClaimedResult), which also bumps the job heartbeat.
 async function publishToPlatform({
   connectionRef,
   mediaItem,
@@ -174,9 +188,10 @@ async function publishToPlatform({
   baseCaption,
   userId,
   resultRecordId,
+  runId,
   tiktokMetadata,
   youtubeMetadata,
-}: PublishToPlatformArgs): Promise<{ platform: Platform; status: string; error?: string }> {
+}: PublishToPlatformArgs): Promise<PlatformStepResult> {
   // ONE deadline for this step, stamped before anything else and shared by
   // every in-step retry: the platform work must end inside Vercel's 300s
   // per-invocation cap with time left to record the result (publishBudget.ts).
@@ -184,7 +199,7 @@ async function publishToPlatform({
   const client = getPlatformClient(connectionRef.platform);
 
   if (!client) {
-    await finalizeResult(resultRecordId, {
+    await finalizeClaimedResult(resultRecordId, runId, {
       status: "failed",
       errorCode: "CLIENT_NOT_FOUND",
       errorMessage: "No client configured for this platform.",
@@ -198,7 +213,7 @@ async function publishToPlatform({
       where: { id: connectionRef.id },
     });
     if (!connection) {
-      await finalizeResult(resultRecordId, {
+      await finalizeClaimedResult(resultRecordId, runId, {
         status: "failed",
         errorCode: "CONNECTION_GONE",
         errorMessage: "This platform connection was removed. Reconnect and retry.",
@@ -210,7 +225,7 @@ async function publishToPlatform({
       };
     }
     if (connection.needsReconnect) {
-      await finalizeResult(resultRecordId, {
+      await finalizeClaimedResult(resultRecordId, runId, {
         status: "failed",
         errorCode: "RECONNECT_REQUIRED",
         errorMessage: "This platform needs to be reconnected in Settings before publishing.",
@@ -264,7 +279,7 @@ async function publishToPlatform({
       platform: connection.platform,
       externalPostId: publishResult.externalPostId,
     });
-    await finalizeResult(resultRecordId, {
+    await finalizeClaimedResult(resultRecordId, runId, {
       status: "success",
       externalPostId: publishResult.externalPostId ?? null,
     });
@@ -277,7 +292,7 @@ async function publishToPlatform({
       code: err.code,
       error: err,
     });
-    await finalizeResult(resultRecordId, {
+    await finalizeClaimedResult(resultRecordId, runId, {
       status: "failed",
       errorCode: err.code ?? "PUBLISH_FAILED",
       errorMessage: err.message || "Failed to publish to platform.",
@@ -324,7 +339,9 @@ function failedRunPostJobId({ event, error }: PublishRunFailureArgs): string | n
  * once and the platforms not yet attempted stay `pending`: the job looked
  * "publishing" until the 2h stuck reconciler gave up on it. This fails those
  * still-`pending` results with PUBLISH_INTERRUPTED and recomputes the job's
- * status through the shared failPendingPostJobResults helper. Results that
+ * status through the shared failPendingPostJobResults helper. A result a
+ * platform step had already CLAIMED may be live, so the helper marks it
+ * PUBLISH_UNCONFIRMED instead (2026-11-01 scale audit, jobs H6). Results that
  * already finished are untouched (a platform that went live stays live), and
  * every failed one is retryable from the UI.
  */
@@ -388,7 +405,7 @@ export const publishToAllPlatforms = inngest.createFunction(
     onFailure: failInterruptedPublishRun,
   },
   { event: "post/publish.requested" },
-  async ({ event, step }) => {
+  async ({ event, step, runId }) => {
     const { postJobId, userId, mediaItemId, baseCaption, perPlatformOverrides, tiktokMetadata, youtubeMetadata } = event.data;
 
     logger.info("[Inngest] Starting background publish job", { postJobId, mediaItemId });
@@ -480,16 +497,15 @@ export const publishToAllPlatforms = inngest.createFunction(
 
       // Each platform upload is a separate step - this allows checkpointing
       const result = await step.run(`publish-to-${connection.platform}`, async () => {
-        // Final review M2: only a still-`pending` result is published — the
-        // route may already have failed it after an ambiguous dispatch error.
-        const current = await readStillPendingResult(resultRecord.id, {
+        // Final review M2 + jobs H6: only the run that claims a still-`pending`
+        // result publishes it — the route may already have failed it after an
+        // ambiguous dispatch error, and a duplicate run may be ahead of us.
+        const early = await claimOrSkip(resultRecord.id, runId, {
           step: "publish",
           postJobId,
           platform: connection.platform,
         });
-        if (!current) {
-          return { platform: connection.platform, status: "skipped" };
-        }
+        if (early) return early;
 
         return publishToPlatform({
           connectionRef: connection,
@@ -498,6 +514,7 @@ export const publishToAllPlatforms = inngest.createFunction(
           baseCaption,
           userId,
           resultRecordId: resultRecord.id,
+          runId,
           tiktokMetadata,
           youtubeMetadata,
         });
@@ -718,10 +735,12 @@ export const mediaRetentionSweep = inngest.createFunction(
  * IDEMPOTENCY (defense-in-depth): the `concurrency` key below serializes runs
  * per `postJobId`, so two overlapping retry events for the same job can never
  * re-run the same platform at the same time. The endpoint's conditional claim
- * is the primary guard; this is the second layer. Third (ruling R8a): each
- * `retry-<platform>` step re-reads its result and publishes only while it is
- * still `pending` — the concurrency key does not serialize a retry against the
- * original publish run, which may have finalized (or onFailure failed) it.
+ * is the primary guard; this is the second layer. Third (ruling R8a, now the
+ * atomic claim of 2026-11-01 scale audit jobs H6): each `retry-<platform>` step
+ * claims its result and publishes only while it is `pending` and unclaimed —
+ * the concurrency key does not serialize a retry against the original publish
+ * run, which may have finalized (or onFailure failed) it, or may not have
+ * reached its own step yet.
  *
  * Removed connections (2026-11-01 audit): a result outlives its connection
  * (`socialConnectionId` is SET NULL on Disconnect / Switch account). The retry
@@ -755,7 +774,7 @@ export const retryPlatforms = inngest.createFunction(
     },
   },
   { event: "post/retry.requested" },
-  async ({ event, step }) => {
+  async ({ event, step, runId }) => {
     // `event.data` is untyped (schemaless Inngest client) — assign into typed
     // locals here rather than annotating with `any`.
     const postJobId: string = event.data.postJobId;
@@ -890,18 +909,17 @@ export const retryPlatforms = inngest.createFunction(
       const connection = connections.find((c) => c.platform === platform);
 
       const result = await step.run(`retry-${platform}`, async () => {
-        // Ruling R8a: publish only while this result is still the `pending`
-        // the retry route claimed. An overlapping run may have finalized it
-        // since, or an onFailure handler failed it (and the user may already
-        // have retried it again) — publishing then would post twice.
-        const current = await readStillPendingResult(resultRecord.id, {
+        // Ruling R8a + jobs H6: publish only if this run claims the result the
+        // retry route re-queued as `pending`. An overlapping run may have
+        // finalized it since, an onFailure handler may have failed it (and the
+        // user may already have retried it again), or the original publish run
+        // may get to it first — publishing then would post twice.
+        const early = await claimOrSkip(resultRecord.id, runId, {
           step: "retry",
           postJobId,
           platform,
         });
-        if (!current) {
-          return { platform, status: "skipped" };
-        }
+        if (early) return early;
 
         if (!connection) {
           // The platform was disconnected since the original post (the result's
@@ -909,7 +927,7 @@ export const retryPlatforms = inngest.createFunction(
           // connection is removed) and the workspace has no usable connection
           // for it now; there is no token to publish with. Fail with a
           // reconnect-shaped code so the UI can point the user at Settings.
-          await finalizeResult(resultRecord.id, {
+          await finalizeClaimedResult(resultRecord.id, runId, {
             status: "failed",
             errorCode: "RECONNECT_REQUIRED",
             errorMessage:
@@ -922,9 +940,7 @@ export const retryPlatforms = inngest.createFunction(
         // Switch account -> `socialConnectionId` null) and the platform since
         // reconnected: this retry publishes through the workspace's CURRENT
         // connection, so point the result at it.
-        if (current.socialConnectionId !== connection.id) {
-          await repointResultConnection(resultRecord.id, connection.id);
-        }
+        await repointResultConnection(resultRecord.id, connection.id);
 
         const captionOverride = overrides?.[platform] ?? null;
         const caption = captionOverride
@@ -946,6 +962,7 @@ export const retryPlatforms = inngest.createFunction(
           baseCaption: captionSource.baseCaption,
           userId,
           resultRecordId: resultRecord.id,
+          runId,
           tiktokMetadata: ttMeta,
           youtubeMetadata: ytMeta,
         });
@@ -1350,7 +1367,7 @@ export const stalePostJobSweep = inngest.createFunction(
       // The eligibility rule is isStalePostJob(); expressed here as the
       // equivalent WHERE so one statement claims the rows atomically. `updatedAt`
       // (not `createdAt`) is the progress signal — a job still working through
-      // its platforms bumps it as each platform finishes (finalizeResult's
+      // its platforms bumps it as each platform finishes (finalizeClaimedResult's
       // heartbeat) and so keeps resetting its clock.
       const { count } = await prisma.postJob.updateMany({
         where: {

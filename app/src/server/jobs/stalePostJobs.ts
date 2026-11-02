@@ -60,7 +60,7 @@ export interface StalePostJobInput {
  *
  * Keys off `updatedAt`, not `createdAt`: a job that is genuinely moving through
  * its platforms bumps it as each platform's result is finalized (the heartbeat
- * in inngest-functions.ts `finalizeResult`), so an active long publish keeps
+ * in resultClaim.ts `finalizeClaimedResult`), so an active long publish keeps
  * resetting its own clock and is never swept.
  */
 export function isStalePostJob(job: StalePostJobInput, now: Date): boolean {

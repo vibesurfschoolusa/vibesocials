@@ -352,6 +352,20 @@ model PostJobResult {
   externalPostId     String?
   errorCode          String?
   errorMessage       String?
+  // 2026-11-01 scale audit (jobs H6): the per-result publish claim. A platform
+  // step claims its result with one conditional write (status pending AND
+  // claimRunId null) before it calls the platform, so two runs of a job — a
+  // duplicate event, a retry overlapping a late original — can never both
+  // publish it. claimRunId is the Inngest runId of the step about to call the
+  // platform; claimedAt is when. A claim is only ever held inside ONE step
+  // (<= 300 s, publishBudget.ts): a pending row that still has one after that
+  // lost its run mid-call, so the reconciler and onFailure mark it
+  // PUBLISH_UNCONFIRMED (the post may be live) instead of "retry me". The retry
+  // route clears both when it re-queues a failed result. Nullable columns, not a
+  // new PostJobResultStatus value: `pending` keeps its meaning for every reader
+  // (and the old deployment) and nothing else needs to know about claims.
+  claimRunId         String?
+  claimedAt          DateTime?
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
