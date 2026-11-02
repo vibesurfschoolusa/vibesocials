@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { truncateGraphemes } from "@/lib/truncate";
+import type { UploadStateStore } from "@/server/jobs/uploadState";
 
+import { LARGE_UPLOAD_CHUNK_WINDOW_MS, LARGE_VIDEO_THRESHOLD_BYTES } from "./largeUpload";
 import { MIN_REQUEST_WINDOW_MS, PUBLISH_BUDGET_EXCEEDED_CODE, PUBLISH_STEP_BUDGET_MS } from "./publishBudget";
 import { isTransientPublishError, withTransientRetries } from "./transientRetry";
 import type { PublishContext } from "./types";
@@ -14,10 +16,14 @@ import {
   ensureFreshTikTokToken,
   pollTikTokPublishStatus,
   refreshTikTokToken,
+  TIKTOK_FINAL_CHUNK_MIN_WINDOW_MS,
   TIKTOK_MAX_CHUNK_SIZE,
   TIKTOK_MAX_FINAL_CHUNK_SIZE,
   TIKTOK_POLL_INTERVAL_MS,
   TIKTOK_POLL_MAX_ATTEMPTS,
+  TIKTOK_UPLOAD_STATE_KIND,
+  TIKTOK_UPLOAD_URL_SAFETY_MS,
+  TIKTOK_UPLOAD_URL_TTL_MS,
   tiktokClient,
 } from "./tiktokClient";
 
@@ -1686,6 +1692,1246 @@ describe("tiktokClient.publishVideo", () => {
 
       expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
       expect(chunkPuts(fetchMock)).toHaveLength(2);
+    });
+  });
+});
+
+// 2026-11-02 scale audit (jobs B3): a video above 50 MiB on an enabled platform is read from
+// storage 10 MiB at a time and PUT to TikTok's upload_url across steps. Every request is faked;
+// the video is a lazily generated stream (never 60 MiB at once on this path), and the upload
+// state is an in-memory store with the real store's rules (a kind, a readable `data` that holds
+// no URL, a sealed `secret`).
+describe("tiktokClient.publishVideo — streamed FILE_UPLOAD (jobs B3)", () => {
+  const MIB = 1024 * 1024;
+  const CHUNK = TIKTOK_MAX_CHUNK_SIZE;
+  /** 60 MiB + 5 bytes: six chunks; the last one absorbs the 5 trailing bytes. */
+  const TOTAL = 6 * CHUNK + 5;
+  const TOTAL_CHUNKS = 6;
+  const FINAL_START = 5 * CHUNK;
+  const NOW = Date.parse("2026-11-02T10:00:00.000Z");
+  const STEP = PUBLISH_STEP_BUDGET_MS;
+
+  const uploadUrlOf = (n: number) => `https://open-upload.tiktokapis.example/video/?upload_id=SECRET-${n}&upload_token=TOKEN-${n}`;
+  const URL_1 = uploadUrlOf(1);
+  const URL_2 = uploadUrlOf(2);
+
+  type Req = { url: string; init: RequestInit };
+  type Reply = (req: Req) => Response | Promise<Response>;
+
+  const mediaItemOf = (sizeBytes: number) =>
+    ({
+      id: "media-1",
+      mimeType: "video/mp4",
+      originalFilename: "clip.mp4",
+      storageLocation: "https://blob.example.com/clip.mp4",
+      sizeBytes,
+    }) as unknown as MediaItem;
+
+  /** The byte the fake blob holds at absolute position `p`. */
+  const byteAt = (p: number) => p % 251;
+
+  const streams = { opened: 0, cancelled: 0 };
+
+  /** Bytes `start..total-1` of the video, produced only when the reader asks (no read-ahead). */
+  function lazyBlobBody(start: number, total: number) {
+    let produced = 0;
+    streams.opened += 1;
+    return new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          const size = Math.min(1_000_000, total - start - produced);
+          if (size <= 0) {
+            controller.close();
+            return;
+          }
+          const out = new Uint8Array(size);
+          for (let i = 0; i < size; i += 1) out[i] = byteAt(start + produced + i);
+          controller.enqueue(out);
+          produced += size;
+        },
+        cancel() {
+          streams.cancelled += 1;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+  }
+
+  const reply =
+    (status: number, body: string | null = null, headers: Record<string, string> = {}): Reply =>
+    () =>
+      new Response(body, { status, headers });
+  const failWith =
+    (error: unknown): Reply =>
+    () =>
+      Promise.reject(error);
+  const timeout = () => failWith(Object.assign(new Error("Request timed out after 120000ms"), { code: "FETCH_TIMEOUT" }));
+  const connectionReset = () => failWith(new TypeError("fetch failed", { cause: { code: "ECONNRESET" } }));
+
+  const headersOf = (init?: RequestInit) => (init?.headers ?? {}) as Record<string, string>;
+  const contentRange = (call: Parameters<typeof fetch> | undefined) => headersOf(call?.[1])["Content-Range"];
+  const bodyOf = (call: Parameters<typeof fetch> | undefined) => (call?.[1] as RequestInit).body as Buffer;
+
+  const creatorInfoOk: Reply = () =>
+    jsonResponse({ data: { creator_username: "acme", privacy_level_options: ["SELF_ONLY"] } });
+  const initOk =
+    (n: number): Reply =>
+    () =>
+      jsonResponse({ data: { publish_id: `publish-${n}`, upload_url: uploadUrlOf(n) }, error: { code: "ok" } });
+  const statusComplete: Reply = () => jsonResponse({ data: { status: "PUBLISH_COMPLETE" } });
+
+  /** Accepts a chunk the way TikTok does: 206 while more remain, 201 for the last one. */
+  const acceptChunk: Reply = ({ init }) => {
+    const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(headersOf(init)["Content-Range"] ?? "");
+    if (!match) throw new Error(`Not a chunk request: ${headersOf(init)["Content-Range"]}`);
+    return new Response(null, { status: Number(match[2]) + 1 >= Number(match[3]) ? 201 : 206 });
+  };
+  const accepts = (count: number): Reply[] => Array.from({ length: count }, () => acceptChunk);
+  const resyncAt = (answer: string): Reply => reply(416, null, { "Content-Range": answer });
+
+  /** The clock moves while a request is in flight. */
+  const advance = (ms: number) => vi.setSystemTime(Date.now() + ms);
+  const after =
+    (ms: number, next: Reply): Reply =>
+    (req) => {
+      advance(ms);
+      return next(req);
+    };
+
+  /**
+   * Fakes creator_info, video/init, the status poll, the blob and the upload URL. `init` and
+   * `puts` are the scripts of answers, in order (every chunk PUT, whatever URL it goes to).
+   */
+  function stubTikTok(
+    opts: {
+      total?: number;
+      creator?: Reply;
+      init?: Reply[];
+      puts?: Reply[];
+      status?: Reply;
+      blobStatus?: number;
+      /** The first N blob reads fail with a 503. */
+      blobFailures?: number;
+      blobAdvance?: number;
+      blobClaimsTotal?: number;
+    } = {},
+  ) {
+    const total = opts.total ?? TOTAL;
+    const inits = [...(opts.init ?? [initOk(1)])];
+    const puts = [...(opts.puts ?? [])];
+    let blobFailures = opts.blobFailures ?? 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      const req = { url, init: init ?? {} };
+      if (url.includes("blob.example.com")) {
+        const range = /^bytes=(\d+)-$/.exec(headersOf(init)["Range"] ?? "");
+        const start = range ? Number(range[1]) : 0;
+        if (blobFailures > 0) {
+          blobFailures -= 1;
+          return new Response(null, { status: 503 });
+        }
+        if (opts.blobStatus !== undefined) return new Response(null, { status: opts.blobStatus });
+        if (opts.blobAdvance !== undefined) advance(opts.blobAdvance); // a slow blob read
+        const claimed = opts.blobClaimsTotal ?? total;
+        return range
+          ? new Response(lazyBlobBody(start, total), {
+              status: 206,
+              headers: { "Content-Range": `bytes ${start}-${claimed - 1}/${claimed}` },
+            })
+          : new Response(lazyBlobBody(0, total), { status: 200, headers: { "Content-Length": String(claimed) } });
+      }
+      if (url.includes("creator_info/query")) return (opts.creator ?? creatorInfoOk)(req);
+      if (url.includes("video/init")) {
+        const next = inits.shift();
+        if (!next) throw new Error("Unexpected extra video/init in test");
+        return next(req);
+      }
+      if (url.includes("status/fetch")) return (opts.status ?? statusComplete)(req);
+      if (url.includes("upload_id=")) {
+        const next = puts.shift();
+        if (!next) throw new Error(`Unexpected extra chunk PUT in test: ${headersOf(init)["Content-Range"]}`);
+        return next(req);
+      }
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const callsTo = (fragment: string) => fetchMock.mock.calls.filter((c) => String(c[0]).includes(fragment));
+    return {
+      fetchMock,
+      creatorInfoCalls: () => callsTo("creator_info/query"),
+      inits: () => callsTo("video/init"),
+      polls: () => callsTo("status/fetch"),
+      blobGets: () => callsTo("blob.example.com"),
+      /** Every chunk PUT, to whichever upload URL. */
+      puts: () => callsTo("upload_id="),
+      putsTo: (n: number) => callsTo(`upload_id=SECRET-${n}`),
+    };
+  }
+
+  /** An in-memory store with the real store's rules: a kind, a readable `data` that holds no URL, a secret. */
+  function fakeStore(initial?: { data: unknown; secret?: unknown }) {
+    let current: { kind: string; data: unknown; secret?: unknown } | null = initial
+      ? { kind: TIKTOK_UPLOAD_STATE_KIND, ...initial }
+      : null;
+    const mocks = {
+      load: vi.fn(async (kind: string) =>
+        current && current.kind === kind
+          ? {
+              data: structuredClone(current.data),
+              ...(current.secret !== undefined ? { secret: structuredClone(current.secret) } : {}),
+            }
+          : null,
+      ),
+      save: vi.fn(async (kind: string, snapshot: { data: unknown; secret?: unknown }) => {
+        if ((JSON.stringify(snapshot.data) ?? "").includes("://")) {
+          throw Object.assign(new Error("The upload could not be tracked."), { code: "UPLOAD_STATE_PLAINTEXT_URL" });
+        }
+        current = { kind, ...structuredClone(snapshot) };
+      }),
+      clear: vi.fn(async () => {
+        current = null;
+      }),
+    };
+    return { store: mocks as unknown as UploadStateStore, mocks, saved: () => current };
+  }
+
+  type StateData = {
+    publishId: string;
+    initAt: number;
+    size: number;
+    chunkSize: number;
+    totalChunks: number;
+    nextChunk: number;
+  };
+
+  /** A saved upload that has `nextChunk` chunks behind it, started at `NOW` on `url`. */
+  const stateAt = (nextChunk: number, over: Partial<StateData> = {}, url = URL_1) => ({
+    data: {
+      publishId: "publish-1",
+      initAt: NOW,
+      size: TOTAL,
+      chunkSize: CHUNK,
+      totalChunks: TOTAL_CHUNKS,
+      nextChunk,
+      ...over,
+    } satisfies StateData,
+    secret: { uploadUrl: url },
+  });
+
+  function bigCtx(
+    store: UploadStateStore | undefined,
+    overrides: Partial<PublishContext> = {},
+    sizeBytes = TOTAL,
+  ): PublishContext {
+    return {
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: makeConnection(),
+      mediaItem: mediaItemOf(sizeBytes),
+      caption: "hello",
+      uploadState: store,
+      ...overrides,
+    };
+  }
+
+  const run = (ctx: PublishContext) => tiktokClient.publishVideo(ctx);
+  const failure = (ctx: PublishContext) => caught(run(ctx));
+  const paused = { continuation: { resumeAt: null } };
+
+  /** The `[first, last]` of every chunk PUT, in order. */
+  const rangesOf = (calls: Array<Parameters<typeof fetch>>) =>
+    calls.map((c) => {
+      const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange(c) ?? "");
+      return [Number(match![1]), Number(match![2])] as const;
+    });
+
+  /** The sampled bytes of a chunk PUT's body are the video's bytes from `first`. */
+  function expectBodyFrom(call: Parameters<typeof fetch> | undefined, first: number) {
+    const body = bodyOf(call);
+    for (const at of [0, 1, Math.floor(body.length / 2), body.length - 1]) {
+      expect(body[at]).toBe(byteAt(first + at));
+    }
+  }
+
+  /** Every console call of the test (the logger writes through console), as one string. */
+  const everythingLogged = () =>
+    JSON.stringify(
+      (["log", "info", "warn", "error", "debug"] as const).map((level) => vi.mocked(console[level]).mock.calls),
+    );
+
+  const describeError = (error: unknown) => {
+    const e = error as (Error & { code?: string; status?: number; cause?: unknown }) | null;
+    return JSON.stringify({ name: e?.name, message: e?.message, stack: e?.stack, code: e?.code, status: e?.status, cause: String(e?.cause) });
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    vi.stubEnv("LARGE_UPLOAD_PLATFORMS", "tiktok");
+    streams.opened = 0;
+    streams.cancelled = 0;
+    for (const level of ["info", "debug"] as const) {
+      vi.spyOn(console, level).mockImplementation(() => {});
+    }
+    // The status poll waits 5 s between checks; the clock is fake, so make that wait instant.
+    const realSetTimeout = globalThis.setTimeout;
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((handler: () => void, ms?: number, ...args: unknown[]) =>
+      realSetTimeout(handler, ms === TIKTOK_POLL_INTERVAL_MS ? 0 : ms, ...args)) as unknown as typeof setTimeout);
+  });
+
+  it("pins the vendor values and the saved-state kind", () => {
+    expect(TIKTOK_UPLOAD_STATE_KIND).toBe("tiktok_file_upload");
+    expect(TIKTOK_UPLOAD_URL_TTL_MS).toBe(3_600_000);
+    expect(TIKTOK_UPLOAD_URL_SAFETY_MS).toBe(600_000);
+    expect(TIKTOK_FINAL_CHUNK_MIN_WINDOW_MS).toBe(150_000);
+    expect(TIKTOK_MAX_CHUNK_SIZE).toBe(10 * MIB);
+    expect(TOTAL).toBeGreaterThan(LARGE_VIDEO_THRESHOLD_BYTES);
+    expect(computeChunkPlan(TOTAL).totalChunks).toBe(TOTAL_CHUNKS);
+  });
+
+  /** The whole-file path's requests: a 4-byte blob served without a Range, and a one-chunk upload. */
+  function stubSmallPath() {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.includes("creator_info")) return creatorInfoOk({ url, init: {} });
+      if (url.includes("blob.example.com")) return new Response(new Uint8Array([1, 2, 3, 4]), { status: 200 });
+      if (url.includes("video/init")) return initOk(1)({ url, init: {} });
+      if (url.includes("upload_id=")) return new Response(null, { status: 201 });
+      return statusComplete({ url, init: {} });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const blobCalls = () => fetchMock.mock.calls.filter((c) => String(c[0]).includes("blob.example.com"));
+    return { fetchMock, blobCalls };
+  }
+
+  describe("which path a post takes", () => {
+    it("keeps today's whole-file download when TikTok is not enabled (the default)", async () => {
+      vi.stubEnv("LARGE_UPLOAD_PLATFORMS", "");
+      const { store, mocks } = fakeStore();
+      const small = stubSmallPath();
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ externalPostId: "publish-1" });
+      expect(mocks.save).not.toHaveBeenCalled();
+      expect(small.blobCalls()).toHaveLength(1);
+      expect(headersOf(small.blobCalls()[0][1])["Range"]).toBeUndefined();
+    });
+
+    it("keeps today's path for a video at or below 50 MiB, and for a direct caller with no store", async () => {
+      const { store, mocks } = fakeStore();
+      const small = stubSmallPath();
+
+      await run(bigCtx(store, {}, LARGE_VIDEO_THRESHOLD_BYTES));
+      await run(bigCtx(undefined));
+
+      expect(mocks.save).not.toHaveBeenCalled();
+      expect(small.blobCalls()).toHaveLength(2);
+      for (const call of small.blobCalls()) expect(headersOf(call[1])["Range"]).toBeUndefined();
+    });
+
+    it("takes the streamed path for a video above 50 MiB when TikTok is enabled: a Range read, never a whole download", async () => {
+      const { store } = fakeStore();
+      const upload = stubTikTok({ puts: accepts(TOTAL_CHUNKS) });
+
+      await run(bigCtx(store));
+
+      expect(upload.blobGets()).toHaveLength(1);
+      expect(headersOf(upload.blobGets()[0][1])["Range"]).toBe("bytes=0-");
+    });
+
+    it("an upload that already has saved state stays on the streamed path even after the switch is turned off", async () => {
+      vi.stubEnv("LARGE_UPLOAD_PLATFORMS", "none");
+      const { store } = fakeStore(stateAt(4));
+      const upload = stubTikTok({ puts: accepts(2) });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ externalPostId: "publish-1" });
+      expect(upload.puts()).toHaveLength(2);
+    });
+
+    it("another platform's switch does not enable TikTok", async () => {
+      vi.stubEnv("LARGE_UPLOAD_PLATFORMS", "youtube,x");
+      const { store, mocks } = fakeStore();
+      const small = stubSmallPath();
+
+      await run(bigCtx(store));
+
+      expect(mocks.save).not.toHaveBeenCalled();
+      expect(headersOf(small.blobCalls()[0][1])["Range"]).toBeUndefined();
+    });
+  });
+
+  describe("the first step", () => {
+    it("runs creator_info and video/init once, with the 10 MiB chunk plan, and sends the same post_info as the small path", async () => {
+      const { store } = fakeStore();
+      const upload = stubTikTok({ puts: accepts(TOTAL_CHUNKS) });
+
+      await run(
+        bigCtx(store, {
+          caption: "Holiday #sun",
+          tiktokMetadata: { privacyLevel: "PUBLIC_TO_EVERYONE", disableComment: true, disableDuet: false, disableStitch: true },
+        }),
+      );
+
+      expect(upload.creatorInfoCalls()).toHaveLength(1);
+      expect(upload.inits()).toHaveLength(1);
+      const body = JSON.parse((upload.inits()[0][1] as RequestInit).body as string);
+      expect(body.source_info).toEqual({
+        source: "FILE_UPLOAD",
+        video_size: TOTAL,
+        chunk_size: CHUNK,
+        total_chunk_count: TOTAL_CHUNKS,
+      });
+      expect(body.post_info).toEqual({
+        title: "Holiday #sun",
+        privacy_level: "PUBLIC_TO_EVERYONE",
+        disable_comment: true,
+        disable_duet: false,
+        disable_stitch: true,
+        video_cover_timestamp_ms: 1000,
+      });
+    });
+
+    it("saves the upload at once - the upload_url sealed in `secret`, progress in `data` - before the first chunk is sent", async () => {
+      const { store, mocks } = fakeStore();
+      const upload = stubTikTok({ puts: accepts(TOTAL_CHUNKS) });
+
+      await run(bigCtx(store));
+
+      expect(mocks.load).toHaveBeenCalledWith("tiktok_file_upload");
+      expect(mocks.save.mock.calls[0]).toEqual([
+        "tiktok_file_upload",
+        {
+          data: {
+            publishId: "publish-1",
+            initAt: NOW,
+            size: TOTAL,
+            chunkSize: CHUNK,
+            totalChunks: TOTAL_CHUNKS,
+            nextChunk: 0,
+          },
+          secret: { uploadUrl: URL_1 },
+        },
+      ]);
+      const saveOrder = mocks.save.mock.invocationCallOrder[0];
+      const initIndex = upload.fetchMock.mock.calls.indexOf(upload.inits()[0]);
+      const firstPut = upload.fetchMock.mock.calls.indexOf(upload.puts()[0]);
+      expect(saveOrder).toBeGreaterThan(upload.fetchMock.mock.invocationCallOrder[initIndex]);
+      expect(saveOrder).toBeLessThan(upload.fetchMock.mock.invocationCallOrder[firstPut]);
+    });
+
+    it("sends each chunk with its Content-Range and Content-Type, the video's own bytes, the last absorbing the remainder", async () => {
+      const { store } = fakeStore();
+      const upload = stubTikTok({ puts: accepts(TOTAL_CHUNKS) });
+
+      await run(bigCtx(store));
+
+      const puts = upload.puts();
+      expect(puts).toHaveLength(TOTAL_CHUNKS);
+      expect(puts.map((c) => (c[1] as RequestInit).method)).toEqual(Array(TOTAL_CHUNKS).fill("PUT"));
+      expect(rangesOf(puts)).toEqual([
+        [0, CHUNK - 1],
+        [CHUNK, 2 * CHUNK - 1],
+        [2 * CHUNK, 3 * CHUNK - 1],
+        [3 * CHUNK, 4 * CHUNK - 1],
+        [4 * CHUNK, 5 * CHUNK - 1],
+        [FINAL_START, TOTAL - 1],
+      ]);
+      expect(contentRange(puts[5])).toBe(`bytes ${FINAL_START}-${TOTAL - 1}/${TOTAL}`);
+      expect(headersOf(puts[0][1])["Content-Type"]).toBe("video/mp4");
+      puts.forEach((call, index) => expectBodyFrom(call, index * CHUNK));
+      expect(String(puts[0][0])).toBe(URL_1);
+    });
+
+    it("holds at most one chunk at a time: no body is above 20 MiB, and the blob is read with a single GET", async () => {
+      const { store } = fakeStore();
+      const upload = stubTikTok({ puts: accepts(TOTAL_CHUNKS) });
+
+      await run(bigCtx(store));
+
+      for (const call of upload.puts()) expect(bodyOf(call).length).toBeLessThan(20 * MIB);
+      expect(upload.blobGets()).toHaveLength(1);
+      expect(streams.opened).toBe(1);
+      expect(streams.cancelled).toBe(1); // closed when the step ended
+    });
+
+    it("an upload_url that is not an https URL is TIKTOK_INIT_MISSING_FIELDS: nothing is saved or sent", async () => {
+      const { store, mocks } = fakeStore();
+      const upload = stubTikTok({
+        init: [() => jsonResponse({ data: { publish_id: "p", upload_url: "http://upload.example/x?upload_id=SECRET-9" } })],
+      });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error?.code).toBe("TIKTOK_INIT_MISSING_FIELDS");
+      expect(mocks.save).not.toHaveBeenCalled();
+      expect(upload.puts()).toHaveLength(0);
+      expect(everythingLogged()).not.toContain("SECRET-9");
+    });
+
+    it("a video/init rate limit defers before anything is saved (RATE_LIMITED)", async () => {
+      const { store, mocks } = fakeStore();
+      const upload = stubTikTok({ init: [reply(429)] });
+
+      expect((await failure(bigCtx(store)))?.code).toBe("RATE_LIMITED");
+      expect(mocks.save).not.toHaveBeenCalled();
+      expect(upload.puts()).toHaveLength(0);
+    });
+
+    it("a creator_info 429 is RATE_LIMITED, with nothing saved and no init", async () => {
+      const { store, mocks } = fakeStore();
+      const upload = stubTikTok({ creator: reply(429) });
+
+      expect((await failure(bigCtx(store)))?.code).toBe("RATE_LIMITED");
+      expect(mocks.save).not.toHaveBeenCalled();
+      expect(upload.inits()).toHaveLength(0);
+    });
+
+    it("a 401 from video/init still flags the connection (guarded) and throws the reconnect code", async () => {
+      const { store, mocks } = fakeStore();
+      stubTikTok({ init: [reply(401, "{}")] });
+
+      const error = await failure(bigCtx(store, { socialConnection: makeConnection({ id: "conn-9" }) }));
+
+      expect(error?.code).toBe(RECONNECT_CODE);
+      expect(updateCalls()).toHaveLength(1);
+      expect(updateCalls()[0].where).toEqual({ id: "conn-9" });
+      expect(mocks.save).not.toHaveBeenCalled();
+    });
+
+    it("an image never takes the streamed path: the small path refuses it, before init", async () => {
+      const { store, mocks } = fakeStore();
+      const upload = stubTikTok();
+      const ctx = bigCtx(store);
+      ctx.mediaItem = { ...ctx.mediaItem, mimeType: "image/png" } as MediaItem;
+
+      expect((await failure(ctx))?.code).toBe("TIKTOK_MEDIA_NOT_VIDEO");
+      expect(upload.inits()).toHaveLength(0);
+      expect(mocks.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("across steps", () => {
+    it("a 6-chunk file over 2 steps: creator_info and init once in total, contiguous ranges, the last ending at size - 1", async () => {
+      const { store, saved } = fakeStore();
+
+      // Step 1: the third chunk is answered with 50 s of the step left: too little for another chunk.
+      const first = stubTikTok({ puts: [acceptChunk, acceptChunk, after(STEP - 50_000, acceptChunk)] });
+      const step1 = await run(bigCtx(store, { deadline: Date.now() + STEP }));
+      expect(step1).toEqual(paused);
+      expect((saved()?.data as StateData).nextChunk).toBe(3);
+      vi.unstubAllGlobals();
+
+      // The run sleeps, then step 2 starts with a whole budget and no `continuation` hint it relies on.
+      vi.setSystemTime(NOW + 10 * 60_000);
+      const second = stubTikTok({ puts: accepts(3), init: [] });
+      const step2 = await run(bigCtx(store, { deadline: Date.now() + STEP, continuation: 1 }));
+
+      expect(step2).toEqual({ externalPostId: "publish-1" });
+      expect(first.creatorInfoCalls().length + second.creatorInfoCalls().length).toBe(1);
+      expect(first.inits().length + second.inits().length).toBe(1);
+      const puts = [...first.puts(), ...second.puts()];
+      const ranges = rangesOf(puts);
+      expect(ranges).toHaveLength(TOTAL_CHUNKS);
+      expect(ranges[0][0]).toBe(0);
+      ranges.forEach(([start], index) => {
+        if (index > 0) expect(start).toBe(ranges[index - 1][1] + 1);
+      });
+      expect(ranges[TOTAL_CHUNKS - 1][1]).toBe(TOTAL - 1);
+      for (const call of puts) expect(bodyOf(call).length).toBeLessThan(20 * MIB);
+      puts.forEach((call, index) => expectBodyFrom(call, index * CHUNK));
+      // One blob GET per step, each from the byte the step starts at.
+      expect(headersOf(second.blobGets()[0][1])["Range"]).toBe(`bytes=${3 * CHUNK}-`);
+      expect(second.blobGets()).toHaveLength(1);
+    });
+
+    it("a step with no time for a chunk saves and continues without touching TikTok or the blob", async () => {
+      const { store, saved } = fakeStore(stateAt(2));
+      const upload = stubTikTok();
+
+      const result = await run(bigCtx(store, { deadline: Date.now() + LARGE_UPLOAD_CHUNK_WINDOW_MS - 1 }));
+
+      expect(result).toEqual(paused);
+      expect(upload.fetchMock).not.toHaveBeenCalled();
+      expect((saved()?.data as StateData).nextChunk).toBe(2);
+      expect((saved()?.secret as { uploadUrl: string }).uploadUrl).toBe(URL_1);
+    });
+
+    it("a chunk starts with exactly 60 s left", async () => {
+      const { store } = fakeStore(stateAt(1));
+      // The chunk takes 1 ms, which leaves the next one 59.999 s.
+      const upload = stubTikTok({ puts: [after(1, acceptChunk)] });
+
+      const result = await run(bigCtx(store, { deadline: Date.now() + LARGE_UPLOAD_CHUNK_WINDOW_MS }));
+
+      expect(result).toEqual(paused);
+      expect(upload.puts()).toHaveLength(1);
+    });
+
+    it("decides start or resume from the saved state alone: state + continuation 0 resumes, no state + continuation 3 starts", async () => {
+      const resumed = fakeStore(stateAt(4));
+      const a = stubTikTok({ puts: accepts(2) });
+      await run(bigCtx(resumed.store, { continuation: 0 }));
+      expect(a.inits()).toHaveLength(0);
+      expect(a.creatorInfoCalls()).toHaveLength(0);
+      expect(rangesOf(a.puts())[0][0]).toBe(4 * CHUNK);
+      vi.unstubAllGlobals();
+
+      const fresh = fakeStore();
+      const b = stubTikTok({ puts: accepts(TOTAL_CHUNKS) });
+      await run(bigCtx(fresh.store, { continuation: 3 }));
+      expect(b.inits()).toHaveLength(1);
+      expect(rangesOf(b.puts())[0][0]).toBe(0);
+    });
+
+    it("a step that starts from saved state keeps using the saved upload_url and publish id", async () => {
+      const { store } = fakeStore(stateAt(4, { publishId: "publish-saved" }, uploadUrlOf(7)));
+      const upload = stubTikTok({ puts: accepts(2) });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ externalPostId: "publish-saved" });
+      expect(String(upload.puts()[0][0])).toBe(uploadUrlOf(7));
+    });
+
+    it("saves its progress after every accepted chunk, so a later failure resumes from where it stopped", async () => {
+      const { store, mocks, saved } = fakeStore();
+      stubTikTok({ puts: [acceptChunk, acceptChunk, reply(400, "bad")] });
+
+      expect((await failure(bigCtx(store)))?.code).toBe("TIKTOK_UPLOAD_FAILED");
+
+      expect(mocks.save.mock.calls.map((c) => (c[1].data as StateData).nextChunk)).toEqual([0, 1, 2]);
+      expect((saved()?.data as StateData).nextChunk).toBe(2);
+    });
+  });
+
+  describe.each([
+    ["wrong size", () => stateAt(2, { size: TOTAL + 1 })],
+    ["a chunk size that is not the plan's", () => stateAt(2, { chunkSize: CHUNK + 1 })],
+    ["a chunk count that is not the plan's", () => stateAt(2, { totalChunks: 7 })],
+    ["a position past the last chunk", () => stateAt(6)],
+    ["a negative position", () => stateAt(-1)],
+    ["a fractional position", () => stateAt(1.5)],
+    ["no publish id", () => stateAt(2, { publishId: "" })],
+    ["no start time", () => stateAt(2, { initAt: Number.NaN })],
+    ["an upload_url that is not https", () => stateAt(2, {}, "http://upload.example/x?upload_id=SECRET-3")],
+    ["no sealed secret", () => ({ data: stateAt(2).data })],
+  ])("saved state that cannot be used (%s)", (_name, make) => {
+    it("is treated like no state: a new upload starts from chunk 0 and the unusable URL is never used", async () => {
+      const { store } = fakeStore(make());
+      const upload = stubTikTok({ puts: accepts(TOTAL_CHUNKS) });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ externalPostId: "publish-1" });
+      expect(upload.inits()).toHaveLength(1);
+      expect(upload.creatorInfoCalls()).toHaveLength(1);
+      expect(rangesOf(upload.puts())[0][0]).toBe(0);
+      expect(String(upload.puts()[0][0])).toBe(URL_1);
+      expect(everythingLogged()).not.toContain("SECRET-3");
+    });
+  });
+
+  describe("416: TikTok's progress does not match ours", () => {
+    it("Content-Range `bytes 0-20971519/<size>` (a last-byte index) resyncs to chunk 2", async () => {
+      const { store } = fakeStore(stateAt(1));
+      const upload = stubTikTok({ puts: [resyncAt(`bytes 0-${2 * CHUNK - 1}/${TOTAL}`), ...accepts(4)] });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ externalPostId: "publish-1" });
+      expect(rangesOf(upload.puts()).map(([start]) => start)).toEqual([CHUNK, 2 * CHUNK, 3 * CHUNK, 4 * CHUNK, FINAL_START]);
+      expect(upload.blobGets()).toHaveLength(1); // the stream was already at chunk 2
+    });
+
+    it("Content-Range `bytes 0-20971520/<size>` (a byte count) resyncs to chunk 2 as well", async () => {
+      const { store } = fakeStore(stateAt(1));
+      const upload = stubTikTok({ puts: [resyncAt(`bytes 0-${2 * CHUNK}/${TOTAL}`), ...accepts(4)] });
+
+      await run(bigCtx(store));
+
+      expect(rangesOf(upload.puts()).map(([start]) => start)).toEqual([CHUNK, 2 * CHUNK, 3 * CHUNK, 4 * CHUNK, FINAL_START]);
+    });
+
+    it("resyncs backwards when TikTok holds less than we thought, reading the blob again from there", async () => {
+      const { store } = fakeStore(stateAt(3));
+      const upload = stubTikTok({ puts: [resyncAt(`bytes 0-${CHUNK - 1}/${TOTAL}`), ...accepts(5)] });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ externalPostId: "publish-1" });
+      expect(rangesOf(upload.puts()).map(([start]) => start)).toEqual([
+        3 * CHUNK,
+        CHUNK,
+        2 * CHUNK,
+        3 * CHUNK,
+        4 * CHUNK,
+        FINAL_START,
+      ]);
+      expect(upload.blobGets().map((c) => headersOf(c[1])["Range"])).toEqual([`bytes=${3 * CHUNK}-`, `bytes=${CHUNK}-`]);
+      expectBodyFrom(upload.puts()[1], CHUNK);
+      expect(streams.cancelled).toBe(streams.opened);
+    });
+
+    it("saves the new position, so the next step starts there", async () => {
+      const { store, saved } = fakeStore(stateAt(1));
+      stubTikTok({ puts: [resyncAt(`bytes 0-${3 * CHUNK - 1}/${TOTAL}`), after(STEP - 50_000, acceptChunk)] });
+
+      const result = await run(bigCtx(store, { deadline: Date.now() + STEP }));
+
+      expect(result).toEqual(paused);
+      expect((saved()?.data as StateData).nextChunk).toBe(4);
+    });
+
+    it.each([
+      ["not on a chunk boundary", `bytes 0-15000000/${TOTAL}`],
+      ["the same position it was sent", `bytes 0-${CHUNK - 1}/${TOTAL}`],
+      ["a total that is not this video's", `bytes 0-${2 * CHUNK - 1}/${TOTAL + 1}`],
+      ["a range that does not start at 0", `bytes 5-${2 * CHUNK - 1}/${TOTAL}`],
+      ["a form that cannot be read", "bytes */*"],
+    ])("an answer %s fails TIKTOK_UPLOAD_FAILED before the final chunk, and nothing more is sent", async (_name, answer) => {
+      const { store } = fakeStore(stateAt(1));
+      const upload = stubTikTok({ puts: [resyncAt(answer)] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error).toMatchObject({ code: "TIKTOK_UPLOAD_FAILED", status: 416 });
+      expect(upload.puts()).toHaveLength(1);
+      expect(upload.polls()).toHaveLength(0);
+    });
+
+    it("an answer with no Content-Range fails TIKTOK_UPLOAD_FAILED", async () => {
+      const { store } = fakeStore(stateAt(1));
+      stubTikTok({ puts: [reply(416)] });
+
+      expect(await failure(bigCtx(store))).toMatchObject({ code: "TIKTOK_UPLOAD_FAILED", status: 416 });
+    });
+
+    it("the final chunk's 416 is unchanged: a rejection (TIKTOK_UPLOAD_FAILED), never resent blindly", async () => {
+      const { store } = fakeStore(stateAt(5));
+      const upload = stubTikTok({ puts: [resyncAt(`bytes 0-${4 * CHUNK - 1}/${TOTAL}`)] });
+
+      expect(await failure(bigCtx(store))).toMatchObject({ code: "TIKTOK_UPLOAD_FAILED", status: 416 });
+      expect(upload.puts()).toHaveLength(1);
+    });
+  });
+
+  describe("403: the upload_url expired", () => {
+    it("starts a new upload and restarts at chunk 0 on the new URL: a second init, PUTs from `bytes 0-`", async () => {
+      const { store } = fakeStore(stateAt(2));
+      const upload = stubTikTok({ init: [initOk(2)], puts: [reply(403), ...accepts(TOTAL_CHUNKS)] });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ externalPostId: "publish-2" });
+      expect(upload.inits()).toHaveLength(1);
+      expect(upload.creatorInfoCalls()).toHaveLength(0); // a continuation step: creator_info ran in the first one
+      expect(upload.putsTo(1)).toHaveLength(1);
+      expect(rangesOf(upload.putsTo(2))[0][0]).toBe(0);
+      expect(rangesOf(upload.putsTo(2))).toHaveLength(TOTAL_CHUNKS);
+      expect(String(upload.puts()[1][0])).toBe(URL_2);
+      expect(contentRange(upload.puts()[1])).toBe(`bytes 0-${CHUNK - 1}/${TOTAL}`);
+      expectBodyFrom(upload.puts()[1], 0);
+    });
+
+    it("saves the new upload (URL sealed, new publish id, position 0) as soon as it exists", async () => {
+      const { store, mocks } = fakeStore(stateAt(2));
+      stubTikTok({ init: [initOk(2)], puts: [reply(403), after(STEP - 50_000, acceptChunk)] });
+
+      const result = await run(bigCtx(store, { deadline: Date.now() + STEP }));
+
+      expect(result).toEqual(paused);
+      const saves = mocks.save.mock.calls.map((c) => c[1] as { data: StateData; secret: { uploadUrl: string } });
+      expect(saves[0].secret.uploadUrl).toBe(URL_2);
+      expect(saves[0].data).toMatchObject({ publishId: "publish-2", nextChunk: 0, initAt: NOW });
+      expect(saves[saves.length - 1].data.nextChunk).toBe(1);
+    });
+
+    it("a fresh URL that answers 403 too fails TIKTOK_UPLOAD_FAILED instead of starting uploads forever", async () => {
+      const { store } = fakeStore(stateAt(2));
+      const upload = stubTikTok({ init: [initOk(2), initOk(3)], puts: [reply(403), reply(403)] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error).toMatchObject({ code: "TIKTOK_UPLOAD_FAILED", status: 403 });
+      expect(upload.inits()).toHaveLength(1);
+    });
+
+    it("the final chunk's 403 is unchanged: TIKTOK_UPLOAD_FAILED, with no new init", async () => {
+      const { store } = fakeStore(stateAt(5));
+      const upload = stubTikTok({ puts: [reply(403)] });
+
+      expect(await failure(bigCtx(store))).toMatchObject({ code: "TIKTOK_UPLOAD_FAILED", status: 403 });
+      expect(upload.inits()).toHaveLength(0);
+    });
+
+    it("a video/init rate limit while renewing defers (RATE_LIMITED), the saved upload staying as it was", async () => {
+      const { store, saved } = fakeStore(stateAt(2));
+      stubTikTok({ init: [reply(429)], puts: [reply(403)] });
+
+      expect((await failure(bigCtx(store)))?.code).toBe("RATE_LIMITED");
+      expect((saved()?.data as StateData).nextChunk).toBe(2);
+      expect((saved()?.secret as { uploadUrl: string }).uploadUrl).toBe(URL_1);
+    });
+  });
+
+  describe("the upload_url is about to expire (1 h, 10 min safety)", () => {
+    it("renews it before sending anything when under 10 min of its hour are left, and restarts at chunk 0", async () => {
+      const { store } = fakeStore(stateAt(2, { initAt: NOW - (TIKTOK_UPLOAD_URL_TTL_MS - TIKTOK_UPLOAD_URL_SAFETY_MS) - 1 }));
+      const upload = stubTikTok({ init: [initOk(2)], puts: accepts(TOTAL_CHUNKS) });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ externalPostId: "publish-2" });
+      expect(upload.inits()).toHaveLength(1);
+      expect(upload.putsTo(1)).toHaveLength(0);
+      expect(rangesOf(upload.putsTo(2))[0][0]).toBe(0);
+    });
+
+    it("keeps it with exactly 10 min left", async () => {
+      const { store } = fakeStore(stateAt(2, { initAt: NOW - (TIKTOK_UPLOAD_URL_TTL_MS - TIKTOK_UPLOAD_URL_SAFETY_MS) }));
+      const upload = stubTikTok({ puts: accepts(4) });
+
+      await run(bigCtx(store));
+
+      expect(upload.inits()).toHaveLength(0);
+      expect(upload.putsTo(1)).toHaveLength(4);
+    });
+
+    it("renews it for the final chunk too, as long as the final chunk has not been sent", async () => {
+      const { store } = fakeStore(stateAt(5, { initAt: NOW - TIKTOK_UPLOAD_URL_TTL_MS }));
+      const upload = stubTikTok({ init: [initOk(2)], puts: accepts(TOTAL_CHUNKS) });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ externalPostId: "publish-2" });
+      expect(upload.putsTo(1)).toHaveLength(0);
+      expect(rangesOf(upload.putsTo(2))[0][0]).toBe(0);
+    });
+
+    it("does not renew it in a step that has no time to use the new one", async () => {
+      const { store } = fakeStore(stateAt(2, { initAt: NOW - TIKTOK_UPLOAD_URL_TTL_MS }));
+      const upload = stubTikTok();
+
+      const result = await run(bigCtx(store, { deadline: Date.now() + 30_000 }));
+
+      expect(result).toEqual(paused);
+      expect(upload.inits()).toHaveLength(0);
+    });
+  });
+
+  describe("the final chunk is the commit call", () => {
+    it("is sent only with at least 150 s left: with 140 s it saves and continues, with no final PUT", async () => {
+      const { store, saved } = fakeStore(stateAt(5));
+      const upload = stubTikTok({ puts: accepts(1) });
+
+      const result = await run(bigCtx(store, { deadline: Date.now() + 140_000 }));
+
+      expect(result).toEqual(paused);
+      expect(upload.puts()).toHaveLength(0);
+      expect(upload.polls()).toHaveLength(0);
+      expect((saved()?.data as StateData).nextChunk).toBe(5);
+    });
+
+    it("the boundary: 149.999 s pauses, 150 s sends the final chunk and polls in the same step", async () => {
+      const a = fakeStore(stateAt(5));
+      const short = stubTikTok({ puts: accepts(1) });
+      expect(await run(bigCtx(a.store, { deadline: Date.now() + TIKTOK_FINAL_CHUNK_MIN_WINDOW_MS - 1 }))).toEqual(paused);
+      expect(short.puts()).toHaveLength(0);
+      vi.unstubAllGlobals();
+
+      const b = fakeStore(stateAt(5));
+      const enough = stubTikTok({ puts: accepts(1) });
+      const result = await run(bigCtx(b.store, { deadline: Date.now() + TIKTOK_FINAL_CHUNK_MIN_WINDOW_MS }));
+      expect(result).toEqual({ externalPostId: "publish-1" });
+      expect(enough.puts()).toHaveLength(1);
+      expect(enough.polls()).toHaveLength(1);
+    });
+
+    it("re-checks the window after reading the chunk: a slow blob read that eats it pauses, with no PUT", async () => {
+      const { store, saved } = fakeStore(stateAt(5));
+      // 200 s left at the start; reading the 10 MiB tail takes 100 s, leaving 100 s: under 150.
+      const upload = stubTikTok({ blobAdvance: 100_000, puts: accepts(1) });
+
+      const result = await run(bigCtx(store, { deadline: Date.now() + 200_000 }));
+
+      expect(result).toEqual(paused);
+      expect(upload.puts()).toHaveLength(0);
+      expect((saved()?.data as StateData).nextChunk).toBe(5);
+      expect(streams.cancelled).toBe(streams.opened);
+    });
+
+    it("a 201 goes on to the status poll inside the same call, then returns the publish id", async () => {
+      const { store } = fakeStore(stateAt(5));
+      const upload = stubTikTok({ puts: accepts(1) });
+
+      const result = await run(bigCtx(store));
+
+      expect(result).toEqual({ externalPostId: "publish-1" });
+      const putIndex = upload.fetchMock.mock.calls.indexOf(upload.puts()[0]);
+      const pollIndex = upload.fetchMock.mock.calls.indexOf(upload.polls()[0]);
+      expect(pollIndex).toBeGreaterThan(putIndex);
+      expect(JSON.parse((upload.polls()[0][1] as RequestInit).body as string)).toEqual({ publish_id: "publish-1" });
+      expect(contentRange(upload.puts()[0])).toBe(`bytes ${FINAL_START}-${TOTAL - 1}/${TOTAL}`);
+    });
+
+    it("the stream is closed before the poll starts", async () => {
+      const { store } = fakeStore(stateAt(5));
+      const upload = stubTikTok({
+        puts: accepts(1),
+        status: () => {
+          expect(streams.cancelled).toBe(streams.opened);
+          return statusComplete({ url: "", init: {} });
+        },
+      });
+
+      await run(bigCtx(store));
+
+      expect(upload.polls()).toHaveLength(1);
+    });
+
+    it("a 503 on the final chunk is PUBLISH_UNCONFIRMED, without polling and without a resend", async () => {
+      const { store } = fakeStore(stateAt(5));
+      const upload = stubTikTok({ puts: [reply(503, "busy")] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+      expect(isTransientPublishError(error)).toBe(false);
+      expect(upload.puts()).toHaveLength(1);
+      expect(upload.polls()).toHaveLength(0);
+    });
+
+    it("the in-step retry never re-runs it: one init, and the final chunk is sent once", async () => {
+      const { store } = fakeStore();
+      const upload = stubTikTok({ puts: [...accepts(5), reply(503, "busy")] });
+
+      const error = await caught(withTransientRetries(() => run(bigCtx(store)), { sleep: async () => {} }));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(upload.inits()).toHaveLength(1);
+      expect(upload.puts()).toHaveLength(TOTAL_CHUNKS);
+    });
+
+    it.each([
+      ["a timeout", () => timeout()],
+      ["a dropped connection", () => connectionReset()],
+    ] as const)("%s on the final chunk is PUBLISH_UNCONFIRMED", async (_name, bad) => {
+      const { store } = fakeStore(stateAt(5));
+      stubTikTok({ puts: [bad()] });
+
+      expect((await failure(bigCtx(store)))?.code).toBe("PUBLISH_UNCONFIRMED");
+    });
+
+    it("a final chunk that never connected is rethrown unchanged (provably not sent)", async () => {
+      const neverConnected = new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } });
+      const { store } = fakeStore(stateAt(5));
+      stubTikTok({ puts: [failWith(neverConnected)] });
+
+      expect(await failure(bigCtx(store))).toBe(neverConnected);
+    });
+
+    it("a final chunk 429 is RATE_LIMITED with the position saved; a 400 is TIKTOK_UPLOAD_FAILED", async () => {
+      const a = fakeStore(stateAt(5));
+      stubTikTok({ puts: [reply(429)] });
+      expect((await failure(bigCtx(a.store)))?.code).toBe("RATE_LIMITED");
+      expect((a.saved()?.data as StateData).nextChunk).toBe(5);
+      vi.unstubAllGlobals();
+
+      const b = fakeStore(stateAt(5));
+      stubTikTok({ puts: [reply(400, "bad")] });
+      expect(await failure(bigCtx(b.store))).toMatchObject({ code: "TIKTOK_UPLOAD_FAILED", status: 400 });
+    });
+
+    it("a final chunk answered rate_limit_exceeded in the body is RATE_LIMITED too", async () => {
+      const { store } = fakeStore(stateAt(5));
+      stubTikTok({
+        puts: [() => jsonResponse({ error: { code: "rate_limit_exceeded" } }, 200)],
+      });
+
+      expect((await failure(bigCtx(store)))?.code).toBe("RATE_LIMITED");
+    });
+
+    it("a status poll that answers 401 stays PUBLISH_UNCONFIRMED (the connection is flagged, no reconnect-and-retry)", async () => {
+      const { store } = fakeStore(stateAt(5));
+      stubTikTok({ puts: accepts(1), status: reply(401, "{}") });
+
+      const error = await failure(bigCtx(store, { socialConnection: makeConnection({ id: "conn-4" }) }));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(updateCalls()).toHaveLength(1);
+      expect(updateCalls()[0].where).toEqual({ id: "conn-4" });
+    });
+
+    it("a poll that reports FAILED is TIKTOK_PUBLISH_FAILED, and one that never finishes is TIKTOK_PUBLISH_PENDING", async () => {
+      const a = fakeStore(stateAt(5));
+      stubTikTok({ puts: accepts(1), status: () => jsonResponse({ data: { status: "FAILED", fail_reason: "file_format_check_failed" } }) });
+      expect(await failure(bigCtx(a.store))).toMatchObject({ code: "TIKTOK_PUBLISH_FAILED" });
+      vi.unstubAllGlobals();
+
+      const b = fakeStore(stateAt(5));
+      stubTikTok({ puts: accepts(1), status: () => jsonResponse({ data: { status: "PROCESSING_UPLOAD" } }) });
+      expect(await failure(bigCtx(b.store))).toMatchObject({ code: "TIKTOK_PUBLISH_PENDING" });
+    });
+  });
+
+  describe("a chunk that is not the last fails, or runs into the step deadline", () => {
+    it.each([
+      ["a 503", () => reply(503, "busy")],
+      ["a 502", () => reply(502, "bad gateway")],
+      ["a timeout", () => timeout()],
+      ["a dropped connection", () => connectionReset()],
+      ["a connection that never reached TikTok", () => failWith(new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } }))],
+    ] as const)("%s saves and continues; the same chunk is retried in the next step", async (_name, bad) => {
+      const { store, saved } = fakeStore();
+      const upload = stubTikTok({ puts: [acceptChunk, acceptChunk, bad()] });
+
+      const result = await run(bigCtx(store, { deadline: Date.now() + STEP }));
+
+      expect(result).toEqual(paused);
+      expect(upload.puts()).toHaveLength(3); // no second try in this step
+      expect((saved()?.data as StateData).nextChunk).toBe(2);
+      expect((saved()?.secret as { uploadUrl: string }).uploadUrl).toBe(URL_1);
+      expect(streams.cancelled).toBe(streams.opened);
+      vi.unstubAllGlobals();
+
+      // The next step PUTs the same chunk again.
+      const next = stubTikTok({ puts: accepts(4) });
+      const resumed = await run(bigCtx(store, { deadline: Date.now() + STEP, continuation: 1 }));
+      expect(resumed).toEqual({ externalPostId: "publish-1" });
+      expect(rangesOf(next.puts())[0]).toEqual([2 * CHUNK, 3 * CHUNK - 1]);
+      expect(next.inits()).toHaveLength(0);
+    });
+
+    it.each([
+      ["times out when the budget ends", () => timeout()],
+      ["gets a 503 as the budget ends", () => reply(503, "unavailable")],
+      ["loses its connection as the budget ends", () => connectionReset()],
+    ] as const)("a chunk that %s pauses - it is not a failure of the upload", async (_name, bad) => {
+      const { store, saved } = fakeStore();
+      const upload = stubTikTok({ puts: [after(STEP - 2_000, bad())] });
+
+      const result = await run(bigCtx(store, { deadline: Date.now() + STEP }));
+
+      expect(result).toEqual(paused);
+      expect(upload.puts()).toHaveLength(1);
+      expect((saved()?.data as StateData).nextChunk).toBe(0);
+    });
+
+    it("a chunk that is never sent because the budget ran out while the blob was read pauses too (no PUT, nothing lost)", async () => {
+      const { store, saved } = fakeStore();
+      // The window check passes (225 s left); reading the chunk then takes all but 3 s.
+      const upload = stubTikTok({ blobAdvance: STEP - 3_000 });
+
+      const result = await run(bigCtx(store, { deadline: Date.now() + STEP }));
+
+      expect(result).toEqual(paused);
+      expect(upload.puts()).toHaveLength(0);
+      expect((saved()?.data as StateData).nextChunk).toBe(0);
+    });
+
+    it("a blob read that is aborted by the step deadline pauses instead of failing the upload", async () => {
+      const { store, saved } = fakeStore(stateAt(1));
+      const upload = stubTikTok();
+      const real = upload.fetchMock.getMockImplementation()!;
+      upload.fetchMock.mockImplementation(async (input, init) => {
+        const response = await real(input, init);
+        if (!String(input).includes("blob.example.com")) return response;
+        // The body fails as the deadline hits: the step's time is gone when the read errors.
+        advance(STEP - 1_000);
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              controller.error(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+            },
+          }),
+          { status: 206, headers: { "Content-Range": `bytes ${CHUNK}-${TOTAL - 1}/${TOTAL}` } },
+        );
+      });
+
+      const result = await run(bigCtx(store, { deadline: Date.now() + STEP }));
+
+      expect(result).toEqual(paused);
+      expect(upload.puts()).toHaveLength(0);
+      expect((saved()?.data as StateData).nextChunk).toBe(1);
+    });
+
+    it("a blob read that fails with plenty of time left is a failure (BLOB_READ_FAILED), not a pause", async () => {
+      const { store } = fakeStore(stateAt(1));
+      const upload = stubTikTok();
+      upload.fetchMock.mockImplementation(async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              controller.error(new TypeError("terminated"));
+            },
+          }),
+          { status: 206, headers: { "Content-Range": `bytes ${CHUNK}-${TOTAL - 1}/${TOTAL}` } },
+        ),
+      );
+
+      const error = await failure(bigCtx(store, { deadline: Date.now() + STEP }));
+
+      expect(error?.code).toBe("BLOB_READ_FAILED");
+    });
+
+    it("a 429 saves the position and throws RATE_LIMITED; the deferral resumes from there", async () => {
+      const { store, saved } = fakeStore();
+      stubTikTok({ puts: [acceptChunk, acceptChunk, reply(429, null, { "Retry-After": "60" })] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error?.code).toBe("RATE_LIMITED");
+      expect((saved()?.data as StateData).nextChunk).toBe(2);
+      expect((saved()?.secret as { uploadUrl: string }).uploadUrl).toBe(URL_1);
+      vi.unstubAllGlobals();
+
+      const next = stubTikTok({ puts: accepts(4) });
+      await run(bigCtx(store));
+      expect(next.inits()).toHaveLength(0);
+      expect(rangesOf(next.puts())[0][0]).toBe(2 * CHUNK);
+    });
+
+    it("a rate limit whose save fails still surfaces as the rate limit", async () => {
+      const { store, mocks } = fakeStore(stateAt(2));
+      stubTikTok({ puts: [reply(429)] });
+      mocks.save.mockRejectedValue(Object.assign(new Error("gone"), { code: "RESULT_CLAIM_LOST" }));
+
+      expect((await failure(bigCtx(store)))?.code).toBe("RATE_LIMITED");
+    });
+
+    it("a 400 or a 404 is a rejection: TIKTOK_UPLOAD_FAILED with its status, no pause", async () => {
+      const a = fakeStore(stateAt(2));
+      stubTikTok({ puts: [reply(400, "bad")] });
+      expect(await failure(bigCtx(a.store))).toMatchObject({ code: "TIKTOK_UPLOAD_FAILED", status: 400 });
+      vi.unstubAllGlobals();
+
+      const b = fakeStore(stateAt(2));
+      stubTikTok({ puts: [reply(404, "no task")] });
+      expect(await failure(bigCtx(b.store))).toMatchObject({ code: "TIKTOK_UPLOAD_FAILED", status: 404 });
+    });
+
+    it("a 2xx other than 206 before the last chunk means TikTok thinks the upload is complete: PUBLISH_UNCONFIRMED, nothing more is sent", async () => {
+      const { store } = fakeStore(stateAt(1));
+      const upload = stubTikTok({ puts: [reply(201), acceptChunk] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(upload.puts()).toHaveLength(1);
+    });
+
+    it("an error that is not a chunk failure (a bug, say) is not swallowed as a pause", async () => {
+      const { store } = fakeStore(stateAt(1));
+      stubTikTok({ puts: [failWith(new RangeError("boom"))] });
+
+      expect(await failure(bigCtx(store))).toBeInstanceOf(RangeError);
+    });
+  });
+
+  describe("the blob", () => {
+    it("a blob that cannot be read fails BLOB_READ_FAILED before any chunk is sent", async () => {
+      const { store } = fakeStore();
+      const upload = stubTikTok({ blobStatus: 404 });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error).toMatchObject({ code: "BLOB_READ_FAILED", status: 404 });
+      expect(upload.puts()).toHaveLength(0);
+    });
+
+    it("an in-step retry after a blob failure resumes from the saved upload: one creator_info, one init, six chunks", async () => {
+      const { store } = fakeStore();
+      const upload = stubTikTok({ blobFailures: 1, puts: accepts(TOTAL_CHUNKS) });
+
+      const result = await caught(
+        withTransientRetries(() => run(bigCtx(store)), { sleep: async () => {} }),
+      );
+
+      expect(result).toBeNull();
+      expect(upload.creatorInfoCalls()).toHaveLength(1);
+      expect(upload.inits()).toHaveLength(1);
+      expect(upload.puts()).toHaveLength(TOTAL_CHUNKS);
+      expect(upload.blobGets()).toHaveLength(2);
+    });
+
+    it("a blob whose size is not the recorded size fails MEDIA_SIZE_MISMATCH before any chunk is sent", async () => {
+      const { store } = fakeStore();
+      const upload = stubTikTok({ blobClaimsTotal: TOTAL + 10 });
+
+      expect((await failure(bigCtx(store)))?.code).toBe("MEDIA_SIZE_MISMATCH");
+      expect(upload.puts()).toHaveLength(0);
+    });
+  });
+
+  describe("no capability URL leaks", () => {
+    const SECRETS = ["SECRET-1", "TOKEN-1", "SECRET-2", "TOKEN-2", "open-upload.tiktokapis.example"];
+
+    function expectNoUrl(...texts: string[]) {
+      for (const text of texts) {
+        for (const secret of SECRETS) expect(text).not.toContain(secret);
+        expect(text).not.toContain("upload_id");
+      }
+    }
+
+    it("a whole upload over two steps: the upload_url is only in the sealed `secret` - never in `data`, a log, or a returned value", async () => {
+      const { store, mocks } = fakeStore();
+      stubTikTok({ puts: [acceptChunk, acceptChunk, after(STEP - 50_000, acceptChunk)] });
+      const step1 = await run(bigCtx(store, { deadline: Date.now() + STEP }));
+      vi.unstubAllGlobals();
+      vi.setSystemTime(NOW + 600_000);
+      stubTikTok({ puts: accepts(3), init: [] });
+      const step2 = await run(bigCtx(store, { deadline: Date.now() + STEP, continuation: 1 }));
+
+      expect(mocks.save).toHaveBeenCalled();
+      for (const [, snapshot] of mocks.save.mock.calls as Array<[string, { data: unknown; secret?: { uploadUrl: string } }]>) {
+        expectNoUrl(JSON.stringify(snapshot.data));
+        expect(JSON.stringify(snapshot.data)).not.toContain("://");
+        expect(snapshot.secret).toEqual({ uploadUrl: URL_1 });
+      }
+      expectNoUrl(JSON.stringify(step1), JSON.stringify(step2), everythingLogged());
+    });
+
+    it("a re-init saves the new URL only sealed, and logs nothing of either URL", async () => {
+      const { store, mocks } = fakeStore(stateAt(2));
+      stubTikTok({ init: [initOk(2)], puts: [reply(403), ...accepts(TOTAL_CHUNKS)] });
+
+      const result = await run(bigCtx(store));
+
+      for (const [, snapshot] of mocks.save.mock.calls as Array<[string, { data: unknown }]>) {
+        expectNoUrl(JSON.stringify(snapshot.data));
+      }
+      expectNoUrl(JSON.stringify(result), everythingLogged());
+    });
+
+    it.each([
+      ["a 400 on a chunk", 2, () => [reply(400, "bad")]],
+      ["a 404 on a chunk", 2, () => [reply(404, "no task")]],
+      ["a 403 on the renewed URL", 2, () => [reply(403), reply(403)]],
+      ["a 429 on a chunk", 2, () => [reply(429)]],
+      ["a 503 on the final chunk", 5, () => [reply(503)]],
+      ["a timeout on the final chunk", 5, () => [timeout()]],
+      ["a bad Content-Range on a 416", 2, () => [resyncAt(`bytes 0-15000000/${TOTAL}`)]],
+    ] as const)("%s: the error and the logs carry no URL", async (_name, at, puts) => {
+      const { store } = fakeStore(stateAt(at));
+      stubTikTok({ init: [initOk(2), initOk(3)], puts: [...puts()] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error).not.toBeNull();
+      expectNoUrl(describeError(error), everythingLogged());
+    });
+
+    it("a video/init payload that has an upload_url but no publish id is logged without the URL", async () => {
+      const { store } = fakeStore();
+      stubTikTok({ init: [() => jsonResponse({ data: { upload_url: URL_1 }, error: { code: "ok" } })] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error?.code).toBe("TIKTOK_INIT_MISSING_FIELDS");
+      expectNoUrl(describeError(error), everythingLogged());
     });
   });
 });

@@ -1,9 +1,10 @@
 import type { Prisma, SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
-import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, FETCH_TIMEOUT_CODE, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS, TIKTOK_DEFAULT_CAPTION } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
+import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 
 import { commitRequest, publishUnconfirmedError } from "./commitCall";
 import {
@@ -14,7 +15,18 @@ import {
   type TokenSnapshot,
 } from "./connectionHealth";
 import { refreshConnectionToken } from "./connectionRefresh";
-import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
+import {
+  LARGE_UPLOAD_CHUNK_WINDOW_MS,
+  openBlobChunkStream,
+  usesLargeUploadPath,
+  type BlobChunkStream,
+} from "./largeUpload";
+import {
+  budgetedTimeout,
+  MIN_REQUEST_WINDOW_MS,
+  PUBLISH_BUDGET_EXCEEDED_CODE,
+  remainingMs,
+} from "./publishBudget";
 import { classifyRateLimit, isRateLimitedError } from "./rateLimited";
 import type { PlatformClient, PublishContext, PublishResult, TikTokCreatorInfo } from "./types";
 
@@ -132,6 +144,20 @@ const TIKTOK_CHUNK_UPLOAD_TIMEOUT_MS = 120_000;
  *    so the step ends < 240s. Small JSON bodies are read after their headers
  *    and are not separately timed (same as every client).
  * Before: 24 x (5s + up to 30s) = 840s of polling alone, x3 attempts.
+ *
+ * STREAMED UPLOAD (2026-11-02 scale audit, jobs B3; publishStreamed below). The same
+ * deadline bounds every request, and a chunk is only started when it can finish:
+ *
+ *   first step      token refresh, creator_info, video/init: each <= min(30s, time left)
+ *   blob read       one GET per step, aborted at the deadline; a read that runs into it
+ *                   pauses (nothing was sent)
+ *   chunk PUT       <= min(120s, time left); a chunk that is not the last starts with
+ *                   >= 60s left (LARGE_UPLOAD_CHUNK_WINDOW_MS), and a failure or timeout
+ *                   at the deadline pauses instead of failing
+ *   final chunk     starts with >= 150s left (TIKTOK_FINAL_CHUNK_MIN_WINDOW_MS): its PUT
+ *                   (<= 120s) and the status poll (the rest) end by the deadline, in the
+ *                   same step, so the commit and what follows it never cross a step
+ *   pause           one small state write, after the deadline
  */
 
 /** Max bytes per TikTok FILE_UPLOAD chunk (TikTok allows 5MB to 64MB; we use 10MB). */
@@ -190,6 +216,161 @@ export function computeChunkPlan(
   }
 
   return { chunkSize, totalChunks, ranges };
+}
+
+// 2026-11-02 scale audit (jobs B3): a video above LARGE_VIDEO_THRESHOLD_BYTES
+// (largeUpload.ts) on a platform listed in LARGE_UPLOAD_PLATFORMS is read from
+// storage one chunk at a time and PUT to TikTok's `upload_url` across several
+// steps, instead of being downloaded whole. Source of every protocol fact below:
+// https://developers.tiktok.com/doc/content-posting-api-media-transfer-guide
+//
+//   chunks   PUT <upload_url> with `Content-Type`, `Content-Length` and
+//            `Content-Range: bytes FIRST-LAST/TOTAL`. "File chunks must be uploaded
+//            sequentially." The plan is computeChunkPlan's: 10 MiB chunks, the last
+//            one absorbing the remainder, 1 to 1,000 of them (a 512 MB video is 51).
+//   answers  206: more chunks remain. 201: "all parts uploaded", TikTok starts posting.
+//            403: the upload_url expired. 404: there is no upload task. 416: the range
+//            does not match TikTok's progress, and the answer carries
+//            `Content-Range: bytes 0-{UPLOADED_BYTES}/{TOTAL}`. 5xx: "retry submitting
+//            this chunk".
+//   expiry   "The upload_url is valid for one hour after issuance", and `video/init` is
+//            limited to 6 requests a minute per user token:
+//            https://developers.tiktok.com/doc/content-posting-api-reference-direct-post
+//
+// The `upload_url` is a capability URL (whoever holds it can write the upload), so it is
+// saved only sealed (uploadState.ts) and never logged. creator_info and video/init run
+// once, in the first step; later steps skip both and resume from the saved state.
+
+/** The `kind` of the upload state a streamed TikTok upload saves and loads (uploadState.ts). */
+export const TIKTOK_UPLOAD_STATE_KIND = "tiktok_file_upload";
+
+/**
+ * How long an `upload_url` is valid: "one hour after issuance"
+ * (https://developers.tiktok.com/doc/content-posting-api-reference-direct-post).
+ */
+export const TIKTOK_UPLOAD_URL_TTL_MS = 3_600_000;
+
+/**
+ * A chunk is not sent to an `upload_url` with less than this left of its hour (10 min):
+ * the upload starts over on a new one instead, as long as the final chunk has not been
+ * sent. A slower upload would die on a 403 part-way through the chunk.
+ */
+export const TIKTOK_UPLOAD_URL_SAFETY_MS = 600_000;
+
+/**
+ * The final chunk is the commit call, and TikTok's status poll runs after it in the
+ * same step, so it starts only with this much of the step left (150 s): one chunk
+ * request (up to 120 s) and a poll that still has time to see the post through.
+ * Post-commit work never crosses a step boundary.
+ */
+export const TIKTOK_FINAL_CHUNK_MIN_WINDOW_MS = 150_000;
+
+/**
+ * Times one step may start a new upload because the URL expired (by the clock or by a
+ * 403). A new URL that is refused too is a failure, not a reason to start over forever.
+ */
+const TIKTOK_MAX_RENEWALS_PER_STEP = 1;
+
+/** What a step saves as readable progress. No URL may be in it (uploadState.ts). */
+interface TikTokUploadData {
+  publishId: string;
+  /** Epoch ms just before `video/init` was sent: the upload_url is valid for an hour from after it. */
+  initAt: number;
+  size: number;
+  chunkSize: number;
+  totalChunks: number;
+  /** Index of the next chunk to send. */
+  nextChunk: number;
+}
+
+/** What a step saves sealed: the upload_url is a capability URL. */
+interface TikTokUploadSecret {
+  uploadUrl: string;
+}
+
+/** An upload that has been started on TikTok: where it is and which URL carries it. */
+interface TikTokUploadSession {
+  publishId: string;
+  uploadUrl: string;
+  initAt: number;
+  nextChunk: number;
+}
+
+/** The upload_url is sent the video, so it must be an https URL. */
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The saved upload, if it is one this step can resume: the same video and plan, a
+ * sealed https `upload_url`, a publish id, and a position inside the plan. Anything else
+ * (another size, a missing secret, a hand-edited row) is treated as no state at all, and
+ * the step starts a new upload.
+ */
+function readSavedUpload(
+  saved: UploadSnapshot<TikTokUploadData, TikTokUploadSecret> | null,
+  plan: ChunkPlan | null,
+  size: number,
+): TikTokUploadSession | null {
+  if (saved === null || plan === null) return null;
+  const { data, secret } = saved;
+  const uploadUrl = secret?.uploadUrl;
+  if (typeof uploadUrl !== "string" || !isHttpsUrl(uploadUrl)) return null;
+  if (typeof data?.publishId !== "string" || data.publishId === "") return null;
+  if (typeof data.initAt !== "number" || !Number.isFinite(data.initAt)) return null;
+  if (data.size !== size || data.chunkSize !== plan.chunkSize || data.totalChunks !== plan.totalChunks) {
+    return null;
+  }
+  if (!Number.isInteger(data.nextChunk) || data.nextChunk < 0 || data.nextChunk >= plan.totalChunks) {
+    return null;
+  }
+  return { publishId: data.publishId, uploadUrl, initAt: data.initAt, nextChunk: data.nextChunk };
+}
+
+function tiktokUploadError(message: string, status?: number): Error & { code: string; status?: number } {
+  const error = new Error(message) as Error & { code: string; status?: number };
+  error.code = "TIKTOK_UPLOAD_FAILED";
+  if (status !== undefined) error.status = status;
+  return error;
+}
+
+/**
+ * Did a chunk request fail in a way that says nothing about the upload: a 5xx, a
+ * timeout, a dropped or refused connection, or no time left to send it? The same chunk
+ * can simply be sent again in the next step. A 4xx, a rate limit or an error we do not
+ * recognize is not this: it says something definite.
+ */
+function isTransientChunkFailure(error: unknown): boolean {
+  if (error instanceof TypeError) return true;
+  const { code, status } = (error ?? {}) as { code?: unknown; status?: unknown };
+  return (
+    code === FETCH_TIMEOUT_CODE ||
+    code === PUBLISH_BUDGET_EXCEEDED_CODE ||
+    (typeof status === "number" && status >= 500)
+  );
+}
+
+/**
+ * Where a 416 says TikTok's upload stands, as a chunk index; null when it cannot be
+ * trusted. The answer carries `Content-Range: bytes 0-{UPLOADED_BYTES}/{TOTAL}`; whether
+ * UPLOADED_BYTES is a count or the index of the last byte is not documented, so either
+ * reading is accepted, but only when it lands on the start of a chunk of the plan (the two
+ * readings are a byte apart and chunk starts are 10 MiB apart, so at most one can). The
+ * total must be this video's.
+ */
+function resyncedChunk(response: Response, plan: ChunkPlan, size: number): number | null {
+  const match = /^bytes 0-(\d+)\/(\d+)$/i.exec(response.headers.get("Content-Range")?.trim() ?? "");
+  if (!match || Number(match[2]) !== size) return null;
+  const reported = Number(match[1]);
+  for (const nextByte of [reported, reported + 1]) {
+    const index = plan.ranges.findIndex((range) => range.start === nextByte);
+    if (index !== -1) return index;
+  }
+  return null;
 }
 
 /**
@@ -661,6 +842,447 @@ export async function getTikTokCreatorInfo(
   };
 }
 
+/**
+ * The creator_info check TikTok's Developer Guidelines require before any post. It
+ * proves the account can post, and fails with the reconnect code on a 401. Shared by
+ * the whole-file path and the first step of a streamed upload.
+ */
+async function verifyCreatorInfo(
+  accessToken: string,
+  socialConnection: SocialConnection,
+  deadline: number | undefined,
+): Promise<void> {
+  // REQUIRED: Call creator_info API before posting to verify account status
+  // This is mandatory per TikTok Developer Guidelines
+  console.log('[TikTok] Fetching creator info to verify account status...');
+  // Budget check outside the try below: an exhausted budget is not a
+  // creator_info failure (nothing is sent; see the STEP BUDGET note above).
+  const creatorInfoTimeoutMs = budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline);
+  try {
+    const creatorInfo = await getTikTokCreatorInfo(accessToken, creatorInfoTimeoutMs);
+    console.log('[TikTok] Creator info retrieved:', {
+      username: creatorInfo.creatorUsername,
+      privacyOptions: creatorInfo.privacyLevelOptions,
+      maxDuration: creatorInfo.maxVideoPostDurationSec,
+    });
+
+    // Verify the account has the required privacy options for sandbox mode
+    if (!creatorInfo.privacyLevelOptions.includes('SELF_ONLY')) {
+      console.warn('[TikTok] Account may not support SELF_ONLY privacy level', {
+        availableOptions: creatorInfo.privacyLevelOptions,
+      });
+    }
+  } catch (creatorInfoError: unknown) {
+    console.error('[TikTok] Failed to fetch creator info:', creatorInfoError);
+    // Keep the typed rate-limit error (platform / kind / retryAt) intact
+    // instead of re-wrapping it below as a plain creator_info failure.
+    if (isRateLimitedError(creatorInfoError)) throw creatorInfoError;
+    const cause = creatorInfoError as Error & { code?: string; status?: number };
+    // A 401 means the access token is no longer valid -> reconnect.
+    if (cause.status === 401) {
+      await throwTikTokReconnect(socialConnection, "creator_info/query");
+    }
+    const error = new Error(
+      `TikTok creator_info check failed: ${cause.message}`,
+    ) as Error & { code: string };
+    error.code = cause.code ?? "TIKTOK_CREATOR_INFO_FAILED";
+    throw error;
+  }
+}
+
+/** The post_info TikTok's video/init takes: the title and the user's form selections (or sandbox defaults). */
+function buildPostInfo(ctx: PublishContext, tiktokCaption: string): TikTokPostInfo {
+  // Use metadata from user's form selections, or defaults for sandbox mode
+  const tiktokMeta = ctx.tiktokMetadata;
+  const postInfo: TikTokPostInfo = {
+    title: tiktokCaption,
+    privacy_level: tiktokMeta?.privacyLevel || "SELF_ONLY",
+    disable_comment: tiktokMeta?.disableComment ?? false,
+    disable_duet: tiktokMeta?.disableDuet ?? false,
+    disable_stitch: tiktokMeta?.disableStitch ?? false,
+    video_cover_timestamp_ms: 1000,
+  };
+
+  // Add commercial content disclosure if specified
+  if (tiktokMeta?.brandedContent || tiktokMeta?.brandOrganic) {
+    postInfo.disclosure_settings = {
+      disclosure_type: "BRANDED_CONTENT",
+    };
+    if (tiktokMeta.brandOrganic) {
+      postInfo.brand_organic_type = "CREATOR_BRAND";
+    }
+    if (tiktokMeta.brandedContent) {
+      postInfo.brand_content_type = "BRANDED_CONTENT";
+    }
+  }
+  return postInfo;
+}
+
+/**
+ * Ask TikTok's Direct Post API for a FILE_UPLOAD upload: the publish id and the
+ * `upload_url` to PUT the chunks to. Not the commit call (nothing is posted until the
+ * final chunk is in), so a 5xx or a network error is an ordinary failure.
+ *
+ * Failures: a rate limit (HTTP 429, or `rate_limit_exceeded` in the body of a 200) is
+ * RATE_LIMITED; a 401 or an `access_token_invalid` body flags the connection (guarded
+ * by the tokens used) and throws the reconnect code; the rest are TIKTOK_INIT_FAILED,
+ * TIKTOK_INIT_ERROR and TIKTOK_INIT_MISSING_FIELDS. The response is logged without its
+ * `data`, which holds the capability URL.
+ */
+async function requestUploadInit(args: {
+  accessToken: string;
+  socialConnection: SocialConnection;
+  postInfo: TikTokPostInfo;
+  size: number;
+  chunkSize: number;
+  totalChunks: number;
+  deadline: number | undefined;
+}): Promise<{ uploadUrl: string; publishId: string }> {
+  const { accessToken, socialConnection, postInfo, size, chunkSize, totalChunks, deadline } = args;
+
+  // Use Direct Post API with FILE_UPLOAD and captions
+  const initRes = await fetchWithTimeout(
+    `${TIKTOK_API_BASE}/v2/post/publish/video/init/`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        post_info: postInfo,
+        source_info: {
+          source: "FILE_UPLOAD",
+          video_size: size,
+          chunk_size: chunkSize,
+          total_chunk_count: totalChunks,
+        },
+      }),
+    },
+    budgetedTimeout(TIKTOK_INIT_TIMEOUT_MS, deadline),
+  );
+
+  // HTTP 429, or `rate_limit_exceeded` in the body of a 200, is RATE_LIMITED.
+  // Classified from a clone, so the body is still parsed below.
+  const initLimited = await classifyRateLimit("tiktok", initRes);
+  if (initLimited) throw initLimited;
+
+  // A 401 means the access token is no longer valid -> reconnect.
+  if (initRes.status === 401) {
+    await throwTikTokReconnect(socialConnection, "video/init");
+  }
+
+  await assertOk(initRes, {
+    code: "TIKTOK_INIT_FAILED",
+    prefix: "Failed to start TikTok video upload",
+  });
+
+  const initJson = (await initRes.json().catch(() => null)) as TikTokInitResponse | null;
+  const initErrorCode = initJson?.error?.code;
+  // TikTok can also report an invalid token as an error code in the body.
+  if (initErrorCode === "access_token_invalid") {
+    await throwTikTokReconnect(socialConnection, "video/init");
+  }
+  if (initErrorCode && initErrorCode !== "ok") {
+    // 2026-11-02 scale audit (jobs B3): `data` holds the upload_url, so only `error` is logged.
+    console.error("[TikTok] video init error payload", { error: initJson?.error });
+    const error = new Error("TikTok video init returned an error") as Error & { code: string };
+    error.code = "TIKTOK_INIT_ERROR";
+    throw error;
+  }
+
+  const uploadUrl = initJson?.data?.upload_url as string | undefined;
+  const publishId = initJson?.data?.publish_id as string | undefined;
+
+  if (!uploadUrl || !publishId) {
+    console.error("[TikTok] video init missing upload_url or publish_id", {
+      hasUploadUrl: Boolean(uploadUrl),
+      hasPublishId: Boolean(publishId),
+      error: initJson?.error,
+    });
+    const error = new Error("TikTok did not return upload_url or publish_id") as Error & { code: string };
+    error.code = "TIKTOK_INIT_MISSING_FIELDS";
+    throw error;
+  }
+
+  return { uploadUrl, publishId };
+}
+
+/**
+ * The streamed path (2026-11-02 scale audit, jobs B3): the video is read from storage
+ * one chunk at a time and PUT to TikTok's upload_url, across steps.
+ *
+ * - First step (`resumed` is null): `video/init`, saved at once - the upload_url sealed -
+ *   before the first chunk. A step that resumes does not call creator_info or
+ *   `video/init`, which keeps init under 6 a minute.
+ * - One GET of the blob serves the whole step; one chunk (10 MiB, the last under 20 MiB)
+ *   is held at a time.
+ * - A chunk that is not the last starts only with LARGE_UPLOAD_CHUNK_WINDOW_MS left, the
+ *   last (the commit call) only with {@link TIKTOK_FINAL_CHUNK_MIN_WINDOW_MS} left. A step
+ *   that cannot start the next chunk saves and continues. The progress is saved after
+ *   every accepted chunk.
+ * - A chunk that is not the last commits nothing, so a 5xx, a timeout, a dropped
+ *   connection, or running into the deadline saves and continues; the same chunk is sent
+ *   again in the next step. A 206 advances; a 416 resyncs to the position TikTok reports
+ *   (see {@link resyncedChunk}); a 403 (the URL expired) starts a new upload from chunk 0;
+ *   anything else is TIKTOK_UPLOAD_FAILED. A rate limit saves, then throws RATE_LIMITED.
+ * - The last chunk goes through commitRequest (a 5xx or a timeout there is
+ *   PUBLISH_UNCONFIRMED and is never resent), then the status poll runs in the same step.
+ */
+async function publishStreamed(args: {
+  ctx: PublishContext;
+  socialConnection: SocialConnection;
+  accessToken: string;
+  store: UploadStateStore;
+  plan: ChunkPlan;
+  size: number;
+  resumed: TikTokUploadSession | null;
+}): Promise<PublishResult> {
+  const { ctx, socialConnection, accessToken, store, plan, size, resumed } = args;
+  const { mediaItem, deadline } = ctx;
+  const { chunkSize, totalChunks, ranges } = plan;
+
+  const saveSession = (session: TikTokUploadSession) =>
+    store.save<TikTokUploadData, TikTokUploadSecret>(TIKTOK_UPLOAD_STATE_KIND, {
+      data: {
+        publishId: session.publishId,
+        initAt: session.initAt,
+        size,
+        chunkSize,
+        totalChunks,
+        nextChunk: session.nextChunk,
+      },
+      secret: { uploadUrl: session.uploadUrl },
+    });
+
+  /** A new upload on TikTok, positioned at chunk 0 and saved at once. */
+  const beginUpload = async (): Promise<TikTokUploadSession> => {
+    console.log("[TikTok] Initializing upload with FILE_UPLOAD (chunked, streamed from storage)", {
+      videoSize: size,
+      chunkSize,
+      totalChunks,
+    });
+    const issuedAt = Date.now();
+    const { uploadUrl, publishId } = await requestUploadInit({
+      accessToken,
+      socialConnection,
+      postInfo: buildPostInfo(ctx, computeTikTokCaption(ctx.caption)),
+      size,
+      chunkSize,
+      totalChunks,
+      deadline,
+    });
+    if (!isHttpsUrl(uploadUrl)) {
+      const error = new Error("TikTok did not return a usable upload_url") as Error & { code: string };
+      error.code = "TIKTOK_INIT_MISSING_FIELDS";
+      throw error;
+    }
+    const session: TikTokUploadSession = { publishId, uploadUrl, initAt: issuedAt, nextChunk: 0 };
+    await saveSession(session);
+    return session;
+  };
+
+  let current = resumed ?? (await beginUpload());
+  let renewals = 0;
+  // Held in an object so the finally block sees the stream a closure opened.
+  const source: { stream: BlobChunkStream | null } = { stream: null };
+
+  const pause = async (): Promise<PublishResult> => {
+    await saveSession(current);
+    console.log("[TikTok] Streamed upload continues in another step", {
+      nextChunk: current.nextChunk,
+      totalChunks,
+    });
+    return { continuation: { resumeAt: null } };
+  };
+
+  /** The bytes `start..end-1` of the video (one open stream, read in order; reopened at `start` after a jump). */
+  const readChunk = async (start: number, end: number): Promise<Buffer<ArrayBuffer>> => {
+    if (source.stream !== null && source.stream.position !== start) {
+      await source.stream.close();
+      source.stream = null;
+    }
+    source.stream ??= await openBlobChunkStream(mediaItem.storageLocation, {
+      offset: start,
+      totalBytes: size,
+      deadline,
+    });
+    // Read into Buffer.allocUnsafe (largeUpload.ts), so it is ArrayBuffer-backed: the cast
+    // only narrows the type `read` widens.
+    return (await source.stream.read(end - start)) as Buffer<ArrayBuffer>;
+  };
+
+  try {
+    for (;;) {
+      const index = current.nextChunk;
+      const { start, end } = ranges[index];
+      const isFinal = index === totalChunks - 1;
+
+      const needed = isFinal ? TIKTOK_FINAL_CHUNK_MIN_WINDOW_MS : LARGE_UPLOAD_CHUNK_WINDOW_MS;
+      if (remainingMs(deadline) < needed) return await pause();
+
+      // The URL is about to expire (and the final chunk has not been sent): start over on a new one.
+      const urlLeftMs = TIKTOK_UPLOAD_URL_TTL_MS - (Date.now() - current.initAt);
+      if (urlLeftMs < TIKTOK_UPLOAD_URL_SAFETY_MS && renewals < TIKTOK_MAX_RENEWALS_PER_STEP) {
+        renewals += 1;
+        console.warn("[TikTok] The upload URL is about to expire; starting a new upload", { nextChunk: index });
+        current = await beginUpload();
+        continue;
+      }
+
+      let body: Buffer<ArrayBuffer>;
+      try {
+        body = await readChunk(start, end);
+      } catch (error) {
+        // Reading runs into the deadline: nothing has been sent, so this is not a failure of
+        // the upload. The next step reopens the blob at the same chunk.
+        if (remainingMs(deadline) < needed) return await pause();
+        throw error;
+      }
+      // Reading takes time too: the chunk (and, for the last, the poll after it) must still fit.
+      if (remainingMs(deadline) < needed) return await pause();
+
+      const uploadUrl = current.uploadUrl;
+      const send = () =>
+        fetchWithTimeout(
+          uploadUrl,
+          {
+            method: "PUT",
+            headers: {
+              "Content-Range": `bytes ${start}-${end - 1}/${size}`,
+              "Content-Type": mediaItem.mimeType,
+            },
+            body,
+          },
+          // Throws before sending when the budget is spent: the upload is then incomplete,
+          // and TikTok never publishes an incomplete upload.
+          budgetedTimeout(TIKTOK_CHUNK_UPLOAD_TIMEOUT_MS, deadline),
+        );
+
+      let response: Response;
+      try {
+        // Only the final chunk is the commit call: Direct Post publishes as soon as the
+        // upload completes. A 5xx, a timeout or a dropped connection there is
+        // PUBLISH_UNCONFIRMED and is never resent.
+        response = isFinal ? await commitRequest("tiktok", send) : await send();
+      } catch (error) {
+        // A chunk that is not the last commits nothing: with no answer (or no time to ask) the
+        // step saves and continues, and the next one sends the same chunk again. Failing here
+        // would record the result failed and drop the state with everything uploaded so far.
+        if (!isFinal && isTransientChunkFailure(error)) {
+          console.warn("[TikTok] A chunk got no answer; the next step sends it again", {
+            chunk: index + 1,
+            totalChunks,
+            status: (error as { status?: unknown } | null)?.status,
+            code: (error as { code?: unknown } | null)?.code,
+          });
+          return await pause();
+        }
+        throw error;
+      }
+
+      if (!isFinal && response.status >= 500) {
+        void response.body?.cancel().catch(() => {});
+        console.warn("[TikTok] A chunk was answered with a server error; the next step sends it again", {
+          chunk: index + 1,
+          totalChunks,
+          status: response.status,
+        });
+        return await pause();
+      }
+
+      const chunkLimited = await classifyRateLimit("tiktok", response);
+      if (chunkLimited) throw chunkLimited;
+
+      if (!isFinal) {
+        if (response.status === 206) {
+          void response.body?.cancel().catch(() => {});
+          current = { ...current, nextChunk: index + 1 };
+          await saveSession(current);
+          console.log(`[TikTok] Chunk ${index + 1}/${totalChunks} uploaded successfully`);
+          continue;
+        }
+
+        if (response.status === 403 && renewals < TIKTOK_MAX_RENEWALS_PER_STEP) {
+          // The upload_url expired before this chunk. Nothing was committed: start over.
+          void response.body?.cancel().catch(() => {});
+          renewals += 1;
+          console.warn("[TikTok] The upload URL expired; starting a new upload", { chunk: index + 1, totalChunks });
+          current = await beginUpload();
+          continue;
+        }
+
+        if (response.status === 416) {
+          // TikTok's progress is not ours (a chunk whose answer was lost, say): carry on from
+          // the position it reports, or fail before the final chunk if that cannot be trusted.
+          const target = resyncedChunk(response, plan, size);
+          void response.body?.cancel().catch(() => {});
+          if (target === null || target === index) {
+            throw tiktokUploadError(
+              `Failed to upload chunk ${index + 1}/${totalChunks} to TikTok: it reported a position that does not match the video (status 416)`,
+              416,
+            );
+          }
+          console.warn("[TikTok] TikTok holds a different part of the upload; resuming from its position", {
+            from: index,
+            to: target,
+            totalChunks,
+          });
+          current = { ...current, nextChunk: target };
+          await saveSession(current);
+          continue;
+        }
+
+        if (response.ok) {
+          // 201 ("all parts uploaded") before the last chunk: TikTok thinks the upload is complete
+          // and may be posting. Do not send more, and do not offer a blind retry (a second post).
+          void response.body?.cancel().catch(() => {});
+          throw publishUnconfirmedError(
+            "tiktok",
+            new Error(`Chunk ${index + 1}/${totalChunks} was answered HTTP ${response.status}, not 206`),
+          );
+        }
+      }
+
+      await assertOk(response, {
+        code: "TIKTOK_UPLOAD_FAILED",
+        prefix: `Failed to upload chunk ${index + 1}/${totalChunks} to TikTok`,
+      });
+
+      // Only the final chunk gets here: it was accepted and TikTok is posting.
+      console.log(`[TikTok] Chunk ${index + 1}/${totalChunks} uploaded successfully`);
+      await source.stream?.close();
+      source.stream = null;
+
+      console.log('[TikTok] Video chunks uploaded, checking publish status...', { publishId: current.publishId });
+
+      // Poll publish status until TikTok confirms the post (uppercase statuses, ~120s budget),
+      // in this same step: the commit and what follows it never cross a step boundary.
+      await pollTikTokPublishStatus({
+        accessToken,
+        publishId: current.publishId,
+        connection: socialConnection,
+        deadline,
+      });
+
+      console.log('[TikTok] Video published successfully', { publishId: current.publishId });
+      return { externalPostId: current.publishId };
+    }
+  } catch (error) {
+    if (isRateLimitedError(error)) {
+      // The deferral resumes from here. Best effort: a failed save must not hide the rate limit.
+      await saveSession(current).catch((saveError: unknown) => {
+        console.warn("[TikTok] Could not save the upload progress before the rate-limit wait", {
+          code: (saveError as { code?: unknown } | null)?.code,
+        });
+      });
+    }
+    throw error;
+  } finally {
+    await source.stream?.close();
+  }
+}
+
 export const tiktokClient: PlatformClient = {
   // Exposed so the daily connection-health sweep (inngest-functions.ts), which
   // only refreshes clients that have a refreshToken method, keeps TikTok's
@@ -669,6 +1291,37 @@ export const tiktokClient: PlatformClient = {
 
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
     const { mediaItem, caption, deadline } = ctx;
+
+    // 2026-11-02 scale audit (jobs B3): a video above 50 MiB on a platform enabled in
+    // LARGE_UPLOAD_PLATFORMS - or any upload that already has saved state - is streamed
+    // from storage in chunks across steps; everything else keeps the whole-file upload
+    // below, unchanged. The saved state alone decides whether this step starts an upload
+    // or resumes one (never `ctx.continuation`: a step whose output was lost runs again
+    // with the state already there and must resume, not start a second upload), so it is
+    // read before anything else.
+    const store = ctx.uploadState;
+    const recordedSize = mediaItem.sizeBytes;
+    const recordedPlan =
+      Number.isSafeInteger(recordedSize) && recordedSize > 0 ? computeChunkPlan(recordedSize) : null;
+    const saved = store
+      ? await store.load<TikTokUploadData, TikTokUploadSecret>(TIKTOK_UPLOAD_STATE_KIND)
+      : null;
+    const resumed = readSavedUpload(saved, recordedPlan, recordedSize);
+    if (saved !== null && resumed === null) {
+      console.warn("[TikTok] The saved upload cannot be used; a new upload starts", { size: recordedSize });
+    }
+    const streamed =
+      store !== undefined &&
+      recordedPlan !== null &&
+      usesLargeUploadPath({
+        platform: "tiktok",
+        mimeType: mediaItem.mimeType || "",
+        sizeBytes: recordedSize,
+        hasState: resumed !== null,
+        hasStore: true,
+      })
+        ? { store, plan: recordedPlan }
+        : null;
 
     // TikTok access tokens last ~24h: refresh a stale/expiring one BEFORE any
     // API call (a terminal refresh failure flags the connection and throws
@@ -686,41 +1339,9 @@ export const tiktokClient: PlatformClient = {
       throw error;
     }
 
-    // REQUIRED: Call creator_info API before posting to verify account status
-    // This is mandatory per TikTok Developer Guidelines
-    console.log('[TikTok] Fetching creator info to verify account status...');
-    // Budget check outside the try below: an exhausted budget is not a
-    // creator_info failure (nothing is sent; see the STEP BUDGET note above).
-    const creatorInfoTimeoutMs = budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline);
-    try {
-      const creatorInfo = await getTikTokCreatorInfo(accessToken, creatorInfoTimeoutMs);
-      console.log('[TikTok] Creator info retrieved:', {
-        username: creatorInfo.creatorUsername,
-        privacyOptions: creatorInfo.privacyLevelOptions,
-        maxDuration: creatorInfo.maxVideoPostDurationSec,
-      });
-      
-      // Verify the account has the required privacy options for sandbox mode
-      if (!creatorInfo.privacyLevelOptions.includes('SELF_ONLY')) {
-        console.warn('[TikTok] Account may not support SELF_ONLY privacy level', {
-          availableOptions: creatorInfo.privacyLevelOptions,
-        });
-      }
-    } catch (creatorInfoError: unknown) {
-      console.error('[TikTok] Failed to fetch creator info:', creatorInfoError);
-      // Keep the typed rate-limit error (platform / kind / retryAt) intact
-      // instead of re-wrapping it below as a plain creator_info failure.
-      if (isRateLimitedError(creatorInfoError)) throw creatorInfoError;
-      const cause = creatorInfoError as Error & { code?: string; status?: number };
-      // A 401 means the access token is no longer valid -> reconnect.
-      if (cause.status === 401) {
-        await throwTikTokReconnect(socialConnection, "creator_info/query");
-      }
-      const error = new Error(
-        `TikTok creator_info check failed: ${cause.message}`,
-      ) as Error & { code: string };
-      error.code = cause.code ?? "TIKTOK_CREATOR_INFO_FAILED";
-      throw error;
+    // creator_info runs once per upload: a streamed upload that resumes already did it.
+    if (streamed === null || resumed === null) {
+      await verifyCreatorInfo(accessToken, socialConnection, deadline);
     }
 
     console.log('[TikTok] Media item details:', {
@@ -733,6 +1354,18 @@ export const tiktokClient: PlatformClient = {
       const error = new Error(`TikTok requires video files. Current mime type: ${mediaItem.mimeType || 'undefined'}`) as Error & { code: string };
       error.code = "TIKTOK_MEDIA_NOT_VIDEO";
       throw error;
+    }
+
+    if (streamed !== null) {
+      return publishStreamed({
+        ctx,
+        socialConnection,
+        accessToken,
+        store: streamed.store,
+        plan: streamed.plan,
+        size: recordedSize,
+        resumed,
+      });
     }
 
     // Download video from Vercel Blob Storage.
@@ -771,89 +1404,16 @@ export const tiktokClient: PlatformClient = {
       captionPreview: tiktokCaption.substring(0, 100) + (tiktokCaption.length > 100 ? '...' : ''),
     });
 
-    // Use metadata from user's form selections, or defaults for sandbox mode
-    const tiktokMeta = ctx.tiktokMetadata;
-    const postInfo: TikTokPostInfo = {
-      title: tiktokCaption,
-      privacy_level: tiktokMeta?.privacyLevel || "SELF_ONLY",
-      disable_comment: tiktokMeta?.disableComment ?? false,
-      disable_duet: tiktokMeta?.disableDuet ?? false,
-      disable_stitch: tiktokMeta?.disableStitch ?? false,
-      video_cover_timestamp_ms: 1000,
-    };
-
-    // Add commercial content disclosure if specified
-    if (tiktokMeta?.brandedContent || tiktokMeta?.brandOrganic) {
-      postInfo.disclosure_settings = {
-        disclosure_type: "BRANDED_CONTENT",
-      };
-      if (tiktokMeta.brandOrganic) {
-        postInfo.brand_organic_type = "CREATOR_BRAND";
-      }
-      if (tiktokMeta.brandedContent) {
-        postInfo.brand_content_type = "BRANDED_CONTENT";
-      }
-    }
-
-    // Use Direct Post API with FILE_UPLOAD and captions
-    const initRes = await fetchWithTimeout(
-      `${TIKTOK_API_BASE}/v2/post/publish/video/init/`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          post_info: postInfo,
-          source_info: {
-            source: "FILE_UPLOAD",
-            video_size: size,
-            chunk_size: CHUNK_SIZE,
-            total_chunk_count: totalChunks,
-          },
-        }),
-      },
-      budgetedTimeout(TIKTOK_INIT_TIMEOUT_MS, deadline),
-    );
-
-    // HTTP 429, or `rate_limit_exceeded` in the body of a 200, is RATE_LIMITED.
-    // Classified from a clone, so the body is still parsed below.
-    const initLimited = await classifyRateLimit("tiktok", initRes);
-    if (initLimited) throw initLimited;
-
-    // A 401 means the access token is no longer valid -> reconnect.
-    if (initRes.status === 401) {
-      await throwTikTokReconnect(socialConnection, "video/init");
-    }
-
-    await assertOk(initRes, {
-      code: "TIKTOK_INIT_FAILED",
-      prefix: "Failed to start TikTok video upload",
+    const postInfo = buildPostInfo(ctx, tiktokCaption);
+    const { uploadUrl, publishId } = await requestUploadInit({
+      accessToken,
+      socialConnection,
+      postInfo,
+      size,
+      chunkSize: CHUNK_SIZE,
+      totalChunks,
+      deadline,
     });
-
-    const initJson = (await initRes.json().catch(() => null)) as TikTokInitResponse | null;
-    const initErrorCode = initJson?.error?.code;
-    // TikTok can also report an invalid token as an error code in the body.
-    if (initErrorCode === "access_token_invalid") {
-      await throwTikTokReconnect(socialConnection, "video/init");
-    }
-    if (initErrorCode && initErrorCode !== "ok") {
-      console.error("[TikTok] video init error payload", initJson);
-      const error = new Error("TikTok video init returned an error") as Error & { code: string };
-      error.code = "TIKTOK_INIT_ERROR";
-      throw error;
-    }
-
-    const uploadUrl = initJson?.data?.upload_url as string | undefined;
-    const publishId = initJson?.data?.publish_id as string | undefined;
-
-    if (!uploadUrl || !publishId) {
-      console.error("[TikTok] video init missing upload_url or publish_id", initJson);
-      const error = new Error("TikTok did not return upload_url or publish_id") as Error & { code: string };
-      error.code = "TIKTOK_INIT_MISSING_FIELDS";
-      throw error;
-    }
 
     console.log('[TikTok] Got upload URL, uploading video in chunks...', {
       totalChunks,
