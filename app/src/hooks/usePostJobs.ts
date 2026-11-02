@@ -261,14 +261,17 @@ export function usePostJobs(): UsePostJobsResult {
 
   // 2026-11-01 scale audit (W5): back in the foreground — fetch at once rather
   // than wait out the next tick, so a user returning to the tab after their
-  // jobs finished sees the fresh state immediately. Not while polling has
-  // stopped (the hint tells the user to refresh) or nothing is in flight. The
+  // jobs finished sees the fresh state immediately. Only when something is in
+  // flight. That includes after polling has stopped: the return then costs a
+  // one-shot fetch, deliberately NOT clearing `stopped` or re-arming (the poll
+  // effect above returns early while stopped), so a job that settled while the
+  // user was away clears the hint on its own and one still running keeps it. The
   // listener is registered once and reads the latest state through a ref, so it
   // is added a single time and removed on unmount.
   const onVisibilityChangeRef = useRef<() => void>(() => {});
   useEffect(() => {
     onVisibilityChangeRef.current = () => {
-      if (stopped || !shouldPollPostJobs(jobs, retryWatch)) return;
+      if (!shouldPollPostJobs(jobs, retryWatch)) return;
       const start = scheduleStartRef.current ?? Date.now();
       if (decidePollAction("visibility", Date.now() - start, isTabHidden()) === "fetch") {
         void load({ background: true });

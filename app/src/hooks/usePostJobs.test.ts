@@ -152,10 +152,46 @@ describe("usePostJobs polling", () => {
     expect(latest.pollingStopped).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(1 + 12 + 16 + 19);
 
-    // Stopped means stopped: no timer, and returning to the tab does not poll.
+    // Stopped means no timer: nothing fires on its own.
+    await advance(10 * 60_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1 + 12 + 16 + 19);
+  });
+
+  it("refetches exactly once when the tab returns after polling stopped, without resuming the poll", async () => {
+    await mount();
+    await advance(31 * 60_000);
+    expect(latest.pollingStopped).toBe(true);
+    const stoppedAt = fetchMock.mock.calls.length;
+
+    // Away and back, job still running: one fetch on return, hint stays, and no
+    // timer is armed afterwards.
+    visibility = "hidden";
+    await advance(5 * 60_000);
+    visibility = "visible";
+    await fireVisibilityChange();
+    expect(fetchMock).toHaveBeenCalledTimes(stoppedAt + 1);
+    expect(latest.pollingStopped).toBe(true);
+    await advance(10 * 60_000);
+    expect(fetchMock).toHaveBeenCalledTimes(stoppedAt + 1);
+    expect(latest.pollingStopped).toBe(true);
+  });
+
+  it("clears the hint on return when the job finished while polling was stopped", async () => {
+    await mount();
+    await advance(31 * 60_000);
+    expect(latest.pollingStopped).toBe(true);
+    const stoppedAt = fetchMock.mock.calls.length;
+
+    payloadJobs = [jobFixture({ status: "completed" })];
+    await fireVisibilityChange();
+    expect(fetchMock).toHaveBeenCalledTimes(stoppedAt + 1);
+    expect(latest.jobs?.[0].status).toBe("completed");
+    expect(latest.pollingStopped).toBe(false);
+
+    // Settled: nothing more to fetch, on a timer or on a later return.
     await advance(10 * 60_000);
     await fireVisibilityChange();
-    expect(fetchMock).toHaveBeenCalledTimes(1 + 12 + 16 + 19);
+    expect(fetchMock).toHaveBeenCalledTimes(stoppedAt + 1);
   });
 
   it("does not poll, and does not claim to have stopped, when nothing is in flight", async () => {
