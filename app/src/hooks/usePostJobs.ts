@@ -3,7 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { PostJobDTO, PostsResponse } from "@/lib/postsDto";
-import { settleRetryWatch, shouldPollPostJobs } from "@/lib/postJobPolling";
+import {
+  decidePollAction,
+  hasNewInFlightJob,
+  inFlightJobIds,
+  nextPollDelayMs,
+  settleRetryWatch,
+  shouldPollPostJobs,
+} from "@/lib/postJobPolling";
 import { appendJobsPage, mergePolledPageOne } from "@/lib/postsPagination";
 
 export interface UsePostJobsResult {
@@ -43,19 +50,37 @@ export interface UsePostJobsResult {
    * flight → no poll). See `shouldPollPostJobs` / `settleRetryWatch`.
    */
   watchRetry: (jobId: string) => void;
+  /**
+   * 2026-11-01 scale audit (W5) — true once the backoff schedule
+   * (`nextPollDelayMs`) has run out while a job is still in flight: polling has
+   * given up and the feed should say so (`POLLING_STOPPED_HINT`). Resets when a
+   * job newly enters the in-flight set, and is false whenever nothing is in
+   * flight.
+   */
+  pollingStopped: boolean;
 }
 
-const POLL_INTERVAL_MS = 10_000;
+/** True while the tab is in the background (minimized or another tab is shown). */
+function isTabHidden(): boolean {
+  return document.visibilityState === "hidden";
+}
 
 /**
  * Fetches the current user's post jobs from `GET /api/posts`. Shared by the
  * dashboard's recent-activity preview and the full activity view.
  *
- * Task 8 — polls every 10s while `shouldPollPostJobs` is true (a fresh publish
- * or a retry still running, or an accepted retry not yet seen to finish), so
+ * Task 8 — polls while `shouldPollPostJobs` is true (a fresh publish or a
+ * retry still running, or an accepted retry not yet seen to finish), so
  * results move from pending to success/failed without a manual reload.
  * Background polls never flip `loading`, so the UI never blanks into skeletons
  * mid-poll; only the initial load and an explicit `reload()` do that.
+ *
+ * 2026-11-01 scale audit (W5) — the cadence backs off (`nextPollDelayMs`: 10 s,
+ * then 30 s, then 60 s, then stop after 30 minutes) instead of a flat 10 s
+ * forever. The schedule's clock starts when polling starts and restarts when a
+ * job newly enters the in-flight set (`hasNewInFlightJob`). A hidden tab never
+ * fetches (`decidePollAction`); when it becomes visible again the feed fetches
+ * at once and the schedule carries on from where its clock stands.
  *
  * Whole-branch review, Finding 1 — background polls must never touch `error`:
  * only the initial load and an explicit `reload()` (both foreground) own that
@@ -91,6 +116,12 @@ export function usePostJobs(): UsePostJobsResult {
   // accepted may read the job as still `failed`; if it resolves after that
   // retry it must not overwrite the fresher view or settle the watch.
   const retryEpochRef = useRef(0);
+  // 2026-11-01 scale audit (W5): when the current run of polling started
+  // (Date.now()), and the in-flight job ids last seen — the baseline a "newly
+  // in flight" comparison needs. `stopped` is set when the schedule runs out.
+  const scheduleStartRef = useRef<number | null>(null);
+  const inFlightIdsRef = useRef<ReadonlySet<string>>(new Set());
+  const [stopped, setStopped] = useState(false);
 
   const load = useCallback(async (options?: { background?: boolean }) => {
     const background = options?.background ?? false;
@@ -186,6 +217,20 @@ export function usePostJobs(): UsePostJobsResult {
     load();
   }, [load]);
 
+  // 2026-11-01 scale audit (W5): restart the backoff schedule whenever a job
+  // newly enters the in-flight set (a new publish, a retry, a watch added by
+  // `watchRetry`) — the user just did something, so poll quickly again. Declared
+  // before the poll effect: effects of one commit run in order, so the poll
+  // effect below always sees the fresh start time.
+  useEffect(() => {
+    const ids = inFlightJobIds(jobs, retryWatch);
+    if (hasNewInFlightJob(inFlightIdsRef.current, ids)) {
+      scheduleStartRef.current = Date.now();
+      setStopped(false);
+    }
+    inFlightIdsRef.current = ids;
+  }, [jobs, retryWatch]);
+
   // Background poll: only while something is still in flight (or an accepted
   // retry is still being watched), so an idle activity list never keeps a timer
   // running. Re-armed whenever `jobs` changes (any successful load), `pollCycle`
@@ -193,13 +238,48 @@ export function usePostJobs(): UsePostJobsResult {
   // `jobs` untouched) OR `retryWatch` changes — so polling keeps going until
   // the server reports everything settled, and survives a dropped request
   // instead of stalling forever. Cleans up on unmount/re-run.
+  //
+  // 2026-11-01 scale audit (W5): the delay comes from `nextPollDelayMs` and the
+  // tick asks `decidePollAction` what to do. "fetch" runs a background load
+  // (whose completion bumps `pollCycle` and so re-arms); "stop" flips `stopped`
+  // and nothing re-arms; "skip" (tab hidden) does nothing, deliberately leaving
+  // no timer behind — the visibilitychange listener below resumes on return, so
+  // a hidden tab costs no wake-ups at all. Elapsed time keeps counting meanwhile
+  // because it is measured from `scheduleStartRef`, not from timer to timer. A
+  // schedule that has already run out arms a 0 ms tick so the stop is decided in
+  // one place (and a hidden tab still never advances to stopped).
   useEffect(() => {
-    if (!shouldPollPostJobs(jobs, retryWatch)) return;
+    if (stopped || !shouldPollPostJobs(jobs, retryWatch)) return;
+    const start = scheduleStartRef.current ?? Date.now();
     const t = setTimeout(() => {
-      void load({ background: true });
-    }, POLL_INTERVAL_MS);
+      const action = decidePollAction("timer", Date.now() - start, isTabHidden());
+      if (action === "fetch") void load({ background: true });
+      else if (action === "stop") setStopped(true);
+    }, nextPollDelayMs(Date.now() - start) ?? 0);
     return () => clearTimeout(t);
-  }, [jobs, load, pollCycle, retryWatch]);
+  }, [jobs, load, pollCycle, retryWatch, stopped]);
+
+  // 2026-11-01 scale audit (W5): back in the foreground — fetch at once rather
+  // than wait out the next tick, so a user returning to the tab after their
+  // jobs finished sees the fresh state immediately. Not while polling has
+  // stopped (the hint tells the user to refresh) or nothing is in flight. The
+  // listener is registered once and reads the latest state through a ref, so it
+  // is added a single time and removed on unmount.
+  const onVisibilityChangeRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    onVisibilityChangeRef.current = () => {
+      if (stopped || !shouldPollPostJobs(jobs, retryWatch)) return;
+      const start = scheduleStartRef.current ?? Date.now();
+      if (decidePollAction("visibility", Date.now() - start, isTabHidden()) === "fetch") {
+        void load({ background: true });
+      }
+    };
+  });
+  useEffect(() => {
+    const listener = () => onVisibilityChangeRef.current();
+    document.addEventListener("visibilitychange", listener);
+    return () => document.removeEventListener("visibilitychange", listener);
+  }, []);
 
   return {
     jobs,
@@ -211,5 +291,8 @@ export function usePostJobs(): UsePostJobsResult {
     loadingMore,
     hasMore: nextCursor !== null,
     watchRetry,
+    // Derived: a stale `stopped` (set in an earlier run, jobs since settled)
+    // must not show the hint.
+    pollingStopped: stopped && shouldPollPostJobs(jobs, retryWatch),
   };
 }

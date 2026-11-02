@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PostJobCard } from "@/components/activity/post-job-card";
 import type { UsePostJobsResult } from "@/hooks/usePostJobs";
+import { POLLING_STOPPED_HINT } from "@/lib/postJobPolling";
 
 const PREVIEW_COUNT = 5;
 
@@ -26,6 +27,7 @@ export function RecentActivity({
   reload,
   workspaceMemberCount,
   watchRetry,
+  pollingStopped,
   showCreateCta = true,
 }: UsePostJobsResult & {
   /**
@@ -101,6 +103,10 @@ export function RecentActivity({
         />
       ) : (
         <div className="space-y-3">
+          {/* 2026-11-01 scale audit (W5): polling gave up after 30 minutes. */}
+          {pollingStopped ? (
+            <Alert variant="info">{POLLING_STOPPED_HINT}</Alert>
+          ) : null}
           {preview.map((job) => (
             <PostJobCard
               key={job.id}

@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PostJobCard } from "@/components/activity/post-job-card";
 import { usePostJobs } from "@/hooks/usePostJobs";
+import { POLLING_STOPPED_HINT } from "@/lib/postJobPolling";
 
 /** Client-rendered activity list. The parent server component gates access. */
 export function ActivityView() {
@@ -22,6 +23,7 @@ export function ActivityView() {
     loadingMore,
     hasMore,
     watchRetry,
+    pollingStopped,
   } = usePostJobs();
   // Team Workspaces (Task 7, design §7) — attribution only in a shared
   // (>1-member) workspace, so a solo workspace's activity feed is unchanged.
@@ -83,6 +85,12 @@ export function ActivityView() {
           />
         ) : (
           <>
+            {/* 2026-11-01 scale audit (W5): polling gave up after 30 minutes. */}
+            {pollingStopped ? (
+              <Alert variant="info" className="mb-3">
+                {POLLING_STOPPED_HINT}
+              </Alert>
+            ) : null}
             <div className="space-y-3">
               {jobs.map((job) => (
                 <PostJobCard
