@@ -189,6 +189,31 @@ releases.
    migrations) first. Then deploy phase 2 (the `20261102*` migrations). Deploy
    phase 3 (the `20261103*` migrations) only after phase 2 is deployed and
    verified, and on its own. Do not push two phases in one build.
+
+   **Before you push phase 3, check the size of the results table.** Run this
+   against production (read-only):
+
+   ```sql
+   SELECT count(*) FROM "PostJobResult";
+   ```
+
+   Phase 3's migrations run during the build. They add a column and build an
+   index on `"PostJobResult"` with a plain `CREATE INDEX` (which blocks writes to
+   the table while it builds). Then they backfill `"workspaceId"` on every row
+   in one `UPDATE` (which locks every row it changes until it ends). Both are
+   quick on a small table. If the count is large (say over 1M rows), they can
+   hold their locks long enough to stall publishing, so plan a quiet window for
+   the push. Each migration gives up after 5 s if it has to wait for a lock
+   held by another transaction (`lock_timeout`), and the build then fails. The
+   backfill is idempotent. Recover a failed backfill the way the "Release
+   checklist" above describes:
+
+   ```bash
+   DATABASE_URL="<DIRECT_URL value>" npx prisma migrate resolve --rolled-back 20261103100100_backfill_post_job_result_workspace_id
+   ```
+
+   Then redeploy. Do not edit the committed migration files to get past a
+   failure: their checksums must not change.
 2. **Before promoting a deploy that changes Inngest functions:**
    - Pause `scheduled-post-scanner` in the Inngest dashboard a couple of minutes
      ahead. If you cannot pause it, confirm that no scanner run is active and
@@ -227,11 +252,26 @@ releases.
      the check that no run is Running or Paused).
    - Immediately after the rollback, force an Inngest resync (dashboard
      "Resync", or `PUT https://<domain>/api/inngest`). Then confirm in the
-     dashboard that `publish-to-all-platforms` shows `retries: 0` again. Older
-     code has no claim guard, so phase 2's `retries: 3` must not stay registered
-     against it.
-   - Expected side effects of a rollback: deferred posts that wake on old code
-     send a "Pending" email, and the 2 h reconciler later marks them stalled.
+     dashboard that `publish-to-all-platforms` shows the `retries` value that
+     the rolled-back code registers:
+     - **Phase 3 back to phase 2:** `retries: 3`. Phase 2 code has the claim
+       guard and registers `retries: 3` itself.
+     - **Back to before phase 2:** `retries: 0`. Older code has no claim guard,
+       so phase 2's `retries: 3` must not stay registered against it.
+   - Expected side effects of a rollback:
+     - Deferred posts that wake on old code send a "Pending" email, and the 2 h
+       reconciler later marks them stalled.
+     - **Instagram (phase 3 back to phase 2).** From the phase 3 merge, every
+       Instagram Reels video polls its container across steps, once a minute.
+       This applies to every account and is **not** behind
+       `LARGE_UPLOAD_PLATFORMS`. A rollback while a Reels post is between two
+       polls hands that result to old code. The user gets the "Pending" email,
+       the 2 h reconciler fails the result `PUBLISH_STALLED` about 2 h later, and
+       the container Instagram already created is left orphaned (never
+       published). Nothing was posted, because the publish call only comes after
+       the poll. The user can retry.
+     - Large videos that are part-way through an upload: see "Enabling
+       large-video uploads (phase 3)" below.
 
 #### Enabling large-video uploads (phase 3)
 
@@ -253,17 +293,40 @@ after the promotion:
 
 1. Set `LARGE_UPLOAD_PLATFORMS=<platform>` (for example `youtube`) in the Vercel
    production environment and redeploy. The value is read at the next deploy.
-2. Publish one ~100 MB video to that platform from its sandbox/test account (see
+2. **YouTube only:** before the test, note today's value of the daily upload
+   counter (read-only):
+
+   ```sql
+   SELECT "count" FROM "RateLimitEntry"
+   WHERE "key" = 'quota:youtube:videos.insert:<today in Pacific time, YYYY-MM-DD>';
+   ```
+
+   No row means 0.
+3. Publish one ~100 MB video to that platform from its sandbox/test account (see
    "Sandbox platform apps" below).
-3. Check that the post went out, with the full video playable on the platform.
-   Then add the next platform to the list (`youtube,tiktok`, and so on) and
-   repeat from step 1.
+4. Check that the run really crossed a step: the run of `publish-to-all-platforms`
+   in the Inngest dashboard must show at least one `publish-to-<platform>-c1` step
+   (for example `publish-to-youtube-c1`). If the ~100 MB run finished in a single
+   step, the cross-step path was not tested: repeat with a bigger file, up to
+   512 MB, until a `-c1` step appears.
+5. Check that the post went out, with the full video playable on the platform.
+   - **YouTube:** run the query from step 2 again. The counter must have risen by
+     exactly 1 for the one video (one upload session). More than 1 means a session
+     was started twice; stop and investigate before you enable another platform.
+   - **TikTok:** record whether the status poll confirmed the post, or the result
+     ended `TIKTOK_PUBLISH_PENDING` ("check TikTok before retrying"). For a
+     pending result, check the sandbox account for the video before you do
+     anything else, and do not retry it blindly.
+6. Add the next platform to the list (`youtube,tiktok`, and so on) and repeat
+   from step 1.
 
 On a failure, remove that platform from the list (or set `none`) and redeploy.
 The platform goes back to the buffered upload. A result that already has saved
 upload state for its run stays on the new path, so switching a platform off never
 strands an upload that has started. A rollback in the middle of an upload leaves
-those results `pending`; the 2 h reconciler fails them as stalled.
+those results `pending`; the 2 h reconciler fails them as stalled. The same holds
+for an Instagram Reels post that is between two polls (see the rollback side
+effects above), whatever `LARGE_UPLOAD_PLATFORMS` says.
 
 ## Sandbox platform apps
 
