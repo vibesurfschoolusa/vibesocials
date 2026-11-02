@@ -9,9 +9,9 @@ import {
 } from "./publishFlowControl";
 
 describe("publishConcurrencyLimits", () => {
-  it("defaults to 5 per workspace and 80 global when the env vars are absent", () => {
-    expect(publishConcurrencyLimits({})).toEqual({ perWorkspace: 5, global: 80 });
-    expect(DEFAULT_PUBLISH_CONCURRENCY_PER_WORKSPACE).toBe(5);
+  it("defaults to 20 per workspace and 80 global when the env vars are absent", () => {
+    expect(publishConcurrencyLimits({})).toEqual({ perWorkspace: 20, global: 80 });
+    expect(DEFAULT_PUBLISH_CONCURRENCY_PER_WORKSPACE).toBe(20);
     expect(DEFAULT_PUBLISH_CONCURRENCY_GLOBAL).toBe(80);
   });
 
@@ -32,7 +32,7 @@ describe("publishConcurrencyLimits", () => {
           PUBLISH_CONCURRENCY_PER_WORKSPACE: raw,
           PUBLISH_CONCURRENCY_GLOBAL: raw,
         }),
-      ).toEqual({ perWorkspace: 5, global: 80 });
+      ).toEqual({ perWorkspace: 20, global: 80 });
     },
   );
 
@@ -42,7 +42,7 @@ describe("publishConcurrencyLimits", () => {
         PUBLISH_CONCURRENCY_PER_WORKSPACE: "abc",
         PUBLISH_CONCURRENCY_GLOBAL: "120",
       }),
-    ).toEqual({ perWorkspace: 5, global: 120 });
+    ).toEqual({ perWorkspace: 20, global: 120 });
   });
 
   it("falls back for a number too large to be a safe integer", () => {
@@ -71,8 +71,8 @@ describe("publishConcurrencyLimits", () => {
 
 describe("publishConcurrency", () => {
   it("is two env-scoped keys: one per workspace, one global", () => {
-    expect(publishConcurrency({ perWorkspace: 5, global: 80 })).toEqual([
-      { scope: "env", key: '"publish-ws-" + event.data.workspaceId', limit: 5 },
+    expect(publishConcurrency({ perWorkspace: 20, global: 80 })).toEqual([
+      { scope: "env", key: '"publish-ws-" + event.data.workspaceId', limit: 20 },
       { scope: "env", key: '"publish-global"', limit: 80 },
     ]);
   });

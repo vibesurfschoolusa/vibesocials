@@ -19,14 +19,23 @@
  */
 
 /**
- * Concurrent publish steps per workspace. 5 stays under TikTok's 6 `video/init`
- * requests per minute per user token, because a TikTok step lasts 30-150 s
- * (https://developers.tiktok.com/doc/content-posting-api-reference-direct-post);
- * a ~300-post agency cannot take more than 6% of the global slots; and it stays
- * well inside X's 100 posts per 15 min per user
- * (https://docs.x.com/x-api/fundamentals/rate-limits).
+ * Concurrent publish steps per workspace (ruling R19: raised from 5).
+ *
+ * 20 drains a ~300-post single-workspace burst (~1,200 steps of ~40 s) in about
+ * 40 minutes, well inside the 2 h stuck-in_progress reconciler. At 5 (~450
+ * steps an hour, ~2.7 h for that burst) queued runs, which write no heartbeat,
+ * were failed PUBLISH_STALLED by `reconcileStuckInProgressJobs` before their run
+ * got a slot, and then skipped every platform when it finally started. It still
+ * caps one workspace at 25% of the global slots.
+ *
+ * Per-account platform limits are not this limit's job: a rate-limited platform
+ * (TikTok `video/init`: 6 requests per minute per user token,
+ * https://developers.tiktok.com/doc/content-posting-api-reference-direct-post;
+ * X: 100 posts per 15 min per user, https://docs.x.com/x-api/fundamentals/rate-limits)
+ * answers 429, and the rate-limit deferral planned for the platform clients (Task 5)
+ * turns that into a delay instead of a failure.
  */
-export const DEFAULT_PUBLISH_CONCURRENCY_PER_WORKSPACE = 5;
+export const DEFAULT_PUBLISH_CONCURRENCY_PER_WORKSPACE = 20;
 
 /**
  * Concurrent publish steps across the whole environment: 80% of the 100
