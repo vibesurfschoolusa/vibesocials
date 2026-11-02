@@ -1490,6 +1490,7 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
     completedAt?: number;
     urlsExpireAt: number;
     restarts: number;
+    lastStatus?: string;
   };
   type Secret = {
     parts: Array<{ url: string; firstByte: number; lastByte: number; headers: Record<string, string> }>;
@@ -2232,6 +2233,24 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       expectNoCapabilityValues(describeError(error));
     });
 
+    it("a refusal logs only the HTTP status: LinkedIn's body, which could quote the metadata, reaches no log or error", async () => {
+      const { store } = fakeStore(uploadState(3));
+      const body = JSON.stringify({
+        message: `invalid metadata ${metadataOf()}`,
+        detail: partUrl(0, RANGES[0]),
+      });
+      stubLinkedIn({ complete: [reply(400, body)] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error).toMatchObject({ code: "LINKEDIN_VIDEO_UPLOAD_FAILED", status: 400 });
+      expect(error?.message).toBe("LinkedIn video upload could not be completed (status 400)");
+      const logged = everythingLogged();
+      expect(logged).not.toContain("invalid metadata");
+      expectNoCapabilityValues(describeError(error), logged);
+      expect(logged).toContain('"status":400');
+    });
+
     it("a 404 fails LINKEDIN_VIDEO_UPLOAD_FAILED too (nothing is posted)", async () => {
       const { store } = fakeStore(uploadState(3));
       const li = stubLinkedIn({ complete: [reply(404, "")] });
@@ -2298,7 +2317,7 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
         "X-Restli-Protocol-Version": "2.0.0",
       });
       expect(li.posts()).toHaveLength(0);
-      expect(saved()?.data).toEqual(processingState(0).data);
+      expect(saved()?.data).toEqual({ ...processingState(0).data, lastStatus: "PROCESSING" });
     });
 
     it("posts once, in the same step, when the asset is AVAILABLE", async () => {
@@ -2380,18 +2399,53 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       },
     );
 
-    it.each(["NEW", "PROCESSING", "WAITING_UPLOAD", "MUTATING", "A_STATUS_NOBODY_DOCUMENTED"])(
-      "%s keeps waiting",
+    /** Runs steps like the run loop does: a continuation's resumeAt becomes "now" for the next step. Ends on a post or a failure. */
+    async function untilDone(store: UploadStateStore, maxSteps = 80) {
+      for (let step = 1; step <= maxSteps; step += 1) {
+        try {
+          const result = await run(bigCtx(store));
+          if (!result.continuation) return { result, error: null as LiError | null, steps: step };
+          const resumeAt = result.continuation.resumeAt;
+          if (resumeAt !== null && resumeAt > Date.now()) vi.setSystemTime(resumeAt);
+        } catch (error) {
+          return { result: null, error: error as LiError, steps: step };
+        }
+      }
+      throw new Error("the upload did not end");
+    }
+
+    /** Status answers that tell us nothing about the asset. */
+    const UNUSABLE_STATUS_ANSWERS = [
+      ["a 404 (the unconfirmed /v2 status read)", reply(404, "")],
+      ["a body that is not JSON", reply(200, "<html>ok</html>")],
+      ["an answer with no recipes", () => json({ id: "ASSET1" })],
+      ["an answer with no feedshare-video recipe", statusReply("AVAILABLE", "urn:li:digitalmediaRecipe:other")],
+      ["a recipe status that is not a string", () => json({ recipes: [{ recipe: VIDEO_RECIPE, status: 3 }] })],
+    ] as const;
+
+    it.each(["NEW", "PROCESSING", "WAITING_UPLOAD", "MUTATING"])(
+      "%s keeps waiting, and is remembered as the last readable status",
       async (status) => {
-        const { store } = fakeStore(processingState(0));
+        const { store, saved } = fakeStore(processingState(0));
         const li = stubLinkedIn({ status: [statusReply(status)] });
 
         expect(await run(bigCtx(store))).toEqual(paused(NOW + POLL));
         expect(li.posts()).toHaveLength(0);
+        expect(saved()?.data.lastStatus).toBe(status);
+        expect(JSON.stringify(saved()?.data)).not.toContain("://");
       },
     );
 
-    it("posts anyway, with a warning, once the asset has been processing for 10 minutes (and not a millisecond sooner)", async () => {
+    it("keeps waiting on a status nobody documented, and forgets the last readable one", async () => {
+      const { store, saved } = fakeStore(processingState(0, { lastStatus: "PROCESSING" }));
+      const li = stubLinkedIn({ status: [statusReply("A_STATUS_NOBODY_DOCUMENTED")] });
+
+      expect(await run(bigCtx(store))).toEqual(paused(NOW + POLL));
+      expect(li.posts()).toHaveLength(0);
+      expect(saved()?.data).not.toHaveProperty("lastStatus");
+    });
+
+    it("still PROCESSING at the 10-minute cap posts, with a warning (and not a millisecond sooner)", async () => {
       const late = fakeStore(processingState(MAX_WAIT));
       const lateLi = stubLinkedIn({ status: [statusReply("PROCESSING")] });
       expect(await run(bigCtx(late.store))).toEqual({ externalPostId: "urn:li:share:77" });
@@ -2405,6 +2459,36 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       expect(earlyLi.posts()).toHaveLength(0);
     });
 
+    it.each(["NEW", "WAITING_UPLOAD", "MUTATING", "A_STATUS_NOBODY_DOCUMENTED"])(
+      "%s at the 10-minute cap fails LINKEDIN_VIDEO_UPLOAD_FAILED and posts nothing",
+      async (status) => {
+        const { store } = fakeStore(processingState(MAX_WAIT));
+        const li = stubLinkedIn({ status: [statusReply(status)] });
+
+        const error = await failure(bigCtx(store));
+
+        expect(error?.code).toBe("LINKEDIN_VIDEO_UPLOAD_FAILED");
+        expect(li.sequence()).toEqual(["status"]);
+        expectNoCapabilityValues(describeError(error), everythingLogged());
+      },
+    );
+
+    it("a status that is not PROCESSING at the cap fails even when PROCESSING was seen earlier", async () => {
+      const { store } = fakeStore(processingState(MAX_WAIT, { lastStatus: "PROCESSING" }));
+      const li = stubLinkedIn({ status: [statusReply("WAITING_UPLOAD")] });
+
+      expect((await failure(bigCtx(store)))?.code).toBe("LINKEDIN_VIDEO_UPLOAD_FAILED");
+      expect(li.posts()).toHaveLength(0);
+    });
+
+    it("the same statuses one millisecond before the cap keep waiting", async () => {
+      const { store } = fakeStore(processingState(MAX_WAIT - 1));
+      const li = stubLinkedIn({ status: [statusReply("WAITING_UPLOAD")] });
+
+      expect(await run(bigCtx(store))).toEqual(paused(NOW + POLL));
+      expect(li.posts()).toHaveLength(0);
+    });
+
     it("a 10-minute wait does not post over an asset that failed", async () => {
       const { store } = fakeStore(processingState(MAX_WAIT + MINUTE));
       const li = stubLinkedIn({ status: [statusReply("CLIENT_ERROR")] });
@@ -2413,21 +2497,137 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       expect(li.posts()).toHaveLength(0);
     });
 
+    it.each(UNUSABLE_STATUS_ANSWERS)(
+      "%s is no answer: pause 30 s and ask again, posting nothing and keeping the last readable status",
+      async (_label, bad) => {
+        const { store, saved } = fakeStore(processingState(0, { lastStatus: "NEW" }));
+        const li = stubLinkedIn({ status: [bad as Reply] });
+
+        const result = await run(bigCtx(store));
+
+        expect(result).toEqual(paused(NOW + RESUME_DELAY));
+        expect(li.sequence()).toEqual(["status"]);
+        expect(saved()?.data.lastStatus).toBe("NEW");
+      },
+    );
+
+    it.each(UNUSABLE_STATUS_ANSWERS)(
+      "%s until the 10-minute cap fails LINKEDIN_VIDEO_UPLOAD_FAILED with no ugcPosts call",
+      async (_label, bad) => {
+        const { store } = fakeStore(processingState(MAX_WAIT));
+        const li = stubLinkedIn({ status: [bad as Reply] });
+
+        const error = await failure(bigCtx(store));
+
+        expect(error?.code).toBe("LINKEDIN_VIDEO_UPLOAD_FAILED");
+        expect(li.sequence()).toEqual(["status"]);
+        expectNoCapabilityValues(describeError(error), everythingLogged());
+      },
+    );
+
+    it("an unusable answer at the cap still posts when PROCESSING was the last readable status", async () => {
+      const { store } = fakeStore(processingState(MAX_WAIT, { lastStatus: "PROCESSING" }));
+      const li = stubLinkedIn({ status: [reply(404, "")] });
+
+      expect(await run(bigCtx(store))).toEqual({ externalPostId: "urn:li:share:77" });
+      expect(li.sequence()).toEqual(["status", "post"]);
+    });
+
+    describe("across the whole wait", () => {
+      it("PROCESSING seen, then no answer until the cap: posts exactly once", async () => {
+        const { store } = fakeStore(processingState(0));
+        const li = stubLinkedIn({
+          status: [statusReply("PROCESSING")],
+          defaults: { status: reply(503, "busy") },
+        });
+
+        const { result, error, steps } = await untilDone(store);
+
+        expect(error).toBeNull();
+        expect(result).toEqual({ externalPostId: "urn:li:share:77" });
+        expect(li.posts()).toHaveLength(1);
+        // One PROCESSING check at +60 s, then a check every 30 s until 10 minutes have passed.
+        expect(steps).toBe(20);
+        expect(Date.now() - NOW).toBe(MAX_WAIT);
+      });
+
+      it("a 404 until the cap: UPLOAD_FAILED, no ugcPosts call", async () => {
+        const { store } = fakeStore(processingState(0));
+        const li = stubLinkedIn({ defaults: { status: reply(404, "") } });
+
+        const { result, error, steps } = await untilDone(store);
+
+        expect(result).toBeNull();
+        expect(error?.code).toBe("LINKEDIN_VIDEO_UPLOAD_FAILED");
+        expect(li.posts()).toHaveLength(0);
+        expect(steps).toBe(21);
+        expect(Date.now() - NOW).toBe(MAX_WAIT);
+      });
+
+      it("WAITING_UPLOAD until the cap: UPLOAD_FAILED, no ugcPosts call", async () => {
+        const { store } = fakeStore(processingState(0));
+        const li = stubLinkedIn({ defaults: { status: statusReply("WAITING_UPLOAD") } });
+
+        const { result, error } = await untilDone(store);
+
+        expect(result).toBeNull();
+        expect(error?.code).toBe("LINKEDIN_VIDEO_UPLOAD_FAILED");
+        expect(li.posts()).toHaveLength(0);
+        expect(li.statuses()).toHaveLength(11);
+      });
+
+      it("PROCESSING until the cap: posts exactly once", async () => {
+        const { store } = fakeStore(processingState(0));
+        const li = stubLinkedIn({ defaults: { status: statusReply("PROCESSING") } });
+
+        const { result, error } = await untilDone(store);
+
+        expect(error).toBeNull();
+        expect(result).toEqual({ externalPostId: "urn:li:share:77" });
+        expect(li.posts()).toHaveLength(1);
+      });
+
+      it("stays inside the continuation limit even when every check is answered with an error", async () => {
+        const { store } = fakeStore(processingState(0));
+        stubLinkedIn({ defaults: { status: reply(503, "busy") } });
+
+        const { error, steps } = await untilDone(store);
+
+        expect(error?.code).toBe("LINKEDIN_VIDEO_UPLOAD_FAILED");
+        expect(steps).toBeLessThanOrEqual(MAX_CONTINUATIONS_PER_RESULT);
+      });
+    });
+
     it.each([
-      ["a 404 (the unconfirmed /v2 status read)", reply(404, "")],
-      ["a body that is not JSON", reply(200, "<html>ok</html>")],
-      ["an answer with no recipes", () => json({ id: "ASSET1" })],
-      ["an answer with no feedshare-video recipe", statusReply("AVAILABLE", "urn:li:digitalmediaRecipe:other")],
-      ["a recipe status that is not a string", () => json({ recipes: [{ recipe: VIDEO_RECIPE, status: 3 }] })],
-    ] as const)("posts anyway, with a warning, when the status answer is %s", async (_label, bad) => {
-      const { store } = fakeStore(processingState(0));
-      const li = stubLinkedIn({ status: [bad as Reply] });
+      ["an address", "https://upload.linkedin.example/dms-uploads/ASSET1?sau=part-secret-1-0"],
+      ["a status nobody documented", "A_STATUS_NOBODY_DOCUMENTED"],
+      ["a failure status", "CLIENT_ERROR"],
+      ["something that is not text", 7],
+    ])("saved state whose lastStatus is %s is still used, with the last status taken as absent", async (_label, lastStatus) => {
+      const { store } = fakeStore(processingState(MAX_WAIT, { lastStatus: lastStatus as string }));
+      const li = stubLinkedIn({ status: [reply(503, "busy")] });
+
+      const error = await failure(bigCtx(store));
+
+      // The state was kept (no new registration); with no readable PROCESSING the cap fails.
+      expect(li.registers()).toHaveLength(0);
+      expect(error?.code).toBe("LINKEDIN_VIDEO_UPLOAD_FAILED");
+      expect(li.posts()).toHaveLength(0);
+    });
+
+    it.each([
+      ["an address", "https://upload.linkedin.example/dms-uploads/ASSET1?sau=part-secret-1-0"],
+      ["a status nobody documented", "A_STATUS_NOBODY_DOCUMENTED"],
+      ["something that is not text", 7],
+    ])("saved state whose lastStatus is %s is not written back (an address would never reach the readable data)", async (_label, lastStatus) => {
+      const { store, saved } = fakeStore(processingState(0, { lastStatus: lastStatus as string }));
+      stubLinkedIn({ status: [reply(503, "busy")] });
 
       const result = await run(bigCtx(store));
 
-      expect(result).toEqual({ externalPostId: "urn:li:share:77" });
-      expect(li.sequence()).toEqual(["status", "post"]);
-      expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).toMatch(/posting anyway/i);
+      expect(result).toEqual(paused(NOW + RESUME_DELAY));
+      expect(saved()?.data).not.toHaveProperty("lastStatus");
+      expectNoCapabilityValues(JSON.stringify(saved()?.data));
     });
 
     it.each([400, 403, 422])("a %i fails LINKEDIN_VIDEO_UPLOAD_FAILED before any post", async (status) => {
@@ -2481,12 +2681,24 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       expect(li.posts()).toHaveLength(0);
     });
 
-    it("posts anyway after 10 minutes of status checks that got no answer", async () => {
-      const { store } = fakeStore(processingState(MAX_WAIT));
-      const li = stubLinkedIn({ status: [reply(503, "busy")] });
+    it("no answer at the cap posts when PROCESSING was the last readable status, and fails otherwise", async () => {
+      const seen = fakeStore(processingState(MAX_WAIT, { lastStatus: "PROCESSING" }));
+      const seenLi = stubLinkedIn({ status: [reply(503, "busy")] });
+      expect(await run(bigCtx(seen.store))).toEqual({ externalPostId: "urn:li:share:77" });
+      expect(seenLi.sequence()).toEqual(["status", "post"]);
+      expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).toMatch(/posting anyway/i);
 
-      expect(await run(bigCtx(store))).toEqual({ externalPostId: "urn:li:share:77" });
-      expect(li.sequence()).toEqual(["status", "post"]);
+      vi.clearAllMocks();
+      const never = fakeStore(processingState(MAX_WAIT));
+      const neverLi = stubLinkedIn({ status: [reply(503, "busy")] });
+      expect((await failure(bigCtx(never.store)))?.code).toBe("LINKEDIN_VIDEO_UPLOAD_FAILED");
+      expect(neverLi.sequence()).toEqual(["status"]);
+
+      vi.clearAllMocks();
+      const other = fakeStore(processingState(MAX_WAIT, { lastStatus: "NEW" }));
+      const otherLi = stubLinkedIn({ status: [timeoutFailure()] });
+      expect((await failure(bigCtx(other.store)))?.code).toBe("LINKEDIN_VIDEO_UPLOAD_FAILED");
+      expect(otherLi.posts()).toHaveLength(0);
     });
 
     it("does not start a check with under 60 s left; the next step does", async () => {
@@ -2664,6 +2876,72 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       expect(saved()).toEqual({ kind: LINKEDIN_UPLOAD_STATE_KIND, ...uploadState(1, { urlsExpireAt: NOW + 1_000 }) });
     });
 
+    it.each([
+      ["a timeout", timeoutFailure()],
+      ["a dropped connection", connectionReset()],
+      ["a body that ends early", terminated()],
+      ["the step budget running out", failWith(Object.assign(new Error("budget"), { code: PUBLISH_BUDGET_EXCEEDED_CODE }))],
+      ["a 503", reply(503, "busy")],
+    ] as const)(
+      "%s on the new registration keeps the restart pending: pause 30 s with the old state, no restart counted",
+      async (_label, bad) => {
+        const { store, saved } = fakeStore(uploadState(1, { urlsExpireAt: NOW + 1_000 }));
+        const li = stubLinkedIn({ register: [bad as Reply, registerReply({ n: 2 })] });
+
+        const result = await run(bigCtx(store));
+
+        expect(result).toEqual(paused(NOW + RESUME_DELAY));
+        expect(li.sequence()).toEqual(["register"]);
+        expect(saved()).toEqual({ kind: LINKEDIN_UPLOAD_STATE_KIND, ...uploadState(1, { urlsExpireAt: NOW + 1_000 }) });
+
+        // The next step registers again, and the restart is counted once.
+        const next = await run(bigCtx(store));
+        expect(li.registers()).toHaveLength(2);
+        expect(next).toEqual(paused(Date.now() + POLL));
+        expect(li.puts().every((p) => p.url.includes("ASSET2"))).toBe(true);
+        expect(li.completes()).toHaveLength(1);
+        expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).toMatch(/registration/i);
+      },
+    );
+
+    it("a restart whose registration keeps getting no answer is never counted twice", async () => {
+      const { store, saved, saves } = fakeStore(uploadState(1, { urlsExpireAt: NOW + 1_000, restarts: 1 }));
+      const li = stubLinkedIn({
+        register: [timeoutFailure(), connectionReset(), registerReply({ n: 2 })],
+      });
+
+      expect(await run(bigCtx(store))).toEqual(paused(NOW + RESUME_DELAY));
+      expect(await run(bigCtx(store))).toEqual(paused(NOW + RESUME_DELAY));
+      expect(saved()?.data.restarts).toBe(1);
+      await run(bigCtx(store));
+
+      expect(li.registers()).toHaveLength(3);
+      expect(saves().find((s) => s.data.asset === assetUrn(2))?.data.restarts).toBe(2);
+    });
+
+    it("a restart's registration refused for good (a 400, a bug) still fails rather than pausing", async () => {
+      const refused = fakeStore(uploadState(1, { urlsExpireAt: NOW + 1_000 }));
+      stubLinkedIn({ register: [reply(400, "{}")] });
+      expect((await failure(bigCtx(refused.store)))?.code).toBe("LINKEDIN_VIDEO_UPLOAD_FAILED");
+
+      vi.clearAllMocks();
+      const bug = new TypeError("Invalid state: the stream is locked");
+      const broken = fakeStore(uploadState(1, { urlsExpireAt: NOW + 1_000 }));
+      stubLinkedIn({ register: [failWith(bug)] });
+      expect(await failure(bigCtx(broken.store))).toBe(bug);
+    });
+
+    it("the very first registration of a fresh upload still fails on a timeout (nothing was uploaded yet)", async () => {
+      const { store, mocks } = fakeStore();
+      const li = stubLinkedIn({ register: [timeoutFailure()] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error?.code).toBe("FETCH_TIMEOUT");
+      expect(li.sequence()).toEqual(["register"]);
+      expect(mocks.save).not.toHaveBeenCalled();
+    });
+
     it("a rate limit on the new registration leaves the old state in place", async () => {
       const { store, saved } = fakeStore(uploadState(1, { urlsExpireAt: NOW + 1_000 }));
       stubLinkedIn({ register: [reply(429, "", { "Retry-After": "60" })] });
@@ -2734,7 +3012,61 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       expect(await failure(bigCtx(store))).toBe(bug);
     });
 
-    it.each([400, 403, 413])("fails LINKEDIN_VIDEO_UPLOAD_FAILED on a %i, naming the part and the status but no URL", async (status) => {
+    it("treats a 403 as an expired part URL: pauses with the restart pending, then registers again and starts over", async () => {
+      const { store, saved, saves } = fakeStore(uploadState(1));
+      const li = stubLinkedIn({ part: [reply(403, "expired")], register: [registerReply({ n: 2 })] });
+
+      const first = await run(bigCtx(store));
+
+      expect(first).toEqual(paused(null));
+      expect(li.sequence()).toEqual(["blob", "part"]);
+      // The position is kept; only the URLs' good-until time says they are spent. Nothing is counted yet.
+      expect(saved()?.data).toMatchObject({ nextPart: 1, etags: ["e1"], restarts: 0, urlsExpireAt: NOW });
+      expect(streams.cancelled).toBe(1);
+
+      const second = await run(bigCtx(store));
+
+      expect(li.registers()).toHaveLength(1);
+      expect(saves().find((s) => s.data.asset === assetUrn(2))).toEqual(uploadState(0, { restarts: 1 }, 2));
+      expect(li.puts().slice(1).every((p) => p.url.includes("ASSET2") && p.intact)).toBe(true);
+      expect(li.puts().slice(1)).toHaveLength(3);
+      expect(second).toEqual(paused(Date.now() + POLL));
+      expect(li.posts()).toHaveLength(0);
+      expectNoCapabilityValues(everythingLogged());
+    });
+
+    it("a 403 starts over twice at most, then fails as a 403 always did", async () => {
+      const { store, saved } = fakeStore();
+      const li = stubLinkedIn({
+        register: [registerReply({ n: 1 }), registerReply({ n: 2 }), registerReply({ n: 3 })],
+        part: [reply(403, "x"), reply(403, "x"), reply(403, "x")],
+      });
+
+      expect(await run(bigCtx(store))).toEqual(paused(null));
+      expect(await run(bigCtx(store))).toEqual(paused(null));
+      expect(saved()?.data).toMatchObject({ asset: assetUrn(2), restarts: 1 });
+
+      const error = await failure(bigCtx(store));
+
+      expect(li.registers()).toHaveLength(3);
+      expect(error).toMatchObject({ code: "LINKEDIN_VIDEO_UPLOAD_FAILED", status: 403 });
+      expect(error?.message).toMatch(/part 1 of 3/);
+      expect(li.posts()).toHaveLength(0);
+      expectNoCapabilityValues(describeError(error), everythingLogged());
+    });
+
+    it("a 403 with no restart left fails at once, without pausing or registering again", async () => {
+      const { store, saved } = fakeStore(uploadState(1, { restarts: 2 }));
+      const li = stubLinkedIn({ part: [reply(403, "expired")] });
+
+      const error = await failure(bigCtx(store));
+
+      expect(error).toMatchObject({ code: "LINKEDIN_VIDEO_UPLOAD_FAILED", status: 403 });
+      expect(li.registers()).toHaveLength(0);
+      expect(saved()?.data.urlsExpireAt).toBe(NOW + HOUR);
+    });
+
+    it.each([400, 413])("fails LINKEDIN_VIDEO_UPLOAD_FAILED on a %i, naming the part and the status but no URL", async (status) => {
       const { store, saved } = fakeStore(uploadState(1));
       stubLinkedIn({ part: [reply(status, "denied")] });
 
@@ -2860,8 +3192,9 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
           return failure(bigCtx(fakeStore().store));
         },
         () => {
+          // With no restart left, a 403 is a plain failure.
           stubLinkedIn({ part: [reply(403, "denied")] });
-          return failure(bigCtx(fakeStore(uploadState(1)).store));
+          return failure(bigCtx(fakeStore(uploadState(1, { restarts: 2 })).store));
         },
         () => {
           stubLinkedIn({ part: [reply(200)] });

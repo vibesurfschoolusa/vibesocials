@@ -126,8 +126,11 @@ export const LINKEDIN_ASSET_POLL_INTERVAL_MS = 60_000;
 
 /**
  * How long after the upload was completed the post waits for the asset to become AVAILABLE
- * (10 min). Our own bound: the page only says processing "might take a few minutes". Past it,
- * the post is made anyway, which is what the whole-file path does right after its upload.
+ * (10 min). Our own bound: the page only says processing "might take a few minutes". At the cap
+ * an asset that LinkedIn last reported PROCESSING is posted anyway, which is what the whole-file
+ * path does right after its upload; any other outcome (no answer ever, WAITING_UPLOAD, NEW, a
+ * status nobody documented) is LINKEDIN_VIDEO_UPLOAD_FAILED, because it says LinkedIn never
+ * took the upload.
  */
 export const LINKEDIN_ASSET_MAX_WAIT_MS = 600_000;
 
@@ -794,6 +797,17 @@ interface LinkedInUploadPart {
   headers: Record<string, string>;
 }
 
+/**
+ * The recipe statuses that mean "not ready yet", as the Assets API page lists them. Only these are
+ * ever written to the readable saved data as `lastStatus` (a status enum string, never a URL).
+ */
+const LINKEDIN_RECIPE_WAITING_STATUSES = ["NEW", "PROCESSING", "WAITING_UPLOAD", "MUTATING"] as const;
+type LinkedInWaitingStatus = (typeof LINKEDIN_RECIPE_WAITING_STATUSES)[number];
+
+function asWaitingStatus(value: unknown): LinkedInWaitingStatus | undefined {
+  return LINKEDIN_RECIPE_WAITING_STATUSES.find((status) => status === value);
+}
+
 /** What a step saves as readable progress. No URL and no LinkedIn opaque value may be in it (uploadState.ts). */
 interface LinkedInMultipartData {
   asset: string;
@@ -810,6 +824,8 @@ interface LinkedInMultipartData {
   urlsExpireAt: number;
   /** How many times the upload started over because its URLs were about to expire. */
   restarts: number;
+  /** The last readable "not ready yet" status of the asset (processing phase only); absent when none, or an unknown one, was seen. */
+  lastStatus?: LinkedInWaitingStatus;
 }
 
 /** What a step saves sealed: capability values. Present until the upload is completed. */
@@ -971,7 +987,11 @@ function readSavedUpload(
   if (phase === "processing") {
     // The completion comes after the last part, and stamps its time. Nothing sealed is needed any more.
     if (nextPart !== partCount || !isFiniteNumber(completedAt)) return null;
-    return { data: { ...common, phase, completedAt }, secret: null };
+    const lastStatus = asWaitingStatus(data.lastStatus);
+    return {
+      data: { ...common, phase, completedAt, ...(lastStatus === undefined ? {} : { lastStatus }) },
+      secret: null,
+    };
   }
 
   const secret = saved?.secret;
@@ -1100,7 +1120,8 @@ async function registerMultipartUpload(args: {
 /** What a status check says about the asset. A processing failure is thrown, not returned. */
 type AssetVerdict =
   | { kind: "available" }
-  | { kind: "waiting" }
+  /** Not ready yet. `status` is the recipe's status when it is one the page lists, else undefined. */
+  | { kind: "waiting"; status: LinkedInWaitingStatus | undefined }
   /** An answer we cannot use: a 404, a body that is not JSON, or no `feedshare-video` recipe in it. */
   | { kind: "unreadable"; reason: string }
   /** No answer: a 5xx, a timeout, or a connection that dropped. Asking again is safe. */
@@ -1179,7 +1200,7 @@ async function checkAssetStatus(args: {
     console.error("[LinkedIn] Video processing failed", { assetUrn: asset, recipeStatus: status });
     throw processingFailed();
   }
-  return { kind: "waiting" };
+  return { kind: "waiting", status: asWaitingStatus(status) };
 }
 
 /**
@@ -1197,17 +1218,21 @@ async function checkAssetStatus(args: {
  *   metadata are dropped from the saved state, and the step continues after the poll interval.
  * - processing: one status check per step. AVAILABLE posts (ugcPosts, the commit call) in the
  *   same step, with at least LINKEDIN_POST_MIN_WINDOW_MS left, else the step continues at once;
- *   still processing continues after LINKEDIN_ASSET_POLL_INTERVAL_MS; a failed recipe is
- *   LINKEDIN_VIDEO_PROCESSING_FAILED. Over LINKEDIN_ASSET_MAX_WAIT_MS since the completion, or
- *   with a status answer that cannot be read, it posts anyway (the whole-file path posts right
- *   after its upload), with a warning.
+ *   a failed recipe is LINKEDIN_VIDEO_PROCESSING_FAILED. A status that is not ready yet continues
+ *   after LINKEDIN_ASSET_POLL_INTERVAL_MS and is saved as `lastStatus`; a missing answer (a 5xx,
+ *   a timeout, a 404, a body we cannot read) continues after LINKEDIN_TRANSIENT_RESUME_DELAY_MS.
+ *   At LINKEDIN_ASSET_MAX_WAIT_MS since the completion the post is made anyway (with a warning)
+ *   only when LinkedIn's last readable status was PROCESSING - the whole-file path posts right
+ *   after its upload - and anything else is LINKEDIN_VIDEO_UPLOAD_FAILED, before any post.
  *
  * With the earliest part URL expiring in under LINKEDIN_URL_EXPIRY_SAFETY_MS and parts left, the
  * video is registered again and uploaded from part 0 (nothing was posted), at most
- * LINKEDIN_MAX_UPLOAD_RESTARTS times. A part, the completion or a status check that gets no
- * usable answer (5xx, timeout, dropped connection) pauses for LINKEDIN_TRANSIENT_RESUME_DELAY_MS
- * and is sent again in the next step; running into the step deadline pauses too. A 429 saves the
- * position, then throws RATE_LIMITED.
+ * LINKEDIN_MAX_UPLOAD_RESTARTS times. A part answered 403 is taken for an expired URL and
+ * restarts the same way, in the next step, using the same count. A part, the completion, a status
+ * check or the registration of a restart that gets no usable answer (5xx, timeout, dropped
+ * connection) pauses for LINKEDIN_TRANSIENT_RESUME_DELAY_MS and is sent again in the next step
+ * (a restart that is waiting for its registration is not counted twice); running into the step
+ * deadline pauses too. A 429 saves the position, then throws RATE_LIMITED.
  */
 async function publishMultipart(args: {
   ctx: PublishContext;
@@ -1299,7 +1324,19 @@ async function publishMultipart(args: {
         parts: progress.partCount,
       });
       await closeSource();
-      current = await beginUpload(progress.restarts + 1);
+      try {
+        current = await beginUpload(progress.restarts + 1);
+      } catch (error) {
+        // Parts are already uploaded, and the registration commits nothing: with no answer the
+        // restart stays pending (the saved state is unchanged, so the retry counts it once).
+        // The very first registration of an upload, with nothing uploaded yet, is not this.
+        if (!isTransientRequestFailure(error)) throw error;
+        console.warn("[LinkedIn] The new registration got no answer; the next step tries it again", {
+          status: (error as { status?: unknown } | null)?.status,
+          code: (error as { code?: unknown } | null)?.code,
+        });
+        return await pause(LINKEDIN_TRANSIENT_RESUME_DELAY_MS);
+      }
     }
 
     if (current.data.phase === "upload") {
@@ -1353,6 +1390,17 @@ async function publishMultipart(args: {
         const { response } = attempt;
         void response.body?.cancel().catch(() => {});
         // The part's own answer is not logged or quoted: it comes from the capability URL.
+        if (response.status === 403 && current.data.restarts < LINKEDIN_MAX_UPLOAD_RESTARTS) {
+          // A part URL that is refused is taken for an expired one. Nothing was posted. The next
+          // step starts over exactly as it does for a URL that is about to expire (and counts it,
+          // and stops at the same cap): this step only records that the URLs are spent.
+          console.warn("[LinkedIn] A part was refused with 403; the upload links are taken for expired", {
+            part: index + 1,
+            parts: partCount,
+          });
+          current = { ...current, data: { ...current.data, urlsExpireAt: Date.now() } };
+          return await pause(null);
+        }
         if (!response.ok) {
           throw uploadFailed(
             `LinkedIn video upload failed (part ${index + 1} of ${partCount}, status ${response.status})`,
@@ -1413,12 +1461,15 @@ async function publishMultipart(args: {
         void attempt.response.body?.cancel().catch(() => {});
         await throwLinkedInReconnect(connection);
       }
-      // An unconfirmed endpoint (see above): a refusal is a failed upload, before any post.
-      await assertOk(attempt.response, {
-        code: "LINKEDIN_VIDEO_UPLOAD_FAILED",
-        prefix: "LinkedIn video upload could not be completed",
-      });
+      // An unconfirmed endpoint (see above): a refusal is a failed upload, before any post. The
+      // body is neither read nor logged (not assertOk): logs become Sentry breadcrumbs, and
+      // LinkedIn's text could quote the `metadata` it was sent.
       void attempt.response.body?.cancel().catch(() => {});
+      if (!attempt.response.ok) {
+        const status = attempt.response.status;
+        console.error("[LinkedIn] The completion was refused", { status });
+        throw uploadFailed(`LinkedIn video upload could not be completed (status ${status})`, status);
+      }
 
       // The part URLs and the metadata are no longer needed: the saved state drops them.
       current = { data: { ...current.data, phase: "processing", completedAt: Date.now() }, secret: null };
@@ -1435,24 +1486,48 @@ async function publishMultipart(args: {
     const verdict = await checkAssetStatus({ accessToken, asset: current.data.asset, connection, deadline });
 
     if (verdict.kind === "waiting") {
+      // The last readable status: a status the page lists is remembered, one nobody documented is not.
+      const readable = { ...current.data };
+      if (verdict.status === undefined) delete readable.lastStatus;
+      else readable.lastStatus = verdict.status;
+      current = { ...current, data: readable };
+
       if (!waitOver) return await pause(LINKEDIN_ASSET_POLL_INTERVAL_MS);
+      // Still PROCESSING at the cap is posted, as the whole-file path posts right after its upload.
+      // WAITING_UPLOAD, NEW, MUTATING or a status nobody documented says LinkedIn never took the
+      // upload, and nothing is posted.
+      if (verdict.status !== "PROCESSING") {
+        console.error("[LinkedIn] The video was never taken up by LinkedIn before the wait ran out", {
+          assetUrn: current.data.asset,
+          recipeStatus: verdict.status ?? "unknown",
+        });
+        throw uploadFailed("LinkedIn never started processing the uploaded video. Nothing was posted — please retry.");
+      }
       console.warn("[LinkedIn] The video is still processing after the wait; posting anyway", {
         assetUrn: current.data.asset,
       });
-    } else if (verdict.kind === "unanswered") {
+    } else if (verdict.kind === "unanswered" || verdict.kind === "unreadable") {
+      // No usable answer (a 5xx, a timeout, a dropped connection, a 404, a body we cannot read):
+      // ask again soon, and at the cap post only if LinkedIn last said PROCESSING - the endpoint
+      // then demonstrably works, and the asset is on its way. Otherwise the unconfirmed /v2 status
+      // read never worked, and nothing is posted.
       if (!waitOver) {
-        console.warn("[LinkedIn] The status check got no answer; the next step asks again", {
+        console.warn("[LinkedIn] The status check got no usable answer; the next step asks again", {
           assetUrn: current.data.asset,
+          reason: verdict.kind === "unreadable" ? verdict.reason : "no answer",
         });
         return await pause(LINKEDIN_TRANSIENT_RESUME_DELAY_MS);
       }
-      console.warn("[LinkedIn] The status checks got no answer for the whole wait; posting anyway", {
+      if (current.data.lastStatus !== "PROCESSING") {
+        console.error("[LinkedIn] The status checks never gave a usable answer before the wait ran out", {
+          assetUrn: current.data.asset,
+        });
+        throw uploadFailed(
+          "LinkedIn's status checks never gave a usable answer. Nothing was posted — please retry.",
+        );
+      }
+      console.warn("[LinkedIn] The status checks got no usable answer for the rest of the wait; posting anyway", {
         assetUrn: current.data.asset,
-      });
-    } else if (verdict.kind === "unreadable") {
-      console.warn("[LinkedIn] The asset's status could not be read; posting anyway", {
-        assetUrn: current.data.asset,
-        reason: verdict.reason,
       });
     }
 
