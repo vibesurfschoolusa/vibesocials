@@ -26,7 +26,6 @@ export function makeWorkspaceContext(
     workspaceId: string;
     workspaceName: string;
     role: WorkspaceContext["role"];
-    memberCount: number;
     /** Approval workflow — defaults off, matching the schema default. */
     requireApproval: boolean;
   }> = {},
@@ -45,6 +44,5 @@ export function makeWorkspaceContext(
       requireApproval: overrides.requireApproval ?? false,
     },
     role: overrides.role ?? "owner",
-    memberCount: overrides.memberCount ?? 1,
   };
 }

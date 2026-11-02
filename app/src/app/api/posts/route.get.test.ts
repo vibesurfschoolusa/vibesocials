@@ -10,15 +10,20 @@ import { makeWorkspaceContext } from "../__test-helpers__/workspaceContextMock";
 // route.test.ts, which covers POST).
 const {
   getWorkspaceContextMock,
+  getWorkspaceMemberCountMock,
   postJobFindManyMock,
   postMetricFindManyMock,
 } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
+  getWorkspaceMemberCountMock: vi.fn(),
   postJobFindManyMock: vi.fn(),
   postMetricFindManyMock: vi.fn(),
 }));
 
-vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
+vi.mock("@/lib/workspace", () => ({
+  getWorkspaceContext: getWorkspaceContextMock,
+  getWorkspaceMemberCount: getWorkspaceMemberCountMock,
+}));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: vi.fn() }));
 vi.mock("@/lib/inngest", () => ({ inngest: { send: vi.fn() } }));
 vi.mock("@/server/jobs/posting", async () => {
@@ -84,9 +89,11 @@ function jobWithYouTube() {
 
 beforeEach(() => {
   getWorkspaceContextMock.mockReset();
+  getWorkspaceMemberCountMock.mockReset();
   postJobFindManyMock.mockReset();
   postMetricFindManyMock.mockReset();
   getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
+  getWorkspaceMemberCountMock.mockResolvedValue(1);
   postJobFindManyMock.mockResolvedValue([]);
   postMetricFindManyMock.mockResolvedValue([]);
 });
@@ -325,14 +332,27 @@ describe("GET /api/posts — workspace scoping (Team Workspaces, Task 4)", () =>
     expect(body.jobs).toEqual([]);
   });
 
-  it("includes workspaceMemberCount at the top level, from the context's memberCount", async () => {
-    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ memberCount: 4 }));
+  it("includes workspaceMemberCount at the top level, counted for the ACTIVE workspace via getWorkspaceMemberCount", async () => {
+    // 2026-11-01 scale audit (W3): the count is no longer on the context;
+    // this route is its only consumer and asks for it explicitly.
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-A" }));
+    getWorkspaceMemberCountMock.mockResolvedValue(4);
     postJobFindManyMock.mockResolvedValue([]);
 
     const res = await GET(getRequest());
     const body = (await res.json()) as PostsResponse;
 
     expect(body.workspaceMemberCount).toBe(4);
+    expect(getWorkspaceMemberCountMock).toHaveBeenCalledTimes(1);
+    expect(getWorkspaceMemberCountMock).toHaveBeenCalledWith("ws-A");
+  });
+
+  it("does not count members when unauthenticated", async () => {
+    getWorkspaceContextMock.mockResolvedValue(null);
+
+    await GET(getRequest());
+
+    expect(getWorkspaceMemberCountMock).not.toHaveBeenCalled();
   });
 
   it("includes workspaceRole and workspaceRequireApproval — the Queue's viewer rules (2026-11-01 audit)", async () => {

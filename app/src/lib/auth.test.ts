@@ -2,13 +2,25 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CheckRateLimitOptions, RateLimitResult } from "./rateLimit";
 
-const { findUniqueMock, checkRateLimitMock, compareMock, findOrCreateGoogleSsoUserMock } =
-  vi.hoisted(() => ({
-    findUniqueMock: vi.fn(),
-    checkRateLimitMock: vi.fn(),
-    compareMock: vi.fn(),
-    findOrCreateGoogleSsoUserMock: vi.fn(),
-  }));
+const {
+  findUniqueMock,
+  checkRateLimitMock,
+  compareMock,
+  findOrCreateGoogleSsoUserMock,
+  getServerSessionMock,
+} = vi.hoisted(() => ({
+  findUniqueMock: vi.fn(),
+  checkRateLimitMock: vi.fn(),
+  compareMock: vi.fn(),
+  findOrCreateGoogleSsoUserMock: vi.fn(),
+  getServerSessionMock: vi.fn(),
+}));
+
+// getCurrentUser's session lookup. The real next-auth module is otherwise kept.
+vi.mock("next-auth", async () => {
+  const actual = await vi.importActual<typeof import("next-auth")>("next-auth");
+  return { ...actual, getServerSession: getServerSessionMock };
+});
 
 vi.mock("./db", () => ({
   prisma: { user: { findUnique: findUniqueMock } },
@@ -29,7 +41,15 @@ vi.mock("bcryptjs", () => ({
   default: { compare: compareMock },
 }));
 
-import { authOptions, authorizeCredentials, LOGIN_DUMMY_PASSWORD_HASH } from "./auth";
+import type { NextAuthOptions } from "next-auth";
+
+import {
+  authOptions,
+  authorizeCredentials,
+  getCurrentUser,
+  LOGIN_DUMMY_PASSWORD_HASH,
+  serverSessionAuthOptions,
+} from "./auth";
 import { GOOGLE_PASSWORD_ACCOUNT_ERROR } from "./loginOAuthError";
 
 const FIFTEEN_MINUTES = 15 * 60 * 1000;
@@ -65,6 +85,7 @@ const USER = {
 
 beforeEach(() => {
   findUniqueMock.mockReset();
+  getServerSessionMock.mockReset();
   checkRateLimitMock.mockReset();
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   compareMock.mockReset();
@@ -278,5 +299,162 @@ describe("authOptions.callbacks.signIn — Google SSO refusals", () => {
 
     expect(await signIn({ user, account: google, profile })).toBe(true);
     expect(user).toEqual({ id: "db-user", sessionVersion: 4 });
+  });
+});
+
+// 2026-11-01 scale audit (W3): getCurrentUser used to pay for the jwt
+// callback's sessionVersion lookup AND its own full-row lookup on every
+// request. It already compares sessionVersion against the row it loads, so it
+// now reads the session with serverSessionAuthOptions (jwt callback without
+// the DB check) and issues exactly one user query.
+describe("serverSessionAuthOptions.callbacks.jwt — no DB check on token reads", () => {
+  type JwtArgs = Parameters<NonNullable<NonNullable<NextAuthOptions["callbacks"]>["jwt"]>>[0];
+  const serverJwt = (args: Partial<JwtArgs>) =>
+    serverSessionAuthOptions.callbacks!.jwt!(args as JwtArgs);
+  const routeJwt = (args: Partial<JwtArgs>) => authOptions.callbacks!.jwt!(args as JwtArgs);
+
+  it("returns the token untouched without querying prisma", async () => {
+    const token = { id: "u1", sessionVersion: 0 };
+
+    expect(await serverJwt({ token })).toBe(token);
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the token even when the DB would say the session is revoked (getCurrentUser enforces that)", async () => {
+    findUniqueMock.mockResolvedValue({ sessionVersion: 9 });
+
+    expect(await serverJwt({ token: { id: "u1", sessionVersion: 0 } })).toEqual({
+      id: "u1",
+      sessionVersion: 0,
+    });
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("still stamps id + sessionVersion on sign-in (user present), without a DB read", async () => {
+    const token = await serverJwt({
+      token: {},
+      user: { id: "u1", sessionVersion: 4 } as JwtArgs["user"],
+    });
+
+    expect(token).toEqual({ id: "u1", sessionVersion: 4 });
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("defaults sessionVersion to 0 on sign-in when the user carries none", async () => {
+    expect(await serverJwt({ token: {}, user: { id: "u1" } as JwtArgs["user"] })).toEqual({
+      id: "u1",
+      sessionVersion: 0,
+    });
+  });
+
+  it("is otherwise identical to authOptions: same session config, pages, providers and other callbacks", () => {
+    expect(serverSessionAuthOptions.session).toBe(authOptions.session);
+    expect(serverSessionAuthOptions.pages).toBe(authOptions.pages);
+    expect(serverSessionAuthOptions.providers).toBe(authOptions.providers);
+    expect(serverSessionAuthOptions.secret).toBe(authOptions.secret);
+    expect(serverSessionAuthOptions.cookies).toBe(authOptions.cookies);
+    expect(serverSessionAuthOptions.callbacks!.session).toBe(authOptions.callbacks!.session);
+    expect(serverSessionAuthOptions.callbacks!.signIn).toBe(authOptions.callbacks!.signIn);
+    expect(serverSessionAuthOptions.callbacks!.jwt).not.toBe(authOptions.callbacks!.jwt);
+  });
+
+  it("authOptions.callbacks.jwt (the /api/auth/session route handler) still re-checks sessionVersion", async () => {
+    findUniqueMock.mockResolvedValue({ sessionVersion: 0 });
+    const token = { id: "u1", sessionVersion: 0 };
+    expect(await routeJwt({ token })).toBe(token);
+    expect(findUniqueMock).toHaveBeenCalledWith({
+      where: { id: "u1" },
+      select: { sessionVersion: true },
+    });
+
+    // Password reset elsewhere bumped the DB value -> null clears the cookie.
+    findUniqueMock.mockResolvedValue({ sessionVersion: 1 });
+    expect(await routeJwt({ token: { id: "u1", sessionVersion: 0 } })).toBeNull();
+
+    // Deleted user -> null too.
+    findUniqueMock.mockResolvedValue(null);
+    expect(await routeJwt({ token: { id: "u1", sessionVersion: 0 } })).toBeNull();
+  });
+});
+
+describe("getCurrentUser", () => {
+  const SESSION = {
+    user: { id: "u1", sessionVersion: 3 },
+    expires: "2999-01-01T00:00:00.000Z",
+  };
+
+  it("reads the session with serverSessionAuthOptions (not authOptions)", async () => {
+    getServerSessionMock.mockResolvedValue(SESSION);
+    findUniqueMock.mockResolvedValue(USER);
+
+    await getCurrentUser();
+
+    expect(getServerSessionMock).toHaveBeenCalledTimes(1);
+    expect(getServerSessionMock.mock.calls[0][0]).toBe(serverSessionAuthOptions);
+    expect(getServerSessionMock.mock.calls[0][0]).not.toBe(authOptions);
+  });
+
+  it("issues exactly one prisma.user.findUnique and returns the full row", async () => {
+    getServerSessionMock.mockResolvedValue(SESSION);
+    findUniqueMock.mockResolvedValue(USER);
+
+    expect(await getCurrentUser()).toBe(USER);
+    expect(findUniqueMock).toHaveBeenCalledTimes(1);
+    expect(findUniqueMock).toHaveBeenCalledWith({ where: { id: "u1" } });
+  });
+
+  it("returns null without any query when there is no session", async () => {
+    getServerSessionMock.mockResolvedValue(null);
+
+    expect(await getCurrentUser()).toBeNull();
+    expect(findUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("returns null when the user row is gone", async () => {
+    getServerSessionMock.mockResolvedValue(SESSION);
+    findUniqueMock.mockResolvedValue(null);
+
+    expect(await getCurrentUser()).toBeNull();
+  });
+
+  it("returns null when the DB sessionVersion no longer matches the session's (password reset elsewhere)", async () => {
+    getServerSessionMock.mockResolvedValue(SESSION);
+    findUniqueMock.mockResolvedValue({ ...USER, sessionVersion: 4 });
+
+    expect(await getCurrentUser()).toBeNull();
+  });
+
+  describe("revocation end-to-end through the options' real callbacks", () => {
+    // Stand-in for getServerSession(options): take a fixed (stale) decoded
+    // token, run options.callbacks.jwt then options.callbacks.session, like
+    // NextAuth v4 does — so the REAL callbacks of whatever options
+    // getCurrentUser passes are what shape the session it sees.
+    function installRealSessionPipeline(token: { id: string; sessionVersion: number }) {
+      getServerSessionMock.mockImplementation(async (options: NextAuthOptions) => {
+        const jwt = await options.callbacks!.jwt!({ token: { ...token } } as never);
+        if (!jwt) return null;
+        return options.callbacks!.session!({
+          session: { user: {}, expires: "2999-01-01T00:00:00.000Z" },
+          token: jwt,
+        } as never);
+      });
+    }
+
+    it("a token issued before a password reset (sessionVersion 0) is rejected once the DB says 1", async () => {
+      installRealSessionPipeline({ id: "u1", sessionVersion: 0 });
+      findUniqueMock.mockResolvedValue({ ...USER, sessionVersion: 1 });
+
+      expect(await getCurrentUser()).toBeNull();
+      // One query total: the full-row lookup. The jwt callback added none.
+      expect(findUniqueMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("a token whose sessionVersion still matches the DB is accepted with a single query", async () => {
+      installRealSessionPipeline({ id: "u1", sessionVersion: 3 });
+      findUniqueMock.mockResolvedValue(USER);
+
+      expect(await getCurrentUser()).toBe(USER);
+      expect(findUniqueMock).toHaveBeenCalledTimes(1);
+    });
   });
 });

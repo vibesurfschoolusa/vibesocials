@@ -1,4 +1,5 @@
 import type { NextAuthOptions } from "next-auth";
+import type { JWT } from "next-auth/jwt";
 import { getServerSession } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
@@ -111,6 +112,17 @@ export async function authorizeCredentials(
   };
 }
 
+/**
+ * Sign-in branch of the jwt callback: mints the token claims from the user
+ * object NextAuth hands over (id + sessionVersion). Shared by `authOptions`
+ * and `serverSessionAuthOptions` so the token shape cannot drift between them.
+ */
+function stampSignInClaims(token: JWT, user: unknown): JWT {
+  token.id = (user as { id: string }).id;
+  token.sessionVersion = (user as { sessionVersion?: number }).sessionVersion ?? 0;
+  return token;
+}
+
 export const authOptions: NextAuthOptions = {
   session: {
     strategy: "jwt",
@@ -184,15 +196,15 @@ export const authOptions: NextAuthOptions = {
     },
     async jwt({ token, user }) {
       if (user) {
-        token.id = (user as { id: string }).id;
-        token.sessionVersion =
-          (user as { sessionVersion?: number }).sessionVersion ?? 0;
-        return token;
+        return stampSignInClaims(token, user);
       }
 
-      // Re-check sessionVersion on every JWT access (getSession / getServerSession).
+      // Re-check sessionVersion on every JWT access through the NextAuth route
+      // handler (/api/auth/session, i.e. client useSession / getSession).
       // Password reset increments the DB value; returning null clears the cookie
       // so client useSession flips to unauthenticated (not only API 401s).
+      // Server-side reads via getCurrentUser use serverSessionAuthOptions
+      // below, which skips this lookup (it enforces sessionVersion itself).
       if (typeof token.id === "string") {
         try {
           const dbUser = await prisma.user.findUnique({
@@ -233,8 +245,39 @@ export const authOptions: NextAuthOptions = {
   },
 };
 
+/**
+ * `authOptions` for server-side session reads (`getCurrentUser`): identical
+ * in every respect — secret, session strategy/maxAge, cookies, pages,
+ * providers, signIn/session callbacks, and the sign-in branch of `jwt` that
+ * stamps `id` + `sessionVersion` — except that the `jwt` callback does NOT
+ * query the DB on a token read.
+ *
+ * 2026-11-01 scale audit (W3): `authOptions.callbacks.jwt` looked up
+ * `User.sessionVersion` on every token read, and `getCurrentUser` then loaded
+ * the full user row anyway — two sequential user queries per authenticated
+ * request. Dropping the first is safe because `getCurrentUser` compares the
+ * session's `sessionVersion` against the row it loads and returns null on a
+ * mismatch, so a password reset elsewhere still revokes API access on the very
+ * next request. The NextAuth route handler keeps `authOptions`, so
+ * /api/auth/session (client useSession) still clears a revoked cookie.
+ *
+ * Use ONLY where the caller enforces sessionVersion itself (getCurrentUser).
+ */
+export const serverSessionAuthOptions: NextAuthOptions = {
+  ...authOptions,
+  callbacks: {
+    ...authOptions.callbacks,
+    async jwt({ token, user }) {
+      if (user) {
+        return stampSignInClaims(token, user);
+      }
+      return token;
+    },
+  },
+};
+
 export async function getCurrentUser() {
-  const session = await getServerSession(authOptions);
+  const session = await getServerSession(serverSessionAuthOptions);
   if (!session?.user || !(session.user as { id?: string }).id) {
     return null;
   }
@@ -254,7 +297,9 @@ export async function getCurrentUser() {
   // Password reset (and any future force-logout) increments sessionVersion.
   // JWTs issued before the bump still pass NextAuth's signature check but
   // fail here, so getServerSession alone is not enough — every API/page path
-  // that uses getCurrentUser / getWorkspaceContext is covered.
+  // that uses getCurrentUser / getWorkspaceContext is covered. This is also why
+  // serverSessionAuthOptions can skip the jwt callback's own DB check
+  // (2026-11-01 scale audit, W3): this comparison is the enforcement.
   if (user.sessionVersion !== sessionVersion) {
     return null;
   }

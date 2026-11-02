@@ -64,6 +64,7 @@ import { NextResponse } from "next/server";
 import {
   ACTIVE_WORKSPACE_COOKIE,
   getWorkspaceContext,
+  getWorkspaceMemberCount,
   isWorkspaceOwner,
   provisionPersonalWorkspace,
   requireOwnerContext,
@@ -397,7 +398,6 @@ describe("getWorkspaceContext", () => {
   it("returns the active workspace context for an authenticated owner", async () => {
     getCurrentUserMock.mockResolvedValue(makeUser());
     findManyMock.mockResolvedValue([makeMembership({ role: "owner" })]);
-    countMock.mockResolvedValue(1);
 
     const context = await getWorkspaceContext();
 
@@ -413,9 +413,12 @@ describe("getWorkspaceContext", () => {
         requireApproval: false,
       },
       role: "owner",
-      memberCount: 1,
     });
-    expect(countMock).toHaveBeenCalledWith({ where: { workspaceId: "workspace-1" } });
+    // 2026-11-01 scale audit (W3): the member count is no longer part of the
+    // context (only GET /api/posts needs it — see getWorkspaceMemberCount), so
+    // building the context never counts members.
+    expect(context).not.toHaveProperty("memberCount");
+    expect(countMock).not.toHaveBeenCalled();
   });
 
   it("self-heals by provisioning a personal workspace when the user has zero memberships", async () => {
@@ -432,7 +435,6 @@ describe("getWorkspaceContext", () => {
     findUniqueUserMock.mockResolvedValue(makeUser({ id: "user-heal" }));
     workspaceCreateMock.mockResolvedValue({ id: "ws-healed" });
     workspaceMemberCreateMock.mockResolvedValue({});
-    countMock.mockResolvedValue(1);
 
     const context = await getWorkspaceContext();
 
@@ -457,7 +459,6 @@ describe("getWorkspaceContext", () => {
     findFirstMock
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ workspaceId: "ws-won" });
-    countMock.mockResolvedValue(1);
 
     const context = await getWorkspaceContext();
 
@@ -481,7 +482,6 @@ describe("getWorkspaceContext", () => {
       }),
     ]);
     cookiesGetMock.mockReturnValue({ value: "ws-invited" });
-    countMock.mockResolvedValue(2);
 
     const context = await getWorkspaceContext();
 
@@ -500,14 +500,13 @@ describe("getWorkspaceContext", () => {
       }),
     ]);
     cookiesGetMock.mockReturnValue({ value: "ws-not-a-member-of" });
-    countMock.mockResolvedValue(1);
 
     const context = await getWorkspaceContext();
 
     expect(context?.workspace.id).toBe("ws-personal");
   });
 
-  it("throws WorkspaceForbiddenError when requireRole: owner isn't met, without leaking memberCount", async () => {
+  it("throws WorkspaceForbiddenError when requireRole: owner isn't met, without querying further", async () => {
     getCurrentUserMock.mockResolvedValue(makeUser());
     findManyMock.mockResolvedValue([makeMembership({ role: "member" })]);
 
@@ -520,9 +519,31 @@ describe("getWorkspaceContext", () => {
   it("does not throw when requireRole: owner IS met", async () => {
     getCurrentUserMock.mockResolvedValue(makeUser());
     findManyMock.mockResolvedValue([makeMembership({ role: "owner" })]);
-    countMock.mockResolvedValue(1);
 
     await expect(getWorkspaceContext({ requireRole: "owner" })).resolves.not.toBeNull();
+  });
+
+  it("issues no workspaceMember.count at all, on any path (2026-11-01 scale audit, W3)", async () => {
+    getCurrentUserMock.mockResolvedValue(makeUser());
+    findManyMock.mockResolvedValue([makeMembership({ role: "owner" })]);
+
+    await getWorkspaceContext();
+    await getWorkspaceContext({ requireRole: "owner" });
+
+    expect(countMock).not.toHaveBeenCalled();
+  });
+});
+
+// 2026-11-01 scale audit (W3): the member count used to ride along on every
+// getWorkspaceContext() call although only GET /api/posts reads it (the
+// createdBy attribution gate). It is now an explicit, on-demand query.
+describe("getWorkspaceMemberCount", () => {
+  it("counts the members of the given workspace", async () => {
+    countMock.mockResolvedValue(3);
+
+    expect(await getWorkspaceMemberCount("ws-1")).toBe(3);
+    expect(countMock).toHaveBeenCalledTimes(1);
+    expect(countMock).toHaveBeenCalledWith({ where: { workspaceId: "ws-1" } });
   });
 });
 
@@ -561,7 +582,6 @@ describe("requireOwnerContext", () => {
   it("returns the workspace context (not a response) for an owner", async () => {
     getCurrentUserMock.mockResolvedValue(makeUser());
     findManyMock.mockResolvedValue([makeMembership({ role: "owner" })]);
-    countMock.mockResolvedValue(1);
 
     const result = await requireOwnerContext();
 
@@ -619,7 +639,6 @@ describe("requireOwnerContextForOAuthStart", () => {
   it("returns the workspace context (not a response) for an owner", async () => {
     getCurrentUserMock.mockResolvedValue(makeUser());
     findManyMock.mockResolvedValue([makeMembership({ role: "owner" })]);
-    countMock.mockResolvedValue(1);
 
     const result = await requireOwnerContextForOAuthStart(
       request,

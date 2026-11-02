@@ -119,7 +119,7 @@ export interface PostsResponse {
   jobs: PostJobDTO[];
   /**
    * Team Workspaces (Task 4) — total members in the caller's active
-   * workspace (from `WorkspaceContext.memberCount`). Gates the `createdBy`
+   * workspace (from `getWorkspaceMemberCount`). Gates the `createdBy`
    * attribution display: the UI only shows "by {name}" when this is >1
    * (design doc §7), so a solo workspace's activity feed looks unchanged.
    */

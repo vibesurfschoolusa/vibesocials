@@ -18,8 +18,18 @@ export interface WorkspaceContext {
     "id" | "name" | "companyWebsite" | "defaultHashtags" | "requireApproval"
   >;
   role: WorkspaceRole;
-  /** Total members in the active workspace — gates attribution display (design §7). */
-  memberCount: number;
+}
+
+/**
+ * Total members in a workspace — gates the `createdBy` attribution display in
+ * GET /api/posts (design §7).
+ *
+ * 2026-11-01 scale audit (W3): this used to be `WorkspaceContext.memberCount`,
+ * counted on EVERY `getWorkspaceContext()` call although only that one route
+ * reads it. Now an explicit, on-demand query.
+ */
+export async function getWorkspaceMemberCount(workspaceId: string): Promise<number> {
+  return prisma.workspaceMember.count({ where: { workspaceId } });
 }
 
 /**
@@ -247,10 +257,6 @@ export async function getWorkspaceContext(
     throw new WorkspaceForbiddenError();
   }
 
-  const memberCount = await prisma.workspaceMember.count({
-    where: { workspaceId: active.workspaceId },
-  });
-
   return {
     user,
     workspace: {
@@ -263,7 +269,6 @@ export async function getWorkspaceContext(
       requireApproval: active.workspace.requireApproval,
     },
     role: active.role,
-    memberCount,
   };
 }
 

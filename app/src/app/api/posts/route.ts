@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getWorkspaceContext } from "@/lib/workspace";
+import { getWorkspaceContext, getWorkspaceMemberCount } from "@/lib/workspace";
 import { BLOB_URL_REJECTED_MESSAGE, isAllowedBlobUrl } from "@/lib/blobUrl";
 import {
   EMAIL_VERIFY_REQUIRED_MESSAGE,
@@ -192,7 +192,9 @@ export async function GET(request: Request) {
     const metricByVideoId = new Map(metricRows.map((row) => [row.externalPostId, row]));
 
     const payload: PostsResponse = {
-      workspaceMemberCount: context.memberCount,
+      // 2026-11-01 scale audit (W3): counted here, on demand — it is no longer
+      // a field of the workspace context every route pays for.
+      workspaceMemberCount: await getWorkspaceMemberCount(context.workspace.id),
       // Approval workflow — lets the Queue decide between Approve/Reject
       // controls (owner) and a read-only awaiting badge (member).
       workspaceRole: context.role,
