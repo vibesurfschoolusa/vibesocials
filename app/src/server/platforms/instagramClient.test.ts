@@ -8,9 +8,12 @@ import {
   INSTAGRAM_POLL_INTERVAL_MS,
   INSTAGRAM_POLL_MAX_ATTEMPTS,
   INSTAGRAM_PUBLISH_RESERVE_MS,
+  INSTAGRAM_STATUS_CHECK_INTERVAL_MS,
+  INSTAGRAM_STATUS_MAX_CHECKS,
   instagramClient,
   waitForInstagramContainer,
 } from "@/server/platforms/instagramClient";
+import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 import {
   MIN_REQUEST_WINDOW_MS,
   PUBLISH_BUDGET_EXCEEDED_CODE,
@@ -752,8 +755,8 @@ describe("instagramClient.publishVideo — rate limits (RATE_LIMITED)", () => {
 // (5 s x up to 30) is bounded by the step deadline. It stops while
 // INSTAGRAM_PUBLISH_RESERVE_MS is still left for media_publish and ends with
 // INSTAGRAM_VIDEO_TIMEOUT - nothing was published at that point, so a retry is
-// safe. (Meta's once-a-minute / 5 min guidance needs polling across steps with
-// step.sleep: phase 3.)
+// safe. 2026-11-02 scale audit (jobs L5): it now serves only a caller with no
+// upload-state store; a platform step polls across steps instead (next suite).
 describe("waitForInstagramContainer", () => {
   type CodedError = Error & { code?: string };
   const failure = (promise: Promise<unknown>) =>
@@ -907,6 +910,473 @@ describe("waitForInstagramContainer", () => {
 
     expect(error?.code).toBe("INSTAGRAM_VIDEO_TIMEOUT");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// 2026-11-02 scale audit (jobs L5): with an upload-state store a REELS video is
+// not polled inside one step. Meta recommends one status query a minute for at
+// most five minutes (https://developers.facebook.com/docs/instagram-platform/content-publishing),
+// so the first step creates the container and saves { containerId, createdAt,
+// checks: 0 }, and each later step makes ONE status check. Only a step that sees
+// FINISHED calls media_publish (the commit), in that same claimed step.
+describe("instagramClient.publishVideo — container polling across steps", () => {
+  type CodedError = Error & { code?: string };
+  const failure = (promise: Promise<unknown>) =>
+    promise.then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+
+  const NOW = Date.parse("2026-11-02T10:00:00Z");
+  const KIND = "instagram_container";
+
+  const containerOk = () => new Response(JSON.stringify({ id: "container-1" }), { status: 200 });
+  const status = (code: string) => new Response(JSON.stringify({ status_code: code }), { status: 200 });
+  const publishOk = () => new Response(JSON.stringify({ id: "media-1" }), { status: 200 });
+  const graphError = (code: number) =>
+    new Response(JSON.stringify({ error: { message: "m", type: "OAuthException", code } }), { status: 400 });
+  const AUTH_ERROR_BODY = JSON.stringify({
+    error: { message: "Session has expired.", type: "OAuthException", code: 190 },
+  });
+
+  interface ContainerState {
+    containerId: string;
+    createdAt: string;
+    checks: number;
+  }
+
+  /** A one-result store that behaves like uploadState.ts: it holds a snapshot per kind. */
+  function makeStore(initial?: unknown) {
+    const kept = new Map<string, UploadSnapshot<unknown, unknown>>();
+    if (initial !== undefined) kept.set(KIND, { data: initial });
+    const store = {
+      load: vi.fn(async (kind: string) => kept.get(kind) ?? null),
+      save: vi.fn(async (kind: string, snapshot: UploadSnapshot<unknown, unknown>) => {
+        kept.set(kind, snapshot);
+      }),
+      clear: vi.fn(async () => {
+        kept.clear();
+      }),
+    };
+    return {
+      store: store as unknown as UploadStateStore,
+      mocks: store,
+      /** What is saved for the container kind right now. */
+      saved: () => kept.get(KIND) ?? null,
+      savedData: () => (kept.get(KIND)?.data ?? null) as ContainerState | null,
+    };
+  }
+
+  const stateWith = (checks: number): ContainerState => ({
+    containerId: "container-1",
+    createdAt: new Date(NOW - 60_000).toISOString(),
+    checks,
+  });
+
+  function ctx(store: UploadStateStore | undefined, extra: { deadline?: number; mimeType?: string } = {}) {
+    return {
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+      mediaItem: {
+        mimeType: extra.mimeType ?? "video/mp4",
+        storageLocation: "https://blob.example.com/m",
+        metadata: null,
+      } as unknown as MediaItem,
+      caption: "hello",
+      deadline: extra.deadline,
+      uploadState: store,
+    };
+  }
+
+  type Route = () => Response | Promise<Response>;
+  function stubGraph(routes: { container?: Route; status?: Route; publish?: Route }) {
+    const container = vi.fn<Route>(routes.container ?? containerOk);
+    const statusCheck = vi.fn<Route>(routes.status ?? (() => status("FINISHED")));
+    const publish = vi.fn<Route>(routes.publish ?? publishOk);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string | URL) => {
+        const url = String(input);
+        if (url.includes("/media_publish")) return Promise.resolve(publish());
+        if (url.includes("/ig-account-1/media")) return Promise.resolve(container());
+        if (url.includes("fields=status_code")) return Promise.resolve(statusCheck());
+        throw new Error(`Unexpected fetch in test: ${url}`);
+      }),
+    );
+    return { container, status: statusCheck, publish };
+  }
+
+  const continuation = { continuation: { resumeAt: NOW + 60_000 } };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("uses Meta's recommended cadence: once a minute, at most five checks", () => {
+    expect(INSTAGRAM_STATUS_CHECK_INTERVAL_MS).toBe(60_000);
+    expect(INSTAGRAM_STATUS_MAX_CHECKS).toBe(5);
+  });
+
+  describe("the first step (no saved state)", () => {
+    it("creates the container once, saves checks 0, and continues in 60 s without publishing", async () => {
+      const { store, savedData, saved } = makeStore();
+      const graph = stubGraph({});
+
+      const result = await instagramClient.publishVideo(ctx(store));
+
+      expect(graph.container).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ continuation: { resumeAt: NOW + 60_000 } });
+      expect(result.externalPostId).toBeUndefined();
+      expect(savedData()).toEqual({ containerId: "container-1", createdAt: new Date(NOW).toISOString(), checks: 0 });
+      // Nothing is secret, so nothing is sealed.
+      expect(saved()).not.toHaveProperty("secret");
+      // No status query and no commit call in this step.
+      expect(graph.status).not.toHaveBeenCalled();
+      expect(graph.publish).not.toHaveBeenCalled();
+    });
+
+    it("never stores the access token", async () => {
+      const { store, mocks } = makeStore();
+      stubGraph({});
+
+      await instagramClient.publishVideo(ctx(store));
+
+      expect(mocks.save).toHaveBeenCalledTimes(1);
+      expect(mocks.save.mock.calls[0][0]).toBe(KIND);
+      expect(JSON.stringify(mocks.save.mock.calls)).not.toContain("page-access-token");
+    });
+
+    it("starts over when the saved data is not a container state (nothing was published, so that is safe)", async () => {
+      const { store, savedData } = makeStore({ containerId: 17, checks: "two" });
+      const graph = stubGraph({});
+
+      const result = await instagramClient.publishVideo(ctx(store));
+
+      expect(graph.container).toHaveBeenCalledTimes(1);
+      expect(result.continuation).toEqual({ resumeAt: NOW + 60_000 });
+      expect(savedData()).toMatchObject({ containerId: "container-1", checks: 0 });
+    });
+
+    it("a throttled container call is RATE_LIMITED and saves nothing", async () => {
+      const { store, mocks } = makeStore();
+      stubGraph({ container: () => graphError(80002) });
+
+      const error = await failure(instagramClient.publishVideo(ctx(store)));
+
+      expect(error?.code).toBe("RATE_LIMITED");
+      expect(mocks.save).not.toHaveBeenCalled();
+    });
+
+    it("a failed save propagates: the step fails, the platform is never asked to publish", async () => {
+      const { store, mocks } = makeStore();
+      mocks.save.mockRejectedValueOnce(Object.assign(new Error("claim gone"), { code: "RESULT_CLAIM_LOST" }));
+      const graph = stubGraph({});
+
+      const error = await failure(instagramClient.publishVideo(ctx(store)));
+
+      expect(error?.code).toBe("RESULT_CLAIM_LOST");
+      expect(graph.publish).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a later step (state present): one status check", () => {
+    it("FINISHED: media_publish once, in this step, then success with the post id", async () => {
+      const { store } = makeStore(stateWith(2));
+      const graph = stubGraph({ status: () => status("FINISHED") });
+
+      const result = await instagramClient.publishVideo(ctx(store));
+
+      expect(result).toEqual({ externalPostId: "media-1" });
+      expect(graph.status).toHaveBeenCalledTimes(1);
+      expect(graph.publish).toHaveBeenCalledTimes(1);
+      const fetchMock = vi.mocked(globalThis.fetch);
+      const publishUrl = new URL(String(fetchMock.mock.calls.find((c) => String(c[0]).includes("/media_publish"))![0]));
+      expect(publishUrl.searchParams.get("creation_id")).toBe("container-1");
+      // Lost ack: the saved container is reused, never replaced.
+      expect(graph.container).not.toHaveBeenCalled();
+    });
+
+    it("checks the status of the SAVED container, not a new one", async () => {
+      const { store } = makeStore(stateWith(0));
+      stubGraph({ status: () => status("IN_PROGRESS") });
+
+      await instagramClient.publishVideo(ctx(store));
+
+      const fetchMock = vi.mocked(globalThis.fetch);
+      const statusCalls = fetchMock.mock.calls.filter((c) => String(c[0]).includes("fields=status_code"));
+      expect(statusCalls).toHaveLength(1);
+      expect(String(statusCalls[0][0])).toContain("/container-1?");
+    });
+
+    it("IN_PROGRESS: counts the check, saves it, and continues in 60 s without publishing", async () => {
+      const { store, savedData } = makeStore(stateWith(1));
+      const graph = stubGraph({ status: () => status("IN_PROGRESS") });
+
+      const result = await instagramClient.publishVideo(ctx(store));
+
+      expect(result).toEqual(continuation);
+      expect(savedData()).toMatchObject({ containerId: "container-1", checks: 2 });
+      expect(graph.publish).not.toHaveBeenCalled();
+      expect(graph.container).not.toHaveBeenCalled();
+    });
+
+    it("IN_PROGRESS on the 5th check: INSTAGRAM_VIDEO_TIMEOUT, and media_publish is never requested", async () => {
+      const { store } = makeStore(stateWith(INSTAGRAM_STATUS_MAX_CHECKS - 1));
+      const graph = stubGraph({ status: () => status("IN_PROGRESS") });
+
+      const error = await failure(instagramClient.publishVideo(ctx(store)));
+
+      expect(error?.code).toBe("INSTAGRAM_VIDEO_TIMEOUT");
+      expect(graph.publish).not.toHaveBeenCalled();
+    });
+
+    it("FINISHED on the 5th check still publishes", async () => {
+      const { store } = makeStore(stateWith(INSTAGRAM_STATUS_MAX_CHECKS - 1));
+      const graph = stubGraph({ status: () => status("FINISHED") });
+
+      await expect(instagramClient.publishVideo(ctx(store))).resolves.toEqual({ externalPostId: "media-1" });
+      expect(graph.publish).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      ["ERROR", "INSTAGRAM_VIDEO_PROCESSING_ERROR"],
+      ["EXPIRED", "INSTAGRAM_CONTAINER_EXPIRED"],
+      // A container that is already PUBLISHED before our own media_publish was
+      // published by something else or by a lost earlier try; either way we cannot say
+      // what is live, and we do not call media_publish on it.
+      ["PUBLISHED", "PUBLISH_UNCONFIRMED"],
+    ])("%s -> %s, and media_publish is never requested", async (statusCode, code) => {
+      const { store } = makeStore(stateWith(1));
+      const graph = stubGraph({ status: () => status(statusCode) });
+
+      const error = await failure(instagramClient.publishVideo(ctx(store)));
+
+      expect(error?.code).toBe(code);
+      expect(graph.publish).not.toHaveBeenCalled();
+    });
+
+    it("PUBLISHED carries the shared user-facing PUBLISH_UNCONFIRMED message", async () => {
+      const { store } = makeStore(stateWith(1));
+      stubGraph({ status: () => status("PUBLISHED") });
+
+      const error = await failure(instagramClient.publishVideo(ctx(store)));
+
+      expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    });
+
+    it("a Meta throttle (code 80002) is RATE_LIMITED, the state is kept untouched, and nothing is published", async () => {
+      const { store, mocks, savedData } = makeStore(stateWith(2));
+      const graph = stubGraph({ status: () => graphError(80002) });
+
+      const error = await failure(instagramClient.publishVideo(ctx(store)));
+
+      expect(error).toMatchObject({ code: "RATE_LIMITED", platform: "instagram" });
+      // Kept as it was: the throttled query told us nothing, so it is not counted.
+      expect(savedData()).toEqual(stateWith(2));
+      expect(mocks.save).not.toHaveBeenCalled();
+      expect(mocks.clear).not.toHaveBeenCalled();
+      expect(graph.publish).not.toHaveBeenCalled();
+      expect(graph.container).not.toHaveBeenCalled();
+    });
+
+    it("an HTTP 429 on the status query is RATE_LIMITED too", async () => {
+      const { store } = makeStore(stateWith(0));
+      stubGraph({ status: () => new Response("{}", { status: 429 }) });
+
+      expect((await failure(instagramClient.publishVideo(ctx(store))))?.code).toBe("RATE_LIMITED");
+    });
+
+    it("a rejected token (OAuthException 190) flags the connection and throws INSTAGRAM_RECONNECT_REQUIRED", async () => {
+      const { store } = makeStore(stateWith(1));
+      stubGraph({ status: () => new Response(AUTH_ERROR_BODY, { status: 400 }) });
+
+      const error = await failure(instagramClient.publishVideo(ctx(store)));
+
+      expect(error?.code).toBe("INSTAGRAM_RECONNECT_REQUIRED");
+      expect(updateMock).toHaveBeenCalledTimes(1);
+      expect((updateMock.mock.calls[0][0] as { where: { id: string } }).where).toEqual({ id: "conn-ig" });
+    });
+
+    it("a 401 whose stored tokens changed meanwhile is CONNECTION_TOKEN_CHANGED and flags nothing", async () => {
+      findUniqueMock.mockResolvedValue(ROTATED_TOKENS);
+      const { store } = makeStore(stateWith(1));
+      stubGraph({ status: () => new Response("{}", { status: 401 }) });
+
+      const error = await failure(instagramClient.publishVideo(ctx(store)));
+
+      expect(error?.code).toBe("CONNECTION_TOKEN_CHANGED");
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["a 500", () => new Response("{}", { status: 500 })],
+      ["a 400 that is not a throttle or a dead token", () => graphError(100)],
+      ["a 200 whose body is not JSON", () => new Response("<html>hi</html>", { status: 200 })],
+      ["a 200 without a status_code", () => new Response("{}", { status: 200 })],
+      ["a status_code we do not know", () => status("SOMETHING_NEW")],
+      ["a connection error", () => Promise.reject(new TypeError("fetch failed"))],
+      [
+        "a request timeout",
+        () => Promise.reject(Object.assign(new Error("Request timed out"), { code: "FETCH_TIMEOUT" })),
+      ],
+    ] as const)("%s counts as a check and the poll continues", async (_name, answer) => {
+      const { store, savedData } = makeStore(stateWith(1));
+      const graph = stubGraph({ status: answer });
+
+      const result = await instagramClient.publishVideo(ctx(store));
+
+      expect(result).toEqual(continuation);
+      expect(savedData()).toMatchObject({ checks: 2 });
+      expect(graph.publish).not.toHaveBeenCalled();
+    });
+
+    it("an unanswered 5th check ends with INSTAGRAM_VIDEO_TIMEOUT, not an endless poll", async () => {
+      const { store } = makeStore(stateWith(INSTAGRAM_STATUS_MAX_CHECKS - 1));
+      stubGraph({ status: () => Promise.reject(new TypeError("fetch failed")) });
+
+      expect((await failure(instagramClient.publishVideo(ctx(store))))?.code).toBe("INSTAGRAM_VIDEO_TIMEOUT");
+    });
+
+    it("refuses to start the check once the step budget is spent (retry-safe, no request)", async () => {
+      const { store } = makeStore(stateWith(1));
+      const graph = stubGraph({});
+
+      const error = await failure(
+        instagramClient.publishVideo(ctx(store, { deadline: NOW + MIN_REQUEST_WINDOW_MS - 1 })),
+      );
+
+      expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+      expect(graph.status).not.toHaveBeenCalled();
+      expect(graph.publish).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("the commit call (media_publish after FINISHED) keeps its rules", () => {
+    it("a 5xx is PUBLISH_UNCONFIRMED and is not retried", async () => {
+      const { store } = makeStore(stateWith(1));
+      const graph = stubGraph({ publish: () => new Response("{}", { status: 500 }) });
+
+      const error = await failure(instagramClient.publishVideo(ctx(store)));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(graph.publish).toHaveBeenCalledTimes(1);
+    });
+
+    it("a 2xx without a post id is PUBLISH_UNCONFIRMED", async () => {
+      const { store } = makeStore(stateWith(1));
+      stubGraph({ publish: () => new Response("{}", { status: 200 }) });
+
+      expect((await failure(instagramClient.publishVideo(ctx(store))))?.code).toBe("PUBLISH_UNCONFIRMED");
+    });
+
+    it("the 100-posts-a-day cap is a RATE_LIMITED deferral and the state is kept for the later attempt", async () => {
+      const { store, mocks, savedData } = makeStore(stateWith(1));
+      stubGraph({
+        publish: () =>
+          new Response(
+            JSON.stringify({ error: { message: "m", type: "OAuthException", code: 9, error_subcode: 2207042 } }),
+            { status: 400 },
+          ),
+      });
+
+      const error = await failure(instagramClient.publishVideo(ctx(store)));
+
+      expect(error).toMatchObject({ code: "RATE_LIMITED", kind: "daily_limit" });
+      expect(mocks.clear).not.toHaveBeenCalled();
+      expect(savedData()).toEqual(stateWith(1));
+    });
+
+    it("a rejected token flags the connection", async () => {
+      const { store } = makeStore(stateWith(1));
+      stubGraph({ publish: () => new Response(AUTH_ERROR_BODY, { status: 400 }) });
+
+      expect((await failure(instagramClient.publishVideo(ctx(store))))?.code).toBe("INSTAGRAM_RECONNECT_REQUIRED");
+      expect(updateMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("walking a whole run, one publishVideo call per step", () => {
+    it("create, IN_PROGRESS, IN_PROGRESS, FINISHED: one container, one media_publish, success", async () => {
+      const { store } = makeStore();
+      const answers = ["IN_PROGRESS", "IN_PROGRESS", "FINISHED"];
+      const graph = stubGraph({ status: () => status(answers.shift()!) });
+
+      const outcomes = [];
+      for (let step = 0; step < 4; step++) outcomes.push(await instagramClient.publishVideo(ctx(store)));
+
+      expect(outcomes).toEqual([continuation, continuation, continuation, { externalPostId: "media-1" }]);
+      expect(graph.container).toHaveBeenCalledTimes(1);
+      expect(graph.status).toHaveBeenCalledTimes(3);
+      expect(graph.publish).toHaveBeenCalledTimes(1);
+    });
+
+    it("a container stuck IN_PROGRESS is given exactly five checks, then INSTAGRAM_VIDEO_TIMEOUT", async () => {
+      const { store } = makeStore();
+      const graph = stubGraph({ status: () => status("IN_PROGRESS") });
+
+      const outcomes: unknown[] = [];
+      for (let step = 0; step < 1 + INSTAGRAM_STATUS_MAX_CHECKS - 1; step++) {
+        outcomes.push(await instagramClient.publishVideo(ctx(store)));
+      }
+      const last = await failure(instagramClient.publishVideo(ctx(store)));
+
+      // The creating step plus four checks continue; the fifth check gives up.
+      expect(outcomes).toHaveLength(INSTAGRAM_STATUS_MAX_CHECKS);
+      expect(outcomes.every((o) => JSON.stringify(o) === JSON.stringify(continuation))).toBe(true);
+      expect(last?.code).toBe("INSTAGRAM_VIDEO_TIMEOUT");
+      expect(graph.container).toHaveBeenCalledTimes(1);
+      expect(graph.status).toHaveBeenCalledTimes(INSTAGRAM_STATUS_MAX_CHECKS);
+      expect(graph.publish).not.toHaveBeenCalled();
+    });
+
+    it("a re-run of the creating step (its output was lost) finds the state and never makes a second container", async () => {
+      const { store } = makeStore();
+      const graph = stubGraph({ status: () => status("IN_PROGRESS") });
+
+      await instagramClient.publishVideo(ctx(store)); // creates the container, saves checks 0
+      await instagramClient.publishVideo(ctx(store)); // the same step again
+
+      expect(graph.container).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("without a store, or for an image: today's in-step behavior", () => {
+    it("a video with no store still polls inside the step (the legacy path) and publishes", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+      const graph = stubGraph({ status: () => status("FINISHED") });
+
+      const promise = instagramClient.publishVideo(ctx(undefined));
+      await vi.advanceTimersByTimeAsync(INSTAGRAM_POLL_INTERVAL_MS);
+
+      await expect(promise).resolves.toEqual({ externalPostId: "media-1" });
+      expect(graph.container).toHaveBeenCalledTimes(1);
+      expect(graph.publish).toHaveBeenCalledTimes(1);
+    });
+
+    it("an image waits 3 s in the step and publishes; it never reads or writes the state", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+      const { store, mocks } = makeStore();
+      const graph = stubGraph({});
+
+      const promise = instagramClient.publishVideo(ctx(store, { mimeType: "image/jpeg" }));
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      await expect(promise).resolves.toEqual({ externalPostId: "media-1" });
+      expect(graph.status).not.toHaveBeenCalled();
+      expect(graph.publish).toHaveBeenCalledTimes(1);
+      expect(mocks.load).not.toHaveBeenCalled();
+      expect(mocks.save).not.toHaveBeenCalled();
+    });
   });
 });
 

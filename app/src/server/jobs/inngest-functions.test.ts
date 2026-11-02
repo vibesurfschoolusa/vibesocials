@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
 import { logger } from "@/lib/logger";
 import { nextPacificMidnight, rateLimitedError } from "@/server/platforms/rateLimited";
+import { instagramClient } from "@/server/platforms/instagramClient";
 import { PUBLISH_STEP_BUDGET_MS } from "@/server/platforms/publishBudget";
 import type { PublishContext } from "@/server/platforms/types";
 
@@ -3044,6 +3045,218 @@ describe("chunked uploads - continuation steps (jobs)", () => {
         [console.log, console.info, console.warn, console.error].map((fn) => vi.mocked(fn).mock.calls),
       );
       expect(logged).not.toContain(SESSION_URI);
+    });
+  });
+
+  // 2026-11-02 scale audit (jobs L5): the REAL Instagram client, driven by a faked
+  // Graph API, polls its REELS container once a minute across steps: one step
+  // creates it, then one step per status check, each after a durable sleep. Only
+  // the step that sees FINISHED calls media_publish.
+  describe("Instagram container polling across steps (jobs L5)", () => {
+    const PAGE_TOKEN = "page-token-for-instagram-e2e";
+    const containerOk = () => new Response(JSON.stringify({ id: "container-1" }), { status: 200 });
+    const statusOf = (code: string) => new Response(JSON.stringify({ status_code: code }), { status: 200 });
+    const throttled = () =>
+      new Response(JSON.stringify({ error: { message: "m", type: "OAuthException", code: 80002 } }), { status: 400 });
+
+    /** The Graph API: the status answers are given in order; the last one repeats. */
+    function stubGraph(statuses: Array<() => Response>) {
+      let checks = 0;
+      const calls = { container: 0, status: 0, publish: 0 };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: string | URL) => {
+          const url = String(input);
+          if (url.includes("/media_publish")) {
+            calls.publish += 1;
+            return new Response(JSON.stringify({ id: "media-1" }), { status: 200 });
+          }
+          if (url.includes("/ig-account-1/media")) {
+            calls.container += 1;
+            return containerOk();
+          }
+          if (url.includes("fields=status_code")) {
+            calls.status += 1;
+            return statuses[Math.min(checks++, statuses.length - 1)]();
+          }
+          throw new Error(`Unexpected fetch in test: ${url}`);
+        }),
+      );
+      return calls;
+    }
+
+    function instagramRun(step = fakeStep()) {
+      db.postJobFindUnique.mockResolvedValue({ id: "job-1", workspaceId: WORKSPACE.id });
+      db.mediaItemFindUnique.mockResolvedValue({
+        id: "media-1",
+        baseCaption: "c",
+        deletedAt: null,
+        mimeType: "video/mp4",
+        storageLocation: "https://blob.example.com/m.mp4",
+      });
+      db.connectionFindMany.mockResolvedValue([{ id: "conn-instagram", platform: "instagram" }]);
+      db.connectionFindUnique.mockResolvedValue({
+        ...connectionRow("instagram"),
+        accessToken: PAGE_TOKEN,
+        accountIdentifier: "ig-account-1",
+      });
+      stubResults(["instagram"]);
+      return handlerOf(publishToAllPlatforms)({ event: publishEvent, step }) as Promise<RunOut>;
+    }
+
+    beforeEach(() => {
+      memoryUploadStates();
+      getPlatformClientMock.mockImplementation(() => instagramClient);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("IN_PROGRESS, IN_PROGRESS, FINISHED: create, wait, check, wait, check, wait, check and publish", async () => {
+      const graph = stubGraph([() => statusOf("IN_PROGRESS"), () => statusOf("IN_PROGRESS"), () => statusOf("FINISHED")]);
+      const step = fakeStep();
+
+      const out = await instagramRun(step);
+
+      expect(step.order).toEqual([
+        "run:fetch-data",
+        "run:publish-to-instagram",
+        "sleepUntil:publish-to-instagram-wait-c1",
+        "run:publish-to-instagram-c1",
+        "sleepUntil:publish-to-instagram-wait-c2",
+        "run:publish-to-instagram-c2",
+        "sleepUntil:publish-to-instagram-wait-c3",
+        "run:publish-to-instagram-c3",
+        "run:finalize-job",
+        "sendEvent:notify-outcome",
+      ]);
+      // Each of the first three steps hands its claim back and is due a minute later.
+      for (const id of ["publish-to-instagram", "publish-to-instagram-c1", "publish-to-instagram-c2"]) {
+        expect(step.outputs[id]).toEqual({
+          platform: "instagram",
+          status: "continue",
+          resumeAt: new Date(T + 60_000).toISOString(),
+          sleep: true,
+        });
+      }
+      expect(step.sleepUntil).toHaveBeenCalledWith("publish-to-instagram-wait-c1", new Date(T + 60_000));
+      expect(claimWrites()).toHaveLength(4);
+      expect(releaseContinuationSpy).toHaveBeenCalledTimes(3);
+      expect(releaseSpy).not.toHaveBeenCalled();
+      // One container, three status checks, one media_publish.
+      expect(graph).toEqual({ container: 1, status: 3, publish: 1 });
+      expect(resultWrites().at(-1)).toEqual({
+        status: "success",
+        externalPostId: "media-1",
+        ...CLEARS_STATE,
+        ...HEARTBEAT,
+      });
+      expect(failedWrites()).toEqual([]);
+      expect(out.results).toEqual([{ platform: "instagram", status: "success" }]);
+    });
+
+    it("refreshes the job heartbeat at every wake, so the reconciler sees a live run", async () => {
+      stubGraph([() => statusOf("IN_PROGRESS"), () => statusOf("FINISHED")]);
+
+      await instagramRun();
+
+      // -c1 and -c2 each refresh it before claiming; the first step does not.
+      expect(db.postJobUpdateMany).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the access token out of every step output and the saved state", async () => {
+      const saved = memoryUploadStates();
+      stubGraph([() => statusOf("IN_PROGRESS"), () => statusOf("FINISHED")]);
+      const step = fakeStep();
+
+      await instagramRun(step);
+
+      expect(saved.size).toBe(1);
+      expect(JSON.stringify(step.outputs)).not.toContain(PAGE_TOKEN);
+      expect(JSON.stringify([...saved.values()])).not.toContain(PAGE_TOKEN);
+    });
+
+    it("a container stuck IN_PROGRESS fails INSTAGRAM_VIDEO_TIMEOUT on the 5th check (-c5), with no media_publish", async () => {
+      const graph = stubGraph([() => statusOf("IN_PROGRESS")]);
+      const step = fakeStep();
+
+      const out = await instagramRun(step);
+
+      expect(step.order).toContain("run:publish-to-instagram-c5");
+      expect(step.order).not.toContain("run:publish-to-instagram-c6");
+      expect(graph).toEqual({ container: 1, status: 5, publish: 0 });
+      expect(failedWrites()).toEqual([
+        expect.objectContaining({ status: "failed", errorCode: "INSTAGRAM_VIDEO_TIMEOUT", ...CLEARS_STATE }),
+      ]);
+      expect(out.results).toEqual([
+        { platform: "instagram", status: "failed", error: "Instagram video processing timeout" },
+      ]);
+    });
+
+    it("a throttled status check defers on the -rl ids, keeps the state, and the next attempt checks again", async () => {
+      const graph = stubGraph([() => statusOf("IN_PROGRESS"), throttled, () => statusOf("FINISHED")]);
+      const step = fakeStep();
+
+      const out = await instagramRun(step);
+
+      expect(step.order.slice(1, 7)).toEqual([
+        "run:publish-to-instagram",
+        "sleepUntil:publish-to-instagram-wait-c1",
+        "run:publish-to-instagram-c1",
+        "sleepUntil:publish-to-instagram-wait-c2",
+        "run:publish-to-instagram-c2",
+        "sleepUntil:publish-to-instagram-wait-rl1",
+      ]);
+      expect(step.order.slice(7, 9)).toEqual(["run:publish-to-instagram-rl1", "run:finalize-job"]);
+      expect(step.outputs["publish-to-instagram-c2"]).toMatchObject({ platform: "instagram", status: "deferred" });
+      expect(releaseSpy).toHaveBeenCalledTimes(1);
+      // The container is never replaced, and the throttled query is the third request.
+      expect(graph).toEqual({ container: 1, status: 3, publish: 1 });
+      expect(out.results).toEqual([{ platform: "instagram", status: "success" }]);
+    });
+
+    it("runs the other platforms while Instagram waits for its first check", async () => {
+      stubGraph([() => statusOf("FINISHED")]);
+      const step = fakeStep();
+      db.postJobFindUnique.mockResolvedValue({ id: "job-1", workspaceId: WORKSPACE.id });
+      db.mediaItemFindUnique.mockResolvedValue({
+        id: "media-1",
+        baseCaption: "c",
+        deletedAt: null,
+        mimeType: "video/mp4",
+        storageLocation: "https://blob.example.com/m.mp4",
+      });
+      db.connectionFindMany.mockResolvedValue([
+        { id: "conn-instagram", platform: "instagram" },
+        { id: "conn-linkedin", platform: "linkedin" },
+      ]);
+      db.connectionFindUnique.mockImplementation(({ where }: { where: { id: string } }) =>
+        Promise.resolve({
+          ...connectionRow(where.id.replace("conn-", "") as Platform),
+          accountIdentifier: "ig-account-1",
+        }),
+      );
+      stubResults(["instagram", "linkedin"]);
+      getPlatformClientMock.mockImplementation((platform: Platform) =>
+        platform === "instagram"
+          ? instagramClient
+          : { publishVideo: vi.fn(async () => ({ externalPostId: "ext-linkedin" })) },
+      );
+
+      const out = (await handlerOf(publishToAllPlatforms)({ event: publishEvent, step })) as RunOut;
+
+      expect(step.order.slice(1, 6)).toEqual([
+        "run:publish-to-instagram",
+        "run:publish-to-linkedin",
+        "sleepUntil:publish-to-instagram-wait-c1",
+        "run:publish-to-instagram-c1",
+        "run:finalize-job",
+      ]);
+      expect(out.results).toEqual([
+        { platform: "instagram", status: "success" },
+        { platform: "linkedin", status: "success" },
+      ]);
     });
   });
 });
