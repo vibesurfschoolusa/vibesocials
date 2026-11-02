@@ -45,8 +45,12 @@ import {
   claimDueScheduledJobs,
   DUE_SCAN_BATCH,
   MATERIALIZE_CHUNK_SIZE,
+  MATERIALIZE_RETRY_DELAYS_MS,
+  MAX_DISPATCH_BYTES,
+  materializeAndDispatchChunk,
   materializeClaimedJobs,
   reconcileStuckInProgressJobs,
+  splitEventsBySize,
   STUCK_IN_PROGRESS_MS,
 } from "./scheduledScanner";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
@@ -70,6 +74,13 @@ describe("scanner batch constants", () => {
   it("claims up to 1000 due jobs per tick and materializes 50 per step", () => {
     expect(DUE_SCAN_BATCH).toBe(1000);
     expect(MATERIALIZE_CHUNK_SIZE).toBe(50);
+  });
+
+  // R20 / R21: events are sent in sub-batches of at most 1 MiB, and a job whose
+  // materialize throws is retried inline after 500 ms and then 2 s.
+  it("bounds a send at 1 MiB and retries a throwing materialize after 500 ms then 2 s", () => {
+    expect(MAX_DISPATCH_BYTES).toBe(1_048_576);
+    expect([...MATERIALIZE_RETRY_DELAYS_MS]).toEqual([500, 2000]);
   });
 });
 
@@ -261,34 +272,44 @@ describe("reconcileStuckInProgressJobs", () => {
   });
 });
 
+/** A prepared-dispatch result for `id`, shaped like prepareDeferredPostJobDispatch's. */
+function okFor(id: string, baseCaption = `caption ${id}`) {
+  return {
+    ok: true as const,
+    event: {
+      postJobId: id,
+      userId: `user-${id}`,
+      workspaceId: `ws-${id}`,
+      mediaItemId: `media-${id}`,
+      baseCaption,
+      perPlatformOverrides: null,
+    },
+  };
+}
+
+/** `count` ids: job-0 ... job-<count-1>. */
+const ids = (count: number) => Array.from({ length: count }, (_, i) => `job-${i}`);
+
 describe("materializeClaimedJobs", () => {
+  /** Resolves at once; records the waits it was asked for. */
+  const sleep = vi.fn<(ms: number) => Promise<void>>();
+
   beforeEach(() => {
+    sleep.mockReset();
+    sleep.mockResolvedValue(undefined);
     // A job that throws is logged (and surfaced); keep the test output quiet.
     vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
   });
 
-  /** A prepared-dispatch result for `id`, shaped like prepareDeferredPostJobDispatch's. */
-  function okFor(id: string) {
-    return {
-      ok: true as const,
-      event: {
-        postJobId: id,
-        userId: `user-${id}`,
-        workspaceId: `ws-${id}`,
-        mediaItemId: `media-${id}`,
-        baseCaption: `caption ${id}`,
-        perPlatformOverrides: null,
-      },
-    };
-  }
-
-  it("builds a scheduled (immediate: false) publish event with a stable id per ok job and isolates a job that throws", async () => {
+  it("builds a scheduled (immediate: false) publish event with a stable id per ok job and isolates a job that keeps throwing", async () => {
     prepareDeferredMock.mockImplementation(async (id: string) => {
       if (id === "b") throw new Error("pool timeout");
       return okFor(id);
     });
 
-    const out = await materializeClaimedJobs(["a", "b", "c"]);
+    const out = await materializeClaimedJobs(["a", "b", "c"], sleep);
 
     expect(out.publishEvents.map((e) => e.id)).toEqual(["publish-a", "publish-c"]);
     expect(out.publishEvents.every((e) => e.name === "post/publish.requested")).toBe(true);
@@ -303,7 +324,8 @@ describe("materializeClaimedJobs", () => {
     expect(out.errorIds).toEqual(["b"]);
     expect(out.noConnections).toEqual([]);
     expect(out.notFound).toEqual([]);
-    expect(prepareDeferredMock).toHaveBeenCalledTimes(3);
+    // a once, b three times (1 + 2 retries), c once.
+    expect(prepareDeferredMock).toHaveBeenCalledTimes(5);
   });
 
   it("puts a NO_CONNECTIONS job in noConnections with its owner's userId", async () => {
@@ -312,7 +334,7 @@ describe("materializeClaimedJobs", () => {
     );
     findUniqueMock.mockResolvedValue({ userId: "owner-1" });
 
-    const out = await materializeClaimedJobs(["a", "n"]);
+    const out = await materializeClaimedJobs(["a", "n"], sleep);
 
     expect(out.noConnections).toEqual([{ postJobId: "n", userId: "owner-1" }]);
     expect(out.publishEvents.map((e) => e.id)).toEqual(["publish-a"]);
@@ -326,17 +348,20 @@ describe("materializeClaimedJobs", () => {
   it("puts a NOT_FOUND job in notFound and sends nothing for it", async () => {
     prepareDeferredMock.mockResolvedValue({ ok: false, reason: "NOT_FOUND" });
 
-    const out = await materializeClaimedJobs(["gone"]);
+    const out = await materializeClaimedJobs(["gone"], sleep);
 
     expect(out).toEqual({ publishEvents: [], noConnections: [], notFound: ["gone"], errorIds: [] });
     expect(findUniqueMock).not.toHaveBeenCalled();
   });
 
-  it("reports an owner lookup that throws as an error, and one deleted since as not found", async () => {
+  it("reports an owner lookup that keeps throwing as an error, and one deleted since as not found", async () => {
     prepareDeferredMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
-    findUniqueMock.mockRejectedValueOnce(new Error("pool timeout")).mockResolvedValueOnce(null);
+    findUniqueMock.mockImplementation(async ({ where }: { where: { id: string } }) => {
+      if (where.id === "x") throw new Error("pool timeout");
+      return null;
+    });
 
-    const out = await materializeClaimedJobs(["x", "y"]);
+    const out = await materializeClaimedJobs(["x", "y"], sleep);
 
     expect(out.errorIds).toEqual(["x"]);
     expect(out.notFound).toEqual(["y"]);
@@ -344,9 +369,269 @@ describe("materializeClaimedJobs", () => {
   });
 
   it("returns an empty batch for no ids without touching the database", async () => {
-    const out = await materializeClaimedJobs([]);
+    const out = await materializeClaimedJobs([], sleep);
 
     expect(out).toEqual({ publishEvents: [], noConnections: [], notFound: [], errorIds: [] });
     expect(prepareDeferredMock).not.toHaveBeenCalled();
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  // 2026-11-01 scale audit (jobs H6), ruling R21: the per-job try/catch swallows a
+  // throw so one bad job cannot strand its chunk, which also means no Inngest step
+  // retry ever heals a transient pool timeout. The job is retried inline instead.
+  describe("inline retries of a throwing job", () => {
+    it("dispatches a job that throws once and then succeeds, and does not report it as an error", async () => {
+      prepareDeferredMock
+        .mockRejectedValueOnce(new Error("Timed out fetching a new connection from the pool"))
+        .mockImplementation(async (id: string) => okFor(id));
+
+      const out = await materializeClaimedJobs(["a"], sleep);
+
+      expect(out.publishEvents.map((e) => e.id)).toEqual(["publish-a"]);
+      expect(out.errorIds).toEqual([]);
+      expect(prepareDeferredMock).toHaveBeenCalledTimes(2);
+      expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([500]);
+    });
+
+    it("gives up on a job that throws 3 times: it lands in errorIds, after waits of 500 ms and 2000 ms", async () => {
+      prepareDeferredMock.mockRejectedValue(new Error("pool timeout"));
+
+      const out = await materializeClaimedJobs(["a"], sleep);
+
+      expect(out.errorIds).toEqual(["a"]);
+      expect(out.publishEvents).toEqual([]);
+      expect(prepareDeferredMock).toHaveBeenCalledTimes(3);
+      expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([500, 2000]);
+    });
+
+    it("succeeds on the third attempt after both waits", async () => {
+      prepareDeferredMock
+        .mockRejectedValueOnce(new Error("blip 1"))
+        .mockRejectedValueOnce(new Error("blip 2"))
+        .mockImplementation(async (id: string) => okFor(id));
+
+      const out = await materializeClaimedJobs(["a"], sleep);
+
+      expect(out.publishEvents.map((e) => e.id)).toEqual(["publish-a"]);
+      expect(out.errorIds).toEqual([]);
+      expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([500, 2000]);
+    });
+
+    it("retries the owner lookup of a NO_CONNECTIONS job too", async () => {
+      prepareDeferredMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
+      findUniqueMock
+        .mockRejectedValueOnce(new Error("pool timeout"))
+        .mockResolvedValueOnce({ userId: "owner-1" });
+
+      const out = await materializeClaimedJobs(["n"], sleep);
+
+      expect(out.noConnections).toEqual([{ postJobId: "n", userId: "owner-1" }]);
+      expect(out.errorIds).toEqual([]);
+    });
+
+    it("does not wait when every job succeeds", async () => {
+      prepareDeferredMock.mockImplementation(async (id: string) => okFor(id));
+
+      await materializeClaimedJobs(["a", "b"], sleep);
+
+      expect(sleep).not.toHaveBeenCalled();
+    });
+  });
+});
+
+// 2026-11-01 scale audit (jobs H6), ruling R20: an event's size is set by user text
+// that nothing caps (baseCaption, the per-platform override values). A send batches
+// events up to MAX_DISPATCH_BYTES, so one huge caption can neither fail the send of
+// 49 other users' posts nor bloat a memoized step output.
+describe("splitEventsBySize", () => {
+  const sized = (id: string, chars: number) => ({ id, pad: "x".repeat(chars) });
+  const bytesOf = (events: unknown[]) => JSON.stringify(events).length;
+
+  it("returns no batches for no events", () => {
+    expect(splitEventsBySize([], 1000)).toEqual([]);
+  });
+
+  it("keeps events that fit together in one batch, in order", () => {
+    const events = [sized("a", 10), sized("b", 10), sized("c", 10)];
+
+    expect(splitEventsBySize(events, 10_000)).toEqual([events]);
+  });
+
+  it("starts a new batch before a batch would serialize past the bound", () => {
+    const events = Array.from({ length: 10 }, (_, i) => sized(`e${i}`, 100));
+    const bound = bytesOf(events.slice(0, 4)); // exactly 4 events fit
+
+    const batches = splitEventsBySize(events, bound);
+
+    expect(batches.map((b) => b.length)).toEqual([4, 4, 2]);
+    expect(batches.flat().map((e) => e.id)).toEqual(events.map((e) => e.id));
+    for (const batch of batches) expect(bytesOf(batch)).toBeLessThanOrEqual(bound);
+  });
+
+  it("sends an event bigger than the bound alone", () => {
+    const small = sized("small", 10);
+    const big = sized("big", 5000);
+
+    const batches = splitEventsBySize([small, small, big, small], 1000);
+
+    expect(batches.map((b) => b.map((e) => e.id))).toEqual([
+      ["small", "small"],
+      ["big"],
+      ["small"],
+    ]);
+  });
+
+  it("measures bytes, not characters, so a multi-byte caption cannot slip under the bound", () => {
+    // 300 CJK characters are 300 UTF-16 units but about 900 UTF-8 bytes.
+    const cjk = { id: "cjk", pad: "字".repeat(300) };
+    const ascii = sized("ascii", 300);
+
+    expect(splitEventsBySize([cjk, cjk], 1000).length).toBe(2);
+    expect(splitEventsBySize([ascii, ascii], 1000).length).toBe(1);
+  });
+
+  it("defaults to MAX_DISPATCH_BYTES", () => {
+    const sixtyPercent = sized("big", Math.floor(MAX_DISPATCH_BYTES * 0.6));
+
+    expect(splitEventsBySize([sixtyPercent, sixtyPercent]).length).toBe(2);
+    expect(splitEventsBySize([sixtyPercent]).length).toBe(1);
+  });
+});
+
+describe("materializeAndDispatchChunk", () => {
+  const sleep = vi.fn<(ms: number) => Promise<void>>();
+  const send = vi.fn<(events: unknown[]) => Promise<unknown>>();
+  const sentIds = (call: number) =>
+    (send.mock.calls[call]?.[0] as Array<{ id: string }>).map((e) => e.id);
+
+  beforeEach(() => {
+    sleep.mockReset();
+    sleep.mockResolvedValue(undefined);
+    send.mockReset();
+    send.mockResolvedValue({ ids: [] });
+    prepareDeferredMock.mockImplementation(async (id: string) => okFor(id));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "info").mockImplementation(() => {});
+  });
+
+  it("materializes the chunk and sends its events in one batch", async () => {
+    const out = await materializeAndDispatchChunk(ids(3), { send, sleep });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(sentIds(0)).toEqual(["publish-job-0", "publish-job-1", "publish-job-2"]);
+    expect(out).toEqual({
+      dispatched: 3,
+      dispatchErrors: 0,
+      noConnections: [],
+      notFound: [],
+      errorIds: [],
+    });
+  });
+
+  it("sends nothing for a chunk without an ok job", async () => {
+    prepareDeferredMock.mockResolvedValue({ ok: false, reason: "NOT_FOUND" });
+
+    const out = await materializeAndDispatchChunk(ids(2), { send, sleep });
+
+    expect(send).not.toHaveBeenCalled();
+    expect(out).toMatchObject({ dispatched: 0, dispatchErrors: 0, notFound: ["job-0", "job-1"] });
+  });
+
+  // One ~1.5 MB event among 49 small ones (a caption nothing caps). It would push a
+  // single 50-event send past any request cap; bounded sub-batches send it alone.
+  it("sends a chunk with one ~1.5 MB event and 49 small ones in at least 2 sub-batches, the big event alone", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) =>
+      okFor(id, id === "job-10" ? "x".repeat(1_500_000) : "small"),
+    );
+
+    const out = await materializeAndDispatchChunk(ids(50), { send, sleep });
+
+    expect(send.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const bigCall = send.mock.calls.findIndex(([events]) =>
+      (events as Array<{ id: string }>).some((e) => e.id === "publish-job-10"),
+    );
+    expect(sentIds(bigCall)).toEqual(["publish-job-10"]);
+    // Every event is sent, once, in order.
+    expect(send.mock.calls.flatMap((_c, i) => sentIds(i))).toEqual(
+      ids(50).map((id) => `publish-${id}`),
+    );
+    for (const [events] of send.mock.calls) {
+      const batch = events as unknown[];
+      if (batch.length > 1) {
+        expect(Buffer.byteLength(JSON.stringify(batch))).toBeLessThanOrEqual(MAX_DISPATCH_BYTES);
+      }
+    }
+    expect(out).toMatchObject({ dispatched: 50, dispatchErrors: 0 });
+  });
+
+  it("a rejected sub-batch leaves the other sub-batches sent, and only its jobs are dispatchErrors", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) =>
+      okFor(id, id === "job-10" ? "x".repeat(1_500_000) : "small"),
+    );
+    send.mockImplementation(async (events: unknown[]) => {
+      if ((events as Array<{ id: string }>).some((e) => e.id === "publish-job-10")) {
+        throw new Error("inngest rejected the event");
+      }
+      return { ids: [] };
+    });
+
+    const out = await materializeAndDispatchChunk(ids(50), { send, sleep });
+
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(out).toMatchObject({ dispatched: 49, dispatchErrors: 1, errorIds: [] });
+  });
+
+  it("counts a job that failed to materialize as an error id, not as a dispatch error", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) => {
+      if (id === "job-1") throw new Error("pool timeout");
+      return okFor(id);
+    });
+
+    const out = await materializeAndDispatchChunk(ids(3), { send, sleep });
+
+    expect(sentIds(0)).toEqual(["publish-job-0", "publish-job-2"]);
+    expect(out).toEqual({
+      dispatched: 2,
+      dispatchErrors: 0,
+      noConnections: [],
+      notFound: [],
+      errorIds: ["job-1"],
+    });
+  });
+
+  it("returns the NO_CONNECTIONS owners for the notification send", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) =>
+      id === "job-1" ? { ok: false, reason: "NO_CONNECTIONS" } : okFor(id),
+    );
+    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+
+    const out = await materializeAndDispatchChunk(ids(3), { send, sleep });
+
+    expect(out.noConnections).toEqual([{ postJobId: "job-1", userId: "owner-1" }]);
+    expect(out.dispatched).toBe(2);
+  });
+
+  // The result is the step's memoized output. It must stay small however big the
+  // captions are: Inngest caps a step output at 4 MiB and a run's state at 32 MiB.
+  it("returns only counts and ids: no caption, baseCaption or perPlatformOverrides, however large the events", async () => {
+    prepareDeferredMock.mockImplementation(async (id: string) =>
+      okFor(id, `SECRET-CAPTION-TEXT ${"y".repeat(100_000)}`),
+    );
+    prepareDeferredMock.mockImplementationOnce(async () => ({ ok: false, reason: "NO_CONNECTIONS" }));
+    findUniqueMock.mockResolvedValue({ userId: "owner-1" });
+
+    const out = await materializeAndDispatchChunk(ids(50), { send, sleep });
+
+    expect(Object.keys(out).sort()).toEqual(
+      ["dispatchErrors", "dispatched", "errorIds", "noConnections", "notFound"].sort(),
+    );
+    const serialized = JSON.stringify(out);
+    expect(serialized).not.toMatch(/caption/i);
+    expect(serialized).not.toContain("perPlatformOverrides");
+    expect(serialized.length).toBeLessThan(5_000);
+    // The 49 events were nevertheless all sent, in bounded sub-batches.
+    expect(send.mock.calls.flatMap((_c, i) => sentIds(i)).length).toBe(49);
+    expect(send.mock.calls.length).toBeGreaterThan(1);
   });
 });

@@ -1,18 +1,22 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { inngest } from "@/lib/inngest";
 
 // Handler-level test for the every-minute scheduled-post scanner. Mocks follow
 // mediaRetentionSweep.test.ts: vi.mock is hoisted above the imports, no database,
 // platform API or Inngest is reached. The scanner's claim/reconcile queries and
-// the deferred-dispatch DB work are stubbed; `materializeClaimedJobs` and the event
-// builder stay REAL, so the chunking, step ids and event shapes are asserted for real.
-const { claimDueMock, reconcileMock, prepareDeferredMock, ownerFindUniqueMock } = vi.hoisted(
-  () => ({
+// the deferred-dispatch DB work are stubbed; `materializeAndDispatchChunk` and the
+// event builder stay REAL, so the chunking, step ids, byte-bounded sends and event
+// shapes are asserted for real. Events are sent with `inngest.send` (spied below);
+// only the no-connections notifications go through `step.sendEvent`.
+const { claimDueMock, reconcileMock, prepareDeferredMock, ownerFindUniqueMock, sendMock } =
+  vi.hoisted(() => ({
     claimDueMock: vi.fn(),
     reconcileMock: vi.fn(),
     prepareDeferredMock: vi.fn(),
     ownerFindUniqueMock: vi.fn(),
-  }),
-);
+    sendMock: vi.fn(),
+  }));
 
 vi.mock("@/lib/db", () => ({
   prisma: { postJob: { findUnique: ownerFindUniqueMock } },
@@ -34,7 +38,7 @@ vi.mock("@/server/jobs/posting", async (importOriginal) => ({
 }));
 
 import { scheduledPostScanner } from "./inngest-functions";
-import { DUE_SCAN_BATCH, MATERIALIZE_CHUNK_SIZE } from "./scheduledScanner";
+import { DUE_SCAN_BATCH, MATERIALIZE_CHUNK_SIZE, MAX_DISPATCH_BYTES } from "./scheduledScanner";
 
 type ScanSummary = {
   claimed: number;
@@ -48,7 +52,8 @@ type SentPayload = Array<{ id: string; name: string; data: Record<string, unknow
 /**
  * Stand-in for Inngest's `step`: runs each step inline and JSON-round-trips its
  * output the way Inngest's memoization does, so a step that leaks a
- * non-serializable value shows up here.
+ * non-serializable value shows up here. `sendEvent` is used only for the
+ * no-connections notifications.
  */
 function fakeStep(sendEvent?: (id: string, payload: SentPayload) => Promise<unknown>) {
   return {
@@ -72,7 +77,7 @@ function claimed(count: number): string[] {
   return Array.from({ length: count }, (_, i) => `job-${i}`);
 }
 
-function okFor(id: string) {
+function okFor(id: string, baseCaption = "scheduled") {
   return {
     ok: true as const,
     event: {
@@ -80,29 +85,38 @@ function okFor(id: string) {
       userId: "user-1",
       workspaceId: "ws-1",
       mediaItemId: `media-${id}`,
-      baseCaption: "scheduled",
+      baseCaption,
       perPlatformOverrides: null,
     },
   };
 }
 
 const stepIds = (step: ReturnType<typeof fakeStep>) => step.run.mock.calls.map(([id]) => id);
-const sendIds = (step: ReturnType<typeof fakeStep>) => step.sendEvent.mock.calls.map(([id]) => id);
-const sentPayload = (step: ReturnType<typeof fakeStep>, call: number) =>
+const notifyIds = (step: ReturnType<typeof fakeStep>) => step.sendEvent.mock.calls.map(([id]) => id);
+const notifyPayload = (step: ReturnType<typeof fakeStep>, call: number) =>
   step.sendEvent.mock.calls[call]?.[1] as unknown as SentPayload;
+/** The events of each `inngest.send` call, in call order. */
+const dispatches = () => sendMock.mock.calls.map(([events]) => events as SentPayload);
 
 beforeEach(() => {
   claimDueMock.mockReset();
   reconcileMock.mockReset();
   prepareDeferredMock.mockReset();
   ownerFindUniqueMock.mockReset();
+  sendMock.mockReset();
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(inngest, "send").mockImplementation(sendMock as unknown as typeof inngest.send);
 
   reconcileMock.mockResolvedValue({ reconciled: 0 });
   prepareDeferredMock.mockImplementation(async (id: string) => okFor(id));
+  sendMock.mockResolvedValue({ ids: [] });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("scheduledPostScanner - options", () => {
@@ -125,7 +139,7 @@ describe("scheduledPostScanner - options", () => {
 });
 
 describe("scheduledPostScanner - batched dispatch", () => {
-  it("120 claimed jobs run as 3 chunked materialize steps and 3 batched sends (50, 50, 20)", async () => {
+  it("120 claimed jobs run as 3 materialize-and-dispatch steps, with sends of 50, 50 and 20 events", async () => {
     claimDueMock.mockResolvedValue(claimed(120));
     const step = fakeStep();
 
@@ -134,16 +148,17 @@ describe("scheduledPostScanner - batched dispatch", () => {
     expect(stepIds(step)).toEqual([
       "claim-due-jobs",
       "reconcile-stuck-in-progress",
-      "materialize-batch-0",
-      "materialize-batch-1",
-      "materialize-batch-2",
+      "materialize-dispatch-batch-0",
+      "materialize-dispatch-batch-1",
+      "materialize-dispatch-batch-2",
     ]);
-    expect(step.sendEvent).toHaveBeenCalledTimes(3);
-    expect(sendIds(step)).toEqual(["dispatch-batch-0", "dispatch-batch-1", "dispatch-batch-2"]);
-    expect([0, 1, 2].map((i) => sentPayload(step, i).length)).toEqual([50, 50, 20]);
+    expect(dispatches().map((events) => events.length)).toEqual([50, 50, 20]);
+    // Nothing needs notifying, so no step.sendEvent at all.
+    expect(step.sendEvent).not.toHaveBeenCalled();
     // No per-job step ids: those were 2 steps per job (2,002 for a full tick).
-    const everyId = [...stepIds(step), ...sendIds(step)];
-    expect(everyId.filter((id) => /^(materialize|publish)-(?!batch)/.test(id))).toEqual([]);
+    expect(stepIds(step).filter((id) => /^(materialize|publish)-(?!dispatch-batch-)/.test(id))).toEqual(
+      [],
+    );
     expect(summary).toEqual({
       claimed: 120,
       dispatched: 120,
@@ -158,27 +173,28 @@ describe("scheduledPostScanner - batched dispatch", () => {
 
     await runScanner(step);
 
-    expect(sentPayload(step, 0)).toEqual(
+    expect(dispatches()).toEqual([
       claimed(3).map((id) => ({
         id: `publish-${id}`,
         name: "post/publish.requested",
         data: { ...okFor(id).event, immediate: false },
       })),
-    );
+    ]);
   });
 
   // Today's per-job steps make a full tick 2 + 2 x 1000 = 2,002 steps, over Inngest's
-  // 1,000-step run limit (V7). Batched, a tick is at most 2 + 3 x 20 = 62.
-  it("a full 1000-post tick is 20 chunks of 50 and stays far under the 1,000-step run limit", async () => {
+  // 1,000-step run limit (V7). One step per chunk makes it 2 + 20, plus at most 20
+  // notification sends.
+  it("a full 1000-post tick is 20 chunk steps and stays far under the 1,000-step run limit", async () => {
     claimDueMock.mockResolvedValue(claimed(DUE_SCAN_BATCH));
     const step = fakeStep();
 
     const summary = await runScanner(step);
 
     expect(summary.dispatched).toBe(1000);
-    // claim + reconcile + 20 x (materialize + dispatch); a send is a step too.
-    expect(step.run.mock.calls.length + step.sendEvent.mock.calls.length).toBe(2 + 2 * 20);
-    expect(sentPayload(step, 19).length).toBe(50);
+    expect(stepIds(step).length).toBe(2 + 20);
+    expect(dispatches().length).toBe(20);
+    expect(dispatches()[19]?.length).toBe(50);
   });
 
   it("sends nothing when no job is due", async () => {
@@ -187,6 +203,7 @@ describe("scheduledPostScanner - batched dispatch", () => {
 
     const summary = await runScanner(step);
 
+    expect(sendMock).not.toHaveBeenCalled();
     expect(step.sendEvent).not.toHaveBeenCalled();
     expect(stepIds(step)).toEqual(["claim-due-jobs", "reconcile-stuck-in-progress"]);
     expect(summary).toEqual({
@@ -197,18 +214,19 @@ describe("scheduledPostScanner - batched dispatch", () => {
     });
   });
 
-  // Review Focus 3: a failed batch send must not strand the other chunks. The jobs
-  // of the failed chunk stay in_progress; the stuck-job reconciler finalizes them.
+  // Review Focus 3: a failed send must not strand the other chunks. The jobs of the
+  // failed send stay in_progress; the stuck-job reconciler finalizes them.
   it("a rejected send fails only its own chunk: the other chunks are still sent", async () => {
     claimDueMock.mockResolvedValue(claimed(120));
-    const step = fakeStep(async (id) => {
-      if (id === "dispatch-batch-1") throw new Error("inngest unavailable");
+    sendMock.mockImplementation(async (events: SentPayload) => {
+      if (events.some((e) => e.id === "publish-job-50")) throw new Error("inngest unavailable");
       return { ids: [] };
     });
+    const step = fakeStep();
 
     const summary = await runScanner(step);
 
-    expect(sendIds(step)).toEqual(["dispatch-batch-0", "dispatch-batch-1", "dispatch-batch-2"]);
+    expect(dispatches().length).toBe(3);
     expect(summary).toEqual({
       claimed: 120,
       dispatched: 70,
@@ -217,7 +235,38 @@ describe("scheduledPostScanner - batched dispatch", () => {
     });
   });
 
-  it("a job that throws while materializing is counted and does not hold back the rest of its chunk", async () => {
+  // 2026-11-01 scale audit (jobs H6), ruling R21: a transient DB error is retried
+  // inline (500 ms, then 2 s) before the job is left to the reconciler.
+  it("retries a job that throws while materializing, then dispatches it", async () => {
+    vi.useFakeTimers();
+    claimDueMock.mockResolvedValue(claimed(4));
+    let calls = 0;
+    prepareDeferredMock.mockImplementation(async (id: string) => {
+      if (id === "job-1" && (calls += 1) === 1) throw new Error("pool timeout");
+      return okFor(id);
+    });
+    const step = fakeStep();
+
+    const promise = runScanner(step);
+    await vi.runAllTimersAsync();
+    const summary = await promise;
+
+    expect(dispatches()[0]?.map((e) => e.id)).toEqual([
+      "publish-job-0",
+      "publish-job-1",
+      "publish-job-2",
+      "publish-job-3",
+    ]);
+    expect(summary).toEqual({
+      claimed: 4,
+      dispatched: 4,
+      failedNoConnections: 0,
+      dispatchErrors: 0,
+    });
+  });
+
+  it("a job that throws every attempt is counted and does not hold back the rest of its chunk", async () => {
+    vi.useFakeTimers();
     claimDueMock.mockResolvedValue(claimed(4));
     prepareDeferredMock.mockImplementation(async (id: string) => {
       if (id === "job-1") throw new Error("pool timeout");
@@ -225,9 +274,11 @@ describe("scheduledPostScanner - batched dispatch", () => {
     });
     const step = fakeStep();
 
-    const summary = await runScanner(step);
+    const promise = runScanner(step);
+    await vi.runAllTimersAsync();
+    const summary = await promise;
 
-    expect(sentPayload(step, 0).map((e) => e.id)).toEqual([
+    expect(dispatches()[0]?.map((e) => e.id)).toEqual([
       "publish-job-0",
       "publish-job-2",
       "publish-job-3",
@@ -240,23 +291,69 @@ describe("scheduledPostScanner - batched dispatch", () => {
     });
   });
 
-  it("a materialize step that fails outright counts its whole chunk and the next chunk still runs", async () => {
+  it("a chunk step that fails outright counts its whole chunk and the next chunk still runs", async () => {
     claimDueMock.mockResolvedValue(claimed(60));
     const step = fakeStep();
     step.run.mockImplementation(async (id: string, cb: () => unknown) => {
-      if (id === "materialize-batch-0") throw new Error("step exhausted its retries");
+      if (id === "materialize-dispatch-batch-0") throw new Error("step exhausted its retries");
       const out = await cb();
       return out === undefined ? undefined : JSON.parse(JSON.stringify(out));
     });
 
     const summary = await runScanner(step);
 
-    expect(sendIds(step)).toEqual(["dispatch-batch-1"]);
+    expect(dispatches().map((events) => events.length)).toEqual([10]);
     expect(summary).toEqual({
       claimed: 60,
       dispatched: 10,
       failedNoConnections: 0,
       dispatchErrors: 50,
+    });
+  });
+
+  // 2026-11-01 scale audit (jobs H6), ruling R20: nothing caps a caption, so 50
+  // events can be 5 MB. The old pair of steps carried the events in a memoized
+  // output (4 MiB limit) and sent them in one request; one chunk step now returns
+  // only counts and sends bounded sub-batches.
+  it("50 events of 100 KB are sent in bounded sub-batches and the step output stays tiny", async () => {
+    claimDueMock.mockResolvedValue(claimed(50));
+    prepareDeferredMock.mockImplementation(async (id: string) =>
+      okFor(id, `${id} ${"c".repeat(100_000)}`),
+    );
+    const step = fakeStep();
+
+    const summary = await runScanner(step);
+
+    expect(summary).toMatchObject({ claimed: 50, dispatched: 50, dispatchErrors: 0 });
+    expect(dispatches().length).toBeGreaterThanOrEqual(5);
+    expect(dispatches().flat().length).toBe(50);
+    for (const events of dispatches()) {
+      expect(Buffer.byteLength(JSON.stringify(events))).toBeLessThanOrEqual(MAX_DISPATCH_BYTES);
+    }
+    const chunkOutput = await step.run.mock.results[2]?.value;
+    expect(JSON.stringify(chunkOutput).length).toBeLessThan(2_000);
+    expect(JSON.stringify(chunkOutput)).not.toMatch(/caption/i);
+  });
+
+  it("one rejected sub-batch of an oversize chunk counts only its own jobs", async () => {
+    claimDueMock.mockResolvedValue(claimed(20));
+    prepareDeferredMock.mockImplementation(async (id: string) =>
+      okFor(id, id === "job-5" ? "x".repeat(1_500_000) : "small"),
+    );
+    sendMock.mockImplementation(async (events: SentPayload) => {
+      if (events.some((e) => e.id === "publish-job-5")) throw new Error("event too large");
+      return { ids: [] };
+    });
+    const step = fakeStep();
+
+    const summary = await runScanner(step);
+
+    expect(dispatches().length).toBe(3);
+    expect(summary).toEqual({
+      claimed: 20,
+      dispatched: 19,
+      failedNoConnections: 0,
+      dispatchErrors: 1,
     });
   });
 });
@@ -277,11 +374,11 @@ describe("scheduledPostScanner - jobs with no connections", () => {
     expect(stepIds(step)).toEqual([
       "claim-due-jobs",
       "reconcile-stuck-in-progress",
-      "materialize-batch-0",
+      "materialize-dispatch-batch-0",
     ]);
-    expect(sendIds(step)).toEqual(["dispatch-batch-0", "notify-noconn-batch-0"]);
-    expect(sentPayload(step, 0).map((e) => e.id)).toEqual(["publish-job-a"]);
-    expect(sentPayload(step, 1)).toEqual([
+    expect(dispatches().map((events) => events.map((e) => e.id))).toEqual([["publish-job-a"]]);
+    expect(notifyIds(step)).toEqual(["notify-noconn-batch-0"]);
+    expect(notifyPayload(step, 0)).toEqual([
       {
         id: "notify-noconn-job-n1",
         name: "notification.requested",
@@ -309,7 +406,8 @@ describe("scheduledPostScanner - jobs with no connections", () => {
 
     const summary = await runScanner(step);
 
-    expect(sendIds(step)).toEqual(["notify-noconn-batch-0"]);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(notifyIds(step)).toEqual(["notify-noconn-batch-0"]);
     expect(summary).toMatchObject({ dispatched: 0, failedNoConnections: 1, dispatchErrors: 0 });
   });
 

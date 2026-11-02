@@ -20,9 +20,9 @@ import {
 import {
   claimDueScheduledJobs,
   MATERIALIZE_CHUNK_SIZE,
-  materializeClaimedJobs,
+  materializeAndDispatchChunk,
   reconcileStuckInProgressJobs,
-  type MaterializedBatch,
+  type ChunkDispatchResult,
 } from "@/server/jobs/scheduledScanner";
 import {
   METRICS_SYNC_BATCH,
@@ -1047,21 +1047,22 @@ export const retryPlatforms = inngest.createFunction(
  * step plus a per-job `publish-<id>` send made a 500-post burst take many
  * minutes and a full tick 2,002 steps against Inngest's 1,000-step run limit
  * (https://www.inngest.com/docs/usage-limits/inngest). Per chunk `<i>`:
- *  - `materialize-batch-<i>` runs `materializeClaimedJobs` (memoized and
- *    idempotent: it creates results only if none exist yet, so a retry never
- *    duplicates rows).
- *  - `dispatch-batch-<i>` is ONE `step.sendEvent` of up to 50 publish events
- *    (a memoized step, so a completed send is never re-sent).
- *  - `notify-noconn-batch-<i>` is one send of the owner notifications for jobs
- *    that had no connection at run time (marked `failed` inside the materialize
- *    step, mirroring the existing no-connections path; reuses the same
+ *  - `materialize-dispatch-batch-<i>` (`materializeAndDispatchChunk`) materializes
+ *    the chunk's jobs and sends their publish events with `inngest.send`, in
+ *    sub-batches bounded by `MAX_DISPATCH_BYTES`. It is ONE step so the events
+ *    (user text nothing caps: a single caption can be megabytes) never become
+ *    memoized step output; the step returns only counts and ids. A re-run is safe:
+ *    materialize is idempotent (results are created only if none exist yet), each
+ *    event has the stable id `publish-<postJobId>`, and `publishToAllPlatforms`
+ *    has `idempotency: event.data.postJobId`, so a second send triggers no run.
+ *  - `notify-noconn-batch-<i>` is one `step.sendEvent` of the owner notifications
+ *    for jobs that had no connection at run time (marked `failed` inside the
+ *    chunk step, mirroring the existing no-connections path; reuses the same
  *    `notification.requested` → `sendNotification` →
  *    `deliverPostOutcomeNotification` path every other outcome uses, so the
- *    user's `notifyOnPostComplete` preference gates it identically).
- * That is at most 2 + 3 x 20 steps for a full tick of 1000. A scan that
- * straddles a deploy re-materializes (idempotent) and re-sends; each event's
- * stable id (`publish-<postJobId>`, `notify-noconn-<postJobId>`) and the publish
- * function's `idempotency: event.data.postJobId` dedupe the second send.
+ *    user's `notifyOnPostComplete` preference gates it identically). Each event
+ *    has the id `notify-noconn-<postJobId>`.
+ * That is at most 2 + 2 x 20 steps for a full tick of 1000.
  *
  * `singleton: { mode: "skip" }` skips a tick while the previous scan is still
  * running (https://www.inngest.com/docs/guides/singleton). A skipped tick is
@@ -1099,23 +1100,31 @@ export const scheduledPostScanner = inngest.createFunction(
         (chunkIndex + 1) * MATERIALIZE_CHUNK_SIZE,
       );
 
-      // Isolate each chunk (review Minor #1): a materialize/send that throws even
-      // after Inngest exhausts the step's retries must not abort the whole scan
-      // and strand every LATER chunk (already flipped to in_progress, so the next
-      // tick — which only re-queries `scheduled` — never re-claims them).
-      // Catching the terminal step error here bounds the blast radius to the one
-      // failing chunk and lets the rest dispatch. Successful steps remain
-      // memoized, so transient errors still get the normal retries.
-      let batch: MaterializedBatch;
+      // Isolate each chunk (review Minor #1): a step that throws even after
+      // Inngest exhausts its retries must not abort the whole scan and strand
+      // every LATER chunk (already flipped to in_progress, so the next tick —
+      // which only re-queries `scheduled` — never re-claims them). Catching the
+      // terminal step error here bounds the blast radius to the one failing
+      // chunk and lets the rest dispatch.
+      let chunk: ChunkDispatchResult;
       try {
-        batch = await step.run(`materialize-batch-${chunkIndex}`, async () => {
-          return materializeClaimedJobs(chunkIds);
+        chunk = await step.run(`materialize-dispatch-batch-${chunkIndex}`, async () => {
+          // The scanner is not "Post now": the chunk builds its events with
+          // `immediate: false`, which keeps the runs at priority 0 behind
+          // user-triggered publishes.
+          return materializeAndDispatchChunk(chunkIds, {
+            send: (events) => inngest.send(events),
+          });
         });
       } catch (error) {
-        // The chunk's jobs stay in_progress (a rare, no-known-trigger case);
-        // surfaced loudly for reconciliation rather than silently marked failed,
-        // which would mislabel a transient DB blip.
-        logger.error("[Inngest] Scheduled materialize step failed", {
+        // Per-job materialize errors and rejected sends are caught INSIDE the
+        // step, so reaching here means the step itself died (e.g. it timed out
+        // or the platform killed it). Which of its jobs were already sent is
+        // unknown; they all stay in_progress, and the stuck-job reconciler
+        // finalizes any that never got a run. Surfaced loudly for reconciliation
+        // rather than silently marked failed, which would mislabel a transient
+        // outage.
+        logger.error("[Inngest] Scheduled materialize-and-dispatch step failed", {
           chunkIndex,
           jobs: chunkIds.length,
           error,
@@ -1124,38 +1133,22 @@ export const scheduledPostScanner = inngest.createFunction(
         continue;
       }
 
-      // A job that threw inside the chunk stays in_progress for the reconciler.
-      dispatchErrors += batch.errorIds.length;
-      if (batch.notFound.length > 0) {
-        logger.warn("[Inngest] Claimed scheduled jobs no longer exist", { postJobIds: batch.notFound });
+      dispatched += chunk.dispatched;
+      // Jobs whose send was rejected, and jobs that threw on every materialize
+      // attempt, stay in_progress for the reconciler.
+      dispatchErrors += chunk.dispatchErrors + chunk.errorIds.length;
+      failedNoConnections += chunk.noConnections.length;
+      if (chunk.notFound.length > 0) {
+        logger.warn("[Inngest] Claimed scheduled jobs no longer exist", { postJobIds: chunk.notFound });
       }
 
-      if (batch.publishEvents.length > 0) {
-        try {
-          // The scanner is not "Post now": `immediate: false` (set by the
-          // materialize step) keeps the runs at priority 0 behind user-triggered
-          // publishes.
-          await step.sendEvent(`dispatch-batch-${chunkIndex}`, batch.publishEvents);
-          dispatched += batch.publishEvents.length;
-        } catch (error) {
-          // The chunk's jobs stay in_progress; the stuck-job reconciler finalizes them.
-          logger.error("[Inngest] Scheduled dispatch failed", {
-            chunkIndex,
-            events: batch.publishEvents.length,
-            error,
-          });
-          dispatchErrors += batch.publishEvents.length;
-        }
-      }
-
-      failedNoConnections += batch.noConnections.length;
-      if (batch.noConnections.length > 0) {
+      if (chunk.noConnections.length > 0) {
         // Phase-6 gap closed: the unattended "no platforms connected" failure
         // notifies like every other outcome. Memoized step => exactly-once.
         try {
           await step.sendEvent(
             `notify-noconn-batch-${chunkIndex}`,
-            batch.noConnections.map(({ postJobId, userId }) => ({
+            chunk.noConnections.map(({ postJobId, userId }) => ({
               id: `notify-noconn-${postJobId}`,
               name: "notification.requested" as const,
               data: { userId, postJobId },
@@ -1164,10 +1157,10 @@ export const scheduledPostScanner = inngest.createFunction(
         } catch (error) {
           logger.error("[Inngest] Scheduled no-connections notification failed", {
             chunkIndex,
-            events: batch.noConnections.length,
+            events: chunk.noConnections.length,
             error,
           });
-          dispatchErrors += batch.noConnections.length;
+          dispatchErrors += chunk.noConnections.length;
         }
       }
     }
