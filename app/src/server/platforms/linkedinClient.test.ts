@@ -17,14 +17,27 @@ import { withTransientRetries } from "@/server/platforms/transientRetry";
 // Mirrors googleTokens.test.ts: vi.mock + vi.hoisted are hoisted above imports,
 // and refreshLinkedInToken resolves prisma via `await import("@/lib/db")` at
 // call time, so it receives this mock. No real database is touched.
-const { updateMock } = vi.hoisted(() => ({ updateMock: vi.fn() }));
+const { updateMock, findUniqueMock, refreshConnectionTokenMock } = vi.hoisted(() => ({
+  updateMock: vi.fn(),
+  findUniqueMock: vi.fn(),
+  refreshConnectionTokenMock: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
     socialConnection: {
       update: updateMock,
+      // The guarded reconnect flag re-reads the stored tokens (connectionHealth.ts).
+      findUnique: findUniqueMock,
     },
   },
+}));
+
+// The per-connection refresh lock has its own suite (connectionRefresh.test.ts).
+// Here it is a pass-through spy: the tests below assert that every refresh is
+// routed through it, with the step deadline, and exercise the refresher itself.
+vi.mock("@/server/platforms/connectionRefresh", () => ({
+  refreshConnectionToken: refreshConnectionTokenMock,
 }));
 
 function makeConnection(
@@ -63,6 +76,20 @@ beforeEach(() => {
   updateMock.mockImplementation(
     (args: { data: Record<string, unknown> }) =>
       Promise.resolve({ ...makeConnection(), ...args.data }),
+  );
+  // By default the database still holds the tokens makeConnection() builds, so
+  // the guarded flag finds them unchanged and writes.
+  findUniqueMock.mockReset();
+  findUniqueMock.mockResolvedValue({
+    accessToken: "old-access-token",
+    refreshToken: "refresh-abc",
+  });
+  refreshConnectionTokenMock.mockReset();
+  refreshConnectionTokenMock.mockImplementation(
+    (
+      snapshot: SocialConnection,
+      refresh: (current: SocialConnection) => Promise<SocialConnection>,
+    ) => refresh(snapshot),
   );
   vi.stubEnv("LINKEDIN_CLIENT_ID", "test-client-id");
   vi.stubEnv("LINKEDIN_CLIENT_SECRET", "test-client-secret");
@@ -244,6 +271,7 @@ describe("ensureFreshLinkedInToken", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const connection = makeConnection({ id: "conn-55", refreshToken: null }); // expiresAt past by default
+    findUniqueMock.mockResolvedValue({ accessToken: "old-access-token", refreshToken: null });
 
     const error = await ensureFreshLinkedInToken(connection)
       .then(() => null)
@@ -304,6 +332,10 @@ describe("ensureFreshLinkedInToken", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const connection = makeConnection({ id: "conn-66", refreshToken: "dead-refresh-token" });
+    findUniqueMock.mockResolvedValue({
+      accessToken: "old-access-token",
+      refreshToken: "dead-refresh-token",
+    });
 
     const error = await ensureFreshLinkedInToken(connection)
       .then(() => null)
@@ -331,6 +363,121 @@ describe("ensureFreshLinkedInToken", () => {
     expect(arg.data.lastRefreshErrorCode).toBe("LINKEDIN_RECONNECT_REQUIRED");
     expect(arg.data).not.toHaveProperty("accessToken");
     expect(arg.data).not.toHaveProperty("refreshToken");
+  });
+});
+
+// 2026-11-01 scale audit (jobs, token refresh): the flag is guarded by the
+// tokens this refresh used (LinkedIn does not rotate the refresh token, V16, but
+// another process may have refreshed the ACCESS token, or the user reconnected).
+describe("LinkedIn refresh — superseded by another refresh", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  const invalidGrant = () =>
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 })),
+    );
+
+  const caughtCode = (promise: Promise<unknown>) =>
+    promise.then(
+      () => null,
+      (e: unknown) => (e as Error & { code?: string }).code ?? "no-code",
+    );
+
+  it("invalid_grant while the stored access token already changed: throws TOKEN_REFRESH_SUPERSEDED and never writes needsReconnect", async () => {
+    invalidGrant();
+    findUniqueMock.mockResolvedValue({
+      accessToken: "another-process-access-token",
+      refreshToken: "refresh-abc",
+    });
+
+    const code = await caughtCode(refreshLinkedInToken(makeConnection({ id: "conn-s" })));
+
+    expect(code).toBe("TOKEN_REFRESH_SUPERSEDED");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("still flags and throws LINKEDIN_RECONNECT_REQUIRED when the stored tokens are the ones that failed", async () => {
+    invalidGrant();
+
+    const code = await caughtCode(refreshLinkedInToken(makeConnection({ id: "conn-dead" })));
+
+    expect(code).toBe("LINKEDIN_RECONNECT_REQUIRED");
+    expect(updateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ensureFreshLinkedInToken: expired with no refresh token while the stored tokens changed (a reconnect) is superseded, not flagged", async () => {
+    findUniqueMock.mockResolvedValue({
+      accessToken: "reconnected-access-token",
+      refreshToken: "reconnected-refresh-token",
+    });
+
+    const code = await caughtCode(ensureFreshLinkedInToken(makeConnection({ refreshToken: null })));
+
+    expect(code).toBe("TOKEN_REFRESH_SUPERSEDED");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+});
+
+// 2026-11-01 scale audit (jobs, token refresh): ensureFreshLinkedInToken
+// serializes every refresh decision per connection (connectionRefresh.ts).
+describe("ensureFreshLinkedInToken — serialized per connection", () => {
+  it("routes an expired token through refreshConnectionToken with the snapshot and the step deadline", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(tokenResponse({ access_token: "fresh-token", expires_in: 5_184_000 })),
+    );
+    const connection = makeConnection();
+    const deadline = Date.now() + 60_000;
+
+    await ensureFreshLinkedInToken(connection, deadline);
+
+    expect(refreshConnectionTokenMock).toHaveBeenCalledTimes(1);
+    expect(refreshConnectionTokenMock.mock.calls[0][0]).toBe(connection);
+    expect(refreshConnectionTokenMock.mock.calls[0][2]).toEqual({ deadline });
+  });
+
+  it("does not take the lock for a token that is still fresh", async () => {
+    const connection = makeConnection({ expiresAt: new Date(Date.now() + 60 * 60 * 1000) });
+
+    await ensureFreshLinkedInToken(connection);
+
+    expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("returns whatever the lock hands back (another process's refresh), without sending a request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const winner = makeConnection({ accessToken: "winner-access" });
+    refreshConnectionTokenMock.mockResolvedValue(winner);
+
+    const result = await ensureFreshLinkedInToken(makeConnection());
+
+    expect(result).toBe(winner);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the row the lock re-read, not the stale snapshot", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(tokenResponse({ access_token: "fresh-token", expires_in: 5_184_000 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const stored = makeConnection({ refreshToken: "stored-refresh" });
+    refreshConnectionTokenMock.mockImplementation(
+      (_snapshot: SocialConnection, refresh: (c: SocialConnection) => Promise<SocialConnection>) =>
+        refresh(stored),
+    );
+
+    await ensureFreshLinkedInToken(makeConnection({ refreshToken: "stale-refresh" }));
+
+    const body = new URLSearchParams(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+    expect(body.get("refresh_token")).toBe("stored-refresh");
   });
 });
 

@@ -4,10 +4,12 @@ import type { SocialConnection } from "@prisma/client";
 import { assertOk } from "@/lib/assertOk";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import {
+  flagTerminalRefreshFailure,
   isTerminalRefreshFailure,
   markConnectionNeedsReconnect,
   readOAuthErrorCode,
 } from "./connectionHealth";
+import { refreshConnectionToken } from "./connectionRefresh";
 import { commitRequest } from "./commitCall";
 import { budgetedTimeout } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
@@ -98,7 +100,14 @@ function linkedinReconnectRequiredError(cause?: unknown): Error & { code: string
  * - `LINKEDIN_TOKEN_REFRESH_FAILED` (sanitized, via assertOk, carrying
  *   `status`) on any other non-2xx — 429 / 5xx / invalid_client — WITHOUT
  *   flagging. The upstream body is logged server-side, never surfaced.
+ * - `TOKEN_REFRESH_SUPERSEDED` instead of LINKEDIN_RECONNECT_REQUIRED when the
+ *   stored tokens no longer equal the ones this refresh used (another process
+ *   refreshed, or the user reconnected): nothing is flagged (2026-11-01 scale
+ *   audit, jobs, token refresh - connectionRefresh.ts).
  * Network errors propagate unchanged and never flag.
+ *
+ * Takes no lock itself: call it through `refreshConnectionToken`
+ * (connectionRefresh.ts), as ensureFreshLinkedInToken does.
  *
  * `opts.deadline` (epoch ms, publishBudget.ts): the token request timeout is
  * clamped to the time left, and with under 5 s left it throws
@@ -175,7 +184,7 @@ export async function refreshLinkedInToken(
     // is dead — mark before throwing the actionable reconnect error (flag
     // fields only; never accessToken/refreshToken), keeping the sanitized
     // refresh error as `cause` for server logs.
-    await markConnectionNeedsReconnect(connection.id, LINKEDIN_RECONNECT_CODE);
+    await flagTerminalRefreshFailure(connection, LINKEDIN_RECONNECT_CODE);
     throw linkedinReconnectRequiredError(error);
   }
 
@@ -233,14 +242,25 @@ export async function ensureFreshLinkedInToken(
     return connection;
   }
 
-  if (connection.refreshToken) {
-    return refreshLinkedInToken(connection, { deadline });
-  }
+  // 2026-11-01 scale audit (jobs, token refresh): the decision runs under the
+  // per-connection lock on the re-read row (refreshConnectionToken), so a
+  // concurrent refresh, or a reconnect, is picked up instead of overwritten or
+  // flagged dead.
+  return refreshConnectionToken(
+    connection,
+    async (current) => {
+      if (current.refreshToken) {
+        return refreshLinkedInToken(current, { deadline });
+      }
 
-  // Roadmap Phase 4: expired with no refresh token stored (the common
-  // non-partner-app case) — mark before throwing.
-  await markConnectionNeedsReconnect(connection.id, LINKEDIN_RECONNECT_CODE);
-  throw linkedinReconnectRequiredError();
+      // Roadmap Phase 4: expired with no refresh token stored (the common
+      // non-partner-app case) — mark before throwing. Guarded like the refresh
+      // failures: a row whose tokens changed is not flagged.
+      await flagTerminalRefreshFailure(current, LINKEDIN_RECONNECT_CODE);
+      throw linkedinReconnectRequiredError();
+    },
+    { deadline },
+  );
 }
 
 async function uploadImage(

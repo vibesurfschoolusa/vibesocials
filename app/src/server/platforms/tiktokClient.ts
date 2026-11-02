@@ -6,7 +6,12 @@ import { PLATFORM_CAPTION_LIMITS, TIKTOK_DEFAULT_CAPTION } from "@/lib/platformL
 import { truncateGraphemes } from "@/lib/truncate";
 
 import { commitRequest } from "./commitCall";
-import { isTerminalRefreshFailure, markConnectionNeedsReconnect } from "./connectionHealth";
+import {
+  flagTerminalRefreshFailure,
+  isTerminalRefreshFailure,
+  markConnectionNeedsReconnect,
+} from "./connectionHealth";
+import { refreshConnectionToken } from "./connectionRefresh";
 import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
 import { classifyRateLimit, isRateLimitedError } from "./rateLimited";
 import type { PlatformClient, PublishContext, PublishResult, TikTokCreatorInfo } from "./types";
@@ -276,7 +281,14 @@ function isExpiredOrExpiringSoon(expiresAt: Date | string | null | undefined): b
  * never in the same update as tokens):
  *  - terminal (the shared isTerminalRefreshFailure rule in connectionHealth.ts,
  *    also used by the Google/LinkedIn refreshes) / no refresh token stored:
- *    flag needsReconnect, throw `TIKTOK_RECONNECT_REQUIRED`.
+ *    flag needsReconnect, throw `TIKTOK_RECONNECT_REQUIRED`. The flag is guarded
+ *    by the tokens this refresh sent (2026-11-01 scale audit, jobs, token
+ *    refresh): TikTok rotates the refresh token, so a refresh that lost a race
+ *    gets `invalid_grant` for a token the winner already replaced. If the stored
+ *    tokens changed, NOTHING is flagged and `TOKEN_REFRESH_SUPERSEDED` is thrown
+ *    instead (refreshConnectionToken then returns the stored row).
+ *  - this function takes no lock: call it through refreshConnectionToken
+ *    (connectionRefresh.ts), as ensureFreshTikTokToken and the health sweep do.
  *  - 429 / 5xx / other non-terminal responses: throw `TIKTOK_TOKEN_REFRESH_FAILED`
  *    (sanitized, carries `status` so withTransientRetries can retry 429/5xx)
  *    WITHOUT flagging. Network errors propagate unchanged (retried in-step only
@@ -299,7 +311,7 @@ export async function refreshTikTokToken(
     console.warn("[TikTok] No refresh token available; marking connection for reconnect", {
       connectionId: connection.id,
     });
-    await markConnectionNeedsReconnect(connection.id, TIKTOK_RECONNECT_CODE);
+    await flagTerminalRefreshFailure(connection, TIKTOK_RECONNECT_CODE);
     throw tiktokReconnectRequiredError();
   }
 
@@ -361,7 +373,7 @@ export async function refreshTikTokToken(
     });
 
     if (isTerminalRefreshFailure(response.status, oauthError)) {
-      await markConnectionNeedsReconnect(connection.id, TIKTOK_RECONNECT_CODE);
+      await flagTerminalRefreshFailure(connection, TIKTOK_RECONNECT_CODE);
       throw tiktokReconnectRequiredError();
     }
 
@@ -422,7 +434,12 @@ export async function refreshTikTokToken(
  * propagate as thrown by refreshTikTokToken (terminal -> flagged reconnect
  * error; transient -> unflagged, retryable). Returns the (possibly refreshed)
  * connection. `deadline` (epoch ms) bounds the refresh request (see
- * {@link refreshTikTokToken}). Exported for unit tests.
+ * {@link refreshTikTokToken}).
+ *
+ * 2026-11-01 scale audit (jobs, token refresh): the refresh runs under the
+ * per-connection lock (refreshConnectionToken), so two publishes, or a publish
+ * and the health sweep, never spend the same rotating refresh token twice; the
+ * loser gets the winner's row. Exported for unit tests.
  */
 export async function ensureFreshTikTokToken(
   connection: SocialConnection,
@@ -431,7 +448,11 @@ export async function ensureFreshTikTokToken(
   if (!isExpiredOrExpiringSoon(connection.expiresAt)) {
     return connection;
   }
-  return refreshTikTokToken(connection, { deadline });
+  return refreshConnectionToken(
+    connection,
+    (current) => refreshTikTokToken(current, { deadline }),
+    { deadline },
+  );
 }
 
 /** TikTok's `fail_reason` values are snake_case enums; anything else is not echoed. */

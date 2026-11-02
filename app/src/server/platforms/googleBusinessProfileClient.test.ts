@@ -14,7 +14,18 @@ import type { PublishContext } from "@/server/platforms/types";
 // Google Business Profile photo publishing. No real Google endpoint and no
 // database: every call goes through a stubbed global fetch (googleTokens.ts
 // resolves prisma lazily - through this mock - and only when a token expired).
-const { updateMock } = vi.hoisted(() => ({ updateMock: vi.fn() }));
+const { updateMock, refreshConnectionTokenMock } = vi.hoisted(() => ({
+  updateMock: vi.fn(),
+  // The per-connection refresh lock has its own suite (connectionRefresh.test.ts):
+  // here it is a pass-through spy, so the refresh itself still runs.
+  refreshConnectionTokenMock: vi.fn<
+    (
+      snapshot: unknown,
+      refresh: (current: unknown) => Promise<unknown>,
+      opts?: { deadline?: number },
+    ) => Promise<unknown>
+  >((snapshot, refresh) => refresh(snapshot)),
+}));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -22,6 +33,10 @@ vi.mock("@/lib/db", () => ({
       update: updateMock,
     },
   },
+}));
+
+vi.mock("@/server/platforms/connectionRefresh", () => ({
+  refreshConnectionToken: refreshConnectionTokenMock,
 }));
 
 const NOW = Date.parse("2026-11-01T12:00:00Z");
@@ -381,5 +396,96 @@ describe("googleBusinessProfileClient.publishVideo — step deadline", () => {
     expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes(ANY_MEDIA_URL_FRAGMENT))).toHaveLength(1);
     expect(settledAt).toBeLessThanOrEqual(deadline);
     expect(settledAt - start).toBeLessThan(240_000);
+  });
+});
+
+// 2026-11-01 scale audit (jobs, token refresh): every GBP refresh goes through
+// refreshConnectionToken (connectionRefresh.ts), which serializes it per
+// connection and hands back the stored row when another process refreshed first.
+describe("googleBusinessProfileClient — serialized token refresh", () => {
+  const MEDIA_URL = "mybusiness.googleapis.com/v4/accounts/111/locations/999/media";
+
+  function expiredContext(deadline?: number): PublishContext {
+    const base = makeContext();
+    return {
+      ...base,
+      deadline,
+      socialConnection: { ...base.socialConnection, expiresAt: new Date("2020-01-01T00:00:00Z") },
+    } as PublishContext;
+  }
+
+  beforeEach(() => {
+    refreshConnectionTokenMock.mockClear();
+    updateMock.mockReset();
+    vi.stubEnv("GOOGLE_GBP_CLIENT_ID", "test-client-id");
+    vi.stubEnv("GOOGLE_GBP_CLIENT_SECRET", "test-client-secret");
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("publishVideo routes an expired token's refresh through refreshConnectionToken with the snapshot and the step deadline", async () => {
+    const fetchMock = vi.fn<typeof fetch>((input) => {
+      if (String(input).includes(MEDIA_URL)) {
+        return Promise.resolve(new Response(JSON.stringify({ name: "accounts/111/locations/999/media/m1" })));
+      }
+      throw new Error(`Unexpected fetch in test: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    // Another process refreshed first: the lock hands back its row, no token request is made.
+    refreshConnectionTokenMock.mockResolvedValueOnce({
+      ...makeContext().socialConnection,
+      accessToken: "winner-access-token",
+    });
+    const deadline = Date.now() + 60_000;
+    const ctx = expiredContext(deadline);
+
+    await googleBusinessProfileClient.publishVideo(ctx);
+
+    expect(refreshConnectionTokenMock).toHaveBeenCalledTimes(1);
+    expect(refreshConnectionTokenMock.mock.calls[0][0]).toBe(ctx.socialConnection);
+    expect(refreshConnectionTokenMock.mock.calls[0][2]).toEqual({ deadline });
+    expect(updateMock).not.toHaveBeenCalled();
+    const headers = (fetchMock.mock.calls[0][1] as RequestInit).headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer winner-access-token");
+  });
+
+  it("publishVideo does not take the lock for a token that is still fresh", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(() =>
+        Promise.resolve(new Response(JSON.stringify({ name: "accounts/111/locations/999/media/m1" }))),
+      ),
+    );
+
+    await googleBusinessProfileClient.publishVideo(makeContext());
+
+    expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshToken (the health sweep's hook) forwards its deadline to the Google refresh", async () => {
+    updateMock.mockImplementation((args: { data: Record<string, unknown> }) =>
+      Promise.resolve({ ...makeContext().socialConnection, ...args.data }),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ access_token: "swept", expires_in: 3600, token_type: "Bearer" })),
+        ),
+      ),
+    );
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    await googleBusinessProfileClient.refreshToken!(makeContext().socialConnection, {
+      deadline: Date.now() + 8_000,
+    });
+
+    const timeouts = setTimeoutSpy.mock.calls.map((c) => c[1] as number);
+    expect(timeouts).toHaveLength(1);
+    expect(timeouts[0]).toBeLessThanOrEqual(8_000);
+    setTimeoutSpy.mockRestore();
   });
 });

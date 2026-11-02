@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { requireOwnerContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
+import { refreshConnectionToken } from "@/server/platforms/connectionRefresh";
 import { refreshGoogleToken } from "@/server/platforms/googleTokens";
 import { Platform, type SocialConnection } from "@prisma/client";
 
@@ -38,11 +39,15 @@ interface GbpLocation {
 // inline copy did. The GET caller only reads `refreshed.accessToken` (never
 // `expiresAt`) and does not distinguish an expiry-null from a failure-null, so
 // wrapping does not change its observable behaviour.
+//
+// 2026-11-01 scale audit (jobs, token refresh): the refresh runs under the
+// per-connection lock (connectionRefresh.ts); a lock timeout, a gone or flagged
+// connection also lands in the catch -> null, like any other failure.
 async function refreshAccessToken(
   connection: SocialConnection,
 ): Promise<SocialConnection | null> {
   try {
-    return await refreshGoogleToken(connection);
+    return await refreshConnectionToken(connection, (current) => refreshGoogleToken(current));
   } catch (error) {
     console.error("[GBP] Failed to refresh access token", { error });
     return null;

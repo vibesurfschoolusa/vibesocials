@@ -53,5 +53,12 @@ export interface PublishResult {
 
 export interface PlatformClient {
   publishVideo(ctx: PublishContext): Promise<PublishResult>;
-  refreshToken?(connection: SocialConnection): Promise<SocialConnection>;
+  /**
+   * Refresh the connection's OAuth tokens and persist them. Raw: it takes no
+   * lock, so callers go through `refreshConnectionToken` (connectionRefresh.ts),
+   * which serializes refreshes per connection. `opts.deadline` (epoch ms,
+   * publishBudget.ts) bounds the token request; clients that never refresh
+   * ignore it.
+   */
+  refreshToken?(connection: SocialConnection, opts?: { deadline?: number }): Promise<SocialConnection>;
 }

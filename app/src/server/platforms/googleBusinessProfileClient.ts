@@ -3,6 +3,7 @@ import type { SocialConnection } from "@prisma/client";
 import { assertOk } from "@/lib/assertOk";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
+import { refreshConnectionToken } from "./connectionRefresh";
 import { resolveGbpLocationName } from "./gbpLocation";
 import { refreshGoogleToken } from "./googleTokens";
 import { commitRequest } from "./commitCall";
@@ -31,9 +32,16 @@ export const googleBusinessProfileClient: PlatformClient = {
     // Check if token needs refresh. 2026-11-01 scale audit (step budget, Task 7):
     // every request below ends by the step deadline (ctx.deadline) and none is
     // started with under 5 s left (PUBLISH_TIME_BUDGET_EXCEEDED, nothing sent).
+    // The refresh runs under the per-connection lock (2026-11-01 scale audit,
+    // jobs, token refresh), so a concurrent publish or the health sweep never
+    // refreshes the same connection at once.
     if (socialConnection.expiresAt && socialConnection.expiresAt < new Date()) {
       console.log("[GBP] Access token expired, refreshing...");
-      socialConnection = await refreshGoogleToken(socialConnection, { deadline });
+      socialConnection = await refreshConnectionToken(
+        socialConnection,
+        (current) => refreshGoogleToken(current, { deadline }),
+        { deadline },
+      );
     }
 
     const accessToken = socialConnection.accessToken;
@@ -115,8 +123,11 @@ export const googleBusinessProfileClient: PlatformClient = {
     };
   },
 
-  async refreshToken(connection: SocialConnection): Promise<SocialConnection> {
-    return refreshGoogleToken(connection);
+  async refreshToken(
+    connection: SocialConnection,
+    opts?: { deadline?: number },
+  ): Promise<SocialConnection> {
+    return refreshGoogleToken(connection, opts);
   },
 };
 

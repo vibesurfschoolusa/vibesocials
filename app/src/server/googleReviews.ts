@@ -3,6 +3,7 @@ import type { SocialConnection } from "@prisma/client";
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 
+import { refreshConnectionToken } from "./platforms/connectionRefresh";
 import { resolveGbpLocationName } from "./platforms/gbpLocation";
 import { refreshGoogleToken } from "./platforms/googleTokens";
 
@@ -37,11 +38,17 @@ export interface GoogleReview {
  * `GOOGLE_TOKEN_REFRESH_FAILED` on a non-2xx (previously
  * `GBP_REVIEWS_TOKEN_REFRESH_FAILED`); the reviews routes surface
  * `error.message`, not `.code`, so the code change is non-breaking.
+ *
+ * 2026-11-01 scale audit (jobs, token refresh): runs under the per-connection
+ * lock (connectionRefresh.ts). If a publish, the health sweep or the metrics
+ * sync refreshed the connection first, its row is returned and no second
+ * refresh is sent. A connection that is gone or already flagged throws
+ * `CONNECTION_GONE` / `RECONNECT_REQUIRED`, whose messages the routes surface.
  */
 export async function refreshAccessToken(
   connection: SocialConnection
 ): Promise<SocialConnection> {
-  return refreshGoogleToken(connection);
+  return refreshConnectionToken(connection, (current) => refreshGoogleToken(current));
 }
 
 /**

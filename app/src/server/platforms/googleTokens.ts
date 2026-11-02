@@ -4,8 +4,8 @@ import { assertOk } from "@/lib/assertOk";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
 import {
+  flagTerminalRefreshFailure,
   isTerminalRefreshFailure,
-  markConnectionNeedsReconnect,
   readOAuthErrorCode,
 } from "./connectionHealth";
 import { budgetedTimeout } from "./publishBudget";
@@ -36,7 +36,14 @@ const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
  *   server-side but not surfaced). Only a TERMINAL failure (HTTP 400/401 such
  *   as invalid_grant — `isTerminalRefreshFailure`) also marks the connection
  *   `needsReconnect`; 429 / 5xx / invalid_client do not.
+ * - `TOKEN_REFRESH_SUPERSEDED` instead of the two flagging errors above when
+ *   the stored tokens no longer equal the ones this refresh used (another
+ *   process refreshed, or the user reconnected): nothing is flagged
+ *   (2026-11-01 scale audit, jobs, token refresh - connectionRefresh.ts).
  * Network errors propagate unchanged and never flag.
+ *
+ * Call it through `refreshConnectionToken` (connectionRefresh.ts), which
+ * serializes refreshes per connection; this function itself takes no lock.
  *
  * `opts.deadline` (epoch ms, publishBudget.ts): 2026-11-01 scale audit (step
  * budget, Task 7) - a refresh that runs inside a platform step must not push the
@@ -59,7 +66,7 @@ export async function refreshGoogleToken(
       connectionId: connection.id,
       code: "GOOGLE_NO_REFRESH_TOKEN",
     });
-    await markConnectionNeedsReconnect(connection.id, "GOOGLE_NO_REFRESH_TOKEN");
+    await flagTerminalRefreshFailure(connection, "GOOGLE_NO_REFRESH_TOKEN");
     const error = new Error(
       "No refresh token available for this Google connection",
     ) as Error & { code: string };
@@ -145,7 +152,7 @@ export async function refreshGoogleToken(
     // "grant is dead" signal — mark needsReconnect before rethrowing (see
     // connectionHealth.ts). Flag fields only; never accessToken/refreshToken.
     logger.error("[GoogleTokens] Token refresh failed; marking connection for reconnect", logContext);
-    await markConnectionNeedsReconnect(connection.id, "GOOGLE_TOKEN_REFRESH_FAILED");
+    await flagTerminalRefreshFailure(connection, "GOOGLE_TOKEN_REFRESH_FAILED");
     throw error;
   }
 

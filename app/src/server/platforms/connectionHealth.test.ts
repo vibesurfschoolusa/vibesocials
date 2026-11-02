@@ -1,21 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  TOKEN_REFRESH_SUPERSEDED_CODE,
   isTerminalRefreshFailure,
   markConnectionNeedsReconnect,
   readOAuthErrorCode,
+  tokenRefreshSupersededError,
 } from "@/server/platforms/connectionHealth";
 
 // Mirrors googleTokens.test.ts: vi.mock + vi.hoisted are hoisted above
 // imports, and markConnectionNeedsReconnect resolves prisma via
 // `await import("@/lib/db")` at call time, so it receives this mock. No real
 // database is touched.
-const { updateMock } = vi.hoisted(() => ({ updateMock: vi.fn() }));
+const { updateMock, findUniqueMock } = vi.hoisted(() => ({
+  updateMock: vi.fn(),
+  findUniqueMock: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
     socialConnection: {
       update: updateMock,
+      findUnique: findUniqueMock,
     },
   },
 }));
@@ -23,6 +29,7 @@ vi.mock("@/lib/db", () => ({
 beforeEach(() => {
   updateMock.mockReset();
   updateMock.mockResolvedValue({});
+  findUniqueMock.mockReset();
 });
 
 afterEach(() => {
@@ -74,9 +81,120 @@ describe("markConnectionNeedsReconnect", () => {
 
     await expect(
       markConnectionNeedsReconnect("conn-789", "INSTAGRAM_RECONNECT_REQUIRED"),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("error");
 
     expect(consoleSpy).toHaveBeenCalled();
+  });
+
+  it("without `expected` it never re-reads the row and reports 'flagged'", async () => {
+    await expect(markConnectionNeedsReconnect("conn-1", "X")).resolves.toBe("flagged");
+
+    expect(findUniqueMock).not.toHaveBeenCalled();
+    expect(updateMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 2026-11-01 scale audit (jobs, token refresh): a refresher that lost a race
+// (TikTok rotates the refresh token, so the loser gets invalid_grant) must not
+// flag a connection another process just refreshed. The guarded flag re-reads
+// the stored tokens and writes nothing unless they still equal the ones the
+// failed refresh used.
+describe("markConnectionNeedsReconnect — guarded by `expected` tokens", () => {
+  const expected = { accessToken: "access-1", refreshToken: "refresh-1" };
+
+  it("writes nothing and reports 'superseded' when the stored tokens differ from `expected`", async () => {
+    findUniqueMock.mockResolvedValue({ accessToken: "access-2", refreshToken: "refresh-2" });
+
+    const result = await markConnectionNeedsReconnect("conn-1", "TIKTOK_RECONNECT_REQUIRED", {
+      expected,
+    });
+
+    expect(result).toBe("superseded");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["only the access token changed (Google, LinkedIn)", { accessToken: "access-2", refreshToken: "refresh-1" }],
+    ["only the refresh token rotated (TikTok)", { accessToken: "access-1", refreshToken: "refresh-2" }],
+    ["the refresh token was cleared", { accessToken: "access-1", refreshToken: null }],
+  ])("is superseded when %s", async (_label, stored) => {
+    findUniqueMock.mockResolvedValue(stored);
+
+    await expect(
+      markConnectionNeedsReconnect("conn-1", "X", { expected }),
+    ).resolves.toBe("superseded");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("writes the three flag fields and reports 'flagged' when the stored tokens equal `expected`", async () => {
+    findUniqueMock.mockResolvedValue({ accessToken: "access-1", refreshToken: "refresh-1" });
+
+    const result = await markConnectionNeedsReconnect("conn-1", "TIKTOK_RECONNECT_REQUIRED", {
+      expected,
+    });
+
+    expect(result).toBe("flagged");
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    const arg = updateMock.mock.calls[0][0] as { where: { id: string }; data: Record<string, unknown> };
+    expect(arg.where).toEqual({ id: "conn-1" });
+    expect(Object.keys(arg.data).sort()).toEqual([
+      "lastRefreshErrorCode",
+      "needsReconnect",
+      "refreshFailedAt",
+    ]);
+    expect(arg.data.needsReconnect).toBe(true);
+    expect(arg.data.lastRefreshErrorCode).toBe("TIKTOK_RECONNECT_REQUIRED");
+  });
+
+  it("treats a null refresh token on both sides as equal", async () => {
+    findUniqueMock.mockResolvedValue({ accessToken: "access-1", refreshToken: null });
+
+    await expect(
+      markConnectionNeedsReconnect("conn-1", "X", {
+        expected: { accessToken: "access-1", refreshToken: null },
+      }),
+    ).resolves.toBe("flagged");
+  });
+
+  it("reads only the two token columns, through the extended client, by id", async () => {
+    findUniqueMock.mockResolvedValue({ accessToken: "access-1", refreshToken: "refresh-1" });
+
+    await markConnectionNeedsReconnect("conn-1", "X", { expected });
+
+    expect(findUniqueMock).toHaveBeenCalledWith({
+      where: { id: "conn-1" },
+      select: { accessToken: true, refreshToken: true },
+    });
+  });
+
+  it("reports 'superseded' (and writes nothing) when the row is gone", async () => {
+    findUniqueMock.mockResolvedValue(null);
+
+    await expect(
+      markConnectionNeedsReconnect("conn-1", "X", { expected }),
+    ).resolves.toBe("superseded");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("swallows a failed re-read: reports 'error', writes nothing, never throws", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    findUniqueMock.mockRejectedValue(new Error("connection refused"));
+
+    await expect(
+      markConnectionNeedsReconnect("conn-1", "X", { expected }),
+    ).resolves.toBe("error");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("tokenRefreshSupersededError", () => {
+  it("carries the TOKEN_REFRESH_SUPERSEDED code and a fixed, token-free message", () => {
+    const error = tokenRefreshSupersededError();
+
+    expect(TOKEN_REFRESH_SUPERSEDED_CODE).toBe("TOKEN_REFRESH_SUPERSEDED");
+    expect(error).toBeInstanceOf(Error);
+    expect(error.code).toBe("TOKEN_REFRESH_SUPERSEDED");
+    expect(error.message).not.toMatch(/token.*[A-Za-z0-9]{20,}/);
   });
 });
 

@@ -25,14 +25,27 @@ import {
 // prisma via `await import("@/lib/db")` at call time, so they receive this
 // mock. No real database is touched, and no real TikTok endpoint is called:
 // every network call below goes through a stubbed global `fetch`.
-const { updateMock } = vi.hoisted(() => ({ updateMock: vi.fn() }));
+const { updateMock, findUniqueMock, refreshConnectionTokenMock } = vi.hoisted(() => ({
+  updateMock: vi.fn(),
+  findUniqueMock: vi.fn(),
+  refreshConnectionTokenMock: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
     socialConnection: {
       update: updateMock,
+      // The guarded reconnect flag re-reads the stored tokens (connectionHealth.ts).
+      findUnique: findUniqueMock,
     },
   },
+}));
+
+// The per-connection refresh lock has its own suite (connectionRefresh.test.ts).
+// Here it is a pass-through spy: the tests below assert that every refresh is
+// routed through it, with the step deadline, and exercise the refresher itself.
+vi.mock("@/server/platforms/connectionRefresh", () => ({
+  refreshConnectionToken: refreshConnectionTokenMock,
 }));
 
 const MB = 1024 * 1024;
@@ -90,6 +103,20 @@ beforeEach(() => {
   updateMock.mockReset();
   updateMock.mockImplementation((args: { data: Record<string, unknown> }) =>
     Promise.resolve({ ...makeConnection(), ...args.data }),
+  );
+  // By default the database still holds the tokens makeConnection() builds, so
+  // the guarded flag finds them unchanged and writes.
+  findUniqueMock.mockReset();
+  findUniqueMock.mockResolvedValue({
+    accessToken: "old-access-token",
+    refreshToken: "old-refresh-token",
+  });
+  refreshConnectionTokenMock.mockReset();
+  refreshConnectionTokenMock.mockImplementation(
+    (
+      snapshot: SocialConnection,
+      refresh: (current: SocialConnection) => Promise<SocialConnection>,
+    ) => refresh(snapshot),
   );
   vi.stubEnv("TIKTOK_CLIENT_KEY", "test-client-key");
   vi.stubEnv("TIKTOK_CLIENT_SECRET", "test-client-secret");
@@ -643,12 +670,75 @@ describe("refreshTikTokToken", () => {
       const fetchMock = vi.fn();
       vi.stubGlobal("fetch", fetchMock);
 
+      findUniqueMock.mockResolvedValue({ accessToken: "old-access-token", refreshToken: null });
+
       const error = await caught(refreshTikTokToken(makeConnection({ refreshToken: null })));
 
       expect(error?.code).toBe(RECONNECT_CODE);
       expect(fetchMock).not.toHaveBeenCalled();
       expect(updateCalls()).toHaveLength(1);
       expect(updateCalls()[0].data.needsReconnect).toBe(true);
+    });
+  });
+
+  // 2026-11-01 scale audit (jobs, token refresh): TikTok rotates the refresh
+  // token, so when two processes refresh at once the loser gets invalid_grant
+  // for a token the winner already replaced. That must not mark the working
+  // connection dead.
+  describe("superseded by another refresh (TikTok rotation race)", () => {
+    const invalidGrant = () =>
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ error: "invalid_grant" }, 400)));
+
+    it("invalid_grant while the stored refresh token was already rotated: throws TOKEN_REFRESH_SUPERSEDED and never writes needsReconnect", async () => {
+      invalidGrant();
+      findUniqueMock.mockResolvedValue({
+        accessToken: "winner-access-token",
+        refreshToken: "winner-rotated-refresh-token",
+      });
+
+      const error = await caught(refreshTikTokToken(makeConnection({ id: "conn-race" })));
+
+      expect(error?.code).toBe("TOKEN_REFRESH_SUPERSEDED");
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("compares the stored tokens with the ones this refresh sent", async () => {
+      invalidGrant();
+
+      await caught(
+        refreshTikTokToken(
+          makeConnection({ id: "conn-race", accessToken: "sent-access", refreshToken: "sent-refresh" }),
+        ),
+      );
+
+      // The default stored row differs from what was sent -> superseded, no write.
+      expect(findUniqueMock).toHaveBeenCalledWith({
+        where: { id: "conn-race" },
+        select: { accessToken: true, refreshToken: true },
+      });
+      expect(updateMock).not.toHaveBeenCalled();
+    });
+
+    it("still flags when the stored tokens are the ones that failed (a genuinely dead grant)", async () => {
+      invalidGrant();
+
+      const error = await caught(refreshTikTokToken(makeConnection({ id: "conn-dead" })));
+
+      expect(error?.code).toBe(RECONNECT_CODE);
+      expect(updateCalls()).toHaveLength(1);
+      expect(updateCalls()[0].data.needsReconnect).toBe(true);
+    });
+
+    it("a missing refresh token while the stored tokens changed: superseded, not flagged", async () => {
+      findUniqueMock.mockResolvedValue({
+        accessToken: "reconnected",
+        refreshToken: "reconnected-refresh",
+      });
+
+      const error = await caught(refreshTikTokToken(makeConnection({ refreshToken: null })));
+
+      expect(error?.code).toBe("TOKEN_REFRESH_SUPERSEDED");
+      expect(updateMock).not.toHaveBeenCalled();
     });
   });
 
@@ -798,6 +888,42 @@ describe("ensureFreshTikTokToken", () => {
     expect(error?.code).toBe("TIKTOK_TOKEN_REFRESH_FAILED");
     expect(error?.status).toBe(503);
     expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  // 2026-11-01 scale audit (jobs, token refresh): the refresh is serialized per
+  // connection by refreshConnectionToken (connectionRefresh.ts).
+  it("routes the refresh through refreshConnectionToken with the snapshot and the step deadline", async () => {
+    vi.stubGlobal("fetch", refreshOk());
+    const connection = makeConnection({ expiresAt: new Date("2020-01-01T00:00:00Z") });
+    const deadline = Date.now() + 60_000;
+
+    await ensureFreshTikTokToken(connection, deadline);
+
+    expect(refreshConnectionTokenMock).toHaveBeenCalledTimes(1);
+    expect(refreshConnectionTokenMock.mock.calls[0][0]).toBe(connection);
+    expect(refreshConnectionTokenMock.mock.calls[0][2]).toEqual({ deadline });
+  });
+
+  it("does not take the lock for a token that is still fresh", async () => {
+    const connection = makeConnection({ expiresAt: new Date(Date.now() + 10 * 60 * 1000) });
+
+    await ensureFreshTikTokToken(connection);
+
+    expect(refreshConnectionTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("returns whatever the lock hands back (another process's refresh), without sending a request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const winner = makeConnection({ accessToken: "winner-access", refreshToken: "winner-refresh" });
+    refreshConnectionTokenMock.mockResolvedValue(winner);
+
+    const result = await ensureFreshTikTokToken(
+      makeConnection({ expiresAt: new Date("2020-01-01T00:00:00Z") }),
+    );
+
+    expect(result).toBe(winner);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

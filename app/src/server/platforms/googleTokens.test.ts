@@ -7,12 +7,17 @@ import { MIN_REQUEST_WINDOW_MS, PUBLISH_BUDGET_EXCEEDED_CODE } from "@/server/pl
 // vi.mock + vi.hoisted are hoisted above imports by vitest; refreshGoogleToken
 // resolves prisma via `await import("@/lib/db")` at call time, so it receives
 // this mock. No real database is touched.
-const { updateMock } = vi.hoisted(() => ({ updateMock: vi.fn() }));
+const { updateMock, findUniqueMock } = vi.hoisted(() => ({
+  updateMock: vi.fn(),
+  findUniqueMock: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
     socialConnection: {
       update: updateMock,
+      // The guarded reconnect flag re-reads the stored tokens (connectionHealth.ts).
+      findUnique: findUniqueMock,
     },
   },
 }));
@@ -51,6 +56,13 @@ beforeEach(() => {
     (args: { data: Record<string, unknown> }) =>
       Promise.resolve({ ...makeConnection(), ...args.data }),
   );
+  // By default the database still holds the tokens makeConnection() builds, so
+  // the guarded flag finds them unchanged and writes.
+  findUniqueMock.mockReset();
+  findUniqueMock.mockResolvedValue({
+    accessToken: "old-access-token",
+    refreshToken: "refresh-abc",
+  });
   vi.stubEnv("GOOGLE_GBP_CLIENT_ID", "test-client-id");
   vi.stubEnv("GOOGLE_GBP_CLIENT_SECRET", "test-client-secret");
 });
@@ -146,6 +158,7 @@ describe("refreshGoogleToken", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const connection = makeConnection({ id: "conn-7", refreshToken: null });
+    findUniqueMock.mockResolvedValue({ accessToken: "old-access-token", refreshToken: null });
 
     const error = await refreshGoogleToken(connection)
       .then(() => null)
@@ -295,6 +308,92 @@ describe("refreshGoogleToken — failure classification", () => {
 
     expect(error).toBe(networkError);
     expect(updateMock).not.toHaveBeenCalled();
+  });
+});
+
+
+// 2026-11-01 scale audit (jobs, token refresh): the flag is guarded by the
+// tokens this refresh used. If another process refreshed the connection in the
+// meantime (stored access token changed), a failure here must not mark the
+// working connection dead; the refresher throws TOKEN_REFRESH_SUPERSEDED and
+// refreshConnectionToken hands back the stored row.
+describe("refreshGoogleToken — superseded by another refresh", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  it("invalid_grant while the stored access token already changed: throws TOKEN_REFRESH_SUPERSEDED and never writes needsReconnect", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 }),
+      ),
+    );
+    findUniqueMock.mockResolvedValue({
+      accessToken: "another-process-access-token",
+      refreshToken: "refresh-abc",
+    });
+
+    const error = await refreshGoogleToken(makeConnection({ id: "conn-s" }))
+      .then(() => null)
+      .catch((e: unknown) => e as Error & { code?: string });
+
+    expect(error?.code).toBe("TOKEN_REFRESH_SUPERSEDED");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("asks the flag to compare against the tokens the refresh used", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 }),
+      ),
+    );
+
+    await refreshGoogleToken(
+      makeConnection({ id: "conn-s", accessToken: "used-access", refreshToken: "used-refresh" }),
+    ).catch(() => undefined);
+
+    // Stored tokens differ from the ones used (the default stored row) -> superseded.
+    expect(updateMock).not.toHaveBeenCalled();
+    expect(findUniqueMock).toHaveBeenCalledWith({
+      where: { id: "conn-s" },
+      select: { accessToken: true, refreshToken: true },
+    });
+  });
+
+  it("a missing refresh token while the stored tokens changed (a reconnect): superseded, not flagged", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    findUniqueMock.mockResolvedValue({
+      accessToken: "reconnected-access-token",
+      refreshToken: "reconnected-refresh-token",
+    });
+
+    const error = await refreshGoogleToken(makeConnection({ refreshToken: null }))
+      .then(() => null)
+      .catch((e: unknown) => e as Error & { code?: string });
+
+    expect(error?.code).toBe("TOKEN_REFRESH_SUPERSEDED");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("a flag that cannot be persisted ('error') still surfaces the original refresh error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 }),
+      ),
+    );
+    findUniqueMock.mockRejectedValue(new Error("db down"));
+
+    const error = await refreshGoogleToken(makeConnection())
+      .then(() => null)
+      .catch((e: unknown) => e as Error & { code?: string });
+
+    expect(error?.code).toBe("GOOGLE_TOKEN_REFRESH_FAILED");
   });
 });
 

@@ -37,7 +37,11 @@ import {
 import { deliverPostOutcomeNotification } from "@/server/notifications/postOutcomeEmail";
 import { buildReconnectEmail } from "@/server/notifications/reconnectEmail";
 import { sendEmail } from "@/server/notifications/email";
-import { isProactiveRefreshEligible } from "@/server/jobs/connectionHealthSweep";
+import {
+  HEALTH_SWEEP_PAGE_SIZE,
+  isProactiveRefreshEligible,
+  proactiveRefreshWhere,
+} from "@/server/jobs/connectionHealthSweep";
 import { platformLabel } from "@/lib/platforms";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import {
@@ -53,6 +57,11 @@ import {
   type PlatformStepOutcome,
   type PlatformStepPlan,
 } from "@/server/jobs/platformSteps";
+import {
+  CONNECTION_GONE_CODE,
+  CONNECTION_RECONNECT_REQUIRED_CODE,
+  refreshConnectionToken,
+} from "@/server/platforms/connectionRefresh";
 import { refreshGoogleToken } from "@/server/platforms/googleTokens";
 import {
   currentPacificMidnight,
@@ -1493,7 +1502,13 @@ export const youtubePostMetricsSync = inngest.createFunction(
               // Shared Google refresh: writes ONLY accessToken/expiry, NEVER
               // refreshToken (see googleTokens.ts). May throw + mark
               // needsReconnect on invalid_grant — caught here so token stays null.
-              active = await refreshGoogleToken(active);
+              // 2026-11-01 scale audit (jobs, token refresh): under the
+              // per-connection lock, so a publish or the health sweep refreshing
+              // the same connection at once is serialized, and a refresh that
+              // finished first is reused instead of repeated.
+              active = await refreshConnectionToken(active, (current) =>
+                refreshGoogleToken(current),
+              );
             }
             if (active.accessToken) {
               resolved = { accessToken: active.accessToken, connectorUserId: active.userId };
@@ -1680,89 +1695,237 @@ export const stalePostJobSweep = inngest.createFunction(
 );
 
 /**
- * Daily connection-health sweep (publish-reliability plan, Task 2).
+ * Daily connection-health sweep (publish-reliability plan, Task 2; fanned out by
+ * the 2026-11-01 scale audit, jobs, token refresh).
  *
- * Proactively refreshes every healthy connection whose access token is
- * expired or expiring within 24h (isProactiveRefreshEligible). Two effects:
- * (1) provider refresh-tokens stay alive (Google revokes grants unused for
- * ~6 months — exactly how the prod GBP connection died on 2026-07-26), and
- * (2) a dead grant is discovered TODAY, flips `needsReconnect` (the platform
- * clients do that themselves via markConnectionNeedsReconnect before
- * throwing), and every workspace OWNER gets ONE reconnect email — instead of
- * the user discovering it when a scheduled post fails.
+ * Proactively refreshes every healthy connection whose access token is expired
+ * or expiring within 24h (Google: idle for about 7 days - see
+ * GOOGLE_IDLE_REFRESH_MS). Two effects: (1) provider refresh-tokens stay alive
+ * (Google revokes grants unused for ~6 months - exactly how the prod GBP
+ * connection died on 2026-07-26), and (2) a dead grant is discovered TODAY,
+ * flips `needsReconnect`, and every workspace OWNER gets ONE reconnect email -
+ * instead of the user discovering it when a scheduled post fails.
+ *
+ * Why a fan-out: the first version loaded every connection and refreshed ~8,600
+ * tokens one after another in ONE 300 s step, which never finished. The cron now
+ * only PAGES connection ids and sends one `connection/refresh.requested` event
+ * per connection to `refresh-connection` (below), which Inngest runs under its
+ * own concurrency limits. Steps:
+ *  - `start` returns the ISO `now`. Every page's WHERE and the event ids derive
+ *    from it, so a page that runs after UTC midnight still dedupes with its
+ *    siblings.
+ *  - `page-<i>` reads up to HEALTH_SWEEP_PAGE_SIZE ids (`select: { id: true }`:
+ *    no token column is ever loaded), ordered by id and resumed after the last
+ *    id of the previous page, so rows that stop matching as they are refreshed
+ *    cannot make a later page skip any.
+ *  - `fan-out-<i>` sends that page's events. Each event id is
+ *    `refresh-<id>-<UTC YYYY-MM-DD>`, so a re-run of the cron the same day
+ *    sends nothing twice (event ids are an idempotency key over 24 h, V1).
+ * A page shorter than HEALTH_SWEEP_PAGE_SIZE is the last: no further query.
+ *
+ * `singleton: { mode: "skip" }` skips a tick that arrives while the previous
+ * sweep is still running (https://www.inngest.com/docs/guides/singleton).
  *
  * Email exactly-once: eligibility requires `needsReconnect === false`, so a
- * connection that flips is skipped by every later sweep; a transient network
- * failure during refresh leaves the flag false, sends nothing, and is simply
- * retried tomorrow. Cron slot 04:45 UTC — cadence map: media-retention 03:00,
- * scheduled-scanner every minute, youtube-metrics hourly :00,
- * stale-post-sweep hourly :30.
+ * connection that flips is skipped by every later sweep; a transient failure
+ * leaves the flag false, sends nothing, and is simply retried tomorrow. Cron slot
+ * 04:45 UTC - cadence map: media-retention 03:00, scheduled-scanner every
+ * minute, youtube-metrics hourly :00, stale-post-sweep hourly :30.
  *
- * SEC: the step returns COUNTS only — never connection rows (tokens).
+ * SEC: step outputs are ids and counts only - never connection rows (tokens).
  */
 export const connectionHealthSweep = inngest.createFunction(
-  { id: "connection-health-sweep", name: "Connection Health Sweep" },
+  {
+    id: "connection-health-sweep",
+    name: "Connection Health Sweep",
+    singleton: { mode: "skip" },
+  },
   { cron: "45 4 * * *" },
   async ({ step }) => {
-    const summary = await step.run("refresh-expiring-connections", async () => {
-      const now = new Date();
-      const candidates = await prisma.socialConnection.findMany({
-        where: { needsReconnect: false, expiresAt: { not: null } },
+    const startedAt: string = await step.run("start", () => new Date().toISOString());
+    const now = new Date(startedAt);
+    const day = startedAt.slice(0, 10); // UTC YYYY-MM-DD
+
+    let pages = 0;
+    let connections = 0;
+    let cursor: string | undefined;
+
+    for (let page = 0; ; page++) {
+      const ids: string[] = await step.run(`page-${page}`, async () => {
+        const rows = await prisma.socialConnection.findMany({
+          where: proactiveRefreshWhere(now),
+          select: { id: true },
+          orderBy: { id: "asc" },
+          take: HEALTH_SWEEP_PAGE_SIZE,
+          ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+        });
+        return rows.map((row) => row.id);
       });
+      pages++;
 
-      let attempted = 0;
-      let refreshed = 0;
-      let flagged = 0;
-      let emailed = 0;
-
-      for (const connection of candidates) {
-        if (!isProactiveRefreshEligible(connection, now)) continue;
-        const client = getPlatformClient(connection.platform);
-        if (!client?.refreshToken) continue;
-
-        attempted++;
-        try {
-          await client.refreshToken(connection);
-          refreshed++;
-        } catch {
-          // Terminal failures already flipped needsReconnect inside the
-          // client (markConnectionNeedsReconnect); transient ones did not.
-          // Re-read the flag to distinguish — email ONLY on the flip.
-          const after = await prisma.socialConnection.findUnique({
-            where: { id: connection.id },
-            select: { needsReconnect: true, workspaceId: true },
-          });
-          if (!after?.needsReconnect) continue;
-          flagged++;
-
-          const [workspace, owners] = await Promise.all([
-            prisma.workspace.findUnique({
-              where: { id: after.workspaceId },
-              select: { name: true },
-            }),
-            prisma.workspaceMember.findMany({
-              where: { workspaceId: after.workspaceId, role: "owner" },
-              select: { user: { select: { email: true } } },
-            }),
-          ]);
-          const email = buildReconnectEmail({
-            platformLabel: platformLabel(connection.platform),
-            workspaceName: workspace?.name ?? "your workspace",
-            appBaseUrl: process.env.NEXTAUTH_URL || null,
-          });
-          for (const owner of owners) {
-            // sendEmail never throws (fail-safe transport).
-            await sendEmail({ to: owner.user.email, ...email });
-            emailed++;
-          }
-        }
+      if (ids.length > 0) {
+        await step.sendEvent(
+          `fan-out-${page}`,
+          ids.map((id) => ({
+            id: `refresh-${id}-${day}`,
+            name: "connection/refresh.requested" as const,
+            data: { socialConnectionId: id },
+          })),
+        );
+        connections += ids.length;
       }
 
-      return { candidates: candidates.length, attempted, refreshed, flagged, emailed };
-    });
+      if (ids.length < HEALTH_SWEEP_PAGE_SIZE) break;
+      cursor = ids[ids.length - 1];
+    }
 
-    logger.info("[Inngest] Connection health sweep complete", summary);
+    const summary = { pages, connections };
+    logger.info("[Inngest] Connection health sweep fanned out", summary);
     return summary;
+  },
+);
+
+/** What one `refresh-connection` run did (the `refresh` step's output). */
+export type ConnectionRefreshOutcome =
+  | "refreshed"
+  | "flagged"
+  | "already_flagged"
+  | "not_eligible"
+  | "gone"
+  | "no_refresh"
+  | "transient_error";
+
+/**
+ * Refresh one connection for the health sweep (the body of the `refresh` step).
+ * Never throws for a refresh failure: it is classified instead, so a dead
+ * grant or a blip is data, not a failed run. Returns only a label - never a
+ * row, token or address.
+ */
+async function refreshOneConnection(socialConnectionId: string): Promise<ConnectionRefreshOutcome> {
+  const connection = await prisma.socialConnection.findUnique({ where: { id: socialConnectionId } });
+  if (!connection) return "gone";
+  // Flagged since the cron paged it (a failed post, an earlier sweep): its owner
+  // is already notified, and re-refreshing a dead grant would only re-fail.
+  if (connection.needsReconnect) return "already_flagged";
+  // The rule is re-checked now: the event may have waited in the queue while a
+  // publish or the metrics sync refreshed the connection.
+  if (!isProactiveRefreshEligible(connection, new Date())) return "not_eligible";
+  const client = getPlatformClient(connection.platform);
+  if (!client?.refreshToken) return "no_refresh";
+  const refreshToken = client.refreshToken.bind(client);
+
+  const deadline = publishDeadline();
+  try {
+    await refreshConnectionToken(connection, (current) => refreshToken(current, { deadline }), {
+      deadline,
+    });
+    return "refreshed";
+  } catch (error) {
+    const code = (error as { code?: unknown } | null)?.code;
+    if (code === CONNECTION_GONE_CODE) return "gone";
+    // Flagged by someone else while we waited for the lock: they own the email.
+    if (code === CONNECTION_RECONNECT_REQUIRED_CODE) return "already_flagged";
+
+    // A terminal failure flipped needsReconnect inside the refresher
+    // (markConnectionNeedsReconnect); a transient one did not. Re-read the flag to
+    // tell them apart - the owners are emailed ONLY on the flip.
+    const after = await prisma.socialConnection.findUnique({
+      where: { id: socialConnectionId },
+      select: { needsReconnect: true },
+    });
+    if (!after) return "gone";
+    if (after.needsReconnect) return "flagged";
+    logger.warn("[Inngest] Connection refresh failed transiently; retried by the next sweep", {
+      socialConnectionId,
+      platform: connection.platform,
+      code: typeof code === "string" ? code : undefined,
+    });
+    return "transient_error";
+  }
+}
+
+/**
+ * Email every owner of the connection's workspace that it needs reconnecting
+ * (the body of the `notify-owners` step). Re-checks the flag so an owner who
+ * reconnected between the two steps is not told to. Returns a COUNT only.
+ */
+async function notifyOwnersToReconnect(socialConnectionId: string): Promise<{ emailed: number }> {
+  const connection = await prisma.socialConnection.findUnique({
+    where: { id: socialConnectionId },
+    select: { platform: true, workspaceId: true, needsReconnect: true },
+  });
+  if (!connection?.needsReconnect) return { emailed: 0 };
+
+  const [workspace, owners] = await Promise.all([
+    prisma.workspace.findUnique({
+      where: { id: connection.workspaceId },
+      select: { name: true },
+    }),
+    prisma.workspaceMember.findMany({
+      where: { workspaceId: connection.workspaceId, role: "owner" },
+      select: { user: { select: { email: true } } },
+    }),
+  ]);
+  const email = buildReconnectEmail({
+    platformLabel: platformLabel(connection.platform),
+    workspaceName: workspace?.name ?? "your workspace",
+    appBaseUrl: process.env.NEXTAUTH_URL || null,
+  });
+  let emailed = 0;
+  for (const owner of owners) {
+    // sendEmail never throws (fail-safe transport).
+    await sendEmail({ to: owner.user.email, ...email });
+    emailed++;
+  }
+  return { emailed };
+}
+
+/**
+ * Refresh ONE connection for the daily health sweep (2026-11-01 scale audit,
+ * jobs, token refresh). Triggered by `connection/refresh.requested`
+ * `{ socialConnectionId }`, sent by `connectionHealthSweep` (one per eligible
+ * connection, event id `refresh-<id>-<UTC date>`).
+ *
+ * `concurrency` (at most two constraints per function, V3): one run per
+ * connection (the refresh itself is also serialized by the Postgres advisory lock
+ * in connectionRefresh.ts, which covers publishes and the metrics sync too), and
+ * 10 refreshes in flight overall so the fan-out cannot stampede the platforms'
+ * token endpoints. `retries: 2` covers infrastructure failures (the DB); a
+ * failed refresh is classified in the step, not thrown.
+ *
+ * Steps (ids are additive and deterministic):
+ *  - `refresh` returns a label: "refreshed", "flagged" (THIS refresh flipped
+ *    needsReconnect), "already_flagged", "not_eligible", "gone", "no_refresh"
+ *    (the platform has nothing to refresh) or "transient_error" (retried by
+ *    tomorrow's sweep, no email).
+ *  - `notify-owners` runs only on "flagged" and emails each workspace owner once.
+ * SEC: step outputs are labels and counts only - never tokens or addresses.
+ */
+export const refreshConnection = inngest.createFunction(
+  {
+    id: "refresh-connection",
+    name: "Refresh Connection",
+    retries: 2,
+    concurrency: [{ key: "event.data.socialConnectionId", limit: 1 }, { limit: 10 }],
+  },
+  { event: "connection/refresh.requested" },
+  async ({ event, step }) => {
+    // `event.data` is untyped (schemaless Inngest client).
+    const socialConnectionId: string = event.data.socialConnectionId;
+
+    const outcome: ConnectionRefreshOutcome = await step.run("refresh", () =>
+      refreshOneConnection(socialConnectionId),
+    );
+
+    let emailed = 0;
+    if (outcome === "flagged") {
+      const notified = await step.run("notify-owners", () =>
+        notifyOwnersToReconnect(socialConnectionId),
+      );
+      emailed = notified.emailed;
+    }
+
+    return { socialConnectionId, outcome, emailed };
   },
 );
 
@@ -1775,4 +1938,5 @@ export const inngestFunctions = [
   youtubePostMetricsSync,
   stalePostJobSweep,
   connectionHealthSweep,
+  refreshConnection,
 ];

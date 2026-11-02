@@ -5,6 +5,7 @@ import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { truncateGraphemes } from "@/lib/truncate";
 
 import { commitRequest } from "./commitCall";
+import { refreshConnectionToken } from "./connectionRefresh";
 import { refreshGoogleToken } from "./googleTokens";
 import { budgetedTimeout } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
@@ -59,10 +60,16 @@ export const youtubeClient: PlatformClient = {
     let { socialConnection } = ctx;
     const { mediaItem, caption, deadline } = ctx;
 
-    // Check if token needs refresh
+    // Check if token needs refresh. 2026-11-01 scale audit (jobs, token refresh):
+    // under the per-connection lock, so a concurrent publish, the health sweep
+    // or the metrics sync never refreshes the same connection at once.
     if (socialConnection.expiresAt && socialConnection.expiresAt < new Date()) {
       console.log("[YouTube] Access token expired, refreshing...");
-      socialConnection = await refreshGoogleToken(socialConnection, { deadline });
+      socialConnection = await refreshConnectionToken(
+        socialConnection,
+        (current) => refreshGoogleToken(current, { deadline }),
+        { deadline },
+      );
     }
 
     const accessToken = socialConnection.accessToken;
@@ -295,7 +302,10 @@ export const youtubeClient: PlatformClient = {
     };
   },
 
-  async refreshToken(connection: SocialConnection): Promise<SocialConnection> {
-    return refreshGoogleToken(connection);
+  async refreshToken(
+    connection: SocialConnection,
+    opts?: { deadline?: number },
+  ): Promise<SocialConnection> {
+    return refreshGoogleToken(connection, opts);
   },
 };

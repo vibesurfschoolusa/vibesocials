@@ -12,6 +12,28 @@
 // those terminal failures, so the flag-writing shape lives in one place.
 
 /**
+ * Code of the error a refresher throws when its terminal failure was NOT
+ * flagged because another process already changed the stored tokens
+ * ({@link markConnectionNeedsReconnect} returned "superseded").
+ * `refreshConnectionToken` (connectionRefresh.ts) catches it and returns the
+ * stored row; it never reaches a user or a PostJobResult.
+ */
+export const TOKEN_REFRESH_SUPERSEDED_CODE = "TOKEN_REFRESH_SUPERSEDED";
+
+/**
+ * 2026-11-01 scale audit (jobs, token refresh): thrown by a refresher in place
+ * of its reconnect error when the guarded flag was refused. Fixed, token-free
+ * message.
+ */
+export function tokenRefreshSupersededError(): Error & { code: string } {
+  const error = new Error(
+    "The connection's tokens were already refreshed by another process.",
+  ) as Error & { code: string };
+  error.code = TOKEN_REFRESH_SUPERSEDED_CODE;
+  return error;
+}
+
+/**
  * Mark a `SocialConnection` as needing reconnect after a terminal auth
  * failure. Writes ONLY `needsReconnect` + the two diagnostic fields — NEVER
  * `accessToken`/`refreshToken` — preserving the never-overwrite-refreshToken
@@ -21,17 +43,49 @@
  * can never mask or replace the original auth error the caller is about to
  * throw — that error (and its code) is the outcome that actually matters to
  * the user and to `PostJobResult.errorCode`.
+ *
+ * `opts.expected` (2026-11-01 scale audit, jobs, token refresh): the tokens the
+ * failed refresh used. Two processes can refresh one connection at once, and
+ * TikTok rotates its refresh token, so the loser gets `invalid_grant` for a
+ * token the winner already replaced; flagging then would mark a working
+ * connection dead and email its owners. With `expected`, the stored tokens are
+ * re-read first and, if either differs, NOTHING is written and the result is
+ * "superseded" (also when the row is gone: there is nothing to flag). The
+ * refreshers throw {@link tokenRefreshSupersededError} on it. Without `opts`
+ * behaviour is unchanged.
+ *
+ * Returns "flagged" (written), "superseded" (refused, see above) or "error"
+ * (the re-read or the write failed; logged).
  */
 export async function markConnectionNeedsReconnect(
   connectionId: string,
   code: string,
-): Promise<void> {
+  opts?: { expected?: { accessToken: string; refreshToken: string | null } },
+): Promise<"flagged" | "superseded" | "error"> {
   try {
     // Dynamic import (matches googleTokens.ts / linkedinClient.ts): keeps
     // `@/lib/db` out of these platform-client modules' static import graph
     // (e.g. instagramClient.ts has no DB import at module load) so it's only
     // pulled in when a failure actually needs to be persisted.
     const { prisma } = await import("@/lib/db");
+
+    const expected = opts?.expected;
+    if (expected) {
+      // Through the extended client: tokens come back decrypted, so they compare
+      // with the plaintext ones the refresher used.
+      const stored = await prisma.socialConnection.findUnique({
+        where: { id: connectionId },
+        select: { accessToken: true, refreshToken: true },
+      });
+      if (
+        !stored ||
+        stored.accessToken !== expected.accessToken ||
+        stored.refreshToken !== expected.refreshToken
+      ) {
+        return "superseded";
+      }
+    }
+
     await prisma.socialConnection.update({
       where: { id: connectionId },
       data: {
@@ -40,12 +94,33 @@ export async function markConnectionNeedsReconnect(
         refreshFailedAt: new Date(),
       },
     });
+    return "flagged";
   } catch (updateError: unknown) {
     console.error(
       "[ConnectionHealth] Failed to mark connection needsReconnect",
       { connectionId, code, error: updateError },
     );
+    return "error";
   }
+}
+
+/**
+ * Flag a connection after a refresh's TERMINAL failure, guarded by the tokens
+ * that refresh used (`connection` is the row it read them from). Resolves when
+ * the flag was written or could not be persisted (best-effort, like
+ * {@link markConnectionNeedsReconnect}); throws
+ * {@link tokenRefreshSupersededError} instead, writing nothing, when the stored
+ * tokens already changed - the caller must not throw its reconnect error then,
+ * because the connection is working.
+ */
+export async function flagTerminalRefreshFailure(
+  connection: { id: string; accessToken: string; refreshToken: string | null },
+  code: string,
+): Promise<void> {
+  const result = await markConnectionNeedsReconnect(connection.id, code, {
+    expected: { accessToken: connection.accessToken, refreshToken: connection.refreshToken },
+  });
+  if (result === "superseded") throw tokenRefreshSupersededError();
 }
 
 /**
