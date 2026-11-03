@@ -47,6 +47,13 @@ for (const route of PUBLIC_ROUTES) {
       ).toBeVisible();
     });
 
+    test("refuses to be framed and to have its content type guessed", async ({ page }) => {
+      const headers = (await page.goto(route.path))?.headers() ?? {};
+
+      expect(headers["x-frame-options"]).toBe("DENY");
+      expect(headers["x-content-type-options"]).toBe("nosniff");
+    });
+
     test("has exactly one <h1> (basic a11y sanity)", async ({ page }) => {
       await page.goto(route.path);
 

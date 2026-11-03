@@ -22,6 +22,21 @@ const nextConfig: NextConfig = {
       { source: "/sign-in", destination: "/login", permanent: true },
     ];
   },
+  // No page of this app is meant to be shown inside another site's frame, and
+  // the signed-in pages carry one-click controls (disconnect an account, remove
+  // a member, cancel a post) that a framing page could trick a user into
+  // clicking. Browsers also must not guess a response's type from its bytes.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+        ],
+      },
+    ];
+  },
 };
 
 // Health track H1 — Sentry build wrapper (source-map upload + build-time
