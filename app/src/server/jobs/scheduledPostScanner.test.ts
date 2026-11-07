@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { inngest } from "@/lib/inngest";
 
-// Handler-level test for the every-minute scheduled-post scanner. Mocks follow
+// Handler-level test for the every-5-minutes scheduled-post scanner. Mocks follow
 // mediaRetentionSweep.test.ts: vi.mock is hoisted above the imports, no database,
 // platform API or Inngest is reached. The scanner's claim/reconcile queries and
 // the deferred-dispatch DB work are stubbed; `materializeAndDispatchChunk` and the
@@ -132,6 +132,15 @@ describe("scheduledPostScanner - options", () => {
     expect(optsOf().id).toBe("scheduled-post-scanner");
   });
 
+  // Inngest counts one execution per run plus one per step, and the free plan
+  // stops ALL runs for the rest of the month at 50,000. Every minute with two
+  // steps cost 3 x 1,440 = 4,320 a day, about 134,000 a month with nobody
+  // posting (27,502 used by 2026-11-07). Every 5 minutes with one step is
+  // 2 x 288 = 576 a day, about 17,900 in a 31-day month.
+  it("runs every 5 minutes, so an idle month stays far under the free plan's 50,000 executions", () => {
+    expect(optsOf().triggers).toEqual([{ cron: "*/5 * * * *" }]);
+  });
+
   it("claims up to 1000 due posts per tick and materializes 50 per step", () => {
     expect(DUE_SCAN_BATCH).toBe(1000);
     expect(MATERIALIZE_CHUNK_SIZE).toBe(50);
@@ -147,7 +156,6 @@ describe("scheduledPostScanner - batched dispatch", () => {
 
     expect(stepIds(step)).toEqual([
       "claim-due-jobs",
-      "reconcile-stuck-in-progress",
       "materialize-dispatch-batch-0",
       "materialize-dispatch-batch-1",
       "materialize-dispatch-batch-2",
@@ -182,8 +190,8 @@ describe("scheduledPostScanner - batched dispatch", () => {
     ]);
   });
 
-  // Today's per-job steps make a full tick 2 + 2 x 1000 = 2,002 steps, over Inngest's
-  // 1,000-step run limit (V7). One step per chunk makes it 2 + 20, plus at most 20
+  // The old per-job steps made a full tick 2 + 2 x 1000 = 2,002 steps, over Inngest's
+  // 1,000-step run limit (V7). One step per chunk makes it 1 + 20, plus at most 20
   // notification sends.
   it("a full 1000-post tick is 20 chunk steps and stays far under the 1,000-step run limit", async () => {
     claimDueMock.mockResolvedValue(claimed(DUE_SCAN_BATCH));
@@ -192,12 +200,13 @@ describe("scheduledPostScanner - batched dispatch", () => {
     const summary = await runScanner(step);
 
     expect(summary.dispatched).toBe(1000);
-    expect(stepIds(step).length).toBe(2 + 20);
+    expect(stepIds(step).length).toBe(1 + 20);
     expect(dispatches().length).toBe(20);
     expect(dispatches()[19]?.length).toBe(50);
   });
 
-  it("sends nothing when no job is due", async () => {
+  // An idle tick is the common case, so it is one step: 2 executions, not 3.
+  it("sends nothing when no job is due, in a single step", async () => {
     claimDueMock.mockResolvedValue([]);
     const step = fakeStep();
 
@@ -205,7 +214,7 @@ describe("scheduledPostScanner - batched dispatch", () => {
 
     expect(sendMock).not.toHaveBeenCalled();
     expect(step.sendEvent).not.toHaveBeenCalled();
-    expect(stepIds(step)).toEqual(["claim-due-jobs", "reconcile-stuck-in-progress"]);
+    expect(stepIds(step)).toEqual(["claim-due-jobs"]);
     expect(summary).toEqual({
       claimed: 0,
       dispatched: 0,
@@ -330,7 +339,9 @@ describe("scheduledPostScanner - batched dispatch", () => {
     for (const events of dispatches()) {
       expect(Buffer.byteLength(JSON.stringify(events))).toBeLessThanOrEqual(MAX_DISPATCH_BYTES);
     }
-    const chunkOutput = await step.run.mock.results[2]?.value;
+    const chunkOutput = await step.run.mock.results[
+      stepIds(step).indexOf("materialize-dispatch-batch-0")
+    ]?.value;
     expect(JSON.stringify(chunkOutput).length).toBeLessThan(2_000);
     expect(JSON.stringify(chunkOutput)).not.toMatch(/caption/i);
   });
@@ -358,6 +369,44 @@ describe("scheduledPostScanner - batched dispatch", () => {
   });
 });
 
+describe("scheduledPostScanner - stuck-job reconcile", () => {
+  // The reconcile shares the claim's step to save an execution per tick. It runs
+  // FIRST: a step that dies after the claim's UPDATE but before it returns loses
+  // the claimed ids (they sit in_progress until the 2 h reconcile fails them), so
+  // nothing slower may follow the claim inside the step.
+  it("reconciles stuck jobs inside the claim step, before claiming", async () => {
+    claimDueMock.mockResolvedValue(claimed(2));
+    const step = fakeStep();
+
+    await runScanner(step);
+
+    expect(reconcileMock).toHaveBeenCalledTimes(1);
+    expect(claimDueMock).toHaveBeenCalledTimes(1);
+    expect(reconcileMock.mock.invocationCallOrder[0]).toBeLessThan(
+      claimDueMock.mock.invocationCallOrder[0]!,
+    );
+    expect(stepIds(step)[0]).toBe("claim-due-jobs");
+  });
+
+  // Recovery must never hold up publishing: a reconcile that throws on every
+  // attempt would otherwise fail the claim step and stop scheduled posts.
+  it("a failing reconcile is logged and the due posts are still claimed and sent", async () => {
+    reconcileMock.mockRejectedValue(new Error("reconcile query failed"));
+    claimDueMock.mockResolvedValue(claimed(3));
+    const step = fakeStep();
+
+    const summary = await runScanner(step);
+
+    expect(summary).toEqual({
+      claimed: 3,
+      dispatched: 3,
+      failedNoConnections: 0,
+      dispatchErrors: 0,
+    });
+    expect(console.error).toHaveBeenCalled();
+  });
+});
+
 describe("scheduledPostScanner - jobs with no connections", () => {
   it("notifies the owners of NO_CONNECTIONS jobs in one batched send, with a stable id per notification", async () => {
     claimDueMock.mockResolvedValue(["job-a", "job-n1", "job-n2"]);
@@ -371,11 +420,7 @@ describe("scheduledPostScanner - jobs with no connections", () => {
 
     const summary = await runScanner(step);
 
-    expect(stepIds(step)).toEqual([
-      "claim-due-jobs",
-      "reconcile-stuck-in-progress",
-      "materialize-dispatch-batch-0",
-    ]);
+    expect(stepIds(step)).toEqual(["claim-due-jobs", "materialize-dispatch-batch-0"]);
     expect(dispatches().map((events) => events.map((e) => e.id))).toEqual([["publish-job-a"]]);
     expect(notifyIds(step)).toEqual(["notify-noconn-batch-0"]);
     expect(notifyPayload(step, 0)).toEqual([

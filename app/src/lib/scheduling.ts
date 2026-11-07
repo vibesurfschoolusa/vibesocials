@@ -14,9 +14,10 @@ import type { PostJobStatus } from "@prisma/client";
 export type PostJobIntent = "immediate" | "scheduled" | "draft";
 
 /**
- * How far in the future a `scheduledFor` must be to be accepted. The cron runs
- * every minute, so anything less than a minute out would be "due" almost
- * immediately — require a small buffer so "schedule" always means "later".
+ * How far in the future a `scheduledFor` must be to be accepted. Anything less
+ * than a minute out would be "due" almost immediately — require a small buffer
+ * so "schedule" always means "later". (The cron then claims it at its next run,
+ * every 5 minutes.)
  */
 export const SCHEDULE_BUFFER_MS = 60_000;
 

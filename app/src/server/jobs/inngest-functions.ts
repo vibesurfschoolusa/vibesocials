@@ -1420,7 +1420,14 @@ export const retryPlatforms = inngest.createFunction(
 /**
  * Roadmap Phase 5 — cron due-scanner for scheduled posts (§6.2).
  *
- * Runs every minute. Atomically claims scheduled jobs whose `scheduledFor` has
+ * Runs every 5 minutes, so a scheduled post goes out up to 5 minutes after its
+ * time. Inngest counts one execution per run plus one per step, and its free
+ * plan stops every run for the rest of the month at 50,000. Every minute with
+ * two steps used 4,320 a day (~134,000 a month) with nobody posting, which would
+ * have stopped all publishing mid-month (2026-11-07). Every 5 minutes with one
+ * step is 576 a day. Do not go back to every minute without a paid plan.
+ *
+ * Atomically claims scheduled jobs whose `scheduledFor` has
  * arrived (`claimDueScheduledJobs`, scheduled → in_progress, up to
  * `DUE_SCAN_BATCH`), then materializes each claimed job's per-platform results
  * from the connections that exist NOW (`prepareDeferredPostJobDispatch` — the
@@ -1453,7 +1460,7 @@ export const retryPlatforms = inngest.createFunction(
  *    `deliverPostOutcomeNotification` path every other outcome uses, so the
  *    user's `notifyOnPostComplete` preference gates it identically). Each event
  *    has the id `notify-noconn-<postJobId>`.
- * That is at most 2 + 2 x 20 steps for a full tick of 1000.
+ * That is at most 1 + 2 x 20 steps for a full tick of 1000.
  *
  * `singleton: { mode: "skip" }` skips a tick while the previous scan is still
  * running (https://www.inngest.com/docs/guides/singleton). A skipped tick is
@@ -1465,20 +1472,29 @@ export const scheduledPostScanner = inngest.createFunction(
     name: "Scheduled Post Scanner",
     singleton: { mode: "skip" },
   },
-  { cron: "* * * * *" },
+  { cron: "*/5 * * * *" },
   async ({ step }) => {
+    // One step, so an idle tick costs 2 executions (the run and this step). The
+    // step id and its string[] result are unchanged from the two-step version, so
+    // a run that straddles a deploy replays the same memoized claim.
     const claimedIds = await step.run("claim-due-jobs", async () => {
+      // Reconcile jobs stuck in_progress after a materialize/dispatch crash
+      // (leaves no pending work and never reaches finalize). It runs BEFORE the
+      // claim: if the step died after the claim's UPDATE but before returning,
+      // the claimed ids would be lost, so the claim must be the step's last act.
+      // A reconcile failure is only logged; recovery must never stop publishing,
+      // and the next tick tries again.
+      try {
+        const reconciled = await reconcileStuckInProgressJobs(new Date());
+        if (reconciled.reconciled > 0) {
+          logger.info("[Inngest] Reconciled stuck in_progress jobs", reconciled);
+        }
+      } catch (error) {
+        logger.error("[Inngest] Reconciling stuck in_progress jobs failed (claiming anyway)", { error });
+      }
+
       return claimDueScheduledJobs(new Date());
     });
-
-    // Reconcile jobs stuck in_progress after a materialize/dispatch crash
-    // (leaves no pending work and never reaches finalize).
-    const reconciled = await step.run("reconcile-stuck-in-progress", async () => {
-      return reconcileStuckInProgressJobs(new Date());
-    });
-    if (reconciled.reconciled > 0) {
-      logger.info("[Inngest] Reconciled stuck in_progress jobs", reconciled);
-    }
 
     let dispatched = 0;
     let failedNoConnections = 0;

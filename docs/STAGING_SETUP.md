@@ -259,6 +259,17 @@ releases.
    Pro) and redeploy; the design limits (publish 20 per workspace and 80 in
    all, `refresh-connection` 10) then apply. The GitHub "Inngest sync" workflow
    prints Inngest's answer, so a rejected sync shows there as a failed run.
+
+   The free plan also caps **executions** at 50,000 a month, counting one per
+   run plus one per step. At the cap Inngest starts no new run of any function,
+   scheduled or event-triggered, until the month ends, so publishing stops.
+   With nobody posting, the crons use about 750 a day, about 23,000 a month:
+   `scheduled-post-scanner` runs every 5 minutes at 2 per idle tick (576 a
+   day), and the hourly sweeps use most of the rest. Each published post adds
+   its own runs and steps. Until 2026-11-07 the scanner ran every minute with
+   two steps (4,320 a day), which would have hit the cap mid-month. After any
+   change to a cron, or to the steps a cron function runs when idle, check
+   Billing → Usage in the Inngest dashboard the next day.
 4. **Rollback.**
    - Prefer rolling forward.
    - If you roll back, pause `scheduled-post-scanner` before you roll back, and
