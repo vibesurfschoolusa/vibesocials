@@ -607,6 +607,45 @@ async function waitForVideoProcessing(
   }
 }
 
+export const X_APP_NOT_ENROLLED_MESSAGE =
+  "X refused the post because the X developer app has no API access plan. Posting through X's API is pay-per-use: sign in at console.x.com with the account that owns the app, add API credits, then retry.";
+
+export const X_CREDITS_EXHAUSTED_MESSAGE =
+  "X refused the post because the X API credits are used up or the spending limit was reached. Add credits at console.x.com, then retry.";
+
+/**
+ * X's account-level refusals of a post, which no retry fixes (found in a live
+ * post, 2026-11-08):
+ *  - 403 with reason `client-not-enrolled`: the developer app is not enrolled in
+ *    an access plan. Since 2026 posting is pay-per-use, with credits bought in
+ *    console.x.com (https://docs.x.com/x-api/getting-started/pricing).
+ *  - 402: the credits are used up or the app's spending limit was reached.
+ * Any other 403 (a duplicate post, a suspended account) keeps the generic
+ * X_TWEET_FAILED. Reads a clone, so the response body stays readable.
+ */
+export async function classifyXAccessError(
+  response: Response,
+): Promise<(Error & { code: string; status: number }) | null> {
+  let code: string;
+  let message: string;
+  if (response.status === 402) {
+    code = "X_CREDITS_EXHAUSTED";
+    message = X_CREDITS_EXHAUSTED_MESSAGE;
+  } else if (response.status === 403) {
+    const body = await response.clone().text().catch(() => "");
+    if (!body.includes("client-not-enrolled")) return null;
+    code = "X_APP_NOT_ENROLLED";
+    message = X_APP_NOT_ENROLLED_MESSAGE;
+  } else {
+    return null;
+  }
+  console.error("[X OAuth 1.0a] X refused the post at the account level", { status: response.status, code });
+  const error = new Error(message) as Error & { code: string; status: number };
+  error.code = code;
+  error.status = response.status;
+  return error;
+}
+
 /**
  * Create the tweet with the uploaded media: the COMMIT call, shared by the small and the
  * chunked path. v1.1 `statuses/update` first, then a v2 fallback; no v2 after an ambiguous
@@ -733,6 +772,10 @@ async function postTweet(args: {
   // only: a 2xx answer that carries x-rate-limit-* headers is still a success.
   const tweetLimited = await classifyRateLimit("x", tweetResponse);
   if (tweetLimited) throw tweetLimited;
+
+  // An account-level refusal (no API plan, credits used up) says what to do.
+  const accessError = await classifyXAccessError(tweetResponse);
+  if (accessError) throw accessError;
 
   // v1Response's status/body are already logged above; assertOk
   // additionally logs tweetResponse's own status + body server-side.

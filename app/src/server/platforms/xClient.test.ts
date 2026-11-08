@@ -11,6 +11,8 @@ import { withTransientRetries } from "./transientRetry";
 import type { PublishContext } from "./types";
 import {
   computeTweetText,
+  X_APP_NOT_ENROLLED_MESSAGE,
+  X_CREDITS_EXHAUSTED_MESSAGE,
   X_APPEND_SEGMENT_BYTES,
   X_DEFAULT_MEDIA_EXPIRES_SECS,
   X_LARGE_PROCESSING_MAX_MS,
@@ -394,6 +396,41 @@ describe("xClient.publishVideo — rate limits (RATE_LIMITED)", () => {
     stubX({ v2: () => json({ title: "Forbidden" }, 403) });
 
     expect((await failure(ctx("image/jpeg")))?.code).toBe("X_TWEET_FAILED");
+  });
+
+  // 2026-11-08 live post: X answered exactly this when the developer app had no
+  // pay-per-use access. The user must add credits in console.x.com.
+  it("a v2 403 client-not-enrolled says to add API credits (X_APP_NOT_ENROLLED)", async () => {
+    stubX({
+      v2: () =>
+        json(
+          {
+            client_id: "31885817",
+            detail:
+              "When authenticating requests to the X API v2 endpoints, you must use keys and tokens from a developer App that is attached to a Project. You can create a project via the developer portal.",
+            reason: "client-not-enrolled",
+            required_enrollment: "Appropriate Level of API Access",
+            title: "Client Forbidden",
+            type: "https://api.x.com/2/problems/client-forbidden",
+          },
+          403,
+        ),
+    });
+
+    const error = await failure(ctx("image/jpeg"));
+
+    expect(error?.code).toBe("X_APP_NOT_ENROLLED");
+    expect(error?.message).toBe(X_APP_NOT_ENROLLED_MESSAGE);
+    expect(error?.message).not.toContain("31885817");
+  });
+
+  it("a v2 402 says the X API credits ran out (X_CREDITS_EXHAUSTED)", async () => {
+    stubX({ v2: () => json({ title: "CreditsDepleted" }, 402) });
+
+    const error = await failure(ctx("image/jpeg"));
+
+    expect(error?.code).toBe("X_CREDITS_EXHAUSTED");
+    expect(error?.message).toBe(X_CREDITS_EXHAUSTED_MESSAGE);
   });
 
   it("image upload 429 -> RATE_LIMITED, not X_IMAGE_UPLOAD_FAILED", async () => {

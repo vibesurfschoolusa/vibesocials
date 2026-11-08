@@ -348,6 +348,23 @@ describe.each(CASES)("$platform OAuth callback: session binding", ({ platform, G
   });
 });
 
+describe("linkedin OAuth callback: the name Settings shows", () => {
+  it("saves the company page's name, so Settings shows it instead of a placeholder member id", async () => {
+    getCurrentUserMock.mockResolvedValue({ id: STATE_USER });
+    const linkedin = CASES.find((c) => c.platform === "linkedin")!;
+    fetchMock.mockImplementation(async (input: string | URL) => linkedin.provider(String(input)));
+
+    await linkedinGET(callbackRequest("linkedin", signedState()));
+
+    const args = upsertMock.mock.calls[0][0] as {
+      create: { metadata: { username?: string | null } };
+      update: { metadata: { username?: string | null } };
+    };
+    expect(args.create.metadata.username).toBe("Org");
+    expect(args.update.metadata.username).toBe("Org");
+  });
+});
+
 describe("linkedin OAuth callback: vanity-name suffix", () => {
   it("binds to the user in the SIGNED part of the state, ignoring the unsigned .vanityName suffix", async () => {
     getCurrentUserMock.mockResolvedValue({ id: "user-victim" });

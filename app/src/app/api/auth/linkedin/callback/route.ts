@@ -491,6 +491,9 @@ export async function GET(request: Request) {
           email: profile.email,
           picture: profile.picture,
           organizations,
+          // Shown as "Connected as <page>" in Settings (lib/connectionSummary.ts):
+          // the company page posts go to, not a placeholder member id.
+          username: organizations[0]?.name ?? null,
         } as unknown as Prisma.InputJsonValue,
         // Roadmap Phase 4: a fresh connect always starts in a healthy state.
         needsReconnect: false,
@@ -507,6 +510,9 @@ export async function GET(request: Request) {
           email: profile.email,
           picture: profile.picture,
           organizations,
+          // Shown as "Connected as <page>" in Settings (lib/connectionSummary.ts):
+          // the company page posts go to, not a placeholder member id.
+          username: organizations[0]?.name ?? null,
         } as unknown as Prisma.InputJsonValue,
         // Roadmap Phase 4: successful reconnect clears the flag set by a
         // prior refresh/COR-5 failure (see server/platforms/connectionHealth.ts).

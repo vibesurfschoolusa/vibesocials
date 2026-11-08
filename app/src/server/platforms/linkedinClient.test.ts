@@ -11,6 +11,7 @@ import {
   LINKEDIN_MAX_UPLOAD_RESTARTS,
   LINKEDIN_POST_MIN_WINDOW_MS,
   LINKEDIN_TRANSIENT_RESUME_DELAY_MS,
+  LINKEDIN_NOT_PAGE_ADMIN_MESSAGE,
   LINKEDIN_UPLOAD_STATE_KIND,
   LINKEDIN_URL_EXPIRY_SAFETY_MS,
   linkedinClient,
@@ -638,6 +639,40 @@ describe("linkedinClient.publishVideo — rate limits (RATE_LIMITED)", () => {
 
   it("a non-429 ugcPosts failure keeps LINKEDIN_POST_CREATION_FAILED", async () => {
     stubLinkedIn({ post: () => new Response("{}", { status: 422 }) });
+    expect((await failure(linkedinClient.publishVideo(ctx("image/jpeg"))))?.code).toBe(
+      "LINKEDIN_POST_CREATION_FAILED",
+    );
+  });
+
+  // 2026-11-08 live post: LinkedIn answered exactly this when the connected
+  // member was not an admin of the company page.
+  it("a 403 AUTH_DELEGATION_DENIED says the account must be a page admin (LINKEDIN_NOT_PAGE_ADMIN)", async () => {
+    stubLinkedIn({
+      post: () =>
+        new Response(
+          JSON.stringify({
+            errorDetailType: "com.linkedin.common.error.BadRequest",
+            message:
+              "com.linkedin.content.common.exception.BadRequestResponseException: denied by [resource: organizationUgcAuthorizations => responseStatus: DENIED]",
+            errorDetails: {
+              inputErrors: [
+                { description: "Write to post is denied due to lack of permission", input: {}, code: "AUTH_DELEGATION_DENIED" },
+              ],
+            },
+            status: 403,
+          }),
+          { status: 403 },
+        ),
+    });
+
+    const error = await failure(linkedinClient.publishVideo(ctx("image/jpeg")));
+
+    expect(error?.code).toBe("LINKEDIN_NOT_PAGE_ADMIN");
+    expect(error?.message).toBe(LINKEDIN_NOT_PAGE_ADMIN_MESSAGE);
+  });
+
+  it("any other 403 keeps LINKEDIN_POST_CREATION_FAILED", async () => {
+    stubLinkedIn({ post: () => new Response(JSON.stringify({ message: "Not enough permissions" }), { status: 403 }) });
     expect((await failure(linkedinClient.publishVideo(ctx("image/jpeg"))))?.code).toBe(
       "LINKEDIN_POST_CREATION_FAILED",
     );

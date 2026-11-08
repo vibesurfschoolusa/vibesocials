@@ -119,6 +119,19 @@ export const LINKEDIN_URL_EXPIRY_SAFETY_MS = 300_000;
  */
 export const LINKEDIN_MAX_UPLOAD_RESTARTS = 2;
 
+export const LINKEDIN_NOT_PAGE_ADMIN_MESSAGE =
+  "LinkedIn refused the post because the LinkedIn account you connected is not an admin of this company page. Ask a page admin to add that account as a Super admin or Content admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.";
+
+/**
+ * LinkedIn's answer when the member may not post as the organization: 403 with
+ * `AUTH_DELEGATION_DENIED` from the `organizationUgcAuthorizations` check
+ * ("Write to post is denied due to lack of permission"). Seen 2026-11-08 for a
+ * member who was not an admin of the page.
+ */
+export function isLinkedInPageAdminDenial(body: string): boolean {
+  return body.includes("AUTH_DELEGATION_DENIED") || body.includes("organizationUgcAuthorizations");
+}
+
 /** Wait between two checks of the asset's processing status: one check per step, a minute apart. */
 export const LINKEDIN_ASSET_POLL_INTERVAL_MS = 60_000;
 
@@ -726,6 +739,13 @@ async function createPost(
     if (response.status === 401) {
       // Roadmap Phase 4: flag before throwing (guarded, see throwLinkedInReconnect).
       await throwLinkedInReconnect(connection);
+    }
+    // The connected member may not post as this company page (found in a live
+    // post, 2026-11-08): say what to do instead of a bare 403.
+    if (response.status === 403 && isLinkedInPageAdminDenial(errorText)) {
+      const error = new Error(LINKEDIN_NOT_PAGE_ADMIN_MESSAGE) as Error & { code: string };
+      error.code = "LINKEDIN_NOT_PAGE_ADMIN";
+      throw error;
     }
     // COR-3: never surface the raw upstream body via PostJobResult.errorMessage.
     const error = new Error(
