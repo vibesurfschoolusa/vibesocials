@@ -7,6 +7,7 @@ import { assertOk } from "@/lib/assertOk";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
+import { removeXMentions } from "@/lib/xMentions";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
@@ -163,14 +164,17 @@ export const X_UPLOAD_STATE_KIND = "x_chunked";
  * only skips the Intl.Segmenter call when definitely under the limit).
  */
 export function computeTweetText(caption: string): string {
+  // X refuses API posts that @-mention users (self-serve tiers, since
+  // 2026-02-23), so mentions come out before the length cut (lib/xMentions.ts).
+  const withoutMentions = removeXMentions(caption);
   const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS.x;
   // x's charLimit is always a number (see platformLimits.ts); the null check
   // only exists to satisfy the shared `Record<Platform, ...>` type.
   if (charLimit === null) {
-    return caption;
+    return withoutMentions;
   }
 
-  let tweetText = caption;
+  let tweetText = withoutMentions;
   if (tweetText.length > charLimit) {
     const truncated = truncateGraphemes(tweetText, charLimit, { ellipsis });
     if (truncated !== tweetText) {

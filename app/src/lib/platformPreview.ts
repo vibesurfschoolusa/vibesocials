@@ -3,6 +3,7 @@ import type { Platform } from "@prisma/client";
 import { buildCaptionWithFooter, type CaptionFooterUser } from "@/lib/captionFooter";
 import { PLATFORM_CAPTION_LIMITS, TIKTOK_DEFAULT_CAPTION } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
+import { removeXMentions } from "@/lib/xMentions";
 
 // A local grapheme counter, intentionally NOT added to lib/truncate.ts: Phase
 // 7's only sanctioned non-UI change is the platformLimits.ts map + the
@@ -84,6 +85,12 @@ export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPrevi
   // clients send empty as-is, so their preview correctly stays empty.
   if (input.platform === "tiktok" && !fullCaption) {
     fullCaption = TIKTOK_DEFAULT_CAPTION;
+  }
+
+  // Mirror the X client (computeTweetText): X refuses API posts that
+  // @-mention users, so the X text goes out without them (lib/xMentions.ts).
+  if (input.platform === "x") {
+    fullCaption = removeXMentions(fullCaption);
   }
 
   const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS[input.platform];
