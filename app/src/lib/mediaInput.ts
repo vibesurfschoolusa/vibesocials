@@ -7,6 +7,23 @@
 /** Largest single file accepted — matches the upload route's `maximumSizeInBytes`. */
 export const MAX_MEDIA_BYTES = 512 * 1024 * 1024;
 
+/**
+ * The content types the blob upload token allows (`POST /api/upload`). The
+ * browser checks a file against this list before uploading
+ * (lib/prepareUploadFile.ts), so an unsupported type gets a clear message
+ * instead of the blob store's generic refusal. iPhone HEIC/HEIF photos are not
+ * on it: the browser converts them to JPEG first.
+ */
+export const UPLOAD_ALLOWED_CONTENT_TYPES: readonly string[] = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "video/mp4",
+  "video/quicktime",
+  "video/webm",
+];
+
 /** Longest `originalFilename` accepted (the usual filesystem name limit). */
 export const FILENAME_MAX_LENGTH = 255;
 

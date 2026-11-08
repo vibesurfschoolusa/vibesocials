@@ -32,6 +32,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { generateBlobKey } from "@/lib/blobKey";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
+import { isHeicFile, prepareUploadFile } from "@/lib/prepareUploadFile";
 import {
   appendMediaPage,
   buildMediaCreateBody,
@@ -305,7 +306,8 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
     // Client-side guard first, ahead of the (bandwidth-costing) upload —
     // mirrors the server-side check in POST /api/media so a mismatched file
     // never reaches the blob store.
-    if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) {
+    // A HEIC photo the browser gave no type is converted below, not refused here.
+    if (!isHeicFile(file) && !file.type.startsWith("image/") && !file.type.startsWith("video/")) {
       toast.error("Only image or video files can be added to the library.");
       return;
     }
@@ -320,7 +322,10 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
     setUploadProgress(0);
 
     try {
-      const blob = await upload(generateBlobKey(file), file, {
+      // iPhone HEIC -> JPEG, big photos shrunk, unsupported types refused with
+      // a clear message, all before the upload (lib/prepareUploadFile.ts).
+      const prepared = await prepareUploadFile(file);
+      const blob = await upload(generateBlobKey(prepared), prepared, {
         access: "public",
         handleUploadUrl: "/api/upload",
         onUploadProgress: (progressEvent) => setUploadProgress(progressEvent.percentage),
@@ -336,9 +341,9 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
         body: JSON.stringify(
           buildMediaCreateBody({
             blobUrl: blob.url,
-            filename: file.name,
-            mimeType: file.type,
-            sizeBytes: file.size,
+            filename: prepared.name,
+            mimeType: prepared.type,
+            sizeBytes: prepared.size,
             baseCaption,
             workspaceId,
           }),

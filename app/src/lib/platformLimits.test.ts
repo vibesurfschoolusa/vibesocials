@@ -30,11 +30,14 @@ describe("PLATFORM_CAPTION_LIMITS", () => {
     expect(PLATFORM_CAPTION_LIMITS.instagram.ellipsis).toBeUndefined();
   });
 
-  it("has no client-side caption limit for youtube, linkedin, facebook_page, google_business_profile", () => {
+  it("caps a Google Business Profile post at 1,500 characters", () => {
+    expect(PLATFORM_CAPTION_LIMITS.google_business_profile).toEqual({ charLimit: 1500, ellipsis: "..." });
+  });
+
+  it("has no client-side caption limit for youtube, linkedin, facebook_page", () => {
     expect(PLATFORM_CAPTION_LIMITS.youtube.charLimit).toBeNull();
     expect(PLATFORM_CAPTION_LIMITS.linkedin.charLimit).toBeNull();
     expect(PLATFORM_CAPTION_LIMITS.facebook_page.charLimit).toBeNull();
-    expect(PLATFORM_CAPTION_LIMITS.google_business_profile.charLimit).toBeNull();
   });
 
   it("covers every Platform enum member exactly once (no silent gaps)", () => {
@@ -76,7 +79,7 @@ describe("platformAcceptsMedia (rules read from each platform client — see PLA
     ["instagram", true, true], // instagramClient.ts:126-161 — REELS (video) or IMAGE
     ["x", true, true], // xClient.ts:528-537 — image or video
     ["linkedin", true, true], // linkedinClient.ts:619-643 — video or image
-    ["google_business_profile", true, true], // googleBusinessProfileClient.ts:41-59 — warns, never rejects
+    ["google_business_profile", true, true], // googleBusinessProfileClient.ts — photo post, video to gallery
   ];
 
   it.each(table)("%s: video=%s image=%s", (platform, video, image) => {

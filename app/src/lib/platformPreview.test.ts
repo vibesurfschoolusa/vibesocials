@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildCaptionWithFooter } from "./captionFooter";
 import { buildPlatformPreview } from "./platformPreview";
 import { truncateGraphemes } from "./truncate";
+import { computeGbpPostSummary } from "@/server/platforms/googleBusinessProfileClient";
 
 describe("buildPlatformPreview", () => {
   it("renders the plain caption for a null-limit platform with no footer/override", () => {
@@ -18,18 +19,22 @@ describe("buildPlatformPreview", () => {
 
   it("never shows a truncation warning for a null-limit platform, however long the caption", () => {
     const caption = "a".repeat(5000);
-    for (const platform of [
-      "youtube",
-      "linkedin",
-      "facebook_page",
-      "google_business_profile",
-    ] as const) {
+    for (const platform of ["youtube", "linkedin", "facebook_page"] as const) {
       const result = buildPlatformPreview({ platform, caption });
       expect(result.rendered).toBe(caption); // full caption, unmodified
       expect(result.limit).toBeNull();
       expect(result.truncated).toBe(false);
       expect(result.willTruncate).toBe(false);
     }
+  });
+
+  it("warns that Google Business Profile cuts a post at 1,500 characters, as the client does", () => {
+    const caption = "a".repeat(5000);
+    const result = buildPlatformPreview({ platform: "google_business_profile", caption });
+    expect(result.limit).toBe(1500);
+    expect(result.willTruncate).toBe(true);
+    expect(result.rendered).toBe(`${"a".repeat(1497)}...`);
+    expect(result.rendered).toBe(computeGbpPostSummary(caption));
   });
 
   it("mirrors TikTok's empty-caption default title (Phase 7 review Minor #1)", () => {

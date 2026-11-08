@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { META_OAUTH_DIALOG_URL } from "@/lib/metaGraph";
 import { createOAuthState } from "@/lib/oauthState";
 import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
 
@@ -28,7 +29,7 @@ export async function GET(request: NextRequest) {
   const encodedState = createOAuthState({ userId: user.id, workspaceId: workspace.id });
 
   // Instagram uses Facebook OAuth with specific scopes
-  const authUrl = new URL("https://www.facebook.com/v21.0/dialog/oauth");
+  const authUrl = new URL(META_OAUTH_DIALOG_URL);
   authUrl.searchParams.set("client_id", clientId);
   authUrl.searchParams.set("redirect_uri", redirectUri);
   authUrl.searchParams.set(

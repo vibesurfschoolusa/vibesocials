@@ -2,7 +2,10 @@ import type { MediaItem, SocialConnection, User } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
-import { googleBusinessProfileClient } from "@/server/platforms/googleBusinessProfileClient";
+import {
+  computeGbpPostSummary,
+  googleBusinessProfileClient,
+} from "@/server/platforms/googleBusinessProfileClient";
 import {
   MIN_REQUEST_WINDOW_MS,
   PUBLISH_BUDGET_EXCEEDED_CODE,
@@ -64,7 +67,7 @@ function makeContext(): PublishContext {
 function stubMediaCreate(response: () => Response) {
   const fetchMock = vi.fn<typeof fetch>((input) => {
     const url = String(input);
-    if (url.includes("mybusiness.googleapis.com/v4/accounts/111/locations/999/media")) {
+    if (url.includes("mybusiness.googleapis.com/v4/accounts/111/locations/999/localPosts")) {
       return Promise.resolve(response());
     }
     throw new Error(`Unexpected fetch in test: ${url}`);
@@ -99,25 +102,117 @@ afterEach(() => {
 });
 
 describe("googleBusinessProfileClient.publishVideo", () => {
-  it("creates the media item and returns its resource name", async () => {
+  it("publishes a photo as a post and returns its resource name", async () => {
     const fetchMock = stubMediaCreate(
-      () => new Response(JSON.stringify({ name: "accounts/111/locations/999/media/m1" }), { status: 200 }),
+      () => new Response(JSON.stringify({ name: "accounts/111/locations/999/localPosts/p1" }), { status: 200 }),
     );
 
     await expect(googleBusinessProfileClient.publishVideo(makeContext())).resolves.toEqual({
-      externalPostId: "accounts/111/locations/999/media/m1",
+      externalPostId: "accounts/111/locations/999/localPosts/p1",
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the sanitized GBP_CREATE_MEDIA_FAILED for a non-limit failure", async () => {
+  it("keeps the sanitized GBP_CREATE_POST_FAILED for a non-limit failure", async () => {
     stubMediaCreate(() => new Response("permission denied SECRET_TOKEN", { status: 403 }));
 
     const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
 
-    expect(error?.code).toBe("GBP_CREATE_MEDIA_FAILED");
+    expect(error?.code).toBe("GBP_CREATE_POST_FAILED");
     expect(error?.status).toBe(403);
     expect(error?.message).not.toContain("SECRET_TOKEN");
+  });
+});
+
+// 2026-11-08: a photo is a Business Profile post (an "Update" with the caption),
+// not a caption-less gallery photo; a video still goes to the gallery.
+describe("googleBusinessProfileClient.publishVideo — what is posted", () => {
+  const POSTS_URL = "https://mybusiness.googleapis.com/v4/accounts/111/locations/999/localPosts";
+  const MEDIA_URL = "https://mybusiness.googleapis.com/v4/accounts/111/locations/999/media";
+
+  function stubAny(response: () => Response) {
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(response()));
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+  const sentBody = (fetchMock: ReturnType<typeof stubAny>) =>
+    JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as Record<string, unknown>;
+
+  it("posts a photo with the caption as a STANDARD post", async () => {
+    const fetchMock = stubAny(
+      () => new Response(JSON.stringify({ name: "accounts/111/locations/999/localPosts/p1", state: "LIVE" })),
+    );
+
+    await googleBusinessProfileClient.publishVideo({ ...makeContext(), caption: "Surf's up!\n\n#surf" });
+
+    expect(String(fetchMock.mock.calls[0][0])).toBe(POSTS_URL);
+    expect(sentBody(fetchMock)).toEqual({
+      languageCode: "en-US",
+      topicType: "STANDARD",
+      summary: "Surf's up!\n\n#surf",
+      media: [{ mediaFormat: "PHOTO", sourceUrl: "https://blob.example.com/photo.jpg" }],
+    });
+  });
+
+  it("cuts a caption over 1,500 characters the way the preview shows it", async () => {
+    const fetchMock = stubAny(() => new Response(JSON.stringify({ name: "accounts/111/locations/999/localPosts/p1" })));
+
+    await googleBusinessProfileClient.publishVideo({ ...makeContext(), caption: "🌊".repeat(1600) });
+
+    const summary = String(sentBody(fetchMock).summary);
+    expect(summary).toBe(`${"🌊".repeat(1497)}...`);
+    expect(computeGbpPostSummary("🌊".repeat(1600))).toBe(summary);
+  });
+
+  it("sends a photo with no caption without an empty summary", async () => {
+    const fetchMock = stubAny(() => new Response(JSON.stringify({ name: "accounts/111/locations/999/localPosts/p1" })));
+
+    await googleBusinessProfileClient.publishVideo({ ...makeContext(), caption: "   " });
+
+    expect(sentBody(fetchMock)).not.toHaveProperty("summary");
+  });
+
+  it("fails GBP_POST_REJECTED when Google rejects the post under its content policy", async () => {
+    stubAny(
+      () => new Response(JSON.stringify({ name: "accounts/111/locations/999/localPosts/p1", state: "REJECTED" })),
+    );
+
+    const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
+
+    expect(error?.code).toBe("GBP_POST_REJECTED");
+  });
+
+  it("still adds a video to the gallery (posts take photos only)", async () => {
+    const fetchMock = stubAny(() => new Response(JSON.stringify({ name: "accounts/111/locations/999/media/v1" })));
+    const base = makeContext();
+
+    await expect(
+      googleBusinessProfileClient.publishVideo({
+        ...base,
+        mediaItem: { ...base.mediaItem, mimeType: "video/mp4", storageLocation: "https://blob.example.com/clip.mp4" },
+      }),
+    ).resolves.toEqual({ externalPostId: "accounts/111/locations/999/media/v1" });
+
+    expect(String(fetchMock.mock.calls[0][0])).toBe(MEDIA_URL);
+    expect(sentBody(fetchMock)).toEqual({
+      mediaFormat: "VIDEO",
+      sourceUrl: "https://blob.example.com/clip.mp4",
+      locationAssociation: { category: "ADDITIONAL" },
+    });
+  });
+
+  it("keeps GBP_CREATE_MEDIA_FAILED for a refused video", async () => {
+    stubAny(() => new Response("denied", { status: 403 }));
+    const base = makeContext();
+
+    const error = await failure(
+      googleBusinessProfileClient.publishVideo({
+        ...base,
+        mediaItem: { ...base.mediaItem, mimeType: "video/mp4" },
+      }),
+    );
+
+    expect(error?.code).toBe("GBP_CREATE_MEDIA_FAILED");
   });
 });
 
@@ -125,7 +220,7 @@ describe("googleBusinessProfileClient.publishVideo", () => {
 // 10 edits/min per profile and answers an excess with HTTP 429 (Retry-After is
 // not documented, so retryAt may be null).
 describe("googleBusinessProfileClient.publishVideo — rate limits (RATE_LIMITED)", () => {
-  it("media create 429 with Retry-After: 30 -> retryAt = now + 30 s", async () => {
+  it("post create 429 with Retry-After: 30 -> retryAt = now + 30 s", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(NOW);
     stubMediaCreate(() => new Response("", { status: 429, headers: { "Retry-After": "30" } }));
@@ -141,7 +236,7 @@ describe("googleBusinessProfileClient.publishVideo — rate limits (RATE_LIMITED
     expect(error?.message).toBe("Google Business Profile is limiting requests right now.");
   });
 
-  it("media create 429 without Retry-After -> retryAt null", async () => {
+  it("post create 429 without Retry-After -> retryAt null", async () => {
     stubMediaCreate(() => new Response("", { status: 429 }));
 
     const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
@@ -150,11 +245,11 @@ describe("googleBusinessProfileClient.publishVideo — rate limits (RATE_LIMITED
   });
 });
 
-// 2026-11-01 scale audit (jobs H6, Review Focus 5): `POST .../media` is the
+// 2026-11-01 scale audit (jobs H6, Review Focus 5): `POST .../localPosts` is the
 // commit call. A 5xx, a timeout or a dropped connection there may already have
 // created the media item, so it is PUBLISH_UNCONFIRMED and is never re-run.
-describe("googleBusinessProfileClient.publishVideo — commit call (POST .../media)", () => {
-  it("media create 500 -> PUBLISH_UNCONFIRMED, requested once", async () => {
+describe("googleBusinessProfileClient.publishVideo — commit call (POST .../localPosts)", () => {
+  it("post create 500 -> PUBLISH_UNCONFIRMED, requested once", async () => {
     const fetchMock = stubMediaCreate(() => new Response("internal", { status: 500 }));
 
     const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
@@ -164,7 +259,7 @@ describe("googleBusinessProfileClient.publishVideo — commit call (POST .../med
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("media create 500 is not re-run by the in-step retry", async () => {
+  it("post create 500 is not re-run by the in-step retry", async () => {
     const fetchMock = stubMediaCreate(() => new Response("internal", { status: 500 }));
 
     await expect(
@@ -218,7 +313,7 @@ describe("googleBusinessProfileClient.publishVideo — commit call (POST .../med
           { status: 200 },
         ),
     ],
-  ] as const)("a 2xx media create with %s -> PUBLISH_UNCONFIRMED, requested once", async (_name, make) => {
+  ] as const)("a 2xx post create with %s -> PUBLISH_UNCONFIRMED, requested once", async (_name, make) => {
     const fetchMock = stubMediaCreate(make);
 
     const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
@@ -236,7 +331,7 @@ describe("googleBusinessProfileClient.publishVideo — commit call (POST .../med
     ["an empty name", JSON.stringify({ name: "" })],
     ["a numeric name", JSON.stringify({ name: 3 })],
     ["a JSON null body", "null"],
-  ])("a 2xx media create with %s -> PUBLISH_UNCONFIRMED, requested once", async (_name, body) => {
+  ])("a 2xx post create with %s -> PUBLISH_UNCONFIRMED, requested once", async (_name, body) => {
     const fetchMock = stubMediaCreate(() => new Response(body, { status: 200 }));
 
     const error = await failure(googleBusinessProfileClient.publishVideo(makeContext()));
@@ -246,13 +341,13 @@ describe("googleBusinessProfileClient.publishVideo — commit call (POST .../med
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("a 429 is still RATE_LIMITED and a 403 still GBP_CREATE_MEDIA_FAILED", async () => {
+  it("a 429 is still RATE_LIMITED and a 403 still GBP_CREATE_POST_FAILED", async () => {
     stubMediaCreate(() => new Response("", { status: 429 }));
     expect((await failure(googleBusinessProfileClient.publishVideo(makeContext())))?.code).toBe("RATE_LIMITED");
 
     stubMediaCreate(() => new Response("denied", { status: 403 }));
     expect((await failure(googleBusinessProfileClient.publishVideo(makeContext())))?.code).toBe(
-      "GBP_CREATE_MEDIA_FAILED",
+      "GBP_CREATE_POST_FAILED",
     );
   });
 });
@@ -261,7 +356,7 @@ describe("googleBusinessProfileClient.publishVideo — commit call (POST .../med
 // refresh, the store-code lookups and the media create - ends by the step
 // deadline, and none is started with under 5 s left.
 describe("googleBusinessProfileClient.publishVideo — step deadline", () => {
-  const MEDIA_URL_FRAGMENT = "mybusiness.googleapis.com/v4/accounts/111/locations/999/media";
+  const MEDIA_URL_FRAGMENT = "mybusiness.googleapis.com/v4/accounts/111/locations/999/localPosts";
   const TOKEN_URL_FRAGMENT = "oauth2.googleapis.com/token";
   const ACCOUNTS_URL_FRAGMENT = "mybusinessaccountmanagement.googleapis.com/v1/accounts";
   const LOCATIONS_URL_FRAGMENT = "mybusinessbusinessinformation.googleapis.com";
@@ -271,7 +366,7 @@ describe("googleBusinessProfileClient.publishVideo — step deadline", () => {
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
   const tokenOk = () => json({ access_token: "fresh-token", expires_in: 3600, token_type: "Bearer" });
-  const mediaOk = () => json({ name: "accounts/111/locations/999/media/m1" });
+  const mediaOk = () => json({ name: "accounts/111/locations/999/localPosts/p1" });
   const noLocations = () => json({ locations: [] });
   const matchingLocation = () => json({ locations: [{ name: "locations/999", storeCode: "STORE-1" }] });
   const accountsList = (count: number) =>
@@ -374,7 +469,7 @@ describe("googleBusinessProfileClient.publishVideo — step deadline", () => {
       googleBusinessProfileClient.publishVideo(
         ctx({ expired: true, locationName: "STORE-1", deadline: NOW + 12_000 }),
       ),
-    ).resolves.toEqual({ externalPostId: "accounts/111/locations/999/media/m1" });
+    ).resolves.toEqual({ externalPostId: "accounts/111/locations/999/localPosts/p1" });
 
     expect(fetchMock).toHaveBeenCalledTimes(4);
     const timeouts = setTimeoutSpy.mock.calls.map((c) => c[1] as number);
@@ -447,7 +542,7 @@ describe("googleBusinessProfileClient.publishVideo — step deadline", () => {
 // refreshConnectionToken (connectionRefresh.ts), which serializes it per
 // connection and hands back the stored row when another process refreshed first.
 describe("googleBusinessProfileClient — serialized token refresh", () => {
-  const MEDIA_URL = "mybusiness.googleapis.com/v4/accounts/111/locations/999/media";
+  const MEDIA_URL = "mybusiness.googleapis.com/v4/accounts/111/locations/999/localPosts";
 
   function expiredContext(deadline?: number): PublishContext {
     const base = makeContext();
@@ -473,7 +568,7 @@ describe("googleBusinessProfileClient — serialized token refresh", () => {
   it("publishVideo routes an expired token's refresh through refreshConnectionToken with the snapshot and the step deadline", async () => {
     const fetchMock = vi.fn<typeof fetch>((input) => {
       if (String(input).includes(MEDIA_URL)) {
-        return Promise.resolve(new Response(JSON.stringify({ name: "accounts/111/locations/999/media/m1" })));
+        return Promise.resolve(new Response(JSON.stringify({ name: "accounts/111/locations/999/localPosts/p1" })));
       }
       throw new Error(`Unexpected fetch in test: ${String(input)}`);
     });
@@ -500,7 +595,7 @@ describe("googleBusinessProfileClient — serialized token refresh", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(() =>
-        Promise.resolve(new Response(JSON.stringify({ name: "accounts/111/locations/999/media/m1" }))),
+        Promise.resolve(new Response(JSON.stringify({ name: "accounts/111/locations/999/localPosts/p1" }))),
       ),
     );
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
+import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { Platform } from "@prisma/client";
@@ -67,7 +68,7 @@ export async function GET(request: NextRequest) {
     }
 
     // 1. Exchange code for short-lived user access token
-    const tokenUrl = new URL("https://graph.facebook.com/v21.0/oauth/access_token");
+    const tokenUrl = new URL(`${META_GRAPH_BASE_URL}/oauth/access_token`);
     tokenUrl.searchParams.set("client_id", clientId);
     tokenUrl.searchParams.set("client_secret", clientSecret);
     tokenUrl.searchParams.set("redirect_uri", redirectUri);
@@ -90,7 +91,7 @@ export async function GET(request: NextRequest) {
     const shortLivedToken = tokenData.access_token;
 
     // 2. Exchange for long-lived user token (60 days)
-    const longLivedUrl = new URL("https://graph.facebook.com/v21.0/oauth/access_token");
+    const longLivedUrl = new URL(`${META_GRAPH_BASE_URL}/oauth/access_token`);
     longLivedUrl.searchParams.set("grant_type", "fb_exchange_token");
     longLivedUrl.searchParams.set("client_id", clientId);
     longLivedUrl.searchParams.set("client_secret", clientSecret);
@@ -117,7 +118,7 @@ export async function GET(request: NextRequest) {
     const expiresIn = longLivedData.expires_in || 5184000; // 60 days default
 
     // 3. Get user's Facebook Pages
-    const pagesUrl = new URL("https://graph.facebook.com/v21.0/me/accounts");
+    const pagesUrl = new URL(`${META_GRAPH_BASE_URL}/me/accounts`);
     pagesUrl.searchParams.set("access_token", userAccessToken);
     pagesUrl.searchParams.set("fields", "id,name,access_token");
 

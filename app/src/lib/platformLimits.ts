@@ -51,9 +51,10 @@ export const PLATFORM_CAPTION_LIMITS: Record<Platform, PlatformCaptionLimit> = {
   linkedin: { charLimit: null },
   // No client-side truncation today (server/platforms/facebookPageClient.ts).
   facebook_page: { charLimit: null },
-  // No client-side truncation today (server/platforms/googleBusinessProfileClient.ts,
-  // which in fact doesn't send a caption/description at all yet).
-  google_business_profile: { charLimit: null },
+  // Matches computeGbpPostSummary in server/platforms/googleBusinessProfileClient.ts.
+  // A photo is published as a Business Profile post ("Update"), whose text
+  // Google caps at 1,500 characters.
+  google_business_profile: { charLimit: 1500, ellipsis: "..." },
 };
 
 /**
@@ -85,9 +86,9 @@ export type MediaKind = "image" | "video";
  *                    server/platforms/xClient.ts:528-537).
  * - linkedin       — both: uploads a video via uploadVideo, an image via
  *                    uploadImage (server/platforms/linkedinClient.ts:619-643).
- * - google_business_profile — both: the client only logs a warning for a
- *                    non-image and sends mediaFormat "VIDEO" for it
- *                    (server/platforms/googleBusinessProfileClient.ts:41-59);
+ * - google_business_profile — both: a photo becomes a post (localPosts), a
+ *                    video is added to the gallery (media, "VIDEO")
+ *                    (server/platforms/googleBusinessProfileClient.ts, `isPhoto`);
  *                    it never rejects, so neither does this map.
  */
 export const PLATFORM_ACCEPTED_MEDIA: Record<Platform, readonly MediaKind[]> = {

@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
+import { UPLOAD_ALLOWED_CONTENT_TYPES } from "@/lib/mediaInput";
 import { checkRateLimit } from "@/lib/rateLimit";
 
 export async function POST(request: Request): Promise<NextResponse> {
@@ -50,15 +51,7 @@ export async function POST(request: Request): Promise<NextResponse> {
         logger.info("[Upload] Generating token", { pathname, userId: user.id });
 
         return {
-          allowedContentTypes: [
-            "image/jpeg",
-            "image/png",
-            "image/gif",
-            "image/webp",
-            "video/mp4",
-            "video/quicktime",
-            "video/webm",
-          ],
+          allowedContentTypes: [...UPLOAD_ALLOWED_CONTENT_TYPES],
           // Blob store cap for a single upload. Matches the largest media any
           // connected platform accepts in practice; the platforms themselves
           // enforce their own stricter limits at publish time.

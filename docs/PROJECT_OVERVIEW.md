@@ -35,7 +35,11 @@ Vibe Socials lets a logged-in user upload media + caption once and publish to mu
 
 ### Platform maturity notes
 
-- **TikTok**: sandbox / Creator inbox draft flow until production approval.
+- **TikTok**: Direct Post, but unaudited: posts are private (SELF_ONLY) until TikTok's audit passes.
+- **Google Business Profile**: a photo is published as a post ("Update") with the caption; a video goes to the photo/video gallery.
+- **Instagram**: photos are served to Instagram as a JPEG cropped into 4:5–1.91:1 (`/api/instagram-photo`).
+- **Uploads**: iPhone HEIC photos are converted to JPEG, and photos over 4.5 MB are shrunk, in the browser before upload.
+- **Meta Graph API version**: one constant, `src/lib/metaGraph.ts` (v26.0 since 2026-11).
 - **LinkedIn**: company-page posting needs Community Management API access.
 - **Metrics**: YouTube only in v1; other platforms are not synced yet.
 

@@ -61,7 +61,7 @@ const PLATFORMS: PlatformConfig[] = [
     href: "/api/auth/tiktok/start",
     icon: Music2,
     description:
-      "Connect your TikTok account. Videos are sent to your TikTok inbox as drafts — you finish and publish them in the TikTok app.",
+      "Connect your TikTok account to post videos to it directly.",
   },
   {
     key: "instagram",

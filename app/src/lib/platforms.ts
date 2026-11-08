@@ -66,7 +66,7 @@ export function platformCaptionEntries(
  */
 export const PLATFORM_MATURITY_NOTES: Partial<Record<Platform, string>> = {
   tiktok:
-    "TikTok runs in sandbox mode until production approval — videos may land in the Creator inbox as private.",
+    "Until TikTok approves this app, videos are posted as private (only you can see them). Switch each one to public in the TikTok app.",
   linkedin:
     "LinkedIn company-page posting requires Community Management API access on the LinkedIn app.",
 };

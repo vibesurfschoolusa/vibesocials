@@ -19,6 +19,8 @@ import {
   requireCommitId,
 } from "./commitCall";
 import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
+import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
+import { instagramImageUrl } from "./instagramPhoto";
 import { classifyRateLimit } from "./rateLimited";
 
 // COR-5: Instagram token expiry handling.
@@ -202,7 +204,7 @@ function requestContainerStatus(options: {
   accessToken: string;
   timeoutMs: number;
 }): Promise<Response> {
-  const statusUrl = new URL(`https://graph.facebook.com/v21.0/${options.containerId}`);
+  const statusUrl = new URL(`${META_GRAPH_BASE_URL}/${options.containerId}`);
   statusUrl.searchParams.set("fields", "status_code");
   statusUrl.searchParams.set("access_token", options.accessToken);
   return fetchWithTimeout(statusUrl.toString(), undefined, options.timeoutMs);
@@ -457,7 +459,7 @@ async function createInstagramContainer(args: {
 }): Promise<string> {
   const { igAccountId, accessToken, connection, caption, mediaUrl, isVideo, locationId, deadline } = args;
 
-  const containerUrl = new URL(`https://graph.facebook.com/v21.0/${igAccountId}/media`);
+  const containerUrl = new URL(`${META_GRAPH_BASE_URL}/${igAccountId}/media`);
 
   const containerParams: Record<string, string> = {
     access_token: accessToken,
@@ -469,7 +471,9 @@ async function createInstagramContainer(args: {
     containerParams.media_type = "REELS";
     containerParams.video_url = mediaUrl;
   } else {
-    containerParams.image_url = mediaUrl;
+    // A JPEG copy cropped into Instagram's 4:5..1.91:1 range (instagramPhoto.ts);
+    // the stored URL only when the app has no public address (local dev).
+    containerParams.image_url = instagramImageUrl(mediaUrl, process.env.NEXTAUTH_URL);
   }
 
   if (locationId) {
@@ -551,7 +555,7 @@ async function publishInstagramContainer(args: {
 }): Promise<PublishResult> {
   const { igAccountId, containerId, accessToken, connection, deadline, username, store } = args;
 
-  const publishUrl = new URL(`https://graph.facebook.com/v21.0/${igAccountId}/media_publish`);
+  const publishUrl = new URL(`${META_GRAPH_BASE_URL}/${igAccountId}/media_publish`);
   publishUrl.searchParams.set("creation_id", containerId);
   publishUrl.searchParams.set("access_token", accessToken);
 

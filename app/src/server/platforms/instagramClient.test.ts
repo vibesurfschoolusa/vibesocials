@@ -20,6 +20,7 @@ import {
   PUBLISH_BUDGET_EXCEEDED_CODE,
   PUBLISH_STEP_BUDGET_MS,
 } from "@/server/platforms/publishBudget";
+import { verifyInstagramPhotoRequest } from "@/server/platforms/instagramPhoto";
 import { withTransientRetries } from "@/server/platforms/transientRetry";
 
 // Instagram stores a long-lived Facebook PAGE token with no refresh path, so
@@ -474,6 +475,67 @@ describe("instagramClient.publishVideo — caption limit", () => {
 
     const containerUrl = new URL(String(fetchMock.mock.calls[0][0]));
     expect(containerUrl.searchParams.get("caption")).toBe("b".repeat(2200));
+  });
+});
+
+// 2026-11-08: Instagram refuses a non-JPEG or a photo outside 4:5..1.91:1, so a
+// photo is handed over through the signed /api/instagram-photo copy; a video
+// (REELS) still uses the stored blob URL.
+describe("instagramClient.publishVideo — which URL Instagram fetches", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  async function containerUrlFor(mimeType: string): Promise<URL> {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("NEXTAUTH_URL", "https://vibesocials.wtf");
+    vi.stubEnv("NEXTAUTH_SECRET", "test-secret");
+    const fetchMock = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/ig-account-1/media")) {
+        return Promise.resolve(new Response("{}", { status: 400 }));
+      }
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await instagramClient
+      .publishVideo({
+        user: { id: "user-1" } as unknown as User,
+        socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+        mediaItem: {
+          mimeType,
+          storageLocation: "https://blob.example.com/m",
+          metadata: null,
+        } as unknown as MediaItem,
+        caption: "hi",
+      })
+      .catch(() => null);
+
+    return new URL(String(fetchMock.mock.calls[0][0]));
+  }
+
+  it("gives Instagram the signed JPEG copy of a photo", async () => {
+    const imageUrl = new URL(String((await containerUrlFor("image/png")).searchParams.get("image_url")));
+
+    expect(`${imageUrl.origin}${imageUrl.pathname}`).toBe("https://vibesocials.wtf/api/instagram-photo");
+    expect(imageUrl.searchParams.get("src")).toBe("https://blob.example.com/m");
+    expect(
+      verifyInstagramPhotoRequest(
+        imageUrl.searchParams.get("src"),
+        imageUrl.searchParams.get("exp"),
+        imageUrl.searchParams.get("sig"),
+      ),
+    ).toBe(true);
+  });
+
+  it("gives Instagram the stored URL of a video", async () => {
+    const containerUrl = await containerUrlFor("video/mp4");
+
+    expect(containerUrl.searchParams.get("video_url")).toBe("https://blob.example.com/m");
+    expect(containerUrl.searchParams.get("image_url")).toBeNull();
   });
 });
 

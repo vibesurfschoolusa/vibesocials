@@ -2,6 +2,8 @@ import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
+import { truncateGraphemes } from "@/lib/truncate";
 
 import { refreshConnectionToken } from "./connectionRefresh";
 import { resolveGbpLocationName } from "./gbpLocation";
@@ -11,11 +13,11 @@ import { budgetedTimeout } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
-// Google Business Profile client (photos that appear on Google Maps)
+// Google Business Profile client (posts that appear on Google Search and Maps)
 //
-// This client uses the Google Business Profile API to create media for a
-// specific business location (locationName in SocialConnection.metadata) so
-// photos appear on Google Maps.
+// For the business location in SocialConnection.metadata.locationName, a photo
+// is published as a Business Profile post (localPosts, an "Update" with the
+// caption) and a video is added to the location's media gallery.
 //
 // Token refresh is delegated to the shared `refreshGoogleToken` helper
 // (src/server/platforms/googleTokens.ts), which updates ONLY accessToken +
@@ -51,51 +53,59 @@ export const googleBusinessProfileClient: PlatformClient = {
       throw error;
     }
 
-    // Google Business Profile primarily supports photos
-    if (mediaItem.mimeType && !mediaItem.mimeType.startsWith("image/")) {
-      console.warn("[GBP] Attempting to upload non-image media", {
-        mimeType: mediaItem.mimeType,
-        originalFilename: mediaItem.originalFilename,
-      });
-    }
-
     const { locationName } = await ensureLocationName(socialConnection, accessToken, deadline);
 
-    console.log("[GBP] Starting media creation", {
+    // A photo becomes a Business Profile post (an "Update" with the caption, shown
+    // on Google Search and Maps). Until 2026-11 it was only added to the photo
+    // gallery, without the caption. A video still goes to the gallery: Google
+    // documents photos only for posts.
+    const isPhoto = mediaItem.mimeType?.startsWith("image/") ?? true;
+
+    console.log(isPhoto ? "[GBP] Creating post" : "[GBP] Adding video to the gallery", {
       locationName,
       storageLocation: mediaItem.storageLocation,
       mimeType: mediaItem.mimeType,
     });
 
-    // Use Google My Business API v4 to create media with the Vercel Blob public URL
-    const isPhoto = mediaItem.mimeType?.startsWith("image/") ?? true;
-    const mediaFormat = isPhoto ? "PHOTO" : "VIDEO";
-    // Use ADDITIONAL instead of COVER to avoid strict aspect ratio requirements
-    const category = "ADDITIONAL";
-
-    // Try creating media by providing the sourceUrl directly in the request
-    // 2026-11-01 scale audit (jobs H6, Review Focus 5): POST .../media is the
+    // 2026-11-01 scale audit (jobs H6, Review Focus 5): the POST below is the
     // commit call. A 5xx, a timeout or a dropped connection after it was sent is
-    // PUBLISH_UNCONFIRMED (the media item may exist) and is never re-run; a 4xx /
-    // 429 is returned and handled below as before. The timeout is clamped to
-    // the remaining step budget; a spent budget throws
-    // PUBLISH_TIME_BUDGET_EXCEEDED BEFORE the request is sent (safe to retry).
+    // PUBLISH_UNCONFIRMED (the post or media item may exist) and is never re-run;
+    // a 4xx / 429 is returned and handled below. The timeout is clamped to the
+    // remaining step budget; a spent budget throws PUBLISH_TIME_BUDGET_EXCEEDED
+    // BEFORE the request is sent (safe to retry).
+    const request = isPhoto
+      ? {
+          url: `https://mybusiness.googleapis.com/v4/${locationName}/localPosts`,
+          body: buildLocalPostBody(ctx.caption, mediaItem.storageLocation),
+          failure: {
+            code: "GBP_CREATE_POST_FAILED",
+            prefix: "Failed to create the Google Business Profile post",
+          },
+        }
+      : {
+          url: `https://mybusiness.googleapis.com/v4/${locationName}/media`,
+          body: {
+            mediaFormat: "VIDEO",
+            sourceUrl: mediaItem.storageLocation, // Public Vercel Blob URL
+            // ADDITIONAL, not COVER, to avoid COVER's strict aspect ratio.
+            locationAssociation: { category: "ADDITIONAL" },
+          },
+          failure: {
+            code: "GBP_CREATE_MEDIA_FAILED",
+            prefix: "Failed to create media item in Google Business Profile",
+          },
+        };
+
     const createRes = await commitRequest("google_business_profile", () =>
       fetchWithTimeout(
-        `https://mybusiness.googleapis.com/v4/${locationName}/media`,
+        request.url,
         {
           method: "POST",
           headers: {
             Authorization: `Bearer ${accessToken}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            mediaFormat,
-            sourceUrl: mediaItem.storageLocation, // Public Vercel Blob URL
-            locationAssociation: {
-              category,
-            },
-          }),
+          body: JSON.stringify(request.body),
         },
         budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
       ),
@@ -106,23 +116,30 @@ export const googleBusinessProfileClient: PlatformClient = {
     const limited = await classifyRateLimit("google_business_profile", createRes);
     if (limited) throw limited;
 
-    await assertOk(createRes, {
-      code: "GBP_CREATE_MEDIA_FAILED",
-      prefix: "Failed to create media item in Google Business Profile",
-    });
+    await assertOk(createRes, request.failure);
 
-    // The media create answered 2xx, so the item may exist: an unreadable body
+    // The create answered 2xx, so the post or item may exist: an unreadable body
     // is PUBLISH_UNCONFIRMED, not a failure to retry (final review F4). So is a
     // body that parsed but has no resource `name` (2026-11-02 scale audit).
-    const created = await readCommitBody<{ name?: unknown } | null>(
+    const created = await readCommitBody<{ name?: unknown; state?: unknown } | null>(
       "google_business_profile",
       createRes,
       "json",
     );
     const externalPostId = requireCommitId("google_business_profile", created?.name, "name");
 
-    console.log("[GBP] Media created successfully", {
+    // A post Google refused under its content policy exists but is never shown.
+    if (isPhoto && created?.state === "REJECTED") {
+      const error = new Error(
+        "Google rejected this Business Profile post under its content policy, so it is not shown. Edit the caption and try again.",
+      ) as Error & { code: string };
+      error.code = "GBP_POST_REJECTED";
+      throw error;
+    }
+
+    console.log(isPhoto ? "[GBP] Post created" : "[GBP] Media created successfully", {
       externalPostId,
+      state: created?.state,
     });
 
     return {
@@ -137,6 +154,34 @@ export const googleBusinessProfileClient: PlatformClient = {
     return refreshGoogleToken(connection, opts);
   },
 };
+
+/**
+ * The text of a Business Profile post: the caption (with the workspace footer),
+ * cut to Google's 1,500 characters the same way the composer preview shows it
+ * (platformLimits.ts). Empty when there is no caption.
+ */
+export function computeGbpPostSummary(caption: string): string {
+  const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS.google_business_profile;
+  const text = caption.trim();
+  if (charLimit === null || text.length <= charLimit) {
+    return text;
+  }
+  return truncateGraphemes(text, charLimit, { ellipsis });
+}
+
+/**
+ * The body of POST .../localPosts for one photo: a STANDARD post ("Update").
+ * A post with no caption carries the photo alone (no empty `summary`).
+ */
+export function buildLocalPostBody(caption: string, photoUrl: string): Record<string, unknown> {
+  const summary = computeGbpPostSummary(caption);
+  return {
+    languageCode: "en-US",
+    topicType: "STANDARD",
+    ...(summary ? { summary } : {}),
+    media: [{ mediaFormat: "PHOTO", sourceUrl: photoUrl }],
+  };
+}
 
 async function ensureLocationName(
   socialConnection: SocialConnection,

@@ -40,6 +40,7 @@ import {
   type DeferredPostFields,
 } from "@/lib/createPostRequest";
 import type { MediaItemDto } from "@/lib/mediaDto";
+import { prepareUploadFile } from "@/lib/prepareUploadFile";
 import { PLATFORM_ORDER, platformLabel, TIKTOK_PRIVACY_LABELS } from "@/lib/platforms";
 import {
   deriveComposerPlatforms,
@@ -190,6 +191,10 @@ function CreatePostFormInner({
     file: File;
     promise: Promise<UploadedBlobInfo>;
   } | null>(null);
+  // Counts file picks. Preparing a pick (HEIC -> JPEG, shrinking a big photo)
+  // is async, so a newer pick can finish first; an older pick that finishes
+  // later sees a different count and is dropped.
+  const fileSelectionRef = useRef(0);
 
   const [tiktokMetadata, setTiktokMetadata] = useState<TikTokPostMetadata>({
     privacyLevel: "",
@@ -412,6 +417,8 @@ function CreatePostFormInner({
   async function runAutoCaptionFromMedia(options: {
     overwrite: boolean;
     blobOverride?: UploadedBlobInfo;
+    /** True once the file this caption is for has been replaced by a newer pick. */
+    isStale?: () => boolean;
   }) {
     const blob = options.blobOverride ?? uploadedBlob;
 
@@ -452,6 +459,10 @@ function CreatePostFormInner({
         throw new Error("AI returned an empty caption from media");
       }
 
+      if (options.isStale?.()) {
+        return;
+      }
+
       setUploadCaption((prev) => {
         if (!options.overwrite && prev.trim()) {
           return prev;
@@ -460,9 +471,14 @@ function CreatePostFormInner({
       });
     } catch (err: unknown) {
       console.error("Error generating caption from media:", err);
-      toast.error((err as Error).message || "Failed to generate caption from media");
+      if (!options.isStale?.()) {
+        toast.error((err as Error).message || "Failed to generate caption from media");
+      }
     } finally {
-      setAutoCaptionLoading(false);
+      // A replaced pick leaves the busy state to the newer one.
+      if (!options.isStale?.()) {
+        setAutoCaptionLoading(false);
+      }
     }
   }
 
@@ -914,8 +930,9 @@ function CreatePostFormInner({
                 type="file"
                 accept="video/*,image/*"
                 onChange={async (event) => {
-                  const nextFile = event.target.files?.[0] ?? null;
-                  setUploadFile(nextFile);
+                  const pickedFile = event.target.files?.[0] ?? null;
+                  const selection = ++fileSelectionRef.current;
+                  setUploadFile(null);
                   setUploadedBlob(null);
                   setShowSuccess(false);
                   // Changing (or clearing) the file invalidates any
@@ -923,7 +940,9 @@ function CreatePostFormInner({
                   // can never be applied to this new selection.
                   activeUploadRef.current = null;
 
-                  if (!nextFile) {
+                  if (!pickedFile) {
+                    // A cleared input ends any busy state an earlier pick left.
+                    setAutoCaptionLoading(false);
                     return;
                   }
 
@@ -931,12 +950,36 @@ function CreatePostFormInner({
                     setAutoCaptionLoading(true);
                     setUploadError(null);
 
+                    // iPhone HEIC -> JPEG, big photos shrunk, unsupported
+                    // types refused with a clear message (prepareUploadFile.ts).
+                    let nextFile: File;
+                    try {
+                      nextFile = await prepareUploadFile(pickedFile);
+                    } catch (prepareError) {
+                      if (selection === fileSelectionRef.current) {
+                        // Clear the input so the same file can be picked again.
+                        setFileInputKey((key) => key + 1);
+                      }
+                      throw prepareError;
+                    }
+                    if (selection !== fileSelectionRef.current) {
+                      return;
+                    }
+                    setUploadFile(nextFile);
+
                     const blobInfo = await ensureUploaded(nextFile);
+                    // A newer pick replaced this one while it uploaded: its
+                    // caption must not land on the newer photo.
+                    const isStale = () => selection !== fileSelectionRef.current;
+                    if (isStale()) {
+                      return;
+                    }
 
                     if (autoCaptionEnabled) {
                       await runAutoCaptionFromMedia({
                         overwrite: false,
                         blobOverride: blobInfo,
+                        isStale,
                       });
                     }
                   } catch (err: unknown) {
@@ -944,12 +987,18 @@ function CreatePostFormInner({
                       "Error uploading media for auto-caption:",
                       err,
                     );
-                    toast.error(
-                      (err as Error).message ||
-                        "Failed to prepare media for posting. Please try again.",
-                    );
+                    // A newer pick has replaced this one: its error is moot.
+                    if (selection === fileSelectionRef.current) {
+                      toast.error(
+                        (err as Error).message ||
+                          "Failed to prepare media for posting. Please try again.",
+                      );
+                    }
                   } finally {
-                    setAutoCaptionLoading(false);
+                    // Only the latest pick owns the busy state.
+                    if (selection === fileSelectionRef.current) {
+                      setAutoCaptionLoading(false);
+                    }
                   }
                 }}
                 className="cursor-pointer"

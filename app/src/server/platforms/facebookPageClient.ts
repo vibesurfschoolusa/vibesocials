@@ -4,6 +4,7 @@ import type { SocialConnection } from "@prisma/client";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { connectionTokenChangedError, flagRejectedToken } from "./connectionHealth";
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
+import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { classifyRateLimit } from "./rateLimited";
 
 // Token-material reality (see app/api/auth/facebook_page/callback/route.ts):
@@ -80,7 +81,7 @@ export const facebookPageClient: PlatformClient = {
       captionLength: caption?.length ?? 0,
     });
 
-    const endpoint = new URL(`https://graph.facebook.com/v21.0/${pageId}/photos`);
+    const endpoint = new URL(`${META_GRAPH_BASE_URL}/${pageId}/photos`);
 
     const body = new URLSearchParams({
       url: mediaItem.storageLocation,
