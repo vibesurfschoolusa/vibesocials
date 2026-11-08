@@ -23,6 +23,7 @@ import { Button, ButtonLink } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { GoogleBusinessLocationForm } from "./google-business-location-form";
 import { ConnectionActions } from "./connection-actions";
+import { LinkedInConnectButton } from "./linkedin-account-dialog";
 import { LinkedInSetupDialog } from "./linkedin-setup-dialog";
 
 interface PlatformConfig {
@@ -164,7 +165,11 @@ export function ConnectionsSection({ connections, readOnly = false }: Connection
                       needsReconnect={connection.needsReconnect}
                       readOnly={readOnly}
                     />
-                  ) : readOnly ? null : href ? (
+                  ) : readOnly ? null : key === "linkedin" ? (
+                    // LinkedIn reuses whichever account is signed in to
+                    // linkedin.com: offer to sign out first (lib/linkedinAccount.ts).
+                    <LinkedInConnectButton />
+                  ) : href ? (
                     <ButtonLink href={href} variant="outline" size="sm">
                       Connect
                     </ButtonLink>

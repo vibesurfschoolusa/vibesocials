@@ -16,6 +16,8 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
 
+import { LinkedInAccountDialog } from "./linkedin-account-dialog";
+
 interface Props {
   platform: string;
   isConnected: boolean;
@@ -50,6 +52,7 @@ export function ConnectionActions({
   const [switching, setSwitching] = useState(false);
 
   const isTikTok = platform === "tiktok";
+  const isLinkedIn = platform === "linkedin";
   const authUrl = `/api/auth/${platform}/start`;
 
   // Shared disconnect call. Throws on failure so callers can decide whether to
@@ -72,8 +75,25 @@ export function ConnectionActions({
       toast.error(err instanceof Error ? err.message : "Failed to disconnect.");
       throw err;
     }
-    toast.success("Account disconnected.");
+    toast.success(
+      isLinkedIn
+        ? "LinkedIn disconnected. Connect asks you to sign out of LinkedIn first if you want a different account."
+        : "Account disconnected.",
+    );
     router.refresh();
+  }
+
+  // LinkedIn switch: disconnect, then connect again after the user has had the
+  // chance to sign out of linkedin.com (LinkedInAccountDialog). Throws to keep
+  // the dialog open when the disconnect fails.
+  async function disconnectForLinkedInSwitch() {
+    try {
+      await disconnect();
+    } catch (err) {
+      console.error("[Switch Account] Error:", err);
+      toast.error(err instanceof Error ? err.message : "Failed to disconnect current account.");
+      throw err;
+    }
   }
 
   // Standard switch: disconnect the current account, then redirect to the
@@ -197,6 +217,13 @@ export function ConnectionActions({
             </Button>
           </DialogFooter>
         </Dialog>
+      ) : isLinkedIn ? (
+        <LinkedInAccountDialog
+          open={switchOpen}
+          onOpenChange={setSwitchOpen}
+          mode="switch"
+          beforeContinue={disconnectForLinkedInSwitch}
+        />
       ) : (
         <ConfirmDialog
           open={switchOpen}

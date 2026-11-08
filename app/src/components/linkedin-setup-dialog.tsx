@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
 
 export function LinkedInSetupDialog() {
   const router = useRouter();
@@ -84,8 +85,18 @@ export function LinkedInSetupDialog() {
       </DialogHeader>
       <DialogBody className="flex flex-col gap-5">
         <Alert variant="info" title="Company pages only">
-          This app posts to LinkedIn company pages, not personal profiles. You must be an
-          administrator of the page.
+          This app posts to LinkedIn company pages, not personal profiles. The LinkedIn account
+          signed in to this browser is the one being connected, and it must be an administrator
+          of the page. Wrong account?{" "}
+          <a
+            href={LINKEDIN_SIGN_OUT_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium underline underline-offset-2"
+          >
+            Sign out of LinkedIn
+          </a>
+          , then close this and click Connect again.
         </Alert>
 
         <div className="flex flex-col gap-1.5">
