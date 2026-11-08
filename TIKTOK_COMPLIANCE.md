@@ -1,3 +1,12 @@
+> **Superseded (2026-11-08).** This file described the January 2026 submission and claimed some
+> behavior the code did not have (for example "Only Me" disabled for branded content, and the creator's
+> username shown instead of the nickname). TikTok rejected that Direct Post audit for UX-guideline
+> points 3a, 3b, 4 and 5d, and because the app name must follow the organization name. The current
+> requirements, the gap table and the fixes are in
+> [`docs/business-assessment-2026-11/tiktok-audit.md`](docs/business-assessment-2026-11/tiktok-audit.md),
+> and the rules are pinned in `app/src/lib/tiktokPostRules.ts` and its tests. Don't reuse this file for
+> the application text.
+
 # TikTok Direct Post API - Compliance Implementation
 
 This document outlines how Vibe Socials implements TikTok's Direct Post API Developer Guidelines.

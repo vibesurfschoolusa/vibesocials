@@ -1166,8 +1166,9 @@ export const mediaRetentionSweep = inngest.createFunction(
  * every job since the 2026-11-01 audit), the shared MediaItem only for legacy
  * jobs (`resolvePostCaptionSource`), so a retried reuse never publishes the
  * original upload's caption. Per-post TikTok/YouTube metadata is replayed from
- * the job's `publishMetadata` snapshot; when absent, each client's SAFE default
- * applies (YouTube `private` here, TikTok `SELF_ONLY`).
+ * the job's `publishMetadata` snapshot; when absent, YouTube falls back to
+ * `private` here and TikTok refuses the post (TIKTOK_PRIVACY_REQUIRED: since
+ * 2026-11 TikTok's Direct Post rules forbid a default privacy level).
  */
 export const retryPlatforms = inngest.createFunction(
   {
@@ -1353,8 +1354,9 @@ export const retryPlatforms = inngest.createFunction(
             : fullBaseCaption;
 
           // Replay publishMetadata from the job when present (immediate jobs now
-          // snapshot it too). Fallback: safest defaults so a retry is never MORE
-          // public than a missing choice (YouTube private, TikTok SELF_ONLY).
+          // snapshot it too). Fallback: YouTube private, so a retry is never MORE
+          // public than a missing choice; TikTok has no fallback and refuses the
+          // post without the user's own privacy choice (TIKTOK_PRIVACY_REQUIRED).
           const ytMeta =
             publishMetadata?.youtube ??
             (platform === "youtube" ? { privacyStatus: "private" as const } : undefined);

@@ -788,7 +788,8 @@ export async function prepareDeferredPostJobDispatch(
       baseCaption: captionSource.baseCaption,
       perPlatformOverrides: captionSource.perPlatformOverrides,
       // Only set when the snapshot has them, so a job with no per-post privacy
-      // yields the same event shape as before (client applies its default).
+      // yields the same event shape as before (YouTube applies its private
+      // default; TikTok refuses the post, since it may not pick a privacy level).
       ...(publishMetadata?.tiktok ? { tiktokMetadata: publishMetadata.tiktok } : {}),
       ...(publishMetadata?.youtube ? { youtubeMetadata: publishMetadata.youtube } : {}),
     },

@@ -8,7 +8,7 @@ import { PlugZap, Sparkles } from "lucide-react";
 import type { Platform } from "@prisma/client";
 import { PlatformPreviewList } from "./composer/platform-preview";
 import { LocationAutocomplete } from "./location-autocomplete";
-import { TikTokPostSettings } from "./tiktok-post-settings";
+import { TikTokConsentDeclaration, TikTokPostSettings } from "./tiktok-post-settings";
 import { YouTubePostSettings } from "./youtube-post-settings";
 import { CaptionCounter } from "@/components/caption-counter";
 import { Alert } from "@/components/ui/alert";
@@ -41,6 +41,7 @@ import {
 } from "@/lib/createPostRequest";
 import type { MediaItemDto } from "@/lib/mediaDto";
 import { prepareUploadFile } from "@/lib/prepareUploadFile";
+import { TIKTOK_DISCLOSURE_INCOMPLETE_TEXT, tiktokPublishBlock } from "@/lib/tiktokPostRules";
 import { PLATFORM_ORDER, platformLabel, TIKTOK_PRIVACY_LABELS } from "@/lib/platforms";
 import {
   deriveComposerPlatforms,
@@ -131,6 +132,9 @@ function CreatePostFormInner({
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [showSuccess, setShowSuccess] = useState(false);
+  // Whether the post just submitted included TikTok: its processing notice
+  // (TikTok guideline 5d) must still show after the form resets.
+  const [submittedToTikTok, setSubmittedToTikTok] = useState(false);
   const [enhancingCaption, setEnhancingCaption] = useState(false);
 
   const [autoCaptionEnabled, setAutoCaptionEnabled] = useState(true);
@@ -204,6 +208,10 @@ function CreatePostFormInner({
   });
   const [tiktokPrivacyError, setTiktokPrivacyError] = useState<string | null>(null);
   const [tiktokCommercialEnabled, setTiktokCommercialEnabled] = useState(false);
+  // TikTok guideline 1b/1c: why TikTok can't take this post (from the TikTok
+  // panel), and the chosen video's length once the browser has read it.
+  const [tiktokBlockingReason, setTiktokBlockingReason] = useState<string | null>(null);
+  const [videoDurationSec, setVideoDurationSec] = useState<number | null>(null);
 
   const [youtubeMetadata, setYoutubeMetadata] = useState<YouTubePostMetadata>({
     privacyStatus: "unlisted",
@@ -258,6 +266,13 @@ function CreatePostFormInner({
     [connectedPlatforms, deselected, activeMimeType],
   );
   const tiktokSelected = selectedPlatforms.includes("tiktok");
+  // Why Publish is blocked for TikTok right now, or null (lib/tiktokPostRules.ts).
+  const tiktokBlock = tiktokPublishBlock({
+    tiktokSelected,
+    blockingReason: tiktokBlockingReason,
+    commercialContentEnabled: tiktokCommercialEnabled,
+    metadata: tiktokMetadata,
+  });
   const youtubeSelected = selectedPlatforms.includes("youtube");
 
   // Roadmap Phase 2 — load the reuse target, if any. Runs once per distinct
@@ -596,6 +611,7 @@ function CreatePostFormInner({
       setDispatchFailed(outcome.kind === "dispatch_failed");
       setAwaitingApproval(outcome.kind === "success" && outcome.heldForApproval);
       setSubmittedMode(publishMode);
+      setSubmittedToTikTok(tiktokSelected);
       setShowSuccess(true);
       setUploadCaption("");
       setUploadLocation("");
@@ -670,9 +686,7 @@ function CreatePostFormInner({
       !tiktokMetadata.brandedContent &&
       !tiktokMetadata.brandOrganic;
     if (tiktokCommercialBlocked) {
-      setUploadError(
-        'Select "Your brand" or "Branded content" (or turn off the promotional toggle) before posting to TikTok.',
-      );
+      setUploadError(TIKTOK_DISCLOSURE_INCOMPLETE_TEXT);
       return;
     }
 
@@ -866,6 +880,12 @@ function CreatePostFormInner({
                         ? "We'll publish this at the time you chose. Edit or cancel it from the Queue until then."
                         : "We're publishing to your connected platforms. Per-platform results appear in Activity."}
                 </p>
+                {submittedToTikTok && submittedMode !== "draft" && !awaitingApproval ? (
+                  <p>
+                    TikTok: after publishing, it may take a few minutes for your video to process and
+                    be visible on your profile.
+                  </p>
+                ) : null}
                 <Link
                   href={!awaitingApproval && submittedMode === "now" ? "/activity" : "/queue"}
                   className={buttonVariants({ variant: "outline", size: "sm" })}
@@ -909,6 +929,7 @@ function CreatePostFormInner({
                 <video
                   src={reuseItem.storageLocation}
                   controls
+                  onLoadedMetadata={(e) => setVideoDurationSec(e.currentTarget.duration)}
                   className="max-h-64 w-full rounded-[var(--radius)] border border-border"
                 />
               ) : null}
@@ -933,6 +954,7 @@ function CreatePostFormInner({
                   const pickedFile = event.target.files?.[0] ?? null;
                   const selection = ++fileSelectionRef.current;
                   setUploadFile(null);
+                  setVideoDurationSec(null);
                   setUploadedBlob(null);
                   setShowSuccess(false);
                   // Changing (or clearing) the file invalidates any
@@ -1017,6 +1039,7 @@ function CreatePostFormInner({
                     <video
                       src={previewUrl}
                       controls
+                      onLoadedMetadata={(e) => setVideoDurationSec(e.currentTarget.duration)}
                       className="max-h-64 w-full rounded-[var(--radius)] border border-border"
                     />
                   ) : null}
@@ -1130,6 +1153,8 @@ function CreatePostFormInner({
             privacyError={tiktokPrivacyError}
             commercialContentEnabled={tiktokCommercialEnabled}
             onCommercialContentEnabledChange={setTiktokCommercialEnabled}
+            videoDurationSec={videoDurationSec}
+            onBlockingChange={setTiktokBlockingReason}
           />
         )}
         {youtubeSelected && activeMimeType && (
@@ -1264,11 +1289,18 @@ function CreatePostFormInner({
             </div>
           )}
 
-          <div className="flex items-center gap-3">
+          {/* TikTok guideline 4: the declaration sits right before the button. */}
+          {tiktokSelected ? (
+            <TikTokConsentDeclaration brandedContent={tiktokMetadata.brandedContent === true} />
+          ) : null}
+
+          <div className="flex flex-wrap items-center gap-3">
             {/* No `disabled` for the zero-connection case: the gate above
                 returns early, so the form only renders once at least one
-                platform is connected. */}
-            <Button type="submit" loading={uploadLoading} disabled={captionOver}>
+                platform is connected. The span carries the hover text: a
+                disabled button gets no hover events in every browser. */}
+            <span title={tiktokBlock ?? undefined}>
+            <Button type="submit" loading={uploadLoading} disabled={captionOver || tiktokBlock !== null}>
               {uploadLoading
                 ? publishMode === "draft"
                   ? "Saving…"
@@ -1281,6 +1313,12 @@ function CreatePostFormInner({
                     ? "Schedule post"
                     : "Publish post"}
             </Button>
+            </span>
+            {tiktokBlock ? (
+              <p className="text-sm text-muted-foreground" role="status">
+                TikTok: {tiktokBlock}
+              </p>
+            ) : null}
           </div>
         </div>
       </form>
@@ -1301,6 +1339,11 @@ function CreatePostFormInner({
             ) : null}
             {selectedPlatforms.includes("tiktok") && tiktokMetadata.privacyLevel ? (
               <span className="block">TikTok privacy: {TIKTOK_PRIVACY_LABELS[tiktokMetadata.privacyLevel] ?? tiktokMetadata.privacyLevel}</span>
+            ) : null}
+            {/* TikTok guideline 4: the declaration also sits right above this
+                dialog's Publish button. */}
+            {selectedPlatforms.includes("tiktok") ? (
+              <TikTokConsentDeclaration brandedContent={tiktokMetadata.brandedContent === true} />
             ) : null}
             {confirmCopy.trail ? <span className="block">{confirmCopy.trail}</span> : null}
           </span>

@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
+import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
-import { Platform } from "@prisma/client";
+import { Platform, type Prisma } from "@prisma/client";
 
 export const runtime = "nodejs";
 
@@ -136,6 +137,13 @@ export async function GET(request: NextRequest) {
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
 
+    // user.info.basic: the account's display name, shown in Settings as
+    // "Connected as <name>" instead of the opaque open_id (and so the scope is
+    // visibly used, as TikTok's app review asks). Best effort: a failure here
+    // doesn't fail the connect.
+    const displayName = await fetchTikTokDisplayName(tokenJson.access_token);
+    const metadata = { username: displayName } as Prisma.InputJsonValue;
+
     await prisma.socialConnection.upsert({
       where: {
         workspaceId_platform: {
@@ -152,6 +160,7 @@ export async function GET(request: NextRequest) {
         expiresAt,
         accountIdentifier,
         scopes,
+        metadata,
         // Roadmap Phase 4: a fresh connect always starts in a healthy state.
         needsReconnect: false,
         lastRefreshErrorCode: null,
@@ -163,6 +172,7 @@ export async function GET(request: NextRequest) {
         expiresAt,
         accountIdentifier,
         scopes,
+        metadata,
         // Roadmap Phase 4: successful reconnect clears the flag set by a
         // prior refresh failure (see server/platforms/connectionHealth.ts).
         needsReconnect: false,
@@ -175,5 +185,28 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(settingsUrl);
   } catch (error) {
     return oauthCallbackFailed({ platform: Platform.tiktok, baseUrl: url.origin, error });
+  }
+}
+
+/**
+ * The TikTok account's display name from /v2/user/info (scope user.info.basic),
+ * or null when TikTok doesn't answer in time or the field is missing.
+ * https://developers.tiktok.com/doc/tiktok-api-v2-get-user-info
+ */
+async function fetchTikTokDisplayName(accessToken: string): Promise<string | null> {
+  try {
+    const response = await fetchWithTimeout(
+      "https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name",
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+      10_000,
+    );
+    if (!response.ok) return null;
+    const body = (await response.json().catch(() => null)) as
+      | { data?: { user?: { display_name?: unknown } } }
+      | null;
+    const name = body?.data?.user?.display_name;
+    return typeof name === "string" && name.trim() ? name.trim() : null;
+  } catch {
+    return null;
   }
 }

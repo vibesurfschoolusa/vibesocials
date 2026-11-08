@@ -1,5 +1,7 @@
 import Link from "next/link";
 
+import { SUPPORT_EMAIL } from "@/lib/siteInfo";
+
 /**
  * Public data-deletion instructions.
  *
@@ -15,7 +17,6 @@ export const metadata = {
     "How to disconnect a social account or permanently delete your Vibe Socials account and all associated data.",
 };
 
-const SUPPORT_EMAIL = "info@vibesurfschool.com";
 
 export default function DataDeletionPage() {
   return (

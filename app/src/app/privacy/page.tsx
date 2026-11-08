@@ -1,98 +1,173 @@
 import Link from "next/link";
 
+import { LegalPage, LegalSection } from "@/components/legal-page";
+import { OPERATOR_LOCATION, OPERATOR_NAME, PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/siteInfo";
+
+export const metadata = {
+  title: "Privacy Policy | Vibe Socials",
+  description:
+    "What Vibe Socials collects, how it is used to publish your posts, who processes it, how long it is kept, and how to delete it.",
+};
+
+const mail = <a href={`mailto:${SUPPORT_EMAIL}`} className="underline underline-offset-2">{SUPPORT_EMAIL}</a>;
+
 export default function PrivacyPage() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10 text-foreground">
-      <div className="w-full max-w-3xl rounded-[calc(var(--radius)+0.125rem)] border border-border bg-card p-8 text-card-foreground shadow-sm">
-        <div className="mb-4 flex items-center justify-between">
-          <h1 className="text-2xl font-semibold text-foreground">Privacy Policy</h1>
-          <Link
-            href="/"
-            className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-          >
-            Back to Vibe Socials
-          </Link>
-        </div>
-        <p className="mb-4 text-sm text-muted-foreground">
-          This Privacy Policy describes how Vibe Socials (the &quot;Service&quot;) handles information
-          about you. This is an early-stage tool intended for limited use by the owner and invited
-          testers.
+    <LegalPage
+      title="Privacy Policy"
+      intro={
+        <p>
+          {PRODUCT_NAME} (&quot;we&quot;, &quot;the Service&quot;) is a web app that lets businesses and
+          creators upload a photo or video once and publish it to the social media accounts they
+          connect. {PRODUCT_NAME} is operated by {OPERATOR_NAME}, {OPERATOR_LOCATION}. This policy
+          explains what we collect, why, who processes it, and how you can delete it.
         </p>
-        <div className="space-y-3 text-sm text-muted-foreground">
-          <section>
-            <h2 className="mb-1 text-sm font-semibold text-foreground">1. Information we store</h2>
-            <ul className="list-disc space-y-1 pl-5">
-              <li>Account information such as your email address and a hashed password.</li>
-              <li>
-                Connection information for social platforms you choose to connect (for example,
-                access tokens, refresh tokens, token expiry, and basic account identifiers like
-                open_id or email).
-              </li>
-              <li>
-                Media metadata and storage paths for videos or images you upload through the
-                Service.
-              </li>
-              <li>
-                Records of posting jobs and status information returned by integrated platforms.
-              </li>
-            </ul>
-          </section>
-          <section>
-            <h2 className="mb-1 text-sm font-semibold text-foreground">2. How we use this information</h2>
-            <p>We use the information described above to:</p>
-            <ul className="list-disc space-y-1 pl-5">
-              <li>Authenticate you and manage your account.</li>
-              <li>
-                Connect to third-party APIs (such as TikTok or Google Business Profile) on your
-                behalf when you explicitly initiate a post or other action.
-              </li>
-              <li>
-                Store media and captions so you can reuse them across platforms and view posting
-                history.
-              </li>
-            </ul>
-          </section>
-          <section>
-            <h2 className="mb-1 text-sm font-semibold text-foreground">3. Third-party services</h2>
-            <p>
-              When you connect a social account, access tokens are stored on the server side and
-              used only to call that platform&apos;s APIs on your behalf. Your use of each platform is
-              also governed by its own terms and privacy policy. We do not control how those
-              platforms handle your data once it is sent to them.
-            </p>
-          </section>
-          <section>
-            <h2 className="mb-1 text-sm font-semibold text-foreground">4. Data retention</h2>
-            <p>
-              Data is stored for as long as your account exists or as needed to operate the Service.
-              You can request removal of your account and associated data by contacting the owner of
-              this project.
-            </p>
-          </section>
-          <section>
-            <h2 className="mb-1 text-sm font-semibold text-foreground">5. Security</h2>
-            <p>
-              This is a development-stage project and does not claim production-grade security.
-              Reasonable measures are taken to restrict access to stored data, but there is always
-              some risk when using early-stage software.
-            </p>
-          </section>
-          <section>
-            <h2 className="mb-1 text-sm font-semibold text-foreground">6. Changes</h2>
-            <p>
-              This policy may be updated over time. If you continue using the Service after changes
-              are made, you accept the updated policy.
-            </p>
-          </section>
-          <section>
-            <h2 className="mb-1 text-sm font-semibold text-foreground">7. Contact</h2>
-            <p>
-              If you have questions about this Privacy Policy, please contact the developer or owner
-              of this project through the channels where you obtained access to Vibe Socials.
-            </p>
-          </section>
-        </div>
-      </div>
-    </div>
+      }
+    >
+      <LegalSection title="1. Information we collect">
+        <ul className="list-disc space-y-1 pl-5">
+          <li>
+            <strong className="text-foreground">Account information:</strong> your name, email
+            address and a hashed password (or your Google sign-in, if you choose it), your workspace
+            and the teammates you invite.
+          </li>
+          <li>
+            <strong className="text-foreground">Content you upload:</strong> the photos and videos you
+            add, your captions, and the post settings you choose.
+          </li>
+          <li>
+            <strong className="text-foreground">Connected platform accounts:</strong> when you connect
+            a platform, we receive the access permissions you approve on that platform&apos;s own
+            sign-in screen, your account&apos;s identifier and display name, and the access and
+            refresh tokens that let us publish for you.
+          </li>
+          <li>
+            <strong className="text-foreground">Publishing results:</strong> the post IDs, links,
+            statuses and error messages each platform returns, and (for YouTube) view and engagement
+            counts for posts made through the Service.
+          </li>
+          <li>
+            <strong className="text-foreground">Google Business reviews:</strong> if you connect a
+            Google Business Profile, the reviews you open in the Service and the replies you send.
+          </li>
+          <li>
+            <strong className="text-foreground">Technical information:</strong> basic request data
+            such as IP address and browser type in short-lived server logs, used for security and to
+            prevent abuse.
+          </li>
+        </ul>
+      </LegalSection>
+
+      <LegalSection title="2. How we use it">
+        <p>Only to provide the Service you asked for:</p>
+        <ul className="mt-1 list-disc space-y-1 pl-5">
+          <li>to sign you in and run your account and workspace;</li>
+          <li>to publish or schedule the posts you create, to the platforms you choose, when you choose;</li>
+          <li>to show you where each post went, keep your connections working, and email you when a post finishes (you can turn these emails off in Settings);</li>
+          <li>to suggest captions with AI, automatically when you add a photo or video (you can turn this off on the Create page) or when you ask, and to suggest review replies when you ask;</li>
+          <li>to suggest places when you add a location to a post.</li>
+        </ul>
+        <p className="mt-2">
+          We do not sell your information, use it for advertising, or post anything you did not
+          create and confirm.
+        </p>
+      </LegalSection>
+
+      <LegalSection title="3. TikTok">
+        <p>When you connect TikTok, you approve these permissions on TikTok&apos;s own screen:</p>
+        <ul className="mt-1 list-disc space-y-1 pl-5">
+          <li>
+            <strong className="text-foreground">user.info.basic:</strong> your TikTok account&apos;s
+            open ID, display name and avatar, shown so you know which account a post goes to.
+          </li>
+          <li>
+            <strong className="text-foreground">video.publish / video.upload:</strong> posting the
+            videos you choose to your account, with the privacy, interaction and content-disclosure
+            settings you select for each post. Before each post we ask TikTok for your account&apos;s
+            current posting options (for example, which privacy levels you can use).
+          </li>
+        </ul>
+        <p className="mt-2">
+          We do not read your TikTok videos, followers, likes or messages. Disconnecting TikTok in
+          Settings deletes the tokens we hold; you can also remove {PRODUCT_NAME}&apos;s access from
+          your TikTok app settings at any time.
+        </p>
+      </LegalSection>
+
+      <LegalSection title="4. Other platforms">
+        <p>
+          The same approach applies to Facebook Pages and Instagram (Meta), YouTube and Google
+          Business Profile (Google), LinkedIn and X: we request only the permissions needed to
+          publish your posts (and, for YouTube, to read view counts of those posts; for Google
+          Business Profile, to read and reply to reviews), and use them only for that. Each
+          platform&apos;s own terms and privacy policy also apply to what you post there.
+        </p>
+      </LegalSection>
+
+      <LegalSection title="5. Who processes your information">
+        <p>We use these service providers, only to run the Service:</p>
+        <ul className="mt-1 list-disc space-y-1 pl-5">
+          <li>Vercel (hosting and media file storage);</li>
+          <li>Neon (database);</li>
+          <li>Inngest (running scheduled and background publishing jobs);</li>
+          <li>Resend (account and notification emails);</li>
+          <li>xAI or OpenAI (AI caption and reply suggestions, for the media and text involved);</li>
+          <li>Google Maps Platform (place search, when you add a location to a post).</li>
+        </ul>
+        <p className="mt-2">
+          Your content is also sent to each social platform you choose to post to. We share
+          information with authorities only where the law requires it.
+        </p>
+      </LegalSection>
+
+      <LegalSection title="6. How long we keep it">
+        <ul className="list-disc space-y-1 pl-5">
+          <li>
+            Photos and videos you have posted are deleted 30 days after they were last used in a post.
+            Uploads you keep in your media library without posting stay until you delete them there
+            or delete your account.
+          </li>
+          <li>Platform tokens are deleted when you disconnect that platform.</li>
+          <li>Your account, posts and publishing history are kept until you delete your account.</li>
+          <li>Server logs are kept for a short time, typically days.</li>
+        </ul>
+      </LegalSection>
+
+      <LegalSection title="7. Your choices and deletion">
+        <p>
+          You can disconnect any platform in Settings at any time. To delete your account and all
+          associated data, follow the steps on our{" "}
+          <Link href="/data-deletion" className="underline underline-offset-2">data deletion page</Link>{" "}
+          or email {mail}. You can also ask us for a copy of your information or to correct it.
+        </p>
+      </LegalSection>
+
+      <LegalSection title="8. Security">
+        <p>
+          All traffic is encrypted (HTTPS). Platform access tokens are encrypted at rest, passwords
+          are stored only as hashes, and each workspace can only see its own data.
+        </p>
+      </LegalSection>
+
+      <LegalSection title="9. Children">
+        <p>
+          The Service is meant for businesses and creators aged 18 or over. We do not knowingly
+          collect information from children under 13.
+        </p>
+      </LegalSection>
+
+      <LegalSection title="10. Changes">
+        <p>
+          We will post any change to this policy here and update the date above. For a significant
+          change, we will also notify account holders by email.
+        </p>
+      </LegalSection>
+
+      <LegalSection title="11. Contact">
+        <p>
+          {OPERATOR_NAME} ({PRODUCT_NAME}), {OPERATOR_LOCATION}. Email: {mail}.
+        </p>
+      </LegalSection>
+    </LegalPage>
   );
 }

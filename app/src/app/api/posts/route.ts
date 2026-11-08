@@ -555,11 +555,14 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
+    // TikTok guideline 2c: interactions stay off unless the user turned them on,
+    // so a missing flag means "disabled", never "allowed".
+    const disabledUnlessFalse = (value: unknown) => (value === undefined ? true : Boolean(value));
     tiktokMetadata = {
       privacyLevel: typeof raw.privacyLevel === "string" ? raw.privacyLevel : "",
-      disableComment: Boolean(raw.disableComment),
-      disableDuet: Boolean(raw.disableDuet),
-      disableStitch: Boolean(raw.disableStitch),
+      disableComment: disabledUnlessFalse(raw.disableComment),
+      disableDuet: disabledUnlessFalse(raw.disableDuet),
+      disableStitch: disabledUnlessFalse(raw.disableStitch),
       ...(raw.brandedContent !== undefined ? { brandedContent: Boolean(raw.brandedContent) } : {}),
       ...(raw.brandOrganic !== undefined ? { brandOrganic: Boolean(raw.brandOrganic) } : {}),
     };

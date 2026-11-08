@@ -75,10 +75,24 @@ export function isTikTokPrivacyMissing(
   return !(typeof level === "string" && level.trim().length > 0);
 }
 
+/**
+ * TikTok guideline 3b: branded content (a paid partnership) can only be public
+ * or friends, never "only me". The composer disables the combination; this
+ * refuses it on the server too.
+ */
+export function isTikTokBrandedContentPrivate(
+  targets: readonly Platform[],
+  tiktokMetadata: { privacyLevel?: unknown; brandedContent?: unknown } | null | undefined,
+): boolean {
+  if (!targets.includes("tiktok")) return false;
+  return tiktokMetadata?.brandedContent === true && tiktokMetadata?.privacyLevel === "SELF_ONLY";
+}
+
 export type PostTargetingErrorCode =
   | "PLATFORM_MEDIA_MISMATCH"
   | "NO_COMPATIBLE_PLATFORMS"
-  | "TIKTOK_PRIVACY_REQUIRED";
+  | "TIKTOK_PRIVACY_REQUIRED"
+  | "TIKTOK_BRANDED_CONTENT_PRIVATE";
 
 /**
  * Thrown by the pure target checks below. `POST /api/posts` maps it to a 400
@@ -106,7 +120,7 @@ export class PostTargetingError extends Error {
 export function assertPostTargetsValid(
   targetPlatforms: readonly Platform[] | undefined,
   mimeType: string | null | undefined,
-  tiktokMetadata: { privacyLevel?: unknown } | null | undefined,
+  tiktokMetadata: { privacyLevel?: unknown; brandedContent?: unknown } | null | undefined,
 ): void {
   if (!targetPlatforms) return;
 
@@ -123,6 +137,14 @@ export function assertPostTargetsValid(
     throw new PostTargetingError(
       "TIKTOK_PRIVACY_REQUIRED",
       "tiktokMetadata.privacyLevel is required when posting to TikTok.",
+      ["tiktok"],
+    );
+  }
+
+  if (isTikTokBrandedContentPrivate(targetPlatforms, tiktokMetadata)) {
+    throw new PostTargetingError(
+      "TIKTOK_BRANDED_CONTENT_PRIVATE",
+      "Branded content visibility cannot be set to private.",
       ["tiktok"],
     );
   }

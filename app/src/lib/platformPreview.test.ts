@@ -37,11 +37,11 @@ describe("buildPlatformPreview", () => {
     expect(result.rendered).toBe(computeGbpPostSummary(caption));
   });
 
-  it("mirrors TikTok's empty-caption default title (Phase 7 review Minor #1)", () => {
+  it("shows an empty TikTok title when the caption is empty: no promotional default (2026-11)", () => {
     // Reuse-mode edge: whitespace-only override + no footer → empty footer-applied
-    // caption. TikTok's client posts a default title; the preview must show it too.
+    // caption. TikTok gets no substitute text (guideline 5b), so the preview is empty.
     const result = buildPlatformPreview({ platform: "tiktok", caption: "", override: "   " });
-    expect(result.rendered).toBe("Video posted via Vibe Socials");
+    expect(result.rendered).toBe("");
     expect(result.truncated).toBe(false);
     expect(result.willTruncate).toBe(false);
   });

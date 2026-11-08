@@ -40,6 +40,7 @@ export const PUBLIC_ROUTE_PREFIXES = [
   "/privacy",
   "/terms",
   "/data-deletion",
+  "/about",
 ];
 
 export function isPublicRoute(pathname: string): boolean {

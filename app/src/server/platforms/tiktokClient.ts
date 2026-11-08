@@ -2,7 +2,7 @@ import type { Prisma, SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
-import { PLATFORM_CAPTION_LIMITS, TIKTOK_DEFAULT_CAPTION } from "@/lib/platformLimits";
+import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 
@@ -28,9 +28,14 @@ import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBu
 import { classifyRateLimit, isRateLimitedError } from "./rateLimited";
 import type { PlatformClient, PublishContext, PublishResult, TikTokCreatorInfo } from "./types";
 
-/** Minimal shape of TikTok's creator_info response (only the fields we read). */
+/**
+ * Minimal shape of TikTok's creator_info response (only the fields we read).
+ * https://developers.tiktok.com/doc/content-posting-api-reference-query-creator-info
+ * "Can't post right now" arrives as HTTP 200 with `error.code` set.
+ */
 interface TikTokCreatorInfoResponse {
   data?: {
+    creator_nickname?: string;
     creator_username?: string;
     creator_avatar_url?: string;
     privacy_level_options?: string[];
@@ -39,9 +44,16 @@ interface TikTokCreatorInfoResponse {
     stitch_disabled?: boolean;
     max_video_post_duration_sec?: number;
   };
+  error?: { code?: string; message?: string };
 }
 
-/** post_info payload sent to TikTok's video/init endpoint. */
+/**
+ * post_info payload sent to TikTok's video/init endpoint. Field names and types
+ * per https://developers.tiktok.com/doc/content-posting-api-reference-direct-post
+ * (`brand_content_toggle` is marked required). Until 2026-11 this sent
+ * `disclosure_settings` / `brand_*_type`, which are not API fields, so the
+ * commercial-content choice never reached TikTok.
+ */
 interface TikTokPostInfo {
   title: string;
   privacy_level: string;
@@ -49,9 +61,35 @@ interface TikTokPostInfo {
   disable_duet: boolean;
   disable_stitch: boolean;
   video_cover_timestamp_ms: number;
-  disclosure_settings?: { disclosure_type: string };
-  brand_organic_type?: string;
-  brand_content_type?: string;
+  brand_content_toggle: boolean;
+  brand_organic_toggle: boolean;
+}
+
+/**
+ * creator_info `error.code` values meaning "this creator can't post right now".
+ * TikTok's guideline 1b: stop the publish and prompt the user to try later.
+ */
+const TIKTOK_CANNOT_POST_MESSAGES: Record<string, string> = {
+  spam_risk_too_many_posts:
+    "TikTok says this account has reached its posting limit for now. Try again later.",
+  spam_risk_user_banned_from_posting: "TikTok says this account can't post right now.",
+  reached_active_user_cap:
+    "TikTok has reached today's limit of accounts that can post through Vibe Socials. Try again later.",
+};
+
+/** A creator_info answer that this creator can't post now. Never retried automatically. */
+export const TIKTOK_CREATOR_CANNOT_POST = "TIKTOK_CREATOR_CANNOT_POST";
+
+/** TikTok's refusal while the app's Direct Post audit is pending: private accounts only. */
+const TIKTOK_UNAUDITED_PRIVATE_ONLY = "unaudited_client_can_only_post_to_private_accounts";
+
+export const TIKTOK_PUBLIC_ACCOUNT_NOT_ALLOWED_MESSAGE =
+  "TikTok only lets Vibe Socials post to private TikTok accounts until TikTok finishes reviewing the app. Set your TikTok account to private to post from here, or post this video in the TikTok app.";
+
+function unauditedPublicAccountError(): Error & { code: string } {
+  const error = new Error(TIKTOK_PUBLIC_ACCOUNT_NOT_ALLOWED_MESSAGE) as Error & { code: string };
+  error.code = "TIKTOK_PUBLIC_ACCOUNT_NOT_ALLOWED";
+  return error;
 }
 
 /** Minimal shape of TikTok's video/init response (only the fields we read). */
@@ -375,8 +413,11 @@ function resyncedChunk(response: Response, plan: ChunkPlan, size: number): numbe
 export function computeTikTokCaption(caption: string): string {
   const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS.tiktok;
 
+  // An empty caption stays empty (TikTok's title is optional). Until 2026-11
+  // this posted "Video posted via Vibe Socials", promotional text the user never
+  // wrote, which TikTok's guideline 5b forbids.
   if (!caption) {
-    return TIKTOK_DEFAULT_CAPTION;
+    return "";
   }
 
   // tiktok's charLimit is always a number (see platformLimits.ts); the null
@@ -815,16 +856,31 @@ export async function getTikTokCreatorInfo(
   });
 
   const json = await response.json() as TikTokCreatorInfoResponse;
-  const data = json?.data;
 
+  // HTTP 200 with an error code: the creator can't post right now (guideline 1b).
+  const errorCode = json?.error?.code;
+  if (errorCode && errorCode !== "ok") {
+    const error = new Error(
+      TIKTOK_CANNOT_POST_MESSAGES[errorCode] ??
+        "TikTok says this account can't post right now. Try again later.",
+    ) as Error & { code: string; tiktokErrorCode: string };
+    error.code = TIKTOK_CREATOR_CANNOT_POST;
+    error.tiktokErrorCode = errorCode;
+    throw error;
+  }
+
+  const data = json?.data;
   if (!data) {
     throw new Error("TikTok creator_info returned no data");
   }
 
   return {
-    creatorUsername: data.creator_username || "Unknown",
+    // Guideline 1a: show the creator's nickname. Older code showed only the username.
+    creatorNickname: data.creator_nickname || data.creator_username || "",
+    creatorUsername: data.creator_username || "",
     creatorAvatarUrl: data.creator_avatar_url || "",
-    privacyLevelOptions: data.privacy_level_options || ["SELF_ONLY"],
+    // No invented options: the composer may only offer what TikTok returns (2b).
+    privacyLevelOptions: data.privacy_level_options ?? [],
     commentDisabled: data.comment_disabled || false,
     duetDisabled: data.duet_disabled || false,
     stitchDisabled: data.stitch_disabled || false,
@@ -841,6 +897,7 @@ async function verifyCreatorInfo(
   accessToken: string,
   socialConnection: SocialConnection,
   deadline: number | undefined,
+  privacyLevel?: string,
 ): Promise<void> {
   // REQUIRED: Call creator_info API before posting to verify account status
   // This is mandatory per TikTok Developer Guidelines
@@ -856,11 +913,16 @@ async function verifyCreatorInfo(
       maxDuration: creatorInfo.maxVideoPostDurationSec,
     });
 
-    // Verify the account has the required privacy options for sandbox mode
-    if (!creatorInfo.privacyLevelOptions.includes('SELF_ONLY')) {
-      console.warn('[TikTok] Account may not support SELF_ONLY privacy level', {
-        availableOptions: creatorInfo.privacyLevelOptions,
-      });
+    // The privacy chosen in the composer must still be one TikTok offers this
+    // account (a scheduled post may have been made days ago). Sending one that
+    // isn't fails `privacy_level_option_mismatch`, which TikTok treats as a
+    // guideline violation, so stop here instead.
+    if (privacyLevel && !creatorInfo.privacyLevelOptions.includes(privacyLevel)) {
+      const error = new Error(
+        "The TikTok privacy setting chosen for this post is no longer available for this account. Create the post again and choose who can view it.",
+      ) as Error & { code: string };
+      error.code = "TIKTOK_PRIVACY_NOT_AVAILABLE";
+      throw error;
     }
   } catch (creatorInfoError: unknown) {
     console.error('[TikTok] Failed to fetch creator info:', creatorInfoError);
@@ -868,6 +930,10 @@ async function verifyCreatorInfo(
     // instead of re-wrapping it below as a plain creator_info failure.
     if (isRateLimitedError(creatorInfoError)) throw creatorInfoError;
     const cause = creatorInfoError as Error & { code?: string; status?: number };
+    // Our own refusals already say what to do: pass them through unchanged.
+    if (cause.code === TIKTOK_CREATOR_CANNOT_POST || cause.code === "TIKTOK_PRIVACY_NOT_AVAILABLE") {
+      throw cause;
+    }
     // A 401 means the access token is no longer valid -> reconnect.
     if (cause.status === 401) {
       await throwTikTokReconnect(socialConnection, "creator_info/query");
@@ -880,32 +946,45 @@ async function verifyCreatorInfo(
   }
 }
 
-/** The post_info TikTok's video/init takes: the title and the user's form selections (or sandbox defaults). */
-function buildPostInfo(ctx: PublishContext, tiktokCaption: string): TikTokPostInfo {
-  // Use metadata from user's form selections, or defaults for sandbox mode
+/**
+ * The post_info TikTok's video/init takes: the title and exactly what the user
+ * chose in the composer. Nothing is defaulted on the user's behalf (TikTok's
+ * guideline 2b/2c: no default privacy, interactions off unless turned on).
+ */
+export function buildPostInfo(ctx: PublishContext, tiktokCaption: string): TikTokPostInfo {
   const tiktokMeta = ctx.tiktokMetadata;
-  const postInfo: TikTokPostInfo = {
-    title: tiktokCaption,
-    privacy_level: tiktokMeta?.privacyLevel || "SELF_ONLY",
-    disable_comment: tiktokMeta?.disableComment ?? false,
-    disable_duet: tiktokMeta?.disableDuet ?? false,
-    disable_stitch: tiktokMeta?.disableStitch ?? false,
-    video_cover_timestamp_ms: 1000,
-  };
-
-  // Add commercial content disclosure if specified
-  if (tiktokMeta?.brandedContent || tiktokMeta?.brandOrganic) {
-    postInfo.disclosure_settings = {
-      disclosure_type: "BRANDED_CONTENT",
-    };
-    if (tiktokMeta.brandOrganic) {
-      postInfo.brand_organic_type = "CREATOR_BRAND";
-    }
-    if (tiktokMeta.brandedContent) {
-      postInfo.brand_content_type = "BRANDED_CONTENT";
-    }
+  const privacyLevel = tiktokMeta?.privacyLevel?.trim();
+  if (!privacyLevel) {
+    // POST /api/posts already requires it; this guards older stored jobs.
+    const error = new Error(
+      "No TikTok privacy setting was chosen for this post. Create the post again and choose who can view it on TikTok.",
+    ) as Error & { code: string };
+    error.code = "TIKTOK_PRIVACY_REQUIRED";
+    throw error;
   }
-  return postInfo;
+
+  const brandedContent = tiktokMeta?.brandedContent === true;
+  if (brandedContent && privacyLevel === "SELF_ONLY") {
+    // Guideline 3b: branded content can't be private (the composer and
+    // POST /api/posts refuse it too).
+    const error = new Error(
+      "Branded content visibility cannot be set to private. Create the post again with another privacy setting.",
+    ) as Error & { code: string };
+    error.code = "TIKTOK_BRANDED_CONTENT_PRIVATE";
+    throw error;
+  }
+
+  return {
+    title: tiktokCaption,
+    privacy_level: privacyLevel,
+    // Interactions are off unless the user turned them on (stored as "disable").
+    disable_comment: tiktokMeta?.disableComment ?? true,
+    disable_duet: tiktokMeta?.disableDuet ?? true,
+    disable_stitch: tiktokMeta?.disableStitch ?? true,
+    video_cover_timestamp_ms: 1000,
+    brand_content_toggle: brandedContent,
+    brand_organic_toggle: tiktokMeta?.brandOrganic === true,
+  };
 }
 
 /**
@@ -962,6 +1041,14 @@ async function requestUploadInit(args: {
     await throwTikTokReconnect(socialConnection, "video/init");
   }
 
+  // Until the Direct Post audit passes, TikTok only accepts posts to private
+  // accounts. Say so plainly instead of a generic init failure (this replaces
+  // the standing "until TikTok approves…" note that used to sit in Settings).
+  if (!initRes.ok) {
+    const refusal = (await initRes.clone().json().catch(() => null)) as TikTokInitResponse | null;
+    if (refusal?.error?.code === TIKTOK_UNAUDITED_PRIVATE_ONLY) throw unauditedPublicAccountError();
+  }
+
   await assertOk(initRes, {
     code: "TIKTOK_INIT_FAILED",
     prefix: "Failed to start TikTok video upload",
@@ -973,6 +1060,7 @@ async function requestUploadInit(args: {
   if (initErrorCode === "access_token_invalid") {
     await throwTikTokReconnect(socialConnection, "video/init");
   }
+  if (initErrorCode === TIKTOK_UNAUDITED_PRIVATE_ONLY) throw unauditedPublicAccountError();
   if (initErrorCode && initErrorCode !== "ok") {
     // 2026-11-02 scale audit (jobs B3): `data` holds the upload_url, so only `error` is logged.
     console.error("[TikTok] video init error payload", { error: initJson?.error });
@@ -1349,7 +1437,7 @@ export const tiktokClient: PlatformClient = {
 
     // creator_info runs once per upload: a streamed upload that resumes already did it.
     if (streamed === null || resumed === null) {
-      await verifyCreatorInfo(accessToken, socialConnection, deadline);
+      await verifyCreatorInfo(accessToken, socialConnection, deadline, ctx.tiktokMetadata?.privacyLevel);
     }
 
     console.log('[TikTok] Media item details:', {
@@ -1488,7 +1576,6 @@ export const tiktokClient: PlatformClient = {
     console.log('[TikTok] Video published successfully', {
       publishId,
       privacyLevel: postInfo.privacy_level,
-      note: 'In sandbox mode, videos are forced to SELF_ONLY (private) visibility. Check your private posts in TikTok.',
     });
 
     return {

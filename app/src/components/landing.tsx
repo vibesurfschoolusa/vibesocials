@@ -1,5 +1,3 @@
-"use client";
-
 import Link from "next/link";
 import {
   Activity,
@@ -15,11 +13,13 @@ import type { LucideIcon } from "lucide-react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
+import { OPERATOR_NAME, PRODUCT_NAME } from "@/lib/siteInfo";
 
 /**
  * Signed-out marketing page for `/`. Purely presentational — no data
- * fetches, no session reads (HomePage only renders it when the session is
- * known to be unauthenticated). One <h1> per the smoke-suite a11y rule;
+ * fetches, no session reads. A server component (2026-11): HomePage decides
+ * on the server, so the page's text is in the HTML itself rather than behind a
+ * client-side spinner (platform app reviewers and search engines read it). One <h1> per the smoke-suite a11y rule;
  * section headings are <h2>. The subtle brand gradient stays landing-only.
  */
 export function Landing() {
@@ -46,12 +46,20 @@ export function Landing() {
             Vibe Socials
           </span>
         </span>
-        <Link
-          href="/login"
-          className={buttonVariants({ variant: "ghost", size: "sm" })}
-        >
-          Log in
-        </Link>
+        <nav aria-label="Main" className="flex items-center gap-1">
+          <Link
+            href="/about"
+            className={buttonVariants({ variant: "ghost", size: "sm" })}
+          >
+            About
+          </Link>
+          <Link
+            href="/login"
+            className={buttonVariants({ variant: "ghost", size: "sm" })}
+          >
+            Log in
+          </Link>
+        </nav>
       </header>
 
       <main className="mx-auto w-full max-w-5xl px-4 md:px-6">
@@ -194,13 +202,24 @@ export function Landing() {
 
       <footer className="border-t border-border">
         <div className="mx-auto flex w-full max-w-5xl flex-col items-center justify-between gap-3 px-4 py-6 text-sm text-muted-foreground sm:flex-row md:px-6">
-          <span>© {new Date().getFullYear()} Vibe Socials</span>
-          <nav aria-label="Legal" className="flex items-center gap-4">
+          <span>
+            © {new Date().getFullYear()} {PRODUCT_NAME} · operated by {OPERATOR_NAME}
+          </span>
+          <nav aria-label="Legal" className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+            <Link href="/about" className="hover:text-foreground">
+              About
+            </Link>
+            <Link href="/about#contact" className="hover:text-foreground">
+              Contact
+            </Link>
             <Link href="/privacy" className="hover:text-foreground">
               Privacy
             </Link>
             <Link href="/terms" className="hover:text-foreground">
               Terms
+            </Link>
+            <Link href="/data-deletion" className="hover:text-foreground">
+              Delete your data
             </Link>
           </nav>
         </div>

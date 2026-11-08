@@ -21,6 +21,7 @@ import {
   TIKTOK_MAX_FINAL_CHUNK_SIZE,
   TIKTOK_POLL_INTERVAL_MS,
   TIKTOK_POLL_MAX_ATTEMPTS,
+  TIKTOK_PUBLIC_ACCOUNT_NOT_ALLOWED_MESSAGE,
   TIKTOK_TRANSIENT_RESUME_DELAY_MS,
   TIKTOK_UPLOAD_STATE_KIND,
   TIKTOK_UPLOAD_URL_SAFETY_MS,
@@ -248,8 +249,8 @@ describe("computeChunkPlan", () => {
 // edited PLATFORM_CAPTION_LIMITS.tiktok without meaning to change what
 // TikTok posts.
 describe("computeTikTokCaption", () => {
-  it("falls back to the default title when caption is empty", () => {
-    expect(computeTikTokCaption("")).toBe("Video posted via Vibe Socials");
+  it("leaves an empty caption empty: no promotional default title (TikTok guideline 5b, 2026-11)", () => {
+    expect(computeTikTokCaption("")).toBe("");
   });
 
   it("returns a caption under 2200 graphemes unchanged", () => {
@@ -1100,6 +1101,7 @@ describe("tiktokClient.publishVideo", () => {
       socialConnection: connection,
       mediaItem,
       caption: "hello",
+      tiktokMetadata: { privacyLevel: "SELF_ONLY", disableComment: true, disableDuet: true, disableStitch: true },
     };
   }
 
@@ -1317,6 +1319,29 @@ describe("tiktokClient.publishVideo", () => {
 
     expect(error?.code).toBe("TIKTOK_INIT_FAILED");
     expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  // Until the Direct Post audit passes, TikTok refuses posts to public accounts.
+  // The user gets a plain explanation, not "Failed to start TikTok video upload".
+  it.each([
+    ["an error status", 403],
+    ["a 200 response", 200],
+  ])("explains TikTok's unaudited-app refusal (in %s) as TIKTOK_PUBLIC_ACCOUNT_NOT_ALLOWED", async (_label, status) => {
+    stubFetch({
+      "creator_info/query": creatorInfoOk,
+      "blob.example.com": videoBlob,
+      "video/init": () =>
+        jsonResponse(
+          { error: { code: "unaudited_client_can_only_post_to_private_accounts", message: "Please review our integration guidelines" } },
+          status,
+        ),
+    });
+
+    const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+    expect(error?.code).toBe("TIKTOK_PUBLIC_ACCOUNT_NOT_ALLOWED");
+    expect(error?.message).toBe(TIKTOK_PUBLIC_ACCOUNT_NOT_ALLOWED_MESSAGE);
+    expect(updateMock).not.toHaveBeenCalled(); // not a reconnect problem
   });
 
   // Task 4 item 10 — step budget.
@@ -1807,7 +1832,12 @@ describe("tiktokClient.publishVideo — streamed FILE_UPLOAD (jobs B3)", () => {
   const bodyOf = (call: Parameters<typeof fetch> | undefined) => (call?.[1] as RequestInit).body as Buffer;
 
   const creatorInfoOk: Reply = () =>
-    jsonResponse({ data: { creator_username: "acme", privacy_level_options: ["SELF_ONLY"] } });
+    jsonResponse({
+      data: {
+        creator_username: "acme",
+        privacy_level_options: ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "SELF_ONLY"],
+      },
+    });
   const initOk =
     (n: number): Reply =>
     () =>
@@ -1962,6 +1992,7 @@ describe("tiktokClient.publishVideo — streamed FILE_UPLOAD (jobs B3)", () => {
       socialConnection: makeConnection(),
       mediaItem: mediaItemOf(sizeBytes),
       caption: "hello",
+      tiktokMetadata: { privacyLevel: "SELF_ONLY", disableComment: true, disableDuet: true, disableStitch: true },
       uploadState: store,
       ...overrides,
     };
@@ -2129,6 +2160,8 @@ describe("tiktokClient.publishVideo — streamed FILE_UPLOAD (jobs B3)", () => {
         disable_duet: false,
         disable_stitch: true,
         video_cover_timestamp_ms: 1000,
+        brand_content_toggle: false,
+        brand_organic_toggle: false,
       });
     });
 

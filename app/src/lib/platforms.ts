@@ -65,8 +65,6 @@ export function platformCaptionEntries(
  * with no special callout.
  */
 export const PLATFORM_MATURITY_NOTES: Partial<Record<Platform, string>> = {
-  tiktok:
-    "Until TikTok approves this app, videos are posted as private (only you can see them). Switch each one to public in the TikTok app.",
   linkedin:
     "LinkedIn company-page posting requires Community Management API access on the LinkedIn app.",
 };
@@ -75,12 +73,12 @@ export const PLATFORM_MATURITY_NOTES: Partial<Record<Platform, string>> = {
  * Short account-requirement badges for the connect list, so a new user sees
  * which platforms need more than a personal account BEFORE starting an OAuth
  * flow they can't finish. Display-only; absent means a personal account works
- * (YouTube, X). TikTok's entry reflects the pending Direct Post approval —
- * drop it once the app leaves sandbox (see TIKTOK_NEXT_STEPS.md).
+ * (YouTube, X, TikTok). TikTok's "Sandbox mode" badge was removed in 2026-11:
+ * the TikTok app has been in production since 2026-01-19, and the badge read
+ * as "unfinished" in the Direct Post audit demo.
  */
 export const PLATFORM_CONNECT_REQUIREMENTS: Partial<Record<Platform, string>> =
   {
-    tiktok: "Sandbox mode",
     instagram: "Business account required",
     linkedin: "Company page required",
     facebook_page: "Facebook Page required",

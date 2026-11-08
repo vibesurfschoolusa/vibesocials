@@ -57,13 +57,6 @@ export const PLATFORM_CAPTION_LIMITS: Record<Platform, PlatformCaptionLimit> = {
   google_business_profile: { charLimit: 1500, ellipsis: "..." },
 };
 
-/**
- * The title TikTok posts when the (footer-applied) caption is empty. Shared
- * source of truth so `tiktokClient.ts`'s `computeTikTokCaption` and the
- * composer preview (`platformPreview.ts`) can't drift on it (Phase 7 review
- * Minor #1 — the preview must show what TikTok will actually post).
- */
-export const TIKTOK_DEFAULT_CAPTION = "Video posted via Vibe Socials";
 
 /** The two kinds of media a post can carry. */
 export type MediaKind = "image" | "video";

@@ -12,6 +12,8 @@ export interface TikTokPostMetadata {
 }
 
 export interface TikTokCreatorInfo {
+  /** Shown on the posting screen (TikTok guideline 1a). Falls back to the username. */
+  creatorNickname: string;
   creatorUsername: string;
   creatorAvatarUrl: string;
   privacyLevelOptions: string[];
