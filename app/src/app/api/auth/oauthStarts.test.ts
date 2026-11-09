@@ -116,3 +116,16 @@ describe.each(CASES)("$platform OAuth start", ({ platform, GET, env, authorizeHo
     expect(loc.searchParams.get("state")).toBeTruthy();
   });
 });
+
+describe("tiktok OAuth start: TikTok's authorization page", () => {
+  it("always shows it (disable_auto_auth=1), so the user sees which account they connect", async () => {
+    vi.stubEnv("TIKTOK_CLIENT_KEY", "tt-key");
+    vi.stubEnv("TIKTOK_REDIRECT_URI", `${ORIGIN}/api/auth/tiktok/callback`);
+
+    const res = await tiktokStart(startRequest("tiktok"));
+
+    const loc = new URL(res.headers.get("location") as string);
+    expect(loc.searchParams.get("disable_auto_auth")).toBe("1");
+    expect(loc.searchParams.get("scope")).toBe("user.info.basic,video.publish");
+  });
+});

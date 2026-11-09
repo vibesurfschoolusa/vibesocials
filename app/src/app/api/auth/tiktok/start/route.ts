@@ -41,6 +41,10 @@ export async function GET(request: Request) {
   // Using FILE_UPLOAD with proper chunking (not PULL_FROM_URL which requires domain verification)
   authUrl.searchParams.set("scope", "user.info.basic,video.publish");
   authUrl.searchParams.set("state", state);
+  // Always show TikTok's authorization page, even when this browser already
+  // approved Vibe Socials: the user sees which TikTok account they are
+  // connecting and what they allow (TikTok's Direct Post audit asks to see it).
+  authUrl.searchParams.set("disable_auto_auth", "1");
 
   return NextResponse.redirect(authUrl.toString());
 }
