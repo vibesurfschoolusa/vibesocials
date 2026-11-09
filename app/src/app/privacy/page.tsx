@@ -94,13 +94,50 @@ export default function PrivacyPage() {
         </p>
       </LegalSection>
 
-      <LegalSection title="4. Other platforms">
+      <LegalSection title="4. YouTube, Google and other platforms">
         <p>
-          The same approach applies to Facebook Pages and Instagram (Meta), YouTube and Google
-          Business Profile (Google), LinkedIn and X: we request only the permissions needed to
-          publish your posts (and, for YouTube, to read view counts of those posts; for Google
-          Business Profile, to read and reply to reviews), and use them only for that. Each
-          platform&apos;s own terms and privacy policy also apply to what you post there.
+          {PRODUCT_NAME} uses YouTube API Services. By connecting YouTube you agree to the{" "}
+          <a href="https://www.youtube.com/t/terms" className="underline underline-offset-2">YouTube Terms of Service</a>, and
+          Google&apos;s handling of your data is described in the{" "}
+          <a href="https://policies.google.com/privacy" className="underline underline-offset-2">Google Privacy Policy</a>. When you
+          connect YouTube or Google Business Profile, you approve these permissions on Google&apos;s
+          own screen, and we use them only as follows:
+        </p>
+        <ul className="mt-1 list-disc space-y-1 pl-5">
+          <li>
+            <strong className="text-foreground">YouTube upload:</strong> uploading the videos you
+            choose to your channel, with the title, description and privacy you set.
+          </li>
+          <li>
+            <strong className="text-foreground">YouTube read-only:</strong> your channel&apos;s name,
+            shown in Settings, and the view, like and comment counts of videos you posted through{" "}
+            {PRODUCT_NAME}, shown on your dashboard.
+          </li>
+          <li>
+            <strong className="text-foreground">Google Business Profile:</strong> creating the posts
+            you publish, adding your videos to your profile&apos;s photos and videos, and showing your
+            reviews and posting the replies you write or approve.
+          </li>
+        </ul>
+        <p className="mt-2">
+          {PRODUCT_NAME}&apos;s use and transfer of information received from Google APIs adheres
+          to the{" "}
+          <a href="https://developers.google.com/terms/api-services-user-data-policy" className="underline underline-offset-2">
+            Google API Services User Data Policy
+          </a>
+          , including the Limited Use requirements. We never sell Google user data, use it for
+          advertising, or use it to train AI models. A review&apos;s text goes to our AI provider only
+          when you ask for a reply suggestion. You can revoke {PRODUCT_NAME}&apos;s access at any time
+          in your{" "}
+          <a href="https://security.google.com/settings/security/permissions" className="underline underline-offset-2">
+            Google account permissions
+          </a>
+          ; disconnecting in Settings deletes the tokens and YouTube data we hold.
+        </p>
+        <p className="mt-2">
+          The same approach applies to Facebook Pages and Instagram (Meta), LinkedIn and X: we
+          request only the permissions needed to publish your posts, and use them only for that.
+          Each platform&apos;s own terms and privacy policy also apply to what you post there.
         </p>
       </LegalSection>
 
@@ -128,6 +165,10 @@ export default function PrivacyPage() {
             or delete your account.
           </li>
           <li>Platform tokens are deleted when you disconnect that platform.</li>
+          <li>
+            YouTube view, like and comment counts are refreshed while YouTube is connected. Counts
+            not refreshed for 30 days are deleted, and disconnecting YouTube deletes them all at once.
+          </li>
           <li>Your account, posts and publishing history are kept until you delete your account.</li>
           <li>Server logs are kept for a short time, typically days.</li>
         </ul>

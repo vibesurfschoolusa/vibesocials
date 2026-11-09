@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { FACEBOOK_PAGE_SCOPES } from "@/lib/oauthScopes";
 
 import { META_OAUTH_DIALOG_URL } from "@/lib/metaGraph";
 import { createOAuthState } from "@/lib/oauthState";
@@ -35,14 +36,11 @@ export async function GET(request: NextRequest) {
   authUrl.searchParams.set("state", encodedState);
   authUrl.searchParams.set(
     "scope",
-    [
-      "pages_show_list", // list pages user manages
-      "pages_manage_posts", // publish to pages
-      // Required for reading engagement (comments, reactions, etc.)
-      "pages_read_engagement",
-      // Helpful for replying to comments and managing comment interactions
-      "pages_manage_engagement",
-    ].join(","),
+    // Only what the app uses (2026-11-09, for Meta App Review: unused
+    // permissions are a common rejection reason). The app lists the user's
+    // Pages and posts photos and videos to the chosen one; it never reads or
+    // moderates comments.
+    FACEBOOK_PAGE_SCOPES.join(","),
   );
 
   return NextResponse.redirect(authUrl.toString());

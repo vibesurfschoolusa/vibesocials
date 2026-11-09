@@ -117,6 +117,45 @@ describe.each(CASES)("$platform OAuth start", ({ platform, GET, env, authorizeHo
   });
 });
 
+// 2026-11-09: each connect asks only for what the app uses, because Meta App
+// Review and Google verification reject apps that request more.
+describe("requested permissions (least privilege)", () => {
+  const scopesOf = async (GET: (request: NextRequest) => Promise<Response>, platform: Platform, env: Record<string, string>) => {
+    for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+    const res = await GET(startRequest(platform));
+    return new URL(res.headers.get("location") as string).searchParams.get("scope") ?? "";
+  };
+  const envOf = (platform: Platform) => CASES.find((c) => c.platform === platform)!.env;
+
+  it("Facebook Page: list Pages, post, and the read-engagement dependency only", async () => {
+    const scope = await scopesOf(facebookPageStart, "facebook_page", envOf("facebook_page"));
+    expect(scope.split(",")).toEqual(["pages_show_list", "pages_manage_posts", "pages_read_engagement"]);
+  });
+
+  it("Instagram: basic + content publish + the Page dependencies; no comments, messages or business_management", async () => {
+    const scope = await scopesOf(instagramStart, "instagram", envOf("instagram"));
+    expect(scope.split(",")).toEqual([
+      "instagram_basic",
+      "instagram_content_publish",
+      "pages_show_list",
+      "pages_read_engagement",
+    ]);
+  });
+
+  it("YouTube: upload + read-only, never youtube.force-ssl", async () => {
+    const scope = await scopesOf(youtubeStart, "youtube", envOf("youtube"));
+    expect(scope.split(" ")).toEqual([
+      "https://www.googleapis.com/auth/youtube.upload",
+      "https://www.googleapis.com/auth/youtube.readonly",
+    ]);
+  });
+
+  it("Google Business Profile: business.manage only", async () => {
+    const scope = await scopesOf(gbpStart, "google_business_profile", envOf("google_business_profile"));
+    expect(scope).toBe("https://www.googleapis.com/auth/business.manage");
+  });
+});
+
 describe("tiktok OAuth start: TikTok's authorization page", () => {
   it("always shows it (disable_auto_auth=1), so the user sees which account they connect", async () => {
     vi.stubEnv("TIKTOK_CLIENT_KEY", "tt-key");

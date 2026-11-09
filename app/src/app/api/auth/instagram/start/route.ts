@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { INSTAGRAM_SCOPES } from "@/lib/oauthScopes";
 
 import { META_OAUTH_DIALOG_URL } from "@/lib/metaGraph";
 import { createOAuthState } from "@/lib/oauthState";
@@ -34,16 +35,10 @@ export async function GET(request: NextRequest) {
   authUrl.searchParams.set("redirect_uri", redirectUri);
   authUrl.searchParams.set(
     "scope",
-    [
-      "instagram_basic",
-      "instagram_content_publish",
-      // Needed for reading and moderating comments via the Instagram Graph API
-      "instagram_manage_comments",
-      "instagram_manage_messages",
-      "pages_show_list",
-      "pages_read_engagement",
-      "business_management",
-    ].join(","),
+    // Only what the app uses (2026-11-09, for Meta App Review): no comment
+    // or message permissions, and no business_management (Business Manager
+    // APIs, which the app doesn't call).
+    INSTAGRAM_SCOPES.join(","),
   );
   authUrl.searchParams.set("response_type", "code");
   authUrl.searchParams.set("state", encodedState);

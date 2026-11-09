@@ -98,6 +98,7 @@ import type {
   TikTokPostMetadata,
   YouTubePostMetadata,
 } from "@/server/platforms/types";
+import { purgeStaleYouTubeMetrics } from "@/server/connections/youtubeData";
 
 // Step-memoized refs only — NEVER put accessToken/refreshToken in step output
 // (Inngest persists step results). Publish steps re-load secrets from the DB.
@@ -1891,7 +1892,14 @@ export const connectionHealthSweep = inngest.createFunction(
       cursor = ids[ids.length - 1];
     }
 
-    const summary = { pages, connections };
+    // YouTube API Services policy (2026-11-09): statistics not refreshed in 30
+    // days are deleted. Daily here, one step, to stay inside the plan's
+    // execution budget (server/connections/youtubeData.ts).
+    const purgedYouTubeMetrics: number = await step.run("purge-stale-youtube-metrics", () =>
+      purgeStaleYouTubeMetrics(),
+    );
+
+    const summary = { pages, connections, purgedYouTubeMetrics };
     logger.info("[Inngest] Connection health sweep fanned out", summary);
     return summary;
   },

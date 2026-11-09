@@ -100,12 +100,24 @@ export async function DELETE(_request: NextRequest, context: PlatformRouteContex
   const platform = platformParam as Platform;
 
   try {
-    const result = await prisma.socialConnection.deleteMany({
+    const deleteConnection = prisma.socialConnection.deleteMany({
       where: {
         workspaceId: workspace.id,
         platform,
       },
     });
+    // YouTube API Services policy (2026-11-09): disconnecting YouTube deletes
+    // the YouTube data the app keeps for this workspace (its videos' view, like
+    // and comment counts), in the same transaction. server/connections/youtubeData.ts.
+    const [result] =
+      platform === Platform.youtube
+        ? await prisma.$transaction([
+            deleteConnection,
+            prisma.postMetric.deleteMany({
+              where: { workspaceId: workspace.id, platform: Platform.youtube },
+            }),
+          ])
+        : [await deleteConnection];
 
     return NextResponse.json(
       { ok: true, deletedCount: result.count },

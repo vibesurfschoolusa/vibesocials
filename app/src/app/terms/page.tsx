@@ -83,6 +83,11 @@ export default function TermsPage() {
           Each platform decides whether and how your post appears, and may change its features or
           limits at any time.
         </p>
+        <p className="mt-2">
+          {PRODUCT_NAME} uses YouTube API Services. If you connect YouTube, you agree to be bound by
+          the{" "}
+          <a href="https://www.youtube.com/t/terms" className="underline underline-offset-2">YouTube Terms of Service</a>.
+        </p>
       </LegalSection>
 
       <LegalSection title="7. Fees">

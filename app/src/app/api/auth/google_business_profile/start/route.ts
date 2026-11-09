@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { GOOGLE_BUSINESS_PROFILE_SCOPES } from "@/lib/oauthScopes";
 
 import { createOAuthState } from "@/lib/oauthState";
 import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
@@ -37,7 +38,7 @@ export async function GET(request: Request) {
   authUrl.searchParams.set("client_id", clientId);
   authUrl.searchParams.set("redirect_uri", redirectUriEnv);
   authUrl.searchParams.set("response_type", "code");
-  authUrl.searchParams.set("scope", "https://www.googleapis.com/auth/business.manage");
+  authUrl.searchParams.set("scope", GOOGLE_BUSINESS_PROFILE_SCOPES.join(" "));
   authUrl.searchParams.set("access_type", "offline");
   authUrl.searchParams.set("include_granted_scopes", "true");
   authUrl.searchParams.set("prompt", "consent");

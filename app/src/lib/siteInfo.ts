@@ -19,4 +19,4 @@ export const OPERATOR_LOCATION = "Florida, United States";
 export const SUPPORT_EMAIL = "info@vibesurfschool.com";
 
 /** The date shown on the privacy policy and terms. Update it with any change to either. */
-export const LEGAL_LAST_UPDATED = "November 8, 2026";
+export const LEGAL_LAST_UPDATED = "November 9, 2026";

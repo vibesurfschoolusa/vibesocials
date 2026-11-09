@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { YOUTUBE_SCOPES } from "@/lib/oauthScopes";
 
 import { createOAuthState } from "@/lib/oauthState";
 import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
@@ -33,7 +34,9 @@ export async function GET(request: NextRequest) {
   authUrl.searchParams.set("client_id", clientId);
   authUrl.searchParams.set("redirect_uri", redirectUriEnv);
   authUrl.searchParams.set("response_type", "code");
-  authUrl.searchParams.set("scope", "https://www.googleapis.com/auth/youtube.force-ssl https://www.googleapis.com/auth/youtube.readonly");
+  // Only what the app uses (2026-11-09, for Google verification): upload, and
+  // read-only for the channel name and view counts. Not youtube.force-ssl.
+  authUrl.searchParams.set("scope", YOUTUBE_SCOPES.join(" "));
   authUrl.searchParams.set("access_type", "offline");
   authUrl.searchParams.set("include_granted_scopes", "true");
   authUrl.searchParams.set("prompt", "consent");
