@@ -654,6 +654,9 @@ async function publishToPlatform({
   await finalizeClaimedResult(resultRecordId, runId, {
     status: "success",
     externalPostId: publishResult.externalPostId ?? null,
+    // Written only when the client returned a link (Instagram), so every other
+    // success writes exactly what it did before.
+    ...(publishResult.externalPostUrl ? { externalPostUrl: publishResult.externalPostUrl } : {}),
   });
   return { platform: connectionRef.platform, status: "success" };
 }

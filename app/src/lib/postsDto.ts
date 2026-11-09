@@ -45,6 +45,8 @@ export interface PostJobResultDTO {
   status: PostJobResultStatus;
   /** Provider post id on success (e.g. a YouTube/TikTok id), else null. */
   externalPostId: string | null;
+  /** The post's public link when the platform gave one (Instagram), else null. */
+  externalPostUrl: string | null;
   /** Sanitized, human-readable failure reason, else null. */
   errorMessage: string | null;
   /**

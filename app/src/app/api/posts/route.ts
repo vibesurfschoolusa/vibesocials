@@ -153,6 +153,7 @@ export async function GET(request: Request) {
             platform: true,
             status: true,
             externalPostId: true,
+            externalPostUrl: true,
             errorMessage: true,
             // Platform limits: with the status they say a result is waiting out a
             // rate limit or quota. `errorCode` is read only to tell a daily limit
@@ -285,6 +286,7 @@ export async function GET(request: Request) {
               platform: result.platform,
               status: result.status,
               externalPostId: result.externalPostId,
+              externalPostUrl: result.externalPostUrl,
               errorMessage: result.errorMessage,
               // Only a pending result is waiting; a failed one that still has an
               // old deferredUntil (its run died) is not.

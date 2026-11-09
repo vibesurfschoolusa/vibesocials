@@ -87,6 +87,36 @@ describe("computeYouTubeTitle", () => {
       caption: "",
     });
     expect([...title]).toHaveLength(100);
+    expect(title.endsWith("…")).toBe(true);
+  });
+
+  // 2026-11-08: a long caption was cut mid-sentence ("…Little moments, big
+  // memories"); the title now ends on a whole sentence when one fits.
+  it("keeps the whole sentences that fit when the caption is too long", () => {
+    expect(
+      computeYouTubeTitle({
+        baseCaption:
+          "Small feet, big dreams. 🌊 Every first stand starts with a little help. Little moments, big memories at Vibe Surf School.",
+        mediaItem: media(""),
+        caption: "",
+      }),
+    ).toBe("Small feet, big dreams. 🌊 Every first stand starts with a little help.");
+  });
+
+  it("cuts one long sentence at a word boundary, with an ellipsis, within 100 graphemes", () => {
+    const title = computeYouTubeTitle({
+      baseCaption: `${"surf ".repeat(30)}lessons`,
+      mediaItem: media(""),
+      caption: "",
+    });
+    expect([...title].length).toBeLessThanOrEqual(100);
+    expect(title).toMatch(/^surf( surf)* surf…$/);
+  });
+
+  it("puts a multi-line caption on one line", () => {
+    expect(
+      computeYouTubeTitle({ baseCaption: "First line\nsecond line", mediaItem: media(""), caption: "" }),
+    ).toBe("First line second line");
   });
 });
 

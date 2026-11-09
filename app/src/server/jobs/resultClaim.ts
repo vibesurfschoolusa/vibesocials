@@ -43,7 +43,7 @@ export type DeferralErrorCode = "RATE_LIMITED" | "DAILY_LIMIT";
 
 /** A platform's final outcome, as written to its PostJobResult row. */
 export type FinalResultData =
-  | { status: "success"; externalPostId: string | null }
+  | { status: "success"; externalPostId: string | null; externalPostUrl?: string | null }
   | { status: "failed"; errorCode: string; errorMessage: string };
 
 /**

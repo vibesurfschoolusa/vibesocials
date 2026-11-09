@@ -306,10 +306,10 @@ export function PostJobCard({
         </p>
       ) : null}
 
-      {results.some((r) => r.status === "success" && platformPostUrl(r.platform, r.externalPostId)) ? (
+      {results.some((r) => r.status === "success" && platformPostUrl(r.platform, r.externalPostId, r.externalPostUrl)) ? (
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
           {results.map((result) => {
-            const url = result.status === "success" ? platformPostUrl(result.platform, result.externalPostId) : null;
+            const url = result.status === "success" ? platformPostUrl(result.platform, result.externalPostId, result.externalPostUrl) : null;
             if (!url) return null;
             return (
               <a

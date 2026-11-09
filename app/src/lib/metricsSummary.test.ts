@@ -19,6 +19,7 @@ function result(partial: Partial<PostJobResultDTO>): PostJobResultDTO {
     platform: "youtube",
     status: "success",
     externalPostId: "vid",
+    externalPostUrl: null,
     errorMessage: null,
     deferral: null,
     unconfirmed: false,

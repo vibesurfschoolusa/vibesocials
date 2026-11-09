@@ -25,4 +25,18 @@ describe("platformPostUrl", () => {
     expect(platformPostUrl("youtube", null)).toBeNull();
     expect(platformPostUrl("youtube", "")).toBeNull();
   });
+
+  // 2026-11-08: Instagram's media id is not a public locator, so the client
+  // stores the post's permalink (PostJobResult.externalPostUrl) and that wins.
+  it("uses a stored https link when there is one", () => {
+    expect(
+      platformPostUrl("instagram", "17993548104117537", "https://www.instagram.com/reel/DfgcZzggTmr/"),
+    ).toBe("https://www.instagram.com/reel/DfgcZzggTmr/");
+  });
+
+  it("never uses a stored link that is not https", () => {
+    expect(platformPostUrl("instagram", "17993548104117537", "javascript:alert(1)")).toBeNull();
+    expect(platformPostUrl("instagram", "17993548104117537", "http://www.instagram.com/p/x/")).toBeNull();
+    expect(platformPostUrl("x", "123", "not a url")).toBe("https://x.com/i/web/status/123");
+  });
 });

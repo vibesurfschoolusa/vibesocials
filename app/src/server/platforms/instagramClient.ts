@@ -621,9 +621,41 @@ async function publishInstagramContainer(args: {
     username,
   });
 
-  return {
-    externalPostId: mediaId,
-  };
+  const permalink = await fetchInstagramPermalink(mediaId, accessToken, deadline);
+  return permalink ? { externalPostId: mediaId, externalPostUrl: permalink } : { externalPostId: mediaId };
+}
+
+/** The permalink lookup is a nicety: it gets a few seconds, never the whole step. */
+const INSTAGRAM_PERMALINK_TIMEOUT_MS = 5_000;
+
+/**
+ * The published post's public link (`GET /{media-id}?fields=permalink`), for
+ * the Activity "View on Instagram" link: the media id itself is not a public
+ * locator. Best effort, after the post is live: any failure (an error answer, a
+ * timeout, a spent step budget, a link that isn't https://www.instagram.com/)
+ * gives null, and the post is recorded as published without a link.
+ */
+async function fetchInstagramPermalink(
+  mediaId: string,
+  accessToken: string,
+  deadline: number | undefined,
+): Promise<string | null> {
+  try {
+    const url = new URL(`${META_GRAPH_BASE_URL}/${mediaId}`);
+    url.searchParams.set("fields", "permalink");
+    url.searchParams.set("access_token", accessToken);
+    const response = await fetchWithTimeout(
+      url.toString(),
+      { method: "GET" },
+      budgetedTimeout(INSTAGRAM_PERMALINK_TIMEOUT_MS, deadline),
+    );
+    if (!response.ok) return null;
+    const data = (await response.json().catch(() => null)) as { permalink?: unknown } | null;
+    const permalink = data?.permalink;
+    return typeof permalink === "string" && permalink.startsWith("https://www.instagram.com/") ? permalink : null;
+  } catch {
+    return null;
+  }
 }
 
 export const instagramClient: PlatformClient = {

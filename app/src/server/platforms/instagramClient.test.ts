@@ -223,11 +223,17 @@ describe("instagramClient.publishVideo — Graph OAuthException 190", () => {
     };
   }
 
-  function stubGraph(routes: { container: () => Response; status?: () => Response; publish?: () => Response }) {
+  function stubGraph(routes: {
+    container: () => Response;
+    status?: () => Response;
+    publish?: () => Response;
+    permalink?: () => Response;
+  }) {
     vi.stubGlobal(
       "fetch",
       vi.fn((input: string | URL) => {
         const url = String(input);
+        if (url.includes("fields=permalink") && routes.permalink) return Promise.resolve(routes.permalink());
         if (url.includes("/media_publish")) return Promise.resolve(routes.publish!());
         if (url.includes("/ig-account-1/media")) return Promise.resolve(routes.container());
         if (url.includes("fields=status_code")) return Promise.resolve(routes.status!());
@@ -253,6 +259,43 @@ describe("instagramClient.publishVideo — Graph OAuthException 190", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  // 2026-11-08: the media id is not a public locator, so after publishing the
+  // client asks for the post's permalink for the Activity link. Best effort: the
+  // post is live either way.
+  describe("permalink for the Activity link", () => {
+    const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+    const publishPhoto = (permalink?: () => Response) => {
+      stubGraph({
+        container: () => json({ id: "container-1" }),
+        status: () => json({ status_code: "FINISHED" }),
+        publish: () => json({ id: "media-1" }),
+        permalink,
+      });
+      return instagramClient.publishVideo(ctx("image/jpeg"));
+    };
+
+    it("returns the post's permalink as externalPostUrl", async () => {
+      const result = await publishPhoto(() => json({ permalink: "https://www.instagram.com/p/DfgcZzggTmr/", id: "media-1" }));
+
+      expect(result).toEqual({
+        externalPostId: "media-1",
+        externalPostUrl: "https://www.instagram.com/p/DfgcZzggTmr/",
+      });
+    });
+
+    it("still succeeds, without a link, when the lookup fails", async () => {
+      await expect(publishPhoto(() => new Response("{}", { status: 500 }))).resolves.toEqual({
+        externalPostId: "media-1",
+      });
+    });
+
+    it("ignores a permalink that is not an https instagram.com link", async () => {
+      await expect(publishPhoto(() => json({ permalink: "https://evil.example/p/x" }))).resolves.toEqual({
+        externalPostId: "media-1",
+      });
+    });
   });
 
   it("maps an HTTP 400 OAuthException 190 from container creation to INSTAGRAM_RECONNECT_REQUIRED and flags", async () => {
@@ -1746,9 +1789,13 @@ describe("instagramClient.publishVideo — step deadline", () => {
     await vi.advanceTimersByTimeAsync(3_000);
 
     await expect(promise).resolves.toEqual({ externalPostId: "media-1" });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    // container timeout, the 3 s image wait, then the media_publish timeout
-    expect(setTimeoutSpy.mock.calls.map((c) => c[1])).toEqual([12_000, 3_000, 9_000]);
+    // container, media_publish, then the best-effort permalink lookup (2026-11-08;
+    // unanswered here, so no link)
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(String(fetchMock.mock.calls[2][0])).toContain("fields=permalink");
+    // container timeout, the 3 s image wait, the media_publish timeout, then the
+    // permalink lookup's own 5 s cap (9 s were left)
+    expect(setTimeoutSpy.mock.calls.map((c) => c[1])).toEqual([12_000, 3_000, 9_000, 5_000]);
   });
 
   it("an image media_publish that would start with under 5 s left is refused (retry-safe), never reported unconfirmed", async () => {

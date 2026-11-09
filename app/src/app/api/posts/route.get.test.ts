@@ -638,6 +638,8 @@ describe("GET /api/posts — result deferral", () => {
       platform: true,
       status: true,
       externalPostId: true,
+      // 2026-11-08: the post's stored public link (Instagram permalinks)
+      externalPostUrl: true,
       errorMessage: true,
       deferredUntil: true,
       errorCode: true,

@@ -65,6 +65,12 @@ export interface PublishContext {
 export interface PublishResult {
   externalPostId?: string | null;
   /**
+   * The post's public link, when `externalPostId` can't be turned into one
+   * (Instagram's media id). Only an https URL the platform returned; saved as
+   * PostJobResult.externalPostUrl and shown in Activity.
+   */
+  externalPostUrl?: string | null;
+  /**
    * The client made progress and has more to do: chunks left, processing not
    * done, or too little step time left for the commit call. It MUST have saved
    * its state in `ctx.uploadState` first. publishToPlatform releases the claim

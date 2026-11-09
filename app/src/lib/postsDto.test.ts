@@ -71,6 +71,7 @@ describe("toPostJobResultSummaryDto — results whose connection was removed", (
     socialConnectionId,
     status: "success",
     externalPostId: "yt-123",
+    externalPostUrl: null,
     errorCode: null,
     errorMessage: null,
     claimRunId: null,

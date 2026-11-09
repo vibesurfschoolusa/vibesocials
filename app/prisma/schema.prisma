@@ -356,6 +356,10 @@ model PostJobResult {
   socialConnectionId String?
   status             PostJobResultStatus @default(pending)
   externalPostId     String?
+  // 2026-11-08: the post's public link, when the platform's id is not one
+  // (Instagram media ids). Written by the publish step from what the platform
+  // returned; Activity prefers it over a link built from externalPostId.
+  externalPostUrl    String?
   errorCode          String?
   errorMessage       String?
   // 2026-11-01 scale audit (jobs H6): the per-result publish claim. A platform

@@ -1,11 +1,27 @@
 import type { Platform } from "@prisma/client";
 
+/** True for an absolute https URL (never javascript:, data: or plain http). */
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 /**
- * Public URL of a published post, derivable from the stored externalPostId
- * alone — or null where the id isn't a public locator (TikTok publish ids,
- * Instagram media ids, GBP media names).
+ * Public URL of a published post: the link the platform returned
+ * (`storedUrl`, PostJobResult.externalPostUrl: Instagram permalinks) when it is
+ * an https URL, else one derived from the stored externalPostId, or null where
+ * the id isn't a public locator (TikTok publish ids, Instagram media ids, GBP
+ * media names).
  */
-export function platformPostUrl(platform: Platform, externalPostId: string | null): string | null {
+export function platformPostUrl(
+  platform: Platform,
+  externalPostId: string | null,
+  storedUrl?: string | null,
+): string | null {
+  if (storedUrl && isHttpsUrl(storedUrl)) return storedUrl;
   if (!externalPostId) return null;
   switch (platform) {
     case "youtube":
