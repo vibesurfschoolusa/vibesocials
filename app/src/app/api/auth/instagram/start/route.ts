@@ -36,8 +36,7 @@ export async function GET(request: NextRequest) {
   authUrl.searchParams.set(
     "scope",
     // Only what the app uses (2026-11-09, for Meta App Review): no comment
-    // or message permissions, and no business_management (Business Manager
-    // APIs, which the app doesn't call).
+    // or message permissions (lib/oauthScopes.ts).
     INSTAGRAM_SCOPES.join(","),
   );
   authUrl.searchParams.set("response_type", "code");

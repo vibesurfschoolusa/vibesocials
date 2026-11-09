@@ -6,23 +6,36 @@
 
 /**
  * Facebook Page: pages_show_list (GET /me/accounts), pages_manage_posts
- * (POST /{page}/photos and /videos), and pages_read_engagement, which Meta lists
- * as a required dependency of pages_manage_posts. No comment moderation.
+ * (POST /{page}/photos and /videos), pages_read_engagement, which Meta lists
+ * as a required dependency of pages_manage_posts, and business_management.
+ * No comment moderation.
+ *
+ * business_management: GET /me/accounts lists a Page that a business portfolio
+ * owns only when the token has it. Checked live on 2026-11-09: without it,
+ * connecting a portfolio-owned Page returned zero Pages. Most small businesses
+ * keep their Page in a portfolio, so this is required.
  */
-export const FACEBOOK_PAGE_SCOPES = ["pages_show_list", "pages_manage_posts", "pages_read_engagement"] as const;
+export const FACEBOOK_PAGE_SCOPES = [
+  "pages_show_list",
+  "pages_manage_posts",
+  "pages_read_engagement",
+  "business_management",
+] as const;
 
 /**
  * Instagram professional account (through its linked Page): instagram_basic
  * (account id, username, permalinks), instagram_content_publish (media containers
- * and media_publish), and pages_show_list + pages_read_engagement (finding the
- * account through its Page; dependencies of instagram_content_publish). No
- * comments, messages or business_management (Business Manager APIs).
+ * and media_publish), pages_show_list + pages_read_engagement (finding the
+ * account through its Page; dependencies of instagram_content_publish), and
+ * business_management, for a Page owned by a business portfolio (see
+ * FACEBOOK_PAGE_SCOPES). No comment or message permissions.
  */
 export const INSTAGRAM_SCOPES = [
   "instagram_basic",
   "instagram_content_publish",
   "pages_show_list",
   "pages_read_engagement",
+  "business_management",
 ] as const;
 
 /**

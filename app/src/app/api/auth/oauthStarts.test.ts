@@ -127,18 +127,26 @@ describe("requested permissions (least privilege)", () => {
   };
   const envOf = (platform: Platform) => CASES.find((c) => c.platform === platform)!.env;
 
-  it("Facebook Page: list Pages, post, and the read-engagement dependency only", async () => {
+  // business_management: without it, GET /me/accounts returned zero Pages for a
+  // Page owned by a business portfolio (checked live 2026-11-09).
+  it("Facebook Page: list Pages, post, the read-engagement dependency, and business_management", async () => {
     const scope = await scopesOf(facebookPageStart, "facebook_page", envOf("facebook_page"));
-    expect(scope.split(",")).toEqual(["pages_show_list", "pages_manage_posts", "pages_read_engagement"]);
+    expect(scope.split(",")).toEqual([
+      "pages_show_list",
+      "pages_manage_posts",
+      "pages_read_engagement",
+      "business_management",
+    ]);
   });
 
-  it("Instagram: basic + content publish + the Page dependencies; no comments, messages or business_management", async () => {
+  it("Instagram: basic + content publish + the Page dependencies + business_management; no comments or messages", async () => {
     const scope = await scopesOf(instagramStart, "instagram", envOf("instagram"));
     expect(scope.split(",")).toEqual([
       "instagram_basic",
       "instagram_content_publish",
       "pages_show_list",
       "pages_read_engagement",
+      "business_management",
     ]);
   });
 
