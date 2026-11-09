@@ -20,5 +20,12 @@ export const META_GRAPH_VERSION = "v26.0";
 /** Base URL for Graph API calls, e.g. `${META_GRAPH_BASE_URL}/me/accounts`. */
 export const META_GRAPH_BASE_URL = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
 
+/**
+ * Base URL for Graph API video uploads (`/{page-id}/videos`): Meta serves them
+ * on graph-video.facebook.com, not graph.facebook.com
+ * (https://developers.facebook.com/docs/video-api/guides/publishing).
+ */
+export const META_GRAPH_VIDEO_BASE_URL = `https://graph-video.facebook.com/${META_GRAPH_VERSION}`;
+
 /** The Facebook Login (OAuth) dialog for the same version. */
 export const META_OAUTH_DIALOG_URL = `https://www.facebook.com/${META_GRAPH_VERSION}/dialog/oauth`;

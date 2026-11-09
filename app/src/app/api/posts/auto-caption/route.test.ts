@@ -232,6 +232,51 @@ describe("POST /api/posts/auto-caption", () => {
       expect(sentBody()).toMatchObject({ model: "grok-4.6", reasoning_effort: "low" });
     });
 
+    // 2026-11-08: a video's caption used to be a guess ("You do not have direct
+    // access to the video frames"). The composer now sends up to 3 still frames.
+    it("sends a video's frames to the vision model as images, in order", async () => {
+      vi.stubEnv("XAI_TEXT_MODEL", "grok-4.6");
+      vi.stubEnv("XAI_VISION_MODEL", "grok-vision-x");
+      const frames = [
+        "data:image/jpeg;base64,AAAA",
+        "data:image/jpeg;base64,BBBB",
+        "data:image/jpeg;base64,CCCC",
+      ];
+
+      const response = await post({ blobUrl: BLOB_URL, mimeType: "video/mp4", frames });
+
+      expect(response.status).toBe(200);
+      const body = sentBody();
+      expect(body.model).toBe("grok-vision-x");
+      const user = (body.messages as Array<{ role: string; content: unknown }>).find((m) => m.role === "user");
+      const parts = user?.content as Array<{ type: string; text?: string; image_url?: { url: string } }>;
+      expect(parts.filter((p) => p.type === "image_url").map((p) => p.image_url?.url)).toEqual(frames);
+      const text = parts.find((p) => p.type === "text")?.text ?? "";
+      expect(text).toContain("still frames from the video");
+      expect(sentPrompt()).not.toContain("You do not have direct access to the video frames");
+    });
+
+    it("keeps the text-only prompt for a video sent without frames", async () => {
+      await post({ blobUrl: BLOB_URL, mimeType: "video/mp4" });
+
+      expect(sentPrompt()).toContain("You do not have direct access to the video frames");
+    });
+
+    it("rejects invalid frames with 400 before any limit is spent or the provider is called", async () => {
+      const response = await post({ blobUrl: BLOB_URL, mimeType: "video/mp4", frames: ["https://evil.example/x.jpg"] });
+
+      expect(response.status).toBe(400);
+      expect(checkRateLimitMock).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("ignores frames sent with a photo (the photo itself is the image)", async () => {
+      await post({ ...validBody, frames: ["data:image/jpeg;base64,AAAA"] });
+
+      expect(sentPrompt()).not.toContain("data:image/jpeg;base64,AAAA");
+      expect(sentPrompt()).toContain(BLOB_URL);
+    });
+
     it("never sends reasoning_effort to the OpenAI fallback provider", async () => {
       vi.stubEnv("XAI_API_KEY", "");
       vi.stubEnv("OPENAI_API_KEY", "openai-key");

@@ -70,8 +70,10 @@ export type MediaKind = "image" | "video";
  *                    (server/platforms/youtubeClient.ts:65-75).
  * - tiktok         — video only: TIKTOK_MEDIA_NOT_VIDEO
  *                    (server/platforms/tiktokClient.ts:654-658).
- * - facebook_page  — images only: FACEBOOK_PAGE_UNSUPPORTED_MEDIA_TYPE
- *                    (server/platforms/facebookPageClient.ts:67-73).
+ * - facebook_page  — both (since 2026-11-08): an image goes to /{page}/photos,
+ *                    a video to /{page}/videos; anything else is
+ *                    FACEBOOK_PAGE_UNSUPPORTED_MEDIA_TYPE
+ *                    (server/platforms/facebookPageClient.ts, `mediaKindOf`).
  * - instagram      — both: a video becomes a REELS container, anything else an
  *                    IMAGE container (server/platforms/instagramClient.ts:126,
  *                    156-161).
@@ -87,7 +89,7 @@ export type MediaKind = "image" | "video";
 export const PLATFORM_ACCEPTED_MEDIA: Record<Platform, readonly MediaKind[]> = {
   youtube: ["video"],
   tiktok: ["video"],
-  facebook_page: ["image"],
+  facebook_page: ["image", "video"],
   instagram: ["image", "video"],
   x: ["image", "video"],
   linkedin: ["image", "video"],

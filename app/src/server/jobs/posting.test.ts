@@ -1030,20 +1030,26 @@ describe("createPostJobForExistingMedia - media compatibility uses the stored mi
     );
   });
 
-  it("rejects an explicit list the stored VIDEO can't go to (Facebook Page is images-only)", async () => {
+  it("sends a stored VIDEO to an explicit Facebook Page target (Facebook takes videos since 2026-11-08)", async () => {
     findUniqueMock.mockResolvedValue(makeMediaItem({ mimeType: "video/mp4" }));
+    findManyConnectionsMock.mockResolvedValue([
+      makeConnection({ id: "conn-fb", platform: "facebook_page" }),
+      makeConnection({ id: "conn-x", platform: "x" }),
+    ]);
 
-    const error = await createPostJobForExistingMedia({
+    const result = await createPostJobForExistingMedia({
       userId: "user-1",
       workspaceId: "workspace-1",
       mediaItemId: "media-1",
       baseCaption: "hello",
       targetPlatforms: ["facebook_page", "x"],
-    }).catch((e: unknown) => e);
+    });
 
-    expect((error as PostTargetingError).code).toBe("PLATFORM_MEDIA_MISMATCH");
-    expect((error as PostTargetingError).platforms).toEqual(["facebook_page"]);
-    expect(postJobCreateMock).not.toHaveBeenCalled();
+    expect(postJobResultCreateMock.mock.calls.map(([arg]) => arg.data.platform)).toEqual([
+      "facebook_page",
+      "x",
+    ]);
+    expect(result.resultIds).toEqual(["result-facebook_page", "result-x"]);
   });
 
   it("rejects an explicit list the stored IMAGE can't go to (YouTube is video-only)", async () => {
@@ -1063,7 +1069,7 @@ describe("createPostJobForExistingMedia - media compatibility uses the stored mi
   });
 
   it("skips incompatible connected platforms (no result rows) when no explicit list was sent", async () => {
-    findUniqueMock.mockResolvedValue(makeMediaItem({ mimeType: "video/mp4" }));
+    findUniqueMock.mockResolvedValue(makeMediaItem({ mimeType: "image/png" }));
     findManyConnectionsMock.mockResolvedValue([
       makeConnection({ id: "conn-yt", platform: "youtube" }),
       makeConnection({ id: "conn-fb", platform: "facebook_page" }),
@@ -1078,10 +1084,10 @@ describe("createPostJobForExistingMedia - media compatibility uses the stored mi
     });
 
     expect(postJobResultCreateMock.mock.calls.map(([arg]) => arg.data.platform)).toEqual([
-      "youtube",
+      "facebook_page",
       "x",
     ]);
-    expect(result.resultIds).toEqual(["result-youtube", "result-x"]);
+    expect(result.resultIds).toEqual(["result-facebook_page", "result-x"]);
   });
 
   it("requires a TikTok privacy level whenever TikTok is an explicit target", async () => {

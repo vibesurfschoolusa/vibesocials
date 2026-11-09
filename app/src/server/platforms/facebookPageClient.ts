@@ -4,7 +4,9 @@ import type { SocialConnection } from "@prisma/client";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { connectionTokenChangedError, flagRejectedToken } from "./connectionHealth";
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
-import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
+import { META_GRAPH_BASE_URL, META_GRAPH_VIDEO_BASE_URL } from "@/lib/metaGraph";
+import { mediaKindOf } from "@/lib/platformLimits";
+import { budgetedTimeout } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 
 // Token-material reality (see app/api/auth/facebook_page/callback/route.ts):
@@ -20,6 +22,13 @@ import { classifyRateLimit } from "./rateLimited";
 // `needsReconnect` flag (Roadmap Phase 4, see connectionHealth.ts).
 
 const FACEBOOK_PAGE_RECONNECT_CODE = "FACEBOOK_PAGE_RECONNECT_REQUIRED";
+
+/**
+ * How long a video upload may take. With `file_url`, Facebook downloads the
+ * whole file before it answers, so this is longer than a photo's 30 s; it is
+ * still cut short by the publish step's deadline (budgetedTimeout).
+ */
+export const FACEBOOK_VIDEO_UPLOAD_TIMEOUT_MS = 120_000;
 
 function facebookPageReconnectRequiredError(): Error & { code: string } {
   const error = new Error(
@@ -67,40 +76,65 @@ export const facebookPageClient: PlatformClient = {
       throw error;
     }
 
-    if (!mediaItem.mimeType || !mediaItem.mimeType.startsWith("image/")) {
+    const kind = mediaKindOf(mediaItem.mimeType ?? "");
+    if (kind === null) {
       const error = new Error(
-        "Facebook Page posting currently supports images only. Please upload an image.",
+        "Facebook Page posting supports images and videos. Please upload a photo or a video.",
       ) as Error & { code: string };
       error.code = "FACEBOOK_PAGE_UNSUPPORTED_MEDIA_TYPE";
       throw error;
     }
+    const isVideo = kind === "video";
+    const what = isVideo ? "video" : "photo";
 
-    console.log("[FacebookPage] Starting photo publish", {
+    console.log(`[FacebookPage] Starting ${what} publish`, {
       pageId,
       storageLocation: mediaItem.storageLocation,
       captionLength: caption?.length ?? 0,
     });
 
-    const endpoint = new URL(`${META_GRAPH_BASE_URL}/${pageId}/photos`);
+    // A photo goes to /{page}/photos with `url` + `caption`. A video goes to
+    // /{page}/videos on graph-video.facebook.com with `file_url` + `description`:
+    // Meta fetches the file itself, as Instagram does for Reels
+    // (https://developers.facebook.com/docs/graph-api/reference/page/videos/).
+    // Both need pages_manage_posts, pages_read_engagement and pages_show_list.
+    const endpoint = isVideo
+      ? new URL(`${META_GRAPH_VIDEO_BASE_URL}/${pageId}/videos`)
+      : new URL(`${META_GRAPH_BASE_URL}/${pageId}/photos`);
 
-    const body = new URLSearchParams({
-      url: mediaItem.storageLocation,
-      caption: caption ?? "",
-      access_token: accessToken,
-    });
+    const body = isVideo
+      ? new URLSearchParams({
+          file_url: mediaItem.storageLocation,
+          description: caption ?? "",
+          access_token: accessToken,
+        })
+      : new URLSearchParams({
+          url: mediaItem.storageLocation,
+          caption: caption ?? "",
+          access_token: accessToken,
+        });
 
-    // 2026-11-01 scale audit (jobs H6, Review Focus 5): POST /{page}/photos is
-    // the commit call. A 5xx, a timeout or a dropped connection after it was
-    // sent is PUBLISH_UNCONFIRMED (the photo may be live) and is never re-run; a
-    // 4xx / 429 is returned and handled below as before.
+    // Checked before the commit call, so a spent step budget sends nothing.
+    const timeoutMs = isVideo
+      ? budgetedTimeout(FACEBOOK_VIDEO_UPLOAD_TIMEOUT_MS, ctx.deadline)
+      : undefined;
+
+    // 2026-11-01 scale audit (jobs H6, Review Focus 5): POST /{page}/photos (or
+    // /videos) is the commit call. A 5xx, a timeout or a dropped connection
+    // after it was sent is PUBLISH_UNCONFIRMED (the post may be live) and is
+    // never re-run; a 4xx / 429 is returned and handled below as before.
     const response = await commitRequest("facebook_page", () =>
-      fetchWithTimeout(endpoint.toString(), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
+      fetchWithTimeout(
+        endpoint.toString(),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body,
         },
-        body,
-      }),
+        timeoutMs,
+      ),
     );
 
     // 2026-11-01 scale audit (platform limits): a Meta throttle (code 4, 17, 32,
@@ -116,7 +150,7 @@ export const facebookPageClient: PlatformClient = {
       const errorBody = await response
         .text()
         .catch(() => "Unable to read error body");
-      console.error("[FacebookPage] Photo publish failed", {
+      console.error(`[FacebookPage] ${isVideo ? "Video" : "Photo"} publish failed`, {
         status: response.status,
         error: errorBody,
       });
@@ -136,13 +170,13 @@ export const facebookPageClient: PlatformClient = {
         throw facebookPageReconnectRequiredError();
       }
       const error = new Error(
-        `Facebook Page photo publish failed (status ${response.status})`,
+        `Facebook Page ${what} publish failed (status ${response.status})`,
       ) as Error & { code: string };
       error.code = "FACEBOOK_PAGE_PUBLISH_FAILED";
       throw error;
     }
 
-    // photos answered 2xx, so the photo may be live: an unreadable body is
+    // photos/videos answered 2xx, so the post may be live: an unreadable body is
     // PUBLISH_UNCONFIRMED, not a failure to retry (final review F4). So is a body
     // that parsed but names neither `id` nor `post_id` (2026-11-02 scale audit).
     const data = await readCommitBody<{ id?: unknown; post_id?: unknown } | null>(
@@ -156,7 +190,7 @@ export const facebookPageClient: PlatformClient = {
       "id or post_id",
     );
 
-    console.log("[FacebookPage] Photo published successfully", {
+    console.log(`[FacebookPage] ${isVideo ? "Video" : "Photo"} published`, {
       pageId,
       externalPostId,
     });

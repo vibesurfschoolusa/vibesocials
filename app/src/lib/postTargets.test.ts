@@ -30,8 +30,8 @@ describe("splitPlatformsByMedia", () => {
       incompatible: ["youtube", "tiktok"],
     });
     expect(splitPlatformsByMedia(["youtube", "x", "facebook_page", "tiktok"], "video/mp4")).toEqual({
-      compatible: ["youtube", "x", "tiktok"],
-      incompatible: ["facebook_page"],
+      compatible: ["youtube", "x", "facebook_page", "tiktok"],
+      incompatible: [],
     });
   });
 
@@ -48,9 +48,7 @@ describe("incompatibleMediaMessage", () => {
   });
 
   it("uses the platform's display label", () => {
-    expect(incompatibleMediaMessage(["facebook_page"], "video/mp4")).toContain(
-      "Facebook Page (images only)",
-    );
+    expect(incompatibleMediaMessage(["youtube"], "image/png")).toContain("YouTube (video only)");
   });
 });
 
@@ -138,13 +136,13 @@ describe("narrowConnectionsForPost (immediate fan-out)", () => {
     const error = targetingError(() =>
       narrowConnectionsForPost({
         connections: all,
-        targetPlatforms: ["facebook_page", "youtube"],
-        mimeType: "video/mp4",
+        targetPlatforms: ["youtube", "x"],
+        mimeType: "image/png",
         tiktokMetadata: undefined,
       }),
     );
     expect(error.code).toBe("PLATFORM_MEDIA_MISMATCH");
-    expect(error.platforms).toEqual(["facebook_page"]);
+    expect(error.platforms).toEqual(["youtube"]);
   });
 
   it("throws NO_COMPATIBLE_PLATFORMS when connections exist but none can publish the media", () => {
@@ -229,10 +227,14 @@ describe("deriveComposerPlatforms", () => {
   });
 
   it("restores a platform when media it accepts is chosen again (derived, not destructive)", () => {
+    // An image deselects the video-only platforms; a video brings them back
+    // (every connected platform here takes video, Facebook Page since 2026-11-08).
+    expect(deriveComposerPlatforms(connected, none, "image/jpeg").selected).toEqual(["x", "facebook_page"]);
     expect(deriveComposerPlatforms(connected, none, "video/mp4").selected).toEqual([
       "tiktok",
       "youtube",
       "x",
+      "facebook_page",
     ]);
   });
 
@@ -242,7 +244,7 @@ describe("deriveComposerPlatforms", () => {
       new Set<Platform>(["x"]),
       "video/mp4",
     );
-    expect(selected).toEqual(["tiktok", "youtube"]);
+    expect(selected).toEqual(["tiktok", "youtube", "facebook_page"]);
     expect(choices.find((c) => c.platform === "x")).toEqual({
       platform: "x",
       checked: false,

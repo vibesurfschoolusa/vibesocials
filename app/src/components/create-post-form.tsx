@@ -43,6 +43,7 @@ import type { MediaItemDto } from "@/lib/mediaDto";
 import { prepareUploadFile } from "@/lib/prepareUploadFile";
 import { TIKTOK_DISCLOSURE_INCOMPLETE_TEXT, tiktokPublishBlock } from "@/lib/tiktokPostRules";
 import { PLATFORM_ORDER, platformLabel, TIKTOK_PRIVACY_LABELS } from "@/lib/platforms";
+import { extractVideoFrames } from "@/lib/extractVideoFrames";
 import {
   deriveComposerPlatforms,
   isTikTokPrivacyMissing,
@@ -432,6 +433,8 @@ function CreatePostFormInner({
   async function runAutoCaptionFromMedia(options: {
     overwrite: boolean;
     blobOverride?: UploadedBlobInfo;
+    /** The picked file, for grabbing a video's frames locally (no cross-origin canvas). */
+    fileOverride?: File | null;
     /** True once the file this caption is for has been replaced by a newer pick. */
     isStale?: () => boolean;
   }) {
@@ -448,6 +451,13 @@ function CreatePostFormInner({
       setAutoCaptionLoading(true);
       setUploadError(null);
 
+      // For a video, a few still frames let the AI see what it shows
+      // (lib/videoFrames.ts). Grabbing them never throws: [] means the
+      // caption is written without them.
+      const frames = blob.mimeType.startsWith("video/")
+        ? await extractVideoFrames(options.fileOverride ?? uploadFile ?? blob.url)
+        : [];
+
       const response = await fetch("/api/posts/auto-caption", {
         method: "POST",
         headers: {
@@ -456,6 +466,7 @@ function CreatePostFormInner({
         body: JSON.stringify({
           blobUrl: blob.url,
           mimeType: blob.mimeType,
+          ...(frames.length > 0 ? { frames } : {}),
         }),
       });
 
@@ -1001,6 +1012,7 @@ function CreatePostFormInner({
                       await runAutoCaptionFromMedia({
                         overwrite: false,
                         blobOverride: blobInfo,
+                        fileOverride: nextFile,
                         isStale,
                       });
                     }

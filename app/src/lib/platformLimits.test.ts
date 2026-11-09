@@ -75,7 +75,7 @@ describe("platformAcceptsMedia (rules read from each platform client — see PLA
   const table: Array<[Platform, boolean, boolean]> = [
     ["youtube", true, false], // youtubeClient.ts:65-75 — video only
     ["tiktok", true, false], // tiktokClient.ts:654-658 — video only
-    ["facebook_page", false, true], // facebookPageClient.ts:67-73 — images only
+    ["facebook_page", true, true], // facebookPageClient.ts — photo to /photos, video to /videos
     ["instagram", true, true], // instagramClient.ts:126-161 — REELS (video) or IMAGE
     ["x", true, true], // xClient.ts:528-537 — image or video
     ["linkedin", true, true], // linkedinClient.ts:619-643 — video or image
@@ -114,8 +114,9 @@ describe("unsupportedMediaReason", () => {
     expect(unsupportedMediaReason("tiktok", "image/png")).toBe("Video only");
   });
 
-  it("explains an images-only platform given a video", () => {
-    expect(unsupportedMediaReason("facebook_page", "video/mp4")).toBe("Images only");
+  it("has no reason for Facebook Page given a video (it takes images and videos since 2026-11-08)", () => {
+    expect(unsupportedMediaReason("facebook_page", "video/mp4")).toBeNull();
+    expect(unsupportedMediaReason("facebook_page", "image/png")).toBeNull();
   });
 
   it("is null when the platform accepts the media (or none is chosen)", () => {

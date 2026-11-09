@@ -14,6 +14,7 @@ import { BLOB_URL_REJECTED_MESSAGE, isAllowedBlobUrl } from "@/lib/blobUrl";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { MAX_VIDEO_FRAMES, parseVideoFrames } from "@/lib/videoFrames";
 import { getWorkspaceContext } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +26,8 @@ interface AutoCaptionRequestBody {
   language?: string;
   tone?: string;
   maxLength?: number;
+  /** Up to 3 JPEG data URLs of still frames, for a video (lib/videoFrames.ts). */
+  frames?: string[];
 }
 
 export async function POST(request: Request) {
@@ -69,6 +72,14 @@ export async function POST(request: Request) {
     ]);
     if (overlong) {
       return aiInputTooLongResponse(overlong);
+    }
+    // Video frames are checked here too, before any limiter counter is spent.
+    const frames = parseVideoFrames(body.frames);
+    if (frames === "invalid") {
+      return NextResponse.json(
+        { error: `frames must be at most ${MAX_VIDEO_FRAMES} small JPEG images` },
+        { status: 400 },
+      );
     }
 
     // Throttle per user: vision calls are the most expensive, so keep this tight.
@@ -140,7 +151,10 @@ export async function POST(request: Request) {
     }
 
     const mediaKind = isImage ? "photo" : "video";
-    const model = isImage ? llm.visionModel : llm.textModel;
+    // A video with frames is shown to the vision model; one without is captioned
+    // by the text model from the prompt alone (the old behaviour).
+    const videoFrames = isVideo ? frames : [];
+    const model = isImage || videoFrames.length > 0 ? llm.visionModel : llm.textModel;
 
     const brandPieces: string[] = [];
     if (context.workspace.companyWebsite?.trim()) {
@@ -207,6 +221,22 @@ ${lengthText}`.trim();
           ],
         },
       ];
+    } else if (videoFrames.length > 0) {
+      messages = [
+        { role: "system", content: systemPrompt },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `${baseUserPrompt}
+
+The images are ${videoFrames.length} still frames from the video, in order. Write a caption that fits what the video shows, including any words that appear on screen.`,
+            },
+            ...videoFrames.map((url) => ({ type: "image_url", image_url: { url } })),
+          ],
+        },
+      ];
     } else {
       messages = [
         { role: "system", content: systemPrompt },
@@ -264,6 +294,7 @@ The media is a short social media video. You do not have direct access to the vi
       userId: context.user.id,
       mediaKind,
       mimeType: trimmedMimeType,
+      videoFrames: videoFrames.length,
       captionLength: caption.length,
     });
 

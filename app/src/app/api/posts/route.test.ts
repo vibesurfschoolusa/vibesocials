@@ -1247,17 +1247,15 @@ describe("POST /api/posts - platform/media compatibility + TikTok privacy (2026-
       expect(inngestSendMock).not.toHaveBeenCalled();
     });
 
-    it("400s a video sent to an images-only platform (Facebook Page)", async () => {
+    it("lets a video through to Facebook Page (it takes videos since 2026-11-08)", async () => {
       const response = await POST(
         jsonRequest({ blobUrl: BLOB, mimeType: "video/mp4", baseCaption: "hi", platforms: ["facebook_page"] }),
       );
 
-      expect(response.status).toBe(400);
-      await expect(response.json()).resolves.toMatchObject({
-        code: "PLATFORM_MEDIA_MISMATCH",
-        platforms: ["facebook_page"],
-      });
-      expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+      expect(response.status).toBe(200);
+      expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ targetPlatforms: ["facebook_page"] }),
+      );
     });
 
     it("applies to scheduled and draft posts too", async () => {
@@ -1291,20 +1289,20 @@ describe("POST /api/posts - platform/media compatibility + TikTok privacy (2026-
       createPostJobForExistingMediaMock.mockRejectedValue(
         new PostTargetingError(
           "PLATFORM_MEDIA_MISMATCH",
-          "These platforms can't publish a video: Facebook Page (images only).",
-          ["facebook_page"],
+          "These platforms can't publish an image: YouTube (video only).",
+          ["youtube"],
         ),
       );
 
       const response = await POST(
-        jsonRequest({ mediaItemId: "media-9", baseCaption: "hi", platforms: ["facebook_page"] }),
+        jsonRequest({ mediaItemId: "media-9", baseCaption: "hi", platforms: ["youtube"] }),
       );
 
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({
-        error: "These platforms can't publish a video: Facebook Page (images only).",
+        error: "These platforms can't publish an image: YouTube (video only).",
         code: "PLATFORM_MEDIA_MISMATCH",
-        platforms: ["facebook_page"],
+        platforms: ["youtube"],
       });
       expect(inngestSendMock).not.toHaveBeenCalled();
     });
