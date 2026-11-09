@@ -8,7 +8,7 @@ import { isNeverConnectedFetchError } from "./transientRetry";
 // 2026-11-01 scale audit (jobs H6, Review Focus 5): the COMMIT call of a
 // publish is the one request that makes the post exist on the platform (X
 // tweet create, YouTube videos.insert, TikTok's final chunk PUT, Instagram
-// media_publish, Facebook /photos, LinkedIn ugcPosts, GBP media create). Once
+// media_publish, Facebook /photos, LinkedIn /rest/posts, GBP media create). Once
 // it has been sent, a 5xx, a timeout or a dropped connection says nothing about
 // whether the platform committed it, and re-running it would double-post.
 //

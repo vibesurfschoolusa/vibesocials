@@ -29,7 +29,10 @@ export function platformPostUrl(
     case "x":
       return `https://x.com/i/web/status/${encodeURIComponent(externalPostId)}`;
     case "linkedin":
-      // LinkedIn's externalPostId is a structured URN ("urn:li:share:...") —
+      // LinkedIn's externalPostId is the post URN the Posts API answered in
+      // `x-restli-id`: "urn:li:share:..." or "urn:li:ugcPost:..." (legacy
+      // ugcPosts ids are the same forms). /feed/update/{urn} opens either
+      // (posts-api: "https://www.linkedin.com/feed/update/urn:li:ugcPost:<id>/").
       // encodeURIComponent would percent-escape its colons and mangle the
       // URL. encodeURI preserves reserved URI characters (":", "/") while
       // still escaping anything genuinely unsafe (spaces, unicode).

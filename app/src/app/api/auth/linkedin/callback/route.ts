@@ -3,6 +3,11 @@ import { prisma } from "@/lib/db";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
+import {
+  findAdministeredOrganizations,
+  lookupOrganization,
+  lookupOrganizationByVanityName,
+} from "@/server/connections/linkedinOrganizations";
 import { createPendingConnection } from "@/server/connections/pendingConnection";
 import {
   saveLinkedInConnection,
@@ -10,25 +15,6 @@ import {
   type LinkedInProfile,
 } from "@/server/connections/saveConnection";
 import { Platform } from "@prisma/client";
-
-// Minimal shapes for the LinkedIn responses this handler reads. Only the fields
-// actually used are modeled; everything else is ignored. (The profile and
-// organization shapes live with saveLinkedInConnection.)
-interface LinkedInAclElement {
-  "organizationalTarget~"?: {
-    id?: string;
-    localizedName?: string;
-    vanityName?: string;
-  };
-}
-
-interface LinkedInOrgElement {
-  id?: string;
-  organizationId?: string;
-  localizedName?: string;
-  name?: string;
-  vanityName?: string;
-}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -185,116 +171,30 @@ export async function GET(request: Request) {
       hasEmail: !!profile.email,
     });
 
-    // Try multiple endpoints to fetch organizations (Community Management API limitations)
+    // The company pages the member administers, through LinkedIn's versioned
+    // REST APIs (server/connections/linkedinOrganizations.ts). Until 2026-11
+    // this tried /v2/organizationalEntityAcls, /v2/organizations?q=roleAssignee
+    // and /rest/organizations?q=roleAssignee under the sunset 202405 version;
+    // organizationAcls replaces all three.
     let organizations: LinkedInOrganization[] = [];
-    
-    // Strategy 1: Try organizationalEntityAcls endpoint (requires specific permissions)
-    console.log("[LinkedIn OAuth] Attempting to fetch organizations - Strategy 1: organizationalEntityAcls");
-    try {
-      const acls = await fetch(
-        "https://api.linkedin.com/v2/organizationalEntityAcls?q=roleAssignee&role=ADMINISTRATOR&projection=(elements*(organizationalTarget~(id,localizedName,vanityName)))",
-        {
-          headers: {
-            Authorization: `Bearer ${tokenData.access_token}`,
-            "X-Restli-Protocol-Version": "2.0.0",
-          },
-        }
-      );
 
-      if (acls.ok) {
-        const aclsData = await acls.json() as { elements?: LinkedInAclElement[] };
-        organizations = aclsData.elements
-          ?.map((element) => ({
-            id: element["organizationalTarget~"]?.id,
-            name: element["organizationalTarget~"]?.localizedName,
-            vanityName: element["organizationalTarget~"]?.vanityName,
-          }))
-          .filter((org) => org.id && org.name) || [];
-        
-        console.log("[LinkedIn OAuth] Strategy 1 SUCCESS", {
-          count: organizations.length,
-          orgs: organizations,
-        });
-      } else {
-        console.log("[LinkedIn OAuth] Strategy 1 failed:", acls.status);
-      }
-    } catch (error) {
-      console.log("[LinkedIn OAuth] Strategy 1 error:", error);
+    // Strategy 1: organizationAcls (approved ADMINISTRATOR roles), with each
+    // page's name from GET /rest/organizations/{id}.
+    console.log("[LinkedIn OAuth] Attempting to fetch organizations - Strategy 1: organizationAcls");
+    const administered = await findAdministeredOrganizations(tokenData.access_token);
+    if (administered && administered.length > 0) {
+      organizations = administered;
+      console.log("[LinkedIn OAuth] Strategy 1 SUCCESS", {
+        count: organizations.length,
+        orgs: organizations,
+      });
+    } else {
+      console.log("[LinkedIn OAuth] Strategy 1 found no organizations", {
+        failed: administered === null,
+      });
     }
 
-    // Strategy 2: Try organizations lookup API with roleAssignee
-    if (organizations.length === 0) {
-      console.log("[LinkedIn OAuth] Attempting Strategy 2: organizations?q=roleAssignee");
-      try {
-        const orgsLookup = await fetch(
-          "https://api.linkedin.com/v2/organizations?q=roleAssignee&role=ADMINISTRATOR&projection=(elements*(id,localizedName,vanityName))",
-          {
-            headers: {
-              Authorization: `Bearer ${tokenData.access_token}`,
-              "X-Restli-Protocol-Version": "2.0.0",
-            },
-          }
-        );
-
-        if (orgsLookup.ok) {
-          const lookupData = await orgsLookup.json() as { elements?: LinkedInOrgElement[] };
-          organizations = lookupData.elements
-            ?.map((org) => ({
-              id: org.id,
-              name: org.localizedName,
-              vanityName: org.vanityName,
-            }))
-            .filter((org) => org.id && org.name) || [];
-          
-          console.log("[LinkedIn OAuth] Strategy 2 SUCCESS", {
-            count: organizations.length,
-            orgs: organizations,
-          });
-        } else {
-          console.log("[LinkedIn OAuth] Strategy 2 failed:", orgsLookup.status);
-        }
-      } catch (error) {
-        console.log("[LinkedIn OAuth] Strategy 2 error:", error);
-      }
-    }
-
-    // Strategy 3: Try REST API with newer versioning
-    if (organizations.length === 0) {
-      console.log("[LinkedIn OAuth] Attempting Strategy 3: REST API /rest/organizations");
-      try {
-        const restOrgs = await fetch(
-          "https://api.linkedin.com/rest/organizations?q=roleAssignee",
-          {
-            headers: {
-              Authorization: `Bearer ${tokenData.access_token}`,
-              "LinkedIn-Version": "202405",
-            },
-          }
-        );
-
-        if (restOrgs.ok) {
-          const restData = await restOrgs.json() as { elements?: LinkedInOrgElement[] };
-          organizations = restData.elements
-            ?.map((org) => ({
-              id: org.id || org.organizationId,
-              name: org.localizedName || org.name,
-              vanityName: org.vanityName,
-            }))
-            .filter((org) => org.id && org.name) || [];
-          
-          console.log("[LinkedIn OAuth] Strategy 3 SUCCESS", {
-            count: organizations.length,
-            orgs: organizations,
-          });
-        } else {
-          console.log("[LinkedIn OAuth] Strategy 3 failed:", restOrgs.status);
-        }
-      } catch (error) {
-        console.log("[LinkedIn OAuth] Strategy 3 error:", error);
-      }
-    }
-
-    // Strategy 4: Check if user has a previous LinkedIn connection with organization data
+    // Strategy 2: Check if user has a previous LinkedIn connection with organization data
     if (organizations.length === 0) {
       console.log("[LinkedIn OAuth] Checking for existing LinkedIn connection");
       
@@ -312,37 +212,23 @@ export async function GET(request: Request) {
           const metadata = existingConnection.metadata as { organizations?: LinkedInOrganization[] };
           const previousOrgs = metadata.organizations || [];
           
-          if (previousOrgs.length > 0) {
+          if (previousOrgs.length > 0 && previousOrgs[0].id !== undefined) {
             console.log("[LinkedIn OAuth] Found organization from previous connection", {
               orgId: previousOrgs[0].id,
               orgName: previousOrgs[0].name,
             });
             
             // Verify the organization is still accessible with new token
-            try {
-              const orgVerify = await fetch(
-                `https://api.linkedin.com/v2/organizations/${previousOrgs[0].id}`,
-                {
-                  headers: {
-                    Authorization: `Bearer ${tokenData.access_token}`,
-                    "X-Restli-Protocol-Version": "2.0.0",
-                  },
-                }
-              );
-              
-              if (orgVerify.ok) {
-                const org = await orgVerify.json();
-                organizations = [{
-                  id: org.id,
-                  name: org.localizedName || org.name || previousOrgs[0].name,
-                  vanityName: org.vanityName || previousOrgs[0].vanityName || null,
-                }];
-                console.log("[LinkedIn OAuth] Previous organization verified and reused!", organizations[0]);
-              } else {
-                console.log("[LinkedIn OAuth] Previous organization verification failed:", orgVerify.status);
-              }
-            } catch (error) {
-              console.log("[LinkedIn OAuth] Previous organization verification error:", error);
+            const org = await lookupOrganization(tokenData.access_token, String(previousOrgs[0].id));
+            if (org) {
+              organizations = [{
+                id: org.id,
+                name: org.name || previousOrgs[0].name,
+                vanityName: org.vanityName || previousOrgs[0].vanityName || null,
+              }];
+              console.log("[LinkedIn OAuth] Previous organization verified and reused!", organizations[0]);
+            } else {
+              console.log("[LinkedIn OAuth] Previous organization verification failed");
             }
           }
         }
@@ -351,7 +237,7 @@ export async function GET(request: Request) {
       }
     }
 
-    // Strategy 5: Check if organization was provided in the state
+    // Strategy 3: Check if organization was provided in the state
     if (organizations.length === 0) {
       console.log("[LinkedIn OAuth] Checking for organization in state/session");
       
@@ -366,63 +252,28 @@ export async function GET(request: Request) {
         const isNumericId = /^\d+$/.test(vanityName);
         
         if (isNumericId) {
-          // Strategy 5a: Direct lookup by numeric organization ID
+          // Strategy 3a: Direct lookup by numeric organization ID
           console.log("[LinkedIn OAuth] Attempting to lookup organization by ID:", vanityName);
-          try {
-            const orgLookup = await fetch(
-              `https://api.linkedin.com/v2/organizations/${vanityName}`,
-              {
-                headers: {
-                  Authorization: `Bearer ${tokenData.access_token}`,
-                  "X-Restli-Protocol-Version": "2.0.0",
-                },
-              }
-            );
-
-            if (orgLookup.ok) {
-              const org = await orgLookup.json();
-              organizations = [{
-                id: org.id,
-                name: org.localizedName || org.name,
-                vanityName: org.vanityName || null,
-              }];
-              console.log("[LinkedIn OAuth] Organization found by ID!", organizations[0]);
-            } else {
-              console.log("[LinkedIn OAuth] ID lookup failed:", orgLookup.status);
-            }
-          } catch (error) {
-            console.log("[LinkedIn OAuth] ID lookup error:", error);
+          const org = await lookupOrganization(tokenData.access_token, vanityName);
+          if (org) {
+            organizations = [{
+              id: org.id,
+              name: org.name,
+              vanityName: org.vanityName || null,
+            }];
+            console.log("[LinkedIn OAuth] Organization found by ID!", organizations[0]);
           }
         } else {
-          // Strategy 5b: Lookup by vanity name
+          // Strategy 3b: Lookup by vanity name
           console.log("[LinkedIn OAuth] Attempting to lookup organization by vanity name:", vanityName);
-          try {
-            const orgLookup = await fetch(
-              `https://api.linkedin.com/v2/organizations?q=vanityName&vanityName=${encodeURIComponent(vanityName)}`,
-              {
-                headers: {
-                  Authorization: `Bearer ${tokenData.access_token}`,
-                  "X-Restli-Protocol-Version": "2.0.0",
-                },
-              }
-            );
-
-            if (orgLookup.ok) {
-              const lookupData = await orgLookup.json();
-              const org = lookupData.elements?.[0];
-              if (org) {
-                organizations = [{
-                  id: org.id,
-                  name: org.localizedName || org.name,
-                  vanityName: org.vanityName,
-                }];
-                console.log("[LinkedIn OAuth] Organization found by vanity name!", organizations[0]);
-              }
-            } else {
-              console.log("[LinkedIn OAuth] Vanity name lookup failed:", orgLookup.status);
-            }
-          } catch (error) {
-            console.log("[LinkedIn OAuth] Vanity name lookup error:", error);
+          const org = await lookupOrganizationByVanityName(tokenData.access_token, vanityName);
+          if (org) {
+            organizations = [{
+              id: org.id,
+              name: org.name,
+              vanityName: org.vanityName,
+            }];
+            console.log("[LinkedIn OAuth] Organization found by vanity name!", organizations[0]);
           }
         }
       }

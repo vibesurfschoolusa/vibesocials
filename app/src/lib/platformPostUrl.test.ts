@@ -13,6 +13,12 @@ describe("platformPostUrl", () => {
       "https://www.linkedin.com/feed/update/urn:li:share:7100",
     );
   });
+  // The Posts API answers either URN form in x-restli-id (posts-api).
+  it("builds a LinkedIn update URL from a ugcPost URN, colons intact", () => {
+    expect(platformPostUrl("linkedin", "urn:li:ugcPost:6856810298419044352")).toBe(
+      "https://www.linkedin.com/feed/update/urn:li:ugcPost:6856810298419044352",
+    );
+  });
   it("builds a Facebook post URL", () => {
     expect(platformPostUrl("facebook_page", "111_222")).toBe("https://www.facebook.com/111_222");
   });

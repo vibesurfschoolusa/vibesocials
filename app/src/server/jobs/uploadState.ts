@@ -20,7 +20,7 @@ import type { PendingResultFailure } from "@/server/jobs/failPendingResults";
  *   refuses a `data` that holds a URL (`://`), so a capability URL cannot land here.
  * - `secret` is `sealSecret(JSON.stringify(...))` (tokenCrypto.ts), the way
  *   SocialConnection tokens are sealed. Capability URLs - the YouTube session
- *   URI, TikTok's `upload_url`, LinkedIn's part URLs and multipart `metadata` -
+ *   URI, TikTok's `upload_url`, LinkedIn's part URLs and video `uploadToken` -
  *   go there and nowhere else: anyone holding one can write to (or finish) the
  *   upload, so none may be readable in the table, a dump, a step output or a log.
  * - `runId`, `platform` and `kind` scope it: state saved by another run (a retry
@@ -37,7 +37,7 @@ export const UPLOAD_STATE_VERSION = 1;
 /**
  * The largest state document (sealed secret included) a result may hold. Every
  * step re-reads it from the database, so it stays small; 512 KiB holds a
- * 128-part LinkedIn upload (a URL, a byte range and headers per part) with room.
+ * 128-part LinkedIn upload (a URL, a byte range and an ETag per part) with room.
  */
 export const MAX_UPLOAD_STATE_BYTES = 524_288;
 

@@ -151,11 +151,20 @@ const CASES: CallbackCase[] = [
       if (url.includes("oauth/v2/accessToken")) {
         return json({ access_token: "li-access", expires_in: 3600, scope: "w_organization_social" });
       }
-      if (url.includes("organizationalEntityAcls")) {
+      if (url.includes("/rest/organizationAcls")) {
         return json({
-          elements: [{ "organizationalTarget~": { id: "org-1", localizedName: "Org" } }],
+          elements: [
+            {
+              role: "ADMINISTRATOR",
+              organization: "urn:li:organization:101",
+              roleAssignee: "urn:li:person:member-1",
+              state: "APPROVED",
+            },
+          ],
+          paging: { count: 10, start: 0, links: [] },
         });
       }
+      if (url.includes("/rest/organizations/101")) return json({ id: 101, localizedName: "Org" });
       return json({ id: "member-1", localizedFirstName: "A", localizedLastName: "B" });
     },
   },
@@ -435,13 +444,39 @@ function instagramProvider(
   };
 }
 
-/** Strategy 1 answers `aclElements`; Strategies 2 and 3 are refused. */
-function linkedinProvider(aclElements: Array<Record<string, unknown>>): FakeProvider {
+/** A page as GET /rest/organizations/{id} answers it. */
+type LinkedInPage = { id: number; localizedName?: string; vanityName?: string };
+
+/**
+ * organizationAcls lists `pages` (approved ADMINISTRATOR roles) and GET
+ * /rest/organizations/{id} answers each of them; every other organization
+ * call is refused. `acl` replaces the organizationAcls answer, `extra` answers
+ * any other URL first (null: not handled).
+ */
+function linkedinProvider(
+  pages: LinkedInPage[],
+  opts: { acl?: () => Response; extra?: (url: string) => Response | null } = {},
+): FakeProvider {
   return (url) => {
     if (url.includes("oauth/v2/accessToken")) {
       return json({ access_token: "li-access", expires_in: 3600, scope: "w_organization_social" });
     }
-    if (url.includes("organizationalEntityAcls")) return json({ elements: aclElements });
+    if (url.includes("/rest/organizationAcls")) {
+      if (opts.acl) return opts.acl();
+      return json({
+        elements: pages.map((page) => ({
+          role: "ADMINISTRATOR",
+          organization: `urn:li:organization:${page.id}`,
+          roleAssignee: "urn:li:person:member-1",
+          state: "APPROVED",
+        })),
+        paging: { count: 10, start: 0, links: [] },
+      });
+    }
+    const extra = opts.extra?.(url);
+    if (extra) return extra;
+    const page = pages.find((p) => url === `https://api.linkedin.com/rest/organizations/${p.id}`);
+    if (page) return json(page);
     if (url.includes("/organizations")) return json({ message: "Not enough permissions" }, 403);
     return json({ id: "member-1", localizedFirstName: "A", localizedLastName: "B" });
   };
@@ -631,7 +666,7 @@ describe("choosing which account to connect", () => {
 
   describe("linkedin", () => {
     it("one organization connects straight away, with the same upsert as before", async () => {
-      useProvider(linkedinProvider([{ "organizationalTarget~": { id: "org-1", localizedName: "Org" } }]));
+      useProvider(linkedinProvider([{ id: 101, localizedName: "Org" }]));
 
       const res = await linkedinGET(callbackRequest("linkedin", signedState()));
 
@@ -646,7 +681,7 @@ describe("choosing which account to connect", () => {
           name: "A B",
           email: null,
           picture: null,
-          organizations: [{ id: "org-1", name: "Org" }],
+          organizations: [{ id: "101", name: "Org" }],
           username: "Org",
         },
         ...HEALTHY,
@@ -667,8 +702,8 @@ describe("choosing which account to connect", () => {
     it("several organizations connect none: the member token and the pages wait for the user's choice", async () => {
       useProvider(
         linkedinProvider([
-          { "organizationalTarget~": { id: 111, localizedName: "My Surf School", vanityName: "my-surf-school" } },
-          { "organizationalTarget~": { id: 222, localizedName: "Client Cafe" } },
+          { id: 111, localizedName: "My Surf School", vanityName: "my-surf-school" },
+          { id: 222, localizedName: "Client Cafe" },
         ]),
       );
 
@@ -689,9 +724,117 @@ describe("choosing which account to connect", () => {
         },
         profile: { sub: "member-1", name: "A B", email: null, picture: null },
         organizations: [
-          { id: 111, name: "My Surf School", vanityName: "my-surf-school" },
-          { id: 222, name: "Client Cafe" },
+          { id: "111", name: "My Surf School", vanityName: "my-surf-school" },
+          { id: "222", name: "Client Cafe" },
         ],
+      });
+    });
+
+    // 2026-11-09: the lookups moved from /v2/organizationalEntityAcls, /v2/organizations
+    // and the sunset 202405 /rest call to the versioned organizationAcls and organizations APIs.
+    describe("company-page lookups through the versioned REST APIs", () => {
+      type Call = [string, RequestInit | undefined];
+      const linkedinApiCalls = () =>
+        (fetchMock.mock.calls as Call[]).filter(([url]) => String(url).startsWith("https://api.linkedin.com/"));
+      const vanityState = (hint: string) => `${signedState()}.${Buffer.from(hint, "utf8").toString("base64url")}`;
+
+      it("asks organizationAcls for approved ADMINISTRATOR roles, then the page by id, every /rest call versioned", async () => {
+        useProvider(linkedinProvider([{ id: 101, localizedName: "Org" }]));
+
+        await linkedinGET(callbackRequest("linkedin", signedState()));
+
+        const urls = linkedinApiCalls().map(([url]) => String(url));
+        expect(urls).toContain(
+          "https://api.linkedin.com/rest/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED&start=0&count=10",
+        );
+        expect(urls).toContain("https://api.linkedin.com/rest/organizations/101");
+        for (const [url, init] of linkedinApiCalls()) {
+          if (!String(url).startsWith("https://api.linkedin.com/rest/")) continue;
+          expect(init?.headers).toMatchObject({
+            Authorization: "Bearer li-access",
+            "Linkedin-Version": "202610",
+            "X-Restli-Protocol-Version": "2.0.0",
+          });
+        }
+        const sent = JSON.stringify(fetchMock.mock.calls);
+        expect(sent).not.toContain("202405");
+        expect(sent).not.toContain("organizationalEntityAcls");
+        expect(sent).not.toContain("/v2/organizations");
+        expect(sent).not.toContain("ids=List(");
+      });
+
+      it("organizationAcls refused: reuses the previous connection's page once GET /rest/organizations/{id} confirms it", async () => {
+        findUniqueMock.mockResolvedValue({
+          metadata: { organizations: [{ id: "555", name: "Old Name", vanityName: "old-name" }] },
+        });
+        useProvider(
+          linkedinProvider([{ id: 555, localizedName: "New Name" }], {
+            acl: () => json({ status: 403, message: "Not enough permissions" }, 403),
+          }),
+        );
+
+        const res = await linkedinGET(callbackRequest("linkedin", signedState()));
+
+        expect(location(res).searchParams.get("success")).toBe("linkedin_connected");
+        const args = upsertMock.mock.calls[0][0] as { update: { metadata: { organizations: unknown[] } } };
+        expect(args.update.metadata.organizations).toEqual([{ id: "555", name: "New Name", vanityName: "old-name" }]);
+      });
+
+      it("the previous connection's page is not reused when LinkedIn no longer confirms it", async () => {
+        findUniqueMock.mockResolvedValue({ metadata: { organizations: [{ id: "555", name: "Old Name" }] } });
+        useProvider(linkedinProvider([]));
+
+        const res = await linkedinGET(callbackRequest("linkedin", signedState()));
+
+        expect(location(res).searchParams.get("linkedin_setup")).toBe("true");
+        expectNoConnectionWrites();
+      });
+
+      it("a numeric id from the setup dialog is looked up with GET /rest/organizations/{id}", async () => {
+        useProvider(linkedinProvider([{ id: 777, localizedName: "Hinted Page" }], { acl: () => json({ elements: [] }) }));
+
+        const res = await linkedinGET(callbackRequest("linkedin", vanityState("777")));
+
+        expect(location(res).searchParams.get("success")).toBe("linkedin_connected");
+        const args = upsertMock.mock.calls[0][0] as { update: { metadata: { organizations: unknown[] } } };
+        expect(args.update.metadata.organizations).toEqual([{ id: "777", name: "Hinted Page", vanityName: null }]);
+      });
+
+      it("a vanity name from the setup dialog is looked up with GET /rest/organizations?q=vanityName", async () => {
+        useProvider(
+          linkedinProvider([], {
+            extra: (url) =>
+              url === "https://api.linkedin.com/rest/organizations?q=vanityName&vanityName=acme-surf"
+                ? json({ elements: [{ id: 888, localizedName: "Acme Surf", vanityName: "acme-surf" }] })
+                : null,
+          }),
+        );
+
+        const res = await linkedinGET(callbackRequest("linkedin", vanityState("acme-surf")));
+
+        expect(location(res).searchParams.get("success")).toBe("linkedin_connected");
+        const args = upsertMock.mock.calls[0][0] as { update: { metadata: { organizations: unknown[]; username: string } } };
+        expect(args.update.metadata.organizations).toEqual([{ id: "888", name: "Acme Surf", vanityName: "acme-surf" }]);
+        expect(args.update.metadata.username).toBe("Acme Surf");
+      });
+
+      it("a page whose name LinkedIn will not give is still offered, by its id", async () => {
+        useProvider(
+          linkedinProvider([], {
+            acl: () =>
+              json({
+                elements: [
+                  { role: "ADMINISTRATOR", organization: "urn:li:organization:31", state: "APPROVED" },
+                  { role: "ADMINISTRATOR", organization: "urn:li:organization:32", state: "APPROVED" },
+                ],
+              }),
+          }),
+        );
+
+        const res = await linkedinGET(callbackRequest("linkedin", signedState()));
+
+        expectChooseRedirect(res);
+        expect(createdPending().opened.organizations).toEqual([{ id: "31" }, { id: "32" }]);
       });
     });
 
