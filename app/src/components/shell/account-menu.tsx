@@ -2,10 +2,12 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { signOut, useSession } from "next-auth/react";
-import { Check, ChevronDown, LogOut } from "lucide-react";
+import { Check, ChevronDown, LogOut, Plus } from "lucide-react";
 import type { WorkspaceRole } from "@prisma/client";
 
 import { cn } from "@/lib/cn";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { ThemeToggle } from "./theme-toggle";
@@ -40,6 +42,10 @@ export function AccountMenu() {
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[] | null>(null);
   const [workspacesLoading, setWorkspacesLoading] = useState(false);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
+  // 2026-11-08: "New workspace" (one per client). The name field opens in place.
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
+  const [newWorkspaceName, setNewWorkspaceName] = useState("");
+  const [createBusy, setCreateBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -118,6 +124,34 @@ export function AccountMenu() {
     } catch {
       toast.error("Couldn't switch workspaces.");
       setSwitchingId(null);
+    }
+  }
+
+  async function handleCreateWorkspace(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const name = newWorkspaceName.trim();
+    if (!name || createBusy) return;
+    setCreateBusy(true);
+    try {
+      const response = await fetch("/api/workspaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as { error?: string } | null;
+        toast.error(data?.error ?? "Couldn't create the workspace.");
+        setCreateBusy(false);
+        return;
+      }
+      // The new workspace is now the active one (cookie set by the route). A
+      // full navigation remounts every client view under it, like a switch;
+      // Settings first, since a new workspace's first job is connecting accounts.
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- a full navigation is the point: router.push would keep every client view on the previous workspace's data (see handleSwitch)
+      window.location.assign("/settings");
+    } catch {
+      toast.error("Couldn't create the workspace.");
+      setCreateBusy(false);
     }
   }
 
@@ -212,6 +246,49 @@ export function AccountMenu() {
                   </button>
                 ))}
               </div>
+            ) : null}
+
+            {!workspacesLoading ? (
+              creatingWorkspace ? (
+                <form onSubmit={handleCreateWorkspace} className="mt-2 flex flex-col gap-2">
+                  <Input
+                    autoFocus
+                    aria-label="New workspace name"
+                    placeholder="Client or business name"
+                    maxLength={60}
+                    value={newWorkspaceName}
+                    onChange={(event) => setNewWorkspaceName(event.target.value)}
+                    disabled={createBusy}
+                  />
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      disabled={createBusy}
+                      onClick={() => {
+                        setCreatingWorkspace(false);
+                        setNewWorkspaceName("");
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button type="submit" size="sm" disabled={createBusy || !newWorkspaceName.trim()}>
+                      {createBusy ? "Creating…" : "Create"}
+                    </Button>
+                  </div>
+                </form>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setCreatingWorkspace(true)}
+                  disabled={switchingId !== null}
+                  className="mt-2 flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-1.5 text-left text-sm text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+                >
+                  <Plus aria-hidden className="h-4 w-4" />
+                  New workspace
+                </button>
+              )
             ) : null}
           </div>
 
