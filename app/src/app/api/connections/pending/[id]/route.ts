@@ -38,8 +38,9 @@ function ownerOf(context: WorkspaceContext) {
 }
 
 /**
- * The error's kind only. A POST failure can come from the connection upsert,
- * and a Prisma validation error quotes the call's arguments: the tokens.
+ * The error's kind only, for every method: a POST failure can come from the
+ * connection upsert, and a Prisma validation error quotes the call's
+ * arguments (the tokens); a payload parse error would quote the payload.
  */
 function errorKind(error: unknown): { name: string; code?: string } {
   if (!(error instanceof Error)) return { name: "unknown" };
@@ -68,7 +69,7 @@ export async function GET(_request: Request, { params }: PendingRouteContext) {
     });
   } catch (error) {
     logger.error("[GET /api/connections/pending/[id]] Unexpected error", {
-      error,
+      error: errorKind(error),
       pendingConnectionId: id,
     });
     return NextResponse.json({ error: "Failed to load the accounts." }, { status: 500 });
@@ -163,7 +164,7 @@ export async function DELETE(_request: Request, { params }: PendingRouteContext)
     return NextResponse.json({ ok: true });
   } catch (error) {
     logger.error("[DELETE /api/connections/pending/[id]] Unexpected error", {
-      error,
+      error: errorKind(error),
       pendingConnectionId: id,
     });
     return NextResponse.json({ error: "Failed to cancel." }, { status: 500 });

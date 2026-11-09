@@ -1,5 +1,12 @@
 # Finding Your LinkedIn Organization ID
 
+> **Outdated (2026-11-09).** The `LINKEDIN_ORGANIZATION_ID` / `LINKEDIN_ORGANIZATION_NAME`
+> environment variables no longer do anything: one app-wide page would post every
+> workspace's LinkedIn posts to the same company. Connecting LinkedIn now finds the
+> pages you administer; with several, Settings asks which one to connect, and with
+> none it asks for the company page's URL. The steps below are kept only for
+> looking up an organization ID by hand.
+
 Since the Community Management API doesn't provide access to the `organizationalEntityAcls` endpoint, you need to manually configure your LinkedIn company page's Organization ID.
 
 ## Method 1: Using LinkedIn's API (Recommended)
