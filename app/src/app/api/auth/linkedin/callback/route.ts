@@ -3,23 +3,17 @@ import { prisma } from "@/lib/db";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
-import { Platform, Prisma } from "@prisma/client";
+import { createPendingConnection } from "@/server/connections/pendingConnection";
+import {
+  saveLinkedInConnection,
+  type LinkedInOrganization,
+  type LinkedInProfile,
+} from "@/server/connections/saveConnection";
+import { Platform } from "@prisma/client";
 
 // Minimal shapes for the LinkedIn responses this handler reads. Only the fields
-// actually used are modeled; everything else is ignored.
-interface LinkedInProfile {
-  sub: string;
-  name: string;
-  email: string | null;
-  picture: string | null;
-}
-
-interface LinkedInOrganization {
-  id?: string;
-  name?: string;
-  vanityName?: string | null;
-}
-
+// actually used are modeled; everything else is ignored. (The profile and
+// organization shapes live with saveLinkedInConnection.)
 interface LinkedInAclElement {
   "organizationalTarget~"?: {
     id?: string;
@@ -434,25 +428,6 @@ export async function GET(request: Request) {
       }
     }
 
-    // Strategy 6: Fallback to environment variable
-    if (organizations.length === 0) {
-      console.log("[LinkedIn OAuth] Checking environment variables");
-      const linkedinOrgId = process.env.LINKEDIN_ORGANIZATION_ID;
-      const linkedinOrgName = process.env.LINKEDIN_ORGANIZATION_NAME || "Company Page";
-      
-      if (linkedinOrgId) {
-        organizations = [{
-          id: linkedinOrgId,
-          name: linkedinOrgName,
-          vanityName: null,
-        }];
-        console.log("[LinkedIn OAuth] Using manually configured organization", {
-          id: linkedinOrgId,
-          name: linkedinOrgName,
-        });
-      }
-    }
-
     // If still no organization, redirect to setup page
     if (organizations.length === 0) {
       console.warn("[LinkedIn OAuth] No organizations found - redirecting to setup");
@@ -468,58 +443,43 @@ export async function GET(request: Request) {
 
     // Calculate token expiry
     const expiresAt = new Date(Date.now() + tokenData.expires_in * 1000);
+    const refreshToken: string | null = tokenData.refresh_token || null;
+    const scope: string | null = tokenData.scope || null;
+
+    // Several company pages (an agency administering its own and its
+    // clients'): connect none of them yet — the user chooses one in Settings.
+    if (organizations.length > 1) {
+      const pendingId = await createPendingConnection({
+        workspaceId,
+        userId,
+        payload: {
+          platform: "linkedin",
+          token: {
+            accessToken: tokenData.access_token,
+            refreshToken,
+            expiresAt: expiresAt.toISOString(),
+            scope,
+          },
+          profile,
+          organizations,
+        },
+      });
+      console.log("[LinkedIn OAuth] Several organizations found; waiting for the user to choose", {
+        userId,
+        count: organizations.length,
+      });
+      return NextResponse.redirect(
+        new URL(`/settings?choose=${encodeURIComponent(pendingId)}`, process.env.NEXTAUTH_URL!)
+      );
+    }
 
     // Upsert social connection
-    await prisma.socialConnection.upsert({
-      where: {
-        workspaceId_platform: {
-          workspaceId,
-          platform: "linkedin",
-        },
-      },
-      create: {
-        userId,
-        workspaceId,
-        platform: "linkedin",
-        accessToken: tokenData.access_token,
-        refreshToken: tokenData.refresh_token || null,
-        expiresAt,
-        accountIdentifier: profile.sub,
-        scopes: tokenData.scope || "w_organization_social r_organization_social",
-        metadata: {
-          name: profile.name,
-          email: profile.email,
-          picture: profile.picture,
-          organizations,
-          // Shown as "Connected as <page>" in Settings (lib/connectionSummary.ts):
-          // the company page posts go to, not a placeholder member id.
-          username: organizations[0]?.name ?? null,
-        } as unknown as Prisma.InputJsonValue,
-        // Roadmap Phase 4: a fresh connect always starts in a healthy state.
-        needsReconnect: false,
-        lastRefreshErrorCode: null,
-        refreshFailedAt: null,
-      },
-      update: {
-        accessToken: tokenData.access_token,
-        refreshToken: tokenData.refresh_token || null,
-        expiresAt,
-        scopes: tokenData.scope || "w_organization_social r_organization_social",
-        metadata: {
-          name: profile.name,
-          email: profile.email,
-          picture: profile.picture,
-          organizations,
-          // Shown as "Connected as <page>" in Settings (lib/connectionSummary.ts):
-          // the company page posts go to, not a placeholder member id.
-          username: organizations[0]?.name ?? null,
-        } as unknown as Prisma.InputJsonValue,
-        // Roadmap Phase 4: successful reconnect clears the flag set by a
-        // prior refresh/COR-5 failure (see server/platforms/connectionHealth.ts).
-        needsReconnect: false,
-        lastRefreshErrorCode: null,
-        refreshFailedAt: null,
-      },
+    await saveLinkedInConnection({
+      userId,
+      workspaceId,
+      token: { accessToken: tokenData.access_token, refreshToken, expiresAt, scope },
+      profile,
+      organization: organizations[0],
     });
 
     console.log("[LinkedIn OAuth] Connection saved successfully", { userId });

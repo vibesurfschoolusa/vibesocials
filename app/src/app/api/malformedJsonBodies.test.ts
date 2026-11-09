@@ -50,6 +50,7 @@ import { POST as forgotPasswordPOST } from "./auth/forgot-password/route";
 import { POST as resetPasswordPOST } from "./auth/reset-password/route";
 import { POST as verifyEmailPOST } from "./auth/verify-email/route";
 import { POST as gbpLocationPOST } from "./connections/google_business_profile/location/route";
+import { POST as pendingConnectionPOST } from "./connections/pending/[id]/route";
 import { PATCH as postJobPATCH } from "./posts/[postJobId]/route";
 import { POST as approvalPOST } from "./posts/[postJobId]/approval/route";
 import { POST as retryPOST } from "./posts/[postJobId]/retry/route";
@@ -72,6 +73,10 @@ const ROUTES: Array<[string, Call]> = [
   ["POST /api/auth/reset-password", (r) => resetPasswordPOST(r)],
   ["POST /api/auth/verify-email", (r) => verifyEmailPOST(r)],
   ["POST /api/connections/google_business_profile/location", (r) => gbpLocationPOST(r)],
+  [
+    "POST /api/connections/pending/[id]",
+    (r) => pendingConnectionPOST(r, { params: Promise.resolve({ id: "pending-1" }) }),
+  ],
   ["PATCH /api/posts/[postJobId]", (r) => postJobPATCH(r as never, postJobParams)],
   ["POST /api/posts/[postJobId]/approval", (r) => approvalPOST(r as never, postJobParams)],
   ["POST /api/posts/[postJobId]/retry", (r) => retryPOST(r as never, postJobParams)],

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
+import { createPendingConnection } from "@/server/connections/pendingConnection";
+import { saveFacebookPageConnection } from "@/server/connections/saveConnection";
 import { Platform } from "@prisma/client";
 
 export async function GET(request: NextRequest) {
@@ -151,61 +152,35 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const desiredPageId = process.env.FACEBOOK_PAGE_ID;
+    const expiresAt = new Date(Date.now() + expiresIn * 1000);
+    const pages = pagesData.data.map((page) => ({
+      id: page.id,
+      name: page.name,
+      accessToken: page.access_token,
+    }));
 
-    let targetPage = pagesData.data[0];
-    if (desiredPageId) {
-      const match = pagesData.data.find((p) => p.id === desiredPageId);
-      if (match) {
-        targetPage = match;
-      }
+    // Several Pages (an agency managing its own and its clients'): connect
+    // none of them yet — the user chooses one in Settings.
+    if (pages.length > 1) {
+      const pendingId = await createPendingConnection({
+        workspaceId,
+        userId,
+        payload: { platform: "facebook_page", expiresAt: expiresAt.toISOString(), pages },
+      });
+      console.log("[FacebookPage OAuth] Several Pages found; waiting for the user to choose", {
+        userId,
+        count: pages.length,
+      });
+      return NextResponse.redirect(
+        new URL(`/settings?choose=${encodeURIComponent(pendingId)}`, request.url),
+      );
     }
 
-    const pageId = targetPage.id;
-    const pageName = targetPage.name;
-    const pageAccessToken = targetPage.access_token;
+    const [page] = pages;
+    const pageId = page.id;
+    const pageName = page.name;
 
-    const expiresAt = new Date(Date.now() + expiresIn * 1000);
-
-    await prisma.socialConnection.upsert({
-      where: {
-        workspaceId_platform: {
-          workspaceId,
-          platform: Platform.facebook_page,
-        },
-      },
-      update: {
-        accessToken: pageAccessToken,
-        refreshToken: null,
-        expiresAt,
-        accountIdentifier: pageId,
-        metadata: {
-          pageName,
-        },
-        // Roadmap Phase 4: successful reconnect clears the flag set by a
-        // prior COR-5 reconnect-required failure (see
-        // server/platforms/connectionHealth.ts).
-        needsReconnect: false,
-        lastRefreshErrorCode: null,
-        refreshFailedAt: null,
-      },
-      create: {
-        userId,
-        workspaceId,
-        platform: Platform.facebook_page,
-        accessToken: pageAccessToken,
-        refreshToken: null,
-        expiresAt,
-        accountIdentifier: pageId,
-        metadata: {
-          pageName,
-        },
-        // Roadmap Phase 4: a fresh connect always starts in a healthy state.
-        needsReconnect: false,
-        lastRefreshErrorCode: null,
-        refreshFailedAt: null,
-      },
-    });
+    await saveFacebookPageConnection({ userId, workspaceId, page, expiresAt });
 
     console.log("[FacebookPage OAuth] Connection successful", {
       userId,

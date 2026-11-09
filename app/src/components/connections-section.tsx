@@ -25,6 +25,7 @@ import { GoogleBusinessLocationForm } from "./google-business-location-form";
 import { ConnectionActions } from "./connection-actions";
 import { LinkedInConnectButton } from "./linkedin-account-dialog";
 import { LinkedInSetupDialog } from "./linkedin-setup-dialog";
+import { PendingConnectionDialog } from "./pending-connection-dialog";
 
 interface PlatformConfig {
   key: Platform;
@@ -113,6 +114,8 @@ export function ConnectionsSection({ connections, readOnly = false }: Connection
       {!readOnly ? (
         <Suspense fallback={null}>
           <LinkedInSetupDialog />
+          {/* ?choose=<id>: a connect found several Pages/accounts to pick from. */}
+          <PendingConnectionDialog />
         </Suspense>
       ) : null}
 

@@ -19,6 +19,8 @@ const {
   updateManyMock,
   deleteMock,
   deleteManyMock,
+  pendingCreateMock,
+  pendingDeleteManyMock,
   fetchMock,
 } = vi.hoisted(() => ({
   getCurrentUserMock: vi.fn(),
@@ -30,6 +32,8 @@ const {
   updateManyMock: vi.fn(),
   deleteMock: vi.fn(),
   deleteManyMock: vi.fn(),
+  pendingCreateMock: vi.fn(),
+  pendingDeleteManyMock: vi.fn(),
   fetchMock: vi.fn(),
 }));
 
@@ -52,6 +56,12 @@ vi.mock("@/lib/db", () => ({
       delete: deleteMock,
       deleteMany: deleteManyMock,
     },
+    // 2026-11-09: several accounts park the connect here for the user to choose.
+    pendingConnection: {
+      create: pendingCreateMock,
+      deleteMany: pendingDeleteManyMock,
+    },
+    $transaction: (operations: Array<Promise<unknown>>) => Promise.all(operations),
   },
 }));
 
@@ -60,6 +70,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { createOAuthState } from "@/lib/oauthState";
+import { openSecret } from "@/lib/tokenCrypto";
 import { GET as facebookPageGET } from "./facebook_page/callback/route";
 import { GET as gbpGET } from "./google_business_profile/callback/route";
 import { GET as instagramGET } from "./instagram/callback/route";
@@ -168,7 +179,16 @@ function location(res: Response): URL {
 }
 
 function expectNoConnectionWrites() {
-  for (const write of [upsertMock, createMock, updateMock, updateManyMock, deleteMock, deleteManyMock]) {
+  for (const write of [
+    upsertMock,
+    createMock,
+    updateMock,
+    updateManyMock,
+    deleteMock,
+    deleteManyMock,
+    pendingCreateMock,
+    pendingDeleteManyMock,
+  ]) {
     expect(write).not.toHaveBeenCalled();
   }
 }
@@ -184,6 +204,8 @@ beforeEach(() => {
     updateManyMock,
     deleteMock,
     deleteManyMock,
+    pendingCreateMock,
+    pendingDeleteManyMock,
     fetchMock,
   ]) {
     m.mockReset();
@@ -200,7 +222,6 @@ beforeEach(() => {
   vi.stubEnv("YOUTUBE_REDIRECT_URI", `${ORIGIN}/api/auth/youtube/callback`);
   vi.stubEnv("FACEBOOK_APP_ID", "fb-id");
   vi.stubEnv("FACEBOOK_APP_SECRET", "fb-secret");
-  vi.stubEnv("FACEBOOK_PAGE_ID", "");
   vi.stubEnv("INSTAGRAM_REDIRECT_URI", `${ORIGIN}/api/auth/instagram/callback`);
   vi.stubEnv("FACEBOOK_PAGE_REDIRECT_URI", `${ORIGIN}/api/auth/facebook_page/callback`);
   vi.stubEnv("LINKEDIN_CLIENT_ID", "li-id");
@@ -217,9 +238,12 @@ beforeEach(() => {
   isWorkspaceOwnerMock.mockResolvedValue(true);
   findUniqueMock.mockResolvedValue(null);
   upsertMock.mockResolvedValue({ id: "conn-1" });
+  pendingCreateMock.mockResolvedValue({ id: "pending-1" });
+  pendingDeleteManyMock.mockResolvedValue({ count: 0 });
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -375,5 +399,311 @@ describe("linkedin OAuth callback: vanity-name suffix", () => {
     expect(location(res).searchParams.get("error")).toBe("oauth_session_mismatch");
     expect(fetchMock).not.toHaveBeenCalled();
     expectNoConnectionWrites();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-11-09: choosing which account to connect. One Facebook Page / Instagram
+// account / LinkedIn page connects straight away, exactly as before (the
+// upserts below are pinned field by field). Several park the connect in a
+// sealed PendingConnection and send the user to /settings?choose=<id>. The
+// app-wide FACEBOOK_PAGE_ID / LINKEDIN_ORGANIZATION_ID overrides are gone.
+// ---------------------------------------------------------------------------
+
+const NOW = new Date("2026-11-09T12:00:00.000Z");
+const TEST_TOKEN_KEY = Buffer.alloc(32, 7).toString("base64");
+const HEALTHY = { needsReconnect: false, lastRefreshErrorCode: null, refreshFailedAt: null };
+
+function facebookProvider(pages: Array<Record<string, unknown>>): FakeProvider {
+  return (url) =>
+    url.includes("/me/accounts")
+      ? json({ data: pages })
+      : json({ access_token: "fb-user-token", expires_in: 5184000 });
+}
+
+/** `usernames`: the Instagram accounts whose details Graph returns; any other ig-N fails. */
+function instagramProvider(
+  pages: Array<Record<string, unknown>>,
+  usernames: Record<string, string>,
+): FakeProvider {
+  return (url) => {
+    if (url.includes("/me/accounts")) return json({ data: pages });
+    const igId = Object.keys(usernames).find((id) => url.includes(`/${id}?`));
+    if (igId) return json({ username: usernames[igId] });
+    if (/\/ig-\d+\?/.test(url)) return json({ error: { message: "Unsupported get request" } }, 400);
+    return json({ access_token: "fb-user-token", expires_in: 5184000 });
+  };
+}
+
+/** Strategy 1 answers `aclElements`; Strategies 2 and 3 are refused. */
+function linkedinProvider(aclElements: Array<Record<string, unknown>>): FakeProvider {
+  return (url) => {
+    if (url.includes("oauth/v2/accessToken")) {
+      return json({ access_token: "li-access", expires_in: 3600, scope: "w_organization_social" });
+    }
+    if (url.includes("organizationalEntityAcls")) return json({ elements: aclElements });
+    if (url.includes("/organizations")) return json({ message: "Not enough permissions" }, 403);
+    return json({ id: "member-1", localizedFirstName: "A", localizedLastName: "B" });
+  };
+}
+
+function useProvider(provider: FakeProvider) {
+  fetchMock.mockImplementation(async (input: string | URL) => provider(String(input)));
+}
+
+/** The one PendingConnection the callback created, with its payload opened. */
+function createdPending() {
+  expect(pendingCreateMock).toHaveBeenCalledTimes(1);
+  const { data } = pendingCreateMock.mock.calls[0][0] as {
+    data: { workspaceId: string; userId: string; platform: string; payload: string; expiresAt: Date };
+  };
+  return { ...data, opened: JSON.parse(openSecret(data.payload)) as Record<string, unknown> };
+}
+
+function expectChooseRedirect(res: Response) {
+  const loc = location(res);
+  expect(loc.origin).toBe(ORIGIN);
+  expect(loc.pathname).toBe("/settings");
+  expect(loc.searchParams.get("choose")).toBe("pending-1");
+  expect(loc.searchParams.get("success")).toBeNull();
+}
+
+describe("choosing which account to connect", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    vi.stubEnv("TOKEN_ENCRYPTION_KEY", TEST_TOKEN_KEY);
+    getCurrentUserMock.mockResolvedValue({ id: STATE_USER });
+  });
+
+  describe("facebook_page", () => {
+    it("one Page connects straight away, with the same upsert as before", async () => {
+      useProvider(facebookProvider([{ id: "page-1", name: "Page", access_token: "page-token" }]));
+
+      const res = await facebookPageGET(callbackRequest("facebook_page", signedState()));
+
+      expect(location(res).searchParams.get("success")).toBe("facebook_page_connected");
+      expect(pendingCreateMock).not.toHaveBeenCalled();
+      const fields = {
+        accessToken: "page-token",
+        refreshToken: null,
+        expiresAt: new Date(NOW.getTime() + 5184000 * 1000),
+        accountIdentifier: "page-1",
+        metadata: { pageName: "Page" },
+        ...HEALTHY,
+      };
+      expect(upsertMock).toHaveBeenCalledWith({
+        where: { workspaceId_platform: { workspaceId: STATE_WORKSPACE, platform: "facebook_page" } },
+        update: fields,
+        create: { userId: STATE_USER, workspaceId: STATE_WORKSPACE, platform: "facebook_page", ...fields },
+      });
+    });
+
+    it("several Pages connect none: a sealed PendingConnection holds them and Settings asks which", async () => {
+      // FACEBOOK_PAGE_ID used to pick a Page app-wide; it is ignored now.
+      vi.stubEnv("FACEBOOK_PAGE_ID", "page-2");
+      useProvider(
+        facebookProvider([
+          { id: "page-1", name: "My Surf School", access_token: "page-token-1" },
+          { id: "page-2", name: "Client Cafe", access_token: "page-token-2" },
+        ]),
+      );
+
+      const res = await facebookPageGET(callbackRequest("facebook_page", signedState()));
+
+      expectChooseRedirect(res);
+      expect(upsertMock).not.toHaveBeenCalled();
+
+      const pending = createdPending();
+      expect(pending.workspaceId).toBe(STATE_WORKSPACE);
+      expect(pending.userId).toBe(STATE_USER);
+      expect(pending.platform).toBe("facebook_page");
+      expect(pending.expiresAt).toEqual(new Date(NOW.getTime() + 15 * 60 * 1000));
+      expect(pending.payload.startsWith("enc:v1:")).toBe(true);
+      expect(pending.payload).not.toContain("page-token");
+      expect(pending.opened).toEqual({
+        platform: "facebook_page",
+        expiresAt: new Date(NOW.getTime() + 5184000 * 1000).toISOString(),
+        pages: [
+          { id: "page-1", name: "My Surf School", accessToken: "page-token-1" },
+          { id: "page-2", name: "Client Cafe", accessToken: "page-token-2" },
+        ],
+      });
+
+      // A newer connect replaces this user's older pending one for the platform.
+      expect(pendingDeleteManyMock).toHaveBeenCalledWith({
+        where: {
+          workspaceId: STATE_WORKSPACE,
+          userId: STATE_USER,
+          OR: [{ platform: "facebook_page" }, { expiresAt: { lte: NOW } }],
+        },
+      });
+    });
+  });
+
+  describe("instagram", () => {
+    it("one Page with an Instagram account connects straight away, with the same upsert as before", async () => {
+      useProvider(
+        instagramProvider(
+          [
+            { id: "page-1", name: "Page", access_token: "page-token", instagram_business_account: { id: "ig-1" } },
+            { id: "page-2", name: "No IG", access_token: "page-token-2" },
+          ],
+          { "ig-1": "brand" },
+        ),
+      );
+
+      const res = await instagramGET(callbackRequest("instagram", signedState()));
+
+      expect(location(res).searchParams.get("success")).toBe("instagram_connected");
+      expect(pendingCreateMock).not.toHaveBeenCalled();
+      const fields = {
+        accessToken: "page-token",
+        refreshToken: null,
+        expiresAt: new Date(NOW.getTime() + 5184000 * 1000),
+        accountIdentifier: "ig-1",
+        metadata: { username: "brand", profilePicture: null, pageId: "page-1" },
+        ...HEALTHY,
+      };
+      expect(upsertMock).toHaveBeenCalledWith({
+        where: { workspaceId_platform: { workspaceId: STATE_WORKSPACE, platform: "instagram" } },
+        update: fields,
+        create: { userId: STATE_USER, workspaceId: STATE_WORKSPACE, platform: "instagram", ...fields },
+      });
+    });
+
+    it("still refuses when the one account's details can't be read", async () => {
+      useProvider(
+        instagramProvider(
+          [{ id: "page-1", name: "Page", access_token: "page-token", instagram_business_account: { id: "ig-1" } }],
+          {},
+        ),
+      );
+
+      const res = await instagramGET(callbackRequest("instagram", signedState()));
+
+      expect(location(res).searchParams.get("error")).toBe("instagram_failed_to_fetch_ig_account");
+      expectNoConnectionWrites();
+    });
+
+    it("several Instagram accounts connect none: the list shows each username it could read", async () => {
+      useProvider(
+        instagramProvider(
+          [
+            { id: "page-1", name: "My Surf School", access_token: "page-token-1", instagram_business_account: { id: "ig-1" } },
+            { id: "page-2", name: "No IG", access_token: "page-token-2" },
+            { id: "page-3", name: "Client Cafe", access_token: "page-token-3", instagram_business_account: { id: "ig-3" } },
+          ],
+          // ig-3's details fail: that row falls back to its Page name.
+          { "ig-1": "mysurfschool" },
+        ),
+      );
+
+      const res = await instagramGET(callbackRequest("instagram", signedState()));
+
+      expectChooseRedirect(res);
+      expect(upsertMock).not.toHaveBeenCalled();
+      const pending = createdPending();
+      expect(pending.platform).toBe("instagram");
+      expect(pending.payload).not.toContain("page-token");
+      expect(pending.opened).toEqual({
+        platform: "instagram",
+        expiresAt: new Date(NOW.getTime() + 5184000 * 1000).toISOString(),
+        accounts: [
+          {
+            igAccountId: "ig-1",
+            pageId: "page-1",
+            pageName: "My Surf School",
+            pageAccessToken: "page-token-1",
+            username: "mysurfschool",
+          },
+          {
+            igAccountId: "ig-3",
+            pageId: "page-3",
+            pageName: "Client Cafe",
+            pageAccessToken: "page-token-3",
+            username: null,
+          },
+        ],
+      });
+    });
+  });
+
+  describe("linkedin", () => {
+    it("one organization connects straight away, with the same upsert as before", async () => {
+      useProvider(linkedinProvider([{ "organizationalTarget~": { id: "org-1", localizedName: "Org" } }]));
+
+      const res = await linkedinGET(callbackRequest("linkedin", signedState()));
+
+      expect(location(res).searchParams.get("success")).toBe("linkedin_connected");
+      expect(pendingCreateMock).not.toHaveBeenCalled();
+      const fields = {
+        accessToken: "li-access",
+        refreshToken: null,
+        expiresAt: new Date(NOW.getTime() + 3600 * 1000),
+        scopes: "w_organization_social",
+        metadata: {
+          name: "A B",
+          email: null,
+          picture: null,
+          organizations: [{ id: "org-1", name: "Org" }],
+          username: "Org",
+        },
+        ...HEALTHY,
+      };
+      expect(upsertMock).toHaveBeenCalledWith({
+        where: { workspaceId_platform: { workspaceId: STATE_WORKSPACE, platform: "linkedin" } },
+        create: {
+          userId: STATE_USER,
+          workspaceId: STATE_WORKSPACE,
+          platform: "linkedin",
+          accountIdentifier: "member-1",
+          ...fields,
+        },
+        update: fields,
+      });
+    });
+
+    it("several organizations connect none: the member token and the pages wait for the user's choice", async () => {
+      useProvider(
+        linkedinProvider([
+          { "organizationalTarget~": { id: 111, localizedName: "My Surf School", vanityName: "my-surf-school" } },
+          { "organizationalTarget~": { id: 222, localizedName: "Client Cafe" } },
+        ]),
+      );
+
+      const res = await linkedinGET(callbackRequest("linkedin", signedState()));
+
+      expectChooseRedirect(res);
+      expect(upsertMock).not.toHaveBeenCalled();
+      const pending = createdPending();
+      expect(pending.platform).toBe("linkedin");
+      expect(pending.payload).not.toContain("li-access");
+      expect(pending.opened).toEqual({
+        platform: "linkedin",
+        token: {
+          accessToken: "li-access",
+          refreshToken: null,
+          expiresAt: new Date(NOW.getTime() + 3600 * 1000).toISOString(),
+          scope: "w_organization_social",
+        },
+        profile: { sub: "member-1", name: "A B", email: null, picture: null },
+        organizations: [
+          { id: 111, name: "My Surf School", vanityName: "my-surf-school" },
+          { id: 222, name: "Client Cafe" },
+        ],
+      });
+    });
+
+    it("no organizations found: LINKEDIN_ORGANIZATION_ID is no longer a fallback, the user is asked for their page", async () => {
+      vi.stubEnv("LINKEDIN_ORGANIZATION_ID", "999");
+      vi.stubEnv("LINKEDIN_ORGANIZATION_NAME", "Owner's Page");
+      useProvider(linkedinProvider([]));
+
+      const res = await linkedinGET(callbackRequest("linkedin", signedState()));
+
+      expect(location(res).searchParams.get("linkedin_setup")).toBe("true");
+      expectNoConnectionWrites();
+    });
   });
 });

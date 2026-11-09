@@ -121,12 +121,13 @@ model Workspace {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  members     WorkspaceMember[]
-  invites     WorkspaceInvite[]
-  connections SocialConnection[]
-  mediaItems  MediaItem[]
-  postJobs    PostJob[]
-  postMetrics PostMetric[]
+  members            WorkspaceMember[]
+  invites            WorkspaceInvite[]
+  connections        SocialConnection[]
+  pendingConnections PendingConnection[]
+  mediaItems         MediaItem[]
+  postJobs           PostJob[]
+  postMetrics        PostMetric[]
 }
 
 // (workspace, user, role) membership row. The creator is `owner`; invite
@@ -224,6 +225,22 @@ model SocialConnection {
   // 2026-11-01 scale audit: User -> SocialConnection ON DELETE CASCADE seeks by
   // userId; without an index each user delete scans the table.
   @@index([userId])
+}
+
+// 2026-11-09: an OAuth connect that found several accounts, waiting for the
+// user to choose one. `payload` is sealSecret(JSON) — it holds tokens.
+model PendingConnection {
+  id          String   @id @default(cuid())
+  workspaceId String
+  userId      String
+  platform    Platform
+  payload     String
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, userId])
 }
 
 model MediaItem {

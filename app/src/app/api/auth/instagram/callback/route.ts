@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
+import { createPendingConnection } from "@/server/connections/pendingConnection";
+import {
+  fetchInstagramAccountDetails,
+  saveInstagramConnection,
+} from "@/server/connections/saveConnection";
 import { Platform } from "@prisma/client";
 
 export async function GET(request: NextRequest) {
@@ -146,90 +150,81 @@ export async function GET(request: NextRequest) {
       pages: pagesData.data?.map((page) => ({ id: page.id, name: page.name })) ?? [],
     });
 
-    // Find the first page with an Instagram Business Account
-    const pageWithInstagram = pagesData.data.find(
-      (page) => page.instagram_business_account,
+    // The pages with an Instagram Business Account linked
+    const pagesWithInstagram = pagesData.data.flatMap((page) =>
+      page.instagram_business_account
+        ? [{ page, igAccountId: page.instagram_business_account.id }]
+        : [],
     );
 
-    if (!pageWithInstagram || !pageWithInstagram.instagram_business_account) {
+    if (pagesWithInstagram.length === 0) {
       console.error("[Instagram OAuth] No Instagram Business Account found");
       return NextResponse.redirect(
         new URL("/settings?error=instagram_no_instagram_account", request.url),
       );
     }
 
-    const igAccountId = pageWithInstagram.instagram_business_account.id;
+    const expiresAt = new Date(Date.now() + expiresIn * 1000);
+
+    // Several Instagram accounts (an agency managing its own and its
+    // clients'): connect none of them yet — the user chooses one in Settings.
+    // Each account's username is read for the list; one Graph error leaves
+    // that row showing just its Page name.
+    if (pagesWithInstagram.length > 1) {
+      const accounts = await Promise.all(
+        pagesWithInstagram.map(async ({ page, igAccountId }) => {
+          const details = await fetchInstagramAccountDetails(
+            igAccountId,
+            page.access_token,
+          ).catch(() => null);
+          return {
+            igAccountId,
+            pageId: page.id,
+            pageName: page.name,
+            pageAccessToken: page.access_token,
+            username: details?.username ?? null,
+          };
+        }),
+      );
+      const pendingId = await createPendingConnection({
+        workspaceId,
+        userId,
+        payload: { platform: "instagram", expiresAt: expiresAt.toISOString(), accounts },
+      });
+      console.log("[Instagram OAuth] Several Instagram accounts found; waiting for the user to choose", {
+        userId,
+        count: accounts.length,
+      });
+      return NextResponse.redirect(
+        new URL(`/settings?choose=${encodeURIComponent(pendingId)}`, request.url),
+      );
+    }
+
+    const [{ page: pageWithInstagram, igAccountId }] = pagesWithInstagram;
     const pageAccessToken = pageWithInstagram.access_token;
 
     // 4. Get Instagram account details
-    const igUrl = new URL(`${META_GRAPH_BASE_URL}/${igAccountId}`);
-    igUrl.searchParams.set("fields", "username,profile_picture_url");
-    igUrl.searchParams.set("access_token", pageAccessToken);
-
-    const igResponse = await fetch(igUrl.toString());
-    if (!igResponse.ok) {
-      const errorText = await igResponse.text();
-      console.error("[Instagram OAuth] Failed to fetch IG account:", errorText);
+    const details = await fetchInstagramAccountDetails(igAccountId, pageAccessToken);
+    if (!details) {
       return NextResponse.redirect(
         new URL("/settings?error=instagram_failed_to_fetch_ig_account", request.url),
       );
     }
 
-    const igData = (await igResponse.json()) as {
-      username: string;
-      profile_picture_url?: string;
-    };
-
     // 5. Store or update the connection
-    const expiresAt = new Date(Date.now() + expiresIn * 1000);
-
-    await prisma.socialConnection.upsert({
-      where: {
-        workspaceId_platform: {
-          workspaceId,
-          platform: "instagram" as Platform,
-        },
-      },
-      update: {
-        accessToken: pageAccessToken,
-        refreshToken: null,
-        expiresAt,
-        accountIdentifier: igAccountId,
-        metadata: {
-          username: igData.username,
-          profilePicture: igData.profile_picture_url || null,
-          pageId: pageWithInstagram.id,
-        },
-        // Roadmap Phase 4: successful reconnect clears the flag set by a
-        // prior COR-5 reconnect-required failure (see
-        // server/platforms/connectionHealth.ts).
-        needsReconnect: false,
-        lastRefreshErrorCode: null,
-        refreshFailedAt: null,
-      },
-      create: {
-        userId,
-        workspaceId,
-        platform: "instagram" as Platform,
-        accessToken: pageAccessToken,
-        refreshToken: null,
-        expiresAt,
-        accountIdentifier: igAccountId,
-        metadata: {
-          username: igData.username,
-          profilePicture: igData.profile_picture_url || null,
-          pageId: pageWithInstagram.id,
-        },
-        // Roadmap Phase 4: a fresh connect always starts in a healthy state.
-        needsReconnect: false,
-        lastRefreshErrorCode: null,
-        refreshFailedAt: null,
-      },
+    await saveInstagramConnection({
+      userId,
+      workspaceId,
+      igAccountId,
+      pageId: pageWithInstagram.id,
+      pageAccessToken,
+      details,
+      expiresAt,
     });
 
     console.log("[Instagram OAuth] Connection successful", {
       userId,
-      username: igData.username,
+      username: details.username,
       igAccountId,
     });
 
