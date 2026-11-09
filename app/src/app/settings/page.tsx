@@ -8,7 +8,7 @@ import { ConnectionsSection } from "@/components/connections-section";
 import { TeamSection } from "@/components/team-section";
 import { Alert } from "@/components/ui/alert";
 import { describeOAuthResult } from "@/lib/oauthResult";
-import type { ConnectionSummary } from "@/lib/connectionSummary";
+import { type ConnectionSummary, toConnectionSummary } from "@/lib/connectionSummary";
 import type { UserSettings } from "@/lib/userSettings";
 
 export default async function SettingsPage({
@@ -54,24 +54,13 @@ export default async function SettingsPage({
       accountIdentifier: true,
       metadata: true,
       // Roadmap Phase 4: the connection-health flag itself — still never
-      // accessToken/refreshToken/scopes/raw metadata beyond the two fields
-      // flattened below.
+      // accessToken/refreshToken/scopes/raw metadata beyond the display
+      // fields toConnectionSummary reads.
       needsReconnect: true,
     },
   });
 
-  const connections: ConnectionSummary[] = rows.map((row) => {
-    const metadata = row.metadata as unknown as
-      | { username?: string | null; locationName?: string | null }
-      | null;
-    return {
-      platform: row.platform,
-      accountIdentifier: row.accountIdentifier,
-      username: metadata?.username ?? null,
-      locationName: metadata?.locationName ?? null,
-      needsReconnect: row.needsReconnect,
-    };
-  });
+  const connections: ConnectionSummary[] = rows.map(toConnectionSummary);
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8 md:px-6 lg:px-8">

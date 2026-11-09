@@ -27,3 +27,32 @@ export interface ConnectionSummary {
    */
   needsReconnect: boolean;
 }
+
+/** The SocialConnection columns Settings selects to build a ConnectionSummary. */
+export interface ConnectionSummaryRow {
+  platform: Platform;
+  accountIdentifier: string;
+  metadata: unknown;
+  needsReconnect: boolean;
+}
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+/**
+ * Maps a row to the browser-safe summary, reading only display fields from
+ * `metadata`. The label is `metadata.username`, or for a Facebook Page its
+ * `metadata.pageName` (server/connections/saveConnection.ts): without that,
+ * Settings showed the Page's numeric id (2026-11-09).
+ */
+export function toConnectionSummary(row: ConnectionSummaryRow): ConnectionSummary {
+  const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+  return {
+    platform: row.platform,
+    accountIdentifier: row.accountIdentifier,
+    username: nonEmptyString(metadata.username) ?? nonEmptyString(metadata.pageName),
+    locationName: nonEmptyString(metadata.locationName),
+    needsReconnect: row.needsReconnect,
+  };
+}
