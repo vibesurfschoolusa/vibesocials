@@ -12,6 +12,7 @@ import { PlatformPreviewList } from "./composer/platform-preview";
 import { LocationAutocomplete } from "./location-autocomplete";
 import { TikTokConsentDeclaration, TikTokPostSettings } from "./tiktok-post-settings";
 import { YouTubePostSettings } from "./youtube-post-settings";
+import { GooglePostSettings } from "./google-post-settings";
 import { CaptionCounter } from "@/components/caption-counter";
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -64,7 +65,12 @@ import {
   localTimeZoneLabel,
   toDateTimeLocalValue,
 } from "@/lib/scheduling";
-import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
+import type {
+  GoogleBusinessPostMetadata,
+  TikTokPostMetadata,
+  YouTubePostMetadata,
+} from "@/server/platforms/types";
+import type { GoogleButton } from "@/lib/googlePostOptions";
 
 interface UploadedBlobInfo {
   url: string;
@@ -110,12 +116,15 @@ interface CreatePostFormInnerProps {
    * the protection off, so the compiler rejects that instead.
    */
   workspaceId: string;
+  /** 2026-11-10 — the workspace's default Google button; Google posts start from it. */
+  googleButtonDefault?: GoogleButton | null;
 }
 
 function CreatePostFormInner({
   footerSettings,
   holdsForApproval = false,
   workspaceId,
+  googleButtonDefault = null,
 }: CreatePostFormInnerProps) {
   const toast = useToast();
   const searchParams = useSearchParams();
@@ -227,6 +236,10 @@ function CreatePostFormInner({
   const [youtubeMetadata, setYoutubeMetadata] = useState<YouTubePostMetadata>({
     privacyStatus: "unlisted",
   });
+  // 2026-11-10 — a Google photo post's type and button, from the workspace default.
+  const initialGoogleMetadata = (): GoogleBusinessPostMetadata =>
+    googleButtonDefault ? { postType: "update", button: googleButtonDefault } : { postType: "update" };
+  const [googleMetadata, setGoogleMetadata] = useState<GoogleBusinessPostMetadata>(initialGoogleMetadata);
 
   // Roadmap Phase 7 / Task 6 — single source of truth for connection state:
   // the same read-only `GET /api/connections` the dashboard's
@@ -285,6 +298,9 @@ function CreatePostFormInner({
     metadata: tiktokMetadata,
   });
   const youtubeSelected = selectedPlatforms.includes("youtube");
+  // Google's options apply to a photo post only; a video goes to the gallery.
+  const googleOptionsShown =
+    selectedPlatforms.includes("google_business_profile") && Boolean(activeMimeType?.startsWith("image/"));
   // What the preview shows: what would really change the post (selected, not
   // blank, not the main caption). The request builders clean the same way.
   const previewOverrides = cleanPlatformOverrides(
@@ -679,6 +695,7 @@ function CreatePostFormInner({
           // this post; a deselected TikTok/YouTube isn't published to.
           tiktokMetadata: tiktokSelected ? tiktokMetadata : undefined,
           youtubeMetadata: youtubeSelected ? youtubeMetadata : undefined,
+          googleMetadata: googleOptionsShown ? googleMetadata : undefined,
         });
       } else {
         // Unreachable given the guard in handleUploadSubmit (this branch only
@@ -709,6 +726,7 @@ function CreatePostFormInner({
           // this post; a deselected TikTok/YouTube isn't published to.
           tiktokMetadata: tiktokSelected ? tiktokMetadata : undefined,
           youtubeMetadata: youtubeSelected ? youtubeMetadata : undefined,
+          googleMetadata: googleOptionsShown ? googleMetadata : undefined,
         });
       }
 
@@ -781,6 +799,7 @@ function CreatePostFormInner({
       });
       setTiktokCommercialEnabled(false);
       setYoutubeMetadata({ privacyStatus: "unlisted" });
+      setGoogleMetadata(initialGoogleMetadata());
       setUploadLoading(false);
     } catch (err: unknown) {
       // An upload refused for full storage says so; anything else stays generic.
@@ -1241,6 +1260,9 @@ function CreatePostFormInner({
             onChange={setYoutubeMetadata}
           />
         )}
+        {googleOptionsShown && (
+          <GooglePostSettings metadata={googleMetadata} onChange={setGoogleMetadata} />
+        )}
 
         {/* Task 7 — per-post platform targeting: defaults to every connected
             platform selected; unchecking one excludes it from the preview
@@ -1471,6 +1493,8 @@ export interface CreatePostFormProps {
    * for other clients.
    */
   workspaceId: string;
+  /** 2026-11-10 — the workspace's default Google button (app/posts/new/page.tsx). */
+  googleButtonDefault?: GoogleButton | null;
 }
 
 /**
@@ -1483,6 +1507,7 @@ export function CreatePostForm({
   footerSettings,
   holdsForApproval,
   workspaceId,
+  googleButtonDefault,
 }: CreatePostFormProps) {
   return (
     <Suspense fallback={<CreatePostFormSkeleton />}>
@@ -1490,6 +1515,7 @@ export function CreatePostForm({
         footerSettings={footerSettings}
         holdsForApproval={holdsForApproval}
         workspaceId={workspaceId}
+        googleButtonDefault={googleButtonDefault}
       />
     </Suspense>
   );

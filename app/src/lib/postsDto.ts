@@ -146,6 +146,13 @@ export interface PostJobDTO {
     targetPlatforms: Platform[] | null;
     youtubePrivacy: string | null;
     tiktokPrivacy: string | null;
+    /**
+     * 2026-11-10 — the Google post's own options ("update" / "event" / "offer",
+     * and a button type such as "BOOK"). Null when the post has none: a post
+     * with none gets the workspace's default button at publish time.
+     */
+    googlePostType: string | null;
+    googleButton: string | null;
   } | null;
   /**
    * Team Workspaces (Task 4) — display name of the job's creator, always

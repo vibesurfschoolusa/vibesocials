@@ -1,6 +1,8 @@
 import type { SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
+import { prisma } from "@/lib/db";
+import { resolveGooglePostMetadata } from "@/lib/googlePostOptions";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
@@ -11,7 +13,7 @@ import { refreshGoogleToken } from "./googleTokens";
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import { budgetedTimeout } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
-import type { PlatformClient, PublishContext, PublishResult } from "./types";
+import type { GoogleBusinessPostMetadata, PlatformClient, PublishContext, PublishResult } from "./types";
 
 // Google Business Profile client (posts that appear on Google Search and Maps)
 //
@@ -76,7 +78,8 @@ export const googleBusinessProfileClient: PlatformClient = {
     const request = isPhoto
       ? {
           url: `https://mybusiness.googleapis.com/v4/${locationName}/localPosts`,
-          body: buildLocalPostBody(ctx.caption, mediaItem.storageLocation),
+          // The options apply to a post only; a video (below) ignores them.
+          body: buildLocalPostBody(ctx.caption, mediaItem.storageLocation, await resolvePostOptions(ctx)),
           failure: {
             code: "GBP_CREATE_POST_FAILED",
             prefix: "Failed to create the Google Business Profile post",
@@ -173,14 +176,83 @@ export function computeGbpPostSummary(caption: string): string {
  * The body of POST .../localPosts for one photo: a STANDARD post ("Update").
  * A post with no caption carries the photo alone (no empty `summary`).
  */
-export function buildLocalPostBody(caption: string, photoUrl: string): Record<string, unknown> {
+export function buildLocalPostBody(
+  caption: string,
+  photoUrl: string,
+  options?: GoogleBusinessPostMetadata,
+): Record<string, unknown> {
   const summary = computeGbpPostSummary(caption);
-  return {
+  const body: Record<string, unknown> = {
     languageCode: "en-US",
     topicType: "STANDARD",
     ...(summary ? { summary } : {}),
     media: [{ mediaFormat: "PHOTO", sourceUrl: photoUrl }],
   };
+  if (!options) return body;
+
+  // 2026-11-10, Google's LocalPost reference: callToAction is ignored for an
+  // OFFER (so never sent), and its url must be unset for CALL.
+  if (options.button && options.postType !== "offer") {
+    body.callToAction = {
+      actionType: options.button.type,
+      ...(options.button.type !== "CALL" && options.button.url ? { url: options.button.url } : {}),
+    };
+  }
+  if (options.postType === "event" && options.event) {
+    const { title, startDate, endDate, startTime, endTime } = options.event;
+    body.topicType = "EVENT";
+    body.event = { title, schedule: gbpSchedule(startDate, endDate, startTime, endTime) };
+  }
+  if (options.postType === "offer" && options.offer) {
+    const { title, startDate, endDate, couponCode, redeemUrl, terms } = options.offer;
+    body.topicType = "OFFER";
+    // Google requires `event` (title + schedule) for an OFFER as well.
+    body.event = { title, schedule: gbpSchedule(startDate, endDate) };
+    const offer = {
+      ...(couponCode ? { couponCode } : {}),
+      ...(redeemUrl ? { redeemOnlineUrl: redeemUrl } : {}),
+      ...(terms ? { termsConditions: terms } : {}),
+    };
+    if (Object.keys(offer).length > 0) body.offer = offer;
+  }
+  return body;
+}
+
+/**
+ * Google's TimeInterval "must contain all fields to be valid", so a missing time
+ * becomes the whole day: 00:00 for the start, 23:59 for the end (an offer has
+ * no times at all). Dates are YYYY-MM-DD, times HH:MM, already validated
+ * (lib/googlePostOptions.ts).
+ */
+function gbpSchedule(startDate: string, endDate: string, startTime?: string, endTime?: string) {
+  const date = (value: string) => {
+    const [year, month, day] = value.split("-").map(Number);
+    return { year, month, day };
+  };
+  const time = (value: string) => {
+    const [hours, minutes] = value.split(":").map(Number);
+    return { hours, minutes, seconds: 0, nanos: 0 };
+  };
+  return {
+    startDate: date(startDate),
+    startTime: time(startTime ?? "00:00"),
+    endDate: date(endDate),
+    endTime: time(endTime ?? "23:59"),
+  };
+}
+
+/**
+ * A photo post's options: the post's own, or, for a post that has none (from
+ * before 2026-11-10, or the API), the workspace's default button. Read before
+ * the create request is sent, so a failure here is safe to retry.
+ */
+async function resolvePostOptions(ctx: PublishContext): Promise<GoogleBusinessPostMetadata | undefined> {
+  if (ctx.googleBusinessProfileMetadata) return ctx.googleBusinessProfileMetadata;
+  const workspace = await prisma.workspace.findUnique({
+    where: { id: ctx.socialConnection.workspaceId },
+    select: { googleButtonType: true, googleButtonUrl: true },
+  });
+  return resolveGooglePostMetadata(undefined, workspace);
 }
 
 async function ensureLocationName(

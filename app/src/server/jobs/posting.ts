@@ -1,7 +1,11 @@
 import { Platform, type MediaItem, type Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import type { SavedFileInfo } from "@/server/storage";
-import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
+import type {
+  GoogleBusinessPostMetadata,
+  TikTokPostMetadata,
+  YouTubePostMetadata,
+} from "@/server/platforms/types";
 import { postJobStatusForIntent, type PostJobIntent } from "@/lib/scheduling";
 import { platformAcceptsMedia } from "@/lib/platformLimits";
 import { assertPostTargetsValid, narrowConnectionsForPost } from "@/lib/postTargets";
@@ -64,6 +68,8 @@ export interface CreatePostJobOnlyParams extends PostJobSchedulingParams {
    */
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
+  /** The Google post's options (2026-11-10); snapshotted like YouTube's privacy. */
+  googleMetadata?: GoogleBusinessPostMetadata;
 }
 
 /**
@@ -81,6 +87,11 @@ export interface PublishMetadataSnapshot {
    * values only.
    */
   targetPlatforms?: Platform[];
+  /**
+   * 2026-11-10 — the Google post's options. Absent means the post has none and
+   * gets the workspace's default button at publish time.
+   */
+  googleBusinessProfile?: GoogleBusinessPostMetadata;
 }
 
 /**
@@ -95,13 +106,15 @@ export function buildPublishMetadataSnapshot(
   tiktokMetadata?: TikTokPostMetadata,
   youtubeMetadata?: YouTubePostMetadata,
   targetPlatforms?: Platform[],
+  googleMetadata?: GoogleBusinessPostMetadata,
 ): PublishMetadataSnapshot | undefined {
   const hasTargetPlatforms = Boolean(targetPlatforms && targetPlatforms.length > 0);
-  if (!tiktokMetadata && !youtubeMetadata && !hasTargetPlatforms) return undefined;
+  if (!tiktokMetadata && !youtubeMetadata && !hasTargetPlatforms && !googleMetadata) return undefined;
   return {
     ...(tiktokMetadata ? { tiktok: tiktokMetadata } : {}),
     ...(youtubeMetadata ? { youtube: youtubeMetadata } : {}),
     ...(hasTargetPlatforms ? { targetPlatforms } : {}),
+    ...(googleMetadata ? { googleBusinessProfile: googleMetadata } : {}),
   };
 }
 
@@ -261,6 +274,7 @@ export async function createPostJobOnly(
             perPlatformOverrides,
             tiktokMetadata: params.tiktokMetadata,
             youtubeMetadata: params.youtubeMetadata,
+            googleMetadata: params.googleMetadata,
             targetPlatforms,
           }),
           workspaceId,
@@ -330,6 +344,7 @@ export function buildPostJobCreateData(args: {
   perPlatformOverrides?: Partial<Record<Platform, string>> | null;
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
+  googleMetadata?: GoogleBusinessPostMetadata;
   /** Task 7 — chosen platform subset, persisted for deferred jobs so
    *  {@link prepareDeferredPostJobDispatch} can replay it at run time. */
   targetPlatforms?: Platform[];
@@ -345,6 +360,7 @@ export function buildPostJobCreateData(args: {
     args.tiktokMetadata,
     args.youtubeMetadata,
     args.targetPlatforms,
+    args.googleMetadata,
   );
   return {
     userId: args.userId,
@@ -397,6 +413,8 @@ export interface CreatePostJobForExistingMediaParams
   tiktokMetadata?: TikTokPostMetadata;
   /** See `baseCaption` above: carried by the event payload, not this helper. */
   youtubeMetadata?: YouTubePostMetadata;
+  /** See `baseCaption` above: carried by the event payload, not this helper. */
+  googleMetadata?: GoogleBusinessPostMetadata;
 }
 
 /**
@@ -509,6 +527,7 @@ export async function createPostJobForExistingMedia(
           perPlatformOverrides,
           tiktokMetadata: params.tiktokMetadata,
           youtubeMetadata: params.youtubeMetadata,
+          googleMetadata: params.googleMetadata,
           targetPlatforms,
         }),
         workspaceId,
@@ -662,6 +681,8 @@ export interface PublishRequestedEventData {
    */
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
+  /** 2026-11-10 — the Google post's options; omitted when the post has none. */
+  googleMetadata?: GoogleBusinessPostMetadata;
 }
 
 /**
@@ -821,6 +842,9 @@ export async function prepareDeferredPostJobDispatch(
       // default; TikTok refuses the post, since it may not pick a privacy level).
       ...(publishMetadata?.tiktok ? { tiktokMetadata: publishMetadata.tiktok } : {}),
       ...(publishMetadata?.youtube ? { youtubeMetadata: publishMetadata.youtube } : {}),
+      ...(publishMetadata?.googleBusinessProfile
+        ? { googleMetadata: publishMetadata.googleBusinessProfile }
+        : {}),
     },
   };
 }

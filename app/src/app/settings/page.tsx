@@ -51,6 +51,8 @@ export default async function SettingsPage({
     notifyOnPostComplete: context.user.notifyOnPostComplete,
     notifyDailyDigest: context.user.notifyDailyDigest,
     requireApproval: context.workspace.requireApproval,
+    googleButtonType: context.workspace.googleButtonType,
+    googleButtonUrl: context.workspace.googleButtonUrl,
   };
 
   // Fetch the WORKSPACE's connections (shared by every member — design §2),

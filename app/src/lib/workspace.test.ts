@@ -107,6 +107,8 @@ function makeMembership(
       companyWebsite: null,
       defaultHashtags: null,
       requireApproval: false,
+      googleButtonType: "BOOK",
+      googleButtonUrl: "https://example.com/book",
       limitPostsPerDay: null,
       limitXPostsPerMonth: null,
       limitYoutubeUploadsPerDay: null,
@@ -416,6 +418,9 @@ describe("getWorkspaceContext", () => {
         // Approval workflow: projected so POST /api/posts can decide whether
         // to hold a member's post.
         requireApproval: false,
+        // 2026-11-10: the default Google button, for Settings and Create.
+        googleButtonType: "BOOK",
+        googleButtonUrl: "https://example.com/book",
       },
       role: "owner",
     });

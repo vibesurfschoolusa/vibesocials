@@ -42,6 +42,8 @@ export function makeWorkspaceContext(
       companyWebsite: null,
       defaultHashtags: null,
       requireApproval: overrides.requireApproval ?? false,
+      googleButtonType: null,
+      googleButtonUrl: null,
     },
     role: overrides.role ?? "owner",
   };

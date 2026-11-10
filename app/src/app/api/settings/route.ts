@@ -3,6 +3,7 @@ import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
+import { parseGoogleButton } from "@/lib/googlePostOptions";
 
 export const COMPANY_WEBSITE_MAX_LENGTH = 2048;
 export const DEFAULT_HASHTAGS_MAX_LENGTH = 1024;
@@ -38,6 +39,13 @@ export interface ParsedSettingsInput {
    * as the footer fields — it governs whether members' posts publish directly.
    */
   requireApproval?: boolean;
+  /**
+   * 2026-11-10 — the button every Google post gets unless the post chose its
+   * own. Workspace-level and OWNER-ONLY, like the footer. Both null = none; the
+   * url is null for CALL.
+   */
+  googleButtonType?: string | null;
+  googleButtonUrl?: string | null;
 }
 
 export type SettingsValidationResult =
@@ -178,6 +186,23 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
     data.requireApproval = record.requireApproval === true;
   }
 
+  // The two keys are one setting: either one present sets both. An empty or
+  // null type is "no button" and clears the link too.
+  if (hasKey(record, "googleButtonType") || hasKey(record, "googleButtonUrl")) {
+    const type = record.googleButtonType;
+    if (type === undefined || type === null || type === "") {
+      data.googleButtonType = null;
+      data.googleButtonUrl = null;
+    } else {
+      const result = parseGoogleButton({ type, url: record.googleButtonUrl });
+      if (!result.ok) {
+        return { ok: false, error: result.error };
+      }
+      data.googleButtonType = result.value?.type ?? null;
+      data.googleButtonUrl = result.value?.url ?? null;
+    }
+  }
+
   return { ok: true, data };
 }
 
@@ -192,11 +217,11 @@ export function touchesWorkspaceFooter(data: ParsedSettingsInput): boolean {
 
 /**
  * True when the body touches ANY workspace-level, owner-only field: the caption
- * footer (above) or the approval flag. This is the gate for both the 403 and the
+ * footer (above), the approval flag or the default Google button. This is the gate for both the 403 and the
  * `workspace.update` branch in `POST`.
  */
 export function touchesOwnerOnlyWorkspaceFields(data: ParsedSettingsInput): boolean {
-  return touchesWorkspaceFooter(data) || "requireApproval" in data;
+  return touchesWorkspaceFooter(data) || "requireApproval" in data || "googleButtonType" in data;
 }
 
 export async function POST(request: Request) {
@@ -235,6 +260,8 @@ export async function POST(request: Request) {
         companyWebsite?: string | null;
         defaultHashtags?: string | null;
         requireApproval?: boolean;
+        googleButtonType?: string | null;
+        googleButtonUrl?: string | null;
       } = {};
       if ("companyWebsite" in data) {
         workspaceData.companyWebsite = data.companyWebsite;
@@ -244,6 +271,10 @@ export async function POST(request: Request) {
       }
       if ("requireApproval" in data) {
         workspaceData.requireApproval = data.requireApproval;
+      }
+      if ("googleButtonType" in data) {
+        workspaceData.googleButtonType = data.googleButtonType;
+        workspaceData.googleButtonUrl = data.googleButtonUrl;
       }
 
       await prisma.workspace.update({

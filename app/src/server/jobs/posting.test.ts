@@ -287,6 +287,26 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
     });
   });
 
+  it("snapshots the post's Google options on the job (2026-11-10)", async () => {
+    const googleMetadata = {
+      postType: "offer" as const,
+      offer: { title: "Deal", startDate: "2030-01-01", endDate: "2030-01-02" },
+    };
+
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: { ...media, mimeType: "image/jpeg" },
+      baseCaption: "hello",
+      intent: "draft",
+      googleMetadata,
+    });
+
+    expect(postJobCreateMock.mock.calls[0][0].data.publishMetadata).toEqual({
+      googleBusinessProfile: googleMetadata,
+    });
+  });
+
 });
 
 describe("createPostJobForExistingMedia", () => {
@@ -341,6 +361,25 @@ describe("createPostJobForExistingMedia", () => {
 
     expect(result.postJobId).toBe("job-1");
     expect(postJobCreateMock).toHaveBeenCalled();
+  });
+
+  it("snapshots the post's Google options on the reuse job (2026-11-10)", async () => {
+    findUniqueMock.mockResolvedValue(makeMediaItem({ workspaceId: "workspace-1" }));
+    const googleMetadata = { postType: "update" as const, button: { type: "CALL" as const } };
+
+    await createPostJobForExistingMedia({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      mediaItemId: "media-1",
+      baseCaption: "hello",
+      intent: "scheduled",
+      scheduledFor: new Date("2030-01-01T00:00:00Z"),
+      googleMetadata,
+    });
+
+    expect(postJobCreateMock.mock.calls[0][0].data.publishMetadata).toEqual({
+      googleBusinessProfile: googleMetadata,
+    });
   });
 
   it("throws MediaItemUnavailableError and never creates a PostJob when the item was deleted", async () => {
@@ -622,6 +661,19 @@ describe("buildPublishMetadataSnapshot (review B1)", () => {
   it("includes targetPlatforms alone when only it is provided", () => {
     expect(buildPublishMetadataSnapshot(undefined, undefined, ["x"])).toEqual({
       targetPlatforms: ["x"],
+    });
+  });
+
+  // 2026-11-10 — fourth positional param: the Google post's options.
+  it("includes the Google options under googleBusinessProfile", () => {
+    const google = { postType: "update" as const };
+    expect(buildPublishMetadataSnapshot(undefined, undefined, undefined, google)).toEqual({
+      googleBusinessProfile: google,
+    });
+    expect(buildPublishMetadataSnapshot(undefined, yt, ["youtube"], google)).toEqual({
+      youtube: yt,
+      targetPlatforms: ["youtube"],
+      googleBusinessProfile: google,
     });
   });
 

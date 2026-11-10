@@ -27,6 +27,26 @@ export interface YouTubePostMetadata {
   privacyStatus: "public" | "unlisted" | "private";
 }
 
+/**
+ * A Google Business Profile post's options (2026-11-10). Dates are `YYYY-MM-DD`
+ * and times `HH:MM`, in the business's local time with no time zone. No `button`
+ * means no button. An absent metadata object (a post from before this change,
+ * or from the API) is a different thing: it gets the workspace's default button.
+ */
+export interface GoogleBusinessPostMetadata {
+  postType: "update" | "event" | "offer";
+  button?: { type: "BOOK" | "ORDER" | "SHOP" | "LEARN_MORE" | "SIGN_UP" | "CALL"; url?: string };
+  event?: { title: string; startDate: string; endDate: string; startTime?: string; endTime?: string };
+  offer?: {
+    title: string;
+    startDate: string;
+    endDate: string;
+    couponCode?: string;
+    redeemUrl?: string;
+    terms?: string;
+  };
+}
+
 export interface PublishContext {
   user: User;
   socialConnection: SocialConnection;
@@ -74,6 +94,11 @@ export interface PublishContext {
   continuation?: number;
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
+  /**
+   * The post's Google options. Absent: the client applies the workspace's
+   * default button (googleBusinessProfileClient.ts).
+   */
+  googleBusinessProfileMetadata?: GoogleBusinessPostMetadata;
 }
 
 export interface PublishResult {

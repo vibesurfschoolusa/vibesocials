@@ -100,6 +100,7 @@ import {
   PostMediaUnavailableError,
 } from "@/server/jobs/postMedia";
 import type {
+  GoogleBusinessPostMetadata,
   PublishContext,
   PublishResult,
   TikTokPostMetadata,
@@ -159,6 +160,7 @@ interface PublishToPlatformArgs {
   continuation: number;
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
+  googleMetadata?: GoogleBusinessPostMetadata;
 }
 
 /**
@@ -474,6 +476,7 @@ async function publishToPlatform({
   continuation,
   tiktokMetadata,
   youtubeMetadata,
+  googleMetadata,
 }: PublishToPlatformArgs): Promise<PlatformStepOutcome> {
   // ONE deadline for this step, stamped before anything else and shared by
   // every in-step retry: the platform work must end inside Vercel's 300s
@@ -589,6 +592,12 @@ async function publishToPlatform({
     // Add YouTube metadata if publishing to YouTube
     if (connection.platform === "youtube" && youtubeMetadata) {
       publishContext.youtubeMetadata = youtubeMetadata;
+    }
+
+    // Google post options (2026-11-10). Absent: the client applies the
+    // workspace's default button.
+    if (connection.platform === "google_business_profile" && googleMetadata) {
+      publishContext.googleBusinessProfileMetadata = googleMetadata;
     }
 
     // YouTube's `videos.insert` has its own daily budget (100 a day by default,
@@ -888,7 +897,16 @@ export const publishToAllPlatforms = inngest.createFunction(
   },
   { event: "post/publish.requested" },
   async ({ event, step, runId }) => {
-    const { postJobId, userId, mediaItemId, baseCaption, perPlatformOverrides, tiktokMetadata, youtubeMetadata } = event.data;
+    const {
+      postJobId,
+      userId,
+      mediaItemId,
+      baseCaption,
+      perPlatformOverrides,
+      tiktokMetadata,
+      youtubeMetadata,
+      googleMetadata,
+    } = event.data;
 
     logger.info("[Inngest] Starting background publish job", { postJobId, mediaItemId });
 
@@ -1056,6 +1074,7 @@ export const publishToAllPlatforms = inngest.createFunction(
             continuation,
             tiktokMetadata,
             youtubeMetadata,
+            googleMetadata,
           });
         },
       });
@@ -1367,6 +1386,7 @@ export const retryPlatforms = inngest.createFunction(
       const publishMetadata = postJob.publishMetadata as {
         tiktok?: TikTokPostMetadata;
         youtube?: YouTubePostMetadata;
+        googleBusinessProfile?: GoogleBusinessPostMetadata;
       } | null;
 
       // 07a: a post with several photos retries all of them or none.
@@ -1527,6 +1547,7 @@ export const retryPlatforms = inngest.createFunction(
             continuation,
             tiktokMetadata: ttMeta,
             youtubeMetadata: ytMeta,
+            googleMetadata: publishMetadata?.googleBusinessProfile,
           });
         },
       });

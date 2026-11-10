@@ -1,7 +1,11 @@
 import type { Platform } from "@prisma/client";
 
 import { cleanPlatformOverrides } from "@/lib/platformOverrides";
-import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
+import type {
+  GoogleBusinessPostMetadata,
+  TikTokPostMetadata,
+  YouTubePostMetadata,
+} from "@/server/platforms/types";
 
 /**
  * The two `POST /api/posts` request bodies the composer sends, as pure builders.
@@ -32,6 +36,7 @@ interface CreatePostBodyBase extends DeferredPostFields {
   location?: string;
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
+  googleMetadata?: GoogleBusinessPostMetadata;
   /** Task 7 — chosen subset of connected platforms to publish to. */
   platforms?: Platform[];
   /** A different caption per platform; left out when there is none. */
@@ -64,6 +69,8 @@ interface CommonBodyInput {
   tiktokMetadata?: TikTokPostMetadata;
   /** Pass only when YouTube is a selected target. */
   youtubeMetadata?: YouTubePostMetadata;
+  /** Pass only when Google Business Profile is a selected target for a photo. */
+  googleMetadata?: GoogleBusinessPostMetadata;
   /**
    * Per-platform captions as the user typed them. Only selected, non-blank ones
    * that differ from the main caption are sent (`cleanPlatformOverrides`);
@@ -114,6 +121,9 @@ export function buildUploadPostBody(input: BuildUploadPostBodyInput): CreatePost
   if (input.youtubeMetadata) {
     body.youtubeMetadata = input.youtubeMetadata;
   }
+  if (input.googleMetadata) {
+    body.googleMetadata = input.googleMetadata;
+  }
   return body;
 }
 
@@ -136,6 +146,9 @@ export function buildReusePostBody(input: BuildReusePostBodyInput): CreatePostRe
   }
   if (input.youtubeMetadata) {
     body.youtubeMetadata = input.youtubeMetadata;
+  }
+  if (input.googleMetadata) {
+    body.googleMetadata = input.googleMetadata;
   }
   return body;
 }

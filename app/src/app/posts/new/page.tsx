@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { CreatePostForm } from "@/components/create-post-form";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
+import { googleButtonFromWorkspace } from "@/lib/googlePostOptions";
 
 export default async function NewPostPage() {
   const context = await getWorkspaceContext();
@@ -46,6 +47,8 @@ export default async function NewPostPage() {
         footerSettings={footerSettings}
         holdsForApproval={holdsForApproval}
         workspaceId={context.workspace.id}
+        // 2026-11-10: Google posts start with the workspace's default button.
+        googleButtonDefault={googleButtonFromWorkspace(context.workspace)}
       />
     </div>
   );

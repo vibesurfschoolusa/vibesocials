@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import {
+  buildLocalPostBody,
   computeGbpPostSummary,
   googleBusinessProfileClient,
 } from "@/server/platforms/googleBusinessProfileClient";
@@ -17,8 +18,10 @@ import type { PublishContext } from "@/server/platforms/types";
 // Google Business Profile photo publishing. No real Google endpoint and no
 // database: every call goes through a stubbed global fetch (googleTokens.ts
 // resolves prisma lazily - through this mock - and only when a token expired).
-const { updateMock, refreshConnectionTokenMock } = vi.hoisted(() => ({
+const { updateMock, workspaceFindUniqueMock, refreshConnectionTokenMock } = vi.hoisted(() => ({
   updateMock: vi.fn(),
+  // The workspace's default Google button (2026-11-10). None unless a test sets one.
+  workspaceFindUniqueMock: vi.fn<(args: unknown) => Promise<unknown>>(async () => null),
   // The per-connection refresh lock has its own suite (connectionRefresh.test.ts):
   // here it is a pass-through spy, so the refresh itself still runs.
   refreshConnectionTokenMock: vi.fn<
@@ -35,6 +38,9 @@ vi.mock("@/lib/db", () => ({
     socialConnection: {
       update: updateMock,
     },
+    workspace: {
+      findUnique: workspaceFindUniqueMock,
+    },
   },
 }));
 
@@ -50,6 +56,7 @@ function makeContext(): PublishContext {
     socialConnection: {
       id: "conn-gbp",
       platform: "google_business_profile",
+      workspaceId: "ws-1",
       accessToken: "access-token",
       refreshToken: "refresh-token",
       expiresAt: null,
@@ -627,5 +634,208 @@ describe("googleBusinessProfileClient — serialized token refresh", () => {
     expect(timeouts).toHaveLength(1);
     expect(timeouts[0]).toBeLessThanOrEqual(8_000);
     setTimeoutSpy.mockRestore();
+  });
+});
+
+// 2026-11-10: a Google post can carry a button, or be an event or an offer, in
+// the shapes Google's LocalPost reference gives (CallToAction, LocalPostEvent
+// with a TimeInterval schedule, LocalPostOffer).
+describe("buildLocalPostBody — post options", () => {
+  const PHOTO = "https://blob.example.com/photo.jpg";
+  const TODAY = {
+    languageCode: "en-US",
+    topicType: "STANDARD",
+    summary: "hello",
+    media: [{ mediaFormat: "PHOTO", sourceUrl: PHOTO }],
+  };
+  const date = (year: number, month: number, day: number) => ({ year, month, day });
+  const time = (hours: number, minutes: number) => ({ hours, minutes, seconds: 0, nanos: 0 });
+
+  it("with no options gives today's body exactly", () => {
+    expect(buildLocalPostBody("hello", PHOTO)).toEqual(TODAY);
+    expect(buildLocalPostBody("hello", PHOTO, undefined)).toEqual(TODAY);
+  });
+
+  it("an update with no button is today's body", () => {
+    expect(buildLocalPostBody("hello", PHOTO, { postType: "update" })).toEqual(TODAY);
+  });
+
+  it.each(["BOOK", "ORDER", "SHOP", "LEARN_MORE", "SIGN_UP"] as const)(
+    "an update with a %s button carries it with its link",
+    (type) => {
+      expect(
+        buildLocalPostBody("hello", PHOTO, { postType: "update", button: { type, url: "https://e.com/x" } }),
+      ).toEqual({ ...TODAY, callToAction: { actionType: type, url: "https://e.com/x" } });
+    },
+  );
+
+  it("a CALL button has no url", () => {
+    expect(buildLocalPostBody("hello", PHOTO, { postType: "update", button: { type: "CALL" } })).toEqual({
+      ...TODAY,
+      callToAction: { actionType: "CALL" },
+    });
+  });
+
+  it("an event with times", () => {
+    expect(
+      buildLocalPostBody("hello", PHOTO, {
+        postType: "event",
+        event: {
+          title: "Full moon paddle",
+          startDate: "2026-11-20",
+          endDate: "2026-11-21",
+          startTime: "18:30",
+          endTime: "09:05",
+        },
+        button: { type: "SIGN_UP", url: "https://e.com/s" },
+      }),
+    ).toEqual({
+      ...TODAY,
+      topicType: "EVENT",
+      event: {
+        title: "Full moon paddle",
+        schedule: {
+          startDate: date(2026, 11, 20),
+          startTime: time(18, 30),
+          endDate: date(2026, 11, 21),
+          endTime: time(9, 5),
+        },
+      },
+      callToAction: { actionType: "SIGN_UP", url: "https://e.com/s" },
+    });
+  });
+
+  it("an event without times runs all day (Google needs every TimeInterval field)", () => {
+    const body = buildLocalPostBody("hello", PHOTO, {
+      postType: "event",
+      event: { title: "Open day", startDate: "2026-12-01", endDate: "2026-12-01" },
+    });
+    expect(body.event).toEqual({
+      title: "Open day",
+      schedule: {
+        startDate: date(2026, 12, 1),
+        startTime: time(0, 0),
+        endDate: date(2026, 12, 1),
+        endTime: time(23, 59),
+      },
+    });
+    expect(body).not.toHaveProperty("callToAction");
+  });
+
+  it("an offer: title and whole days in event, the rest in offer, never a button", () => {
+    expect(
+      buildLocalPostBody("hello", PHOTO, {
+        postType: "offer",
+        offer: {
+          title: "20% off lessons",
+          startDate: "2026-11-20",
+          endDate: "2026-11-30",
+          couponCode: "SURF20",
+          redeemUrl: "https://e.com/r",
+          terms: "One per customer.",
+        },
+        // Not accepted by the validator; ignored here too, as Google does.
+        button: { type: "BOOK", url: "https://e.com/b" },
+      }),
+    ).toEqual({
+      ...TODAY,
+      topicType: "OFFER",
+      event: {
+        title: "20% off lessons",
+        schedule: {
+          startDate: date(2026, 11, 20),
+          startTime: time(0, 0),
+          endDate: date(2026, 11, 30),
+          endTime: time(23, 59),
+        },
+      },
+      offer: { couponCode: "SURF20", redeemOnlineUrl: "https://e.com/r", termsConditions: "One per customer." },
+    });
+  });
+
+  it("an offer with no optional fields sends no empty offer object", () => {
+    const body = buildLocalPostBody("hello", PHOTO, {
+      postType: "offer",
+      offer: { title: "Deal", startDate: "2026-11-20", endDate: "2026-11-20" },
+    });
+    expect(body.topicType).toBe("OFFER");
+    expect(body).not.toHaveProperty("offer");
+  });
+});
+
+describe("googleBusinessProfileClient.publishVideo — post options and the workspace default", () => {
+  function stubOk() {
+    const fetchMock = vi.fn<typeof fetch>(() =>
+      Promise.resolve(new Response(JSON.stringify({ name: "accounts/111/locations/999/localPosts/p1" }))),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+  const sentBody = (fetchMock: ReturnType<typeof stubOk>) =>
+    JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as Record<string, unknown>;
+
+  beforeEach(() => {
+    workspaceFindUniqueMock.mockClear();
+  });
+
+  it("sends the post's own options", async () => {
+    const fetchMock = stubOk();
+    await googleBusinessProfileClient.publishVideo({
+      ...makeContext(),
+      googleBusinessProfileMetadata: { postType: "update", button: { type: "CALL" } },
+    });
+    expect(sentBody(fetchMock).callToAction).toEqual({ actionType: "CALL" });
+    // The post chose for itself: the workspace default is not read.
+    expect(workspaceFindUniqueMock).not.toHaveBeenCalled();
+  });
+
+  it("gives a post with no options the workspace's default button", async () => {
+    workspaceFindUniqueMock.mockResolvedValueOnce({ googleButtonType: "BOOK", googleButtonUrl: "https://e.com/book" });
+    const fetchMock = stubOk();
+    await googleBusinessProfileClient.publishVideo(makeContext());
+    expect(workspaceFindUniqueMock).toHaveBeenCalledWith({
+      where: { id: "ws-1" },
+      select: { googleButtonType: true, googleButtonUrl: true },
+    });
+    expect(sentBody(fetchMock)).toEqual({
+      languageCode: "en-US",
+      topicType: "STANDARD",
+      summary: "hello",
+      media: [{ mediaFormat: "PHOTO", sourceUrl: "https://blob.example.com/photo.jpg" }],
+      callToAction: { actionType: "BOOK", url: "https://e.com/book" },
+    });
+  });
+
+  it("does not add the default when the user chose No button", async () => {
+    workspaceFindUniqueMock.mockResolvedValueOnce({ googleButtonType: "BOOK", googleButtonUrl: "https://e.com/book" });
+    const fetchMock = stubOk();
+    await googleBusinessProfileClient.publishVideo({
+      ...makeContext(),
+      googleBusinessProfileMetadata: { postType: "update" },
+    });
+    expect(sentBody(fetchMock)).not.toHaveProperty("callToAction");
+  });
+
+  it("a video ignores the options and the default (it goes to the gallery, not a post)", async () => {
+    workspaceFindUniqueMock.mockResolvedValueOnce({ googleButtonType: "BOOK", googleButtonUrl: "https://e.com/book" });
+    const fetchMock = stubOk();
+    const base = makeContext();
+    await googleBusinessProfileClient.publishVideo({
+      ...base,
+      mediaItem: { ...base.mediaItem, mimeType: "video/mp4", storageLocation: "https://blob.example.com/clip.mp4" },
+      googleBusinessProfileMetadata: {
+        postType: "event",
+        event: { title: "x", startDate: "2026-11-20", endDate: "2026-11-20" },
+        button: { type: "CALL" },
+      },
+    });
+    expect(sentBody(fetchMock)).toEqual({
+      mediaFormat: "VIDEO",
+      sourceUrl: "https://blob.example.com/clip.mp4",
+      locationAssociation: { category: "ADDITIONAL" },
+    });
+    expect(workspaceFindUniqueMock).not.toHaveBeenCalled();
+    workspaceFindUniqueMock.mockReset();
+    workspaceFindUniqueMock.mockImplementation(async () => null);
   });
 });

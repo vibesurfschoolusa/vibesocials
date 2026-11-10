@@ -240,7 +240,26 @@ describe("GET /api/posts — media + publish snapshot (Task 8)", () => {
       targetPlatforms: ["youtube", "tiktok"],
       youtubePrivacy: "unlisted",
       tiktokPrivacy: "SELF_ONLY",
+      googlePostType: null,
+      googleButton: null,
     });
+  });
+
+  // 2026-11-10: the Queue card shows "Google: Offer" or "Google: Book button".
+  it("maps the Google post type and button onto the DTO", async () => {
+    postJobFindManyMock.mockResolvedValue([
+      {
+        ...jobWithYouTube(),
+        publishMetadata: {
+          googleBusinessProfile: { postType: "update", button: { type: "BOOK", url: "https://e.com/b" } },
+        },
+      },
+    ]);
+    postMetricFindManyMock.mockResolvedValue([]);
+
+    const body = (await (await GET(getRequest())).json()) as PostsResponse;
+
+    expect(body.jobs[0].publish).toMatchObject({ googlePostType: "update", googleButton: "BOOK" });
   });
 
   it("maps a null publishMetadata (legacy/immediate job) to publish: null", async () => {

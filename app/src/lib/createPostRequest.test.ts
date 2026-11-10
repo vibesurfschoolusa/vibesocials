@@ -165,6 +165,17 @@ describe("buildUploadPostBody", () => {
     ).toMatchObject({ youtubeMetadata: { privacyStatus: "private" }, workspaceId: WORKSPACE_ID });
   });
 
+  it("attaches googleMetadata only when given (2026-11-10)", () => {
+    expect(sent(buildUploadPostBody(input))).not.toHaveProperty("googleMetadata");
+    expect(sent(buildUploadPostBody({ ...input, googleMetadata: { postType: "update" } }))).toMatchObject({
+      googleMetadata: { postType: "update" },
+    });
+    expect(
+      sent(buildReusePostBody({ ...input, mediaItemId: "m-1", googleMetadata: { postType: "update" } })),
+    ).toMatchObject({ googleMetadata: { postType: "update" } });
+    expect(sent(buildReusePostBody({ ...input, mediaItemId: "m-1" }))).not.toHaveProperty("googleMetadata");
+  });
+
   it("attaches per-platform captions when present and omits the field when not", () => {
     expect(sent(buildUploadPostBody(input))).not.toHaveProperty("perPlatformOverrides");
     expect(sent(buildUploadPostBody({ ...input, perPlatformOverrides: null }))).not.toHaveProperty(

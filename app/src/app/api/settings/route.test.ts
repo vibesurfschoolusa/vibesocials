@@ -290,6 +290,77 @@ describe("requireApproval (approval workflow)", () => {
   });
 });
 
+// 2026-11-10: the button every Google post gets (lib/googlePostOptions.ts).
+describe("googleButtonType / googleButtonUrl (the default Google button)", () => {
+  it("parses a button, trimming the link", () => {
+    expect(
+      parseSettingsInput({ googleButtonType: "BOOK", googleButtonUrl: " https://example.com/book " }),
+    ).toEqual({ ok: true, data: { googleButtonType: "BOOK", googleButtonUrl: "https://example.com/book" } });
+  });
+
+  it("stores no link for CALL", () => {
+    expect(parseSettingsInput({ googleButtonType: "CALL", googleButtonUrl: "https://example.com" })).toEqual({
+      ok: true,
+      data: { googleButtonType: "CALL", googleButtonUrl: null },
+    });
+  });
+
+  it("clears both for no button (null or empty type)", () => {
+    for (const type of [null, ""]) {
+      expect(parseSettingsInput({ googleButtonType: type, googleButtonUrl: "https://example.com" })).toEqual({
+        ok: true,
+        data: { googleButtonType: null, googleButtonUrl: null },
+      });
+    }
+  });
+
+  it("validates with the same rules as a post's button", () => {
+    const noLink = parseSettingsInput({ googleButtonType: "BOOK", googleButtonUrl: "" });
+    expect(noLink.ok).toBe(false);
+    expect(!noLink.ok && noLink.error).toMatch(/button link/i);
+    const http = parseSettingsInput({ googleButtonType: "BOOK", googleButtonUrl: "http://example.com" });
+    expect(!http.ok && http.error).toMatch(/https:\/\//);
+    const unknown = parseSettingsInput({ googleButtonType: "GET_OFFER", googleButtonUrl: "https://e.com" });
+    expect(!unknown.ok && unknown.error).toMatch(/button type/i);
+  });
+
+  it("returns 400 for a bad button and writes nothing", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+
+    const response = await POST(jsonRequest({ googleButtonType: "BOOK", googleButtonUrl: "not a link" }));
+
+    expect(response.status).toBe(400);
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("is saved by an owner on the workspace row", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    workspaceUpdateMock.mockResolvedValue({});
+
+    const response = await POST(
+      jsonRequest({ googleButtonType: "LEARN_MORE", googleButtonUrl: "https://example.com" }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(workspaceUpdateMock).toHaveBeenCalledWith({
+      where: { id: "ws-1" },
+      data: { googleButtonType: "LEARN_MORE", googleButtonUrl: "https://example.com" },
+    });
+  });
+
+  it("is refused for a member (403), writing nothing", async () => {
+    getWorkspaceContextMock.mockResolvedValue(MEMBER_CONTEXT);
+
+    const response = await POST(
+      jsonRequest({ googleButtonType: "BOOK", googleButtonUrl: "https://example.com", notifyOnPostComplete: true }),
+    );
+
+    expect(response.status).toBe(403);
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
+    expect(userUpdateMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("notifyDailyDigest (daily problems email)", () => {
   it("parses a boolean and normalizes null to on", () => {
     expect(parseSettingsInput({ notifyDailyDigest: false })).toEqual({

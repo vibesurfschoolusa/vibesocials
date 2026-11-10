@@ -8,9 +8,16 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
+import {
+  GOOGLE_BUTTON_LABELS,
+  GOOGLE_BUTTON_TYPES,
+  defaultGoogleButtonUrl,
+  parseGoogleButton,
+} from "@/lib/googlePostOptions";
 import type { UserSettings } from "@/lib/userSettings";
 
 // Mirrors tiktok-post-settings.tsx's checkbox styling for a consistent look
@@ -42,10 +49,25 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
   );
   const [notifyDailyDigest, setNotifyDailyDigest] = useState(settings.notifyDailyDigest);
   const [requireApproval, setRequireApproval] = useState(settings.requireApproval);
+  // 2026-11-10: the default Google button. "" = no button. The link starts as
+  // the company website until one is saved.
+  const [googleButtonType, setGoogleButtonType] = useState(settings.googleButtonType ?? "");
+  const [googleButtonUrl, setGoogleButtonUrl] = useState(
+    settings.googleButtonUrl ?? defaultGoogleButtonUrl(settings.companyWebsite),
+  );
+  // The same check POST /api/settings applies, shown before saving.
+  const googleButtonCheck = googleButtonType
+    ? parseGoogleButton({ type: googleButtonType, url: googleButtonUrl })
+    : null;
+  const googleButtonError = googleButtonCheck && !googleButtonCheck.ok ? googleButtonCheck.error : null;
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isOwner && googleButtonError) {
+      toast.error(googleButtonError);
+      return;
+    }
     setIsLoading(true);
 
     try {
@@ -60,6 +82,9 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
             // Owner-only, same class as the footer fields — a member's body
             // must omit it entirely or the route 403s the whole request.
             requireApproval,
+            // Owner-only too (the default Google button).
+            googleButtonType: googleButtonType || null,
+            googleButtonUrl: googleButtonUrl.trim(),
             notifyOnPostComplete,
             notifyDailyDigest,
           }
@@ -173,6 +198,51 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
             <p className="text-sm text-muted-foreground">
               Posts created by members wait in the Queue for you to approve before publishing.
               Your own posts are unaffected.
+            </p>
+          </div>
+        ) : null}
+
+        {/* 2026-11-10: the default Google button, owner-only workspace setting
+            (the route 403s a member's body that mentions it). */}
+        {isOwner ? (
+          <div className="flex flex-col gap-1.5 border-t border-border pt-6">
+            <h3 className="text-sm font-medium text-foreground">Google posts</h3>
+            <Label htmlFor="googleButtonType">Add this button to every Google post</Label>
+            <Select
+              id="googleButtonType"
+              value={googleButtonType}
+              onChange={(e) => setGoogleButtonType(e.target.value)}
+            >
+              <option value="">No button</option>
+              {GOOGLE_BUTTON_TYPES.map((type) => (
+                <option key={type} value={type}>
+                  {GOOGLE_BUTTON_LABELS[type]}
+                </option>
+              ))}
+            </Select>
+            {googleButtonType && googleButtonType !== "CALL" ? (
+              <>
+                <Label htmlFor="googleButtonUrl" className="mt-2">
+                  Button link
+                </Label>
+                <Input
+                  id="googleButtonUrl"
+                  type="url"
+                  placeholder="https://"
+                  value={googleButtonUrl}
+                  aria-invalid={googleButtonError ? true : undefined}
+                  onChange={(e) => setGoogleButtonUrl(e.target.value)}
+                />
+              </>
+            ) : null}
+            {googleButtonError ? (
+              <p role="alert" className="text-sm text-destructive">
+                {googleButtonError}
+              </p>
+            ) : null}
+            <p className="text-sm text-muted-foreground">
+              Every new Google post starts with this button, and you can change it on each post. Posts
+              made without choosing get it too. Offers never have a button.
             </p>
           </div>
         ) : null}

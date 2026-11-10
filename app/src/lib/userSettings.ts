@@ -42,4 +42,11 @@ export interface UserSettings {
    * Workspace.
    */
   requireApproval: boolean;
+  /**
+   * 2026-11-10 — the button every Google post gets unless the post chose its
+   * own (lib/googlePostOptions.ts). Workspace-level and owner-only to change.
+   * Null type = no button; the url is null for CALL.
+   */
+  googleButtonType: string | null;
+  googleButtonUrl: string | null;
 }

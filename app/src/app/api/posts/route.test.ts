@@ -750,6 +750,75 @@ describe("POST /api/posts — per-post privacy persistence + validation (review 
     );
   });
 
+  // 2026-11-10: the Google post's options, validated by lib/googlePostOptions.ts.
+  const GOOGLE_EVENT = {
+    postType: "event",
+    event: { title: "Full moon paddle", startDate: "2030-01-05", endDate: "2030-01-05", startTime: "18:00" },
+    button: { type: "SIGN_UP", url: "https://example.com/signup" },
+  };
+
+  it("forwards the validated googleMetadata to the create helper for a scheduled post (stored in the snapshot)", async () => {
+    await POST(
+      jsonRequest({
+        blobUrl: "https://test.public.blob.vercel-storage.com/x",
+        baseCaption: "hi",
+        scheduledFor: FUTURE,
+        googleMetadata: { ...GOOGLE_EVENT, bogus: 1 },
+      }),
+    );
+
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "scheduled", googleMetadata: GOOGLE_EVENT }),
+    );
+  });
+
+  it("forwards googleMetadata on the reuse path too", async () => {
+    createPostJobForExistingMediaMock.mockResolvedValue({ postJobId: "job-2", mediaItemId: "media-9", resultIds: [] });
+
+    await POST(jsonRequest({ mediaItemId: "media-9", baseCaption: "hi", draft: true, googleMetadata: GOOGLE_EVENT }));
+
+    expect(createPostJobForExistingMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "draft", googleMetadata: GOOGLE_EVENT }),
+    );
+  });
+
+  it("sends googleMetadata in the immediate publish event", async () => {
+    await POST(
+      jsonRequest({
+        blobUrl: "https://test.public.blob.vercel-storage.com/x",
+        baseCaption: "hi",
+        googleMetadata: { postType: "update" },
+      }),
+    );
+
+    expect(inngestSendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ googleMetadata: { postType: "update" } }) }),
+    );
+  });
+
+  it("a post without googleMetadata sends none (the workspace default applies at publish)", async () => {
+    await POST(jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }));
+
+    const [event] = inngestSendMock.mock.calls[0] as [{ data: Record<string, unknown> }];
+    expect(event.data.googleMetadata).toBeUndefined();
+  });
+
+  it.each([
+    [{ postType: "offer", offer: { title: "Deal", startDate: "2030-01-01", endDate: "2030-01-02" }, button: { type: "BOOK", url: "https://e.com" } }, /offer can't have a button/],
+    [{ postType: "update", button: { type: "BOOK", url: "http://e.com" } }, /button link/],
+    [{ postType: "event", event: { title: "x", startDate: "2030-01-05", endDate: "2030-01-04" } }, /end date/],
+    ["update", /googleMetadata/],
+  ])("refuses bad googleMetadata with a 400 naming the field (%#)", async (googleMetadata, message) => {
+    const response = await POST(
+      jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi", googleMetadata }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toMatch(message);
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
   it("sends the VALIDATED tiktokMetadata (not the raw body) in the immediate publish event", async () => {
     await POST(
       jsonRequest({

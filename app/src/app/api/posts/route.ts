@@ -30,7 +30,12 @@ import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { isValidPerPlatformOverrides, validateScheduledFor, type PostJobIntent } from "@/lib/scheduling";
 import { deriveApprovalState, shouldHoldForApproval } from "@/lib/approval";
-import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
+import type {
+  GoogleBusinessPostMetadata,
+  TikTokPostMetadata,
+  YouTubePostMetadata,
+} from "@/server/platforms/types";
+import { parseGooglePostMetadata } from "@/lib/googlePostOptions";
 import { deferralKindFromErrorCode } from "@/lib/resultDeferral";
 import type { PostsResponse } from "@/lib/postsDto";
 import {
@@ -249,6 +254,7 @@ export async function GET(request: Request) {
           tiktok?: { privacyLevel?: string };
           youtube?: { privacyStatus?: string };
           targetPlatforms?: string[];
+          googleBusinessProfile?: { postType?: string; button?: { type?: string } };
         } | null;
 
         return {
@@ -284,6 +290,8 @@ export async function GET(request: Request) {
                 targetPlatforms: (snapshot.targetPlatforms as Platform[] | undefined) ?? null,
                 youtubePrivacy: snapshot.youtube?.privacyStatus ?? null,
                 tiktokPrivacy: snapshot.tiktok?.privacyLevel ?? null,
+                googlePostType: snapshot.googleBusinessProfile?.postType ?? null,
+                googleButton: snapshot.googleBusinessProfile?.button?.type ?? null,
               }
             : null,
           // Team Workspaces (Task 4) — creator attribution. `name` falls back
@@ -366,6 +374,8 @@ interface CreatePostBody {
   perPlatformOverrides?: unknown;
   tiktokMetadata?: unknown;
   youtubeMetadata?: { privacyStatus?: unknown };
+  // 2026-11-10 — the Google post's options (lib/googlePostOptions.ts).
+  googleMetadata?: unknown;
   // Task 7 — optional chosen subset of platforms to publish this post to.
   // Absent = every connected platform (legacy/default behavior).
   platforms?: unknown;
@@ -572,6 +582,17 @@ export async function POST(request: Request) {
     };
   }
 
+  // 2026-11-10: the Google post's button / event / offer. Absent (or null) means
+  // none chosen, so the workspace's default button applies at publish time.
+  let googleMetadata: GoogleBusinessPostMetadata | undefined;
+  if (body?.googleMetadata != null) {
+    const parsed = parseGooglePostMetadata(body.googleMetadata);
+    if (!parsed.ok) {
+      return NextResponse.json({ error: parsed.error }, { status: 400 });
+    }
+    googleMetadata = parsed.value;
+  }
+
   // Validate TikTok metadata into a clean typed object (previously forwarded raw
   // — now at parity with youtube, and normalized so it can be persisted on
   // scheduled/draft jobs, review B1). `privacyLevel` must be a STRING if present
@@ -724,6 +745,7 @@ export async function POST(request: Request) {
         // immediate (which carries them in the event below).
         tiktokMetadata,
         youtubeMetadata,
+        googleMetadata,
         // Task 7 — chosen platform subset; undefined = every connection.
         targetPlatforms,
       });
@@ -761,6 +783,7 @@ export async function POST(request: Request) {
         // immediate (which carries them in the event below).
         tiktokMetadata,
         youtubeMetadata,
+        googleMetadata,
         // Task 7 — chosen platform subset; undefined = every connection.
         targetPlatforms,
       });
@@ -829,6 +852,7 @@ export async function POST(request: Request) {
               perPlatformOverrides: perPlatformOverrides ?? null,
               tiktokMetadata,
               youtubeMetadata,
+              googleMetadata,
             },
             { immediate: true },
           ),

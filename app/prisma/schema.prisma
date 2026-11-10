@@ -128,6 +128,11 @@ model Workspace {
   limitXPostsPerMonth       Int?
   limitYoutubeUploadsPerDay Int?
   limitStorageMb            Int?
+  // Google posts (2026-11-10): the button every Google post gets unless the post
+  // chose its own. Null type = none. One of BOOK, ORDER, SHOP, LEARN_MORE,
+  // SIGN_UP, CALL (src/lib/googlePostOptions.ts); the url is null for CALL.
+  googleButtonType String?
+  googleButtonUrl  String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

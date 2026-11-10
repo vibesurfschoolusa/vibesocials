@@ -173,6 +173,17 @@ describe("prepareDeferredPostJobDispatch", () => {
     }
   });
 
+  it("replays the Google options so a scheduled or approved post publishes with them (2026-11-10)", async () => {
+    const google = { postType: "update", button: { type: "BOOK", url: "https://e.com/book" } };
+    postJobFindUniqueMock.mockResolvedValue(makeJob({ publishMetadata: { googleBusinessProfile: google } }));
+    connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.event.googleMetadata).toEqual(google);
+  });
+
   it("omits tiktok/youtube metadata from the event when the job has no publishMetadata", async () => {
     postJobFindUniqueMock.mockResolvedValue(makeJob({ publishMetadata: null }));
     connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
@@ -183,6 +194,7 @@ describe("prepareDeferredPostJobDispatch", () => {
     if (result.ok) {
       expect(result.event).not.toHaveProperty("tiktokMetadata");
       expect(result.event).not.toHaveProperty("youtubeMetadata");
+      expect(result.event).not.toHaveProperty("googleMetadata");
     }
   });
 

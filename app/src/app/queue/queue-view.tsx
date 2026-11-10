@@ -38,6 +38,7 @@ import {
   platformLabel,
   TIKTOK_PRIVACY_LABELS,
 } from "@/lib/platforms";
+import { googleQueueLabel } from "@/lib/googlePostOptions";
 import type { PostJobDTO, PostsResponse } from "@/lib/postsDto";
 import { appendJobsPage } from "@/lib/postsPagination";
 import {
@@ -137,6 +138,8 @@ function QueueCard({
   // on publish. Shown on every card that has them, most importantly to the owner
   // deciding on a pending post - approving means approving these too.
   const platformCaptions = platformCaptionEntries(job.platformCaptions);
+  // 2026-11-10: "Offer", "Book button"; null for a plain Google update.
+  const googleLabel = googleQueueLabel(job.publish?.googlePostType ?? null, job.publish?.googleButton ?? null);
 
   return (
     <Card className="p-4 sm:p-5">
@@ -176,6 +179,7 @@ function QueueCard({
               : "Publishing to all platforms connected at publish time"}
             {job.publish?.youtubePrivacy ? ` · YouTube: ${job.publish.youtubePrivacy}` : ""}
             {job.publish?.tiktokPrivacy ? ` · TikTok: ${TIKTOK_PRIVACY_LABELS[job.publish.tiktokPrivacy] ?? job.publish.tiktokPrivacy}` : ""}
+            {googleLabel ? ` · Google: ${googleLabel}` : ""}
           </p>
           {platformCaptions.length > 0 ? (
             <div className="mt-2 rounded-md border border-border bg-muted/40 p-2.5">

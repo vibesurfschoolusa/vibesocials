@@ -1855,6 +1855,49 @@ describe("publish functions - finalize through the locked recompute, notify with
     expect(publishCtxs.map((c) => c.socialConnection.platform).sort()).toEqual(["x", "youtube"]);
     expect(out.status).toBe("completed");
   });
+
+  // 2026-11-10: the Google post's options ride the event like YouTube's privacy
+  // and reach the Google client only.
+  const GOOGLE = { postType: "update", button: { type: "BOOK", url: "https://e.com/book" } } as const;
+
+  it("hands the event's googleMetadata to the Google client only", async () => {
+    await publishRun(["google_business_profile", "x"], fakeStep(), {
+      ...publishEvent,
+      data: { ...publishEvent.data, googleMetadata: GOOGLE },
+    });
+
+    const byPlatform = Object.fromEntries(publishCtxs.map((c) => [c.socialConnection.platform, c]));
+    expect(byPlatform.google_business_profile.googleBusinessProfileMetadata).toEqual(GOOGLE);
+    expect(byPlatform.x).not.toHaveProperty("googleBusinessProfileMetadata");
+  });
+
+  it("an event without googleMetadata leaves it unset (the client applies the workspace default)", async () => {
+    await publishRun(["google_business_profile"]);
+
+    expect(publishCtxs[0]).not.toHaveProperty("googleBusinessProfileMetadata");
+  });
+
+  it("a retry keeps the post's Google options from the job's snapshot", async () => {
+    db.postJobFindUnique.mockResolvedValue({
+      id: "job-1", workspaceId: WORKSPACE.id, mediaItemId: "media-1",
+      baseCaption: "c", perPlatformOverrides: null,
+      publishMetadata: { googleBusinessProfile: GOOGLE },
+    });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null, mimeType: "image/jpeg" });
+    db.connectionFindMany.mockResolvedValue([{ id: "conn-google_business_profile", platform: "google_business_profile" }]);
+    stubResults(["google_business_profile"]);
+
+    await handlerOf(retryPlatforms)({
+      event: {
+        name: "post/retry.requested",
+        data: { postJobId: "job-1", userId: "user-1", platforms: ["google_business_profile"] },
+      },
+      step: fakeStep(),
+    });
+
+    expect(publishCtxs).toHaveLength(1);
+    expect(publishCtxs[0].googleBusinessProfileMetadata).toEqual(GOOGLE);
+  });
 });
 
 // 2026-11-01 scale audit (platform limits): a platform that answers with a rate

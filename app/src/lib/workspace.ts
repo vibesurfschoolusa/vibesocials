@@ -15,7 +15,13 @@ export interface WorkspaceContext {
   user: User;
   workspace: Pick<
     Workspace,
-    "id" | "name" | "companyWebsite" | "defaultHashtags" | "requireApproval"
+    | "id"
+    | "name"
+    | "companyWebsite"
+    | "defaultHashtags"
+    | "requireApproval"
+    | "googleButtonType"
+    | "googleButtonUrl"
   >;
   role: WorkspaceRole;
 }
@@ -267,6 +273,9 @@ export async function getWorkspaceContext(
       // Approval workflow: POST /api/posts reads this to decide whether a
       // member's post is held for owner approval (lib/approval.ts).
       requireApproval: active.workspace.requireApproval,
+      // 2026-11-10: the default Google button, shown in Settings and Create.
+      googleButtonType: active.workspace.googleButtonType,
+      googleButtonUrl: active.workspace.googleButtonUrl,
     },
     role: active.role,
   };
