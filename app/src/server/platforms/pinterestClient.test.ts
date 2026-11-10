@@ -109,6 +109,7 @@ function makeContext(
   return {
     user: { id: "user-1" } as User,
     socialConnection: makeConnection(connectionOverrides),
+    get mediaItems() { return [this.mediaItem]; },
     mediaItem: {
       id: "media-1",
       mimeType: "image/jpeg",

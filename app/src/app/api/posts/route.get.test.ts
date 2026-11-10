@@ -822,3 +822,26 @@ describe("GET /api/posts — unconfirmed publish", () => {
     expect(JSON.stringify(results)).not.toContain("PUBLISH_UNCONFIRMED");
   });
 });
+
+describe("GET /api/posts - mediaCount (07a)", () => {
+  it("counts the post's photo rows in the same query", async () => {
+    await GET(getRequest());
+
+    expect(postJobFindManyMock.mock.calls[0][0].select._count).toEqual({ select: { media: true } });
+  });
+
+  it("is 1 for a single-media post and the photo count for a post with several", async () => {
+    postJobFindManyMock.mockResolvedValue([
+      { ...jobWithYouTube(), id: "job-single", _count: { media: 0 } },
+      { ...jobWithYouTube(), id: "job-multi", _count: { media: 3 } },
+    ]);
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+
+    expect(body.jobs.map((job) => [job.id, job.mediaCount])).toEqual([
+      ["job-single", 1],
+      ["job-multi", 3],
+    ]);
+  });
+});

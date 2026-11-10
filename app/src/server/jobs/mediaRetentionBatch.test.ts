@@ -12,6 +12,7 @@ const db = vi.hoisted(() => ({
   update: vi.fn(),
   count: vi.fn(),
   postJobCount: vi.fn(),
+  postJobMediaCount: vi.fn(),
   executeRaw: vi.fn(),
   transaction: vi.fn(),
 }));
@@ -69,11 +70,14 @@ beforeEach(() => {
     _count: { postJobs: 1 },
   });
   db.postJobCount.mockResolvedValue(0);
+  // 07a: by default no post uses the item as one of several photos.
+  db.postJobMediaCount.mockResolvedValue(0);
   db.count.mockResolvedValue(0);
   db.transaction.mockImplementation(async (callback: (tx: unknown) => unknown) =>
     callback({
       $executeRaw: db.executeRaw,
       postJob: { count: db.postJobCount },
+      postJobMedia: { count: db.postJobMediaCount },
       mediaItem: { findUnique: db.findUnique, update: db.update, count: db.count },
     }),
   );
@@ -95,6 +99,14 @@ describe("sweepExpiredMediaBatch - the candidate query", () => {
   const STALENESS = {
     OR: [{ lastUsedAt: { lt: CUTOFF } }, { lastUsedAt: null, createdAt: { lt: CUTOFF } }],
   };
+  // 07a: a photo used through PostJobMedia counts exactly like one used through
+  // PostJob.mediaItemId, for "in use by a non-terminal post" and "posted once".
+  const NON_TERMINAL = { status: { notIn: ["completed", "failed", "cancelled"] } };
+  const IN_USE_FILTERS = {
+    postJobs: { none: NON_TERMINAL },
+    postJobMedia: { none: { postJob: NON_TERMINAL } },
+  };
+  const POSTED_ONCE = { OR: [{ postJobs: { some: {} } }, { postJobMedia: { some: {} } }] };
 
   it("keyset-pages on (createdAt, id) below the cutoff, with today's eligibility filters", async () => {
     await sweepExpiredMediaBatch({ after: null, now: NOW });
@@ -104,11 +116,8 @@ describe("sweepExpiredMediaBatch - the candidate query", () => {
       where: {
         deletedAt: null,
         createdAt: { lt: CUTOFF },
-        postJobs: {
-          some: {},
-          none: { status: { notIn: ["completed", "failed", "cancelled"] } },
-        },
-        AND: [STALENESS],
+        ...IN_USE_FILTERS,
+        AND: [POSTED_ONCE, STALENESS],
       },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       take: 200,
@@ -126,11 +135,8 @@ describe("sweepExpiredMediaBatch - the candidate query", () => {
       where: {
         deletedAt: null,
         createdAt: { lt: CUTOFF },
-        postJobs: {
-          some: {},
-          none: { status: { notIn: ["completed", "failed", "cancelled"] } },
-        },
-        AND: [STALENESS],
+        ...IN_USE_FILTERS,
+        AND: [POSTED_ONCE, STALENESS],
         OR: [{ createdAt: { gt: cursorAt } }, { createdAt: cursorAt, id: { gt: "media-0200" } }],
       },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -346,5 +352,60 @@ describe("sweepExpiredMediaBatch - blob deletion (moved from mediaRetentionSweep
     const summary = await sweepExpiredMediaBatch({ after: null, now: NOW });
 
     expect(summary).toMatchObject({ candidates: 2, swept: 1, errors: 1 });
+  });
+});
+
+describe("sweepExpiredMediaBatch - a photo of a post with several photos (07a)", () => {
+  it("skips a photo that a non-terminal post uses as a later photo", async () => {
+    db.findUnique.mockResolvedValue({
+      storageLocation: BLOB_URL,
+      deletedAt: null,
+      lastUsedAt: STALE,
+      createdAt: STALE,
+      _count: { postJobs: 0, postJobMedia: 1 },
+    });
+    db.postJobMediaCount.mockResolvedValue(1);
+
+    const summary = await sweepExpiredMediaBatch({ after: null, now: NOW });
+
+    expect(summary).toMatchObject({ swept: 0, skipped: 1 });
+    expect(db.postJobMediaCount).toHaveBeenCalledWith({
+      where: {
+        mediaItemId: "media-0000",
+        postJob: { status: { notIn: ["completed", "failed", "cancelled"] } },
+      },
+    });
+    expect(db.update).not.toHaveBeenCalled();
+    expect(delMock).not.toHaveBeenCalled();
+  });
+
+  it("sweeps a stale photo used only through PostJobMedia once its post is terminal (it was posted)", async () => {
+    db.findUnique.mockResolvedValue({
+      storageLocation: BLOB_URL,
+      deletedAt: null,
+      lastUsedAt: STALE,
+      createdAt: STALE,
+      _count: { postJobs: 0, postJobMedia: 1 },
+    });
+
+    const summary = await sweepExpiredMediaBatch({ after: null, now: NOW });
+
+    expect(summary).toMatchObject({ swept: 1, skipped: 0 });
+    expect(db.update).toHaveBeenCalledWith({ where: { id: "media-0000" }, data: { deletedAt: NOW } });
+    expect(delMock).toHaveBeenCalled();
+  });
+
+  it("still skips a never-posted library upload", async () => {
+    db.findUnique.mockResolvedValue({
+      storageLocation: BLOB_URL,
+      deletedAt: null,
+      lastUsedAt: null,
+      createdAt: STALE,
+      _count: { postJobs: 0, postJobMedia: 0 },
+    });
+
+    const summary = await sweepExpiredMediaBatch({ after: null, now: NOW });
+
+    expect(summary).toMatchObject({ swept: 0, skipped: 1 });
   });
 });

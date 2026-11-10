@@ -30,7 +30,13 @@ export interface YouTubePostMetadata {
 export interface PublishContext {
   user: User;
   socialConnection: SocialConnection;
+  /** The post's first (or only) file. Always `mediaItems[0]`. */
   mediaItem: MediaItem;
+  /**
+   * The post's files in order (07a): one for a single photo or video, up to
+   * MAX_POST_MEDIA photos for a post with several. Never empty.
+   */
+  mediaItems: MediaItem[];
   /** The text to publish: the post's (override or base) caption + workspace footer. */
   caption: string;
   /**

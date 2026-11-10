@@ -55,6 +55,7 @@ function makeContext(): PublishContext {
       expiresAt: null,
       metadata: { locationName: "accounts/111/locations/999" },
     } as unknown as SocialConnection,
+    get mediaItems() { return [this.mediaItem]; },
     mediaItem: {
       mimeType: "image/jpeg",
       storageLocation: "https://blob.example.com/photo.jpg",

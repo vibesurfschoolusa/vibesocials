@@ -1805,3 +1805,155 @@ describe("POST /api/posts — daily post limit (usage limits)", () => {
     expect(checkDailyPostLimitMock).not.toHaveBeenCalled();
   });
 });
+
+describe("POST /api/posts - the media list (several photos, 07a)", () => {
+  const HOST = "https://test.public.blob.vercel-storage.com";
+  const photo = (n: number, mimeType = "image/jpeg") => ({
+    blobUrl: `${HOST}/p${n}.jpg`,
+    filename: `p${n}.jpg`,
+    mimeType,
+    sizeBytes: 100 + n,
+  });
+  const stored = (n: number, mimeType = "image/jpeg") => ({
+    storageLocation: `${HOST}/p${n}.jpg`,
+    originalFilename: `p${n}.jpg`,
+    mimeType,
+    sizeBytes: 100 + n,
+  });
+  const FUTURE = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["r1"] });
+  });
+
+  it("one entry creates the post with exactly the arguments the blobUrl fields give", async () => {
+    await POST(jsonRequest({ ...photo(1), baseCaption: "hi" }));
+    const viaBlobUrl = createPostJobOnlyMock.mock.calls[0][0];
+    const eventViaBlobUrl = inngestSendMock.mock.calls[0][0];
+    createPostJobOnlyMock.mockClear();
+    inngestSendMock.mockClear();
+
+    const response = await POST(jsonRequest({ media: [photo(1)], baseCaption: "hi" }));
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock.mock.calls[0][0]).toStrictEqual(viaBlobUrl);
+    expect(createPostJobOnlyMock.mock.calls[0][0]).not.toHaveProperty("extraMedia");
+    expect(inngestSendMock.mock.calls[0][0]).toStrictEqual(eventViaBlobUrl);
+  });
+
+  it("a single GIF or video in the list behaves as a single blob does", async () => {
+    const response = await POST(jsonRequest({ media: [photo(1, "video/mp4")], baseCaption: "hi" }));
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock.mock.calls[0][0].media).toEqual(stored(1, "video/mp4"));
+  });
+
+  it("three entries create the post with the first as media and the rest, in order, as extraMedia", async () => {
+    const response = await POST(
+      jsonRequest({ media: [photo(1), photo(2, "image/png"), photo(3, "image/webp")], baseCaption: "hi" }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        media: stored(1),
+        extraMedia: [stored(2, "image/png"), stored(3, "image/webp")],
+        intent: "immediate",
+      }),
+    );
+    // The publish event is unchanged: it names the first photo.
+    expect(inngestSendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ mediaItemId: "media-1" }) }),
+    );
+  });
+
+  it.each([
+    ["blobUrl", { blobUrl: `${HOST}/x.jpg` }],
+    ["mediaItemId", { mediaItemId: "media-9" }],
+  ])("media together with %s is a 400", async (_name, extra) => {
+    const response = await POST(jsonRequest({ media: [photo(1), photo(2)], baseCaption: "hi", ...extra }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Send either media or blobUrl / mediaItemId, not both.",
+    });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    expect(createPostJobForExistingMediaMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["eleven files", Array.from({ length: 11 }, (_, i) => photo(i)), "A post can have at most 10 photos."],
+    [
+      "a video among several",
+      [photo(1), photo(2, "video/mp4")],
+      "A post with several files can only contain photos. Post a video on its own.",
+    ],
+    [
+      "a GIF among several",
+      [photo(1, "image/gif"), photo(2)],
+      "A post with several photos can't include a GIF. Post a GIF on its own.",
+    ],
+    ["a bad host", [photo(1), { ...photo(2), blobUrl: "https://evil.example/x.jpg" }], `File 2: ${BLOB_URL_REJECTED_MESSAGE}`],
+  ])("%s is a 400 that names the rule", async (_name, media, error) => {
+    const response = await POST(jsonRequest({ media, baseCaption: "hi" }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("treats a multi-photo post as an image post for platform targeting", async () => {
+    const response = await POST(
+      jsonRequest({ media: [photo(1), photo(2)], baseCaption: "hi", platforms: ["youtube"] }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ code: "PLATFORM_MEDIA_MISMATCH", platforms: ["youtube"] });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("the daily post limit still applies", async () => {
+    checkDailyPostLimitMock.mockResolvedValue({ error: "Limit reached.", code: "WORKSPACE_DAILY_POST_LIMIT" });
+
+    const response = await POST(jsonRequest({ media: [photo(1), photo(2)], baseCaption: "hi" }));
+
+    expect(response.status).toBe(429);
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("a member's multi-photo post is held for approval with its photos", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: true }));
+
+    const response = await POST(jsonRequest({ media: [photo(1), photo(2)], baseCaption: "hi" }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ awaitingApproval: true });
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "draft", media: stored(1), extraMedia: [stored(2)] }),
+    );
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("a scheduled multi-photo post is created scheduled with its photos and sends no event", async () => {
+    const response = await POST(jsonRequest({ media: [photo(1), photo(2)], baseCaption: "hi", scheduledFor: FUTURE }));
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        intent: "scheduled",
+        scheduledFor: new Date(FUTURE),
+        extraMedia: [stored(2)],
+      }),
+    );
+    expect(checkDailyPostLimitMock).toHaveBeenCalledWith(expect.objectContaining({ mode: "schedule" }));
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("a multi-photo draft is saved with its photos", async () => {
+    const response = await POST(jsonRequest({ media: [photo(1), photo(2)], baseCaption: "hi", draft: true }));
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ intent: "draft", extraMedia: [stored(2)] }),
+    );
+  });
+});

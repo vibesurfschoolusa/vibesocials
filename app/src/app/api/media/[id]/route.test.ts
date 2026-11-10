@@ -11,12 +11,14 @@ const {
   findFirstMock,
   transactionMock,
   postJobCountMock,
+  postJobMediaCountMock,
   mediaItemUpdateMock,
   mediaItemCountMock,
   executeRawMock,
   delMock,
   getWorkspaceContextMock,
 } = vi.hoisted(() => ({
+  postJobMediaCountMock: vi.fn(),
   findFirstMock: vi.fn(),
   transactionMock: vi.fn(),
   postJobCountMock: vi.fn(),
@@ -87,6 +89,9 @@ beforeEach(() => {
   findFirstMock.mockReset();
   transactionMock.mockReset();
   postJobCountMock.mockReset();
+  // 07a: by default no post uses this item as its second or later photo.
+  postJobMediaCountMock.mockReset();
+  postJobMediaCountMock.mockResolvedValue(0);
   mediaItemUpdateMock.mockReset();
   mediaItemCountMock.mockReset();
   // Default: no OTHER live MediaItem shares this blob URL (the common case).
@@ -103,6 +108,7 @@ beforeEach(() => {
     callback({
       $executeRaw: executeRawMock,
       postJob: { count: postJobCountMock },
+      postJobMedia: { count: postJobMediaCountMock },
       mediaItem: { update: mediaItemUpdateMock, count: mediaItemCountMock },
     }),
   );
@@ -337,6 +343,7 @@ describe("DELETE /api/media/[id]", () => {
       callback({
         $executeRaw: executeRawMock,
         postJob: { count: postJobCountMock },
+        postJobMedia: { count: postJobMediaCountMock },
         mediaItem: { update: mediaItemUpdateMock, count: mediaItemCountMock },
       }),
     );
@@ -429,5 +436,40 @@ describe("DELETE /api/media/[id]", () => {
       expect(mediaItemCountMock).not.toHaveBeenCalled();
       expect(delMock).not.toHaveBeenCalled();
     });
+  });
+});
+
+// 07a: a photo can be used by a post as its second or later photo, through
+// PostJobMedia, without being that post's PostJob.mediaItemId.
+describe("DELETE /api/media/[id] - a photo of a post with several photos (07a)", () => {
+  it("refuses with MEDIA_IN_USE when a non-terminal post uses it as a later photo", async () => {
+    findFirstMock.mockResolvedValue(makeItemRow({ id: "media-2" }));
+    postJobCountMock.mockResolvedValue(0);
+    postJobMediaCountMock.mockResolvedValue(1);
+
+    const response = await DELETE(dummyRequest, ctx("media-2"));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "MEDIA_IN_USE" });
+    expect(postJobMediaCountMock).toHaveBeenCalledWith({
+      where: {
+        mediaItemId: "media-2",
+        postJob: { status: { notIn: ["completed", "failed", "cancelled"] } },
+      },
+    });
+    expect(mediaItemUpdateMock).not.toHaveBeenCalled();
+    expect(delMock).not.toHaveBeenCalled();
+  });
+
+  it("deletes it once every post that uses it is terminal", async () => {
+    findFirstMock.mockResolvedValue(makeItemRow({ id: "media-2" }));
+    postJobCountMock.mockResolvedValue(0);
+    postJobMediaCountMock.mockResolvedValue(0);
+
+    const response = await DELETE(dummyRequest, ctx("media-2"));
+
+    expect(response.status).toBe(200);
+    expect(mediaItemUpdateMock).toHaveBeenCalledTimes(1);
+    expect(delMock).toHaveBeenCalled();
   });
 });

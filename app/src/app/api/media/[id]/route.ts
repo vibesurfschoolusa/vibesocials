@@ -138,8 +138,17 @@ export async function DELETE(_request: NextRequest, context: MediaItemRouteConte
       const nonTerminalJobCount = await tx.postJob.count({
         where: { mediaItemId: id, status: { notIn: [...TERMINAL_POST_JOB_STATUSES] } },
       });
+      // 07a: a post with several photos uses its later photos through
+      // PostJobMedia only. A separate count, so each one stays an index lookup
+      // by mediaItemId (an OR across both tables would not).
+      const nonTerminalPhotoCount = await tx.postJobMedia.count({
+        where: {
+          mediaItemId: id,
+          postJob: { status: { notIn: [...TERMINAL_POST_JOB_STATUSES] } },
+        },
+      });
 
-      if (!isMediaDeletable(nonTerminalJobCount)) {
+      if (!isMediaDeletable(nonTerminalJobCount + nonTerminalPhotoCount)) {
         return { ok: false as const };
       }
 

@@ -30,6 +30,7 @@ function job(partial: Partial<PostJobDTO> = {}): PostJobDTO {
     caption: "c",
     results: [],
     media: null,
+    mediaCount: 1,
     publish: null,
     createdBy: null,
     approvalState: "none" as const,

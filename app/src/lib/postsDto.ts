@@ -134,6 +134,11 @@ export interface PostJobDTO {
   /** Attached media for thumbnails (public blob URL — already exposed via /api/media). */
   media: { url: string; mimeType: string } | null;
   /**
+   * How many files the post has (07a): 1 for a single photo or video, 2 to
+   * MAX_POST_MEDIA for a post with several photos. `media` is the first.
+   */
+  mediaCount: number;
+  /**
    * Compose-time publish choices snapshotted on the job (Roadmap Phase 5 +
    * targeting). Null for legacy/immediate jobs with no snapshot.
    */

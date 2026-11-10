@@ -47,7 +47,9 @@ export interface MediaSweepEligibilityInput {
   hasNonTerminalJob: boolean;
   /**
    * True if the item is referenced by at least one PostJob at all — i.e. it was
-   * actually posted, as opposed to a never-posted library upload.
+   * actually posted, as opposed to a never-posted library upload. A post with
+   * several photos references its later photos through PostJobMedia (07a);
+   * callers count those references here and in `hasNonTerminalJob` too.
    */
   hasAnyJob: boolean;
   /** Last time the media was attached to a post, else null (never stamped). */

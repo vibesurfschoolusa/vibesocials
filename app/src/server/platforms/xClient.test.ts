@@ -114,6 +114,7 @@ describe("xClient.publishVideo — media-processing poll + step budget", () => {
         accessToken: "access-token",
         refreshToken: "access-token-secret",
       } as unknown as SocialConnection,
+      get mediaItems() { return [this.mediaItem]; },
       mediaItem: {
         mimeType: "video/mp4",
         storageLocation: "https://blob.example.com/v.mp4",
@@ -297,6 +298,7 @@ describe("xClient.publishVideo — rate limits (RATE_LIMITED)", () => {
         accessToken: "access-token",
         refreshToken: "access-token-secret",
       } as unknown as SocialConnection,
+      get mediaItems() { return [this.mediaItem]; },
       mediaItem: {
         mimeType,
         storageLocation: "https://blob.example.com/m",
@@ -1047,6 +1049,7 @@ describe("xClient.publishVideo — streamed chunked upload (jobs B3, M3)", () =>
         accessToken: CREDENTIALS.accessToken,
         refreshToken: CREDENTIALS.accessTokenSecret,
       } as unknown as SocialConnection,
+      get mediaItems() { return [this.mediaItem]; },
       mediaItem: {
         id: "media-1",
         mimeType,

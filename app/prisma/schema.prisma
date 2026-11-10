@@ -278,6 +278,9 @@ model MediaItem {
   // attribution. Cascade: deleting a workspace removes its media.
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   postJobs  PostJob[]
+  // Several photos in one post (2026-11-10): this item's place in a post with
+  // two or more photos. The first photo is also the post's `PostJob.mediaItem`.
+  postJobMedia PostJobMedia[]
 
   @@index([workspaceId])
   // 2026-11-01 scale audit: the media library list
@@ -348,6 +351,10 @@ model PostJob {
   workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   mediaItem MediaItem       @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
   results   PostJobResult[]
+  // Several photos in one post (2026-11-10): one row per photo, positions 0 to
+  // n-1, written only for a post with two or more. A post without rows has the
+  // one `mediaItem` above (src/server/jobs/postMedia.ts loadPostMediaItems).
+  media     PostJobMedia[]
 
   // Due-scanner lookup: WHERE status = 'scheduled' AND scheduledFor <= now.
   @@index([status, scheduledFor])
@@ -368,6 +375,25 @@ model PostJob {
   @@index([workspaceId, status, createdAt])
   // 2026-11-01 scale audit: User -> PostJob ON DELETE CASCADE seeks by userId.
   @@index([userId])
+}
+
+// Several photos in one post (2026-11-10). `PostJob.mediaItemId` stays the first
+// photo, so code that predates this table publishes the first photo and nothing
+// else changes for it. A post with one photo or video has no rows here.
+model PostJobMedia {
+  id          String   @id @default(cuid())
+  postJobId   String
+  mediaItemId String
+  position    Int
+  createdAt   DateTime @default(now())
+
+  postJob   PostJob   @relation(fields: [postJobId], references: [id], onDelete: Cascade)
+  mediaItem MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+
+  @@unique([postJobId, position])
+  // Media delete and the retention sweep look a photo's posts up by mediaItemId;
+  // also backs MediaItem -> PostJobMedia ON DELETE CASCADE.
+  @@index([mediaItemId])
 }
 
 model PostJobResult {

@@ -43,7 +43,15 @@ export interface CreatePostJobOnlyParams extends PostJobSchedulingParams {
    * own personal workspace.
    */
   workspaceId: string;
+  /** The post's first (or only) file: `PostJob.mediaItemId`. */
   media: SavedFileInfo;
+  /**
+   * Several photos in one post (07a): the photos after `media`, in order. Each
+   * becomes its own MediaItem, and the post gets one PostJobMedia row per photo
+   * (positions 0 to n-1, `media` first). Absent or empty = a single-file post,
+   * written exactly as before (no PostJobMedia rows).
+   */
+  extraMedia?: SavedFileInfo[];
   baseCaption: string;
   location?: string;
   perPlatformOverrides?: Partial<Record<Platform, string>> | null;
@@ -212,26 +220,35 @@ export async function createPostJobOnly(
   // PostJob and correctly leave `lastUsedAt = null`.
   const now = new Date();
 
+  const createMediaItem = (tx: Prisma.TransactionClient, file: SavedFileInfo) =>
+    tx.mediaItem.create({
+      data: {
+        userId,
+        workspaceId,
+        storageLocation: file.storageLocation,
+        originalFilename: file.originalFilename,
+        mimeType: file.mimeType,
+        sizeBytes: file.sizeBytes,
+        baseCaption,
+        lastUsedAt: now,
+        metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+        perPlatformOverrides: perPlatformOverrides
+          ? (perPlatformOverrides as unknown as Record<string, string>)
+          : undefined,
+      },
+    });
+  const extraMedia = params.extraMedia ?? [];
+
   // Atomic media + job + results so a mid-path failure never leaves orphans
   // (mirrors createPostJobForExistingMedia).
   const { postJob, mediaItem, resultRecords } = await prisma.$transaction(
     async (tx) => {
-      const mediaItemRow = await tx.mediaItem.create({
-        data: {
-          userId,
-          workspaceId,
-          storageLocation: media.storageLocation,
-          originalFilename: media.originalFilename,
-          mimeType: media.mimeType,
-          sizeBytes: media.sizeBytes,
-          baseCaption,
-          lastUsedAt: now,
-          metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
-          perPlatformOverrides: perPlatformOverrides
-            ? (perPlatformOverrides as unknown as Record<string, string>)
-            : undefined,
-        },
-      });
+      const mediaItemRow = await createMediaItem(tx, media);
+      // One after another, so the rows are created in the post's order.
+      const extraRows = [];
+      for (const file of extraMedia) {
+        extraRows.push(await createMediaItem(tx, file));
+      }
 
       const job = await tx.postJob.create({
         data: {
@@ -249,6 +266,18 @@ export async function createPostJobOnly(
           workspaceId,
         },
       });
+
+      // Only a post with two or more photos gets rows; the first is the job's
+      // own media item, so code that ignores this table publishes it.
+      if (extraRows.length > 0) {
+        await tx.postJobMedia.createMany({
+          data: [mediaItemRow, ...extraRows].map((row, position) => ({
+            postJobId: job.id,
+            mediaItemId: row.id,
+            position,
+          })),
+        });
+      }
 
       // Scheduled/draft jobs get NO results here — the cron/promote create them
       // at run time from the connections that exist then.

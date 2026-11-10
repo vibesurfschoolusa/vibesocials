@@ -6,6 +6,7 @@ import { findOverlongCaption, pickPlatformOverrides } from "@/lib/captionLimits"
 import { captionTooLongResponse, invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { parsePostMediaFields, type PostMediaFields } from "@/lib/mediaInput";
+import { validatePostMediaList, type PostMediaEntry } from "@/lib/postMedia";
 import {
   INVALID_WORKSPACE_ID_CODE,
   INVALID_WORKSPACE_ID_MESSAGE,
@@ -145,6 +146,8 @@ export async function GET(request: Request) {
         // local-part at map time below, and the full email NEVER reaches the
         // DTO (SEC-1).
         user: { select: { name: true, email: true } },
+        // 07a: a post with several photos has one PostJobMedia row per photo.
+        _count: { select: { media: true } },
         results: {
           select: {
             platform: true,
@@ -259,6 +262,8 @@ export async function GET(request: Request) {
           media: job.mediaItem
             ? { url: job.mediaItem.storageLocation, mimeType: job.mediaItem.mimeType }
             : null,
+          // 07a: how many files the post has. A single-media post has no rows.
+          mediaCount: Math.max(1, job._count?.media ?? 0),
           // Compose-time publish choices, null for legacy/immediate jobs with
           // no snapshot (see PublishMetadataSnapshot, src/server/jobs/posting.ts).
           publish: snapshot
@@ -339,6 +344,10 @@ interface CreatePostBody {
   filename?: string;
   mimeType?: string;
   sizeBytes?: number;
+  // Several photos in one post (07a): 1 to MAX_POST_MEDIA files, in order, each
+  // `{ blobUrl, filename, mimeType, sizeBytes }`. Never together with
+  // `blobUrl` / `mediaItemId`; one entry is the same as those blob fields.
+  media?: unknown;
   baseCaption?: unknown;
   location?: unknown;
   perPlatformOverrides?: unknown;
@@ -438,14 +447,22 @@ export async function POST(request: Request) {
     }
   }
 
+  const hasMediaList = body?.media != null;
+  if (hasMediaList && (body.blobUrl != null || body.mediaItemId != null)) {
+    return NextResponse.json(
+      { error: "Send either media or blobUrl / mediaItemId, not both." },
+      { status: 400 },
+    );
+  }
+
   const hasBlobUrl = typeof body?.blobUrl === "string" && body.blobUrl.trim().length > 0;
   const hasMediaItemId =
     typeof body?.mediaItemId === "string" && body.mediaItemId.trim().length > 0;
   // blobUrl wins if a caller somehow sends both, preserving the original
   // (pre-Phase-2) path byte-for-byte for every existing caller.
-  const usingExistingMedia = hasMediaItemId && !hasBlobUrl;
+  const usingExistingMedia = hasMediaItemId && !hasBlobUrl && !hasMediaList;
 
-  if (!hasBlobUrl && !usingExistingMedia) {
+  if (!hasBlobUrl && !usingExistingMedia && !hasMediaList) {
     return NextResponse.json(
       { error: "blobUrl or mediaItemId is required" },
       { status: 400 },
@@ -459,7 +476,19 @@ export async function POST(request: Request) {
   // used to store `body.blobUrl` untrimmed), so the shared-blob guard
   // (deleteBlobUnlessShared) can't be bypassed by a variant URL.
   let storedBlobUrl: string | undefined;
-  if (hasBlobUrl) {
+  // Several photos (07a): the photos after the first, in order. Stays undefined
+  // for one file, so a one-entry list takes the blobUrl path unchanged.
+  let extraMedia: PostMediaEntry[] | undefined;
+  if (hasMediaList) {
+    const listValidation = validatePostMediaList(body.media);
+    if (!listValidation.ok) {
+      return NextResponse.json({ error: listValidation.error }, { status: 400 });
+    }
+    const [first, ...rest] = listValidation.value;
+    storedBlobUrl = first.storageLocation;
+    mediaFields = { filename: first.originalFilename, mimeType: first.mimeType, sizeBytes: first.sizeBytes };
+    if (rest.length > 0) extraMedia = rest;
+  } else if (hasBlobUrl) {
     const canonical = canonicalBlobUrl(body.blobUrl as string);
     if (!canonical) {
       return NextResponse.json({ error: BLOB_URL_REJECTED_MESSAGE }, { status: 400 });
@@ -709,6 +738,7 @@ export async function POST(request: Request) {
           mimeType: mediaFields.mimeType,
           sizeBytes: mediaFields.sizeBytes,
         },
+        ...(extraMedia ? { extraMedia } : {}),
         baseCaption: baseCaptionRaw,
         location,
         perPlatformOverrides,

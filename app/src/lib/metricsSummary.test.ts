@@ -38,6 +38,7 @@ function job(results: PostJobResultDTO[]): PostJobDTO {
     caption: "c",
     results,
     media: null,
+    mediaCount: 1,
     publish: null,
     // Team Workspaces (Task 4) — irrelevant to summarizeYouTubeMetrics; a
     // fixed stand-in like every other field here.

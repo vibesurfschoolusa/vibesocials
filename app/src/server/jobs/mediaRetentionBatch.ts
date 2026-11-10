@@ -88,14 +88,17 @@ export async function sweepExpiredMediaBatch(opts: {
   const clock = opts.clock ?? Date.now;
   const cutoff = new Date(now.getTime() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
 
+  // 07a: a photo of a post with several photos is used through PostJobMedia
+  // (only the first is also PostJob.mediaItemId), and counts exactly the same:
+  // "in use by a non-terminal post" and "posted at least once" look at both.
+  const nonTerminal = { status: { notIn: [...TERMINAL_POST_JOB_STATUSES] } };
   const where: Prisma.MediaItemWhereInput = {
     deletedAt: null,
     createdAt: { lt: cutoff },
-    postJobs: {
-      some: {},
-      none: { status: { notIn: [...TERMINAL_POST_JOB_STATUSES] } },
-    },
+    postJobs: { none: nonTerminal },
+    postJobMedia: { none: { postJob: nonTerminal } },
     AND: [
+      { OR: [{ postJobs: { some: {} } }, { postJobMedia: { some: {} } }] },
       {
         OR: [
           { lastUsedAt: { lt: cutoff } },
@@ -141,7 +144,7 @@ export async function sweepExpiredMediaBatch(opts: {
               deletedAt: true,
               lastUsedAt: true,
               createdAt: true,
-              _count: { select: { postJobs: true } },
+              _count: { select: { postJobs: true, postJobMedia: true } },
             },
           });
           if (!media) return "skipped";
@@ -153,11 +156,16 @@ export async function sweepExpiredMediaBatch(opts: {
               status: { notIn: [...TERMINAL_POST_JOB_STATUSES] },
             },
           });
+          // 07a: the same for a photo used through PostJobMedia. A separate
+          // count, so each stays an index lookup by mediaItemId.
+          const nonTerminalPhotoUses = await tx.postJobMedia.count({
+            where: { mediaItemId: candidate.id, postJob: nonTerminal },
+          });
 
           const eligible = isMediaSweepEligible({
             deletedAt: media.deletedAt,
-            hasNonTerminalJob: nonTerminalJobs > 0,
-            hasAnyJob: media._count.postJobs > 0,
+            hasNonTerminalJob: nonTerminalJobs > 0 || nonTerminalPhotoUses > 0,
+            hasAnyJob: media._count.postJobs > 0 || media._count.postJobMedia > 0,
             lastUsedAt: media.lastUsedAt,
             createdAt: media.createdAt,
             now,

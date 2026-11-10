@@ -130,6 +130,7 @@ function ytCtx(overrides: Partial<PublishContext> = {}): PublishContext {
       refreshToken: "refresh-token",
       expiresAt: null,
     } as unknown as SocialConnection,
+    get mediaItems() { return [this.mediaItem]; },
     mediaItem: {
       mimeType: "video/mp4",
       storageLocation: "https://blob.example.com/v.mp4",

@@ -214,6 +214,7 @@ describe("instagramClient.publishVideo — Graph OAuthException 190", () => {
     return {
       user: { id: "user-1" } as unknown as User,
       socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+      get mediaItems() { return [this.mediaItem]; },
       mediaItem: {
         mimeType,
         storageLocation: "https://blob.example.com/m",
@@ -507,6 +508,7 @@ describe("instagramClient.publishVideo — caption limit", () => {
       .publishVideo({
         user: { id: "user-1" } as unknown as User,
         socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+        get mediaItems() { return [this.mediaItem]; },
         mediaItem: {
           mimeType: "image/jpeg",
           storageLocation: "https://blob.example.com/m",
@@ -548,6 +550,7 @@ describe("instagramClient.publishVideo — which URL Instagram fetches", () => {
       .publishVideo({
         user: { id: "user-1" } as unknown as User,
         socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+        get mediaItems() { return [this.mediaItem]; },
         mediaItem: {
           mimeType,
           storageLocation: "https://blob.example.com/m",
@@ -599,6 +602,7 @@ describe("instagramClient.publishVideo — rate limits (RATE_LIMITED)", () => {
     return {
       user: { id: "user-1" } as unknown as User,
       socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+      get mediaItems() { return [this.mediaItem]; },
       mediaItem: {
         mimeType,
         storageLocation: "https://blob.example.com/m",
@@ -1085,6 +1089,7 @@ describe("instagramClient.publishVideo — container polling across steps", () =
     return {
       user: { id: "user-1" } as unknown as User,
       socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+      get mediaItems() { return [this.mediaItem]; },
       mediaItem: {
         mimeType: extra.mimeType ?? "video/mp4",
         storageLocation: "https://blob.example.com/m",
@@ -1709,6 +1714,7 @@ describe("instagramClient.publishVideo — step deadline", () => {
     return {
       user: { id: "user-1" } as unknown as User,
       socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+      get mediaItems() { return [this.mediaItem]; },
       mediaItem: {
         mimeType,
         storageLocation: "https://blob.example.com/m",

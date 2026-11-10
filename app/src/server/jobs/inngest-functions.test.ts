@@ -4223,3 +4223,167 @@ describe("usage limits - the workspace's X and YouTube limits in the platform st
     expect(consumeSlotMock).not.toHaveBeenCalled();
   });
 });
+
+// 07a: several photos in one post. The context carries the post's photos in
+// order as `mediaItems`; `mediaItem` stays the first. No client reads the list yet.
+describe("publish functions - a post's photos (07a)", () => {
+  const PHOTO_SENTENCE = "One of this post's photos is no longer available.";
+  const photo = (id: string, deletedAt: string | null = null) => ({
+    id,
+    baseCaption: "c",
+    perPlatformOverrides: null,
+    mimeType: "image/jpeg",
+    deletedAt,
+  });
+  const JOB = {
+    id: "job-1",
+    workspaceId: WORKSPACE.id,
+    mediaItemId: "m1",
+    baseCaption: "c",
+    perPlatformOverrides: null,
+    publishMetadata: null,
+  };
+
+  /** The job row, and (for a select, i.e. loadPostMediaItems) its photo rows. */
+  function stubJob(photos: Array<ReturnType<typeof photo>> | null, positions?: number[]) {
+    db.postJobFindUnique.mockImplementation((args: { select?: unknown }) => {
+      if (!args.select) return Promise.resolve({ ...JOB, _count: { media: photos ? photos.length : 0 } });
+      return Promise.resolve({
+        mediaItemId: "m1",
+        mediaItem: photo("m1"),
+        media: (photos ?? []).map((p, i) => ({ position: positions?.[i] ?? i, mediaItem: p })),
+      });
+    });
+  }
+
+  function publish(data: Record<string, unknown> = {}) {
+    return handlerOf(publishToAllPlatforms)({
+      event: {
+        name: "post/publish.requested",
+        data: { postJobId: "job-1", userId: "user-1", mediaItemId: "m1", baseCaption: "c", perPlatformOverrides: null, ...data },
+      },
+      step: fakeStep(),
+    });
+  }
+
+  function retry() {
+    return handlerOf(retryPlatforms)({
+      event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms: ["x"] } },
+      step: fakeStep(),
+    });
+  }
+
+  beforeEach(() => {
+    db.mediaItemFindUnique.mockResolvedValue(photo("m1"));
+    db.connectionFindMany.mockResolvedValue([{ id: "conn-x", platform: "x" }]);
+    stubResults(["x"]);
+  });
+
+  it("a single-photo post: mediaItems is the one media item, loaded the same way as before", async () => {
+    stubJob(null);
+
+    await publish();
+
+    expect(ctxFor("x").mediaItems).toEqual([ctxFor("x").mediaItem]);
+    expect(ctxFor("x").mediaItem.id).toBe("m1");
+    // No photo-row lookup for a post without rows.
+    expect(db.postJobFindUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it("a first publish carries the photos in order, mediaItem the first", async () => {
+    stubJob([photo("m1"), photo("m2"), photo("m3")]);
+
+    await publish();
+
+    expect(ctxFor("x").mediaItems.map((m) => m.id)).toEqual(["m1", "m2", "m3"]);
+    expect(ctxFor("x").mediaItem.id).toBe("m1");
+  });
+
+  it("a scheduled post (the scanner's event) carries the photos in order", async () => {
+    stubJob([photo("m1"), photo("m2")]);
+
+    await publish({ workspaceId: WORKSPACE.id, immediate: false });
+
+    expect(ctxFor("x").mediaItems.map((m) => m.id)).toEqual(["m1", "m2"]);
+  });
+
+  it("a retry carries the photos in order", async () => {
+    stubJob([photo("m1"), photo("m2"), photo("m3")]);
+
+    await retry();
+
+    expect(ctxFor("x").mediaItems.map((m) => m.id)).toEqual(["m1", "m2", "m3"]);
+    expect(ctxFor("x").mediaItem.id).toBe("m1");
+  });
+
+  it("a single-photo retry carries the one item", async () => {
+    stubJob(null);
+
+    await retry();
+
+    expect(ctxFor("x").mediaItems).toEqual([ctxFor("x").mediaItem]);
+  });
+
+  it("a deleted second photo fails the post's results with the sentence and publishes nothing", async () => {
+    stubJob([photo("m1"), photo("m2", "2026-11-01T00:00:00.000Z")]);
+
+    const error = await publish().catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(NonRetriableError);
+    expect((error as Error).message).toBe(PHOTO_SENTENCE);
+    expect(failPendingMock).toHaveBeenCalledWith("job-1", {
+      errorCode: "MEDIA_UNAVAILABLE",
+      errorMessage: PHOTO_SENTENCE,
+    });
+    expect(publishCtxs).toHaveLength(0);
+  });
+
+  it("a photo whose row is gone fails the post's results the same way", async () => {
+    stubJob([photo("m1"), photo("m3")], [0, 2]);
+
+    const error = await publish().catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(NonRetriableError);
+    expect(failPendingMock).toHaveBeenCalledWith("job-1", {
+      errorCode: "MEDIA_UNAVAILABLE",
+      errorMessage: PHOTO_SENTENCE,
+    });
+    expect(publishCtxs).toHaveLength(0);
+  });
+
+  it("a retry with a deleted second photo fails the retried results with the sentence", async () => {
+    stubJob([photo("m1"), photo("m2", "2026-11-01T00:00:00.000Z")]);
+
+    await retry();
+
+    expect(failPendingMock).toHaveBeenCalledWith(
+      "job-1",
+      { errorCode: "MEDIA_UNAVAILABLE", errorMessage: PHOTO_SENTENCE },
+      { platforms: ["x"] },
+    );
+    expect(publishCtxs).toHaveLength(0);
+  });
+
+  it("a run whose fetch-data output was memoized before this release still publishes the one item", async () => {
+    stubJob(null);
+    const step = fakeStep();
+    const realRun = step.run.getMockImplementation()!;
+    step.run.mockImplementation(async (id: string, cb: () => unknown) => {
+      const out = await realRun(id, cb);
+      if (id !== "fetch-data") return out;
+      const older = { ...(out as Record<string, unknown>) };
+      delete older.mediaItems;
+      return older;
+    });
+
+    await handlerOf(publishToAllPlatforms)({
+      event: {
+        name: "post/publish.requested",
+        data: { postJobId: "job-1", userId: "user-1", mediaItemId: "m1", baseCaption: "c", perPlatformOverrides: null },
+      },
+      step,
+    });
+
+    expect(ctxFor("x").mediaItems.map((m) => m.id)).toEqual(["m1"]);
+  });
+});

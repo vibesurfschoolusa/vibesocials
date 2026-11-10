@@ -15,6 +15,7 @@ const {
   postJobCreateMock,
   postJobResultCreateMock,
   executeRawMock,
+  postJobMediaCreateManyMock,
 } = vi.hoisted(() => ({
   findUniqueMock: vi.fn(),
   mediaItemCreateMock: vi.fn(),
@@ -23,6 +24,7 @@ const {
   postJobCreateMock: vi.fn(),
   postJobResultCreateMock: vi.fn(),
   executeRawMock: vi.fn(),
+  postJobMediaCreateManyMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => {
@@ -44,6 +46,9 @@ vi.mock("@/lib/db", () => {
     },
     postJobResult: {
       create: postJobResultCreateMock,
+    },
+    postJobMedia: {
+      createMany: postJobMediaCreateManyMock,
     },
     $transaction: (cb: (tx: unknown) => unknown) => cb(prisma),
   };
@@ -1165,5 +1170,120 @@ describe("buildRetryEvent", () => {
 
     expect(event.name).toBe("post/retry.requested");
     expect(event.data).toEqual(data);
+  });
+});
+
+describe("createPostJobOnly - several photos (07a)", () => {
+  const photo = (n: number) => ({
+    storageLocation: `https://example.public.blob.vercel-storage.com/p${n}.jpg`,
+    originalFilename: `p${n}.jpg`,
+    mimeType: "image/jpeg",
+    sizeBytes: 100 + n,
+  });
+
+  beforeEach(() => {
+    mediaItemCreateMock.mockReset();
+    findManyConnectionsMock.mockReset();
+    postJobCreateMock.mockReset();
+    postJobResultCreateMock.mockReset();
+    postJobMediaCreateManyMock.mockReset();
+
+    let created = 0;
+    mediaItemCreateMock.mockImplementation(() => {
+      created += 1;
+      return Promise.resolve(makeMediaItem({ id: `media-${created}`, mimeType: "image/jpeg" }));
+    });
+    postJobCreateMock.mockResolvedValue({ id: "job-1" });
+    postJobMediaCreateManyMock.mockResolvedValue({ count: 3 });
+    postJobResultCreateMock.mockImplementation((args: { data: { platform: string } }) =>
+      Promise.resolve({ id: `result-${args.data.platform}` }),
+    );
+    findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-x", platform: "x" })]);
+  });
+
+  it("a single photo writes one MediaItem, the job, and no PostJobMedia rows", async () => {
+    const result = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: photo(1),
+      baseCaption: "hello",
+    });
+
+    expect(mediaItemCreateMock).toHaveBeenCalledTimes(1);
+    expect(postJobMediaCreateManyMock).not.toHaveBeenCalled();
+    expect(postJobCreateMock.mock.calls[0][0].data.mediaItemId).toBe("media-1");
+    expect(result.mediaItemId).toBe("media-1");
+  });
+
+  it("three photos write three MediaItems and three ordered PostJobMedia rows, the job pointing at the first", async () => {
+    const before = Date.now();
+    const result = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: photo(1),
+      extraMedia: [photo(2), photo(3)],
+      baseCaption: "hello",
+      location: "Miami",
+    });
+
+    expect(mediaItemCreateMock).toHaveBeenCalledTimes(3);
+    const created = mediaItemCreateMock.mock.calls.map(
+      (c) => (c[0] as { data: Record<string, unknown> }).data,
+    );
+    expect(created.map((d) => d.storageLocation)).toEqual([
+      photo(1).storageLocation,
+      photo(2).storageLocation,
+      photo(3).storageLocation,
+    ]);
+    // Each photo is its own library item in the workspace, stamped as used now.
+    for (const data of created) {
+      expect(data).toMatchObject({
+        userId: "user-1",
+        workspaceId: "workspace-1",
+        mimeType: "image/jpeg",
+        baseCaption: "hello",
+        metadata: { location: { description: "Miami" } },
+      });
+      expect((data.lastUsedAt as Date).getTime()).toBeGreaterThanOrEqual(before);
+    }
+
+    expect(postJobCreateMock.mock.calls[0][0].data.mediaItemId).toBe("media-1");
+    expect(postJobMediaCreateManyMock).toHaveBeenCalledWith({
+      data: [
+        { postJobId: "job-1", mediaItemId: "media-1", position: 0 },
+        { postJobId: "job-1", mediaItemId: "media-2", position: 1 },
+        { postJobId: "job-1", mediaItemId: "media-3", position: 2 },
+      ],
+    });
+    expect(result).toEqual({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["result-x"] });
+  });
+
+  it("an empty extraMedia list is a single-photo post", async () => {
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: photo(1),
+      extraMedia: [],
+      baseCaption: "hello",
+    });
+
+    expect(mediaItemCreateMock).toHaveBeenCalledTimes(1);
+    expect(postJobMediaCreateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("a scheduled multi-photo post writes its rows and no results", async () => {
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: photo(1),
+      extraMedia: [photo(2)],
+      baseCaption: "hello",
+      intent: "scheduled",
+      scheduledFor: new Date("2030-01-01T00:00:00Z"),
+    });
+
+    expect(postJobMediaCreateManyMock).toHaveBeenCalledTimes(1);
+    expect(postJobResultCreateMock).not.toHaveBeenCalled();
+    expect(postJobCreateMock.mock.calls[0][0].data.status).toBe("scheduled");
   });
 });

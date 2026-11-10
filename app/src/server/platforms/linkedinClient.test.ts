@@ -2039,6 +2039,7 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
     return {
       user: { id: "user-1" } as unknown as User,
       socialConnection: makeConnection({ id: "conn-li", expiresAt: new Date(Date.now() + 3_600_000) }),
+      get mediaItems() { return [this.mediaItem]; },
       mediaItem: {
         id: "media-1",
         mimeType,

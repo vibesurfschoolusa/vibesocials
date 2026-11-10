@@ -93,6 +93,11 @@ import {
   exhaustYouTubeUploadBudget,
 } from "@/server/platforms/youtubeQuota";
 import type { MediaItem, Platform, User } from "@prisma/client";
+import {
+  loadPostMediaItems,
+  POST_PHOTO_UNAVAILABLE_MESSAGE,
+  PostMediaUnavailableError,
+} from "@/server/jobs/postMedia";
 import type {
   PublishContext,
   PublishResult,
@@ -130,6 +135,8 @@ interface ConnectionRef {
 interface PublishToPlatformArgs {
   connectionRef: ConnectionRef;
   mediaItem: SerializedMediaItem;
+  /** The post's media in order (07a); `mediaItem` is the first. */
+  mediaItems: SerializedMediaItem[];
   /** The text to publish (override or base caption + workspace footer). */
   caption: string;
   /** The post's base caption, no footer — YouTube's title source. */
@@ -456,6 +463,7 @@ function scrubbedError(err: Error & { code?: string; status?: unknown }): Error 
 async function publishToPlatform({
   connectionRef,
   mediaItem,
+  mediaItems,
   caption,
   baseCaption,
   userId,
@@ -564,6 +572,7 @@ async function publishToPlatform({
       user: { id: userId } as unknown as User,
       socialConnection: connection,
       mediaItem: mediaItem as unknown as MediaItem,
+      mediaItems: mediaItems as unknown as MediaItem[],
       caption,
       baseCaption,
       deadline,
@@ -728,6 +737,27 @@ const MEDIA_UNAVAILABLE = {
   errorMessage: "The media for this post is no longer available. Recreate the post.",
 } as const satisfies PendingResultFailure;
 
+/** Recorded on a several-photo post's results when one of its photos is gone (07a). */
+const PHOTO_UNAVAILABLE = {
+  errorCode: "MEDIA_UNAVAILABLE",
+  errorMessage: POST_PHOTO_UNAVAILABLE_MESSAGE,
+} as const satisfies PendingResultFailure;
+
+/**
+ * The photos of a post that has PostJobMedia rows, in order, or null when one
+ * of them is missing or soft-deleted. Only called for a post with rows: a
+ * single-media post keeps today's lookup and checks exactly.
+ */
+async function loadAvailablePhotos(postJobId: string): Promise<MediaItem[] | null> {
+  try {
+    const photos = await loadPostMediaItems(postJobId);
+    return photos.some((photo) => photo.deletedAt !== null) ? null : photos;
+  } catch (error) {
+    if (error instanceof PostMediaUnavailableError) return null;
+    throw error;
+  }
+}
+
 /** The parts of Inngest's `inngest/function.failed` payload this handler reads. */
 interface PublishRunFailureArgs {
   event: {
@@ -859,7 +889,11 @@ export const publishToAllPlatforms = inngest.createFunction(
     // the return value. Connection refs (id + platform) only; publish steps
     // re-load tokens from the DB.
     const setupData = await step.run("fetch-data", async () => {
-      const postJob = await prisma.postJob.findUnique({ where: { id: postJobId } });
+      const postJob = await prisma.postJob.findUnique({
+        where: { id: postJobId },
+        // 07a: whether the post has several photos, in the same query.
+        include: { _count: { select: { media: true } } },
+      });
       if (!postJob) {
         // Deterministic: the job row is gone, so a retry could not change it.
         throw new NonRetriableError("Missing required data");
@@ -885,6 +919,20 @@ export const publishToAllPlatforms = inngest.createFunction(
         throw new NonRetriableError("Missing required data");
       }
 
+      // 07a: a post with several photos publishes all of them or none. A gone
+      // photo fails the results here with a sentence that says so (a deterministic
+      // failure, like the missing media above), then ends the run; onFailure then
+      // finds nothing pending. A single-media post loads nothing more.
+      let mediaItems: MediaItem[] = [mediaItem];
+      if ((postJob._count?.media ?? 0) > 0) {
+        const photos = await loadAvailablePhotos(postJobId);
+        if (!photos) {
+          await failPendingPostJobResults(postJobId, PHOTO_UNAVAILABLE);
+          throw new NonRetriableError(POST_PHOTO_UNAVAILABLE_MESSAGE);
+        }
+        mediaItems = photos;
+      }
+
       // 2026-11-02 scale audit (correctness L1): the plan below is built from
       // these rows, not from the connections - a result outlives its connection
       // (Disconnect clears `socialConnectionId`). The connection id is carried so
@@ -898,11 +946,14 @@ export const publishToAllPlatforms = inngest.createFunction(
       return {
         user,
         workspace,
-        mediaItem,
+        mediaItem: mediaItems[0],
+        mediaItems,
         socialConnections: socialConnections as ConnectionRef[],
         resultRecords,
       };
     });
+    // A run whose fetch-data output was memoized before 07a has no list.
+    const publishMediaItems = setupData.mediaItems ?? [setupData.mediaItem];
 
     if (!setupData.socialConnections.length) {
       // 2026-11-02 scale audit (correctness L1): every connection was removed
@@ -981,6 +1032,7 @@ export const publishToAllPlatforms = inngest.createFunction(
           return publishToPlatform({
             connectionRef: connection,
             mediaItem: setupData.mediaItem,
+            mediaItems: publishMediaItems,
             caption,
             baseCaption,
             userId,
@@ -1256,7 +1308,11 @@ export const retryPlatforms = inngest.createFunction(
     //
     // SEC: connection list is id+platform only — tokens reloaded in publish step.
     const setupData = await step.run("fetch-retry-data", async () => {
-      const postJob = await prisma.postJob.findUnique({ where: { id: postJobId } });
+      const postJob = await prisma.postJob.findUnique({
+        where: { id: postJobId },
+        // 07a: whether the post has several photos, in the same query.
+        include: { _count: { select: { media: true } } },
+      });
       if (!postJob) {
         return null;
       }
@@ -1291,10 +1347,21 @@ export const retryPlatforms = inngest.createFunction(
         youtube?: YouTubePostMetadata;
       } | null;
 
+      // 07a: a post with several photos retries all of them or none.
+      let mediaItems: MediaItem[] = mediaItem ? [mediaItem] : [];
+      let photoUnavailable = false;
+      if (mediaItem && (postJob._count?.media ?? 0) > 0) {
+        const photos = await loadAvailablePhotos(postJobId);
+        if (photos) mediaItems = photos;
+        else photoUnavailable = true;
+      }
+
       return {
         user,
         workspace,
         mediaItem,
+        mediaItems,
+        photoUnavailable,
         connections: connections as ConnectionRef[],
         resultRecords,
         publishMetadata,
@@ -1317,6 +1384,9 @@ export const retryPlatforms = inngest.createFunction(
       publishMetadata,
       captionSource,
     } = setupData;
+    // A run whose fetch-retry-data output was memoized before 07a has neither field.
+    const photoUnavailable = setupData.photoUnavailable === true;
+    const retryMediaItems = setupData.mediaItems ?? (mediaItem ? [mediaItem] : []);
 
     // The blob must still exist to re-publish. The endpoint already gates this,
     // but a concurrent retention sweep could have removed it in between — fail
@@ -1325,14 +1395,23 @@ export const retryPlatforms = inngest.createFunction(
     // defensive check: the job's workspaceId is a NOT NULL FK, so a missing
     // row here means the workspace was deleted concurrently (or DB
     // corruption) — equally "shouldn't happen" as a missing user/mediaItem.
-    if (!user || !workspace || !mediaItem || !captionSource || mediaItem.deletedAt !== null) {
+    // 07a: one of several photos gone fails the same way, with its own sentence.
+    if (
+      !user ||
+      !workspace ||
+      !mediaItem ||
+      !captionSource ||
+      mediaItem.deletedAt !== null ||
+      photoUnavailable
+    ) {
+      const failure = photoUnavailable ? PHOTO_UNAVAILABLE : MEDIA_UNAVAILABLE;
       // Through the shared helper (2026-11-01 scale audit, jobs H6): a row
       // another run has CLAIMED (the original publish run, mid-call) may be live,
       // so it is marked PUBLISH_UNCONFIRMED - which that run's confirmed success
       // still overwrites - instead of MEDIA_UNAVAILABLE. The job is recomputed
       // over ALL results exactly as this step used to.
       await step.run("fail-media-unavailable", async () => {
-        await failPendingPostJobResults(postJobId, MEDIA_UNAVAILABLE, { platforms });
+        await failPendingPostJobResults(postJobId, failure, { platforms });
       });
       return { postJobId, error: "Media unavailable" };
     }
@@ -1414,6 +1493,7 @@ export const retryPlatforms = inngest.createFunction(
           return publishToPlatform({
             connectionRef: connection,
             mediaItem,
+            mediaItems: retryMediaItems,
             caption,
             baseCaption: captionSource.baseCaption,
             userId,

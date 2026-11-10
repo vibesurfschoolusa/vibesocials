@@ -1099,6 +1099,7 @@ describe("tiktokClient.publishVideo", () => {
     return {
       user: { id: "user-1" } as unknown as User,
       socialConnection: connection,
+      get mediaItems() { return [this.mediaItem]; },
       mediaItem,
       caption: "hello",
       tiktokMetadata: { privacyLevel: "SELF_ONLY", disableComment: true, disableDuet: true, disableStitch: true },
@@ -1990,6 +1991,7 @@ describe("tiktokClient.publishVideo — streamed FILE_UPLOAD (jobs B3)", () => {
     return {
       user: { id: "user-1" } as unknown as User,
       socialConnection: makeConnection(),
+      get mediaItems() { return [this.mediaItem]; },
       mediaItem: mediaItemOf(sizeBytes),
       caption: "hello",
       tiktokMetadata: { privacyLevel: "SELF_ONLY", disableComment: true, disableDuet: true, disableStitch: true },
