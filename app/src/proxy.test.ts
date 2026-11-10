@@ -18,4 +18,16 @@ describe("isPublicPath", () => {
     expect(isPublicPath("/settings")).toBe(false);
     expect(isPublicPath("/helpdesk")).toBe(false);
   });
+
+  it("lets the browser fetch the web app manifest and the service worker signed out", () => {
+    expect(isPublicPath("/manifest.webmanifest")).toBe(true);
+    expect(isPublicPath("/sw.js")).toBe(true);
+  });
+
+  it("opens only those two exact files, nothing under or beside them", () => {
+    expect(isPublicPath("/sw.js/x")).toBe(false);
+    expect(isPublicPath("/manifest.webmanifest/x")).toBe(false);
+    expect(isPublicPath("/sw.json")).toBe(false);
+    expect(isPublicPath("/share-target")).toBe(false);
+  });
 });

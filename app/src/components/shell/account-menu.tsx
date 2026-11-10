@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
 import { signOut, useSession } from "next-auth/react";
-import { Check, ChevronDown, LayoutGrid, LogOut, Plus } from "lucide-react";
+import { Check, ChevronDown, CircleHelp, Download, LayoutGrid, LogOut, Plus } from "lucide-react";
 import type { WorkspaceRole } from "@prisma/client";
 
 import { cn } from "@/lib/cn";
@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
+import { InstallInstructionsDialog, useInstallApp } from "./install-app";
 import { ThemeToggle } from "./theme-toggle";
 
 /** GET /api/workspaces list item (design doc §4/§7) — the switcher's data. */
@@ -22,8 +23,8 @@ interface WorkspaceSummary {
 }
 
 /**
- * Account dropdown: signed-in email, workspace switcher, theme toggle, and
- * sign-out. Implemented as a labelled popover (not an ARIA menu, since it
+ * Account dropdown: signed-in email, workspace switcher, theme toggle, Help,
+ * "Install app" (hidden when already installed) and sign-out. Implemented as a labelled popover (not an ARIA menu, since it
  * hosts a control group) with Esc-to-close, outside-click-to-close, and focus
  * returned to the trigger.
  */
@@ -35,6 +36,7 @@ export function AccountMenu() {
   const containerRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
+  const installApp = useInstallApp();
 
   // Team Workspaces (Task 7) — the switcher's memberships. Fetched fresh every
   // time the popover opens (a cheap, membership-checked route) rather than
@@ -310,6 +312,27 @@ export function AccountMenu() {
             <ThemeToggle />
           </div>
           <div className="my-1 h-px bg-border" />
+          <Link
+            href="/help"
+            onClick={() => setOpen(false)}
+            className="flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-2 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <CircleHelp aria-hidden className="h-4 w-4 text-muted-foreground" />
+            Help
+          </Link>
+          {installApp.available ? (
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                installApp.install();
+              }}
+              className="flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-2 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Download aria-hidden className="h-4 w-4 text-muted-foreground" />
+              Install app
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={async () => {
@@ -323,6 +346,11 @@ export function AccountMenu() {
           </button>
         </div>
       ) : null}
+
+      <InstallInstructionsDialog
+        open={installApp.instructionsOpen}
+        onOpenChange={installApp.setInstructionsOpen}
+      />
     </div>
   );
 }

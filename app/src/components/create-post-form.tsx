@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef, useCallback, Suspense } from "react";
+import { useState, useEffect, useEffectEvent, useMemo, useRef, useCallback, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { upload } from '@vercel/blob/client';
@@ -44,6 +44,7 @@ import {
 import type { MediaItemDto } from "@/lib/mediaDto";
 import { cleanPlatformOverrides, type PlatformOverrides } from "@/lib/platformOverrides";
 import { prepareUploadFile } from "@/lib/prepareUploadFile";
+import { takeSharedFile } from "@/lib/sharedFile";
 import { TIKTOK_DISCLOSURE_INCOMPLETE_TEXT, tiktokPublishBlock } from "@/lib/tiktokPostRules";
 import {
   PLATFORM_ORDER,
@@ -526,6 +527,102 @@ function CreatePostFormInner({
     }
   }
 
+  // The one way a file gets attached: picked in the file input, or shared to
+  // the installed app on Android (the effect below). Null clears the pick.
+  async function attachPickedFile(pickedFile: File | null) {
+    const selection = ++fileSelectionRef.current;
+    setUploadFile(null);
+    setVideoDurationSec(null);
+    setUploadedBlob(null);
+    setShowSuccess(false);
+    // Changing (or clearing) the file invalidates any
+    // in-flight/completed upload for the previous file so it
+    // can never be applied to this new selection.
+    activeUploadRef.current = null;
+
+    if (!pickedFile) {
+      // A cleared input ends any busy state an earlier pick left.
+      setAutoCaptionLoading(false);
+      return;
+    }
+
+    try {
+      setAutoCaptionLoading(true);
+      setUploadError(null);
+
+      // iPhone HEIC -> JPEG, big photos shrunk, unsupported
+      // types refused with a clear message (prepareUploadFile.ts).
+      let nextFile: File;
+      try {
+        nextFile = await prepareUploadFile(pickedFile);
+      } catch (prepareError) {
+        if (selection === fileSelectionRef.current) {
+          // Clear the input so the same file can be picked again.
+          setFileInputKey((key) => key + 1);
+        }
+        throw prepareError;
+      }
+      if (selection !== fileSelectionRef.current) {
+        return;
+      }
+      setUploadFile(nextFile);
+
+      const blobInfo = await ensureUploaded(nextFile);
+      // A newer pick replaced this one while it uploaded: its
+      // caption must not land on the newer photo.
+      const isStale = () => selection !== fileSelectionRef.current;
+      if (isStale()) {
+        return;
+      }
+
+      if (autoCaptionEnabled) {
+        await runAutoCaptionFromMedia({
+          overwrite: false,
+          blobOverride: blobInfo,
+          fileOverride: nextFile,
+          isStale,
+        });
+      }
+    } catch (err: unknown) {
+      console.error(
+        "Error uploading media for auto-caption:",
+        err,
+      );
+      // A newer pick has replaced this one: its error is moot.
+      if (selection === fileSelectionRef.current) {
+        toast.error(
+          (err as Error).message ||
+            "Failed to prepare media for posting. Please try again.",
+        );
+      }
+    } finally {
+      // Only the latest pick owns the busy state.
+      if (selection === fileSelectionRef.current) {
+        setAutoCaptionLoading(false);
+      }
+    }
+  }
+
+  // Android share target: public/sw.js parked the shared file in Cache Storage
+  // and sent the user here with ?shared=1. Not cancelled on unmount on
+  // purpose: the take empties the cache, so a dropped result would lose the
+  // file (React's dev double-mount would do exactly that).
+  const attachSharedFile = useEffectEvent((file: File) => {
+    void attachPickedFile(file);
+  });
+  const sharedParam = searchParams.get("shared");
+  useEffect(() => {
+    if (sharedParam !== "1") return;
+    void (async () => {
+      const file = await takeSharedFile();
+      if (!file) return;
+      attachSharedFile(file);
+      const url = new URL(window.location.href);
+      url.searchParams.delete("shared");
+      window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+    })();
+  }, [sharedParam]);
+
   // Extracted from handleUploadSubmit below (Task 7 / Step 5) so it can run
   // either directly (schedule/draft — no confirmation needed) or via the
   // publish-now confirmation dialog's onConfirm (immediate publish). Every
@@ -985,80 +1082,7 @@ function CreatePostFormInner({
                 id="post-media"
                 type="file"
                 accept="video/*,image/*"
-                onChange={async (event) => {
-                  const pickedFile = event.target.files?.[0] ?? null;
-                  const selection = ++fileSelectionRef.current;
-                  setUploadFile(null);
-                  setVideoDurationSec(null);
-                  setUploadedBlob(null);
-                  setShowSuccess(false);
-                  // Changing (or clearing) the file invalidates any
-                  // in-flight/completed upload for the previous file so it
-                  // can never be applied to this new selection.
-                  activeUploadRef.current = null;
-
-                  if (!pickedFile) {
-                    // A cleared input ends any busy state an earlier pick left.
-                    setAutoCaptionLoading(false);
-                    return;
-                  }
-
-                  try {
-                    setAutoCaptionLoading(true);
-                    setUploadError(null);
-
-                    // iPhone HEIC -> JPEG, big photos shrunk, unsupported
-                    // types refused with a clear message (prepareUploadFile.ts).
-                    let nextFile: File;
-                    try {
-                      nextFile = await prepareUploadFile(pickedFile);
-                    } catch (prepareError) {
-                      if (selection === fileSelectionRef.current) {
-                        // Clear the input so the same file can be picked again.
-                        setFileInputKey((key) => key + 1);
-                      }
-                      throw prepareError;
-                    }
-                    if (selection !== fileSelectionRef.current) {
-                      return;
-                    }
-                    setUploadFile(nextFile);
-
-                    const blobInfo = await ensureUploaded(nextFile);
-                    // A newer pick replaced this one while it uploaded: its
-                    // caption must not land on the newer photo.
-                    const isStale = () => selection !== fileSelectionRef.current;
-                    if (isStale()) {
-                      return;
-                    }
-
-                    if (autoCaptionEnabled) {
-                      await runAutoCaptionFromMedia({
-                        overwrite: false,
-                        blobOverride: blobInfo,
-                        fileOverride: nextFile,
-                        isStale,
-                      });
-                    }
-                  } catch (err: unknown) {
-                    console.error(
-                      "Error uploading media for auto-caption:",
-                      err,
-                    );
-                    // A newer pick has replaced this one: its error is moot.
-                    if (selection === fileSelectionRef.current) {
-                      toast.error(
-                        (err as Error).message ||
-                          "Failed to prepare media for posting. Please try again.",
-                      );
-                    }
-                  } finally {
-                    // Only the latest pick owns the busy state.
-                    if (selection === fileSelectionRef.current) {
-                      setAutoCaptionLoading(false);
-                    }
-                  }
-                }}
+                onChange={(event) => attachPickedFile(event.target.files?.[0] ?? null)}
                 className="cursor-pointer"
               />
 

@@ -55,6 +55,11 @@ export default withAuth(
 );
 
 export function isPublicPath(pathname: string): boolean {
+  // The browser fetches these without cookies when installing the app. Exact
+  // matches only: neither has anything under it.
+  if (pathname === "/manifest.webmanifest" || pathname === "/sw.js") {
+    return true;
+  }
   const prefixes = [
     "/login",
     "/register",
