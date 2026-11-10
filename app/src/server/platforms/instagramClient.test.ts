@@ -1864,3 +1864,390 @@ describe("instagramClient.publishVideo — step deadline", () => {
     expect(settledAt - start).toBeLessThan(240_000);
   });
 });
+
+// 07b: a post with several photos is one Instagram carousel
+// (https://developers.facebook.com/docs/instagram-platform/content-publishing, "Carousel posts"):
+// one container per photo with is_carousel_item=true, then a CAROUSEL container naming the
+// children in order with the caption, then media_publish on it. The parent container waits
+// across steps with the same saved state a REELS video uses.
+describe("instagramClient.publishVideo — several photos (carousel)", () => {
+  type CodedError = Error & { code?: string };
+  const failure = (promise: Promise<unknown>) =>
+    promise.then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+
+  const NOW = Date.parse("2026-11-10T10:00:00Z");
+  const KIND = "instagram_container";
+  const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+  const savedAt = (ageMs: number, containerId = "carousel-1", checks = 0) => ({
+    containerId,
+    createdAt: new Date(NOW - ageMs).toISOString(),
+    checks,
+  });
+
+  function makeStore(initial?: unknown) {
+    const kept = new Map<string, UploadSnapshot<unknown, unknown>>();
+    if (initial !== undefined) kept.set(KIND, { data: initial });
+    const store = {
+      load: vi.fn(async (kind: string) => kept.get(kind) ?? null),
+      save: vi.fn(async (kind: string, snapshot: UploadSnapshot<unknown, unknown>) => {
+        kept.set(kind, snapshot);
+      }),
+      clear: vi.fn(async () => {
+        kept.clear();
+      }),
+    };
+    return {
+      store: store as unknown as UploadStateStore,
+      mocks: store,
+      savedData: () => kept.get(KIND)?.data ?? null,
+    };
+  }
+
+  const photoUrl = (i: number) => `https://blob.example.com/p${i}`;
+
+  /** A post of `count` photos; the list carries file fields only, as the publish function builds it. */
+  function ctx(
+    count: number,
+    extra: { store?: UploadStateStore; deadline?: number; mimeTypes?: string[]; caption?: string } = {},
+  ) {
+    const mediaItems = Array.from({ length: count }, (_, i) => ({
+      mimeType: extra.mimeTypes?.[i] ?? (i % 2 ? "image/png" : "image/jpeg"),
+      storageLocation: photoUrl(i),
+      metadata: null,
+      baseCaption: "",
+      perPlatformOverrides: null,
+    })) as unknown as MediaItem[];
+    return {
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+      mediaItem: { ...mediaItems[0], baseCaption: "base text" } as unknown as MediaItem,
+      mediaItems,
+      caption: extra.caption ?? "hello carousel",
+      deadline: extra.deadline,
+      uploadState: extra.store,
+    };
+  }
+
+  type Route = (url: URL) => Response | Promise<Response>;
+  /**
+   * Graph stub. Children answer child-1, child-2, ... in creation order; the parent
+   * answers carousel-1. Every request is kept, in order, for the exact-sequence checks.
+   */
+  function stubGraph(routes: { child?: Route; parent?: Route; status?: Route; publish?: Route } = {}) {
+    let children = 0;
+    const requests: URL[] = [];
+    const fetchMock = vi.fn((input: string | URL) => {
+      const url = new URL(String(input));
+      requests.push(url);
+      if (url.pathname.endsWith("/media_publish")) {
+        return Promise.resolve((routes.publish ?? (() => json({ id: "media-9" })))(url));
+      }
+      if (url.pathname.endsWith("/ig-account-1/media")) {
+        if (url.searchParams.get("is_carousel_item") === "true") {
+          children += 1;
+          const n = children;
+          return Promise.resolve((routes.child ?? (() => json({ id: `child-${n}` })))(url));
+        }
+        return Promise.resolve((routes.parent ?? (() => json({ id: "carousel-1" })))(url));
+      }
+      if (url.searchParams.get("fields") === "status_code") {
+        return Promise.resolve((routes.status ?? (() => json({ status_code: "FINISHED" })))(url));
+      }
+      if (url.searchParams.get("fields") === "permalink") {
+        return Promise.resolve(json({ permalink: "https://www.instagram.com/p/abc/" }));
+      }
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const isChild = (u: URL) => u.searchParams.get("is_carousel_item") === "true";
+    const isParent = (u: URL) => u.pathname.endsWith("/ig-account-1/media") && !isChild(u);
+    return {
+      fetchMock,
+      requests,
+      childRequests: () => requests.filter(isChild),
+      parentRequests: () => requests.filter(isParent),
+      statusRequests: () => requests.filter((u) => u.searchParams.get("fields") === "status_code"),
+      publishRequests: () => requests.filter((u) => u.pathname.endsWith("/media_publish")),
+    };
+  }
+
+  /** The photo a child container hands Instagram: the app's signed, fitted copy of the stored photo. */
+  function expectFittedPhoto(child: URL, i: number) {
+    const imageUrl = new URL(String(child.searchParams.get("image_url")));
+    expect(`${imageUrl.origin}${imageUrl.pathname}`).toBe("https://vibesocials.wtf/api/instagram-photo");
+    expect(imageUrl.searchParams.get("src")).toBe(photoUrl(i));
+    expect(
+      verifyInstagramPhotoRequest(
+        imageUrl.searchParams.get("src"),
+        imageUrl.searchParams.get("exp"),
+        imageUrl.searchParams.get("sig"),
+      ),
+    ).toBe(true);
+  }
+
+  /** The exact fields of each child container, in order. */
+  function expectChildren(childRequests: URL[], count: number) {
+    expect(childRequests).toHaveLength(count);
+    childRequests.forEach((child, i) => {
+      expect(child.pathname.endsWith("/ig-account-1/media")).toBe(true);
+      expect([...child.searchParams.keys()].sort()).toEqual(["access_token", "image_url", "is_carousel_item"]);
+      expect(child.searchParams.get("is_carousel_item")).toBe("true");
+      expect(child.searchParams.get("access_token")).toBe("page-access-token");
+      expectFittedPhoto(child, i);
+    });
+  }
+
+  function expectParent(parent: URL, count: number, caption = "hello carousel") {
+    expect([...parent.searchParams.keys()].sort()).toEqual(["access_token", "caption", "children", "media_type"]);
+    expect(parent.searchParams.get("media_type")).toBe("CAROUSEL");
+    expect(parent.searchParams.get("children")).toBe(
+      Array.from({ length: count }, (_, i) => `child-${i + 1}`).join(","),
+    );
+    expect(parent.searchParams.get("caption")).toBe(caption);
+    expect(parent.searchParams.get("access_token")).toBe("page-access-token");
+  }
+
+  const continuation = { continuation: { resumeAt: NOW + 60_000 } };
+  const published = { externalPostId: "media-9", externalPostUrl: "https://www.instagram.com/p/abc/" };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    vi.stubEnv("NEXTAUTH_URL", "https://vibesocials.wtf");
+    vi.stubEnv("NEXTAUTH_SECRET", "test-secret");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it.each([2, 10])(
+    "%i photos: one child per photo in order, one CAROUSEL container, then (next step) one media_publish with the post id and link",
+    async (count) => {
+      const { store, savedData } = makeStore();
+      const graph = stubGraph();
+
+      const first = await instagramClient.publishVideo(ctx(count, { store }));
+
+      // Step 1: the children, in the post's order, then the parent; nothing published yet.
+      expect(first).toEqual(continuation);
+      expect(graph.requests.map((u) => (u.searchParams.get("is_carousel_item") ? "child" : "parent"))).toEqual([
+        ...Array<string>(count).fill("child"),
+        "parent",
+      ]);
+      expectChildren(graph.childRequests(), count);
+      expectParent(graph.parentRequests()[0], count);
+      expect(savedData()).toEqual(savedAt(0));
+      expect(JSON.stringify(savedData())).not.toContain("page-access-token");
+
+      // Step 2: one status check of the parent, FINISHED, then media_publish on it.
+      graph.requests.length = 0;
+      const second = await instagramClient.publishVideo(ctx(count, { store }));
+
+      expect(second).toEqual(published);
+      expect(graph.requests.map((u) => `${u.pathname.split("/").pop()}?${u.searchParams.get("fields") ?? ""}`)).toEqual([
+        "carousel-1?status_code",
+        "media_publish?",
+        "media-9?permalink",
+      ]);
+      expect(graph.publishRequests()[0].searchParams.get("creation_id")).toBe("carousel-1");
+    },
+  );
+
+  it("takes the text from ctx.caption (cut to Instagram's limit), never from the list entries", async () => {
+    const graph = stubGraph();
+    const long = "x".repeat(2_300);
+
+    await instagramClient.publishVideo(ctx(2, { store: makeStore().store, caption: long }));
+
+    expectParent(graph.parentRequests()[0], 2, computeInstagramCaption(long));
+  });
+
+  it("without a store, waits for the parent inside the step and publishes once", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const graph = stubGraph();
+
+    const promise = instagramClient.publishVideo(ctx(3));
+    await vi.advanceTimersByTimeAsync(INSTAGRAM_POLL_INTERVAL_MS);
+
+    await expect(promise).resolves.toEqual(published);
+    expectChildren(graph.childRequests(), 3);
+    expect(graph.parentRequests()).toHaveLength(1);
+    expect(graph.statusRequests()[0].pathname.endsWith("/carousel-1")).toBe(true);
+    expect(graph.publishRequests()).toHaveLength(1);
+  });
+
+  it("the second photo failing: one clear message, no parent, no publish, nothing saved", async () => {
+    const { store, savedData } = makeStore();
+    let n = 0;
+    const graph = stubGraph({
+      child: () =>
+        ++n === 2 ? json({ error: { message: "m", type: "OAuthException", code: 100 } }, 400) : json({ id: `child-${n}` }),
+    });
+
+    const error = await failure(instagramClient.publishVideo(ctx(3, { store })));
+
+    expect(error?.code).toBe("INSTAGRAM_CAROUSEL_ITEM_FAILED");
+    expect(error?.message).toBe("Instagram did not accept photo 2 of 3, so nothing was posted. Please retry.");
+    expect(graph.childRequests()).toHaveLength(2);
+    expect(graph.parentRequests()).toHaveLength(0);
+    expect(graph.publishRequests()).toHaveLength(0);
+    expect(savedData()).toBeNull();
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("a photo answered without a container id fails the same way", async () => {
+    let n = 0;
+    const graph = stubGraph({ child: () => (++n === 2 ? json({}) : json({ id: `child-${n}` })) });
+
+    const error = await failure(instagramClient.publishVideo(ctx(2, { store: makeStore().store })));
+
+    expect(error?.code).toBe("INSTAGRAM_CAROUSEL_ITEM_FAILED");
+    expect(graph.parentRequests()).toHaveLength(0);
+  });
+
+  it("a throttled photo stays RATE_LIMITED, and a dead token stays the reconnect error", async () => {
+    stubGraph({ child: () => json({ error: { message: "m", type: "OAuthException", code: 80002 } }, 400) });
+    expect((await failure(instagramClient.publishVideo(ctx(2, { store: makeStore().store }))))?.code).toBe(
+      "RATE_LIMITED",
+    );
+
+    stubGraph({ child: () => json({ error: { message: "m", type: "OAuthException", code: 190 } }, 400) });
+    expect((await failure(instagramClient.publishVideo(ctx(2, { store: makeStore().store }))))?.code).toBe(
+      "INSTAGRAM_RECONNECT_REQUIRED",
+    );
+    expect(updateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed CAROUSEL container: INSTAGRAM_CONTAINER_FAILED, nothing saved, no publish", async () => {
+    const { store, savedData } = makeStore();
+    const graph = stubGraph({ parent: () => json({}, 400) });
+
+    const error = await failure(instagramClient.publishVideo(ctx(2, { store })));
+
+    expect(error?.code).toBe("INSTAGRAM_CONTAINER_FAILED");
+    expect(savedData()).toBeNull();
+    expect(graph.publishRequests()).toHaveLength(0);
+  });
+
+  it("media_publish answering 500 is PUBLISH_UNCONFIRMED and is not sent again by the in-step retry", async () => {
+    const { store } = makeStore(savedAt(60_000));
+    const graph = stubGraph({ publish: () => json({}, 500) });
+
+    const error = await failure(
+      withTransientRetries(() => instagramClient.publishVideo(ctx(2, { store })), { sleep: async () => {} }),
+    );
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect(graph.publishRequests()).toHaveLength(1);
+    expect(graph.childRequests()).toHaveLength(0);
+  });
+
+  it.each([["video/mp4"], ["image/gif"]])("a %s among several photos: refused before any request", async (bad) => {
+    const graph = stubGraph();
+    const { store, mocks } = makeStore();
+
+    const error = await failure(
+      instagramClient.publishVideo(ctx(3, { store, mimeTypes: ["image/jpeg", bad, "image/png"] })),
+    );
+
+    expect(error?.code).toBe("INSTAGRAM_CAROUSEL_UNSUPPORTED_MEDIA");
+    expect(error?.message).toBe(
+      "Instagram can only post several JPG, PNG or WebP photos together. Remove file 2 and try again.",
+    );
+    expect(graph.fetchMock).not.toHaveBeenCalled();
+    expect(mocks.load).not.toHaveBeenCalled();
+  });
+
+  it("accepts WebP photos (Instagram is handed the app's JPEG copy)", async () => {
+    const graph = stubGraph();
+
+    const result = await instagramClient.publishVideo(
+      ctx(2, { store: makeStore().store, mimeTypes: ["image/webp", "image/webp"] }),
+    );
+
+    expect(result).toEqual(continuation);
+    expectChildren(graph.childRequests(), 2);
+  });
+
+  it("a parent not ready before the step ends continues in the next step and publishes once", async () => {
+    const { store } = makeStore();
+    const answers = ["IN_PROGRESS", "IN_PROGRESS", "FINISHED"];
+    const graph = stubGraph({ status: () => json({ status_code: answers.shift() }) });
+
+    const outcomes = [];
+    for (let step = 0; step < 4; step++) outcomes.push(await instagramClient.publishVideo(ctx(4, { store })));
+
+    expect(outcomes).toEqual([continuation, continuation, continuation, published]);
+    expect(graph.childRequests()).toHaveLength(4);
+    expect(graph.parentRequests()).toHaveLength(1);
+    expect(graph.statusRequests()).toHaveLength(3);
+    expect(graph.publishRequests()).toHaveLength(1);
+  });
+
+  it("a re-run of the creating step (its output was lost) checks the saved carousel instead of making a second", async () => {
+    const { store } = makeStore();
+    const graph = stubGraph({ status: () => json({ status_code: "IN_PROGRESS" }) });
+
+    await instagramClient.publishVideo(ctx(2, { store }));
+    await instagramClient.publishVideo(ctx(2, { store }));
+
+    expect(graph.childRequests()).toHaveLength(2);
+    expect(graph.parentRequests()).toHaveLength(1);
+  });
+
+  it("a carousel stuck IN_PROGRESS gets five checks, then fails with a photo message and no publish", async () => {
+    const { store } = makeStore();
+    const graph = stubGraph({ status: () => json({ status_code: "IN_PROGRESS" }) });
+
+    for (let step = 0; step < INSTAGRAM_STATUS_MAX_CHECKS; step++) await instagramClient.publishVideo(ctx(2, { store }));
+    const error = await failure(instagramClient.publishVideo(ctx(2, { store })));
+
+    expect(error?.code).toBe("INSTAGRAM_CAROUSEL_TIMEOUT");
+    expect(error?.message).toBe("Instagram took too long to process the photos, so nothing was posted. Please retry.");
+    expect(graph.statusRequests()).toHaveLength(INSTAGRAM_STATUS_MAX_CHECKS);
+    expect(graph.publishRequests()).toHaveLength(0);
+  });
+
+  it("a carousel Instagram reports as ERROR fails with a photo message and no publish", async () => {
+    const { store } = makeStore(savedAt(60_000));
+    const graph = stubGraph({ status: () => json({ status_code: "ERROR" }) });
+
+    const error = await failure(instagramClient.publishVideo(ctx(2, { store })));
+
+    expect(error?.code).toBe("INSTAGRAM_CAROUSEL_PROCESSING_ERROR");
+    expect(error?.message).toBe("Instagram could not process the photos, so nothing was posted.");
+    expect(graph.publishRequests()).toHaveLength(0);
+  });
+
+  it("a saved carousel older than 23 h is replaced by a new one, not checked", async () => {
+    const { store, savedData } = makeStore(savedAt(INSTAGRAM_CONTAINER_MAX_AGE_MS + 1, "old-carousel", 1));
+    const graph = stubGraph();
+
+    expect(await instagramClient.publishVideo(ctx(2, { store }))).toEqual(continuation);
+    expect(graph.statusRequests()).toHaveLength(0);
+    expect(graph.childRequests()).toHaveLength(2);
+    expect(savedData()).toEqual(savedAt(0));
+  });
+
+  it("a spent step budget before the first photo is retry-safe: PUBLISH_TIME_BUDGET_EXCEEDED, no request", async () => {
+    const graph = stubGraph();
+
+    const error = await failure(
+      instagramClient.publishVideo(ctx(2, { store: makeStore().store, deadline: NOW + MIN_REQUEST_WINDOW_MS - 1 })),
+    );
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(graph.fetchMock).not.toHaveBeenCalled();
+  });
+});

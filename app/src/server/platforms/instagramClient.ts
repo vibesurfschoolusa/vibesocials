@@ -20,6 +20,7 @@ import {
 } from "./commitCall";
 import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
+import { MULTI_PHOTO_MIME_TYPES } from "@/lib/postMedia";
 import { instagramImageUrl } from "./instagramPhoto";
 import { classifyRateLimit } from "./rateLimited";
 
@@ -459,8 +460,6 @@ async function createInstagramContainer(args: {
 }): Promise<string> {
   const { igAccountId, accessToken, connection, caption, mediaUrl, isVideo, locationId, deadline } = args;
 
-  const containerUrl = new URL(`${META_GRAPH_BASE_URL}/${igAccountId}/media`);
-
   const containerParams: Record<string, string> = {
     access_token: accessToken,
     caption: computeInstagramCaption(caption),
@@ -480,13 +479,30 @@ async function createInstagramContainer(args: {
     containerParams.location_id = locationId;
   }
 
-  Object.entries(containerParams).forEach(([key, value]) => {
-    containerUrl.searchParams.set(key, value);
-  });
-
   console.log("[Instagram] Creating media container", {
     mediaType: isVideo ? "REELS" : "IMAGE",
     hasLocation: !!locationId,
+  });
+
+  return postInstagramContainer({ igAccountId, params: containerParams, connection, deadline });
+}
+
+/**
+ * POST one container (`/{ig-id}/media` with `params`) and return its id. Shared by
+ * the single-media container and the carousel's children and parent. Errors as
+ * {@link createInstagramContainer} lists.
+ */
+async function postInstagramContainer(args: {
+  igAccountId: string;
+  params: Record<string, string>;
+  connection: SocialConnection;
+  deadline: number | undefined;
+}): Promise<string> {
+  const { igAccountId, params, connection, deadline } = args;
+
+  const containerUrl = new URL(`${META_GRAPH_BASE_URL}/${igAccountId}/media`);
+  Object.entries(params).forEach(([key, value]) => {
+    containerUrl.searchParams.set(key, value);
   });
 
   const containerResponse = await fetchWithTimeout(
@@ -658,6 +674,173 @@ async function fetchInstagramPermalink(
   }
 }
 
+// 07b: a post with several photos is one carousel
+// (https://developers.facebook.com/docs/instagram-platform/content-publishing, "Carousel posts"):
+// one container per photo with is_carousel_item=true, then one container with
+// media_type=CAROUSEL, the children's ids in order and the caption, then media_publish on
+// it. The parent waits across steps with the same saved state a REELS video uses (see the
+// header), so a step that ends before it is FINISHED never creates a second carousel. The
+// children are not saved: if a step fails before the parent exists, the next try makes new
+// ones, and Meta discards the unused ones after 24 h. Nothing is posted before media_publish.
+
+/** The shared container messages speak of a video; a carousel's speak of the photos. */
+const CAROUSEL_ERRORS: Record<string, { code: string; message: string }> = {
+  INSTAGRAM_VIDEO_TIMEOUT: {
+    code: "INSTAGRAM_CAROUSEL_TIMEOUT",
+    message: "Instagram took too long to process the photos, so nothing was posted. Please retry.",
+  },
+  INSTAGRAM_VIDEO_PROCESSING_ERROR: {
+    code: "INSTAGRAM_CAROUSEL_PROCESSING_ERROR",
+    message: "Instagram could not process the photos, so nothing was posted.",
+  },
+  INSTAGRAM_CONTAINER_EXPIRED: {
+    code: "INSTAGRAM_CONTAINER_EXPIRED",
+    message: "Instagram discarded the photos before they were posted. Please retry.",
+  },
+};
+
+function asCarouselError(error: unknown): unknown {
+  const code = (error as { code?: unknown } | null)?.code;
+  const mapped = typeof code === "string" ? CAROUSEL_ERRORS[code] : undefined;
+  return mapped ? Object.assign(instagramCodedError(mapped.code, mapped.message), { cause: error }) : error;
+}
+
+/**
+ * One photo's child container. Photos may be sent again (nothing is posted), so a
+ * refusal names the photo and fails the whole carousel: INSTAGRAM_CAROUSEL_ITEM_FAILED.
+ * A throttle, a dead token and a spent step budget keep their own errors.
+ */
+async function createCarouselItem(args: {
+  igAccountId: string;
+  accessToken: string;
+  connection: SocialConnection;
+  photoUrl: string;
+  position: number;
+  count: number;
+  deadline: number | undefined;
+}): Promise<string> {
+  const { igAccountId, accessToken, connection, photoUrl, position, count, deadline } = args;
+  console.log("[Instagram] Creating carousel item", { position, count });
+  try {
+    return await postInstagramContainer({
+      igAccountId,
+      params: {
+        access_token: accessToken,
+        is_carousel_item: "true",
+        // The same fitted JPEG copy the single-photo path hands Instagram (instagramPhoto.ts).
+        image_url: instagramImageUrl(photoUrl, process.env.NEXTAUTH_URL),
+      },
+      connection,
+      deadline,
+    });
+  } catch (error) {
+    if ((error as { code?: unknown } | null)?.code !== "INSTAGRAM_CONTAINER_FAILED") throw error;
+    throw Object.assign(
+      instagramCodedError(
+        "INSTAGRAM_CAROUSEL_ITEM_FAILED",
+        `Instagram did not accept photo ${position} of ${count}, so nothing was posted. Please retry.`,
+      ),
+      { cause: error },
+    );
+  }
+}
+
+async function publishInstagramCarousel(args: {
+  ctx: PublishContext;
+  igAccountId: string;
+  accessToken: string;
+  connection: SocialConnection;
+  username: string | undefined;
+}): Promise<PublishResult> {
+  const { ctx, igAccountId, accessToken, connection, username } = args;
+  const { mediaItems, caption, deadline } = ctx;
+  const store = ctx.uploadState;
+
+  // The create route allows only these; refuse anything else before a request is sent.
+  const unsupported = mediaItems.findIndex((item) => !MULTI_PHOTO_MIME_TYPES.includes(item.mimeType ?? ""));
+  if (unsupported >= 0) {
+    throw instagramCodedError(
+      "INSTAGRAM_CAROUSEL_UNSUPPORTED_MEDIA",
+      `Instagram can only post several JPG, PNG or WebP photos together. Remove file ${unsupported + 1} and try again.`,
+    );
+  }
+
+  console.log("[Instagram] Starting carousel", { count: mediaItems.length, igAccountId });
+
+  try {
+    let saved = store
+      ? readContainerState((await store.load<unknown>(INSTAGRAM_CONTAINER_STATE_KIND))?.data)
+      : null;
+    if (store && saved && isStaleContainer(saved)) {
+      console.log("[Instagram] Saved carousel is too old to publish; creating a new one", {
+        containerId: saved.containerId,
+        createdAt: saved.createdAt,
+      });
+      await dropSavedContainer(store);
+      saved = null;
+    }
+
+    let containerId: string;
+    if (store && saved) {
+      const pending = await checkSavedContainer({ state: saved, accessToken, connection, store, deadline });
+      if (pending) return pending;
+      containerId = saved.containerId;
+    } else {
+      // One after another: each request has the single-photo path's own timeout,
+      // clamped to the step budget.
+      const children: string[] = [];
+      for (const [index, item] of mediaItems.entries()) {
+        children.push(
+          await createCarouselItem({
+            igAccountId,
+            accessToken,
+            connection,
+            photoUrl: item.storageLocation,
+            position: index + 1,
+            count: mediaItems.length,
+            deadline,
+          }),
+        );
+      }
+
+      console.log("[Instagram] Creating carousel container", { count: children.length });
+      containerId = await postInstagramContainer({
+        igAccountId,
+        params: {
+          access_token: accessToken,
+          media_type: "CAROUSEL",
+          children: children.join(","),
+          caption: computeInstagramCaption(caption),
+        },
+        connection,
+        deadline,
+      });
+
+      if (store) {
+        await store.save<InstagramContainerState>(INSTAGRAM_CONTAINER_STATE_KIND, {
+          data: { containerId, createdAt: new Date().toISOString(), checks: 0 },
+        });
+        return continueInAMinute();
+      }
+
+      await waitForInstagramContainer({ containerId, accessToken, connection, deadline });
+    }
+
+    return await publishInstagramContainer({
+      igAccountId,
+      containerId,
+      accessToken,
+      connection,
+      deadline,
+      username,
+      store,
+    });
+  } catch (error: unknown) {
+    console.error("[Instagram] Carousel publish error", error);
+    throw asCarouselError(error);
+  }
+}
+
 export const instagramClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
     let { socialConnection } = ctx;
@@ -689,6 +872,16 @@ export const instagramClient: PlatformClient = {
       const error = new Error("Missing Instagram account ID") as Error & { code: string };
       error.code = "INSTAGRAM_NO_ACCOUNT_ID";
       throw error;
+    }
+
+    if (ctx.mediaItems.length > 1) {
+      return publishInstagramCarousel({
+        ctx,
+        igAccountId,
+        accessToken,
+        connection: socialConnection,
+        username: metadata.username,
+      });
     }
 
     console.log("[Instagram] Starting media upload", {
