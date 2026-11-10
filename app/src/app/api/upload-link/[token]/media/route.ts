@@ -1,7 +1,12 @@
 import { BlobNotFoundError, head, type HeadBlobResult } from "@vercel/blob";
 import { after, NextResponse } from "next/server";
 
-import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl, ownBlobStoreId } from "@/lib/blobUrl";
+import {
+  BLOB_URL_REJECTED_MESSAGE,
+  canonicalBlobUrl,
+  guardBlobKey,
+  ownBlobStoreId,
+} from "@/lib/blobUrl";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
@@ -121,9 +126,22 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
   if (!ownerId) return refuse(UPLOAD_LINK_INACTIVE_MESSAGE, 404);
 
   const now = new Date();
+  let written: boolean;
   try {
-    await prisma.$transaction([
-      prisma.mediaItem.create({
+    written = await prisma.$transaction(async (tx) => {
+      // Idempotent: one live row per file. Without this, one big upload
+      // registered 200 times a day would fill the workspace's counted storage.
+      // The lock is the one deleteBlobUnlessShared (server/jobs/mediaBlob.ts)
+      // takes on this file's key, so two registrations at once cannot both
+      // insert, and a delete of the same file waits its turn.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${guardBlobKey(blobUrl)}))`;
+      const existing = await tx.mediaItem.findFirst({
+        where: { workspaceId: link.workspaceId, storageLocation: blobUrl, deletedAt: null },
+        select: { id: true },
+      });
+      if (existing) return false;
+
+      await tx.mediaItem.create({
         data: {
           workspaceId: link.workspaceId,
           userId: ownerId,
@@ -139,16 +157,20 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
             ...(note ? { note } : {}),
           },
         },
-      }),
-      prisma.workspaceUploadLink.update({
+      });
+      await tx.workspaceUploadLink.update({
         where: { id: link.id },
         data: { lastUsedAt: now, uploadCount: { increment: 1 } },
-      }),
-    ]);
+      });
+      return true;
+    });
   } catch (error) {
     logger.error("[upload-link] Couldn't register a client file", { error, linkId: link.id });
     return refuse("Couldn't save the file. Try again.", 500);
   }
+
+  // Already in the library: the same answer as the first time, and no email.
+  if (!written) return NextResponse.json({ ok: true }, { status: 201 });
 
   // After the response: the email never delays or fails the client's upload.
   after(async () => {

@@ -7,6 +7,8 @@ const {
   checkRateLimitMock,
   headMock,
   mediaCreateMock,
+  mediaFindFirstMock,
+  executeRawMock,
   linkUpdateMock,
   transactionMock,
   afterMock,
@@ -17,6 +19,8 @@ const {
   checkRateLimitMock: vi.fn(),
   headMock: vi.fn(),
   mediaCreateMock: vi.fn(),
+  mediaFindFirstMock: vi.fn(),
+  executeRawMock: vi.fn(),
   linkUpdateMock: vi.fn(),
   transactionMock: vi.fn(),
   afterMock: vi.fn(),
@@ -47,7 +51,7 @@ vi.mock("next/server", async (importOriginal) => ({
 
 import { BlobNotFoundError, BlobServiceNotAvailable } from "@vercel/blob";
 
-import { BLOB_URL_REJECTED_MESSAGE } from "@/lib/blobUrl";
+import { BLOB_URL_REJECTED_MESSAGE, guardBlobKey } from "@/lib/blobUrl";
 import { MAX_MEDIA_BYTES } from "@/lib/mediaInput";
 import { UPLOAD_LINK_DAILY_LIMIT_MESSAGE, UPLOAD_LINK_INACTIVE_MESSAGE } from "@/lib/uploadLink";
 
@@ -78,6 +82,15 @@ function call(request: Request, token = TOKEN) {
   return POST(request, { params: Promise.resolve({ token }) });
 }
 
+/**
+ * A tiny MediaItem table for the transaction: findFirst matches live rows of the
+ * workspace by address, create adds one. Transactions run one at a time, as the
+ * advisory lock makes them for one address.
+ */
+type Row = { workspaceId: string; storageLocation: string; deletedAt: Date | null };
+let rows: Row[] = [];
+let txQueue: Promise<unknown> = Promise.resolve();
+
 /** The data the route wrote to the new MediaItem. */
 function createdData(): Record<string, unknown> {
   return mediaCreateMock.mock.calls[0][0].data;
@@ -107,12 +120,16 @@ beforeEach(() => {
     checkRateLimitMock,
     headMock,
     mediaCreateMock,
+    mediaFindFirstMock,
+    executeRawMock,
     linkUpdateMock,
     transactionMock,
     afterMock,
   ]) {
     mock.mockReset();
   }
+  rows = [];
+  txQueue = Promise.resolve();
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "log").mockImplementation(() => {});
   // ownBlobStoreId() reads the store id from the token: here "store1".
@@ -123,9 +140,31 @@ beforeEach(() => {
   resolveUploadLinkOwnerMock.mockResolvedValue("creator-1");
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   headMock.mockResolvedValue(headResult());
-  mediaCreateMock.mockImplementation((args: unknown) => ({ op: "create", args }));
-  linkUpdateMock.mockImplementation((args: unknown) => ({ op: "update", args }));
-  transactionMock.mockResolvedValue([{ id: "media-1" }, { id: "link-1" }]);
+  mediaFindFirstMock.mockImplementation(
+    async ({ where }: { where: { workspaceId: string; storageLocation: string; deletedAt: null } }) =>
+      rows.find(
+        (row) =>
+          row.workspaceId === where.workspaceId &&
+          row.storageLocation === where.storageLocation &&
+          row.deletedAt === null,
+      ) ?? null,
+  );
+  mediaCreateMock.mockImplementation(async ({ data }: { data: Row }) => {
+    rows.push({ ...data, deletedAt: null });
+    return { id: `media-${rows.length}` };
+  });
+  linkUpdateMock.mockResolvedValue({ id: "link-1" });
+  transactionMock.mockImplementation((callback: (tx: unknown) => Promise<unknown>) => {
+    const run = txQueue.then(() =>
+      callback({
+        $executeRaw: executeRawMock,
+        mediaItem: { findFirst: mediaFindFirstMock, create: mediaCreateMock },
+        workspaceUploadLink: { update: linkUpdateMock },
+      }),
+    );
+    txQueue = run.catch(() => undefined);
+    return run;
+  });
   notifyOwnersOfClientUploadMock.mockResolvedValue(undefined);
 });
 
@@ -222,11 +261,15 @@ describe("the request body", () => {
     await call(mediaRequest(goodBody({ filename: "f".repeat(400) })));
     expect((createdData().originalFilename as string).length).toBe(255);
 
+    // Each call is a new file as far as the library knows.
     mediaCreateMock.mockClear();
+    rows = [];
     await call(mediaRequest(goodBody({ filename: "  " })));
     expect(createdData().originalFilename).toBe("upload");
 
+    // Each call is a new file as far as the library knows.
     mediaCreateMock.mockClear();
+    rows = [];
     await call(mediaRequest(goodBody({ filename: { a: 1 } })));
     expect(createdData().originalFilename).toBe("upload");
   });
@@ -368,12 +411,84 @@ describe("the row", () => {
   it("marks the link used and counts the file, in the same transaction", async () => {
     await call(mediaRequest(goodBody()));
 
+    expect(transactionMock).toHaveBeenCalledTimes(1);
     expect(linkUpdateMock).toHaveBeenCalledWith({
       where: { id: "link-1" },
       data: { lastUsedAt: expect.any(Date), uploadCount: { increment: 1 } },
     });
-    const ops = transactionMock.mock.calls[0][0] as Array<{ op: string }>;
-    expect(ops.map((op) => op.op)).toEqual(["create", "update"]);
+    expect(mediaCreateMock.mock.invocationCallOrder[0]).toBeLessThan(
+      linkUpdateMock.mock.invocationCallOrder[0],
+    );
+  });
+});
+
+describe("registering the same file again", () => {
+  it("locks the file's key, as the delete guard does, then looks for a live row in the workspace", async () => {
+    await call(mediaRequest(goodBody()));
+
+    expect(executeRawMock).toHaveBeenCalledTimes(1);
+    const sql = (executeRawMock.mock.calls[0][0] as TemplateStringsArray).join("?");
+    expect(sql).toContain("pg_advisory_xact_lock(hashtext(");
+    expect(executeRawMock.mock.calls[0][1]).toBe(guardBlobKey(GOOD_URL));
+    expect(mediaFindFirstMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { workspaceId: "ws-1", storageLocation: GOOD_URL, deletedAt: null },
+      }),
+    );
+    expect(executeRawMock.mock.invocationCallOrder[0]).toBeLessThan(
+      mediaFindFirstMock.mock.invocationCallOrder[0],
+    );
+    expect(mediaFindFirstMock.mock.invocationCallOrder[0]).toBeLessThan(
+      mediaCreateMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("answers the same success the second time and writes nothing: no row, no count, no email", async () => {
+    const first = await call(mediaRequest(goodBody()));
+    const second = await call(mediaRequest(goodBody()));
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(await second.json()).toEqual(await first.json());
+    expect(rows).toHaveLength(1);
+    expect(mediaCreateMock).toHaveBeenCalledTimes(1);
+    expect(linkUpdateMock).toHaveBeenCalledTimes(1);
+    expect(afterMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks after storage has confirmed the file", async () => {
+    await call(mediaRequest(goodBody()));
+    expect(headMock.mock.invocationCallOrder[0]).toBeLessThan(
+      transactionMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("leaves one row when two registrations of one file arrive together", async () => {
+    const responses = await Promise.all([call(mediaRequest(goodBody())), call(mediaRequest(goodBody()))]);
+
+    expect(responses.map((response) => response.status)).toEqual([201, 201]);
+    expect(rows).toHaveLength(1);
+    expect(linkUpdateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives two rows for two different files", async () => {
+    const other = `${HOST}/ul/link-1/fedcba9876543210-IMG_2.jpg`;
+    await call(mediaRequest(goodBody()));
+    headMock.mockResolvedValueOnce(headResult({ pathname: "ul/link-1/fedcba9876543210-IMG_2.jpg", url: other }));
+    await call(mediaRequest(goodBody({ blobUrl: other })));
+
+    expect(rows.map((row) => row.storageLocation)).toEqual([GOOD_URL, other]);
+    expect(linkUpdateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("registers a file again when its earlier row was deleted", async () => {
+    rows.push({ workspaceId: "ws-1", storageLocation: GOOD_URL, deletedAt: new Date() });
+
+    const response = await call(mediaRequest(goodBody()));
+
+    expect(response.status).toBe(201);
+    expect(rows.filter((row) => row.deletedAt === null)).toHaveLength(1);
+    expect(mediaCreateMock).toHaveBeenCalledTimes(1);
   });
 });
 
