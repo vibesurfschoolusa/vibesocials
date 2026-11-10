@@ -3946,3 +3946,207 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
     });
   });
 });
+
+// 07b: a post with several photos is one multi-image post (MultiImage API,
+// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/multiimage-post-api):
+// each photo goes through the Images API exactly as a single photo does, then one
+// POST /rest/posts carries `content.multiImage.images` with the image URNs in order.
+describe("linkedinClient — several photos in one post", () => {
+  const REST = "https://api.linkedin.com/rest";
+  const INIT = `${REST}/images?action=initializeUpload`;
+  const POSTS = `${REST}/posts`;
+  const uploadUrl = (n: number) => `https://www.linkedin.com/dms-uploads/IMG${n}/uploaded-image/0?ut=image-secret-${n}`;
+  const blobUrl = (n: number) => `https://blob.example.com/photo-${n}.jpg`;
+  const imageUrn = (n: number) => `urn:li:image:IMG${n}`;
+
+  type Call = [string, RequestInit];
+  type CodedError = Error & { code?: string; status?: number };
+
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+  /** Answers the n-th initializeUpload with photo n's upload URL and image URN. */
+  function stub(
+    routes: {
+      init?: (n: number) => Response | undefined;
+      put?: (n: number) => Response;
+      post?: () => Response | Promise<Response>;
+    } = {},
+  ) {
+    let inits = 0;
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      const blob = /photo-(\d+)\.jpg$/.exec(url);
+      if (blob) return new Response(Uint8Array.of(Number(blob[1])));
+      if (url === INIT) {
+        inits += 1;
+        return (
+          routes.init?.(inits) ??
+          json({ value: { uploadUrlExpiresAt: 1650567510704, uploadUrl: uploadUrl(inits), image: imageUrn(inits) } })
+        );
+      }
+      const put = /dms-uploads\/IMG(\d+)\//.exec(url);
+      if (put) return routes.put?.(Number(put[1])) ?? new Response("", { status: 201 });
+      if (url === POSTS) {
+        return (routes.post ?? (() => new Response(null, { status: 201, headers: { "x-restli-id": "urn:li:share:7000000000000000001" } })))();
+      }
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const calls = () => fetchMock.mock.calls as unknown as Call[];
+    return { fetchMock, calls, urls: () => calls().map(([url]) => url) };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bodyOf = (call: Call | undefined) => JSON.parse(String(call?.[1].body)) as Record<string, any>;
+  const headersOf = (call: Call | undefined) => (call?.[1].headers ?? {}) as Record<string, string>;
+
+  function photo(n: number, mimeType = "image/jpeg") {
+    return {
+      id: `media-${n}`,
+      mimeType,
+      storageLocation: blobUrl(n),
+      originalFilename: `photo-${n}.jpg`,
+      sizeBytes: 1,
+      baseCaption: "",
+      perPlatformOverrides: null,
+    };
+  }
+
+  function ctx(items: ReturnType<typeof photo>[], extra: Partial<PublishContext> = {}) {
+    return {
+      user: { id: "user-1" },
+      socialConnection: makeConnection({ id: "conn-li", expiresAt: new Date(Date.now() + 3_600_000) }),
+      mediaItem: { ...items[0], baseCaption: "the base caption" },
+      mediaItems: items,
+      caption: "Surf day (all levels) #surf",
+      ...extra,
+    } as unknown as PublishContext;
+  }
+
+  const photos = (count: number) => Array.from({ length: count }, (_, i) => photo(i + 1, i % 2 ? "image/png" : "image/jpeg"));
+
+  /** The calls of one photo, in the order the single-photo path makes them. */
+  const photoCalls = (n: number) => [INIT, blobUrl(n), uploadUrl(n)];
+
+  const failure = (promise: Promise<unknown>) =>
+    promise.then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+
+  beforeEach(() => {
+    for (const level of ["log", "warn", "error"] as const) vi.spyOn(console, level).mockImplementation(() => {});
+  });
+
+  it.each([2, 10])("%i photos: each uploaded in order like a single photo, then one multi-image post", async (count) => {
+    const li = stub();
+
+    const result = await linkedinClient.publishVideo(ctx(photos(count)));
+
+    expect(result).toEqual({ externalPostId: "urn:li:share:7000000000000000001" });
+    expect(li.urls()).toEqual([...Array.from({ length: count }, (_, i) => photoCalls(i + 1)).flat(), POSTS]);
+
+    const calls = li.calls();
+    for (const call of calls.filter(([url]) => url === INIT)) {
+      expect(call[1].method).toBe("POST");
+      expect(bodyOf(call)).toEqual({ initializeUploadRequest: { owner: "urn:li:organization:123" } });
+    }
+    for (let n = 1; n <= count; n += 1) {
+      const put = calls.find(([url]) => url === uploadUrl(n));
+      expect(put?.[1].method).toBe("PUT");
+      expect(headersOf(put)).toEqual({ Authorization: "Bearer old-access-token" });
+      expect(Array.from(new Uint8Array(put?.[1].body as ArrayBuffer))).toEqual([n]);
+    }
+
+    const post = calls.filter(([url]) => url === POSTS);
+    expect(post).toHaveLength(1);
+    expect(headersOf(post[0])).toEqual({
+      Authorization: "Bearer old-access-token",
+      "Content-Type": "application/json",
+      "Linkedin-Version": LINKEDIN_API_VERSION,
+      "X-Restli-Protocol-Version": "2.0.0",
+    });
+    expect(bodyOf(post[0])).toEqual({
+      author: "urn:li:organization:123",
+      // ctx.caption, as little text (the list's entries carry no caption).
+      commentary: "Surf day \\(all levels\\) #surf",
+      visibility: "PUBLIC",
+      distribution: { feedDistribution: "MAIN_FEED", targetEntities: [], thirdPartyDistributionChannels: [] },
+      content: { multiImage: { images: Array.from({ length: count }, (_, i) => ({ id: imageUrn(i + 1) })) } },
+      lifecycleState: "PUBLISHED",
+      isReshareDisabledByAuthor: false,
+    });
+  });
+
+  it("one photo in the list takes the single-photo path: content.media, as before", async () => {
+    const li = stub();
+
+    await linkedinClient.publishVideo(ctx([photo(1)]));
+
+    expect(li.urls()).toEqual([...photoCalls(1), POSTS]);
+    expect(bodyOf(li.calls().find(([url]) => url === POSTS)).content).toEqual({ media: { id: imageUrn(1) } });
+  });
+
+  it("the second photo's upload fails: nothing is posted, one clear message that names the photo", async () => {
+    const li = stub({ put: (n) => new Response("boom", { status: n === 2 ? 400 : 201 }) });
+
+    const error = await failure(linkedinClient.publishVideo(ctx(photos(3))));
+
+    expect(error?.code).toBe("LINKEDIN_IMAGE_UPLOAD_FAILED");
+    expect(error?.status).toBe(400);
+    expect(error?.message).toBe("Photo 2 of 3: LinkedIn image upload failed (status 400). Nothing was posted.");
+    expect(li.urls()).toEqual([...photoCalls(1), ...photoCalls(2)]);
+  });
+
+  it("a rate limit or a rejected token on a later photo keeps its own error, and nothing is posted", async () => {
+    const limited = stub({ put: (n) => new Response("", { status: n === 2 ? 429 : 201 }) });
+    expect((await failure(linkedinClient.publishVideo(ctx(photos(2)))))?.code).toBe("RATE_LIMITED");
+    expect(limited.urls()).not.toContain(POSTS);
+
+    const rejected = stub({ init: (n) => (n === 2 ? json({ message: "expired" }, 401) : undefined) });
+    expect((await failure(linkedinClient.publishVideo(ctx(photos(2)))))?.code).toBe("LINKEDIN_RECONNECT_REQUIRED");
+    expect(rejected.urls()).not.toContain(POSTS);
+  });
+
+  it("the post gets no clear answer: PUBLISH_UNCONFIRMED, and neither the post nor the uploads are sent again", async () => {
+    const li = stub({ post: () => Promise.reject(Object.assign(new Error("timed out"), { code: "FETCH_TIMEOUT" })) });
+
+    const error = await failure(
+      withTransientRetries(() => linkedinClient.publishVideo(ctx(photos(3))), { sleep: async () => {} }),
+    );
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect(li.urls().filter((url) => url === POSTS)).toHaveLength(1);
+    expect(li.urls().filter((url) => url === INIT)).toHaveLength(3);
+  });
+
+  it.each([
+    ["a video", "video/mp4", "images only"],
+    ["a file that is no image", "application/pdf", "images only"],
+    // The same reason the composer gives a single WebP (PLATFORM_REFUSED_FORMATS).
+    ["a WebP", "image/webp", "JPG, PNG or GIF only"],
+  ])("%s among several photos: refused before any request", async (_label, mimeType, reason) => {
+    const li = stub();
+
+    const error = await failure(linkedinClient.publishVideo(ctx([photo(1), photo(2, mimeType), photo(3)])));
+
+    expect(error?.code).toBe("LINKEDIN_UNSUPPORTED_MEDIA");
+    expect(error?.message).toBe(
+      `LinkedIn can't post file 2 of 3 in a post with several photos: ${reason}. Nothing was posted.`,
+    );
+    expect(li.fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("with too little of the step left for the post after the uploads, the post is not sent", async () => {
+    const li = stub();
+    // The uploads fit; the post would start with less than its full timeout plus the minimum window.
+    const error = await failure(
+      linkedinClient.publishVideo(ctx(photos(2), { deadline: Date.now() + LINKEDIN_POST_MIN_WINDOW_MS - 1_000 })),
+    );
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(li.urls()).toEqual([...photoCalls(1), ...photoCalls(2)]);
+  });
+});

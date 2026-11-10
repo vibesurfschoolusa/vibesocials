@@ -1,7 +1,8 @@
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
-import type { SocialConnection } from "@prisma/client";
+import type { MediaItem, SocialConnection } from "@prisma/client";
 
 import { assertOk } from "@/lib/assertOk";
+import { mediaKindOf, unsupportedMediaReason } from "@/lib/platformLimits";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { LINKEDIN_REST_BASE_URL, linkedinRestHeaders, toLinkedInLittleText } from "@/lib/linkedinApi";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
@@ -26,7 +27,7 @@ import {
   usesLargeUploadPath,
   type BlobChunkStream,
 } from "./largeUpload";
-import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
+import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, publishBudgetExceededError, remainingMs } from "./publishBudget";
 import { classifyRateLimit, isRateLimitedError } from "./rateLimited";
 
 /**
@@ -704,12 +705,19 @@ interface LinkedInPostBody {
     targetEntities: [];
     thirdPartyDistributionChannels: [];
   };
-  content?: {
-    media: {
-      id: string;
-      title?: string;
-    };
-  };
+  content?:
+    | {
+        media: {
+          id: string;
+          title?: string;
+        };
+      }
+    | {
+        /** A post with several photos (MultiImage API): the image URNs in order, 2 to 20. */
+        multiImage: {
+          images: Array<{ id: string }>;
+        };
+      };
   lifecycleState: "PUBLISHED";
   isReshareDisabledByAuthor: false;
 }
@@ -722,10 +730,12 @@ async function createPost(
   mediaUrn?: string,
   isVideo: boolean = false,
   deadline?: number,
+  /** Several photos: the post's content is a multiImage of these URNs, in order (mediaUrn is then unused). */
+  imageUrns?: string[],
 ): Promise<string> {
   console.log("[LinkedIn] Creating post", {
     authorUrn,
-    hasMedia: !!mediaUrn,
+    hasMedia: !!mediaUrn || !!imageUrns,
     isVideo,
   });
 
@@ -745,7 +755,12 @@ async function createPost(
   };
 
   // Add media if provided
-  if (mediaUrn) {
+  if (imageUrns) {
+    // MultiImage API: `content.multiImage.images` is an array of Media, each with its image URN
+    // as `id` (altText is optional and not sent; a single image sends none either).
+    postBody.content = { multiImage: { images: imageUrns.map((id) => ({ id })) } };
+    console.log("[LinkedIn] Post body includes several images", { images: imageUrns.length, author: authorUrn });
+  } else if (mediaUrn) {
     // A video keeps the title the ugcPosts body gave it ("Video"); an image has none. The title
     // is optional for both (the Post schema requires it only for documents).
     postBody.content = {
@@ -763,8 +778,8 @@ async function createPost(
   console.log("[LinkedIn] Sending post to API", {
     endpoint: LINKEDIN_POSTS_URL,
     author: postBody.author,
-    mediaType: mediaUrn ? (isVideo ? "VIDEO" : "IMAGE") : "NONE",
-    hasMedia: !!mediaUrn,
+    mediaType: imageUrns ? "MULTI_IMAGE" : mediaUrn ? (isVideo ? "VIDEO" : "IMAGE") : "NONE",
+    hasMedia: !!mediaUrn || !!imageUrns,
   });
 
   // Log full post body for debugging
@@ -1665,10 +1680,93 @@ async function publishMultipart(args: {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// 07b: a post with several photos, as one multi-image post.
+// https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/multiimage-post-api
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Every file of a post with several photos must be an image LinkedIn takes (the MultiImage API:
+ * "Only supports images", "JPG, GIF, and PNG formats"). The create route sends only JPEG, PNG and
+ * WebP here; a WebP is refused with the reason the composer gives a single one
+ * (PLATFORM_REFUSED_FORMATS). Thrown before any request.
+ */
+function assertMultiImageMedia(items: readonly MediaItem[]): void {
+  for (const [index, item] of items.entries()) {
+    const reason =
+      mediaKindOf(item.mimeType) === "image" ? unsupportedMediaReason("linkedin", item.mimeType) : "images only";
+    if (reason !== null) {
+      throw linkedinCodedError(
+        "LINKEDIN_UNSUPPORTED_MEDIA",
+        `LinkedIn can't post file ${index + 1} of ${items.length} in a post with several photos: ${reason}. Nothing was posted.`,
+      );
+    }
+  }
+}
+
+/** Codes uploadImage gives a failure of the photo itself: these name the photo; any other error passes as is. */
+const PHOTO_FAILURE_CODES: ReadonlySet<string> = new Set([
+  "LINKEDIN_IMAGE_REGISTRATION_FAILED",
+  "LINKEDIN_IMAGE_DOWNLOAD_FAILED",
+  "LINKEDIN_IMAGE_UPLOAD_FAILED",
+]);
+
+/** A photo's upload failed: the same code and status, with a message that says which photo and that nothing was posted. */
+function photoFailed(error: unknown, index: number, count: number): unknown {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (!(error instanceof Error) || typeof code !== "string" || !PHOTO_FAILURE_CODES.has(code)) return error;
+  const detail = error.message.endsWith("Nothing was posted.") ? error.message : `${error.message}. Nothing was posted.`;
+  const failed = linkedinCodedError(
+    code,
+    `Photo ${index + 1} of ${count}: ${detail}`,
+    (error as { status?: unknown }).status as number | undefined,
+  );
+  failed.cause = error;
+  return failed;
+}
+
+/**
+ * Each photo through the Images API exactly as a single photo goes (uploadImage), one after
+ * another; then one `POST /rest/posts` whose `content.multiImage.images` lists the image URNs in
+ * order. Any photo that fails fails the publish before the post: an image uploaded but never
+ * posted is simply never used, and a retry uploads them all again (uploads commit nothing). The
+ * post is the commit call (createPost); it starts only with its full timeout left, so a slow run
+ * of uploads ends in PUBLISH_TIME_BUDGET_EXCEEDED, with nothing posted, rather than a post cut
+ * short into PUBLISH_UNCONFIRMED.
+ */
+async function publishMultiImage(args: {
+  items: readonly MediaItem[];
+  accessToken: string;
+  authorUrn: string;
+  caption: string;
+  connection: SocialConnection;
+  deadline: number | undefined;
+}): Promise<PublishResult> {
+  const { items, accessToken, authorUrn, caption, connection, deadline } = args;
+  console.log("[LinkedIn] Starting a post with several photos", { photos: items.length, authorUrn });
+
+  const imageUrns: string[] = [];
+  for (const [index, item] of items.entries()) {
+    try {
+      imageUrns.push(await uploadImage(accessToken, authorUrn, item.storageLocation, connection, deadline));
+    } catch (error) {
+      throw photoFailed(error, index, items.length);
+    }
+  }
+
+  if (remainingMs(deadline) < LINKEDIN_POST_MIN_WINDOW_MS) throw publishBudgetExceededError();
+  const postId = await createPost(accessToken, authorUrn, caption, connection, undefined, false, deadline, imageUrns);
+  console.log("[LinkedIn] Publish successful", { postId, photos: items.length });
+  return { externalPostId: postId };
+}
+
 export const linkedinClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
     let { socialConnection } = ctx;
     const { mediaItem, caption, deadline } = ctx;
+    // Callers from before 07a (and tests) may leave the list out: it is then the one file.
+    const items = ctx.mediaItems ?? [mediaItem];
+    if (items.length > 1) assertMultiImageMedia(items);
 
     // COR-5: refresh the token when a refresh_token is stored (partner apps),
     // otherwise fail with a clear reconnect error — before we use the token.
@@ -1709,6 +1807,11 @@ export const linkedinClient: PlatformClient = {
       orgId,
       orgName: organizations[0].name,
     });
+
+    if (items.length > 1) {
+      // The text is ctx.caption, as for one file: the list's entries carry no caption.
+      return await publishMultiImage({ items, accessToken, authorUrn, caption, connection: socialConnection, deadline });
+    }
 
     const mediaUrl = mediaItem.storageLocation;
     const isVideo = mediaItem.mimeType.startsWith("video/");
