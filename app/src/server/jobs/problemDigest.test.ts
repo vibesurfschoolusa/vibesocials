@@ -21,12 +21,23 @@ vi.mock("@/lib/db", () => ({
     user: { findMany: db.userFindMany },
   },
 }));
-vi.mock("@/server/notifications/email", () => ({ sendEmail: sendEmailMock }));
+// Only the transport is replaced; EmailRetryableError / isRetryableEmailError stay
+// real, so a mocked send throws exactly what the real one throws under
+// throwOnRetryable (a RetryAfterError for a 429, an EmailRetryableError for a 5xx).
+vi.mock("@/server/notifications/email", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/notifications/email")>()),
+  sendEmail: sendEmailMock,
+}));
 vi.mock("@/lib/logger", () => ({ logger: loggerMock }));
 
+import { RetryAfterError } from "inngest";
+
+import { EmailRetryableError } from "@/server/notifications/email";
 import {
   collectProblemDigests,
   DIGEST_MAX_EMAILS_PER_RUN,
+  DIGEST_RETRY_DELAY_MS,
+  DIGEST_SEND_INTERVAL_MS,
   sendProblemDigests,
   type ProblemDigest,
 } from "./problemDigest";
@@ -52,6 +63,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllEnvs();
 });
 
@@ -174,46 +186,133 @@ function digest(userId: string): ProblemDigest {
   };
 }
 
-describe("sendProblemDigests", () => {
-  it("sends each owner one email with the key digest/<userId>/<UTC day>", async () => {
-    db.userFindMany.mockResolvedValue([{ id: "user-1", email: "one@example.com" }]);
+/** Owners with addresses, as the user query returns them. */
+function serveUsers() {
+  db.userFindMany.mockImplementation(async (args: { where: { id: { in: string[] } } }) =>
+    args.where.id.in.map((id) => ({ id, email: `${id}@example.com` })),
+  );
+}
 
-    const result = await sendProblemDigests([digest("user-1")], NOW);
+/** Run a send with fake timers, so the pacing and retry waits take no real time. */
+async function sendWithTimers(digests: ProblemDigest[]) {
+  vi.useFakeTimers({ now: NOW });
+  const pending = sendProblemDigests(digests, NOW);
+  await vi.runAllTimersAsync();
+  return pending;
+}
+
+const rateLimited = () => new RetryAfterError("Resend rate limited the send", 2_000);
+const serverError = () => new EmailRetryableError("Resend send failed (status 500)");
+
+describe("sendProblemDigests", () => {
+  beforeEach(serveUsers);
+
+  it("sends each owner one email with the key digest/<userId>/<UTC day>, throwing on retryable failures", async () => {
+    const result = await sendWithTimers([digest("user-1")]);
 
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     const [params, options] = sendEmailMock.mock.calls[0];
-    expect(params.to).toBe("one@example.com");
+    expect(params.to).toBe("user-1@example.com");
     expect(params.subject).toBe("Vibe Socials: 1 workspace needs attention");
-    expect(options).toEqual({ idempotencyKey: "digest/user-1/2026-11-10" });
+    expect(options).toEqual({ idempotencyKey: "digest/user-1/2026-11-10", throwOnRetryable: true });
     expect(result).toEqual({ sent: 1, failed: 0, left: 0 });
   });
 
-  it("keeps sending after one owner's email fails", async () => {
-    db.userFindMany.mockResolvedValue([
-      { id: "user-1", email: "one@example.com" },
-      { id: "user-2", email: "two@example.com" },
+  it(`waits ${DIGEST_SEND_INTERVAL_MS} ms between two sends`, async () => {
+    vi.useFakeTimers({ now: NOW });
+    const pending = sendProblemDigests([digest("user-1"), digest("user-2")], NOW);
+
+    await vi.advanceTimersByTimeAsync(DIGEST_SEND_INTERVAL_MS - 1);
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sendEmailMock).toHaveBeenCalledTimes(2);
+
+    await expect(pending).resolves.toEqual({ sent: 2, failed: 0, left: 0 });
+  });
+
+  it("retries a rate-limited send once, after the delay it carries, and counts it sent", async () => {
+    // The SDK keeps whole seconds: 1 000 ms is stored as "1".
+    sendEmailMock.mockRejectedValueOnce(new RetryAfterError("Resend rate limited the send", 1_000));
+    vi.useFakeTimers({ now: NOW });
+    const pending = sendProblemDigests([digest("user-1")], NOW);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sendEmailMock).toHaveBeenCalledTimes(2);
+    // The retry uses the same key, so Resend never delivers it twice.
+    expect(sendEmailMock.mock.calls[1][1]).toEqual(sendEmailMock.mock.calls[0][1]);
+
+    await expect(pending).resolves.toEqual({ sent: 1, failed: 0, left: 0 });
+  });
+
+  it(`waits ${DIGEST_RETRY_DELAY_MS} ms before retrying an error that carries no delay`, async () => {
+    sendEmailMock.mockRejectedValueOnce(serverError());
+    vi.useFakeTimers({ now: NOW });
+    const pending = sendProblemDigests([digest("user-1")], NOW);
+
+    await vi.advanceTimersByTimeAsync(DIGEST_RETRY_DELAY_MS - 1);
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sendEmailMock).toHaveBeenCalledTimes(2);
+
+    await expect(pending).resolves.toEqual({ sent: 1, failed: 0, left: 0 });
+  });
+
+  it("counts an owner failed after two retryable failures in a row, and carries on", async () => {
+    sendEmailMock.mockRejectedValueOnce(rateLimited()).mockRejectedValueOnce(serverError());
+
+    const result = await sendWithTimers([digest("user-1"), digest("user-2")]);
+
+    expect(sendEmailMock).toHaveBeenCalledTimes(3);
+    expect(sendEmailMock.mock.calls.map(([params]) => params.to)).toEqual([
+      "user-1@example.com",
+      "user-1@example.com",
+      "user-2@example.com",
     ]);
+    expect(result).toEqual({ sent: 1, failed: 1, left: 0 });
+    expect(loggerMock.error).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry an error that is not retryable, and carries on", async () => {
     sendEmailMock.mockRejectedValueOnce(new Error("boom"));
 
-    const result = await sendProblemDigests([digest("user-1"), digest("user-2")], NOW);
+    const result = await sendWithTimers([digest("user-1"), digest("user-2")]);
 
     expect(sendEmailMock).toHaveBeenCalledTimes(2);
-    expect(sendEmailMock.mock.calls[1][0].to).toBe("two@example.com");
+    expect(sendEmailMock.mock.calls[1][0].to).toBe("user-2@example.com");
     expect(result).toEqual({ sent: 1, failed: 1, left: 0 });
   });
 
-  it(`stops after ${DIGEST_MAX_EMAILS_PER_RUN} emails and logs how many were left`, async () => {
-    expect(DIGEST_MAX_EMAILS_PER_RUN).toBe(200);
-    const digests = Array.from({ length: 205 }, (_, index) => digest(`user-${index}`));
-    db.userFindMany.mockImplementation(async (args: { where: { id: { in: string[] } } }) =>
-      args.where.id.in.map((id) => ({ id, email: `${id}@example.com` })),
+  it("totals sent and failed across a mixed run", async () => {
+    sendEmailMock
+      .mockRejectedValueOnce(rateLimited()) // user-0: retried, then sent
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(serverError()) // user-1: failed twice
+      .mockRejectedValueOnce(serverError())
+      .mockResolvedValueOnce(undefined) // user-2: sent
+      .mockRejectedValueOnce(new Error("boom")); // user-3: failed, not retried
+    // user-4: sent (the default resolved value)
+
+    const result = await sendWithTimers(
+      Array.from({ length: 5 }, (_, index) => digest(`user-${index}`)),
     );
 
-    const result = await sendProblemDigests(digests, NOW);
+    expect(sendEmailMock).toHaveBeenCalledTimes(7);
+    expect(result).toEqual({ sent: 3, failed: 2, left: 0 });
+  });
 
-    expect(sendEmailMock).toHaveBeenCalledTimes(200);
-    expect(db.userFindMany.mock.calls[0][0].where.id.in).toHaveLength(200);
-    expect(result).toEqual({ sent: 200, failed: 0, left: 5 });
+  it(`stops after ${DIGEST_MAX_EMAILS_PER_RUN} emails and logs how many were left`, async () => {
+    expect(DIGEST_MAX_EMAILS_PER_RUN).toBe(40);
+    const digests = Array.from({ length: DIGEST_MAX_EMAILS_PER_RUN + 5 }, (_, index) =>
+      digest(`user-${index}`),
+    );
+
+    const result = await sendWithTimers(digests);
+
+    expect(sendEmailMock).toHaveBeenCalledTimes(DIGEST_MAX_EMAILS_PER_RUN);
+    expect(db.userFindMany.mock.calls[0][0].where.id.in).toHaveLength(DIGEST_MAX_EMAILS_PER_RUN);
+    expect(result).toEqual({ sent: DIGEST_MAX_EMAILS_PER_RUN, failed: 0, left: 5 });
     expect(loggerMock.warn).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({ left: 5 }),
@@ -223,7 +322,7 @@ describe("sendProblemDigests", () => {
   it("skips an owner whose account is gone", async () => {
     db.userFindMany.mockResolvedValue([]);
 
-    const result = await sendProblemDigests([digest("user-1")], NOW);
+    const result = await sendWithTimers([digest("user-1")]);
 
     expect(sendEmailMock).not.toHaveBeenCalled();
     expect(result).toEqual({ sent: 0, failed: 0, left: 0 });

@@ -48,13 +48,16 @@ export async function getWorkspacesOverview(userId: string, now: Date): Promise<
   const failedSince = new Date(now.getTime() - FAILURE_WINDOW_MS);
 
   const [monthGroups, scheduledGroups, approvalGroups, failedGroups, connections] = await Promise.all([
-    prisma.postJob.groupBy({
-      by: ["workspaceId"],
+    // From PostJobResult directly, on its [workspaceId, updatedAt] index: a
+    // PostJob filter on `results: { some }` becomes a subquery over the whole
+    // result table. One row per (workspace, post), counted per workspace below.
+    prisma.postJobResult.groupBy({
+      by: ["workspaceId", "postJobId"],
       where: {
         workspaceId: scope,
-        results: { some: { status: "success", updatedAt: { gte: month.start, lt: month.end } } },
+        status: "success",
+        updatedAt: { gte: month.start, lt: month.end },
       },
-      _count: { _all: true },
     }),
     prisma.postJob.groupBy({
       by: ["workspaceId"],
@@ -87,7 +90,10 @@ export async function getWorkspacesOverview(userId: string, now: Date): Promise<
     }),
   ]);
 
-  const postsThisMonth = countsByWorkspace(monthGroups);
+  const postsThisMonth = new Map<string, number>();
+  for (const { workspaceId } of monthGroups) {
+    if (workspaceId) postsThisMonth.set(workspaceId, (postsThisMonth.get(workspaceId) ?? 0) + 1);
+  }
   const scheduled = countsByWorkspace(scheduledGroups);
   const waitingForApproval = countsByWorkspace(approvalGroups);
 

@@ -1,9 +1,10 @@
 import type { Platform } from "@prisma/client";
+import { RetryAfterError } from "inngest";
 
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { utcDayKey } from "@/lib/usageLimits";
-import { sendEmail } from "@/server/notifications/email";
+import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
 import {
   buildProblemDigestEmail,
   type ProblemDigestWorkspace,
@@ -18,8 +19,36 @@ import {
  * the send step, so they never land in a step's stored output.
  */
 
-/** A run sends at most this many emails; the rest are logged and wait for tomorrow. */
-export const DIGEST_MAX_EMAILS_PER_RUN = 200;
+/** Pause between two sends: Resend allows 10 requests a second per team, shared with other mail. */
+export const DIGEST_SEND_INTERVAL_MS = 600;
+
+/** Wait before the one retry of a send that failed retryably and carried no usable delay. */
+export const DIGEST_RETRY_DELAY_MS = 2_000;
+
+/**
+ * A run sends at most this many emails; the rest are logged and wait for tomorrow.
+ * Sized so the send step fits one Inngest step (Vercel stops it at 300 s; the
+ * publish steps budget 225 s) even when every send fails retryably: per owner,
+ * two requests (allow 1 s each), a 2 s retry wait and the 600 ms pause is
+ * 4.6 s, and 40 x 4.6 s = 184 s. A normal day is about 40 x 0.9 s.
+ */
+export const DIGEST_MAX_EMAILS_PER_RUN = 40;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * How long to wait before retrying: the delay a RetryAfterError carries, never
+ * more than DIGEST_RETRY_DELAY_MS so the step stays inside its time;
+ * DIGEST_RETRY_DELAY_MS for any other retryable error. The SDK stores the delay
+ * as whole SECONDS (it rounds the ms given up) or as an ISO date.
+ */
+function retryDelayMs(error: unknown): number {
+  if (!(error instanceof RetryAfterError)) return DIGEST_RETRY_DELAY_MS;
+  const raw = error.retryAfter;
+  const ms = /^\d+$/.test(raw) ? Number(raw) * 1000 : Date.parse(raw) - Date.now();
+  if (!Number.isFinite(ms)) return DIGEST_RETRY_DELAY_MS;
+  return Math.min(Math.max(ms, 0), DIGEST_RETRY_DELAY_MS);
+}
 
 /** How far back a failed result counts as today's problem. */
 const FAILURE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -51,6 +80,7 @@ export async function collectProblemDigests(now: Date): Promise<ProblemDigest[]>
   const since = new Date(now.getTime() - FAILURE_WINDOW_MS);
 
   const [failedResults, reconnects, approvals] = await Promise.all([
+    // Scans PostJobResult once a day; needs an index on (status, updatedAt) if the table grows large.
     prisma.postJobResult.findMany({
       where: {
         status: "failed",
@@ -134,10 +164,14 @@ export async function collectProblemDigests(now: Date): Promise<ProblemDigest[]>
 }
 
 /**
- * Email each digest's owner, at most DIGEST_MAX_EMAILS_PER_RUN per run. The
- * idempotency key `digest/<userId>/<UTC day of now>` makes a re-run of the
- * step (or of the whole run, the same day) send nothing twice. One owner's
- * failed send is logged and the rest still go out.
+ * Email each digest's owner, at most DIGEST_MAX_EMAILS_PER_RUN per run, one
+ * every DIGEST_SEND_INTERVAL_MS. The idempotency key `digest/<userId>/<UTC day
+ * of now>` makes a re-run of the step (or of the whole run, the same day) send
+ * nothing twice. A rate limit, 5xx or network error throws here
+ * (throwOnRetryable); that owner is tried once more after the error's delay,
+ * then counted failed, and the rest still go out. A rejection Resend will never
+ * accept (a bad address) is logged inside sendEmail and returns, so it counts as
+ * sent: retrying it cannot help.
  */
 export async function sendProblemDigests(
   digests: ProblemDigest[],
@@ -163,14 +197,26 @@ export async function sendProblemDigests(
 
   let sent = 0;
   let failed = 0;
+  let first = true;
   for (const digest of batch) {
     const to = emailOf.get(digest.userId);
     if (!to) continue;
-    try {
-      await sendEmail(
+    if (!first) await sleep(DIGEST_SEND_INTERVAL_MS);
+    first = false;
+
+    const send = () =>
+      sendEmail(
         { to, ...buildProblemDigestEmail({ workspaces: digest.workspaces, appBaseUrl }) },
-        { idempotencyKey: `digest/${digest.userId}/${day}` },
+        { idempotencyKey: `digest/${digest.userId}/${day}`, throwOnRetryable: true },
       );
+    try {
+      try {
+        await send();
+      } catch (error) {
+        if (!isRetryableEmailError(error)) throw error;
+        await sleep(retryDelayMs(error));
+        await send();
+      }
       sent++;
     } catch (error) {
       failed++;

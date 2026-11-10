@@ -20,27 +20,43 @@ import { getWorkspacesOverview } from "./workspaceOverview";
 
 const NOW = new Date("2026-11-10T15:00:00.000Z");
 
-type PostJobGroupArgs = { by: string[]; where: Record<string, unknown> };
+type GroupArgs = { by: string[]; where: Record<string, unknown> };
+type PostJobKind = "scheduled" | "approval";
+type ResultKind = "month" | "failed";
 
-/** Which of the three post counts a `postJob.groupBy` call is. */
-function postJobQueryKind(args: PostJobGroupArgs): "month" | "scheduled" | "approval" {
-  if ("results" in args.where) return "month";
-  if (args.where.status === "scheduled") return "scheduled";
-  return "approval";
+/** Which post count a `postJob.groupBy` call is. */
+const postJobKind = (args: GroupArgs): PostJobKind =>
+  args.where.status === "scheduled" ? "scheduled" : "approval";
+/** Which result query a `postJobResult.groupBy` call is. */
+const resultKind = (args: GroupArgs): ResultKind => (args.by.includes("postJobId") ? "month" : "failed");
+
+function servePostJobGroups(rows: Partial<Record<PostJobKind, unknown[]>>) {
+  db.postJobGroupBy.mockImplementation(async (args: GroupArgs) => rows[postJobKind(args)] ?? []);
+}
+function serveResultGroups(rows: Partial<Record<ResultKind, unknown[]>>) {
+  db.resultGroupBy.mockImplementation(async (args: GroupArgs) => rows[resultKind(args)] ?? []);
 }
 
-/** Serve the post counts per kind: `{ month: [...], scheduled: [...], approval: [...] }`. */
-function servePostJobGroups(rows: Partial<Record<"month" | "scheduled" | "approval", unknown[]>>) {
-  db.postJobGroupBy.mockImplementation(async (args: PostJobGroupArgs) => rows[postJobQueryKind(args)] ?? []);
+function postJobCall(kind: PostJobKind): GroupArgs {
+  const call = db.postJobGroupBy.mock.calls.find(([args]) => postJobKind(args) === kind);
+  if (!call) throw new Error(`no ${kind} query`);
+  return call[0];
 }
-
-function postJobCall(kind: "month" | "scheduled" | "approval"): PostJobGroupArgs {
-  const call = db.postJobGroupBy.mock.calls.find(([args]) => postJobQueryKind(args) === kind);
+function resultCall(kind: ResultKind): GroupArgs {
+  const call = db.resultGroupBy.mock.calls.find(([args]) => resultKind(args) === kind);
   if (!call) throw new Error(`no ${kind} query`);
   return call[0];
 }
 
 const count = (workspaceId: string, n: number) => ({ workspaceId, _count: { _all: n } });
+/** The month query's rows: one per (workspace, post) with a successful result this month. */
+const posts = (workspaceId: string, n: number) =>
+  Array.from({ length: n }, (_, index) => ({ workspaceId, postJobId: `${workspaceId}-p${index}` }));
+const failed = (workspaceId: string, platform: string, n: number) => ({
+  workspaceId,
+  platform,
+  _count: { _all: n },
+});
 
 beforeEach(() => {
   for (const mock of Object.values(db)) mock.mockReset();
@@ -49,7 +65,7 @@ beforeEach(() => {
     { role: "member", workspace: { id: "ws-busy", name: "Busy Co" } },
   ]);
   servePostJobGroups({});
-  db.resultGroupBy.mockResolvedValue([]);
+  serveResultGroups({});
   db.connectionFindMany.mockResolvedValue([]);
 });
 
@@ -60,12 +76,13 @@ describe("getWorkspacesOverview", () => {
     expect(db.memberFindMany.mock.calls[0][0].where).toEqual({ userId: "user-1" });
     const scoped = { in: ["ws-calm", "ws-busy"] };
     for (const [args] of db.postJobGroupBy.mock.calls) expect(args.where.workspaceId).toEqual(scoped);
-    expect(db.resultGroupBy.mock.calls[0][0].where.workspaceId).toEqual(scoped);
+    for (const [args] of db.resultGroupBy.mock.calls) expect(args.where.workspaceId).toEqual(scoped);
     expect(db.connectionFindMany.mock.calls[0][0].where.workspaceId).toEqual(scoped);
   });
 
   it("shows only the user's workspaces, even if a count comes back for another", async () => {
     servePostJobGroups({ scheduled: [count("ws-other", 9)] });
+    serveResultGroups({ month: posts("ws-other", 3) });
     db.connectionFindMany.mockResolvedValue([
       { workspaceId: "ws-other", platform: "x", needsReconnect: true },
     ]);
@@ -73,7 +90,11 @@ describe("getWorkspacesOverview", () => {
     const overview = await getWorkspacesOverview("user-1", NOW);
 
     expect(overview.map((entry) => entry.workspaceId).sort()).toEqual(["ws-busy", "ws-calm"]);
-    expect(overview.every((entry) => entry.scheduled === 0 && entry.needsReconnect.length === 0)).toBe(true);
+    expect(
+      overview.every(
+        (entry) => entry.scheduled === 0 && entry.postsThisMonth === 0 && entry.needsReconnect.length === 0,
+      ),
+    ).toBe(true);
   });
 
   it("returns nothing, and runs no counts, for a user with no workspaces", async () => {
@@ -95,8 +116,8 @@ describe("getWorkspacesOverview", () => {
 
     await getWorkspacesOverview("user-1", NOW);
 
-    expect(db.postJobGroupBy).toHaveBeenCalledTimes(3);
-    expect(db.resultGroupBy).toHaveBeenCalledTimes(1);
+    expect(db.postJobGroupBy).toHaveBeenCalledTimes(2);
+    expect(db.resultGroupBy).toHaveBeenCalledTimes(2);
     expect(db.connectionFindMany).toHaveBeenCalledTimes(1);
     for (const [args] of db.postJobGroupBy.mock.calls) expect(args.by).toEqual(["workspaceId"]);
   });
@@ -122,14 +143,13 @@ describe("getWorkspacesOverview", () => {
 
   it("counts every field for a workspace with all of the problems", async () => {
     servePostJobGroups({
-      month: [count("ws-busy", 12)],
       scheduled: [count("ws-busy", 4)],
       approval: [count("ws-busy", 2)],
     });
-    db.resultGroupBy.mockResolvedValue([
-      { workspaceId: "ws-busy", platform: "x", _count: { _all: 2 } },
-      { workspaceId: "ws-busy", platform: "instagram", _count: { _all: 1 } },
-    ]);
+    serveResultGroups({
+      month: posts("ws-busy", 12),
+      failed: [failed("ws-busy", "x", 2), failed("ws-busy", "instagram", 1)],
+    });
     db.connectionFindMany.mockResolvedValue([
       { workspaceId: "ws-busy", platform: "linkedin", needsReconnect: true },
       { workspaceId: "ws-busy", platform: "x", needsReconnect: false },
@@ -165,7 +185,8 @@ describe("getWorkspacesOverview", () => {
   });
 
   it("does not mark scheduled posts or posts this month as needing attention", async () => {
-    servePostJobGroups({ month: [count("ws-calm", 5)], scheduled: [count("ws-calm", 5)] });
+    servePostJobGroups({ scheduled: [count("ws-calm", 5)] });
+    serveResultGroups({ month: posts("ws-calm", 5) });
 
     const overview = await getWorkspacesOverview("user-1", NOW);
 
@@ -175,7 +196,7 @@ describe("getWorkspacesOverview", () => {
   it("counts failed results finished in the last 7 days only", async () => {
     await getWorkspacesOverview("user-1", NOW);
 
-    const args = db.resultGroupBy.mock.calls[0][0];
+    const args = resultCall("failed");
     expect(args.by).toEqual(["workspaceId", "platform"]);
     expect(args.where.status).toBe("failed");
     // A result that finished 7 days and a moment ago is outside this range.
@@ -193,11 +214,15 @@ describe("getWorkspacesOverview", () => {
     });
   });
 
-  it("counts posts this month by a successful result inside the current UTC month", async () => {
+  it("counts posts this month from successful results inside the current UTC month", async () => {
     await getWorkspacesOverview("user-1", NOW);
 
-    expect(postJobCall("month").where.results).toEqual({
-      some: {
+    // Straight on PostJobResult, served by its [workspaceId, updatedAt] index.
+    expect(db.postJobGroupBy.mock.calls.some(([args]) => "results" in args.where)).toBe(false);
+    expect(resultCall("month")).toEqual({
+      by: ["workspaceId", "postJobId"],
+      where: {
+        workspaceId: { in: ["ws-calm", "ws-busy"] },
         status: "success",
         updatedAt: {
           gte: new Date("2026-11-01T00:00:00.000Z"),
@@ -207,16 +232,37 @@ describe("getWorkspacesOverview", () => {
     });
   });
 
-  it("starts a new month at 00:00 UTC on the 1st", async () => {
-    await getWorkspacesOverview("user-1", new Date("2026-12-01T00:00:00.000Z"));
-    expect(postJobCall("month").where.results).toMatchObject({
-      some: { updatedAt: { gte: new Date("2026-12-01T00:00:00.000Z") } },
+  it("counts each post once per workspace, however many platforms it succeeded on", async () => {
+    // groupBy returns one row per (workspace, post), so a post that went out on
+    // three platforms is one row; the count is the rows per workspace.
+    serveResultGroups({
+      month: [
+        { workspaceId: "ws-busy", postJobId: "p1" },
+        { workspaceId: "ws-busy", postJobId: "p2" },
+        { workspaceId: "ws-calm", postJobId: "p3" },
+      ],
     });
 
-    db.postJobGroupBy.mockClear();
+    const overview = await getWorkspacesOverview("user-1", NOW);
+
+    expect(Object.fromEntries(overview.map((entry) => [entry.workspaceId, entry.postsThisMonth]))).toEqual({
+      "ws-busy": 2,
+      "ws-calm": 1,
+    });
+  });
+
+  it("starts a new month at 00:00 UTC on the 1st", async () => {
+    await getWorkspacesOverview("user-1", new Date("2026-12-01T00:00:00.000Z"));
+    expect(resultCall("month").where.updatedAt).toEqual({
+      gte: new Date("2026-12-01T00:00:00.000Z"),
+      lt: new Date("2027-01-01T00:00:00.000Z"),
+    });
+
+    db.resultGroupBy.mockClear();
     await getWorkspacesOverview("user-1", new Date("2026-11-30T23:59:59.999Z"));
-    expect(postJobCall("month").where.results).toMatchObject({
-      some: { updatedAt: { gte: new Date("2026-11-01T00:00:00.000Z") } },
+    expect(resultCall("month").where.updatedAt).toEqual({
+      gte: new Date("2026-11-01T00:00:00.000Z"),
+      lt: new Date("2026-12-01T00:00:00.000Z"),
     });
   });
 
@@ -227,7 +273,7 @@ describe("getWorkspacesOverview", () => {
       { role: "owner", workspace: { id: "ws-c", name: "Charlie" } },
       { role: "owner", workspace: { id: "ws-b", name: "Bravo" } },
     ]);
-    db.resultGroupBy.mockResolvedValue([{ workspaceId: "ws-d", platform: "x", _count: { _all: 1 } }]);
+    serveResultGroups({ failed: [failed("ws-d", "x", 1)] });
     db.connectionFindMany.mockResolvedValue([
       { workspaceId: "ws-c", platform: "x", needsReconnect: true },
     ]);
