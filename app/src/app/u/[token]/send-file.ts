@@ -5,7 +5,8 @@ import { prepareUploadFile } from "@/lib/prepareUploadFile";
 /**
  * One file through a client upload link, in the browser (2026-11-10): prepared
  * as on Create (iPhone photos converted, big photos shrunk), uploaded straight
- * to file storage at the path the server signed, then registered.
+ * to file storage at the path the server signed, then registered. The type and
+ * size are not sent: the server reads them from storage.
  *
  * The token is fetched here and the file sent with `put()`, not `upload()`:
  * `upload()` drops the body of a refused token request, and the client needs
@@ -95,8 +96,6 @@ export async function sendClientFile(
   const mediaResponse = await postJson(deps, `${base}/media`, {
     blobUrl: blob.url,
     filename: prepared.name,
-    mimeType: prepared.type,
-    sizeBytes: prepared.size,
     senderName: input.senderName,
     note: input.note,
   });

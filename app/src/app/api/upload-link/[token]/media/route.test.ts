@@ -2,16 +2,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   findActiveUploadLinkMock,
+  resolveUploadLinkOwnerMock,
   notifyOwnersOfClientUploadMock,
   checkRateLimitMock,
+  headMock,
   mediaCreateMock,
   linkUpdateMock,
   transactionMock,
   afterMock,
 } = vi.hoisted(() => ({
   findActiveUploadLinkMock: vi.fn(),
+  resolveUploadLinkOwnerMock: vi.fn(),
   notifyOwnersOfClientUploadMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
+  headMock: vi.fn(),
   mediaCreateMock: vi.fn(),
   linkUpdateMock: vi.fn(),
   transactionMock: vi.fn(),
@@ -20,9 +24,15 @@ const {
 
 vi.mock("@/server/uploadLink", () => ({
   findActiveUploadLink: findActiveUploadLinkMock,
+  resolveUploadLinkOwner: resolveUploadLinkOwnerMock,
   notifyOwnersOfClientUpload: notifyOwnersOfClientUploadMock,
 }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
+// The real error classes, so the route's "not found" test is the SDK's own.
+vi.mock("@vercel/blob", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@vercel/blob")>()),
+  head: headMock,
+}));
 vi.mock("@/lib/db", () => ({
   prisma: {
     mediaItem: { create: mediaCreateMock },
@@ -35,6 +45,8 @@ vi.mock("next/server", async (importOriginal) => ({
   after: afterMock,
 }));
 
+import { BlobNotFoundError, BlobServiceNotAvailable } from "@vercel/blob";
+
 import { BLOB_URL_REJECTED_MESSAGE } from "@/lib/blobUrl";
 import { MAX_MEDIA_BYTES } from "@/lib/mediaInput";
 import { UPLOAD_LINK_DAILY_LIMIT_MESSAGE, UPLOAD_LINK_INACTIVE_MESSAGE } from "@/lib/uploadLink";
@@ -42,12 +54,16 @@ import { UPLOAD_LINK_DAILY_LIMIT_MESSAGE, UPLOAD_LINK_INACTIVE_MESSAGE } from "@
 import { POST } from "./route";
 
 const TOKEN = "T".repeat(43);
-const LINK = { id: "link-1", workspaceId: "ws-1", createdById: "owner-1", workspaceName: "Surf Co" };
+const LINK = { id: "link-1", workspaceId: "ws-1", createdById: "creator-1", workspaceName: "Surf Co" };
 const HOST = "https://store1.public.blob.vercel-storage.com";
-const GOOD_URL = `${HOST}/ul/link-1/0123456789abcdef-IMG_1.jpg`;
+const HEX = "0123456789abcdef";
+const PATHNAME = `ul/link-1/${HEX}-IMG_1.jpg`;
+const GOOD_URL = `${HOST}/${PATHNAME}`;
+const NOT_THROUGH_LINK = "This file was not sent through this link.";
+const CHECK_FAILED = "Could not check the file. Try again.";
 
 function goodBody(overrides: Record<string, unknown> = {}) {
-  return { blobUrl: GOOD_URL, mimeType: "image/jpeg", sizeBytes: 1234, filename: "IMG_1.jpg", ...overrides };
+  return { blobUrl: GOOD_URL, filename: "IMG_1.jpg", ...overrides };
 }
 
 function mediaRequest(body: unknown, headers: Record<string, string> = {}): Request {
@@ -67,11 +83,29 @@ function createdData(): Record<string, unknown> {
   return mediaCreateMock.mock.calls[0][0].data;
 }
 
+/** The routes each checkRateLimit call counted against, in order. */
+function countedRoutes(): string[] {
+  return checkRateLimitMock.mock.calls.map(([options]) => options.route as string);
+}
+
+function headResult(overrides: Record<string, unknown> = {}) {
+  return {
+    size: 4321,
+    contentType: "image/jpeg",
+    pathname: PATHNAME,
+    url: GOOD_URL,
+    uploadedAt: new Date(),
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   for (const mock of [
     findActiveUploadLinkMock,
+    resolveUploadLinkOwnerMock,
     notifyOwnersOfClientUploadMock,
     checkRateLimitMock,
+    headMock,
     mediaCreateMock,
     linkUpdateMock,
     transactionMock,
@@ -81,11 +115,14 @@ beforeEach(() => {
   }
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "log").mockImplementation(() => {});
-  delete process.env.BLOB_READ_WRITE_TOKEN;
+  // ownBlobStoreId() reads the store id from the token: here "store1".
+  process.env.BLOB_READ_WRITE_TOKEN = "vercel_blob_rw_store1_secretpart";
   delete process.env.BLOB_STORE_ID;
 
   findActiveUploadLinkMock.mockResolvedValue(LINK);
+  resolveUploadLinkOwnerMock.mockResolvedValue("creator-1");
   checkRateLimitMock.mockResolvedValue({ allowed: true });
+  headMock.mockResolvedValue(headResult());
   mediaCreateMock.mockImplementation((args: unknown) => ({ op: "create", args }));
   linkUpdateMock.mockImplementation((args: unknown) => ({ op: "update", args }));
   transactionMock.mockResolvedValue([{ id: "media-1" }, { id: "link-1" }]);
@@ -104,25 +141,28 @@ describe("an inactive link", () => {
     const body = await unknown.json();
     expect(body).toEqual({ error: UPLOAD_LINK_INACTIVE_MESSAGE });
     expect(await revoked.json()).toEqual(body);
+    expect(headMock).not.toHaveBeenCalled();
     expect(transactionMock).not.toHaveBeenCalled();
   });
 });
 
-describe("the blob checks POST /api/media applies", () => {
-  it("needs a JSON body", async () => {
+describe("the request body", () => {
+  it("needs JSON, and a refused body counts against no limit", async () => {
     const wrongType = await call(mediaRequest(goodBody(), { "Content-Type": "text/plain" }));
     expect(wrongType.status).toBe(400);
     expect((await call(mediaRequest("{"))).status).toBe(400);
+    expect((await call(mediaRequest("[1]"))).status).toBe(400);
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
     expect(transactionMock).not.toHaveBeenCalled();
   });
 
-  it("needs a blob URL on an allowed host, in its canonical form", async () => {
+  it("needs a blob URL on an allowed host, in its canonical form, without counting", async () => {
     for (const blobUrl of [
       undefined,
       "",
+      42,
       "https://evil.example/ul/link-1/a.jpg",
       `${GOOD_URL}?x=1`,
-      "http://store1.public.blob.vercel-storage.com/ul/link-1/a.jpg",
       `${HOST}/ul/link-1/${"a".repeat(2100)}.jpg`,
     ]) {
       const response = await call(mediaRequest(goodBody({ blobUrl })));
@@ -130,61 +170,164 @@ describe("the blob checks POST /api/media applies", () => {
     }
     const rejected = await call(mediaRequest(goodBody({ blobUrl: "https://evil.example/ul/link-1/a.jpg" })));
     await expect(rejected.json()).resolves.toEqual({ error: BLOB_URL_REJECTED_MESSAGE });
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+    expect(headMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses an address not in the upload route's shape, or not on the app's store, without counting", async () => {
+    for (const blobUrl of [
+      `${HOST}/1700000000-abc-IMG_1.jpg`,
+      `${HOST}/ul/link-1/abc-IMG_1.jpg`,
+      `${HOST}/ul/link-1/${HEX.toUpperCase()}-IMG_1.jpg`,
+      `${HOST}/ul/link-1/${HEX}-..%2Fx.jpg`,
+      `http://localhost:9366/ul/link-1/${HEX}-IMG_1.jpg`,
+      `https://store2.public.blob.vercel-storage.com/ul/link-1/${HEX}-IMG_1.jpg`,
+    ]) {
+      const response = await call(mediaRequest(goodBody({ blobUrl })));
+      expect(response.status, blobUrl).toBe(400);
+    }
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+    expect(headMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses everything when the app's store is not known", async () => {
+    delete process.env.BLOB_READ_WRITE_TOKEN;
+    const response = await call(mediaRequest(goodBody()));
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: NOT_THROUGH_LINK });
+  });
+
+  it("refuses a file under another link's prefix, counting the IP but not the link's day", async () => {
+    for (const blobUrl of [
+      `${HOST}/ul/link-2/${HEX}-IMG_1.jpg`,
+      `${HOST}/ul/link-1x/${HEX}-IMG_1.jpg`,
+    ]) {
+      const response = await call(mediaRequest(goodBody({ blobUrl })));
+      expect(response.status, blobUrl).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: NOT_THROUGH_LINK });
+    }
+    expect(countedRoutes()).toEqual(["upload-link/media", "upload-link/media"]);
+    expect(headMock).not.toHaveBeenCalled();
     expect(transactionMock).not.toHaveBeenCalled();
   });
 
-  it("needs an image or video type", async () => {
-    for (const mimeType of ["application/pdf", "text/html", undefined, 7]) {
-      expect((await call(mediaRequest(goodBody({ mimeType })))).status).toBe(400);
-    }
-    expect(transactionMock).not.toHaveBeenCalled();
+  it("ignores the client's type and size: what storage reports is written", async () => {
+    await call(
+      mediaRequest(goodBody({ mimeType: `image/${"x".repeat(4_000_000)}`, sizeBytes: 1 })),
+    );
+    expect(createdData()).toMatchObject({ mimeType: "image/jpeg", sizeBytes: 4321 });
   });
 
-  it("needs a size above 0 and at most the shared limit", async () => {
-    for (const sizeBytes of [0, -1, MAX_MEDIA_BYTES + 1, "100", undefined, Number.NaN]) {
-      expect((await call(mediaRequest(goodBody({ sizeBytes })))).status, String(sizeBytes)).toBe(400);
-    }
-    expect((await call(mediaRequest(goodBody({ sizeBytes: MAX_MEDIA_BYTES })))).status).toBe(201);
+  it("caps an over-long file name and falls back to 'upload'", async () => {
+    await call(mediaRequest(goodBody({ filename: "f".repeat(400) })));
+    expect((createdData().originalFilename as string).length).toBe(255);
+
+    mediaCreateMock.mockClear();
+    await call(mediaRequest(goodBody({ filename: "  " })));
+    expect(createdData().originalFilename).toBe("upload");
+
+    mediaCreateMock.mockClear();
+    await call(mediaRequest(goodBody({ filename: { a: 1 } })));
+    expect(createdData().originalFilename).toBe("upload");
   });
 });
 
-describe("the link's own prefix", () => {
-  it("refuses a file on an allowed host but outside ul/<link id>/", async () => {
-    const response = await call(mediaRequest(goodBody({ blobUrl: `${HOST}/1700000000-abc-IMG_1.jpg` })));
+describe("checking the file in storage", () => {
+  it("looks up the canonical address, after the limits", async () => {
+    await call(mediaRequest(goodBody()));
+
+    expect(headMock).toHaveBeenCalledWith(GOOD_URL);
+    expect(checkRateLimitMock.mock.invocationCallOrder[1]).toBeLessThan(
+      headMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("refuses a file storage does not have", async () => {
+    headMock.mockRejectedValue(new BlobNotFoundError());
+
+    const response = await call(mediaRequest(goodBody()));
+
     expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: NOT_THROUGH_LINK });
     expect(transactionMock).not.toHaveBeenCalled();
   });
 
-  it("refuses a file under another link's prefix", async () => {
-    for (const blobUrl of [
-      `${HOST}/ul/link-2/abc-IMG_1.jpg`,
-      `${HOST}/ul/link-10/abc-IMG_1.jpg`,
-      `${HOST}/ul/link-1/../link-2/abc-IMG_1.jpg`,
-    ]) {
-      expect((await call(mediaRequest(goodBody({ blobUrl })))).status, blobUrl).toBe(400);
+  it("answers 503 and writes nothing when storage cannot be asked", async () => {
+    for (const error of [new BlobServiceNotAvailable(), new TypeError("fetch failed")]) {
+      headMock.mockRejectedValueOnce(error);
+      const response = await call(mediaRequest(goodBody()));
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({ error: CHECK_FAILED });
     }
     expect(transactionMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses when storage's own pathname is not this link's shape", async () => {
+    for (const pathname of [`ul/link-2/${HEX}-IMG_1.jpg`, "IMG_1.jpg", `/${PATHNAME}`]) {
+      headMock.mockResolvedValueOnce(headResult({ pathname }));
+      const response = await call(mediaRequest(goodBody()));
+      expect(response.status, pathname).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: NOT_THROUGH_LINK });
+    }
+    expect(transactionMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a stored type that is not on the allowed list", async () => {
+    for (const contentType of ["text/html", "image/svg+xml", "application/pdf", "", "image/heic"]) {
+      headMock.mockResolvedValueOnce(headResult({ contentType }));
+      expect((await call(mediaRequest(goodBody()))).status, contentType).toBe(400);
+    }
+    expect(transactionMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a stored size of 0 or over the limit, and takes the limit itself", async () => {
+    for (const size of [0, MAX_MEDIA_BYTES + 1, Number.NaN]) {
+      headMock.mockResolvedValueOnce(headResult({ size }));
+      expect((await call(mediaRequest(goodBody()))).status, String(size)).toBe(400);
+    }
+    expect(transactionMock).not.toHaveBeenCalled();
+
+    headMock.mockResolvedValueOnce(headResult({ size: MAX_MEDIA_BYTES, contentType: "video/mp4" }));
+    expect((await call(mediaRequest(goodBody()))).status).toBe(201);
+    expect(createdData()).toMatchObject({ sizeBytes: MAX_MEDIA_BYTES, mimeType: "video/mp4" });
   });
 });
 
 describe("the row", () => {
-  it("goes to the link's workspace, owned by the link's creator, with the link's metadata", async () => {
+  it("goes to the link's workspace, with the resolved owner and the link's metadata", async () => {
     const response = await call(
       mediaRequest(goodBody({ senderName: "  Ana  ", note: "  For Friday  " })),
     );
 
     expect(response.status).toBe(201);
     await expect(response.json()).resolves.toEqual({ ok: true });
+    expect(resolveUploadLinkOwnerMock).toHaveBeenCalledWith(LINK);
     expect(createdData()).toEqual({
       workspaceId: "ws-1",
-      userId: "owner-1",
+      userId: "creator-1",
       storageLocation: GOOD_URL,
       originalFilename: "IMG_1.jpg",
       mimeType: "image/jpeg",
-      sizeBytes: 1234,
+      sizeBytes: 4321,
       baseCaption: "",
       metadata: { source: "upload_link", linkId: "link-1", senderName: "Ana", note: "For Friday" },
     });
+  });
+
+  it("is owned by another owner when the creator is no longer one", async () => {
+    resolveUploadLinkOwnerMock.mockResolvedValue("longest-owner");
+    await call(mediaRequest(goodBody()));
+    expect(createdData().userId).toBe("longest-owner");
+  });
+
+  it("is refused with the 'not active' sentence when the workspace has no owner", async () => {
+    resolveUploadLinkOwnerMock.mockResolvedValue(null);
+
+    const response = await call(mediaRequest(goodBody()));
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: UPLOAD_LINK_INACTIVE_MESSAGE });
+    expect(transactionMock).not.toHaveBeenCalled();
   });
 
   it("leaves out a name and a note that were not given", async () => {
@@ -215,20 +358,11 @@ describe("the row", () => {
 
     expect(createdData()).toMatchObject({
       workspaceId: "ws-1",
-      userId: "owner-1",
+      userId: "creator-1",
       baseCaption: "",
       storageLocation: GOOD_URL,
       metadata: { source: "upload_link", linkId: "link-1" },
     });
-  });
-
-  it("caps an over-long file name and falls back to 'upload'", async () => {
-    await call(mediaRequest(goodBody({ filename: "f".repeat(400) })));
-    expect((createdData().originalFilename as string).length).toBe(255);
-
-    mediaCreateMock.mockClear();
-    await call(mediaRequest(goodBody({ filename: "  " })));
-    expect(createdData().originalFilename).toBe("upload");
   });
 
   it("marks the link used and counts the file, in the same transaction", async () => {
@@ -257,14 +391,16 @@ describe("limits", () => {
     checkRateLimitMock.mockReset();
     checkRateLimitMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 99 });
     findActiveUploadLinkMock.mockClear();
+    headMock.mockClear();
     transactionMock.mockClear();
     const response = await call(mediaRequest(goodBody()));
     expect(response.status).toBe(429);
     expect(findActiveUploadLinkMock).not.toHaveBeenCalled();
+    expect(headMock).not.toHaveBeenCalled();
     expect(transactionMock).not.toHaveBeenCalled();
   });
 
-  it("allows 200 files a day per link, failing closed, with the sentence", async () => {
+  it("allows 200 files a day per link, failing closed, with the sentence, before storage is asked", async () => {
     await call(mediaRequest(goodBody()));
     expect(checkRateLimitMock).toHaveBeenNthCalledWith(2, {
       userId: "upload-link:link-1",
@@ -278,10 +414,12 @@ describe("limits", () => {
     checkRateLimitMock
       .mockResolvedValueOnce({ allowed: true })
       .mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 3600 });
+    headMock.mockClear();
     transactionMock.mockClear();
     const response = await call(mediaRequest(goodBody()));
     expect(response.status).toBe(429);
     await expect(response.json()).resolves.toMatchObject({ error: UPLOAD_LINK_DAILY_LIMIT_MESSAGE });
+    expect(headMock).not.toHaveBeenCalled();
     expect(transactionMock).not.toHaveBeenCalled();
   });
 });

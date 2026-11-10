@@ -18,7 +18,7 @@ vi.mock("@/server/notifications/email", () => ({ sendEmail: sendEmailMock }));
 
 import { generateInviteToken, hashInviteToken } from "@/lib/inviteToken";
 
-import { findActiveUploadLink, notifyOwnersOfClientUpload } from "./uploadLink";
+import { findActiveUploadLink, notifyOwnersOfClientUpload, resolveUploadLinkOwner } from "./uploadLink";
 
 function linkRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -149,5 +149,40 @@ describe("notifyOwnersOfClientUpload", () => {
     await vi.advanceTimersByTimeAsync(1);
     await done;
     expect(settled).toBe(true);
+  });
+});
+
+describe("resolveUploadLinkOwner", () => {
+  const link = { id: "link-1", workspaceId: "ws-1", createdById: "creator", workspaceName: "Surf Co" };
+
+  it("asks for the workspace's owners, longest-standing first", async () => {
+    memberFindManyMock.mockResolvedValue([]);
+    await resolveUploadLinkOwner(link);
+    expect(memberFindManyMock).toHaveBeenCalledWith({
+      where: { workspaceId: "ws-1", role: "owner" },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { userId: true },
+    });
+  });
+
+  it("keeps the link's creator while they are still an owner", async () => {
+    memberFindManyMock.mockResolvedValue([{ userId: "first-owner" }, { userId: "creator" }]);
+    expect(await resolveUploadLinkOwner(link)).toBe("creator");
+  });
+
+  it("falls back to the longest-standing owner when the creator left, or was made a member", async () => {
+    // A member's row is not in an owner query, so leaving and demotion look the same.
+    memberFindManyMock.mockResolvedValue([{ userId: "first-owner" }, { userId: "second-owner" }]);
+    expect(await resolveUploadLinkOwner(link)).toBe("first-owner");
+  });
+
+  it("falls back the same way when the creator's account is gone (its memberships go with it)", async () => {
+    memberFindManyMock.mockResolvedValue([{ userId: "only-owner" }]);
+    expect(await resolveUploadLinkOwner({ ...link, createdById: "deleted-user" })).toBe("only-owner");
+  });
+
+  it("gives null when the workspace has no owner", async () => {
+    memberFindManyMock.mockResolvedValue([]);
+    expect(await resolveUploadLinkOwner(link)).toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
+import { readJsonObject } from "@/lib/http";
 import { generateInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -11,12 +12,48 @@ import {
   uploadLinkUrl,
 } from "@/lib/uploadLink";
 import { requireOwnerContext } from "@/lib/workspace";
+import {
+  INVALID_WORKSPACE_ID_CODE,
+  INVALID_WORKSPACE_ID_MESSAGE,
+  WORKSPACE_CHANGED_CODE,
+  WORKSPACE_CHANGED_MESSAGE,
+} from "@/lib/workspaceChanged";
 
 /**
  * The workspace's client upload link (2026-11-10), for its owners only. The raw
  * token is kept sealed so an owner can copy the address again; a member gets
  * the owner gate's 403 and never sees it.
+ *
+ * The active workspace is a cookie every tab shares, so the Media page sends
+ * the workspace it was rendered for (GET: `?workspaceId=`, POST and DELETE: a
+ * `{ workspaceId }` body). A mismatch is a 409 with the library's sentence, as
+ * POST /api/media answers, so an owner with two workspaces in two tabs cannot
+ * copy, replace or turn off the wrong one's link. An absent id keeps the plain
+ * behaviour, as there.
  */
+
+/** The 400 / 409 for a workspace id that is not the active one, or null when it may go on. */
+function workspaceMismatch(sent: unknown, activeWorkspaceId: string): NextResponse | null {
+  if (sent === undefined) return null;
+  if (typeof sent !== "string") {
+    return NextResponse.json(
+      { error: INVALID_WORKSPACE_ID_MESSAGE, code: INVALID_WORKSPACE_ID_CODE },
+      { status: 400 },
+    );
+  }
+  if (sent !== activeWorkspaceId) {
+    return NextResponse.json(
+      { error: WORKSPACE_CHANGED_MESSAGE, code: WORKSPACE_CHANGED_CODE },
+      { status: 409 },
+    );
+  }
+  return null;
+}
+
+/** The workspace id a POST or DELETE body carries; an empty or non-JSON body carries none. */
+async function bodyWorkspaceId(request: Request): Promise<unknown> {
+  return ((await readJsonObject(request)) ?? {}).workspaceId;
+}
 
 type LinkRow = {
   tokenSealed: string;
@@ -41,10 +78,15 @@ function toLinkDto(row: LinkRow, workspaceId: string) {
   };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) return contextOrError;
   const workspaceId = contextOrError.workspace.id;
+  const mismatch = workspaceMismatch(
+    new URL(request.url).searchParams.get("workspaceId") ?? undefined,
+    workspaceId,
+  );
+  if (mismatch) return mismatch;
 
   const link = await prisma.workspaceUploadLink.findFirst({
     where: { workspaceId, revokedAt: null },
@@ -58,11 +100,13 @@ export async function GET() {
  * transaction, under a per-workspace advisory lock, so two at once still leave
  * exactly one active link (as POST /api/workspaces/invites does).
  */
-export async function POST() {
+export async function POST(request: Request) {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) return contextOrError;
   const context = contextOrError;
   const workspaceId = context.workspace.id;
+  const mismatch = workspaceMismatch(await bodyWorkspaceId(request), workspaceId);
+  if (mismatch) return mismatch;
 
   const rateLimit = await checkRateLimit({
     userId: context.user.id,
@@ -109,9 +153,11 @@ export async function POST() {
 }
 
 /** Turn the link off. Idempotent: with nothing active it still answers ok. */
-export async function DELETE() {
+export async function DELETE(request: Request) {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) return contextOrError;
+  const mismatch = workspaceMismatch(await bodyWorkspaceId(request), contextOrError.workspace.id);
+  if (mismatch) return mismatch;
 
   await prisma.workspaceUploadLink.updateMany({
     where: { workspaceId: contextOrError.workspace.id, revokedAt: null },

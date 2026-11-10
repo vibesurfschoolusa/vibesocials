@@ -8,7 +8,9 @@ import {
   UPLOAD_LINK_TEXT_MAX,
   cleanSenderText,
   isUploadLinkBlobPath,
+  isUploadLinkPathname,
   isUploadLinkTokenShape,
+  uploadLinkIdOfBlobUrl,
   requestIp,
   uploadLinkHourWindow,
   uploadLinkPathname,
@@ -38,28 +40,107 @@ describe("uploadLinkStoragePrefix", () => {
   });
 });
 
-describe("isUploadLinkBlobPath", () => {
-  it("accepts a file under this link's prefix", () => {
-    expect(isUploadLinkBlobPath(`${HOST}/ul/link-1/abc-photo.jpg`, "link-1")).toBe(true);
+const STORE = "store1";
+const HEX = "0123456789abcdef";
+const GOOD = `${HOST}/ul/link-1/${HEX}-IMG_1.jpg`;
+
+describe("isUploadLinkPathname (the shape the upload route writes)", () => {
+  it("accepts ul/<id>/<16 hex>-<safe name>", () => {
+    expect(isUploadLinkPathname(`ul/link-1/${HEX}-IMG_1.jpg`, "link-1")).toBe(true);
+    expect(isUploadLinkPathname(`ul/link-1/${HEX}-a.b_c-d`, "link-1")).toBe(true);
   });
 
-  it("refuses a file outside the prefix, or under another link's", () => {
-    expect(isUploadLinkBlobPath(`${HOST}/123-photo.jpg`, "link-1")).toBe(false);
-    expect(isUploadLinkBlobPath(`${HOST}/ul/link-2/photo.jpg`, "link-1")).toBe(false);
-    expect(isUploadLinkBlobPath(`${HOST}/ul/link-10/photo.jpg`, "link-1")).toBe(false);
-    expect(isUploadLinkBlobPath(`${HOST}/x/ul/link-1/photo.jpg`, "link-1")).toBe(false);
+  it("accepts every path uploadLinkPathname makes", () => {
+    for (const name of ["IMG 5252 (1).jpg", "../x/evil.jpg", "", "..", `${"a".repeat(300)}.jpg`, "ñandú.mov"]) {
+      expect(isUploadLinkPathname(uploadLinkPathname("link-1", name, HEX), "link-1"), name).toBe(true);
+    }
   });
 
-  it("refuses the bare prefix and dot segments that leave it", () => {
-    expect(isUploadLinkBlobPath(`${HOST}/ul/link-1/`, "link-1")).toBe(false);
-    expect(isUploadLinkBlobPath(`${HOST}/ul/link-1`, "link-1")).toBe(false);
-    expect(isUploadLinkBlobPath(`${HOST}/ul/link-1/../link-2/a.jpg`, "link-1")).toBe(false);
-    expect(isUploadLinkBlobPath(`${HOST}/ul%2Flink-1/a.jpg`, "link-1")).toBe(false);
+  it("refuses anything else", () => {
+    for (const pathname of [
+      `ul/link-2/${HEX}-a.jpg`,
+      `ul/link-1x/${HEX}-a.jpg`,
+      `/ul/link-1/${HEX}-a.jpg`,
+      `UL/link-1/${HEX}-a.jpg`,
+      `ul/LINK-1/${HEX}-a.jpg`,
+      `ul/link-1/${HEX.toUpperCase()}-a.jpg`,
+      `ul/link-1/0123456789abcde-a.jpg`,
+      `ul/link-1/${HEX}-`,
+      `ul/link-1/${HEX}a.jpg`,
+      `ul/link-1/${HEX}-a/b.jpg`,
+      `ul/link-1/${HEX}-..%2Fa.jpg`,
+      `ul/link-1/${HEX}-%2E%2E`,
+      `ul/link-1/../link-2/${HEX}-a.jpg`,
+      `ul/link-1/${HEX}-a b.jpg`,
+      `ul/link-1/${HEX}-${"a".repeat(101)}`,
+    ]) {
+      expect(isUploadLinkPathname(pathname, "link-1"), pathname).toBe(false);
+    }
   });
 
-  it("refuses a value that is not a URL, and an empty link id", () => {
-    expect(isUploadLinkBlobPath("ul/link-1/a.jpg", "link-1")).toBe(false);
-    expect(isUploadLinkBlobPath(`${HOST}/ul//a.jpg`, "")).toBe(false);
+  it("refuses an empty or odd link id", () => {
+    expect(isUploadLinkPathname(`ul//${HEX}-a.jpg`, "")).toBe(false);
+    expect(isUploadLinkPathname(`ul/a.b/${HEX}-a.jpg`, "a.b")).toBe(false);
+  });
+});
+
+describe("isUploadLinkBlobPath (the full address)", () => {
+  it("accepts this link's file on the app's own storage host", () => {
+    expect(isUploadLinkBlobPath(GOOD, "link-1", STORE)).toBe(true);
+  });
+
+  it("refuses another link's id and a longer id", () => {
+    expect(isUploadLinkBlobPath(`${HOST}/ul/link-2/${HEX}-IMG_1.jpg`, "link-1", STORE)).toBe(false);
+    expect(isUploadLinkBlobPath(`${HOST}/ul/link-1x/${HEX}-IMG_1.jpg`, "link-1", STORE)).toBe(false);
+  });
+
+  it("refuses encoded slashes and dots, and dot segments", () => {
+    expect(isUploadLinkBlobPath(`${HOST}/ul/link-1/${HEX}-..%2Fx.jpg`, "link-1", STORE)).toBe(false);
+    expect(isUploadLinkBlobPath(`${HOST}/ul%2Flink-1/${HEX}-x.jpg`, "link-1", STORE)).toBe(false);
+    expect(isUploadLinkBlobPath(`${HOST}/ul/link-1/%2E%2E/link-2/${HEX}-x.jpg`, "link-1", STORE)).toBe(false);
+    expect(isUploadLinkBlobPath(`${HOST}/ul/link-2/../link-1/${HEX}-x.jpg`, "link-1", STORE)).toBe(false);
+  });
+
+  it("refuses an upper-case variant", () => {
+    expect(isUploadLinkBlobPath(GOOD.replace("/ul/", "/UL/"), "link-1", STORE)).toBe(false);
+    expect(isUploadLinkBlobPath(GOOD.toUpperCase(), "link-1", STORE)).toBe(false);
+    expect(isUploadLinkBlobPath(GOOD.replace("store1", "STORE1"), "link-1", STORE)).toBe(false);
+  });
+
+  it("refuses a loopback host and any other host", () => {
+    for (const url of [
+      `http://localhost:9366/ul/link-1/${HEX}-IMG_1.jpg`,
+      `https://localhost/ul/link-1/${HEX}-IMG_1.jpg`,
+      `http://127.0.0.1/ul/link-1/${HEX}-IMG_1.jpg`,
+      `https://[::1]/ul/link-1/${HEX}-IMG_1.jpg`,
+      `https://store2.public.blob.vercel-storage.com/ul/link-1/${HEX}-IMG_1.jpg`,
+      `https://store1.private.blob.vercel-storage.com/ul/link-1/${HEX}-IMG_1.jpg`,
+      `https://evil.example/ul/link-1/${HEX}-IMG_1.jpg`,
+      `https://store1.public.blob.vercel-storage.com.evil.example/ul/link-1/${HEX}-IMG_1.jpg`,
+      `http://store1.public.blob.vercel-storage.com/ul/link-1/${HEX}-IMG_1.jpg`,
+    ]) {
+      expect(isUploadLinkBlobPath(url, "link-1", STORE), url).toBe(false);
+    }
+  });
+
+  it("refuses a port, credentials, a query or a fragment", () => {
+    expect(isUploadLinkBlobPath(GOOD.replace(".com/", ".com:443/"), "link-1", STORE)).toBe(false);
+    expect(isUploadLinkBlobPath(GOOD.replace("https://", "https://u:p@"), "link-1", STORE)).toBe(false);
+    expect(isUploadLinkBlobPath(`${GOOD}?x=1`, "link-1", STORE)).toBe(false);
+    expect(isUploadLinkBlobPath(`${GOOD}#x`, "link-1", STORE)).toBe(false);
+  });
+
+  it("refuses everything when the app's store is not known", () => {
+    expect(isUploadLinkBlobPath(GOOD, "link-1", null)).toBe(false);
+  });
+});
+
+describe("uploadLinkIdOfBlobUrl (the cheap check before any limit)", () => {
+  it("gives the link id of a well-formed address, else null", () => {
+    expect(uploadLinkIdOfBlobUrl(GOOD, STORE)).toBe("link-1");
+    expect(uploadLinkIdOfBlobUrl(`${HOST}/1700-abc-a.jpg`, STORE)).toBeNull();
+    expect(uploadLinkIdOfBlobUrl(`http://localhost:9366/ul/link-1/${HEX}-a.jpg`, STORE)).toBeNull();
+    expect(uploadLinkIdOfBlobUrl(GOOD, null)).toBeNull();
   });
 });
 

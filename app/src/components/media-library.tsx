@@ -220,11 +220,14 @@ interface UploadLinkDto {
 /**
  * Client upload link (2026-11-10): owners make, copy, replace or turn off the
  * workspace's link here. The owner-only GET answers a member 403, and then the
- * panel is not shown at all.
+ * panel is not shown at all. Every call carries the workspace this page was
+ * rendered for: if another tab switched workspace, the routes answer 409 and
+ * the panel shows their sentence instead of acting on the other workspace.
  */
-function UploadLinkPanel() {
+function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
   const toast = useToast();
-  const [state, setState] = useState<"loading" | "hidden" | "ready">("loading");
+  const [state, setState] = useState<"loading" | "hidden" | "ready" | "changed">("loading");
+  const [changedMessage, setChangedMessage] = useState("");
   const [link, setLink] = useState<UploadLinkDto | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<"replace" | "off" | null>(null);
@@ -233,9 +236,18 @@ function UploadLinkPanel() {
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch("/api/workspaces/upload-link");
-        const data = (await response.json().catch(() => null)) as { link?: UploadLinkDto | null } | null;
+        const response = await fetch(
+          `/api/workspaces/upload-link?workspaceId=${encodeURIComponent(workspaceId)}`,
+        );
+        const data = (await response.json().catch(() => null)) as
+          | { link?: UploadLinkDto | null; error?: string }
+          | null;
         if (cancelled) return;
+        if (response.status === 409) {
+          setChangedMessage(data?.error ?? "Reload this page.");
+          setState("changed");
+          return;
+        }
         if (!response.ok) {
           setState("hidden");
           return;
@@ -249,11 +261,15 @@ function UploadLinkPanel() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [workspaceId]);
 
   // Create and Replace are the same call: the server revokes any old link.
   const makeLink = useCallback(async () => {
-    const response = await fetch("/api/workspaces/upload-link", { method: "POST" });
+    const response = await fetch("/api/workspaces/upload-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId }),
+    });
     const data = (await response.json().catch(() => null)) as
       | { link?: UploadLinkDto; error?: string }
       | null;
@@ -263,17 +279,23 @@ function UploadLinkPanel() {
     }
     setLink(data.link);
     toast.success("New link ready. Copy it and send it to your client.");
-  }, [toast]);
+  }, [toast, workspaceId]);
 
   const turnOff = useCallback(async () => {
-    const response = await fetch("/api/workspaces/upload-link", { method: "DELETE" });
+    const response = await fetch("/api/workspaces/upload-link", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId }),
+    });
     if (!response.ok) {
-      toast.error("Couldn't turn the link off. Try again.");
+      const data = (await response.json().catch(() => null)) as { error?: string } | null;
+      // A 409 carries the library's "switched workspace" sentence: shown as is.
+      toast.error(data?.error ?? "Couldn't turn the link off. Try again.");
       throw new Error("REVOKE_FAILED");
     }
     setLink(null);
     toast.success("The link is off. It no longer works.");
-  }, [toast]);
+  }, [toast, workspaceId]);
 
   async function handleCreate() {
     setBusy(true);
@@ -296,6 +318,13 @@ function UploadLinkPanel() {
     }
   }
 
+  if (state === "changed") {
+    return (
+      <Alert variant="warning" title="Client upload link">
+        <p>{changedMessage}</p>
+      </Alert>
+    );
+  }
   if (state !== "ready") return null;
 
   return (
@@ -599,7 +628,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
 
   return (
     <div className="space-y-8">
-      <UploadLinkPanel />
+      <UploadLinkPanel workspaceId={workspaceId} />
 
       <Card>
         <CardHeader>

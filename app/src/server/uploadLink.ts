@@ -44,6 +44,26 @@ export async function findActiveUploadLink(token: string): Promise<ActiveUploadL
   };
 }
 
+/**
+ * Who owns a file sent through the link (a media item needs an owner): the
+ * link's creator while they are still an owner of its workspace, otherwise the
+ * longest-standing owner. Resolved at each registration, because the creator
+ * may have left, been made a member, or deleted their account (memberships are
+ * deleted with it); a file owned by a non-member would later be deleted along
+ * with that person's account. Null when the workspace has no owner at all.
+ */
+export async function resolveUploadLinkOwner(link: ActiveUploadLink): Promise<string | null> {
+  const owners = await prisma.workspaceMember.findMany({
+    where: { workspaceId: link.workspaceId, role: "owner" },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: { userId: true },
+  });
+  if (owners.length === 0) return null;
+  return owners.some((owner) => owner.userId === link.createdById)
+    ? link.createdById
+    : owners[0].userId;
+}
+
 /** How long the owners' email may run before the caller carries on (as workspaceUsage.ts). */
 const NOTIFY_TIMEOUT_MS = 5_000;
 

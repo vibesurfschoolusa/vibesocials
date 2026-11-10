@@ -37,21 +37,42 @@ export function uploadLinkStoragePrefix(linkId: string): string {
   return `ul/${linkId}/`;
 }
 
+/** A link id as it may appear in a path (cuids are lower-case letters and digits). */
+const LINK_ID = /^[A-Za-z0-9_-]+$/;
+/** The rest of the path {@link uploadLinkPathname} writes: 16 hex, a hyphen, a safe name. */
+const FILE_PART = `[0-9a-f]{16}-[A-Za-z0-9._-]{1,${STORED_NAME_MAX}}`;
+const PATHNAME = new RegExp(`^ul/([A-Za-z0-9_-]+)/${FILE_PART}$`);
+
 /**
- * True when `url` names a file under this link's prefix. The URL parser resolves
- * dot segments first, so `/ul/<id>/../other` does not pass, and a `%2F` stays
- * escaped, so it cannot fake the slash after the id.
+ * True when `pathname` (as storage reports it, no leading slash) has exactly the
+ * shape the upload route writes for this link. Matched as a plain string: no
+ * `%`, no `/` in the name and no dot segment can get through.
  */
-export function isUploadLinkBlobPath(url: string, linkId: string): boolean {
-  if (!linkId || linkId.includes("/")) return false;
-  let pathname: string;
-  try {
-    pathname = new URL(url).pathname;
-  } catch {
-    return false;
-  }
-  const prefix = `/${uploadLinkStoragePrefix(linkId)}`;
-  return pathname.startsWith(prefix) && pathname.length > prefix.length;
+export function isUploadLinkPathname(pathname: string, linkId: string): boolean {
+  if (!LINK_ID.test(linkId)) return false;
+  const match = PATHNAME.exec(pathname);
+  return match !== null && match[1] === linkId;
+}
+
+/**
+ * The link id in a client upload address, or null unless the address is exactly
+ * `https://<own store>.public.blob.vercel-storage.com/ul/<id>/<16 hex>-<name>`.
+ * Only the app's own public store host passes: never a loopback address (the
+ * shared allowlist in lib/blobUrl.ts accepts http://localhost for the e2e mock),
+ * another store, a port, credentials, a query or a fragment. `storeId` is
+ * ownBlobStoreId(); when it is unknown nothing passes.
+ */
+export function uploadLinkIdOfBlobUrl(url: string, storeId: string | null): string | null {
+  if (!storeId || !/^[a-z0-9]+$/.test(storeId)) return null;
+  const prefix = `https://${storeId}.public.blob.vercel-storage.com/`;
+  if (typeof url !== "string" || !url.startsWith(prefix)) return null;
+  const match = PATHNAME.exec(url.slice(prefix.length));
+  return match ? match[1] : null;
+}
+
+/** True when `url` is this link's file on the app's own store ({@link uploadLinkIdOfBlobUrl}). */
+export function isUploadLinkBlobPath(url: string, linkId: string, storeId: string | null): boolean {
+  return LINK_ID.test(linkId) && uploadLinkIdOfBlobUrl(url, storeId) === linkId;
 }
 
 /**

@@ -69,8 +69,6 @@ describe("sendClientFile", () => {
     expect(JSON.parse(mediaInit.body)).toEqual({
       blobUrl: "https://s.public.blob.vercel-storage.com/ul/link-1/r-IMG_1.jpg",
       filename: "IMG_1.jpg",
-      mimeType: "image/jpeg",
-      sizeBytes: 3,
       senderName: "Ana",
       note: "Hi",
     });
