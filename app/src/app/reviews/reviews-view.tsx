@@ -15,6 +15,7 @@ import { ErrorState } from "@/components/reviews/error-state";
 import { LocationPicker } from "@/components/reviews/location-picker";
 import { ReviewCard } from "@/components/reviews/review-card";
 import type { GoogleReview, Location } from "@/components/reviews/types";
+import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 
 /** Client-rendered reviews view. The parent server component gates access. */
 export function ReviewsView() {
@@ -350,7 +351,7 @@ export function ReviewsView() {
           }
           action={
             locations.length === 0 && !gbpConnected ? (
-              <Link href="/settings" className={buttonVariants({ variant: "primary" })}>
+              <Link href={SETTINGS_CONNECTIONS_HREF} className={buttonVariants({ variant: "primary" })}>
                 Go to connections
               </Link>
             ) : undefined

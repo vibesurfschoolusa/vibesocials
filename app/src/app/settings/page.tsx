@@ -102,7 +102,7 @@ export default async function SettingsPage({
           <SettingsForm key={context.workspace.id} settings={settings} role={context.role} />
         </section>
 
-        <section>
+        <section id="connections" className="scroll-mt-20">
           <div className="mb-4">
             <h2 className="text-lg font-semibold tracking-tight text-foreground">Connections</h2>
             <p className="mt-1 text-sm text-muted-foreground">

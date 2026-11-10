@@ -14,7 +14,7 @@ import {
 import { buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
-import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
+import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 import type { UseConnectionsResult } from "@/hooks/useConnections";
 
 /**
@@ -103,7 +103,7 @@ export function ConnectionHealth({
                   </a>
                 ) : (
                   <Link
-                    href="/settings"
+                    href={SETTINGS_CONNECTIONS_HREF}
                     className={buttonVariants({
                       variant: "ghost",
                       size: "sm",
@@ -119,7 +119,7 @@ export function ConnectionHealth({
         )}
 
         <Link
-          href="/settings"
+          href={SETTINGS_CONNECTIONS_HREF}
           className={buttonVariants({
             variant: "outline",
             size: "sm",

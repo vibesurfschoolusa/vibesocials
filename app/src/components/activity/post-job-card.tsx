@@ -11,7 +11,7 @@ import { Card } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
 import { MediaThumb } from "@/components/media-thumb";
 import { cn } from "@/lib/cn";
-import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
+import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 import { platformPostUrl } from "@/lib/platformPostUrl";
 import type { PostJobDTO } from "@/lib/postsDto";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
@@ -302,7 +302,7 @@ export function PostJobCard({
       {job.status === "failed" && results.length === 0 ? (
         <p className="mt-3 rounded-[var(--radius)] border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-foreground">
           This post failed because no platforms were connected when it ran. Connect a
-          platform in <Link href="/settings" className="font-medium text-primary underline underline-offset-2">Settings</Link> and create it again.
+          platform in <Link href={SETTINGS_CONNECTIONS_HREF} className="font-medium text-primary underline underline-offset-2">Settings</Link> and create it again.
         </p>
       ) : null}
 
@@ -353,7 +353,7 @@ export function PostJobCard({
               >
                 Reconnect {platformLabel(platform)} in{" "}
                 <Link
-                  href="/settings"
+                  href={SETTINGS_CONNECTIONS_HREF}
                   className="font-medium text-primary underline underline-offset-2 hover:no-underline"
                 >
                   Settings

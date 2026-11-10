@@ -15,6 +15,7 @@ import { cn } from "@/lib/cn";
 import { deriveGettingStarted } from "@/lib/gettingStarted";
 import type { ConnectionStatus } from "@/lib/connectionsDto";
 import type { PostJobDTO } from "@/lib/postsDto";
+import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 
 /**
  * First-run "Get started" checklist, shown at the top of the dashboard until
@@ -50,7 +51,7 @@ export function GettingStarted({
             description="Link YouTube, X, Instagram, or any of the others in Settings."
             action={
               <Link
-                href="/settings"
+                href={SETTINGS_CONNECTIONS_HREF}
                 className={buttonVariants({
                   variant: "primary",
                   size: "sm",

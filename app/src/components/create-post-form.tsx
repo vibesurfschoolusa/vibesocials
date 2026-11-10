@@ -42,7 +42,12 @@ import {
 import type { MediaItemDto } from "@/lib/mediaDto";
 import { prepareUploadFile } from "@/lib/prepareUploadFile";
 import { TIKTOK_DISCLOSURE_INCOMPLETE_TEXT, tiktokPublishBlock } from "@/lib/tiktokPostRules";
-import { PLATFORM_ORDER, platformLabel, TIKTOK_PRIVACY_LABELS } from "@/lib/platforms";
+import {
+  PLATFORM_ORDER,
+  platformLabel,
+  SETTINGS_CONNECTIONS_HREF,
+  TIKTOK_PRIVACY_LABELS,
+} from "@/lib/platforms";
 import { extractVideoFrames } from "@/lib/extractVideoFrames";
 import {
   deriveComposerPlatforms,
@@ -832,7 +837,7 @@ function CreatePostFormInner({
           title="Connect a platform to start posting"
           description="Vibe Socials publishes to the platforms you've connected. Connect at least one in Settings, then come back here."
           action={
-            <Link href="/settings" className={buttonVariants({ variant: "primary" })}>
+            <Link href={SETTINGS_CONNECTIONS_HREF} className={buttonVariants({ variant: "primary" })}>
               Go to connections
             </Link>
           }

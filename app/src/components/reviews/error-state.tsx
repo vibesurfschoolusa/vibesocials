@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 
 interface ErrorStateProps {
   title: string;
@@ -30,7 +31,7 @@ export function ErrorState({ title, message, onRetry }: ErrorStateProps) {
           </Button>
           {showConnectionsLink && (
             <Link
-              href="/settings"
+              href={SETTINGS_CONNECTIONS_HREF}
               className={buttonVariants({
                 variant: "link",
                 size: "sm",

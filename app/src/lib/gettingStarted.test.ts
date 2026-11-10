@@ -127,10 +127,12 @@ describe("deriveDashboardCta", () => {
 
   // Leading with "Create post" when nothing is connected sends the user to a
   // composer that can only tell them to go connect something.
+  // 2026-11-09 first-run check: straight to the Connections section, not the
+  // top of Settings (caption settings).
   it("leads with connecting when nothing is connected", () => {
     expect(deriveDashboardCta([])).toEqual({
       kind: "connect",
-      href: "/settings",
+      href: "/settings#connections",
       label: "Connect a platform",
     });
     expect(deriveDashboardCta([connection({ connected: false })])).toMatchObject({

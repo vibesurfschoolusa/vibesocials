@@ -1,5 +1,6 @@
 import type { ConnectionStatus } from "@/lib/connectionsDto";
 import type { PostJobDTO } from "@/lib/postsDto";
+import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 
 /**
  * First-run onboarding state for the dashboard's "Get started" checklist.
@@ -69,7 +70,7 @@ export function deriveDashboardCta(
   const hasConnection = connections.some((connection) => connection.connected);
   return hasConnection
     ? { kind: "compose", href: "/posts/new", label: "Create post" }
-    : { kind: "connect", href: "/settings", label: "Connect a platform" };
+    : { kind: "connect", href: SETTINGS_CONNECTIONS_HREF, label: "Connect a platform" };
 }
 
 /**

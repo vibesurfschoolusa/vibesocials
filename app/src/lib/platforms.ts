@@ -60,6 +60,13 @@ export function platformCaptionEntries(
 }
 
 /**
+ * Where every "Connect" / "Go to connections" link leads: the Connections
+ * section of Settings (app/settings/page.tsx, id="connections"), not the top of
+ * the page, which starts with caption settings (2026-11-09 first-run check).
+ */
+export const SETTINGS_CONNECTIONS_HREF = "/settings#connections";
+
+/**
  * Product maturity notes for the UI (sandbox modes, partial analytics, etc.).
  * Display-only; never carries secrets. Empty string means production-ready
  * with no special callout.
