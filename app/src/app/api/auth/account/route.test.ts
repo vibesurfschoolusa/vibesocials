@@ -29,6 +29,8 @@ const m = vi.hoisted(() => {
     pendingDeleteMany: fn(),
     handshakeDeleteMany: fn(),
     userDelete: fn(),
+    queueCreate: fn(),
+    queueDeleteMany: fn(),
   };
 });
 
@@ -53,9 +55,17 @@ vi.mock("@/lib/db", () => {
     pendingConnection: { deleteMany: m.pendingDeleteMany },
     oAuthHandshake: { deleteMany: m.handshakeDeleteMany },
     user: { delete: m.userDelete },
-    $transaction: (cb: (tx: unknown) => unknown) => {
+    pendingBlobDeletion: { createManyAndReturn: m.queueCreate, deleteMany: m.queueDeleteMany },
+    $transaction: async (cb: (tx: unknown) => unknown) => {
       m.callLog.push("transaction");
-      return cb(prisma);
+      try {
+        const result = await cb(prisma);
+        m.callLog.push("commit");
+        return result;
+      } catch (error) {
+        m.callLog.push("rollback");
+        throw error;
+      }
     },
   };
   return { prisma };
@@ -148,11 +158,20 @@ beforeEach(() => {
   m.pendingDeleteMany.mockImplementation(logged("delete pendingConnection"));
   m.handshakeDeleteMany.mockImplementation(logged("delete oAuthHandshake"));
   m.userDelete.mockImplementation(logged("delete user", {}));
+  m.queueCreate.mockImplementation(async ({ data }: { data: { url: string }[] }) => {
+    m.callLog.push(`queue ${data.map((row) => row.url).join(",")}`);
+    return data.map((row, index) => ({ id: `q${index}`, url: row.url }));
+  });
+  m.queueDeleteMany.mockImplementation(async ({ where }: { where: { id: { in: string[] } } }) => {
+    m.callLog.push(`unqueue ${where.id.in.join(",")}`);
+    return { count: where.id.in.length };
+  });
 });
 
 function nothingChanged() {
   for (const mock of [
     m.del,
+    m.queueCreate,
     m.connectionUpdateMany,
     m.mediaUpdateMany,
     m.postJobUpdateMany,
@@ -269,22 +288,36 @@ describe("DELETE /api/auth/account", () => {
     nothingChanged();
   });
 
-  it("returns 500 and changes no row when a file deletion fails", async () => {
+  it("still succeeds when the files fail to delete after the commit, and leaves them queued", async () => {
     media = [{ id: "m1", workspaceId: "ws-personal", storageLocation: FILE("a") }];
     m.del.mockRejectedValue(new Error("blob down"));
 
     const response = await DELETE(request({ password: "right-password" }));
 
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({
-      error: "Could not delete all of your workspaces' files. Try again.",
-    });
-    expect(m.callLog).not.toContain("transaction");
-    expect(m.userDelete).not.toHaveBeenCalled();
-    expect(m.workspaceDeleteMany).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ deleted: true });
+    expect(m.userDelete).toHaveBeenCalled();
+    expect(m.queueCreate).toHaveBeenCalled();
+    expect(m.queueDeleteMany).not.toHaveBeenCalled();
+    expect(m.deliverAccountEmail).toHaveBeenCalled();
   });
 
-  it("deletes files, then reassigns, deletes the planned workspaces and deletes the user last", async () => {
+  it("answers 500, changes nothing and deletes no file when the transaction fails", async () => {
+    media = [{ id: "m1", workspaceId: "ws-personal", storageLocation: FILE("a") }];
+    m.userDelete.mockRejectedValue(new Error("connection lost"));
+
+    const response = await DELETE(request({ password: "right-password" }));
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: "Could not delete your account. Nothing was changed. Try again.",
+    });
+    expect(m.callLog.at(-1)).toBe("rollback");
+    expect(m.del).not.toHaveBeenCalled();
+    expect(m.deliverAccountEmail).not.toHaveBeenCalled();
+  });
+
+  it("locks, checks, queues and deletes in one transaction, deletes the user last, then the files", async () => {
     memberships = [
       { role: "owner", workspace: { id: "ws-personal", name: "Personal", members: [] } },
       {
@@ -306,6 +339,9 @@ describe("DELETE /api/auth/account", () => {
     media = [
       { id: "m1", workspaceId: "ws-personal", storageLocation: FILE("mine") },
       { id: "m2", workspaceId: "ws-co", storageLocation: FILE("co-file") },
+      // Shared with a workspace that survives: never queued.
+      { id: "m3", workspaceId: "ws-personal", storageLocation: FILE("shared") },
+      { id: "m4", workspaceId: "ws-co", storageLocation: FILE("shared") },
     ];
 
     const response = await DELETE(request({ password: "right-password" }));
@@ -316,10 +352,11 @@ describe("DELETE /api/auth/account", () => {
     const reassign = (model: string, workspaceId: string, toUserId: string) =>
       `reassign ${model} ${JSON.stringify({ where: { workspaceId, userId: USER_ID }, data: { userId: toUserId } })}`;
     expect(m.callLog).toEqual([
-      expect.stringMatching(/^del /),
       "transaction",
       "lock ws-owners:ws-co",
       "lock ws-owners:ws-joined",
+      "lock ws-owners:ws-personal",
+      `queue ${FILE("mine")}`,
       reassign("socialConnection", "ws-co", "u-early"),
       reassign("mediaItem", "ws-co", "u-early"),
       reassign("postJob", "ws-co", "u-early"),
@@ -332,6 +369,9 @@ describe("DELETE /api/auth/account", () => {
       `delete pendingConnection ${JSON.stringify({ where: { userId: USER_ID } })}`,
       `delete oAuthHandshake ${JSON.stringify({ where: { userId: USER_ID } })}`,
       `delete user ${JSON.stringify({ where: { id: USER_ID } })}`,
+      "commit",
+      expect.stringMatching(/^del /),
+      "unqueue q0",
     ]);
     expect(m.del).toHaveBeenCalledWith([FILE("mine")], expect.anything());
     expect(m.deliverAccountEmail).toHaveBeenCalledWith(
@@ -410,7 +450,10 @@ describe("DELETE /api/auth/account", () => {
     };
 
     function nothingWritten() {
+      expect(m.callLog.at(-1)).toBe("rollback");
       for (const mock of [
+        m.del,
+        m.queueCreate,
         m.connectionUpdateMany,
         m.mediaUpdateMany,
         m.postJobUpdateMany,
@@ -424,7 +467,7 @@ describe("DELETE /api/auth/account", () => {
       }
     }
 
-    it("refuses when the co-owner who was to receive the rows left during the file cleanup", async () => {
+    it("refuses when the co-owner who was to receive the rows left after the plan was read", async () => {
       memberships = [memberships[0], coOwned];
       liveMembers = { "ws-co": [{ userId: "u-member", role: "member", createdAt: day(3) }] };
 
@@ -465,31 +508,23 @@ describe("DELETE /api/auth/account", () => {
       nothingWritten();
     });
 
-    it("refuses when a post started publishing in a workspace to be deleted", async () => {
-      m.postJobFindFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: "job-1" });
+    it("checks for a publishing post inside the transaction, after the locks", async () => {
+      media = [{ id: "m1", workspaceId: "ws-personal", storageLocation: FILE("a") }];
+      m.postJobFindFirst.mockImplementation(async () => {
+        m.callLog.push("check publishing");
+        return { id: "job-1" };
+      });
 
       const response = await DELETE(request({ password: "right-password" }));
 
       expect(response.status).toBe(409);
-      await expect(response.json()).resolves.toEqual({
-        error: "A post is publishing right now. Try again in a few minutes.",
-      });
-      expect(m.postJobFindFirst).toHaveBeenCalledTimes(2);
+      expect(m.callLog).toEqual([
+        "transaction",
+        "lock ws-owners:ws-personal",
+        "check publishing",
+        "rollback",
+      ]);
       nothingWritten();
-    });
-
-    it("answers 500 with a finish-it sentence when the database step fails after the files went", async () => {
-      media = [{ id: "m1", workspaceId: "ws-personal", storageLocation: FILE("a") }];
-      m.userDelete.mockRejectedValue(new Error("connection lost"));
-
-      const response = await DELETE(request({ password: "right-password" }));
-
-      expect(m.del).toHaveBeenCalled();
-      expect(response.status).toBe(500);
-      await expect(response.json()).resolves.toEqual({
-        error: "The files were removed, but the rest could not be finished. Try again to complete it.",
-      });
-      expect(m.deliverAccountEmail).not.toHaveBeenCalled();
     });
   });
 });

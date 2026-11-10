@@ -10,49 +10,50 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // context or a ready-made error response.
 //
 // DELETE runs the real server/account/deleteWorkspace.ts against these
-// mocks, so its tests check the order of file and row deletion end to end.
-const {
-  updateMock,
-  requireOwnerContextMock,
-  provisionPersonalWorkspaceMock,
-  checkRateLimitMock,
-  cookieSetMock,
-  delMock,
-  memberCountMock,
-  memberFindManyMock,
-  postJobFindFirstMock,
-  mediaFindManyMock,
-  workspaceDeleteManyMock,
-  executeRawMock,
-  callLog,
-} = vi.hoisted(() => ({
-  updateMock: vi.fn(),
-  requireOwnerContextMock: vi.fn(),
-  provisionPersonalWorkspaceMock: vi.fn(),
-  checkRateLimitMock: vi.fn(),
-  cookieSetMock: vi.fn(),
-  delMock: vi.fn(),
-  memberCountMock: vi.fn(),
-  memberFindManyMock: vi.fn(),
-  postJobFindFirstMock: vi.fn(),
-  mediaFindManyMock: vi.fn(),
-  workspaceDeleteManyMock: vi.fn(),
-  executeRawMock: vi.fn(),
+// mocks. `m.callLog` records the transaction's start and commit (or
+// rollback) and every write, so the tests check that the queue rows and the
+// row deletes share the transaction and that no file is deleted before the
+// commit.
+const m = vi.hoisted(() => ({
+  update: vi.fn(),
+  requireOwnerContext: vi.fn(),
+  provisionPersonalWorkspace: vi.fn(),
+  checkRateLimit: vi.fn(),
+  cookieSet: vi.fn(),
+  del: vi.fn(),
+  memberCount: vi.fn(),
+  memberFindMany: vi.fn(),
+  postJobFindFirst: vi.fn(),
+  mediaFindMany: vi.fn(),
+  workspaceDeleteMany: vi.fn(),
+  executeRaw: vi.fn(),
+  queueCreate: vi.fn(),
+  queueDeleteMany: vi.fn(),
   callLog: [] as string[],
 }));
+const updateMock = m.update;
+const requireOwnerContextMock = m.requireOwnerContext;
 
 vi.mock("@/lib/db", () => {
   // $transaction replays the callback against this same object (mirrors
   // workspaces/leave/route.test.ts), so tx.<model> resolves to these mocks.
   const prisma: Record<string, unknown> = {
-    $executeRaw: executeRawMock,
-    workspace: { update: updateMock, deleteMany: workspaceDeleteManyMock },
-    workspaceMember: { count: memberCountMock, findMany: memberFindManyMock },
-    postJob: { findFirst: postJobFindFirstMock },
-    mediaItem: { findMany: mediaFindManyMock },
-    $transaction: (cb: (tx: unknown) => unknown) => {
-      callLog.push("transaction");
-      return cb(prisma);
+    $executeRaw: m.executeRaw,
+    workspace: { update: m.update, deleteMany: m.workspaceDeleteMany },
+    workspaceMember: { count: m.memberCount, findMany: m.memberFindMany },
+    postJob: { findFirst: m.postJobFindFirst },
+    mediaItem: { findMany: m.mediaFindMany },
+    pendingBlobDeletion: { createManyAndReturn: m.queueCreate, deleteMany: m.queueDeleteMany },
+    $transaction: async (cb: (tx: unknown) => unknown) => {
+      m.callLog.push("transaction");
+      try {
+        const result = await cb(prisma);
+        m.callLog.push("commit");
+        return result;
+      } catch (error) {
+        m.callLog.push("rollback");
+        throw error;
+      }
     },
   };
   return { prisma };
@@ -60,13 +61,16 @@ vi.mock("@/lib/db", () => {
 
 vi.mock("@/lib/workspace", () => ({
   ACTIVE_WORKSPACE_COOKIE: "vs_active_workspace",
-  requireOwnerContext: requireOwnerContextMock,
-  provisionPersonalWorkspace: provisionPersonalWorkspaceMock,
+  requireOwnerContext: m.requireOwnerContext,
+  provisionPersonalWorkspace: m.provisionPersonalWorkspace,
 }));
 
-vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
-vi.mock("next/headers", () => ({ cookies: async () => ({ set: cookieSetMock }) }));
-vi.mock("@vercel/blob", () => ({ del: delMock }));
+vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: m.checkRateLimit }));
+vi.mock("next/headers", () => ({ cookies: async () => ({ set: m.cookieSet }) }));
+vi.mock("@vercel/blob", () => ({ del: m.del }));
+vi.mock("@/lib/logger", () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 
 import { DELETE, PATCH } from "./route";
 
@@ -205,50 +209,76 @@ describe("DELETE /api/workspaces/active", () => {
     });
   }
 
-  /** Counts for workspaceDeletionRefusal, then the in-transaction rehome counts. */
+  /** Counts for workspaceDeletionRefusal, then the rehome counts. */
   function refusalCounts({ otherOwners = 0, callerMemberships = 2 } = {}) {
-    memberCountMock.mockImplementation(
+    m.memberCount.mockImplementation(
       async ({ where }: { where: { role?: string; userId: unknown } }) => {
-        if (where.role === "owner") return otherOwners;
-        if (where.userId === "user-1") return callerMemberships;
+        if (where.role === "owner") {
+          m.callLog.push("check owners");
+          return otherOwners;
+        }
+        if (where.userId === "user-1") {
+          m.callLog.push("check memberships");
+          return callerMemberships;
+        }
         return remainingMemberships[where.userId as string] ?? 0;
       },
     );
   }
 
+  function nothingWritten() {
+    for (const mock of [m.queueCreate, m.workspaceDeleteMany, m.provisionPersonalWorkspace, m.del, m.cookieSet]) {
+      expect(mock).not.toHaveBeenCalled();
+    }
+  }
+
   beforeEach(() => {
-    callLog.length = 0;
+    m.callLog.length = 0;
     media = [];
     otherMembers = [];
     remainingMemberships = {};
     vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
     vi.stubEnv("BLOB_STORE_ID", "");
     for (const mock of [
-      provisionPersonalWorkspaceMock,
-      checkRateLimitMock,
-      cookieSetMock,
-      delMock,
-      memberCountMock,
-      memberFindManyMock,
-      postJobFindFirstMock,
-      mediaFindManyMock,
-      workspaceDeleteManyMock,
-      executeRawMock,
+      m.provisionPersonalWorkspace,
+      m.checkRateLimit,
+      m.cookieSet,
+      m.del,
+      m.memberCount,
+      m.memberFindMany,
+      m.postJobFindFirst,
+      m.mediaFindMany,
+      m.workspaceDeleteMany,
+      m.executeRaw,
+      m.queueCreate,
+      m.queueDeleteMany,
     ]) {
       mock.mockReset();
     }
-    checkRateLimitMock.mockResolvedValue({ allowed: true });
+    m.checkRateLimit.mockResolvedValue({ allowed: true });
     refusalCounts();
-    postJobFindFirstMock.mockResolvedValue(null);
-    delMock.mockImplementation(async () => {
-      callLog.push("del");
+    m.postJobFindFirst.mockResolvedValue(null);
+    m.executeRaw.mockImplementation(async (_strings: unknown, key: string) => {
+      m.callLog.push(`lock ${key}`);
+      return 0;
     });
-    workspaceDeleteManyMock.mockImplementation(async () => {
-      callLog.push("delete-workspace");
+    m.del.mockImplementation(async (keys: string[]) => {
+      m.callLog.push(`del ${keys.join(",")}`);
+    });
+    m.queueCreate.mockImplementation(async ({ data }: { data: { url: string }[] }) => {
+      m.callLog.push(`queue ${data.map((row) => row.url).join(",")}`);
+      return data.map((row, index) => ({ id: `q${index}`, url: row.url }));
+    });
+    m.queueDeleteMany.mockImplementation(async ({ where }: { where: { id: { in: string[] } } }) => {
+      m.callLog.push(`unqueue ${where.id.in.join(",")}`);
+      return { count: where.id.in.length };
+    });
+    m.workspaceDeleteMany.mockImplementation(async () => {
+      m.callLog.push("delete-workspace");
       return { count: 1 };
     });
-    memberFindManyMock.mockImplementation(async () => otherMembers);
-    mediaFindManyMock.mockImplementation(async ({ where }: { where: MediaWhere }) =>
+    m.memberFindMany.mockImplementation(async () => otherMembers);
+    m.mediaFindMany.mockImplementation(async ({ where }: { where: MediaWhere }) =>
       media.filter((row) => {
         if (where.workspaceId.in && !where.workspaceId.in.includes(row.workspaceId)) return false;
         if (where.workspaceId.notIn && where.workspaceId.notIn.includes(row.workspaceId)) return false;
@@ -273,8 +303,7 @@ describe("DELETE /api/workspaces/active", () => {
     const response = await DELETE(deleteRequest({ confirmName: "Old name" }));
 
     expect(response.status).toBe(403);
-    expect(workspaceDeleteManyMock).not.toHaveBeenCalled();
-    expect(delMock).not.toHaveBeenCalled();
+    nothingWritten();
   });
 
   it("returns the gate's 401 when signed out", async () => {
@@ -288,12 +317,12 @@ describe("DELETE /api/workspaces/active", () => {
   });
 
   it("returns 429 when rate limited", async () => {
-    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
+    m.checkRateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
 
     const response = await DELETE(deleteRequest({ confirmName: "Old name" }));
 
     expect(response.status).toBe(429);
-    expect(workspaceDeleteManyMock).not.toHaveBeenCalled();
+    nothingWritten();
   });
 
   it("returns 400 on invalid JSON", async () => {
@@ -309,11 +338,11 @@ describe("DELETE /api/workspaces/active", () => {
       const response = await DELETE(deleteRequest({ confirmName }));
       expect(response.status).toBe(400);
     }
-    expect(workspaceDeleteManyMock).not.toHaveBeenCalled();
-    expect(delMock).not.toHaveBeenCalled();
+    nothingWritten();
   });
 
-  it("refuses with 409 when another owner exists", async () => {
+  it("refuses with 409 when another owner exists, writing nothing and deleting no file", async () => {
+    media = [{ id: "m1", workspaceId: "ws-1", storageLocation: FILE("a") }];
     refusalCounts({ otherOwners: 1 });
 
     const response = await DELETE(deleteRequest({ confirmName: "Old name" }));
@@ -322,12 +351,22 @@ describe("DELETE /api/workspaces/active", () => {
     await expect(response.json()).resolves.toEqual({
       error: "This workspace has another owner. Only a workspace with one owner can be deleted.",
     });
-    expect(workspaceDeleteManyMock).not.toHaveBeenCalled();
-    expect(delMock).not.toHaveBeenCalled();
+    expect(m.callLog.at(-1)).toBe("rollback");
+    nothingWritten();
   });
 
-  it("refuses with 409 while a post is publishing", async () => {
-    postJobFindFirstMock.mockResolvedValue({ id: "job-1" });
+  it("checks for a second owner under the ws-owners lock, inside the transaction", async () => {
+    // A co-owner promoted after the Settings page loaded, before this request.
+    refusalCounts({ otherOwners: 1 });
+
+    const response = await DELETE(deleteRequest({ confirmName: "Old name" }));
+
+    expect(response.status).toBe(409);
+    expect(m.callLog).toEqual(["transaction", "lock ws-owners:ws-1", "check owners", "rollback"]);
+  });
+
+  it("refuses with 409 while a post is publishing, writing nothing", async () => {
+    m.postJobFindFirst.mockResolvedValue({ id: "job-1" });
 
     const response = await DELETE(deleteRequest({ confirmName: "Old name" }));
 
@@ -335,10 +374,10 @@ describe("DELETE /api/workspaces/active", () => {
     await expect(response.json()).resolves.toEqual({
       error: "A post is publishing right now. Try again in a few minutes.",
     });
-    expect(workspaceDeleteManyMock).not.toHaveBeenCalled();
+    nothingWritten();
   });
 
-  it("refuses with 409 when it is the caller's last workspace", async () => {
+  it("refuses with 409 when it is the caller's last workspace, writing nothing", async () => {
     refusalCounts({ callerMemberships: 1 });
 
     const response = await DELETE(deleteRequest({ confirmName: "Old name" }));
@@ -347,10 +386,10 @@ describe("DELETE /api/workspaces/active", () => {
     await expect(response.json()).resolves.toEqual({
       error: "This is your only workspace. To leave Vibe Socials, delete your account instead.",
     });
-    expect(workspaceDeleteManyMock).not.toHaveBeenCalled();
+    nothingWritten();
   });
 
-  it("deletes the files before the rows, clears the cookie and returns 200", async () => {
+  it("queues the files and deletes the rows in one transaction, then deletes the files after the commit", async () => {
     media = [
       { id: "m1", workspaceId: "ws-1", storageLocation: FILE("a") },
       { id: "m2", workspaceId: "ws-1", storageLocation: FILE("b") },
@@ -360,17 +399,26 @@ describe("DELETE /api/workspaces/active", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ deleted: true });
-    expect(callLog).toEqual(["del", "transaction", "delete-workspace"]);
-    expect(delMock).toHaveBeenCalledWith([FILE("a"), FILE("b")], expect.anything());
-    expect(workspaceDeleteManyMock).toHaveBeenCalledWith({ where: { id: { in: ["ws-1"] } } });
-    expect(cookieSetMock).toHaveBeenCalledWith(
+    expect(m.callLog).toEqual([
+      "transaction",
+      "lock ws-owners:ws-1",
+      "check owners",
+      "check memberships",
+      `queue ${FILE("a")},${FILE("b")}`,
+      "delete-workspace",
+      "commit",
+      `del ${FILE("a")},${FILE("b")}`,
+      "unqueue q0,q1",
+    ]);
+    expect(m.workspaceDeleteMany).toHaveBeenCalledWith({ where: { id: { in: ["ws-1"] } } });
+    expect(m.cookieSet).toHaveBeenCalledWith(
       "vs_active_workspace",
       "",
       expect.objectContaining({ maxAge: 0, path: "/" }),
     );
   });
 
-  it("keeps a file another workspace still uses", async () => {
+  it("does not queue a file another workspace still uses", async () => {
     media = [
       { id: "m1", workspaceId: "ws-1", storageLocation: FILE("shared") },
       { id: "m2", workspaceId: "ws-1", storageLocation: FILE("mine") },
@@ -380,22 +428,39 @@ describe("DELETE /api/workspaces/active", () => {
     const response = await DELETE(deleteRequest({ confirmName: "Old name" }));
 
     expect(response.status).toBe(200);
-    expect(delMock).toHaveBeenCalledWith([FILE("mine")], expect.anything());
+    expect(m.queueCreate).toHaveBeenCalledWith({
+      data: [{ url: FILE("mine") }],
+      select: { id: true, url: true },
+    });
+    expect(m.del).toHaveBeenCalledWith([FILE("mine")], expect.anything());
   });
 
-  it("returns 500 and leaves the rows when a file deletion fails", async () => {
+  it("still succeeds when the files fail to delete after the commit, and leaves them queued", async () => {
     media = [{ id: "m1", workspaceId: "ws-1", storageLocation: FILE("a") }];
-    delMock.mockRejectedValue(new Error("blob down"));
+    m.del.mockRejectedValue(new Error("blob down"));
+
+    const response = await DELETE(deleteRequest({ confirmName: "Old name" }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ deleted: true });
+    expect(m.workspaceDeleteMany).toHaveBeenCalled();
+    expect(m.queueDeleteMany).not.toHaveBeenCalled();
+    expect(m.cookieSet).toHaveBeenCalled();
+  });
+
+  it("answers 500 and deletes no file when the transaction fails", async () => {
+    media = [{ id: "m1", workspaceId: "ws-1", storageLocation: FILE("a") }];
+    m.workspaceDeleteMany.mockRejectedValue(new Error("connection lost"));
 
     const response = await DELETE(deleteRequest({ confirmName: "Old name" }));
 
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toEqual({
-      error: "Could not delete all of this workspace's files. Try again.",
+      error: "Could not delete this workspace. Nothing was changed. Try again.",
     });
-    expect(callLog).not.toContain("transaction");
-    expect(workspaceDeleteManyMock).not.toHaveBeenCalled();
-    expect(cookieSetMock).not.toHaveBeenCalled();
+    expect(m.callLog.at(-1)).toBe("rollback");
+    expect(m.del).not.toHaveBeenCalled();
+    expect(m.cookieSet).not.toHaveBeenCalled();
   });
 
   it("gives a member left with no workspace a new personal one, in the same transaction", async () => {
@@ -404,54 +469,26 @@ describe("DELETE /api/workspaces/active", () => {
       { user: { id: "user-3", name: "Busy", email: "busy@example.com" } },
     ];
     remainingMemberships = { "user-2": 0, "user-3": 1 };
-    provisionPersonalWorkspaceMock.mockImplementation(async () => {
-      callLog.push("provision");
+    m.provisionPersonalWorkspace.mockImplementation(async () => {
+      m.callLog.push("provision");
       return { workspaceId: "ws-new" };
     });
 
     const response = await DELETE(deleteRequest({ confirmName: "Old name" }));
 
     expect(response.status).toBe(200);
-    expect(memberFindManyMock).toHaveBeenCalledWith({
+    expect(m.memberFindMany).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", userId: { not: "user-1" } },
       select: { user: { select: { id: true, name: true, email: true } } },
     });
-    expect(provisionPersonalWorkspaceMock).toHaveBeenCalledTimes(1);
-    expect(provisionPersonalWorkspaceMock).toHaveBeenCalledWith(expect.anything(), {
+    expect(m.provisionPersonalWorkspace).toHaveBeenCalledTimes(1);
+    expect(m.provisionPersonalWorkspace).toHaveBeenCalledWith(expect.anything(), {
       id: "user-2",
       name: "Lonely",
       email: "lonely@example.com",
     });
-    expect(callLog).toEqual(["transaction", "delete-workspace", "provision"]);
-  });
-
-  it("refuses with 409 when a post started publishing during the file cleanup", async () => {
-    media = [{ id: "m1", workspaceId: "ws-1", storageLocation: FILE("a") }];
-    postJobFindFirstMock.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: "job-1" });
-
-    const response = await DELETE(deleteRequest({ confirmName: "Old name" }));
-
-    expect(response.status).toBe(409);
-    await expect(response.json()).resolves.toEqual({
-      error: "A post is publishing right now. Try again in a few minutes.",
-    });
-    expect(postJobFindFirstMock).toHaveBeenCalledTimes(2);
-    expect(workspaceDeleteManyMock).not.toHaveBeenCalled();
-    expect(cookieSetMock).not.toHaveBeenCalled();
-  });
-
-  it("answers 500 with a finish-it sentence when the database step fails after the files went", async () => {
-    media = [{ id: "m1", workspaceId: "ws-1", storageLocation: FILE("a") }];
-    workspaceDeleteManyMock.mockRejectedValue(new Error("connection lost"));
-
-    const response = await DELETE(deleteRequest({ confirmName: "Old name" }));
-
-    expect(delMock).toHaveBeenCalled();
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toEqual({
-      error: "The files were removed, but the rest could not be finished. Try again to complete it.",
-    });
-    expect(cookieSetMock).not.toHaveBeenCalled();
+    expect(m.callLog.indexOf("delete-workspace")).toBeLessThan(m.callLog.indexOf("provision"));
+    expect(m.callLog.indexOf("provision")).toBeLessThan(m.callLog.indexOf("commit"));
   });
 
   it("acts only on the caller's active owned workspace, whatever the body says", async () => {
@@ -465,10 +502,10 @@ describe("DELETE /api/workspaces/active", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(workspaceDeleteManyMock).toHaveBeenCalledTimes(1);
-    expect(workspaceDeleteManyMock).toHaveBeenCalledWith({ where: { id: { in: ["ws-1"] } } });
-    expect(delMock).toHaveBeenCalledWith([FILE("mine")], expect.anything());
-    expect(postJobFindFirstMock).toHaveBeenCalledWith(
+    expect(m.workspaceDeleteMany).toHaveBeenCalledTimes(1);
+    expect(m.workspaceDeleteMany).toHaveBeenCalledWith({ where: { id: { in: ["ws-1"] } } });
+    expect(m.del).toHaveBeenCalledWith([FILE("mine")], expect.anything());
+    expect(m.postJobFindFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ workspaceId: { in: ["ws-1"] } }),
       }),

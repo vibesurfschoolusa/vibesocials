@@ -512,6 +512,22 @@ model PostJobResult {
   @@index([workspaceId, updatedAt])
 }
 
+// 2026-11-10: stored files waiting to be deleted after their workspace (or the
+// account that owned it) was deleted. The deleting transaction writes one row
+// per file together with the row deletions, so no file is forgotten; the route
+// then deletes what it can at once, and the hourly mediaRetentionSweep drains
+// the rest (src/server/jobs/pendingBlobDeletion.ts). `url` is the guardBlobKey
+// form of the file. Deliberately no relation: the rows that pointed at the
+// file are gone by the time this is read.
+model PendingBlobDeletion {
+  id        String   @id @default(cuid())
+  url       String
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
 // Fixed-window rate-limit counters (see src/lib/rateLimit.ts).
 // `key` encodes userId + route + time-window bucket; the limiter fails open,
 // so a missing table or any store error must never break the guarded routes.

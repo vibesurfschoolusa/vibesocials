@@ -12,17 +12,17 @@ import {
 } from "@/lib/workspace";
 import {
   DeletionRefusedError,
-  FINISH_FAILED_MESSAGE,
-  POST_PUBLISHING_MESSAGE,
-  WORKSPACE_FILES_FAILED_MESSAGE,
-  deleteWorkspaceFiles,
+  WORKSPACE_DELETE_FAILED_MESSAGE,
+  deleteQueuedFiles,
   deleteWorkspaceRows,
-  isPostPublishing,
+  lockWorkspaceOwners,
+  queueWorkspaceFiles,
   workspaceDeletionRefusal,
+  type QueuedFile,
 } from "@/server/account/deleteWorkspace";
 
-// The file cleanup is bounded at about 10 s per 100 media items (see
-// BLOB_DELETE_BATCH_SIZE), so a 300-item workspace fits well inside this.
+// The transaction is capped at 15 s and the file deletion after it at 20 s
+// (AFTER_COMMIT_BUDGET_MS), so this leaves room for both.
 export const maxDuration = 60;
 
 const NAME_MIN_LENGTH = 1;
@@ -73,11 +73,14 @@ export async function PATCH(request: Request) {
  *
  * Owner-only deletion of the caller's ACTIVE workspace; the body names no
  * workspace, so a caller can only ever delete the one they are an owner of.
- * Refused while another owner exists, a post is publishing, or it is the
- * caller's last workspace. Stored files go first: if that fails, no row has
- * changed. Then one transaction checks again that no post is publishing (the
- * file cleanup can take tens of seconds), deletes the workspace (everything
- * in it cascades) and gives any member left with no workspace a personal one.
+ *
+ * One transaction decides and changes everything: under the ws-owners lock it
+ * refuses while another owner exists, a post is publishing, or it is the
+ * caller's last workspace; otherwise it queues the stored files that must go,
+ * deletes the workspace (everything in it cascades) and gives any member left
+ * with no workspace a personal one. Only after the commit are the files
+ * deleted; what is not done within AFTER_COMMIT_BUDGET_MS stays queued for the
+ * hourly drain, and the request succeeds either way.
  */
 export async function DELETE(request: Request) {
   const contextOrError = await requireOwnerContext();
@@ -111,30 +114,19 @@ export async function DELETE(request: Request) {
     );
   }
 
-  const refusal = await workspaceDeletionRefusal(workspaceId, context.user.id);
-  if (refusal) {
-    return NextResponse.json({ error: refusal }, { status: 409 });
-  }
-
+  let queued: QueuedFile[];
   try {
-    await deleteWorkspaceFiles([workspaceId]);
-  } catch (error) {
-    logger.error("[DELETE /api/workspaces/active] File cleanup failed", { workspaceId, error });
-    return NextResponse.json({ error: WORKSPACE_FILES_FAILED_MESSAGE }, { status: 500 });
-  }
-
-  try {
-    await deleteInTransaction(workspaceId, context.user.id);
+    queued = await deleteInTransaction(workspaceId, context.user.id);
   } catch (error) {
     if (error instanceof DeletionRefusedError) {
       return NextResponse.json({ error: error.message }, { status: 409 });
     }
-    logger.error("[DELETE /api/workspaces/active] Database step failed after the files", {
-      workspaceId,
-      error,
-    });
-    return NextResponse.json({ error: FINISH_FAILED_MESSAGE }, { status: 500 });
+    logger.error("[DELETE /api/workspaces/active] Transaction failed", { workspaceId, error });
+    return NextResponse.json({ error: WORKSPACE_DELETE_FAILED_MESSAGE }, { status: 500 });
   }
+
+  // Never throws; what it cannot finish stays queued.
+  await deleteQueuedFiles(queued);
 
   const cookieStore = await cookies();
   cookieStore.set(ACTIVE_WORKSPACE_COOKIE, "", {
@@ -148,17 +140,21 @@ export async function DELETE(request: Request) {
   return NextResponse.json({ deleted: true }, { status: 200 });
 }
 
-async function deleteInTransaction(workspaceId: string, userId: string): Promise<void> {
-  await prisma.$transaction(
+async function deleteInTransaction(workspaceId: string, userId: string): Promise<QueuedFile[]> {
+  return prisma.$transaction(
     async (tx) => {
+      await lockWorkspaceOwners(tx, workspaceId);
+      const refusal = await workspaceDeletionRefusal(workspaceId, userId, tx);
+      if (refusal) {
+        throw new DeletionRefusedError(refusal);
+      }
+
       const others = await tx.workspaceMember.findMany({
         where: { workspaceId, userId: { not: userId } },
         select: { user: { select: { id: true, name: true, email: true } } },
       });
 
-      if (await isPostPublishing([workspaceId], tx)) {
-        throw new DeletionRefusedError(POST_PUBLISHING_MESSAGE);
-      }
+      const queued = await queueWorkspaceFiles(tx, [workspaceId]);
       await deleteWorkspaceRows(tx, [workspaceId]);
 
       // getWorkspaceContext would also self-heal a member with no workspace
@@ -172,7 +168,9 @@ async function deleteInTransaction(workspaceId: string, userId: string): Promise
           await provisionPersonalWorkspace(tx, user);
         }
       }
+      return queued;
     },
     { timeout: 15_000 },
   );
 }
+

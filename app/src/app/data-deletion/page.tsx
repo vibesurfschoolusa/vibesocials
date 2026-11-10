@@ -58,8 +58,9 @@ export default function DataDeletionPage() {
               2. Delete a workspace or your entire account in Settings
             </h2>
             <p className="mb-2">
-              Sign in and open <strong>Settings</strong>. Deleting there removes the data at once;
-              there is nothing to wait for.
+              Sign in and open <strong>Settings</strong>. Deleting there removes the data at once.
+              The stored files go right after, or within the hour if the file storage is slow to
+              respond.
             </p>
             <ul className="mb-2 list-disc space-y-1 pl-5">
               <li>

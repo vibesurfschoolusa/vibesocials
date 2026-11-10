@@ -1,13 +1,19 @@
 import type { Prisma } from "@prisma/client";
-import { del } from "@vercel/blob";
 
 import { guardBlobKey } from "@/lib/blobUrl";
 import { prisma } from "@/lib/db";
-import { BLOB_DELETE_TIMEOUT_MS } from "@/server/jobs/mediaBlob";
+import { logger } from "@/lib/logger";
+import { deleteBlobsWithTimeout } from "@/server/jobs/pendingBlobDeletion";
 
 /**
- * Deleting a whole workspace: the stored-file cleanup and the row deletion,
- * shared by DELETE /api/workspaces/active and DELETE /api/auth/account.
+ * Deleting a whole workspace, shared by DELETE /api/workspaces/active and
+ * DELETE /api/auth/account.
+ *
+ * Order: ONE transaction takes the locks, runs every check, queues the stored
+ * files that must go (PendingBlobDeletion) and deletes the rows. Only after it
+ * commits are the files deleted, so a refusal can never come after a file is
+ * gone. What the request does not finish stays queued for the hourly drain
+ * (src/server/jobs/pendingBlobDeletion.ts).
  */
 
 export const OTHER_OWNER_MESSAGE =
@@ -15,13 +21,11 @@ export const OTHER_OWNER_MESSAGE =
 export const POST_PUBLISHING_MESSAGE = "A post is publishing right now. Try again in a few minutes.";
 export const LAST_WORKSPACE_MESSAGE =
   "This is your only workspace. To leave Vibe Socials, delete your account instead.";
-export const WORKSPACE_FILES_FAILED_MESSAGE =
-  "Could not delete all of this workspace's files. Try again.";
-export const FINISH_FAILED_MESSAGE =
-  "The files were removed, but the rest could not be finished. Try again to complete it.";
+export const WORKSPACE_DELETE_FAILED_MESSAGE =
+  "Could not delete this workspace. Nothing was changed. Try again.";
 
 /**
- * Thrown inside a deletion transaction when a re-check fails, so the
+ * Thrown inside a deletion transaction when a check fails, so the
  * transaction rolls back; the route answers 409 with `message`.
  */
 export class DeletionRefusedError extends Error {
@@ -31,20 +35,32 @@ export class DeletionRefusedError extends Error {
   }
 }
 
-/**
- * Files per Blob `del()` call, which takes an array. Each call is bounded by
- * BLOB_DELETE_TIMEOUT_MS (10 s), so 300 media items are 3 calls: at most
- * about 30 s even if every call runs to its timeout.
- */
+/** Media rows per page while queueing, and files per Blob `del()` after the commit. */
 export const BLOB_DELETE_BATCH_SIZE = 100;
+/** How long a request spends deleting queued files after its commit. */
+export const AFTER_COMMIT_BUDGET_MS = 20_000;
+
+type CountClient = { workspaceMember: Pick<Prisma.TransactionClient["workspaceMember"], "count"> };
+type PostJobClient = { postJob: Pick<Prisma.TransactionClient["postJob"], "findFirst"> };
+
+/**
+ * Serializes with the leave and demote paths, which take the same key, so
+ * owners cannot change between a deletion's checks and its commit.
+ */
+export async function lockWorkspaceOwners(
+  tx: Pick<Prisma.TransactionClient, "$executeRaw">,
+  workspaceId: string,
+): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`ws-owners:${workspaceId}`}))`;
+}
 
 /**
  * True when a post in any of these workspaces is being published now. Pass a
- * transaction client as `db` to check again inside the deletion transaction.
+ * transaction client as `db` to check inside the deletion transaction.
  */
 export async function isPostPublishing(
   workspaceIds: string[],
-  db: { postJob: Pick<Prisma.TransactionClient["postJob"], "findFirst"> } = prisma,
+  db: PostJobClient = prisma,
 ): Promise<boolean> {
   if (workspaceIds.length === 0) {
     return false;
@@ -58,54 +74,44 @@ export async function isPostPublishing(
 
 /**
  * Why `userId` (an owner of `workspaceId`) may not delete it, or null when
- * they may. Used by the route and by Settings to show the same sentence.
+ * they may. The route calls it inside its transaction; Settings calls it with
+ * the default client to show the same sentence ahead of time.
  */
 export async function workspaceDeletionRefusal(
   workspaceId: string,
   userId: string,
+  db: CountClient & PostJobClient = prisma,
 ): Promise<string | null> {
-  const [otherOwners, publishing, memberships] = await Promise.all([
-    prisma.workspaceMember.count({
-      where: { workspaceId, role: "owner", userId: { not: userId } },
-    }),
-    isPostPublishing([workspaceId]),
-    prisma.workspaceMember.count({ where: { userId } }),
-  ]);
+  const otherOwners = await db.workspaceMember.count({
+    where: { workspaceId, role: "owner", userId: { not: userId } },
+  });
   if (otherOwners > 0) return OTHER_OWNER_MESSAGE;
-  if (publishing) return POST_PUBLISHING_MESSAGE;
+  if (await isPostPublishing([workspaceId], db)) return POST_PUBLISHING_MESSAGE;
+  const memberships = await db.workspaceMember.count({ where: { userId } });
   if (memberships <= 1) return LAST_WORKSPACE_MESSAGE;
   return null;
 }
 
-async function delWithTimeout(keys: string[]): Promise<void> {
-  // A reason-less abort, as in mediaBlob.ts: the SDK fails fast on an
-  // AbortError but retries a TimeoutError.
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), BLOB_DELETE_TIMEOUT_MS);
-  try {
-    await del(keys, { abortSignal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
+export type QueuedFile = { id: string; url: string };
 
 /**
- * Deletes the stored files of every live MediaItem in `workspaceIds`, except
- * a file a live MediaItem in some OTHER workspace still points at. Files are
- * compared by guardBlobKey (the key deleteBlobUnlessShared uses), and a file
- * shared only among the workspaces being deleted is deleted.
- *
- * Throws at the first failed batch. It changes no rows: the caller deletes
- * the workspace only after this resolves, so a failure leaves every row in
- * place. Files of earlier batches are already gone by then; a retry re-sends
- * them (Blob `del` of a missing file is not an error).
+ * Inside the deleting transaction, before the rows go: queues one
+ * PendingBlobDeletion per stored file of the live media in `workspaceIds`
+ * that no live media item in a SURVIVING workspace uses. Files are compared
+ * by guardBlobKey (the key deleteBlobUnlessShared uses, which also does the
+ * blob host checks), and a file shared only among the workspaces being
+ * deleted is queued once.
  */
-export async function deleteWorkspaceFiles(workspaceIds: string[]): Promise<void> {
+export async function queueWorkspaceFiles(
+  tx: Prisma.TransactionClient,
+  workspaceIds: string[],
+): Promise<QueuedFile[]> {
+  const toQueue = new Set<string>();
   const handled = new Set<string>();
   let cursor: string | undefined;
 
   for (;;) {
-    const page = await prisma.mediaItem.findMany({
+    const page = await tx.mediaItem.findMany({
       where: {
         workspaceId: { in: workspaceIds },
         deletedAt: null,
@@ -115,9 +121,7 @@ export async function deleteWorkspaceFiles(workspaceIds: string[]): Promise<void
       orderBy: { id: "asc" },
       take: BLOB_DELETE_BATCH_SIZE,
     });
-    if (page.length === 0) {
-      return;
-    }
+    if (page.length === 0) break;
     cursor = page[page.length - 1].id;
 
     const spellingsByKey = new Map<string, Set<string>>();
@@ -131,7 +135,7 @@ export async function deleteWorkspaceFiles(workspaceIds: string[]): Promise<void
 
     if (spellingsByKey.size > 0) {
       const allSpellings = [...new Set([...spellingsByKey.values()].flatMap((set) => [...set]))];
-      const elsewhere = await prisma.mediaItem.findMany({
+      const elsewhere = await tx.mediaItem.findMany({
         where: {
           storageLocation: { in: allSpellings },
           deletedAt: null,
@@ -140,22 +144,62 @@ export async function deleteWorkspaceFiles(workspaceIds: string[]): Promise<void
         select: { storageLocation: true },
       });
       const usedElsewhere = new Set(elsewhere.map((row) => row.storageLocation));
-
-      const toDelete = [...spellingsByKey.entries()]
-        .filter(([, spellings]) => ![...spellings].some((value) => usedElsewhere.has(value)))
-        .map(([key]) => key);
-      if (toDelete.length > 0) {
-        await delWithTimeout(toDelete);
-      }
-      for (const key of spellingsByKey.keys()) {
+      for (const [key, spellings] of spellingsByKey) {
         handled.add(key);
+        if (![...spellings].some((value) => usedElsewhere.has(value))) {
+          toQueue.add(key);
+        }
       }
     }
 
-    if (page.length < BLOB_DELETE_BATCH_SIZE) {
-      return;
+    if (page.length < BLOB_DELETE_BATCH_SIZE) break;
+  }
+
+  if (toQueue.size === 0) {
+    return [];
+  }
+  return tx.pendingBlobDeletion.createManyAndReturn({
+    data: [...toQueue].map((url) => ({ url })),
+    select: { id: true, url: true },
+  });
+}
+
+/**
+ * Deletes the stored files after the transaction committed. Batches of
+ * BLOB_DELETE_BATCH_SIZE, for at most AFTER_COMMIT_BUDGET_MS in total; each
+ * deleted batch has its queue rows removed. A failed batch, a batch not
+ * reached, or a queue row that could not be removed stays queued for the
+ * hourly drain. Never throws: the data is already gone, so the request
+ * succeeds either way.
+ */
+export async function deleteQueuedFiles(
+  files: QueuedFile[],
+  opts: { now?: () => number } = {},
+): Promise<{ deleted: number; left: number }> {
+  const now = opts.now ?? Date.now;
+  const deadline = now() + AFTER_COMMIT_BUDGET_MS;
+  let deleted = 0;
+
+  for (let start = 0; start < files.length; start += BLOB_DELETE_BATCH_SIZE) {
+    const remaining = deadline - now();
+    if (remaining <= 0) break;
+    const batch = files.slice(start, start + BLOB_DELETE_BATCH_SIZE);
+    try {
+      await deleteBlobsWithTimeout(
+        batch.map((file) => file.url),
+        remaining,
+      );
+      await prisma.pendingBlobDeletion.deleteMany({ where: { id: { in: batch.map((file) => file.id) } } });
+      deleted += batch.length;
+    } catch (error) {
+      logger.warn("[deleteWorkspace] Stored files left queued for the hourly drain", {
+        count: batch.length,
+        error,
+      });
     }
   }
+
+  return { deleted, left: files.length - deleted };
 }
 
 /**

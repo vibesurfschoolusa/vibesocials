@@ -12,6 +12,7 @@ import {
   type RetentionBatchResult,
   type RetentionCursor,
 } from "@/server/jobs/mediaRetentionBatch";
+import { drainPendingBlobDeletions } from "@/server/jobs/pendingBlobDeletion";
 import {
   CONNECTION_GONE_FAILURE,
   failPendingPostJobResults,
@@ -1195,6 +1196,11 @@ export const publishToAllPlatforms = inngest.createFunction(
  * hour's run starts from the beginning of the list and picks up what is left.
  * SEC: step outputs are counts and one (createdAt, id) cursor - never a
  * storageLocation.
+ *
+ * 2026-11-10: a last step, `drain-pending-blob-deletions`, deletes stored files
+ * of deleted workspaces that the deleting request could not finish
+ * (pendingBlobDeletion.ts: up to 200 a run, at most 60 s). It is the last step
+ * so the existing step ids and their order are unchanged for in-flight runs.
  */
 export const mediaRetentionSweep = inngest.createFunction(
   {
@@ -1232,6 +1238,9 @@ export const mediaRetentionSweep = inngest.createFunction(
       if (!batch.next) break;
       after = batch.next;
     }
+
+    // Logs its own deleted / kept / left counts.
+    await step.run("drain-pending-blob-deletions", () => drainPendingBlobDeletions());
 
     const summary = { batches, candidates, swept, skipped, errors, exhausted };
     logger.info("[Inngest] Media retention sweep complete", summary);

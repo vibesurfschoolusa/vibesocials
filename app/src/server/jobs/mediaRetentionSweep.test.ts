@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // deletion) is covered by mediaRetentionBatch.test.ts, where the shared-blob
 // cases moved. vi.mock is hoisted above the imports: no database, Vercel Blob
 // or Inngest is reached.
-const { batchMock } = vi.hoisted(() => ({ batchMock: vi.fn() }));
+const { batchMock, drainMock } = vi.hoisted(() => ({ batchMock: vi.fn(), drainMock: vi.fn() }));
 
 vi.mock("@/lib/db", () => ({ prisma: {} }));
 vi.mock("@/server/platforms", () => ({ getPlatformClient: vi.fn() }));
@@ -16,6 +16,8 @@ vi.mock("@/server/jobs/mediaRetentionBatch", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/jobs/mediaRetentionBatch")>()),
   sweepExpiredMediaBatch: batchMock,
 }));
+
+vi.mock("@/server/jobs/pendingBlobDeletion", () => ({ drainPendingBlobDeletions: drainMock }));
 
 import { inngestFunctions, mediaRetentionSweep } from "./inngest-functions";
 import {
@@ -75,8 +77,12 @@ const fullBatch = (i: number): BatchResult => ({
   exhausted: false,
 });
 
+const DRAIN = "drain-pending-blob-deletions";
+
 beforeEach(() => {
   batchMock.mockReset();
+  drainMock.mockReset();
+  drainMock.mockResolvedValue({ deleted: 0, kept: 0, left: 0 });
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -132,7 +138,7 @@ describe("mediaRetentionSweep - the batch loop", () => {
 
     const summary = await runSweep(step);
 
-    expect(step.ids).toEqual(["sweep-batch-0", "sweep-batch-1"]);
+    expect(step.ids).toEqual(["sweep-batch-0", "sweep-batch-1", DRAIN]);
     expect(batchMock).toHaveBeenCalledTimes(2);
     expect(summary).toEqual({
       batches: 2,
@@ -157,7 +163,7 @@ describe("mediaRetentionSweep - the batch loop", () => {
 
     const summary = await runSweep(step);
 
-    expect(step.ids).toEqual(["sweep-batch-0"]);
+    expect(step.ids).toEqual(["sweep-batch-0", DRAIN]);
     expect(summary).toMatchObject({ batches: 1, candidates: 0, exhausted: true });
   });
 
@@ -184,7 +190,7 @@ describe("mediaRetentionSweep - the batch loop", () => {
     const summary = await runSweep(step);
 
     expect(RETENTION_MAX_BATCHES_PER_RUN).toBe(15);
-    expect(step.ids).toEqual(Array.from({ length: 15 }, (_, n) => `sweep-batch-${n}`));
+    expect(step.ids).toEqual([...Array.from({ length: 15 }, (_, n) => `sweep-batch-${n}`), DRAIN]);
     expect(batchMock).toHaveBeenCalledTimes(15);
     expect(summary).toMatchObject({
       batches: 15,
@@ -206,7 +212,7 @@ describe("mediaRetentionSweep - the batch loop", () => {
 
     const summary = await runSweep(step);
 
-    expect(step.ids).toEqual(["sweep-batch-0"]);
+    expect(step.ids).toEqual(["sweep-batch-0", DRAIN]);
     expect(summary.exhausted).toBe(false);
   });
 
@@ -227,5 +233,25 @@ describe("mediaRetentionSweep - the batch loop", () => {
     batchMock.mockRejectedValueOnce(new Error("db down"));
 
     await expect(runSweep(fakeStep())).rejects.toThrow("db down");
+  });
+});
+
+describe("mediaRetentionSweep - the pending blob deletion queue", () => {
+  it("drains the queue in one last step, after the sweep batches", async () => {
+    batchMock.mockResolvedValueOnce({
+      candidates: 0,
+      swept: 0,
+      skipped: 0,
+      errors: 0,
+      next: null,
+      exhausted: true,
+    } satisfies BatchResult);
+    const step = fakeStep();
+
+    await runSweep(step);
+
+    expect(step.ids[step.ids.length - 1]).toBe(DRAIN);
+    expect(step.ids.filter((id) => id === DRAIN)).toHaveLength(1);
+    expect(drainMock).toHaveBeenCalledTimes(1);
   });
 });

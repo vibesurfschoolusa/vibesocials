@@ -8,21 +8,24 @@ import { normalizeEmail } from "@/lib/email";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
-import { accountDeletionRefusal, loadAccountDeletion } from "@/server/account/accountDeletion";
+import { blockedMessage, loadAccountDeletion } from "@/server/account/accountDeletion";
 import {
   DeletionRefusedError,
-  FINISH_FAILED_MESSAGE,
   POST_PUBLISHING_MESSAGE,
-  deleteWorkspaceFiles,
+  deleteQueuedFiles,
   deleteWorkspaceRows,
   isPostPublishing,
+  lockWorkspaceOwners,
+  queueWorkspaceFiles,
+  type QueuedFile,
 } from "@/server/account/deleteWorkspace";
 import { pickHeir, type AccountDeletionPlan } from "@/server/account/deletionPlan";
 
-// Same bound as DELETE /api/workspaces/active: about 10 s per 100 media items.
+// Same bound as DELETE /api/workspaces/active: a 15 s transaction, then at
+// most 20 s of file deletion.
 export const maxDuration = 60;
 
-const FILES_FAILED_MESSAGE = "Could not delete all of your workspaces' files. Try again.";
+const ACCOUNT_DELETE_FAILED_MESSAGE = "Could not delete your account. Nothing was changed. Try again.";
 const PLAN_CHANGED_MESSAGE =
   "Your workspaces changed while this was running. Nothing was deleted from your account. Try again.";
 
@@ -33,10 +36,10 @@ const PLAN_CHANGED_MESSAGE =
  * memberships and rows in the database, never from the body, so the only
  * workspaces deleted are ones this user owns with nobody else in them.
  *
- * Order: plan, refuse if blocked or publishing, delete stored files (a
- * failure here changes no row), then one transaction: re-check the plan
- * (the file cleanup can take tens of seconds), reassign the user's rows in
- * surviving workspaces, delete the planned workspaces, delete the user last.
+ * Order: read the plan, refuse if blocked, then one transaction that locks,
+ * re-checks the plan, queues the stored files that must go, reassigns the
+ * user's rows in surviving workspaces, deletes the planned workspaces and
+ * deletes the user last. Only after the commit are the files deleted.
  */
 export async function DELETE(request: Request) {
   const user = await getCurrentUser();
@@ -78,32 +81,25 @@ export async function DELETE(request: Request) {
     );
   }
 
+  // Read-only: what the transaction below must confirm under its locks.
   const { plan } = await loadAccountDeletion(user.id);
-  const refusal = await accountDeletionRefusal(plan);
-  if (refusal) {
-    return NextResponse.json({ error: refusal }, { status: 409 });
+  if (plan.blocked.length > 0) {
+    return NextResponse.json({ error: blockedMessage(plan.blocked) }, { status: 409 });
   }
 
-  if (plan.deleteWorkspaceIds.length > 0) {
-    try {
-      await deleteWorkspaceFiles(plan.deleteWorkspaceIds);
-    } catch (error) {
-      logger.error("[DELETE /api/auth/account] File cleanup failed", { userId: user.id, error });
-      return NextResponse.json({ error: FILES_FAILED_MESSAGE }, { status: 500 });
-    }
-  }
-
+  let queued: QueuedFile[];
   try {
-    await deleteInTransaction(user.id, plan);
+    queued = await deleteInTransaction(user.id, plan);
   } catch (error) {
     if (error instanceof DeletionRefusedError) {
       return NextResponse.json({ error: error.message }, { status: 409 });
     }
-    logger.error("[DELETE /api/auth/account] Database step failed", { userId: user.id, error });
-    const message =
-      plan.deleteWorkspaceIds.length > 0 ? FINISH_FAILED_MESSAGE : "Could not delete your account. Try again.";
-    return NextResponse.json({ error: message }, { status: 500 });
+    logger.error("[DELETE /api/auth/account] Transaction failed", { userId: user.id, error });
+    return NextResponse.json({ error: ACCOUNT_DELETE_FAILED_MESSAGE }, { status: 500 });
   }
+
+  // Never throws; what it cannot finish stays queued for the hourly drain.
+  await deleteQueuedFiles(queued);
 
   // Best-effort: deliverAccountEmail logs and returns false on any failure.
   await deliverAccountEmail(user.email, buildAccountDeletedEmail());
@@ -111,16 +107,25 @@ export async function DELETE(request: Request) {
   return NextResponse.json({ deleted: true }, { status: 200 });
 }
 
-async function deleteInTransaction(userId: string, plan: AccountDeletionPlan): Promise<void> {
-  await prisma.$transaction(
+/**
+ * Everything that decides and changes data, in one transaction: lock, check
+ * the plan still holds, queue the stored files, reassign, delete. Any failed
+ * check throws DeletionRefusedError and the transaction rolls back.
+ */
+async function deleteInTransaction(userId: string, plan: AccountDeletionPlan): Promise<QueuedFile[]> {
+  return prisma.$transaction(
     async (tx) => {
-      // Re-check every reassignment under the same ws-owners lock the leave
-      // and demote paths take, so the heir cannot leave or be demoted between
-      // this check and the commit. Locks are taken in id order so two account
+      // The same ws-owners lock the leave and demote paths take, on every
+      // workspace the plan touches, so owners and members cannot change
+      // between these checks and the commit. Taken in id order so two
       // deletions cannot deadlock on each other's workspaces.
-      const reassign = [...plan.reassign].sort((a, b) => (a.workspaceId < b.workspaceId ? -1 : 1));
-      for (const { workspaceId, toUserId } of reassign) {
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`ws-owners:${workspaceId}`}))`;
+      const lockIds = [...new Set([...plan.reassign.map((r) => r.workspaceId), ...plan.deleteWorkspaceIds])].sort();
+      for (const workspaceId of lockIds) {
+        await lockWorkspaceOwners(tx, workspaceId);
+      }
+
+      // The heir must still be the one the plan chose.
+      for (const { workspaceId, toUserId } of plan.reassign) {
         const others = await tx.workspaceMember.findMany({
           where: { workspaceId, userId: { not: userId } },
           select: { userId: true, role: true, createdAt: true },
@@ -130,7 +135,9 @@ async function deleteInTransaction(userId: string, plan: AccountDeletionPlan): P
         }
       }
 
+      let queued: QueuedFile[] = [];
       if (plan.deleteWorkspaceIds.length > 0) {
+        // A workspace to delete must still be the user's alone.
         const joined = await tx.workspaceMember.count({
           where: { workspaceId: { in: plan.deleteWorkspaceIds }, userId: { not: userId } },
         });
@@ -140,6 +147,7 @@ async function deleteInTransaction(userId: string, plan: AccountDeletionPlan): P
         if (await isPostPublishing(plan.deleteWorkspaceIds, tx)) {
           throw new DeletionRefusedError(POST_PUBLISHING_MESSAGE);
         }
+        queued = await queueWorkspaceFiles(tx, plan.deleteWorkspaceIds);
       }
 
       // These four tables cascade from User: without this the surviving
@@ -160,6 +168,7 @@ async function deleteInTransaction(userId: string, plan: AccountDeletionPlan): P
       await tx.oAuthHandshake.deleteMany({ where: { userId } });
 
       await tx.user.delete({ where: { id: userId } });
+      return queued;
     },
     { timeout: 15_000 },
   );
