@@ -507,30 +507,16 @@ describe("POST /api/posts/[postJobId]/approval — a scheduled row still awaitin
   );
 });
 
-describe("POST /api/posts/[postJobId]/approval — email verification (2026-11-01 audit)", () => {
+// 2026-11-09: publishing no longer waits for a verified email. Posting needs
+// the person's own platform accounts connected through each platform's sign-in,
+// and Meta's reviewers register with any email address, then publish.
+describe("POST /api/posts/[postJobId]/approval — an unverified email may publish", () => {
   beforeEach(() => {
-    // Email is deliverable → verification is enforced; the owner (fixture)
-    // has no emailVerifiedAt.
+    // Email is deliverable, and the owner (fixture) has no emailVerifiedAt.
     process.env.RESEND_API_KEY = "re_test";
   });
 
-  it("403s EMAIL_VERIFY_REQUIRED before any state change when approving would publish now", async () => {
-    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
-
-    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
-
-    expect(res.status).toBe(403);
-    expect((await res.json()).code).toBe("EMAIL_VERIFY_REQUIRED");
-    expect(updateManyMock).not.toHaveBeenCalled();
-    expect(prepareDispatchMock).not.toHaveBeenCalled();
-    expect(inngestSendMock).not.toHaveBeenCalled();
-  });
-
-  it("lets a verified owner approve-and-publish", async () => {
-    getWorkspaceContextMock.mockResolvedValue({
-      ...makeWorkspaceContext({ role: "owner" }),
-      user: { id: "user-1", email: "owner@example.com", name: "Owner", emailVerifiedAt: new Date() },
-    });
+  it("lets an owner who hasn't verified their email approve-and-publish", async () => {
     findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
 
     const res = await POST(req({ decision: "approve" }), ctx("job-1"));

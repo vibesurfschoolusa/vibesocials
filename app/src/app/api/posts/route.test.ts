@@ -1694,3 +1694,23 @@ describe("POST /api/posts — caption length cap and override keys (2026-11-01 s
     expect(total).toBe(80_000);
   });
 });
+
+// 2026-11-09: publishing no longer waits for a verified email. Posting needs
+// the person's own platform accounts connected through each platform's sign-in,
+// and Meta's reviewers register with any email address, then publish.
+describe("POST /api/posts — an unverified email may publish", () => {
+  beforeEach(() => {
+    // Email is deliverable, and the fixture user has no emailVerifiedAt.
+    vi.stubEnv("RESEND_API_KEY", "re_test");
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: [] });
+  });
+
+  it("publishes now for a user who hasn't verified their email", async () => {
+    const response = await POST(
+      jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+  });
+});

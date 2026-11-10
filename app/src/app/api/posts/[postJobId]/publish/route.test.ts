@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeWorkspaceContext } from "../../../__test-helpers__/workspaceContextMock";
 
@@ -701,5 +701,27 @@ describe("POST /api/posts/[postJobId]/publish — held posts (ruling R10)", () =
 
     expect(res.status).toBe(409);
     expect((await res.json()).code).toBe("NOT_A_DRAFT");
+  });
+});
+
+// 2026-11-09: publishing no longer waits for a verified email. Posting needs
+// the person's own platform accounts connected through each platform's sign-in,
+// and Meta's reviewers register with any email address, then publish.
+describe("POST /api/posts/[postJobId]/publish — an unverified email may publish", () => {
+  beforeEach(() => {
+    // Email is deliverable, and the fixture user has no emailVerifiedAt.
+    vi.stubEnv("RESEND_API_KEY", "re_test");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("publishes a draft now for a user who hasn't verified their email", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+
+    const res = await POST(req({}), ctx("job-1"));
+
+    expect(res.status).toBe(202);
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
   });
 });

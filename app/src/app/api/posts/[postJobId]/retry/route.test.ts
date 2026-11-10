@@ -521,3 +521,26 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     });
   });
 });
+
+// 2026-11-09: publishing no longer waits for a verified email. Posting needs
+// the person's own platform accounts connected through each platform's sign-in,
+// and Meta's reviewers register with any email address, then publish.
+describe("POST /api/posts/[postJobId]/retry — an unverified email may retry", () => {
+  beforeEach(() => {
+    // Email is deliverable, and the fixture user has no emailVerifiedAt.
+    vi.stubEnv("RESEND_API_KEY", "re_test");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("retries a failed platform for a user who hasn't verified their email", async () => {
+    postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
+    resultUpdateManyMock.mockResolvedValue({ count: 1 });
+
+    const res = await POST(req({ platform: "tiktok" }), ctx("job-1"));
+
+    expect(res.status).toBe(202);
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+  });
+});

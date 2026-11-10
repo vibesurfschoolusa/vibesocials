@@ -8,10 +8,6 @@ import {
   releaseApprovalHoldData,
   submissionScheduledFor,
 } from "@/lib/approval";
-import {
-  EMAIL_VERIFY_REQUIRED_MESSAGE,
-  isEmailVerifiedForPublish,
-} from "@/lib/emailVerified";
 import { readJsonObject } from "@/lib/http";
 import { inngest } from "@/lib/inngest";
 import { logger } from "@/lib/logger";
@@ -146,9 +142,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     );
   }
 
-  // Submit for approval instead of publishing/scheduling. Needs no verified
-  // email or connection yet: nothing goes out until an owner approves, and
-  // the approval route re-checks both.
+  // Submit for approval instead of publishing/scheduling. Needs no connection
+  // yet: nothing goes out until an owner approves, and the approval route
+  // re-checks it.
   if (approvalAction === "submit") {
     let requested: Date | null = null;
     if (wantsSchedule) {
@@ -243,14 +239,6 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     return NextResponse.json(
       { ok: true, status: "scheduled", scheduledFor: validation.date.toISOString() },
       { status: 200 },
-    );
-  }
-
-  // Publish-now (live fan-out): require verified email when Resend is configured.
-  if (!isEmailVerifiedForPublish(workspaceContext.user)) {
-    return NextResponse.json(
-      { error: EMAIL_VERIFY_REQUIRED_MESSAGE, code: "EMAIL_VERIFY_REQUIRED" },
-      { status: 403 },
     );
   }
 

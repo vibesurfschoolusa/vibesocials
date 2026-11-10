@@ -9,10 +9,6 @@ import {
   isAwaitingApprovalDecision,
 } from "@/lib/approval";
 import { prisma } from "@/lib/db";
-import {
-  EMAIL_VERIFY_REQUIRED_MESSAGE,
-  isEmailVerifiedForPublish,
-} from "@/lib/emailVerified";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { inngest } from "@/lib/inngest";
 import { logger } from "@/lib/logger";
@@ -71,8 +67,6 @@ const MUTATE_RATE_LIMIT = {
  * fire-and-forget: it must never fail the decision.
  *
  * 2026-11-01 audit:
- *  - Approving into an immediate publish applies the same verified-email gate
- *    as the publish route (403 `EMAIL_VERIFY_REQUIRED`) BEFORE any write.
  *  - Optional body `reviewedUpdatedAt` (the `updatedAt` the owner reviewed):
  *    a mismatch 409s `CHANGED_SINCE_REVIEW` without deciding, and the decision
  *    write is also pinned to the `updatedAt` just read, so a member's edit
@@ -186,15 +180,6 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     now,
     bufferMs: SCHEDULE_BUFFER_MS,
   });
-
-  // Approving into an immediate publish is a live fan-out — same verified
-  // email gate as the publish route, checked before anything is written.
-  if (outcome === "publish_now" && !isEmailVerifiedForPublish(workspaceContext.user)) {
-    return NextResponse.json(
-      { error: EMAIL_VERIFY_REQUIRED_MESSAGE, code: "EMAIL_VERIFY_REQUIRED" },
-      { status: 403 },
-    );
-  }
 
   // Atomic claim: only a still-undecided submission (draft, or a scheduled row
   // left submitted-but-unapproved — ruling R10 backstop) at the version just

@@ -2,10 +2,6 @@ import { NextResponse } from "next/server";
 
 import { getWorkspaceContext, getWorkspaceMemberCount } from "@/lib/workspace";
 import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "@/lib/blobUrl";
-import {
-  EMAIL_VERIFY_REQUIRED_MESSAGE,
-  isEmailVerifiedForPublish,
-} from "@/lib/emailVerified";
 import { findOverlongCaption, pickPlatformOverrides } from "@/lib/captionLimits";
 import { captionTooLongResponse, invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
@@ -641,16 +637,8 @@ export async function POST(request: Request) {
   });
   const effectiveIntent: PostJobIntent = heldForApproval ? "draft" : intent;
 
-  // Live publish only (drafts/schedules can be prepared before verify). A held
-  // post publishes nothing yet, so it doesn't need a verified email — the
-  // owner's approval is what triggers the live fan-out, and that path
-  // re-checks.
-  if (effectiveIntent === "immediate" && !isEmailVerifiedForPublish(context.user)) {
-    return NextResponse.json(
-      { error: EMAIL_VERIFY_REQUIRED_MESSAGE, code: "EMAIL_VERIFY_REQUIRED" },
-      { status: 403 },
-    );
-  }
+  // Publishing needs no verified email (2026-11-09): only the person's own
+  // platform accounts, connected through each platform's sign-in, receive it.
 
   try {
     // Create job records without executing (for background processing).
