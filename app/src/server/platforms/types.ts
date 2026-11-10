@@ -30,7 +30,10 @@ export interface YouTubePostMetadata {
 export interface PublishContext {
   user: User;
   socialConnection: SocialConnection;
-  /** The post's first (or only) file. Always `mediaItems[0]`. */
+  /**
+   * The post's first (or only) file, with its caption fields. The same file as
+   * `mediaItems[0]`, which carries the file fields only.
+   */
   mediaItem: MediaItem;
   /**
    * The post's files in order (07a): one for a single photo or video, up to
