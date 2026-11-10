@@ -19,7 +19,7 @@ import {
   queueWorkspaceFiles,
   type QueuedFile,
 } from "@/server/account/deleteWorkspace";
-import { pickHeir, type AccountDeletionPlan } from "@/server/account/deletionPlan";
+import { samePlan, type AccountDeletionPlan } from "@/server/account/deletionPlan";
 
 // Same bound as DELETE /api/workspaces/active: a 15 s transaction, then at
 // most 20 s of file deletion.
@@ -37,9 +37,10 @@ const PLAN_CHANGED_MESSAGE =
  * workspaces deleted are ones this user owns with nobody else in them.
  *
  * Order: read the plan, refuse if blocked, then one transaction that locks,
- * re-checks the plan, queues the stored files that must go, reassigns the
- * user's rows in surviving workspaces, deletes the planned workspaces and
- * deletes the user last. Only after the commit are the files deleted.
+ * plans again from fresh rows (refusing on any difference), queues the stored
+ * files that must go, reassigns the user's rows in surviving workspaces,
+ * deletes the planned workspaces and deletes the user last. Only after the
+ * commit are the files deleted.
  */
 export async function DELETE(request: Request) {
   const user = await getCurrentUser();
@@ -108,42 +109,42 @@ export async function DELETE(request: Request) {
 }
 
 /**
- * Everything that decides and changes data, in one transaction: lock, check
- * the plan still holds, queue the stored files, reassign, delete. Any failed
+ * Everything that decides and changes data, in one transaction: lock, plan
+ * again from fresh rows, queue the stored files, reassign, delete. Any failed
  * check throws DeletionRefusedError and the transaction rolls back.
  */
 async function deleteInTransaction(userId: string, plan: AccountDeletionPlan): Promise<QueuedFile[]> {
   return prisma.$transaction(
     async (tx) => {
-      // The same ws-owners lock the leave and demote paths take, on every
-      // workspace the plan touches, so owners and members cannot change
-      // between these checks and the commit. Taken in id order so two
-      // deletions cannot deadlock on each other's workspaces.
-      const lockIds = [...new Set([...plan.reassign.map((r) => r.workspaceId), ...plan.deleteWorkspaceIds])].sort();
+      // The same ws-owners lock the leave and demote paths take, on the union
+      // of the workspaces in the first plan and in a fresh read, in id order
+      // so two deletions cannot deadlock on each other's workspaces.
+      const seen = await loadAccountDeletion(userId, tx);
+      const lockIds = [
+        ...new Set([
+          ...plan.deleteWorkspaceIds,
+          ...plan.reassign.map((r) => r.workspaceId),
+          ...plan.blocked.map((b) => b.workspaceId),
+          ...seen.workspaces.map((w) => w.workspaceId),
+        ]),
+      ].sort();
       for (const workspaceId of lockIds) {
         await lockWorkspaceOwners(tx, workspaceId);
       }
 
-      // The heir must still be the one the plan chose.
-      for (const { workspaceId, toUserId } of plan.reassign) {
-        const others = await tx.workspaceMember.findMany({
-          where: { workspaceId, userId: { not: userId } },
-          select: { userId: true, role: true, createdAt: true },
-        });
-        if (pickHeir(others) !== toUserId) {
-          throw new DeletionRefusedError(PLAN_CHANGED_MESSAGE);
-        }
+      // Under the locks, plan again from fresh rows; anything different (a
+      // workspace now blocked or newly joined, another heir, another delete
+      // list) refuses. Comparing whole plans, not just heir ids, catches an
+      // heir who stepped down to member and is still the member fallback.
+      // A workspace joined after the read above is not locked, but every
+      // workspace lands in one of the plan's lists, so it changes the plan.
+      const fresh = await loadAccountDeletion(userId, tx);
+      if (!samePlan(plan, fresh.plan)) {
+        throw new DeletionRefusedError(PLAN_CHANGED_MESSAGE);
       }
 
       let queued: QueuedFile[] = [];
       if (plan.deleteWorkspaceIds.length > 0) {
-        // A workspace to delete must still be the user's alone.
-        const joined = await tx.workspaceMember.count({
-          where: { workspaceId: { in: plan.deleteWorkspaceIds }, userId: { not: userId } },
-        });
-        if (joined > 0) {
-          throw new DeletionRefusedError(PLAN_CHANGED_MESSAGE);
-        }
         if (await isPostPublishing(plan.deleteWorkspaceIds, tx)) {
           throw new DeletionRefusedError(POST_PUBLISHING_MESSAGE);
         }

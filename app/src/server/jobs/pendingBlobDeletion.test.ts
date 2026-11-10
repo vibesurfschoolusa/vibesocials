@@ -15,7 +15,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 vi.mock("@/lib/db", () => ({
   prisma: {
-    pendingBlobDeletion: { findMany: m.findMany, delete: m.deleteRow, update: m.updateRow },
+    pendingBlobDeletion: { findMany: m.findMany, deleteMany: m.deleteRow, updateMany: m.updateRow },
     mediaItem: { count: m.mediaCount },
   },
 }));
@@ -33,8 +33,8 @@ const row = (id: string, attempts = 0) => ({ id, url: url(id), attempts, created
 beforeEach(() => {
   for (const mock of Object.values(m)) mock.mockReset();
   m.del.mockResolvedValue(undefined);
-  m.deleteRow.mockResolvedValue({});
-  m.updateRow.mockResolvedValue({});
+  m.deleteRow.mockResolvedValue({ count: 1 });
+  m.updateRow.mockResolvedValue({ count: 1 });
   m.mediaCount.mockResolvedValue(0);
   vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
   vi.stubEnv("BLOB_STORE_ID", "");
@@ -45,14 +45,14 @@ afterEach(() => {
 });
 
 describe("drainPendingBlobDeletions", () => {
-  it("takes up to 200 rows, oldest first", async () => {
+  it("takes up to 200 rows, fewest attempts first, then oldest", async () => {
     m.findMany.mockResolvedValue([]);
 
     await drainPendingBlobDeletions();
 
     expect(DRAIN_BATCH_SIZE).toBe(200);
     expect(m.findMany).toHaveBeenCalledWith({
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      orderBy: [{ attempts: "asc" }, { createdAt: "asc" }, { id: "asc" }],
       take: 200,
       select: { id: true, url: true },
     });
@@ -124,6 +124,23 @@ describe("drainPendingBlobDeletions", () => {
 
     expect(spy.mock.calls.map((call) => call[1])).toContain(5_000);
     spy.mockRestore();
+  });
+
+  it("is not thrown off by a row already removed (by a request's own cleanup)", async () => {
+    m.findMany.mockResolvedValue([row("a"), row("b"), row("c")]);
+    m.deleteRow.mockResolvedValue({ count: 0 });
+    m.updateRow.mockResolvedValue({ count: 0 });
+    m.mediaCount.mockResolvedValueOnce(1).mockResolvedValue(0);
+    m.del.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("blob down"));
+
+    await expect(drainPendingBlobDeletions()).resolves.toEqual({ deleted: 1, kept: 1, left: 1 });
+
+    expect(m.deleteRow).toHaveBeenCalledWith({ where: { id: "a" } });
+    expect(m.deleteRow).toHaveBeenCalledWith({ where: { id: "b" } });
+    expect(m.updateRow).toHaveBeenCalledWith({
+      where: { id: "c" },
+      data: { attempts: { increment: 1 } },
+    });
   });
 
   it("logs how many were deleted, kept and left", async () => {

@@ -1,3 +1,5 @@
+import type { Prisma } from "@prisma/client";
+
 import { prisma } from "@/lib/db";
 
 import { POST_PUBLISHING_MESSAGE, isPostPublishing } from "./deleteWorkspace";
@@ -8,6 +10,12 @@ import { planAccountDeletion, type AccountDeletionPlan, type DeletionMembership 
  * Settings confirmation shows. Shared by DELETE /api/auth/account and
  * src/app/settings/page.tsx so both say the same thing.
  */
+
+/** The reads loadAccountDeletion makes: the default client, or a transaction's. */
+type DeletionReadClient = Pick<
+  Prisma.TransactionClient,
+  "workspaceMember" | "workspace" | "socialConnection" | "mediaItem" | "postJob" | "postMetric"
+>;
 
 const OTHER_MEMBER_SELECT = { userId: true, role: true, createdAt: true } as const;
 
@@ -26,21 +34,26 @@ export function blockedMessage(blocked: AccountDeletionPlan["blocked"]): string 
  * metric. All four cascade from User, so a workspace the user has LEFT (or
  * was removed from) still loses those rows unless they are reassigned.
  */
-async function workspacesWithUserRows(userId: string): Promise<string[]> {
+async function workspacesWithUserRows(db: DeletionReadClient, userId: string): Promise<string[]> {
   const args = { where: { userId }, select: { workspaceId: true }, distinct: ["workspaceId" as const] };
   const results = await Promise.all([
-    prisma.socialConnection.findMany(args),
-    prisma.mediaItem.findMany(args),
-    prisma.postJob.findMany(args),
-    prisma.postMetric.findMany(args),
+    db.socialConnection.findMany(args),
+    db.mediaItem.findMany(args),
+    db.postJob.findMany(args),
+    db.postMetric.findMany(args),
   ]);
   return [...new Set(results.flat().map((row) => row.workspaceId))];
 }
 
+/**
+ * Pass a transaction client as `db` to read the same rows again under the
+ * deletion's locks (DELETE /api/auth/account re-plans from them).
+ */
 export async function loadAccountDeletion(
   userId: string,
+  db: DeletionReadClient = prisma,
 ): Promise<{ plan: AccountDeletionPlan; workspaces: DeletionMembership[] }> {
-  const memberships = await prisma.workspaceMember.findMany({
+  const memberships = await db.workspaceMember.findMany({
     where: { userId },
     select: {
       role: true,
@@ -61,9 +74,9 @@ export async function loadAccountDeletion(
   }));
 
   const memberOf = new Set(workspaces.map((w) => w.workspaceId));
-  const formerIds = (await workspacesWithUserRows(userId)).filter((id) => !memberOf.has(id));
+  const formerIds = (await workspacesWithUserRows(db, userId)).filter((id) => !memberOf.has(id));
   if (formerIds.length > 0) {
-    const former = await prisma.workspace.findMany({
+    const former = await db.workspace.findMany({
       where: { id: { in: formerIds } },
       select: { id: true, name: true, members: { select: OTHER_MEMBER_SELECT } },
     });

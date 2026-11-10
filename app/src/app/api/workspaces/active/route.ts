@@ -160,8 +160,10 @@ async function deleteInTransaction(workspaceId: string, userId: string): Promise
       // getWorkspaceContext would also self-heal a member with no workspace
       // on their next request; doing it here means they never hit that path.
       // Same per-user advisory lock as that self-heal, so the two cannot both
-      // provision one.
-      for (const { user } of others) {
+      // provision one. Locks go in user-id order, so two workspace deletions
+      // that share members cannot deadlock on each other's ws-provision locks.
+      const byUserId = [...others].sort((a, b) => (a.user.id < b.user.id ? -1 : a.user.id > b.user.id ? 1 : 0));
+      for (const { user } of byUserId) {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`ws-provision:${user.id}`}))`;
         const remaining = await tx.workspaceMember.count({ where: { userId: user.id } });
         if (remaining === 0) {

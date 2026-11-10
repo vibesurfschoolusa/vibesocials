@@ -34,6 +34,9 @@ const m = vi.hoisted(() => {
   };
 });
 
+/** True while the route's transaction callback runs (set by the $transaction mock). */
+const inTransaction = vi.hoisted(() => ({ value: false }));
+
 vi.mock("@/lib/auth", () => ({ getCurrentUser: m.getCurrentUser }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: m.checkRateLimit }));
 vi.mock("@vercel/blob", () => ({ del: m.del }));
@@ -58,6 +61,7 @@ vi.mock("@/lib/db", () => {
     pendingBlobDeletion: { createManyAndReturn: m.queueCreate, deleteMany: m.queueDeleteMany },
     $transaction: async (cb: (tx: unknown) => unknown) => {
       m.callLog.push("transaction");
+      inTransaction.value = true;
       try {
         const result = await cb(prisma);
         m.callLog.push("commit");
@@ -65,6 +69,8 @@ vi.mock("@/lib/db", () => {
       } catch (error) {
         m.callLog.push("rollback");
         throw error;
+      } finally {
+        inTransaction.value = false;
       }
     },
   };
@@ -81,8 +87,8 @@ type Member = { userId: string; role: "owner" | "member"; createdAt: Date };
 type Membership = { role: "owner" | "member"; workspace: { id: string; name: string; members: Member[] } };
 let memberships: Membership[];
 let media: { id: string; workspaceId: string; storageLocation: string }[];
-/** What the in-transaction re-check reads; null = same as the memberships above. */
-let liveMembers: Record<string, Member[]> | null;
+/** The user's memberships as read inside the transaction; null = same as `memberships`. */
+let freshMemberships: Membership[] | null;
 
 const day = (n: number) => new Date(`2026-01-0${n}T00:00:00Z`);
 
@@ -114,18 +120,16 @@ beforeEach(() => {
   vi.stubEnv("BLOB_STORE_ID", "");
   memberships = [{ role: "owner", workspace: { id: "ws-personal", name: "Personal", members: [] } }];
   media = [];
-  liveMembers = null;
+  freshMemberships = null;
 
   m.getCurrentUser.mockResolvedValue({ id: USER_ID, email: "me@example.com", passwordHash });
   m.checkRateLimit.mockResolvedValue({ allowed: true });
   m.deliverAccountEmail.mockResolvedValue(false);
-  // The loader asks for the user's own memberships; the re-check inside the
-  // transaction asks for one workspace's other members.
-  m.memberFindMany.mockImplementation(async ({ where }: { where: { userId?: unknown; workspaceId?: string } }) => {
-    if (where.userId === USER_ID) return memberships;
-    const workspaceId = where.workspaceId as string;
-    if (liveMembers) return liveMembers[workspaceId] ?? [];
-    return memberships.find((entry) => entry.workspace.id === workspaceId)?.workspace.members ?? [];
+  // The loader reads the user's memberships once before the transaction and
+  // again inside it; `freshMemberships` is what changed in between.
+  m.memberFindMany.mockImplementation(async ({ where }: { where: { userId?: unknown } }) => {
+    if (where.userId !== USER_ID) throw new Error("unexpected workspaceMember.findMany");
+    return inTransaction.value && freshMemberships ? freshMemberships : memberships;
   });
   m.memberCount.mockResolvedValue(0);
   m.executeRaw.mockImplementation(async (_strings: unknown, key: string) => {
@@ -356,6 +360,9 @@ describe("DELETE /api/auth/account", () => {
       "lock ws-owners:ws-co",
       "lock ws-owners:ws-joined",
       "lock ws-owners:ws-personal",
+      // Both candidates are locked (sorted); only the unshared one is queued.
+      `lock ${FILE("mine")}`,
+      `lock ${FILE("shared")}`,
       `queue ${FILE("mine")}`,
       reassign("socialConnection", "ws-co", "u-early"),
       reassign("mediaItem", "ws-co", "u-early"),
@@ -387,7 +394,6 @@ describe("DELETE /api/auth/account", () => {
     m.workspaceFindMany.mockResolvedValue([
       { id: "ws-left", name: "Left", members: [{ userId: "u-boss", role: "owner", createdAt: day(1) }] },
     ]);
-    liveMembers = { "ws-left": [{ userId: "u-boss", role: "owner", createdAt: day(1) }] };
 
     const response = await DELETE(request({ password: "right-password" }));
 
@@ -469,7 +475,10 @@ describe("DELETE /api/auth/account", () => {
 
     it("refuses when the co-owner who was to receive the rows left after the plan was read", async () => {
       memberships = [memberships[0], coOwned];
-      liveMembers = { "ws-co": [{ userId: "u-member", role: "member", createdAt: day(3) }] };
+      freshMemberships = [
+        memberships[0],
+        { role: "owner", workspace: { ...coOwned.workspace, members: [{ userId: "u-member", role: "member", createdAt: day(3) }] } },
+      ];
 
       const response = await DELETE(request({ password: "right-password" }));
 
@@ -479,14 +488,59 @@ describe("DELETE /api/auth/account", () => {
       nothingWritten();
     });
 
-    it("refuses when the target is no longer an owner", async () => {
+    it("refuses when the heir is no longer an owner and another owner took their place", async () => {
       memberships = [memberships[0], coOwned];
-      liveMembers = {
-        "ws-co": [
-          { userId: "u-co", role: "member", createdAt: day(2) },
-          { userId: "u-new", role: "owner", createdAt: day(4) },
-        ],
+      freshMemberships = [
+        memberships[0],
+        {
+          role: "owner",
+          workspace: {
+            ...coOwned.workspace,
+            members: [
+              { userId: "u-co", role: "member", createdAt: day(2) },
+              { userId: "u-new", role: "owner", createdAt: day(4) },
+            ],
+          },
+        },
+      ];
+
+      const response = await DELETE(request({ password: "right-password" }));
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({ error: CHANGED });
+      nothingWritten();
+    });
+
+    it("refuses when the heir demoted themselves and is still the longest-standing member", async () => {
+      // W: owners U (the user) and H, member M. The first plan hands U's rows
+      // to H. H steps down before the lock: by user id alone H is still the
+      // heir (the member fallback), but U is now the only owner of a workspace
+      // with members, so deleting U would leave W with no owner.
+      const before: Membership = {
+        role: "owner",
+        workspace: {
+          id: "ws-w",
+          name: "W",
+          members: [
+            { userId: "u-h", role: "owner", createdAt: day(2) },
+            { userId: "u-m", role: "member", createdAt: day(3) },
+          ],
+        },
       };
+      memberships = [memberships[0], before];
+      freshMemberships = [
+        memberships[0],
+        {
+          role: "owner",
+          workspace: {
+            ...before.workspace,
+            members: [
+              { userId: "u-h", role: "member", createdAt: day(2) },
+              { userId: "u-m", role: "member", createdAt: day(3) },
+            ],
+          },
+        },
+      ];
 
       const response = await DELETE(request({ password: "right-password" }));
 
@@ -496,15 +550,37 @@ describe("DELETE /api/auth/account", () => {
     });
 
     it("refuses when a workspace to be deleted gained a member", async () => {
-      m.memberCount.mockResolvedValue(1);
+      freshMemberships = [
+        {
+          role: "owner",
+          workspace: { id: "ws-personal", name: "Personal", members: [{ userId: "u-x", role: "member", createdAt: day(5) }] },
+        },
+      ];
 
       const response = await DELETE(request({ password: "right-password" }));
 
       expect(response.status).toBe(409);
       await expect(response.json()).resolves.toEqual({ error: CHANGED });
-      expect(m.memberCount).toHaveBeenCalledWith({
-        where: { workspaceId: { in: ["ws-personal"] }, userId: { not: USER_ID } },
-      });
+      nothingWritten();
+    });
+
+    it("refuses when the user joined a workspace after the first plan, and locks it too, sorted", async () => {
+      freshMemberships = [
+        memberships[0],
+        {
+          role: "member",
+          workspace: { id: "ws-new", name: "New", members: [{ userId: "u-z", role: "owner", createdAt: day(1) }] },
+        },
+      ];
+
+      const response = await DELETE(request({ password: "right-password" }));
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({ error: CHANGED });
+      expect(m.callLog.filter((entry) => entry.startsWith("lock "))).toEqual([
+        "lock ws-owners:ws-new",
+        "lock ws-owners:ws-personal",
+      ]);
       nothingWritten();
     });
 

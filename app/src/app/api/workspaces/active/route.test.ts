@@ -404,6 +404,8 @@ describe("DELETE /api/workspaces/active", () => {
       "lock ws-owners:ws-1",
       "check owners",
       "check memberships",
+      `lock ${FILE("a")}`,
+      `lock ${FILE("b")}`,
       `queue ${FILE("a")},${FILE("b")}`,
       "delete-workspace",
       "commit",
@@ -489,6 +491,24 @@ describe("DELETE /api/workspaces/active", () => {
     });
     expect(m.callLog.indexOf("delete-workspace")).toBeLessThan(m.callLog.indexOf("provision"));
     expect(m.callLog.indexOf("provision")).toBeLessThan(m.callLog.indexOf("commit"));
+  });
+
+  it("takes the ws-provision locks in user-id order, whatever order the members come back in", async () => {
+    otherMembers = [
+      { user: { id: "user-9", name: null, email: "nine@example.com" } },
+      { user: { id: "user-2", name: null, email: "two@example.com" } },
+      { user: { id: "user-5", name: null, email: "five@example.com" } },
+    ];
+    remainingMemberships = { "user-9": 1, "user-2": 1, "user-5": 1 };
+
+    const response = await DELETE(deleteRequest({ confirmName: "Old name" }));
+
+    expect(response.status).toBe(200);
+    expect(m.callLog.filter((entry) => entry.startsWith("lock ws-provision:"))).toEqual([
+      "lock ws-provision:user-2",
+      "lock ws-provision:user-5",
+      "lock ws-provision:user-9",
+    ]);
   });
 
   it("acts only on the caller's active owned workspace, whatever the body says", async () => {

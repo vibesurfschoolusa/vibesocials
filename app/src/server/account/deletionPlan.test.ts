@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { planAccountDeletion, type DeletionMembership } from "./deletionPlan";
+import { planAccountDeletion, samePlan, type DeletionMembership } from "./deletionPlan";
 
 const day = (n: number) => new Date(`2026-01-${String(n).padStart(2, "0")}T00:00:00Z`);
 
@@ -199,5 +199,37 @@ describe("planAccountDeletion", () => {
 
   it("plans nothing for a user with no workspaces", () => {
     expect(planAccountDeletion([])).toEqual({ deleteWorkspaceIds: [], reassign: [], blocked: [] });
+  });
+});
+
+describe("samePlan", () => {
+  const base = {
+    deleteWorkspaceIds: ["ws-a", "ws-b"],
+    reassign: [
+      { workspaceId: "ws-c", toUserId: "u-1" },
+      { workspaceId: "ws-d", toUserId: "u-2" },
+    ],
+    blocked: [{ workspaceId: "ws-e", name: "E" }],
+  };
+
+  it("is true for the same plan in any order", () => {
+    expect(
+      samePlan(base, {
+        deleteWorkspaceIds: ["ws-b", "ws-a"],
+        reassign: [...base.reassign].reverse(),
+        blocked: [{ workspaceId: "ws-e", name: "E renamed" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("is false for a different delete list, heir, block or extra workspace", () => {
+    expect(samePlan(base, { ...base, deleteWorkspaceIds: ["ws-a"] })).toBe(false);
+    expect(
+      samePlan(base, { ...base, reassign: [base.reassign[0], { workspaceId: "ws-d", toUserId: "u-9" }] }),
+    ).toBe(false);
+    expect(samePlan(base, { ...base, blocked: [] })).toBe(false);
+    expect(
+      samePlan(base, { ...base, reassign: [...base.reassign, { workspaceId: "ws-new", toUserId: "u-1" }] }),
+    ).toBe(false);
   });
 });

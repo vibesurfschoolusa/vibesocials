@@ -67,3 +67,18 @@ export function planAccountDeletion(memberships: DeletionMembership[]): AccountD
 
   return plan;
 }
+
+/**
+ * True when two plans do the same thing: the same workspaces deleted, the
+ * same heir for the same workspaces, the same workspaces blocked. Order and
+ * workspace names do not matter.
+ */
+export function samePlan(a: AccountDeletionPlan, b: AccountDeletionPlan): boolean {
+  const key = (plan: AccountDeletionPlan) =>
+    JSON.stringify([
+      [...plan.deleteWorkspaceIds].sort(),
+      plan.reassign.map((r) => `${r.workspaceId}>${r.toUserId}`).sort(),
+      plan.blocked.map((b) => b.workspaceId).sort(),
+    ]);
+  return key(a) === key(b);
+}

@@ -101,13 +101,20 @@ export type QueuedFile = { id: string; url: string };
  * by guardBlobKey (the key deleteBlobUnlessShared uses, which also does the
  * blob host checks), and a file shared only among the workspaces being
  * deleted is queued once.
+ *
+ * Before the "used elsewhere" check, every candidate key gets the same
+ * advisory lock deleteBlobUnlessShared takes (mediaBlob.ts), so a concurrent
+ * deletion of another row that shares the file waits for this commit and then
+ * sees this side's rows gone, instead of both seeing each other as live and
+ * neither deleting the file. All keys are collected first and locked in one
+ * sorted pass, so two deletions sharing files cannot deadlock on each other.
+ * One lock statement per distinct file.
  */
 export async function queueWorkspaceFiles(
   tx: Prisma.TransactionClient,
   workspaceIds: string[],
 ): Promise<QueuedFile[]> {
-  const toQueue = new Set<string>();
-  const handled = new Set<string>();
+  const spellingsByKey = new Map<string, Set<string>>();
   let cursor: string | undefined;
 
   for (;;) {
@@ -121,45 +128,49 @@ export async function queueWorkspaceFiles(
       orderBy: { id: "asc" },
       take: BLOB_DELETE_BATCH_SIZE,
     });
-    if (page.length === 0) break;
-    cursor = page[page.length - 1].id;
-
-    const spellingsByKey = new Map<string, Set<string>>();
     for (const row of page) {
       const key = guardBlobKey(row.storageLocation);
-      if (handled.has(key)) continue;
       const spellings = spellingsByKey.get(key) ?? new Set([key]);
       spellings.add(row.storageLocation);
       spellingsByKey.set(key, spellings);
     }
-
-    if (spellingsByKey.size > 0) {
-      const allSpellings = [...new Set([...spellingsByKey.values()].flatMap((set) => [...set]))];
-      const elsewhere = await tx.mediaItem.findMany({
-        where: {
-          storageLocation: { in: allSpellings },
-          deletedAt: null,
-          workspaceId: { notIn: workspaceIds },
-        },
-        select: { storageLocation: true },
-      });
-      const usedElsewhere = new Set(elsewhere.map((row) => row.storageLocation));
-      for (const [key, spellings] of spellingsByKey) {
-        handled.add(key);
-        if (![...spellings].some((value) => usedElsewhere.has(value))) {
-          toQueue.add(key);
-        }
-      }
-    }
-
     if (page.length < BLOB_DELETE_BATCH_SIZE) break;
+    cursor = page[page.length - 1].id;
   }
 
-  if (toQueue.size === 0) {
+  const keys = [...spellingsByKey.keys()].sort();
+  if (keys.length === 0) {
+    return [];
+  }
+  for (const key of keys) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+  }
+
+  const toQueue: string[] = [];
+  for (let start = 0; start < keys.length; start += BLOB_DELETE_BATCH_SIZE) {
+    const chunk = keys.slice(start, start + BLOB_DELETE_BATCH_SIZE);
+    const allSpellings = [...new Set(chunk.flatMap((key) => [...(spellingsByKey.get(key) ?? [])]))];
+    const elsewhere = await tx.mediaItem.findMany({
+      where: {
+        storageLocation: { in: allSpellings },
+        deletedAt: null,
+        workspaceId: { notIn: workspaceIds },
+      },
+      select: { storageLocation: true },
+    });
+    const usedElsewhere = new Set(elsewhere.map((row) => row.storageLocation));
+    for (const key of chunk) {
+      if (![...(spellingsByKey.get(key) ?? [])].some((value) => usedElsewhere.has(value))) {
+        toQueue.push(key);
+      }
+    }
+  }
+
+  if (toQueue.length === 0) {
     return [];
   }
   return tx.pendingBlobDeletion.createManyAndReturn({
-    data: [...toQueue].map((url) => ({ url })),
+    data: toQueue.map((url) => ({ url })),
     select: { id: true, url: true },
   });
 }

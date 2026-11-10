@@ -13,6 +13,8 @@ const m = vi.hoisted(() => ({
   workspaceDeleteMany: vi.fn(),
   queueCreate: vi.fn(),
   queueDeleteMany: vi.fn(),
+  executeRaw: vi.fn(),
+  log: [] as string[],
 }));
 
 vi.mock("@vercel/blob", () => ({ del: m.del }));
@@ -61,6 +63,7 @@ function fakeFindMany({ where, take }: { where: Where; take?: number }) {
 }
 
 const tx = {
+  $executeRaw: m.executeRaw,
   mediaItem: { findMany: m.mediaFindMany },
   pendingBlobDeletion: { createManyAndReturn: m.queueCreate },
 } as unknown as Prisma.TransactionClient;
@@ -76,6 +79,8 @@ beforeEach(() => {
     if (typeof mock === "function") mock.mockReset();
   }
   m.del.mockResolvedValue(undefined);
+  m.log.length = 0;
+  m.executeRaw.mockResolvedValue(0);
   m.mediaFindMany.mockImplementation(fakeFindMany);
   m.queueCreate.mockImplementation(async ({ data }: { data: { url: string }[] }) =>
     data.map((row, index) => ({ id: `q${index}`, url: row.url })),
@@ -167,6 +172,35 @@ describe("queueWorkspaceFiles", () => {
 
     expect(new Set(queuedUrls()).size).toBe(total);
     expect(queuedUrls()).toHaveLength(total);
+  });
+
+  it("locks every candidate file key, sorted, before asking whether a surviving workspace uses it", async () => {
+    m.rows.push(
+      { id: "m1", workspaceId: "ws-1", storageLocation: url("zeta"), deletedAt: null },
+      { id: "m2", workspaceId: "ws-1", storageLocation: url("alpha"), deletedAt: null },
+      { id: "m3", workspaceId: "ws-1", storageLocation: `${url("mid")}?x=1`, deletedAt: null },
+    );
+    // Tagged template: (strings, ...values), so the lock key is the first value.
+    m.executeRaw.mockImplementation(async (strings: TemplateStringsArray, key: string) => {
+      m.log.push(`lock ${strings.join("?")} ${key}`);
+      return 0;
+    });
+    m.mediaFindMany.mockImplementation(async (args: { where: Where; take?: number }) => {
+      m.log.push(args.where.storageLocation ? "check elsewhere" : "page");
+      return fakeFindMany(args);
+    });
+
+    await queueWorkspaceFiles(tx, ["ws-1"]);
+
+    // The same lock deleteBlobUnlessShared takes (mediaBlob.ts), keyed by guardBlobKey.
+    const lock = (key: string) => `lock SELECT pg_advisory_xact_lock(hashtext(?)) ${key}`;
+    expect(m.log).toEqual([
+      "page",
+      lock(url("alpha")),
+      lock(url("mid")),
+      lock(url("zeta")),
+      "check elsewhere",
+    ]);
   });
 
   it("queues nothing for a workspace with no media", async () => {

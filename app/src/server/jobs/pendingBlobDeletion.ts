@@ -41,9 +41,12 @@ export interface DrainResult {
 }
 
 /**
- * Works through up to DRAIN_BATCH_SIZE queued files for at most
+ * Works through up to DRAIN_BATCH_SIZE queued files (fewest attempts, then
+ * oldest, first) for at most
  * DRAIN_BUDGET_MS. One file at a time, so one bad URL cannot hold up the
- * others: it only collects attempts.
+ * others: it only collects attempts. Rows are removed and counted with
+ * deleteMany / updateMany, so a row a request's own after-commit cleanup
+ * removed a moment earlier is not an error.
  */
 export async function drainPendingBlobDeletions(
   opts: { now?: () => number } = {},
@@ -51,7 +54,9 @@ export async function drainPendingBlobDeletions(
   const now = opts.now ?? Date.now;
   const deadline = now() + DRAIN_BUDGET_MS;
   const rows = await prisma.pendingBlobDeletion.findMany({
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    // Fewest attempts first: rows that keep failing sink below new ones, so
+    // 200 permanent failures cannot starve the queue. No cap on attempts.
+    orderBy: [{ attempts: "asc" }, { createdAt: "asc" }, { id: "asc" }],
     take: DRAIN_BATCH_SIZE,
     select: { id: true, url: true },
   });
@@ -73,7 +78,7 @@ export async function drainPendingBlobDeletions(
       where: { storageLocation: { in: spellings }, deletedAt: null },
     });
     if (inUse > 0) {
-      await prisma.pendingBlobDeletion.delete({ where: { id: row.id } });
+      await prisma.pendingBlobDeletion.deleteMany({ where: { id: row.id } });
       result.kept += 1;
       continue;
     }
@@ -82,14 +87,14 @@ export async function drainPendingBlobDeletions(
       await deleteBlobsWithTimeout(key, remaining);
     } catch (error) {
       logger.warn("[pendingBlobDeletion] Delete failed, kept queued", { id: row.id, error });
-      await prisma.pendingBlobDeletion.update({
+      await prisma.pendingBlobDeletion.updateMany({
         where: { id: row.id },
         data: { attempts: { increment: 1 } },
       });
       result.left += 1;
       continue;
     }
-    await prisma.pendingBlobDeletion.delete({ where: { id: row.id } });
+    await prisma.pendingBlobDeletion.deleteMany({ where: { id: row.id } });
     result.deleted += 1;
   }
 
