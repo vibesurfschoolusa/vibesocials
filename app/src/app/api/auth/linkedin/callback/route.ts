@@ -168,6 +168,16 @@ export async function GET(request: Request) {
       });
     }
 
+    // organizationAcls answered, and the member administers no page: that list
+    // is LinkedIn's own, so no fallback may connect a page by name (2026-11-09,
+    // live: a page found that way refused every post). The fallbacks below are
+    // only for when organizationAcls could not be read at all.
+    if (administered !== null && administered.length === 0) {
+      return NextResponse.redirect(
+        new URL("/settings?error=linkedin_no_admin_pages", process.env.NEXTAUTH_URL!)
+      );
+    }
+
     // Strategy 2: Check if user has a previous LinkedIn connection with organization data
     if (organizations.length === 0) {
       console.log("[LinkedIn OAuth] Checking for existing LinkedIn connection");

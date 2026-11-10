@@ -237,6 +237,16 @@ describe("describeOAuthResult — real callback-route codes", () => {
 
 // Audit fixes Task 6: codes added with the OAuth callback session binding
 // (lib/oauthCallbackGuard.ts) and the start/callback error handling.
+describe("describeOAuthResult — LinkedIn account that administers no page", () => {
+  it("says what to do instead of a generic failure", () => {
+    expect(describeOAuthResult({ error: "linkedin_no_admin_pages", success: null })).toEqual({
+      variant: "danger",
+      message:
+        "This LinkedIn account isn't a Super admin of any company page. Sign in to LinkedIn with an account that is a Super admin of your page, then click Connect again.",
+    });
+  });
+});
+
 describe("describeOAuthResult — session binding and connect-failure codes", () => {
   const ALL_PLATFORMS: Array<[string, string]> = [
     ["facebook_page", "Facebook Page"],

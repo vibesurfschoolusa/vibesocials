@@ -65,8 +65,9 @@ export function platformCaptionEntries(
  * with no special callout.
  */
 export const PLATFORM_MATURITY_NOTES: Partial<Record<Platform, string>> = {
-  linkedin:
-    "LinkedIn company-page posting requires Community Management API access on the LinkedIn app.",
+  // LinkedIn's note ("requires Community Management API access on the LinkedIn
+  // app") was removed 2026-11-09: the app has that access, and company-page
+  // posting through the current REST APIs is live.
 };
 
 /**

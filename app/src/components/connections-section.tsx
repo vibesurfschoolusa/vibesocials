@@ -85,7 +85,7 @@ const PLATFORMS: PlatformConfig[] = [
     label: "LinkedIn",
     href: "/api/auth/linkedin/start",
     icon: Linkedin,
-    description: "Connect your LinkedIn profile to share posts with your network.",
+    description: "Connect the LinkedIn company page you administer, to post as your company.",
   },
   {
     key: "google_business_profile",

@@ -785,9 +785,30 @@ describe("choosing which account to connect", () => {
         expect(args.update.metadata.organizations).toEqual([{ id: "555", name: "New Name", vanityName: "old-name" }]);
       });
 
+      // 2026-11-09, live: an account that administers no page was "connected"
+      // to a page it found by name, and every post was refused. When
+      // organizationAcls answers, its list is the truth.
+      it("an account that administers no page gets linkedin_no_admin_pages, even with a previous page or a hint", async () => {
+        findUniqueMock.mockResolvedValue({ metadata: { organizations: [{ id: "555", name: "Old Name" }] } });
+        useProvider(
+          linkedinProvider([{ id: 555, localizedName: "Old Name" }, { id: 777, localizedName: "Hinted Page" }], {
+            acl: () => json({ elements: [], paging: { count: 10, start: 0, links: [] } }),
+          }),
+        );
+
+        for (const state of [signedState(), vanityState("777"), vanityState("acme-surf")]) {
+          const res = await linkedinGET(callbackRequest("linkedin", state));
+          expect(location(res).pathname).toBe("/settings");
+          expect(location(res).searchParams.get("error")).toBe("linkedin_no_admin_pages");
+        }
+        expectNoConnectionWrites();
+        const lookups = linkedinApiCalls().filter(([url]) => String(url).includes("/rest/organizations"));
+        expect(lookups).toEqual([]);
+      });
+
       it("the previous connection's page is not reused when LinkedIn no longer confirms it", async () => {
         findUniqueMock.mockResolvedValue({ metadata: { organizations: [{ id: "555", name: "Old Name" }] } });
-        useProvider(linkedinProvider([]));
+        useProvider(linkedinProvider([], { acl: () => json({ status: 403, message: "Not enough permissions" }, 403) }));
 
         const res = await linkedinGET(callbackRequest("linkedin", signedState()));
 
@@ -795,8 +816,12 @@ describe("choosing which account to connect", () => {
         expectNoConnectionWrites();
       });
 
-      it("a numeric id from the setup dialog is looked up with GET /rest/organizations/{id}", async () => {
-        useProvider(linkedinProvider([{ id: 777, localizedName: "Hinted Page" }], { acl: () => json({ elements: [] }) }));
+      it("organizationAcls refused: a numeric id from the setup dialog is looked up with GET /rest/organizations/{id}", async () => {
+        useProvider(
+          linkedinProvider([{ id: 777, localizedName: "Hinted Page" }], {
+            acl: () => json({ status: 403, message: "Not enough permissions" }, 403),
+          }),
+        );
 
         const res = await linkedinGET(callbackRequest("linkedin", vanityState("777")));
 
@@ -805,9 +830,10 @@ describe("choosing which account to connect", () => {
         expect(args.update.metadata.organizations).toEqual([{ id: "777", name: "Hinted Page", vanityName: null }]);
       });
 
-      it("a vanity name from the setup dialog is looked up with GET /rest/organizations?q=vanityName", async () => {
+      it("organizationAcls refused: a vanity name from the setup dialog is looked up with GET /rest/organizations?q=vanityName", async () => {
         useProvider(
           linkedinProvider([], {
+            acl: () => json({ status: 403, message: "Not enough permissions" }, 403),
             extra: (url) =>
               url === "https://api.linkedin.com/rest/organizations?q=vanityName&vanityName=acme-surf"
                 ? json({ elements: [{ id: 888, localizedName: "Acme Surf", vanityName: "acme-surf" }] })
@@ -843,14 +869,14 @@ describe("choosing which account to connect", () => {
       });
     });
 
-    it("no organizations found: LINKEDIN_ORGANIZATION_ID is no longer a fallback, the user is asked for their page", async () => {
+    it("no organizations found: LINKEDIN_ORGANIZATION_ID is no longer a fallback, the user is told the account administers no page", async () => {
       vi.stubEnv("LINKEDIN_ORGANIZATION_ID", "999");
       vi.stubEnv("LINKEDIN_ORGANIZATION_NAME", "Owner's Page");
       useProvider(linkedinProvider([]));
 
       const res = await linkedinGET(callbackRequest("linkedin", signedState()));
 
-      expect(location(res).searchParams.get("linkedin_setup")).toBe("true");
+      expect(location(res).searchParams.get("error")).toBe("linkedin_no_admin_pages");
       expectNoConnectionWrites();
     });
   });

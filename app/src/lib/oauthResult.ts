@@ -38,6 +38,15 @@ export function describeOAuthResult(params: {
           "That connection was started from a different account. Sign in to the account you want to connect and try again.",
       };
     }
+    // LinkedIn's organizationAcls answered: the account administers no page
+    // (app/api/auth/linkedin/callback/route.ts).
+    if (error === "linkedin_no_admin_pages") {
+      return {
+        variant: "danger",
+        message:
+          "This LinkedIn account isn't a Super admin of any company page. Sign in to LinkedIn with an account that is a Super admin of your page, then click Connect again.",
+      };
+    }
     const label = platformFromCode(error);
     // LinkedIn's own "user declined" redirect uses a fixed linkedin_auth_failed
     // code rather than a "*_denied" one — catch it too so it reads as a
