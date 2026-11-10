@@ -149,9 +149,20 @@ export async function uploadPhotosInOrder(
   deps.onDone?.(captionStarted);
 }
 
+/**
+ * "Remove all" clears the main caption only when it is still exactly the text
+ * the AI last wrote from the photos: a caption about removed photos must not
+ * stay for the next ones. Typed or edited text is the user's and stays.
+ */
+export function removeAllClearsCaption(caption: string, lastAiCaption: string | null): boolean {
+  return caption !== "" && lastAiCaption !== null && caption === lastAiCaption;
+}
+
 /** The question "Remove all" asks once before clearing the set. */
-export function removeAllTitle(count: number): string {
-  return `Remove all ${count} photos?`;
+export function removeAllTitle(count: number, clearsCaption: boolean): string {
+  return clearsCaption
+    ? `Remove all ${count} photos? The caption written for them will be cleared too.`
+    : `Remove all ${count} photos? Your caption stays.`;
 }
 
 export interface AttachedPhotosProps {
@@ -161,9 +172,18 @@ export interface AttachedPhotosProps {
   onRetry(key: string): void;
   /** Clears the set, after one confirmation. */
   onRemoveAll(): void;
+  /** Whether "Remove all" will also clear the caption (removeAllClearsCaption). */
+  removeAllClearsCaption: boolean;
 }
 
-export function AttachedPhotos({ photos, onRemove, onMove, onRetry, onRemoveAll }: AttachedPhotosProps) {
+export function AttachedPhotos({
+  photos,
+  onRemove,
+  onMove,
+  onRetry,
+  onRemoveAll,
+  removeAllClearsCaption: clearsCaption,
+}: AttachedPhotosProps) {
   const progress = photoSetProgress(photos);
   const preparing = photos.some((photo) => photo.status === "preparing");
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -217,7 +237,7 @@ export function AttachedPhotos({ photos, onRemove, onMove, onRetry, onRemoveAll 
           <ConfirmDialog
             open={confirmOpen}
             onOpenChange={setConfirmOpen}
-            title={removeAllTitle(photos.length)}
+            title={removeAllTitle(photos.length, clearsCaption)}
             confirmText="Remove all"
             destructive
             onConfirm={onRemoveAll}

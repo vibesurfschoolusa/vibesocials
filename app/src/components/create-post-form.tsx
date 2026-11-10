@@ -13,6 +13,7 @@ import {
   patchPhoto,
   photoSetReady,
   preparePhotos,
+  removeAllClearsCaption,
   uploadPhotosInOrder,
   type AttachedPhoto,
 } from "./composer/attached-photos";
@@ -165,6 +166,9 @@ function CreatePostFormInner({
 
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadCaption, setUploadCaption] = useState("");
+  // 07c: the last caption the AI wrote from the media. "Remove all" clears the
+  // caption box only while it still holds exactly this (removeAllClearsCaption).
+  const [lastAiCaption, setLastAiCaption] = useState<string | null>(null);
   // 2026-11-01 scale audit (jobs, event size): over the 10,000-character cap, which
   // POST /api/posts rejects - blocks the submit (lib/captionLimits.ts).
   const captionOver = captionCounter(uploadCaption).over;
@@ -579,6 +583,9 @@ function CreatePostFormInner({
         }
         return caption;
       });
+      // Remembered even when the box kept the user's text: it then differs,
+      // so "Remove all" keeps it.
+      setLastAiCaption(caption);
     } catch (err: unknown) {
       console.error("Error generating caption from media:", err);
       if (!options.isStale?.()) {
@@ -811,6 +818,18 @@ function CreatePostFormInner({
   function clearAttachedPhotos() {
     void attachPickedFile(null);
     setFileInputKey((k) => k + 1);
+  }
+
+  // "Remove all": a caption the AI wrote for these photos, still unedited,
+  // goes with them so the next photos get their own. Per-platform captions stay.
+  const removeAllClearsTheCaption = removeAllClearsCaption(uploadCaption, lastAiCaption);
+  function removeAllPhotos() {
+    if (removeAllClearsTheCaption) {
+      setUploadCaption("");
+      setLastAiCaption(null);
+    }
+    setUploadError(null);
+    clearAttachedPhotos();
   }
 
   function removeAttachedPhoto(key: string) {
@@ -1372,7 +1391,8 @@ function CreatePostFormInner({
                   onRemove={removeAttachedPhoto}
                   onMove={(key, direction) => changePhotoSet((prev) => movePhoto(prev, key, direction))}
                   onRetry={retryAttachedPhoto}
-                  onRemoveAll={clearAttachedPhotos}
+                  onRemoveAll={removeAllPhotos}
+                  removeAllClearsCaption={removeAllClearsTheCaption}
                 />
               )}
 

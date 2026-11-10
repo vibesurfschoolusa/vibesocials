@@ -8,6 +8,7 @@ import {
   photoSetProgress,
   photoSetReady,
   preparePhotos,
+  removeAllClearsCaption,
   removeAllTitle,
   uploadPhotosInOrder,
   type AttachedPhoto,
@@ -281,7 +282,7 @@ describe("AttachedPhotos", () => {
   const noop = () => {};
   const render = (photos: AttachedPhoto[]) =>
     renderToStaticMarkup(
-      createElement(AttachedPhotos, { photos, onRemove: noop, onMove: noop, onRetry: noop, onRemoveAll: noop }),
+      createElement(AttachedPhotos, { photos, onRemove: noop, onMove: noop, onRetry: noop, onRemoveAll: noop, removeAllClearsCaption: false }),
     );
 
   it("marks the first photo Cover and gives each photo remove and move buttons", () => {
@@ -318,8 +319,32 @@ describe("AttachedPhotos", () => {
 });
 
 describe("removeAllTitle", () => {
-  it("names the number of photos", () => {
-    expect(removeAllTitle(6)).toBe("Remove all 6 photos?");
+  it("names the number of photos and says what happens to the caption", () => {
+    expect(removeAllTitle(3, true)).toBe("Remove all 3 photos? The caption written for them will be cleared too.");
+    expect(removeAllTitle(6, false)).toBe("Remove all 6 photos? Your caption stays.");
+  });
+});
+
+describe("removeAllClearsCaption", () => {
+  const ai = "Sunset paddle-out at Cocoa Beach.";
+
+  it("clears the AI's text when it is still unedited", () => {
+    expect(removeAllClearsCaption(ai, ai)).toBe(true);
+  });
+
+  it("keeps AI text the user edited", () => {
+    expect(removeAllClearsCaption(`${ai} Book now!`, ai)).toBe(false);
+    expect(removeAllClearsCaption(`${ai} `, ai)).toBe(false);
+  });
+
+  it("keeps a typed caption when the AI wrote nothing", () => {
+    expect(removeAllClearsCaption("My own words", null)).toBe(false);
+  });
+
+  it("an empty caption stays empty: nothing to clear", () => {
+    expect(removeAllClearsCaption("", null)).toBe(false);
+    expect(removeAllClearsCaption("", ai)).toBe(false);
+    expect(removeAllClearsCaption("", "")).toBe(false);
   });
 });
 
