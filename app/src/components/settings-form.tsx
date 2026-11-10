@@ -40,6 +40,7 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
   const [notifyOnPostComplete, setNotifyOnPostComplete] = useState(
     settings.notifyOnPostComplete,
   );
+  const [notifyDailyDigest, setNotifyDailyDigest] = useState(settings.notifyDailyDigest);
   const [requireApproval, setRequireApproval] = useState(settings.requireApproval);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -60,8 +61,9 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
             // must omit it entirely or the route 403s the whole request.
             requireApproval,
             notifyOnPostComplete,
+            notifyDailyDigest,
           }
-        : { notifyOnPostComplete };
+        : { notifyOnPostComplete, notifyDailyDigest };
 
       const response = await fetch("/api/settings", {
         method: "POST",
@@ -193,6 +195,21 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
           <p className="text-sm text-muted-foreground">
             Get a per-platform summary emailed to you whenever a post (including a
             scheduled post or a retry) finishes publishing.
+          </p>
+          <label className="mt-3 flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={notifyDailyDigest}
+              onChange={(e) => setNotifyDailyDigest(e.target.checked)}
+              className={checkboxClass}
+            />
+            <span className="text-sm text-foreground">
+              Email me a daily summary when a post fails, an account needs reconnecting, or a post
+              is waiting for approval
+            </span>
+          </label>
+          <p className="text-sm text-muted-foreground">
+            Sent to workspace owners, once a day, only on days when something needs attention.
           </p>
         </div>
 

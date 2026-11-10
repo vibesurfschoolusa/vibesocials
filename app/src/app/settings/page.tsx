@@ -46,6 +46,7 @@ export default async function SettingsPage({
     companyWebsite: context.workspace.companyWebsite,
     defaultHashtags: context.workspace.defaultHashtags,
     notifyOnPostComplete: context.user.notifyOnPostComplete,
+    notifyDailyDigest: context.user.notifyDailyDigest,
     requireApproval: context.workspace.requireApproval,
   };
 

@@ -31,6 +31,8 @@ export interface ParsedSettingsInput {
   companyWebsite?: string | null;
   defaultHashtags?: string | null;
   notifyOnPostComplete?: boolean;
+  /** The daily problems email (2026-11-10). Per-user, like notifyOnPostComplete. */
+  notifyDailyDigest?: boolean;
   /**
    * Approval workflow (2026-07-26). Workspace-level and OWNER-ONLY, same class
    * as the footer fields — it governs whether members' posts publish directly.
@@ -158,6 +160,15 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
     data.notifyOnPostComplete = result.value;
   }
 
+  if (hasKey(record, "notifyDailyDigest")) {
+    // Null normalizes to on, the schema default, like notifyOnPostComplete.
+    const result = validateBoolean(record.notifyDailyDigest, "notifyDailyDigest");
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    data.notifyDailyDigest = result.value;
+  }
+
   if (hasKey(record, "requireApproval")) {
     // An explicit `null` normalizes to off — matching the schema default, same
     // convention validateBoolean uses for notifyOnPostComplete.
@@ -241,10 +252,18 @@ export async function POST(request: Request) {
       });
     }
 
+    // Both email preferences are the caller's own, open to any member.
+    const userData: { notifyOnPostComplete?: boolean; notifyDailyDigest?: boolean } = {};
     if ("notifyOnPostComplete" in data) {
+      userData.notifyOnPostComplete = data.notifyOnPostComplete;
+    }
+    if ("notifyDailyDigest" in data) {
+      userData.notifyDailyDigest = data.notifyDailyDigest;
+    }
+    if (Object.keys(userData).length > 0) {
       await prisma.user.update({
         where: { id: context.user.id },
-        data: { notifyOnPostComplete: data.notifyOnPostComplete },
+        data: userData,
       });
     }
 

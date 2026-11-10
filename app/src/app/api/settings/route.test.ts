@@ -290,6 +290,74 @@ describe("requireApproval (approval workflow)", () => {
   });
 });
 
+describe("notifyDailyDigest (daily problems email)", () => {
+  it("parses a boolean and normalizes null to on", () => {
+    expect(parseSettingsInput({ notifyDailyDigest: false })).toEqual({
+      ok: true,
+      data: { notifyDailyDigest: false },
+    });
+    expect(parseSettingsInput({ notifyDailyDigest: null })).toEqual({
+      ok: true,
+      data: { notifyDailyDigest: true },
+    });
+  });
+
+  it("rejects a non-boolean with 400 and writes nothing", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+
+    const response = await POST(jsonRequest({ notifyDailyDigest: "no" }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "notifyDailyDigest must be a boolean",
+    });
+    expect(userUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("saves to the calling user's own row", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    userUpdateMock.mockResolvedValue({});
+
+    const response = await POST(jsonRequest({ notifyDailyDigest: false }));
+
+    expect(response.status).toBe(200);
+    expect(userUpdateMock).toHaveBeenCalledWith({
+      where: { id: "user-owner" },
+      data: { notifyDailyDigest: false },
+    });
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("is not owner-only: a member saves it", async () => {
+    getWorkspaceContextMock.mockResolvedValue(MEMBER_CONTEXT);
+    userUpdateMock.mockResolvedValue({});
+
+    const response = await POST(jsonRequest({ notifyDailyDigest: false }));
+
+    expect(response.status).toBe(200);
+    expect(userUpdateMock).toHaveBeenCalledWith({
+      where: { id: "user-member" },
+      data: { notifyDailyDigest: false },
+    });
+  });
+
+  it("saves both email preferences in one write", async () => {
+    getWorkspaceContextMock.mockResolvedValue(MEMBER_CONTEXT);
+    userUpdateMock.mockResolvedValue({});
+
+    const response = await POST(
+      jsonRequest({ notifyOnPostComplete: true, notifyDailyDigest: false }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(userUpdateMock).toHaveBeenCalledTimes(1);
+    expect(userUpdateMock).toHaveBeenCalledWith({
+      where: { id: "user-member" },
+      data: { notifyOnPostComplete: true, notifyDailyDigest: false },
+    });
+  });
+});
+
 describe("touchesWorkspaceFooter", () => {
   it("is false when neither footer key is present", () => {
     expect(touchesWorkspaceFooter({})).toBe(false);

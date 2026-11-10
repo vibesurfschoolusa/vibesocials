@@ -76,6 +76,9 @@ model User {
   // RESEND_API_KEY is configured, which is the other, env-level gate. Defaults
   // to true so existing users start opted in, matching the spec (§7.2).
   notifyOnPostComplete Boolean   @default(true)
+  // 2026-11-10: the daily problems email to owners (server/jobs/problemDigest.ts).
+  // Defaults to true so existing owners start opted in, like the field above.
+  notifyDailyDigest    Boolean   @default(true)
   // Bumped on password reset so outstanding next-auth JWTs (which embed the
   // prior version) fail getCurrentUser until the user signs in again.
   sessionVersion       Int       @default(0)

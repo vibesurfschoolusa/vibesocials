@@ -46,6 +46,7 @@ import {
 } from "@/server/jobs/stalePostJobs";
 import { deliverPostOutcomeNotification } from "@/server/notifications/postOutcomeEmail";
 import { buildReconnectEmail } from "@/server/notifications/reconnectEmail";
+import { collectProblemDigests, sendProblemDigests } from "@/server/jobs/problemDigest";
 import { sendEmail } from "@/server/notifications/email";
 import {
   HEALTH_SWEEP_PAGE_SIZE,
@@ -2160,6 +2161,38 @@ export const refreshConnection = inngest.createFunction(
   },
 );
 
+/**
+ * The daily problems email (2026-11-10): one email per owner whose workspaces
+ * have a failed post, a connection to reconnect or a post waiting for approval
+ * (logic in problemDigest.ts). Two steps at most, and one on a day with no
+ * problems. `collect` is read-only and memoizes the run's time, so a retry of
+ * `send` uses the same UTC day in the `digest/<userId>/<day>` idempotency key
+ * and emails nobody twice. 12:00 UTC is a free slot in the cadence map above.
+ * SEC: step outputs are ids, names and counts; addresses are read inside `send`.
+ */
+export const dailyProblemDigest = inngest.createFunction(
+  {
+    id: "daily-problem-digest",
+    name: "Daily Problem Digest",
+    singleton: { mode: "skip" },
+  },
+  { cron: "0 12 * * *" },
+  async ({ step }) => {
+    const collected = await step.run("collect", async () => {
+      const now = new Date();
+      return { now: now.toISOString(), digests: await collectProblemDigests(now) };
+    });
+    if (collected.digests.length === 0) return { digests: 0, sent: 0, failed: 0, left: 0 };
+
+    const result = await step.run("send", () =>
+      sendProblemDigests(collected.digests, new Date(collected.now)),
+    );
+    const summary = { digests: collected.digests.length, ...result };
+    logger.info("[Inngest] Daily problem digest sent", summary);
+    return summary;
+  },
+);
+
 export const inngestFunctions = [
   publishToAllPlatforms,
   mediaRetentionSweep,
@@ -2170,4 +2203,5 @@ export const inngestFunctions = [
   stalePostJobSweep,
   connectionHealthSweep,
   refreshConnection,
+  dailyProblemDigest,
 ];

@@ -31,6 +31,11 @@ export interface UserSettings {
    */
   notifyOnPostComplete: boolean;
   /**
+   * 2026-11-10 — whether to send the daily problems email (sent to owners only,
+   * see server/jobs/problemDigest.ts). Per-user, sourced from the User row.
+   */
+  notifyDailyDigest: boolean;
+  /**
    * Approval workflow (2026-07-26) — when true, MEMBERS' posts are held for an
    * owner to approve before anything publishes. Workspace-level and owner-only
    * to change (same class as the footer fields). Sourced from the active

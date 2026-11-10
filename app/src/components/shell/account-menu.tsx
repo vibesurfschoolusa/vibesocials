@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useId, useRef, useState } from "react";
+import Link from "next/link";
 import { signOut, useSession } from "next-auth/react";
-import { Check, ChevronDown, LogOut, Plus } from "lucide-react";
+import { Check, ChevronDown, LayoutGrid, LogOut, Plus } from "lucide-react";
 import type { WorkspaceRole } from "@prisma/client";
 
 import { cn } from "@/lib/cn";
@@ -214,6 +215,17 @@ export function AccountMenu() {
               <p className="truncate text-sm font-medium text-foreground">
                 {activeWorkspace.name}
               </p>
+            ) : null}
+
+            {!workspacesLoading && workspaces && workspaces.length > 1 ? (
+              <Link
+                href="/workspaces"
+                onClick={() => setOpen(false)}
+                className="mt-2 flex items-center gap-2 rounded-[var(--radius)] px-2 py-1.5 text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <LayoutGrid aria-hidden className="h-4 w-4 text-muted-foreground" />
+                All workspaces
+              </Link>
             ) : null}
 
             {!workspacesLoading && workspaces && workspaces.length > 1 ? (

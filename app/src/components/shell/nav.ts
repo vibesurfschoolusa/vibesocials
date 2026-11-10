@@ -26,6 +26,11 @@ export const NAV_ITEMS: NavItemDef[] = [
   { label: "Settings", href: "/settings", icon: Settings },
 ];
 
+/** Pages the top bar titles that are not in the sidebar. */
+const TITLE_ONLY_ITEMS: Pick<NavItemDef, "label" | "href">[] = [
+  { label: "Workspaces", href: "/workspaces" },
+];
+
 /**
  * Routes that render with NO app shell — auth pages and legal pages. Everything
  * else is treated as an authenticated app route and gets the full shell once the
@@ -58,7 +63,7 @@ export function isActiveNav(pathname: string, href: string): boolean {
 
 /** Resolve the current section's title from the nav (longest match wins). */
 export function sectionTitle(pathname: string): string {
-  const match = [...NAV_ITEMS]
+  const match = [...NAV_ITEMS, ...TITLE_ONLY_ITEMS]
     .filter((item) => isActiveNav(pathname, item.href))
     .sort((a, b) => b.href.length - a.href.length)[0];
   return match?.label ?? "Vibe Socials";
