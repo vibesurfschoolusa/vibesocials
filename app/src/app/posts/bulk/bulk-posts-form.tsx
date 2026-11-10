@@ -136,10 +136,15 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
     useState<YouTubePostMetadata["privacyStatus"]>(BULK_YOUTUBE_PRIVACY_DEFAULT);
   // Object URLs made for photo thumbnails, revoked on removal and on unmount.
   const objectUrlsRef = useRef(new Map<string, string>());
+  // Set on unmount: a photo still being prepared then gets no object URL, since
+  // the unmount cleanup below has already run and would never revoke it.
+  const unmountedRef = useRef(false);
 
   useEffect(() => {
     const urls = objectUrlsRef.current;
+    unmountedRef.current = false;
     return () => {
+      unmountedRef.current = true;
       for (const url of urls.values()) URL.revokeObjectURL(url);
       urls.clear();
     };
@@ -191,7 +196,11 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
       // A photo's thumbnail is the prepared file (a HEIC original would not show).
       // A video's comes from the frames read for its caption (captionRow).
       let thumbnail: string | undefined;
-      if (prepared.type.startsWith("image/") && rowsRef.current.some((r) => r.id === id)) {
+      if (
+        prepared.type.startsWith("image/") &&
+        !unmountedRef.current &&
+        rowsRef.current.some((r) => r.id === id)
+      ) {
         revokeThumbnail(id);
         thumbnail = URL.createObjectURL(prepared);
         objectUrlsRef.current.set(id, thumbnail);
@@ -331,7 +340,7 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
   }
 
   function markInQueue(id: string) {
-    updateRow(id, { uncertain: false, postId: "confirmed-in-queue", whenSetByHand: true, result: "In the Queue" });
+    updateRow(id, { uncertain: false, postId: "confirmed-in-queue", result: "In the Queue" });
   }
 
   function sendAgain(id: string) {
@@ -403,9 +412,8 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
         if (result.outcome === "created") {
           updateRow(id, {
             sending: false,
+            // With a post id the row's time is locked (rowTimeLocked): it shows the time sent.
             postId: result.postId,
-            // The post exists with this time; changing the controls must not move what is shown.
-            whenSetByHand: true,
             result: result.heldForApproval ? "Sent for approval" : mode === "draft" ? "Saved as a draft" : "Scheduled",
           });
         } else if (result.outcome === "refused") {

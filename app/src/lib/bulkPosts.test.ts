@@ -26,6 +26,7 @@ import {
   platformsForRow,
   refreshedFirstDay,
   rowSendBlock,
+  rowTimeLocked,
   rowsToSend,
   allRowsCreated,
   spreadSchedule,
@@ -142,13 +143,75 @@ interface TestRow {
   id: string;
   when: string;
   whenSetByHand: boolean;
+  postId: string | null;
+  uncertain: boolean;
 }
 
 const CONTROLS: BulkScheduleControls = { firstDay: "2026-11-11", timeOfDay: "18:00", everyDays: 1 };
 
 function autoRows(count: number): TestRow[] {
-  return Array.from({ length: count }, (_, i) => ({ id: `r${i + 1}`, when: "", whenSetByHand: false }));
+  return Array.from({ length: count }, (_, i) => ({
+    id: `r${i + 1}`,
+    when: "",
+    whenSetByHand: false,
+    postId: null,
+    uncertain: false,
+  }));
 }
+
+// A row whose send got no clear answer may already be in the Queue at the time
+// it was sent with. If its shown time moved, the user would look for the post at
+// the wrong time, miss it, press "Send again" and make a second post.
+describe("applySchedule keeps the sent time of a row whose post may exist", () => {
+  const SENT = "2026-11-12T18:00";
+  // r2 was sent with its spread time (not set by hand) and got no clear answer.
+  function withUnknownRow(): TestRow[] {
+    return applySchedule(autoRows(3), CONTROLS).map((r) => (r.id === "r2" ? { ...r, uncertain: true } : r));
+  }
+  const whenOf = (rows: TestRow[], id: string) => rows.find((r) => r.id === id)?.when;
+
+  it("after another row is removed", () => {
+    const rows = applySchedule(
+      withUnknownRow().filter((r) => r.id !== "r1"),
+      CONTROLS,
+    );
+    expect(whenOf(rows, "r2")).toBe(SENT);
+    expect(whenOf(rows, "r3")).toBe("2026-11-12T18:00");
+  });
+
+  it("after another row is moved", () => {
+    const rows = applySchedule(moveRow(withUnknownRow(), "r3", -1), CONTROLS);
+    expect(whenOf(rows, "r2")).toBe(SENT);
+  });
+
+  it("after the three controls change", () => {
+    const rows = applySchedule(withUnknownRow(), { firstDay: "2026-11-20", timeOfDay: "07:00", everyDays: 3 });
+    expect(whenOf(rows, "r2")).toBe(SENT);
+    expect(whenOf(rows, "r1")).toBe("2026-11-20T07:00");
+  });
+
+  it("after the default first day moves on past midnight", () => {
+    const firstDay = refreshedFirstDay({ firstDay: CONTROLS.firstDay, setByUser: false }, new Date(2026, 10, 11, 0, 5));
+    expect(firstDay).toBe("2026-11-12");
+    const rows = applySchedule(withUnknownRow(), { ...CONTROLS, firstDay: firstDay as string });
+    expect(whenOf(rows, "r2")).toBe(SENT);
+  });
+
+  it("locks a created row the same way, and frees an unknown row once the user chooses Send again", () => {
+    const created = withUnknownRow().map((r) => (r.id === "r2" ? { ...r, uncertain: false, postId: "job-1" } : r));
+    expect(whenOf(applySchedule(created, { ...CONTROLS, firstDay: "2026-11-20" }), "r2")).toBe(SENT);
+
+    const sendAgain = withUnknownRow().map((r) => (r.id === "r2" ? { ...r, uncertain: false } : r));
+    expect(whenOf(applySchedule(sendAgain, { ...CONTROLS, firstDay: "2026-11-20" }), "r2")).toBe("2026-11-21T18:00");
+  });
+
+  it("names the rule for the page: a row's time is locked when set by hand, created, or maybe created", () => {
+    expect(rowTimeLocked({ whenSetByHand: false, postId: null, uncertain: false })).toBe(false);
+    expect(rowTimeLocked({ whenSetByHand: true, postId: null, uncertain: false })).toBe(true);
+    expect(rowTimeLocked({ whenSetByHand: false, postId: "job-1", uncertain: false })).toBe(true);
+    expect(rowTimeLocked({ whenSetByHand: false, postId: null, uncertain: true })).toBe(true);
+  });
+});
 
 describe("applySchedule", () => {
   it("gives every row not set by hand its slot in list order", () => {

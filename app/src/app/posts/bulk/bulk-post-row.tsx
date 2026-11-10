@@ -165,7 +165,9 @@ export function BulkPostRow({
             className="h-11 sm:max-w-xs"
             min={minWhen}
             value={row.when}
-            disabled={!editable}
+            // A row whose post may exist keeps the time it was sent with, so the
+            // user looks for it in the Queue at that time (rowTimeLocked).
+            disabled={!editable || row.uncertain}
             onChange={(event) => onWhenChange(event.target.value)}
           />
         </div>

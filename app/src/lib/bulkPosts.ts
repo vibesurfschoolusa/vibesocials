@@ -74,18 +74,35 @@ export function spreadSchedule(input: BulkScheduleControls & { count: number }):
   );
 }
 
+interface TimeLockState {
+  whenSetByHand: boolean;
+  postId: string | null;
+  uncertain: boolean;
+}
+
 /**
- * Give each row not set by hand the slot of its place in the list. A hand-set
- * row keeps its own time (and its slot stays unused), so changing one row never
- * shifts the others. Rows are returned unchanged when the controls are invalid.
+ * A row keeps its shown time when the user set it by hand, when its post was
+ * created, or when its send got no clear answer: that post may be in the Queue
+ * at the time it was sent with, and a moved time would send the user looking in
+ * the wrong place and then pressing "Send again" for a second post.
  */
-export function applySchedule<T extends { when: string; whenSetByHand: boolean }>(
+export function rowTimeLocked(row: TimeLockState): boolean {
+  return row.whenSetByHand || row.postId !== null || row.uncertain;
+}
+
+/**
+ * Give each row whose time is not locked (rowTimeLocked) the slot of its place
+ * in the list. A locked row keeps its time (and its slot stays unused), so
+ * changing one row never shifts the others. Rows are returned unchanged when
+ * the controls are invalid.
+ */
+export function applySchedule<T extends { when: string } & TimeLockState>(
   rows: T[],
   controls: BulkScheduleControls,
 ): T[] {
   const slots = spreadSchedule({ ...controls, count: rows.length });
   if (slots.length !== rows.length) return rows;
-  return rows.map((row, i) => (row.whenSetByHand || row.when === slots[i] ? row : { ...row, when: slots[i] }));
+  return rows.map((row, i) => (rowTimeLocked(row) || row.when === slots[i] ? row : { ...row, when: slots[i] }));
 }
 
 /** Move the row with `id` up (-1) or down (+1) by one place. */
