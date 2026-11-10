@@ -8,8 +8,17 @@ import type { WorkspaceRole } from "@prisma/client";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Alert } from "@/components/ui/alert";
 import { Card } from "@/components/ui/card";
-import { ConfirmDialog } from "@/components/ui/dialog";
+import {
+  ConfirmDialog,
+  Dialog,
+  DialogBody,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -53,20 +62,29 @@ function formatDate(iso: string): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+/** Computed on the server for owners: what deleting this workspace would remove. */
+export interface WorkspaceDeletionInfo {
+  memberCount: number;
+  scheduledCount: number;
+  /** The sentence the server would refuse with, or null when it is allowed. */
+  refusal: string | null;
+}
+
 interface TeamSectionProps {
   role: WorkspaceRole;
   workspaceName: string;
+  deletion?: WorkspaceDeletionInfo | null;
 }
 
 /**
  * Settings → Team card (design doc §7). Owners get full management (rename,
  * invite link, member list + removal); members get a read-only summary.
  */
-export function TeamSection({ role, workspaceName }: TeamSectionProps) {
+export function TeamSection({ role, workspaceName, deletion }: TeamSectionProps) {
   if (role !== "owner") {
     return <MemberView workspaceName={workspaceName} />;
   }
-  return <OwnerView workspaceName={workspaceName} />;
+  return <OwnerView workspaceName={workspaceName} deletion={deletion ?? null} />;
 }
 
 /**
@@ -189,7 +207,13 @@ function MemberView({ workspaceName }: { workspaceName: string }) {
   );
 }
 
-function OwnerView({ workspaceName }: { workspaceName: string }) {
+function OwnerView({
+  workspaceName,
+  deletion,
+}: {
+  workspaceName: string;
+  deletion: WorkspaceDeletionInfo | null;
+}) {
   const router = useRouter();
   const toast = useToast();
   // Own user id — next-auth populates `session.user.id` via the jwt/session
@@ -607,6 +631,8 @@ function OwnerView({ workspaceName }: { workspaceName: string }) {
         ) : null}
       </div>
 
+      {deletion ? <DeleteWorkspace workspaceName={savedName} deletion={deletion} /> : null}
+
       <ConfirmDialog
         open={revokeOpen}
         onOpenChange={setRevokeOpen}
@@ -662,5 +688,112 @@ function OwnerView({ workspaceName }: { workspaceName: string }) {
         onConfirm={handleLeave}
       />
     </Card>
+  );
+}
+
+function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
+}
+
+/**
+ * Owner-only "Delete this workspace". The confirm button is replaced by the
+ * server's refusal sentence when one applies; otherwise the owner must type
+ * the workspace name exactly, as DELETE /api/workspaces/active requires.
+ */
+function DeleteWorkspace({
+  workspaceName,
+  deletion,
+}: {
+  workspaceName: string;
+  deletion: WorkspaceDeletionInfo;
+}) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [confirmName, setConfirmName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleDelete() {
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/workspaces/active", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmName }),
+      });
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as { error?: string } | null;
+        setError(data?.error ?? "Could not delete this workspace. Try again.");
+        setBusy(false);
+        return;
+      }
+      // The route cleared the active-workspace cookie; refresh so the server
+      // components (and the workspace switcher) re-resolve it.
+      router.push("/");
+      router.refresh();
+    } catch {
+      setError("Could not delete this workspace. Try again.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="border-t border-border pt-6">
+      <Button size="sm" variant="destructive" onClick={() => setOpen(true)}>
+        Delete this workspace
+      </Button>
+
+      <Dialog open={open} onOpenChange={busy ? () => undefined : setOpen}>
+        <DialogHeader>
+          <DialogTitle>Delete {workspaceName}?</DialogTitle>
+          <DialogDescription>This cannot be undone.</DialogDescription>
+        </DialogHeader>
+        <DialogBody className="flex flex-col gap-4">
+          <p>
+            This removes the workspace for all {plural(deletion.memberCount, "member", "members")},
+            with its connections, media, posts and stats.{" "}
+            {deletion.scheduledCount === 0
+              ? "It has no scheduled posts."
+              : `${plural(deletion.scheduledCount, "scheduled post", "scheduled posts")} will not go out.`}
+          </p>
+          <p>
+            Connected platform accounts keep any access they granted until it is removed on each
+            platform.
+          </p>
+          {deletion.refusal ? (
+            <Alert variant="danger">{deletion.refusal}</Alert>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="delete-workspace-confirm">
+                Type <strong>{workspaceName}</strong> to confirm
+              </Label>
+              <Input
+                id="delete-workspace-confirm"
+                autoComplete="off"
+                value={confirmName}
+                onChange={(event) => setConfirmName(event.target.value)}
+              />
+            </div>
+          )}
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        </DialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setOpen(false)} disabled={busy}>
+            Cancel
+          </Button>
+          {deletion.refusal ? null : (
+            <Button
+              variant="destructive"
+              loading={busy}
+              disabled={confirmName !== workspaceName}
+              onClick={handleDelete}
+            >
+              Delete workspace
+            </Button>
+          )}
+        </DialogFooter>
+      </Dialog>
+    </div>
   );
 }

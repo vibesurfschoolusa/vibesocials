@@ -1,11 +1,14 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 
-import { getWorkspaceContext } from "@/lib/workspace";
+import { getWorkspaceContext, getWorkspaceMemberCount } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { SettingsForm } from "@/components/settings-form";
 import { ConnectionsSection } from "@/components/connections-section";
-import { TeamSection } from "@/components/team-section";
+import { TeamSection, type WorkspaceDeletionInfo } from "@/components/team-section";
+import { AccountSection } from "@/components/account-section";
+import { accountDeletionPreview } from "@/server/account/accountDeletion";
+import { workspaceDeletionRefusal } from "@/server/account/deleteWorkspace";
 import { UsageSection } from "@/components/usage-section";
 import { getWorkspaceUsageOrNull } from "@/server/usage/workspaceUsage";
 import { Alert } from "@/components/ui/alert";
@@ -72,6 +75,14 @@ export default async function SettingsPage({
   // Usage limits (2026-11-10): the same counts the limits are enforced with.
   // Null when they cannot be read: the section says so and the page still renders.
   const usage = await getWorkspaceUsageOrNull(context.workspace.id, new Date());
+
+  // What the two delete confirmations say, computed with the same functions
+  // the delete routes use, so the dialog shows the sentence the route would
+  // refuse with.
+  const [accountDeletion, workspaceDeletion] = await Promise.all([
+    accountDeletionPreview(context.user.id),
+    context.role === "owner" ? loadWorkspaceDeletion(context.workspace.id, context.user.id) : null,
+  ]);
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8 md:px-6 lg:px-8">
@@ -155,6 +166,7 @@ export default async function SettingsPage({
             key={context.workspace.id}
             role={context.role}
             workspaceName={context.workspace.name}
+            deletion={workspaceDeletion}
           />
         </section>
 
@@ -167,7 +179,34 @@ export default async function SettingsPage({
           </div>
           <UsageSection usage={usage} />
         </section>
+
+        <section id="account" className="scroll-mt-20">
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold tracking-tight text-foreground">Account</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Your sign-in, your password, and deleting your account.
+            </p>
+          </div>
+          {/* SEC-1: a boolean, never the hash itself. */}
+          <AccountSection
+            email={context.user.email}
+            hasPassword={context.user.passwordHash !== null}
+            deletion={accountDeletion}
+          />
+        </section>
       </div>
     </div>
   );
+}
+
+async function loadWorkspaceDeletion(
+  workspaceId: string,
+  userId: string,
+): Promise<WorkspaceDeletionInfo> {
+  const [memberCount, scheduledCount, refusal] = await Promise.all([
+    getWorkspaceMemberCount(workspaceId),
+    prisma.postJob.count({ where: { workspaceId, status: "scheduled" } }),
+    workspaceDeletionRefusal(workspaceId, userId),
+  ]);
+  return { memberCount, scheduledCount, refusal };
 }

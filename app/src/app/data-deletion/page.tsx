@@ -47,16 +47,52 @@ export default function DataDeletionPage() {
               to the platform you want to remove. This immediately deletes the stored access and
               refresh tokens for that platform. Your past posts and their per-platform results
               stay in your Activity history, no longer linked to the removed connection; they are
-              deleted only when you delete your account (step 2). Posts already published on the
-              platform itself are not affected — remove those from the platform directly.
+              deleted when you delete the workspace or your account (step 2). Posts already
+              published on the platform itself are not affected — remove those from the platform
+              directly.
             </p>
           </section>
 
           <section>
             <h2 className="mb-1 text-sm font-semibold text-foreground">
-              2. Delete your entire account
+              2. Delete a workspace or your entire account in Settings
             </h2>
             <p className="mb-2">
+              Sign in and open <strong>Settings</strong>. Deleting there removes the data at once;
+              there is nothing to wait for.
+            </p>
+            <ul className="mb-2 list-disc space-y-1 pl-5">
+              <li>
+                <strong>Delete a workspace:</strong> as its owner, go to <strong>Team</strong> and
+                choose <strong>Delete this workspace</strong>.
+              </li>
+              <li>
+                <strong>Delete your account:</strong> go to <strong>Account</strong> and choose{" "}
+                <strong>Delete account</strong>. Workspaces only you use are deleted with it.
+              </li>
+            </ul>
+            <p>Deleting a workspace, or an account with its workspaces, permanently removes:</p>
+            <ul className="mt-2 list-disc space-y-1 pl-5">
+              <li>Your account record, including email address and password hash (account only).</li>
+              <li>
+                Every social connection in those workspaces, including all stored access and
+                refresh tokens.
+              </li>
+              <li>Their uploaded media, along with the underlying stored files.</li>
+              <li>Their posts, scheduled posts, drafts, and their per-platform results.</li>
+              <li>Any performance metrics collected for those posts.</li>
+            </ul>
+            <p className="mt-2">
+              In a workspace other people still use, what you added stays for them and passes to
+              its owner when your account is deleted.
+            </p>
+          </section>
+
+          <section>
+            <h2 className="mb-1 text-sm font-semibold text-foreground">
+              3. If you cannot sign in, email us
+            </h2>
+            <p>
               Email{" "}
               <a
                 className="underline underline-offset-2 hover:text-foreground"
@@ -67,30 +103,18 @@ export default function DataDeletionPage() {
               from the address you registered with, asking us to delete your account. We action
               these within 30 days and confirm by email when it is done.
             </p>
-            <p>Deleting your account permanently removes:</p>
-            <ul className="mt-2 list-disc space-y-1 pl-5">
-              <li>Your account record, including email address and password hash.</li>
-              <li>
-                Every social connection you authorized, including all stored access and refresh
-                tokens.
-              </li>
-              <li>Your uploaded media, along with the underlying stored files.</li>
-              <li>Your posts, scheduled posts, drafts, and their per-platform results.</li>
-              <li>Any performance metrics collected for your posts.</li>
-            </ul>
           </section>
 
           <section>
             <h2 className="mb-1 text-sm font-semibold text-foreground">
-              3. Revoke access from the platform&apos;s side
+              4. Revoke access from the platform&apos;s side
             </h2>
             <p>
-              You can also revoke Vibe Socials&apos; access from the platform directly — for
-              example in Google Account permissions, Facebook Business Integrations, TikTok
-              security settings, LinkedIn permitted services, or Pinterest security settings. Doing
-              so stops Vibe Socials from
-              publishing on your behalf immediately. To remove the data we have already stored,
-              follow step 1 or 2 above as well.
+              Deleting in Vibe Socials removes the tokens we stored, but a platform can still list
+              Vibe Socials as allowed until you remove it there — for example in Google Account
+              permissions, Facebook Business Integrations, TikTok security settings, LinkedIn
+              permitted services, or Pinterest security settings. Doing so stops Vibe Socials from
+              publishing on your behalf immediately.
             </p>
           </section>
 
