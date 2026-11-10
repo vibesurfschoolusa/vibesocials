@@ -282,10 +282,14 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   }
 
   // Usage limits (2026-11-10): the post goes out today. A scheduled post must
-  // not count against itself if it was already on today.
+  // not count against itself if it was already on today. The claim below stamps
+  // `scheduledFor` with this instant, so the post counts toward today (an old
+  // draft would otherwise count toward the day it was created, and a post
+  // scheduled for later toward that later day), like a post the scanner found due.
+  const publishedAt = new Date();
   const refusal = await checkDailyPostLimit({
     workspaceId: workspaceContext.workspace.id,
-    day: new Date(),
+    day: publishedAt,
     mode: "now",
     excludePostJobId: postJobId,
   });
@@ -308,7 +312,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       status: { in: [...MUTABLE_POST_JOB_STATUSES] },
       updatedAt: job.updatedAt,
     },
-    data: { status: "in_progress", ...releaseHold },
+    data: { status: "in_progress", scheduledFor: publishedAt, ...releaseHold },
   });
 
   if (count === 0) {

@@ -214,6 +214,10 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
           status: nextStatus,
           approvedAt: now,
           approvedByUserId: workspaceContext.user.id,
+          // Usage limits (2026-11-10): a post published now counts toward today,
+          // the day the limit was checked for above, not its creation day or a
+          // slot that passed during review.
+          ...(outcome === "publish_now" ? { scheduledFor: now } : {}),
         }
       : { status: nextStatus },
   });

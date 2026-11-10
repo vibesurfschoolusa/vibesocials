@@ -224,7 +224,7 @@ describe("POST /api/posts/[postJobId]/publish", () => {
     expect(res.status).toBe(202);
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { id: "job-1", workspaceId: "ws-1", status: { in: ["scheduled", "draft"] } },
-      data: { status: "in_progress" },
+      data: { status: "in_progress", scheduledFor: expect.any(Date) },
     });
     expect(prepareDispatchMock).toHaveBeenCalledWith("job-1");
     // 2026-11-01 scale audit (jobs H6 + H1): stable event id, the workspace for
@@ -524,7 +524,7 @@ describe("POST /api/posts/[postJobId]/publish — approval enforcement (2026-11-
         status: { in: ["scheduled", "draft"] },
         updatedAt: UPDATED,
       },
-      data: { status: "in_progress" },
+      data: { status: "in_progress", scheduledFor: expect.any(Date) },
     });
   });
 
@@ -651,7 +651,12 @@ describe("POST /api/posts/[postJobId]/publish — held posts (ruling R10)", () =
           status: { in: ["scheduled", "draft"] },
           updatedAt: UPDATED,
         },
-        data: { status: "in_progress", submittedForApprovalAt: null, approvedAt: null },
+        data: {
+          status: "in_progress",
+          scheduledFor: expect.any(Date),
+          submittedForApprovalAt: null,
+          approvedAt: null,
+        },
       });
       expect(inngestSendMock).toHaveBeenCalledTimes(1);
     });
@@ -697,7 +702,7 @@ describe("POST /api/posts/[postJobId]/publish — held posts (ruling R10)", () =
         status: { in: ["scheduled", "draft"] },
         updatedAt: UPDATED,
       },
-      data: { status: "in_progress" },
+      data: { status: "in_progress", scheduledFor: expect.any(Date) },
     });
   });
 
@@ -797,5 +802,59 @@ describe("POST /api/posts/[postJobId]/publish — daily post limit (usage limits
 
     expect(res.status).toBe(202);
     expect(checkDailyPostLimitMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/posts/[postJobId]/publish — publishing now counts toward today (usage limits)", () => {
+  const OLD = new Date("2026-01-05T10:00:00Z");
+  const TOMORROW = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+  /** The `scheduledFor` the publish-now claim wrote. */
+  function claimedScheduledFor(): Date {
+    const data = updateManyMock.mock.calls[0][0].data as { scheduledFor?: unknown };
+    expect(data.scheduledFor).toBeInstanceOf(Date);
+    return data.scheduledFor as Date;
+  }
+
+  it("an old draft published now is stamped with the time it goes out, the same instant the limit was checked for", async () => {
+    findFirstMock.mockResolvedValue(jobRow({ status: "draft", scheduledFor: null, createdAt: OLD }));
+    const before = Date.now();
+
+    const res = await POST(req({}), ctx("job-1"));
+
+    expect(res.status).toBe(202);
+    const stamped = claimedScheduledFor();
+    expect(stamped.getTime()).toBeGreaterThanOrEqual(before);
+    expect(stamped.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(checkDailyPostLimitMock.mock.calls[0][0].day).toEqual(stamped);
+    expect(updateManyMock.mock.calls[0][0].data.status).toBe("in_progress");
+  });
+
+  it("an old draft published now is refused at today's limit", async () => {
+    findFirstMock.mockResolvedValue(jobRow({ status: "draft", scheduledFor: null, createdAt: OLD }));
+    checkDailyPostLimitMock.mockResolvedValue({
+      error:
+        "This workspace has reached its limit of 20 posts for today. Schedule this post for another day, or try again tomorrow.",
+      code: "WORKSPACE_DAILY_POST_LIMIT",
+    });
+
+    const res = await POST(req({}), ctx("job-1"));
+
+    expect(res.status).toBe(429);
+    expect(checkDailyPostLimitMock.mock.calls[0][0]).toMatchObject({ mode: "now" });
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("a post scheduled for tomorrow and published now moves to today: its scheduledFor becomes now, not tomorrow", async () => {
+    findFirstMock.mockResolvedValue(jobRow({ status: "scheduled", scheduledFor: TOMORROW }));
+    const before = Date.now();
+
+    const res = await POST(req({}), ctx("job-1"));
+
+    expect(res.status).toBe(202);
+    const stamped = claimedScheduledFor();
+    expect(stamped.getTime()).toBeGreaterThanOrEqual(before);
+    expect(stamped.getTime()).toBeLessThan(TOMORROW.getTime());
+    expect(stamped.toISOString().slice(0, 10)).toBe(new Date().toISOString().slice(0, 10));
   });
 });

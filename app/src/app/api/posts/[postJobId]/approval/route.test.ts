@@ -229,6 +229,7 @@ describe("POST /api/posts/[postJobId]/approval", () => {
         status: "in_progress",
         approvedAt: expect.any(Date),
         approvedByUserId: "user-1",
+        scheduledFor: expect.any(Date),
       },
     });
     expect(prepareDispatchMock).toHaveBeenCalledWith("job-1");
@@ -471,7 +472,12 @@ describe("POST /api/posts/[postJobId]/approval — a scheduled row still awaitin
     await expect(res.json()).resolves.toMatchObject({ status: "in_progress", approvalState: "approved" });
     expect(updateManyMock).toHaveBeenCalledWith({
       where: CLAIM_WHERE,
-      data: { status: "in_progress", approvedAt: expect.any(Date), approvedByUserId: "user-1" },
+      data: {
+        status: "in_progress",
+        approvedAt: expect.any(Date),
+        approvedByUserId: "user-1",
+        scheduledFor: expect.any(Date),
+      },
     });
     expect(prepareDispatchMock).toHaveBeenCalledWith("job-1");
     expect(inngestSendMock).toHaveBeenCalledTimes(1);
@@ -631,5 +637,53 @@ describe("POST /api/posts/[postJobId]/approval — daily post limit (usage limit
 
     expect(res.status).toBe(200);
     expect(checkDailyPostLimitMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/posts/[postJobId]/approval — approving to publish now counts toward today (usage limits)", () => {
+  it("an old held draft approved to publish now is stamped with the time it goes out, the instant the limit was checked for", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
+    const before = Date.now();
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    const data = updateManyMock.mock.calls[0][0].data as { status: string; scheduledFor?: unknown };
+    expect(data.status).toBe("in_progress");
+    expect(data.scheduledFor).toBeInstanceOf(Date);
+    expect((data.scheduledFor as Date).getTime()).toBeGreaterThanOrEqual(before);
+    expect(checkDailyPostLimitMock.mock.calls[0][0].day).toEqual(data.scheduledFor);
+  });
+
+  it("a slot that passed during review is replaced by now", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: PAST }));
+
+    await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    const data = updateManyMock.mock.calls[0][0].data as { scheduledFor?: Date };
+    expect(data.scheduledFor!.getTime()).toBeGreaterThan(PAST.getTime());
+  });
+
+  it("an old held draft approved to publish now is refused at today's limit", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
+    checkDailyPostLimitMock.mockResolvedValue({
+      error:
+        "This workspace has reached its limit of 20 posts for today. Schedule this post for another day, or try again tomorrow.",
+      code: "WORKSPACE_DAILY_POST_LIMIT",
+    });
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(429);
+    expect(checkDailyPostLimitMock.mock.calls[0][0]).toMatchObject({ mode: "now" });
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("approving into a kept future slot does not touch scheduledFor", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+
+    await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(updateManyMock.mock.calls[0][0].data).not.toHaveProperty("scheduledFor");
   });
 });
