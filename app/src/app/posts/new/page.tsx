@@ -1,4 +1,7 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
+
+import { buttonVariants } from "@/components/ui/button";
 
 import { getWorkspaceContext } from "@/lib/workspace";
 import { CreatePostForm } from "@/components/create-post-form";
@@ -33,11 +36,16 @@ export default async function NewPostPage() {
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-8 md:px-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight text-foreground">Create post</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Upload a new image or video, then post to your connected platforms.
-        </p>
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Create post</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Upload a new image or video, then post to your connected platforms.
+          </p>
+        </div>
+        <Link href="/posts/bulk" className={buttonVariants({ variant: "outline", size: "md" })}>
+          Add many at once
+        </Link>
       </div>
 
       {/* 2026-11-01 audit (M3): the composer sends the workspace it was rendered

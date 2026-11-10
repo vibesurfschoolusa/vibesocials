@@ -206,6 +206,82 @@ describe("POST /api/posts/auto-caption", () => {
     });
   });
 
+  // 14 (Add many at once): the bulk page captions up to 20 files, one at a time,
+  // so it asks for its own per-user counter instead of the 10-per-5-minutes one.
+  describe("bulk flag", () => {
+    const userLimitCalls = () =>
+      checkRateLimitMock.mock.calls
+        .map(([opts]) => opts)
+        .filter((opts: { userId: string }) => opts.userId === "user-1");
+
+    it("without bulk, uses today's per-user counter: 10 per 5 minutes, failing closed", async () => {
+      await post(validBody);
+
+      expect(userLimitCalls()).toEqual([
+        { userId: "user-1", route: "posts/auto-caption", limit: 10, windowMs: 5 * 60 * 1000, failClosed: true },
+      ]);
+    });
+
+    it("with bulk: false, uses today's per-user counter", async () => {
+      await post({ ...validBody, bulk: false });
+
+      expect(userLimitCalls()).toEqual([
+        { userId: "user-1", route: "posts/auto-caption", limit: 10, windowMs: 5 * 60 * 1000, failClosed: true },
+      ]);
+    });
+
+    it("with bulk: true, uses a separate counter of 40 per 15 minutes, failing closed", async () => {
+      const response = await post({ ...validBody, bulk: true });
+
+      expect(response.status).toBe(200);
+      expect(userLimitCalls()).toEqual([
+        { userId: "user-1", route: "posts/auto-caption-bulk", limit: 40, windowMs: 15 * 60 * 1000, failClosed: true },
+      ]);
+    });
+
+    it("with bulk: true, answers today's 429 when the bulk counter is spent", async () => {
+      checkRateLimitMock.mockImplementation(async (opts: { userId: string }) =>
+        opts.userId === "user-1" ? { allowed: false, retryAfterSeconds: 120 } : { allowed: true },
+      );
+
+      const response = await post({ ...validBody, bulk: true });
+
+      expect(response.status).toBe(429);
+      expect(response.headers.get("Retry-After")).toBe("120");
+      await expect(response.json()).resolves.toMatchObject({ error: "Too many requests, slow down." });
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it.each([["yes"], [1], [null], [{}]])(
+      "rejects a non-boolean bulk (%j) with 400 before any limit is spent",
+      async (bulk) => {
+        const response = await post({ ...validBody, bulk });
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toEqual({ error: "bulk must be true or false" });
+        expect(checkRateLimitMock).not.toHaveBeenCalled();
+        expect(fetchMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it("with bulk: true, still spends and respects the workspace's daily AI quota", async () => {
+      checkRateLimitMock.mockImplementation(async (opts: { userId: string }) =>
+        opts.userId.startsWith("ai:workspace:")
+          ? { allowed: false, retryAfterSeconds: 3600 }
+          : { allowed: true },
+      );
+
+      const response = await post({ ...validBody, bulk: true });
+
+      expect(response.status).toBe(429);
+      await expect(response.json()).resolves.toMatchObject({ code: "AI_WORKSPACE_DAILY_LIMIT" });
+      expect(checkRateLimitMock.mock.calls.map(([opts]) => opts)).toContainEqual(
+        expect.objectContaining({ userId: "ai:workspace:ws-1", limit: 200 }),
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
   describe("provider call", () => {
     it("sends reasoning_effort: 'low' to xAI grok-4.5", async () => {
       await post(validBody);

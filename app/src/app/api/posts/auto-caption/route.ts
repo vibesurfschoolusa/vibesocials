@@ -28,6 +28,8 @@ interface AutoCaptionRequestBody {
   maxLength?: number;
   /** Up to 3 JPEG data URLs of still frames, for a video (lib/videoFrames.ts). */
   frames?: string[];
+  /** True from the Add-many page: a separate per-user counter (40 per 15 minutes). */
+  bulk?: boolean;
 }
 
 export async function POST(request: Request) {
@@ -82,15 +84,32 @@ export async function POST(request: Request) {
       );
     }
 
+    if (body.bulk !== undefined && typeof body.bulk !== "boolean") {
+      return NextResponse.json({ error: "bulk must be true or false" }, { status: 400 });
+    }
+
     // Throttle per user: vision calls are the most expensive, so keep this tight.
     // Fail closed — a limiter outage must not open unlimited LLM spend.
-    const rateLimit = await checkRateLimit({
-      userId: context.user.id,
-      route: "posts/auto-caption",
-      limit: 10,
-      windowMs: 5 * 60 * 1000,
-      failClosed: true,
-    });
+    // The Add-many page (/posts/bulk) captions up to 20 files one after another,
+    // which the 10-per-5-minutes counter would stretch to ten minutes, so it
+    // asks for its own counter. The workspace's daily AI quota still applies.
+    const rateLimit = await checkRateLimit(
+      body.bulk === true
+        ? {
+            userId: context.user.id,
+            route: "posts/auto-caption-bulk",
+            limit: 40,
+            windowMs: 15 * 60 * 1000,
+            failClosed: true,
+          }
+        : {
+            userId: context.user.id,
+            route: "posts/auto-caption",
+            limit: 10,
+            windowMs: 5 * 60 * 1000,
+            failClosed: true,
+          },
+    );
 
     if (!rateLimit.allowed) {
       return NextResponse.json(
