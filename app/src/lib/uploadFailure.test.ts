@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { explainUploadFailure, UploadRefusedError } from "./uploadFailure";
+import { explainUploadFailure, UPLOAD_REFUSED_MESSAGE, UploadRefusedError } from "./uploadFailure";
 
 const FULL =
   "This workspace's media storage is full (5.0 GB). Delete media you no longer need on the Media page, then upload again.";
@@ -48,5 +48,32 @@ describe("explainUploadFailure", () => {
 
     const explained = await explainUploadFailure("boom", fetchMock);
     expect(explained).toBeInstanceOf(Error);
+  });
+
+  it("a refused token with storage not full says to wait (07c: many files at once)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ storageFull: false }));
+    for (const libraryMessage of [
+      "Vercel Blob: Failed to  retrieve the client token",
+      "Vercel Blob: Failed to retrieve the client token",
+    ]) {
+      const explained = await explainUploadFailure(new Error(libraryMessage), fetchMock);
+      expect(explained).toBeInstanceOf(UploadRefusedError);
+      expect(explained.message).toBe(
+        "The upload was refused. If you are adding many files, wait a few minutes and try again.",
+      );
+      expect(explained.message).toBe(UPLOAD_REFUSED_MESSAGE);
+    }
+  });
+
+  it("a refused token says to wait even when the storage question fails", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error("offline"));
+    const explained = await explainUploadFailure(new Error("Vercel Blob: Failed to  retrieve the client token"), fetchMock);
+    expect(explained.message).toBe(UPLOAD_REFUSED_MESSAGE);
+  });
+
+  it("storage full still wins over the refusal sentence", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ storageFull: true, error: FULL }));
+    const explained = await explainUploadFailure(new Error("Vercel Blob: Failed to  retrieve the client token"), fetchMock);
+    expect(explained.message).toBe(FULL);
   });
 });

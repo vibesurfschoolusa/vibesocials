@@ -44,10 +44,11 @@ export async function POST(request: Request): Promise<NextResponse> {
   const { user } = context;
 
   // Cap client upload-token issuance (each call can authorize up to 512MB).
+  // 120 per 15 minutes: a post with ten photos takes ten tokens (07c).
   const rateLimit = await checkRateLimit({
     userId: user.id,
     route: "upload",
-    limit: 40,
+    limit: 120,
     windowMs: 15 * 60 * 1000,
     failClosed: true,
   });

@@ -75,6 +75,25 @@ describe("POST /api/upload — storage limit (usage limits)", () => {
   });
 });
 
+describe("POST /api/upload — token rate limit", () => {
+  it("allows 120 tokens per user per 15 minutes, so a ten-photo post fits many times", async () => {
+    await POST(tokenRequest());
+
+    expect(checkRateLimitMock).toHaveBeenCalledWith(
+      expect.objectContaining({ route: "upload", limit: 120, windowMs: 15 * 60 * 1000, failClosed: true }),
+    );
+  });
+
+  it("429s past the limit before any token is issued", async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
+
+    const res = await POST(tokenRequest());
+
+    expect(res.status).toBe(429);
+    expect(handleUploadMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("GET /api/upload — why an upload was refused", () => {
   it("401s when signed out", async () => {
     getWorkspaceContextMock.mockResolvedValue(null);

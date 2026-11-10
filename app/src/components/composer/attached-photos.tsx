@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight, ImagePlus, X } from "lucide-react";
 
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/dialog";
 import { cn } from "@/lib/cn";
 import type { UploadedBlob } from "@/lib/createPostRequest";
 
@@ -17,9 +18,12 @@ import type { UploadedBlob } from "@/lib/createPostRequest";
 export interface AttachedPhoto {
   /** Stable id for the list, independent of order. */
   key: string;
-  /** The prepared file (HEIC already converted, big photos shrunk). */
+  /**
+   * The prepared file (HEIC already converted, big photos shrunk); the picked
+   * file while `preparing`.
+   */
   file: File;
-  status: "waiting" | "uploading" | "uploaded" | "failed";
+  status: "preparing" | "waiting" | "uploading" | "uploaded" | "failed";
   /** 0-100 while uploading. */
   progress: number;
   blob: UploadedBlob | null;
@@ -42,10 +46,14 @@ export function photoSetReady(photos: readonly AttachedPhoto[]): boolean {
   return photos.length > 0 && photos.every((photo) => photo.status === "uploaded" && photo.blob !== null);
 }
 
-/** Progress for the set while any photo is waiting or uploading, else null. */
+/**
+ * Progress for the set while any photo is waiting or uploading, else null.
+ * Null too while any is still being prepared: the row says "Preparing".
+ */
 export function photoSetProgress(
   photos: readonly AttachedPhoto[],
 ): { done: number; total: number; percent: number } | null {
+  if (photos.some((photo) => photo.status === "preparing")) return null;
   if (!photos.some((photo) => photo.status === "waiting" || photo.status === "uploading")) return null;
   const done = photos.filter((photo) => photo.status === "uploaded").length;
   const inFlight = photos.find((photo) => photo.status === "uploading")?.progress ?? 0;
@@ -56,42 +64,94 @@ export function photoSetProgress(
   };
 }
 
+export interface PreparePhotosDeps {
+  /** prepareUploadFile: rejects with the sentence to show. */
+  prepare(file: File): Promise<File>;
+  /** True once a newer pick replaced this one, or the page was left. */
+  isStale(): boolean;
+  /** False once the user removed that placeholder. */
+  isAttached(key: string): boolean;
+}
+
+/**
+ * Prepare a pick's photos one after another, skipping a placeholder removed
+ * meanwhile. Null when the pick went stale; a failed preparation rejects.
+ */
+export async function preparePhotos(
+  entries: readonly { key: string; file: File }[],
+  deps: PreparePhotosDeps,
+): Promise<{ key: string; file: File }[] | null> {
+  const prepared: { key: string; file: File }[] = [];
+  for (const { key, file } of entries) {
+    if (deps.isStale()) return null;
+    if (!deps.isAttached(key)) continue;
+    const ready = await deps.prepare(file);
+    if (deps.isStale()) return null;
+    if (deps.isAttached(key)) prepared.push({ key, file: ready });
+  }
+  return prepared;
+}
+
 export interface UploadPhotosDeps {
   /** Uploads one file, rejecting with the sentence to show (lib/uploadFailure.ts). */
   upload(file: File, onProgress: (percent: number) => void): Promise<UploadedBlob>;
-  /** True once a newer pick replaced this set: stop uploading. */
+  /** True once a newer pick replaced this set, or the page was left: stop. */
   isStale(): boolean;
+  /** False once the user removed that photo: skip it, or drop its result. */
+  isAttached(key: string): boolean;
+  /** True while that photo is the first one attached. */
+  isCover(key: string): boolean;
   onUpdate(key: string, patch: Partial<AttachedPhoto>): void;
-  onUploaded?(key: string, blob: UploadedBlob): void;
+  /**
+   * Given: write the AI caption from this photo. Called at most once, for the
+   * first photo of these entries to finish uploading while it is the cover.
+   */
+  onCaption?(key: string, blob: UploadedBlob, file: File): void;
+  /** At the end, unless stale: whether `onCaption` was called. */
+  onDone?(captionStarted: boolean): void;
 }
 
 const UPLOAD_FAILED_FALLBACK = "This photo didn't upload. Retry it or remove it.";
 
 /**
  * Upload the photos one after another (never in parallel, so a phone's
- * connection isn't split ten ways). A failure marks that photo and moves on;
- * it never rejects.
+ * connection isn't split ten ways). Each is checked against the current set
+ * before it starts and again before its result is used. A failure marks that
+ * photo and moves on; it never rejects.
  */
 export async function uploadPhotosInOrder(
   entries: readonly { key: string; file: File }[],
   deps: UploadPhotosDeps,
 ): Promise<void> {
+  let captionStarted = false;
   for (const { key, file } of entries) {
     if (deps.isStale()) return;
+    if (!deps.isAttached(key)) continue;
     deps.onUpdate(key, { status: "uploading", progress: 0, error: null });
     try {
       const blob = await deps.upload(file, (percent) => {
-        if (!deps.isStale()) deps.onUpdate(key, { progress: percent });
+        if (!deps.isStale() && deps.isAttached(key)) deps.onUpdate(key, { progress: percent });
       });
       if (deps.isStale()) return;
+      if (!deps.isAttached(key)) continue;
       deps.onUpdate(key, { status: "uploaded", blob, error: null });
-      deps.onUploaded?.(key, blob);
+      if (deps.onCaption && !captionStarted && deps.isCover(key)) {
+        captionStarted = true;
+        deps.onCaption(key, blob, file);
+      }
     } catch (error: unknown) {
       if (deps.isStale()) return;
+      if (!deps.isAttached(key)) continue;
       const message = error instanceof Error && error.message ? error.message : UPLOAD_FAILED_FALLBACK;
       deps.onUpdate(key, { status: "failed", error: message, blob: null });
     }
   }
+  deps.onDone?.(captionStarted);
+}
+
+/** The question "Remove all" asks once before clearing the set. */
+export function removeAllTitle(count: number): string {
+  return `Remove all ${count} photos?`;
 }
 
 export interface AttachedPhotosProps {
@@ -99,10 +159,14 @@ export interface AttachedPhotosProps {
   onRemove(key: string): void;
   onMove(key: string, direction: -1 | 1): void;
   onRetry(key: string): void;
+  /** Clears the set, after one confirmation. */
+  onRemoveAll(): void;
 }
 
-export function AttachedPhotos({ photos, onRemove, onMove, onRetry }: AttachedPhotosProps) {
+export function AttachedPhotos({ photos, onRemove, onMove, onRetry, onRemoveAll }: AttachedPhotosProps) {
   const progress = photoSetProgress(photos);
+  const preparing = photos.some((photo) => photo.status === "preparing");
+  const [confirmOpen, setConfirmOpen] = useState(false);
   return (
     <div className="mt-2 space-y-2">
       <ol className="flex gap-2 overflow-x-auto pb-1" aria-label="Attached photos">
@@ -119,6 +183,11 @@ export function AttachedPhotos({ photos, onRemove, onMove, onRetry }: AttachedPh
           />
         ))}
       </ol>
+      {preparing && (
+        <p className="text-xs text-muted-foreground" role="status">
+          Preparing photos&hellip;
+        </p>
+      )}
       {progress && (
         <div className="space-y-1">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -139,6 +208,21 @@ export function AttachedPhotos({ photos, onRemove, onMove, onRetry }: AttachedPh
             />
           </div>
         </div>
+      )}
+      {photos.length >= 2 && (
+        <>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmOpen(true)}>
+            Remove all
+          </Button>
+          <ConfirmDialog
+            open={confirmOpen}
+            onOpenChange={setConfirmOpen}
+            title={removeAllTitle(photos.length)}
+            confirmText="Remove all"
+            destructive
+            onConfirm={onRemoveAll}
+          />
+        </>
       )}
     </div>
   );
@@ -184,9 +268,13 @@ function PhotoTile({
             Cover
           </span>
         )}
-        {photo.status === "uploading" || photo.status === "waiting" ? (
+        {photo.status === "uploading" || photo.status === "waiting" || photo.status === "preparing" ? (
           <span className="absolute inset-x-0 bottom-0 bg-black/60 text-center text-[10px] leading-4 text-white">
-            {photo.status === "uploading" ? `${Math.round(photo.progress)}%` : "Waiting"}
+            {photo.status === "uploading"
+              ? `${Math.round(photo.progress)}%`
+              : photo.status === "preparing"
+                ? "Preparing"
+                : "Waiting"}
           </span>
         ) : null}
       </div>

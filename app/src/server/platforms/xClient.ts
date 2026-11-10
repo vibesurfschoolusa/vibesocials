@@ -6,6 +6,7 @@ import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import { assertOk } from "@/lib/assertOk";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
+import { X_MAX_PHOTOS } from "@/lib/postMedia";
 import { truncateGraphemes } from "@/lib/truncate";
 import { removeXMentions } from "@/lib/xMentions";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
@@ -1385,13 +1386,6 @@ async function publishChunked(args: {
 // ---------------------------------------------------------------------------
 // Several photos in one post (07b)
 // ---------------------------------------------------------------------------
-
-/**
- * X allows at most 4 photos on a post ("A Post may include up to 4 photos, 1 animated GIF, or
- * 1 video": https://docs.x.com/x-api/posts/create-post). Photos after the fourth are left out;
- * the Create page tells the user so.
- */
-export const X_MAX_PHOTOS = 4;
 
 /** The photo types a post with several files may hold (the create route guarantees these). */
 const X_MULTI_PHOTO_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);

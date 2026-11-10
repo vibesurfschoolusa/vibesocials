@@ -145,7 +145,11 @@ export function movePhoto<T extends { key: string }>(list: T[], key: string, dir
   return next;
 }
 
-/** X takes at most this many photos in one post; the rest are left out. */
+/**
+ * X allows at most 4 photos on a post ("A Post may include up to 4 photos, 1 animated GIF, or
+ * 1 video": https://docs.x.com/x-api/posts/create-post). Photos after the fourth are left out
+ * (server/platforms/xClient.ts); the Create page tells the user so.
+ */
 export const X_MAX_PHOTOS = 4;
 
 /**

@@ -12,6 +12,7 @@ import {
   AttachedPhotos,
   patchPhoto,
   photoSetReady,
+  preparePhotos,
   uploadPhotosInOrder,
   type AttachedPhoto,
 } from "./composer/attached-photos";
@@ -242,6 +243,17 @@ function CreatePostFormInner({
   // 07c: two or more photos in one post. Empty for a single file, which keeps
   // today's path (uploadFile / ensureUploaded) untouched. The first is the cover.
   const [photoSet, setPhotoSet] = useState<AttachedPhoto[]>([]);
+  // The set as of the last change, for the async queue: it checks that a
+  // photo is still attached (and still the cover) before acting on it. Every
+  // change goes through changePhotoSet so the two never differ.
+  const photoSetRef = useRef<AttachedPhoto[]>([]);
+  const changePhotoSet = (change: (prev: AttachedPhoto[]) => AttachedPhoto[]) => {
+    const next = change(photoSetRef.current);
+    photoSetRef.current = next;
+    setPhotoSet(next);
+  };
+  // Leaving the page stops the photo queue: no further upload starts.
+  const mountedRef = useRef(false);
   // A pick of several photos is being prepared (HEIC -> JPEG, shrinking).
   const [preparingPhotos, setPreparingPhotos] = useState(false);
   const photoKeyRef = useRef(0);
@@ -399,6 +411,13 @@ function CreatePostFormInner({
     setPreviewUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
   }, [previewFile]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // Clear the inline TikTok privacy validation once a level is chosen.
   useEffect(() => {
@@ -578,7 +597,7 @@ function CreatePostFormInner({
   async function attachPickedFile(pickedFile: File | null) {
     const selection = ++fileSelectionRef.current;
     // A new pick (or none) replaces any attached photos too.
-    setPhotoSet((prev) => (prev.length === 0 ? prev : []));
+    changePhotoSet((prev) => (prev.length === 0 ? prev : []));
     setUploadFile(null);
     setVideoDurationSec(null);
     setUploadedBlob(null);
@@ -672,40 +691,50 @@ function CreatePostFormInner({
     }
   }
 
-  // Queue photos for upload behind any already uploading. `captionKey` is the
-  // first photo of a fresh pick: the AI caption is written from it, once.
+  const isPhotoAttached = (key: string) => photoSetRef.current.some((photo) => photo.key === key);
+  const isCoverPhoto = (key: string) => photoSetRef.current[0]?.key === key;
+
+  // Queue photos for upload behind any already uploading. With `wantCaption`
+  // (a fresh pick), the AI caption is written once, from the first of them to
+  // finish while it is the cover, and dropped if it stops being the cover.
   function queuePhotoUploads(
     entries: { key: string; file: File }[],
     isStale: () => boolean,
-    captionKey: string | null,
+    wantCaption: boolean,
   ) {
-    const writeCaption = captionKey !== null && autoCaptionEnabled;
+    const writeCaption = wantCaption && autoCaptionEnabled;
     photoQueueRef.current = photoQueueRef.current.then(() =>
       uploadPhotosInOrder(entries, {
         upload: uploadPhoto,
         isStale,
-        onUpdate: (key, patch) => {
-          setPhotoSet((prev) => patchPhoto(prev, key, patch));
-          if (key === captionKey && patch.status === "failed") setAutoCaptionLoading(false);
-        },
-        onUploaded: (key, blob) => {
-          if (key !== captionKey) return;
-          if (!writeCaption) {
-            setAutoCaptionLoading(false);
-            return;
-          }
-          const file = entries.find((entry) => entry.key === key)?.file ?? null;
-          void runAutoCaptionFromMedia({ overwrite: false, blobOverride: blob, fileOverride: file, isStale });
+        isAttached: isPhotoAttached,
+        isCover: isCoverPhoto,
+        onUpdate: (key, patch) => changePhotoSet((prev) => patchPhoto(prev, key, patch)),
+        onCaption: writeCaption
+          ? (key, blob, file) => {
+              void runAutoCaptionFromMedia({
+                overwrite: false,
+                blobOverride: blob,
+                fileOverride: file,
+                isStale: () => isStale() || !isCoverPhoto(key),
+              }).finally(() => {
+                if (!isStale()) setAutoCaptionLoading(false);
+              });
+            }
+          : undefined,
+        onDone: (captionStarted) => {
+          if (writeCaption && !captionStarted) setAutoCaptionLoading(false);
         },
       }),
     );
   }
 
-  // 07c: several photos picked at once (`replace`: in the main input, which
-  // replaces what is attached) or added with "Add photos". A pick that breaks
-  // a rule attaches nothing and says why (lib/postMedia.ts).
+  // 07c: several photos picked at once in the main input (`replace`: it
+  // replaces what is attached; only shown with fewer than two photos) or
+  // added with "Add photos". A pick that breaks a rule attaches nothing and
+  // says why (lib/postMedia.ts).
   async function attachPickedPhotos(picked: File[], replace: boolean) {
-    const attachedCount = replace ? 0 : Math.max(photoSet.length, 1);
+    const attachedCount = replace ? 0 : Math.max(photoSetRef.current.length, 1);
     // An iPhone photo counts as the JPEG it becomes; checked again after.
     const problem = photoPickProblem(
       attachedCount,
@@ -722,41 +751,52 @@ function CreatePostFormInner({
       setUploadProgress(null);
     }
     const selection = fileSelectionRef.current;
-    const isStale = () => selection !== fileSelectionRef.current;
-    // Adding to a single attached photo: it becomes the first of the set.
-    const single =
-      !replace && photoSet.length === 0 && uploadFile && uploadedBlob
-        ? { file: uploadFile, blob: uploadedBlob }
-        : null;
+    const isStale = () => selection !== fileSelectionRef.current || !mountedRef.current;
+    const nextKey = () => `photo-${++photoKeyRef.current}`;
+    // Adding to a single attached photo: it moves into the set, first.
+    const first: AttachedPhoto[] =
+      !replace && photoSetRef.current.length === 0 && uploadFile && uploadedBlob
+        ? [{ key: nextKey(), file: uploadFile, status: "uploaded", progress: 0, blob: uploadedBlob, error: null }]
+        : [];
+    if (first.length > 0) {
+      setUploadFile(null);
+      setUploadedBlob(null);
+    }
+    // Shown at once, marked "Preparing", while HEIC photos convert.
+    const placeholders: AttachedPhoto[] = picked.map((file) => ({
+      key: nextKey(),
+      file,
+      status: "preparing",
+      progress: 0,
+      blob: null,
+      error: null,
+    }));
+    const pickKeys = new Set(placeholders.map((photo) => photo.key));
+    changePhotoSet((prev) => addPhotos(prev.length > 0 ? prev : first, placeholders));
     setUploadError(null);
     setShowSuccess(false);
     setPreparingPhotos(true);
-    if (replace) setAutoCaptionLoading(true);
+    if (replace && autoCaptionEnabled) setAutoCaptionLoading(true);
 
     try {
-      const prepared: File[] = [];
-      for (const file of picked) prepared.push(await prepareUploadFile(file));
-      if (isStale()) return;
+      const prepared = await preparePhotos(placeholders, {
+        prepare: (file) => prepareUploadFile(file),
+        isStale,
+        isAttached: isPhotoAttached,
+      });
+      if (!prepared) return;
 
-      const typeProblem = photoPickProblem(attachedCount, prepared);
+      const typeProblem = photoPickProblem(attachedCount, prepared.map((entry) => entry.file));
       if (typeProblem) throw new Error(typeProblem);
 
-      const nextKey = () => `photo-${++photoKeyRef.current}`;
-      const entries: AttachedPhoto[] = prepared.map((file) => ({
-        key: nextKey(),
-        file,
-        status: "waiting",
-        progress: 0,
-        blob: null,
-        error: null,
-      }));
-      const first: AttachedPhoto[] = single
-        ? [{ key: nextKey(), file: single.file, status: "uploaded", progress: 0, blob: single.blob, error: null }]
-        : [];
-      setPhotoSet((prev) => addPhotos(prev.length > 0 ? prev : first, entries));
-      queuePhotoUploads(entries, isStale, replace ? entries[0].key : null);
+      for (const { key, file } of prepared) {
+        changePhotoSet((prev) => patchPhoto(prev, key, { file, status: "waiting" }));
+      }
+      queuePhotoUploads(prepared, isStale, replace);
     } catch (err: unknown) {
       if (isStale()) return;
+      // Attach nothing from this pick.
+      changePhotoSet((prev) => prev.filter((photo) => !pickKeys.has(photo.key)));
       setUploadError((err as Error).message || "Failed to prepare media for posting. Please try again.");
       if (replace) {
         setFileInputKey((key) => key + 1);
@@ -767,22 +807,31 @@ function CreatePostFormInner({
     }
   }
 
+  // Back to an empty picker: the last photo removed, or "Remove all".
+  function clearAttachedPhotos() {
+    void attachPickedFile(null);
+    setFileInputKey((k) => k + 1);
+  }
+
   function removeAttachedPhoto(key: string) {
-    if (photoSet.length === 1 && photoSet[0].key === key) {
-      // The last one: back to an empty picker.
-      void attachPickedFile(null);
-      setFileInputKey((k) => k + 1);
+    const current = photoSetRef.current;
+    if (current.length === 1 && current[0].key === key) {
+      clearAttachedPhotos();
       return;
     }
-    setPhotoSet((prev) => removePhoto(prev, key));
+    changePhotoSet((prev) => removePhoto(prev, key));
   }
 
   function retryAttachedPhoto(key: string) {
-    const photo = photoSet.find((p) => p.key === key);
-    if (!photo) return;
+    const photo = photoSetRef.current.find((p) => p.key === key);
+    if (!photo || photo.status !== "failed") return;
     const selection = fileSelectionRef.current;
-    setPhotoSet((prev) => patchPhoto(prev, key, { status: "waiting", error: null }));
-    queuePhotoUploads([{ key, file: photo.file }], () => selection !== fileSelectionRef.current, null);
+    changePhotoSet((prev) => patchPhoto(prev, key, { status: "waiting", error: null }));
+    queuePhotoUploads(
+      [{ key, file: photo.file }],
+      () => selection !== fileSelectionRef.current || !mountedRef.current,
+      false,
+    );
   }
 
   // What to render while connections load, resolve, or fail — pure rule in
@@ -960,7 +1009,7 @@ function CreatePostFormInner({
       // `reuseItem` returns the composer to the normal file-upload UI.
       setUploadFile(null);
       setUploadedBlob(null);
-      setPhotoSet([]);
+      changePhotoSet(() => []);
       activeUploadRef.current = null;
       // Clear the finished upload's bar and remount the file input, so the old
       // filename is gone and choosing the same file again fires a change event.
@@ -1291,28 +1340,39 @@ function CreatePostFormInner({
             </div>
           ) : (
             <>
-              <Label htmlFor="post-media">Media file (image or video)</Label>
-              <Input
-                key={fileInputKey}
-                id="post-media"
-                type="file"
-                accept="video/*,image/*"
-                multiple
-                onChange={(event) => {
-                  // One file (or none) takes today's path unchanged.
-                  const files = Array.from(event.target.files ?? []);
-                  if (files.length > 1) void attachPickedPhotos(files, true);
-                  else void attachPickedFile(files[0] ?? null);
-                }}
-                className="cursor-pointer"
-              />
+              {/* 07c: with two or more photos the main input is hidden, so a
+                  pick there can't silently replace the set; "Add photos" and
+                  "Remove all" take its place. */}
+              {photoSet.length < 2 ? (
+                <>
+                  <Label htmlFor="post-media">Media file (image or video)</Label>
+                  <Input
+                    key={fileInputKey}
+                    id="post-media"
+                    type="file"
+                    accept="video/*,image/*"
+                    multiple
+                    disabled={preparingPhotos}
+                    onChange={(event) => {
+                      // One file (or none) takes today's path unchanged.
+                      const files = Array.from(event.target.files ?? []);
+                      if (files.length > 1) void attachPickedPhotos(files, true);
+                      else void attachPickedFile(files[0] ?? null);
+                    }}
+                    className="cursor-pointer"
+                  />
+                </>
+              ) : (
+                <p className="text-sm font-medium text-foreground">Photos</p>
+              )}
 
               {photoSet.length > 0 && (
                 <AttachedPhotos
                   photos={photoSet}
                   onRemove={removeAttachedPhoto}
-                  onMove={(key, direction) => setPhotoSet((prev) => movePhoto(prev, key, direction))}
+                  onMove={(key, direction) => changePhotoSet((prev) => movePhoto(prev, key, direction))}
                   onRetry={retryAttachedPhoto}
+                  onRemoveAll={clearAttachedPhotos}
                 />
               )}
 
