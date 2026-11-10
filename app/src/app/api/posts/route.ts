@@ -23,6 +23,7 @@ import {
 } from "@/server/jobs/posting";
 import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
+import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 import { prisma } from "@/lib/db";
 import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -636,6 +637,19 @@ export async function POST(request: Request) {
     intent,
   });
   const effectiveIntent: PostJobIntent = heldForApproval ? "draft" : intent;
+
+  // Usage limits (2026-11-10): a post committed to a day counts toward that UTC
+  // day's limit. A draft (including one held for approval) is not committed yet.
+  if (effectiveIntent !== "draft") {
+    const refusal = await checkDailyPostLimit({
+      workspaceId: context.workspace.id,
+      day: scheduledForDate ?? new Date(),
+      mode: effectiveIntent === "scheduled" ? "schedule" : "now",
+    });
+    if (refusal) {
+      return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });
+    }
+  }
 
   // Publishing needs no verified email (2026-11-09): only the person's own
   // platform accounts, connected through each platform's sign-in, receive it.

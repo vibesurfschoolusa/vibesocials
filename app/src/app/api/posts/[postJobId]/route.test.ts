@@ -15,6 +15,7 @@ const {
   deleteManyMock,
   postJobResultFindManyMock,
   notifyOwnersMock,
+  checkDailyPostLimitMock,
 } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
   findFirstMock: vi.fn(),
@@ -22,6 +23,7 @@ const {
   deleteManyMock: vi.fn(),
   postJobResultFindManyMock: vi.fn(),
   notifyOwnersMock: vi.fn(),
+  checkDailyPostLimitMock: vi.fn(),
 }));
 
 // Team Workspaces (Task 4): getCurrentUser -> getWorkspaceContext.
@@ -38,6 +40,10 @@ vi.mock("@/lib/db", () => ({
 }));
 vi.mock("@/server/notifications/approvalRequested", () => ({
   notifyOwnersOfApprovalRequest: notifyOwnersMock,
+}));
+// Usage limits (2026-11-10): the count has its own suite (workspaceUsage.test.ts).
+vi.mock("@/server/usage/workspaceUsage", () => ({
+  checkDailyPostLimit: checkDailyPostLimitMock,
 }));
 
 import { PATCH, DELETE, GET } from "./route";
@@ -109,6 +115,8 @@ beforeEach(() => {
   deleteManyMock.mockReset();
   postJobResultFindManyMock.mockReset();
   notifyOwnersMock.mockReset();
+  checkDailyPostLimitMock.mockReset();
+  checkDailyPostLimitMock.mockResolvedValue(null);
   getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
   notifyOwnersMock.mockResolvedValue(undefined);
   updateManyMock.mockResolvedValue({ count: 1 });
@@ -300,6 +308,8 @@ describe("PATCH /api/posts/[postJobId]", () => {
       where: { id: "foreign-job", workspaceId: "ws-1" },
       select: {
         status: true,
+        // Usage limits: whether a reschedule moves the post to another UTC day.
+        scheduledFor: true,
         submittedForApprovalAt: true,
         approvedAt: true,
         baseCaption: true,
@@ -629,5 +639,75 @@ describe("PATCH /api/posts/[postJobId] — caption length cap and override keys 
     expect(updateManyMock).toHaveBeenCalledWith(
       expect.objectContaining({ data: { perPlatformOverrides: Prisma.DbNull } }),
     );
+  });
+});
+
+describe("PATCH /api/posts/[postJobId] — daily post limit (usage limits)", () => {
+  const SCHEDULE_SENTENCE =
+    "That day already has 20 posts, which is this workspace's daily limit. Pick another day.";
+  // Two times on the same UTC day, and one on another, all in the future.
+  const base = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+  const DAY_START = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate()));
+  const SAME_DAY_A = new Date(DAY_START.getTime() + 2 * 60 * 60 * 1000);
+  const SAME_DAY_B = new Date(DAY_START.getTime() + 20 * 60 * 60 * 1000);
+  const OTHER_DAY = new Date(DAY_START.getTime() + 26 * 60 * 60 * 1000);
+
+  it("moving a scheduled post to another UTC day checks that day, leaving the post itself out", async () => {
+    findFirstMock.mockResolvedValue({ status: "scheduled", scheduledFor: SAME_DAY_A });
+
+    const res = await PATCH(req({ scheduledFor: OTHER_DAY.toISOString() }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    expect(checkDailyPostLimitMock).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      day: OTHER_DAY,
+      mode: "schedule",
+      excludePostJobId: "job-1",
+    });
+  });
+
+  it("moving into a full day answers 429 with the sentence and code, and writes nothing", async () => {
+    findFirstMock.mockResolvedValue({ status: "scheduled", scheduledFor: SAME_DAY_A });
+    checkDailyPostLimitMock.mockResolvedValue({ error: SCHEDULE_SENTENCE, code: "WORKSPACE_DAILY_POST_LIMIT" });
+
+    const res = await PATCH(req({ scheduledFor: OTHER_DAY.toISOString() }), ctx("job-1"));
+
+    expect(res.status).toBe(429);
+    await expect(res.json()).resolves.toEqual({ error: SCHEDULE_SENTENCE, code: "WORKSPACE_DAILY_POST_LIMIT" });
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not check a new time on the same UTC day", async () => {
+    findFirstMock.mockResolvedValue({ status: "scheduled", scheduledFor: SAME_DAY_A });
+
+    const res = await PATCH(req({ scheduledFor: SAME_DAY_B.toISOString() }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    expect(checkDailyPostLimitMock).not.toHaveBeenCalled();
+  });
+
+  it("does not check an edit that leaves the time alone", async () => {
+    findFirstMock.mockResolvedValue({ status: "scheduled", scheduledFor: SAME_DAY_A });
+
+    const res = await PATCH(req({ baseCaption: "new text" }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    expect(checkDailyPostLimitMock).not.toHaveBeenCalled();
+  });
+
+  it("does not check a member's edit that sends the post back for approval (it becomes a draft)", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: true }));
+    findFirstMock.mockResolvedValue({
+      status: "scheduled",
+      scheduledFor: SAME_DAY_A,
+      submittedForApprovalAt: new Date("2026-11-01T09:00:00Z"),
+      approvedAt: new Date("2026-11-01T10:00:00Z"),
+      baseCaption: "hi",
+    });
+
+    const res = await PATCH(req({ scheduledFor: OTHER_DAY.toISOString() }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    expect(checkDailyPostLimitMock).not.toHaveBeenCalled();
   });
 });

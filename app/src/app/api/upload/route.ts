@@ -1,18 +1,36 @@
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { NextResponse } from "next/server";
 
-import { getCurrentUser } from "@/lib/auth";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { UPLOAD_ALLOWED_CONTENT_TYPES } from "@/lib/mediaInput";
 import { checkRateLimit } from "@/lib/rateLimit";
+import { getWorkspaceContext } from "@/lib/workspace";
+import { checkStorageLimit } from "@/server/usage/workspaceUsage";
 
-export async function POST(request: Request): Promise<NextResponse> {
-  const user = await getCurrentUser();
-
-  if (!user) {
+/**
+ * GET /api/upload — why the active workspace cannot upload, if it cannot.
+ * `upload()` from @vercel/blob/client drops the body of a refused token request
+ * and throws a generic error, so Create and the Media page ask here to show the
+ * storage sentence instead (lib/uploadFailure.ts).
+ */
+export async function GET(): Promise<NextResponse> {
+  const context = await getWorkspaceContext();
+  if (!context) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  const refusal = await checkStorageLimit(context.workspace.id);
+  return NextResponse.json(refusal ? { storageFull: true, ...refusal } : { storageFull: false });
+}
+
+export async function POST(request: Request): Promise<NextResponse> {
+  // Usage limits (2026-11-10): the active workspace, whose storage the upload uses.
+  const context = await getWorkspaceContext();
+
+  if (!context) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const { user } = context;
 
   // Cap client upload-token issuance (each call can authorize up to 512MB).
   const rateLimit = await checkRateLimit({
@@ -41,6 +59,16 @@ export async function POST(request: Request): Promise<NextResponse> {
   const body = await readJsonObject(request);
   if (!body) {
     return invalidJsonBodyResponse();
+  }
+
+  // Usage limits (2026-11-10): no new token once the workspace's media is at or
+  // over its storage limit. Checked before the file exists, so one upload can
+  // take it over the limit; that is accepted.
+  if (body.type === "blob.generate-client-token") {
+    const refusal = await checkStorageLimit(context.workspace.id);
+    if (refusal) {
+      return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 403 });
+    }
   }
 
   try {

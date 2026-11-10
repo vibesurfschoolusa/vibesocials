@@ -41,6 +41,8 @@ const {
   exhaustBudgetMock,
   deliverNotificationMock,
   healResultWorkspaceIdsMock,
+  checkXLimitMock,
+  checkYoutubeLimitMock,
 } = vi.hoisted(() => ({
   getPlatformClientMock: vi.fn(),
   failPendingMock: vi.fn(),
@@ -55,6 +57,8 @@ const {
   exhaustBudgetMock: vi.fn(),
   deliverNotificationMock: vi.fn(),
   healResultWorkspaceIdsMock: vi.fn(),
+  checkXLimitMock: vi.fn(),
+  checkYoutubeLimitMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -85,6 +89,12 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 vi.mock("@/server/platforms", () => ({ getPlatformClient: getPlatformClientMock }));
+// Usage limits (2026-11-10): the counts and the owners' email have their own
+// suite (workspaceUsage.test.ts); here only where the platform step checks.
+vi.mock("@/server/usage/workspaceUsage", () => ({
+  checkXMonthlyLimit: checkXLimitMock,
+  checkYoutubeDailyLimit: checkYoutubeLimitMock,
+}));
 // The YouTube upload budget is a database counter (its own suite covers it).
 vi.mock("@/server/platforms/youtubeQuota", () => ({
   consumeYouTubeUploadSlot: consumeSlotMock,
@@ -231,6 +241,11 @@ beforeEach(() => {
   // The YouTube upload budget is open unless a test closes it.
   consumeSlotMock.mockResolvedValue({ allowed: true });
   exhaustBudgetMock.mockResolvedValue(undefined);
+  // The workspace's own limits are open unless a test reaches them.
+  checkXLimitMock.mockReset();
+  checkYoutubeLimitMock.mockReset();
+  checkXLimitMock.mockResolvedValue(null);
+  checkYoutubeLimitMock.mockResolvedValue(null);
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -4059,5 +4074,104 @@ describe("sendNotification - throttle, retries and idempotent delivery", () => {
     await expect(handlerOf(sendNotification)({ event, step: fakeStep() })).rejects.toBeInstanceOf(
       EmailRetryableError,
     );
+  });
+});
+
+describe("usage limits - the workspace's X and YouTube limits in the platform step", () => {
+  const publishEvent = {
+    name: "post/publish.requested",
+    data: { postJobId: "job-1", userId: "user-1", mediaItemId: "media-1", baseCaption: "c", perPlatformOverrides: null },
+  };
+  const X_REFUSAL = {
+    errorCode: "X_MONTHLY_LIMIT",
+    errorMessage: "This workspace has used its 30 X posts for November. X posts start again on 1 December.",
+  };
+  const YOUTUBE_REFUSAL = {
+    errorCode: "YOUTUBE_WORKSPACE_DAILY_LIMIT",
+    errorMessage:
+      "This workspace has reached its limit of 10 YouTube uploads for today. Retry this upload tomorrow.",
+  };
+
+  type RunOut = { status: string; results: Array<{ platform: Platform; status: string; error?: string }> };
+
+  function publishRun(platforms: Platform[], step = fakeStep()) {
+    db.postJobFindUnique.mockResolvedValue({ id: "job-1", workspaceId: WORKSPACE.id });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null });
+    db.connectionFindMany.mockResolvedValue(platforms.map((p) => ({ id: `conn-${p}`, platform: p })));
+    stubResults(platforms);
+    return handlerOf(publishToAllPlatforms)({ event: publishEvent, step }) as Promise<RunOut>;
+  }
+
+  /** The `data` of each result write, by result id. */
+  function writesFor(resultId: string): Array<Record<string, unknown>> {
+    return db.resultUpdate.mock.calls
+      .map((c) => c[0] as { where: { id: string }; data: Record<string, unknown> })
+      .filter((c) => c.where.id === resultId)
+      .map((c) => c.data);
+  }
+
+  it("under the limits nothing changes: both platforms publish", async () => {
+    const out = await publishRun(["x", "youtube"]);
+
+    expect(checkXLimitMock).toHaveBeenCalledWith(WORKSPACE.id);
+    expect(checkYoutubeLimitMock).toHaveBeenCalledWith(WORKSPACE.id);
+    expect(publishCtxs.map((c) => c.socialConnection.platform).sort()).toEqual(["x", "youtube"]);
+    expect(consumeSlotMock).toHaveBeenCalledTimes(1);
+    expect(out.results).toEqual([
+      { platform: "x", status: "success" },
+      { platform: "youtube", status: "success" },
+    ]);
+  });
+
+  it("at the X limit the X result fails with X_MONTHLY_LIMIT, the X client is never called, and another platform still publishes", async () => {
+    checkXLimitMock.mockResolvedValue(X_REFUSAL);
+
+    const out = await publishRun(["x", "instagram"]);
+
+    expect(publishCtxs.map((c) => c.socialConnection.platform)).toEqual(["instagram"]);
+    expect(writesFor("result-x")).toEqual([
+      { status: "failed", ...X_REFUSAL, ...CLEARS_STATE, ...HEARTBEAT },
+    ]);
+    expect(writesFor("result-instagram")).toEqual([
+      expect.objectContaining({ status: "success", externalPostId: "ext-instagram" }),
+    ]);
+    expect(out.results).toEqual([
+      { platform: "x", status: "failed", error: X_REFUSAL.errorMessage },
+      { platform: "instagram", status: "success" },
+    ]);
+    // The X check is X's only: it never runs for another platform.
+    expect(checkXLimitMock).toHaveBeenCalledTimes(1);
+    expect(releaseSpy).not.toHaveBeenCalled();
+  });
+
+  it("at the YouTube limit the YouTube result fails with YOUTUBE_WORKSPACE_DAILY_LIMIT, spends no app-wide slot, and another platform still publishes", async () => {
+    checkYoutubeLimitMock.mockResolvedValue(YOUTUBE_REFUSAL);
+
+    const out = await publishRun(["x", "youtube"]);
+
+    expect(consumeSlotMock).not.toHaveBeenCalled();
+    expect(publishCtxs.map((c) => c.socialConnection.platform)).toEqual(["x"]);
+    expect(writesFor("result-youtube")).toEqual([
+      { status: "failed", ...YOUTUBE_REFUSAL, ...CLEARS_STATE, ...HEARTBEAT },
+    ]);
+    expect(out.results).toEqual([
+      { platform: "x", status: "success" },
+      { platform: "youtube", status: "failed", error: YOUTUBE_REFUSAL.errorMessage },
+    ]);
+    // Not a deferral: nothing waits for a reset.
+    expect(releaseSpy).not.toHaveBeenCalled();
+  });
+
+  it("the YouTube check runs only where a slot would be spent: not for a saved upload session of this run", async () => {
+    uploadStateMocks.createStore.mockImplementation(() => ({
+      load: vi.fn().mockResolvedValue({ secret: { sessionUri: "sealed" }, data: {} }),
+      save: vi.fn(),
+      clear: vi.fn(),
+    }));
+
+    await publishRun(["youtube"]);
+
+    expect(checkYoutubeLimitMock).not.toHaveBeenCalled();
+    expect(consumeSlotMock).not.toHaveBeenCalled();
   });
 });

@@ -119,6 +119,12 @@ model Workspace {
   // publish or schedule is held as a `draft` + `submittedForApprovalAt` until
   // an owner approves it. Owners' own posts are never held (they approve).
   requireApproval Boolean  @default(false)
+  // Usage limits (2026-11-10). Null = use LIMIT_* from the environment, else the
+  // built-in default (src/lib/usageLimits.ts). Zero blocks everything.
+  limitPostsPerDay          Int?
+  limitXPostsPerMonth       Int?
+  limitYoutubeUploadsPerDay Int?
+  limitStorageMb            Int?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

@@ -33,6 +33,7 @@ import { useToast } from "@/components/ui/toast";
 import { generateBlobKey } from "@/lib/blobKey";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { isHeicFile, prepareUploadFile } from "@/lib/prepareUploadFile";
+import { explainUploadFailure } from "@/lib/uploadFailure";
 import {
   appendMediaPage,
   buildMediaCreateBody,
@@ -325,10 +326,14 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
       // iPhone HEIC -> JPEG, big photos shrunk, unsupported types refused with
       // a clear message, all before the upload (lib/prepareUploadFile.ts).
       const prepared = await prepareUploadFile(file);
+      // A full workspace storage reaches the user as its own sentence, not as
+      // the blob client's generic token failure (lib/uploadFailure.ts).
       const blob = await upload(generateBlobKey(prepared), prepared, {
         access: "public",
         handleUploadUrl: "/api/upload",
         onUploadProgress: (progressEvent) => setUploadProgress(progressEvent.percentage),
+      }).catch(async (uploadError: unknown) => {
+        throw await explainUploadFailure(uploadError);
       });
 
       const response = await fetch("/api/media", {

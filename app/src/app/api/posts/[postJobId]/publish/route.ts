@@ -19,6 +19,7 @@ import {
   resolvePlatformCaptions,
 } from "@/server/jobs/posting";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
+import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 import { MUTABLE_POST_JOB_STATUSES, validateScheduledFor } from "@/lib/scheduling";
 
 interface PostJobRouteContext {
@@ -215,6 +216,17 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
     }
 
+    // Usage limits (2026-11-10): the draft is committed to this UTC day.
+    const refusal = await checkDailyPostLimit({
+      workspaceId: workspaceContext.workspace.id,
+      day: validation.date,
+      mode: "schedule",
+      excludePostJobId: postJobId,
+    });
+    if (refusal) {
+      return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });
+    }
+
     // Pinned to the version read (status AND updatedAt): what this writes
     // depends on that version's approval columns, so a member submitting the
     // draft in between must make it miss (409) — not leave it scheduled
@@ -267,6 +279,18 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       },
       { status: 400 },
     );
+  }
+
+  // Usage limits (2026-11-10): the post goes out today. A scheduled post must
+  // not count against itself if it was already on today.
+  const refusal = await checkDailyPostLimit({
+    workspaceId: workspaceContext.workspace.id,
+    day: new Date(),
+    mode: "now",
+    excludePostJobId: postJobId,
+  });
+  if (refusal) {
+    return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });
   }
 
   // Atomic claim {draft|scheduled} → in_progress. Only one caller wins — this

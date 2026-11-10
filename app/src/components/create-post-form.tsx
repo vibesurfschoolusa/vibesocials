@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useRef, useCallback, Suspense } from "rea
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { upload } from '@vercel/blob/client';
+import { explainUploadFailure, UploadRefusedError } from "@/lib/uploadFailure";
 import { PlugZap, Sparkles } from "lucide-react";
 import type { Platform } from "@prisma/client";
 import { PlatformPreviewList } from "./composer/platform-preview";
@@ -420,13 +421,15 @@ function CreatePostFormInner({
 
         return blobInfo;
       },
-      (err: unknown) => {
+      async (err: unknown) => {
         settled = true;
         if (activeUploadRef.current?.file === file) {
           activeUploadRef.current = null;
           setUploadProgress(null);
         }
-        throw err;
+        // A full workspace storage reaches the user as its own sentence, not
+        // as the blob client's generic token failure (lib/uploadFailure.ts).
+        throw await explainUploadFailure(err);
       },
     );
 
@@ -658,8 +661,11 @@ function CreatePostFormInner({
       setTiktokCommercialEnabled(false);
       setYoutubeMetadata({ privacyStatus: "unlisted" });
       setUploadLoading(false);
-    } catch {
-      toast.error("Unexpected error while creating post.");
+    } catch (err: unknown) {
+      // An upload refused for full storage says so; anything else stays generic.
+      toast.error(
+        err instanceof UploadRefusedError ? err.message : "Unexpected error while creating post.",
+      );
       setUploadLoading(false);
     }
   }

@@ -19,6 +19,7 @@ import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failP
 import { buildPublishEvent, prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
 import { sendEmail } from "@/server/notifications/email";
 import { buildApprovalDecisionEmail } from "@/server/notifications/approvalEmail";
+import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -180,6 +181,20 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     now,
     bufferMs: SCHEDULE_BUFFER_MS,
   });
+
+  // Usage limits (2026-11-10): approving commits the post to a UTC day, its kept
+  // slot or today. At the limit nothing is decided, so the owner can retry later.
+  if (outcome !== null) {
+    const refusal = await checkDailyPostLimit({
+      workspaceId: workspaceContext.workspace.id,
+      day: outcome === "schedule" && job.scheduledFor ? job.scheduledFor : now,
+      mode: outcome === "schedule" ? "schedule" : "now",
+      excludePostJobId: postJobId,
+    });
+    if (refusal) {
+      return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });
+    }
+  }
 
   // Atomic claim: only a still-undecided submission (draft, or a scheduled row
   // left submitted-but-unapproved — ruling R10 backstop) at the version just

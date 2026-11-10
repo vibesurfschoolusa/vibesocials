@@ -105,3 +105,17 @@ describe("composerSubmitOutcome — workspace changed in another tab (M3)", () =
     ).toEqual({ kind: "error", resetForm: false, toast: "Nope" });
   });
 });
+
+describe("composerSubmitOutcome — daily post limit (usage limits)", () => {
+  it("shows the server's limit sentence and keeps the form", () => {
+    const sentence =
+      "This workspace has reached its limit of 20 posts for today. Schedule this post for another day, or try again tomorrow.";
+    expect(
+      composerSubmitOutcome({
+        ok: false,
+        body: { error: sentence, code: "WORKSPACE_DAILY_POST_LIMIT" },
+        mode: "now",
+      }),
+    ).toEqual({ kind: "error", resetForm: false, toast: sentence });
+  });
+});

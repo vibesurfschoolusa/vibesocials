@@ -17,6 +17,7 @@ const {
   prepareDispatchMock,
   sendEmailMock,
   failPendingMock,
+  checkDailyPostLimitMock,
 } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
@@ -27,6 +28,7 @@ const {
   prepareDispatchMock: vi.fn(),
   sendEmailMock: vi.fn(),
   failPendingMock: vi.fn(),
+  checkDailyPostLimitMock: vi.fn(),
 }));
 
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
@@ -47,6 +49,10 @@ vi.mock("@/server/jobs/posting", async () => {
   return { ...actual, prepareDeferredPostJobDispatch: prepareDispatchMock };
 });
 vi.mock("@/server/notifications/email", () => ({ sendEmail: sendEmailMock }));
+// Usage limits (2026-11-10): the count has its own suite (workspaceUsage.test.ts).
+vi.mock("@/server/usage/workspaceUsage", () => ({
+  checkDailyPostLimit: checkDailyPostLimitMock,
+}));
 // Keep the REAL DISPATCH_FAILURE constant; only the DB-touching helper is mocked.
 vi.mock("@/server/jobs/failPendingResults", async () => {
   const actual = await vi.importActual<typeof import("@/server/jobs/failPendingResults")>(
@@ -115,6 +121,8 @@ beforeEach(() => {
   prepareDispatchMock.mockReset();
   sendEmailMock.mockReset();
   failPendingMock.mockReset();
+  checkDailyPostLimitMock.mockReset();
+  checkDailyPostLimitMock.mockResolvedValue(null);
   // Verification is only enforced when email can actually be delivered.
   delete process.env.RESEND_API_KEY;
 
@@ -558,5 +566,70 @@ describe("POST /api/posts/[postJobId]/approval — dispatch failure (2026-11-01 
     // The member isn't told "publishing now" about a publish that never started.
     expect(sendEmailMock).not.toHaveBeenCalled();
     consoleSpy.mockRestore();
+  });
+});
+
+describe("POST /api/posts/[postJobId]/approval — daily post limit (usage limits)", () => {
+  const NOW_SENTENCE =
+    "This workspace has reached its limit of 20 posts for today. Schedule this post for another day, or try again tomorrow.";
+  const SCHEDULE_SENTENCE =
+    "That day already has 20 posts, which is this workspace's daily limit. Pick another day.";
+
+  it("approving into a still-future slot checks that day", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    expect(checkDailyPostLimitMock).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      day: FUTURE,
+      mode: "schedule",
+      excludePostJobId: "job-1",
+    });
+  });
+
+  it("approving into a full day answers 429 with the sentence and code, and decides nothing", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+    checkDailyPostLimitMock.mockResolvedValue({ error: SCHEDULE_SENTENCE, code: "WORKSPACE_DAILY_POST_LIMIT" });
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(429);
+    await expect(res.json()).resolves.toEqual({ error: SCHEDULE_SENTENCE, code: "WORKSPACE_DAILY_POST_LIMIT" });
+    expect(updateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("approving to publish now checks today", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: PAST }));
+    const before = Date.now();
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    const args = checkDailyPostLimitMock.mock.calls[0][0];
+    expect(args).toMatchObject({ workspaceId: "ws-1", mode: "now", excludePostJobId: "job-1" });
+    expect(args.day.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it("approving to publish now at the limit answers 429 and dispatches nothing", async () => {
+    findFirstMock.mockResolvedValue(pendingJob());
+    checkDailyPostLimitMock.mockResolvedValue({ error: NOW_SENTENCE, code: "WORKSPACE_DAILY_POST_LIMIT" });
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(429);
+    await expect(res.json()).resolves.toEqual({ error: NOW_SENTENCE, code: "WORKSPACE_DAILY_POST_LIMIT" });
+    expect(updateManyMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("rejecting is never checked", async () => {
+    findFirstMock.mockResolvedValue(pendingJob());
+
+    const res = await POST(req({ decision: "reject" }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    expect(checkDailyPostLimitMock).not.toHaveBeenCalled();
   });
 });

@@ -19,6 +19,7 @@ const {
   inngestSendMock,
   notifyOwnersMock,
   failPendingMock,
+  checkDailyPostLimitMock,
 } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
@@ -30,6 +31,7 @@ const {
   inngestSendMock: vi.fn(),
   notifyOwnersMock: vi.fn(),
   failPendingMock: vi.fn(),
+  checkDailyPostLimitMock: vi.fn(),
 }));
 
 // Team Workspaces (Task 4) — route.ts now resolves the caller via
@@ -67,6 +69,12 @@ vi.mock("@/server/jobs/posting", async () => {
     createPostJobForExistingMedia: createPostJobForExistingMediaMock,
   };
 });
+
+// Usage limits (2026-11-10): the count and the email have their own suite
+// (workspaceUsage.test.ts); here only where the route checks, and what it answers.
+vi.mock("@/server/usage/workspaceUsage", () => ({
+  checkDailyPostLimit: checkDailyPostLimitMock,
+}));
 
 vi.mock("@/server/notifications/approvalRequested", () => ({
   notifyOwnersOfApprovalRequest: notifyOwnersMock,
@@ -142,6 +150,8 @@ beforeEach(() => {
   notifyOwnersMock.mockResolvedValue(undefined);
   failPendingMock.mockReset();
   failPendingMock.mockResolvedValue({ failedCount: 1, status: "failed" });
+  checkDailyPostLimitMock.mockReset();
+  checkDailyPostLimitMock.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -1720,5 +1730,78 @@ describe("POST /api/posts — an unverified email may publish", () => {
 
     expect(response.status).toBe(200);
     expect(inngestSendMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("POST /api/posts — daily post limit (usage limits)", () => {
+  const FUTURE = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const BLOB = "https://test.public.blob.vercel-storage.com/x";
+  const NOW_SENTENCE =
+    "This workspace has reached its limit of 20 posts for today. Schedule this post for another day, or try again tomorrow.";
+  const SCHEDULE_SENTENCE =
+    "That day already has 20 posts, which is this workspace's daily limit. Pick another day.";
+
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: [] });
+  });
+
+  it("checks a post going out now against today, and lets it through under the limit", async () => {
+    const before = Date.now();
+    const response = await POST(jsonRequest({ blobUrl: BLOB, baseCaption: "hi" }));
+
+    expect(response.status).toBe(200);
+    expect(checkDailyPostLimitMock).toHaveBeenCalledTimes(1);
+    const args = checkDailyPostLimitMock.mock.calls[0][0];
+    expect(args).toMatchObject({ workspaceId: "ws-1", mode: "now" });
+    expect(args.day.getTime()).toBeGreaterThanOrEqual(before);
+    expect(createPostJobOnlyMock).toHaveBeenCalled();
+  });
+
+  it("answers 429 with the sentence and code at the limit, and creates nothing", async () => {
+    checkDailyPostLimitMock.mockResolvedValue({ error: NOW_SENTENCE, code: "WORKSPACE_DAILY_POST_LIMIT" });
+
+    const response = await POST(jsonRequest({ blobUrl: BLOB, baseCaption: "hi" }));
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toEqual({
+      error: NOW_SENTENCE,
+      code: "WORKSPACE_DAILY_POST_LIMIT",
+    });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("checks a scheduled post against its scheduled day", async () => {
+    checkDailyPostLimitMock.mockResolvedValue({ error: SCHEDULE_SENTENCE, code: "WORKSPACE_DAILY_POST_LIMIT" });
+
+    const response = await POST(jsonRequest({ blobUrl: BLOB, baseCaption: "hi", scheduledFor: FUTURE }));
+
+    expect(checkDailyPostLimitMock).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      day: new Date(FUTURE),
+      mode: "schedule",
+    });
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toEqual({
+      error: SCHEDULE_SENTENCE,
+      code: "WORKSPACE_DAILY_POST_LIMIT",
+    });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("never checks a draft", async () => {
+    const response = await POST(jsonRequest({ blobUrl: BLOB, baseCaption: "hi", draft: true }));
+
+    expect(response.status).toBe(200);
+    expect(checkDailyPostLimitMock).not.toHaveBeenCalled();
+  });
+
+  it("never checks a member's post held for approval (it is saved as a draft)", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: true }));
+
+    const response = await POST(jsonRequest({ blobUrl: BLOB, baseCaption: "hi", scheduledFor: FUTURE }));
+
+    expect(response.status).toBe(200);
+    expect(checkDailyPostLimitMock).not.toHaveBeenCalled();
   });
 });

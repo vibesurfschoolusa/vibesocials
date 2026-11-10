@@ -98,6 +98,7 @@ import type {
   TikTokPostMetadata,
   YouTubePostMetadata,
 } from "@/server/platforms/types";
+import { checkXMonthlyLimit, checkYoutubeDailyLimit } from "@/server/usage/workspaceUsage";
 import { backfillGbpLocationTitles } from "@/server/connections/gbpLocationTitle";
 import { refreshLinkedInOrganizationProfiles } from "@/server/connections/linkedinData";
 import { purgeStaleYouTubeMetrics } from "@/server/connections/youtubeData";
@@ -525,6 +526,18 @@ async function publishToPlatform({
       };
     }
 
+    // Usage limits (2026-11-10): X posts are paid per post, so each workspace has
+    // a monthly budget. Checked after the claim and before the X client, inside
+    // this step (a repeat only re-reads a count; the owners' email is once per
+    // month). Only X's result fails; the post's other platforms carry on.
+    if (connection.platform === "x") {
+      const refusal = await checkXMonthlyLimit(connection.workspaceId);
+      if (refusal) {
+        await finalizeClaimedResult(resultRecordId, runId, { status: "failed", ...refusal });
+        return { platform: connectionRef.platform, status: "failed", error: refusal.errorMessage };
+      }
+    }
+
     logger.info(`[Inngest] Publishing to ${connection.platform}...`, {
       platform: connection.platform,
       resultRecordId,
@@ -569,6 +582,14 @@ async function publishToPlatform({
     if (connection.platform === "youtube") {
       const session = await uploadState.load<unknown, unknown>(YOUTUBE_UPLOAD_STATE_KIND);
       if (session === null || session.secret === undefined) {
+        // Usage limits (2026-11-10): the workspace's own share of the app-wide
+        // budget, checked first so a refused upload spends no app-wide slot. A
+        // plain failure, not a deferral: retrying waits for the user.
+        const refusal = await checkYoutubeDailyLimit(connection.workspaceId);
+        if (refusal) {
+          await finalizeClaimedResult(resultRecordId, runId, { status: "failed", ...refusal });
+          return { platform: connectionRef.platform, status: "failed", error: refusal.errorMessage };
+        }
         const slot = await consumeYouTubeUploadSlot();
         if (!slot.allowed) {
           refusedByOurBudget = true;

@@ -17,6 +17,8 @@ import {
 } from "@/lib/scheduling";
 import { resolvePlatformCaptions } from "@/server/jobs/posting";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
+import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
+import { utcDayKey } from "@/lib/usageLimits";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -179,6 +181,8 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
     where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
     select: {
       status: true,
+      // Usage limits: whether a reschedule moves the post to another UTC day.
+      scheduledFor: true,
       submittedForApprovalAt: true,
       approvedAt: true,
       baseCaption: true,
@@ -237,6 +241,25 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
     Object.assign(data, holdForApprovalData(new Date()));
   } else if (approvalEffect === "restamp") {
     data.submittedForApprovalAt = new Date();
+  }
+
+  // Usage limits (2026-11-10): a scheduled post moved to another UTC day counts
+  // toward that day. Not itself, and not when the edit re-holds it as a draft.
+  const newScheduledFor = data.scheduledFor instanceof Date ? data.scheduledFor : null;
+  if (
+    newScheduledFor &&
+    approvalEffect !== "rehold" &&
+    (!existing.scheduledFor || utcDayKey(existing.scheduledFor) !== utcDayKey(newScheduledFor))
+  ) {
+    const refusal = await checkDailyPostLimit({
+      workspaceId: workspaceContext.workspace.id,
+      day: newScheduledFor,
+      mode: "schedule",
+      excludePostJobId: postJobId,
+    });
+    if (refusal) {
+      return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });
+    }
   }
 
   // Atomic write: still mutable at write time (guards the cron-claim race).
