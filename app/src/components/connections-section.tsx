@@ -78,7 +78,7 @@ const PLATFORMS: PlatformConfig[] = [
     href: "/api/auth/facebook_page/start",
     icon: Facebook,
     description:
-      "Connect your Facebook Page so Vibe Socials can post photos directly to your page.",
+      "Connect your Facebook Page so Vibe Socials can post photos and videos to it.",
   },
   {
     key: "linkedin",
@@ -123,7 +123,9 @@ export function ConnectionsSection({ connections, readOnly = false }: Connection
         {PLATFORMS.map(({ key, label, href, icon: Icon, description }) => {
           const connection = connections.find((c) => c.platform === key);
           const isGoogleBusinessProfile = key === "google_business_profile";
-          const username = connection?.username ?? connection?.accountIdentifier;
+          // A Business Profile has no account name to show until a location is
+          // chosen (lib/connectionSummary.ts names it after that location).
+          const username = connection?.username ?? (connection?.accountIdentifier || null);
           const locationName = connection?.locationName ?? null;
 
           return (
@@ -150,7 +152,13 @@ export function ConnectionsSection({ connections, readOnly = false }: Connection
                       ) : null}
                     </div>
                     <p className="mt-0.5 break-words text-sm text-muted-foreground">
-                      {connection ? `Connected as ${username}` : description}
+                      {connection
+                        ? username
+                          ? `Connected as ${username}`
+                          : isGoogleBusinessProfile
+                            ? "Connected. Choose the Maps location to post to below."
+                            : "Connected"
+                        : description}
                     </p>
                     {PLATFORM_MATURITY_NOTES[key] ? (
                       <p className="mt-1 break-words text-xs text-muted-foreground/90">
@@ -186,7 +194,10 @@ export function ConnectionsSection({ connections, readOnly = false }: Connection
 
               {isGoogleBusinessProfile && connection && !readOnly ? (
                 <div className="mt-4 border-t border-border pt-4">
-                  <GoogleBusinessLocationForm initialLocationName={locationName} />
+                  <GoogleBusinessLocationForm
+                    initialLocationName={locationName}
+                    initialLocationTitle={connection.username}
+                  />
                 </div>
               ) : null}
             </Card>

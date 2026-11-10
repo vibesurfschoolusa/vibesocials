@@ -7,6 +7,9 @@ import { Platform, Prisma } from "@prisma/client";
 
 export const runtime = "nodejs";
 
+/** A business name longer than this is cut: it is only a label in Settings. */
+const MAX_LOCATION_TITLE_LENGTH = 200;
+
 /**
  * POST /api/connections/google_business_profile/location
  * Sets the chosen Maps location on the workspace's GBP connection.
@@ -23,16 +26,26 @@ export async function POST(request: Request) {
   const contentType = request.headers.get("content-type") || "";
 
   let locationNameRaw: unknown;
+  let locationTitleRaw: unknown;
   if (contentType.includes("application/json")) {
     const body = await readJsonObject(request);
     if (!body) {
       return invalidJsonBodyResponse();
     }
     locationNameRaw = body.locationName;
+    locationTitleRaw = body.locationTitle;
   } else {
     const form = await request.formData();
     locationNameRaw = form.get("locationName");
+    locationTitleRaw = form.get("locationTitle");
   }
+  // The location's display name, from Google's list in Settings, so the
+  // connection reads "Connected as <business>" (lib/connectionSummary.ts).
+  // A location saved without one (a pasted store code) clears the old name.
+  const locationTitle =
+    typeof locationTitleRaw === "string" && locationTitleRaw.trim()
+      ? locationTitleRaw.trim().slice(0, MAX_LOCATION_TITLE_LENGTH)
+      : null;
   if (typeof locationNameRaw !== "string" || !locationNameRaw.trim()) {
     return NextResponse.json(
       { error: "locationName is required" },
@@ -64,6 +77,7 @@ export async function POST(request: Request) {
       metadata: {
         ...existingMetadata,
         locationName,
+        locationTitle,
       } as Prisma.InputJsonObject,
     },
   });

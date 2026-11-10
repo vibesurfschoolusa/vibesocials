@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -10,6 +11,8 @@ import { useToast } from "@/components/ui/toast";
 
 interface Props {
   initialLocationName?: string | null;
+  /** The saved location's name, from Google's list (null for a pasted store code). */
+  initialLocationTitle?: string | null;
 }
 
 interface RemoteLocation {
@@ -20,22 +23,20 @@ interface RemoteLocation {
   accountName: string | null;
 }
 
-export function GoogleBusinessLocationForm({ initialLocationName }: Props) {
+export function GoogleBusinessLocationForm({ initialLocationName, initialLocationTitle }: Props) {
   const toast = useToast();
+  const router = useRouter();
   const [locationName, setLocationName] = useState(initialLocationName ?? "");
+  const [savedTitle, setSavedTitle] = useState(initialLocationTitle ?? null);
   const [saving, setSaving] = useState(false);
   const [locations, setLocations] = useState<RemoteLocation[] | null>(null);
   const [loadingLocations, setLoadingLocations] = useState(false);
 
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault();
-
-    const trimmed = locationName.trim();
-    if (!trimmed) {
-      toast.error("Enter a location resource name or store code.");
-      return;
-    }
-
+  // Saves a location: picked from Google's list (with its name, saved at once)
+  // or typed in the Advanced field (no name). 2026-11-09 first-run check:
+  // picking from the list only filled the Advanced field, so a new user's
+  // choice was silently never saved.
+  async function saveLocation(name: string, title: string | null) {
     setSaving(true);
 
     try {
@@ -44,7 +45,7 @@ export function GoogleBusinessLocationForm({ initialLocationName }: Props) {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ locationName: trimmed }),
+        body: JSON.stringify({ locationName: name, locationTitle: title }),
       });
 
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -55,12 +56,28 @@ export function GoogleBusinessLocationForm({ initialLocationName }: Props) {
         return;
       }
 
-      toast.success("Saved. Future posts will use this Maps location.");
+      setSavedTitle(title);
+      toast.success(
+        title ? `Saved. Posts will go to ${title} on Google Maps.` : "Saved. Future posts will use this Maps location.",
+      );
       setSaving(false);
+      // Settings' "Connected as" label is server-rendered from the saved name.
+      router.refresh();
     } catch {
       toast.error("Unexpected error while saving location.");
       setSaving(false);
     }
+  }
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+
+    const trimmed = locationName.trim();
+    if (!trimmed) {
+      toast.error("Enter a location resource name or store code.");
+      return;
+    }
+    await saveLocation(trimmed, null);
   }
 
   async function handleFetchLocations() {
@@ -99,6 +116,8 @@ export function GoogleBusinessLocationForm({ initialLocationName }: Props) {
       return;
     }
     setLocationName(value);
+    const picked = locations?.find((loc) => loc.resourceName === value);
+    void saveLocation(value, picked?.title ?? null);
   }
 
   return (
@@ -109,7 +128,9 @@ export function GoogleBusinessLocationForm({ initialLocationName }: Props) {
           <div className="min-w-0">
             <p className="text-sm font-medium text-foreground">Maps business location</p>
             <p className="text-sm text-muted-foreground">
-              Load your locations from Google and choose the one to post to.
+              {savedTitle
+                ? `Posting to ${savedTitle}. Load your locations again to choose another.`
+                : "Load your locations from Google and choose the one to post to."}
             </p>
           </div>
           <Button
@@ -127,7 +148,7 @@ export function GoogleBusinessLocationForm({ initialLocationName }: Props) {
         {locations && locations.length > 0 ? (
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="gbp-location-select">Choose a location</Label>
-            <Select id="gbp-location-select" defaultValue="" onChange={handleSelectLocation}>
+            <Select id="gbp-location-select" defaultValue="" onChange={handleSelectLocation} disabled={saving}>
               <option value="">Select a location</option>
               {locations.map((loc) => {
                 const parts: string[] = [];
@@ -165,8 +186,8 @@ export function GoogleBusinessLocationForm({ initialLocationName }: Props) {
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
-          Picking a location above fills this in automatically. You can also paste a store code
-          from Advanced settings.
+          Choosing a location above saves it right away. You can also paste a resource name or
+          store code here and save it.
         </p>
       </form>
     </div>

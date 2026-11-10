@@ -48,6 +48,19 @@ function nonEmptyString(value: unknown): string | null {
  */
 export function toConnectionSummary(row: ConnectionSummaryRow): ConnectionSummary {
   const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+  // A Business Profile is named by the location chosen in Settings
+  // (metadata.locationTitle). Its accountIdentifier is a placeholder or an
+  // opaque Google id, never shown (2026-11-09: "Connected as
+  // google_business_profile").
+  if (row.platform === "google_business_profile") {
+    return {
+      platform: row.platform,
+      accountIdentifier: "",
+      username: nonEmptyString(metadata.locationTitle),
+      locationName: nonEmptyString(metadata.locationName),
+      needsReconnect: row.needsReconnect,
+    };
+  }
   return {
     platform: row.platform,
     accountIdentifier: row.accountIdentifier,

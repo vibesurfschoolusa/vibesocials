@@ -43,6 +43,20 @@ describe("toConnectionSummary", () => {
     expect(JSON.stringify(summary)).not.toContain("secret");
   });
 
+  // 2026-11-09 first-run check: Settings read "Connected as
+  // google_business_profile" (a placeholder account id).
+  it("names a Business Profile by its chosen location, never by its placeholder id", () => {
+    const base = { ...ROW, platform: "google_business_profile" as const, accountIdentifier: "google_business_profile" };
+
+    expect(
+      toConnectionSummary({ ...base, metadata: { locationName: "accounts/1/locations/2", locationTitle: "Vibe Surf School" } }),
+    ).toMatchObject({ username: "Vibe Surf School", accountIdentifier: "" });
+    expect(toConnectionSummary({ ...base, metadata: { locationName: null } })).toMatchObject({
+      username: null,
+      accountIdentifier: "",
+    });
+  });
+
   it("shows the Business Profile location", () => {
     const summary = toConnectionSummary({
       ...ROW,
