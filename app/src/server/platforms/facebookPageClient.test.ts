@@ -29,7 +29,8 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-vi.mock("@/lib/fetchWithTimeout", () => ({
+vi.mock("@/lib/fetchWithTimeout", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/fetchWithTimeout")>()),
   fetchWithTimeout: fetchMock,
 }));
 
@@ -423,6 +424,252 @@ describe("facebookPageClient.publishVideo — rate limits (RATE_LIMITED)", () =>
     );
 
     expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+  });
+});
+
+// 07b: several photos in one post. Each photo goes to /{page}/photos with
+// published=false, then one /{page}/feed post names them in attached_media, in
+// order (https://developers.facebook.com/docs/graph-api/reference/page/photos/,
+// "Publishing Multiple Photos"). The feed post is the commit call.
+describe("facebookPageClient.publishVideo — several photos (photos published=false + feed)", () => {
+  type CodedError = Error & { code?: string; status?: number };
+
+  function multiContext(
+    mimeTypes: string[],
+    extra: Partial<PublishContext> = {},
+  ): PublishContext {
+    const items = mimeTypes.map(
+      (mimeType, i) =>
+        ({
+          id: `media-${i + 1}`,
+          mimeType,
+          storageLocation: `https://blob.example.com/photo-${i + 1}.jpg`,
+          baseCaption: "",
+          perPlatformOverrides: null,
+        }) as MediaItem,
+    );
+    return {
+      user: { id: "user-1" } as User,
+      socialConnection: makeConnection(),
+      mediaItem: { ...items[0], baseCaption: "Surf day" } as MediaItem,
+      mediaItems: items,
+      caption: "Surf day #waves",
+      ...extra,
+    };
+  }
+
+  const photos = (n: number) => Array.from({ length: n }, () => "image/jpeg");
+
+  /** Uploads answer photo-1..photo-n, then the feed answers the post id. */
+  function answerUploadsThenFeed(n: number, feed: () => Response = () => response(200, { id: "page-1_post-9" })) {
+    for (let i = 1; i <= n; i++) {
+      fetchMock.mockImplementationOnce(async () => response(200, { id: `photo-${i}` }));
+    }
+    fetchMock.mockImplementationOnce(async () => feed());
+  }
+
+  function call(i: number) {
+    const [url, init, timeout] = fetchMock.mock.calls[i] as [string, RequestInit, number | undefined];
+    return { url: new URL(url), body: new URLSearchParams(String(init.body)), init, timeout };
+  }
+
+  const failure = (ctx: PublishContext) =>
+    facebookPageClient.publishVideo(ctx).then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+
+  it("two photos: uploads each unpublished, then one feed post with the caption and both photos in order", async () => {
+    answerUploadsThenFeed(2);
+
+    const result = await facebookPageClient.publishVideo(multiContext(photos(2)));
+
+    expect(result).toEqual({ externalPostId: "page-1_post-9" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    for (const i of [0, 1]) {
+      const { url, body, init } = call(i);
+      expect(init.method).toBe("POST");
+      expect(url.host).toBe("graph.facebook.com");
+      expect(url.pathname).toMatch(/\/page-1\/photos$/);
+      expect([...body.keys()].sort()).toEqual(["access_token", "published", "url"]);
+      expect(body.get("url")).toBe(`https://blob.example.com/photo-${i + 1}.jpg`);
+      expect(body.get("published")).toBe("false");
+      expect(body.get("access_token")).toBe("page-access-token");
+    }
+    const feed = call(2);
+    expect(feed.init.method).toBe("POST");
+    expect(feed.url.host).toBe("graph.facebook.com");
+    expect(feed.url.pathname).toMatch(/\/page-1\/feed$/);
+    expect([...feed.body.keys()]).toEqual([
+      "message",
+      "attached_media[0]",
+      "attached_media[1]",
+      "access_token",
+    ]);
+    expect(feed.body.get("message")).toBe("Surf day #waves");
+    expect(feed.body.get("attached_media[0]")).toBe('{"media_fbid":"photo-1"}');
+    expect(feed.body.get("attached_media[1]")).toBe('{"media_fbid":"photo-2"}');
+    expect(feed.body.get("access_token")).toBe("page-access-token");
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("ten photos: ten uploads in order, then one feed post naming all ten in order", async () => {
+    answerUploadsThenFeed(10);
+
+    const result = await facebookPageClient.publishVideo(multiContext(photos(10)));
+
+    expect(result.externalPostId).toBe("page-1_post-9");
+    expect(fetchMock).toHaveBeenCalledTimes(11);
+    for (let i = 0; i < 10; i++) {
+      expect(call(i).url.pathname).toMatch(/\/page-1\/photos$/);
+      expect(call(i).body.get("url")).toBe(`https://blob.example.com/photo-${i + 1}.jpg`);
+    }
+    const feed = call(10);
+    expect(feed.url.pathname).toMatch(/\/page-1\/feed$/);
+    for (let i = 0; i < 10; i++) {
+      expect(feed.body.get(`attached_media[${i}]`)).toBe(`{"media_fbid":"photo-${i + 1}"}`);
+    }
+    expect(feed.body.has("attached_media[10]")).toBe(false);
+  });
+
+  it("waits on each upload and on the feed post no longer than the single-photo path (30 s)", async () => {
+    answerUploadsThenFeed(3);
+
+    await facebookPageClient.publishVideo(multiContext(photos(3)));
+
+    for (let i = 0; i < 4; i++) expect(call(i).timeout).toBe(30_000);
+  });
+
+  it("clamps each request to the step deadline", async () => {
+    answerUploadsThenFeed(2);
+
+    await facebookPageClient.publishVideo(multiContext(photos(2), { deadline: Date.now() + 20_000 }));
+
+    for (let i = 0; i < 3; i++) {
+      expect(call(i).timeout).toBeLessThanOrEqual(20_000);
+      expect(call(i).timeout).toBeGreaterThan(15_000);
+    }
+  });
+
+  it("sends nothing when the step budget is already spent", async () => {
+    const error = await failure(multiContext(photos(2), { deadline: Date.now() + 1_000 }));
+
+    expect(error?.code).toBe("PUBLISH_TIME_BUDGET_EXCEEDED");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed upload of the second photo makes no post and fails with one clear message", async () => {
+    fetchMock.mockImplementationOnce(async () => response(200, { id: "photo-1" }));
+    fetchMock.mockImplementationOnce(async () =>
+      response(400, { error: { type: "GraphMethodException", code: 100, message: "SECRET-DETAIL" } }),
+    );
+
+    const error = await failure(multiContext(photos(3)));
+
+    expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+    expect(error?.message).toBe("Facebook Page could not upload photo 2 of 3 (status 400). No post was made.");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/feed"))).toBe(false);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("an upload 5xx is not unconfirmed (nothing is posted yet) and carries its status so the publish may be retried", async () => {
+    fetchMock.mockImplementationOnce(async () => response(200, { id: "photo-1" }));
+    fetchMock.mockImplementationOnce(async () => response(503, "<html>Service Unavailable</html>"));
+
+    const error = await failure(multiContext(photos(2)));
+
+    expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+    expect(error?.status).toBe(503);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("an upload answered 2xx without a photo id makes no post", async () => {
+    fetchMock.mockImplementationOnce(async () => response(200, { id: "photo-1" }));
+    fetchMock.mockImplementationOnce(async () => response(200, {}));
+
+    const error = await failure(multiContext(photos(2)));
+
+    expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+    expect(error?.message).toBe("Facebook Page could not upload photo 2 of 2. No post was made.");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a dead token on an upload is the reconnect error and flags the connection", async () => {
+    fetchMock.mockImplementationOnce(async () =>
+      response(400, { error: { type: "OAuthException", code: 190, message: "expired" } }),
+    );
+
+    const error = await failure(multiContext(photos(2)));
+
+    expect(error?.code).toBe("FACEBOOK_PAGE_RECONNECT_REQUIRED");
+    expect(updateMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a throttled upload is RATE_LIMITED", async () => {
+    fetchMock.mockImplementationOnce(async () => new Response("", { status: 429, headers: { "Retry-After": "60" } }));
+
+    const error = await failure(multiContext(photos(2)));
+
+    expect(error?.code).toBe("RATE_LIMITED");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["a timeout", () => Promise.reject(Object.assign(new Error("Request timed out"), { code: "FETCH_TIMEOUT" }))],
+    ["a 503", async () => response(503, "<html>Service Unavailable</html>")],
+    ["a 2xx without an id", async () => response(200, {})],
+    ["a 2xx with an unreadable body", async () => new Response("<html>ok</html>", { status: 200 })],
+  ] as const)("the feed post answering %s is PUBLISH_UNCONFIRMED and is not sent again", async (_name, feed) => {
+    fetchMock.mockImplementationOnce(async () => response(200, { id: "photo-1" }));
+    fetchMock.mockImplementationOnce(async () => response(200, { id: "photo-2" }));
+    fetchMock.mockImplementationOnce(feed);
+
+    const error = await failure(multiContext(photos(2)));
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/feed"))).toHaveLength(1);
+  });
+
+  it("a feed post refused with a 4xx fails without the raw body", async () => {
+    answerUploadsThenFeed(2, () =>
+      response(400, { error: { type: "GraphMethodException", code: 100, message: "SECRET-DETAIL" } }),
+    );
+
+    const error = await failure(multiContext(photos(2)));
+
+    expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+    expect(error?.message).toBe("Facebook Page photos publish failed (status 400)");
+    expect(error?.message).not.toContain("SECRET-DETAIL");
+  });
+
+  it.each([
+    ["a video", "video/mp4"],
+    ["a GIF", "image/gif"],
+    ["a PDF", "application/pdf"],
+  ])("%s among several photos sends no request", async (_name, mimeType) => {
+    const error = await failure(multiContext(["image/jpeg", mimeType, "image/png"]));
+
+    expect(error?.code).toBe("FACEBOOK_PAGE_UNSUPPORTED_MEDIA_TYPE");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts JPEG, PNG and WebP together", async () => {
+    answerUploadsThenFeed(3);
+
+    await expect(
+      facebookPageClient.publishVideo(multiContext(["image/jpeg", "image/png", "image/webp"])),
+    ).resolves.toEqual({ externalPostId: "page-1_post-9" });
+  });
+
+  it("more than 10 photos sends no request", async () => {
+    const error = await failure(multiContext(photos(11)));
+
+    expect(error?.code).toBe("FACEBOOK_PAGE_TOO_MANY_PHOTOS");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

@@ -1,7 +1,8 @@
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { SocialConnection } from "@prisma/client";
 
-import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import { MAX_POST_MEDIA, MULTI_PHOTO_MIME_TYPES } from "@/lib/postMedia";
 import { connectionTokenChangedError, flagRejectedToken } from "./connectionHealth";
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import { META_GRAPH_BASE_URL, META_GRAPH_VIDEO_BASE_URL } from "@/lib/metaGraph";
@@ -58,6 +59,171 @@ export function isFacebookAuthErrorBody(body: string): boolean {
   }
 }
 
+function publishFailedError(message: string, status?: number): Error & { code: string; status?: number } {
+  const error = new Error(message) as Error & { code: string; status?: number };
+  error.code = "FACEBOOK_PAGE_PUBLISH_FAILED";
+  if (status !== undefined) error.status = status;
+  return error;
+}
+
+/**
+ * Throws for a Graph response that was not ok (rate limits already classified).
+ * `status` is attached only for calls that may be repeated (photo uploads), so
+ * withTransientRetries can retry their 5xx.
+ */
+async function throwRejected(
+  response: Response,
+  socialConnection: SocialConnection,
+  logLabel: string,
+  message: string,
+  status?: number,
+): Promise<never> {
+  // COR-3 discipline (matches instagramClient.ts): raw upstream bodies go
+  // to server logs only — PostJobResult.errorMessage renders in the UI, so
+  // the thrown message carries just a prefix + status.
+  const errorBody = await response
+    .text()
+    .catch(() => "Unable to read error body");
+  console.error(`[FacebookPage] ${logLabel}`, {
+    status: response.status,
+    error: errorBody,
+  });
+  // Token no longer accepted -> the actionable reconnect error, and flag
+  // the connection so the dashboard/settings Reconnect affordance lights
+  // up instead of the user retrying a dead token forever. The flag is
+  // guarded by the tokens this call sent (2026-11-02 scale audit, jobs,
+  // token refresh): if the stored tokens changed since this publish read the
+  // row (the user reconnected), nothing is flagged and the plain, retryable
+  // CONNECTION_TOKEN_CHANGED is thrown.
+  if (response.status === 401 || isFacebookAuthErrorBody(errorBody)) {
+    const flagged = await flagRejectedToken(
+      socialConnection,
+      FACEBOOK_PAGE_RECONNECT_CODE,
+    );
+    if (flagged === "superseded") throw connectionTokenChangedError();
+    throw facebookPageReconnectRequiredError();
+  }
+  throw publishFailedError(message, status);
+}
+
+/**
+ * 07b: a post with several photos. Per the Page photos reference
+ * (https://developers.facebook.com/docs/graph-api/reference/page/photos/,
+ * "Publishing Multiple Photos"): each photo is uploaded to /{page}/photos with
+ * `published=false`, then one POST /{page}/feed names them all as
+ * `attached_media[i]={"media_fbid":"<photo id>"}`, in order. Unpublished photos
+ * that never get attached are deleted by Facebook after 24 hours, so a failed
+ * or repeated upload leaves nothing visible; only the feed post is the commit
+ * call. Its id ("<page>_<post>") is recorded like the single photo's id.
+ */
+async function publishSeveralPhotos(
+  ctx: PublishContext,
+  accessToken: string,
+  pageId: string,
+): Promise<PublishResult> {
+  const { socialConnection, mediaItems, caption } = ctx;
+
+  if (mediaItems.length > MAX_POST_MEDIA) {
+    const error = new Error(
+      `Facebook Page posts here can carry at most ${MAX_POST_MEDIA} photos. Remove some photos and try again.`,
+    ) as Error & { code: string };
+    error.code = "FACEBOOK_PAGE_TOO_MANY_PHOTOS";
+    throw error;
+  }
+  if (mediaItems.some((item) => !MULTI_PHOTO_MIME_TYPES.includes(item.mimeType ?? ""))) {
+    const error = new Error(
+      "A Facebook Page post with several photos takes JPEG, PNG or WebP photos only.",
+    ) as Error & { code: string };
+    error.code = "FACEBOOK_PAGE_UNSUPPORTED_MEDIA_TYPE";
+    throw error;
+  }
+
+  const total = mediaItems.length;
+  console.log("[FacebookPage] Starting multi-photo publish", {
+    pageId,
+    photoCount: total,
+    captionLength: caption?.length ?? 0,
+  });
+
+  const photoIds: string[] = [];
+  for (const [index, item] of mediaItems.entries()) {
+    const which = `photo ${index + 1} of ${total}`;
+    // An upload is not a commit (the photo stays unpublished), so a plain
+    // fetch: a 5xx or a network failure here may be retried.
+    const response = await fetchWithTimeout(
+      `${META_GRAPH_BASE_URL}/${pageId}/photos`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          url: item.storageLocation,
+          published: "false",
+          access_token: accessToken,
+        }),
+      },
+      budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, ctx.deadline),
+    );
+
+    const limited = await classifyRateLimit("facebook_page", response);
+    if (limited) throw limited;
+    if (!response.ok) {
+      await throwRejected(
+        response,
+        socialConnection,
+        `Upload of ${which} failed`,
+        `Facebook Page could not upload ${which} (status ${response.status}). No post was made.`,
+        response.status,
+      );
+    }
+    const data = (await response.json().catch(() => null)) as { id?: unknown } | null;
+    if (typeof data?.id !== "string" || data.id.length === 0) {
+      console.error(`[FacebookPage] Upload of ${which} answered without a photo id`);
+      throw publishFailedError(`Facebook Page could not upload ${which}. No post was made.`);
+    }
+    photoIds.push(data.id);
+  }
+
+  const body = new URLSearchParams({ message: caption ?? "" });
+  photoIds.forEach((id, i) => body.append(`attached_media[${i}]`, JSON.stringify({ media_fbid: id })));
+  body.append("access_token", accessToken);
+
+  // Checked before the commit call, so a spent step budget sends nothing.
+  const timeoutMs = budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, ctx.deadline);
+  const response = await commitRequest("facebook_page", () =>
+    fetchWithTimeout(
+      `${META_GRAPH_BASE_URL}/${pageId}/feed`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+      },
+      timeoutMs,
+    ),
+  );
+
+  const limited = await classifyRateLimit("facebook_page", response);
+  if (limited) throw limited;
+  if (!response.ok) {
+    await throwRejected(
+      response,
+      socialConnection,
+      "Multi-photo feed post failed",
+      `Facebook Page photos publish failed (status ${response.status})`,
+    );
+  }
+
+  const data = await readCommitBody<{ id?: unknown } | null>("facebook_page", response, "json");
+  const externalPostId = requireCommitId("facebook_page", data?.id, "id");
+
+  console.log("[FacebookPage] Multi-photo post published", {
+    pageId,
+    externalPostId,
+    photoCount: total,
+  });
+
+  return { externalPostId };
+}
+
 export const facebookPageClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
     const { socialConnection, mediaItem, caption } = ctx;
@@ -74,6 +240,10 @@ export const facebookPageClient: PlatformClient = {
       const error = new Error("Missing Facebook Page ID") as Error & { code: string };
       error.code = "FACEBOOK_PAGE_NO_ID";
       throw error;
+    }
+
+    if (ctx.mediaItems.length > 1) {
+      return publishSeveralPhotos(ctx, accessToken, pageId);
     }
 
     const kind = mediaKindOf(mediaItem.mimeType ?? "");
@@ -144,36 +314,12 @@ export const facebookPageClient: PlatformClient = {
     if (limited) throw limited;
 
     if (!response.ok) {
-      // COR-3 discipline (matches instagramClient.ts): raw upstream bodies go
-      // to server logs only — PostJobResult.errorMessage renders in the UI, so
-      // the thrown message carries just a prefix + status.
-      const errorBody = await response
-        .text()
-        .catch(() => "Unable to read error body");
-      console.error(`[FacebookPage] ${isVideo ? "Video" : "Photo"} publish failed`, {
-        status: response.status,
-        error: errorBody,
-      });
-      // Token no longer accepted -> the actionable reconnect error, and flag
-      // the connection so the dashboard/settings Reconnect affordance lights
-      // up instead of the user retrying a dead token forever. The flag is
-      // guarded by the tokens this call sent (2026-11-02 scale audit, jobs,
-      // token refresh): if the stored tokens changed since this publish read the
-      // row (the user reconnected), nothing is flagged and the plain, retryable
-      // CONNECTION_TOKEN_CHANGED is thrown.
-      if (response.status === 401 || isFacebookAuthErrorBody(errorBody)) {
-        const flagged = await flagRejectedToken(
-          socialConnection,
-          FACEBOOK_PAGE_RECONNECT_CODE,
-        );
-        if (flagged === "superseded") throw connectionTokenChangedError();
-        throw facebookPageReconnectRequiredError();
-      }
-      const error = new Error(
+      await throwRejected(
+        response,
+        socialConnection,
+        `${isVideo ? "Video" : "Photo"} publish failed`,
         `Facebook Page ${what} publish failed (status ${response.status})`,
-      ) as Error & { code: string };
-      error.code = "FACEBOOK_PAGE_PUBLISH_FAILED";
-      throw error;
+      );
     }
 
     // photos/videos answered 2xx, so the post may be live: an unreadable body is
