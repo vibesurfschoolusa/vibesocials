@@ -883,3 +883,52 @@ describe("GET /api/posts - mediaCount (07a)", () => {
     expect(postJobMediaGroupByMock).not.toHaveBeenCalled();
   });
 });
+
+describe("GET /api/posts - the client's review (client review link)", () => {
+  it("selects the three client columns and exposes them as ISO strings and text", async () => {
+    postJobFindManyMock.mockResolvedValue([
+      {
+        ...jobWithYouTube(),
+        id: "changed",
+        status: "draft",
+        clientApprovedAt: null,
+        clientChangeRequestedAt: new Date("2026-11-10T09:00:00.000Z"),
+        clientNote: "Use the <b>other</b> photo",
+      },
+      {
+        ...jobWithYouTube(),
+        id: "approved",
+        status: "scheduled",
+        clientApprovedAt: new Date("2026-11-10T08:00:00.000Z"),
+        clientChangeRequestedAt: null,
+        clientNote: null,
+      },
+      // A row from before the columns existed reads as no review.
+      { ...jobWithYouTube(), id: "plain" },
+    ]);
+
+    const body = (await (await GET(getRequest())).json()) as PostsResponse;
+
+    const { select } = postJobFindManyMock.mock.calls[0][0];
+    expect(select.clientApprovedAt).toBe(true);
+    expect(select.clientChangeRequestedAt).toBe(true);
+    expect(select.clientNote).toBe(true);
+    expect(body.jobs.map((job) => [job.id, job.clientApprovedAt, job.clientChangeRequestedAt, job.clientNote])).toEqual([
+      ["changed", null, "2026-11-10T09:00:00.000Z", "Use the <b>other</b> photo"],
+      ["approved", "2026-11-10T08:00:00.000Z", null, null],
+      ["plain", null, null, null],
+    ]);
+  });
+
+  it("says which workspace the list is for, so the Queue's link panel acts on that one", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-7" }));
+    const body = (await (await GET(getRequest())).json()) as PostsResponse;
+    expect(body.workspaceId).toBe("ws-7");
+  });
+
+  it("is never read by a signed-out caller", async () => {
+    getWorkspaceContextMock.mockResolvedValue(null);
+    expect((await GET(getRequest())).status).toBe(401);
+    expect(postJobFindManyMock).not.toHaveBeenCalled();
+  });
+});

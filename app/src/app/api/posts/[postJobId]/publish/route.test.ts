@@ -68,6 +68,8 @@ import { POST } from "./route";
 const FUTURE = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 const SUBMITTED = new Date("2026-11-01T09:00:00Z");
 const UPDATED = new Date("2026-11-01T09:30:00Z");
+/** Scheduling a draft again clears the client's change request (client review link). */
+const CLEAR_CLIENT_CHANGE = { clientChangeRequestedAt: null, clientNote: null };
 
 /** The ownership/approval read's row; defaults to a plain draft. */
 function jobRow(overrides: Record<string, unknown> = {}) {
@@ -194,10 +196,26 @@ describe("POST /api/posts/[postJobId]/publish", () => {
     expect(body.status).toBe("scheduled");
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { id: "job-1", workspaceId: "ws-1", status: "draft" },
-      data: { status: "scheduled", scheduledFor: new Date(FUTURE) },
+      data: { status: "scheduled", scheduledFor: new Date(FUTURE), ...CLEAR_CLIENT_CHANGE },
     });
     // Scheduling sends no event now — the cron dispatches when due.
     expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("scheduling a draft the client asked to change clears the request in the same update", async () => {
+    findFirstMock.mockResolvedValue(jobRow({ scheduledFor: new Date(FUTURE) }));
+
+    const res = await POST(req({ scheduledFor: FUTURE }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+    expect(updateManyMock.mock.calls[0][0].data).toMatchObject({
+      status: "scheduled",
+      clientChangeRequestedAt: null,
+      clientNote: null,
+    });
+    // The client's earlier approval, if any, was already cleared by the change request.
+    expect(updateManyMock.mock.calls[0][0].data).not.toHaveProperty("clientApprovedAt");
   });
 
   it("rejects scheduling a non-draft (409 NOT_A_DRAFT)", async () => {
@@ -632,6 +650,7 @@ describe("POST /api/posts/[postJobId]/publish — held posts (ruling R10)", () =
         data: {
           status: "scheduled",
           scheduledFor: new Date(FUTURE),
+          ...CLEAR_CLIENT_CHANGE,
           submittedForApprovalAt: null,
           approvedAt: null,
         },
@@ -683,7 +702,7 @@ describe("POST /api/posts/[postJobId]/publish — held posts (ruling R10)", () =
     expect(res.status).toBe(200);
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { id: "job-1", workspaceId: "ws-1", status: "draft", updatedAt: UPDATED },
-      data: { status: "scheduled", scheduledFor: new Date(FUTURE) },
+      data: { status: "scheduled", scheduledFor: new Date(FUTURE), ...CLEAR_CLIENT_CHANGE },
     });
   });
 

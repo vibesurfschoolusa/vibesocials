@@ -44,3 +44,10 @@ describe("isPublicRoute — client upload link", () => {
     expect(isPublicRoute("/upload")).toBe(false);
   });
 });
+
+describe("isPublicRoute — client review link", () => {
+  it("renders /v/<token> with no app shell, and only that", () => {
+    expect(isPublicRoute("/v/abc")).toBe(true);
+    expect(isPublicRoute("/videos")).toBe(false);
+  });
+});

@@ -171,11 +171,28 @@ export interface PostJobDTO {
    * awaiting-approval section from `"pending"`.
    */
   approvalState: ApprovalState;
+  /**
+   * Client review link (2026-11-10) — the client's own say through the
+   * workspace's /v/ link, separate from `approvalState`. ISO-8601 when the
+   * client approved this post (it stays scheduled), or asked for a change (it
+   * is then a draft, with `clientNote` the client's plain text). Null otherwise.
+   * GET /api/posts always sends all three; they are optional only so DTOs built
+   * elsewhere (test fixtures) need not name them.
+   */
+  clientApprovedAt?: string | null;
+  clientChangeRequestedAt?: string | null;
+  clientNote?: string | null;
 }
 
 /** Response body of `GET /api/posts`. */
 export interface PostsResponse {
   jobs: PostJobDTO[];
+  /**
+   * The caller's active workspace, which these jobs belong to. The Queue's
+   * client review link panel sends it back, so a workspace switch in another
+   * tab answers 409 instead of acting on a workspace this page does not show.
+   */
+  workspaceId: string;
   /**
    * Team Workspaces (Task 4) — total members in the caller's active
    * workspace (from `getWorkspaceMemberCount`). Gates the `createdBy`

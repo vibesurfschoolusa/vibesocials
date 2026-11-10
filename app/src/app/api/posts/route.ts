@@ -135,6 +135,10 @@ export async function GET(request: Request) {
         // Approval workflow — feeds the derived `approvalState` DTO field.
         submittedForApprovalAt: true,
         approvedAt: true,
+        // Client review link — the client's approval or change request.
+        clientApprovedAt: true,
+        clientChangeRequestedAt: true,
+        clientNote: true,
         mediaItem: {
           select: {
             baseCaption: true,
@@ -245,6 +249,7 @@ export async function GET(request: Request) {
       // controls (owner) and a read-only awaiting badge (member).
       workspaceRole: context.role,
       workspaceRequireApproval: context.workspace.requireApproval,
+      workspaceId: context.workspace.id,
       nextCursor,
       jobs: jobs.map((job) => {
         // Task 8 — the raw JSON snapshot narrowed to the display fields the
@@ -269,6 +274,10 @@ export async function GET(request: Request) {
             approvedAt: job.approvedAt,
             status: job.status,
           }),
+          // Client review link: the client's approval or change request.
+          clientApprovedAt: job.clientApprovedAt?.toISOString() ?? null,
+          clientChangeRequestedAt: job.clientChangeRequestedAt?.toISOString() ?? null,
+          clientNote: job.clientNote ?? null,
           // Scheduled/draft jobs snapshot their caption on the job itself so
           // editing them never mutates shared reused media; fall back to the
           // media item's caption for immediate/older jobs.

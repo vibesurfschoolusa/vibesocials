@@ -2,12 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { CalendarClock, PlusCircle } from "lucide-react";
+import { CalendarClock, Copy, PlusCircle } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   ConfirmDialog,
   Dialog,
@@ -17,7 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
-import { fieldBaseClasses } from "@/components/ui/input";
+import { fieldBaseClasses, Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
@@ -143,6 +143,17 @@ function QueueCard({
 
   return (
     <Card className="p-4 sm:p-5">
+      {/* Client review link: the client pulled this post out of the schedule. */}
+      {job.status === "draft" && job.clientChangeRequestedAt ? (
+        <div className="mb-3 rounded-md border border-border bg-muted/40 p-2.5">
+          <p className="text-xs font-medium text-foreground">Your client asked for a change</p>
+          {job.clientNote ? (
+            <p className="mt-1 whitespace-pre-wrap break-words text-xs text-muted-foreground">
+              {job.clientNote}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       <div className="flex items-start justify-between gap-3">
         <MediaThumb media={job.media} count={job.mediaCount} />
         <div className="min-w-0 flex-1">
@@ -197,7 +208,12 @@ function QueueCard({
             </div>
           ) : null}
         </div>
-        <Badge variant={badge.tone}>{badge.label}</Badge>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <Badge variant={badge.tone}>{badge.label}</Badge>
+          {job.status === "scheduled" && job.clientApprovedAt ? (
+            <Badge variant="success">Client approved</Badge>
+          ) : null}
+        </div>
       </div>
 
       {/* Approval workflow: a pending submission gets its own action row.
@@ -531,6 +547,188 @@ function QueueEditDialog({
   );
 }
 
+interface ReviewLinkDto {
+  /** null when the stored token cannot be opened; Replace makes a new one. */
+  url: string | null;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
+
+/**
+ * Client review link (2026-11-10): owners make, copy, replace or turn off the
+ * workspace's link here, as the upload link's panel on the Media page. The
+ * owner-only GET answers a member 403, and then the panel is not shown. Every
+ * call carries the workspace whose posts this page shows: if another tab
+ * switched workspace, the routes answer 409 and the panel shows their sentence.
+ */
+function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
+  const toast = useToast();
+  const [state, setState] = useState<"loading" | "hidden" | "ready" | "changed">("loading");
+  const [changedMessage, setChangedMessage] = useState("");
+  const [link, setLink] = useState<ReviewLinkDto | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState<"replace" | "off" | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(
+          `/api/workspaces/review-link?workspaceId=${encodeURIComponent(workspaceId)}`,
+        );
+        const data = (await response.json().catch(() => null)) as
+          | { link?: ReviewLinkDto | null; error?: string }
+          | null;
+        if (cancelled) return;
+        if (response.status === 409) {
+          setChangedMessage(data?.error ?? "Reload this page.");
+          setState("changed");
+          return;
+        }
+        if (!response.ok) {
+          setState("hidden");
+          return;
+        }
+        setLink(data?.link ?? null);
+        setState("ready");
+      } catch {
+        if (!cancelled) setState("hidden");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
+
+  // Create and Replace are the same call: the server revokes any old link.
+  const makeLink = useCallback(async () => {
+    const response = await fetch("/api/workspaces/review-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId }),
+    });
+    const data = (await response.json().catch(() => null)) as
+      | { link?: ReviewLinkDto; error?: string }
+      | null;
+    if (!response.ok || !data?.link) {
+      toast.error(data?.error ?? "Couldn't make the link. Try again.");
+      throw new Error("CREATE_FAILED");
+    }
+    setLink(data.link);
+    toast.success("New link ready. Copy it and send it to your client.");
+  }, [toast, workspaceId]);
+
+  const turnOff = useCallback(async () => {
+    const response = await fetch("/api/workspaces/review-link", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId }),
+    });
+    if (!response.ok) {
+      const data = (await response.json().catch(() => null)) as { error?: string } | null;
+      // A 409 carries the library's "switched workspace" sentence: shown as is.
+      toast.error(data?.error ?? "Couldn't turn the link off. Try again.");
+      throw new Error("REVOKE_FAILED");
+    }
+    setLink(null);
+    toast.success("The link is off. It no longer works.");
+  }, [toast, workspaceId]);
+
+  async function handleCreate() {
+    setBusy(true);
+    try {
+      await makeLink();
+    } catch {
+      // Already shown as a toast.
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyUrl() {
+    if (!link?.url) return;
+    try {
+      await navigator.clipboard.writeText(link.url);
+      toast.success("Link copied.");
+    } catch {
+      toast.error("Couldn't copy the link. Copy it by hand instead.");
+    }
+  }
+
+  if (state === "changed") {
+    return (
+      <Alert variant="warning" title="Client review link">
+        <p>{changedMessage}</p>
+      </Alert>
+    );
+  }
+  if (state !== "ready") return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Client review link</CardTitle>
+        <CardDescription>
+          Give this link to a client. Without an account, they see the posts scheduled for the
+          next 60 days and can approve each one or ask for a change. A change request takes the
+          post out of the schedule and emails the owners.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {link === null ? (
+          <Button type="button" loading={busy} onClick={handleCreate}>
+            Create link
+          </Button>
+        ) : (
+          <>
+            {link.url ? (
+              <div className="flex gap-2">
+                <Input
+                  readOnly
+                  value={link.url}
+                  aria-label="Client review link"
+                  onFocus={(event) => event.currentTarget.select()}
+                />
+                <Button type="button" variant="outline" onClick={copyUrl}>
+                  <Copy className="h-4 w-4" aria-hidden />
+                  Copy
+                </Button>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                This link can&apos;t be shown again. Replace it to get a new one.
+              </p>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => setConfirm("replace")}>
+                Replace link
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setConfirm("off")}>
+                Turn off
+              </Button>
+            </div>
+          </>
+        )}
+      </CardContent>
+      <ConfirmDialog
+        open={confirm !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirm(null);
+        }}
+        title={confirm === "replace" ? "Replace the client review link?" : "Turn off the client review link?"}
+        description={
+          confirm === "replace"
+            ? "The old link stops working. Your client will need the new one."
+            : "The old link stops working. Decisions your client already made stay as they are."
+        }
+        confirmText={confirm === "replace" ? "Replace link" : "Turn off"}
+        destructive
+        onConfirm={confirm === "replace" ? makeLink : turnOff}
+      />
+    </Card>
+  );
+}
+
 /** Client-rendered Queue: scheduled + draft posts with edit/cancel/publish/delete. */
 export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUser } = {}) {
   const toast = useToast();
@@ -546,6 +744,10 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
   // ...and whether the workspace requires owner approval, which decides what a
   // member's Publish / Edit actually does (lib/queueActions.ts).
   const [workspaceRequireApproval, setWorkspaceRequireApproval] = useState(false);
+  // The workspace these posts belong to, as the first load reported it. The
+  // review link panel sends it, so a switch in another tab answers 409. Kept
+  // from the first load: a later reload after a switch must not re-point it.
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   // Clock for the owner's approve hint (does the proposed time still hold?).
   // Refreshed on an interval so the hint can't promise a time that has since
   // passed, and kept out of render so the component stays pure.
@@ -590,6 +792,7 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
       setWorkspaceMemberCount(data.workspaceMemberCount);
       setWorkspaceRole(data.workspaceRole);
       setWorkspaceRequireApproval(data.workspaceRequireApproval);
+      setWorkspaceId((prev) => prev ?? data.workspaceId);
       setNowMs(Date.now());
     } catch {
       if (!silent) setError("Failed to load your queue.");
@@ -818,6 +1021,12 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
           </Link>
         </div>
       </div>
+
+      {workspaceRole === "owner" && workspaceId ? (
+        <div className="mt-6">
+          <ReviewLinkPanel workspaceId={workspaceId} />
+        </div>
+      ) : null}
 
       <div className="mt-8">
         {loading ? (

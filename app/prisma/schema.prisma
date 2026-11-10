@@ -68,6 +68,25 @@ model WorkspaceUploadLink {
   @@index([workspaceId, revokedAt])
 }
 
+// Client review link (2026-11-10). One active link per workspace, at
+// /v/<token>, where a client looks over the upcoming posts and approves one or
+// asks for a change, without signing in. Stored like WorkspaceUploadLink: the
+// hash for the lookup, the raw token sealed so an owner can copy it again.
+model WorkspaceReviewLink {
+  id          String    @id @default(cuid())
+  workspaceId String
+  tokenHash   String    @unique // sha256 hex of the raw token
+  tokenSealed String
+  createdById String
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, revokedAt])
+}
+
 // Account lifecycle (scale-readiness spec §A). Discriminates the two kinds of
 // short-lived, single-use AccountToken: password reset (60 min TTL) and email
 // verification (7 day TTL). See src/lib/accountToken.ts for the TTLs.
@@ -169,6 +188,7 @@ model Workspace {
   members            WorkspaceMember[]
   invites            WorkspaceInvite[]
   uploadLinks        WorkspaceUploadLink[]
+  reviewLinks        WorkspaceReviewLink[]
   connections        SocialConnection[]
   pendingConnections PendingConnection[]
   mediaItems         MediaItem[]
@@ -377,6 +397,13 @@ model PostJob {
   submittedForApprovalAt DateTime?
   approvedAt             DateTime?
   approvedByUserId       String?
+  // Client review link (2026-11-10): the client's own say, separate from the
+  // member/owner approval above. A change request turns the post back into a
+  // `draft` (keeping scheduledFor) with the client's plain-text note; scheduling
+  // it again clears both. An approval leaves the post scheduled.
+  clientApprovedAt        DateTime?
+  clientChangeRequestedAt DateTime?
+  clientNote              String?
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
 

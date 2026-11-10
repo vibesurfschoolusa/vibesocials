@@ -36,4 +36,10 @@ describe("isPublicPath", () => {
     expect(isPublicPath("/upload")).toBe(false);
     expect(isPublicPath("/users")).toBe(false);
   });
+
+  it("lets a signed-out client open a review link, and nothing that only starts with /v", () => {
+    expect(isPublicPath("/v/abc")).toBe(true);
+    expect(isPublicPath("/videos")).toBe(false);
+    expect(isPublicPath("/verify")).toBe(false);
+  });
 });

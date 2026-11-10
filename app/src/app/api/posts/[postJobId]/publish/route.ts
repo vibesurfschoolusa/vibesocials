@@ -238,7 +238,15 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         status: "draft",
         updatedAt: job.updatedAt,
       },
-      data: { status: "scheduled", scheduledFor: validation.date, ...releaseHold },
+      // A draft the client asked to change (client review link) is a fresh post
+      // for the client to look over once it is scheduled again.
+      data: {
+        status: "scheduled",
+        scheduledFor: validation.date,
+        clientChangeRequestedAt: null,
+        clientNote: null,
+        ...releaseHold,
+      },
     });
 
     if (count === 0) {
