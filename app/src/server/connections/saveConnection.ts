@@ -3,6 +3,8 @@ import { Platform, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { LINKEDIN_SCOPES } from "@/lib/oauthScopes";
+import type { PinterestBoard } from "@/lib/pinterestApi";
+import type { PinterestAccount } from "@/server/connections/pinterestAccount";
 
 /**
  * Saving the account a user chose to connect (2026-11-09).
@@ -230,5 +232,65 @@ export async function saveLinkedInConnection({
       accountIdentifier: profile.sub,
     },
     update: fields,
+  });
+}
+
+/** The tokens from Pinterest's code exchange. */
+export interface PinterestToken {
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt: Date;
+  /** The scopes Pinterest granted. */
+  scopes: string[];
+}
+
+/**
+ * Saves the Pinterest connection that posts to `board` (2026-11-10). A Pin
+ * always goes on a board, so the board is part of the connection:
+ * pinterestClient.ts reads `metadata.boardId`, and Settings shows the username
+ * with the board's name (lib/connectionSummary.ts). To post to another board
+ * the user connects again and chooses it.
+ */
+export async function savePinterestConnection({
+  userId,
+  workspaceId,
+  token,
+  account,
+  board,
+}: ConnectionOwner & {
+  token: PinterestToken;
+  account: PinterestAccount;
+  board: PinterestBoard;
+}): Promise<void> {
+  const fields = {
+    accessToken: token.accessToken,
+    refreshToken: token.refreshToken,
+    expiresAt: token.expiresAt,
+    accountIdentifier: account.username,
+    scopes: token.scopes,
+    metadata: {
+      username: account.username,
+      accountId: account.id,
+      accountType: account.accountType,
+      boardId: board.id,
+      boardName: board.name,
+    },
+    ...HEALTHY,
+  };
+
+  await prisma.socialConnection.upsert({
+    where: {
+      workspaceId_platform: {
+        workspaceId,
+        platform: Platform.pinterest,
+      },
+    },
+    update: fields,
+    create: {
+      userId,
+      workspaceId,
+      platform: Platform.pinterest,
+      ...fields,
+    },
   });
 }

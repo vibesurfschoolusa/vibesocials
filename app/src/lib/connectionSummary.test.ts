@@ -67,6 +67,21 @@ describe("toConnectionSummary", () => {
     expect(summary).toMatchObject({ username: null, locationName: "locations/123" });
   });
 
+  // 2026-11-10: a Pinterest connection posts to one board, chosen at connect.
+  it("names a Pinterest connection by its username and the board it posts to", () => {
+    const base = { ...ROW, platform: "pinterest" as const, accountIdentifier: "vibesurfschool" };
+
+    expect(
+      toConnectionSummary({
+        ...base,
+        metadata: { username: "vibesurfschool", boardId: "555", boardName: "Surf lessons" },
+      }).username,
+    ).toBe("vibesurfschool, board \u201cSurf lessons\u201d");
+    expect(toConnectionSummary({ ...base, metadata: { username: "vibesurfschool" } }).username).toBe(
+      "vibesurfschool",
+    );
+  });
+
   it("copes with missing or empty metadata", () => {
     expect(toConnectionSummary({ ...ROW, metadata: null })).toMatchObject({ username: null, locationName: null });
     expect(toConnectionSummary({ ...ROW, metadata: { pageName: "" } })).toMatchObject({ username: null });

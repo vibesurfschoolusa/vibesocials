@@ -15,6 +15,7 @@ enum Platform {
   instagram
   google_business_profile
   facebook_page
+  pinterest
 }
 
 enum PostJobStatus {

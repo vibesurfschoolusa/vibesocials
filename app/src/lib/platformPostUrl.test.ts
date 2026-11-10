@@ -22,6 +22,9 @@ describe("platformPostUrl", () => {
   it("builds a Facebook post URL", () => {
     expect(platformPostUrl("facebook_page", "111_222")).toBe("https://www.facebook.com/111_222");
   });
+  it("builds a Pinterest Pin URL", () => {
+    expect(platformPostUrl("pinterest", "987654321")).toBe("https://www.pinterest.com/pin/987654321/");
+  });
   it("returns null where no public URL is derivable from the id alone", () => {
     expect(platformPostUrl("tiktok", "v_pub_url~x")).toBeNull();
     expect(platformPostUrl("instagram", "1789")).toBeNull();

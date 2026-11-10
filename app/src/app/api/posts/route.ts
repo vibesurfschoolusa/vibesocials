@@ -501,7 +501,7 @@ export async function POST(request: Request) {
     }
     // 2026-11-01 scale audit (jobs, event size): only platform keys are ever published
     // (`overrides?.[platform]`), so any other key is dropped here - what bounds
-    // the event at 1 base + 7 overrides x 10,000 characters - and the cap is
+    // the event at 1 base + 8 overrides x 10,000 characters - and the cap is
     // checked on what is left.
     perPlatformOverrides = pickPlatformOverrides(overridesRaw);
     const overlongOverride = findOverlongCaption({ perPlatformOverrides });

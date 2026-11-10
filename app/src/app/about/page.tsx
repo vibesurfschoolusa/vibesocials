@@ -2,7 +2,8 @@ import Link from "next/link";
 
 import { LegalPage, LegalSection } from "@/components/legal-page";
 import { buttonVariants } from "@/components/ui/button";
-import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
+import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
+import { platformLabel } from "@/lib/platforms";
 import { OPERATOR_LOCATION, OPERATOR_NAME, PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/siteInfo";
 
 export const metadata = {
@@ -34,7 +35,7 @@ export default function AboutPage() {
 
       <LegalSection title="Where you can post">
         <ul className="flex flex-wrap gap-2">
-          {PLATFORM_ORDER.map((platform) => (
+          {advertisedPlatforms().map((platform) => (
             <li key={platform} className="rounded-full border border-border px-3 py-1 text-xs">
               {platformLabel(platform)}
             </li>

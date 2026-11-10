@@ -39,6 +39,9 @@ export function platformPostUrl(
       return `https://www.linkedin.com/feed/update/${encodeURI(externalPostId)}`;
     case "facebook_page":
       return `https://www.facebook.com/${encodeURIComponent(externalPostId)}`;
+    case "pinterest":
+      // The Pin's id from POST /pins (server/platforms/pinterestClient.ts).
+      return `https://www.pinterest.com/pin/${encodeURIComponent(externalPostId)}/`;
     default:
       return null;
   }

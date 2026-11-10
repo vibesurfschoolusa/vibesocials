@@ -18,6 +18,7 @@ import { GET as facebookPageStart } from "./facebook_page/start/route";
 import { GET as gbpStart } from "./google_business_profile/start/route";
 import { GET as instagramStart } from "./instagram/start/route";
 import { GET as linkedinStart } from "./linkedin/start/route";
+import { GET as pinterestStart } from "./pinterest/start/route";
 import { GET as tiktokStart } from "./tiktok/start/route";
 import { GET as youtubeStart } from "./youtube/start/route";
 
@@ -71,6 +72,16 @@ const CASES: StartCase[] = [
       GOOGLE_GBP_REDIRECT_URI: `${ORIGIN}/api/auth/google_business_profile/callback`,
     },
     authorizeHost: "accounts.google.com",
+  },
+  {
+    platform: "pinterest",
+    GET: pinterestStart,
+    env: {
+      PINTEREST_APP_ID: "1234567",
+      PINTEREST_APP_SECRET: "pin-secret",
+      PINTEREST_REDIRECT_URI: `${ORIGIN}/api/auth/pinterest/callback`,
+    },
+    authorizeHost: "www.pinterest.com",
   },
 ];
 
@@ -177,6 +188,19 @@ describe("requested permissions (least privilege)", () => {
   it("Google Business Profile: business.manage only", async () => {
     const scope = await scopesOf(gbpStart, "google_business_profile", envOf("google_business_profile"));
     expect(scope).toBe("https://www.googleapis.com/auth/business.manage");
+  });
+
+  // Pinterest lists boards:write as required for POST /pins (API description
+  // 5.28.0, checked 2026-11-10). No ads, catalogs or analytics scopes.
+  it("Pinterest: create Pins, list boards, read the username; nothing else", async () => {
+    const scope = await scopesOf(pinterestStart, "pinterest", envOf("pinterest"));
+    expect(scope.split(",")).toEqual([
+      "boards:read",
+      "boards:write",
+      "pins:read",
+      "pins:write",
+      "user_accounts:read",
+    ]);
   });
 });
 

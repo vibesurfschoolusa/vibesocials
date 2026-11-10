@@ -247,6 +247,29 @@ describe("describeOAuthResult — LinkedIn account that administers no page", ()
   });
 });
 
+describe("describeOAuthResult — Pinterest", () => {
+  it("an account with no board we can post to is told to create one", () => {
+    expect(describeOAuthResult({ error: "pinterest_no_boards", success: null })).toEqual({
+      variant: "danger",
+      message:
+        "This Pinterest account has no board we can post to, and every Pin goes on a board. Create a board on Pinterest (not a secret one), then click Connect again.",
+    });
+  });
+
+  it("saying no on Pinterest's screen reads as a cancellation", () => {
+    expect(describeOAuthResult({ error: "pinterest_access_denied", success: null })?.message).toBe(
+      "You cancelled the Pinterest authorization — nothing was connected. Click Connect to try again.",
+    );
+  });
+
+  it("a successful connect names Pinterest", () => {
+    expect(describeOAuthResult({ error: null, success: "pinterest_connected" })).toEqual({
+      variant: "success",
+      message: "Pinterest connected.",
+    });
+  });
+});
+
 describe("describeOAuthResult — session binding and connect-failure codes", () => {
   const ALL_PLATFORMS: Array<[string, string]> = [
     ["facebook_page", "Facebook Page"],

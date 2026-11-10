@@ -25,7 +25,7 @@ describe("deferral bounds", () => {
   it("pins the documented values", () => {
     expect(MAX_RATE_LIMIT_RETRIES).toBe(3);
     // X at 0.25 MB/s needs about 20 steps and LinkedIn's 128 parts plus processing
-    // about 23 (plan Task 7); 7 platforms x (40 + 40 sleeps + 6 rate-limit steps)
+    // about 23 (plan Task 7); 8 platforms x (40 + 40 sleeps + 6 rate-limit steps)
     // stays under Inngest's 1,000 steps per run.
     expect(MAX_CONTINUATIONS_PER_RESULT).toBe(40);
     // GBP's documented exponential backoff (plan V17).

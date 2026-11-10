@@ -1542,7 +1542,7 @@ describe("POST /api/posts — workspace changed in another tab (2026-11-01 audit
 });
 
 // 2026-11-01 scale audit (jobs, event size): a publish event carries the caption plus up
-// to 7 per-platform overrides, and nothing capped their length, so an oversized
+// to 8 per-platform overrides, and nothing capped their length, so an oversized
 // caption could exceed Inngest's event / step-output size limits.
 describe("POST /api/posts — caption length cap and override keys (2026-11-01 scale audit)", () => {
   const BLOB = "https://test.public.blob.vercel-storage.com/vid.mp4";
@@ -1675,23 +1675,31 @@ describe("POST /api/posts — caption length cap and override keys (2026-11-01 s
     );
   });
 
-  it("bounds the publish event: 8 captions of 10,000 characters plus a junk key stay under 80,000 caption characters", async () => {
+  // One override per platform: 8 since Pinterest (2026-11-10).
+  it("bounds the publish event: 9 captions of 10,000 characters plus a junk key stay at 90,000 caption characters", async () => {
     const overrides = Object.fromEntries(
-      ["tiktok", "youtube", "x", "linkedin", "instagram", "google_business_profile", "facebook_page"].map(
-        (p) => [p, AT_CAP],
-      ),
+      [
+        "tiktok",
+        "youtube",
+        "x",
+        "linkedin",
+        "instagram",
+        "google_business_profile",
+        "facebook_page",
+        "pinterest",
+      ].map((p) => [p, AT_CAP]),
     );
     await POST(jsonRequest(blobBody({ baseCaption: AT_CAP, perPlatformOverrides: { ...overrides, junk: AT_CAP } })));
 
     const sent = inngestSendMock.mock.calls[0][0] as {
       data: { baseCaption: string; perPlatformOverrides: Record<string, string> };
     };
-    expect(Object.keys(sent.data.perPlatformOverrides)).toHaveLength(7);
+    expect(Object.keys(sent.data.perPlatformOverrides)).toHaveLength(8);
     expect(sent.data.perPlatformOverrides).not.toHaveProperty("junk");
     const total =
       sent.data.baseCaption.length +
       Object.values(sent.data.perPlatformOverrides).reduce((n, v) => n + v.length, 0);
-    expect(total).toBe(80_000);
+    expect(total).toBe(90_000);
   });
 });
 

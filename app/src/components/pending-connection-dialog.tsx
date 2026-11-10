@@ -17,7 +17,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 
 /** The platforms whose connect can end in a choice (server/connections/pendingConnection.ts). */
-type ChoosablePlatform = "facebook_page" | "instagram" | "linkedin";
+type ChoosablePlatform = "facebook_page" | "instagram" | "linkedin" | "pinterest";
 
 /** GET /api/connections/pending/[id] candidate: ids and names only, never tokens. */
 interface Candidate {
@@ -40,6 +40,11 @@ const COPY: Record<ChoosablePlatform, { title: string; description: string }> = 
     title: "Choose which LinkedIn page to connect",
     description:
       "You administer several LinkedIn company pages. Choose the one this workspace posts to.",
+  },
+  pinterest: {
+    title: "Choose which Pinterest board to post to",
+    description:
+      "Every Pin goes on a board. Choose the board this workspace posts to. To change it later, switch the account in Settings and choose again.",
   },
 };
 

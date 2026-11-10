@@ -7,6 +7,7 @@ import {
   Linkedin,
   MapPin,
   Music2,
+  Pin,
   Twitter,
   Youtube,
   type LucideIcon,
@@ -66,6 +67,14 @@ const PLATFORMS: PlatformConfig[] = [
       "Connect your TikTok account to post videos to it directly.",
   },
   {
+    key: "pinterest",
+    label: "Pinterest",
+    href: "/api/auth/pinterest/start",
+    icon: Pin,
+    description:
+      "Connect your Pinterest account to publish photos and videos as Pins on one of your boards.",
+  },
+  {
     key: "instagram",
     label: "Instagram",
     href: "/api/auth/instagram/start",
@@ -106,9 +115,19 @@ interface ConnectionsSectionProps {
    * controls, and no GBP location picker (also a mutation).
    */
   readOnly?: boolean;
+  /**
+   * Platforms this deployment can't connect yet (app/settings/page.tsx:
+   * Pinterest, until its app credentials are set). Not listed, unless the
+   * workspace already has that connection, which stays visible and removable.
+   */
+  unavailablePlatforms?: readonly Platform[];
 }
 
-export function ConnectionsSection({ connections, readOnly = false }: ConnectionsSectionProps) {
+export function ConnectionsSection({
+  connections,
+  readOnly = false,
+  unavailablePlatforms = [],
+}: ConnectionsSectionProps) {
   return (
     <>
       {!readOnly ? (
@@ -122,6 +141,7 @@ export function ConnectionsSection({ connections, readOnly = false }: Connection
       <div className="flex flex-col gap-3">
         {PLATFORMS.map(({ key, label, href, icon: Icon, description }) => {
           const connection = connections.find((c) => c.platform === key);
+          if (!connection && unavailablePlatforms.includes(key)) return null;
           const isGoogleBusinessProfile = key === "google_business_profile";
           // A Business Profile has no account name to show until a location is
           // chosen (lib/connectionSummary.ts names it after that location).

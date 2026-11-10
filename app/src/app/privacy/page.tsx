@@ -135,7 +135,7 @@ export default function PrivacyPage() {
           ; disconnecting in Settings deletes the tokens and YouTube data we hold.
         </p>
         <p className="mt-2">
-          The same approach applies to Facebook Pages and Instagram (Meta), LinkedIn and X: we
+          The same approach applies to Facebook Pages and Instagram (Meta), LinkedIn, Pinterest and X: we
           request only the permissions needed to publish your posts, and use them only for that.
           Each platform&apos;s own terms and privacy policy also apply to what you post there.
         </p>
@@ -144,6 +144,16 @@ export default function PrivacyPage() {
           company page, and finding the pages you administer so you can choose one. We store the
           page&apos;s ID and name to show it in Settings and to publish to it. We do not read your
           LinkedIn profile, your connections, or comments and reactions on your posts.
+        </p>
+        <p className="mt-2">
+          For Pinterest, you approve on Pinterest&apos;s own screen: creating Pins, and reading your
+          boards and your username. We read your list of boards when you connect, so you can choose
+          the board your Pins go on. We store your username and that board&apos;s ID and name, to show
+          them in Settings and to publish to the board, and the ID of each Pin we create, to link to
+          it. We do not read your other Pins, your followers, your messages or your analytics, and we
+          never save other people&apos;s Pins, follow accounts or comment for you. You can remove{" "}
+          {PRODUCT_NAME}&apos;s access at any time in your Pinterest settings under Security; disconnecting
+          in Settings deletes the tokens and the Pinterest details we hold.
         </p>
       </LegalSection>
 

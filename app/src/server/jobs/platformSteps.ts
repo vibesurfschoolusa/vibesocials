@@ -35,7 +35,7 @@ export const MAX_RATE_LIMIT_RETRIES = 3;
  * 128 parts plus processing). The step after the 40th is not started: the
  * platform step fails the result UPLOAD_INCOMPLETE (inngest-functions.ts), and
  * the orchestrator below throws if a plan asks anyway. With 40 sleeps and the
- * rate-limit steps, 7 platforms x (40 + 40 + 6) stay under Inngest's 1,000
+ * rate-limit steps, 8 platforms x (40 + 40 + 6) = 688 stay under Inngest's 1,000
  * steps per run (https://www.inngest.com/docs/usage-limits/inngest).
  */
 export const MAX_CONTINUATIONS_PER_RESULT = 40;

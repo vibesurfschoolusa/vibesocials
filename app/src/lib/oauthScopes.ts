@@ -62,3 +62,19 @@ export const LINKEDIN_SCOPES = ["w_organization_social", "rw_organization_admin"
 
 /** Google Business Profile: local posts, gallery media and review replies. */
 export const GOOGLE_BUSINESS_PROFILE_SCOPES = ["https://www.googleapis.com/auth/business.manage"] as const;
+
+/**
+ * Pinterest (API v5): pins:write and pins:read (POST /pins, POST /media and
+ * GET /media/{id} for a video's processing status), boards:read (GET /boards,
+ * to choose the board at connect), boards:write (Pinterest lists it as required
+ * for POST /pins; the app never creates or edits a board) and user_accounts:read
+ * (GET /user_account, for the username shown in Settings). No ads or catalogs
+ * scopes. Checked against Pinterest's API description 5.28.0 on 2026-11-10.
+ */
+export const PINTEREST_SCOPES = [
+  "boards:read",
+  "boards:write",
+  "pins:read",
+  "pins:write",
+  "user_accounts:read",
+] as const;

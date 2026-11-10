@@ -8,6 +8,7 @@ import { ConnectionsSection } from "@/components/connections-section";
 import { TeamSection } from "@/components/team-section";
 import { Alert } from "@/components/ui/alert";
 import { describeOAuthResult } from "@/lib/oauthResult";
+import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
 import { type ConnectionSummary, toConnectionSummary } from "@/lib/connectionSummary";
 import type { UserSettings } from "@/lib/userSettings";
 
@@ -109,7 +110,12 @@ export default async function SettingsPage({
               Connect your social accounts so Vibe Socials can publish on your behalf.
             </p>
           </div>
-          <ConnectionsSection connections={connections} readOnly={context.role !== "owner"} />
+          <ConnectionsSection
+            connections={connections}
+            readOnly={context.role !== "owner"}
+            // Pinterest is listed once its app credentials are set (lib/advertisedPlatforms.ts).
+            unavailablePlatforms={advertisedPlatforms().includes("pinterest") ? [] : ["pinterest"]}
+          />
         </section>
 
         <section>

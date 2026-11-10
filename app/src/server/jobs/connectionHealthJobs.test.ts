@@ -16,6 +16,7 @@ const {
   refreshConnectionTokenMock,
   sendEmailMock,
   syncPageMock,
+  backfillGbpLocationTitlesMock,
 } = vi.hoisted(() => ({
   findManyMock: vi.fn(),
   findUniqueMock: vi.fn(),
@@ -25,6 +26,7 @@ const {
   refreshConnectionTokenMock: vi.fn(),
   sendEmailMock: vi.fn(),
   syncPageMock: vi.fn(),
+  backfillGbpLocationTitlesMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -42,6 +44,11 @@ vi.mock("@/server/platforms", () => ({ getPlatformClient: getPlatformClientMock 
 // names (server/connections/linkedinData.ts, its own suite); none here.
 vi.mock("@/server/connections/linkedinData", () => ({
   refreshLinkedInOrganizationProfiles: async () => ({ refreshed: 0, cleared: 0 }),
+}));
+// 2026-11-10: then it names Business Profile locations that have no title yet
+// (server/connections/gbpLocationTitle.ts, its own suite); none here.
+vi.mock("@/server/connections/gbpLocationTitle", () => ({
+  backfillGbpLocationTitles: backfillGbpLocationTitlesMock,
 }));
 // The lock helper has its own suite (connectionRefresh.test.ts); only the
 // function is replaced, its error codes stay real.
@@ -152,6 +159,8 @@ beforeEach(() => {
     (snapshot: unknown, refresh: (current: unknown) => Promise<unknown>) => refresh(snapshot),
   );
   sendEmailMock.mockResolvedValue(undefined);
+  backfillGbpLocationTitlesMock.mockReset();
+  backfillGbpLocationTitlesMock.mockResolvedValue({ named: 0, failed: 0, flagged: [] });
 });
 
 afterEach(() => {
@@ -210,7 +219,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
     expect(step.sendEvent).toHaveBeenCalledTimes(2);
     expect(eventsOf(step, 0)).toHaveLength(1000);
     expect(eventsOf(step, 1)).toHaveLength(3);
-    expect(summary).toEqual({ pages: 2, connections: 1003, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 } });
+    expect(summary).toEqual({ pages: 2, connections: 1003, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 } });
   });
 
   it("sends one event per connection with the id refresh-<id>-<UTC date> (a same-day re-run dedupes)", async () => {
@@ -233,6 +242,45 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
     ]);
   });
 
+  // 2026-11-10: the title backfill refreshes Google tokens; a dead grant flags the
+  // connection outside refresh-connection, which is what emails the owners.
+  it("emails the owners of a Business Profile connection the title backfill found dead", async () => {
+    findManyMock.mockResolvedValueOnce([]);
+    backfillGbpLocationTitlesMock.mockResolvedValue({ named: 2, failed: 1, flagged: ["conn-9"] });
+    findUniqueMock.mockResolvedValue({
+      platform: "google_business_profile",
+      workspaceId: "ws-1",
+      needsReconnect: true,
+    });
+    workspaceFindUniqueMock.mockResolvedValue({ name: "Acme" });
+    membersFindManyMock.mockResolvedValue([{ user: { id: "user-a", email: "owner-a@example.com" } }]);
+    const step = fakeStep();
+
+    const summary = await runCron(step);
+
+    expect(step.order.slice(-2)).toEqual([
+      "run:backfill-gbp-location-titles",
+      "run:notify-gbp-reconnect-0",
+    ]);
+    expect(findUniqueMock).toHaveBeenCalledWith({
+      where: { id: "conn-9" },
+      select: { platform: true, workspaceId: true, needsReconnect: true },
+    });
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(sendEmailMock.mock.calls[0][0].to).toBe("owner-a@example.com");
+    expect(sendEmailMock.mock.calls[0][0].subject).toContain("Google Business Profile");
+    // The same per-day key refresh-connection uses, so nobody is emailed twice.
+    expect(sendEmailMock.mock.calls[0][1]).toMatchObject({
+      idempotencyKey: "reconnect/conn-9/2026-11-01/user-a",
+    });
+    expect((summary as unknown as { gbpLocationTitles: unknown }).gbpLocationTitles).toEqual({
+      named: 2,
+      failed: 1,
+      flagged: 1,
+      reconnectEmails: 1,
+    });
+  });
+
   it("uses deterministic step ids: start, page-<i>, fan-out-<i>, then the YouTube and LinkedIn data steps", async () => {
     findManyMock
       .mockResolvedValueOnce(ids(0, HEALTH_SWEEP_PAGE_SIZE))
@@ -249,6 +297,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
       "sendEvent:fan-out-1",
       "run:purge-stale-youtube-metrics",
       "run:refresh-linkedin-organization-profiles",
+      "run:backfill-gbp-location-titles",
     ]);
     expect(step.outputs.start).toBe(NOW.toISOString());
   });
@@ -319,7 +368,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
       expect(sent).toHaveLength(2500);
       expect(sent[0]).toBe(`refresh-${pad(0)}-2026-11-01`);
       expect(sent[sent.length - 1]).toBe(`refresh-${pad(2499)}-2026-11-01`);
-      expect(summary).toEqual({ pages: 3, connections: 2500, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 } });
+      expect(summary).toEqual({ pages: 3, connections: 2500, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 } });
     });
 
     it("rows added while the sweep runs are picked up when they sort after the current page", async () => {
@@ -343,7 +392,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
     const summary = await runCron(step);
 
     expect(step.sendEvent).toHaveBeenCalledTimes(1);
-    expect(summary).toEqual({ pages: 2, connections: 1000, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 } });
+    expect(summary).toEqual({ pages: 2, connections: 1000, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 } });
   });
 
   it("no eligible connection: one page query, no event", async () => {
@@ -354,7 +403,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
 
     expect(findManyMock).toHaveBeenCalledTimes(1);
     expect(step.sendEvent).not.toHaveBeenCalled();
-    expect(summary).toEqual({ pages: 1, connections: 0, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 } });
+    expect(summary).toEqual({ pages: 1, connections: 0, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 }, gbpLocationTitles: { named: 0, failed: 0, flagged: 0, reconnectEmails: 0 } });
   });
 
   it("never loads token columns, and its step outputs hold only ids", async () => {

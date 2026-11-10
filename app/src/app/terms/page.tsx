@@ -79,7 +79,8 @@ export default function TermsPage() {
 
       <LegalSection title="6. Third-party platforms">
         <p>
-          {PRODUCT_NAME} is not affiliated with or endorsed by TikTok, Meta, Google, LinkedIn or X.
+          {PRODUCT_NAME} is not affiliated with or endorsed by TikTok, Meta, Google, LinkedIn,
+          Pinterest or X.
           Each platform decides whether and how your post appears, and may change its features or
           limits at any time.
         </p>

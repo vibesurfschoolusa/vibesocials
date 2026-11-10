@@ -6,7 +6,7 @@ import { PLATFORM_ORDER } from "@/lib/platforms";
  * 2026-11-01 scale audit (jobs, event size): the one cap on a caption's length, shared by
  * the API routes (POST /api/posts, PATCH /api/posts/[postJobId], POST
  * /api/media) and the three caption textareas (composer, Queue edit, media
- * library). A publish event carries the base caption plus up to 7 per-platform
+ * library). A publish event carries the base caption plus up to 8 per-platform
  * overrides, and nothing capped their length, so an oversized caption could
  * exceed Inngest's event and step-output size limits.
  *
@@ -33,7 +33,7 @@ export function captionTooLongMessage(field: string): string {
  * Keeps only the entries whose key is a `Platform`, dropping everything else.
  * Only platform keys are ever published (`overrides?.[platform]`), so an unknown
  * key is dead weight in the stored job and the publish event; dropping it is
- * what bounds the event at 1 base + 7 overrides x MAX_CAPTION_CHARS. (Rejecting
+ * what bounds the event at 1 base + 8 overrides x MAX_CAPTION_CHARS. (Rejecting
  * the key instead would block reusing a legacy media item that carries one.)
  */
 export function pickPlatformOverrides(

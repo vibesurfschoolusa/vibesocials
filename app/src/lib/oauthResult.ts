@@ -47,6 +47,16 @@ export function describeOAuthResult(params: {
           "This LinkedIn account isn't a Super admin of any company page. Sign in to LinkedIn with an account that is a Super admin of your page, then click Connect again.",
       };
     }
+    // Pinterest: a Pin always goes on a board, and GET /boards listed none
+    // (app/api/auth/pinterest/callback/route.ts). Secret boards are not listed:
+    // the app does not ask for boards:read_secret.
+    if (error === "pinterest_no_boards") {
+      return {
+        variant: "danger",
+        message:
+          "This Pinterest account has no board we can post to, and every Pin goes on a board. Create a board on Pinterest (not a secret one), then click Connect again.",
+      };
+    }
     const label = platformFromCode(error);
     // LinkedIn's own "user declined" redirect uses a fixed linkedin_auth_failed
     // code rather than a "*_denied" one — catch it too so it reads as a

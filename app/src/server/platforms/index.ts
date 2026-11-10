@@ -3,6 +3,7 @@ import type { Platform } from "@prisma/client";
 import { googleBusinessProfileClient } from "./googleBusinessProfileClient";
 import { instagramClient } from "./instagramClient";
 import { linkedinClient } from "./linkedinClient";
+import { pinterestClient } from "./pinterestClient";
 import { tiktokClient } from "./tiktokClient";
 import { xClient } from "./xClient";
 import { youtubeClient } from "./youtubeClient";
@@ -17,6 +18,7 @@ const platformClients: Record<Platform, PlatformClient> = {
   instagram: instagramClient,
   google_business_profile: googleBusinessProfileClient,
   facebook_page: facebookPageClient,
+  pinterest: pinterestClient,
 };
 
 export function getPlatformClient(platform: Platform): PlatformClient | null {

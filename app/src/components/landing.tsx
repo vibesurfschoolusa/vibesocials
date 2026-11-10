@@ -12,7 +12,8 @@ import {
 import type { LucideIcon } from "lucide-react";
 
 import { buttonVariants } from "@/components/ui/button";
-import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
+import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
+import { platformLabel } from "@/lib/platforms";
 import { OPERATOR_NAME, PRODUCT_NAME } from "@/lib/siteInfo";
 
 /**
@@ -97,7 +98,7 @@ export function Landing() {
           </div>
 
           <ul className="mt-10 flex max-w-2xl flex-wrap items-center justify-center gap-2">
-            {PLATFORM_ORDER.map((platform) => (
+            {advertisedPlatforms().map((platform) => (
               <li
                 key={platform}
                 className="rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground"

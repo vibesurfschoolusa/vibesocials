@@ -12,6 +12,7 @@ export const PLATFORM_LABELS: Record<Platform, string> = {
   linkedin: "LinkedIn",
   facebook_page: "Facebook Page",
   google_business_profile: "Google Business Profile",
+  pinterest: "Pinterest",
 };
 
 /** Stable display order for platform chips / status badges. */
@@ -23,6 +24,7 @@ export const PLATFORM_ORDER: readonly Platform[] = [
   "linkedin",
   "facebook_page",
   "google_business_profile",
+  "pinterest",
 ];
 
 /** Resolve a platform's display label, falling back to the raw enum value. */

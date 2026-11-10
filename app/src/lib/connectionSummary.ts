@@ -61,6 +61,20 @@ export function toConnectionSummary(row: ConnectionSummaryRow): ConnectionSummar
       needsReconnect: row.needsReconnect,
     };
   }
+  // A Pinterest connection posts to one board, chosen at connect
+  // (server/connections/saveConnection.ts): Settings names both, so the user
+  // sees where Pins go without opening Pinterest (2026-11-10).
+  if (row.platform === "pinterest") {
+    const username = nonEmptyString(metadata.username);
+    const boardName = nonEmptyString(metadata.boardName);
+    return {
+      platform: row.platform,
+      accountIdentifier: row.accountIdentifier,
+      username: username && boardName ? `${username}, board \u201c${boardName}\u201d` : username,
+      locationName: null,
+      needsReconnect: row.needsReconnect,
+    };
+  }
   return {
     platform: row.platform,
     accountIdentifier: row.accountIdentifier,

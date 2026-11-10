@@ -55,6 +55,10 @@ export const PLATFORM_CAPTION_LIMITS: Record<Platform, PlatformCaptionLimit> = {
   // A photo is published as a Business Profile post ("Update"), whose text
   // Google caps at 1,500 characters.
   google_business_profile: { charLimit: 1500, ellipsis: "..." },
+  // Matches fitPinterestDescription (lib/pinterestApi.ts), which
+  // server/platforms/pinterestClient.ts sends as the Pin's description:
+  // Pinterest's limit is 800 characters, and it refuses a longer one.
+  pinterest: { charLimit: 800, ellipsis: "..." },
 };
 
 
@@ -85,6 +89,10 @@ export type MediaKind = "image" | "video";
  *                    video is added to the gallery (media, "VIDEO")
  *                    (server/platforms/googleBusinessProfileClient.ts, `isPhoto`);
  *                    it never rejects, so neither does this map.
+ * - pinterest      — both: a photo becomes a Pin by URL, a video is uploaded and
+ *                    processed first; anything else is
+ *                    PINTEREST_UNSUPPORTED_MEDIA_TYPE
+ *                    (server/platforms/pinterestClient.ts, `mediaKindOf`).
  */
 export const PLATFORM_ACCEPTED_MEDIA: Record<Platform, readonly MediaKind[]> = {
   youtube: ["video"],
@@ -94,6 +102,7 @@ export const PLATFORM_ACCEPTED_MEDIA: Record<Platform, readonly MediaKind[]> = {
   x: ["image", "video"],
   linkedin: ["image", "video"],
   google_business_profile: ["image", "video"],
+  pinterest: ["image", "video"],
 };
 
 /**
@@ -107,6 +116,9 @@ export const PLATFORM_ACCEPTED_MEDIA: Record<Platform, readonly MediaKind[]> = {
  */
 const PLATFORM_REFUSED_FORMATS: Partial<Record<Platform, Readonly<Record<string, string>>>> = {
   linkedin: { "image/webp": "JPG, PNG or GIF only", "video/webm": "MP4 or MOV only" },
+  // Pinterest's video Pins take .mp4, .mov and .m4v (H.264 / H.265); a WebM
+  // upload fails its processing, so it is refused up front.
+  pinterest: { "video/webm": "MP4 or MOV only" },
 };
 
 /**

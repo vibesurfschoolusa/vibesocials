@@ -102,6 +102,9 @@ const TIKTOK_RATE_LIMIT_CODE = "rate_limit_exceeded";
  * both answer with HTTP 429. Whether they, Meta (without a BUC header) and
  * TikTok send `Retry-After` is unconfirmed (plan U5): without one retryAt is
  * null and the run's backoff schedule applies.
+ *
+ * Pinterest (API description 5.28.0: every operation lists a 429, "being rate
+ * limited") is handled the same way: `Retry-After` when it sends one.
  */
 
 export type RateLimitKind = "rate_limited" | "daily_limit" | "youtube_quota";
@@ -321,6 +324,7 @@ export async function classifyRateLimit(
 
     case "linkedin":
     case "google_business_profile":
+    case "pinterest":
       return res.status === 429
         ? rateLimitedError(platform, "rate_limited", retryAfterAt(res.headers, now))
         : null;

@@ -50,8 +50,15 @@ describe("PLATFORM_CAPTION_LIMITS", () => {
         "linkedin",
         "facebook_page",
         "google_business_profile",
+        "pinterest",
       ].sort(),
     );
+  });
+
+  // Pinterest refuses a Pin whose description is over 800 characters
+  // (PinCreate.description maxLength), so the client cuts it there.
+  it("Pinterest: the description limit, 800, with an ellipsis", () => {
+    expect(PLATFORM_CAPTION_LIMITS.pinterest).toEqual({ charLimit: 800, ellipsis: "..." });
   });
 });
 
@@ -80,7 +87,14 @@ describe("platformAcceptsMedia (rules read from each platform client — see PLA
     ["x", true, true], // xClient.ts:528-537 — image or video
     ["linkedin", true, true], // linkedinClient.ts:619-643 — video or image
     ["google_business_profile", true, true], // googleBusinessProfileClient.ts — photo post, video to gallery
+    ["pinterest", true, true], // pinterestClient.ts — image Pin by URL, video Pin by upload
   ];
+
+  it("Pinterest takes MP4 and MOV videos but not WebM, and says why", () => {
+    expect(platformAcceptsMedia("pinterest", "video/quicktime")).toBe(true);
+    expect(platformAcceptsMedia("pinterest", "video/webm")).toBe(false);
+    expect(unsupportedMediaReason("pinterest", "video/webm")).toBe("MP4 or MOV only");
+  });
 
   it.each(table)("%s: video=%s image=%s", (platform, video, image) => {
     expect(platformAcceptsMedia(platform, "video/mp4")).toBe(video);

@@ -3,7 +3,7 @@ import type { SocialConnection } from "@prisma/client";
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PUBLISH_UNCONFIRMED_CODE } from "@/lib/publishOutcomes";
-import { truncateGraphemes } from "@/lib/truncate";
+import { fitTitle } from "@/lib/truncate";
 import {
   YOUTUBE_UPLOAD_STATE_KIND,
   type UploadSnapshot,
@@ -181,35 +181,12 @@ type UploadStatus =
   /** 404: the session is gone; a new one has to be started. */
   | { kind: "expired" };
 
-const sentenceSegmenter = new Intl.Segmenter(undefined, { granularity: "sentence" });
-const titleGraphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-
-/** Grapheme count (what YouTube's title limit counts). */
-function graphemeLength(text: string): number {
-  return [...titleGraphemeSegmenter.segment(text)].length;
-}
-
 /**
  * Fit text into YouTube's title limit without cutting it mid-sentence
- * (2026-11-08): on one line; whole if it fits; else the whole sentences that
- * fit; else one sentence cut at its last whole word, with "…". A single word
- * longer than the limit is cut where it must be, with "…".
+ * (2026-11-08): see {@link fitTitle} (lib/truncate.ts) for the rules.
  */
 export function fitYouTubeTitle(text: string, max: number = YOUTUBE_TITLE_MAX_GRAPHEMES): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  if (graphemeLength(oneLine) <= max) return oneLine;
-
-  let fitted = "";
-  for (const { segment } of sentenceSegmenter.segment(oneLine)) {
-    const next = fitted + segment;
-    if (graphemeLength(next.trim()) > max) break;
-    fitted = next;
-  }
-  if (fitted.trim()) return fitted.trim();
-
-  const cut = truncateGraphemes(oneLine, max, { ellipsis: "…" }).slice(0, -1);
-  const lastSpace = cut.lastIndexOf(" ");
-  return (lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trimEnd() + "…";
+  return fitTitle(text, max);
 }
 
 /**

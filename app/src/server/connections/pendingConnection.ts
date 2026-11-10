@@ -4,11 +4,15 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { openSecret, sealSecret } from "@/lib/tokenCrypto";
 
+import type { PinterestBoard } from "@/lib/pinterestApi";
+
+import type { PinterestAccount } from "./pinterestAccount";
 import {
   fetchInstagramAccountDetails,
   saveFacebookPageConnection,
   saveInstagramConnection,
   saveLinkedInConnection,
+  savePinterestConnection,
   type FacebookPageAccount,
   type LinkedInOrganization,
   type LinkedInProfile,
@@ -20,7 +24,9 @@ import {
  * When a Facebook, Instagram or LinkedIn connect finds several accounts the
  * user manages, the OAuth callback connects none of them. It stores the
  * candidates here (with the tokens needed to connect any one of them, sealed)
- * and sends the user to `/settings?choose=<id>`, where they pick one.
+ * and sends the user to `/settings?choose=<id>`, where they pick one. A
+ * Pinterest connect does the same with the account's boards (2026-11-10): a Pin
+ * always goes on a board, so the board is what the user chooses.
  *
  * A pending row belongs to the user who started the connect, in the workspace
  * it was started for, and lives 15 minutes. Starting another connect for the
@@ -30,7 +36,7 @@ import {
 export const PENDING_CONNECTION_TTL_MS = 15 * 60 * 1000;
 
 /** The platforms whose connect can end in a choice. */
-export type ChoosablePlatform = "facebook_page" | "instagram" | "linkedin";
+export type ChoosablePlatform = "facebook_page" | "instagram" | "linkedin" | "pinterest";
 
 export interface InstagramAccountCandidate {
   igAccountId: string;
@@ -64,6 +70,17 @@ export type PendingConnectionPayload =
       };
       profile: LinkedInProfile;
       organizations: LinkedInOrganization[];
+    }
+  | {
+      platform: "pinterest";
+      token: {
+        accessToken: string;
+        refreshToken: string | null;
+        expiresAt: string;
+        scopes: string[];
+      };
+      account: PinterestAccount;
+      boards: PinterestBoard[];
     };
 
 /** One account the user can choose. Safe for the browser: no tokens. */
@@ -120,7 +137,12 @@ export async function createPendingConnection({
 }
 
 function isChoosablePlatform(platform: Platform): platform is ChoosablePlatform {
-  return platform === "facebook_page" || platform === "instagram" || platform === "linkedin";
+  return (
+    platform === "facebook_page" ||
+    platform === "instagram" ||
+    platform === "linkedin" ||
+    platform === "pinterest"
+  );
 }
 
 /**
@@ -186,6 +208,13 @@ export function listPendingCandidates(payload: PendingConnectionPayload): Pendin
         id: String(org.id),
         name: org.name ?? String(org.id),
         ...(org.vanityName ? { detail: `linkedin.com/company/${org.vanityName}` } : {}),
+      }));
+    case "pinterest":
+      return payload.boards.map((board) => ({
+        id: board.id,
+        name: board.name,
+        // Only you (and people you invite) see Pins on a secret board.
+        ...(board.privacy === "SECRET" ? { detail: "Secret board" } : {}),
       }));
   }
 }
@@ -256,6 +285,24 @@ export async function connectPendingCandidate(
         },
         profile: payload.profile,
         organization,
+      });
+      return { ok: true };
+    }
+
+    case "pinterest": {
+      const board = payload.boards.find((b) => b.id === candidateId);
+      if (!board) return { ok: false, reason: "unknown_candidate" };
+
+      await savePinterestConnection({
+        ...owner,
+        token: {
+          accessToken: payload.token.accessToken,
+          refreshToken: payload.token.refreshToken,
+          expiresAt: new Date(payload.token.expiresAt),
+          scopes: payload.token.scopes,
+        },
+        account: payload.account,
+        board,
       });
       return { ok: true };
     }

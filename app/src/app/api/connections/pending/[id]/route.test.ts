@@ -14,6 +14,7 @@ const {
   saveFacebookPageConnectionMock,
   saveInstagramConnectionMock,
   saveLinkedInConnectionMock,
+  savePinterestConnectionMock,
   fetchInstagramAccountDetailsMock,
 } = vi.hoisted(() => ({
   requireOwnerContextMock: vi.fn(),
@@ -23,6 +24,7 @@ const {
   saveFacebookPageConnectionMock: vi.fn(),
   saveInstagramConnectionMock: vi.fn(),
   saveLinkedInConnectionMock: vi.fn(),
+  savePinterestConnectionMock: vi.fn(),
   fetchInstagramAccountDetailsMock: vi.fn(),
 }));
 
@@ -47,6 +49,7 @@ vi.mock("@/server/connections/saveConnection", () => ({
   saveFacebookPageConnection: saveFacebookPageConnectionMock,
   saveInstagramConnection: saveInstagramConnectionMock,
   saveLinkedInConnection: saveLinkedInConnectionMock,
+  savePinterestConnection: savePinterestConnectionMock,
   fetchInstagramAccountDetails: fetchInstagramAccountDetailsMock,
 }));
 
@@ -113,7 +116,23 @@ const LINKEDIN = {
   ],
 } as unknown as PendingConnectionPayload;
 
-const TOKENS = ["page-token-1", "page-token-2", "li-access", "li-refresh"];
+// Pinterest (2026-11-10): the choice is the board the Pins go on.
+const PINTEREST: PendingConnectionPayload = {
+  platform: "pinterest",
+  token: {
+    accessToken: "pin-access",
+    refreshToken: "pin-refresh",
+    expiresAt: TOKEN_EXPIRY,
+    scopes: ["boards:read", "boards:write", "pins:read", "pins:write", "user_accounts:read"],
+  },
+  account: { id: "9001", username: "mysurfschool", accountType: "BUSINESS" },
+  boards: [
+    { id: "555", name: "Surf lessons", privacy: "PUBLIC" },
+    { id: "666", name: "Team photos", privacy: "SECRET" },
+  ],
+};
+
+const TOKENS = ["page-token-1", "page-token-2", "li-access", "li-refresh", "pin-access", "pin-refresh"];
 
 function row(
   payload: PendingConnectionPayload,
@@ -151,6 +170,7 @@ function expectNothingSaved() {
   expect(saveFacebookPageConnectionMock).not.toHaveBeenCalled();
   expect(saveInstagramConnectionMock).not.toHaveBeenCalled();
   expect(saveLinkedInConnectionMock).not.toHaveBeenCalled();
+  expect(savePinterestConnectionMock).not.toHaveBeenCalled();
 }
 
 beforeEach(() => {
@@ -162,6 +182,7 @@ beforeEach(() => {
     saveFacebookPageConnectionMock,
     saveInstagramConnectionMock,
     saveLinkedInConnectionMock,
+    savePinterestConnectionMock,
     fetchInstagramAccountDetailsMock,
   ]) {
     m.mockReset();
@@ -176,6 +197,7 @@ beforeEach(() => {
   saveFacebookPageConnectionMock.mockResolvedValue(undefined);
   saveInstagramConnectionMock.mockResolvedValue(undefined);
   saveLinkedInConnectionMock.mockResolvedValue(undefined);
+  savePinterestConnectionMock.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -313,10 +335,25 @@ describe("GET /api/connections/pending/[id]", () => {
     });
   });
 
+  it("lists the Pinterest boards by id and name, marking a secret one", async () => {
+    findUniqueMock.mockResolvedValue(row(PINTEREST));
+
+    const response = await GET(getReq(), ctx());
+
+    await expect(response.json()).resolves.toEqual({
+      platform: "pinterest",
+      candidates: [
+        { id: "555", name: "Surf lessons" },
+        { id: "666", name: "Team photos", detail: "Secret board" },
+      ],
+    });
+  });
+
   it.each([
     ["facebook_page", FACEBOOK],
     ["instagram", INSTAGRAM],
     ["linkedin", LINKEDIN],
+    ["pinterest", PINTEREST],
   ])("never returns a token (%s)", async (_platform, payload) => {
     findUniqueMock.mockResolvedValue(row(payload));
 
@@ -457,6 +494,37 @@ describe("POST /api/connections/pending/[id]", () => {
       organization: { id: 222, name: "Client Cafe" },
     });
     expect(deleteManyMock).toHaveBeenCalledWith({ where: { id: PENDING_ID } });
+  });
+
+  it("connects Pinterest to the chosen board, with the account's tokens", async () => {
+    findUniqueMock.mockResolvedValue(row(PINTEREST));
+
+    const response = await POST(postReq({ candidateId: "666" }), ctx());
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, platform: "pinterest" });
+    expect(savePinterestConnectionMock).toHaveBeenCalledWith({
+      userId: "user-1",
+      workspaceId: "ws-1",
+      token: {
+        accessToken: "pin-access",
+        refreshToken: "pin-refresh",
+        expiresAt: new Date(TOKEN_EXPIRY),
+        scopes: ["boards:read", "boards:write", "pins:read", "pins:write", "user_accounts:read"],
+      },
+      account: { id: "9001", username: "mysurfschool", accountType: "BUSINESS" },
+      board: { id: "666", name: "Team photos", privacy: "SECRET" },
+    });
+    expect(deleteManyMock).toHaveBeenCalledWith({ where: { id: PENDING_ID } });
+  });
+
+  it("a board id that is not on the Pinterest list is not a choice", async () => {
+    findUniqueMock.mockResolvedValue(row(PINTEREST));
+
+    const response = await POST(postReq({ candidateId: "777" }), ctx());
+
+    expect(response.status).toBe(400);
+    expectNothingSaved();
   });
 
   it("500s without logging the error's message when the save fails, keeping the pending connect", async () => {

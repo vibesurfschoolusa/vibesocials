@@ -75,6 +75,7 @@ import { GET as facebookPageGET } from "./facebook_page/callback/route";
 import { GET as gbpGET } from "./google_business_profile/callback/route";
 import { GET as instagramGET } from "./instagram/callback/route";
 import { GET as linkedinGET } from "./linkedin/callback/route";
+import { GET as pinterestGET } from "./pinterest/callback/route";
 import { GET as tiktokGET } from "./tiktok/callback/route";
 import { GET as youtubeGET } from "./youtube/callback/route";
 
@@ -168,6 +169,11 @@ const CASES: CallbackCase[] = [
       return new Response("not found", { status: 404 });
     },
   },
+  {
+    platform: "pinterest",
+    GET: pinterestGET,
+    provider: (url) => pinterestProvider([{ id: "555", name: "Board", privacy: "PUBLIC" }])(url),
+  },
 ];
 
 function callbackRequest(platform: Platform, state: string, code = "auth-code"): NextRequest {
@@ -236,6 +242,9 @@ beforeEach(() => {
   vi.stubEnv("LINKEDIN_CLIENT_ID", "li-id");
   vi.stubEnv("LINKEDIN_CLIENT_SECRET", "li-secret");
   vi.stubEnv("LINKEDIN_REDIRECT_URI", `${ORIGIN}/api/auth/linkedin/callback`);
+  vi.stubEnv("PINTEREST_APP_ID", "1234567");
+  vi.stubEnv("PINTEREST_APP_SECRET", "pin-secret");
+  vi.stubEnv("PINTEREST_REDIRECT_URI", `${ORIGIN}/api/auth/pinterest/callback`);
   vi.stubGlobal("fetch", fetchMock);
 
   // The routes still log provider progress through console.*; keep test
@@ -478,6 +487,45 @@ function linkedinProvider(
     const page = pages.find((p) => url === `https://api.linkedin.com/rest/organizations/${p.id}`);
     if (page) return json(page);
     if (url.includes("/organizations")) return json({ message: "Not enough permissions" }, 403);
+    return new Response("not found", { status: 404 });
+  };
+}
+
+/** A board as GET /v5/boards lists it. */
+type PinterestBoardItem = { id: string; name: string; privacy?: string };
+
+/**
+ * The token exchange, GET /user_account and GET /boards. `pages` answers the
+ * board list page by page (each page's bookmark leads to the next); without it
+ * `boards` is the one page.
+ */
+function pinterestProvider(
+  boards: PinterestBoardItem[],
+  opts: { pages?: PinterestBoardItem[][]; account?: () => Response } = {},
+): FakeProvider {
+  const pages = opts.pages ?? [boards];
+  return (url) => {
+    if (url.includes("/v5/oauth/token")) {
+      return json({
+        access_token: "pin-access",
+        refresh_token: "pin-refresh",
+        expires_in: 2592000,
+        refresh_token_expires_in: 5184000,
+        scope: "boards:read,boards:write,pins:read,pins:write,user_accounts:read",
+        token_type: "bearer",
+      });
+    }
+    if (url.includes("/v5/user_account")) {
+      return opts.account?.() ?? json({ id: "9001", username: "brand", account_type: "BUSINESS" });
+    }
+    if (url.includes("/v5/boards")) {
+      const bookmark = new URL(url).searchParams.get("bookmark");
+      const index = bookmark ? Number(bookmark.replace("page-", "")) : 0;
+      return json({
+        items: pages[index] ?? [],
+        bookmark: index + 1 < pages.length ? `page-${index + 1}` : null,
+      });
+    }
     return new Response("not found", { status: 404 });
   };
 }
@@ -878,6 +926,158 @@ describe("choosing which account to connect", () => {
 
       expect(location(res).searchParams.get("error")).toBe("linkedin_no_admin_pages");
       expectNoConnectionWrites();
+    });
+  });
+
+  // 2026-11-10: Pinterest. A Pin always goes on a board, so the "account" the
+  // user chooses is the board.
+  describe("pinterest", () => {
+    const SCOPES = ["boards:read", "boards:write", "pins:read", "pins:write", "user_accounts:read"];
+    type Call = [string, RequestInit | undefined];
+    const calls = () => fetchMock.mock.calls as Call[];
+
+    it("an account with one board connects straight away, posting to that board", async () => {
+      useProvider(pinterestProvider([{ id: "555", name: "Surf lessons", privacy: "PUBLIC" }]));
+
+      const res = await pinterestGET(callbackRequest("pinterest", signedState()));
+
+      expect(location(res).searchParams.get("success")).toBe("pinterest_connected");
+      expect(pendingCreateMock).not.toHaveBeenCalled();
+      const fields = {
+        accessToken: "pin-access",
+        refreshToken: "pin-refresh",
+        expiresAt: new Date(NOW.getTime() + 2592000 * 1000),
+        accountIdentifier: "brand",
+        scopes: SCOPES,
+        metadata: {
+          username: "brand",
+          accountId: "9001",
+          accountType: "BUSINESS",
+          boardId: "555",
+          boardName: "Surf lessons",
+        },
+        ...HEALTHY,
+      };
+      expect(upsertMock).toHaveBeenCalledWith({
+        where: { workspaceId_platform: { workspaceId: STATE_WORKSPACE, platform: "pinterest" } },
+        update: fields,
+        create: { userId: STATE_USER, workspaceId: STATE_WORKSPACE, platform: "pinterest", ...fields },
+      });
+    });
+
+    it("exchanges the code with HTTP Basic auth of the app id and secret, and reads the account and boards with the new token", async () => {
+      useProvider(pinterestProvider([{ id: "555", name: "Surf lessons" }]));
+
+      await pinterestGET(callbackRequest("pinterest", signedState()));
+
+      const [tokenUrl, tokenInit] = calls()[0];
+      expect(String(tokenUrl)).toBe("https://api.pinterest.com/v5/oauth/token");
+      expect(tokenInit?.method).toBe("POST");
+      expect((tokenInit?.headers as Record<string, string>).Authorization).toBe(
+        `Basic ${Buffer.from("1234567:pin-secret").toString("base64")}`,
+      );
+      expect(Object.fromEntries(tokenInit?.body as URLSearchParams)).toEqual({
+        grant_type: "authorization_code",
+        code: "auth-code",
+        redirect_uri: `${ORIGIN}/api/auth/pinterest/callback`,
+      });
+      const apiCalls = calls().slice(1);
+      expect(apiCalls.map(([url]) => String(url).split("?")[0]).sort()).toEqual([
+        "https://api.pinterest.com/v5/boards",
+        "https://api.pinterest.com/v5/user_account",
+      ]);
+      for (const [, init] of apiCalls) {
+        expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer pin-access");
+      }
+    });
+
+    it("several boards connect none: the tokens and the boards wait for the user's choice", async () => {
+      useProvider(
+        pinterestProvider([
+          { id: "555", name: "Surf lessons", privacy: "PUBLIC" },
+          { id: "666", name: "Team photos", privacy: "SECRET" },
+        ]),
+      );
+
+      const res = await pinterestGET(callbackRequest("pinterest", signedState()));
+
+      expectChooseRedirect(res);
+      expect(upsertMock).not.toHaveBeenCalled();
+      const pending = createdPending();
+      expect(pending.platform).toBe("pinterest");
+      expect(pending.payload).not.toContain("pin-access");
+      expect(pending.payload).not.toContain("pin-refresh");
+      expect(pending.opened).toEqual({
+        platform: "pinterest",
+        token: {
+          accessToken: "pin-access",
+          refreshToken: "pin-refresh",
+          expiresAt: new Date(NOW.getTime() + 2592000 * 1000).toISOString(),
+          scopes: SCOPES,
+        },
+        account: { id: "9001", username: "brand", accountType: "BUSINESS" },
+        boards: [
+          { id: "555", name: "Surf lessons", privacy: "PUBLIC" },
+          { id: "666", name: "Team photos", privacy: "SECRET" },
+        ],
+      });
+    });
+
+    it("reads every page of a long board list", async () => {
+      useProvider(
+        pinterestProvider([], {
+          pages: [[{ id: "1", name: "One" }], [{ id: "2", name: "Two" }], [{ id: "3", name: "Three" }]],
+        }),
+      );
+
+      await pinterestGET(callbackRequest("pinterest", signedState()));
+
+      const boards = createdPending().opened.boards as Array<{ id: string }>;
+      expect(boards.map((board) => board.id)).toEqual(["1", "2", "3"]);
+    });
+
+    it("an account with no boards is told to create one, and nothing is saved", async () => {
+      useProvider(pinterestProvider([]));
+
+      const res = await pinterestGET(callbackRequest("pinterest", signedState()));
+
+      expect(location(res).searchParams.get("error")).toBe("pinterest_no_boards");
+      expectNoConnectionWrites();
+    });
+
+    it("an account Pinterest won't describe is not connected", async () => {
+      useProvider(
+        pinterestProvider([{ id: "555", name: "Surf lessons" }], {
+          account: () => json({ code: 2, message: "nope" }, 403),
+        }),
+      );
+
+      const res = await pinterestGET(callbackRequest("pinterest", signedState()));
+
+      expect(location(res).searchParams.get("error")).toBe("pinterest_account_unavailable");
+      expectNoConnectionWrites();
+    });
+
+    it("a refused code exchange is pinterest_token_exchange_failed", async () => {
+      useProvider((url) =>
+        url.includes("/v5/oauth/token") ? json({ code: 283, message: "bad code" }, 400) : json({}, 404),
+      );
+
+      const res = await pinterestGET(callbackRequest("pinterest", signedState()));
+
+      expect(location(res).searchParams.get("error")).toBe("pinterest_token_exchange_failed");
+      expectNoConnectionWrites();
+    });
+
+    it("Pinterest's own ?error= (the user said no) is passed on as a cancellation", async () => {
+      const url = new URL("/api/auth/pinterest/callback", ORIGIN);
+      url.searchParams.set("error", "access_denied");
+      url.searchParams.set("state", signedState());
+
+      const res = await pinterestGET(new NextRequest(url));
+
+      expect(location(res).searchParams.get("error")).toBe("pinterest_access_denied");
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 });

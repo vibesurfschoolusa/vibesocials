@@ -87,7 +87,8 @@ export default function DataDeletionPage() {
             <p>
               You can also revoke Vibe Socials&apos; access from the platform directly — for
               example in Google Account permissions, Facebook Business Integrations, TikTok
-              security settings, or LinkedIn permitted services. Doing so stops Vibe Socials from
+              security settings, LinkedIn permitted services, or Pinterest security settings. Doing
+              so stops Vibe Socials from
               publishing on your behalf immediately. To remove the data we have already stored,
               follow step 1 or 2 above as well.
             </p>

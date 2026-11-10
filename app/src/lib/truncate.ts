@@ -83,3 +83,29 @@ export function truncateGraphemes(
 
   return graphemes.slice(0, budget).join("") + ellipsis;
 }
+
+const sentenceSegmenter = new Intl.Segmenter(undefined, { granularity: "sentence" });
+
+/**
+ * Fit text into a title of at most `max` graphemes without cutting it
+ * mid-sentence (2026-11-08, YouTube; shared with Pinterest since 2026-11-10): on
+ * one line; whole if it fits; else the whole sentences that fit; else one
+ * sentence cut at its last whole word, with "…". A single word longer than the
+ * limit is cut where it must be, with "…".
+ */
+export function fitTitle(text: string, max: number): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  if (toGraphemes(oneLine).length <= max) return oneLine;
+
+  let fitted = "";
+  for (const { segment } of sentenceSegmenter.segment(oneLine)) {
+    const next = fitted + segment;
+    if (toGraphemes(next.trim()).length > max) break;
+    fitted = next;
+  }
+  if (fitted.trim()) return fitted.trim();
+
+  const cut = truncateGraphemes(oneLine, max, { ellipsis: "…" }).slice(0, -1);
+  const lastSpace = cut.lastIndexOf(" ");
+  return (lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trimEnd() + "…";
+}

@@ -98,6 +98,7 @@ import type {
   TikTokPostMetadata,
   YouTubePostMetadata,
 } from "@/server/platforms/types";
+import { backfillGbpLocationTitles } from "@/server/connections/gbpLocationTitle";
 import { refreshLinkedInOrganizationProfiles } from "@/server/connections/linkedinData";
 import { purgeStaleYouTubeMetrics } from "@/server/connections/youtubeData";
 
@@ -1907,7 +1908,36 @@ export const connectionHealthSweep = inngest.createFunction(
       refreshLinkedInOrganizationProfiles(),
     );
 
-    const summary = { pages, connections, purgedYouTubeMetrics, linkedinOrganizations };
+    // 2026-11-10: a Business Profile location chosen before its title was saved
+    // gets it here, so Settings can name the connection
+    // (server/connections/gbpLocationTitle.ts). Bounded, and a no-op once named.
+    const gbpBackfill = await step.run("backfill-gbp-location-titles", () =>
+      backfillGbpLocationTitles(),
+    );
+    // A token refresh in that step can find a Google grant dead and flag the
+    // connection. `refresh-connection` emails the owners only when IT observes the
+    // flip, so the ones flagged here are emailed here (same per-day idempotency
+    // key, so nobody is emailed twice).
+    let gbpReconnectEmails = 0;
+    for (const [index, socialConnectionId] of gbpBackfill.flagged.entries()) {
+      const notified = await step.run(`notify-gbp-reconnect-${index}`, () =>
+        notifyOwnersToReconnect(socialConnectionId, day),
+      );
+      gbpReconnectEmails += notified.emailed;
+    }
+
+    const summary = {
+      pages,
+      connections,
+      purgedYouTubeMetrics,
+      linkedinOrganizations,
+      gbpLocationTitles: {
+        named: gbpBackfill.named,
+        failed: gbpBackfill.failed,
+        flagged: gbpBackfill.flagged.length,
+        reconnectEmails: gbpReconnectEmails,
+      },
+    };
     logger.info("[Inngest] Connection health sweep fanned out", summary);
     return summary;
   },

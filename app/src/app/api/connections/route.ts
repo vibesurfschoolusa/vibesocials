@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getWorkspaceContext } from "@/lib/workspace";
+import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { Platform } from "@prisma/client";
@@ -13,7 +14,7 @@ import type {
  * GET /api/connections
  *
  * Additive, read-only summary powering the dashboard "connection health" row.
- * Reports, for every supported platform, whether the active WORKSPACE has a
+ * Reports, for every platform this deployment offers, whether the active WORKSPACE has a
  * connection (Team Workspaces — connections are shared by every member,
  * design §1/§4: "View connection health" is member-readable) — without
  * exposing any connection details. Complements the existing per-platform
@@ -38,13 +39,17 @@ export async function GET() {
     const reconnectByPlatform = new Map(
       rows.map((row) => [row.platform, row.needsReconnect]),
     );
-    const connections: ConnectionStatus[] = (
-      Object.values(Platform) as Platform[]
-    ).map((platform) => ({
-      platform,
-      connected: reconnectByPlatform.has(platform),
-      needsReconnect: reconnectByPlatform.get(platform) ?? false,
-    }));
+    // A platform this deployment can't connect yet (Pinterest before its app
+    // credentials are set, lib/advertisedPlatforms.ts) is listed only when the
+    // workspace already has that connection.
+    const offered = new Set<Platform>(advertisedPlatforms());
+    const connections: ConnectionStatus[] = (Object.values(Platform) as Platform[])
+      .filter((platform) => offered.has(platform) || reconnectByPlatform.has(platform))
+      .map((platform) => ({
+        platform,
+        connected: reconnectByPlatform.has(platform),
+        needsReconnect: reconnectByPlatform.get(platform) ?? false,
+      }));
 
     const payload: ConnectionsResponse = { connections };
     return NextResponse.json(payload);
