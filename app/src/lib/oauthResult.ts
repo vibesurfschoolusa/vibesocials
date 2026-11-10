@@ -31,7 +31,8 @@ export function describeOAuthResult(params: {
   error: string | null;
   success: string | null;
 }): { variant: "success" | "danger"; message: string; platform: Platform | null } | null {
-  const code = params.error ?? params.success;
+  // `||`, not `??`: describeCode skips an empty error, so this must too.
+  const code = params.error || params.success;
   const described = describeCode(params);
   return described && code ? { ...described, platform: platformFromCode(code) } : null;
 }

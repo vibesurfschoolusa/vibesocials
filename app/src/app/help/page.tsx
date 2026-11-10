@@ -100,7 +100,7 @@ export default function HelpPage() {
       <LegalSection title="Removing access">
         <p>
           Disconnect in Settings removes the connection from {PRODUCT_NAME}. Each platform also lets
-          you remove {PRODUCT_NAME}&apos;s access in its own settings.
+          you remove the access you gave {PRODUCT_NAME} in its own settings.
         </p>
       </LegalSection>
     </LegalPage>

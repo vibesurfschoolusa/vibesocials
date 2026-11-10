@@ -22,7 +22,7 @@ export interface PlatformGuide {
   status?: string;
 }
 
-const META_REVIEW = `Meta is reviewing Vibe Socials. Until the review finishes, Facebook and Instagram can only be connected by accounts we have added as testers. Write to ${SUPPORT_EMAIL} and we will set it up with you.`;
+const META_REVIEW = `Meta is reviewing Vibe Socials. Until the review finishes, connecting Facebook and Instagram is not open to every account yet. Write to ${SUPPORT_EMAIL} and we will help you get set up.`;
 
 const GOOGLE_VERIFICATION =
   'Google is still verifying Vibe Socials. Until then Google shows a screen saying it has not verified this app. Choose "Advanced", then "Go to vibesocials.wtf", to continue.';

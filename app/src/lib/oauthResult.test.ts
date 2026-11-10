@@ -316,6 +316,14 @@ describe("describeOAuthResult — which platform it was", () => {
   it("carries the platform on success too", () => {
     expect(describeOAuthResult({ error: null, success: "x_connected" })?.platform).toBe("x");
   });
+
+  it("reads past an empty error to the success code", () => {
+    expect(describeOAuthResult({ error: "", success: "x_connected" })).toEqual({
+      variant: "success",
+      message: "X connected.",
+      platform: "x",
+    });
+  });
 });
 
 describe("describeOAuthResult — session binding and connect-failure codes", () => {

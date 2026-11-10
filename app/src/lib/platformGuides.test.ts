@@ -43,6 +43,15 @@ describe("PLATFORM_GUIDES", () => {
     }
   });
 
+  it("does not promise on a public page to add Meta accounts as testers", () => {
+    for (const platform of ["facebook_page", "instagram"] as const) {
+      expect(PLATFORM_GUIDES[platform].status).toBe(
+        `Meta is reviewing Vibe Socials. Until the review finishes, connecting Facebook and Instagram is not open to every account yet. Write to ${SUPPORT_EMAIL} and we will help you get set up.`,
+      );
+      expect(PLATFORM_GUIDES[platform].status).not.toMatch(/tester/i);
+    }
+  });
+
   it("has no review note for X and Pinterest", () => {
     expect(PLATFORM_GUIDES.x.status).toBeUndefined();
     expect(PLATFORM_GUIDES.pinterest.status).toBeUndefined();
