@@ -1,6 +1,7 @@
 import { Resend } from "resend";
 
 import { logger } from "@/lib/logger";
+import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 
 /**
  * Account lifecycle (scale-readiness spec §A) — password-reset and
@@ -110,6 +111,39 @@ export function buildVerifyEmail(opts: BuildAccountEmailOptions): AccountEmail {
     expiryNote:
       "This link expires in 7 days. If you didn't create a Vibe Socials account, you can safely ignore this email.",
   });
+  return { subject, html, text };
+}
+
+/**
+ * Renders a short notice with no link token. `paragraphs` are fixed copy plus
+ * our own origin and support address, none of which hold HTML-special
+ * characters, so no escaping is needed.
+ */
+function renderNoticeEmail(heading: string, paragraphs: string[]): { html: string; text: string } {
+  const html = ["<div>", `<h1>${heading}</h1>`, ...paragraphs.map((p) => `<p>${p}</p>`), "</div>"].join("");
+  const text = [heading, "", ...paragraphs.flatMap((p) => [p, ""]), "— Vibe Socials"].join("\n");
+  return { html, text };
+}
+
+/** Sent after a signed-in user changes their password in Settings. */
+export function buildPasswordChangedEmail(opts: { baseUrl: string }): AccountEmail {
+  const loginUrl = `${opts.baseUrl.replace(/\/+$/, "")}/login`;
+  const subject = "Your Vibe Socials password was changed";
+  const { html, text } = renderNoticeEmail("Your password was changed", [
+    "The password for your Vibe Socials account was just changed, and every device was signed out. If you did this, there is nothing else to do.",
+    `If it was not you, choose "Forgot password" on the sign-in page (${loginUrl}) to set a new one, and write to ${SUPPORT_EMAIL}.`,
+  ]);
+  return { subject, html, text };
+}
+
+/** Sent after a user deletes their own account in Settings. */
+export function buildAccountDeletedEmail(): AccountEmail {
+  const subject = "Your Vibe Socials account was deleted";
+  const { html, text } = renderNoticeEmail("Your account was deleted", [
+    "Your Vibe Socials account has been deleted, along with the workspaces only you used and their files.",
+    "Platform accounts you connected keep any access they granted until you remove it on each platform.",
+    `If you did not do this, write to ${SUPPORT_EMAIL}.`,
+  ]);
   return { subject, html, text };
 }
 

@@ -23,10 +23,13 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import {
+  buildAccountDeletedEmail,
+  buildPasswordChangedEmail,
   buildPasswordResetEmail,
   buildVerifyEmail,
   deliverAccountEmail,
 } from "./accountEmails";
+import { SUPPORT_EMAIL } from "./siteInfo";
 
 const BASE_URL = "https://app.vibesocials.com";
 const RAW_TOKEN = "RAWTOKEN-abc123_sentinel-XYZ";
@@ -89,6 +92,32 @@ describe("buildVerifyEmail", () => {
     expect(text).not.toContain("?token=");
     expect(countOccurrences(html, RAW_TOKEN)).toBe(1);
     expect(countOccurrences(text, RAW_TOKEN)).toBe(1);
+  });
+});
+
+describe("buildPasswordChangedEmail", () => {
+  it("says the password changed and what to do if it was not them", () => {
+    const { subject, html, text } = buildPasswordChangedEmail({ baseUrl: `${BASE_URL}/` });
+
+    expect(subject).toBe("Your Vibe Socials password was changed");
+    for (const body of [html, text]) {
+      expect(body).toContain("Forgot password");
+      expect(body).toContain(SUPPORT_EMAIL);
+      expect(body).toContain(`${BASE_URL}/login`);
+    }
+    expect(text).not.toContain(`${BASE_URL}//login`);
+  });
+});
+
+describe("buildAccountDeletedEmail", () => {
+  it("confirms the deletion and names the support address", () => {
+    const { subject, html, text } = buildAccountDeletedEmail();
+
+    expect(subject).toBe("Your Vibe Socials account was deleted");
+    for (const body of [html, text]) {
+      expect(body).toContain("deleted");
+      expect(body).toContain(SUPPORT_EMAIL);
+    }
   });
 });
 
