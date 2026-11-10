@@ -44,7 +44,7 @@ import {
 import type { MediaItemDto } from "@/lib/mediaDto";
 import { cleanPlatformOverrides, type PlatformOverrides } from "@/lib/platformOverrides";
 import { prepareUploadFile } from "@/lib/prepareUploadFile";
-import { takeSharedFile } from "@/lib/sharedFile";
+import { shouldTakeSharedFile, takeSharedFile } from "@/lib/sharedFile";
 import { TIKTOK_DISCLOSURE_INCOMPLETE_TEXT, tiktokPublishBlock } from "@/lib/tiktokPostRules";
 import {
   PLATFORM_ORDER,
@@ -603,16 +603,27 @@ function CreatePostFormInner({
     }
   }
 
+  // What to render while connections load, resolve, or fail — pure rule in
+  // lib/composerGate.ts. Computed here, above the shared-file effect that
+  // waits for it; the early returns that use it are further down.
+  const composerGate = deriveComposerGate(connections, connectionsLoading);
+
   // Android share target: public/sw.js parked the shared file in Cache Storage
-  // and sent the user here with ?shared=1. Not cancelled on unmount on
-  // purpose: the take empties the cache, so a dropped result would lose the
-  // file (React's dev double-mount would do exactly that).
+  // and sent the user here with ?shared=1. It is taken only once the form
+  // shows (lib/sharedFile.ts shouldTakeSharedFile), for the same reason the
+  // file input waits for it (see the gate comment near the early returns).
+  // The ref makes it one take per mount even if the gate changes mid-take.
+  // Not cancelled on unmount on purpose: the take empties the cache, so a
+  // dropped result would lose the file (React's dev double-mount would do
+  // exactly that).
   const attachSharedFile = useEffectEvent((file: File) => {
     void attachPickedFile(file);
   });
   const sharedParam = searchParams.get("shared");
+  const sharedTakenRef = useRef(false);
   useEffect(() => {
-    if (sharedParam !== "1") return;
+    if (!shouldTakeSharedFile(sharedParam, composerGate) || sharedTakenRef.current) return;
+    sharedTakenRef.current = true;
     void (async () => {
       const file = await takeSharedFile();
       if (!file) return;
@@ -621,7 +632,7 @@ function CreatePostFormInner({
       url.searchParams.delete("shared");
       window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
     })();
-  }, [sharedParam]);
+  }, [sharedParam, composerGate]);
 
   // Extracted from handleUploadSubmit below (Task 7 / Step 5) so it can run
   // either directly (schedule/draft — no confirmation needed) or via the
@@ -903,14 +914,12 @@ function CreatePostFormInner({
   // preview of the freshly attached file.
   const activeMediaUrl = reuseItem ? reuseItem.storageLocation : previewUrl;
 
-  // What to render while connections load, resolve, or fail — pure rule in
-  // lib/composerGate.ts. The `loading` branch exists because rendering the
-  // full form during the first fetch let the user attach a file (the blob
-  // upload even ran) that the zero-connection CTA below then silently
-  // discarded when the fetch resolved. Both early returns sit after every
-  // hook, so hook order is unaffected.
-  const composerGate = deriveComposerGate(connections, connectionsLoading);
-
+  // `composerGate` (computed above the hooks that need it). The `loading`
+  // branch exists because rendering the full form during the first fetch let
+  // the user attach a file (the blob upload even ran) that the
+  // zero-connection CTA below then silently discarded when the fetch
+  // resolved. Both early returns sit after every hook, so hook order is
+  // unaffected.
   if (composerGate === "loading") {
     // Same placeholder the Suspense boundary below shows, so first paint and
     // connections-loading are visually indistinguishable.

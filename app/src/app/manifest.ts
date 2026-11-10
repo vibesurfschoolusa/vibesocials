@@ -1,7 +1,8 @@
 import type { MetadataRoute } from "next";
 
 // Colours from the light theme in globals.css: --primary and --background.
-// layout.tsx's `viewport` uses the same theme colour.
+// They colour only the installed app; layout.tsx's `viewport` keeps the
+// browser bar on the page background instead.
 const THEME_COLOR = "#4f46e5";
 const BACKGROUND_COLOR = "#ffffff";
 

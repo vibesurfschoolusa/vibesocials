@@ -4,10 +4,12 @@
 // bodies at a few megabytes), so it is parked in Cache Storage here and the
 // Create page picks it up. Nothing else is intercepted or cached.
 
-// The same two strings as SHARED_FILE_CACHE and SHARED_FILE_KEY in
-// src/lib/sharedFile.ts: change them in both files together.
+// The same strings as SHARED_FILE_CACHE, SHARED_FILE_KEY and
+// SHARED_FILE_TIME_HEADER in src/lib/sharedFile.ts: change them in both files
+// together. (The 60-minute limit lives only there; this side just stamps the time.)
 const SHARED_FILE_CACHE = "vs-shared-file";
 const SHARED_FILE_KEY = "/shared-file";
+const SHARED_FILE_TIME_HEADER = "X-Shared-At";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(self.skipWaiting());
@@ -26,9 +28,12 @@ self.addEventListener("fetch", (event) => {
 
 async function receiveShare(request) {
   try {
+    // Cleared first, so a share that fails below can never deliver the
+    // previous one, and a share with no file attaches nothing.
+    const cache = await caches.open(SHARED_FILE_CACHE);
+    await cache.delete(SHARED_FILE_KEY);
     const form = await request.formData();
     const file = form.getAll("media").find((value) => typeof value !== "string");
-    const cache = await caches.open(SHARED_FILE_CACHE);
     if (file) {
       await cache.put(
         SHARED_FILE_KEY,
@@ -37,12 +42,10 @@ async function receiveShare(request) {
             "Content-Type": file.type || "application/octet-stream",
             // A cached Response keeps no file name; header values must be ASCII.
             "X-File-Name": encodeURIComponent(file.name || ""),
+            [SHARED_FILE_TIME_HEADER]: String(Date.now()),
           },
         }),
       );
-    } else {
-      // A share with no file must not attach one left over from an earlier share.
-      await cache.delete(SHARED_FILE_KEY);
     }
   } catch {
     // Still land on Create; it simply finds no file.

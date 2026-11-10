@@ -27,9 +27,14 @@ export const metadata: Metadata = {
   },
 };
 
-// The manifest's theme colour (--primary in the light theme, see manifest.ts).
+// The browser bar matches the page background (--background in globals.css,
+// light and dark) so the site looks as before for people who never install.
+// The manifest's own theme colour only colours the installed app.
 export const viewport: Viewport = {
-  themeColor: "#4f46e5",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#0b0f19" },
+  ],
 };
 
 // Applies the saved theme override before first paint to avoid a flash. Mirrors

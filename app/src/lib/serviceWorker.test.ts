@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { SHARED_FILE_CACHE, SHARED_FILE_KEY } from "./sharedFile";
+import { SHARED_FILE_CACHE, SHARED_FILE_KEY, SHARED_FILE_TIME_HEADER } from "./sharedFile";
 
 // public/sw.js is plain browser JavaScript with no build step, so the test
 // runs its source against fake `self`, `caches` and events.
@@ -84,6 +84,41 @@ describe("public/sw.js", () => {
     expect(await stored.text()).toBe("first");
     expect(stored.headers.get("Content-Type")).toBe("image/jpeg");
     expect(decodeURIComponent(stored.headers.get("X-File-Name") ?? "")).toBe("wave 1.jpg");
+  });
+
+  it("stamps the stored file with the time it was shared", async () => {
+    const { listeners, store } = loadWorker();
+    const form = new FormData();
+    form.append("media", new File(["x"], "a.jpg", { type: "image/jpeg" }));
+    const { event, respondWith } = fetchEvent(sharePost(form));
+    const before = Date.now();
+
+    listeners.fetch(event);
+    await respondWith.mock.calls[0][0];
+
+    const stored = store.get(SHARED_FILE_CACHE)!.get(SHARED_FILE_KEY)!;
+    const sharedAt = Number(stored.headers.get(SHARED_FILE_TIME_HEADER));
+    expect(sharedAt).toBeGreaterThanOrEqual(before);
+    expect(sharedAt).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("never leaves an earlier file behind when a share cannot be read", async () => {
+    const { listeners, store } = loadWorker();
+    store.set(SHARED_FILE_CACHE, new Map([[SHARED_FILE_KEY, new Response("old")]]));
+    const broken = {
+      method: "POST",
+      url: `${ORIGIN}/share-target`,
+      formData: async () => {
+        throw new TypeError("Could not parse content as FormData.");
+      },
+    } as unknown as Request;
+    const { event, respondWith } = fetchEvent(broken);
+
+    listeners.fetch(event);
+
+    const response = (await respondWith.mock.calls[0][0]) as Response;
+    expect(response.status).toBe(303);
+    expect(store.get(SHARED_FILE_CACHE)!.size).toBe(0);
   });
 
   it("replaces an earlier shared file", async () => {
