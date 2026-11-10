@@ -33,6 +33,8 @@ interface CreatePostBodyBase extends DeferredPostFields {
   youtubeMetadata?: YouTubePostMetadata;
   /** Task 7 — chosen subset of connected platforms to publish to. */
   platforms?: Platform[];
+  /** A different caption per platform; left out when there is none. */
+  perPlatformOverrides?: Partial<Record<Platform, string>>;
 }
 
 // Request body for a freshly uploaded file.
@@ -48,7 +50,6 @@ export interface CreatePostRequest extends CreatePostBodyBase {
 // of blobUrl / mediaItemId is present.
 export interface CreatePostReuseRequest extends CreatePostBodyBase {
   mediaItemId: string;
-  perPlatformOverrides?: Partial<Record<Platform, string>>;
 }
 
 interface CommonBodyInput {
@@ -62,6 +63,11 @@ interface CommonBodyInput {
   tiktokMetadata?: TikTokPostMetadata;
   /** Pass only when YouTube is a selected target. */
   youtubeMetadata?: YouTubePostMetadata;
+  /**
+   * Per-platform captions, already cleaned (lib/platformOverrides.ts
+   * `cleanPlatformOverrides`). `null`, undefined or `{}` leaves the field out.
+   */
+  perPlatformOverrides?: Partial<Record<Platform, string>> | null;
 }
 
 export interface UploadedBlob {
@@ -77,8 +83,12 @@ export interface BuildUploadPostBodyInput extends CommonBodyInput {
 
 export interface BuildReusePostBodyInput extends CommonBodyInput {
   mediaItemId: string;
-  /** The reused item's per-platform caption overrides, when it has any. */
-  perPlatformOverrides?: Partial<Record<Platform, string>> | null;
+}
+
+function hasOverrides(
+  overrides: Partial<Record<Platform, string>> | null | undefined,
+): overrides is Partial<Record<Platform, string>> {
+  return !!overrides && Object.keys(overrides).length > 0;
 }
 
 /** Body for posting a file the composer just uploaded to blob storage. */
@@ -94,6 +104,9 @@ export function buildUploadPostBody(input: BuildUploadPostBodyInput): CreatePost
     ...input.deferred,
     workspaceId: input.workspaceId,
   };
+  if (hasOverrides(input.perPlatformOverrides)) {
+    body.perPlatformOverrides = input.perPlatformOverrides;
+  }
   if (input.tiktokMetadata) {
     body.tiktokMetadata = input.tiktokMetadata;
   }
@@ -113,7 +126,7 @@ export function buildReusePostBody(input: BuildReusePostBodyInput): CreatePostRe
     ...input.deferred,
     workspaceId: input.workspaceId,
   };
-  if (input.perPlatformOverrides) {
+  if (hasOverrides(input.perPlatformOverrides)) {
     body.perPlatformOverrides = input.perPlatformOverrides;
   }
   if (input.tiktokMetadata) {

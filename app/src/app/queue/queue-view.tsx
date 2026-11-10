@@ -23,12 +23,20 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { CaptionCounter } from "@/components/caption-counter";
+import { PlatformCaptionEditor } from "@/components/composer/platform-caption-editor";
+import { useConnections } from "@/hooks/useConnections";
 import { MediaThumb } from "@/components/media-thumb";
 import { QueueCalendar } from "./queue-calendar";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { cn } from "@/lib/cn";
 import {
+  cleanPlatformOverrides,
+  platformOverridesEqual,
+  type PlatformOverrides,
+} from "@/lib/platformOverrides";
+import {
   PLATFORM_CAPTIONS_HEADING,
+  PLATFORM_ORDER,
   platformCaptionEntries,
   platformLabel,
   TIKTOK_PRIVACY_LABELS,
@@ -58,6 +66,9 @@ import {
   localTimeZoneLabel,
   toDateTimeLocalValue,
 } from "@/lib/scheduling";
+
+/** A card patch from the edit dialog, which may also carry the saved per-platform captions. */
+type EditPatch = JobPatch & Partial<Pick<PostJobDTO, "platformCaptions">>;
 
 function formatTimestamp(iso: string): string {
   const date = new Date(iso);
@@ -287,9 +298,9 @@ function QueueEditDialog({
   viewer: QueueViewer;
   onClose: () => void;
   /** The save is complete: patch the card and close the dialog. */
-  onSaved: (patch: JobPatch) => void;
+  onSaved: (patch: EditPatch) => void;
   /** Part of the save landed (caption) but the dialog stays open: patch the card only. */
-  onPartialSave: (patch: JobPatch) => void;
+  onPartialSave: (patch: EditPatch) => void;
   /** The server's state for this post is unknown (unreadable reply): re-sync the list. */
   onStale: () => void;
 }) {
@@ -297,6 +308,26 @@ function QueueEditDialog({
   const isScheduled = job.status === "scheduled";
   const model = editDialogModel(job, viewer);
   const [caption, setCaption] = useState(job.caption ?? "");
+  // Per-platform captions as typed, and as last persisted (so a retry or an
+  // untouched editor never rewrites them).
+  const [platformOverrides, setPlatformOverrides] = useState<PlatformOverrides | null>(
+    job.platformCaptions,
+  );
+  const [savedOverrides, setSavedOverrides] = useState<PlatformOverrides | null>(
+    job.platformCaptions,
+  );
+  // The post's platforms: its chosen targets, or (no targets = every platform
+  // connected at publish time) the connected ones plus any that already have a
+  // caption, so a saved caption is never hidden while connections load.
+  const { connections } = useConnections();
+  const targetPlatforms = job.publish?.targetPlatforms ?? null;
+  const editorPlatforms =
+    targetPlatforms ??
+    PLATFORM_ORDER.filter(
+      (platform) =>
+        typeof job.platformCaptions?.[platform] === "string" ||
+        connections?.some((c) => c.platform === platform && c.connected),
+    );
   // 2026-11-01 scale audit (jobs, event size): over the 10,000-character cap, which
   // PATCH /api/posts/[id] rejects - blocks Save (lib/captionLimits.ts).
   const captionOver = captionCounter(caption).over;
@@ -336,6 +367,15 @@ function QueueEditDialog({
       scheduledIso = check.iso;
     }
 
+    // Per-platform captions go along only when the user changed them; `null`
+    // removes the last one.
+    const cleanedOverrides = cleanPlatformOverrides(platformOverrides, trimmed, editorPlatforms);
+    const overridesEdited = !platformOverridesEqual(
+      cleanedOverrides,
+      cleanPlatformOverrides(savedOverrides, trimmed, editorPlatforms),
+    );
+    const overridesPatch: EditPatch = overridesEdited ? { platformCaptions: cleanedOverrides } : {};
+
     setSaving(true);
     try {
       if (isScheduled || scheduledIso === null) {
@@ -346,6 +386,7 @@ function QueueEditDialog({
           body: JSON.stringify({
             baseCaption: trimmed,
             ...(scheduledIso ? { scheduledFor: scheduledIso } : {}),
+            ...(overridesEdited ? { perPlatformOverrides: cleanedOverrides } : {}),
           }),
         });
         if (!response.ok) {
@@ -360,6 +401,7 @@ function QueueEditDialog({
         onSaved({
           caption: trimmed,
           ...(scheduledIso ? { scheduledFor: scheduledIso } : {}),
+          ...overridesPatch,
           ...outcome.patch,
         });
         return;
@@ -373,6 +415,7 @@ function QueueEditDialog({
         originalCaption: savedCaption,
         scheduledForIso: scheduledIso,
         submitsForApproval: publishNeedsApproval(job, viewer),
+        perPlatformOverrides: overridesEdited ? cleanedOverrides : undefined,
       });
       if (result.kind === "failed") {
         // Keep the dialog open with the user's input; the server says why. If
@@ -380,7 +423,8 @@ function QueueEditDialog({
         // retry doesn't re-PATCH an unchanged caption.
         if (result.captionSaved) {
           setSavedCaption(trimmed);
-          onPartialSave({ caption: trimmed });
+          if (overridesEdited) setSavedOverrides(cleanedOverrides);
+          onPartialSave({ caption: trimmed, ...overridesPatch });
         }
         toast.error(result.error);
         if (result.reason === "unreadable_response") onStale();
@@ -388,7 +432,7 @@ function QueueEditDialog({
         return;
       }
       toast.success(result.message);
-      onSaved(result.patch);
+      onSaved({ ...result.patch, ...overridesPatch });
     } catch {
       toast.error("Couldn't save your changes.");
       setSaving(false);
@@ -413,6 +457,14 @@ function QueueEditDialog({
           />
           <CaptionCounter id="queue-edit-caption-count" text={caption} />
         </div>
+        <PlatformCaptionEditor
+          idPrefix="queue-edit-platform-caption"
+          platforms={editorPlatforms}
+          caption={caption}
+          overrides={platformOverrides}
+          onChange={setPlatformOverrides}
+          disabled={saving}
+        />
         <div className="space-y-1.5">
           <Label htmlFor="queue-edit-time">{model.scheduleLabel}</Label>
           <input
@@ -560,7 +612,7 @@ export function QueueView() {
 
   // Update one card in place from a server response (and re-sort: an approved
   // post moves from the pending group to its scheduled slot).
-  const patchJob = useCallback((id: string, patch: JobPatch) => {
+  const patchJob = useCallback((id: string, patch: EditPatch) => {
     setJobs((prev) =>
       prev ? sortQueue(prev.map((j) => (j.id === id ? applyJobPatch(j, patch) : j))) : prev,
     );

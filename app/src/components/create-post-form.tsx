@@ -7,6 +7,7 @@ import { upload } from '@vercel/blob/client';
 import { explainUploadFailure, UploadRefusedError } from "@/lib/uploadFailure";
 import { PlugZap, Sparkles } from "lucide-react";
 import type { Platform } from "@prisma/client";
+import { PlatformCaptionEditor } from "./composer/platform-caption-editor";
 import { PlatformPreviewList } from "./composer/platform-preview";
 import { LocationAutocomplete } from "./location-autocomplete";
 import { TikTokConsentDeclaration, TikTokPostSettings } from "./tiktok-post-settings";
@@ -41,6 +42,7 @@ import {
   type DeferredPostFields,
 } from "@/lib/createPostRequest";
 import type { MediaItemDto } from "@/lib/mediaDto";
+import { cleanPlatformOverrides, type PlatformOverrides } from "@/lib/platformOverrides";
 import { prepareUploadFile } from "@/lib/prepareUploadFile";
 import { TIKTOK_DISCLOSURE_INCOMPLETE_TEXT, tiktokPublishBlock } from "@/lib/tiktokPostRules";
 import {
@@ -126,9 +128,10 @@ function CreatePostFormInner({
   const reuseMediaItemId = searchParams.get("mediaItemId");
   const [reuseItem, setReuseItem] = useState<MediaItemDto | null>(null);
   const [reuseLoading, setReuseLoading] = useState(() => Boolean(reuseMediaItemId));
-  const [reusePerPlatformOverrides, setReusePerPlatformOverrides] = useState<Partial<
-    Record<Platform, string>
-  > | null>(null);
+  // A different caption per platform, as the user typed them, for both a fresh
+  // upload and reused media (starts from the reused item's own captions). What
+  // is sent and previewed is the cleaned form (lib/platformOverrides.ts).
+  const [platformOverrides, setPlatformOverrides] = useState<PlatformOverrides | null>(null);
 
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadCaption, setUploadCaption] = useState("");
@@ -281,6 +284,12 @@ function CreatePostFormInner({
     metadata: tiktokMetadata,
   });
   const youtubeSelected = selectedPlatforms.includes("youtube");
+  // Only what would really change a post: selected, not blank, not the main caption.
+  const overridesToSend = cleanPlatformOverrides(
+    platformOverrides,
+    uploadCaption,
+    selectedPlatforms,
+  );
 
   // Roadmap Phase 2 — load the reuse target, if any. Runs once per distinct
   // `reuseMediaItemId` (a fresh navigation from the media library always
@@ -314,7 +323,7 @@ function CreatePostFormInner({
         const item = data.item;
         setReuseItem(item);
         setUploadCaption(item.baseCaption ?? "");
-        setReusePerPlatformOverrides(
+        setPlatformOverrides(
           (item.perPlatformOverrides as Partial<Record<Platform, string>> | null) ?? null,
         );
         setReuseLoading(false);
@@ -367,7 +376,7 @@ function CreatePostFormInner({
   // input.
   const handleDismissReuse = useCallback(() => {
     setReuseItem(null);
-    setReusePerPlatformOverrides(null);
+    setPlatformOverrides(null);
     setUploadCaption("");
   }, []);
 
@@ -555,7 +564,7 @@ function CreatePostFormInner({
           platforms: selectedPlatforms,
           deferred,
           workspaceId,
-          perPlatformOverrides: reusePerPlatformOverrides,
+          perPlatformOverrides: overridesToSend,
           // Task 7 — only attach metadata for a platform still selected for
           // this post; a deselected TikTok/YouTube isn't published to.
           tiktokMetadata: tiktokSelected ? tiktokMetadata : undefined,
@@ -584,6 +593,7 @@ function CreatePostFormInner({
           platforms: selectedPlatforms,
           deferred,
           workspaceId,
+          perPlatformOverrides: overridesToSend,
           // Task 7 — only attach metadata for a platform still selected for
           // this post; a deselected TikTok/YouTube isn't published to.
           tiktokMetadata: tiktokSelected ? tiktokMetadata : undefined,
@@ -646,7 +656,7 @@ function CreatePostFormInner({
       setUploadProgress(null);
       setFileInputKey((key) => key + 1);
       setReuseItem(null);
-      setReusePerPlatformOverrides(null);
+      setPlatformOverrides(null);
       setPublishMode("now");
       setScheduledForLocal("");
       // Task 7 — every connected platform defaults back to selected for the
@@ -1151,6 +1161,15 @@ function CreatePostFormInner({
           <CaptionCounter id="post-caption-count" text={uploadCaption} />
         </div>
 
+        <PlatformCaptionEditor
+          idPrefix="post-platform-caption"
+          platforms={selectedPlatforms}
+          caption={uploadCaption}
+          overrides={platformOverrides}
+          onChange={setPlatformOverrides}
+          footer={footerSettings}
+        />
+
         <div className="space-y-1.5">
           <Label htmlFor="post-location">
             Location <span className="font-normal text-muted-foreground">(optional)</span>
@@ -1253,7 +1272,7 @@ function CreatePostFormInner({
         <PlatformPreviewList
           platforms={selectedPlatforms}
           caption={uploadCaption}
-          overrides={reusePerPlatformOverrides}
+          overrides={overridesToSend}
           user={footerSettings}
           mediaUrl={activeMediaUrl}
           mediaMimeType={activeMimeType}

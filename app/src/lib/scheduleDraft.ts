@@ -1,3 +1,5 @@
+import type { Platform } from "@prisma/client";
+
 import { captionChanged, publishOutcome, type JobPatch } from "./queueActions";
 
 /**
@@ -5,7 +7,7 @@ import { captionChanged, publishOutcome, type JobPatch } from "./queueActions";
  * extracted from the component so the orchestration is table-testable with an
  * injected `fetch`:
  *
- *   1. PATCH the caption — only if it changed;
+ *   1. PATCH the caption — only if it or the per-platform captions changed;
  *   2. a failed PATCH stops here (publish is never called);
  *   3. POST `…/publish { scheduledFor }` — for a member in an approval
  *      workspace the server answers 202 pending (a submission) instead of 200
@@ -82,16 +84,32 @@ export async function scheduleDraft(input: {
   scheduledForIso: string;
   /** The server will treat this as a submission (member under approval) — only picks error wording. */
   submitsForApproval: boolean;
+  /**
+   * Per-platform captions to save with the caption, already cleaned: an object,
+   * or `null` to remove them all. Leave it undefined when they were not edited.
+   */
+  perPlatformOverrides?: Partial<Record<Platform, string>> | null;
 }): Promise<ScheduleDraftResult> {
-  const { fetchFn, jobId, caption, originalCaption, scheduledForIso, submitsForApproval } = input;
+  const {
+    fetchFn,
+    jobId,
+    caption,
+    originalCaption,
+    scheduledForIso,
+    submitsForApproval,
+    perPlatformOverrides,
+  } = input;
   let captionSaved = false;
 
   try {
-    if (captionChanged(originalCaption, caption)) {
+    if (captionChanged(originalCaption, caption) || perPlatformOverrides !== undefined) {
       const patchResponse = await fetchFn(`/api/posts/${jobId}`, {
         method: "PATCH",
         headers: JSON_HEADERS,
-        body: JSON.stringify({ baseCaption: caption }),
+        body: JSON.stringify({
+          baseCaption: caption,
+          ...(perPlatformOverrides !== undefined ? { perPlatformOverrides } : {}),
+        }),
       });
       if (!patchResponse.ok) {
         return {

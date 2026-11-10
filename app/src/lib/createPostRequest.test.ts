@@ -98,6 +98,12 @@ describe("buildReusePostBody", () => {
     });
   });
 
+  it("omits an empty per-platform captions object", () => {
+    expect(sent(buildReusePostBody({ ...input, perPlatformOverrides: {} }))).not.toHaveProperty(
+      "perPlatformOverrides",
+    );
+  });
+
   it("requires a workspace id at compile time", () => {
     // `npx tsc --noEmit` fails on an unused @ts-expect-error, so making the
     // field optional again fails the gate. The runtime call is only to run the line.
@@ -157,6 +163,43 @@ describe("buildUploadPostBody", () => {
     expect(
       sent(buildUploadPostBody({ ...input, youtubeMetadata: { privacyStatus: "private" } })),
     ).toMatchObject({ youtubeMetadata: { privacyStatus: "private" }, workspaceId: WORKSPACE_ID });
+  });
+
+  it("attaches per-platform captions when present and omits the field when not", () => {
+    expect(sent(buildUploadPostBody(input))).not.toHaveProperty("perPlatformOverrides");
+    expect(sent(buildUploadPostBody({ ...input, perPlatformOverrides: null }))).not.toHaveProperty(
+      "perPlatformOverrides",
+    );
+    expect(sent(buildUploadPostBody({ ...input, perPlatformOverrides: {} }))).not.toHaveProperty(
+      "perPlatformOverrides",
+    );
+    expect(
+      sent(buildUploadPostBody({ ...input, perPlatformOverrides: { x: "Short for X" } })),
+    ).toMatchObject({ perPlatformOverrides: { x: "Short for X" }, workspaceId: WORKSPACE_ID });
+  });
+
+  it("carries per-platform captions on a draft and a scheduled post too", () => {
+    expect(
+      sent(
+        buildUploadPostBody({
+          ...input,
+          deferred: { draft: true },
+          perPlatformOverrides: { x: "Short for X" },
+        }),
+      ),
+    ).toMatchObject({ draft: true, perPlatformOverrides: { x: "Short for X" } });
+    expect(
+      sent(
+        buildUploadPostBody({
+          ...input,
+          deferred: { scheduledFor: "2026-12-01T10:00:00.000Z" },
+          perPlatformOverrides: { x: "Short for X" },
+        }),
+      ),
+    ).toMatchObject({
+      scheduledFor: "2026-12-01T10:00:00.000Z",
+      perPlatformOverrides: { x: "Short for X" },
+    });
   });
 
   it("requires a workspace id at compile time", () => {

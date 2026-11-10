@@ -246,3 +246,47 @@ describe("scheduleDraft — an unreadable publish response is an ERROR, never a 
     expect(result).toMatchObject({ kind: "failed", reason: "publish_failed" });
   });
 });
+
+describe("scheduleDraft — per-platform captions", () => {
+  const SCHEDULED = () => json(200, { ok: true, status: "scheduled", scheduledFor: SCHEDULED_AT });
+
+  it("sends changed per-platform captions with the caption in the PATCH", async () => {
+    const { calls } = await run([json(200, { ok: true }), SCHEDULED()], {
+      perPlatformOverrides: { x: "Short for X" },
+    });
+    expect(calls).toEqual([
+      {
+        method: "PATCH",
+        url: "/api/posts/job-1",
+        body: { baseCaption: "New caption", perPlatformOverrides: { x: "Short for X" } },
+      },
+      PUBLISH_CALL,
+    ]);
+  });
+
+  it("PATCHes when only the per-platform captions changed (caption unchanged)", async () => {
+    const { calls } = await run([json(200, { ok: true }), SCHEDULED()], {
+      originalCaption: "New caption",
+      perPlatformOverrides: { linkedin: "For LinkedIn" },
+    });
+    expect(calls[0]).toEqual({
+      method: "PATCH",
+      url: "/api/posts/job-1",
+      body: { baseCaption: "New caption", perPlatformOverrides: { linkedin: "For LinkedIn" } },
+    });
+    expect(calls).toHaveLength(2);
+  });
+
+  it("sends null to remove every per-platform caption", async () => {
+    const { calls } = await run([json(200, { ok: true }), SCHEDULED()], {
+      originalCaption: "New caption",
+      perPlatformOverrides: null,
+    });
+    expect(calls[0].body).toEqual({ baseCaption: "New caption", perPlatformOverrides: null });
+  });
+
+  it("leaves the field out when the per-platform captions were not edited", async () => {
+    const { calls } = await run([json(200, { ok: true }), SCHEDULED()]);
+    expect(calls[0].body).toEqual({ baseCaption: "New caption" });
+  });
+});

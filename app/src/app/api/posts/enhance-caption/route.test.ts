@@ -202,3 +202,108 @@ describe("POST /api/posts/enhance-caption", () => {
     });
   });
 });
+
+describe("POST /api/posts/enhance-caption - adapt for a platform", () => {
+  function sentMessages(): { system: string; user: string } {
+    const body = sentBody() as { messages: Array<{ role: string; content: string }> };
+    return {
+      system: body.messages.find((m) => m.role === "system")?.content ?? "",
+      user: body.messages.find((m) => m.role === "user")?.content ?? "",
+    };
+  }
+
+  it("keeps the original prompt when neither field is sent", async () => {
+    await post({ caption: "fresh bread" });
+
+    const { system, user } = sentMessages();
+    expect(system).toContain("Short and concise (1-2 sentences, max 150 characters)");
+    expect(system).not.toContain("Written for");
+    expect(user).toContain('"fresh bread"');
+    expect(sentBody()).toMatchObject({ max_tokens: 150 });
+  });
+
+  it("rejects an unknown platform with 400 and never calls the provider", async () => {
+    const response = await post({ caption: "fresh bread", platform: "myspace" });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Unknown platform." });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+  });
+
+  it.each([[49], [10_001], [100.5], ["280"], [null]])(
+    "rejects maxLength %s with 400",
+    async (maxLength) => {
+      const response = await post({ caption: "fresh bread", platform: "x", maxLength });
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "maxLength must be a whole number from 50 to 10,000.",
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([[50], [10_000]])("accepts maxLength %s", async (maxLength) => {
+    const response = await post({ caption: "fresh bread", platform: "x", maxLength });
+
+    expect(response.status).toBe(200);
+  });
+
+  it("puts the X guidance and the length into the prompt for X", async () => {
+    const response = await post({ caption: "fresh bread", platform: "x", maxLength: 254 });
+
+    expect(response.status).toBe(200);
+    const { system } = sentMessages();
+    expect(system).toContain("Written for X: One or two short sentences. Must fit 254 characters.");
+    expect(system).toContain("At most 254 characters");
+    expect(system).toContain("NO hashtags");
+    expect(system).not.toContain("max 150 characters");
+  });
+
+  it.each([
+    ["instagram", "Friendly and personal, a short opening line that works on its own."],
+    ["facebook_page", "Friendly and conversational, two to four sentences."],
+    ["linkedin", "Professional and plain, two or three sentences, no slang."],
+    [
+      "google_business_profile",
+      "What is offered and where, plainly, for someone finding the business on Maps.",
+    ],
+    ["tiktok", "Short, casual, one or two sentences."],
+    [
+      "youtube",
+      "The first sentence must work as the video's title; then one or two sentences of description.",
+    ],
+    ["pinterest", "Descriptive, with the words someone would search for."],
+  ])("uses the %s guidance", async (platform, guidance) => {
+    await post({ caption: "fresh bread", platform });
+
+    expect(sentMessages().system).toContain(guidance);
+  });
+
+  it("still strips hashtags from an adapted caption", async () => {
+    fetchMock.mockImplementation(async () => providerOk("Fresh bread #bakery"));
+
+    const response = await post({ caption: "fresh bread", platform: "instagram" });
+
+    await expect(response.json()).resolves.toEqual({ enhancedCaption: "Fresh bread bakery" });
+  });
+
+  it("keeps the caption cap and the rate limits for an adapt request", async () => {
+    const tooLong = await post({ caption: "c".repeat(2201), platform: "x", maxLength: 280 });
+    expect(tooLong.status).toBe(400);
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
+    const limited = await post({ caption: "fresh bread", platform: "x", maxLength: 280 });
+    expect(limited.status).toBe(429);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the workspace AI quota for an adapt request", async () => {
+    await post({ caption: "fresh bread", platform: "linkedin" });
+
+    const keys = checkRateLimitMock.mock.calls.map(([opts]) => opts.userId);
+    expect(keys).toContain("ai:workspace:ws-1");
+  });
+});

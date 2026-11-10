@@ -1,3 +1,4 @@
+import type { Platform } from "@prisma/client";
 import { NextResponse } from "next/server";
 import {
   AI_LIMITS,
@@ -11,10 +12,45 @@ import {
 } from "@/lib/aiGuards";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
+import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
+import { ADAPT_MAX_LENGTH_MAX, ADAPT_MAX_LENGTH_MIN } from "@/lib/platformOverrides";
+import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
+
+const PROMPT_OUTPUT_RULES = `IMPORTANT: Write ONLY the enhanced caption as plain text without any hashtags. Do NOT include:
+- Any meta-commentary
+- Explanations or notes
+- Just the caption text itself`;
+
+// What suits each platform when "Adapt for {platform}" rewrites a caption.
+const PLATFORM_GUIDANCE: Record<Platform, (maxLength: number | undefined) => string> = {
+  x: (maxLength) =>
+    `One or two short sentences. Must fit ${maxLength ?? PLATFORM_CAPTION_LIMITS.x.charLimit} characters.`,
+  instagram: () => "Friendly and personal, a short opening line that works on its own.",
+  facebook_page: () => "Friendly and conversational, two to four sentences.",
+  linkedin: () => "Professional and plain, two or three sentences, no slang.",
+  google_business_profile: () =>
+    "What is offered and where, plainly, for someone finding the business on Maps.",
+  tiktok: () => "Short, casual, one or two sentences.",
+  youtube: () =>
+    "The first sentence must work as the video's title; then one or two sentences of description.",
+  pinterest: () => "Descriptive, with the words someone would search for.",
+};
+
+function adaptSystemPrompt(platform: Platform, maxLength: number | undefined): string {
+  const lines = [
+    `- Written for ${platformLabel(platform)}: ${PLATFORM_GUIDANCE[platform](maxLength)}`,
+    ...(maxLength ? [`- At most ${maxLength} characters`] : []),
+    "- Use plain text only with NO hashtags (no '#' characters at all)",
+  ];
+  return `You are a social media expert who rewrites a caption so it suits one platform. The caption should be:
+${lines.join("\n")}
+
+${PROMPT_OUTPUT_RULES}`;
+}
 
 /**
  * POST /api/posts/enhance-caption - Generate AI-enhanced SEO-optimized caption
@@ -35,7 +71,7 @@ export async function POST(request: Request) {
     if (!body) {
       return invalidJsonBodyResponse();
     }
-    const { caption } = body;
+    const { caption, platform, maxLength } = body;
 
     // 2026-11-01 scale audit (W6): cap the prompt text BEFORE any limiter
     // counter is spent or the provider is called.
@@ -45,6 +81,28 @@ export async function POST(request: Request) {
     if (overlong) {
       return aiInputTooLongResponse(overlong);
     }
+
+    // "Adapt for {platform}": both fields optional, checked before any limiter
+    // counter is spent.
+    if (platform !== undefined && !PLATFORM_ORDER.includes(platform as Platform)) {
+      return NextResponse.json({ error: "Unknown platform." }, { status: 400 });
+    }
+    if (
+      maxLength !== undefined &&
+      !(
+        typeof maxLength === "number" &&
+        Number.isInteger(maxLength) &&
+        maxLength >= ADAPT_MAX_LENGTH_MIN &&
+        maxLength <= ADAPT_MAX_LENGTH_MAX
+      )
+    ) {
+      return NextResponse.json(
+        { error: "maxLength must be a whole number from 50 to 10,000." },
+        { status: 400 },
+      );
+    }
+    const adaptPlatform = platform as Platform | undefined;
+    const adaptMaxLength = maxLength as number | undefined;
 
     // Fail closed — a limiter outage must not open unlimited LLM spend.
     const rateLimit = await checkRateLimit({
@@ -84,21 +142,26 @@ export async function POST(request: Request) {
       return aiWorkspaceLimitResponse(quota.retryAfterSeconds);
     }
 
-    const systemPrompt = `You are a social media expert specializing in creating engaging, SEO-optimized captions for social media posts. Your captions should be:
+    const systemPrompt = adaptPlatform
+      ? adaptSystemPrompt(adaptPlatform, adaptMaxLength)
+      : `You are a social media expert specializing in creating engaging, SEO-optimized captions for social media posts. Your captions should be:
 - Short and concise (1-2 sentences, max 150 characters)
 - Use plain text only with NO hashtags (no '#' characters at all)
 - Be engaging and call-to-action oriented
 - SEO-friendly with keywords naturally integrated
 - Suitable for platforms like Instagram, TikTok, YouTube, and X (Twitter)
 - Professional yet approachable tone
-- Include emojis where appropriate (but don't overdo it)
+- Include emojis where appropriate (but don't overdo it)${
+          adaptMaxLength ? `\n- At most ${adaptMaxLength} characters` : ""
+        }
 
-IMPORTANT: Write ONLY the enhanced caption as plain text without any hashtags. Do NOT include:
-- Any meta-commentary
-- Explanations or notes
-- Just the caption text itself`;
+${PROMPT_OUTPUT_RULES}`;
 
-    const userPrompt = `Enhance this basic caption into a short, engaging, SEO-optimized social media post:
+    const userPrompt = adaptPlatform
+      ? `Rewrite this caption for ${platformLabel(adaptPlatform)}:
+
+"${caption.trim()}"`
+      : `Enhance this basic caption into a short, engaging, SEO-optimized social media post:
 
 "${caption.trim()}"
 
@@ -117,7 +180,8 @@ Create an enhanced version that's perfect for social media.`;
           { role: "user", content: userPrompt },
         ],
         temperature: 0.8,
-        max_tokens: 150,
+        // Adapted captions may run to a few sentences (LinkedIn, YouTube).
+        max_tokens: adaptPlatform ? 400 : 150,
         ...reasoningParams(llm.provider, llm.textModel),
       }),
       signal: AbortSignal.timeout(AI_PROVIDER_TIMEOUT_MS),
