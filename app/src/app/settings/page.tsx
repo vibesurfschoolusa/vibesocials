@@ -50,6 +50,7 @@ export default async function SettingsPage({
     defaultHashtags: context.workspace.defaultHashtags,
     notifyOnPostComplete: context.user.notifyOnPostComplete,
     notifyDailyDigest: context.user.notifyDailyDigest,
+    notifyNewReviews: context.user.notifyNewReviews,
     requireApproval: context.workspace.requireApproval,
     googleButtonType: context.workspace.googleButtonType,
     googleButtonUrl: context.workspace.googleButtonUrl,

@@ -52,11 +52,18 @@ export async function refreshAccessToken(
 }
 
 /**
- * Fetch reviews for a Google Business Profile location
+ * Fetch reviews for a Google Business Profile location (first page only).
+ *
+ * `newestFirst` (2026-11-10, the new review email) asks for the largest page
+ * (50) ordered `updateTime desc`, the only newest-first order Google offers
+ * (rating, rating desc, updateTime desc). A review's updateTime is never before
+ * its createTime, so every review created since the last daily check is on that
+ * page unless more than 50 reviews were created or edited in between.
  */
 export async function fetchReviews(
   accessToken: string,
-  locationName: string
+  locationName: string,
+  options: { newestFirst?: boolean } = {}
 ): Promise<GoogleReview[]> {
   console.log("[GBP Reviews] Fetching reviews", { locationName });
 
@@ -70,8 +77,11 @@ export async function fetchReviews(
 
   // Use Google My Business API v4 to fetch reviews
   // API: https://developers.google.com/my-business/reference/rest/v4/accounts.locations.reviews/list
+  const query = options.newestFirst
+    ? `?pageSize=50&orderBy=${encodeURIComponent("updateTime desc")}`
+    : "";
   const response = await fetchWithTimeout(
-    `https://mybusiness.googleapis.com/v4/${resolvedLocationName}/reviews`,
+    `https://mybusiness.googleapis.com/v4/${resolvedLocationName}/reviews${query}`,
     {
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -114,6 +124,62 @@ export async function fetchReviews(
   });
 
   return reviews;
+}
+
+/** The location id of `accounts/{a}/locations/{l}` or `locations/{l}`, or null. */
+function locationIdOf(resourceName: string): string | null {
+  const match = /(?:^|\/)locations\/([^/]+)$/.exec(resourceName);
+  return match ? match[1] : null;
+}
+
+/**
+ * The review link saved on a connection's metadata, or null. `newReviewUriFor`
+ * names the location it was read for: a link saved before another location was
+ * chosen belongs to the old one and counts as missing.
+ */
+export function savedNewReviewUri(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const { locationName, newReviewUri, newReviewUriFor } = metadata as Record<string, unknown>;
+  if (typeof newReviewUri !== "string" || newReviewUri === "") return null;
+  if (typeof locationName !== "string" || locationName.trim() === "") return null;
+  return newReviewUriFor === locationName.trim() ? newReviewUri : null;
+}
+
+/**
+ * The link where a customer leaves a review for the location (2026-11-10, the
+ * "Get more reviews" panel): Business Information API `metadata.newReviewUri`,
+ * read with `readMask=metadata.newReviewUri` (scope business.manage, which the
+ * connection holds). Null when Google gives none, or anything but an https link,
+ * since it is shown as a link and drawn as a QR code. Throws on a refusal.
+ */
+export async function fetchNewReviewUri(
+  accessToken: string,
+  locationName: string
+): Promise<string | null> {
+  const resourceName = await resolveGbpLocationName(accessToken, locationName);
+  const locationId = locationIdOf(resourceName);
+  if (!locationId) return null;
+
+  const response = await fetchWithTimeout(
+    `https://mybusinessbusinessinformation.googleapis.com/v1/locations/${encodeURIComponent(locationId)}?readMask=metadata.newReviewUri`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+    15_000
+  );
+  await assertOk(response, {
+    code: "GBP_REVIEW_LINK_FETCH_FAILED",
+    prefix: "Failed to read the Google review link",
+  });
+
+  const body = (await response.json().catch(() => null)) as {
+    metadata?: { newReviewUri?: unknown };
+  } | null;
+  const uri = body?.metadata?.newReviewUri;
+  if (typeof uri !== "string" || uri.length > 2048) return null;
+  try {
+    return new URL(uri).protocol === "https:" ? uri : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

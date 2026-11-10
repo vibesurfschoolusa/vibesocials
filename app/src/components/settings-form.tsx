@@ -48,6 +48,7 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
     settings.notifyOnPostComplete,
   );
   const [notifyDailyDigest, setNotifyDailyDigest] = useState(settings.notifyDailyDigest);
+  const [notifyNewReviews, setNotifyNewReviews] = useState(settings.notifyNewReviews);
   const [requireApproval, setRequireApproval] = useState(settings.requireApproval);
   // 2026-11-10: the default Google button. "" = no button. The link starts as
   // the company website until one is saved.
@@ -87,8 +88,9 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
             googleButtonUrl: googleButtonUrl.trim(),
             notifyOnPostComplete,
             notifyDailyDigest,
+            notifyNewReviews,
           }
-        : { notifyOnPostComplete, notifyDailyDigest };
+        : { notifyOnPostComplete, notifyDailyDigest, notifyNewReviews };
 
       const response = await fetch("/api/settings", {
         method: "POST",
@@ -280,6 +282,18 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
           </label>
           <p className="text-sm text-muted-foreground">
             Sent to workspace owners, once a day, only on days when something needs attention.
+          </p>
+          <label className="mt-3 flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={notifyNewReviews}
+              onChange={(e) => setNotifyNewReviews(e.target.checked)}
+              className={checkboxClass}
+            />
+            <span className="text-sm text-foreground">Email me when a new Google review arrives</span>
+          </label>
+          <p className="text-sm text-muted-foreground">
+            Sent to workspace owners, once a day, on days when the Google listing gets new reviews.
           </p>
         </div>
 

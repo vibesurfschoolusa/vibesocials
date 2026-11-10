@@ -100,6 +100,9 @@ model User {
   // 2026-11-10: the daily problems email to owners (server/jobs/problemDigest.ts).
   // Defaults to true so existing owners start opted in, like the field above.
   notifyDailyDigest    Boolean   @default(true)
+  // 2026-11-10: the email to owners when their Google listing gets a new review
+  // (server/jobs/reviewAlerts.ts). Defaults to true, like the fields above.
+  notifyNewReviews     Boolean   @default(true)
   // Bumped on password reset so outstanding next-auth JWTs (which embed the
   // prior version) fail getCurrentUser until the user signs in again.
   sessionVersion       Int       @default(0)

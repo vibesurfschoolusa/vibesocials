@@ -429,6 +429,58 @@ describe("notifyDailyDigest (daily problems email)", () => {
   });
 });
 
+describe("notifyNewReviews (new Google review email)", () => {
+  it("parses a boolean and normalizes null to on", () => {
+    expect(parseSettingsInput({ notifyNewReviews: false })).toEqual({
+      ok: true,
+      data: { notifyNewReviews: false },
+    });
+    expect(parseSettingsInput({ notifyNewReviews: null })).toEqual({
+      ok: true,
+      data: { notifyNewReviews: true },
+    });
+  });
+
+  it("rejects a non-boolean with 400 and writes nothing", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+
+    const response = await POST(jsonRequest({ notifyNewReviews: "yes" }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "notifyNewReviews must be a boolean",
+    });
+    expect(userUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("is not owner-only: a member saves it to their own row", async () => {
+    getWorkspaceContextMock.mockResolvedValue(MEMBER_CONTEXT);
+    userUpdateMock.mockResolvedValue({});
+
+    const response = await POST(jsonRequest({ notifyNewReviews: false }));
+
+    expect(response.status).toBe(200);
+    expect(userUpdateMock).toHaveBeenCalledWith({
+      where: { id: "user-member" },
+      data: { notifyNewReviews: false },
+    });
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("saves with the other email preferences in one write", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    userUpdateMock.mockResolvedValue({});
+
+    await POST(jsonRequest({ notifyOnPostComplete: true, notifyDailyDigest: true, notifyNewReviews: false }));
+
+    expect(userUpdateMock).toHaveBeenCalledTimes(1);
+    expect(userUpdateMock).toHaveBeenCalledWith({
+      where: { id: "user-owner" },
+      data: { notifyOnPostComplete: true, notifyDailyDigest: true, notifyNewReviews: false },
+    });
+  });
+});
+
 describe("touchesWorkspaceFooter", () => {
   it("is false when neither footer key is present", () => {
     expect(touchesWorkspaceFooter({})).toBe(false);

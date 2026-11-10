@@ -17,6 +17,8 @@ import { ReviewCard } from "@/components/reviews/review-card";
 import type { GoogleReview, Location } from "@/components/reviews/types";
 import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 
+import { ReviewLinkPanel } from "./review-link-panel";
+
 /** Client-rendered reviews view. The parent server component gates access. */
 export function ReviewsView() {
   const toast = useToast();
@@ -274,6 +276,10 @@ export function ReviewsView() {
           Manage and reply to your Google Business Profile reviews
         </p>
       </div>
+
+      {/* 2026-11-10: the review link, QR code, print card and message. Only once
+          Google is connected: before that the page offers the connect step. */}
+      {gbpConnected && <ReviewLinkPanel />}
 
       {/* Location Selector */}
       {locations.length > 1 && (

@@ -14,6 +14,7 @@ const SETTINGS: UserSettings = {
   defaultHashtags: null,
   notifyOnPostComplete: true,
   notifyDailyDigest: true,
+  notifyNewReviews: true,
   requireApproval: false,
   googleButtonType: null,
   googleButtonUrl: null,
@@ -21,6 +22,23 @@ const SETTINGS: UserSettings = {
 
 const render = (settings: UserSettings, role: "owner" | "member" = "owner") =>
   renderToStaticMarkup(createElement(SettingsForm, { settings, role }));
+
+// 2026-11-10: the new Google review email preference.
+describe("SettingsForm — Notifications", () => {
+  const reviewBox = /<input type="checkbox"([^>]*)\/><span[^>]*>Email me when a new Google review arrives<\/span>/;
+
+  it("shows the new review checkbox, checked when the preference is on", () => {
+    const match = reviewBox.exec(render(SETTINGS));
+    expect(match).not.toBeNull();
+    expect(match?.[1]).toContain('checked=""');
+  });
+
+  it("shows it unchecked when the preference is off, to a member too", () => {
+    const match = reviewBox.exec(render({ ...SETTINGS, notifyNewReviews: false }, "member"));
+    expect(match).not.toBeNull();
+    expect(match?.[1]).not.toContain("checked");
+  });
+});
 
 // 2026-11-10: the workspace's default Google button.
 describe("SettingsForm — Google posts", () => {

@@ -84,6 +84,7 @@ function makeUser(overrides: Partial<User> = {}): User {
     googleLinkedAt: null,
     notifyOnPostComplete: true,
     notifyDailyDigest: true,
+    notifyNewReviews: true,
     sessionVersion: 0,
     createdAt: new Date("2020-01-01T00:00:00Z"),
     updatedAt: new Date("2020-01-01T00:00:00Z"),

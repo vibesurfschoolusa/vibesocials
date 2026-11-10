@@ -48,6 +48,11 @@ import {
 import { deliverPostOutcomeNotification } from "@/server/notifications/postOutcomeEmail";
 import { buildReconnectEmail } from "@/server/notifications/reconnectEmail";
 import { collectProblemDigests, sendProblemDigests } from "@/server/jobs/problemDigest";
+import {
+  checkReviewConnections,
+  collectReviewAlertConnections,
+  sendReviewAlerts,
+} from "@/server/jobs/reviewAlerts";
 import { sendEmail } from "@/server/notifications/email";
 import {
   HEALTH_SWEEP_PAGE_SIZE,
@@ -2318,6 +2323,51 @@ export const dailyProblemDigest = inngest.createFunction(
   },
 );
 
+/**
+ * The new Google review email (2026-11-10): owners hear the same day that their
+ * listing got a review (logic in reviewAlerts.ts). At most three steps, each
+ * safe to run twice: `collect` lists the Google connections oldest-checked
+ * first and memoizes the run's time; `check` asks Google for each one's newest
+ * reviews for at most 120 s (the rest carry on tomorrow); `send` emails the
+ * owners and only then saves each listing's marker, under the
+ * `reviews/<connectionId>/<userId>/<day>` idempotency key. 13:00 UTC is a free
+ * slot in the cadence map above, an hour after the daily problems email.
+ * SEC: step outputs are ids, names and review excerpts; never tokens or addresses.
+ */
+export const googleReviewAlerts = inngest.createFunction(
+  {
+    id: "google-review-alerts",
+    name: "Google Review Alerts",
+    singleton: { mode: "skip" },
+  },
+  { cron: "0 13 * * *" },
+  async ({ step }) => {
+    const collected = await step.run("collect", async () => ({
+      now: new Date().toISOString(),
+      connectionIds: await collectReviewAlertConnections(),
+    }));
+    const connections = collected.connectionIds.length;
+    if (connections === 0) return { connections };
+
+    const now = new Date(collected.now);
+    const checked = await step.run("check", () => checkReviewConnections(collected.connectionIds, now));
+    const { alerts, ...counts } = checked;
+    if (alerts.length === 0) return { connections, ...counts, alerts: 0 };
+
+    const sent = await step.run("send", () => sendReviewAlerts(alerts, now));
+    const summary = {
+      connections,
+      ...counts,
+      alerts: alerts.length,
+      sent: sent.sent,
+      sendFailed: sent.failed,
+      sendLeft: sent.left,
+    };
+    logger.info("[Inngest] Google review alerts sent", summary);
+    return summary;
+  },
+);
+
 export const inngestFunctions = [
   publishToAllPlatforms,
   mediaRetentionSweep,
@@ -2329,4 +2379,5 @@ export const inngestFunctions = [
   connectionHealthSweep,
   refreshConnection,
   dailyProblemDigest,
+  googleReviewAlerts,
 ];
