@@ -49,9 +49,9 @@ const ALERT = {
   connectionId: "conn-1",
   workspaceId: "ws-1",
   locationName: "accounts/1/locations/2",
-  locationTitle: "Surf Co",
   seenThrough: "2026-11-10T08:00:00Z",
-  reviews: [{ starRating: "FIVE", reviewerName: "Dana", comment: "Great" }],
+  count: 1,
+  reviewIds: ["review-1"],
 };
 
 beforeEach(() => {

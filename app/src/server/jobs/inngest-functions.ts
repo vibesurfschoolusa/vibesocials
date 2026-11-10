@@ -2330,9 +2330,11 @@ export const dailyProblemDigest = inngest.createFunction(
  * first and memoizes the run's time; `check` asks Google for each one's newest
  * reviews for at most 120 s (the rest carry on tomorrow); `send` emails the
  * owners and only then saves each listing's marker, under the
- * `reviews/<connectionId>/<userId>/<day>` idempotency key. 13:00 UTC is a free
+ * `reviews/<connectionId>/<userId>/<day>` idempotency key. A day with nothing
+ * new runs no `send` and reads no listing twice. 13:00 UTC is a free
  * slot in the cadence map above, an hour after the daily problems email.
- * SEC: step outputs are ids, names and review excerpts; never tokens or addresses.
+ * SEC: step outputs are ids and counts only. `send` reads the review text again
+ * from Google and the owners' addresses itself; neither is stored.
  */
 export const googleReviewAlerts = inngest.createFunction(
   {

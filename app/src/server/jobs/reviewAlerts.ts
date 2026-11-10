@@ -1,4 +1,4 @@
-import type { Prisma } from "@prisma/client";
+import type { Prisma, SocialConnection } from "@prisma/client";
 import { RetryAfterError } from "inngest";
 
 import { prisma } from "@/lib/db";
@@ -8,8 +8,7 @@ import { fetchReviews, refreshAccessToken, type GoogleReview } from "@/server/go
 import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
 import {
   buildNewReviewsEmail,
-  firstChars,
-  NEW_REVIEW_COMMENT_CHARS,
+  NEW_REVIEWS_SHOWN,
   type NewReviewSummary,
 } from "@/server/notifications/newReviewsEmail";
 
@@ -20,15 +19,18 @@ import {
  * each one's newest reviews for at most REVIEW_CHECK_BUDGET_MS; and
  * `sendReviewAlerts` emails the owners of each listing that got new reviews.
  *
- * Nothing about reviews is stored but two times in `SocialConnection.metadata`:
- * - `reviewsSeenThrough`, the createTime of the newest review seen. A review
- *   created after it is new. The first check of a connection only sets it, so
- *   nobody is emailed about old reviews. An edited old review keeps its
- *   createTime, so it is not new.
+ * Nothing about reviews is stored but these keys of `SocialConnection.metadata`:
+ * - `reviewsSeenThrough`, the createTime of the newest review seen, and
+ *   `reviewsSeenFor`, the location it was seen at. A review created after the
+ *   marker is new. A marker saved for another location, or with no location
+ *   recorded, counts as missing: the owner may have switched from a quiet
+ *   listing to a busy one, whose history is not news. With no marker the check
+ *   is a first check: it only sets the marker, so nobody is emailed about old
+ *   reviews. An edited old review keeps its createTime, so it is not new.
  * - `reviewsCheckedAt`, when the connection was last checked: the order of the
  *   next run, so a run cut short by its time budget carries on from there.
  *
- * Both are written by a guarded merge onto the row as it is at that moment
+ * They are written by a guarded merge onto the row as it is at that moment
  * (saveReviewMarkerIfUnchanged), as gbpLocationTitle.ts writes a title.
  *
  * Order: for a listing with new reviews the marker is saved only after its
@@ -37,12 +39,22 @@ import {
  * emailed every day. A re-run of the send step on the same day sends nothing
  * twice: Resend drops a repeat of the idempotency key.
  *
- * Step outputs carry ids, names, ratings and comment excerpts; owners' addresses
- * are read in the send step and never land in a step's stored output.
+ * Step outputs carry ids and counts only. The send step reads the listing's
+ * first page again to quote the reviews, and reads owners' addresses itself, so
+ * no review text and no address lands in a step's stored output.
  */
 
 /** No new connection is checked after this long; the rest wait for the next day. */
 export const REVIEW_CHECK_BUDGET_MS = 120_000;
+
+/**
+ * The send step reads no listing again after this long, and each read is
+ * bounded by REVIEW_ALERT_FETCH_TIMEOUT_MS; later emails go without excerpts.
+ * With the sends' own worst case (40 x 4.6 s, problemDigest.ts) the step stays
+ * inside Vercel's 300 s.
+ */
+export const REVIEW_ALERT_FETCH_BUDGET_MS = 60_000;
+export const REVIEW_ALERT_FETCH_TIMEOUT_MS = 10_000;
 
 /** Pause between two sends: Resend allows 10 requests a second per team, shared with other mail. */
 export const REVIEW_ALERT_SEND_INTERVAL_MS = 600;
@@ -89,6 +101,15 @@ function later(a: string | null, b: string): string {
   return a;
 }
 
+/**
+ * The marker saved for `locationName`, or null: none saved, or saved for
+ * another location, or saved with no location recorded.
+ */
+export function seenThroughFor(metadata: Record<string, unknown>, locationName: string): string | null {
+  if (nonEmptyString(metadata.reviewsSeenFor) !== locationName) return null;
+  return nonEmptyString(metadata.reviewsSeenThrough);
+}
+
 export interface NewReviewsResult {
   /** Reviews created after the marker, newest first. Empty on a first check. */
   newReviews: GoogleReview[];
@@ -130,11 +151,12 @@ export function findNewReviews(
 }
 
 /**
- * Saves the check time, and `seenThrough` when given, merged onto the metadata
- * as it is NOW, so nothing written meanwhile is lost. Writes nothing when the
- * connection is gone or another location was chosen meanwhile (that location's
- * reviews are not the ones checked), and never moves a marker backwards (an
- * overlapping run may have moved it further).
+ * Saves the check time, and `seenThrough` (with `reviewsSeenFor`) when given,
+ * merged onto the metadata as it is NOW, so nothing written meanwhile is lost.
+ * Writes nothing when the connection is gone or another location was chosen
+ * meanwhile (that location's reviews are not the ones checked), and never moves
+ * this location's marker backwards (an overlapping run may have moved it
+ * further). A marker saved for another location is replaced.
  */
 export async function saveReviewMarkerIfUnchanged(
   id: string,
@@ -146,9 +168,12 @@ export async function saveReviewMarkerIfUnchanged(
   const metadata = metadataOf(fresh);
   if (nonEmptyString(metadata.locationName) !== locationName) return false;
 
-  const stored = nonEmptyString(metadata.reviewsSeenThrough);
-  const next: Record<string, unknown> = { ...metadata, reviewsCheckedAt: marker.checkedAt.toISOString() };
-  if (marker.seenThrough) next.reviewsSeenThrough = later(stored, marker.seenThrough);
+  const next: Record<string, unknown> = { ...metadata };
+  if (marker.seenThrough) {
+    next.reviewsSeenThrough = later(seenThroughFor(metadata, locationName), marker.seenThrough);
+    next.reviewsSeenFor = locationName;
+  }
+  next.reviewsCheckedAt = marker.checkedAt.toISOString();
 
   await prisma.socialConnection.update({
     where: { id },
@@ -179,15 +204,21 @@ export async function collectReviewAlertConnections(): Promise<string[]> {
     .map((row) => row.id);
 }
 
-/** A listing with new reviews, for the send step. No secrets, no addresses. */
+/**
+ * A listing with new reviews, for the send step: ids and counts only, never
+ * review text, secrets or addresses (Inngest stores step outputs).
+ */
 export interface ReviewAlert {
   connectionId: string;
   workspaceId: string;
+  /** The location checked: the send step quotes it and the marker guard compares it. */
   locationName: string;
-  locationTitle: string;
   /** The marker to save once the owners' emails were attempted. */
   seenThrough: string;
-  reviews: NewReviewSummary[];
+  /** How many reviews are new. */
+  count: number;
+  /** The newest NEW_REVIEWS_SHOWN of them, by Google review id, newest first. */
+  reviewIds: string[];
 }
 
 export interface ReviewCheckResult {
@@ -202,13 +233,12 @@ export interface ReviewCheckResult {
   left: number;
 }
 
-function summarize(review: GoogleReview): NewReviewSummary {
-  const comment = review.comment?.trim();
-  return {
-    starRating: review.starRating,
-    reviewerName: review.reviewer?.displayName ?? "",
-    ...(comment ? { comment: firstChars(comment, NEW_REVIEW_COMMENT_CHARS) } : {}),
-  };
+/** A usable access token: the stored one, or a refreshed one (saved by the shared refresh path). */
+async function accessTokenOf(connection: SocialConnection, now: Date): Promise<string> {
+  if (connection.expiresAt && new Date(connection.expiresAt).getTime() <= now.getTime()) {
+    return (await refreshAccessToken(connection)).accessToken;
+  }
+  return connection.accessToken;
 }
 
 /**
@@ -235,10 +265,7 @@ export async function checkReviewConnections(
     }
     const id = ids[index];
 
-    const connection = await prisma.socialConnection.findUnique({
-      where: { id },
-      include: { workspace: { select: { name: true } } },
-    });
+    const connection = await prisma.socialConnection.findUnique({ where: { id } });
     if (!connection) {
       result.skipped++;
       continue;
@@ -256,12 +283,9 @@ export async function checkReviewConnections(
 
     result.checked++;
     try {
-      let current = connection;
-      if (current.expiresAt && new Date(current.expiresAt).getTime() <= now.getTime()) {
-        current = { ...current, ...(await refreshAccessToken(current)) };
-      }
-      const reviews = await fetchReviews(current.accessToken, locationName, { newestFirst: true });
-      const found = findNewReviews(reviews, nonEmptyString(metadata.reviewsSeenThrough), now);
+      const accessToken = await accessTokenOf(connection, now);
+      const reviews = await fetchReviews(accessToken, locationName, { newestFirst: true });
+      const found = findNewReviews(reviews, seenThroughFor(metadata, locationName), now);
 
       if (found.newReviews.length === 0) {
         await saveReviewMarkerIfUnchanged(id, locationName, {
@@ -275,9 +299,9 @@ export async function checkReviewConnections(
         connectionId: id,
         workspaceId: connection.workspaceId,
         locationName,
-        locationTitle: nonEmptyString(metadata.locationTitle) ?? connection.workspace.name,
         seenThrough: found.seenThrough,
-        reviews: found.newReviews.map(summarize),
+        count: found.newReviews.length,
+        reviewIds: found.newReviews.slice(0, NEW_REVIEWS_SHOWN).map((review) => review.reviewId),
       });
     } catch (error) {
       result.failed++;
@@ -306,15 +330,60 @@ export interface ReviewAlertSendResult {
   left: number;
 }
 
+function summarize(review: GoogleReview): NewReviewSummary {
+  return {
+    starRating: review.starRating,
+    reviewerName: review.reviewer?.displayName ?? "",
+    ...(review.comment ? { comment: review.comment } : {}),
+  };
+}
+
+/**
+ * The excerpts for `alert`: its listing's first page read again, the reviews it
+ * names picked out in its order. Null when the read fails; the email then goes
+ * with the count and the link only.
+ */
+async function loadExcerpts(
+  connection: SocialConnection,
+  alert: ReviewAlert,
+  now: Date,
+): Promise<NewReviewSummary[] | null> {
+  try {
+    const accessToken = await accessTokenOf(connection, now);
+    const reviews = await fetchReviews(accessToken, alert.locationName, {
+      newestFirst: true,
+      timeoutMs: REVIEW_ALERT_FETCH_TIMEOUT_MS,
+    });
+    const byId = new Map(reviews.map((review) => [review.reviewId, review]));
+    return alert.reviewIds.flatMap((id) => {
+      const review = byId.get(id);
+      return review ? [summarize(review)] : [];
+    });
+  } catch (error) {
+    logger.warn("[reviews] Couldn't read the new reviews again; emailing without excerpts", {
+      connectionId: alert.connectionId,
+      error: error instanceof Error ? error.name : "unknown",
+      code: (error as { code?: unknown } | null)?.code,
+    });
+    return null;
+  }
+}
+
 /**
  * Emails each alert's workspace owners who kept `notifyNewReviews` on, one send
  * every REVIEW_ALERT_SEND_INTERVAL_MS, then saves that listing's marker. A
  * retryable failure (thrown under throwOnRetryable) is retried once after its
  * delay; one owner's failure never stops the rest. At most
  * REVIEW_ALERT_MAX_EMAILS_PER_RUN sends: a listing whose owners would go over it
- * is left, marker unchanged, for the next day.
+ * is left, marker unchanged, for the next day. A listing whose location changed
+ * since the check is skipped: its reviews are not the chosen location's.
  */
-export async function sendReviewAlerts(alerts: ReviewAlert[], now: Date): Promise<ReviewAlertSendResult> {
+export async function sendReviewAlerts(
+  alerts: ReviewAlert[],
+  now: Date,
+  clock: () => number = Date.now,
+): Promise<ReviewAlertSendResult> {
+  const startedAt = clock();
   const day = utcDayKey(now);
   const appBaseUrl = process.env.NEXTAUTH_URL || null;
   let sent = 0;
@@ -324,8 +393,19 @@ export async function sendReviewAlerts(alerts: ReviewAlert[], now: Date): Promis
 
   for (let index = 0; index < alerts.length; index++) {
     const alert = alerts[index];
+    let connection: (SocialConnection & { workspace: { name: string } }) | null;
     let recipients: Array<{ userId: string; user: { email: string } }>;
     try {
+      connection = await prisma.socialConnection.findUnique({
+        where: { id: alert.connectionId },
+        include: { workspace: { select: { name: true } } },
+      });
+      if (!connection || nonEmptyString(metadataOf(connection).locationName) !== alert.locationName) {
+        logger.warn("[reviews] Listing gone or moved since the check; not emailed", {
+          connectionId: alert.connectionId,
+        });
+        continue;
+      }
       recipients = await prisma.workspaceMember.findMany({
         where: { workspaceId: alert.workspaceId, role: "owner", user: { notifyNewReviews: true } },
         select: { userId: true, user: { select: { email: true } } },
@@ -333,7 +413,7 @@ export async function sendReviewAlerts(alerts: ReviewAlert[], now: Date): Promis
       });
     } catch (error) {
       // Marker unchanged: the same reviews are found again tomorrow.
-      logger.error("[reviews] Couldn't read a listing's owners; carrying on", {
+      logger.error("[reviews] Couldn't read a listing or its owners; carrying on", {
         error,
         connectionId: alert.connectionId,
       });
@@ -349,40 +429,46 @@ export async function sendReviewAlerts(alerts: ReviewAlert[], now: Date): Promis
       return { sent, failed, left };
     }
 
-    const email = buildNewReviewsEmail({
-      locationTitle: alert.locationTitle,
-      reviews: alert.reviews,
-      appBaseUrl,
-    });
-    for (const recipient of recipients) {
-      if (!first) await sleep(REVIEW_ALERT_SEND_INTERVAL_MS);
-      first = false;
-      attempts++;
+    if (recipients.length > 0) {
+      const excerpts =
+        clock() - startedAt <= REVIEW_ALERT_FETCH_BUDGET_MS ? await loadExcerpts(connection, alert, now) : null;
+      const email = buildNewReviewsEmail({
+        locationTitle: nonEmptyString(metadataOf(connection).locationTitle) ?? connection.workspace.name,
+        count: alert.count,
+        reviews: excerpts,
+        appBaseUrl,
+      });
 
-      const send = () =>
-        sendEmail(
-          { to: recipient.user.email, ...email },
-          {
-            idempotencyKey: `reviews/${alert.connectionId}/${recipient.userId}/${day}`,
-            throwOnRetryable: true,
-          },
-        );
-      try {
+      for (const recipient of recipients) {
+        if (!first) await sleep(REVIEW_ALERT_SEND_INTERVAL_MS);
+        first = false;
+        attempts++;
+
+        const send = () =>
+          sendEmail(
+            { to: recipient.user.email, ...email },
+            {
+              idempotencyKey: `reviews/${alert.connectionId}/${recipient.userId}/${day}`,
+              throwOnRetryable: true,
+            },
+          );
         try {
-          await send();
+          try {
+            await send();
+          } catch (error) {
+            if (!isRetryableEmailError(error)) throw error;
+            await sleep(retryDelayMs(error));
+            await send();
+          }
+          sent++;
         } catch (error) {
-          if (!isRetryableEmailError(error)) throw error;
-          await sleep(retryDelayMs(error));
-          await send();
+          failed++;
+          logger.error("[reviews] Couldn't send one new review email; carrying on", {
+            error,
+            userId: recipient.userId,
+            connectionId: alert.connectionId,
+          });
         }
-        sent++;
-      } catch (error) {
-        failed++;
-        logger.error("[reviews] Couldn't send one new review email; carrying on", {
-          error,
-          userId: recipient.userId,
-          connectionId: alert.connectionId,
-        });
       }
     }
 

@@ -41,11 +41,13 @@ import { EmailRetryableError } from "@/server/notifications/email";
 
 import {
   REVIEW_ALERT_MAX_EMAILS_PER_RUN,
+  REVIEW_ALERT_FETCH_BUDGET_MS,
   REVIEW_CHECK_BUDGET_MS,
   checkReviewConnections,
   collectReviewAlertConnections,
   findNewReviews,
   saveReviewMarkerIfUnchanged,
+  seenThroughFor,
   sendReviewAlerts,
   type ReviewAlert,
 } from "./reviewAlerts";
@@ -53,6 +55,7 @@ import {
 const NOW = new Date("2026-11-10T13:00:00.000Z");
 const HOUR = 60 * 60 * 1000;
 const LOCATION = "accounts/1/locations/22";
+const OTHER_LOCATION = "accounts/1/locations/99";
 
 function review(id: string, createTime: string, over: Partial<GoogleReview> = {}): GoogleReview {
   return {
@@ -92,13 +95,14 @@ function row(over: Partial<Row> = {}): Row {
       locationName: LOCATION,
       locationTitle: "Surf Co",
       reviewsSeenThrough: "2026-11-09T10:00:00Z",
+      reviewsSeenFor: LOCATION,
     },
     workspace: { name: "Surf Workspace" },
     ...over,
   };
 }
 
-/** The rows the check reads, by id; the guarded write re-reads the same row unless told otherwise. */
+/** The rows by id: the check, the send step and the guarded write all read them. */
 function useRows(rows: Row[]) {
   db.connectionFindUnique.mockImplementation(async ({ where }: { where: { id: string } }) => {
     const found = rows.find((r) => r.id === where.id);
@@ -169,8 +173,26 @@ describe("findNewReviews", () => {
   });
 });
 
+describe("seenThroughFor", () => {
+  it("is the marker saved for this location", () => {
+    expect(seenThroughFor({ reviewsSeenThrough: "2026-11-09T10:00:00Z", reviewsSeenFor: LOCATION }, LOCATION)).toBe(
+      "2026-11-09T10:00:00Z",
+    );
+  });
+
+  it("is missing for a marker saved for another location", () => {
+    expect(
+      seenThroughFor({ reviewsSeenThrough: "2026-11-09T10:00:00Z", reviewsSeenFor: OTHER_LOCATION }, LOCATION),
+    ).toBeNull();
+  });
+
+  it("is missing for a marker with no location recorded", () => {
+    expect(seenThroughFor({ reviewsSeenThrough: "2026-11-09T10:00:00Z" }, LOCATION)).toBeNull();
+  });
+});
+
 describe("saveReviewMarkerIfUnchanged", () => {
-  it("merges the marker onto the metadata as it is now, keeping what else was written", async () => {
+  it("merges the marker and its location onto the metadata as it is now, keeping what else was written", async () => {
     db.connectionFindUnique.mockResolvedValue({
       metadata: { locationName: LOCATION, newReviewUri: "https://g.page/r/x/review" },
     });
@@ -185,6 +207,7 @@ describe("saveReviewMarkerIfUnchanged", () => {
           locationName: LOCATION,
           newReviewUri: "https://g.page/r/x/review",
           reviewsSeenThrough: "2026-11-10T08:00:00Z",
+          reviewsSeenFor: LOCATION,
           reviewsCheckedAt: NOW.toISOString(),
         },
       },
@@ -192,7 +215,7 @@ describe("saveReviewMarkerIfUnchanged", () => {
   });
 
   it("writes nothing when another location was chosen meanwhile", async () => {
-    db.connectionFindUnique.mockResolvedValue({ metadata: { locationName: "accounts/1/locations/99" } });
+    db.connectionFindUnique.mockResolvedValue({ metadata: { locationName: OTHER_LOCATION } });
 
     await expect(
       saveReviewMarkerIfUnchanged("conn-1", LOCATION, { seenThrough: "2026-11-10T08:00:00Z", checkedAt: NOW }),
@@ -209,7 +232,7 @@ describe("saveReviewMarkerIfUnchanged", () => {
 
   it("never moves a marker that another run moved further back", async () => {
     db.connectionFindUnique.mockResolvedValue({
-      metadata: { locationName: LOCATION, reviewsSeenThrough: "2026-11-10T12:00:00Z" },
+      metadata: { locationName: LOCATION, reviewsSeenThrough: "2026-11-10T12:00:00Z", reviewsSeenFor: LOCATION },
     });
 
     await saveReviewMarkerIfUnchanged("conn-1", LOCATION, { seenThrough: "2026-11-10T08:00:00Z", checkedAt: NOW });
@@ -217,9 +240,22 @@ describe("saveReviewMarkerIfUnchanged", () => {
     expect(db.connectionUpdate.mock.calls[0][0].data.metadata.reviewsSeenThrough).toBe("2026-11-10T12:00:00Z");
   });
 
+  it("replaces a later marker that was saved for another location", async () => {
+    db.connectionFindUnique.mockResolvedValue({
+      metadata: { locationName: LOCATION, reviewsSeenThrough: "2026-11-10T12:00:00Z", reviewsSeenFor: OTHER_LOCATION },
+    });
+
+    await saveReviewMarkerIfUnchanged("conn-1", LOCATION, { seenThrough: "2026-11-10T08:00:00Z", checkedAt: NOW });
+
+    expect(db.connectionUpdate.mock.calls[0][0].data.metadata).toMatchObject({
+      reviewsSeenThrough: "2026-11-10T08:00:00Z",
+      reviewsSeenFor: LOCATION,
+    });
+  });
+
   it("only stamps the check time when given no marker", async () => {
     db.connectionFindUnique.mockResolvedValue({
-      metadata: { locationName: LOCATION, reviewsSeenThrough: "2026-11-09T10:00:00Z" },
+      metadata: { locationName: LOCATION, reviewsSeenThrough: "2026-11-09T10:00:00Z", reviewsSeenFor: LOCATION },
     });
 
     await saveReviewMarkerIfUnchanged("conn-1", LOCATION, { checkedAt: NOW });
@@ -227,6 +263,7 @@ describe("saveReviewMarkerIfUnchanged", () => {
     expect(db.connectionUpdate.mock.calls[0][0].data.metadata).toEqual({
       locationName: LOCATION,
       reviewsSeenThrough: "2026-11-09T10:00:00Z",
+      reviewsSeenFor: LOCATION,
       reviewsCheckedAt: NOW.toISOString(),
     });
   });
@@ -251,7 +288,7 @@ describe("collectReviewAlertConnections", () => {
 });
 
 describe("checkReviewConnections", () => {
-  it("returns an alert with the new reviews, and leaves the marker for the send step", async () => {
+  it("returns ids and counts only, no review text, and leaves the marker for the send step", async () => {
     useRows([row()]);
     fetchReviewsMock.mockResolvedValue([
       review("old", "2026-11-08T00:00:00Z"),
@@ -266,15 +303,29 @@ describe("checkReviewConnections", () => {
         connectionId: "conn-1",
         workspaceId: "ws-1",
         locationName: LOCATION,
-        locationTitle: "Surf Co",
         seenThrough: "2026-11-10T08:00:00Z",
-        reviews: [{ starRating: "FOUR", reviewerName: "Reviewer new", comment: "Comment new" }],
+        count: 1,
+        reviewIds: ["new"],
       },
     ]);
+    expect(JSON.stringify(result)).not.toContain("Comment");
+    expect(JSON.stringify(result)).not.toContain("Reviewer");
     expect(db.connectionUpdate).not.toHaveBeenCalled();
   });
 
-  it("on the first check saves the marker and returns no alert", async () => {
+  it("keeps at most 10 review ids, newest first, and the full count", async () => {
+    useRows([row()]);
+    fetchReviewsMock.mockResolvedValue(
+      Array.from({ length: 12 }, (_, i) => review(`r${i}`, `2026-11-10T0${Math.floor(i / 10)}:${String(i % 10).padStart(2, "0")}:00Z`)),
+    );
+
+    const [alert] = (await checkReviewConnections(["conn-1"], NOW)).alerts;
+
+    expect(alert.count).toBe(12);
+    expect(alert.reviewIds).toEqual(["r11", "r10", "r9", "r8", "r7", "r6", "r5", "r4", "r3", "r2"]);
+  });
+
+  it("on the first check saves the marker for the location and returns no alert", async () => {
     useRows([row({ metadata: { locationName: LOCATION } })]);
     fetchReviewsMock.mockResolvedValue([review("a", "2026-11-05T00:00:00Z")]);
 
@@ -284,7 +335,49 @@ describe("checkReviewConnections", () => {
     expect(db.connectionUpdate.mock.calls[0][0].data.metadata).toEqual({
       locationName: LOCATION,
       reviewsSeenThrough: "2026-11-05T00:00:00Z",
+      reviewsSeenFor: LOCATION,
       reviewsCheckedAt: NOW.toISOString(),
+    });
+  });
+
+  // An owner who first picked a quiet listing and then the real one must not
+  // get the real one's history emailed as new.
+  it("after a switch of location emails nothing on the next check, and records the new location", async () => {
+    useRows([
+      row({
+        metadata: {
+          locationName: OTHER_LOCATION,
+          locationTitle: "Real Shop",
+          reviewsSeenThrough: "2026-01-01T00:00:00Z",
+          reviewsSeenFor: LOCATION,
+        },
+      }),
+    ]);
+    fetchReviewsMock.mockResolvedValue(
+      Array.from({ length: 50 }, (_, i) => review(`h${i}`, `2026-10-${String((i % 28) + 1).padStart(2, "0")}T00:00:00Z`)),
+    );
+
+    const result = await checkReviewConnections(["conn-1"], NOW);
+
+    expect(result.alerts).toEqual([]);
+    expect(fetchReviewsMock).toHaveBeenCalledWith("gbp-access", OTHER_LOCATION, { newestFirst: true });
+    expect(db.connectionUpdate.mock.calls[0][0].data.metadata).toMatchObject({
+      locationName: OTHER_LOCATION,
+      reviewsSeenThrough: "2026-10-28T00:00:00Z",
+      reviewsSeenFor: OTHER_LOCATION,
+    });
+  });
+
+  it("treats a marker with no location recorded as a first check", async () => {
+    useRows([row({ metadata: { locationName: LOCATION, reviewsSeenThrough: "2026-01-01T00:00:00Z" } })]);
+    fetchReviewsMock.mockResolvedValue([review("a", "2026-11-05T00:00:00Z")]);
+
+    const result = await checkReviewConnections(["conn-1"], NOW);
+
+    expect(result.alerts).toEqual([]);
+    expect(db.connectionUpdate.mock.calls[0][0].data.metadata).toMatchObject({
+      reviewsSeenThrough: "2026-11-05T00:00:00Z",
+      reviewsSeenFor: LOCATION,
     });
   });
 
@@ -295,32 +388,9 @@ describe("checkReviewConnections", () => {
     const result = await checkReviewConnections(["conn-1"], NOW);
 
     expect(result.alerts).toEqual([]);
+    expect(fetchReviewsMock).toHaveBeenCalledTimes(1);
     expect(db.connectionUpdate.mock.calls[0][0].data.metadata.reviewsCheckedAt).toBe(NOW.toISOString());
     expect(db.connectionUpdate.mock.calls[0][0].data.metadata.reviewsSeenThrough).toBe("2026-11-09T10:00:00Z");
-  });
-
-  it("names the listing by the workspace when the location has no saved title", async () => {
-    useRows([row({ metadata: { locationName: LOCATION, reviewsSeenThrough: "2026-11-09T10:00:00Z" } })]);
-    fetchReviewsMock.mockResolvedValue([review("new", "2026-11-10T08:00:00Z")]);
-
-    const result = await checkReviewConnections(["conn-1"], NOW);
-
-    expect(result.alerts[0].locationTitle).toBe("Surf Workspace");
-  });
-
-  it("shortens a long comment and names an anonymous reviewer", async () => {
-    useRows([row()]);
-    fetchReviewsMock.mockResolvedValue([
-      review("new", "2026-11-10T08:00:00Z", {
-        comment: "x".repeat(1000),
-        reviewer: { displayName: "", isAnonymous: true },
-      }),
-    ]);
-
-    const [alert] = (await checkReviewConnections(["conn-1"], NOW)).alerts;
-
-    expect(alert.reviews[0].reviewerName).toBe("");
-    expect(Array.from(alert.reviews[0].comment ?? "").length).toBeLessThanOrEqual(301);
   });
 
   it("skips a connection that needs reconnecting, one with no location, and one that errors; the rest continue", async () => {
@@ -386,9 +456,9 @@ function alert(over: Partial<ReviewAlert> = {}): ReviewAlert {
     connectionId: "conn-1",
     workspaceId: "ws-1",
     locationName: LOCATION,
-    locationTitle: "Surf Co",
     seenThrough: "2026-11-10T08:00:00Z",
-    reviews: [{ starRating: "FIVE", reviewerName: "Dana", comment: "Great" }],
+    count: 1,
+    reviewIds: ["new"],
     ...over,
   };
 }
@@ -397,14 +467,17 @@ function owners(...ids: string[]) {
   return ids.map((id) => ({ userId: id, user: { email: `${id}@example.com` } }));
 }
 
-/** The marker row the guarded write re-reads. */
-function serveMarkerRow() {
-  db.connectionFindUnique.mockResolvedValue({ metadata: { locationName: LOCATION } });
+/** The send step's second read of the listing: the review the alert names. */
+function serveReviews() {
+  fetchReviewsMock.mockResolvedValue([
+    review("new", "2026-11-10T08:00:00Z", { comment: "Loved the lesson", reviewer: { displayName: "Dana", isAnonymous: false } }),
+    review("old", "2026-11-08T00:00:00Z"),
+  ]);
 }
 
-async function sendWithTimers(alerts: ReviewAlert[]) {
+async function sendWithTimers(alerts: ReviewAlert[], clock?: () => number) {
   vi.useFakeTimers({ now: NOW });
-  const pending = sendReviewAlerts(alerts, NOW);
+  const pending = sendReviewAlerts(alerts, NOW, clock);
   await vi.runAllTimersAsync();
   return pending;
 }
@@ -413,7 +486,10 @@ const rateLimited = () => new RetryAfterError("Resend rate limited the send", 2_
 const serverError = () => new EmailRetryableError("Resend send failed (status 500)");
 
 describe("sendReviewAlerts", () => {
-  beforeEach(serveMarkerRow);
+  beforeEach(() => {
+    useRows([row()]);
+    serveReviews();
+  });
 
   it("emails each owner who kept the preference on, with the key reviews/<connection>/<user>/<UTC day>", async () => {
     db.memberFindMany.mockResolvedValue(owners("user-1"));
@@ -433,6 +509,69 @@ describe("sendReviewAlerts", () => {
     expect(result).toEqual({ sent: 1, failed: 0, left: 0 });
   });
 
+  it("reads the listing again and quotes only the reviews the alert names", async () => {
+    db.memberFindMany.mockResolvedValue(owners("user-1"));
+
+    await sendWithTimers([alert()]);
+
+    expect(fetchReviewsMock).toHaveBeenCalledWith("gbp-access", LOCATION, { newestFirst: true, timeoutMs: 10_000 });
+    const { html } = sendEmailMock.mock.calls[0][0];
+    expect(html).toContain("Loved the lesson");
+    expect(html).toContain("Dana");
+    expect(html).not.toContain("Comment old");
+  });
+
+  it("says and m more for the new reviews beyond the ids it was given", async () => {
+    db.memberFindMany.mockResolvedValue(owners("user-1"));
+
+    await sendWithTimers([alert({ count: 14 })]);
+
+    const { subject, html } = sendEmailMock.mock.calls[0][0];
+    expect(subject).toBe("14 new Google reviews for Surf Co");
+    expect(html).toContain("and 13 more");
+  });
+
+  it("when the second read fails, sends the count and the link, and still moves the marker", async () => {
+    db.memberFindMany.mockResolvedValue(owners("user-1"));
+    fetchReviewsMock.mockReset();
+    fetchReviewsMock.mockRejectedValue(new Error("Google down"));
+
+    const result = await sendWithTimers([alert({ count: 3 })]);
+
+    const { subject, html } = sendEmailMock.mock.calls[0][0];
+    expect(subject).toBe("3 new Google reviews for Surf Co");
+    expect(html).toContain("3 new Google reviews for Surf Co. Open Reviews to read them.");
+    expect(html).not.toContain("<li>");
+    expect(result.sent).toBe(1);
+    expect(db.connectionUpdate.mock.calls[0][0].data.metadata).toMatchObject({
+      reviewsSeenThrough: "2026-11-10T08:00:00Z",
+      reviewsSeenFor: LOCATION,
+    });
+  });
+
+  it("refreshes an expired token before the second read", async () => {
+    const expired = row({ expiresAt: new Date(NOW.getTime() - HOUR) });
+    useRows([expired]);
+    refreshMock.mockResolvedValue({ ...expired, accessToken: "gbp-access-2" });
+    db.memberFindMany.mockResolvedValue(owners("user-1"));
+
+    await sendWithTimers([alert()]);
+
+    expect(fetchReviewsMock.mock.calls[0][0]).toBe("gbp-access-2");
+  });
+
+  it(`reads no listing again once ${REVIEW_ALERT_FETCH_BUDGET_MS / 1000} seconds have passed; the email goes without excerpts`, async () => {
+    useRows([row({ id: "a" }), row({ id: "b" })]);
+    db.memberFindMany.mockResolvedValue(owners("user-1"));
+    const times = [0, 0, REVIEW_ALERT_FETCH_BUDGET_MS + 1];
+    const clock = () => times.shift() ?? REVIEW_ALERT_FETCH_BUDGET_MS + 1;
+
+    await sendWithTimers([alert({ connectionId: "a" }), alert({ connectionId: "b" })], clock);
+
+    expect(fetchReviewsMock).toHaveBeenCalledTimes(1);
+    expect(sendEmailMock.mock.calls[1][0].html).toContain("Open Reviews to read it.");
+  });
+
   it("saves the marker after the emails were attempted", async () => {
     db.memberFindMany.mockResolvedValue(owners("user-1"));
     const order: string[] = [];
@@ -444,17 +583,35 @@ describe("sendReviewAlerts", () => {
     expect(order).toEqual(["send", "save"]);
     expect(db.connectionUpdate.mock.calls[0][0].data.metadata).toMatchObject({
       reviewsSeenThrough: "2026-11-10T08:00:00Z",
+      reviewsSeenFor: LOCATION,
       reviewsCheckedAt: NOW.toISOString(),
     });
   });
 
-  it("still saves the marker when no owner wants the email", async () => {
+  it("still saves the marker when no owner wants the email, and reads nothing from Google", async () => {
     db.memberFindMany.mockResolvedValue([]);
 
     await sendWithTimers([alert()]);
 
     expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(fetchReviewsMock).not.toHaveBeenCalled();
     expect(db.connectionUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("makes no request at all with nothing to send", async () => {
+    await expect(sendWithTimers([])).resolves.toEqual({ sent: 0, failed: 0, left: 0 });
+    expect(fetchReviewsMock).not.toHaveBeenCalled();
+    expect(db.memberFindMany).not.toHaveBeenCalled();
+  });
+
+  it("sends nothing for a listing whose location was changed since the check", async () => {
+    useRows([row({ metadata: { locationName: OTHER_LOCATION } })]);
+    db.memberFindMany.mockResolvedValue(owners("user-1"));
+
+    await sendWithTimers([alert()]);
+
+    expect(sendEmailMock).not.toHaveBeenCalled();
+    expect(db.connectionUpdate).not.toHaveBeenCalled();
   });
 
   it("retries a retryable failure once with the same key, and counts it sent", async () => {
@@ -495,6 +652,7 @@ describe("sendReviewAlerts", () => {
   });
 
   it("keeps going to the next connection when one connection's owners cannot be read", async () => {
+    useRows([row({ id: "a" }), row({ id: "b", workspaceId: "ws-2" })]);
     db.memberFindMany.mockRejectedValueOnce(new Error("db blip")).mockResolvedValueOnce(owners("user-2"));
 
     const result = await sendWithTimers([alert({ connectionId: "a" }), alert({ connectionId: "b", workspaceId: "ws-2" })]);
@@ -505,12 +663,11 @@ describe("sendReviewAlerts", () => {
 
   it(`sends at most ${REVIEW_ALERT_MAX_EMAILS_PER_RUN} emails a run; a connection left over keeps its marker for tomorrow`, async () => {
     expect(REVIEW_ALERT_MAX_EMAILS_PER_RUN).toBe(40);
+    const ids = Array.from({ length: REVIEW_ALERT_MAX_EMAILS_PER_RUN + 3 }, (_, i) => `c-${i}`);
+    useRows(ids.map((id) => row({ id })));
     db.memberFindMany.mockImplementation(async () => owners("user-1"));
-    const alerts = Array.from({ length: REVIEW_ALERT_MAX_EMAILS_PER_RUN + 3 }, (_, i) =>
-      alert({ connectionId: `c-${i}` }),
-    );
 
-    const result = await sendWithTimers(alerts);
+    const result = await sendWithTimers(ids.map((id) => alert({ connectionId: id })));
 
     expect(sendEmailMock).toHaveBeenCalledTimes(REVIEW_ALERT_MAX_EMAILS_PER_RUN);
     expect(db.connectionUpdate).toHaveBeenCalledTimes(REVIEW_ALERT_MAX_EMAILS_PER_RUN);

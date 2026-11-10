@@ -63,7 +63,7 @@ export async function refreshAccessToken(
 export async function fetchReviews(
   accessToken: string,
   locationName: string,
-  options: { newestFirst?: boolean } = {}
+  options: { newestFirst?: boolean; timeoutMs?: number } = {}
 ): Promise<GoogleReview[]> {
   console.log("[GBP Reviews] Fetching reviews", { locationName });
 
@@ -86,7 +86,8 @@ export async function fetchReviews(
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
-    }
+    },
+    options.timeoutMs
   );
 
   await assertOk(response, {

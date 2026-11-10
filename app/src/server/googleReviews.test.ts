@@ -42,6 +42,14 @@ describe("fetchReviews", () => {
     expect(url.searchParams.get("orderBy")).toBe("updateTime desc");
     expect(url.searchParams.get("pageSize")).toBe("50");
   });
+
+  it("bounds the request by the timeout it is given", async () => {
+    fetchMock.mockResolvedValue(json({ reviews: [] }));
+
+    await fetchReviews("tok", "accounts/1/locations/2", { newestFirst: true, timeoutMs: 10_000 });
+
+    expect(fetchMock.mock.calls[0][2]).toBe(10_000);
+  });
 });
 
 describe("fetchNewReviewUri", () => {

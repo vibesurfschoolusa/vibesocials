@@ -45,19 +45,23 @@ function reviewLine(review: NewReviewSummary): string {
   return `<li><strong>${rating}</strong> from ${escapeHtml(name)}<br>${comment}</li>`;
 }
 
+/**
+ * `count` is how many reviews are new; `reviews` are the excerpts to quote (the
+ * first NEW_REVIEWS_SHOWN are shown, the rest of `count` is "and m more"). Null
+ * `reviews` is the plain email the send step falls back to when it could not
+ * read the reviews again: the count and the link only.
+ */
 export function buildNewReviewsEmail(params: {
   locationTitle: string;
-  reviews: NewReviewSummary[];
+  count: number;
+  reviews: NewReviewSummary[] | null;
   /** `process.env.NEXTAUTH_URL`. Null renders the email with no link. */
   appBaseUrl: string | null;
 }): { subject: string; html: string } {
-  const count = params.reviews.length;
+  const count = params.count;
   // The subject is plain text, not HTML: only line breaks are taken out.
   const title = params.locationTitle.replace(/[\r\n]+/g, " ").trim();
-  const subject = `${count} new Google review${count === 1 ? "" : "s"} for ${title}`;
-
-  const shown = params.reviews.slice(0, NEW_REVIEWS_SHOWN).map(reviewLine);
-  const more = count - shown.length;
+  const headline = `${count} new Google review${count === 1 ? "" : "s"} for ${title}`;
 
   // Trim a trailing slash so "https://host/" never yields "https://host//reviews".
   const base = params.appBaseUrl ? params.appBaseUrl.replace(/\/+$/, "") : null;
@@ -65,12 +69,23 @@ export function buildNewReviewsEmail(params: {
     ? `<p><a href="${base}/reviews">Read and reply on the Reviews page</a></p>`
     : `<p>Open Reviews in Vibe Socials to read and reply.</p>`;
 
-  return {
-    subject,
-    html: [
+  let body: string[];
+  if (params.reviews === null) {
+    body = [`<p>${escapeHtml(headline)}. Open Reviews to read ${count === 1 ? "it" : "them"}.</p>`];
+  } else {
+    const shown = params.reviews.slice(0, NEW_REVIEWS_SHOWN).map(reviewLine);
+    const more = count - shown.length;
+    body = [
       `<p>${escapeHtml(title)} has ${count === 1 ? "a new Google review" : `${count} new Google reviews`}.</p>`,
       `<ul>\n${shown.join("\n")}\n</ul>`,
       ...(more > 0 ? [`<p>and ${more} more</p>`] : []),
+    ];
+  }
+
+  return {
+    subject: headline,
+    html: [
+      ...body,
       linkLine,
       `<p>To stop these emails, turn off "Email me when a new Google review arrives" in Settings, Notifications.</p>`,
       `<p>— Vibe Socials</p>`,
