@@ -2,6 +2,7 @@ import { Platform, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
+import { LINKEDIN_SCOPES } from "@/lib/oauthScopes";
 
 /**
  * Saving the account a user chose to connect (2026-11-09).
@@ -198,7 +199,7 @@ export async function saveLinkedInConnection({
     accessToken: token.accessToken,
     refreshToken: token.refreshToken,
     expiresAt: token.expiresAt,
-    scopes: token.scope || "w_organization_social r_organization_social",
+    scopes: token.scope || LINKEDIN_SCOPES.join(" "),
     metadata: {
       name: profile.name,
       email: profile.email,
@@ -207,6 +208,9 @@ export async function saveLinkedInConnection({
       // Shown as "Connected as <page>" in Settings (lib/connectionSummary.ts):
       // the company page posts go to, not a placeholder member id.
       username: organizations[0]?.name ?? null,
+      // When the page's name was read: LinkedIn allows eight weeks for it
+      // (server/connections/linkedinData.ts refreshes or deletes it daily).
+      organizationsFetchedAt: new Date().toISOString(),
     } as unknown as Prisma.InputJsonValue,
     ...HEALTHY,
   };

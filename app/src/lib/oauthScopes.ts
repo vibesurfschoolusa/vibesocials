@@ -48,5 +48,17 @@ export const YOUTUBE_SCOPES = [
   "https://www.googleapis.com/auth/youtube.readonly",
 ] as const;
 
+/**
+ * LinkedIn company page (Community Management API): w_organization_social
+ * (POST /rest/posts, /rest/images and /rest/videos as the page, and reading a
+ * video's processing status) and rw_organization_admin (GET /rest/organizationAcls
+ * to find the pages the member administers, and GET /rest/organizations/{id} for
+ * each page's name). LinkedIn's docs, checked 2026-11-09: organizationAcls needs
+ * r_ or rw_organization_admin, and the app is offered only rw_; the organization
+ * lookup lists rw_organization_admin. Not r_organization_social: the app reads
+ * no posts. No member profile scope: posts go out as the page.
+ */
+export const LINKEDIN_SCOPES = ["w_organization_social", "rw_organization_admin"] as const;
+
 /** Google Business Profile: local posts, gallery media and review replies. */
 export const GOOGLE_BUSINESS_PROFILE_SCOPES = ["https://www.googleapis.com/auth/business.manage"] as const;

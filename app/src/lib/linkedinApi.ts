@@ -60,6 +60,12 @@ const LITTLE_RESERVED = /[\\|{}@[\]()<>#*_~]/gu;
 const HASHTAG_WORD_START = /^[\p{L}\p{N}]/u;
 
 /**
+ * ...unless it sits inside a word or a URL: after a letter, a digit, or a URL's
+ * `/ : . ? & = _ -`, a `#` is a fragment or part of a word, not a hashtag.
+ */
+const INSIDE_WORD_OR_URL = /[\p{L}\p{N}/:.?&=_-]$/u;
+
+/**
  * A caption as `little` text, so the Posts API shows it as written: every
  * reserved character is escaped, except a `#` that starts a word, which stays a
  * hashtag. That matches what the legacy ugcPosts API did with plain text: it
@@ -68,7 +74,13 @@ const HASHTAG_WORD_START = /^[\p{L}\p{N}]/u;
  */
 export function toLinkedInLittleText(text: string): string {
   return text.replace(LITTLE_RESERVED, (char: string, offset: number) => {
-    if (char === "#" && HASHTAG_WORD_START.test(text.slice(offset + 1, offset + 3))) return char;
+    if (
+      char === "#" &&
+      HASHTAG_WORD_START.test(text.slice(offset + 1, offset + 3)) &&
+      !INSIDE_WORD_OR_URL.test(text.slice(Math.max(0, offset - 2), offset))
+    ) {
+      return char;
+    }
     return `\\${char}`;
   });
 }

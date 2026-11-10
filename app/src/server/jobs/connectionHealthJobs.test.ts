@@ -38,6 +38,11 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 vi.mock("@/server/platforms", () => ({ getPlatformClient: getPlatformClientMock }));
+// 2026-11-09: the sweep's last step refreshes or expires stored LinkedIn page
+// names (server/connections/linkedinData.ts, its own suite); none here.
+vi.mock("@/server/connections/linkedinData", () => ({
+  refreshLinkedInOrganizationProfiles: async () => ({ refreshed: 0, cleared: 0 }),
+}));
 // The lock helper has its own suite (connectionRefresh.test.ts); only the
 // function is replaced, its error codes stay real.
 vi.mock("@/server/platforms/connectionRefresh", async (importOriginal) => ({
@@ -205,7 +210,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
     expect(step.sendEvent).toHaveBeenCalledTimes(2);
     expect(eventsOf(step, 0)).toHaveLength(1000);
     expect(eventsOf(step, 1)).toHaveLength(3);
-    expect(summary).toEqual({ pages: 2, connections: 1003, purgedYouTubeMetrics: 0 });
+    expect(summary).toEqual({ pages: 2, connections: 1003, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 } });
   });
 
   it("sends one event per connection with the id refresh-<id>-<UTC date> (a same-day re-run dedupes)", async () => {
@@ -228,7 +233,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
     ]);
   });
 
-  it("uses deterministic step ids: start, page-<i>, fan-out-<i>, then purge-stale-youtube-metrics", async () => {
+  it("uses deterministic step ids: start, page-<i>, fan-out-<i>, then the YouTube and LinkedIn data steps", async () => {
     findManyMock
       .mockResolvedValueOnce(ids(0, HEALTH_SWEEP_PAGE_SIZE))
       .mockResolvedValueOnce(ids(HEALTH_SWEEP_PAGE_SIZE, 3));
@@ -243,6 +248,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
       "run:page-1",
       "sendEvent:fan-out-1",
       "run:purge-stale-youtube-metrics",
+      "run:refresh-linkedin-organization-profiles",
     ]);
     expect(step.outputs.start).toBe(NOW.toISOString());
   });
@@ -313,7 +319,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
       expect(sent).toHaveLength(2500);
       expect(sent[0]).toBe(`refresh-${pad(0)}-2026-11-01`);
       expect(sent[sent.length - 1]).toBe(`refresh-${pad(2499)}-2026-11-01`);
-      expect(summary).toEqual({ pages: 3, connections: 2500, purgedYouTubeMetrics: 0 });
+      expect(summary).toEqual({ pages: 3, connections: 2500, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 } });
     });
 
     it("rows added while the sweep runs are picked up when they sort after the current page", async () => {
@@ -337,7 +343,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
     const summary = await runCron(step);
 
     expect(step.sendEvent).toHaveBeenCalledTimes(1);
-    expect(summary).toEqual({ pages: 2, connections: 1000, purgedYouTubeMetrics: 0 });
+    expect(summary).toEqual({ pages: 2, connections: 1000, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 } });
   });
 
   it("no eligible connection: one page query, no event", async () => {
@@ -348,7 +354,7 @@ describe("connectionHealthSweep (cron) — pages ids, fans out events", () => {
 
     expect(findManyMock).toHaveBeenCalledTimes(1);
     expect(step.sendEvent).not.toHaveBeenCalled();
-    expect(summary).toEqual({ pages: 1, connections: 0, purgedYouTubeMetrics: 0 });
+    expect(summary).toEqual({ pages: 1, connections: 0, purgedYouTubeMetrics: 0, linkedinOrganizations: { refreshed: 0, cleared: 0 } });
   });
 
   it("never loads token columns, and its step outputs hold only ids", async () => {

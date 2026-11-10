@@ -1,4 +1,5 @@
 import { NextResponse, NextRequest } from "next/server";
+import { LINKEDIN_SCOPES } from "@/lib/oauthScopes";
 import { createOAuthState } from "@/lib/oauthState";
 import { requireOwnerContextForOAuthStart } from "@/lib/workspace";
 
@@ -20,9 +21,9 @@ export async function GET(request: NextRequest) {
 
   if (!clientId || !redirectUri) {
     console.error("[LinkedIn OAuth] Missing environment variables");
-    return NextResponse.redirect(
-      new URL("/settings?error=linkedin_config_missing", process.env.NEXTAUTH_URL)
-    );
+    const url = new URL("/settings", request.url);
+    url.searchParams.set("error", "linkedin_not_configured");
+    return NextResponse.redirect(url);
   }
 
   // Check if user provided a vanity name for organization lookup
@@ -46,14 +47,9 @@ export async function GET(request: NextRequest) {
   authUrl.searchParams.set("client_id", clientId);
   authUrl.searchParams.set("redirect_uri", redirectUri);
   authUrl.searchParams.set("state", state);
-  // Using ONLY Community Management API organization scopes
-  // IMPORTANT: OpenID Connect and Community Management API are mutually exclusive
-  // Development Tier may only support organization scopes, not member profile scopes
-  // Testing with minimal org scopes that Community Management API explicitly provides
-  authUrl.searchParams.set(
-    "scope",
-    "w_organization_social r_organization_social"
-  );
+  // Community Management API scopes only (lib/oauthScopes.ts): LinkedIn
+  // allows no other product, such as Sign In with OpenID Connect, on the app.
+  authUrl.searchParams.set("scope", LINKEDIN_SCOPES.join(" "));
 
   console.log("[LinkedIn OAuth] Redirecting to LinkedIn authorization", {
     userId: user.id,

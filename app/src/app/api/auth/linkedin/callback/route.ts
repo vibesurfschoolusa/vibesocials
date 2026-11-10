@@ -91,7 +91,7 @@ export async function GET(request: Request) {
     if (!clientId || !clientSecret || !redirectUri) {
       console.error("[LinkedIn OAuth] Missing environment variables");
       return NextResponse.redirect(
-        new URL("/settings?error=linkedin_config_missing", process.env.NEXTAUTH_URL!)
+        new URL("/settings?error=linkedin_not_configured", process.env.NEXTAUTH_URL!)
       );
     }
 
@@ -129,41 +129,15 @@ export async function GET(request: Request) {
       scope: tokenData.scope,
     });
 
-    // Note: We're using ONLY organization scopes (no profile/email scopes)
-    // Development Tier Community Management API may not support member profile scopes
-    // We'll use a minimal profile based on what's available or use organization info
-    
-    // Try to fetch basic profile (may fail without profile scopes)
-    let profile: LinkedInProfile | null = null;
-    try {
-      const profileResponse = await fetch("https://api.linkedin.com/v2/me", {
-        headers: {
-          Authorization: `Bearer ${tokenData.access_token}`,
-        },
-      });
-
-      if (profileResponse.ok) {
-        const profileData = await profileResponse.json();
-        profile = {
-          sub: profileData.id,
-          name: `${profileData.localizedFirstName || ""} ${profileData.localizedLastName || ""}`.trim(),
-          email: null, // No email scope
-          picture: null,
-        };
-      }
-    } catch {
-      console.warn("[LinkedIn OAuth] Could not fetch profile (no profile scopes)");
-    }
-
-    // If we couldn't get profile, use minimal placeholder
-    if (!profile) {
-      profile = {
-        sub: `linkedin_${Date.now()}`, // Temporary ID, will be updated when we fetch orgs
-        name: "LinkedIn User",
-        email: null,
-        picture: null,
-      };
-    }
+    // No member profile: the app requests no profile scope (lib/oauthScopes.ts
+    // LINKEDIN_SCOPES) and posts as the company page, so the legacy /v2/me call
+    // it used to make always failed. The connection is named after the page.
+    const profile: LinkedInProfile = {
+      sub: `linkedin_${Date.now()}`,
+      name: "LinkedIn User",
+      email: null,
+      picture: null,
+    };
 
     console.log("[LinkedIn OAuth] Profile data", {
       sub: profile.sub,

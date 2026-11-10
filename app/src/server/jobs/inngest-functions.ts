@@ -98,6 +98,7 @@ import type {
   TikTokPostMetadata,
   YouTubePostMetadata,
 } from "@/server/platforms/types";
+import { refreshLinkedInOrganizationProfiles } from "@/server/connections/linkedinData";
 import { purgeStaleYouTubeMetrics } from "@/server/connections/youtubeData";
 
 // Step-memoized refs only — NEVER put accessToken/refreshToken in step output
@@ -1899,7 +1900,14 @@ export const connectionHealthSweep = inngest.createFunction(
       purgeStaleYouTubeMetrics(),
     );
 
-    const summary = { pages, connections, purgedYouTubeMetrics };
+    // LinkedIn data storage requirements (2026-11-09): a connected page's name
+    // and vanity name may be kept eight weeks. Daily: re-read while the token
+    // works, delete eight weeks after the last read (server/connections/linkedinData.ts).
+    const linkedinOrganizations = await step.run("refresh-linkedin-organization-profiles", () =>
+      refreshLinkedInOrganizationProfiles(),
+    );
+
+    const summary = { pages, connections, purgedYouTubeMetrics, linkedinOrganizations };
     logger.info("[Inngest] Connection health sweep fanned out", summary);
     return summary;
   },

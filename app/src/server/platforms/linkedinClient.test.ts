@@ -9,6 +9,8 @@ import {
   ensureFreshLinkedInToken,
   LINKEDIN_ASSET_MAX_WAIT_MS,
   LINKEDIN_ASSET_POLL_INTERVAL_MS,
+  LINKEDIN_INLINE_VIDEO_POLL_MS,
+  LINKEDIN_INLINE_VIDEO_WAIT_MS,
   LINKEDIN_MAX_UPLOAD_RESTARTS,
   LINKEDIN_POST_MIN_WINDOW_MS,
   LINKEDIN_TRANSIENT_RESUME_DELAY_MS,
@@ -619,6 +621,9 @@ describe("linkedinClient.publishVideo — rate limits (RATE_LIMITED)", () => {
       if (url.includes("/rest/videos?action=finalizeUpload")) {
         return Promise.resolve((routes.finalize ?? (() => new Response("", { status: 200 })))());
       }
+      if (url.startsWith("https://api.linkedin.com/rest/videos/urn")) {
+        return Promise.resolve(new Response(JSON.stringify({ status: "AVAILABLE" }), { status: 200 }));
+      }
       if (url === "https://api.linkedin.com/rest/posts") {
         return Promise.resolve((routes.post ?? (() => new Response(JSON.stringify({ id: "urn:li:share:1" }), { status: 201 })))());
       }
@@ -1004,7 +1009,17 @@ describe("linkedinClient — Posts, Images and Videos APIs", () => {
       },
     });
 
-  function stub(routes: { imageInit?: Reply; videoInit?: Reply; imagePut?: Reply; part?: Reply; finalize?: Reply; post?: Reply } = {}) {
+  function stub(
+    routes: {
+      imageInit?: Reply;
+      videoInit?: Reply;
+      imagePut?: Reply;
+      part?: Reply;
+      finalize?: Reply;
+      status?: Reply;
+      post?: Reply;
+    } = {},
+  ) {
     const bodies: Array<{ url: string; bytes: number[] | null }> = [];
     const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
       const url = String(input);
@@ -1021,6 +1036,7 @@ describe("linkedinClient — Posts, Images and Videos APIs", () => {
         return (routes.part ?? (() => new Response(null, { status: 200, headers: { ETag: `"etag-${n}"` } })))();
       }
       if (url === `${REST}/videos?action=finalizeUpload`) return (routes.finalize ?? (() => new Response(null, { status: 200 })))();
+      if (url.startsWith(`${REST}/videos/urn`)) return (routes.status ?? (() => json({ status: "AVAILABLE" })))();
       if (url === `${REST}/posts`) {
         return (routes.post ?? (() => new Response(null, { status: 201, headers: { "x-restli-id": "urn:li:share:6844785523593134080" } })))();
       }
@@ -1109,6 +1125,7 @@ describe("linkedinClient — Posts, Images and Videos APIs", () => {
       PART_URL(2),
       PART_URL(3),
       `${REST}/videos?action=finalizeUpload`,
+      `${REST}/videos/${encodeURIComponent("urn:li:video:C5505AQH-oV1qvnFtKA")}`,
       `${REST}/posts`,
     ]);
     expect(bodyOf(li.callTo(`${REST}/videos?action=initializeUpload`))).toEqual({
@@ -1141,6 +1158,110 @@ describe("linkedinClient — Posts, Images and Videos APIs", () => {
     });
     // No part URL, upload token or image upload URL reaches a log.
     for (const secret of ["part-secret", "upload-token-secret", "image-secret"]) expect(everythingLogged()).not.toContain(secret);
+  });
+
+  // 2026-11-09 review: the post waits for the video (GET /rest/videos/{urn}) instead of
+  // referring to one LinkedIn is still processing.
+  describe("waiting for the video before the post", () => {
+    const VIDEO_STATUS_URL = `${REST}/videos/${encodeURIComponent("urn:li:video:C5505AQH-oV1qvnFtKA")}`;
+    const statusCalls = (li: ReturnType<typeof stub>) => li.calls().filter(([url]) => url === VIDEO_STATUS_URL);
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("checks again every 5 s while PROCESSING, and posts once it is AVAILABLE", async () => {
+      const answers = ["PROCESSING", "PROCESSING", "AVAILABLE"];
+      const li = stub({ status: () => json({ status: answers.shift() }) });
+
+      const publishing = linkedinClient.publishVideo(ctx("video/mp4"));
+      await vi.advanceTimersByTimeAsync(LINKEDIN_INLINE_VIDEO_POLL_MS * 2);
+      const result = await publishing;
+
+      expect(result).toEqual({ externalPostId: "urn:li:share:6844785523593134080" });
+      expect(statusCalls(li)).toHaveLength(3);
+      expect(headersOf(statusCalls(li)[0])).toMatchObject({ "Linkedin-Version": "202610" });
+    });
+
+    it("fails LINKEDIN_VIDEO_PROCESSING_FAILED without posting when LinkedIn cannot process the video", async () => {
+      const li = stub({ status: () => json({ status: "PROCESSING_FAILED", processingFailureReason: "bad file" }) });
+
+      const error = await failure(linkedinClient.publishVideo(ctx("video/mp4")));
+
+      expect(error?.code).toBe("LINKEDIN_VIDEO_PROCESSING_FAILED");
+      expect(li.callTo(`${REST}/posts`)).toBeUndefined();
+    });
+
+    it("posts anyway when the status cannot be read (403), or is still PROCESSING after 90 s", async () => {
+      const refused = stub({ status: () => json({ message: "forbidden" }, 403) });
+      await expect(linkedinClient.publishVideo(ctx("video/mp4"))).resolves.toEqual({
+        externalPostId: "urn:li:share:6844785523593134080",
+      });
+      expect(statusCalls(refused)).toHaveLength(1);
+
+      const slow = stub({ status: () => json({ status: "PROCESSING" }) });
+      const publishing = linkedinClient.publishVideo(ctx("video/mp4"));
+      await vi.advanceTimersByTimeAsync(LINKEDIN_INLINE_VIDEO_WAIT_MS);
+      await expect(publishing).resolves.toEqual({ externalPostId: "urn:li:share:6844785523593134080" });
+      expect(statusCalls(slow).length).toBeGreaterThanOrEqual(LINKEDIN_INLINE_VIDEO_WAIT_MS / LINKEDIN_INLINE_VIDEO_POLL_MS - 1);
+      expect(slow.callTo(`${REST}/posts`)).toBeDefined();
+    });
+  });
+
+  // 2026-11-09 review: the Videos API schema marks uploadToken and uploadUrlsExpireAt
+  // "Required: No", and the page's own sample answers a last part past the end of the file.
+  it("accepts an initialization with no upload token or expiry, and ends a last part that runs past the file at its last byte", async () => {
+    const li = stub({
+      videoInit: () =>
+        json({
+          value: {
+            video: "urn:li:video:C5505AQH-oV1qvnFtKA",
+            uploadInstructions: [
+              { uploadUrl: PART_URL(1), firstByte: 0, lastByte: 3 },
+              { uploadUrl: PART_URL(2), firstByte: 4, lastByte: 4194303 },
+            ],
+          },
+        }),
+    });
+
+    await expect(linkedinClient.publishVideo(ctx("video/mp4"))).resolves.toEqual({
+      externalPostId: "urn:li:share:6844785523593134080",
+    });
+    expect(li.bodies).toEqual([
+      { url: PART_URL(1), bytes: [1, 2, 3, 4] },
+      { url: PART_URL(2), bytes: [5, 6, 7, 8, 9, 10] },
+    ]);
+    expect(bodyOf(li.callTo(`${REST}/videos?action=finalizeUpload`)).finalizeUploadRequest.uploadToken).toBe("");
+  });
+
+  it("sends the member token with an image upload only to a LinkedIn host", async () => {
+    const elsewhere = "https://uploads.example.net/image?ut=image-secret";
+    const li = stub({
+      imageInit: () =>
+        json({ value: { uploadUrlExpiresAt: 1650567510704, uploadUrl: elsewhere, image: "urn:li:image:C4E10AQFoyyAjHPMQuQ" } }),
+      imagePut: () => new Response("", { status: 201 }),
+    });
+    // The stub answers the image PUT by URL: route this one to it.
+    li.fetchMock.mockImplementation((async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes("blob.example.com")) return new Response(BLOB);
+      if (url === `${REST}/images?action=initializeUpload`)
+        return json({ value: { uploadUrlExpiresAt: 1650567510704, uploadUrl: elsewhere, image: "urn:li:image:C4E10AQFoyyAjHPMQuQ" } });
+      if (url === elsewhere) return new Response("", { status: 201 });
+      if (url === `${REST}/posts`) return new Response(null, { status: 201, headers: { "x-restli-id": "urn:li:share:1" } });
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    }) as never);
+
+    await linkedinClient.publishVideo(ctx("image/jpeg"));
+
+    expect(headersOf(li.callTo(elsewhere))).toEqual({});
+    // The LinkedIn-hosted upload URL of every other test does get it.
+    const onLinkedIn = stub();
+    await linkedinClient.publishVideo(ctx("image/jpeg"));
+    expect(headersOf(onLinkedIn.callTo(IMAGE_UPLOAD_URL))).toEqual({ Authorization: "Bearer old-access-token" });
   });
 
   it.each(["image/jpeg", "video/mp4"])(
@@ -1299,6 +1420,9 @@ describe("linkedinClient — step deadline", () => {
       }
       if (url === UPLOAD_URL) return (overrides.upload ?? (async () => uploadOk()))(init);
       if (url.includes("?action=finalizeUpload")) return (overrides.finalize ?? (async () => finalizeOk()))(init);
+      if (url.startsWith("https://api.linkedin.com/rest/videos/urn")) {
+        return Promise.resolve(new Response(JSON.stringify({ status: "AVAILABLE" }), { status: 200 }));
+      }
       if (url === "https://api.linkedin.com/rest/posts") return (overrides.post ?? (async () => postOk()))(init);
       throw new Error(`Unexpected fetch in test: ${url}`);
     });
@@ -2003,7 +2127,7 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       expect(result).toEqual({ externalPostId: "urn:li:share:77" });
       expect(mocks.save).not.toHaveBeenCalled();
       // The whole file first, then the Videos API in one step.
-      expect(li.sequence()).toEqual(["blob", "register", "part", "finalize", "post"]);
+      expect(li.sequence()).toEqual(["blob", "register", "part", "finalize", "status", "post"]);
       expect(headersOf(li.blobGets()[0][1])["Range"]).toBeUndefined();
       expect(bodyOf(li.registers()[0])).toEqual({
         initializeUploadRequest: {
@@ -2027,9 +2151,9 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
 
       expect(mocks.save).not.toHaveBeenCalled();
       expect(li.sequence()).toEqual([
-        ...["blob", "register", "part", "finalize", "post"],
-        ...["blob", "register", "part", "finalize", "post"],
-        ...["blob", "register", "part", "finalize", "post"],
+        ...["blob", "register", "part", "finalize", "status", "post"],
+        ...["blob", "register", "part", "finalize", "status", "post"],
+        ...["blob", "register", "part", "finalize", "status", "post"],
       ]);
     });
 
@@ -2325,9 +2449,7 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
 
     it.each([
       ["no parts", () => registerReply({ ranges: [] })],
-      ["no upload token", () => registerReply({ uploadToken: null })],
       ["an upload token that is not text", () => registerReply({ uploadToken: 5 })],
-      ["no uploadUrlsExpireAt", () => registerReply({ expiresAt: null })],
       [
         "a gap between two parts",
         () =>
@@ -2336,10 +2458,6 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
           }),
       ],
       ["parts that end short of the video", () => registerReply({ ranges: RANGES.slice(0, 2) })],
-      [
-        "parts that run past the video",
-        () => registerReply({ ranges: [RANGES[0], RANGES[1], { first: RANGES[2].first, last: TOTAL }] }),
-      ],
       [
         "a part that starts after its end",
         () => registerReply({ ranges: [RANGES[0], { first: 20_000_000, last: 19_999_999 }, RANGES[2]] }),
@@ -3762,7 +3880,7 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       const result = await run(bigCtx(undefined, {}, total));
 
       expect(result).toEqual({ externalPostId: "urn:li:share:77" });
-      expect(li.sequence()).toEqual(["blob", "register", "part", "part", "part", "finalize", "post"]);
+      expect(li.sequence()).toEqual(["blob", "register", "part", "part", "part", "finalize", "status", "post"]);
       expect(bodyOf(li.registers()[0]).initializeUploadRequest.fileSizeBytes).toBe(total);
       expect(li.puts().map((p) => pnOf(p.url))).toEqual([1, 2, 3]);
       expect(li.puts().map((p) => p.length)).toEqual(ranges.map((r) => r.last - r.first + 1));

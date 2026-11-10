@@ -139,6 +139,12 @@ export default function PrivacyPage() {
           request only the permissions needed to publish your posts, and use them only for that.
           Each platform&apos;s own terms and privacy policy also apply to what you post there.
         </p>
+        <p className="mt-2">
+          For LinkedIn, you approve two permissions on LinkedIn&apos;s own screen: posting as your
+          company page, and finding the pages you administer so you can choose one. We store the
+          page&apos;s ID and name to show it in Settings and to publish to it. We do not read your
+          LinkedIn profile, your connections, or comments and reactions on your posts.
+        </p>
       </LegalSection>
 
       <LegalSection title="5. Who processes your information">
@@ -168,6 +174,11 @@ export default function PrivacyPage() {
           <li>
             YouTube view, like and comment counts are refreshed while YouTube is connected. Counts
             not refreshed for 30 days are deleted, and disconnecting YouTube deletes them all at once.
+          </li>
+          <li>
+            A connected LinkedIn page&apos;s name is read again from LinkedIn every day while the
+            connection works. A name not refreshed for eight weeks is deleted; disconnecting LinkedIn
+            deletes it at once.
           </li>
           <li>Your account, posts and publishing history are kept until you delete your account.</li>
           <li>Server logs are kept for a short time, typically days.</li>

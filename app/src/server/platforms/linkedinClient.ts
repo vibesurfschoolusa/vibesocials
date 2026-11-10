@@ -488,13 +488,12 @@ async function uploadImage(
 
   // Step 3: Upload image to LinkedIn: a PUT to the upload URL, with the member
   // token (the Images API page points to the Assets API's "Upload the Image").
+  // The token goes only to a LinkedIn host, never to any URL an answer names.
   const uploadResponse = await fetchWithTimeout(
     uploadUrl,
     {
       method: "PUT",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
+      headers: isLinkedInHost(uploadUrl) ? { Authorization: `Bearer ${accessToken}` } : {},
       body: imageBuffer,
     },
     budgetedTimeout(LINKEDIN_UPLOAD_TIMEOUT_MS, deadline),
@@ -928,6 +927,16 @@ const isWholeNumber = (value: unknown): value is number => typeof value === "num
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const isText = (value: unknown): value is string => typeof value === "string" && value !== "";
 
+/** Is this URL on linkedin.com (or a subdomain of it)? Only those get the member token. */
+function isLinkedInHost(url: string): boolean {
+  try {
+    const host = new URL(url).hostname;
+    return host === "linkedin.com" || host.endsWith(".linkedin.com");
+  } catch {
+    return false;
+  }
+}
+
 /** The upload URLs are sent the media, so they must be https URLs. */
 function isHttpsUrl(value: unknown): value is string {
   if (typeof value !== "string") return false;
@@ -981,8 +990,12 @@ function readVideoUpload(body: unknown, totalBytes: number): LinkedInVideoUpload
   const value = asRecord(asRecord(body)?.value);
   const instructions = value?.uploadInstructions;
   const video = value?.video;
-  const uploadToken = value?.uploadToken;
-  const urlsExpireAt = value?.uploadUrlsExpireAt;
+  // Both are "Required: No" in the Videos API schema: the finalize takes an
+  // empty upload token (the page's samples send ""), and URLs whose expiry is
+  // not given are treated as valid for a day (the page: "Typically URLs expire
+  // 30 days from the time an upload is initialized").
+  const uploadToken = value?.uploadToken ?? "";
+  const urlsExpireAt = value?.uploadUrlsExpireAt ?? Date.now() + 24 * 60 * 60 * 1000;
   if (
     !Array.isArray(instructions) ||
     typeof video !== "string" ||
@@ -1007,6 +1020,13 @@ function readVideoUpload(body: unknown, totalBytes: number): LinkedInVideoUpload
     parts.push({ url: instruction.uploadUrl, firstByte: instruction.firstByte, lastByte: instruction.lastByte });
   }
   parts.sort((a, b) => a.firstByte - b.firstByte);
+  // The last part may run past the end of the file (the Videos API page's own
+  // sample answers lastByte 4194303 for a 1055736-byte video): it ends at the
+  // file's last byte.
+  const last = parts[parts.length - 1];
+  if (last && last.firstByte < totalBytes && last.lastByte > totalBytes - 1) {
+    parts[parts.length - 1] = { ...last, lastByte: totalBytes - 1 };
+  }
   const problem = partsProblem(parts, totalBytes);
   if (problem !== null) throw uploadFailed(problem);
 
@@ -1240,6 +1260,62 @@ async function checkVideoStatus(args: {
     throw processingFailed();
   }
   return { kind: "waiting", status: asWaitingStatus(status) };
+}
+
+/** The whole-file path waits this long for LinkedIn to finish processing a video (in the step). */
+export const LINKEDIN_INLINE_VIDEO_WAIT_MS = 90_000;
+
+/** Between two status checks of that wait. */
+export const LINKEDIN_INLINE_VIDEO_POLL_MS = 5_000;
+
+const pauseFor = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * After a whole-file upload: waits, inside the step, until `GET /rest/videos/{urn}` says
+ * AVAILABLE, so the post never refers to a video LinkedIn is still processing (the Videos API
+ * lists 400 MEDIA_ASSET_WAITING_UPLOAD, and the Post schema PUBLISH_FAILED). A PROCESSING_FAILED
+ * video fails the publish (LINKEDIN_VIDEO_PROCESSING_FAILED), as does a 401. Anything that stops
+ * the check from answering (a refused status read, a rate limit, no answer, the wait or the
+ * step's budget running out) ends the wait and the post goes out, as it did before this wait:
+ * LinkedIn then decides, and a refusal of the post is reported as such.
+ */
+async function waitForVideoReady(args: {
+  accessToken: string;
+  video: string;
+  connection: TokenSnapshot;
+  deadline: number | undefined;
+}): Promise<void> {
+  const { video, deadline } = args;
+  const waitUntil = Date.now() + LINKEDIN_INLINE_VIDEO_WAIT_MS;
+  for (;;) {
+    if (remainingMs(deadline) < LINKEDIN_POST_MIN_WINDOW_MS + LINKEDIN_INLINE_VIDEO_POLL_MS) {
+      console.warn("[LinkedIn] No time left to wait for the video; posting it now", { videoUrn: video });
+      return;
+    }
+    let verdict: VideoVerdict;
+    try {
+      verdict = await checkVideoStatus(args);
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code;
+      if (code === "LINKEDIN_VIDEO_UPLOAD_FAILED" || isRateLimitedError(error)) {
+        console.warn("[LinkedIn] Could not read the video's status; posting it now", { videoUrn: video });
+        return;
+      }
+      throw error;
+    }
+    if (verdict.kind === "available") {
+      console.log("[LinkedIn] The video is ready", { videoUrn: video });
+      return;
+    }
+    if (Date.now() + LINKEDIN_INLINE_VIDEO_POLL_MS > waitUntil) {
+      console.warn("[LinkedIn] The video is still processing after the wait; posting it now", {
+        videoUrn: video,
+        ...(verdict.kind === "waiting" && verdict.status ? { videoStatus: verdict.status } : {}),
+      });
+      return;
+    }
+    await pauseFor(LINKEDIN_INLINE_VIDEO_POLL_MS);
+  }
 }
 
 /**
@@ -1691,7 +1767,8 @@ export const linkedinClient: PlatformClient = {
 
       // Upload media if present
       if (isVideo) {
-        // The whole file in one step: Videos API initializeUpload, its parts, finalizeUpload.
+        // The whole file in one step: Videos API initializeUpload, its parts, finalizeUpload,
+        // then a short wait for LinkedIn to process it before the post refers to it.
         mediaUrn = await uploadVideo(
           accessToken,
           authorUrn,
@@ -1700,6 +1777,7 @@ export const linkedinClient: PlatformClient = {
           socialConnection,
           deadline,
         );
+        await waitForVideoReady({ accessToken, video: mediaUrn, connection: socialConnection, deadline });
       } else if (mediaItem.mimeType.startsWith("image/")) {
         mediaUrn = await uploadImage(accessToken, authorUrn, mediaUrl, socialConnection, deadline);
       }

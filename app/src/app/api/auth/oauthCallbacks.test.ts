@@ -165,7 +165,7 @@ const CASES: CallbackCase[] = [
         });
       }
       if (url.includes("/rest/organizations/101")) return json({ id: 101, localizedName: "Org" });
-      return json({ id: "member-1", localizedFirstName: "A", localizedLastName: "B" });
+      return new Response("not found", { status: 404 });
     },
   },
 ];
@@ -478,7 +478,7 @@ function linkedinProvider(
     const page = pages.find((p) => url === `https://api.linkedin.com/rest/organizations/${p.id}`);
     if (page) return json(page);
     if (url.includes("/organizations")) return json({ message: "Not enough permissions" }, 403);
-    return json({ id: "member-1", localizedFirstName: "A", localizedLastName: "B" });
+    return new Response("not found", { status: 404 });
   };
 }
 
@@ -677,12 +677,14 @@ describe("choosing which account to connect", () => {
         refreshToken: null,
         expiresAt: new Date(NOW.getTime() + 3600 * 1000),
         scopes: "w_organization_social",
+        // No member profile (no profile scope): the connection is named after the page.
         metadata: {
-          name: "A B",
+          name: "LinkedIn User",
           email: null,
           picture: null,
           organizations: [{ id: "101", name: "Org" }],
           username: "Org",
+          organizationsFetchedAt: NOW.toISOString(),
         },
         ...HEALTHY,
       };
@@ -692,7 +694,7 @@ describe("choosing which account to connect", () => {
           userId: STATE_USER,
           workspaceId: STATE_WORKSPACE,
           platform: "linkedin",
-          accountIdentifier: "member-1",
+          accountIdentifier: `linkedin_${NOW.getTime()}`,
           ...fields,
         },
         update: fields,
@@ -722,7 +724,7 @@ describe("choosing which account to connect", () => {
           expiresAt: new Date(NOW.getTime() + 3600 * 1000).toISOString(),
           scope: "w_organization_social",
         },
-        profile: { sub: "member-1", name: "A B", email: null, picture: null },
+        profile: { sub: `linkedin_${NOW.getTime()}`, name: "LinkedIn User", email: null, picture: null },
         organizations: [
           { id: "111", name: "My Surf School", vanityName: "my-surf-school" },
           { id: "222", name: "Client Cafe" },
@@ -761,6 +763,9 @@ describe("choosing which account to connect", () => {
         expect(sent).not.toContain("organizationalEntityAcls");
         expect(sent).not.toContain("/v2/organizations");
         expect(sent).not.toContain("ids=List(");
+        // No legacy /v2 API at all: /v2/me needs a member profile scope the app
+        // does not request (lib/oauthScopes.ts LINKEDIN_SCOPES), so it always failed.
+        expect(linkedinApiCalls().map(([url]) => String(url)).filter((url) => url.includes("/v2/"))).toEqual([]);
       });
 
       it("organizationAcls refused: reuses the previous connection's page once GET /rest/organizations/{id} confirms it", async () => {

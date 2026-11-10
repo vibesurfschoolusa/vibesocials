@@ -46,6 +46,16 @@ describe("toLinkedInLittleText", () => {
     expect(toLinkedInLittleText("#surf #ÉtéSurf #2026 #Wellen")).toBe("#surf #ÉtéSurf #2026 #Wellen");
   });
 
+  // 2026-11-09 review: a # inside a word or a URL is not a hashtag (a link's
+  // #fragment stays part of the link).
+  it("escapes a # inside a word or a URL", () => {
+    expect(toLinkedInLittleText("Book at https://vibesurfschool.com/#lessons today #surf")).toBe(
+      "Book at https://vibesurfschool.com/\\#lessons today #surf",
+    );
+    expect(toLinkedInLittleText("page#top and x#tag")).toBe("page\\#top and x\\#tag");
+    expect(toLinkedInLittleText('(#surf) and "#waves"')).toBe('\\(#surf\\) and "#waves"');
+  });
+
   it("escapes a # that starts no word", () => {
     expect(toLinkedInLittleText("C# and # alone, #")).toBe("C\\# and \\# alone, \\#");
     expect(toLinkedInLittleText("##double")).toBe("\\##double");

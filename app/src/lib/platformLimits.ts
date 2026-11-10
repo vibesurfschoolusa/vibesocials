@@ -97,6 +97,19 @@ export const PLATFORM_ACCEPTED_MEDIA: Record<Platform, readonly MediaKind[]> = {
 };
 
 /**
+ * Formats a platform refuses although it takes that kind of media, from the
+ * platform's own docs, with the short reason the composer shows.
+ *
+ * - linkedin — the Images API takes "JPG, GIF, and PNG formats" and the Videos
+ *   API "File format: MP4" (checked 2026-11-09). WebP and WebM are refused here;
+ *   MOV, the iPhone's format, stays allowed: if LinkedIn cannot process one, the
+ *   publish fails with LINKEDIN_VIDEO_PROCESSING_FAILED instead of a broken post.
+ */
+const PLATFORM_REFUSED_FORMATS: Partial<Record<Platform, Readonly<Record<string, string>>>> = {
+  linkedin: { "image/webp": "JPG, PNG or GIF only", "video/webm": "MP4 or MOV only" },
+};
+
+/**
  * Classify a MIME type the way every client does — a plain, case-sensitive
  * `startsWith` on `video/` / `image/` — or `null` for anything else.
  */
@@ -120,7 +133,11 @@ export function platformAcceptsMedia(
 ): boolean {
   if (mimeType == null) return true;
   const kind = mediaKindOf(mimeType);
-  return kind !== null && PLATFORM_ACCEPTED_MEDIA[platform].includes(kind);
+  return (
+    kind !== null &&
+    PLATFORM_ACCEPTED_MEDIA[platform].includes(kind) &&
+    PLATFORM_REFUSED_FORMATS[platform]?.[mimeType] === undefined
+  );
 }
 
 /**
@@ -133,5 +150,7 @@ export function unsupportedMediaReason(
 ): string | null {
   if (platformAcceptsMedia(platform, mimeType)) return null;
   if (mimeType == null || mediaKindOf(mimeType) === null) return "Unsupported file type";
+  const refusedFormat = PLATFORM_REFUSED_FORMATS[platform]?.[mimeType];
+  if (refusedFormat !== undefined) return refusedFormat;
   return PLATFORM_ACCEPTED_MEDIA[platform].includes("video") ? "Video only" : "Images only";
 }

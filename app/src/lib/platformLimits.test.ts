@@ -128,4 +128,19 @@ describe("unsupportedMediaReason", () => {
   it("names an unrecognised file type for any platform", () => {
     expect(unsupportedMediaReason("x", "application/pdf")).toBe("Unsupported file type");
   });
+
+  // LinkedIn's Images API takes JPG, GIF and PNG; its Videos API, MP4 (docs,
+  // checked 2026-11-09). MOV, the iPhone's format, stays allowed.
+  it("LinkedIn: refuses WebP images and WebM videos, with the formats it takes", () => {
+    expect(platformAcceptsMedia("linkedin", "image/webp")).toBe(false);
+    expect(unsupportedMediaReason("linkedin", "image/webp")).toBe("JPG, PNG or GIF only");
+    expect(platformAcceptsMedia("linkedin", "video/webm")).toBe(false);
+    expect(unsupportedMediaReason("linkedin", "video/webm")).toBe("MP4 or MOV only");
+    for (const ok of ["image/jpeg", "image/png", "image/gif", "video/mp4", "video/quicktime"]) {
+      expect(platformAcceptsMedia("linkedin", ok)).toBe(true);
+    }
+    // Other platforms are unchanged.
+    expect(platformAcceptsMedia("x", "image/webp")).toBe(true);
+    expect(platformAcceptsMedia("facebook_page", "video/webm")).toBe(true);
+  });
 });

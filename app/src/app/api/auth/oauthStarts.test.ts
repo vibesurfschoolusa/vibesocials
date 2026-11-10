@@ -17,6 +17,7 @@ vi.mock("@/lib/workspace", () => ({
 import { GET as facebookPageStart } from "./facebook_page/start/route";
 import { GET as gbpStart } from "./google_business_profile/start/route";
 import { GET as instagramStart } from "./instagram/start/route";
+import { GET as linkedinStart } from "./linkedin/start/route";
 import { GET as tiktokStart } from "./tiktok/start/route";
 import { GET as youtubeStart } from "./youtube/start/route";
 
@@ -55,6 +56,12 @@ const CASES: StartCase[] = [
     GET: tiktokStart,
     env: { TIKTOK_CLIENT_KEY: "tt-key", TIKTOK_REDIRECT_URI: `${ORIGIN}/api/auth/tiktok/callback` },
     authorizeHost: "www.tiktok.com",
+  },
+  {
+    platform: "linkedin",
+    GET: linkedinStart,
+    env: { LINKEDIN_CLIENT_ID: "li-id", LINKEDIN_REDIRECT_URI: `${ORIGIN}/api/auth/linkedin/callback` },
+    authorizeHost: "www.linkedin.com",
   },
   {
     platform: "google_business_profile",
@@ -156,6 +163,15 @@ describe("requested permissions (least privilege)", () => {
       "https://www.googleapis.com/auth/youtube.upload",
       "https://www.googleapis.com/auth/youtube.readonly",
     ]);
+  });
+
+  // organizationAcls (which Pages the person administers) and the organization
+  // lookup (each Page's name) need rw_organization_admin; posts, images and
+  // videos need w_organization_social. The app reads no posts, so no
+  // r_organization_social. LinkedIn's docs, checked 2026-11-09.
+  it("LinkedIn: post as the Page, and find the Pages the person administers; nothing else", async () => {
+    const scope = await scopesOf(linkedinStart, "linkedin", envOf("linkedin"));
+    expect(scope.split(" ")).toEqual(["w_organization_social", "rw_organization_admin"]);
   });
 
   it("Google Business Profile: business.manage only", async () => {
