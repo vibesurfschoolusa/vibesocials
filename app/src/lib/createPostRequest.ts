@@ -1,5 +1,6 @@
 import type { Platform } from "@prisma/client";
 
+import { cleanPlatformOverrides } from "@/lib/platformOverrides";
 import type { TikTokPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
 
 /**
@@ -64,8 +65,9 @@ interface CommonBodyInput {
   /** Pass only when YouTube is a selected target. */
   youtubeMetadata?: YouTubePostMetadata;
   /**
-   * Per-platform captions, already cleaned (lib/platformOverrides.ts
-   * `cleanPlatformOverrides`). `null`, undefined or `{}` leaves the field out.
+   * Per-platform captions as the user typed them. Only selected, non-blank ones
+   * that differ from the main caption are sent (`cleanPlatformOverrides`);
+   * when none remain the field is left out.
    */
   perPlatformOverrides?: Partial<Record<Platform, string>> | null;
 }
@@ -85,10 +87,8 @@ export interface BuildReusePostBodyInput extends CommonBodyInput {
   mediaItemId: string;
 }
 
-function hasOverrides(
-  overrides: Partial<Record<Platform, string>> | null | undefined,
-): overrides is Partial<Record<Platform, string>> {
-  return !!overrides && Object.keys(overrides).length > 0;
+function overridesToSend(input: CommonBodyInput): Partial<Record<Platform, string>> | null {
+  return cleanPlatformOverrides(input.perPlatformOverrides, input.baseCaption, input.platforms);
 }
 
 /** Body for posting a file the composer just uploaded to blob storage. */
@@ -104,8 +104,9 @@ export function buildUploadPostBody(input: BuildUploadPostBodyInput): CreatePost
     ...input.deferred,
     workspaceId: input.workspaceId,
   };
-  if (hasOverrides(input.perPlatformOverrides)) {
-    body.perPlatformOverrides = input.perPlatformOverrides;
+  const perPlatformOverrides = overridesToSend(input);
+  if (perPlatformOverrides) {
+    body.perPlatformOverrides = perPlatformOverrides;
   }
   if (input.tiktokMetadata) {
     body.tiktokMetadata = input.tiktokMetadata;
@@ -126,8 +127,9 @@ export function buildReusePostBody(input: BuildReusePostBodyInput): CreatePostRe
     ...input.deferred,
     workspaceId: input.workspaceId,
   };
-  if (hasOverrides(input.perPlatformOverrides)) {
-    body.perPlatformOverrides = input.perPlatformOverrides;
+  const perPlatformOverrides = overridesToSend(input);
+  if (perPlatformOverrides) {
+    body.perPlatformOverrides = perPlatformOverrides;
   }
   if (input.tiktokMetadata) {
     body.tiktokMetadata = input.tiktokMetadata;

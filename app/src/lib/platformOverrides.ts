@@ -140,3 +140,40 @@ export function adaptMaxLength(
   if (room === null) return undefined;
   return Math.min(ADAPT_MAX_LENGTH_MAX, Math.max(ADAPT_MAX_LENGTH_MIN, room));
 }
+
+/**
+ * Put an "Adapt" answer into the platform's caption, unless the user switched
+ * that caption off while the request ran: then the answer is dropped.
+ */
+export function applyAdaptedCaption(
+  prev: PlatformOverrides | null,
+  platform: Platform,
+  adapted: string,
+): PlatformOverrides {
+  if (typeof prev?.[platform] !== "string") return prev ?? {};
+  return { ...prev, [platform]: adapted };
+}
+
+/**
+ * What the Queue's edit dialog sends as `perPlatformOverrides`: undefined
+ * (leave the field out), the cleaned captions, or `null` to remove them all.
+ *
+ * - A post with no caption of its own (`baseCaption` null) publishes the media
+ *   item's captions, which the dialog shows. Saving gives it its own caption,
+ *   and its own (null) overrides would replace those, so what is shown is
+ *   always sent with it.
+ * - Otherwise the captions go only when they differ from what was saved,
+ *   compared as stored: cleaning both sides first would hide the removal of a
+ *   caption that happens to equal the new main caption.
+ */
+export function queueOverridesToSend(input: {
+  current: PlatformOverrides | null;
+  saved: PlatformOverrides | null;
+  mainCaption: string;
+  platforms: readonly Platform[];
+  hasOwnCaption: boolean;
+}): PlatformOverrides | null | undefined {
+  const { current, saved, mainCaption, platforms, hasOwnCaption } = input;
+  if (hasOwnCaption && platformOverridesEqual(current, saved)) return undefined;
+  return cleanPlatformOverrides(current, mainCaption, platforms);
+}

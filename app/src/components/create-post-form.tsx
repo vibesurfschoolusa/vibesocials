@@ -284,8 +284,9 @@ function CreatePostFormInner({
     metadata: tiktokMetadata,
   });
   const youtubeSelected = selectedPlatforms.includes("youtube");
-  // Only what would really change a post: selected, not blank, not the main caption.
-  const overridesToSend = cleanPlatformOverrides(
+  // What the preview shows: what would really change the post (selected, not
+  // blank, not the main caption). The request builders clean the same way.
+  const previewOverrides = cleanPlatformOverrides(
     platformOverrides,
     uploadCaption,
     selectedPlatforms,
@@ -564,7 +565,8 @@ function CreatePostFormInner({
           platforms: selectedPlatforms,
           deferred,
           workspaceId,
-          perPlatformOverrides: overridesToSend,
+          // Cleaned by the builder, the same way as for the preview.
+          perPlatformOverrides: platformOverrides,
           // Task 7 — only attach metadata for a platform still selected for
           // this post; a deselected TikTok/YouTube isn't published to.
           tiktokMetadata: tiktokSelected ? tiktokMetadata : undefined,
@@ -593,7 +595,8 @@ function CreatePostFormInner({
           platforms: selectedPlatforms,
           deferred,
           workspaceId,
-          perPlatformOverrides: overridesToSend,
+          // Cleaned by the builder, the same way as for the preview.
+          perPlatformOverrides: platformOverrides,
           // Task 7 — only attach metadata for a platform still selected for
           // this post; a deselected TikTok/YouTube isn't published to.
           tiktokMetadata: tiktokSelected ? tiktokMetadata : undefined,
@@ -1272,7 +1275,7 @@ function CreatePostFormInner({
         <PlatformPreviewList
           platforms={selectedPlatforms}
           caption={uploadCaption}
-          overrides={overridesToSend}
+          overrides={previewOverrides}
           user={footerSettings}
           mediaUrl={activeMediaUrl}
           mediaMimeType={activeMimeType}

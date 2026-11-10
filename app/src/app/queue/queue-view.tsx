@@ -29,11 +29,8 @@ import { MediaThumb } from "@/components/media-thumb";
 import { QueueCalendar } from "./queue-calendar";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { cn } from "@/lib/cn";
-import {
-  cleanPlatformOverrides,
-  platformOverridesEqual,
-  type PlatformOverrides,
-} from "@/lib/platformOverrides";
+import type { CaptionFooterUser } from "@/lib/captionFooter";
+import { queueOverridesToSend, type PlatformOverrides } from "@/lib/platformOverrides";
 import {
   PLATFORM_CAPTIONS_HEADING,
   PLATFORM_ORDER,
@@ -293,9 +290,12 @@ function QueueEditDialog({
   onSaved,
   onPartialSave,
   onStale,
+  footerSettings,
 }: {
   job: PostJobDTO;
   viewer: QueueViewer;
+  /** The workspace footer appended at publish time (same data the Create page gets). */
+  footerSettings?: CaptionFooterUser;
   onClose: () => void;
   /** The save is complete: patch the card and close the dialog. */
   onSaved: (patch: EditPatch) => void;
@@ -328,6 +328,31 @@ function QueueEditDialog({
         typeof job.platformCaptions?.[platform] === "string" ||
         connections?.some((c) => c.platform === platform && c.connected),
     );
+  // Whether the post has a caption of its own. The list's `caption` and
+  // `platformCaptions` fall back to the media item's for an older post that
+  // has none (resolvePostCaptionSource); only the single-post read says which.
+  // Unknown (still loading, or the read failed) counts as "none", which sends
+  // the shown captions with the caption: the safe side.
+  const [hasOwnCaption, setHasOwnCaption] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`/api/posts/${encodeURIComponent(job.id)}`);
+        const data = (await response.json().catch(() => null)) as
+          | { postJob?: { baseCaption?: unknown } }
+          | null;
+        if (!cancelled && response.ok && typeof data?.postJob?.baseCaption === "string") {
+          setHasOwnCaption(true);
+        }
+      } catch {
+        // Stays "none": the shown captions are sent with the caption.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [job.id]);
   // 2026-11-01 scale audit (jobs, event size): over the 10,000-character cap, which
   // PATCH /api/posts/[id] rejects - blocks Save (lib/captionLimits.ts).
   const captionOver = captionCounter(caption).over;
@@ -367,14 +392,16 @@ function QueueEditDialog({
       scheduledIso = check.iso;
     }
 
-    // Per-platform captions go along only when the user changed them; `null`
-    // removes the last one.
-    const cleanedOverrides = cleanPlatformOverrides(platformOverrides, trimmed, editorPlatforms);
-    const overridesEdited = !platformOverridesEqual(
-      cleanedOverrides,
-      cleanPlatformOverrides(savedOverrides, trimmed, editorPlatforms),
-    );
-    const overridesPatch: EditPatch = overridesEdited ? { platformCaptions: cleanedOverrides } : {};
+    // undefined = leave them out; `null` removes the last one (lib/platformOverrides.ts).
+    const overridesToSend = queueOverridesToSend({
+      current: platformOverrides,
+      saved: savedOverrides,
+      mainCaption: trimmed,
+      platforms: editorPlatforms,
+      hasOwnCaption,
+    });
+    const overridesEdited = overridesToSend !== undefined;
+    const overridesPatch: EditPatch = overridesEdited ? { platformCaptions: overridesToSend } : {};
 
     setSaving(true);
     try {
@@ -386,7 +413,7 @@ function QueueEditDialog({
           body: JSON.stringify({
             baseCaption: trimmed,
             ...(scheduledIso ? { scheduledFor: scheduledIso } : {}),
-            ...(overridesEdited ? { perPlatformOverrides: cleanedOverrides } : {}),
+            ...(overridesEdited ? { perPlatformOverrides: overridesToSend } : {}),
           }),
         });
         if (!response.ok) {
@@ -415,7 +442,7 @@ function QueueEditDialog({
         originalCaption: savedCaption,
         scheduledForIso: scheduledIso,
         submitsForApproval: publishNeedsApproval(job, viewer),
-        perPlatformOverrides: overridesEdited ? cleanedOverrides : undefined,
+        perPlatformOverrides: overridesToSend,
       });
       if (result.kind === "failed") {
         // Keep the dialog open with the user's input; the server says why. If
@@ -423,7 +450,12 @@ function QueueEditDialog({
         // retry doesn't re-PATCH an unchanged caption.
         if (result.captionSaved) {
           setSavedCaption(trimmed);
-          if (overridesEdited) setSavedOverrides(cleanedOverrides);
+          // The post now has its own caption, and these captions as stored.
+          setHasOwnCaption(true);
+          if (overridesEdited) {
+            setSavedOverrides(overridesToSend);
+            setPlatformOverrides(overridesToSend);
+          }
           onPartialSave({ caption: trimmed, ...overridesPatch });
         }
         toast.error(result.error);
@@ -463,6 +495,7 @@ function QueueEditDialog({
           caption={caption}
           overrides={platformOverrides}
           onChange={setPlatformOverrides}
+          footer={footerSettings}
           disabled={saving}
         />
         <div className="space-y-1.5">
@@ -495,7 +528,7 @@ function QueueEditDialog({
 }
 
 /** Client-rendered Queue: scheduled + draft posts with edit/cancel/publish/delete. */
-export function QueueView() {
+export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUser } = {}) {
   const toast = useToast();
   const [jobs, setJobs] = useState<PostJobDTO[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -860,6 +893,7 @@ export function QueueView() {
           key={editTarget.id}
           job={editTarget}
           viewer={viewer}
+          footerSettings={footerSettings}
           onClose={() => setEditTarget(null)}
           onPartialSave={(patch) => patchJob(editTarget.id, patch)}
           onStale={() => void load({ silent: true })}

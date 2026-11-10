@@ -11,6 +11,7 @@ import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { cn } from "@/lib/cn";
 import {
   adaptMaxLength,
+  applyAdaptedCaption,
   countPlatformOverrides,
   platformCaptionCounter,
   setPlatformOverride,
@@ -94,7 +95,7 @@ export function PlatformCaptionEditor({
         return;
       }
       const adapted = data.enhancedCaption;
-      onChange((prev) => ({ ...prev, [platform]: adapted }));
+      onChange((prev) => applyAdaptedCaption(prev, platform, adapted));
     } catch {
       toast.error(`Couldn't adapt the caption for ${platformLabel(platform)}. Try again.`);
     } finally {
@@ -128,7 +129,8 @@ export function PlatformCaptionEditor({
                   role="switch"
                   aria-checked={on}
                   aria-labelledby={switchLabelId}
-                  disabled={disabled}
+                  // Not while "Adapt" runs for this platform: its answer needs the caption on.
+                  disabled={disabled || adapting === platform}
                   onClick={() =>
                     onChange((prev) => setPlatformOverride(prev, platform, !on, caption))
                   }

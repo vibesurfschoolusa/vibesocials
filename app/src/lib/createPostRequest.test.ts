@@ -208,3 +208,44 @@ describe("buildUploadPostBody", () => {
     expect(body.blobUrl).toBe(BLOB.url);
   });
 });
+
+describe("both create paths send the cleaned per-platform captions", () => {
+  // The composer hands over the captions exactly as typed; each builder keeps
+  // only selected, non-blank ones that differ from the main caption.
+  const typed = {
+    x: "Short for X",
+    linkedin: "   ",
+    instagram: "hello",
+    tiktok: "TikTok is not selected",
+  };
+  const common = {
+    baseCaption: "hello",
+    location: "",
+    platforms: ["x", "linkedin", "instagram"] as Platform[],
+    deferred: {},
+    workspaceId: WORKSPACE_ID,
+    perPlatformOverrides: typed,
+  };
+
+  it("fresh upload", () => {
+    expect(sent(buildUploadPostBody({ ...common, blob: BLOB })).perPlatformOverrides).toEqual({
+      x: "Short for X",
+    });
+  });
+
+  it("reused media", () => {
+    expect(
+      sent(buildReusePostBody({ ...common, mediaItemId: "media-1" })).perPlatformOverrides,
+    ).toEqual({ x: "Short for X" });
+  });
+
+  it("leaves the field out when cleaning leaves nothing", () => {
+    const nothing = { ...common, perPlatformOverrides: { linkedin: "", instagram: " hello " } };
+    expect(sent(buildUploadPostBody({ ...nothing, blob: BLOB }))).not.toHaveProperty(
+      "perPlatformOverrides",
+    );
+    expect(sent(buildReusePostBody({ ...nothing, mediaItemId: "media-1" }))).not.toHaveProperty(
+      "perPlatformOverrides",
+    );
+  });
+});

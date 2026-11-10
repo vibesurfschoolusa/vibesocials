@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   adaptMaxLength,
+  applyAdaptedCaption,
   cleanPlatformOverrides,
   countPlatformOverrides,
   platformCaptionCounter,
   platformOverridesEqual,
+  queueOverridesToSend,
   setPlatformOverride,
 } from "./platformOverrides";
 
@@ -127,5 +129,70 @@ describe("adaptMaxLength", () => {
 
   it("never goes below the 50 the route accepts", () => {
     expect(adaptMaxLength("x", { defaultHashtags: "#".repeat(260) })).toBe(50);
+  });
+});
+
+describe("applyAdaptedCaption", () => {
+  it("fills the platform's caption while it is switched on", () => {
+    expect(applyAdaptedCaption({ x: "old", linkedin: "keep" }, "x", "new")).toEqual({
+      x: "new",
+      linkedin: "keep",
+    });
+  });
+
+  it("drops the answer when that platform's caption was switched off meanwhile", () => {
+    const prev = { linkedin: "keep" };
+    expect(applyAdaptedCaption(prev, "x", "new")).toBe(prev);
+    expect(applyAdaptedCaption(null, "x", "new")).toEqual({});
+  });
+});
+
+describe("queueOverridesToSend", () => {
+  const PLATFORMS: Platform[] = ["x", "linkedin", "instagram"];
+  const base = { mainCaption: "Main caption", platforms: PLATFORMS, hasOwnCaption: true };
+
+  it("sends nothing when the captions are untouched", () => {
+    const saved = { x: "For X", linkedin: "For LinkedIn" };
+    expect(queueOverridesToSend({ ...base, current: { ...saved }, saved })).toBeUndefined();
+    expect(queueOverridesToSend({ ...base, current: null, saved: null })).toBeUndefined();
+    expect(queueOverridesToSend({ ...base, current: {}, saved: null })).toBeUndefined();
+  });
+
+  it("sends null when the last caption is removed", () => {
+    expect(queueOverridesToSend({ ...base, current: {}, saved: { x: "For X" } })).toBeNull();
+  });
+
+  it("sends the other caption when one of two is removed", () => {
+    expect(
+      queueOverridesToSend({
+        ...base,
+        current: { linkedin: "For LinkedIn" },
+        saved: { x: "For X", linkedin: "For LinkedIn" },
+      }),
+    ).toEqual({ linkedin: "For LinkedIn" });
+  });
+
+  it("sends a changed caption", () => {
+    expect(
+      queueOverridesToSend({ ...base, current: { x: "Newer" }, saved: { x: "For X" } }),
+    ).toEqual({ x: "Newer" });
+  });
+
+  it("removing a caption equal to the new main caption still clears the stored one", () => {
+    // Saved X caption "Main caption"; the user removes it. Cleaning both sides
+    // against the main caption would hide the change and leave it stored.
+    expect(
+      queueOverridesToSend({ ...base, current: {}, saved: { x: "Main caption" } }),
+    ).toBeNull();
+  });
+
+  it("an older post with no caption of its own always sends what the dialog shows", () => {
+    const shown = { x: "From the media item" };
+    expect(
+      queueOverridesToSend({ ...base, hasOwnCaption: false, current: { ...shown }, saved: shown }),
+    ).toEqual({ x: "From the media item" });
+    expect(
+      queueOverridesToSend({ ...base, hasOwnCaption: false, current: null, saved: null }),
+    ).toBeNull();
   });
 });
