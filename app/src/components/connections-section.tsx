@@ -18,6 +18,7 @@ import {
   PLATFORM_CONNECT_REQUIREMENTS,
   PLATFORM_MATURITY_NOTES,
 } from "@/lib/platforms";
+import { platformHelpHref } from "@/lib/platformGuides";
 import type { Platform } from "@prisma/client";
 import { Badge } from "@/components/ui/badge";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -184,6 +185,16 @@ export function ConnectionsSection({
                       <p className="mt-1 break-words text-xs text-muted-foreground/90">
                         {PLATFORM_MATURITY_NOTES[key]}
                       </p>
+                    ) : null}
+                    {!connection && !readOnly ? (
+                      <a
+                        href={platformHelpHref(key)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-1 inline-block text-xs font-medium text-primary underline-offset-4 hover:underline"
+                      >
+                        How to connect
+                      </a>
                     ) : null}
                   </div>
                 </div>

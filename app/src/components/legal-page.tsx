@@ -47,11 +47,12 @@ export function LegalSection({ title, children }: { title: string; children: Rea
   );
 }
 
-/** About, Privacy, Terms and Data deletion, linked from every public page. */
+/** About, Help, Privacy, Terms and Data deletion, linked from every public page. */
 export function SiteLinks() {
   return (
     <nav aria-label="Site" className="mt-8 flex flex-wrap gap-x-4 gap-y-2 border-t border-border pt-4 text-xs text-muted-foreground">
       <Link href="/about" className="hover:text-foreground">About</Link>
+      <Link href="/help" className="hover:text-foreground">Help</Link>
       <Link href="/about#contact" className="hover:text-foreground">Contact</Link>
       <Link href="/privacy" className="hover:text-foreground">Privacy Policy</Link>
       <Link href="/terms" className="hover:text-foreground">Terms of Service</Link>

@@ -49,6 +49,14 @@ export function GettingStarted({
             done={state.connectDone}
             title="Connect a platform"
             description="Link YouTube, X, Instagram, or any of the others in Settings."
+            note={
+              <>
+                Each platform needs something different.{" "}
+                <Link href="/help" className="font-medium text-primary underline-offset-4 hover:underline">
+                  Read the setup guide.
+                </Link>
+              </>
+            }
             action={
               <Link
                 href={SETTINGS_CONNECTIONS_HREF}
@@ -93,12 +101,15 @@ function Step({
   done,
   title,
   description,
+  note,
   action,
 }: {
   index: number;
   done: boolean;
   title: string;
   description: string;
+  /** A second line under the description, while the step is not done. */
+  note?: React.ReactNode;
   action: React.ReactNode;
 }) {
   return (
@@ -129,6 +140,9 @@ function Step({
           </p>
           {!done ? (
             <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
+          ) : null}
+          {!done && note ? (
+            <p className="mt-0.5 text-sm text-muted-foreground">{note}</p>
           ) : null}
         </div>
         {!done ? <div className="shrink-0">{action}</div> : null}

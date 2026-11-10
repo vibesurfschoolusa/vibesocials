@@ -9,19 +9,34 @@ import { PLATFORM_LABELS } from "@/lib/platforms";
  * label-less phrasing in that case rather than pairing a fallback noun
  * with a template that already carries its own article.
  */
-function platformFromCode(code: string): string | null {
+function platformFromCode(code: string): Platform | null {
   const match = (Object.keys(PLATFORM_LABELS) as Platform[])
     .filter((key) => code === key || code.startsWith(`${key}_`))
     .sort((a, b) => b.length - a.length)[0];
-  return match ? PLATFORM_LABELS[match] : null;
+  return match ?? null;
+}
+
+function labelFromCode(code: string): string | null {
+  const platform = platformFromCode(code);
+  return platform ? PLATFORM_LABELS[platform] : null;
 }
 
 /**
  * Human-readable outcome for the ?error= / ?success= params every OAuth
  * callback appends to /settings. Returns null when neither is present.
- * Error wins when both are present.
+ * Error wins when both are present. `platform` is the platform the code names
+ * (null when it names none), so Settings can link to that platform's guide.
  */
 export function describeOAuthResult(params: {
+  error: string | null;
+  success: string | null;
+}): { variant: "success" | "danger"; message: string; platform: Platform | null } | null {
+  const code = params.error ?? params.success;
+  const described = describeCode(params);
+  return described && code ? { ...described, platform: platformFromCode(code) } : null;
+}
+
+function describeCode(params: {
   error: string | null;
   success: string | null;
 }): { variant: "success" | "danger"; message: string } | null {
@@ -57,7 +72,7 @@ export function describeOAuthResult(params: {
           "This Pinterest account has no board we can post to, and every Pin goes on a board. Create a board on Pinterest (not a secret one), then click Connect again.",
       };
     }
-    const label = platformFromCode(error);
+    const label = labelFromCode(error);
     // LinkedIn's own "user declined" redirect uses a fixed linkedin_auth_failed
     // code rather than a "*_denied" one — catch it too so it reads as a
     // cancellation instead of a generic failure.
@@ -109,7 +124,7 @@ export function describeOAuthResult(params: {
   }
 
   if (success) {
-    const label = platformFromCode(success);
+    const label = labelFromCode(success);
     return {
       variant: "success",
       message: label ? `${label} connected.` : "Account connected.",

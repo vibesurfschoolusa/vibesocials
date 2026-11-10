@@ -7,7 +7,7 @@ describe("describeOAuthResult", () => {
   });
 
   it("maps a success code to a success message with the platform label", () => {
-    expect(describeOAuthResult({ error: null, success: "youtube_connected" })).toEqual({
+    expect(describeOAuthResult({ error: null, success: "youtube_connected" })).toMatchObject({
       variant: "success",
       message: "YouTube connected.",
     });
@@ -51,7 +51,7 @@ describe("describeOAuthResult", () => {
         error: "facebook_page_not_workspace_owner",
         success: null,
       });
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         variant: "danger",
         message: "Only the workspace owner can connect accounts. Ask them to connect Facebook Page.",
       });
@@ -79,7 +79,7 @@ describe("describeOAuthResult", () => {
 
     it("falls back gracefully for an unprefixed not_workspace_owner code", () => {
       const result = describeOAuthResult({ error: "not_workspace_owner", success: null });
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         variant: "danger",
         message: "Only the workspace owner can connect accounts. Ask them to connect it.",
       });
@@ -95,33 +95,33 @@ describe("describeOAuthResult", () => {
 // compiled by reading all 7 route files directly.
 describe("describeOAuthResult — real callback-route codes", () => {
   it("maps every platform's real *_connected success code to its label", () => {
-    expect(describeOAuthResult({ error: null, success: "facebook_page_connected" })).toEqual({
+    expect(describeOAuthResult({ error: null, success: "facebook_page_connected" })).toMatchObject({
       variant: "success",
       message: "Facebook Page connected.",
     });
     expect(
       describeOAuthResult({ error: null, success: "google_business_profile_connected" }),
-    ).toEqual({
+    ).toMatchObject({
       variant: "success",
       message: "Google Business Profile connected.",
     });
-    expect(describeOAuthResult({ error: null, success: "instagram_connected" })).toEqual({
+    expect(describeOAuthResult({ error: null, success: "instagram_connected" })).toMatchObject({
       variant: "success",
       message: "Instagram connected.",
     });
-    expect(describeOAuthResult({ error: null, success: "linkedin_connected" })).toEqual({
+    expect(describeOAuthResult({ error: null, success: "linkedin_connected" })).toMatchObject({
       variant: "success",
       message: "LinkedIn connected.",
     });
-    expect(describeOAuthResult({ error: null, success: "tiktok_connected" })).toEqual({
+    expect(describeOAuthResult({ error: null, success: "tiktok_connected" })).toMatchObject({
       variant: "success",
       message: "TikTok connected.",
     });
-    expect(describeOAuthResult({ error: null, success: "x_connected" })).toEqual({
+    expect(describeOAuthResult({ error: null, success: "x_connected" })).toMatchObject({
       variant: "success",
       message: "X connected.",
     });
-    expect(describeOAuthResult({ error: null, success: "youtube_connected" })).toEqual({
+    expect(describeOAuthResult({ error: null, success: "youtube_connected" })).toMatchObject({
       variant: "success",
       message: "YouTube connected.",
     });
@@ -129,7 +129,7 @@ describe("describeOAuthResult — real callback-route codes", () => {
 
   it("resolves X's real denial code (x_auth_denied) to a cancelled X message", () => {
     const result = describeOAuthResult({ error: "x_auth_denied", success: null });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       variant: "danger",
       message:
         "You cancelled the X authorization — nothing was connected. Click Connect to try again.",
@@ -185,7 +185,7 @@ describe("describeOAuthResult — real callback-route codes", () => {
   // instead of a generic failure.
   it("resolves LinkedIn's own denial code (linkedin_auth_failed) to a cancelled LinkedIn message", () => {
     const result = describeOAuthResult({ error: "linkedin_auth_failed", success: null });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       variant: "danger",
       message:
         "You cancelled the LinkedIn authorization — nothing was connected. Click Connect to try again.",
@@ -203,7 +203,7 @@ describe("describeOAuthResult — real callback-route codes", () => {
   it("falls back to the generic account label for real unprefixed codes", () => {
     for (const error of ["missing_code_or_state", "token_exchange_failed"]) {
       const result = describeOAuthResult({ error, success: null });
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         variant: "danger",
         message: "The account couldn't be connected. Please try again.",
       });
@@ -218,7 +218,7 @@ describe("describeOAuthResult — real callback-route codes", () => {
   // sign-in..." (doubled article).
   it("treats an unprefixed access_denied code as a cancellation, without a doubled article", () => {
     const result = describeOAuthResult({ error: "access_denied", success: null });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       variant: "danger",
       message:
         "You cancelled the authorization — nothing was connected. Click Connect to try again.",
@@ -227,7 +227,7 @@ describe("describeOAuthResult — real callback-route codes", () => {
 
   it("buckets an unprefixed invalid_state code as a secure sign-in failure, without a doubled article", () => {
     const result = describeOAuthResult({ error: "invalid_state", success: null });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       variant: "danger",
       message: "The sign-in couldn't be completed securely. Please try connecting again.",
     });
@@ -239,7 +239,7 @@ describe("describeOAuthResult — real callback-route codes", () => {
 // (lib/oauthCallbackGuard.ts) and the start/callback error handling.
 describe("describeOAuthResult — LinkedIn account that administers no page", () => {
   it("says what to do instead of a generic failure", () => {
-    expect(describeOAuthResult({ error: "linkedin_no_admin_pages", success: null })).toEqual({
+    expect(describeOAuthResult({ error: "linkedin_no_admin_pages", success: null })).toMatchObject({
       variant: "danger",
       message:
         "This LinkedIn account isn't a Super admin of any company page. Sign in to LinkedIn with an account that is a Super admin of your page, then click Connect again.",
@@ -249,7 +249,7 @@ describe("describeOAuthResult — LinkedIn account that administers no page", ()
 
 describe("describeOAuthResult — Pinterest", () => {
   it("an account with no board we can post to is told to create one", () => {
-    expect(describeOAuthResult({ error: "pinterest_no_boards", success: null })).toEqual({
+    expect(describeOAuthResult({ error: "pinterest_no_boards", success: null })).toMatchObject({
       variant: "danger",
       message:
         "This Pinterest account has no board we can post to, and every Pin goes on a board. Create a board on Pinterest (not a secret one), then click Connect again.",
@@ -263,10 +263,58 @@ describe("describeOAuthResult — Pinterest", () => {
   });
 
   it("a successful connect names Pinterest", () => {
-    expect(describeOAuthResult({ error: null, success: "pinterest_connected" })).toEqual({
+    expect(describeOAuthResult({ error: null, success: "pinterest_connected" })).toMatchObject({
       variant: "success",
       message: "Pinterest connected.",
     });
+  });
+});
+
+// The setup-guide link under a Settings error (/help#<anchor>) needs to know
+// which platform failed.
+describe("describeOAuthResult — which platform it was", () => {
+  it("carries the platform for a specific error code", () => {
+    expect(describeOAuthResult({ error: "linkedin_no_admin_pages", success: null })?.platform).toBe(
+      "linkedin",
+    );
+    expect(describeOAuthResult({ error: "pinterest_no_boards", success: null })?.platform).toBe(
+      "pinterest",
+    );
+  });
+
+  it("carries the platform for every generic <platform>_connect_failed code", () => {
+    for (const platform of [
+      "facebook_page",
+      "google_business_profile",
+      "instagram",
+      "linkedin",
+      "pinterest",
+      "tiktok",
+      "x",
+      "youtube",
+    ] as const) {
+      expect(
+        describeOAuthResult({ error: `${platform}_connect_failed`, success: null })?.platform,
+      ).toBe(platform);
+    }
+  });
+
+  it("picks the longest matching platform key", () => {
+    expect(
+      describeOAuthResult({ error: "google_business_profile_oauth_denied", success: null })
+        ?.platform,
+    ).toBe("google_business_profile");
+  });
+
+  it("carries null when the code names no platform", () => {
+    expect(describeOAuthResult({ error: "access_denied", success: null })?.platform).toBeNull();
+    expect(
+      describeOAuthResult({ error: "oauth_session_mismatch", success: null })?.platform,
+    ).toBeNull();
+  });
+
+  it("carries the platform on success too", () => {
+    expect(describeOAuthResult({ error: null, success: "x_connected" })?.platform).toBe("x");
   });
 });
 
@@ -282,7 +330,7 @@ describe("describeOAuthResult — session binding and connect-failure codes", ()
   ];
 
   it("explains oauth_session_mismatch (callback finished under a different signed-in account)", () => {
-    expect(describeOAuthResult({ error: "oauth_session_mismatch", success: null })).toEqual({
+    expect(describeOAuthResult({ error: "oauth_session_mismatch", success: null })).toMatchObject({
       variant: "danger",
       message:
         "That connection was started from a different account. Sign in to the account you want to connect and try again.",
@@ -293,7 +341,7 @@ describe("describeOAuthResult — session binding and connect-failure codes", ()
     for (const [platform, label] of ALL_PLATFORMS) {
       expect(
         describeOAuthResult({ error: `${platform}_not_configured`, success: null }),
-      ).toEqual({
+      ).toMatchObject({
         variant: "danger",
         message: `Connecting ${label} isn't available yet. Please try again later.`,
       });
@@ -301,7 +349,7 @@ describe("describeOAuthResult — session binding and connect-failure codes", ()
   });
 
   it("falls back gracefully for an unprefixed not_configured code", () => {
-    expect(describeOAuthResult({ error: "not_configured", success: null })).toEqual({
+    expect(describeOAuthResult({ error: "not_configured", success: null })).toMatchObject({
       variant: "danger",
       message: "Connecting this account isn't available yet. Please try again later.",
     });
@@ -312,7 +360,7 @@ describe("describeOAuthResult — session binding and connect-failure codes", ()
   // connected. Please try again." copy is the intended message.
   it("maps every <platform>_connect_failed code to the label-aware try-again message", () => {
     for (const [platform, label] of ALL_PLATFORMS) {
-      expect(describeOAuthResult({ error: `${platform}_connect_failed`, success: null })).toEqual({
+      expect(describeOAuthResult({ error: `${platform}_connect_failed`, success: null })).toMatchObject({
         variant: "danger",
         message: `${label} couldn't be connected. Please try again.`,
       });

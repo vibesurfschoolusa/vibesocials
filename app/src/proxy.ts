@@ -54,7 +54,7 @@ export default withAuth(
   },
 );
 
-function isPublicPath(pathname: string): boolean {
+export function isPublicPath(pathname: string): boolean {
   const prefixes = [
     "/login",
     "/register",
@@ -65,6 +65,7 @@ function isPublicPath(pathname: string): boolean {
     "/terms",
     "/data-deletion",
     "/about",
+    "/help",
   ];
   return prefixes.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),

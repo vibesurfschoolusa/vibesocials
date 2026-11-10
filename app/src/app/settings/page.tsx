@@ -11,6 +11,8 @@ import { getWorkspaceUsageOrNull } from "@/server/usage/workspaceUsage";
 import { Alert } from "@/components/ui/alert";
 import { describeOAuthResult } from "@/lib/oauthResult";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
+import { platformHelpHref } from "@/lib/platformGuides";
+import { platformLabel } from "@/lib/platforms";
 import { type ConnectionSummary, toConnectionSummary } from "@/lib/connectionSummary";
 import type { UserSettings } from "@/lib/userSettings";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
@@ -75,7 +77,17 @@ export default async function SettingsPage({
       {oauthResult ? (
         <Alert variant={oauthResult.variant} className="mb-6">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p>{oauthResult.message}</p>
+            <div>
+              <p>{oauthResult.message}</p>
+              {oauthResult.variant === "danger" && oauthResult.platform ? (
+                <Link
+                  href={platformHelpHref(oauthResult.platform)}
+                  className="mt-1 inline-block text-sm font-medium text-primary underline-offset-4 hover:underline"
+                >
+                  See how to connect {platformLabel(oauthResult.platform)}
+                </Link>
+              ) : null}
+            </div>
             <Link
               href="/settings"
               className="text-sm font-medium text-primary underline-offset-4 hover:underline"
