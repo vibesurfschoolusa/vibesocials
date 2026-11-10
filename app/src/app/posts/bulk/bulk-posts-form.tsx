@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { upload } from "@vercel/blob/client";
 import type { Platform } from "@prisma/client";
@@ -13,25 +13,37 @@ import { Label } from "@/components/ui/label";
 import { useConnections } from "@/hooks/useConnections";
 import { generateBlobKey } from "@/lib/blobKey";
 import {
+  BULK_DRAFTS_NOTE,
+  BULK_GOOGLE_BUTTON_NOTE,
   BULK_MAX_FILES,
   BULK_NO_TIME_MESSAGE,
   BULK_TIKTOK_NOTE,
   BULK_TOO_MANY_FILES_MESSAGE,
+  BULK_YOUTUBE_PRIVACY_DEFAULT,
+  UNREADABLE_BODY,
   type BulkCaptionStatus,
   type BulkFinishMode,
   type BulkScheduleControls,
+  type BulkSendResponse,
   type BulkUploadStatus,
   allRowsCreated,
   applySchedule,
   captionProgressText,
+  classifySendResponse,
   filesThatFit,
+  minFirstDay,
+  minRowTime,
   moveRow,
   nextWork,
   platformsForRow,
+  refreshedFirstDay,
   rowSendBlock,
-  sendResultFromResponse,
+  rowsToSend,
   tomorrowLocalDate,
+  youtubePrivacyShown,
 } from "@/lib/bulkPosts";
+import { Select } from "@/components/ui/select";
+import type { YouTubePostMetadata } from "@/server/platforms/types";
 import { buildUploadPostBody, type UploadedBlob } from "@/lib/createPostRequest";
 import { extractVideoFrames } from "@/lib/extractVideoFrames";
 import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
@@ -59,12 +71,14 @@ export interface BulkRow {
   whenSetByHand: boolean;
   /** The created post's id; a row that has one is never sent again. */
   postId: string | null;
+  /** The last send got no clear answer: the post may exist, so it is not sent again on its own. */
+  uncertain: boolean;
   sending: boolean;
   result: string | null;
   sendError: string | null;
+  /** An object URL of the prepared photo, or a frame of the video once one was read. */
+  thumbnail: string | null;
 }
-
-const NETWORK_ERROR = "Couldn't reach the server. Check your connection and press the button again.";
 
 function newRow(file: File): BulkRow {
   return {
@@ -82,9 +96,11 @@ function newRow(file: File): BulkRow {
     when: "",
     whenSetByHand: false,
     postId: null,
+    uncertain: false,
     sending: false,
     result: null,
     sendError: null,
+    thumbnail: null,
   };
 }
 
@@ -111,6 +127,29 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
   const controlsRef = useRef(controls);
   // Raw text of the "every N days" box, so it can be cleared while typing.
   const [everyDaysText, setEveryDaysText] = useState("1");
+  // Once the user picks a first day it is theirs; until then it follows "tomorrow".
+  const firstDaySetByUserRef = useRef(false);
+  // The clock behind the inputs' `min` and the "tomorrow" default, kept current
+  // while the page stays open. The press itself reads a fresh clock.
+  const [now, setNow] = useState(() => new Date());
+  const [youtubePrivacy, setYoutubePrivacy] =
+    useState<YouTubePostMetadata["privacyStatus"]>(BULK_YOUTUBE_PRIVACY_DEFAULT);
+  // Object URLs made for photo thumbnails, revoked on removal and on unmount.
+  const objectUrlsRef = useRef(new Map<string, string>());
+
+  useEffect(() => {
+    const urls = objectUrlsRef.current;
+    return () => {
+      for (const url of urls.values()) URL.revokeObjectURL(url);
+      urls.clear();
+    };
+  }, []);
+
+  function revokeThumbnail(id: string) {
+    const url = objectUrlsRef.current.get(id);
+    if (url) URL.revokeObjectURL(url);
+    objectUrlsRef.current.delete(id);
+  }
 
   const { connections, loading: connectionsLoading, error: connectionsError, reload } = useConnections();
   // TikTok is never offered here: it needs choices for each video.
@@ -149,7 +188,15 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
       // Same preparation as Create: HEIC -> JPEG, big photos shrunk, unsupported types refused.
       const prepared = await prepareUploadFile(file);
       filesRef.current.set(id, prepared);
-      updateRow(id, { fileName: prepared.name, mimeType: prepared.type });
+      // A photo's thumbnail is the prepared file (a HEIC original would not show).
+      // A video's comes from the frames read for its caption (captionRow).
+      let thumbnail: string | undefined;
+      if (prepared.type.startsWith("image/") && rowsRef.current.some((r) => r.id === id)) {
+        revokeThumbnail(id);
+        thumbnail = URL.createObjectURL(prepared);
+        objectUrlsRef.current.set(id, thumbnail);
+      }
+      updateRow(id, { fileName: prepared.name, mimeType: prepared.type, ...(thumbnail ? { thumbnail } : {}) });
       let settled = false;
       const blob = await upload(generateBlobKey(prepared), prepared, {
         access: "public",
@@ -193,6 +240,10 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
       const frames = blob.mimeType.startsWith("video/")
         ? await extractVideoFrames(filesRef.current.get(id) ?? blob.url)
         : [];
+      // The first of those frames doubles as the video's thumbnail, at no extra cost.
+      if (frames.length > 0) {
+        updateRow(id, (current) => (current.thumbnail ? {} : { thumbnail: frames[0] }));
+      }
       const response = await fetch("/api/posts/auto-caption", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -264,6 +315,7 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
 
   function removeRow(id: string) {
     filesRef.current.delete(id);
+    revokeThumbnail(id);
     setTooMany(false);
     respread((current) => current.filter((row) => row.id !== id));
   }
@@ -278,22 +330,49 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
     void runWork();
   }
 
+  function markInQueue(id: string) {
+    updateRow(id, { uncertain: false, postId: "confirmed-in-queue", whenSetByHand: true, result: "In the Queue" });
+  }
+
+  function sendAgain(id: string) {
+    updateRow(id, { uncertain: false });
+  }
+
   async function finish(mode: BulkFinishMode) {
     if (sendingMode) return;
     setSendingMode(mode);
     try {
-      // One after another; a row that already has a post is never sent again.
-      for (const id of rowsRef.current.filter((r) => r.postId === null).map((r) => r.id)) {
-        const row = rowsRef.current.find((r) => r.id === id);
-        if (!row || row.postId !== null) continue;
-        const { platforms } = platformsForRow(selectedPlatforms, row.mimeType);
+      const platformsOf = (row: BulkRow) => platformsForRow(selectedPlatforms, row.mimeType).platforms;
+      // Checked first, against the clock at the press, so no row is sent while
+      // another one still has a time in the past.
+      const pressedAt = new Date();
+      const ready: string[] = [];
+      for (const row of rowsToSend(rowsRef.current)) {
         const block = rowSendBlock(
-          { id, uploaded: row.blob !== null, caption: row.caption, platforms, when: row.when, postId: row.postId },
+          {
+            id: row.id,
+            uploaded: row.blob !== null,
+            caption: row.caption,
+            platforms: platformsOf(row),
+            when: row.when,
+            postId: row.postId,
+            uncertain: row.uncertain,
+          },
           mode,
+          pressedAt,
         );
+        if (block) updateRow(row.id, { sendError: block });
+        else ready.push(row.id);
+      }
+
+      // One after another. A created row, or one whose post may exist, is never sent again here.
+      for (const id of ready) {
+        const row = rowsRef.current.find((r) => r.id === id);
+        if (!row || row.postId !== null || row.uncertain || !row.blob) continue;
+        const platforms = platformsOf(row);
         const scheduledFor = mode === "schedule" ? localDateTimeToUtcIso(row.when) : null;
-        if (block || !row.blob || (mode === "schedule" && !scheduledFor)) {
-          updateRow(id, { sendError: block ?? BULK_NO_TIME_MESSAGE });
+        if (mode === "schedule" && !scheduledFor) {
+          updateRow(id, { sendError: BULK_NO_TIME_MESSAGE });
           continue;
         }
         const body = buildUploadPostBody({
@@ -301,43 +380,59 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
           baseCaption: row.caption,
           location: "",
           platforms,
-          deferred: mode === "draft" ? { draft: true } : { scheduledFor: scheduledFor ?? undefined },
+          deferred: scheduledFor ? { scheduledFor } : { draft: true },
           workspaceId,
+          // The same field Create sends, for every row that goes to YouTube.
+          youtubeMetadata: platforms.includes("youtube") ? { privacyStatus: youtubePrivacy } : undefined,
         });
         updateRow(id, { sending: true, sendError: null });
+        let response: BulkSendResponse;
         try {
-          const response = await fetch("/api/posts", {
+          const answer = await fetch("/api/posts", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body),
           });
-          const data: unknown = await response.json().catch(() => null);
-          const result = sendResultFromResponse({ ok: response.ok, body: data, mode });
-          updateRow(
-            id,
-            result.created
-              ? {
-                  sending: false,
-                  postId: result.postId,
-                  // The post exists with this time; changing the controls must not move what is shown.
-                  whenSetByHand: true,
-                  result: result.heldForApproval
-                    ? "Sent for approval"
-                    : mode === "draft"
-                      ? "Saved as a draft"
-                      : "Scheduled",
-                }
-              : { sending: false, sendError: result.error },
-          );
+          const data: unknown = await answer.json().catch(() => UNREADABLE_BODY);
+          response = { status: answer.status, body: data };
         } catch (error: unknown) {
-          console.error("[Add many] Create failed", error);
-          updateRow(id, { sending: false, sendError: NETWORK_ERROR });
+          console.error("[Add many] Create request got no answer", error);
+          response = { threw: true };
+        }
+        const result = classifySendResponse(response, mode);
+        if (result.outcome === "created") {
+          updateRow(id, {
+            sending: false,
+            postId: result.postId,
+            // The post exists with this time; changing the controls must not move what is shown.
+            whenSetByHand: true,
+            result: result.heldForApproval ? "Sent for approval" : mode === "draft" ? "Saved as a draft" : "Scheduled",
+          });
+        } else if (result.outcome === "refused") {
+          updateRow(id, { sending: false, sendError: result.error });
+        } else {
+          updateRow(id, { sending: false, uncertain: true });
         }
       }
     } finally {
       setSendingMode(null);
     }
   }
+
+  // Every 30 s: move the inputs' `min` on, and the default first day past midnight.
+  const tick = useEffectEvent(() => {
+    const current = new Date();
+    setNow(current);
+    const firstDay = refreshedFirstDay(
+      { firstDay: controlsRef.current.firstDay, setByUser: firstDaySetByUserRef.current },
+      current,
+    );
+    if (firstDay) changeControls({ firstDay });
+  });
+  useEffect(() => {
+    const timer = setInterval(() => tick(), 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   const workState = rows.map((r) => ({ id: r.id, upload: r.upload, caption: r.captionStatus }));
   const captionProgress = captionProgressText(workState);
@@ -422,6 +517,25 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
             </div>
           )}
           <p className="text-sm text-muted-foreground">{BULK_TIKTOK_NOTE}</p>
+          {youtubePrivacyShown(
+            selectedPlatforms,
+            rows.map((r) => r.mimeType),
+          ) ? (
+            <div className="flex flex-col gap-1 sm:max-w-xs">
+              <Label htmlFor="bulk-youtube-privacy">YouTube privacy</Label>
+              <Select
+                id="bulk-youtube-privacy"
+                className="h-11"
+                value={youtubePrivacy}
+                disabled={sendingMode !== null}
+                onChange={(event) => setYoutubePrivacy(event.target.value as YouTubePostMetadata["privacyStatus"])}
+              >
+                <option value="public">Public</option>
+                <option value="unlisted">Unlisted</option>
+                <option value="private">Private</option>
+              </Select>
+            </div>
+          ) : null}
         </fieldset>
 
         <fieldset className="flex flex-col gap-2">
@@ -433,8 +547,12 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
                 id="bulk-first-day"
                 type="date"
                 className="h-11"
+                min={minFirstDay(now)}
                 value={controls.firstDay}
-                onChange={(event) => changeControls({ firstDay: event.target.value })}
+                onChange={(event) => {
+                  firstDaySetByUserRef.current = true;
+                  changeControls({ firstDay: event.target.value });
+                }}
               />
             </div>
             <div className="flex flex-col gap-1">
@@ -480,6 +598,9 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
               count={rows.length}
               skipped={platformsForRow(selectedPlatforms, row.mimeType).skipped}
               locked={sendingMode !== null}
+              minWhen={minRowTime(now)}
+              onConfirmInQueue={() => markInQueue(row.id)}
+              onSendAgain={() => sendAgain(row.id)}
               onCaptionChange={(caption) => updateRow(row.id, { caption, sendError: null })}
               onWhenChange={(when) => updateRow(row.id, { when, whenSetByHand: true, sendError: null })}
               onMove={(delta) => respread((current) => moveRow(current, row.id, delta))}
@@ -517,6 +638,12 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
               The buttons wait until every file is uploaded and captioned.
             </p>
           ) : null}
+        </div>
+      ) : null}
+      {rows.length > 0 && !done ? (
+        <div className="-mt-3 flex flex-col gap-1 text-sm text-muted-foreground">
+          <p>{BULK_DRAFTS_NOTE}</p>
+          {selectedPlatforms.includes("google_business_profile") ? <p>{BULK_GOOGLE_BUTTON_NOTE}</p> : null}
         </div>
       ) : null}
 

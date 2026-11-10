@@ -1,6 +1,7 @@
 "use client";
 
 import type { Platform } from "@prisma/client";
+import { Film, Image as ImageIcon } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -8,6 +9,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { BULK_MAYBE_CREATED_MESSAGE } from "@/lib/bulkPosts";
 import { platformLabel } from "@/lib/platforms";
 import type { BulkRow } from "./bulk-posts-form";
 
@@ -19,12 +21,35 @@ interface BulkPostRowProps {
   skipped: Platform[];
   /** True while the rows are being sent. */
   locked: boolean;
+  /** Earliest schedulable time, as a datetime-local `min`. */
+  minWhen: string;
+  onConfirmInQueue(): void;
+  onSendAgain(): void;
   onCaptionChange(caption: string): void;
   onWhenChange(when: string): void;
   onMove(delta: -1 | 1): void;
   onRemove(): void;
   onRetry(): void;
   onWriteAgain(): void;
+}
+
+function Thumbnail({ row }: { row: BulkRow }) {
+  const box =
+    "flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-[var(--radius)] border border-border bg-muted text-muted-foreground";
+  if (row.thumbnail) {
+    return (
+      <span className={box}>
+        {/* eslint-disable-next-line @next/next/no-img-element -- a local object URL or an inline video frame, which next/image cannot load; decorative next to the file name, so alt is empty */}
+        <img src={row.thumbnail} alt="" className="h-full w-full object-cover" />
+      </span>
+    );
+  }
+  const Icon = row.mimeType.startsWith("video/") ? Film : ImageIcon;
+  return (
+    <span className={box}>
+      <Icon aria-hidden className="h-6 w-6" />
+    </span>
+  );
 }
 
 function uploadText(row: BulkRow): string | null {
@@ -39,6 +64,9 @@ export function BulkPostRow({
   count,
   skipped,
   locked,
+  minWhen,
+  onConfirmInQueue,
+  onSendAgain,
   onCaptionChange,
   onWhenChange,
   onMove,
@@ -56,9 +84,12 @@ export function BulkPostRow({
     <li>
       <Card className="flex flex-col gap-3 p-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <p className="min-w-0 break-words text-sm font-medium text-foreground">
-            {index + 1}. {row.fileName}
-          </p>
+          <div className="flex min-w-0 items-center gap-3">
+            <Thumbnail row={row} />
+            <p className="min-w-0 break-words text-sm font-medium text-foreground">
+              {index + 1}. {row.fileName}
+            </p>
+          </div>
           {!created ? (
             <div className="flex flex-wrap gap-2">
               <Button
@@ -132,6 +163,7 @@ export function BulkPostRow({
             id={whenId}
             type="datetime-local"
             className="h-11 sm:max-w-xs"
+            min={minWhen}
             value={row.when}
             disabled={!editable}
             onChange={(event) => onWhenChange(event.target.value)}
@@ -147,6 +179,19 @@ export function BulkPostRow({
         {row.sending ? <p className="text-sm text-muted-foreground">Sending...</p> : null}
         {row.result ? <Alert variant="success">{row.result}</Alert> : null}
         {row.sendError ? <Alert variant="danger">{row.sendError}</Alert> : null}
+        {row.uncertain ? (
+          <Alert variant="warning">
+            <p>{BULK_MAYBE_CREATED_MESSAGE}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <Button size="md" disabled={locked} onClick={onConfirmInQueue}>
+                It is in the Queue
+              </Button>
+              <Button variant="outline" size="md" disabled={locked} onClick={onSendAgain}>
+                Send again
+              </Button>
+            </div>
+          </Alert>
+        ) : null}
       </Card>
     </li>
   );

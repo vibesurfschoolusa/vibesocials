@@ -7,20 +7,30 @@ import {
   BULK_NOT_UPLOADED_MESSAGE,
   BULK_NO_PLATFORMS_MESSAGE,
   BULK_NO_TIME_MESSAGE,
+  BULK_PAST_TIME_MESSAGE,
+  BULK_MAYBE_CREATED_MESSAGE,
+  BULK_DRAFTS_NOTE,
+  BULK_GOOGLE_BUTTON_NOTE,
+  BULK_YOUTUBE_PRIVACY_DEFAULT,
+  UNREADABLE_BODY,
   type BulkScheduleControls,
   type BulkSendableRow,
   applySchedule,
   captionProgressText,
+  classifySendResponse,
   filesThatFit,
+  minFirstDay,
+  minRowTime,
   moveRow,
   nextWork,
   platformsForRow,
+  refreshedFirstDay,
   rowSendBlock,
   rowsToSend,
   allRowsCreated,
-  sendResultFromResponse,
   spreadSchedule,
   tomorrowLocalDate,
+  youtubePrivacyShown,
 } from "./bulkPosts";
 import { localDateTimeToUtcIso } from "./scheduling";
 
@@ -118,6 +128,12 @@ describe("spreadSchedule", () => {
         "2026-11-01T23:00:00.000Z",
         "2026-11-02T23:00:00.000Z",
       ]);
+    });
+
+    it("moves a time that does not exist when the clocks go forward to the next valid time (2027-03-14 in New York)", () => {
+      const slots = spreadSchedule({ count: 3, firstDay: "2027-03-13", timeOfDay: "02:30", everyDays: 1 });
+
+      expect(slots).toEqual(["2027-03-13T02:30", "2027-03-14T03:30", "2027-03-15T02:30"]);
     });
   });
 });
@@ -245,19 +261,30 @@ function sendable(overrides: Partial<BulkSendableRow> = {}): BulkSendableRow {
     platforms: ["instagram"],
     when: "2026-11-11T18:00",
     postId: null,
+    uncertain: false,
     ...overrides,
   };
 }
 
+// The moment "Schedule all" is pressed in these tests: 2026-11-10 12:00 local.
+const pressedAt = () => new Date(2026, 10, 10, 12, 0, 0);
+
 describe("rowsToSend", () => {
-  it("skips rows that were already created, and sends rows that failed before", () => {
+  it("skips rows that were already created, and sends rows that were refused before", () => {
     const rows = [
       sendable({ id: "created", postId: "job-1" }),
-      sendable({ id: "failed-before" }),
+      sendable({ id: "refused-before" }),
       sendable({ id: "new" }),
     ];
 
-    expect(rowsToSend(rows).map((r) => r.id)).toEqual(["failed-before", "new"]);
+    expect(rowsToSend(rows).map((r) => r.id)).toEqual(["refused-before", "new"]);
+  });
+
+  it("leaves out a row whose post may already exist, until the user says to send it again", () => {
+    const rows = [sendable({ id: "maybe", uncertain: true }), sendable({ id: "new" })];
+
+    expect(rowsToSend(rows).map((r) => r.id)).toEqual(["new"]);
+    expect(rowsToSend([{ ...rows[0], uncertain: false }]).map((r) => r.id)).toEqual(["maybe"]);
   });
 });
 
@@ -265,71 +292,159 @@ describe("allRowsCreated", () => {
   it("is true only when there are rows and every one has a post", () => {
     expect(allRowsCreated([])).toBe(false);
     expect(allRowsCreated([sendable({ postId: "a" }), sendable({ postId: null })])).toBe(false);
+    expect(allRowsCreated([sendable({ postId: "a" }), sendable({ postId: null, uncertain: true })])).toBe(false);
     expect(allRowsCreated([sendable({ postId: "a" }), sendable({ postId: "b" })])).toBe(true);
   });
 });
 
 describe("rowSendBlock", () => {
   it("lets a ready row through for either button", () => {
-    expect(rowSendBlock(sendable(), "schedule")).toBeNull();
-    expect(rowSendBlock(sendable(), "draft")).toBeNull();
+    expect(rowSendBlock(sendable(), "schedule", pressedAt())).toBeNull();
+    expect(rowSendBlock(sendable(), "draft", pressedAt())).toBeNull();
   });
 
   // POST /api/posts refuses a blank baseCaption ("baseCaption is required"), so
   // the page refuses it first, with a sentence the user can act on.
   it("refuses a row with an empty or blank caption", () => {
-    expect(rowSendBlock(sendable({ caption: "" }), "schedule")).toBe(BULK_EMPTY_CAPTION_MESSAGE);
-    expect(rowSendBlock(sendable({ caption: "   " }), "draft")).toBe(BULK_EMPTY_CAPTION_MESSAGE);
+    expect(rowSendBlock(sendable({ caption: "" }), "schedule", pressedAt())).toBe(BULK_EMPTY_CAPTION_MESSAGE);
+    expect(rowSendBlock(sendable({ caption: "   " }), "draft", pressedAt())).toBe(BULK_EMPTY_CAPTION_MESSAGE);
     expect(BULK_EMPTY_CAPTION_MESSAGE).toBe("Write a caption for this post, then press the button again.");
   });
 
   it("refuses a row whose file has not uploaded", () => {
-    expect(rowSendBlock(sendable({ uploaded: false }), "draft")).toBe(BULK_NOT_UPLOADED_MESSAGE);
+    expect(rowSendBlock(sendable({ uploaded: false }), "draft", pressedAt())).toBe(BULK_NOT_UPLOADED_MESSAGE);
   });
 
   it("refuses a row that no chosen platform takes", () => {
-    expect(rowSendBlock(sendable({ platforms: [] }), "draft")).toBe(BULK_NO_PLATFORMS_MESSAGE);
+    expect(rowSendBlock(sendable({ platforms: [] }), "draft", pressedAt())).toBe(BULK_NO_PLATFORMS_MESSAGE);
   });
 
   it("refuses to schedule a row without a date and time, but a draft does not need one", () => {
-    expect(rowSendBlock(sendable({ when: "" }), "schedule")).toBe(BULK_NO_TIME_MESSAGE);
-    expect(rowSendBlock(sendable({ when: "" }), "draft")).toBeNull();
+    expect(rowSendBlock(sendable({ when: "" }), "schedule", pressedAt())).toBe(BULK_NO_TIME_MESSAGE);
+    expect(rowSendBlock(sendable({ when: "not a time" }), "schedule", pressedAt())).toBe(BULK_NO_TIME_MESSAGE);
+    expect(rowSendBlock(sendable({ when: "" }), "draft", pressedAt())).toBeNull();
+  });
+
+  it("refuses to schedule a time less than a minute after the press, and lets a draft through", () => {
+    expect(BULK_PAST_TIME_MESSAGE).toBe("Pick a time in the future.");
+    expect(rowSendBlock(sendable({ when: "2026-11-10T11:00" }), "schedule", pressedAt())).toBe(BULK_PAST_TIME_MESSAGE);
+    expect(rowSendBlock(sendable({ when: "2026-11-10T12:00" }), "schedule", pressedAt())).toBe(BULK_PAST_TIME_MESSAGE);
+    expect(rowSendBlock(sendable({ when: "2026-11-10T12:01" }), "schedule", pressedAt())).toBeNull();
+    expect(rowSendBlock(sendable({ when: "2026-11-10T11:00" }), "draft", pressedAt())).toBeNull();
+  });
+
+  it("checks against the clock it is given, so a page left open past the time refuses it", () => {
+    const row = sendable({ when: "2026-11-11T18:00" });
+
+    expect(rowSendBlock(row, "schedule", pressedAt())).toBeNull();
+    expect(rowSendBlock(row, "schedule", new Date(2026, 10, 11, 18, 30))).toBe(BULK_PAST_TIME_MESSAGE);
   });
 });
 
-describe("sendResultFromResponse", () => {
-  it("keeps the created post's id", () => {
+describe("classifySendResponse", () => {
+  it("keeps the created post's id from a 201", () => {
     expect(
-      sendResultFromResponse({ ok: true, body: { postJob: { id: "job-9" }, message: "Post scheduled." }, mode: "schedule" }),
-    ).toEqual({ created: true, postId: "job-9", heldForApproval: false });
+      classifySendResponse({ status: 201, body: { postJob: { id: "job-9" }, message: "Post scheduled." } }, "schedule"),
+    ).toEqual({ outcome: "created", postId: "job-9", heldForApproval: false });
   });
 
   it("notes a post held for approval", () => {
     expect(
-      sendResultFromResponse({ ok: true, body: { postJob: { id: "job-9" }, awaitingApproval: true }, mode: "schedule" }),
-    ).toEqual({ created: true, postId: "job-9", heldForApproval: true });
+      classifySendResponse({ status: 200, body: { postJob: { id: "job-9" }, awaitingApproval: true } }, "schedule"),
+    ).toEqual({ outcome: "created", postId: "job-9", heldForApproval: true });
   });
 
-  it("counts a created post as created even when the response names no id, so it is never sent twice", () => {
-    expect(sendResultFromResponse({ ok: true, body: { postJob: null }, mode: "draft" })).toEqual({
-      created: true,
+  it("counts a readable success as created even when it names no id, so it is never sent twice", () => {
+    expect(classifySendResponse({ status: 200, body: { postJob: null } }, "draft")).toEqual({
+      outcome: "created",
       postId: "created",
       heldForApproval: false,
     });
   });
 
-  it("keeps the server's sentence when it refuses", () => {
+  // The route creates the post before it answers, and has no idempotency key.
+  it("is unknown when the request threw (no answer arrived)", () => {
+    expect(classifySendResponse({ threw: true }, "schedule")).toEqual({ outcome: "unknown" });
+  });
+
+  it.each([500, 502, 504])("is unknown on a %i", (status) => {
+    expect(classifySendResponse({ status, body: { error: "Internal error" } }, "schedule")).toEqual({
+      outcome: "unknown",
+    });
+  });
+
+  it("is unknown when the body cannot be read, even on a success status", () => {
+    expect(classifySendResponse({ status: 200, body: UNREADABLE_BODY }, "schedule")).toEqual({ outcome: "unknown" });
+    expect(classifySendResponse({ status: 500, body: UNREADABLE_BODY }, "draft")).toEqual({ outcome: "unknown" });
+  });
+
+  it("is a refusal with the server's sentence on a 400 or a 429", () => {
+    expect(classifySendResponse({ status: 400, body: { error: "baseCaption is required" } }, "draft")).toEqual({
+      outcome: "refused",
+      error: "baseCaption is required",
+    });
     expect(
-      sendResultFromResponse({
-        ok: false,
-        body: { error: "Your workspace has reached today's limit of 25 posts.", code: "DAILY_POST_LIMIT" },
-        mode: "schedule",
-      }),
-    ).toEqual({ created: false, error: "Your workspace has reached today's limit of 25 posts." });
-    expect(sendResultFromResponse({ ok: false, body: null, mode: "draft" })).toEqual({
-      created: false,
+      classifySendResponse(
+        { status: 429, body: { error: "Your workspace has reached today's limit of 25 posts.", code: "DAILY_POST_LIMIT" } },
+        "schedule",
+      ),
+    ).toEqual({ outcome: "refused", error: "Your workspace has reached today's limit of 25 posts." });
+  });
+
+  it("is still a refusal on a 4xx whose body cannot be read", () => {
+    expect(classifySendResponse({ status: 400, body: UNREADABLE_BODY }, "draft")).toEqual({
+      outcome: "refused",
       error: "Failed to create post.",
     });
+  });
+
+  it("names the sentence an unknown row shows", () => {
+    expect(BULK_MAYBE_CREATED_MESSAGE).toBe(
+      "This post may have been created. Check the Queue before sending it again.",
+    );
+  });
+});
+
+describe("refreshedFirstDay", () => {
+  it("moves the default first day on once the page has been open past midnight", () => {
+    expect(refreshedFirstDay({ firstDay: "2026-11-11", setByUser: false }, new Date(2026, 10, 11, 0, 5))).toBe(
+      "2026-11-12",
+    );
+  });
+
+  it("leaves it when it is still tomorrow, or when the user picked it", () => {
+    expect(refreshedFirstDay({ firstDay: "2026-11-11", setByUser: false }, new Date(2026, 10, 10, 23, 59))).toBeNull();
+    expect(refreshedFirstDay({ firstDay: "2026-11-11", setByUser: true }, new Date(2026, 10, 12, 9, 0))).toBeNull();
+  });
+});
+
+describe("minimum input values", () => {
+  it("gives today as the earliest first day and now plus a minute as the earliest row time", () => {
+    const now = new Date(2026, 10, 10, 23, 59, 30);
+
+    expect(minFirstDay(now)).toBe("2026-11-10");
+    expect(minRowTime(now)).toBe("2026-11-11T00:01");
+  });
+});
+
+describe("YouTube privacy", () => {
+  it("starts unlisted, as on Create", () => {
+    expect(BULK_YOUTUBE_PRIVACY_DEFAULT).toBe("unlisted");
+  });
+
+  it("is offered only when YouTube is chosen and at least one row is a video", () => {
+    expect(youtubePrivacyShown(["youtube", "x"], ["image/jpeg", "video/mp4"])).toBe(true);
+    expect(youtubePrivacyShown(["youtube"], ["image/jpeg"])).toBe(false);
+    expect(youtubePrivacyShown(["x"], ["video/mp4"])).toBe(false);
+  });
+});
+
+describe("notes under the buttons", () => {
+  it("says what the buttons do", () => {
+    expect(BULK_DRAFTS_NOTE).toBe("Drafts are saved without a time. Set each one's time in the Queue.");
+    expect(BULK_GOOGLE_BUTTON_NOTE).toBe(
+      "Google posts get your workspace's default button, if one is set in Settings.",
+    );
   });
 });
 

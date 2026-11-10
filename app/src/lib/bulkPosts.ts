@@ -2,7 +2,8 @@ import type { Platform } from "@prisma/client";
 
 import { composerSubmitOutcome } from "@/lib/composerSubmitOutcome";
 import { platformAcceptsMedia } from "@/lib/platformLimits";
-import { toDateTimeLocalValue } from "@/lib/scheduling";
+import { SCHEDULE_BUFFER_MS, toDateTimeLocalValue } from "@/lib/scheduling";
+import type { YouTubePostMetadata } from "@/server/platforms/types";
 
 /**
  * Pure rules for the Add-many page (/posts/bulk): how many files a batch takes,
@@ -23,6 +24,12 @@ export const BULK_NOT_UPLOADED_MESSAGE = "This file has not uploaded. Retry it o
 export const BULK_NO_PLATFORMS_MESSAGE =
   "None of the chosen platforms takes this kind of file. Choose another platform or remove it.";
 export const BULK_NO_TIME_MESSAGE = "Pick a date and time for this post.";
+export const BULK_PAST_TIME_MESSAGE = "Pick a time in the future.";
+export const BULK_MAYBE_CREATED_MESSAGE =
+  "This post may have been created. Check the Queue before sending it again.";
+export const BULK_DRAFTS_NOTE = "Drafts are saved without a time. Set each one's time in the Queue.";
+export const BULK_GOOGLE_BUTTON_NOTE =
+  "Google posts get your workspace's default button, if one is set in Settings.";
 
 /** How many of `picked` files fit in a batch that already has `current` rows. */
 export function filesThatFit(current: number, picked: number): { take: number; tooMany: boolean } {
@@ -49,7 +56,10 @@ export interface BulkScheduleControls {
  * `count` local date-times (`YYYY-MM-DDTHH:mm`, the datetime-local format),
  * one every `everyDays` days from `firstDay`, each at `timeOfDay`. Built from
  * calendar fields in the browser's zone, so a daylight-saving change keeps the
- * same wall-clock time. Empty when the controls don't make a schedule.
+ * same wall-clock time. On the day the clocks go forward, a time that does not
+ * exist that day (02:30 when 02:00 jumps to 03:00) becomes the next valid time
+ * (03:30): that is what `new Date(y, m, d, h, min)` does, and it is tested.
+ * Empty when the controls don't make a schedule.
  */
 export function spreadSchedule(input: BulkScheduleControls & { count: number }): string[] {
   const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(input.firstDay);
@@ -118,50 +128,110 @@ export interface BulkSendableRow {
   when: string;
   /** Set once POST /api/posts created this row's post; such a row is never sent again. */
   postId: string | null;
+  /** The last send got no clear answer, so its post may exist; not sent until the user says so. */
+  uncertain: boolean;
 }
 
 export type BulkFinishMode = "schedule" | "draft";
 
-/** Rows whose post doesn't exist yet: new rows and rows the server refused before. */
-export function rowsToSend<T extends { postId: string | null }>(rows: T[]): T[] {
-  return rows.filter((row) => row.postId === null);
+/**
+ * Rows to send on a press: no post yet, and no send whose answer was unclear
+ * (that post may exist; "Send again" clears the flag).
+ */
+export function rowsToSend<T extends { postId: string | null; uncertain: boolean }>(rows: T[]): T[] {
+  return rows.filter((row) => row.postId === null && !row.uncertain);
 }
 
 export function allRowsCreated(rows: readonly { postId: string | null }[]): boolean {
   return rows.length > 0 && rows.every((row) => row.postId !== null);
 }
 
-/** Why this row can't be sent yet, or null when it can. */
-export function rowSendBlock(row: BulkSendableRow, mode: BulkFinishMode): string | null {
+/**
+ * Why this row can't be sent yet, or null when it can. `now` is the clock at
+ * the press: a scheduled time must be SCHEDULE_BUFFER_MS ahead of it, the same
+ * rule POST /api/posts applies (validateScheduledFor).
+ */
+export function rowSendBlock(row: BulkSendableRow, mode: BulkFinishMode, now: Date): string | null {
   if (!row.uploaded) return BULK_NOT_UPLOADED_MESSAGE;
   if (!row.caption.trim()) return BULK_EMPTY_CAPTION_MESSAGE;
   if (row.platforms.length === 0) return BULK_NO_PLATFORMS_MESSAGE;
-  if (mode === "schedule" && !row.when) return BULK_NO_TIME_MESSAGE;
+  if (mode === "schedule") {
+    const at = row.when ? new Date(row.when).getTime() : Number.NaN;
+    if (Number.isNaN(at)) return BULK_NO_TIME_MESSAGE;
+    if (at < now.getTime() + SCHEDULE_BUFFER_MS) return BULK_PAST_TIME_MESSAGE;
+  }
   return null;
 }
 
+/** Stands for a response body that could not be read as JSON. */
+export const UNREADABLE_BODY: unique symbol = Symbol("unreadable body");
+
+export type BulkSendResponse = { threw: true } | { status: number; body: unknown };
+
 export type BulkSendResult =
-  | { created: true; postId: string; heldForApproval: boolean }
-  | { created: false; error: string };
+  | { outcome: "created"; postId: string; heldForApproval: boolean }
+  | { outcome: "refused"; error: string }
+  | { outcome: "unknown" };
 
 /**
- * A `POST /api/posts` response, read the same way as on Create
- * (composerSubmitOutcome). A post that exists keeps an id even when the body
- * names none, so pressing the button again never sends it twice.
+ * What one `POST /api/posts` did. The route creates the post before it
+ * answers and takes no idempotency key, so an answer that never came, a 5xx,
+ * or a body that can't be read may hide a post that exists: "unknown", never
+ * resent on its own. A 4xx is a clear refusal (nothing was made) and keeps the
+ * server's sentence, read as on Create (composerSubmitOutcome). A readable
+ * success keeps its id, or a marker when it names none.
  */
-export function sendResultFromResponse(input: { ok: boolean; body: unknown; mode: BulkFinishMode }): BulkSendResult {
-  const outcome = composerSubmitOutcome(input);
-  if (!outcome.resetForm) return { created: false, error: outcome.toast };
-  const body = (typeof input.body === "object" && input.body !== null ? input.body : {}) as {
+export function classifySendResponse(response: BulkSendResponse, mode: BulkFinishMode): BulkSendResult {
+  if ("threw" in response) return { outcome: "unknown" };
+  const { status } = response;
+  const readable = response.body !== UNREADABLE_BODY;
+  if (status >= 400 && status < 500) {
+    const outcome = composerSubmitOutcome({ ok: false, body: readable ? response.body : null, mode });
+    return { outcome: "refused", error: outcome.toast };
+  }
+  if (status < 200 || status >= 300 || !readable) return { outcome: "unknown" };
+  const outcome = composerSubmitOutcome({ ok: true, body: response.body, mode });
+  const body = (typeof response.body === "object" && response.body !== null ? response.body : {}) as {
     postJob?: { id?: unknown } | null;
-    postJobId?: unknown;
   };
-  const id = body.postJob?.id ?? body.postJobId;
+  const id = body.postJob?.id;
   return {
-    created: true,
+    outcome: "created",
     postId: typeof id === "string" && id ? id : "created",
     heldForApproval: outcome.kind === "success" && outcome.heldForApproval,
   };
+}
+
+/** Earliest first day (today), as a date input `min`. */
+export function minFirstDay(now: Date): string {
+  return toDateTimeLocalValue(now).slice(0, 10);
+}
+
+/** Earliest row time, as a datetime-local `min`: now plus the buffer, up to the next whole minute. */
+export function minRowTime(now: Date): string {
+  const earliest = new Date(now.getTime() + SCHEDULE_BUFFER_MS);
+  if (earliest.getSeconds() > 0 || earliest.getMilliseconds() > 0) {
+    earliest.setSeconds(60, 0);
+  }
+  return toDateTimeLocalValue(earliest);
+}
+
+/**
+ * The new default first day when the page has stayed open past midnight, or
+ * null when it should stay (still tomorrow, or the user picked it).
+ */
+export function refreshedFirstDay(state: { firstDay: string; setByUser: boolean }, now: Date): string | null {
+  if (state.setByUser) return null;
+  const tomorrow = tomorrowLocalDate(now);
+  return state.firstDay === tomorrow ? null : tomorrow;
+}
+
+/** The Create page's starting YouTube privacy. */
+export const BULK_YOUTUBE_PRIVACY_DEFAULT: YouTubePostMetadata["privacyStatus"] = "unlisted";
+
+/** One YouTube privacy choice is shown when YouTube is chosen and a row is a video. */
+export function youtubePrivacyShown(selected: readonly Platform[], mimeTypes: readonly string[]): boolean {
+  return selected.includes("youtube") && mimeTypes.some((type) => platformAcceptsMedia("youtube", type));
 }
 
 export type BulkUploadStatus = "queued" | "working" | "done" | "failed";
