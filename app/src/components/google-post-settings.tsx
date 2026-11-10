@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,7 +15,9 @@ import {
   GOOGLE_POST_TYPES,
   GOOGLE_TERMS_MAX,
   GOOGLE_TITLE_MAX,
+  changeGooglePostType,
   parseGooglePostMetadata,
+  type GoogleButton,
   type GoogleButtonType,
   type GooglePostType,
 } from "@/lib/googlePostOptions";
@@ -39,14 +43,13 @@ export function GooglePostSettings({ metadata, onChange }: GooglePostSettingsPro
   const event: EventFields = metadata.event ?? EMPTY_DATES;
   const offer: OfferFields = metadata.offer ?? EMPTY_DATES;
   const button = metadata.button;
+  // The button an offer dropped, restored when the user switches back (changeGooglePostType).
+  const [savedButton, setSavedButton] = useState<GoogleButton | undefined>(metadata.button);
 
   const setType = (postType: GooglePostType) => {
-    if (postType === "update") onChange({ postType, ...(metadata.button ? { button: metadata.button } : {}) });
-    if (postType === "event") {
-      onChange({ postType, event, ...(metadata.button ? { button: metadata.button } : {}) });
-    }
-    // Google ignores a button on an offer, so choosing an offer drops it.
-    if (postType === "offer") onChange({ postType, offer });
+    const next = changeGooglePostType(metadata, postType, savedButton);
+    setSavedButton(next.savedButton);
+    onChange(next.metadata);
   };
   const setButtonType = (value: string) => {
     if (!value) {

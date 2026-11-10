@@ -2017,6 +2017,20 @@ describe("POST /api/posts - the media list (several photos, 07a)", () => {
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
 
+  it("a multi-photo post keeps its Google options, on the job and in the publish event", async () => {
+    const googleMetadata = { postType: "update", button: { type: "BOOK", url: "https://e.com/book" } };
+
+    const response = await POST(jsonRequest({ media: [photo(1), photo(2)], baseCaption: "hi", googleMetadata }));
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ extraMedia: [stored(2)], googleMetadata }),
+    );
+    expect(inngestSendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ googleMetadata }) }),
+    );
+  });
+
   it("a multi-photo draft is saved with its photos", async () => {
     const response = await POST(jsonRequest({ media: [photo(1), photo(2)], baseCaption: "hi", draft: true }));
 

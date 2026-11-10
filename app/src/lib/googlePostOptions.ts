@@ -165,13 +165,15 @@ export function parseGooglePostMetadata(raw: unknown): GoogleOptionsResult<Googl
     if (!startTime.ok) return startTime;
     const endTime = optionalTime(raw.event.endTime, "event end time");
     if (!endTime.ok) return endTime;
+    // On one day the end must come after the start. A missing time is sent as
+    // the day's edge (00:00 / 23:59, googleBusinessProfileClient.ts), so it is
+    // compared as that; with no times at all the event lasts the whole day.
     if (
       base.value.startDate === base.value.endDate &&
-      startTime.value &&
-      endTime.value &&
-      endTime.value < startTime.value
+      (startTime.value || endTime.value) &&
+      (endTime.value ?? "23:59") <= (startTime.value ?? "00:00")
     ) {
-      return fail("The event end time can't be before its start time on the same day.");
+      return fail("On the same day, the event end time must be after its start time.");
     }
     return {
       ok: true,
@@ -208,6 +210,35 @@ export function parseGooglePostMetadata(raw: unknown): GoogleOptionsResult<Googl
       },
     },
   };
+}
+
+const EMPTY_TITLE_AND_DATES = { title: "", startDate: "", endDate: "" };
+
+/**
+ * The composer's post-type switch. An offer can't carry a button, so choosing
+ * Offer drops it, and remembers it in `savedButton`: switching back to Update
+ * or Event restores the button the user had before (the workspace default or
+ * their own pick, or none), so trying Offer never silently loses it. Between
+ * Update and Event the current button stays.
+ */
+export function changeGooglePostType(
+  current: GoogleBusinessPostMetadata,
+  postType: GooglePostType,
+  savedButton: GoogleButton | undefined,
+): { metadata: GoogleBusinessPostMetadata; savedButton: GoogleButton | undefined } {
+  if (postType === "offer") {
+    return {
+      metadata: { postType, offer: current.offer ?? EMPTY_TITLE_AND_DATES },
+      savedButton: current.postType === "offer" ? savedButton : current.button,
+    };
+  }
+  const button = current.postType === "offer" ? savedButton : current.button;
+  const withButton = button ? { button } : {};
+  const metadata: GoogleBusinessPostMetadata =
+    postType === "event"
+      ? { postType, event: current.event ?? EMPTY_TITLE_AND_DATES, ...withButton }
+      : { postType, ...withButton };
+  return { metadata, savedButton };
 }
 
 export interface WorkspaceGoogleButton {

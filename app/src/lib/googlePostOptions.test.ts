@@ -4,6 +4,7 @@ import {
   GOOGLE_BUTTON_TYPES,
   defaultGoogleButtonUrl,
   googleButtonFromWorkspace,
+  changeGooglePostType,
   googleQueueLabel,
   parseGoogleButton,
   parseGooglePostMetadata,
@@ -108,7 +109,36 @@ describe("parseGooglePostMetadata", () => {
     );
     expect(
       error({ postType: "event", event: { ...event, startTime: "18:00", endTime: "17:00" } }),
-    ).toMatch(/event end.*before.*start/i);
+    ).toMatch(/event end time must be after its start time/i);
+  });
+
+  it("on one day, refuses an end time equal to the start time", () => {
+    expect(
+      error({ postType: "event", event: { ...event, startTime: "10:00", endTime: "10:00" } }),
+    ).toMatch(/event end time must be after its start time/i);
+    // A missing time is the whole day's edge: a start at 23:59 alone ends at 23:59.
+    expect(error({ postType: "event", event: { ...event, startTime: "23:59" } })).toMatch(
+      /event end time must be after its start time/i,
+    );
+    expect(error({ postType: "event", event: { ...event, endTime: "00:00" } })).toMatch(
+      /event end time must be after its start time/i,
+    );
+  });
+
+  it("keeps valid a one-day event with no times (it lasts all day) and one that ends later", () => {
+    expect(ok({ postType: "event", event })).toEqual({ postType: "event", event });
+    expect(ok({ postType: "event", event: { ...event, startTime: "10:00", endTime: "10:01" } }).event).toMatchObject({
+      startTime: "10:00",
+      endTime: "10:01",
+    });
+    // Same times on different days are fine.
+    expect(
+      ok({ postType: "event", event: { ...event, endDate: "2026-11-21", startTime: "10:00", endTime: "10:00" } }),
+    ).toMatchObject({ postType: "event" });
+    // An offer has no times and runs whole days, so a one-day offer is valid.
+    expect(ok({ postType: "offer", offer: { ...offer, endDate: offer.startDate } })).toMatchObject({
+      postType: "offer",
+    });
   });
 
   it("refuses a time that is not HH:MM", () => {
@@ -250,5 +280,52 @@ describe("defaultGoogleButtonUrl", () => {
     expect(defaultGoogleButtonUrl("https://example.com/x")).toBe("https://example.com/x");
     expect(defaultGoogleButtonUrl(" ")).toBe("");
     expect(defaultGoogleButtonUrl(null)).toBe("");
+  });
+});
+
+// Review round: trying Offer and coming back must not silently lose the button.
+describe("changeGooglePostType", () => {
+  const book = { type: "BOOK" as const, url: "https://e.com/book" };
+  const EMPTY = { title: "", startDate: "", endDate: "" };
+
+  it("choosing Offer drops the button and remembers it", () => {
+    expect(changeGooglePostType({ postType: "update", button: book }, "offer", undefined)).toEqual({
+      metadata: { postType: "offer", offer: EMPTY },
+      savedButton: book,
+    });
+  });
+
+  it.each(["update", "event"] as const)("switching back from Offer to %s restores the remembered button", (type) => {
+    const toOffer = changeGooglePostType({ postType: "update", button: book }, "offer", undefined);
+    const back = changeGooglePostType(toOffer.metadata, type, toOffer.savedButton);
+    expect(back.metadata.button).toEqual(book);
+    expect(back.metadata.postType).toBe(type);
+  });
+
+  it("restores No button when that was the choice before Offer", () => {
+    const toOffer = changeGooglePostType({ postType: "update" }, "offer", book);
+    expect(toOffer.savedButton).toBeUndefined();
+    expect(changeGooglePostType(toOffer.metadata, "update", toOffer.savedButton).metadata).toEqual({
+      postType: "update",
+    });
+  });
+
+  it("keeps the current button between Update and Event", () => {
+    const call = { type: "CALL" as const };
+    expect(changeGooglePostType({ postType: "update", button: call }, "event", book).metadata).toEqual({
+      postType: "event",
+      event: EMPTY,
+      button: call,
+    });
+  });
+
+  it("keeps the event's and the offer's own fields when re-choosing the same type", () => {
+    const evt = { title: "Paddle", startDate: "2026-11-20", endDate: "2026-11-20" };
+    expect(changeGooglePostType({ postType: "event", event: evt }, "event", undefined).metadata.event).toEqual(evt);
+    const off = { title: "Deal", startDate: "2026-11-20", endDate: "2026-11-21" };
+    expect(changeGooglePostType({ postType: "offer", offer: off }, "offer", book)).toEqual({
+      metadata: { postType: "offer", offer: off },
+      savedButton: book,
+    });
   });
 });

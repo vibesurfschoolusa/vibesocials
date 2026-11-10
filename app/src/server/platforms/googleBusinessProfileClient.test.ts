@@ -806,6 +806,16 @@ describe("googleBusinessProfileClient.publishVideo — post options and the work
     });
   });
 
+  it("when reading the workspace default fails, sends nothing to Google and throws for the publish code", async () => {
+    const dbError = new Error("Timed out fetching a new connection from the pool");
+    workspaceFindUniqueMock.mockRejectedValueOnce(dbError);
+    const fetchMock = stubOk();
+
+    await expect(googleBusinessProfileClient.publishVideo(makeContext())).rejects.toBe(dbError);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("does not add the default when the user chose No button", async () => {
     workspaceFindUniqueMock.mockResolvedValueOnce({ googleButtonType: "BOOK", googleButtonUrl: "https://e.com/book" });
     const fetchMock = stubOk();

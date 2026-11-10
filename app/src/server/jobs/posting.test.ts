@@ -1310,6 +1310,25 @@ describe("createPostJobOnly - several photos (07a)", () => {
     expect(result).toEqual({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["result-x"] });
   });
 
+  it("a post with several photos snapshots its Google options on the job (2026-11-10)", async () => {
+    const googleMetadata = { postType: "update" as const, button: { type: "CALL" as const } };
+
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: photo(1),
+      extraMedia: [photo(2), photo(3)],
+      baseCaption: "hello",
+      intent: "scheduled",
+      scheduledFor: new Date("2030-01-01T00:00:00Z"),
+      googleMetadata,
+    });
+
+    expect(postJobCreateMock.mock.calls[0][0].data.publishMetadata).toEqual({
+      googleBusinessProfile: googleMetadata,
+    });
+  });
+
   it("an empty extraMedia list is a single-photo post", async () => {
     await createPostJobOnly({
       userId: "user-1",
