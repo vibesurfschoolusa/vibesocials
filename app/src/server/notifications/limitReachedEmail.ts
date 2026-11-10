@@ -1,5 +1,5 @@
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
-import { formatStorageGb, utcDateLabel, type UsageLimitKind } from "@/lib/usageLimits";
+import { formatStorageGb, utcDateLabel, utcDayMonthLabel, type UsageLimitKind } from "@/lib/usageLimits";
 
 /**
  * Sent to every OWNER of a workspace the first time it hits one of its usage
@@ -17,15 +17,19 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function limitLines(kind: UsageLimitKind, limit: number, resetsAt: Date | null): [string, string, string] {
+/** The sentence after the workspace's name, then the body's other lines. */
+function limitLines(
+  kind: UsageLimitKind,
+  limit: number,
+  resetsAt: Date | null,
+  day: Date | null,
+): [string, ...string[]] {
   switch (kind) {
     case "postsPerDay":
+      // The full day can be a future one (a post scheduled into it), which does
+      // not "open again": name the day and say only what is true.
       return [
-        `has reached its limit of ${limit} posts a day.`,
-        "Drafts and posts scheduled for other days still work.",
-        resetsAt
-          ? `New posts for that day are possible again from 00:00 UTC on ${utcDateLabel(resetsAt)}.`
-          : "New posts are possible again the next UTC day.",
+        `reached its limit of ${limit} posts for ${day ? utcDayMonthLabel(day) : "that day"}. Posts on other days are not affected.`,
       ];
     case "xPostsPerMonth":
       return [
@@ -53,18 +57,19 @@ export function buildLimitReachedEmail(params: {
   kind: UsageLimitKind;
   /** The limit's number: posts or uploads, or bytes for storage. */
   limit: number;
-  /** When the window ends; null for storage, which has none. */
+  /** When the limit starts again (X, YouTube); null when the email names no such time. */
   resetsAt: Date | null;
+  /** Posts per day only: the UTC day that is full. */
+  day?: Date | null;
 }): { subject: string; html: string } {
   const workspace = escapeHtml(params.workspaceName);
-  const [reached, stillWorks, startsAgain] = limitLines(params.kind, params.limit, params.resetsAt);
+  const [reached, ...rest] = limitLines(params.kind, params.limit, params.resetsAt, params.day ?? null);
 
   return {
     subject: `${params.workspaceName} reached a Vibe Socials limit`,
     html: [
       `<p><strong>${workspace}</strong> ${reached}</p>`,
-      `<p>${stillWorks}</p>`,
-      `<p>${startsAgain}</p>`,
+      ...rest.map((line) => `<p>${line}</p>`),
       `<p>If you need a higher limit, write to ${SUPPORT_EMAIL} and we will raise it.</p>`,
       `<p>— Vibe Socials</p>`,
     ].join("\n"),

@@ -4094,13 +4094,26 @@ describe("usage limits - the workspace's X and YouTube limits in the platform st
 
   type RunOut = { status: string; results: Array<{ platform: Platform; status: string; error?: string }> };
 
-  function publishRun(platforms: Platform[], step = fakeStep()) {
+  function publishRun(
+    platforms: Platform[],
+    media: Record<string, unknown> = { id: "media-1", baseCaption: "c", deletedAt: null },
+  ) {
+    const step = fakeStep();
     db.postJobFindUnique.mockResolvedValue({ id: "job-1", workspaceId: WORKSPACE.id });
-    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null });
+    db.mediaItemFindUnique.mockResolvedValue(media);
     db.connectionFindMany.mockResolvedValue(platforms.map((p) => ({ id: `conn-${p}`, platform: p })));
     stubResults(platforms);
     return handlerOf(publishToAllPlatforms)({ event: publishEvent, step }) as Promise<RunOut>;
   }
+
+  /** A video post (only a video can carry a saved X upload). */
+  const VIDEO = {
+    id: "media-1",
+    baseCaption: "c",
+    deletedAt: null,
+    mimeType: "video/mp4",
+    sizeBytes: 80 * 1024 * 1024,
+  };
 
   /** The `data` of each result write, by result id. */
   function writesFor(resultId: string): Array<Record<string, unknown>> {
@@ -4124,7 +4137,8 @@ describe("usage limits - the workspace's X and YouTube limits in the platform st
   });
 
   it("at the X limit the X result fails with X_MONTHLY_LIMIT, the X client is never called, and another platform still publishes", async () => {
-    checkXLimitMock.mockResolvedValue(X_REFUSAL);
+    const notifyOwners = vi.fn().mockResolvedValue(undefined);
+    checkXLimitMock.mockResolvedValue({ ...X_REFUSAL, notifyOwners });
 
     const out = await publishRun(["x", "instagram"]);
 
@@ -4142,10 +4156,15 @@ describe("usage limits - the workspace's X and YouTube limits in the platform st
     // The X check is X's only: it never runs for another platform.
     expect(checkXLimitMock).toHaveBeenCalledTimes(1);
     expect(releaseSpy).not.toHaveBeenCalled();
+    // The owners are told only after the result is recorded.
+    expect(notifyOwners).toHaveBeenCalledTimes(1);
+    const xFinalize = db.resultUpdate.mock.calls.findIndex((c) => (c[0] as { where: { id: string } }).where.id === "result-x");
+    expect(db.resultUpdate.mock.invocationCallOrder[xFinalize]).toBeLessThan(notifyOwners.mock.invocationCallOrder[0]);
   });
 
   it("at the YouTube limit the YouTube result fails with YOUTUBE_WORKSPACE_DAILY_LIMIT, spends no app-wide slot, and another platform still publishes", async () => {
-    checkYoutubeLimitMock.mockResolvedValue(YOUTUBE_REFUSAL);
+    const notifyOwners = vi.fn().mockResolvedValue(undefined);
+    checkYoutubeLimitMock.mockResolvedValue({ ...YOUTUBE_REFUSAL, notifyOwners });
 
     const out = await publishRun(["x", "youtube"]);
 
@@ -4160,6 +4179,35 @@ describe("usage limits - the workspace's X and YouTube limits in the platform st
     ]);
     // Not a deferral: nothing waits for a reset.
     expect(releaseSpy).not.toHaveBeenCalled();
+    const ytFinalize = db.resultUpdate.mock.calls.findIndex(
+      (c) => (c[0] as { where: { id: string } }).where.id === "result-youtube",
+    );
+    expect(db.resultUpdate.mock.invocationCallOrder[ytFinalize]).toBeLessThan(notifyOwners.mock.invocationCallOrder[0]);
+  });
+
+  it("an X upload that has already begun (saved chunked state of this run) is never refused: the continuation proceeds", async () => {
+    checkXLimitMock.mockResolvedValue({ ...X_REFUSAL, notifyOwners: vi.fn() });
+    const load = vi.fn(async (kind: string) =>
+      kind === "x_chunked" ? { data: { mediaId: "m-1", nextSegment: 3 } } : null,
+    );
+    uploadStateMocks.createStore.mockImplementation(() => ({ load, save: vi.fn(), clear: vi.fn() }));
+
+    const out = await publishRun(["x"], VIDEO);
+
+    expect(load).toHaveBeenCalledWith("x_chunked");
+    expect(checkXLimitMock).not.toHaveBeenCalled();
+    expect(publishCtxs.map((c) => c.socialConnection.platform)).toEqual(["x"]);
+    expect(out.results).toEqual([{ platform: "x", status: "success" }]);
+  });
+
+  it("an X video step with no saved upload is checked", async () => {
+    const load = vi.fn(async () => null);
+    uploadStateMocks.createStore.mockImplementation(() => ({ load, save: vi.fn(), clear: vi.fn() }));
+
+    await publishRun(["x"], VIDEO);
+
+    expect(load).toHaveBeenCalledWith("x_chunked");
+    expect(checkXLimitMock).toHaveBeenCalledTimes(1);
   });
 
   it("the YouTube check runs only where a slot would be spent: not for a saved upload session of this run", async () => {

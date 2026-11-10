@@ -99,6 +99,7 @@ import type {
   YouTubePostMetadata,
 } from "@/server/platforms/types";
 import { checkXMonthlyLimit, checkYoutubeDailyLimit } from "@/server/usage/workspaceUsage";
+import { X_UPLOAD_STATE_KIND } from "@/server/platforms/xClient";
 import { backfillGbpLocationTitles } from "@/server/connections/gbpLocationTitle";
 import { refreshLinkedInOrganizationProfiles } from "@/server/connections/linkedinData";
 import { purgeStaleYouTubeMetrics } from "@/server/connections/youtubeData";
@@ -529,11 +530,25 @@ async function publishToPlatform({
     // Usage limits (2026-11-10): X posts are paid per post, so each workspace has
     // a monthly budget. Checked after the claim and before the X client, inside
     // this step (a repeat only re-reads a count; the owners' email is once per
-    // month). Only X's result fails; the post's other platforms carry on.
-    if (connection.platform === "x") {
+    // month). Only X's result fails; the post's other platforms carry on. An
+    // upload this run already began (saved chunked state, xClient.ts) is never
+    // refused: its continuation steps finish the post the first step admitted.
+    // Only a video can have one (the client saves state for videos alone, by the
+    // same mimeType test), so a photo costs no extra read.
+    const xUploadBegun =
+      connection.platform === "x" &&
+      mediaItem.mimeType?.startsWith("video/") === true &&
+      (await uploadState.load(X_UPLOAD_STATE_KIND)) !== null;
+    if (connection.platform === "x" && !xUploadBegun) {
       const refusal = await checkXMonthlyLimit(connection.workspaceId);
       if (refusal) {
-        await finalizeClaimedResult(resultRecordId, runId, { status: "failed", ...refusal });
+        await finalizeClaimedResult(resultRecordId, runId, {
+          status: "failed",
+          errorCode: refusal.errorCode,
+          errorMessage: refusal.errorMessage,
+        });
+        // After the result is recorded; bounded and never throws.
+        await refusal.notifyOwners();
         return { platform: connectionRef.platform, status: "failed", error: refusal.errorMessage };
       }
     }
@@ -587,7 +602,13 @@ async function publishToPlatform({
         // plain failure, not a deferral: retrying waits for the user.
         const refusal = await checkYoutubeDailyLimit(connection.workspaceId);
         if (refusal) {
-          await finalizeClaimedResult(resultRecordId, runId, { status: "failed", ...refusal });
+          await finalizeClaimedResult(resultRecordId, runId, {
+            status: "failed",
+            errorCode: refusal.errorCode,
+            errorMessage: refusal.errorMessage,
+          });
+          // After the result is recorded; bounded and never throws.
+          await refusal.notifyOwners();
           return { platform: connectionRef.platform, status: "failed", error: refusal.errorMessage };
         }
         const slot = await consumeYouTubeUploadSlot();

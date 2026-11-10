@@ -31,10 +31,10 @@ export const DEFAULT_WORKSPACE_LIMITS: WorkspaceLimits = {
   postsPerDay: 20,
   xPostsPerMonth: 30,
   youtubeUploadsPerDay: 10,
-  storageBytes: 2048 * MB,
+  storageBytes: 5120 * MB,
 };
 
-const DEFAULT_STORAGE_MB = 2048;
+const DEFAULT_STORAGE_MB = 5120;
 
 /** A whole non-negative number from the environment, parsed like youtubeDailyUploadLimit. */
 function envLimit(env: Record<string, string | undefined>, name: string): number | null {
@@ -127,12 +127,17 @@ function utcMonthName(at: Date): string {
   return MONTH_NAMES[at.getUTCMonth()];
 }
 
+/** "12 November" for the UTC date of `at`. */
+export function utcDayMonthLabel(at: Date): string {
+  return `${at.getUTCDate()} ${utcMonthName(at)}`;
+}
+
 /** "11 November 2026" for the UTC date of `at`. */
 export function utcDateLabel(at: Date): string {
   return `${at.getUTCDate()} ${utcMonthName(at)} ${at.getUTCFullYear()}`;
 }
 
-/** Bytes as GB with one decimal: "2.0 GB". */
+/** Bytes as GB with one decimal: "5.0 GB". */
 export function formatStorageGb(bytes: number): string {
   return `${(bytes / GB).toFixed(1)} GB`;
 }
@@ -163,6 +168,9 @@ export function youtubeWorkspaceDailyLimitMessage(limit: number): string {
 export function storageFullMessage(limitBytes: number): string {
   return `This workspace's media storage is full (${formatStorageGb(limitBytes)}). Delete media you no longer need on the Media page, then upload again.`;
 }
+
+/** Settings, when the usage could not be read. */
+export const USAGE_UNAVAILABLE_MESSAGE = "Usage is not available right now.";
 
 /** The "when it starts again" line under each limit in Settings. `resetsAt` is null for storage. */
 export function usageResetText(kind: UsageLimitKind, resetsAt: Date | null): string {

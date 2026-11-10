@@ -1,5 +1,10 @@
 import { Card } from "@/components/ui/card";
-import { formatStorageGb, usageResetText, type UsageLimitKind } from "@/lib/usageLimits";
+import {
+  formatStorageGb,
+  USAGE_UNAVAILABLE_MESSAGE,
+  usageResetText,
+  type UsageLimitKind,
+} from "@/lib/usageLimits";
 import type { UsageMeter, WorkspaceUsage } from "@/server/usage/workspaceUsage";
 
 interface UsageRow {
@@ -14,8 +19,17 @@ const plain = (value: number) => String(value);
 /**
  * Settings → Usage (usage limits, 2026-11-10). Rendered on the server from the
  * same counts the limits are enforced with; every member sees it, read-only.
+ * `usage` is null when it could not be read: one line, and Settings still renders.
  */
-export function UsageSection({ usage }: { usage: WorkspaceUsage }) {
+export function UsageSection({ usage }: { usage: WorkspaceUsage | null }) {
+  if (!usage) {
+    return (
+      <Card className="p-6">
+        <p className="text-sm text-muted-foreground">{USAGE_UNAVAILABLE_MESSAGE}</p>
+      </Card>
+    );
+  }
+
   const rows: UsageRow[] = [
     { kind: "postsPerDay", label: "Posts today (UTC)", meter: usage.postsToday, format: plain },
     { kind: "xPostsPerMonth", label: "X posts this month", meter: usage.xPostsThisMonth, format: plain },

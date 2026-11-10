@@ -19,6 +19,17 @@ export async function GET(): Promise<NextResponse> {
   if (!context) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  // Each call sums the workspace's storage, so it is throttled. Over the limit it
+  // answers "not full": the caller then shows the upload's own error.
+  const rateLimit = await checkRateLimit({
+    userId: context.user.id,
+    route: "upload/status",
+    limit: 60,
+    windowMs: 5 * 60 * 1000,
+  });
+  if (!rateLimit.allowed) {
+    return NextResponse.json({ storageFull: false });
+  }
   const refusal = await checkStorageLimit(context.workspace.id);
   return NextResponse.json(refusal ? { storageFull: true, ...refusal } : { storageFull: false });
 }

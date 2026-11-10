@@ -23,7 +23,7 @@ describe("DEFAULT_WORKSPACE_LIMITS", () => {
       postsPerDay: 20,
       xPostsPerMonth: 30,
       youtubeUploadsPerDay: 10,
-      storageBytes: 2048 * MB,
+      storageBytes: 5120 * MB,
     });
   });
 });
@@ -191,8 +191,8 @@ describe("sentences", () => {
   });
 
   it("storage full, in GB with one decimal", () => {
-    expect(storageFullMessage(2048 * MB)).toBe(
-      "This workspace's media storage is full (2.0 GB). Delete media you no longer need on the Media page, then upload again.",
+    expect(storageFullMessage(5120 * MB)).toBe(
+      "This workspace's media storage is full (5.0 GB). Delete media you no longer need on the Media page, then upload again.",
     );
     expect(storageFullMessage(1536 * MB)).toBe(
       "This workspace's media storage is full (1.5 GB). Delete media you no longer need on the Media page, then upload again.",

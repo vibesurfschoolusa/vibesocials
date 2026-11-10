@@ -7,7 +7,7 @@ import { SettingsForm } from "@/components/settings-form";
 import { ConnectionsSection } from "@/components/connections-section";
 import { TeamSection } from "@/components/team-section";
 import { UsageSection } from "@/components/usage-section";
-import { getWorkspaceUsage } from "@/server/usage/workspaceUsage";
+import { getWorkspaceUsageOrNull } from "@/server/usage/workspaceUsage";
 import { Alert } from "@/components/ui/alert";
 import { describeOAuthResult } from "@/lib/oauthResult";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
@@ -67,7 +67,8 @@ export default async function SettingsPage({
   const connections: ConnectionSummary[] = rows.map(toConnectionSummary);
 
   // Usage limits (2026-11-10): the same counts the limits are enforced with.
-  const usage = await getWorkspaceUsage(context.workspace.id, new Date());
+  // Null when they cannot be read: the section says so and the page still renders.
+  const usage = await getWorkspaceUsageOrNull(context.workspace.id, new Date());
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8 md:px-6 lg:px-8">

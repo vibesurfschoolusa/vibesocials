@@ -4,7 +4,7 @@ const db = vi.hoisted(() => ({
   workspaceFindUnique: vi.fn(),
   postJobCount: vi.fn(),
   resultCount: vi.fn(),
-  mediaAggregate: vi.fn(),
+  queryRaw: vi.fn(),
   memberFindMany: vi.fn(),
 }));
 const { consumeFixedWindowMock, sendEmailMock } = vi.hoisted(() => ({
@@ -17,8 +17,8 @@ vi.mock("@/lib/db", () => ({
     workspace: { findUnique: db.workspaceFindUnique },
     postJob: { count: db.postJobCount },
     postJobResult: { count: db.resultCount },
-    mediaItem: { aggregate: db.mediaAggregate },
     workspaceMember: { findMany: db.memberFindMany },
+    $queryRaw: db.queryRaw,
   },
 }));
 vi.mock("@/lib/rateLimit", () => ({ consumeFixedWindow: consumeFixedWindowMock }));
@@ -26,6 +26,7 @@ vi.mock("@/server/notifications/email", () => ({ sendEmail: sendEmailMock }));
 
 import {
   checkDailyPostLimit,
+  getWorkspaceUsageOrNull,
   checkStorageLimit,
   checkXMonthlyLimit,
   checkYoutubeDailyLimit,
@@ -58,7 +59,7 @@ beforeEach(() => {
   db.workspaceFindUnique.mockResolvedValue(workspaceRow());
   db.postJobCount.mockResolvedValue(0);
   db.resultCount.mockResolvedValue(0);
-  db.mediaAggregate.mockResolvedValue({ _sum: { sizeBytes: null } });
+  db.queryRaw.mockResolvedValue([{ total: BigInt(0) }]);
   db.memberFindMany.mockResolvedValue([
     { user: { id: "owner-1", email: "one@example.com" } },
     { user: { id: "owner-2", email: "two@example.com" } },
@@ -84,7 +85,7 @@ describe("getWorkspaceLimits", () => {
       postsPerDay: 40,
       xPostsPerMonth: 5,
       youtubeUploadsPerDay: 10,
-      storageBytes: 2048 * MB,
+      storageBytes: 5120 * MB,
     });
     expect(db.workspaceFindUnique).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: "ws-1" } }),
@@ -211,6 +212,57 @@ describe("the limit-reached email", () => {
     expect(refusal?.code).toBe("WORKSPACE_DAILY_POST_LIMIT");
   });
 
+  it("names a future full day in the email and says other days are not affected", async () => {
+    db.postJobCount.mockResolvedValue(20);
+
+    await checkDailyPostLimit({ workspaceId: "ws-1", day: new Date("2026-11-12T18:00:00Z"), mode: "schedule" });
+
+    expect(consumeFixedWindowMock).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "usage-limit-email:ws-1:postsPerDay:2026-11-12" }),
+    );
+    const html = (sendEmailMock.mock.calls[0][0] as { html: string }).html;
+    expect(html).toContain(
+      "<strong>Surf Co</strong> reached its limit of 20 posts for 12 November. Posts on other days are not affected.",
+    );
+    expect(html).not.toContain("possible again");
+  });
+
+  it("gives up waiting after 5 seconds: the caller gets its refusal, and the delay is logged", async () => {
+    vi.useFakeTimers();
+    try {
+      db.postJobCount.mockResolvedValue(20);
+      sendEmailMock.mockReturnValue(new Promise(() => {}));
+
+      let settled = false;
+      const pending = checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" }).then((r) => {
+        settled = true;
+        return r;
+      });
+      await vi.advanceTimersByTimeAsync(4_900);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(200);
+      await expect(pending).resolves.toMatchObject({ code: "WORKSPACE_DAILY_POST_LIMIT" });
+      expect(console.error).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an owner lookup that hangs is cut off after 5 seconds too", async () => {
+    vi.useFakeTimers();
+    try {
+      db.resultCount.mockResolvedValue(30);
+      db.memberFindMany.mockReturnValue(new Promise(() => {}));
+
+      const refusal = await checkXMonthlyLimit("ws-1", NOW);
+      const notified = refusal!.notifyOwners();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(notified).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a failure to find the owners does not fail the caller", async () => {
     db.postJobCount.mockResolvedValue(20);
     db.memberFindMany.mockRejectedValue(new Error("db down"));
@@ -219,11 +271,15 @@ describe("the limit-reached email", () => {
     expect(refusal?.code).toBe("WORKSPACE_DAILY_POST_LIMIT");
   });
 
-  it("uses the UTC month as the X window", async () => {
+  it("X: the check sends nothing itself; notifyOwners does, with the UTC month as the window", async () => {
     db.resultCount.mockResolvedValue(30);
 
-    await checkXMonthlyLimit("ws-1", NOW);
+    const refusal = await checkXMonthlyLimit("ws-1", NOW);
+    expect(consumeFixedWindowMock).not.toHaveBeenCalled();
+    expect(sendEmailMock).not.toHaveBeenCalled();
 
+    await refusal!.notifyOwners();
+    expect(sendEmailMock).toHaveBeenCalledTimes(2);
     expect(consumeFixedWindowMock).toHaveBeenCalledWith({
       key: "usage-limit-email:ws-1:xPostsPerMonth:2026-11",
       limit: 1,
@@ -231,11 +287,13 @@ describe("the limit-reached email", () => {
     });
   });
 
-  it("uses the Pacific day as the YouTube window", async () => {
+  it("YouTube: the check sends nothing itself; notifyOwners does, with the Pacific day as the window", async () => {
     db.resultCount.mockResolvedValue(10);
 
-    await checkYoutubeDailyLimit("ws-1", NOW);
+    const refusal = await checkYoutubeDailyLimit("ws-1", NOW);
+    expect(consumeFixedWindowMock).not.toHaveBeenCalled();
 
+    await refusal!.notifyOwners();
     expect(consumeFixedWindowMock).toHaveBeenCalledWith({
       key: "usage-limit-email:ws-1:youtubeUploadsPerDay:2026-11-10",
       limit: 1,
@@ -244,7 +302,7 @@ describe("the limit-reached email", () => {
   });
 
   it("uses the UTC day as the storage window", async () => {
-    db.mediaAggregate.mockResolvedValue({ _sum: { sizeBytes: 2048 * MB } });
+    db.queryRaw.mockResolvedValue([{ total: BigInt(5120 * MB) }]);
 
     await checkStorageLimit("ws-1", NOW);
 
@@ -278,6 +336,7 @@ describe("checkXMonthlyLimit", () => {
       errorCode: "X_MONTHLY_LIMIT",
       errorMessage:
         "This workspace has used its 30 X posts for November. X posts start again on 1 December.",
+      notifyOwners: expect.any(Function),
     });
   });
 
@@ -312,33 +371,47 @@ describe("checkYoutubeDailyLimit", () => {
       errorCode: "YOUTUBE_WORKSPACE_DAILY_LIMIT",
       errorMessage:
         "This workspace has reached its limit of 10 YouTube uploads for today. Retry this upload tomorrow.",
+      notifyOwners: expect.any(Function),
     });
   });
 });
 
 describe("checkStorageLimit", () => {
-  it("sums the sizes of the workspace's media that is not deleted", async () => {
-    db.mediaAggregate.mockResolvedValue({ _sum: { sizeBytes: 100 } });
+  it("sums the sizes of the workspace's live media as a bigint, with the workspace id as a parameter", async () => {
+    db.queryRaw.mockResolvedValue([{ total: BigInt(100) }]);
 
     await expect(checkStorageLimit("ws-1", NOW)).resolves.toBeNull();
-    expect(db.mediaAggregate).toHaveBeenCalledWith({
-      where: { workspaceId: "ws-1", deletedAt: null },
-      _sum: { sizeBytes: true },
-    });
+    const [strings, ...values] = db.queryRaw.mock.calls[0] as [TemplateStringsArray, ...unknown[]];
+    expect(strings.join("$").replace(/\s+/g, " ").trim()).toBe(
+      'SELECT COALESCE(SUM("sizeBytes"), 0)::bigint AS "total" FROM "MediaItem" WHERE "workspaceId" = $ AND "deletedAt" IS NULL',
+    );
+    expect(values).toEqual(["ws-1"]);
+  });
+
+  it("reads a total above 2^31 bytes correctly", async () => {
+    const threeGb = 3 * 1024 * MB;
+    expect(threeGb).toBeGreaterThan(2 ** 31);
+    db.queryRaw.mockResolvedValue([{ total: BigInt(threeGb) }]);
+
+    await expect(checkStorageLimit("ws-1", NOW)).resolves.toBeNull();
+    expect((await getWorkspaceUsage("ws-1", NOW)).storage.used).toBe(threeGb);
+
+    db.workspaceFindUnique.mockResolvedValue(workspaceRow({ limitStorageMb: 2048 }));
+    await expect(checkStorageLimit("ws-1", NOW)).resolves.toMatchObject({ code: "WORKSPACE_STORAGE_FULL" });
   });
 
   it("refuses at or over the limit with the storage sentence", async () => {
-    db.mediaAggregate.mockResolvedValue({ _sum: { sizeBytes: 2048 * MB } });
+    db.queryRaw.mockResolvedValue([{ total: BigInt(5120 * MB) }]);
 
     await expect(checkStorageLimit("ws-1", NOW)).resolves.toEqual({
       code: "WORKSPACE_STORAGE_FULL",
       error:
-        "This workspace's media storage is full (2.0 GB). Delete media you no longer need on the Media page, then upload again.",
+        "This workspace's media storage is full (5.0 GB). Delete media you no longer need on the Media page, then upload again.",
     });
   });
 
   it("allows just under the limit", async () => {
-    db.mediaAggregate.mockResolvedValue({ _sum: { sizeBytes: 2048 * MB - 1 } });
+    db.queryRaw.mockResolvedValue([{ total: BigInt(5120 * MB - 1) }]);
     await expect(checkStorageLimit("ws-1", NOW)).resolves.toBeNull();
   });
 });
@@ -349,13 +422,28 @@ describe("getWorkspaceUsage", () => {
     db.resultCount.mockImplementation(({ where }: { where: { platform: string } }) =>
       Promise.resolve(where.platform === "x" ? 4 : 1),
     );
-    db.mediaAggregate.mockResolvedValue({ _sum: { sizeBytes: 5 * MB } });
+    db.queryRaw.mockResolvedValue([{ total: BigInt(5 * MB) }]);
 
     await expect(getWorkspaceUsage("ws-1", NOW)).resolves.toEqual({
       postsToday: { used: 3, limit: 20, resetsAt: new Date("2026-11-11T00:00:00.000Z") },
       xPostsThisMonth: { used: 4, limit: 30, resetsAt: new Date("2026-12-01T00:00:00.000Z") },
       youtubeUploadsToday: { used: 1, limit: 10, resetsAt: new Date("2026-11-11T08:00:00.000Z") },
-      storage: { used: 5 * MB, limit: 2048 * MB, resetsAt: null },
+      storage: { used: 5 * MB, limit: 5120 * MB, resetsAt: null },
     });
+  });
+});
+
+describe("getWorkspaceUsageOrNull", () => {
+  it("returns the usage when it can be read", async () => {
+    await expect(getWorkspaceUsageOrNull("ws-1", NOW)).resolves.toMatchObject({
+      postsToday: { used: 0, limit: 20 },
+    });
+  });
+
+  it("returns null (and logs) when any count cannot be read, so Settings still renders", async () => {
+    db.queryRaw.mockRejectedValue(new Error("db down"));
+
+    await expect(getWorkspaceUsageOrNull("ws-1", NOW)).resolves.toBeNull();
+    expect(console.error).toHaveBeenCalled();
   });
 });

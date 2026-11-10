@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { explainUploadFailure, UploadRefusedError } from "./uploadFailure";
 
 const FULL =
-  "This workspace's media storage is full (2.0 GB). Delete media you no longer need on the Media page, then upload again.";
+  "This workspace's media storage is full (5.0 GB). Delete media you no longer need on the Media page, then upload again.";
 
 function jsonResponse(body: unknown, ok = true) {
   return { ok, json: async () => body } as unknown as Response;

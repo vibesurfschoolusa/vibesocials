@@ -10,21 +10,24 @@ describe("buildLimitReachedEmail", () => {
       workspaceName: "Surf Co",
       kind: "postsPerDay",
       limit: 20,
-      resetsAt: new Date("2026-11-11T00:00:00Z"),
+      day: new Date("2026-11-12T00:00:00Z"),
+      resetsAt: null,
     });
     expect(email.subject).toBe("Surf Co reached a Vibe Socials limit");
   });
 
-  it("posts per day: the limit, what still works, when it starts again, and the support address", () => {
+  it("posts per day: names the full day, says only that other days are not affected, and gives the support address", () => {
     const { html } = buildLimitReachedEmail({
       workspaceName: "Surf Co",
       kind: "postsPerDay",
       limit: 20,
-      resetsAt: new Date("2026-11-11T00:00:00Z"),
+      day: new Date("2026-11-12T15:00:00Z"),
+      resetsAt: null,
     });
-    expect(html).toContain("<strong>Surf Co</strong> has reached its limit of 20 posts a day.");
-    expect(html).toContain("Drafts and posts scheduled for other days still work.");
-    expect(html).toContain("New posts for that day are possible again from 00:00 UTC on 11 November 2026.");
+    expect(html).toContain(
+      "<p><strong>Surf Co</strong> reached its limit of 20 posts for 12 November. Posts on other days are not affected.</p>",
+    );
+    expect(html).not.toContain("possible again");
     expect(html).toContain(`write to ${SUPPORT_EMAIL}`);
   });
 
@@ -56,10 +59,10 @@ describe("buildLimitReachedEmail", () => {
     const { html } = buildLimitReachedEmail({
       workspaceName: "Surf Co",
       kind: "storage",
-      limit: 2048 * 1024 * 1024,
+      limit: 5120 * 1024 * 1024,
       resetsAt: null,
     });
-    expect(html).toContain("has used all of its 2.0 GB of media storage.");
+    expect(html).toContain("has used all of its 5.0 GB of media storage.");
     expect(html).toContain("Posting with media already in the library still works.");
     expect(html).toContain("Uploads work again as soon as media is deleted on the Media page.");
   });

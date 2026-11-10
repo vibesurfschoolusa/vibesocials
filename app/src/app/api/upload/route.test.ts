@@ -20,7 +20,7 @@ vi.mock("@/server/usage/workspaceUsage", () => ({ checkStorageLimit: checkStorag
 import { GET, POST } from "./route";
 
 const FULL =
-  "This workspace's media storage is full (2.0 GB). Delete media you no longer need on the Media page, then upload again.";
+  "This workspace's media storage is full (5.0 GB). Delete media you no longer need on the Media page, then upload again.";
 
 function tokenRequest(): Request {
   return new Request("http://localhost/api/upload", {
@@ -86,6 +86,28 @@ describe("GET /api/upload — why an upload was refused", () => {
     const res = await GET();
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({ storageFull: false });
+  });
+
+  it("is rate limited per user at 60 per 5 minutes", async () => {
+    await GET();
+
+    expect(checkRateLimitMock).toHaveBeenCalledWith({
+      userId: "user-1",
+      route: "upload/status",
+      limit: 60,
+      windowMs: 5 * 60 * 1000,
+    });
+  });
+
+  it("answers as if storage is not full when the rate limit is hit, without summing storage", async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
+    checkStorageLimitMock.mockResolvedValue({ error: FULL, code: "WORKSPACE_STORAGE_FULL" });
+
+    const res = await GET();
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ storageFull: false });
+    expect(checkStorageLimitMock).not.toHaveBeenCalled();
   });
 
   it("gives the storage sentence when the workspace is full", async () => {
