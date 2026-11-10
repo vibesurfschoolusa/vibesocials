@@ -13,7 +13,9 @@ const {
   getWorkspaceMemberCountMock,
   postJobFindManyMock,
   postMetricFindManyMock,
+  postJobMediaGroupByMock,
 } = vi.hoisted(() => ({
+  postJobMediaGroupByMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
   getWorkspaceMemberCountMock: vi.fn(),
   postJobFindManyMock: vi.fn(),
@@ -36,6 +38,7 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     postJob: { findMany: postJobFindManyMock },
     postMetric: { findMany: postMetricFindManyMock },
+    postJobMedia: { groupBy: postJobMediaGroupByMock },
   },
 }));
 
@@ -96,6 +99,9 @@ beforeEach(() => {
   getWorkspaceMemberCountMock.mockResolvedValue(1);
   postJobFindManyMock.mockResolvedValue([]);
   postMetricFindManyMock.mockResolvedValue([]);
+  // 07a: by default no post on the page has several photos.
+  postJobMediaGroupByMock.mockReset();
+  postJobMediaGroupByMock.mockResolvedValue([]);
 });
 
 describe("GET /api/posts — metrics join (Roadmap Phase 8)", () => {
@@ -824,24 +830,37 @@ describe("GET /api/posts — unconfirmed publish", () => {
 });
 
 describe("GET /api/posts - mediaCount (07a)", () => {
-  it("counts the post's photo rows in the same query", async () => {
+  it("does not count photo rows inside the page query", async () => {
     await GET(getRequest());
 
-    expect(postJobFindManyMock.mock.calls[0][0].select._count).toEqual({ select: { media: true } });
+    expect(postJobFindManyMock.mock.calls[0][0].select).not.toHaveProperty("_count");
   });
 
-  it("is 1 for a single-media post and the photo count for a post with several", async () => {
+  it("counts the page's photo rows in one grouped query by post id", async () => {
     postJobFindManyMock.mockResolvedValue([
-      { ...jobWithYouTube(), id: "job-single", _count: { media: 0 } },
-      { ...jobWithYouTube(), id: "job-multi", _count: { media: 3 } },
+      { ...jobWithYouTube(), id: "job-single" },
+      { ...jobWithYouTube(), id: "job-multi" },
     ]);
+    postJobMediaGroupByMock.mockResolvedValue([{ postJobId: "job-multi", _count: { _all: 3 } }]);
 
     const res = await GET(getRequest());
     const body = (await res.json()) as PostsResponse;
 
+    expect(postJobMediaGroupByMock).toHaveBeenCalledTimes(1);
+    expect(postJobMediaGroupByMock).toHaveBeenCalledWith({
+      by: ["postJobId"],
+      where: { postJobId: { in: ["job-single", "job-multi"] } },
+      _count: { _all: true },
+    });
     expect(body.jobs.map((job) => [job.id, job.mediaCount])).toEqual([
       ["job-single", 1],
       ["job-multi", 3],
     ]);
+  });
+
+  it("makes no count query for an empty page", async () => {
+    await GET(getRequest());
+
+    expect(postJobMediaGroupByMock).not.toHaveBeenCalled();
   });
 });

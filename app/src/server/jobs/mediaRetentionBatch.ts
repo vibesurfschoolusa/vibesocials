@@ -42,8 +42,15 @@ export const RETENTION_BATCH_BUDGET_MS = 150_000;
  * Where the next batch resumes: the (createdAt, id) of the last candidate this
  * run handled. `createdAt` is an ISO string so the cursor survives Inngest's
  * JSON memoization of the step output.
+ *
+ * 07a: `pass: "photos"` is the second pass, over photos used only as a post's
+ * second or later photo (see sweepExpiredMediaBatch). Its first batch starts
+ * with `createdAt` and `id` null. A cursor without `pass` is the first pass, so
+ * a run saved before 07a resumes where it was.
  */
-export type RetentionCursor = { createdAt: string; id: string };
+export type RetentionCursor =
+  | { createdAt: string; id: string; pass?: undefined }
+  | { pass: "photos"; createdAt: string | null; id: string | null };
 
 export interface RetentionBatchResult {
   /** Candidates the query returned (not all are processed when the budget runs out). */
@@ -73,6 +80,21 @@ export interface RetentionBatchResult {
  * referencing job, and stale by age (`lastUsedAt` when stamped, else
  * `createdAt`). The authoritative rule and the race-closing re-check run per
  * item inside the transaction, also unchanged.
+ *
+ * 07a: a post with several photos refers to its second and later photos only
+ * through PostJobMedia. Two passes keep every relation filter at the top level
+ * (Postgres runs a top-level `some` / `none` as a semi- / anti-join on the
+ * relation's index, but a relation filter inside an OR as a subplan over the
+ * whole table):
+ *  - the first pass is today's query plus one top-level `none`: no unfinished
+ *    post uses the item through PostJobMedia;
+ *  - the photo pass (`after.pass === "photos"`) takes items with a PostJobMedia
+ *    row, no PostJob.mediaItemId reference at all (the first pass covers those)
+ *    and no unfinished post through PostJobMedia, by the same age rule.
+ * When the first pass runs out, one existence query on PostJobMedia decides
+ * whether the photo pass runs: with no rows the batch reports `exhausted`, so
+ * the sweep's queries are today's plus that one check. Both passes run in the
+ * run's `sweep-batch-<i>` steps and share their limits.
  */
 export async function sweepExpiredMediaBatch(opts: {
   after: RetentionCursor | null;
@@ -88,26 +110,42 @@ export async function sweepExpiredMediaBatch(opts: {
   const clock = opts.clock ?? Date.now;
   const cutoff = new Date(now.getTime() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
 
-  // 07a: a photo of a post with several photos is used through PostJobMedia
-  // (only the first is also PostJob.mediaItemId), and counts exactly the same:
-  // "in use by a non-terminal post" and "posted at least once" look at both.
+  const photoPass = after?.pass === "photos";
   const nonTerminal = { status: { notIn: [...TERMINAL_POST_JOB_STATUSES] } };
-  const where: Prisma.MediaItemWhereInput = {
-    deletedAt: null,
-    createdAt: { lt: cutoff },
-    postJobs: { none: nonTerminal },
-    postJobMedia: { none: { postJob: nonTerminal } },
-    AND: [
-      { OR: [{ postJobs: { some: {} } }, { postJobMedia: { some: {} } }] },
-      {
-        OR: [
-          { lastUsedAt: { lt: cutoff } },
-          { lastUsedAt: null, createdAt: { lt: cutoff } },
+  const where: Prisma.MediaItemWhereInput = photoPass
+    ? {
+        deletedAt: null,
+        createdAt: { lt: cutoff },
+        postJobMedia: { some: {}, none: { postJob: nonTerminal } },
+        postJobs: { none: {} },
+        AND: [
+          {
+            OR: [
+              { lastUsedAt: { lt: cutoff } },
+              { lastUsedAt: null, createdAt: { lt: cutoff } },
+            ],
+          },
         ],
-      },
-    ],
-  };
-  if (after) {
+      }
+    : {
+        deletedAt: null,
+        createdAt: { lt: cutoff },
+        postJobs: {
+          some: {},
+          none: nonTerminal,
+        },
+        // 07a: not one of several photos of an unfinished post.
+        postJobMedia: { none: { postJob: nonTerminal } },
+        AND: [
+          {
+            OR: [
+              { lastUsedAt: { lt: cutoff } },
+              { lastUsedAt: null, createdAt: { lt: cutoff } },
+            ],
+          },
+        ],
+      };
+  if (after && after.createdAt !== null && after.id !== null) {
     const cursorAt = new Date(after.createdAt);
     where.OR = [{ createdAt: { gt: cursorAt } }, { createdAt: cursorAt, id: { gt: after.id } }];
   }
@@ -205,7 +243,8 @@ export async function sweepExpiredMediaBatch(opts: {
 
     // Past this row whatever happened to it: a skipped or errored row must not
     // be selected again within the run.
-    next = { createdAt: candidate.createdAt.toISOString(), id: candidate.id };
+    const handled = { createdAt: candidate.createdAt.toISOString(), id: candidate.id };
+    next = photoPass ? { pass: "photos", ...handled } : handled;
 
     // Out of budget: stop BETWEEN items and hand the cursor back. The first item
     // always runs, so a batch makes progress however small the budget.
@@ -215,15 +254,25 @@ export async function sweepExpiredMediaBatch(opts: {
     }
   }
 
+  // A short page is the end of the list. A full page may be followed by more,
+  // and a batch cut short by the budget certainly is.
+  let exhausted = !stoppedEarly && candidates.length < take;
+  // 07a: the end of the first pass starts the photo pass, when there can be any.
+  if (exhausted && !photoPass) {
+    const anyPhotoRow = await prisma.postJobMedia.findFirst({ select: { id: true } });
+    if (anyPhotoRow) {
+      exhausted = false;
+      next = { pass: "photos", createdAt: null, id: null };
+    }
+  }
+
   const result: RetentionBatchResult = {
     candidates: candidates.length,
     swept,
     skipped,
     errors,
     next,
-    // A short page is the end of the list. A full page may be followed by more,
-    // and a batch cut short by the budget certainly is.
-    exhausted: !stoppedEarly && candidates.length < take,
+    exhausted,
   };
   console.log("[Inngest] Media retention batch complete", result);
   return result;

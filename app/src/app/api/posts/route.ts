@@ -146,8 +146,6 @@ export async function GET(request: Request) {
         // local-part at map time below, and the full email NEVER reaches the
         // DTO (SEC-1).
         user: { select: { name: true, email: true } },
-        // 07a: a post with several photos has one PostJobMedia row per photo.
-        _count: { select: { media: true } },
         results: {
           select: {
             platform: true,
@@ -219,6 +217,21 @@ export async function GET(request: Request) {
 
     const metricByVideoId = new Map(metricRows.map((row) => [row.externalPostId, row]));
 
+    // 07a: a post with several photos has one PostJobMedia row per photo. One
+    // grouped query for this page's ids (the (postJobId, position) index serves
+    // it), not a `_count` in the page query, which Prisma renders as a join on
+    // an aggregate over the whole table.
+    const photoCountRows = jobs.length
+      ? await prisma.postJobMedia.groupBy({
+          by: ["postJobId"],
+          where: { postJobId: { in: jobs.map((job) => job.id) } },
+          _count: { _all: true },
+        })
+      : [];
+    const photoCountByJobId = new Map(
+      photoCountRows.map((row) => [row.postJobId, row._count._all]),
+    );
+
     const payload: PostsResponse = {
       // 2026-11-01 scale audit (W3): counted here, on demand — it is no longer
       // a field of the workspace context every route pays for.
@@ -263,7 +276,7 @@ export async function GET(request: Request) {
             ? { url: job.mediaItem.storageLocation, mimeType: job.mediaItem.mimeType }
             : null,
           // 07a: how many files the post has. A single-media post has no rows.
-          mediaCount: Math.max(1, job._count?.media ?? 0),
+          mediaCount: photoCountByJobId.get(job.id) ?? 1,
           // Compose-time publish choices, null for legacy/immediate jobs with
           // no snapshot (see PublishMetadataSnapshot, src/server/jobs/posting.ts).
           publish: snapshot

@@ -758,6 +758,17 @@ async function loadAvailablePhotos(postJobId: string): Promise<MediaItem[] | nul
   }
 }
 
+/**
+ * The post's media for a fetch step's output (07a), without the caption fields:
+ * captions come from the post, and no platform client reads them from this
+ * list, so ten photos do not store a long caption ten more times. The step's
+ * `mediaItem` stays whole: runs saved by the previous code, and that code after
+ * a rollback, read it.
+ */
+function mediaItemsForStepOutput(items: MediaItem[]): MediaItem[] {
+  return items.map((item) => ({ ...item, baseCaption: "", perPlatformOverrides: null }));
+}
+
 /** The parts of Inngest's `inngest/function.failed` payload this handler reads. */
 interface PublishRunFailureArgs {
   event: {
@@ -947,13 +958,15 @@ export const publishToAllPlatforms = inngest.createFunction(
         user,
         workspace,
         mediaItem: mediaItems[0],
-        mediaItems,
+        mediaItems: mediaItemsForStepOutput(mediaItems),
         socialConnections: socialConnections as ConnectionRef[],
         resultRecords,
       };
     });
     // A run whose fetch-data output was memoized before 07a has no list.
-    const publishMediaItems = setupData.mediaItems ?? [setupData.mediaItem];
+    const publishMediaItems = setupData.mediaItems ?? [
+      { ...setupData.mediaItem, baseCaption: "", perPlatformOverrides: null },
+    ];
 
     if (!setupData.socialConnections.length) {
       // 2026-11-02 scale audit (correctness L1): every connection was removed
@@ -1360,7 +1373,7 @@ export const retryPlatforms = inngest.createFunction(
         user,
         workspace,
         mediaItem,
-        mediaItems,
+        mediaItems: mediaItemsForStepOutput(mediaItems),
         photoUnavailable,
         connections: connections as ConnectionRef[],
         resultRecords,
@@ -1386,7 +1399,9 @@ export const retryPlatforms = inngest.createFunction(
     } = setupData;
     // A run whose fetch-retry-data output was memoized before 07a has neither field.
     const photoUnavailable = setupData.photoUnavailable === true;
-    const retryMediaItems = setupData.mediaItems ?? (mediaItem ? [mediaItem] : []);
+    const retryMediaItems =
+      setupData.mediaItems ??
+      (mediaItem ? [{ ...mediaItem, baseCaption: "", perPlatformOverrides: null }] : []);
 
     // The blob must still exist to re-publish. The endpoint already gates this,
     // but a concurrent retention sweep could have removed it in between — fail

@@ -11,6 +11,7 @@ import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { recomputeAndStorePostJobStatus } from "@/server/jobs/failPendingResults";
 import { buildRetryEvent } from "@/server/jobs/posting";
+import { isPostMediaComplete } from "@/server/jobs/postMedia";
 import { Prisma, type Platform } from "@prisma/client";
 
 interface RetryRouteContext {
@@ -123,7 +124,13 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
     select: {
       id: true,
+      mediaItemId: true,
       mediaItem: { select: { deletedAt: true } },
+      // 07a: a post with several photos has one row per photo (none otherwise).
+      media: {
+        orderBy: { position: "asc" },
+        select: { position: true, mediaItem: { select: { id: true, deletedAt: true } } },
+      },
       results: { select: { platform: true, status: true } },
     },
   });
@@ -134,7 +141,14 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
 
   // The blob must still exist to re-fetch and re-publish (Phase 1 soft-delete
   // removes it). If it's gone, the post can't be retried — only recreated.
-  if (postJob.mediaItem.deletedAt !== null) {
+  // 07a: a post with several photos needs every photo, so a deleted or missing
+  // one is refused the same way, before the user is told it is retrying.
+  const photos = postJob.media ?? [];
+  const photoGone =
+    photos.length > 0 &&
+    (!isPostMediaComplete(postJob.mediaItemId, photos) ||
+      photos.some((row) => row.mediaItem.deletedAt !== null));
+  if (postJob.mediaItem.deletedAt !== null || photoGone) {
     return NextResponse.json(
       {
         error: "This post's media is no longer available — recreate the post.",

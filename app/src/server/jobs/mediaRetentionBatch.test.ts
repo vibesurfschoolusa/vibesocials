@@ -13,6 +13,7 @@ const db = vi.hoisted(() => ({
   count: vi.fn(),
   postJobCount: vi.fn(),
   postJobMediaCount: vi.fn(),
+  postJobMediaFindFirst: vi.fn(),
   executeRaw: vi.fn(),
   transaction: vi.fn(),
 }));
@@ -21,6 +22,7 @@ const { delMock } = vi.hoisted(() => ({ delMock: vi.fn() }));
 vi.mock("@/lib/db", () => ({
   prisma: {
     mediaItem: { findMany: db.findMany },
+    postJobMedia: { findFirst: db.postJobMediaFindFirst },
     $transaction: db.transaction,
   },
 }));
@@ -72,6 +74,8 @@ beforeEach(() => {
   db.postJobCount.mockResolvedValue(0);
   // 07a: by default no post uses the item as one of several photos.
   db.postJobMediaCount.mockResolvedValue(0);
+  // 07a: by default no post has several photos, so the photo pass never runs.
+  db.postJobMediaFindFirst.mockResolvedValue(null);
   db.count.mockResolvedValue(0);
   db.transaction.mockImplementation(async (callback: (tx: unknown) => unknown) =>
     callback({
@@ -99,14 +103,13 @@ describe("sweepExpiredMediaBatch - the candidate query", () => {
   const STALENESS = {
     OR: [{ lastUsedAt: { lt: CUTOFF } }, { lastUsedAt: null, createdAt: { lt: CUTOFF } }],
   };
-  // 07a: a photo used through PostJobMedia counts exactly like one used through
-  // PostJob.mediaItemId, for "in use by a non-terminal post" and "posted once".
   const NON_TERMINAL = { status: { notIn: ["completed", "failed", "cancelled"] } };
-  const IN_USE_FILTERS = {
-    postJobs: { none: NON_TERMINAL },
+  // Today's filter, plus one top-level condition (07a): no unfinished post uses
+  // the item as one of several photos. No relation filter sits inside an OR.
+  const FIRST_PHOTO_FILTERS = {
+    postJobs: { some: {}, none: NON_TERMINAL },
     postJobMedia: { none: { postJob: NON_TERMINAL } },
   };
-  const POSTED_ONCE = { OR: [{ postJobs: { some: {} } }, { postJobMedia: { some: {} } }] };
 
   it("keyset-pages on (createdAt, id) below the cutoff, with today's eligibility filters", async () => {
     await sweepExpiredMediaBatch({ after: null, now: NOW });
@@ -116,8 +119,8 @@ describe("sweepExpiredMediaBatch - the candidate query", () => {
       where: {
         deletedAt: null,
         createdAt: { lt: CUTOFF },
-        ...IN_USE_FILTERS,
-        AND: [POSTED_ONCE, STALENESS],
+        ...FIRST_PHOTO_FILTERS,
+        AND: [STALENESS],
       },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       take: 200,
@@ -135,8 +138,8 @@ describe("sweepExpiredMediaBatch - the candidate query", () => {
       where: {
         deletedAt: null,
         createdAt: { lt: CUTOFF },
-        ...IN_USE_FILTERS,
-        AND: [POSTED_ONCE, STALENESS],
+        ...FIRST_PHOTO_FILTERS,
+        AND: [STALENESS],
         OR: [{ createdAt: { gt: cursorAt } }, { createdAt: cursorAt, id: { gt: "media-0200" } }],
       },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -407,5 +410,108 @@ describe("sweepExpiredMediaBatch - a photo of a post with several photos (07a)",
     const summary = await sweepExpiredMediaBatch({ after: null, now: NOW });
 
     expect(summary).toMatchObject({ swept: 0, skipped: 1 });
+  });
+});
+
+// 07a review round: photos used only as a second or later photo have no
+// PostJob.mediaItemId reference, so the first-photo query never selects them.
+// A separate pass with its own cursor sweeps them, after the first pass runs out,
+// and only when the PostJobMedia table has any row at all.
+describe("sweepExpiredMediaBatch - the later-photo pass (07a)", () => {
+  const NON_TERMINAL = { status: { notIn: ["completed", "failed", "cancelled"] } };
+  const STALENESS = {
+    OR: [{ lastUsedAt: { lt: CUTOFF } }, { lastUsedAt: null, createdAt: { lt: CUTOFF } }],
+  };
+  const START: RetentionCursor = { pass: "photos", createdAt: null, id: null };
+
+  it("when the first pass runs out and no post has several photos, the run ends after one existence check", async () => {
+    db.findMany.mockResolvedValue(rows(3));
+
+    const result = await sweepExpiredMediaBatch({ after: null, now: NOW });
+
+    expect(result).toMatchObject({ candidates: 3, exhausted: true });
+    expect(db.postJobMediaFindFirst).toHaveBeenCalledTimes(1);
+    expect(db.postJobMediaFindFirst).toHaveBeenCalledWith({ select: { id: true } });
+    expect(db.findMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("a full first-pass page makes no existence check", async () => {
+    db.findMany.mockResolvedValue(rows(200));
+
+    await sweepExpiredMediaBatch({ after: null, now: NOW });
+
+    expect(db.postJobMediaFindFirst).not.toHaveBeenCalled();
+  });
+
+  it("when the first pass runs out and the table has rows, it hands back the start of the photo pass", async () => {
+    db.findMany.mockResolvedValue(rows(3));
+    db.postJobMediaFindFirst.mockResolvedValue({ id: "pjm-1" });
+
+    const result = await sweepExpiredMediaBatch({ after: null, now: NOW });
+
+    expect(result).toMatchObject({ candidates: 3, swept: 3, exhausted: false, next: START });
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+  });
+
+  it("the photo pass selects items used only through PostJobMedia, with no unfinished post, by the same age rule", async () => {
+    db.findMany.mockResolvedValue([]);
+
+    const result = await sweepExpiredMediaBatch({ after: START, now: NOW });
+
+    expect(db.findMany.mock.calls[0][0]).toEqual({
+      where: {
+        deletedAt: null,
+        createdAt: { lt: CUTOFF },
+        postJobMedia: { some: {}, none: { postJob: NON_TERMINAL } },
+        postJobs: { none: {} },
+        AND: [STALENESS],
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: 200,
+      select: { id: true, createdAt: true },
+    });
+    // The photo pass is the last: no further existence check.
+    expect(result).toMatchObject({ candidates: 0, exhausted: true, next: START });
+    expect(db.postJobMediaFindFirst).not.toHaveBeenCalled();
+  });
+
+  it("the photo pass pages on its own cursor and sweeps through the same per-item transaction", async () => {
+    const page = rows(200, 400);
+    db.findMany.mockResolvedValue(page);
+    db.findUnique.mockResolvedValue({
+      storageLocation: BLOB_URL,
+      deletedAt: null,
+      lastUsedAt: STALE,
+      createdAt: STALE,
+      _count: { postJobs: 0, postJobMedia: 1 },
+    });
+    const after: RetentionCursor = { pass: "photos", createdAt: "2025-01-01T00:03:20.000Z", id: "media-0200" };
+
+    const result = await sweepExpiredMediaBatch({ after, now: NOW });
+
+    const cursorAt = new Date("2025-01-01T00:03:20.000Z");
+    expect(db.findMany.mock.calls[0][0].where.OR).toEqual([
+      { createdAt: { gt: cursorAt } },
+      { createdAt: cursorAt, id: { gt: "media-0200" } },
+    ]);
+    expect(result).toMatchObject({
+      candidates: 200,
+      swept: 200,
+      exhausted: false,
+      next: { pass: "photos", createdAt: page[199].createdAt.toISOString(), id: "media-0599" },
+    });
+  });
+
+  it("the photo pass keeps the batch's time budget", async () => {
+    db.findMany.mockResolvedValue(rows(5));
+    let nowMs = 1_000_000;
+    db.update.mockImplementation(async () => {
+      nowMs += RETENTION_BATCH_BUDGET_MS + 1;
+    });
+
+    const result = await sweepExpiredMediaBatch({ after: START, now: NOW, clock: () => nowMs });
+
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ swept: 1, exhausted: false, next: { pass: "photos", id: "media-0000" } });
   });
 });

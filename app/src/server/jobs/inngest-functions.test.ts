@@ -4284,7 +4284,10 @@ describe("publish functions - a post's photos (07a)", () => {
 
     await publish();
 
-    expect(ctxFor("x").mediaItems).toEqual([ctxFor("x").mediaItem]);
+    // The list entry carries no caption fields (captions come from the post).
+    expect(ctxFor("x").mediaItems).toEqual([
+      { ...ctxFor("x").mediaItem, baseCaption: "", perPlatformOverrides: null },
+    ]);
     expect(ctxFor("x").mediaItem.id).toBe("m1");
     // No photo-row lookup for a post without rows.
     expect(db.postJobFindUnique).toHaveBeenCalledTimes(1);
@@ -4321,8 +4324,56 @@ describe("publish functions - a post's photos (07a)", () => {
 
     await retry();
 
-    expect(ctxFor("x").mediaItems).toEqual([ctxFor("x").mediaItem]);
+    expect(ctxFor("x").mediaItems).toEqual([
+      { ...ctxFor("x").mediaItem, baseCaption: "", perPlatformOverrides: null },
+    ]);
   });
+
+  it.each(["fetch-data", "fetch-retry-data"])(
+    "the %s output for a ten-photo post with long captions stays small",
+    async (stepId) => {
+    const longCaption = "c".repeat(10_000);
+    const overrides = { x: "o".repeat(10_000), linkedin: "l".repeat(10_000) };
+    const long = (id: string) => ({ ...photo(id), baseCaption: longCaption, perPlatformOverrides: overrides });
+    const photos = Array.from({ length: 10 }, (_, i) => long(`m${i + 1}`));
+    db.mediaItemFindUnique.mockResolvedValue(photos[0]);
+    db.postJobFindUnique.mockImplementation((args: { select?: unknown }) =>
+      Promise.resolve(
+        args.select
+          ? { mediaItemId: "m1", mediaItem: photos[0], media: photos.map((p, i) => ({ position: i, mediaItem: p })) }
+          : { ...JOB, _count: { media: 10 } },
+      ),
+    );
+    const step = fakeStep();
+
+    await (stepId === "fetch-data"
+      ? handlerOf(publishToAllPlatforms)({
+          event: {
+            name: "post/publish.requested",
+            data: { postJobId: "job-1", userId: "user-1", mediaItemId: "m1", baseCaption: "c", perPlatformOverrides: null },
+          },
+          step,
+        })
+      : handlerOf(retryPlatforms)({
+          event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms: ["x"] } },
+          step,
+        }));
+
+    const output = step.outputs[stepId] as { mediaItem: unknown; mediaItems: Array<Record<string, unknown>> };
+    // `mediaItem` stays whole (saved runs and a rollback read it); the ten list
+    // entries add only their file fields.
+    expect(output.mediaItem).toEqual(JSON.parse(JSON.stringify(photos[0])));
+    expect(output.mediaItems.map((m) => m.id)).toEqual(photos.map((p) => p.id));
+    for (const entry of output.mediaItems) {
+      expect(entry.baseCaption).toBe("");
+      expect(entry.perPlatformOverrides).toBeNull();
+    }
+    const total = JSON.stringify(output).length;
+    const oneFullItem = JSON.stringify(output.mediaItem).length;
+    expect(oneFullItem).toBeGreaterThan(30_000);
+    expect(total - oneFullItem).toBeLessThan(5_000);
+    },
+  );
 
   it("a deleted second photo fails the post's results with the sentence and publishes nothing", async () => {
     stubJob([photo("m1"), photo("m2", "2026-11-01T00:00:00.000Z")]);
@@ -4384,6 +4435,8 @@ describe("publish functions - a post's photos (07a)", () => {
       step,
     });
 
-    expect(ctxFor("x").mediaItems.map((m) => m.id)).toEqual(["m1"]);
+    expect(ctxFor("x").mediaItems).toEqual([
+      { ...ctxFor("x").mediaItem, baseCaption: "", perPlatformOverrides: null },
+    ]);
   });
 });

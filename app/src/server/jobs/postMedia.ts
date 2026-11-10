@@ -14,16 +14,39 @@ export class PostMediaUnavailableError extends Error {
 }
 
 /**
+ * Whether a post's PostJobMedia rows (ordered by position) still describe a
+ * whole post with several photos: at least two rows, positions exactly 0 to n-1,
+ * and the first row is the post's `PostJob.mediaItemId`.
+ *
+ * Deleting a `MediaItem` cascades to its row. That is caught when it leaves a
+ * gap (any photo but the last), leaves one row, or removes the first photo (the
+ * post's own media item, whose deletion cascades to the post itself anyway). A
+ * deleted LAST photo is NOT caught: positions 0 to n-2 look like a whole post
+ * with one photo fewer. Hard deletes of a MediaItem only come from deleting its
+ * workspace or user (the app soft-deletes otherwise), which also deletes the
+ * post, so this is a guard, not a guarantee. Soft deletes (`deletedAt`) are not
+ * judged here; callers check them.
+ */
+export function isPostMediaComplete(
+  mediaItemId: string,
+  rows: ReadonlyArray<{ position: number; mediaItem: { id: string } }>,
+): boolean {
+  return (
+    rows.length >= 2 &&
+    rows.every((row, index) => row.position === index) &&
+    rows[0].mediaItem.id === mediaItemId
+  );
+}
+
+/**
  * A post's media in order: its `PostJobMedia` rows by position when it has any
  * (a post with two or more photos), else its one `PostJob.mediaItem`. Always at
  * least one item, and the first is always `PostJob.mediaItem`.
  *
- * Deleting a `MediaItem` cascades to its `PostJobMedia` row, so a missing photo
- * shows as positions that are not exactly 0 to n-1, as a post left with one
- * row, or as a first row that is not the post's media item. Each throws
- * {@link PostMediaUnavailableError}, as does a missing post. A soft-deleted item
- * (`deletedAt`) is returned as is: the caller decides, as it does today for a
- * post's single item.
+ * Throws {@link PostMediaUnavailableError} for a missing post or for rows that
+ * {@link isPostMediaComplete} rejects; see there for which missing photos that
+ * catches (not a deleted last photo). A soft-deleted item (`deletedAt`) is
+ * returned as is: the caller decides, as it does today for a post's single item.
  */
 export async function loadPostMediaItems(
   postJobId: string,
@@ -40,11 +63,7 @@ export async function loadPostMediaItems(
   if (!job) throw new PostMediaUnavailableError();
   if (job.media.length === 0) return [job.mediaItem];
 
-  const complete =
-    job.media.length >= 2 &&
-    job.media.every((row, index) => row.position === index) &&
-    job.media[0].mediaItem.id === job.mediaItemId;
-  if (!complete) throw new PostMediaUnavailableError();
+  if (!isPostMediaComplete(job.mediaItemId, job.media)) throw new PostMediaUnavailableError();
 
   return job.media.map((row) => row.mediaItem);
 }

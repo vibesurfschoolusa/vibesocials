@@ -544,3 +544,62 @@ describe("POST /api/posts/[postJobId]/retry — an unverified email may retry", 
     expect(inngestSendMock).toHaveBeenCalledTimes(1);
   });
 });
+
+// 07a review round: a post with several photos is refused up front, with the
+// same 409 as a single post whose media was deleted, when any photo is gone.
+describe("POST /api/posts/[postJobId]/retry - a post with several photos (07a)", () => {
+  const row = (position: number, id: string, deletedAt: Date | null = null) => ({
+    position,
+    mediaItem: { id, deletedAt },
+  });
+  function multiJob(media: ReturnType<typeof row>[]) {
+    return {
+      ...makeJob([{ platform: "tiktok", status: "failed" }]),
+      mediaItemId: "m1",
+      media,
+    };
+  }
+
+  it("reads the photos in the same query as the job", async () => {
+    postJobFindFirstMock.mockResolvedValue(null);
+
+    await POST(req({ platform: "tiktok" }), ctx("job-1"));
+
+    expect(postJobFindFirstMock.mock.calls[0][0].select).toMatchObject({
+      mediaItemId: true,
+      media: {
+        orderBy: { position: "asc" },
+        select: { position: true, mediaItem: { select: { id: true, deletedAt: true } } },
+      },
+    });
+  });
+
+  it.each([
+    ["a deleted second photo", [row(0, "m1"), row(1, "m2", new Date())]],
+    ["a deleted first photo", [row(0, "m1", new Date()), row(1, "m2")]],
+    ["a missing photo (a gap in the positions)", [row(0, "m1"), row(2, "m3")]],
+    ["a post left with one photo row", [row(0, "m1")]],
+  ])("refuses with 409 MEDIA_UNAVAILABLE for %s", async (_name, media) => {
+    postJobFindFirstMock.mockResolvedValue(multiJob(media));
+
+    const res = await POST(req({ platform: "tiktok" }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({
+      error: "This post's media is no longer available — recreate the post.",
+      code: "MEDIA_UNAVAILABLE",
+    });
+    expect(resultUpdateManyMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("retries a post whose photos are all there", async () => {
+    postJobFindFirstMock.mockResolvedValue(multiJob([row(0, "m1"), row(1, "m2"), row(2, "m3")]));
+    resultUpdateManyMock.mockResolvedValue({ count: 1 });
+
+    const res = await POST(req({ platform: "tiktok" }), ctx("job-1"));
+
+    expect(res.status).toBe(202);
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+  });
+});
