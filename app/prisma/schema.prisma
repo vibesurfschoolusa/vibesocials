@@ -47,6 +47,27 @@ enum WorkspaceRole {
   member
 }
 
+// Client upload link (2026-11-10). One active link per workspace, at
+// /u/<token>, where a client sends photos and videos without signing in. Hashed
+// like WorkspaceInvite, but the owner can copy the link again, so the raw token
+// is also kept sealed (src/lib/tokenCrypto.ts) and shown only to owners. No
+// expiry: it works until revoked. uploadCount and lastUsedAt are for the owner.
+model WorkspaceUploadLink {
+  id          String    @id @default(cuid())
+  workspaceId String
+  tokenHash   String    @unique // sha256 hex of the raw token
+  tokenSealed String
+  createdById String
+  createdAt   DateTime  @default(now())
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+  uploadCount Int       @default(0)
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, revokedAt])
+}
+
 // Account lifecycle (scale-readiness spec §A). Discriminates the two kinds of
 // short-lived, single-use AccountToken: password reset (60 min TTL) and email
 // verification (7 day TTL). See src/lib/accountToken.ts for the TTLs.
@@ -138,6 +159,7 @@ model Workspace {
 
   members            WorkspaceMember[]
   invites            WorkspaceInvite[]
+  uploadLinks        WorkspaceUploadLink[]
   connections        SocialConnection[]
   pendingConnections PendingConnection[]
   mediaItems         MediaItem[]

@@ -47,6 +47,8 @@ export const PUBLIC_ROUTE_PREFIXES = [
   "/data-deletion",
   "/about",
   "/help",
+  // Client upload links (2026-11-10): the client has no account, so no shell.
+  "/u",
 ];
 
 export function isPublicRoute(pathname: string): boolean {

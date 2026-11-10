@@ -30,4 +30,10 @@ describe("isPublicPath", () => {
     expect(isPublicPath("/sw.json")).toBe(false);
     expect(isPublicPath("/share-target")).toBe(false);
   });
+
+  it("lets a signed-out client open an upload link, and nothing that only starts with /u", () => {
+    expect(isPublicPath("/u/abc")).toBe(true);
+    expect(isPublicPath("/upload")).toBe(false);
+    expect(isPublicPath("/users")).toBe(false);
+  });
 });

@@ -37,3 +37,10 @@ describe("sectionTitle", () => {
     expect(isPublicRoute("/workspaces")).toBe(false);
   });
 });
+
+describe("isPublicRoute — client upload link", () => {
+  it("renders /u/<token> with no app shell, and only that", () => {
+    expect(isPublicRoute("/u/abc")).toBe(true);
+    expect(isPublicRoute("/upload")).toBe(false);
+  });
+});

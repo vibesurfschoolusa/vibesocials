@@ -71,6 +71,8 @@ export function isPublicPath(pathname: string): boolean {
     "/data-deletion",
     "/about",
     "/help",
+    // Client upload links: a client sends files without an account (2026-11-10).
+    "/u",
   ];
   return prefixes.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),

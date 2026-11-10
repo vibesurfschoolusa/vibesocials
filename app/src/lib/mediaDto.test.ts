@@ -44,6 +44,52 @@ describe("toMediaItemDto — lastUsedAt mapping", () => {
   });
 });
 
+describe("toMediaItemDto — files sent through a client upload link", () => {
+  it("exposes the sender's name and the note, and nothing else from metadata", () => {
+    const dto = toMediaItemDto(
+      makeSource({
+        metadata: {
+          source: "upload_link",
+          linkId: "link-1",
+          senderName: "Ana",
+          note: "For Friday",
+          secret: "x",
+        },
+      }),
+    );
+
+    expect(dto.clientSenderName).toBe("Ana");
+    expect(dto.clientNote).toBe("For Friday");
+    expect(dto).not.toHaveProperty("metadata");
+    const json = JSON.stringify(dto);
+    expect(json).not.toContain("link-1");
+    expect(json).not.toContain("upload_link");
+    expect(json).not.toContain("secret");
+  });
+
+  it("marks a link file with no name or note with nulls", () => {
+    const dto = toMediaItemDto(makeSource({ metadata: { source: "upload_link", linkId: "link-1" } }));
+    expect(dto.clientSenderName).toBeNull();
+    expect(dto.clientNote).toBeNull();
+  });
+
+  it("ignores a name or note that is not a string", () => {
+    const dto = toMediaItemDto(
+      makeSource({ metadata: { source: "upload_link", senderName: { a: 1 }, note: 5 } }),
+    );
+    expect(dto.clientSenderName).toBeNull();
+    expect(dto.clientNote).toBeNull();
+  });
+
+  it("adds neither field for any other file", () => {
+    for (const metadata of [undefined, null, { senderName: "Ana" }, [1], "upload_link"]) {
+      const dto = toMediaItemDto(makeSource({ metadata: metadata as MediaItemDtoSource["metadata"] }));
+      expect(dto, JSON.stringify(metadata)).not.toHaveProperty("clientSenderName");
+      expect(dto).not.toHaveProperty("clientNote");
+    }
+  });
+});
+
 describe("daysUntilRemoval", () => {
   const RETENTION_DAYS = 30;
   const DAY_MS = 24 * 60 * 60 * 1000;

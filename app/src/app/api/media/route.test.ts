@@ -560,6 +560,26 @@ describe("GET /api/media", () => {
     expect(body.items[1].lastUsedAt).toBeNull();
   });
 
+  it("selects metadata and gives a client link file's sender name and note only", async () => {
+    findManyMock.mockResolvedValue([
+      {
+        ...makeRows(1)[0],
+        metadata: { source: "upload_link", linkId: "link-1", senderName: "Ana", note: "Hi" },
+      },
+    ]);
+
+    const response = await GET(getRequest());
+    const body = (await response.json()) as { items: Array<Record<string, unknown>> };
+
+    expect(findManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ select: expect.objectContaining({ metadata: true }) }),
+    );
+    expect(body.items[0].clientSenderName).toBe("Ana");
+    expect(body.items[0].clientNote).toBe("Hi");
+    expect(body.items[0]).not.toHaveProperty("metadata");
+    expect(JSON.stringify(body)).not.toContain("link-1");
+  });
+
   // 2026-11-01 scale audit (W11): the list used to return the whole library
   // (16.7 MB at 50k items, over Vercel's 4.5 MB response cap). It now pages by
   // keyset on (createdAt desc, id desc), 60 per page.

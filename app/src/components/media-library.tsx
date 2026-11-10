@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { upload } from "@vercel/blob/client";
 import {
+  Copy,
   File as FileIcon,
   ImageOff,
   Images,
@@ -52,6 +53,9 @@ interface MediaItemDto {
   storageLocation: string;
   createdAt: string;
   lastUsedAt: string | null;
+  /** Present only on a file sent through the client upload link (lib/mediaDto.ts). */
+  clientSenderName?: string | null;
+  clientNote?: string | null;
 }
 
 interface ListResponse {
@@ -165,6 +169,18 @@ function MediaCard({ item, onReuse, onDeleteRequest }: MediaCardProps) {
               </>
             )}
           </p>
+          {item.clientSenderName !== undefined && (
+            <>
+              <p className="truncate text-xs font-medium text-foreground">
+                From {item.clientSenderName ?? "your client"}
+              </p>
+              {item.clientNote ? (
+                <p className="line-clamp-3 whitespace-pre-line break-words text-xs text-muted-foreground">
+                  {item.clientNote}
+                </p>
+              ) : null}
+            </>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -189,6 +205,164 @@ function MediaCard({ item, onReuse, onDeleteRequest }: MediaCardProps) {
           </Button>
         </div>
       </div>
+    </Card>
+  );
+}
+
+interface UploadLinkDto {
+  /** null when the stored token cannot be opened; Replace makes a new one. */
+  url: string | null;
+  uploadCount: number;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
+
+/**
+ * Client upload link (2026-11-10): owners make, copy, replace or turn off the
+ * workspace's link here. The owner-only GET answers a member 403, and then the
+ * panel is not shown at all.
+ */
+function UploadLinkPanel() {
+  const toast = useToast();
+  const [state, setState] = useState<"loading" | "hidden" | "ready">("loading");
+  const [link, setLink] = useState<UploadLinkDto | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [confirm, setConfirm] = useState<"replace" | "off" | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch("/api/workspaces/upload-link");
+        const data = (await response.json().catch(() => null)) as { link?: UploadLinkDto | null } | null;
+        if (cancelled) return;
+        if (!response.ok) {
+          setState("hidden");
+          return;
+        }
+        setLink(data?.link ?? null);
+        setState("ready");
+      } catch {
+        if (!cancelled) setState("hidden");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Create and Replace are the same call: the server revokes any old link.
+  const makeLink = useCallback(async () => {
+    const response = await fetch("/api/workspaces/upload-link", { method: "POST" });
+    const data = (await response.json().catch(() => null)) as
+      | { link?: UploadLinkDto; error?: string }
+      | null;
+    if (!response.ok || !data?.link) {
+      toast.error(data?.error ?? "Couldn't make the link. Try again.");
+      throw new Error("CREATE_FAILED");
+    }
+    setLink(data.link);
+    toast.success("New link ready. Copy it and send it to your client.");
+  }, [toast]);
+
+  const turnOff = useCallback(async () => {
+    const response = await fetch("/api/workspaces/upload-link", { method: "DELETE" });
+    if (!response.ok) {
+      toast.error("Couldn't turn the link off. Try again.");
+      throw new Error("REVOKE_FAILED");
+    }
+    setLink(null);
+    toast.success("The link is off. It no longer works.");
+  }, [toast]);
+
+  async function handleCreate() {
+    setBusy(true);
+    try {
+      await makeLink();
+    } catch {
+      // Already shown as a toast.
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyUrl() {
+    if (!link?.url) return;
+    try {
+      await navigator.clipboard.writeText(link.url);
+      toast.success("Link copied.");
+    } catch {
+      toast.error("Couldn't copy the link. Copy it by hand instead.");
+    }
+  }
+
+  if (state !== "ready") return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Client upload link</CardTitle>
+        <CardDescription>
+          Give this link to a client. They can send photos and videos from their phone without an
+          account, and the files land here.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {link === null ? (
+          <Button type="button" loading={busy} onClick={handleCreate}>
+            Create link
+          </Button>
+        ) : (
+          <>
+            {link.url ? (
+              <div className="flex gap-2">
+                <Input
+                  readOnly
+                  value={link.url}
+                  aria-label="Client upload link"
+                  onFocus={(event) => event.currentTarget.select()}
+                />
+                <Button type="button" variant="outline" onClick={copyUrl}>
+                  <Copy className="h-4 w-4" aria-hidden />
+                  Copy
+                </Button>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                This link can&apos;t be shown again. Replace it to get a new one.
+              </p>
+            )}
+            <p className="text-sm text-muted-foreground">
+              {link.uploadCount === 1
+                ? "1 file has come through this link."
+                : `${link.uploadCount} files have come through this link.`}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => setConfirm("replace")}>
+                Replace link
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setConfirm("off")}>
+                Turn off
+              </Button>
+            </div>
+          </>
+        )}
+      </CardContent>
+      <ConfirmDialog
+        open={confirm !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirm(null);
+        }}
+        title={confirm === "replace" ? "Replace the client upload link?" : "Turn off the client upload link?"}
+        description={
+          confirm === "replace"
+            ? "The old link stops working. Anyone using it will need the new one."
+            : "The old link stops working. Files already sent stay in your library."
+        }
+        confirmText={confirm === "replace" ? "Replace link" : "Turn off"}
+        destructive
+        onConfirm={confirm === "replace" ? makeLink : turnOff}
+      />
     </Card>
   );
 }
@@ -425,6 +599,8 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
 
   return (
     <div className="space-y-8">
+      <UploadLinkPanel />
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Upload new media</CardTitle>

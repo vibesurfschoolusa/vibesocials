@@ -107,6 +107,8 @@ export async function GET(request: Request) {
       perPlatformOverrides: true,
       createdAt: true,
       lastUsedAt: true,
+      // Client upload link (2026-11-10): the DTO reads only the sender's name and note from it.
+      metadata: true,
     },
   });
 

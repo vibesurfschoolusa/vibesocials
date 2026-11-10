@@ -28,6 +28,15 @@ export interface MediaItemDto {
    * null when it has never been posted. See {@link daysUntilRemoval}.
    */
   lastUsedAt: string | null;
+  /**
+   * Client upload link (2026-11-10): present only on a file sent through a
+   * workspace's upload link. The sender's name, or null when none was given (the
+   * card then says "your client"). Only this and {@link clientNote} are read
+   * from `metadata`; the rest of it never leaves the server.
+   */
+  clientSenderName?: string | null;
+  /** The note sent with a client upload link file, or null; present only on such a file. */
+  clientNote?: string | null;
 }
 
 /**
@@ -51,7 +60,22 @@ export type MediaItemDtoSource = Pick<
   | "createdAt"
 > & {
   lastUsedAt?: MediaItem["lastUsedAt"];
+  /** Optional like lastUsedAt: a caller that does not select it gets no client fields. */
+  metadata?: MediaItem["metadata"];
 };
+
+/** The sender's name and note of a client upload link file, or null for any other file. */
+function clientUploadFields(
+  metadata: MediaItem["metadata"] | undefined,
+): { clientSenderName: string | null; clientNote: string | null } | null {
+  if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) return null;
+  const record = metadata as Record<string, unknown>;
+  if (record.source !== "upload_link") return null;
+  return {
+    clientSenderName: typeof record.senderName === "string" ? record.senderName : null,
+    clientNote: typeof record.note === "string" ? record.note : null,
+  };
+}
 
 /** Map a MediaItem (or a select-narrowed subset) to its display DTO. */
 export function toMediaItemDto(item: MediaItemDtoSource): MediaItemDto {
@@ -65,6 +89,7 @@ export function toMediaItemDto(item: MediaItemDtoSource): MediaItemDto {
     perPlatformOverrides: item.perPlatformOverrides,
     createdAt: item.createdAt.toISOString(),
     lastUsedAt: item.lastUsedAt?.toISOString() ?? null,
+    ...clientUploadFields(item.metadata),
   };
 }
 
