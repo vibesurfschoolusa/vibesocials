@@ -2029,38 +2029,150 @@ describe("instagramClient.publishVideo — several photos (carousel)", () => {
     vi.unstubAllEnvs();
   });
 
+  /** A request's last path segment and its `fields`, e.g. "carousel-1?status_code". */
+  const shortName = (u: URL) => {
+    if (u.searchParams.get("is_carousel_item") === "true") return "child";
+    if (u.pathname.endsWith("/ig-account-1/media")) return "parent";
+    return `${u.pathname.split("/").pop()}?${u.searchParams.get("fields") ?? ""}`;
+  };
+
+  /** Exactly one media_publish, with exactly these fields. */
+  function expectOnePublish(publishRequests: URL[]) {
+    expect(publishRequests).toHaveLength(1);
+    const publish = publishRequests[0];
+    expect(publish.pathname.endsWith("/ig-account-1/media_publish")).toBe(true);
+    expect([...publish.searchParams.keys()].sort()).toEqual(["access_token", "creation_id"]);
+    expect(publish.searchParams.get("creation_id")).toBe("carousel-1");
+    expect(publish.searchParams.get("access_token")).toBe("page-access-token");
+  }
+
   it.each([2, 10])(
-    "%i photos: one child per photo in order, one CAROUSEL container, then (next step) one media_publish with the post id and link",
+    "%i photos ready at once: children in order, one CAROUSEL container, one status check and one media_publish, all in the first step",
     async (count) => {
       const { store, savedData } = makeStore();
       const graph = stubGraph();
 
-      const first = await instagramClient.publishVideo(ctx(count, { store }));
+      const result = await instagramClient.publishVideo(ctx(count, { store }));
 
-      // Step 1: the children, in the post's order, then the parent; nothing published yet.
-      expect(first).toEqual(continuation);
-      expect(graph.requests.map((u) => (u.searchParams.get("is_carousel_item") ? "child" : "parent"))).toEqual([
+      expect(result).toEqual(published);
+      expect(graph.requests.map(shortName)).toEqual([
         ...Array<string>(count).fill("child"),
         "parent",
-      ]);
-      expectChildren(graph.childRequests(), count);
-      expectParent(graph.parentRequests()[0], count);
-      expect(savedData()).toEqual(savedAt(0));
-      expect(JSON.stringify(savedData())).not.toContain("page-access-token");
-
-      // Step 2: one status check of the parent, FINISHED, then media_publish on it.
-      graph.requests.length = 0;
-      const second = await instagramClient.publishVideo(ctx(count, { store }));
-
-      expect(second).toEqual(published);
-      expect(graph.requests.map((u) => `${u.pathname.split("/").pop()}?${u.searchParams.get("fields") ?? ""}`)).toEqual([
         "carousel-1?status_code",
         "media_publish?",
         "media-9?permalink",
       ]);
-      expect(graph.publishRequests()[0].searchParams.get("creation_id")).toBe("carousel-1");
+      expectChildren(graph.childRequests(), count);
+      expectParent(graph.parentRequests()[0], count);
+      expectOnePublish(graph.publishRequests());
+      expect(JSON.stringify(savedData())).not.toContain("page-access-token");
     },
   );
+
+  it.each([2, 10])(
+    "%i photos not ready at once: the first step waits; the next one checks, then makes one media_publish with the post id and link",
+    async (count) => {
+      const { store, savedData } = makeStore();
+      const answers = ["IN_PROGRESS", "FINISHED"];
+      const graph = stubGraph({ status: () => json({ status_code: answers.shift() }) });
+
+      const first = await instagramClient.publishVideo(ctx(count, { store }));
+
+      expect(first).toEqual(continuation);
+      expect(graph.requests.map(shortName)).toEqual([
+        ...Array<string>(count).fill("child"),
+        "parent",
+        "carousel-1?status_code",
+      ]);
+      expect(savedData()).toEqual(savedAt(0, "carousel-1", 1));
+      expect(JSON.stringify(savedData())).not.toContain("page-access-token");
+
+      graph.requests.length = 0;
+      const second = await instagramClient.publishVideo(ctx(count, { store }));
+
+      expect(second).toEqual(published);
+      expect(graph.requests.map(shortName)).toEqual(["carousel-1?status_code", "media_publish?", "media-9?permalink"]);
+      expectOnePublish(graph.publishRequests());
+    },
+  );
+
+  it("saves the carousel before its first status check, so a step that dies after it resumes the same carousel", async () => {
+    const { store, savedData } = makeStore();
+    let savedAtCheck: unknown = "not checked";
+    const graph = stubGraph({
+      status: () => {
+        savedAtCheck = savedData();
+        return json({ status_code: "FINISHED" });
+      },
+    });
+
+    await instagramClient.publishVideo(ctx(2, { store }));
+
+    expect(savedAtCheck).toEqual(savedAt(0));
+    expectOnePublish(graph.publishRequests());
+  });
+
+  it("a step that runs again after the carousel was saved checks it and never creates a second one", async () => {
+    // The first step's output was lost after the save (its check said IN_PROGRESS).
+    const { store } = makeStore();
+    const answers = ["IN_PROGRESS", "FINISHED"];
+    const graph = stubGraph({ status: () => json({ status_code: answers.shift() }) });
+
+    await instagramClient.publishVideo(ctx(3, { store }));
+    const again = await instagramClient.publishVideo(ctx(3, { store }));
+
+    expect(again).toEqual(published);
+    expect(graph.childRequests()).toHaveLength(3);
+    expect(graph.parentRequests()).toHaveLength(1);
+    expectOnePublish(graph.publishRequests());
+  });
+
+  it("with too little of the step left for a check and the publish, saves the carousel and continues", async () => {
+    const { store, savedData } = makeStore();
+    // Enough for the three container calls (the clock does not move), not for the reserve.
+    const graph = stubGraph();
+
+    const result = await instagramClient.publishVideo(
+      ctx(2, { store, deadline: NOW + INSTAGRAM_PUBLISH_RESERVE_MS + MIN_REQUEST_WINDOW_MS - 1 }),
+    );
+
+    expect(result).toEqual(continuation);
+    expect(graph.statusRequests()).toHaveLength(0);
+    expect(graph.publishRequests()).toHaveLength(0);
+    expect(savedData()).toEqual(savedAt(0));
+  });
+
+  it("the daily cap on the carousel's publish clears it; the deferred attempt makes new photo containers and a new carousel", async () => {
+    const { store, savedData } = makeStore();
+    let publishes = 0;
+    const graph = stubGraph({
+      publish: () =>
+        ++publishes === 1
+          ? json({ error: { message: "m", type: "OAuthException", code: 9, error_subcode: 2207042 } }, 400)
+          : json({ id: "media-9" }),
+    });
+
+    const error = await failure(instagramClient.publishVideo(ctx(2, { store })));
+
+    expect(error?.code).toBe("RATE_LIMITED");
+    expect((error as { kind?: string } | null)?.kind).toBe("daily_limit");
+    expect(savedData()).toBeNull();
+
+    graph.requests.length = 0;
+    const deferred = await instagramClient.publishVideo(ctx(2, { store }));
+
+    expect(deferred).toEqual(published);
+    expect(graph.requests.map(shortName)).toEqual([
+      "child",
+      "child",
+      "parent",
+      "carousel-1?status_code",
+      "media_publish?",
+      "media-9?permalink",
+    ]);
+    // Children numbered on from the first attempt: new containers, not the old ones.
+    expect(graph.parentRequests()[0].searchParams.get("children")).toBe("child-3,child-4");
+  });
 
   it("takes the text from ctx.caption (cut to Instagram's limit), never from the list entries", async () => {
     const graph = stubGraph();
@@ -2176,13 +2288,14 @@ describe("instagramClient.publishVideo — several photos (carousel)", () => {
       ctx(2, { store: makeStore().store, mimeTypes: ["image/webp", "image/webp"] }),
     );
 
-    expect(result).toEqual(continuation);
+    expect(result).toEqual(published);
     expectChildren(graph.childRequests(), 2);
   });
 
   it("a parent not ready before the step ends continues in the next step and publishes once", async () => {
     const { store } = makeStore();
-    const answers = ["IN_PROGRESS", "IN_PROGRESS", "FINISHED"];
+    // The first answer is the creating step's own check.
+    const answers = ["IN_PROGRESS", "IN_PROGRESS", "IN_PROGRESS", "FINISHED"];
     const graph = stubGraph({ status: () => json({ status_code: answers.shift() }) });
 
     const outcomes = [];
@@ -2191,8 +2304,8 @@ describe("instagramClient.publishVideo — several photos (carousel)", () => {
     expect(outcomes).toEqual([continuation, continuation, continuation, published]);
     expect(graph.childRequests()).toHaveLength(4);
     expect(graph.parentRequests()).toHaveLength(1);
-    expect(graph.statusRequests()).toHaveLength(3);
-    expect(graph.publishRequests()).toHaveLength(1);
+    expect(graph.statusRequests()).toHaveLength(4);
+    expectOnePublish(graph.publishRequests());
   });
 
   it("a re-run of the creating step (its output was lost) checks the saved carousel instead of making a second", async () => {
@@ -2210,7 +2323,10 @@ describe("instagramClient.publishVideo — several photos (carousel)", () => {
     const { store } = makeStore();
     const graph = stubGraph({ status: () => json({ status_code: "IN_PROGRESS" }) });
 
-    for (let step = 0; step < INSTAGRAM_STATUS_MAX_CHECKS; step++) await instagramClient.publishVideo(ctx(2, { store }));
+    // The creating step makes the first check, so four steps continue and the fifth check gives up.
+    for (let step = 0; step < INSTAGRAM_STATUS_MAX_CHECKS - 1; step++) {
+      expect(await instagramClient.publishVideo(ctx(2, { store }))).toEqual(continuation);
+    }
     const error = await failure(instagramClient.publishVideo(ctx(2, { store })));
 
     expect(error?.code).toBe("INSTAGRAM_CAROUSEL_TIMEOUT");
@@ -2230,14 +2346,38 @@ describe("instagramClient.publishVideo — several photos (carousel)", () => {
     expect(graph.publishRequests()).toHaveLength(0);
   });
 
+  it("a carousel Instagram reports as EXPIRED keeps the code with a photo message, and no publish", async () => {
+    const { store } = makeStore(savedAt(60_000));
+    const graph = stubGraph({ status: () => json({ status_code: "EXPIRED" }) });
+
+    const error = await failure(instagramClient.publishVideo(ctx(2, { store })));
+
+    expect(error?.code).toBe("INSTAGRAM_CONTAINER_EXPIRED");
+    expect(error?.message).toBe("Instagram discarded the photos before they were posted. Please retry.");
+    expect(graph.publishRequests()).toHaveLength(0);
+  });
+
+  it("a saved carousel already PUBLISHED is PUBLISH_UNCONFIRMED and is never sent to media_publish", async () => {
+    const { store } = makeStore(savedAt(60_000));
+    const graph = stubGraph({ status: () => json({ status_code: "PUBLISHED" }) });
+
+    const error = await failure(instagramClient.publishVideo(ctx(2, { store })));
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect(graph.publishRequests()).toHaveLength(0);
+    expect(graph.childRequests()).toHaveLength(0);
+  });
+
   it("a saved carousel older than 23 h is replaced by a new one, not checked", async () => {
     const { store, savedData } = makeStore(savedAt(INSTAGRAM_CONTAINER_MAX_AGE_MS + 1, "old-carousel", 1));
-    const graph = stubGraph();
+    const graph = stubGraph({ status: () => json({ status_code: "IN_PROGRESS" }) });
 
     expect(await instagramClient.publishVideo(ctx(2, { store }))).toEqual(continuation);
-    expect(graph.statusRequests()).toHaveLength(0);
+    // Only the new carousel is checked.
+    expect(graph.statusRequests().map((u) => u.pathname.split("/").pop())).toEqual(["carousel-1"]);
     expect(graph.childRequests()).toHaveLength(2);
-    expect(savedData()).toEqual(savedAt(0));
+    expect(savedData()).toEqual(savedAt(0, "carousel-1", 1));
   });
 
   it("a spent step budget before the first photo is retry-safe: PUBLISH_TIME_BUDGET_EXCEEDED, no request", async () => {

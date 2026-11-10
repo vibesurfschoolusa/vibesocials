@@ -678,8 +678,9 @@ async function fetchInstagramPermalink(
 // (https://developers.facebook.com/docs/instagram-platform/content-publishing, "Carousel posts"):
 // one container per photo with is_carousel_item=true, then one container with
 // media_type=CAROUSEL, the children's ids in order and the caption, then media_publish on
-// it. The parent waits across steps with the same saved state a REELS video uses (see the
-// header), so a step that ends before it is FINISHED never creates a second carousel. The
+// it. The parent is checked once in the step that creates it and, if not yet FINISHED,
+// waits across steps with the same saved state a REELS video uses (see the header), so a
+// step that ends before it is FINISHED never creates a second carousel. The
 // children are not saved: if a step fails before the parent exists, the next try makes new
 // ones, and Meta discards the unused ones after 24 h. Nothing is posted before media_publish.
 
@@ -817,13 +818,22 @@ async function publishInstagramCarousel(args: {
       });
 
       if (store) {
-        await store.save<InstagramContainerState>(INSTAGRAM_CONTAINER_STATE_KIND, {
-          data: { containerId, createdAt: new Date().toISOString(), checks: 0 },
-        });
-        return continueInAMinute();
-      }
+        // Saved before the check below, so a step that dies between that check and
+        // media_publish resumes this carousel and never creates a second one.
+        const state: InstagramContainerState = { containerId, createdAt: new Date().toISOString(), checks: 0 };
+        await store.save<InstagramContainerState>(INSTAGRAM_CONTAINER_STATE_KIND, { data: state });
 
-      await waitForInstagramContainer({ containerId, accessToken, connection, deadline });
+        // Photos are usually ready at once: check now and publish in this step when
+        // FINISHED, instead of always spending a minute and a step. The check counts
+        // toward the five. Without room for a check and the publish, the next step checks.
+        if (remainingMs(deadline) < INSTAGRAM_PUBLISH_RESERVE_MS + MIN_REQUEST_WINDOW_MS) {
+          return continueInAMinute();
+        }
+        const pending = await checkSavedContainer({ state, accessToken, connection, store, deadline });
+        if (pending) return pending;
+      } else {
+        await waitForInstagramContainer({ containerId, accessToken, connection, deadline });
+      }
     }
 
     return await publishInstagramContainer({
