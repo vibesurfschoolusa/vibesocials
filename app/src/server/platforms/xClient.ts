@@ -660,15 +660,16 @@ async function postTweet(args: {
   oauth: OAuth;
   token: XToken;
   tweetText: string;
-  mediaId: string;
+  /** In the order they appear on the post; one for a single photo or video, up to 4 photos. */
+  mediaIds: string[];
   deadline: number | undefined;
 }): Promise<PublishResult> {
-  const { oauth, token, tweetText, mediaId, deadline } = args;
+  const { oauth, token, tweetText, mediaIds, deadline } = args;
 
   // Create tweet with media using API v2 (Free tier has access to v2 endpoints)
   console.log("[X OAuth 1.0a] Creating tweet with v2 API", {
     textLength: tweetText.length,
-    mediaId,
+    mediaIds,
   });
 
   // Try v1.1 API first (more reliable with OAuth 1.0a), fallback to v2
@@ -676,7 +677,8 @@ async function postTweet(args: {
   const v1Url = "https://api.twitter.com/1.1/statuses/update.json";
   const v1Params = {
     status: tweetText,
-    media_ids: mediaId,
+    // v1.1 takes a comma-separated list; one id is the same string as before.
+    media_ids: mediaIds.join(","),
   };
 
   const v1RequestData = {
@@ -741,7 +743,7 @@ async function postTweet(args: {
   const tweetPayload = {
     text: tweetText,
     media: {
-      media_ids: [mediaId],
+      media_ids: [...mediaIds],
     },
   };
 
@@ -1360,7 +1362,7 @@ async function publishChunked(args: {
         oauth,
         token,
         tweetText: computeTweetText(caption),
-        mediaId: current.mediaId,
+        mediaIds: [current.mediaId],
         deadline,
       });
     }
@@ -1378,6 +1380,81 @@ async function publishChunked(args: {
   } finally {
     await closeSource();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Several photos in one post (07b)
+// ---------------------------------------------------------------------------
+
+/**
+ * X allows at most 4 photos on a post ("A Post may include up to 4 photos, 1 animated GIF, or
+ * 1 video": https://docs.x.com/x-api/posts/create-post). Photos after the fourth are left out;
+ * the Create page tells the user so.
+ */
+export const X_MAX_PHOTOS = 4;
+
+/** The photo types a post with several files may hold (the create route guarantees these). */
+const X_MULTI_PHOTO_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+/**
+ * A post with several photos: each of the first {@link X_MAX_PHOTOS} goes through the
+ * single-photo upload, one after another, then ONE tweet names every media id in order. Each X
+ * post is paid for, so there is exactly one commit call; the uploads before it publish nothing
+ * and may be repeated by a retry. A photo that cannot be uploaded fails the whole post before
+ * the tweet: never some of the photos.
+ */
+async function publishPhotos(args: {
+  ctx: PublishContext;
+  oauth: OAuth;
+  token: XToken;
+  consumerKey: string;
+  consumerSecret: string;
+}): Promise<PublishResult> {
+  const { ctx, oauth, token, consumerKey, consumerSecret } = args;
+  const { mediaItems, caption, deadline } = ctx;
+
+  // Checked across every file, sent or not, before anything is requested.
+  if (mediaItems.some((item) => !X_MULTI_PHOTO_TYPES.has(item.mimeType ?? ""))) {
+    throw xUploadError(
+      "X_INVALID_MEDIA_TYPE",
+      "A post with several files can only hold JPEG, PNG or WebP photos on X. No post was created.",
+    );
+  }
+
+  const sent = mediaItems.slice(0, X_MAX_PHOTOS);
+  if (mediaItems.length > sent.length) {
+    console.log("[X OAuth 1.0a] X takes at most 4 photos; the rest are left out", {
+      photos: mediaItems.length,
+      sent: sent.length,
+    });
+  }
+
+  const mediaIds: string[] = [];
+  for (const [index, item] of sent.entries()) {
+    try {
+      mediaIds.push(
+        await uploadMedia(
+          consumerKey,
+          consumerSecret,
+          token.key,
+          token.secret,
+          item.storageLocation,
+          item.mimeType || "",
+          deadline,
+        ),
+      );
+    } catch (error) {
+      // An upload refusal names the photo; its code and status stay, so retry classification is
+      // unchanged. A rate limit or a spent budget passes through as it is.
+      const code = (error as { code?: unknown } | null)?.code;
+      if (error instanceof Error && (code === "X_IMAGE_UPLOAD_FAILED" || code === "X_MEDIA_DOWNLOAD_FAILED")) {
+        error.message = `Photo ${index + 1} of ${sent.length} could not be uploaded to X (${error.message}). No post was created.`;
+      }
+      throw error;
+    }
+  }
+
+  return postTweet({ oauth, token, tweetText: computeTweetText(caption), mediaIds, deadline });
 }
 
 export const xClient: PlatformClient = {
@@ -1408,6 +1485,16 @@ export const xClient: PlatformClient = {
       const error = new Error("Missing X consumer credentials") as Error & { code: string };
       error.code = "X_NO_CONSUMER_KEYS";
       throw error;
+    }
+
+    if (ctx.mediaItems.length > 1) {
+      return publishPhotos({
+        ctx,
+        oauth: createOAuth(consumerKey, consumerSecret),
+        token: { key: accessToken, secret: accessTokenSecret },
+        consumerKey,
+        consumerSecret,
+      });
     }
 
     // X supports both images and videos
@@ -1483,7 +1570,7 @@ export const xClient: PlatformClient = {
     // is longer, we'll truncate with ellipsis.
     const tweetText = computeTweetText(caption);
 
-    return postTweet({ oauth, token, tweetText, mediaId, deadline });
+    return postTweet({ oauth, token, tweetText, mediaIds: [mediaId], deadline });
   },
 
   async refreshToken(connection: SocialConnection): Promise<SocialConnection> {

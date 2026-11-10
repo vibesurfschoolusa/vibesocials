@@ -2298,3 +2298,274 @@ describe("xClient.publishVideo — streamed chunked upload (jobs B3, M3)", () =>
     });
   });
 });
+
+
+// 07b: a post with several photos becomes ONE X post with up to 4 photos
+// (https://docs.x.com/x-api/posts/create-post: "A Post may include up to 4 photos";
+// `media.media_ids` are attached "in the order given"). Each photo goes through the same
+// whole-file image upload the single-photo path uses; then one tweet create names every
+// media id. Photos after the fourth are left out. Each X post is paid for, so a multi-photo
+// post must never create more than one.
+describe("xClient.publishVideo — several photos in one post (07b)", () => {
+  type Call = Parameters<typeof fetch>;
+  type Reply = () => Response | Promise<Response>;
+  const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...headers } });
+
+  /** Photo n is stored at .../pn and holds the single byte n, so its upload is recognisable. */
+  const photo = (n: number, mimeType = "image/jpeg") =>
+    ({
+      id: `media-${n}`,
+      mimeType,
+      storageLocation: `https://blob.example.com/p${n}`,
+      sizeBytes: 1,
+      originalFilename: `p${n}.jpg`,
+      baseCaption: "",
+      perPlatformOverrides: null,
+    }) as unknown as MediaItem;
+
+  function photosCtx(items: MediaItem[], over: Partial<PublishContext> = {}): PublishContext {
+    return {
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: {
+        id: "conn-x",
+        platform: "x",
+        accessToken: "access-token",
+        refreshToken: "access-token-secret",
+      } as unknown as SocialConnection,
+      mediaItem: { ...items[0], baseCaption: "ignored base caption" } as MediaItem,
+      mediaItems: items,
+      caption: "hello @someone there",
+      ...over,
+    };
+  }
+  const photos = (count: number) => Array.from({ length: count }, (_, i) => photo(i + 1));
+
+  const labelOf = (call: Call): string => {
+    const url = String(call[0]);
+    const blob = /blob\.example\.com\/(p\d+)/.exec(url);
+    if (blob) return blob[1];
+    if (url.includes("upload.twitter.com")) return "IMAGE";
+    if (url.includes("statuses/update.json")) return "v1";
+    if (url.includes("/2/tweets")) return "v2";
+    return "?";
+  };
+
+  /**
+   * Fakes the blob and X. The image upload answers media id `10<n>` for photo n (read from the
+   * uploaded bytes). Each route has a script of answers used in order, then a default.
+   */
+  function stubX(opts: { image?: Reply[]; blob?: Record<number, Reply>; v1?: Reply[]; v2?: Reply[] } = {}) {
+    const image = [...(opts.image ?? [])];
+    const v1 = [...(opts.v1 ?? [])];
+    const v2 = [...(opts.v2 ?? [])];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      const blob = /blob\.example\.com\/p(\d+)/.exec(url);
+      if (blob) {
+        const n = Number(blob[1]);
+        return (opts.blob?.[n] ?? (() => new Response(new Uint8Array([n]))))();
+      }
+      if (url.includes("upload.twitter.com")) {
+        const scripted = image.shift();
+        if (scripted) return scripted();
+        const data = (init?.body as URLSearchParams).get("media_data") ?? "";
+        return json({ media_id_string: `10${Buffer.from(data, "base64")[0]}` });
+      }
+      if (url.includes("statuses/update.json")) return (v1.shift() ?? (() => json({ id_str: "tweet-1" })))();
+      if (url.includes("/2/tweets")) return (v2.shift() ?? (() => json({ data: { id: "tweet-2", text: "x" } }, 201)))();
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const where = (label: string) => fetchMock.mock.calls.filter((c) => labelOf(c) === label);
+    return {
+      fetchMock,
+      sequence: () => fetchMock.mock.calls.map(labelOf),
+      v1Calls: () => where("v1"),
+      v2Calls: () => where("v2"),
+      tweets: () => [...where("v1"), ...where("v2")],
+    };
+  }
+  const formOf = (call: Call | undefined) => (call?.[1] as RequestInit).body as URLSearchParams;
+  const jsonOf = (call: Call | undefined) => JSON.parse(String((call?.[1] as RequestInit).body)) as unknown;
+
+  const failure = (c: PublishContext) =>
+    xClient.publishVideo(c).then(
+      () => null,
+      (e: unknown) => e as Error & { code?: string; status?: number },
+    );
+
+  beforeEach(() => {
+    vi.stubEnv("X_CONSUMER_KEY", "consumer-key");
+    vi.stubEnv("X_CONSUMER_SECRET", "consumer-secret");
+    for (const level of ["log", "warn", "error"] as const) vi.spyOn(console, level).mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("one photo: the same requests as before (one upload, one v1.1 tweet with its media id)", async () => {
+    const x = stubX();
+
+    const result = await xClient.publishVideo(photosCtx([photo(1)], { caption: "hello" }));
+
+    expect(result).toEqual({ externalPostId: "tweet-1" });
+    expect(x.sequence()).toEqual(["p1", "IMAGE", "v1"]);
+    expect(Object.fromEntries(formOf(x.v1Calls()[0]))).toEqual({ status: "hello", media_ids: "101" });
+  });
+
+  it("two photos: each uploaded in order, then ONE tweet with both media ids and the caption", async () => {
+    const x = stubX();
+
+    const result = await xClient.publishVideo(photosCtx(photos(2)));
+
+    expect(result).toEqual({ externalPostId: "tweet-1" });
+    expect(x.sequence()).toEqual(["p1", "IMAGE", "p2", "IMAGE", "v1"]);
+    // The text comes from ctx.caption (mentions removed, as for one photo), never from mediaItems.
+    expect(Object.fromEntries(formOf(x.v1Calls()[0]))).toEqual({
+      status: computeTweetText("hello @someone there"),
+      media_ids: "101,102",
+    });
+    expect(x.tweets()).toHaveLength(1);
+  });
+
+  it("four photos: four uploads in order, then one tweet naming all four", async () => {
+    const x = stubX();
+
+    const result = await xClient.publishVideo(photosCtx(photos(4)));
+
+    expect(result).toEqual({ externalPostId: "tweet-1" });
+    expect(x.sequence()).toEqual(["p1", "IMAGE", "p2", "IMAGE", "p3", "IMAGE", "p4", "IMAGE", "v1"]);
+    expect(formOf(x.v1Calls()[0]).get("media_ids")).toBe("101,102,103,104");
+    expect(x.tweets()).toHaveLength(1);
+  });
+
+  it("five photos: only the first four are downloaded and sent; the fifth is left out", async () => {
+    const x = stubX();
+
+    const result = await xClient.publishVideo(photosCtx(photos(5)));
+
+    expect(result).toEqual({ externalPostId: "tweet-1" });
+    expect(x.sequence()).toEqual(["p1", "IMAGE", "p2", "IMAGE", "p3", "IMAGE", "p4", "IMAGE", "v1"]);
+    expect(formOf(x.v1Calls()[0]).get("media_ids")).toBe("101,102,103,104");
+  });
+
+  it("ten photos: still four uploads and one tweet", async () => {
+    const x = stubX();
+
+    await expect(xClient.publishVideo(photosCtx(photos(10)))).resolves.toEqual({ externalPostId: "tweet-1" });
+    expect(x.sequence().filter((l) => l === "IMAGE")).toHaveLength(4);
+    expect(x.tweets()).toHaveLength(1);
+  });
+
+  it("v1.1 rejected: the v2 fallback carries the same media ids in order, as a JSON array", async () => {
+    const x = stubX({ v1: [() => json({ errors: [] }, 403)] });
+
+    const result = await xClient.publishVideo(photosCtx(photos(5)));
+
+    expect(result).toEqual({ externalPostId: "tweet-2" });
+    expect(x.v2Calls()).toHaveLength(1);
+    expect(jsonOf(x.v2Calls()[0])).toEqual({
+      text: computeTweetText("hello @someone there"),
+      media: { media_ids: ["101", "102", "103", "104"] },
+    });
+  });
+
+  it("the second photo's upload fails: no tweet, one clear message naming the photo", async () => {
+    const x = stubX({ image: [() => json({ media_id_string: "101" }), () => json({ error: "bad" }, 400)] });
+
+    const error = await failure(photosCtx(photos(3)));
+
+    expect(error?.code).toBe("X_IMAGE_UPLOAD_FAILED");
+    expect(error?.status).toBe(400);
+    expect(error?.message).toBe(
+      "Photo 2 of 3 could not be uploaded to X (X media upload failed (status 400)). No post was created.",
+    );
+    expect(x.sequence()).toEqual(["p1", "IMAGE", "p2", "IMAGE"]);
+    expect(x.tweets()).toHaveLength(0);
+  });
+
+  it("the second photo cannot be read from storage: no tweet, one clear message", async () => {
+    const x = stubX({ blob: { 2: () => new Response(null, { status: 404 }) } });
+
+    const error = await failure(photosCtx(photos(2)));
+
+    expect(error?.code).toBe("X_MEDIA_DOWNLOAD_FAILED");
+    expect(error?.message).toBe(
+      "Photo 2 of 2 could not be uploaded to X (Failed to fetch media from storage (status 404)). No post was created.",
+    );
+    expect(x.tweets()).toHaveLength(0);
+  });
+
+  it("a rate limit on a photo upload stays RATE_LIMITED, and no tweet is made", async () => {
+    const x = stubX({ image: [() => json({ media_id_string: "101" }), () => new Response("", { status: 429 })] });
+
+    const error = await failure(photosCtx(photos(2)));
+
+    expect(error?.code).toBe("RATE_LIMITED");
+    expect(x.tweets()).toHaveLength(0);
+  });
+
+  it("the tweet create answers 502: PUBLISH_UNCONFIRMED, sent once, no v2, not re-run by the in-step retry", async () => {
+    const x = stubX({ v1: [() => json({ errors: [] }, 502)] });
+
+    await expect(
+      withTransientRetries(() => xClient.publishVideo(photosCtx(photos(3))), { sleep: async () => {} }),
+    ).rejects.toMatchObject({ code: "PUBLISH_UNCONFIRMED", message: PUBLISH_UNCONFIRMED_MESSAGE });
+    expect(x.v1Calls()).toHaveLength(1);
+    expect(x.v2Calls()).toHaveLength(0);
+  });
+
+  it("the tweet create times out: PUBLISH_UNCONFIRMED, sent once", async () => {
+    const timeout = Object.assign(new Error("Request timed out after 30000ms"), { code: "FETCH_TIMEOUT" });
+    const x = stubX({ v1: [() => Promise.reject(timeout)] });
+
+    expect((await failure(photosCtx(photos(2))))?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(x.tweets()).toHaveLength(1);
+  });
+
+  it.each([
+    ["a video", "video/mp4"],
+    ["a GIF", "image/gif"],
+    ["no type", ""],
+  ])("%s among several photos: nothing is sent", async (_name, mimeType) => {
+    const x = stubX();
+
+    const error = await failure(photosCtx([photo(1), photo(2, mimeType), photo(3)]));
+
+    expect(error?.code).toBe("X_INVALID_MEDIA_TYPE");
+    expect(x.fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("a non-image after the fourth photo is refused too (nothing sent)", async () => {
+    const x = stubX();
+
+    const error = await failure(photosCtx([...photos(4), photo(5, "video/mp4")]));
+
+    expect(error?.code).toBe("X_INVALID_MEDIA_TYPE");
+    expect(x.fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not read or write the saved upload state (that is the video path's)", async () => {
+    stubX();
+    const store = { load: vi.fn(), save: vi.fn(), clear: vi.fn() } as unknown as UploadStateStore;
+
+    await xClient.publishVideo(photosCtx(photos(2), { uploadState: store }));
+
+    expect(vi.mocked(store.load)).not.toHaveBeenCalled();
+    expect(vi.mocked(store.save)).not.toHaveBeenCalled();
+  });
+
+  it("a spent step budget: nothing is sent", async () => {
+    const x = stubX();
+
+    const error = await failure(photosCtx(photos(2), { deadline: Date.now() + 1_000 }));
+
+    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(x.fetchMock).not.toHaveBeenCalled();
+  });
+});
