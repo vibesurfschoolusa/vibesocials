@@ -127,6 +127,50 @@ export function buildUploadPostBody(input: BuildUploadPostBodyInput): CreatePost
   return body;
 }
 
+/** One entry of the `media` list (07a), in the order the photos were shown. */
+export interface CreatePostMediaEntry {
+  blobUrl: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+// Request body for two or more freshly uploaded photos: `media`, and none of
+// the single-file fields (the route refuses both together).
+export interface CreatePostMediaRequest extends CreatePostBodyBase {
+  media: CreatePostMediaEntry[];
+}
+
+export interface BuildPhotosPostBodyInput extends CommonBodyInput {
+  /** The attached photos in the order shown; the first is the cover. */
+  blobs: UploadedBlob[];
+}
+
+/**
+ * Body for the Create page's attached photos (07c). One photo gives exactly
+ * today's single-file body; two or more give `media` instead of the
+ * single-file fields, with every other field as the single-file body has it.
+ */
+export function buildPhotosPostBody(
+  input: BuildPhotosPostBodyInput,
+): CreatePostRequest | CreatePostMediaRequest {
+  const [first, ...rest] = input.blobs;
+  if (!first) throw new Error("buildPhotosPostBody needs at least one photo.");
+  const single = buildUploadPostBody({ ...input, blob: first });
+  if (rest.length === 0) return single;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- dropped on purpose: `media` replaces them
+  const { blobUrl, filename, mimeType, sizeBytes, ...common } = single;
+  return {
+    ...common,
+    media: input.blobs.map((blob) => ({
+      blobUrl: blob.url,
+      filename: blob.filename,
+      mimeType: blob.mimeType,
+      sizeBytes: blob.sizeBytes,
+    })),
+  };
+}
+
 /** Body for posting an already-persisted library item (no upload). */
 export function buildReusePostBody(input: BuildReusePostBodyInput): CreatePostReuseRequest {
   const body: CreatePostReuseRequest = {

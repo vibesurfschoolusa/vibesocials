@@ -5,6 +5,7 @@ import type { Platform } from "@prisma/client";
 
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import { MediaCountBadge, mediaCountBadge } from "@/components/media-thumb";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { platformLabel } from "@/lib/platforms";
 import { buildPlatformPreview } from "@/lib/platformPreview";
@@ -25,6 +26,8 @@ export interface PlatformPreviewListProps {
   mediaUrl: string | null;
   /** Attached media's MIME type, used to pick an image vs. video thumbnail. */
   mediaMimeType: string | null;
+  /** How many photos are attached (07c); above 1 the first gets a count badge. */
+  mediaCount?: number;
 }
 
 /**
@@ -46,6 +49,7 @@ export function PlatformPreviewList({
   user,
   mediaUrl,
   mediaMimeType,
+  mediaCount,
 }: PlatformPreviewListProps) {
   if (platforms.length === 0) {
     return null;
@@ -67,6 +71,7 @@ export function PlatformPreviewList({
             user={user}
             mediaUrl={mediaUrl}
             mediaMimeType={mediaMimeType}
+            mediaCount={mediaCount}
           />
         ))}
       </div>
@@ -81,6 +86,7 @@ function PlatformPreviewCard({
   user,
   mediaUrl,
   mediaMimeType,
+  mediaCount,
 }: {
   platform: Platform;
   caption: string;
@@ -88,11 +94,14 @@ function PlatformPreviewCard({
   user?: CaptionFooterUser | null;
   mediaUrl: string | null;
   mediaMimeType: string | null;
+  mediaCount?: number;
 }) {
   const preview = buildPlatformPreview({ platform, caption, override, user });
   const headingId = `platform-preview-heading-${platform}`;
   const isImage = mediaMimeType?.startsWith("image/") ?? false;
   const isVideo = mediaMimeType?.startsWith("video/") ?? false;
+  // Several photos (07c): the first is shown with a count badge over it.
+  const several = isImage && mediaCountBadge(mediaCount) !== null;
 
   return (
     <Card
@@ -112,7 +121,18 @@ function PlatformPreviewCard({
         )}
       </div>
 
-      {mediaUrl && isImage && (
+      {mediaUrl && several && (
+        <div className="relative">
+          {/* eslint-disable-next-line @next/next/no-img-element -- the same preview as below, with the photo count over it */}
+          <img
+            src={mediaUrl}
+            alt=""
+            className="h-32 w-full rounded-[var(--radius)] border border-border object-cover"
+          />
+          <MediaCountBadge count={mediaCount} />
+        </div>
+      )}
+      {mediaUrl && isImage && !several && (
         // eslint-disable-next-line @next/next/no-img-element -- reuses the composer's existing local object-URL / already-public blob preview (see previewUrl / reuseItem in create-post-form.tsx); not a fresh upload, decorative duplicate of the media picked above so alt is empty
         <img
           src={mediaUrl}

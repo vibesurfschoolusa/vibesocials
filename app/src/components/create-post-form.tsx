@@ -7,6 +7,14 @@ import { upload } from '@vercel/blob/client';
 import { explainUploadFailure, UploadRefusedError } from "@/lib/uploadFailure";
 import { PlugZap, Sparkles } from "lucide-react";
 import type { Platform } from "@prisma/client";
+import {
+  AddPhotosButton,
+  AttachedPhotos,
+  patchPhoto,
+  photoSetReady,
+  uploadPhotosInOrder,
+  type AttachedPhoto,
+} from "./composer/attached-photos";
 import { PlatformCaptionEditor } from "./composer/platform-caption-editor";
 import { PlatformPreviewList } from "./composer/platform-preview";
 import { LocationAutocomplete } from "./location-autocomplete";
@@ -36,15 +44,26 @@ import {
   composerSubmitOutcome,
 } from "@/lib/composerSubmitOutcome";
 import {
+  buildPhotosPostBody,
   buildReusePostBody,
   buildUploadPostBody,
+  type CreatePostMediaRequest,
   type CreatePostRequest,
   type CreatePostReuseRequest,
   type DeferredPostFields,
 } from "@/lib/createPostRequest";
 import type { MediaItemDto } from "@/lib/mediaDto";
 import { cleanPlatformOverrides, type PlatformOverrides } from "@/lib/platformOverrides";
-import { prepareUploadFile } from "@/lib/prepareUploadFile";
+import {
+  addPhotos,
+  MAX_POST_MEDIA,
+  movePhoto,
+  MULTI_PHOTO_MIME_TYPES,
+  multiPhotoPlatformNotes,
+  photoPickProblem,
+  removePhoto,
+} from "@/lib/postMedia";
+import { isHeicFile, prepareUploadFile } from "@/lib/prepareUploadFile";
 import { shouldTakeSharedFile, takeSharedFile } from "@/lib/sharedFile";
 import { TIKTOK_DISCLOSURE_INCOMPLETE_TEXT, tiktokPublishBlock } from "@/lib/tiktokPostRules";
 import {
@@ -220,6 +239,15 @@ function CreatePostFormInner({
   // later sees a different count and is dropped.
   const fileSelectionRef = useRef(0);
 
+  // 07c: two or more photos in one post. Empty for a single file, which keeps
+  // today's path (uploadFile / ensureUploaded) untouched. The first is the cover.
+  const [photoSet, setPhotoSet] = useState<AttachedPhoto[]>([]);
+  // A pick of several photos is being prepared (HEIC -> JPEG, shrinking).
+  const [preparingPhotos, setPreparingPhotos] = useState(false);
+  const photoKeyRef = useRef(0);
+  // Chains every set upload so the photos upload one after another, retries too.
+  const photoQueueRef = useRef<Promise<void>>(Promise.resolve());
+
   const [tiktokMetadata, setTiktokMetadata] = useState<TikTokPostMetadata>({
     privacyLevel: "",
     disableComment: true,
@@ -277,7 +305,7 @@ function CreatePostFormInner({
   // `uploadFile` alone (a real File only exists in the upload flow), so reuse
   // mode needs the equivalent signal from `reuseItem` instead. `null` until
   // some media is chosen.
-  const activeMimeType = uploadFile?.type ?? reuseItem?.mimeType ?? null;
+  const activeMimeType = photoSet[0]?.file.type ?? uploadFile?.type ?? reuseItem?.mimeType ?? null;
 
   // 2026-11-01 audit: a platform whose client can't publish the chosen media
   // (YouTube/TikTok are video-only, Facebook Page images-only) is shown
@@ -359,16 +387,18 @@ function CreatePostFormInner({
 
   // Build (and clean up) an object URL for the attached file so we can render
   // an inline media preview without touching the upload flow.
+  // With several photos it is the cover's (the platform previews show it).
+  const previewFile = photoSet[0]?.file ?? uploadFile;
   useEffect(() => {
-    if (!uploadFile) {
+    if (!previewFile) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs derived preview state with the attached file; pre-existing pattern newly flagged by react-hooks 7.1 (required by eslint-config-next 16.4)
       setPreviewUrl(null);
       return;
     }
-    const objectUrl = URL.createObjectURL(uploadFile);
+    const objectUrl = URL.createObjectURL(previewFile);
     setPreviewUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
-  }, [uploadFile]);
+  }, [previewFile]);
 
   // Clear the inline TikTok privacy validation once a level is chosen.
   useEffect(() => {
@@ -547,6 +577,8 @@ function CreatePostFormInner({
   // the installed app on Android (the effect below). Null clears the pick.
   async function attachPickedFile(pickedFile: File | null) {
     const selection = ++fileSelectionRef.current;
+    // A new pick (or none) replaces any attached photos too.
+    setPhotoSet((prev) => (prev.length === 0 ? prev : []));
     setUploadFile(null);
     setVideoDurationSec(null);
     setUploadedBlob(null);
@@ -619,6 +651,140 @@ function CreatePostFormInner({
     }
   }
 
+  // 07c: one photo of a set, uploaded the way ensureUploaded uploads a single
+  // file (same key, route and storage-full sentence) but without its
+  // one-file state, which the single path keeps for itself.
+  async function uploadPhoto(file: File, onProgress: (percent: number) => void): Promise<UploadedBlobInfo> {
+    let settled = false;
+    try {
+      const newBlob = await upload(generateBlobKey(file), file, {
+        access: "public",
+        handleUploadUrl: "/api/upload",
+        onUploadProgress: (event) => {
+          if (!settled) onProgress(event.percentage);
+        },
+      });
+      return { url: newBlob.url, filename: file.name, mimeType: file.type, sizeBytes: file.size };
+    } catch (err: unknown) {
+      throw await explainUploadFailure(err);
+    } finally {
+      settled = true;
+    }
+  }
+
+  // Queue photos for upload behind any already uploading. `captionKey` is the
+  // first photo of a fresh pick: the AI caption is written from it, once.
+  function queuePhotoUploads(
+    entries: { key: string; file: File }[],
+    isStale: () => boolean,
+    captionKey: string | null,
+  ) {
+    const writeCaption = captionKey !== null && autoCaptionEnabled;
+    photoQueueRef.current = photoQueueRef.current.then(() =>
+      uploadPhotosInOrder(entries, {
+        upload: uploadPhoto,
+        isStale,
+        onUpdate: (key, patch) => {
+          setPhotoSet((prev) => patchPhoto(prev, key, patch));
+          if (key === captionKey && patch.status === "failed") setAutoCaptionLoading(false);
+        },
+        onUploaded: (key, blob) => {
+          if (key !== captionKey) return;
+          if (!writeCaption) {
+            setAutoCaptionLoading(false);
+            return;
+          }
+          const file = entries.find((entry) => entry.key === key)?.file ?? null;
+          void runAutoCaptionFromMedia({ overwrite: false, blobOverride: blob, fileOverride: file, isStale });
+        },
+      }),
+    );
+  }
+
+  // 07c: several photos picked at once (`replace`: in the main input, which
+  // replaces what is attached) or added with "Add photos". A pick that breaks
+  // a rule attaches nothing and says why (lib/postMedia.ts).
+  async function attachPickedPhotos(picked: File[], replace: boolean) {
+    const attachedCount = replace ? 0 : Math.max(photoSet.length, 1);
+    // An iPhone photo counts as the JPEG it becomes; checked again after.
+    const problem = photoPickProblem(
+      attachedCount,
+      picked.map((file) => ({ type: isHeicFile(file) ? "image/jpeg" : file.type })),
+    );
+    if (problem) {
+      setUploadError(problem);
+      if (replace) setFileInputKey((key) => key + 1);
+      return;
+    }
+
+    if (replace) {
+      void attachPickedFile(null);
+      setUploadProgress(null);
+    }
+    const selection = fileSelectionRef.current;
+    const isStale = () => selection !== fileSelectionRef.current;
+    // Adding to a single attached photo: it becomes the first of the set.
+    const single =
+      !replace && photoSet.length === 0 && uploadFile && uploadedBlob
+        ? { file: uploadFile, blob: uploadedBlob }
+        : null;
+    setUploadError(null);
+    setShowSuccess(false);
+    setPreparingPhotos(true);
+    if (replace) setAutoCaptionLoading(true);
+
+    try {
+      const prepared: File[] = [];
+      for (const file of picked) prepared.push(await prepareUploadFile(file));
+      if (isStale()) return;
+
+      const typeProblem = photoPickProblem(attachedCount, prepared);
+      if (typeProblem) throw new Error(typeProblem);
+
+      const nextKey = () => `photo-${++photoKeyRef.current}`;
+      const entries: AttachedPhoto[] = prepared.map((file) => ({
+        key: nextKey(),
+        file,
+        status: "waiting",
+        progress: 0,
+        blob: null,
+        error: null,
+      }));
+      const first: AttachedPhoto[] = single
+        ? [{ key: nextKey(), file: single.file, status: "uploaded", progress: 0, blob: single.blob, error: null }]
+        : [];
+      setPhotoSet((prev) => addPhotos(prev.length > 0 ? prev : first, entries));
+      queuePhotoUploads(entries, isStale, replace ? entries[0].key : null);
+    } catch (err: unknown) {
+      if (isStale()) return;
+      setUploadError((err as Error).message || "Failed to prepare media for posting. Please try again.");
+      if (replace) {
+        setFileInputKey((key) => key + 1);
+        setAutoCaptionLoading(false);
+      }
+    } finally {
+      setPreparingPhotos(false);
+    }
+  }
+
+  function removeAttachedPhoto(key: string) {
+    if (photoSet.length === 1 && photoSet[0].key === key) {
+      // The last one: back to an empty picker.
+      void attachPickedFile(null);
+      setFileInputKey((k) => k + 1);
+      return;
+    }
+    setPhotoSet((prev) => removePhoto(prev, key));
+  }
+
+  function retryAttachedPhoto(key: string) {
+    const photo = photoSet.find((p) => p.key === key);
+    if (!photo) return;
+    const selection = fileSelectionRef.current;
+    setPhotoSet((prev) => patchPhoto(prev, key, { status: "waiting", error: null }));
+    queuePhotoUploads([{ key, file: photo.file }], () => selection !== fileSelectionRef.current, null);
+  }
+
   // What to render while connections load, resolve, or fail — pure rule in
   // lib/composerGate.ts. Computed here, above the shared-file effect that
   // waits for it; the early returns that use it are further down.
@@ -677,7 +843,7 @@ function CreatePostFormInner({
     }
 
     try {
-      let postData: CreatePostRequest | CreatePostReuseRequest;
+      let postData: CreatePostRequest | CreatePostReuseRequest | CreatePostMediaRequest;
 
       if (reuseItem) {
         // Roadmap Phase 2 — reuse: no upload, attach the existing MediaItem.
@@ -693,6 +859,21 @@ function CreatePostFormInner({
           perPlatformOverrides: platformOverrides,
           // Task 7 — only attach metadata for a platform still selected for
           // this post; a deselected TikTok/YouTube isn't published to.
+          tiktokMetadata: tiktokSelected ? tiktokMetadata : undefined,
+          youtubeMetadata: youtubeSelected ? youtubeMetadata : undefined,
+          googleMetadata: googleOptionsShown ? googleMetadata : undefined,
+        });
+      } else if (photoSet.length > 0) {
+        // 07c: the attached photos in the order shown (handleUploadSubmit
+        // checked every one is uploaded). One left gives today's body.
+        postData = buildPhotosPostBody({
+          blobs: photoSet.flatMap((photo) => (photo.blob ? [photo.blob] : [])),
+          baseCaption: uploadCaption,
+          location: uploadLocation,
+          platforms: selectedPlatforms,
+          deferred,
+          workspaceId,
+          perPlatformOverrides: platformOverrides,
           tiktokMetadata: tiktokSelected ? tiktokMetadata : undefined,
           youtubeMetadata: youtubeSelected ? youtubeMetadata : undefined,
           googleMetadata: googleOptionsShown ? googleMetadata : undefined,
@@ -779,6 +960,7 @@ function CreatePostFormInner({
       // `reuseItem` returns the composer to the normal file-upload UI.
       setUploadFile(null);
       setUploadedBlob(null);
+      setPhotoSet([]);
       activeUploadRef.current = null;
       // Clear the finished upload's bar and remount the file input, so the old
       // filename is gone and choosing the same file again fires a change event.
@@ -815,8 +997,13 @@ function CreatePostFormInner({
     setUploadError(null);
     setShowSuccess(false);
 
-    if (!reuseItem && !uploadFile) {
+    if (!reuseItem && !uploadFile && photoSet.length === 0) {
       setUploadError("Please choose a file to upload.");
+      return;
+    }
+
+    if (photoSet.length > 0 && !photoSetReady(photoSet)) {
+      setUploadError("Wait until every photo has uploaded, or remove the ones that failed.");
       return;
     }
 
@@ -1110,11 +1297,26 @@ function CreatePostFormInner({
                 id="post-media"
                 type="file"
                 accept="video/*,image/*"
-                onChange={(event) => attachPickedFile(event.target.files?.[0] ?? null)}
+                multiple
+                onChange={(event) => {
+                  // One file (or none) takes today's path unchanged.
+                  const files = Array.from(event.target.files ?? []);
+                  if (files.length > 1) void attachPickedPhotos(files, true);
+                  else void attachPickedFile(files[0] ?? null);
+                }}
                 className="cursor-pointer"
               />
 
-              {uploadFile && previewUrl && (
+              {photoSet.length > 0 && (
+                <AttachedPhotos
+                  photos={photoSet}
+                  onRemove={removeAttachedPhoto}
+                  onMove={(key, direction) => setPhotoSet((prev) => movePhoto(prev, key, direction))}
+                  onRetry={retryAttachedPhoto}
+                />
+              )}
+
+              {photoSet.length === 0 && uploadFile && previewUrl && (
                 <div className="mt-2 space-y-2">
                   {isImagePreview ? (
                     // eslint-disable-next-line @next/next/no-img-element -- local object-URL preview; next/image would need remote host config
@@ -1158,6 +1360,17 @@ function CreatePostFormInner({
                   </div>
                 </div>
               )}
+
+              {/* 07c: more photos, up to 10. Offered once a single photo has
+                  uploaded, or for a set below the limit. */}
+              {(photoSet.length > 0
+                ? photoSet.length < MAX_POST_MEDIA
+                : Boolean(uploadFile && uploadedBlob && MULTI_PHOTO_MIME_TYPES.includes(uploadFile.type))) && (
+                <AddPhotosButton
+                  disabled={preparingPhotos}
+                  onPick={(files) => void attachPickedPhotos(files, false)}
+                />
+              )}
             </>
           )}
         </div>
@@ -1181,9 +1394,15 @@ function CreatePostFormInner({
                 type="button"
                 variant="outline"
                 size="sm"
-                onClick={() => runAutoCaptionFromMedia({ overwrite: true })}
+                onClick={() =>
+                  runAutoCaptionFromMedia(
+                    photoSet.length > 0
+                      ? { overwrite: true, blobOverride: photoSet[0].blob ?? undefined, fileOverride: photoSet[0].file }
+                      : { overwrite: true },
+                  )
+                }
                 loading={autoCaptionLoading}
-                disabled={autoCaptionLoading || !uploadedBlob}
+                disabled={autoCaptionLoading || !(photoSet.length > 0 ? photoSet[0].blob : uploadedBlob)}
               >
                 {!autoCaptionLoading && <Sparkles className="h-4 w-4" aria-hidden />}
                 Caption from media
@@ -1319,6 +1538,11 @@ function CreatePostFormInner({
                   : "Select at least one platform."}
               </p>
             ) : null}
+            {multiPhotoPlatformNotes(selectedPlatforms, photoSet.length).map((note) => (
+              <p key={note.platform} className="text-xs text-muted-foreground">
+                {note.text}
+              </p>
+            ))}
           </fieldset>
         ) : null}
 
@@ -1334,6 +1558,7 @@ function CreatePostFormInner({
           user={footerSettings}
           mediaUrl={activeMediaUrl}
           mediaMimeType={activeMimeType}
+          mediaCount={photoSet.length}
         />
 
         {/* Roadmap Phase 5 — publish timing: now / schedule / draft. */}
@@ -1400,7 +1625,16 @@ function CreatePostFormInner({
                 platform is connected. The span carries the hover text: a
                 disabled button gets no hover events in every browser. */}
             <span title={tiktokBlock ?? undefined}>
-            <Button type="submit" loading={uploadLoading} disabled={captionOver || tiktokBlock !== null}>
+            <Button
+              type="submit"
+              loading={uploadLoading}
+              disabled={
+                captionOver ||
+                tiktokBlock !== null ||
+                preparingPhotos ||
+                (photoSet.length > 0 && !photoSetReady(photoSet))
+              }
+            >
               {uploadLoading
                 ? publishMode === "draft"
                   ? "Saving…"

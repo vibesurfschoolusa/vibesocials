@@ -1,3 +1,5 @@
+import type { Platform } from "@prisma/client";
+
 import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "./blobUrl";
 import { parsePostMediaFields } from "./mediaInput";
 
@@ -99,4 +101,71 @@ export function validatePostMediaList(entries: unknown): PostMediaListResult {
   }
 
   return { ok: true, value: cleaned };
+}
+
+// --- The Create page's photo picker (07c) ---------------------------------
+// The same rules as above, told to the user before anything uploads.
+
+export const PHOTO_LIMIT_MESSAGE = `You can attach up to ${MAX_POST_MEDIA} photos.`;
+export const PHOTO_VIDEO_ALONE_MESSAGE =
+  "A video is posted on its own. Remove the photos first, or post the video separately.";
+export const PHOTO_GIF_ALONE_MESSAGE = "A GIF is posted on its own.";
+export const PHOTO_TYPE_MESSAGE = "A post with several photos takes JPEG, PNG or WebP images only.";
+
+/**
+ * Why a pick of several photos (or photos added to ones already attached)
+ * can't be attached, or null. A video or GIF is named before the count so the
+ * user learns the rule that matters. Run it again after `prepareUploadFile`:
+ * an iPhone HEIC photo only counts as a JPEG once converted.
+ */
+export function photoPickProblem(attachedCount: number, picked: readonly { type: string }[]): string | null {
+  if (picked.some((file) => file.type.startsWith("video/"))) return PHOTO_VIDEO_ALONE_MESSAGE;
+  if (picked.some((file) => file.type === "image/gif")) return PHOTO_GIF_ALONE_MESSAGE;
+  if (attachedCount + picked.length > MAX_POST_MEDIA) return PHOTO_LIMIT_MESSAGE;
+  if (picked.some((file) => !MULTI_PHOTO_MIME_TYPES.includes(file.type))) return PHOTO_TYPE_MESSAGE;
+  return null;
+}
+
+export function addPhotos<T>(list: readonly T[], added: readonly T[]): T[] {
+  return [...list, ...added];
+}
+
+/** The list without that photo; the same list when the key is unknown. */
+export function removePhoto<T extends { key: string }>(list: T[], key: string): T[] {
+  return list.some((photo) => photo.key === key) ? list.filter((photo) => photo.key !== key) : list;
+}
+
+/** Swap the photo with its neighbour; the same list when it can't move that way. */
+export function movePhoto<T extends { key: string }>(list: T[], key: string, direction: -1 | 1): T[] {
+  const from = list.findIndex((photo) => photo.key === key);
+  const to = from + direction;
+  if (from < 0 || to < 0 || to >= list.length) return list;
+  const next = [...list];
+  [next[from], next[to]] = [next[to], next[from]];
+  return next;
+}
+
+/** X takes at most this many photos in one post; the rest are left out. */
+export const X_MAX_PHOTOS = 4;
+
+/**
+ * One short note per selected platform that will not post every attached
+ * photo. Google Business Profile and Pinterest take the first photo only.
+ */
+export function multiPhotoPlatformNotes(
+  platforms: readonly Platform[],
+  photoCount: number,
+): { platform: Platform; text: string }[] {
+  if (photoCount < 2) return [];
+  const notes: { platform: Platform; text: string }[] = [];
+  for (const platform of platforms) {
+    if (platform === "x" && photoCount > X_MAX_PHOTOS) {
+      notes.push({ platform, text: `X shows the first ${X_MAX_PHOTOS} photos.` });
+    } else if (platform === "google_business_profile") {
+      notes.push({ platform, text: "Google shows the first photo." });
+    } else if (platform === "pinterest") {
+      notes.push({ platform, text: "Pinterest shows the first photo." });
+    }
+  }
+  return notes;
 }

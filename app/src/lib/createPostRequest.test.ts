@@ -1,7 +1,7 @@
 import type { Platform } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
-import { buildReusePostBody, buildUploadPostBody } from "./createPostRequest";
+import { buildPhotosPostBody, buildReusePostBody, buildUploadPostBody } from "./createPostRequest";
 
 // 2026-11-01 audit (M3) + final review (T9): the composer sends the id of the
 // workspace its page was rendered for, and POST /api/posts refuses (409) when the
@@ -258,5 +258,71 @@ describe("both create paths send the cleaned per-platform captions", () => {
     expect(sent(buildReusePostBody({ ...nothing, mediaItemId: "media-1" }))).not.toHaveProperty(
       "perPlatformOverrides",
     );
+  });
+});
+
+describe("buildPhotosPostBody (07c: the Create page's attached photos)", () => {
+  const photos = [1, 2, 3].map((n) => ({
+    url: `https://abc123.public.blob.vercel-storage.com/p${n}.jpg`,
+    filename: `p${n}.jpg`,
+    mimeType: "image/jpeg",
+    sizeBytes: 100 + n,
+  }));
+  const input = {
+    baseCaption: "hello",
+    location: "Lisbon",
+    platforms: ["x", "instagram"] as Platform[],
+    deferred: {},
+    workspaceId: WORKSPACE_ID,
+    perPlatformOverrides: { x: "Short for X" },
+    googleMetadata: { postType: "update" as const },
+  };
+
+  it("one photo gives exactly today's single-file body", () => {
+    expect(sent(buildPhotosPostBody({ ...input, blobs: [BLOB] }))).toEqual(
+      sent(buildUploadPostBody({ ...input, blob: BLOB })),
+    );
+    expect(sent(buildPhotosPostBody({ ...input, blobs: [BLOB] }))).not.toHaveProperty("media");
+  });
+
+  it("three photos give media in order and none of the single-file fields", () => {
+    const body = sent(buildPhotosPostBody({ ...input, blobs: photos }));
+    expect(body).toEqual({
+      media: photos.map((p) => ({
+        blobUrl: p.url,
+        filename: p.filename,
+        mimeType: p.mimeType,
+        sizeBytes: p.sizeBytes,
+      })),
+      baseCaption: "hello",
+      location: "Lisbon",
+      platforms: ["x", "instagram"],
+      workspaceId: WORKSPACE_ID,
+      perPlatformOverrides: { x: "Short for X" },
+      googleMetadata: { postType: "update" },
+    });
+    for (const field of ["blobUrl", "filename", "mimeType", "sizeBytes", "mediaItemId"]) {
+      expect(body).not.toHaveProperty(field);
+    }
+  });
+
+  it("the draft and schedule paths carry the same media list", () => {
+    const draft = sent(buildPhotosPostBody({ ...input, blobs: photos, deferred: { draft: true } }));
+    expect(draft).toMatchObject({ draft: true, workspaceId: WORKSPACE_ID });
+    expect((draft.media as { blobUrl: string }[]).map((m) => m.blobUrl)).toEqual(photos.map((p) => p.url));
+    expect(draft).not.toHaveProperty("blobUrl");
+
+    const scheduled = sent(
+      buildPhotosPostBody({ ...input, blobs: photos, deferred: { scheduledFor: "2026-12-01T10:00:00.000Z" } }),
+    );
+    expect(scheduled).toMatchObject({ scheduledFor: "2026-12-01T10:00:00.000Z" });
+    expect(scheduled.media).toEqual(draft.media);
+
+    const singleDraft = sent(buildPhotosPostBody({ ...input, blobs: [BLOB], deferred: { draft: true } }));
+    expect(singleDraft).toEqual(sent(buildUploadPostBody({ ...input, blob: BLOB, deferred: { draft: true } })));
+  });
+
+  it("refuses an empty list rather than sending a post without media", () => {
+    expect(() => buildPhotosPostBody({ ...input, blobs: [] })).toThrow();
   });
 });

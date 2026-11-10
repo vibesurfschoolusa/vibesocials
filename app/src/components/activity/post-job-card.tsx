@@ -249,7 +249,7 @@ export function PostJobCard({
   return (
     <Card className="p-4 sm:p-5">
       <div className="flex items-start justify-between gap-3">
-        <MediaThumb media={job.media} />
+        <MediaThumb media={job.media} count={job.mediaCount} />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-foreground">
             {job.caption?.trim() || "Untitled post"}

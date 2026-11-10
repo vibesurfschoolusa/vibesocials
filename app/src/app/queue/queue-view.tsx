@@ -144,7 +144,7 @@ function QueueCard({
   return (
     <Card className="p-4 sm:p-5">
       <div className="flex items-start justify-between gap-3">
-        <MediaThumb media={job.media} />
+        <MediaThumb media={job.media} count={job.mediaCount} />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-foreground">{title}</p>
           {/* A post awaiting approval is technically a draft, but it may carry
