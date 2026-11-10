@@ -16,7 +16,20 @@ export const POST_PUBLISHING_MESSAGE = "A post is publishing right now. Try agai
 export const LAST_WORKSPACE_MESSAGE =
   "This is your only workspace. To leave Vibe Socials, delete your account instead.";
 export const WORKSPACE_FILES_FAILED_MESSAGE =
-  "Could not delete this workspace's files. Nothing else was changed. Try again.";
+  "Could not delete all of this workspace's files. Try again.";
+export const FINISH_FAILED_MESSAGE =
+  "The files were removed, but the rest could not be finished. Try again to complete it.";
+
+/**
+ * Thrown inside a deletion transaction when a re-check fails, so the
+ * transaction rolls back; the route answers 409 with `message`.
+ */
+export class DeletionRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DeletionRefusedError";
+  }
+}
 
 /**
  * Files per Blob `del()` call, which takes an array. Each call is bounded by
@@ -25,12 +38,18 @@ export const WORKSPACE_FILES_FAILED_MESSAGE =
  */
 export const BLOB_DELETE_BATCH_SIZE = 100;
 
-/** True when a post in any of these workspaces is being published now. */
-export async function isPostPublishing(workspaceIds: string[]): Promise<boolean> {
+/**
+ * True when a post in any of these workspaces is being published now. Pass a
+ * transaction client as `db` to check again inside the deletion transaction.
+ */
+export async function isPostPublishing(
+  workspaceIds: string[],
+  db: { postJob: Pick<Prisma.TransactionClient["postJob"], "findFirst"> } = prisma,
+): Promise<boolean> {
   if (workspaceIds.length === 0) {
     return false;
   }
-  const job = await prisma.postJob.findFirst({
+  const job = await db.postJob.findFirst({
     where: { workspaceId: { in: workspaceIds }, status: { in: ["pending", "in_progress"] } },
     select: { id: true },
   });
@@ -78,8 +97,8 @@ async function delWithTimeout(keys: string[]): Promise<void> {
  *
  * Throws at the first failed batch. It changes no rows: the caller deletes
  * the workspace only after this resolves, so a failure leaves every row in
- * place, and a retry re-sends the files already gone (Blob `del` of a missing
- * file is not an error).
+ * place. Files of earlier batches are already gone by then; a retry re-sends
+ * them (Blob `del` of a missing file is not an error).
  */
 export async function deleteWorkspaceFiles(workspaceIds: string[]): Promise<void> {
   const handled = new Set<string>();

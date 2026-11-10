@@ -208,7 +208,7 @@ function DeleteAccount({
             <div>
               <p>
                 You will leave these workspaces. What you added to them stays there and passes to
-                their longest-standing owner:
+                their longest-standing owner (or member, if a workspace has no other owner):
               </p>
               <ul className="mt-1 list-disc pl-5">
                 {deletion.leaveWorkspaces.map((workspace, index) => (

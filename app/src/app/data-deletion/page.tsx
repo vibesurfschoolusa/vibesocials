@@ -84,7 +84,7 @@ export default function DataDeletionPage() {
             </ul>
             <p className="mt-2">
               In a workspace other people still use, what you added stays for them and passes to
-              its owner when your account is deleted.
+              one of its owners (or, if it has none, a member) when your account is deleted.
             </p>
           </section>
 

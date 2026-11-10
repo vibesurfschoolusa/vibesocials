@@ -11,9 +11,13 @@ import {
   requireOwnerContext,
 } from "@/lib/workspace";
 import {
+  DeletionRefusedError,
+  FINISH_FAILED_MESSAGE,
+  POST_PUBLISHING_MESSAGE,
   WORKSPACE_FILES_FAILED_MESSAGE,
   deleteWorkspaceFiles,
   deleteWorkspaceRows,
+  isPostPublishing,
   workspaceDeletionRefusal,
 } from "@/server/account/deleteWorkspace";
 
@@ -71,8 +75,9 @@ export async function PATCH(request: Request) {
  * workspace, so a caller can only ever delete the one they are an owner of.
  * Refused while another owner exists, a post is publishing, or it is the
  * caller's last workspace. Stored files go first: if that fails, no row has
- * changed. Then one transaction deletes the workspace (everything in it
- * cascades) and gives any member left with no workspace a personal one.
+ * changed. Then one transaction checks again that no post is publishing (the
+ * file cleanup can take tens of seconds), deletes the workspace (everything
+ * in it cascades) and gives any member left with no workspace a personal one.
  */
 export async function DELETE(request: Request) {
   const contextOrError = await requireOwnerContext();
@@ -118,13 +123,42 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: WORKSPACE_FILES_FAILED_MESSAGE }, { status: 500 });
   }
 
+  try {
+    await deleteInTransaction(workspaceId, context.user.id);
+  } catch (error) {
+    if (error instanceof DeletionRefusedError) {
+      return NextResponse.json({ error: error.message }, { status: 409 });
+    }
+    logger.error("[DELETE /api/workspaces/active] Database step failed after the files", {
+      workspaceId,
+      error,
+    });
+    return NextResponse.json({ error: FINISH_FAILED_MESSAGE }, { status: 500 });
+  }
+
+  const cookieStore = await cookies();
+  cookieStore.set(ACTIVE_WORKSPACE_COOKIE, "", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 0,
+  });
+
+  return NextResponse.json({ deleted: true }, { status: 200 });
+}
+
+async function deleteInTransaction(workspaceId: string, userId: string): Promise<void> {
   await prisma.$transaction(
     async (tx) => {
       const others = await tx.workspaceMember.findMany({
-        where: { workspaceId, userId: { not: context.user.id } },
+        where: { workspaceId, userId: { not: userId } },
         select: { user: { select: { id: true, name: true, email: true } } },
       });
 
+      if (await isPostPublishing([workspaceId], tx)) {
+        throw new DeletionRefusedError(POST_PUBLISHING_MESSAGE);
+      }
       await deleteWorkspaceRows(tx, [workspaceId]);
 
       // getWorkspaceContext would also self-heal a member with no workspace
@@ -141,15 +175,4 @@ export async function DELETE(request: Request) {
     },
     { timeout: 15_000 },
   );
-
-  const cookieStore = await cookies();
-  cookieStore.set(ACTIVE_WORKSPACE_COOKIE, "", {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    maxAge: 0,
-  });
-
-  return NextResponse.json({ deleted: true }, { status: 200 });
 }

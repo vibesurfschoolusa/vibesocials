@@ -131,6 +131,72 @@ describe("planAccountDeletion", () => {
     expect(plan.reassign).toEqual([{ workspaceId: "ws-co", toUserId: "u-old-owner" }]);
   });
 
+  it("reassigns to the longest-standing other member when a joined workspace has no owner", () => {
+    const plan = planAccountDeletion([
+      membership({
+        workspaceId: "ws-ownerless",
+        role: "member",
+        otherMembers: [
+          { userId: "u-late", role: "member", createdAt: day(7) },
+          { userId: "u-early", role: "member", createdAt: day(3) },
+        ],
+      }),
+    ]);
+
+    expect(plan).toEqual({
+      deleteWorkspaceIds: [],
+      reassign: [{ workspaceId: "ws-ownerless", toUserId: "u-early" }],
+      blocked: [],
+    });
+  });
+
+  it("reassigns to a member of a workspace the user left that has no owner", () => {
+    const plan = planAccountDeletion([
+      membership({
+        workspaceId: "ws-former",
+        role: null,
+        otherMembers: [{ userId: "u-member", role: "member", createdAt: day(2) }],
+      }),
+    ]);
+
+    expect(plan.reassign).toEqual([{ workspaceId: "ws-former", toUserId: "u-member" }]);
+    expect(plan.deleteWorkspaceIds).toEqual([]);
+  });
+
+  it("deletes a workspace that has nobody else in it, whatever the user's role", () => {
+    const plan = planAccountDeletion([
+      membership({ workspaceId: "ws-member-alone", role: "member" }),
+      membership({ workspaceId: "ws-former-empty", role: null }),
+    ]);
+
+    expect(plan).toEqual({
+      deleteWorkspaceIds: ["ws-member-alone", "ws-former-empty"],
+      reassign: [],
+      blocked: [],
+    });
+  });
+
+  it("puts every workspace in exactly one list", () => {
+    const roles = ["owner", "member", null] as const;
+    const others = [
+      [],
+      [{ userId: "u-o", role: "owner" as const, createdAt: day(1) }],
+      [{ userId: "u-m", role: "member" as const, createdAt: day(1) }],
+    ];
+    const memberships = roles.flatMap((role, r) =>
+      others.map((otherMembers, o) => membership({ workspaceId: `ws-${r}-${o}`, role, otherMembers })),
+    );
+
+    const plan = planAccountDeletion(memberships);
+
+    const placed = [
+      ...plan.deleteWorkspaceIds,
+      ...plan.reassign.map((entry) => entry.workspaceId),
+      ...plan.blocked.map((entry) => entry.workspaceId),
+    ];
+    expect(placed.sort()).toEqual(memberships.map((entry) => entry.workspaceId).sort());
+  });
+
   it("plans nothing for a user with no workspaces", () => {
     expect(planAccountDeletion([])).toEqual({ deleteWorkspaceIds: [], reassign: [], blocked: [] });
   });

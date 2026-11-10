@@ -391,7 +391,7 @@ describe("DELETE /api/workspaces/active", () => {
 
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toEqual({
-      error: "Could not delete this workspace's files. Nothing else was changed. Try again.",
+      error: "Could not delete all of this workspace's files. Try again.",
     });
     expect(callLog).not.toContain("transaction");
     expect(workspaceDeleteManyMock).not.toHaveBeenCalled();
@@ -423,6 +423,35 @@ describe("DELETE /api/workspaces/active", () => {
       email: "lonely@example.com",
     });
     expect(callLog).toEqual(["transaction", "delete-workspace", "provision"]);
+  });
+
+  it("refuses with 409 when a post started publishing during the file cleanup", async () => {
+    media = [{ id: "m1", workspaceId: "ws-1", storageLocation: FILE("a") }];
+    postJobFindFirstMock.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: "job-1" });
+
+    const response = await DELETE(deleteRequest({ confirmName: "Old name" }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: "A post is publishing right now. Try again in a few minutes.",
+    });
+    expect(postJobFindFirstMock).toHaveBeenCalledTimes(2);
+    expect(workspaceDeleteManyMock).not.toHaveBeenCalled();
+    expect(cookieSetMock).not.toHaveBeenCalled();
+  });
+
+  it("answers 500 with a finish-it sentence when the database step fails after the files went", async () => {
+    media = [{ id: "m1", workspaceId: "ws-1", storageLocation: FILE("a") }];
+    workspaceDeleteManyMock.mockRejectedValue(new Error("connection lost"));
+
+    const response = await DELETE(deleteRequest({ confirmName: "Old name" }));
+
+    expect(delMock).toHaveBeenCalled();
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: "The files were removed, but the rest could not be finished. Try again to complete it.",
+    });
+    expect(cookieSetMock).not.toHaveBeenCalled();
   });
 
   it("acts only on the caller's active owned workspace, whatever the body says", async () => {

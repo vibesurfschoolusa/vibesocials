@@ -13,6 +13,8 @@ const m = vi.hoisted(() => {
     deliverAccountEmail: fn(),
     del: fn(),
     memberFindMany: fn(),
+    memberCount: fn(),
+    executeRaw: fn(),
     workspaceFindMany: fn(),
     connectionFindMany: fn(),
     mediaFindMany: fn(),
@@ -41,7 +43,8 @@ vi.mock("@/lib/accountEmails", async (importOriginal) => ({
 }));
 vi.mock("@/lib/db", () => {
   const prisma: Record<string, unknown> = {
-    workspaceMember: { findMany: m.memberFindMany },
+    $executeRaw: m.executeRaw,
+    workspaceMember: { findMany: m.memberFindMany, count: m.memberCount },
     workspace: { findMany: m.workspaceFindMany, deleteMany: m.workspaceDeleteMany },
     socialConnection: { findMany: m.connectionFindMany, updateMany: m.connectionUpdateMany },
     mediaItem: { findMany: m.mediaFindMany, updateMany: m.mediaUpdateMany },
@@ -68,6 +71,8 @@ type Member = { userId: string; role: "owner" | "member"; createdAt: Date };
 type Membership = { role: "owner" | "member"; workspace: { id: string; name: string; members: Member[] } };
 let memberships: Membership[];
 let media: { id: string; workspaceId: string; storageLocation: string }[];
+/** What the in-transaction re-check reads; null = same as the memberships above. */
+let liveMembers: Record<string, Member[]> | null;
 
 const day = (n: number) => new Date(`2026-01-0${n}T00:00:00Z`);
 
@@ -99,11 +104,24 @@ beforeEach(() => {
   vi.stubEnv("BLOB_STORE_ID", "");
   memberships = [{ role: "owner", workspace: { id: "ws-personal", name: "Personal", members: [] } }];
   media = [];
+  liveMembers = null;
 
   m.getCurrentUser.mockResolvedValue({ id: USER_ID, email: "me@example.com", passwordHash });
   m.checkRateLimit.mockResolvedValue({ allowed: true });
   m.deliverAccountEmail.mockResolvedValue(false);
-  m.memberFindMany.mockImplementation(async () => memberships);
+  // The loader asks for the user's own memberships; the re-check inside the
+  // transaction asks for one workspace's other members.
+  m.memberFindMany.mockImplementation(async ({ where }: { where: { userId?: unknown; workspaceId?: string } }) => {
+    if (where.userId === USER_ID) return memberships;
+    const workspaceId = where.workspaceId as string;
+    if (liveMembers) return liveMembers[workspaceId] ?? [];
+    return memberships.find((entry) => entry.workspace.id === workspaceId)?.workspace.members ?? [];
+  });
+  m.memberCount.mockResolvedValue(0);
+  m.executeRaw.mockImplementation(async (_strings: unknown, key: string) => {
+    m.callLog.push(`lock ${key}`);
+    return 0;
+  });
   m.workspaceFindMany.mockResolvedValue([]);
   m.connectionFindMany.mockResolvedValue([]);
   m.postJobFindMany.mockResolvedValue([]);
@@ -258,6 +276,9 @@ describe("DELETE /api/auth/account", () => {
     const response = await DELETE(request({ password: "right-password" }));
 
     expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: "Could not delete all of your workspaces' files. Try again.",
+    });
     expect(m.callLog).not.toContain("transaction");
     expect(m.userDelete).not.toHaveBeenCalled();
     expect(m.workspaceDeleteMany).not.toHaveBeenCalled();
@@ -297,6 +318,8 @@ describe("DELETE /api/auth/account", () => {
     expect(m.callLog).toEqual([
       expect.stringMatching(/^del /),
       "transaction",
+      "lock ws-owners:ws-co",
+      "lock ws-owners:ws-joined",
       reassign("socialConnection", "ws-co", "u-early"),
       reassign("mediaItem", "ws-co", "u-early"),
       reassign("postJob", "ws-co", "u-early"),
@@ -324,6 +347,7 @@ describe("DELETE /api/auth/account", () => {
     m.workspaceFindMany.mockResolvedValue([
       { id: "ws-left", name: "Left", members: [{ userId: "u-boss", role: "owner", createdAt: day(1) }] },
     ]);
+    liveMembers = { "ws-left": [{ userId: "u-boss", role: "owner", createdAt: day(1) }] };
 
     const response = await DELETE(request({ password: "right-password" }));
 
@@ -371,5 +395,101 @@ describe("DELETE /api/auth/account", () => {
     expect(m.del).not.toHaveBeenCalled();
     expect(m.workspaceDeleteMany).toHaveBeenCalledWith({ where: { id: { in: [] } } });
     expect(m.userDelete).toHaveBeenCalledWith({ where: { id: USER_ID } });
+  });
+
+  describe("re-checks the plan inside the transaction", () => {
+    const CHANGED =
+      "Your workspaces changed while this was running. Nothing was deleted from your account. Try again.";
+    const coOwned: Membership = {
+      role: "owner",
+      workspace: {
+        id: "ws-co",
+        name: "Co",
+        members: [{ userId: "u-co", role: "owner", createdAt: day(2) }],
+      },
+    };
+
+    function nothingWritten() {
+      for (const mock of [
+        m.connectionUpdateMany,
+        m.mediaUpdateMany,
+        m.postJobUpdateMany,
+        m.metricUpdateMany,
+        m.workspaceDeleteMany,
+        m.pendingDeleteMany,
+        m.handshakeDeleteMany,
+        m.userDelete,
+      ]) {
+        expect(mock).not.toHaveBeenCalled();
+      }
+    }
+
+    it("refuses when the co-owner who was to receive the rows left during the file cleanup", async () => {
+      memberships = [memberships[0], coOwned];
+      liveMembers = { "ws-co": [{ userId: "u-member", role: "member", createdAt: day(3) }] };
+
+      const response = await DELETE(request({ password: "right-password" }));
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({ error: CHANGED });
+      expect(m.callLog).toContain("lock ws-owners:ws-co");
+      nothingWritten();
+    });
+
+    it("refuses when the target is no longer an owner", async () => {
+      memberships = [memberships[0], coOwned];
+      liveMembers = {
+        "ws-co": [
+          { userId: "u-co", role: "member", createdAt: day(2) },
+          { userId: "u-new", role: "owner", createdAt: day(4) },
+        ],
+      };
+
+      const response = await DELETE(request({ password: "right-password" }));
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({ error: CHANGED });
+      nothingWritten();
+    });
+
+    it("refuses when a workspace to be deleted gained a member", async () => {
+      m.memberCount.mockResolvedValue(1);
+
+      const response = await DELETE(request({ password: "right-password" }));
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({ error: CHANGED });
+      expect(m.memberCount).toHaveBeenCalledWith({
+        where: { workspaceId: { in: ["ws-personal"] }, userId: { not: USER_ID } },
+      });
+      nothingWritten();
+    });
+
+    it("refuses when a post started publishing in a workspace to be deleted", async () => {
+      m.postJobFindFirst.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: "job-1" });
+
+      const response = await DELETE(request({ password: "right-password" }));
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toEqual({
+        error: "A post is publishing right now. Try again in a few minutes.",
+      });
+      expect(m.postJobFindFirst).toHaveBeenCalledTimes(2);
+      nothingWritten();
+    });
+
+    it("answers 500 with a finish-it sentence when the database step fails after the files went", async () => {
+      media = [{ id: "m1", workspaceId: "ws-personal", storageLocation: FILE("a") }];
+      m.userDelete.mockRejectedValue(new Error("connection lost"));
+
+      const response = await DELETE(request({ password: "right-password" }));
+
+      expect(m.del).toHaveBeenCalled();
+      expect(response.status).toBe(500);
+      await expect(response.json()).resolves.toEqual({
+        error: "The files were removed, but the rest could not be finished. Try again to complete it.",
+      });
+      expect(m.deliverAccountEmail).not.toHaveBeenCalled();
+    });
   });
 });

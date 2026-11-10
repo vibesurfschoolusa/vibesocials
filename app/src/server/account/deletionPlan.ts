@@ -22,36 +22,47 @@ export interface AccountDeletionPlan {
 }
 
 /**
- * Decides, before anything is changed, what deleting an account does to each
- * of the user's workspaces. Pure, so every rule is testable on its own.
+ * Who receives the deleting user's rows in a workspace that survives: the
+ * longest-standing other owner, else (a workspace that has somehow lost its
+ * owners) the longest-standing other member, else null (nobody else is in it).
  *
- * "Longest-standing owner" uses the membership's createdAt: the schema keeps
- * no promotion date, so the owner who joined first wins.
+ * "Longest-standing" uses the membership's createdAt: the schema keeps no
+ * promotion date, so the owner who joined first wins.
+ */
+export function pickHeir(otherMembers: DeletionMembership["otherMembers"]): string | null {
+  const owners = otherMembers.filter((member) => member.role === "owner");
+  const pool = owners.length > 0 ? owners : otherMembers;
+  if (pool.length === 0) {
+    return null;
+  }
+  return pool.reduce((oldest, current) => (current.createdAt < oldest.createdAt ? current : oldest))
+    .userId;
+}
+
+/**
+ * Decides, before anything is changed, what deleting an account does to each
+ * of the user's workspaces. Pure, so every rule is testable on its own. Every
+ * workspace lands in exactly one list.
  */
 export function planAccountDeletion(memberships: DeletionMembership[]): AccountDeletionPlan {
   const plan: AccountDeletionPlan = { deleteWorkspaceIds: [], reassign: [], blocked: [] };
 
   for (const membership of memberships) {
-    const otherOwners = membership.otherMembers.filter((member) => member.role === "owner");
+    const hasOtherOwner = membership.otherMembers.some((member) => member.role === "owner");
 
-    if (membership.role === "owner" && otherOwners.length === 0) {
-      if (membership.otherMembers.length === 0) {
-        plan.deleteWorkspaceIds.push(membership.workspaceId);
-      } else {
-        plan.blocked.push({ workspaceId: membership.workspaceId, name: membership.name });
-      }
+    // The only owner of a workspace others still use: it has nobody to pass to.
+    if (membership.role === "owner" && !hasOtherOwner && membership.otherMembers.length > 0) {
+      plan.blocked.push({ workspaceId: membership.workspaceId, name: membership.name });
       continue;
     }
 
-    // Every workspace keeps at least one owner (the leave and demote routes
-    // enforce it), so a surviving workspace always has one to hand rows to.
-    if (otherOwners.length === 0) {
-      continue;
+    const heir = pickHeir(membership.otherMembers);
+    if (heir === null) {
+      // Nobody else is in it, whatever the user's role: it is theirs alone.
+      plan.deleteWorkspaceIds.push(membership.workspaceId);
+    } else {
+      plan.reassign.push({ workspaceId: membership.workspaceId, toUserId: heir });
     }
-    const longest = otherOwners.reduce((oldest, current) =>
-      current.createdAt < oldest.createdAt ? current : oldest,
-    );
-    plan.reassign.push({ workspaceId: membership.workspaceId, toUserId: longest.userId });
   }
 
   return plan;
