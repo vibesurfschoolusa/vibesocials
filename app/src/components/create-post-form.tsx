@@ -191,10 +191,27 @@ export function composerPageState(
 }
 
 export const UNTOUCHED_SUBMIT_MESSAGE = "Add a photo or video, or write the text of your post.";
+/** Where no connected platform takes text alone, offering text would lead nowhere. */
+export const UNTOUCHED_FILE_ONLY_MESSAGE = "Add a photo or video.";
 
 /** The sentence by the button after a press on the untouched page, or null. */
-export function untouchedSubmitMessage(state: { untouched: boolean; pressed: boolean }): string | null {
-  return state.untouched && state.pressed ? UNTOUCHED_SUBMIT_MESSAGE : null;
+export function untouchedSubmitMessage(state: {
+  untouched: boolean;
+  pressed: boolean;
+  connected: readonly Platform[];
+}): string | null {
+  if (!state.untouched || !state.pressed) return null;
+  const textGoesNowhere = state.connected.length > 0 && !state.connected.some(platformAcceptsTextOnly);
+  return textGoesNowhere ? UNTOUCHED_FILE_ONLY_MESSAGE : UNTOUCHED_SUBMIT_MESSAGE;
+}
+
+/**
+ * Does this press count as a try for the platform-list alert? Not on the
+ * untouched page: the post was not written yet, so the first letter typed
+ * after it must not bring up a red line.
+ */
+export function pressCountsAsTry(pageState: ComposerPageState): boolean {
+  return pageState !== "untouched";
 }
 
 /**
@@ -754,7 +771,11 @@ function CreatePostFormInner({
   // Set by a press on the untouched page; it goes once there is a file or text.
   const [untouchedPressed, setUntouchedPressed] = useState(false);
   if (untouchedPressed && !untouched) setUntouchedPressed(false);
-  const untouchedMessage = untouchedSubmitMessage({ untouched, pressed: untouchedPressed });
+  const untouchedMessage = untouchedSubmitMessage({
+    untouched,
+    pressed: untouchedPressed,
+    connected: connectedPlatforms,
+  });
   const { choices: platformChoices, selected: selectedPlatforms } = useMemo(
     () => deriveComposerPlatforms(connectedPlatforms, deselected, activeMimeType, { noFile: textPage }),
     [connectedPlatforms, deselected, activeMimeType, textPage],
@@ -1693,7 +1714,7 @@ function CreatePostFormInner({
 
   async function handleUploadSubmit(event: React.FormEvent) {
     event.preventDefault();
-    setTriedSend(true);
+    if (pressCountsAsTry(pageState)) setTriedSend(true);
     // A file just went away: the first press stops here, with the notice (and
     // any error beside it) still showing, so the person sees it before a dialog.
     if (fileLostShown) {

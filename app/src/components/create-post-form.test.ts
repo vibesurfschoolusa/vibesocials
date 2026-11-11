@@ -27,6 +27,7 @@ import {
   photosFailureLosesFile,
   scheduleWhenText,
   platformListAlert,
+  pressCountsAsTry,
   repeatCautionNote,
   sharedFileOnItsWay,
   showLocationField,
@@ -537,10 +538,10 @@ describe("the untouched Create page", () => {
 
   it("pressing the button while untouched sends nothing and says what to do, by the button", () => {
     expect(UNTOUCHED_SUBMIT_MESSAGE).toBe("Add a photo or video, or write the text of your post.");
-    expect(untouchedSubmitMessage({ untouched: true, pressed: true })).toBe(UNTOUCHED_SUBMIT_MESSAGE);
-    expect(untouchedSubmitMessage({ untouched: true, pressed: false })).toBeNull();
+    expect(untouchedSubmitMessage({ untouched: true, pressed: true, connected: ["x"] })).toBe(UNTOUCHED_SUBMIT_MESSAGE);
+    expect(untouchedSubmitMessage({ untouched: true, pressed: false, connected: ["x"] })).toBeNull();
     // Text typed or a file added: the sentence goes.
-    expect(untouchedSubmitMessage({ untouched: false, pressed: true })).toBeNull();
+    expect(untouchedSubmitMessage({ untouched: false, pressed: true, connected: ["x"] })).toBeNull();
   });
 
   it("the lost-file notice is unchanged: it is shown while there is no file, text or not", () => {
@@ -612,5 +613,42 @@ describe("composerPageState: own captions for platforms that need a file", () =>
     textPosts.enabled = false;
     expect(composerPageState({ ...nothing, overrides: { instagram: "a" } })).toBe("file");
     expect(composerPageState({ ...nothing, overrides: { x: "a" } })).toBe("file");
+  });
+});
+
+// F2 fix round 1, item 2: where every connected platform needs a file, text can
+// go nowhere, so the untouched press asks only for a file and is not a try.
+describe("the untouched press where every platform needs a file", () => {
+  type Platform = Parameters<typeof textOnlyNotice>[0]["connected"][number];
+  const pressed = { untouched: true, pressed: true };
+
+  it("all need a file: the short sentence", () => {
+    const connected: Platform[] = ["instagram", "tiktok", "youtube"];
+    expect(untouchedSubmitMessage({ ...pressed, connected })).toBe("Add a photo or video.");
+  });
+
+  it("all need a file: typing after the press shows no red line until the person presses again", () => {
+    expect(pressCountsAsTry("untouched")).toBe(false);
+    expect(pressCountsAsTry("text")).toBe(true);
+    expect(pressCountsAsTry("file")).toBe(true);
+    // The first letter typed: a text post whose platforms all need a file, not yet tried.
+    expect(platformListAlert({ selectedCount: 0, allDisabled: true, noFile: true, triedSend: false })).toBeNull();
+    // Pressed again, now as a text post: the line shows.
+    expect(platformListAlert({ selectedCount: 0, allDisabled: true, noFile: true, triedSend: true })).toBe(
+      "None of your connected platforms can publish a post without a photo or video.",
+    );
+  });
+
+  it("at least one takes text: today's sentence", () => {
+    const connected: Platform[] = ["instagram", "x"];
+    expect(untouchedSubmitMessage({ ...pressed, connected })).toBe(
+      "Add a photo or video, or write the text of your post.",
+    );
+  });
+
+  it("no platform connected at all: as today", () => {
+    expect(untouchedSubmitMessage({ ...pressed, connected: [] })).toBe(
+      "Add a photo or video, or write the text of your post.",
+    );
   });
 });
