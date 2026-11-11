@@ -62,6 +62,12 @@ export interface FoundPostMetrics {
   counts: SocialPostCounts;
   /** Counts only, as the platform named them: stored as PostMetric.raw. */
   raw: Record<string, number>;
+  /**
+   * The numbers this read asked for. The sync's update writes only these, so a
+   * read that left one out (Facebook without the comment totals) never blanks
+   * a stored value; a number asked for and not given is written as null.
+   */
+  asked: Array<keyof SocialPostCounts>;
 }
 
 /**
@@ -123,11 +129,16 @@ export function hasAnyCount(counts: SocialPostCounts): boolean {
  */
 type BatchEntry =
   | { kind: "ok"; body: unknown }
-  | { kind: "gone" }
+  | { kind: "gone"; reason: string }
   | { kind: "failed"; reason: string; denied: boolean }
   | { kind: "limited" };
 
-/** Graph `error.code` 100 is "does not exist / cannot be loaded": a deleted post. */
+/**
+ * Graph `error.code` 100 is read as "does not exist / cannot be loaded": a
+ * deleted post. Meta also answers 100 for a missing permission or an unknown
+ * field, so it is still counted among the refusals (with its subcode), and a
+ * Page answering 100 for everything shows in the log.
+ */
 const GRAPH_NOT_FOUND_CODE = 100;
 
 /** Graph permission errors: 10 ("does not have permission") and 200-299 (283: "requires the extended permission"). */
@@ -155,9 +166,13 @@ async function readEntry(platform: Platform, entry: unknown): Promise<BatchEntry
   // classifyRateLimit reads a Response; one is built from the entry's own code and body.
   const limited = await classifyRateLimit(platform, new Response(JSON.stringify(body ?? {}), { status: item.code }));
   if (limited) return { kind: "limited" };
-  const code = (body as { error?: { code?: unknown } } | null)?.error?.code;
+  const error = (body as { error?: { code?: unknown; error_subcode?: unknown } } | null)?.error;
+  const code = error?.code;
   if (typeof code !== "number" || !Number.isInteger(code)) return failedEntry("unreadable");
-  if (code === GRAPH_NOT_FOUND_CODE) return { kind: "gone" };
+  if (code === GRAPH_NOT_FOUND_CODE) {
+    const subcode = error?.error_subcode;
+    return { kind: "gone", reason: Number.isInteger(subcode) ? `${code}/${subcode}` : String(code) };
+  }
   return failedEntry(String(code), isPermissionCode(code));
 }
 
@@ -246,18 +261,24 @@ function fieldsFor(video: boolean, withComments: boolean): string {
 const totalOf = (edge: unknown) => countOf((edge as { summary?: { total_count?: unknown } } | null)?.summary?.total_count);
 
 /** A post's (or a video's) numbers; an edge not asked for or not sent stays null. */
-function readCounts(body: unknown, video: boolean): FoundPostMetrics {
+function readCounts(body: unknown, video: boolean, withComments: boolean): FoundPostMetrics {
   const node = body as { reactions?: unknown; likes?: unknown; comments?: unknown; shares?: { count?: unknown } } | null;
-  const comments = totalOf(node?.comments);
+  const comments = withComments ? totalOf(node?.comments) : null;
+  const askedComments: Array<keyof SocialPostCounts> = withComments ? ["comments"] : [];
   if (video) {
     const likes = totalOf(node?.likes);
-    return { counts: { ...NO_COUNTS, likes, comments }, raw: rawCounts({ likes, comments }) };
+    return {
+      counts: { ...NO_COUNTS, likes, comments },
+      raw: rawCounts({ likes, comments }),
+      asked: ["likes", ...askedComments],
+    };
   }
   const reactions = totalOf(node?.reactions);
   const shares = countOf(node?.shares?.count);
   return {
     counts: { ...NO_COUNTS, likes: reactions, comments, shares },
     raw: rawCounts({ reactions, comments, shares }),
+    asked: ["likes", "shares", ...askedComments],
   };
 }
 
@@ -281,7 +302,9 @@ export async function fetchFacebookPostMetricsBatch(
   if (refs.length === 0) return batch;
 
   const note = (entry: BatchEntry) => {
-    if (entry.kind === "failed") batch.refusals[entry.reason] = (batch.refusals[entry.reason] ?? 0) + 1;
+    if (entry.kind === "failed" || entry.kind === "gone") {
+      batch.refusals[entry.reason] = (batch.refusals[entry.reason] ?? 0) + 1;
+    }
   };
 
   // The node to read for each stored id.
@@ -329,7 +352,7 @@ export async function fetchFacebookPostMetricsBatch(
   ids.forEach((id, index) => {
     const entry = entries[index];
     note(entry);
-    if (entry.kind === "ok") batch.byId.set(id, readCounts(entry.body, targets.get(id)!.video));
+    if (entry.kind === "ok") batch.byId.set(id, readCounts(entry.body, targets.get(id)!.video, withComments));
     else if (withComments && entry.kind === "failed" && entry.denied) denied.push(id);
     else settle(batch, id, entry);
   });
@@ -344,7 +367,7 @@ export async function fetchFacebookPostMetricsBatch(
     const entry = again[index];
     note(entry);
     if (entry.kind === "ok") {
-      batch.byId.set(id, readCounts(entry.body, targets.get(id)!.video));
+      batch.byId.set(id, readCounts(entry.body, targets.get(id)!.video, false));
       batch.commentsRefused = true;
     } else settle(batch, id, entry);
   });

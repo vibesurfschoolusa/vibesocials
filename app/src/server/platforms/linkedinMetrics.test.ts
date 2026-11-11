@@ -62,6 +62,7 @@ describe("fetchLinkedInShareStatisticsBatch", () => {
       clicks: 20,
       saves: null,
     });
+    expect(out.byId.get("urn:li:share:1")?.asked).toEqual(["views", "clicks", "likes", "comments", "shares"]);
     expect(out.byId.get("urn:li:share:1")?.raw).toEqual({
       impressionCount: 500,
       clickCount: 20,

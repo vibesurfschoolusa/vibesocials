@@ -113,6 +113,7 @@ export async function fetchLinkedInShareStatisticsBatch(
             shares: numbers.shareCount,
           },
           raw: rawCounts(numbers),
+          asked: ["views", "clicks", "likes", "comments", "shares"],
         });
       }
     } catch (error) {

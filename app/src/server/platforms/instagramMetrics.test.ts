@@ -52,6 +52,7 @@ describe("fetchInstagramMediaMetricsBatch", () => {
       saves: null,
     });
     expect(out.byId.get("m1")?.raw).toEqual({ like_count: 12, comments_count: 3 });
+    expect(out.byId.get("m1")?.asked).toEqual(["likes", "comments"]);
   });
 
   it("reads several ids in one request; a hidden like count stays null; a string count is read", async () => {

@@ -48,6 +48,7 @@ export async function fetchInstagramMediaMetricsBatch(
     batch.byId.set(id, {
       counts: { ...NO_COUNTS, likes, comments },
       raw: rawCounts({ like_count: likes, comments_count: comments }),
+      asked: ["likes", "comments"],
     });
   });
   return batch;

@@ -304,7 +304,15 @@ export async function syncSocialPostMetrics(
             postJobResultId: item.resultId,
             ...numbers,
           },
-          update: { userId: connection.userId, postJobResultId: item.resultId, ...numbers },
+          // Only the numbers this read asked for: a read that left one out (the
+          // Facebook fallback without comment totals) keeps the stored value.
+          update: {
+            userId: connection.userId,
+            postJobResultId: item.resultId,
+            ...Object.fromEntries(found.asked.map((key) => [key, found.counts[key]])),
+            raw: numbers.raw,
+            fetchedAt: now,
+          },
         });
         result.updated += 1;
       } catch (error) {

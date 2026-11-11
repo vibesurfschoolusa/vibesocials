@@ -240,8 +240,37 @@ describe("fetchFacebookPostMetricsBatch", () => {
       ["1_a", "1_b", "1_c", "1_d", "1_e"].map((id) => ({ id, kind: "post" as const })),
       "t",
     );
-    expect(out.refusals).toEqual({ "2": 2, no_answer: 1, unreadable: 1 });
+    // Code 100 still means "not found", but it is counted (with its subcode):
+    // Meta also answers 100 for a missing permission or an unknown field.
+    expect(out.byId.has("1_c") || out.failed.has("1_c")).toBe(false);
+    expect(out.refusals).toEqual({ "2": 2, "100/33": 1, no_answer: 1, unreadable: 1 });
     expect(JSON.stringify(out.refusals)).not.toContain("1_");
+  });
+
+  it("counts code 100 without a subcode under 100", async () => {
+    fetchMock.mockResolvedValueOnce(batchAnswer([{ code: 400, body: { error: { code: 100, message: "Unknown field" } } }]));
+    const out = await fetchFacebookPostMetricsBatch([{ id: "1_a", kind: "post" }], "t");
+    expect(out.refusals).toEqual({ "100": 1 });
+    expect(out.byId.size + out.failed.size).toBe(0);
+  });
+
+  it("says which numbers each read asked for", async () => {
+    fetchMock.mockResolvedValueOnce(
+      batchAnswer([
+        { code: 200, body: postBody(1, 1, 1) },
+        { code: 200, body: { id: "v", likes: { summary: { total_count: 1 } } } },
+      ]),
+    );
+    const out = await fetchFacebookPostMetricsBatch(
+      [
+        { id: "1_a", kind: "post" },
+        { id: "v1", kind: "video" },
+      ],
+      "t",
+      { withComments: false },
+    );
+    expect(out.byId.get("1_a")?.asked).toEqual(["likes", "shares"]);
+    expect(out.byId.get("v1")?.asked).toEqual(["likes"]);
   });
 
   it("a whole-batch refusal is counted under its status", async () => {
@@ -286,6 +315,10 @@ describe("fetchFacebookPostMetricsBatch", () => {
       { method: "GET", relative_url: "v1?fields=likes.summary(total_count).limit(0)" },
     ]);
     expect(out.byId.get("1_a")?.counts).toMatchObject({ likes: 7, shares: 3, comments: null });
+    // The second read did not ask for comments: the sync must not write that column.
+    expect(out.byId.get("1_a")?.asked).toEqual(["likes", "shares"]);
+    expect(out.byId.get("1_b")?.asked).toEqual(["likes", "shares", "comments"]);
+    expect(out.byId.get("v1")?.asked).toEqual(["likes"]);
     expect(out.byId.get("1_b")?.counts).toMatchObject({ likes: 4, comments: 2 });
     expect(out.byId.get("v1")?.counts).toMatchObject({ likes: 5, comments: null });
     expect(out.commentsRefused).toBe(true);

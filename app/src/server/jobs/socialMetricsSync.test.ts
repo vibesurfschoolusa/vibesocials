@@ -98,10 +98,12 @@ const counts = (over: Record<string, number | null> = {}) => ({
   ...over,
 });
 
+const ALL_NUMBERS = ["views", "likes", "comments", "shares", "clicks", "saves"];
+
 /** A batch result where every asked id is found. */
 function allFound(ids: string[], c = counts()) {
   return {
-    byId: new Map(ids.map((id) => [id, { counts: c, raw: { like_count: c.likes ?? 0 } }])),
+    byId: new Map(ids.map((id) => [id, { counts: c, raw: { like_count: c.likes ?? 0 }, asked: ALL_NUMBERS }])),
     failed: new Set<string>(),
     unchecked: new Set<string>(),
     rateLimited: false,
@@ -538,6 +540,47 @@ describe("syncSocialPostMetrics", () => {
     expect(m.instagram).not.toHaveBeenCalled();
     expect(stamped()).toEqual(["s1"]);
     expect(out).toMatchObject({ stories: 1, attempted: 1 });
+  });
+
+  describe("the update writes only the numbers the read asked for", () => {
+    const facebookFound = (comments: number | null, asked: string[]) => ({
+      byId: new Map([["9_1", { counts: counts({ likes: 7, comments, shares: 2 }), raw: {}, asked }]]),
+      failed: new Set<string>(),
+      unchecked: new Set<string>(),
+      rateLimited: false,
+      refusals: {},
+      commentsRefused: !asked.includes("comments"),
+    });
+
+    beforeEach(() => {
+      m.findMany.mockResolvedValue([row("r1", "facebook_page", "9_1")]);
+    });
+
+    it("a read made without the comment totals leaves a stored comment count (say 12) as it is", async () => {
+      m.facebook.mockResolvedValue(facebookFound(null, ["likes", "shares"]));
+      await syncSocialPostMetrics(NOW);
+      const call = m.upsert.mock.calls[0][0];
+      expect(call.update).not.toHaveProperty("comments");
+      expect(call.update).toMatchObject({ likes: 7, shares: 2 });
+      // Not asked either, so not written over: views, clicks, saves.
+      expect(call.update).not.toHaveProperty("views");
+      // A new row still gets every column, the ones not asked as null.
+      expect(call.create).toMatchObject({ likes: 7, shares: 2, comments: null, views: null });
+    });
+
+    it("a normal read with a new comment count updates it", async () => {
+      m.facebook.mockResolvedValue(facebookFound(15, ["likes", "shares", "comments"]));
+      await syncSocialPostMetrics(NOW);
+      expect(m.upsert.mock.calls[0][0].update).toMatchObject({ likes: 7, shares: 2, comments: 15 });
+    });
+
+    it("a normal read where the platform gives no comment count writes null, as before", async () => {
+      m.facebook.mockResolvedValue(facebookFound(null, ["likes", "shares", "comments"]));
+      await syncSocialPostMetrics(NOW);
+      const update = m.upsert.mock.calls[0][0].update;
+      expect(update).toHaveProperty("comments");
+      expect(update.comments).toBeNull();
+    });
   });
 
   it("does nothing when nothing is eligible", async () => {

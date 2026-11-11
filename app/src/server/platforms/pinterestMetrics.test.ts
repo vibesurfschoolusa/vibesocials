@@ -66,6 +66,7 @@ describe("fetchPinterestPinMetricsBatch", () => {
       clicks: 37,
       saves: 20,
     });
+    expect(out.byId.get("123")?.asked).toEqual(["views", "saves", "clicks"]);
     expect(out.byId.get("123")?.raw).toEqual({ IMPRESSION: 240, SAVE: 20, PIN_CLICK: 37, OUTBOUND_CLICK: 5 });
   });
 

@@ -114,6 +114,7 @@ export async function fetchPinterestPinMetricsBatch(
       batch.byId.set(pin.id, {
         counts: { ...NO_COUNTS, views: numbers.IMPRESSION, saves: numbers.SAVE, clicks: numbers.PIN_CLICK },
         raw: rawCounts(numbers),
+        asked: ["views", "saves", "clicks"],
       });
     } catch (error) {
       console.error("[PostMetrics] Pinterest Pin analytics failed", {
