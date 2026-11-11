@@ -52,6 +52,10 @@ export const CONNECT_LINK_CREATE_LIMIT_MESSAGE = "Too many new links in the last
 export const CONNECT_LINK_RATE_LIMIT_MESSAGE =
   "Too many requests from this network in the last hour. Try again later.";
 
+/** The per-link limit can refuse a visitor on a fresh network, so it names the link, not the network. */
+export const CONNECT_LINK_USED_TOO_OFTEN_MESSAGE =
+  "This link was used too many times in the last hour. Try again later.";
+
 export const CONNECT_LINK_PLATFORMS_REQUIRED_MESSAGE = "Choose at least one platform the link offers.";
 
 export const CONNECT_LINK_PLATFORM_UNAVAILABLE_MESSAGE =

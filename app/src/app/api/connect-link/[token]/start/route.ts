@@ -6,6 +6,7 @@ import {
   CONNECT_LINK_RATE_LIMIT_MESSAGE,
   CONNECT_LINK_STARTS_PER_HOUR,
   CONNECT_LINK_STARTS_PER_LINK_PER_HOUR,
+  CONNECT_LINK_USED_TOO_OFTEN_MESSAGE,
   alreadyConnectedCode,
   connectFailedCode,
   isConnectLinkTokenShape,
@@ -40,8 +41,8 @@ function backToPage(request: Request, token: string, error?: string): NextRespon
   return NextResponse.redirect(url, 303);
 }
 
-function tooMany(retryAfterSeconds: number | undefined): NextResponse {
-  return new NextResponse(CONNECT_LINK_RATE_LIMIT_MESSAGE, {
+function tooMany(retryAfterSeconds: number | undefined, message = CONNECT_LINK_RATE_LIMIT_MESSAGE): NextResponse {
+  return new NextResponse(message, {
     status: 429,
     headers: { "content-type": "text/plain; charset=utf-8", "Retry-After": String(retryAfterSeconds ?? 60) },
   });
@@ -90,7 +91,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
       windowMs: 60 * 60 * 1000,
       failClosed: true,
     });
-    if (!linkLimit.allowed) return tooMany(linkLimit.retryAfterSeconds);
+    if (!linkLimit.allowed) return tooMany(linkLimit.retryAfterSeconds, CONNECT_LINK_USED_TOO_OFTEN_MESSAGE);
 
     if (!isPlatform(platformValue)) return backToPage(request, token, "connect_failed");
     const platform = platformValue;

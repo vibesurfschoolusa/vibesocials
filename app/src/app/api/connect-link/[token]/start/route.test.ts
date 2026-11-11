@@ -144,10 +144,11 @@ describe("only a deliberate press on our own page starts a flow", () => {
     expect(res.status).toBe(303);
   });
 
-  it("is rate limited per network", async () => {
+  it("is rate limited per network, with the network sentence", async () => {
     h.rateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 60 });
     const res = await press("tiktok");
     expect(res.status).toBe(429);
+    expect(await res.text()).toBe("Too many requests from this network in the last hour. Try again later.");
     expect(h.rateLimit.mock.calls[0][0]).toMatchObject({ route: "connect-link/start", failClosed: true });
   });
 });
@@ -309,7 +310,7 @@ describe("the per-link start limit", () => {
     expect(h.rateLimit.mock.calls[1][0]).toMatchObject({ limit: 60, windowMs: 60 * 60 * 1000, failClosed: true });
   });
 
-  it("over the link's cap from a fresh network: the same 429, nothing sent to a platform, no cookie", async () => {
+  it("over the link's cap from a fresh network: 429 with the link's own sentence, nothing sent to a platform, no cookie", async () => {
     const fetchMock = vi.fn(async () => new Response("oauth_token=t&oauth_token_secret=s"));
     vi.stubGlobal("fetch", fetchMock);
     limitOnly(({ route }) => route === LINK_ROUTE);
@@ -317,7 +318,7 @@ describe("the per-link start limit", () => {
     const res = await press("x", { "sec-fetch-site": "same-origin", "x-forwarded-for": "203.0.113.9" });
 
     expect(res.status).toBe(429);
-    expect(await res.text()).toBe("Too many requests from this network in the last hour. Try again later.");
+    expect(await res.text()).toBe("This link was used too many times in the last hour. Try again later.");
     expect(res.headers.get("Retry-After")).toBe("120");
     expect(res.headers.get("set-cookie")).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
