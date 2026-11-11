@@ -111,6 +111,12 @@ function ReviewPostCard({
         onDecided(outcome.patch);
         return;
       }
+      if (outcome.kind === "stands") {
+        // Already approved: reload, so the card shows the text that was approved.
+        setAsking(false);
+        onStale(outcome.message);
+        return;
+      }
       // A refused decision always says why on its own card.
       setError(outcome.message);
       if (outcome.kind === "changed") onStale(outcome.message);

@@ -18,6 +18,14 @@ export const REVIEW_POST_LOCKED_MESSAGE = "This post can no longer be changed he
 export const REVIEW_POST_CHANGED_MESSAGE =
   "This post was changed after you opened this page. Have a look at the new version.";
 
+/**
+ * An approval that had already been given (a second phone, or a retry after a
+ * lost answer). The page reloads instead of marking its card: it may be showing
+ * older text than the one that was approved.
+ */
+export const REVIEW_ALREADY_APPROVED_MESSAGE =
+  "This post was already approved. The list below shows it as it is now.";
+
 /** An approval that names no version (an old page, or not the page at all). */
 export const REVIEW_VERSION_MISSING_MESSAGE = "Reload this page and try again.";
 
@@ -141,17 +149,23 @@ const REVIEW_DECISION_FAILED_MESSAGE = "Couldn't save that. Try again.";
 /**
  * What the page does with a decision's answer. A saved one updates that card
  * from the answer alone (no list reload, which could fail and hide the save);
- * only a "changed" 409 reloads the list; anything else shows its sentence on
- * the card.
+ * a "changed" 409 reloads the list, and so does an approval that already stood
+ * ("stands"): the server cannot tell a retry from a page still showing text
+ * from before an edit, so the card is never marked approved from that answer.
+ * Anything else shows its sentence on the card.
  */
 export type ReviewDecisionOutcome =
   | { kind: "saved"; patch: Partial<ReviewPostDTO> }
+  | { kind: "stands"; message: string }
   | { kind: "changed"; message: string }
   | { kind: "refused"; message: string };
 
 export function reviewDecisionOutcome(status: number, data: unknown): ReviewDecisionOutcome {
   const body = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
   if (status >= 200 && status < 300) {
+    if (body.state === "approved" && body.already === true) {
+      return { kind: "stands", message: REVIEW_ALREADY_APPROVED_MESSAGE };
+    }
     if (body.state === "approved" && typeof body.version === "string") {
       return { kind: "saved", patch: { state: "approved", version: body.version, note: null } };
     }

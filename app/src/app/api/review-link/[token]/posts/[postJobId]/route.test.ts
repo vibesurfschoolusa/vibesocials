@@ -311,8 +311,9 @@ describe("approving a version the client did not see", () => {
     expect(linkUpdateMock).not.toHaveBeenCalled();
   });
 
-  it("lets a repeated approval stand: 200 with the current version, nothing written", async () => {
+  it("lets a repeated approval stand: 200 marked `already`, with the current version, nothing written", async () => {
     // Two phones, or a retry after a lost answer: the only change was the client's own approval.
+    // `already` tells the page to reload: it may be showing text older than the one approved.
     postUpdateManyMock.mockResolvedValue({ count: 0 });
     postFindFirstMock.mockResolvedValue({
       updatedAt: new Date("2026-11-10T11:00:00.500Z"),
@@ -326,6 +327,7 @@ describe("approving a version the client did not see", () => {
       ok: true,
       state: "approved",
       version: "2026-11-10T11:00:00.500Z",
+      already: true,
     });
     // Scoped exactly like the write, minus the version.
     expect(postFindFirstMock).toHaveBeenCalledWith({

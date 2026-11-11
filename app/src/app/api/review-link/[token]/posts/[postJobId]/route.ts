@@ -141,7 +141,15 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
       }
     }
     if (current?.clientApprovedAt) {
-      return NextResponse.json({ ok: true, state: "approved", version: current.updatedAt.toISOString() });
+      // `already`: this request wrote nothing. The page reloads on it rather
+      // than marking its card, because it may still show text from before an
+      // edit that someone else with the link has since approved.
+      return NextResponse.json({
+        ok: true,
+        state: "approved",
+        version: current.updatedAt.toISOString(),
+        already: true,
+      });
     }
     return NextResponse.json(
       { error: current ? REVIEW_POST_CHANGED_MESSAGE : REVIEW_POST_LOCKED_MESSAGE },

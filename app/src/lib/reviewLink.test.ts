@@ -9,6 +9,7 @@ import {
   REVIEW_POST_CHANGED_MESSAGE,
   REVIEW_POST_LOCKED_MESSAGE,
   REVIEW_ANSWER_UNREADABLE_MESSAGE,
+  REVIEW_ALREADY_APPROVED_MESSAGE,
   isReviewLinkTokenShape,
   reviewDecisionOutcome,
   parseReviewDecision,
@@ -139,6 +140,17 @@ describe("reviewDecisionOutcome", () => {
       kind: "refused",
       message: REVIEW_POST_LOCKED_MESSAGE,
     });
+  });
+
+  it("reloads the list when the approval already stood, instead of marking the text on screen as approved", () => {
+    // The page may be showing older text than the one that was approved (a
+    // second phone approved after the owner's edit), so the card is not patched.
+    expect(
+      reviewDecisionOutcome(200, { ok: true, state: "approved", version: VERSION, already: true }),
+    ).toEqual({ kind: "stands", message: REVIEW_ALREADY_APPROVED_MESSAGE });
+    expect(REVIEW_ALREADY_APPROVED_MESSAGE).toBe(
+      "This post was already approved. The list below shows it as it is now.",
+    );
   });
 
   it("always gives a refused decision a sentence", () => {
