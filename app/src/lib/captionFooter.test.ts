@@ -145,3 +145,44 @@ describe("buildCaptionWithFooter with a platform", () => {
     expect(buildCaptionWithFooter("Waves", { trackWebsiteLinks: true }, "x")).toBe("Waves");
   });
 });
+
+// 20, fix round 1: the tags never cost the post its text. On a platform with a
+// length limit the tagged link is used only when the whole text fits it.
+describe("buildCaptionWithFooter tracking tags only when they fit", () => {
+  const on = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf", trackWebsiteLinks: true };
+  const plain = (caption: string) => `${caption}\n\nFor more info visit vibesurfschool.com\n\n#surf`;
+  const tagged = (caption: string, source: string) =>
+    `${caption}\n\nFor more info visit vibesurfschool.com/?utm_source=${source}&utm_medium=social&utm_campaign=vibesocials\n\n#surf`;
+
+  it.each([
+    ["x", "x", 280],
+    ["pinterest", "pinterest", 800],
+    ["google_business_profile", "google", 1500],
+  ] as const)("on %s: tagged up to the limit, plain one character over", (platform, source, limit) => {
+    const room = limit - tagged("", source).length;
+    expect(buildCaptionWithFooter("a".repeat(room - 1), on, platform)).toBe(tagged("a".repeat(room - 1), source));
+    expect(buildCaptionWithFooter("a".repeat(room), on, platform)).toBe(tagged("a".repeat(room), source));
+    expect(buildCaptionWithFooter("a".repeat(room + 1), on, platform)).toBe(plain("a".repeat(room + 1)));
+  });
+
+  it("on X counts the text without @-mentions, as the X client does", () => {
+    const room = 280 - tagged("", "x").length;
+    const caption = `@ana_surf ${"a".repeat(room)}`;
+    expect(buildCaptionWithFooter(caption, on, "x")).toBe(tagged(caption, "x"));
+    expect(buildCaptionWithFooter(`${caption}a`, on, "x")).toBe(plain(`${caption}a`));
+  });
+
+  it("counts code points, so an emoji caption never gets the tags into a cut", () => {
+    // The surfer emoji below is one grapheme but four code points; Pinterest
+    // cuts on code points too (fitPinterestDescription).
+    const surfer = "\u{1F3C4}\u200D\u2642\uFE0F";
+    const room = 800 - tagged("", "pinterest").length;
+    const caption = surfer.repeat(room);
+    expect(buildCaptionWithFooter(caption, on, "pinterest")).toBe(plain(caption));
+  });
+
+  it("always tags on a platform without a limit", () => {
+    const caption = "a".repeat(20_000);
+    expect(buildCaptionWithFooter(caption, on, "linkedin")).toBe(tagged(caption, "linkedin"));
+  });
+});

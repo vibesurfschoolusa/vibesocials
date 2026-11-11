@@ -1,6 +1,8 @@
 import type { Platform } from "@prisma/client";
 
+import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { trackedWebsiteLink } from "@/lib/trackingTags";
+import { removeXMentions } from "@/lib/xMentions";
 
 /**
  * The subset of the posting user that contributes an optional footer to a
@@ -15,6 +17,27 @@ export interface CaptionFooterUser {
   trackWebsiteLinks?: boolean | null;
 }
 
+function composeCaption(base: string, website: string | undefined, hashtags: string | undefined): string {
+  const parts = [base];
+  if (website) parts.push(`For more info visit ${website}`);
+  if (hashtags) parts.push(hashtags);
+  return parts.join("\n\n");
+}
+
+/**
+ * Whether this text goes out whole on the platform. It is counted the way the
+ * platform's client counts it: on X without @-mentions (xClient.ts removes them
+ * before the cut). Code points are counted, not graphemes: every grapheme is at
+ * least one code point, so text that passes here is cut by no client (Pinterest
+ * also cuts on code points, lib/pinterestApi.ts).
+ */
+function fitsPlatformLimit(text: string, platform: Platform): boolean {
+  const { charLimit } = PLATFORM_CAPTION_LIMITS[platform];
+  if (charLimit === null) return true;
+  const counted = platform === "x" ? removeXMentions(text) : text;
+  return [...counted].length <= charLimit;
+}
+
 /**
  * Compose the published caption from a base caption plus the user's optional
  * footer: a "For more info visit <website>" line, then the default hashtags.
@@ -25,25 +48,22 @@ export interface CaptionFooterUser {
  * is always included (trimmed), even when empty.
  *
  * With a `platform` and `trackWebsiteLinks` on, the website carries that
- * platform's tracking tags (lib/trackingTags.ts). Without either, the output
- * is exactly what it was before tracking tags existed.
+ * platform's tracking tags (lib/trackingTags.ts), but only when the whole text
+ * still fits the platform's limit: the tags must never cost the post its text,
+ * so otherwise the plain link is used. Without a platform or with the setting
+ * off, the output is exactly what it was before tracking tags existed.
  */
 export function buildCaptionWithFooter(
   baseCaption: string,
   user: CaptionFooterUser,
   platform?: Platform,
 ): string {
-  const parts = [baseCaption.trim()];
+  const base = baseCaption.trim();
+  const website = user.companyWebsite?.trim() || undefined;
+  const hashtags = user.defaultHashtags?.trim() || undefined;
+  const plain = composeCaption(base, website, hashtags);
+  if (!platform || !user.trackWebsiteLinks || !website) return plain;
 
-  const website = user.companyWebsite?.trim();
-  if (website) {
-    const link = platform && user.trackWebsiteLinks ? trackedWebsiteLink(website, platform) : website;
-    parts.push(`For more info visit ${link}`);
-  }
-
-  if (user.defaultHashtags?.trim()) {
-    parts.push(user.defaultHashtags.trim());
-  }
-
-  return parts.join("\n\n");
+  const tagged = composeCaption(base, trackedWebsiteLink(website, platform), hashtags);
+  return fitsPlatformLimit(tagged, platform) ? tagged : plain;
 }

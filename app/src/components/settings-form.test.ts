@@ -215,7 +215,7 @@ describe("SettingsForm — Tracking tags", () => {
     expect(html.indexOf("Add tracking tags")).toBeGreaterThan(html.indexOf('id="companyWebsite"'));
     expect(html.indexOf("Add tracking tags")).toBeLessThan(html.indexOf('id="defaultHashtags"'));
     expect(html).toContain(
-      "Your Google Analytics will then show which platform each visit came from. The link in your posts gets longer.",
+      "Your Google Analytics will then show which platform each visit came from. The link in your posts gets longer. Where the longer link would not fit, the plain link is used.",
     );
     expect(html).toContain("Applies to posts published from now on, including ones already scheduled.");
     // Off: no example link.

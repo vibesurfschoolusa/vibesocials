@@ -902,6 +902,15 @@ describe("googleBusinessProfileClient.publishVideo — tracking tags on the butt
     expect(sentButton(fetchMock)).toEqual({ actionType: "BOOK", url: "https://booking.example.org/vibe" });
   });
 
+  // Fix round 1: the read is only for the tags, so a failed read counts as
+  // "setting off" for a post with its own button and never stops the publish.
+  it("sends the post's own button unchanged when the workspace read fails", async () => {
+    workspaceFindUniqueMock.mockRejectedValueOnce(new Error("Timed out fetching a new connection from the pool"));
+    const fetchMock = stubOk();
+    await googleBusinessProfileClient.publishVideo(ownButton("https://vibesurfschool.com/book"));
+    expect(sentButton(fetchMock)).toEqual({ actionType: "BOOK", url: "https://vibesurfschool.com/book" });
+  });
+
   it("with the setting off sends the button as today", async () => {
     workspaceFindUniqueMock.mockResolvedValueOnce({ companyWebsite: "vibesurfschool.com", trackWebsiteLinks: false });
     const fetchMock = stubOk();

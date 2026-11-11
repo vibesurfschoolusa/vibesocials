@@ -197,30 +197,19 @@ describe("queueOverridesToSend", () => {
   });
 });
 
-// 20: the room for a platform's caption counts that platform's tagged footer.
+// 20: the room for a caption is counted with the plain footer whatever the
+// tracking-tags setting: the tags are only used when they fit (captionFooter.ts),
+// so switching the setting on never changes a counter.
 describe("platformCaptionCounter and adaptMaxLength with tracking tags", () => {
-  const off = { companyWebsite: "a.co", defaultHashtags: null };
+  const off = { companyWebsite: "a.co", defaultHashtags: "#surf" };
   const on = { ...off, trackWebsiteLinks: true };
-  // "\n\nFor more info visit a.co" is 26; the X tags add
-  // "/?utm_source=x&utm_medium=social&utm_campaign=vibesocials", 57 more.
-  it("leaves X 57 characters less room with the setting on", () => {
-    expect(platformCaptionCounter("hello", "x", off).max).toBe(254);
-    expect(platformCaptionCounter("hello", "x", on).max).toBe(254 - 57);
-    expect(adaptMaxLength("x", on)).toBe(254 - 57);
-  });
 
-  it("counts each platform's own tags", () => {
-    // utm_source=pinterest is 8 characters longer than utm_source=x.
-    expect(platformCaptionCounter("hi", "pinterest", on).max).toBe(800 - 26 - 57 - 8);
-    // Instagram is never tagged.
-    expect(platformCaptionCounter("hi", "instagram", on).max).toBe(2200 - 26);
-  });
-
-  it("is today's room with the setting off", () => {
-    for (const platform of ["x", "pinterest", "google_business_profile", "tiktok"] as const) {
-      expect(platformCaptionCounter("hi", platform, { ...off, trackWebsiteLinks: false }).max).toBe(
-        platformCaptionCounter("hi", platform, off).max,
-      );
+  it("gives every platform the same room with the setting on as off", () => {
+    for (const platform of ["x", "pinterest", "google_business_profile", "instagram", "tiktok", "linkedin"] as const) {
+      expect(platformCaptionCounter("hello", platform, on)).toEqual(platformCaptionCounter("hello", platform, off));
+      expect(adaptMaxLength(platform, on)).toBe(adaptMaxLength(platform, off));
     }
+    // "\n\nFor more info visit a.co\n\n#surf" is 33 characters.
+    expect(platformCaptionCounter("hello", "x", on).max).toBe(280 - 33);
   });
 });

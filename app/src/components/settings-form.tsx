@@ -66,7 +66,7 @@ function TrackingTagsField({
       </label>
       <p className="text-sm text-muted-foreground">
         Your Google Analytics will then show which platform each visit came from. The link in your
-        posts gets longer.
+        posts gets longer. Where the longer link would not fit, the plain link is used.
       </p>
       <p className="text-sm text-muted-foreground">
         Applies to posts published from now on, including ones already scheduled.

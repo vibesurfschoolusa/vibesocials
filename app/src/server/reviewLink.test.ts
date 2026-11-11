@@ -317,7 +317,7 @@ describe("listReviewPosts - the text that will be published", () => {
     await listReviewPosts("ws-1", NOW);
     expect(workspaceFindUniqueMock).toHaveBeenCalledWith({
       where: { id: "ws-1" },
-      select: { companyWebsite: true, defaultHashtags: true },
+      select: { companyWebsite: true, defaultHashtags: true, trackWebsiteLinks: true },
     });
   });
 
@@ -345,6 +345,36 @@ describe("listReviewPosts - the text that will be published", () => {
     const [post] = await listReviewPosts("ws-1", NOW);
 
     expect(post.platformCaptions).toEqual([{ label: "X", text: `Thanks for the lesson${FOOTER}` }]);
+  });
+
+  // 20: with tracking tags on, each platform's text shows the tagged link the
+  // publish function sends; the general caption has no platform, so it stays plain.
+  it("shows each platform's tagged link when the workspace has tracking tags on", async () => {
+    workspaceFindUniqueMock.mockResolvedValue({
+      companyWebsite: "surfco.example",
+      defaultHashtags: "#surf #florida",
+      trackWebsiteLinks: true,
+    });
+    postFindManyMock
+      .mockResolvedValueOnce([
+        postRow({
+          publishMetadata: { targetPlatforms: ["x", "linkedin"] },
+          perPlatformOverrides: { x: "X text", linkedin: "LinkedIn text" },
+        }),
+      ])
+      .mockResolvedValueOnce([]);
+
+    const [post] = await listReviewPosts("ws-1", NOW);
+    const tagged = (source: string) =>
+      `\n\nFor more info visit surfco.example/?utm_source=${source}&utm_medium=social&utm_campaign=vibesocials\n\n#surf #florida`;
+
+    expect(post.caption).toBe(`Dawn patrol tomorrow${FOOTER}`);
+    expect(post.platformCaptions).toEqual(
+      expect.arrayContaining([
+        { label: "X", text: `X text${tagged("x")}` },
+        { label: "LinkedIn", text: `LinkedIn text${tagged("linkedin")}` },
+      ]),
+    );
   });
 
   it("shows the caption as is when the workspace has no footer", async () => {

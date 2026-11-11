@@ -90,19 +90,15 @@ function countGraphemes(text: string): number {
   return [...graphemeSegmenter.segment(text)].length;
 }
 
-/**
- * Length of the footer the app appends to this platform's caption (0 when there
- * is none), with that platform's tracking tags when they are on. The X client
- * counts the link as its full text, so the tags count in full here too.
- */
-function footerLength(platform: Platform, footer: CaptionFooterUser | null | undefined): number {
-  return countGraphemes(buildCaptionWithFooter("", footer ?? {}, platform));
+/** Length of the footer the app appends to every caption (0 when there is none). */
+function footerLength(footer: CaptionFooterUser | null | undefined): number {
+  return countGraphemes(buildCaptionWithFooter("", footer ?? {}));
 }
 
 /** Room for the caption on this platform once the footer is added, or null when it has no limit. */
 function captionRoom(platform: Platform, footer: CaptionFooterUser | null | undefined): number | null {
   const { charLimit } = PLATFORM_CAPTION_LIMITS[platform];
-  return charLimit === null ? null : charLimit - footerLength(platform, footer);
+  return charLimit === null ? null : charLimit - footerLength(footer);
 }
 
 export interface PlatformCaptionCounter {

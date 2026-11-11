@@ -3,10 +3,12 @@ import { Prisma, type Platform } from "@prisma/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
+import { buildPlatformPreview } from "@/lib/platformPreview";
 import { logger } from "@/lib/logger";
 import { nextPacificMidnight, rateLimitedError } from "@/server/platforms/rateLimited";
 import { instagramClient } from "@/server/platforms/instagramClient";
 import { youtubeClient } from "@/server/platforms/youtubeClient";
+import { computeTweetText } from "@/server/platforms/xClient";
 import { PUBLISH_STEP_BUDGET_MS } from "@/server/platforms/publishBudget";
 import type { PublishContext } from "@/server/platforms/types";
 
@@ -4625,6 +4627,32 @@ describe("publish functions - tracking tags on the website link (20)", () => {
         await run({ linkedin: "Own LinkedIn text" });
         expect(ctxFor("linkedin").caption).toBe(`Own LinkedIn text\n\n${tagged("linkedin")}\n\n#surf`);
         expect(ctxFor("x").caption).toBe(`Waves\n\n${tagged("x")}\n\n#surf`);
+      });
+
+      // Fix round 1: the tags never cost the post its text. The X text is tagged
+      // only when the whole text fits 280; the preview shows the same.
+      it("on X, tags up to the limit and sends the plain link one character over", async () => {
+        db.workspaceFindUnique.mockResolvedValue(TRACKED);
+        const room = 280 - `\n\n${tagged("x")}\n\n#surf`.length;
+        for (const [length, expectTagged] of [
+          [room - 1, true],
+          [room, true],
+          [room + 1, false],
+        ] as const) {
+          publishCtxs.length = 0;
+          const text = "a".repeat(length);
+          await run({ x: text });
+          const sent = ctxFor("x").caption;
+          expect(sent).toBe(
+            expectTagged
+              ? `${text}\n\n${tagged("x")}\n\n#surf`
+              : `${text}\n\nFor more info visit vibesurfschool.com\n\n#surf`,
+          );
+          expect(computeTweetText(sent)).toBe(
+            buildPlatformPreview({ platform: "x", caption: "Waves", override: text, user: TRACKED }).rendered,
+          );
+          expect(computeTweetText(sent)).toBe(sent);
+        }
       });
 
       it("with the setting off, every caption equals today's", async () => {

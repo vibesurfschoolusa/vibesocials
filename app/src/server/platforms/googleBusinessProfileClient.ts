@@ -249,15 +249,19 @@ function gbpSchedule(startDate: string, endDate: string, startTime?: string, end
  *
  * With tracking tags on, a button that links to the workspace website's site is
  * tagged as a Google visit (lib/trackingTags.ts). A post whose own options have
- * no link has nothing to tag, so the workspace is not read for it.
+ * no link has nothing to tag, so the workspace is not read for it. For a post
+ * with its own button the read is only for the tags, so a failed read counts as
+ * the setting off and the post's own button goes out unchanged; the default
+ * button still needs the read, and a failure there throws as before.
  */
 async function resolvePostOptions(ctx: PublishContext): Promise<GoogleBusinessPostMetadata | undefined> {
   const own = ctx.googleBusinessProfileMetadata;
   if (own && !own.button?.url) return own;
-  const workspace = await prisma.workspace.findUnique({
+  const read = prisma.workspace.findUnique({
     where: { id: ctx.socialConnection.workspaceId },
     select: { googleButtonType: true, googleButtonUrl: true, companyWebsite: true, trackWebsiteLinks: true },
   });
+  const workspace = own ? await read.catch(() => null) : await read;
   const options = own ?? resolveGooglePostMetadata(undefined, workspace);
   const url = options?.button?.url;
   if (!options?.button || !url || !workspace?.trackWebsiteLinks) return options;

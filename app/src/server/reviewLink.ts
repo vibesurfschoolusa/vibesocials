@@ -131,12 +131,13 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
   }
 
   // The footer the publisher adds to every caption (inngest-functions.ts). These
-  // two fields go out with every post, so they may appear in the text; nothing
-  // else of the workspace is read.
+  // two fields go out with every post, so they may appear in the text; the
+  // tracking-tags flag only decides whether each platform's link is tagged, as
+  // it is at publish time. Nothing else of the workspace is read.
   const footer: CaptionFooterUser =
     (await prisma.workspace.findUnique({
       where: { id: workspaceId },
-      select: { companyWebsite: true, defaultHashtags: true },
+      select: { companyWebsite: true, defaultHashtags: true, trackWebsiteLinks: true },
     })) ?? {};
 
   const posts = rows.map((row): ReviewPostDTO => {

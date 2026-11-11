@@ -5,6 +5,9 @@ import { buildPlatformPreview } from "./platformPreview";
 import { truncateGraphemes } from "./truncate";
 import { computeGbpPostSummary } from "@/server/platforms/googleBusinessProfileClient";
 import { computeTweetText } from "@/server/platforms/xClient";
+import { fitPinterestDescription } from "./pinterestApi";
+import { PLATFORM_CAPTION_LIMITS } from "./platformLimits";
+import { trackedWebsiteLink } from "./trackingTags";
 
 describe("buildPlatformPreview", () => {
   it("renders the plain caption for a null-limit platform with no footer/override", () => {
@@ -198,30 +201,59 @@ describe("buildPlatformPreview", () => {
   });
 });
 
-// 20: with tracking tags on, the preview shows each platform's tagged link,
-// exactly as the publish function builds it (buildCaptionWithFooter with the
-// platform) and as the X client cuts it.
+// 20: with tracking tags on, the preview shows what will be sent: the tagged
+// link when the whole text fits the platform's limit, the plain link when it
+// does not. It agrees with the publish path (buildCaptionWithFooter with the
+// platform, then the client's own cut) at the boundary too.
 describe("buildPlatformPreview with tracking tags", () => {
   const off = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf" };
   const on = { ...off, trackWebsiteLinks: true };
-  const X_TAGGED =
-    "vibesurfschool.com/?utm_source=x&utm_medium=social&utm_campaign=vibesocials";
+  const footerWith = (link: string) => `\n\nFor more info visit ${link}\n\n#surf`;
+  const taggedFooter = (platform: "x" | "pinterest" | "google_business_profile") =>
+    footerWith(trackedWebsiteLink("vibesurfschool.com", platform));
+  const PLAIN = footerWith("vibesurfschool.com");
 
-  it("shows X the tagged link, matching what the X client posts", () => {
+  it("shows X the tagged link when it fits, matching what the X client posts", () => {
     const result = buildPlatformPreview({ platform: "x", caption: "Waves", user: on });
-    expect(result.rendered).toBe(`Waves\n\nFor more info visit ${X_TAGGED}\n\n#surf`);
+    expect(result.rendered).toBe(`Waves${taggedFooter("x")}`);
     expect(result.rendered).toBe(computeTweetText(buildCaptionWithFooter("Waves", on, "x")));
   });
 
-  it("counts the tagged link's full text against X's 280 and cuts as the X client does", () => {
-    const caption = "a".repeat(200);
-    const result = buildPlatformPreview({ platform: "x", caption, user: on });
-    const sent = computeTweetText(buildCaptionWithFooter(caption, on, "x"));
-    expect(result.charCount).toBe(buildCaptionWithFooter(caption, on, "x").length);
-    expect(result.willTruncate).toBe(true);
-    expect(result.rendered).toBe(sent);
-    // The same caption fits untagged: the tags alone push it over.
-    expect(buildPlatformPreview({ platform: "x", caption, user: off }).willTruncate).toBe(false);
+  it.each([
+    ["x", (text: string) => computeTweetText(text)],
+    ["google_business_profile", (text: string) => computeGbpPostSummary(text)],
+    ["pinterest", (text: string) => fitPinterestDescription(text)],
+  ] as const)("on %s: tagged one under and exactly at the limit, plain one over", (platform, send) => {
+    const limit = PLATFORM_CAPTION_LIMITS[platform].charLimit as number;
+    const room = limit - taggedFooter(platform).length;
+    for (const [length, expectTagged] of [
+      [room - 1, true],
+      [room, true],
+      [room + 1, false],
+    ] as const) {
+      const caption = "a".repeat(length);
+      const preview = buildPlatformPreview({ platform, caption, user: on });
+      const published = send(buildCaptionWithFooter(caption, on, platform));
+      expect(preview.rendered).toBe(`${caption}${expectTagged ? taggedFooter(platform) : PLAIN}`);
+      expect(preview.rendered).toBe(published);
+      expect(preview.willTruncate).toBe(false);
+    }
+  });
+
+  it("on X decides on the text without @-mentions, as the X client counts it", () => {
+    const room = 280 - taggedFooter("x").length;
+    // With the mention the tagged text is over 280; without it, it fits exactly.
+    const caption = `@ana_surf ${"a".repeat(room)}`;
+    const preview = buildPlatformPreview({ platform: "x", caption, user: on });
+    expect(preview.rendered).toBe(`${"a".repeat(room)}${taggedFooter("x")}`);
+    expect(preview.rendered).toBe(computeTweetText(buildCaptionWithFooter(caption, on, "x")));
+  });
+
+  it("a long caption that does not fit is cut as with the setting off, never inside the link", () => {
+    const caption = "a".repeat(400);
+    const tagged = buildPlatformPreview({ platform: "x", caption, user: on });
+    expect(tagged).toEqual(buildPlatformPreview({ platform: "x", caption, user: off }));
+    expect(tagged.rendered).not.toContain("utm_");
   });
 
   it("uses a per-platform caption with that platform's own tagged footer", () => {
