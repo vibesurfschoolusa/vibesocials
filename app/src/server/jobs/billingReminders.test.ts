@@ -66,8 +66,20 @@ describe("billingReminders (billing-reminders)", () => {
     expect(runMock).not.toHaveBeenCalled();
   });
 
-  it("with billing on, runs one step and returns its counts", async () => {
+  it("with billing on but payments not configured, returns before any step (fix round 1)", async () => {
     vi.stubEnv("BILLING_ENABLED", "true");
+    vi.stubEnv("STRIPE_SECRET_KEY", "");
+    const step = fakeStep();
+    await runHandler(step);
+    expect(step.order).toEqual([]);
+    expect(runMock).not.toHaveBeenCalled();
+  });
+
+  it("with payments configured, runs one step and returns its counts", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_example");
+    vi.stubEnv("STRIPE_WEBHOOK_SECRET", "whsec_example");
+    vi.stubEnv("STRIPE_PRICE_STARTER", "price_example_starter");
     const step = fakeStep();
     expect(await runHandler(step)).toEqual(SUMMARY);
     expect(step.order).toEqual(["send"]);

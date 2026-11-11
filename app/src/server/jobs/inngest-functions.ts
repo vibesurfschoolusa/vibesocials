@@ -63,7 +63,7 @@ import {
   proactiveRefreshWhere,
 } from "@/server/jobs/connectionHealthSweep";
 import { platformLabel } from "@/lib/platforms";
-import { billingEnabled, billingFieldsSelect } from "@/lib/billing";
+import { billingFieldsSelect, paymentsConfigured } from "@/lib/billing";
 import { needsMediaMessage } from "@/lib/postTargets";
 import { runBillingReminders } from "@/server/billing/reminders";
 import {
@@ -2582,8 +2582,9 @@ export const monthlyReportEmail = inngest.createFunction(
 /**
  * The trial emails (21b): a reminder 3 days before a trial ends and a notice
  * once it has ended, each once per workspace (logic in billing/reminders.ts).
- * With billing off it returns before any step: no execution beyond the run
- * itself. With billing on, one step that sends at most 40 emails. 16:00 UTC,
+ * Unless payments are configured (billing on, Stripe set up, a price) it
+ * returns before any step, so no email points at a plan button that is not
+ * there (fix round 1). Otherwise one step that sends at most 40 emails. 16:00 UTC,
  * after the other daily emails. SEC: the step output is counts only.
  */
 export const billingReminders = inngest.createFunction(
@@ -2594,7 +2595,7 @@ export const billingReminders = inngest.createFunction(
   },
   { cron: "0 16 * * *" },
   async ({ step }) => {
-    if (!billingEnabled()) return { skipped: "billing off" };
+    if (!paymentsConfigured()) return { skipped: "payments not configured" };
     const summary = await step.run("send", () => runBillingReminders(new Date()));
     logger.info("[Inngest] Billing reminders sent", summary);
     return summary;
