@@ -29,3 +29,21 @@ describe("PlatformPreviewList photo count", () => {
     expect(html).toContain(">4</span>");
   });
 });
+
+// Go-live check F2 item 4: a long footer link ran past the card on a phone.
+describe("PlatformPreviewList long text", () => {
+  it("wraps the preview text anywhere, so a long link stays inside its card", () => {
+    const link = "https://example.com/?utm_source=facebook&utm_medium=social&utm_campaign=vibesocials";
+    for (const platform of ["instagram", "facebook_page", "x", "linkedin", "tiktok", "youtube", "google_business_profile"] as const) {
+      const html = renderToStaticMarkup(
+        createElement(PlatformPreviewList, { platforms: [platform], caption: link, mediaUrl: null, mediaMimeType: null }),
+      );
+      const text = html.match(/<p class="([^"]*)">[^<]*utm_campaign/)?.[1] ?? "";
+      expect(text, platform).toContain("[overflow-wrap:anywhere]");
+      // The card itself may shrink to its column instead of growing to the link.
+      expect(html.match(/role="group"[^>]*class="([^"]*)"|class="([^"]*)"[^>]*role="group"/)?.slice(1).join(" "), platform).toContain(
+        "min-w-0",
+      );
+    }
+  });
+});

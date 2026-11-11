@@ -107,7 +107,7 @@ function PlatformPreviewCard({
     <Card
       role="group"
       aria-labelledby={headingId}
-      className="flex flex-col gap-2 p-3"
+      className="flex min-w-0 flex-col gap-2 p-3"
     >
       <div className="flex items-center justify-between gap-2">
         <h3 id={headingId} className="text-sm font-semibold text-foreground">
@@ -149,7 +149,8 @@ function PlatformPreviewCard({
         />
       )}
 
-      <p className="min-h-[1.25rem] whitespace-pre-wrap break-words text-sm text-foreground">
+      {/* Wraps anywhere: a footer link with tracking tags has no break point and ran past the card on a phone. */}
+      <p className="min-h-[1.25rem] whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-sm text-foreground">
         {preview.rendered || <span className="text-muted-foreground">No caption yet</span>}
       </p>
 
