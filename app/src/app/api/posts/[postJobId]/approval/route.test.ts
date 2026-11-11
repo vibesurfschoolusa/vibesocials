@@ -210,9 +210,23 @@ describe("POST /api/posts/[postJobId]/approval", () => {
         status: "scheduled",
         approvedAt: expect.any(Date),
         approvedByUserId: "user-1",
+        // Scheduled again: a new post for the client to look over (client review link).
+        clientApprovedAt: null,
+        clientChangeRequestedAt: null,
+        clientNote: null,
       },
     });
     expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("publishing now or rejecting leaves the client's marks: the post leaves the client's page", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
+    await POST(req({ decision: "approve" }), ctx("job-1"));
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+    await POST(req({ decision: "reject" }), ctx("job-1"));
+    for (const [{ data }] of updateManyMock.mock.calls) {
+      expect(data).not.toHaveProperty("clientApprovedAt");
+    }
   });
 
   it("approving a post with no time publishes it now", async () => {
@@ -457,7 +471,14 @@ describe("POST /api/posts/[postJobId]/approval — a scheduled row still awaitin
     });
     expect(updateManyMock).toHaveBeenCalledWith({
       where: CLAIM_WHERE,
-      data: { status: "scheduled", approvedAt: expect.any(Date), approvedByUserId: "user-1" },
+      data: {
+        status: "scheduled",
+        approvedAt: expect.any(Date),
+        approvedByUserId: "user-1",
+        clientApprovedAt: null,
+        clientChangeRequestedAt: null,
+        clientNote: null,
+      },
     });
     expect(prepareDispatchMock).not.toHaveBeenCalled();
     expect(inngestSendMock).not.toHaveBeenCalled();

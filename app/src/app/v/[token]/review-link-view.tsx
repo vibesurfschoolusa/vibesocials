@@ -67,17 +67,24 @@ function ReviewPostCard({
 }: {
   post: ReviewPostDTO;
   token: string;
-  onDecided: (id: string, patch: Partial<ReviewPostDTO>) => void;
-  onStale: () => void;
+  /** Saved: take the new list (an approval changes the post's version). */
+  onDecided: () => Promise<void>;
+  /** 409: the post changed or left the schedule. Show why above the list and reload it. */
+  onStale: (message: string) => void;
 }) {
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const state = stateText(post);
+  // Whole characters, as the server counts them (an emoji is one, not two).
   const noteLength = Array.from(note.trim()).length;
+  const noteTooShort = noteLength === 0;
+  const noteTooLong = noteLength > REVIEW_NOTE_MAX;
 
-  async function decide(body: { decision: "approve" } | { decision: "change"; note: string }) {
+  async function decide(
+    body: { decision: "approve"; version: string } | { decision: "change"; note: string },
+  ) {
     setBusy(true);
     setError(null);
     try {
@@ -90,17 +97,16 @@ function ReviewPostCard({
         },
       );
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
-      if (!response.ok) {
-        setError(data?.error ?? "Couldn't save that. Try again.");
-        if (response.status === 409) onStale();
+      if (response.status === 409) {
+        onStale(data?.error ?? "This post can no longer be changed here.");
         return;
       }
-      if (body.decision === "approve") {
-        onDecided(post.id, { state: "approved", note: null });
-      } else {
-        onDecided(post.id, { state: "change_requested", note: body.note.trim() });
-        setAsking(false);
+      if (!response.ok) {
+        setError(data?.error ?? "Couldn't save that. Try again.");
+        return;
       }
+      setAsking(false);
+      await onDecided();
     } catch {
       setError("Couldn't save that. Check your connection and try again.");
     } finally {
@@ -145,7 +151,7 @@ function ReviewPostCard({
               className="space-y-2"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (noteLength === 0 || noteLength > REVIEW_NOTE_MAX) return;
+                if (noteTooShort || noteTooLong) return;
                 void decide({ decision: "change", note });
               }}
             >
@@ -155,15 +161,15 @@ function ReviewPostCard({
                 value={note}
                 onChange={(event) => setNote(event.target.value)}
                 rows={3}
-                maxLength={REVIEW_NOTE_MAX}
                 required
+                aria-invalid={noteTooLong || undefined}
                 disabled={busy}
               />
-              <p className="text-xs text-muted-foreground">
+              <p className={noteTooLong ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
                 {noteLength}/{REVIEW_NOTE_MAX}. This post will not go out until it is scheduled again.
               </p>
               <div className="flex flex-wrap gap-2">
-                <Button type="submit" loading={busy} disabled={noteLength === 0}>
+                <Button type="submit" loading={busy} disabled={noteTooShort || noteTooLong}>
                   Send
                 </Button>
                 <Button type="button" variant="ghost" disabled={busy} onClick={() => setAsking(false)}>
@@ -177,7 +183,7 @@ function ReviewPostCard({
                 type="button"
                 loading={busy}
                 disabled={post.state === "approved"}
-                onClick={() => void decide({ decision: "approve" })}
+                onClick={() => void decide({ decision: "approve", version: post.version })}
               >
                 Looks good
               </Button>
@@ -201,6 +207,8 @@ function ReviewPostCard({
 export function ReviewLinkView({ token }: { token: string }) {
   const [posts, setPosts] = useState<ReviewPostDTO[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Why the list was just reloaded (a post changed, or left the schedule).
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -226,9 +234,18 @@ export function ReviewLinkView({ token }: { token: string }) {
     void load();
   }, [load]);
 
-  const patch = useCallback((id: string, change: Partial<ReviewPostDTO>) => {
-    setPosts((prev) => (prev ? prev.map((p) => (p.id === id ? { ...p, ...change } : p)) : prev));
-  }, []);
+  const afterDecision = useCallback(async () => {
+    setNotice(null);
+    await load();
+  }, [load]);
+
+  const stale = useCallback(
+    (message: string) => {
+      setNotice(message);
+      void load();
+    },
+    [load],
+  );
 
   if (error && posts === null) {
     return (
@@ -247,21 +264,29 @@ export function ReviewLinkView({ token }: { token: string }) {
       </p>
     );
   }
-  if (posts.length === 0) {
-    return <p className="text-sm text-muted-foreground">Nothing is scheduled for the next 60 days.</p>;
-  }
-
   return (
-    <ul className="space-y-4">
-      {posts.map((post) => (
-        <ReviewPostCard
-          key={post.id}
-          post={post}
-          token={token}
-          onDecided={patch}
-          onStale={() => void load()}
-        />
-      ))}
-    </ul>
+    <div className="space-y-4">
+      {notice ? (
+        <p role="status" className="rounded-[var(--radius)] border border-border bg-muted/60 p-3 text-sm">
+          {notice}
+        </p>
+      ) : null}
+      {posts.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Nothing is scheduled for the next 60 days.</p>
+      ) : (
+        <ul className="space-y-4">
+          {posts.map((post) => (
+            // Keyed on the version too: a changed post gets a fresh card.
+            <ReviewPostCard
+              key={`${post.id}:${post.version}`}
+              post={post}
+              token={token}
+              onDecided={afterDecision}
+              onStale={stale}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

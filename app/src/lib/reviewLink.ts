@@ -14,6 +14,13 @@ export const REVIEW_LINK_INACTIVE_MESSAGE = "This link is not active. Ask for a 
 /** Shown for a post that is not (or no longer) one the client may decide on. */
 export const REVIEW_POST_LOCKED_MESSAGE = "This post can no longer be changed here.";
 
+/** An approval of a version the client did not see: the post was edited since the page loaded. */
+export const REVIEW_POST_CHANGED_MESSAGE =
+  "This post was changed after you opened this page. Have a look at the new version.";
+
+/** An approval that names no version (an old page, or not the page at all). */
+export const REVIEW_VERSION_MISSING_MESSAGE = "Reload this page and try again.";
+
 export const REVIEW_LINK_IP_LIMIT_MESSAGE =
   "Too many requests from this network in the last hour. Try again later.";
 
@@ -61,19 +68,28 @@ export function isReviewLinkTokenShape(token: string): boolean {
 }
 
 export type ReviewDecision =
-  | { ok: true; decision: "approve" }
+  | { ok: true; decision: "approve"; version: Date }
   | { ok: true; decision: "change"; note: string }
   | { ok: false; error: string };
 
 /**
- * The client's decision from a request body. Only `decision` and `note` are
- * read. The note is plain text: control characters other than line breaks and
+ * The client's decision from a request body. Only `decision`, `version` and
+ * `note` are read. An approval must name the version the client looked at
+ * (the post's `updatedAt` exactly as the list gave it), so it can only land on
+ * that text; a change request needs none. The note is plain text: control characters other than line breaks and
  * tabs are dropped, it is trimmed, and over 500 characters (whole characters,
  * so an emoji counts once) it is refused rather than cut, so the client knows.
  */
 export function parseReviewDecision(body: unknown): ReviewDecision {
   const record = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  if (record.decision === "approve") return { ok: true, decision: "approve" };
+  if (record.decision === "approve") {
+    const version = typeof record.version === "string" ? new Date(record.version) : null;
+    // Exactly the form the list sends, so no other spelling names some other instant.
+    if (!version || Number.isNaN(version.getTime()) || version.toISOString() !== record.version) {
+      return { ok: false, error: REVIEW_VERSION_MISSING_MESSAGE };
+    }
+    return { ok: true, decision: "approve", version };
+  }
   if (record.decision !== "change") return { ok: false, error: REVIEW_DECISION_INVALID_MESSAGE };
 
   if (typeof record.note !== "string") return { ok: false, error: REVIEW_NOTE_MISSING_MESSAGE };
@@ -111,4 +127,6 @@ export interface ReviewPostDTO {
   state: ReviewPostState;
   /** The client's own note, only on a change request. */
   note: string | null;
+  /** The post's updatedAt (ISO-8601): an approval sends it back and lands only on this version. */
+  version: string;
 }

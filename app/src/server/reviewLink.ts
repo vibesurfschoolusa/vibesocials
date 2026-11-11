@@ -52,6 +52,9 @@ export async function findActiveReviewLink(token: string): Promise<ActiveReviewL
  */
 const REVIEW_POST_SELECT = {
   id: true,
+  status: true,
+  // The version an approval is pinned to.
+  updatedAt: true,
   scheduledFor: true,
   baseCaption: true,
   perPlatformOverrides: true,
@@ -137,7 +140,9 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
     })) ?? {};
 
   const posts = rows.map((row): ReviewPostDTO => {
-    const changeRequested = row.clientChangeRequestedAt !== null;
+    // Only a draft is on hold. A scheduled post always gets its buttons, whatever
+    // its client columns say (every write that schedules a post clears them).
+    const changeRequested = row.status === "draft" && row.clientChangeRequestedAt !== null;
     const caption = row.baseCaption ?? row.mediaItem?.baseCaption ?? "";
     return {
       id: row.id,
@@ -158,6 +163,7 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
       mediaCount: photoCountById.get(row.id) ?? 1,
       state: changeRequested ? "change_requested" : row.clientApprovedAt ? "approved" : "none",
       note: changeRequested ? row.clientNote : null,
+      version: row.updatedAt.toISOString(),
     };
   });
 

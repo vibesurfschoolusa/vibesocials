@@ -238,11 +238,12 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         status: "draft",
         updatedAt: job.updatedAt,
       },
-      // A draft the client asked to change (client review link) is a fresh post
-      // for the client to look over once it is scheduled again.
+      // Client review link: every write that schedules a post clears the
+      // client's marks, so the client looks it over as a new post.
       data: {
         status: "scheduled",
         scheduledFor: validation.date,
+        clientApprovedAt: null,
         clientChangeRequestedAt: null,
         clientNote: null,
         ...releaseHold,

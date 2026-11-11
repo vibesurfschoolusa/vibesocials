@@ -218,6 +218,11 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
           // the day the limit was checked for above, not its creation day or a
           // slot that passed during review.
           ...(outcome === "publish_now" ? { scheduledFor: now } : {}),
+          // Client review link: every write that schedules a post clears the
+          // client's marks, so the client looks it over as a new post.
+          ...(nextStatus === "scheduled"
+            ? { clientApprovedAt: null, clientChangeRequestedAt: null, clientNote: null }
+            : {}),
         }
       : { status: nextStatus },
   });

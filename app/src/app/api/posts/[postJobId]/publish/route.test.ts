@@ -68,8 +68,8 @@ import { POST } from "./route";
 const FUTURE = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 const SUBMITTED = new Date("2026-11-01T09:00:00Z");
 const UPDATED = new Date("2026-11-01T09:30:00Z");
-/** Scheduling a draft again clears the client's change request (client review link). */
-const CLEAR_CLIENT_CHANGE = { clientChangeRequestedAt: null, clientNote: null };
+/** Scheduling a post again clears every client mark: it is a new post to look over (client review link). */
+const CLEAR_CLIENT_CHANGE = { clientApprovedAt: null, clientChangeRequestedAt: null, clientNote: null };
 
 /** The ownership/approval read's row; defaults to a plain draft. */
 function jobRow(overrides: Record<string, unknown> = {}) {
@@ -211,11 +211,26 @@ describe("POST /api/posts/[postJobId]/publish", () => {
     expect(updateManyMock).toHaveBeenCalledTimes(1);
     expect(updateManyMock.mock.calls[0][0].data).toMatchObject({
       status: "scheduled",
+      clientApprovedAt: null,
       clientChangeRequestedAt: null,
       clientNote: null,
     });
-    // The client's earlier approval, if any, was already cleared by the change request.
-    expect(updateManyMock.mock.calls[0][0].data).not.toHaveProperty("clientApprovedAt");
+  });
+
+  it("submitting for approval keeps the client's note, so the owner sees it while deciding", async () => {
+    getWorkspaceContextMock.mockResolvedValue(
+      makeWorkspaceContext({ role: "member", requireApproval: true }),
+    );
+    findFirstMock.mockResolvedValue(jobRow({ scheduledFor: new Date(FUTURE) }));
+
+    const res = await POST(req({ scheduledFor: FUTURE }), ctx("job-1"));
+
+    expect(res.status).toBe(202);
+    const { data } = updateManyMock.mock.calls[0][0];
+    expect(data.status).toBe("draft");
+    for (const field of ["clientApprovedAt", "clientChangeRequestedAt", "clientNote"]) {
+      expect(data).not.toHaveProperty(field);
+    }
   });
 
   it("rejects scheduling a non-draft (409 NOT_A_DRAFT)", async () => {

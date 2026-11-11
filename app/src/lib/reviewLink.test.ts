@@ -5,6 +5,7 @@ import {
   REVIEW_NOTE_MISSING_MESSAGE,
   REVIEW_NOTE_TOO_LONG_MESSAGE,
   REVIEW_DECISION_INVALID_MESSAGE,
+  REVIEW_VERSION_MISSING_MESSAGE,
   isReviewLinkTokenShape,
   parseReviewDecision,
   reviewLinkUrl,
@@ -28,11 +29,28 @@ describe("isReviewLinkTokenShape", () => {
 });
 
 describe("parseReviewDecision", () => {
-  it("reads an approval and ignores anything else in the body", () => {
-    expect(parseReviewDecision({ decision: "approve", note: "x", status: "published" })).toEqual({
-      ok: true,
-      decision: "approve",
-    });
+  it("reads an approval with the version it was given, and ignores anything else in the body", () => {
+    expect(
+      parseReviewDecision({
+        decision: "approve",
+        version: "2026-11-10T10:00:00.123Z",
+        note: "x",
+        status: "published",
+      }),
+    ).toEqual({ ok: true, decision: "approve", version: new Date("2026-11-10T10:00:00.123Z") });
+  });
+
+  it("refuses an approval without a version that names an instant", () => {
+    for (const version of [undefined, null, "", "not a date", 1731232800000, "2026-11-10"]) {
+      expect(parseReviewDecision({ decision: "approve", version }), String(version)).toEqual({
+        ok: false,
+        error: REVIEW_VERSION_MISSING_MESSAGE,
+      });
+    }
+  });
+
+  it("does not need a version for a change request", () => {
+    expect(parseReviewDecision({ decision: "change", note: "x" })).toMatchObject({ ok: true });
   });
 
   it("reads a change request with its note trimmed", () => {

@@ -53,6 +53,8 @@ function linkRow(overrides: Record<string, unknown> = {}) {
 function postRow(overrides: Record<string, unknown> = {}) {
   return {
     id: "post-1",
+    status: "scheduled",
+    updatedAt: new Date("2026-11-10T09:30:00.250Z"),
     scheduledFor: new Date("2026-11-12T15:00:00Z"),
     baseCaption: "Dawn patrol tomorrow",
     perPlatformOverrides: null,
@@ -195,6 +197,7 @@ describe("listReviewPosts", () => {
         mediaCount: 1,
         state: "none",
         note: null,
+        version: "2026-11-10T09:30:00.250Z",
       },
     ]);
     const text = JSON.stringify(posts);
@@ -253,6 +256,7 @@ describe("listReviewPosts", () => {
       .mockResolvedValueOnce([
         postRow({
           id: "changed",
+          status: "draft",
           scheduledFor: new Date("2026-11-15T10:00:00Z"),
           clientChangeRequestedAt: new Date("2026-11-09T10:00:00Z"),
           clientNote: "Use the <b>other</b> photo",
@@ -264,6 +268,31 @@ describe("listReviewPosts", () => {
     expect(posts.map((post) => post.id)).toEqual(["changed", "later"]);
     expect(posts[0]).toMatchObject({ state: "change_requested", note: "Use the <b>other</b> photo" });
     expect(posts[1]).toMatchObject({ state: "none", note: null });
+  });
+
+  it("selects the status and the version", async () => {
+    await listReviewPosts("ws-1", NOW);
+    for (const [query] of postFindManyMock.mock.calls) {
+      expect(query.select.status).toBe(true);
+      expect(query.select.updatedAt).toBe(true);
+    }
+  });
+
+  it("says Change requested only for a draft: a scheduled post keeps its buttons whatever its columns say", async () => {
+    postFindManyMock
+      .mockResolvedValueOnce([
+        postRow({
+          clientChangeRequestedAt: new Date("2026-11-09T10:00:00Z"),
+          clientNote: "old note",
+          clientApprovedAt: null,
+        }),
+      ])
+      .mockResolvedValueOnce([]);
+
+    const [post] = await listReviewPosts("ws-1", NOW);
+
+    expect(post.state).toBe("none");
+    expect(post.note).toBeNull();
   });
 
   it("does not ask for counts or connections when there is nothing to show", async () => {

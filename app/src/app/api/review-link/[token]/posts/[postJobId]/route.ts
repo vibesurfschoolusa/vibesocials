@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { after, NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
@@ -11,6 +12,7 @@ import {
   REVIEW_LINK_INACTIVE_MESSAGE,
   REVIEW_LINK_IP_LIMIT_MESSAGE,
   REVIEW_LINK_IP_PER_HOUR,
+  REVIEW_POST_CHANGED_MESSAGE,
   REVIEW_POST_LOCKED_MESSAGE,
   parseReviewDecision,
   reviewWindowEnd,
@@ -20,7 +22,7 @@ import { findActiveReviewLink, notifyOwnersOfClientChange } from "@/server/revie
 
 /**
  * POST /api/review-link/[token]/posts/[postJobId] — the client's decision on
- * one post (2026-11-10), signed out: `{ decision: "approve" }` or
+ * one post (2026-11-10), signed out: `{ decision: "approve", version }` or
  * `{ decision: "change", note }`.
  *
  * Each decision is ONE conditional update, matched on the post id, the link's
@@ -32,8 +34,15 @@ import { findActiveReviewLink, notifyOwnersOfClientChange } from "@/server/revie
  * claimed is `in_progress` and gets the 409; a post pulled back here is a
  * `draft` the scanner no longer selects.
  *
- * Neither decision touches the members' approval columns
- * (submittedForApprovalAt, approvedAt, approvedByUserId; lib/approval.ts).
+ * An approval is also pinned to `version` (the post's updatedAt as the page
+ * received it), so it can only land on the text the client saw; a miss on a
+ * post still in reach answers the "changed" 409 and the page reloads. A change
+ * request is not pinned: stopping a post on an old view is harmless.
+ *
+ * A change request also clears the members' approval (submittedForApprovalAt,
+ * approvedAt, approvedByUserId; lib/approval.ts): an owner approved the post
+ * as it was, and a draft still marked approved would let a member edit and
+ * schedule it unreviewed. As a plain draft it goes through approval again.
  *
  * Order: the body is checked first (no counting for a refused body), then the
  * per-IP limit (shared with the list route), the lookup, the per-link day
@@ -85,26 +94,49 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     scheduledFor: { lte: reviewWindowEnd(now) },
   };
 
+  const update: Prisma.PostJobUpdateManyArgs =
+    decision.decision === "approve"
+      ? {
+          where: { ...where, updatedAt: decision.version },
+          data: { clientApprovedAt: now, clientChangeRequestedAt: null, clientNote: null },
+        }
+      : {
+          where,
+          data: {
+            status: "draft",
+            clientChangeRequestedAt: now,
+            clientNote: decision.note,
+            clientApprovedAt: null,
+            submittedForApprovalAt: null,
+            approvedAt: null,
+            approvedByUserId: null,
+          },
+        };
+
   let count: number;
   try {
-    ({ count } = await prisma.postJob.updateMany({
-      where,
-      data:
-        decision.decision === "approve"
-          ? { clientApprovedAt: now, clientChangeRequestedAt: null, clientNote: null }
-          : {
-              status: "draft",
-              clientChangeRequestedAt: now,
-              clientNote: decision.note,
-              clientApprovedAt: null,
-            },
-    }));
+    ({ count } = await prisma.postJob.updateMany(update));
   } catch (error) {
     logger.error("[review-link] Couldn't save a decision", { error, linkId: link.id });
     return NextResponse.json({ error: "Couldn't save that. Try again." }, { status: 500 });
   }
 
-  if (count === 0) return NextResponse.json({ error: REVIEW_POST_LOCKED_MESSAGE }, { status: 409 });
+  if (count === 0) {
+    // An approval that missed: if the post is still one the client may decide
+    // on, only its version moved. A read, so nothing is written either way.
+    let changed = false;
+    if (decision.decision === "approve") {
+      try {
+        changed = (await prisma.postJob.findFirst({ where, select: { id: true } })) !== null;
+      } catch (error) {
+        logger.error("[review-link] Couldn't tell why an approval missed", { error, linkId: link.id });
+      }
+    }
+    return NextResponse.json(
+      { error: changed ? REVIEW_POST_CHANGED_MESSAGE : REVIEW_POST_LOCKED_MESSAGE },
+      { status: 409 },
+    );
+  }
 
   try {
     await prisma.workspaceReviewLink.update({ where: { id: link.id }, data: { lastUsedAt: now } });

@@ -56,6 +56,20 @@ interface QueueCalendarProps {
  * the exact time in the existing dialog, which is also the keyboard-accessible
  * reschedule path. Drafts have no date and stay in the List view.
  */
+/**
+ * The posts the grid can't plot, for the line under it. A draft that keeps a
+ * time (one the client asked to change, through the review link) is not
+ * "without a date", so only drafts with no time count as such; posts awaiting
+ * approval are all counted, as before.
+ */
+export function offCalendarSummary<
+  T extends { status: string; approvalState: string; scheduledFor: string | null },
+>(jobs: T[]): { awaitingApproval: number; drafts: number } {
+  return summarizeOffCalendar(
+    jobs.filter((j) => j.status === "scheduled" || j.approvalState === "pending" || !j.scheduledFor),
+  );
+}
+
 export function QueueCalendar({ jobs, onEdit, onRescheduled }: QueueCalendarProps) {
   const toast = useToast();
   const [monthCursor, setMonthCursor] = useState(() => {
@@ -68,7 +82,7 @@ export function QueueCalendar({ jobs, onEdit, onRescheduled }: QueueCalendarProp
   const scheduled = useMemo(() => jobs.filter((j) => j.status === "scheduled"), [jobs]);
   // Posts the grid can't plot, split by why — a post awaiting approval often
   // HAS a proposed time, so it must not be described as "without a date".
-  const offCalendar = useMemo(() => summarizeOffCalendar(jobs), [jobs]);
+  const offCalendar = useMemo(() => offCalendarSummary(jobs), [jobs]);
   const weeks = useMemo(
     () => buildCalendarMonth(monthCursor.year, monthCursor.monthIndex),
     [monthCursor],
