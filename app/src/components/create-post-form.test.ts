@@ -13,6 +13,7 @@ vi.mock("@/lib/platformLimits", async (importOriginal) => ({
 import {
   buildTextPostBody,
   composerPageState,
+  composerPageView,
   FILE_LOST_MESSAGE,
   fileLostBlocksSubmit,
   fileLostNoticeShown,
@@ -32,6 +33,7 @@ import {
   sharedFileOnItsWay,
   showLocationField,
   submitButtonLabel,
+  submitFirstStep,
   textOnlyNotice,
   textPostConfirmCopy,
   type PickEvent,
@@ -650,5 +652,91 @@ describe("the untouched press where every platform needs a file", () => {
     expect(untouchedSubmitMessage({ ...pressed, connected: [] })).toBe(
       "Add a photo or video, or write the text of your post.",
     );
+  });
+});
+
+// F2 fix round 1, item 3: the form takes what it shows (composerPageView) and
+// the first decisions of a press (submitFirstStep) from these helpers, fed by
+// composerPageState, so the tests below run the form's own chain.
+describe("the form's chain: composerPageState, composerPageView, submitFirstStep", () => {
+  type Platform = Parameters<typeof textOnlyNotice>[0]["connected"][number];
+  const nothing = { reuseLoading: false, hasReuseItem: false, hasUploadFile: false, photoCount: 0, overrides: null };
+  const connected: Platform[] = ["instagram", "x", "youtube"];
+
+  function view(caption: string, extra: Partial<typeof nothing> = {}, triedSend = false) {
+    const pageState = composerPageState({ ...nothing, ...extra, caption }, true);
+    return {
+      pageState,
+      ...composerPageView({
+        pageState,
+        connected,
+        deselected: new Set(),
+        mimeType: extra.hasUploadFile ? "image/jpeg" : null,
+        mode: "now",
+        loading: false,
+        triedSend,
+      }),
+    };
+  }
+
+  it("untouched: every platform selectable, no notice, the file page's button", () => {
+    const v = view("");
+    expect(v.untouched).toBe(true);
+    expect(v.noFile).toBe(true);
+    expect(v.selected).toEqual(connected);
+    expect(v.textNotice).toBeNull();
+    expect(v.buttonLabel).toBe("Publish post");
+    expect(v.platformAlert).toBeNull();
+  });
+
+  it("text: the photo platforms greyed out, the notice and the text post's button", () => {
+    const v = view("Open today");
+    expect(v.untouched).toBe(false);
+    expect(v.selected).toEqual(["x"]);
+    expect(v.textNotice).toContain("This post has no photo or video.");
+    expect(v.buttonLabel).toBe("Publish without a photo");
+  });
+
+  it("file: the file page", () => {
+    const v = view("Hi", { hasUploadFile: true });
+    expect(v.noFile).toBe(false);
+    expect(v.selected).toEqual(["instagram", "x"]);
+    expect(v.textNotice).toBeNull();
+    expect(v.buttonLabel).toBe("Publish post");
+  });
+
+  const go = { fileLost: "none" as const, fileBlock: null };
+
+  it("untouched: the press stops with the sentence and is not a try", () => {
+    expect(submitFirstStep({ ...go, pageState: view("").pageState })).toEqual({ stop: "untouched", countsAsTry: false });
+  });
+
+  it("text or file: the press goes on and is a try", () => {
+    expect(submitFirstStep({ ...go, pageState: view("Hi").pageState })).toEqual({ stop: null, countsAsTry: true });
+    expect(submitFirstStep({ ...go, pageState: view("Hi", { hasUploadFile: true }).pageState })).toEqual({
+      stop: null,
+      countsAsTry: true,
+    });
+  });
+
+  it("a fresh lost-file notice comes first, before the untouched stop", () => {
+    expect(submitFirstStep({ ...go, pageState: "untouched", fileLost: "fresh" })).toEqual({
+      stop: "file-lost",
+      countsAsTry: false,
+    });
+    // Seen once: the next press goes on to the untouched stop.
+    expect(submitFirstStep({ ...go, pageState: "untouched", fileLost: "seen" })).toEqual({
+      stop: "untouched",
+      countsAsTry: false,
+    });
+  });
+
+  it("a file still being prepared or shared stops with its wait sentence", () => {
+    const fileBlock = "Wait until the file is ready, then press the button again.";
+    expect(submitFirstStep({ ...go, pageState: "file", fileBlock })).toEqual({
+      stop: "wait",
+      message: fileBlock,
+      countsAsTry: true,
+    });
   });
 });

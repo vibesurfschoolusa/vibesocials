@@ -215,6 +215,64 @@ export function pressCountsAsTry(pageState: ComposerPageState): boolean {
 }
 
 /**
+ * What the page shows for its state. The form takes all of it from here, so
+ * which of these wait for text (only a text post greys out the photo platforms,
+ * shows the notice and renames the button) is decided, and tested, in one place.
+ */
+export function composerPageView(input: {
+  pageState: ComposerPageState;
+  connected: readonly Platform[];
+  deselected: ReadonlySet<Platform>;
+  mimeType: string | null;
+  mode: PublishMode;
+  loading: boolean;
+  triedSend: boolean;
+}) {
+  const textPage = input.pageState === "text";
+  const { choices, selected } = deriveComposerPlatforms(input.connected, input.deselected, input.mimeType, {
+    noFile: textPage,
+  });
+  const allDisabled = choices.every((choice) => choice.disabledReason !== null);
+  return {
+    /** No file (switch on): the lost-file notice, Location and the rest keep reading this. */
+    noFile: input.pageState !== "file",
+    untouched: input.pageState === "untouched",
+    choices,
+    selected,
+    allDisabled,
+    platformAlert: platformListAlert({
+      selectedCount: selected.length,
+      allDisabled,
+      noFile: textPage,
+      triedSend: input.triedSend,
+    }),
+    textNotice: textOnlyNotice({ noFile: textPage, connected: input.connected, deselected: input.deselected, selected }),
+    buttonLabel: submitButtonLabel({ mode: input.mode, noFile: textPage, loading: input.loading }),
+  };
+}
+
+/**
+ * The first decisions of a press, in the form's order: a fresh lost-file notice
+ * stops it (the notice speaks), then a file still on its way (its wait
+ * sentence), then the untouched page (the sentence by the button). Null: go on.
+ */
+export function submitFirstStep(state: {
+  pageState: ComposerPageState;
+  /** The lost-file notice as shown: "none" when it is not on the page. */
+  fileLost: FileLostNotice;
+  /** fileSubmitBlock for a single pick or a shared file still on its way, or null. */
+  fileBlock: string | null;
+}):
+  | { stop: "file-lost" | "untouched" | null; countsAsTry: boolean }
+  | { stop: "wait"; message: string; countsAsTry: boolean } {
+  const countsAsTry = pressCountsAsTry(state.pageState);
+  if (fileLostBlocksSubmit(state.fileLost)) return { stop: "file-lost", countsAsTry };
+  if (state.fileBlock) return { stop: "wait", message: state.fileBlock, countsAsTry };
+  if (state.pageState === "untouched") return { stop: "untouched", countsAsTry };
+  return { stop: null, countsAsTry };
+}
+
+/**
  * Is a file shared into the Android app still on its way? The page was opened
  * with ?shared=1 and the take has not finished (attached, or found nothing).
  */
@@ -752,9 +810,8 @@ function CreatePostFormInner({
   // choices. See lib/postTargets.ts / PLATFORM_ACCEPTED_MEDIA.
   // Posts without a photo (2026-11-10): with nothing attached only the platforms
   // that take text alone can be chosen; attaching a file restores the rest.
-  // composerPageState, with the switch read at load (TEXT_POSTS_ON). `noFile`
-  // keeps its meaning (no file, switch on); the platform list, the notice and
-  // the button wait for text before they read as a text post (`textPage`).
+  // composerPageState, with the switch read at load (TEXT_POSTS_ON); what it
+  // means for the page comes from composerPageView.
   const pageState = composerPageState({
     preparingFile,
     sharedFilePending,
@@ -765,9 +822,23 @@ function CreatePostFormInner({
     caption: uploadCaption,
     overrides: platformOverrides,
   }, TEXT_POSTS_ON);
-  const noFile = pageState !== "file";
-  const textPage = pageState === "text";
-  const untouched = pageState === "untouched";
+  // Set by the first press of the submit button (platformListAlert).
+  const [triedSend, setTriedSend] = useState(false);
+  const pageView = useMemo(
+    () =>
+      composerPageView({
+        pageState,
+        connected: connectedPlatforms,
+        deselected,
+        mimeType: activeMimeType,
+        mode: publishMode,
+        loading: uploadLoading,
+        triedSend,
+      }),
+    [pageState, connectedPlatforms, deselected, activeMimeType, publishMode, uploadLoading, triedSend],
+  );
+  const { noFile, untouched, choices: platformChoices, selected: selectedPlatforms, platformAlert, textNotice } =
+    pageView;
   // Set by a press on the untouched page; it goes once there is a file or text.
   const [untouchedPressed, setUntouchedPressed] = useState(false);
   if (untouchedPressed && !untouched) setUntouchedPressed(false);
@@ -775,25 +846,6 @@ function CreatePostFormInner({
     untouched,
     pressed: untouchedPressed,
     connected: connectedPlatforms,
-  });
-  const { choices: platformChoices, selected: selectedPlatforms } = useMemo(
-    () => deriveComposerPlatforms(connectedPlatforms, deselected, activeMimeType, { noFile: textPage }),
-    [connectedPlatforms, deselected, activeMimeType, textPage],
-  );
-  // Set by the first press of the submit button (platformListAlert).
-  const [triedSend, setTriedSend] = useState(false);
-  const platformAlert = platformListAlert({
-    selectedCount: selectedPlatforms.length,
-    allDisabled: platformChoices.every((choice) => choice.disabledReason !== null),
-    noFile: textPage,
-    triedSend,
-  });
-  // Text mode says so where the person presses (textOnlyNotice).
-  const textNotice = textOnlyNotice({
-    noFile: textPage,
-    connected: connectedPlatforms,
-    deselected,
-    selected: selectedPlatforms,
   });
   // Only while the page is in text mode: with a file again it has nothing to say.
   const fileLostShown = noFile && fileLostNoticeShown(fileLost);
@@ -1714,34 +1766,39 @@ function CreatePostFormInner({
 
   async function handleUploadSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (pressCountsAsTry(pageState)) setTriedSend(true);
+    // The order of these first checks is submitFirstStep's.
+    const first = submitFirstStep({
+      pageState,
+      fileLost: fileLostShown ? fileLost : "none",
+      fileBlock:
+        preparingFile || sharedPendingNow
+          ? fileSubmitBlock({
+              preparingFile,
+              sharedFilePending: sharedPendingNow,
+              preparingPhotos: false,
+              photosNotReady: false,
+            })
+          : null,
+    });
+    if (first.countsAsTry) setTriedSend(true);
     // A file just went away: the first press stops here, with the notice (and
     // any error beside it) still showing, so the person sees it before a dialog.
-    if (fileLostShown) {
-      setFileLost((current) => nextFileLostNotice(current, { type: "pressed" }));
-      if (fileLostBlocksSubmit(fileLost)) {
-        // The press did nothing else, so say why.
-        toast.error("Nothing was sent. The photo or video could not be added: see the notice above the buttons.");
-        return;
-      }
+    if (fileLostShown) setFileLost((current) => nextFileLostNotice(current, { type: "pressed" }));
+    if (first.stop === "file-lost") {
+      // The press did nothing else, so say why.
+      toast.error("Nothing was sent. The photo or video could not be added: see the notice above the buttons.");
+      return;
     }
     setUploadError(null);
     setShowSuccess(false);
 
-    if (preparingFile || sharedPendingNow) {
-      setUploadError(
-        fileSubmitBlock({
-          preparingFile,
-          sharedFilePending: sharedPendingNow,
-          preparingPhotos: false,
-          photosNotReady: false,
-        }),
-      );
+    if (first.stop === "wait") {
+      setUploadError(first.message);
       return;
     }
 
     // Nothing to send yet: say so by the button (untouchedSubmitMessage).
-    if (untouched) {
+    if (first.stop === "untouched") {
       setUntouchedPressed(true);
       return;
     }
@@ -2530,7 +2587,7 @@ function CreatePostFormInner({
                 }) !== null
               }
             >
-              {submitButtonLabel({ mode: publishMode, noFile: textPage, loading: uploadLoading })}
+              {pageView.buttonLabel}
             </Button>
             </span>
             {untouchedMessage ? (
