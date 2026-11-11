@@ -25,6 +25,8 @@ export interface WorkspaceContext {
     | "brandVoice"
     | "brandVoiceExamples"
     | "trackWebsiteLinks"
+    | "pausedAt"
+    | "pausedReason"
   >;
   role: WorkspaceRole;
 }
@@ -286,6 +288,11 @@ export async function getWorkspaceContext(
       // Tracking tags: the Create and Queue footers carry it with the website,
       // so their previews and counters show the tagged link.
       trackWebsiteLinks: active.workspace.trackWebsiteLinks,
+      // Pause (2026-11-10): the routes pass these to workspaceBlock
+      // (lib/workspaceStatus.ts) and the banner shows its message. Read on every
+      // request, so a pause or resume takes effect on the next one.
+      pausedAt: active.workspace.pausedAt,
+      pausedReason: active.workspace.pausedReason,
     },
     role: active.role,
   };

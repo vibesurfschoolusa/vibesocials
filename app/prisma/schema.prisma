@@ -186,10 +186,17 @@ model Workspace {
   // post carries utm tags naming the platform (src/lib/trackingTags.ts).
   // Owner-only, off by default.
   trackWebsiteLinks  Boolean  @default(false)
+  // Paused by the operator (2026-11-10, /admin). Set together: while pausedAt is
+  // set the workspace cannot upload, create, schedule or publish, and its members
+  // read pausedReason in a banner. Enforced only through workspaceBlock()
+  // (src/lib/workspaceStatus.ts), never by reading these columns directly.
+  pausedAt     DateTime?
+  pausedReason String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   members            WorkspaceMember[]
+  adminActions       AdminAction[]
   invites            WorkspaceInvite[]
   uploadLinks        WorkspaceUploadLink[]
   reviewLinks        WorkspaceReviewLink[]
@@ -710,4 +717,25 @@ model LocationMetricDaily {
 
   @@unique([workspaceId, locationName, day])
   @@index([workspaceId, day])
+}
+
+// What the operator changed on /admin (2026-11-10): limits, pause, resume. The
+// operator's email and the workspace's name are copied at the time, so a record
+// still reads after either is renamed or deleted; operatorUserId is therefore
+// not a foreign key. The app only ever inserts rows here.
+model AdminAction {
+  id             String   @id @default(cuid())
+  operatorUserId String
+  operatorEmail  String
+  workspaceId    String?
+  workspaceName  String
+  // "limits" | "pause" | "resume"
+  action         String
+  // { old, new } values of what changed.
+  detail         Json
+  createdAt      DateTime @default(now())
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
 }

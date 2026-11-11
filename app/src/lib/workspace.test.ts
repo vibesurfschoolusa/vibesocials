@@ -117,6 +117,8 @@ function makeMembership(
       limitXPostsPerMonth: null,
       limitYoutubeUploadsPerDay: null,
       limitStorageMb: null,
+      pausedAt: null,
+      pausedReason: null,
       createdAt: new Date("2020-01-01T00:00:00Z"),
       updatedAt: new Date("2020-01-01T00:00:00Z"),
     },
@@ -399,6 +401,22 @@ describe("resolveWorkspaceForUser", () => {
 });
 
 describe("getWorkspaceContext", () => {
+  it("carries the pause fields of the active workspace, read fresh on every call", async () => {
+    getCurrentUserMock.mockResolvedValue(makeUser());
+    const pausedAt = new Date("2026-11-10T08:00:00Z");
+    const paused = makeMembership({ role: "owner" });
+    paused.workspace = { ...paused.workspace, pausedAt, pausedReason: "Unpaid invoice." };
+    findManyMock.mockResolvedValueOnce([paused]).mockResolvedValueOnce([makeMembership({ role: "owner" })]);
+
+    const first = await getWorkspaceContext();
+    expect(first?.workspace.pausedAt).toEqual(pausedAt);
+    expect(first?.workspace.pausedReason).toBe("Unpaid invoice.");
+
+    const second = await getWorkspaceContext();
+    expect(second?.workspace.pausedAt).toBeNull();
+    expect(second?.workspace.pausedReason).toBeNull();
+  });
+
   it("returns null when unauthenticated, without touching workspace data", async () => {
     getCurrentUserMock.mockResolvedValue(null);
 
@@ -430,6 +448,9 @@ describe("getWorkspaceContext", () => {
         brandVoiceExamples: "Waves are up",
         // Tracking tags: the Create and Queue footers read it with the website.
         trackWebsiteLinks: true,
+        // Pause (2026-11-10): the routes' block check and the banner read these.
+        pausedAt: null,
+        pausedReason: null,
       },
       role: "owner",
     });

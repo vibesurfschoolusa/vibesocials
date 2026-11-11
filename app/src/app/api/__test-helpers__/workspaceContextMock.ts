@@ -28,6 +28,9 @@ export function makeWorkspaceContext(
     role: WorkspaceContext["role"];
     /** Approval workflow — defaults off, matching the schema default. */
     requireApproval: boolean;
+    /** Pause (2026-11-10) — defaults to not paused. */
+    pausedAt: Date | null;
+    pausedReason: string | null;
   }> = {},
 ): WorkspaceContext {
   return {
@@ -47,6 +50,8 @@ export function makeWorkspaceContext(
       brandVoice: null,
       brandVoiceExamples: null,
       trackWebsiteLinks: false,
+      pausedAt: overrides.pausedAt ?? null,
+      pausedReason: overrides.pausedReason ?? null,
     },
     role: overrides.role ?? "owner",
   };
