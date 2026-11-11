@@ -4992,3 +4992,236 @@ describe("publishToAllPlatforms and retryPlatforms — plan ended (billing on)",
     expect(fetched.workspace).toEqual(WORKSPACE);
   });
 });
+
+describe("publish functions - a post without a file (text only)", () => {
+  const TEXT_JOB = {
+    id: "job-1",
+    workspaceId: WORKSPACE.id,
+    mediaItemId: null,
+    baseCaption: "Lessons cancelled today",
+    perPlatformOverrides: null,
+    publishMetadata: null,
+    _count: { media: 0 },
+  };
+  const GOOGLE_OFFER = {
+    postType: "offer",
+    button: { type: "CALL" },
+    offer: { title: "Half price", startDate: "2026-12-01", endDate: "2026-12-07" },
+  };
+  const TEXT_PLATFORMS: Platform[] = ["facebook_page", "x", "linkedin", "google_business_profile"];
+
+  type RunOut = { status: string; results: Array<{ platform: Platform; status: string; error?: string }> };
+
+  let textCtxs: Array<Record<string, unknown>>;
+  let videoCalls: number;
+
+  beforeEach(() => {
+    textCtxs = [];
+    videoCalls = 0;
+    // Only the four text platforms' clients have publishText.
+    getPlatformClientMock.mockImplementation((platform: Platform) => {
+      const client: Record<string, unknown> = {
+        publishVideo: vi.fn(async (ctx: PublishContext) => {
+          videoCalls++;
+          publishCtxs.push(ctx);
+          return { externalPostId: `ext-${ctx.socialConnection.platform}` };
+        }),
+      };
+      if (TEXT_PLATFORMS.includes(platform)) {
+        client.publishText = vi.fn(async (ctx: Record<string, unknown>) => {
+          textCtxs.push(ctx);
+          return { externalPostId: `text-${platform}` };
+        });
+      }
+      return client;
+    });
+  });
+
+  function writesFor(resultId: string): Array<Record<string, unknown>> {
+    return db.resultUpdate.mock.calls
+      .map((c) => c[0] as { where: { id: string }; data: Record<string, unknown> })
+      .filter((c) => c.where.id === resultId)
+      .map((c) => c.data);
+  }
+
+  function publishText(platforms: Platform[], step: FakeStep, data: Record<string, unknown> = {}) {
+    db.postJobFindUnique.mockResolvedValue(TEXT_JOB);
+    db.connectionFindMany.mockResolvedValue(platforms.map((p) => ({ id: `conn-${p}`, platform: p })));
+    stubResults(platforms);
+    return handlerOf(publishToAllPlatforms)({
+      event: {
+        name: "post/publish.requested",
+        data: {
+          postJobId: "job-1",
+          userId: "user-1",
+          mediaItemId: null,
+          baseCaption: "Lessons cancelled today",
+          perPlatformOverrides: null,
+          ...data,
+        },
+      },
+      step,
+    }) as Promise<RunOut>;
+  }
+
+  it("calls publishText for each target, never loads a file, and runs the usual steps", async () => {
+    const step = fakeStep();
+
+    const out = await publishText(["x", "linkedin"], step);
+
+    expect(db.mediaItemFindUnique).not.toHaveBeenCalled();
+    expect(videoCalls).toBe(0);
+    expect(step.order).toEqual([
+      "run:fetch-data",
+      "run:publish-to-x",
+      "run:publish-to-linkedin",
+      "run:finalize-job",
+      "sendEvent:notify-outcome",
+    ]);
+    expect(step.outputs["fetch-data"]).toMatchObject({ mediaItem: null, mediaItems: [] });
+    expect(textCtxs).toHaveLength(2);
+    for (const ctx of textCtxs) {
+      expect(ctx).not.toHaveProperty("mediaItem");
+      expect(ctx).not.toHaveProperty("mediaItems");
+      expect(ctx.baseCaption).toBe("Lessons cancelled today");
+    }
+    // The same footer as any post, built per platform.
+    expect(textCtxs[0].caption).toBe(buildCaptionWithFooter("Lessons cancelled today", WORKSPACE, "x"));
+    expect(writesFor("result-x")).toEqual([expect.objectContaining({ status: "success", externalPostId: "text-x" })]);
+    expect(out.results).toEqual([
+      { platform: "x", status: "success" },
+      { platform: "linkedin", status: "success" },
+    ]);
+  });
+
+  it("hands the Google options to publishText", async () => {
+    await publishText(["google_business_profile"], fakeStep(), { googleMetadata: GOOGLE_OFFER });
+    expect(textCtxs[0].googleBusinessProfileMetadata).toEqual(GOOGLE_OFFER);
+  });
+
+  it("applies the X monthly limit to a text post", async () => {
+    const notifyOwners = vi.fn().mockResolvedValue(undefined);
+    checkXLimitMock.mockResolvedValue({ errorCode: "X_MONTHLY_LIMIT", errorMessage: "Limit.", notifyOwners });
+    const out = await publishText(["x"], fakeStep());
+    expect(textCtxs).toEqual([]);
+    expect(out.results).toEqual([{ platform: "x", status: "failed", error: "Limit." }]);
+  });
+
+  it("a target whose client has no publishText fails only that platform, with the sentence", async () => {
+    const out = await publishText(["instagram", "x"], fakeStep());
+
+    expect(videoCalls).toBe(0);
+    expect(writesFor("result-instagram")).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        errorCode: "PLATFORM_NEEDS_MEDIA",
+        errorMessage: "Instagram needs a photo or video.",
+      }),
+    ]);
+    expect(out.results).toEqual([
+      { platform: "instagram", status: "failed", error: "Instagram needs a photo or video." },
+      { platform: "x", status: "success" },
+    ]);
+  });
+
+  it("a post with a file runs the same steps, with the same output, and never calls publishText", async () => {
+    const media = { id: "media-1", baseCaption: "c", perPlatformOverrides: null, deletedAt: null, mimeType: "image/jpeg" };
+    db.postJobFindUnique.mockResolvedValue({ ...TEXT_JOB, mediaItemId: "media-1" });
+    db.mediaItemFindUnique.mockResolvedValue(media);
+    db.connectionFindMany.mockResolvedValue([{ id: "conn-x", platform: "x" }]);
+    stubResults(["x"]);
+    const step = fakeStep();
+
+    await handlerOf(publishToAllPlatforms)({
+      event: {
+        name: "post/publish.requested",
+        data: { postJobId: "job-1", userId: "user-1", mediaItemId: "media-1", baseCaption: "c", perPlatformOverrides: null },
+      },
+      step,
+    });
+
+    expect(db.mediaItemFindUnique).toHaveBeenCalledWith({ where: { id: "media-1" } });
+    expect(step.order).toEqual(["run:fetch-data", "run:publish-to-x", "run:finalize-job", "sendEvent:notify-outcome"]);
+    expect(step.outputs["fetch-data"]).toEqual({
+      user: { id: "user-1" },
+      workspace: WORKSPACE,
+      mediaItem: media,
+      mediaItems: [{ ...media, baseCaption: "", perPlatformOverrides: null }],
+      socialConnections: [{ id: "conn-x", platform: "x" }],
+      resultRecords: [{ id: "result-x", platform: "x", socialConnectionId: "conn-x" }],
+    });
+    expect(step.outputs["publish-to-x"]).toEqual({ platform: "x", status: "success" });
+    expect(textCtxs).toEqual([]);
+    expect(ctxFor("x").mediaItem).toEqual(media);
+  });
+
+  it("a retry of a post with a file keeps its steps and output", async () => {
+    const media = { id: "media-1", baseCaption: "c", perPlatformOverrides: null, deletedAt: null, mimeType: "image/jpeg" };
+    db.postJobFindUnique.mockResolvedValue({ ...TEXT_JOB, mediaItemId: "media-1" });
+    db.mediaItemFindUnique.mockResolvedValue(media);
+    db.connectionFindMany.mockResolvedValue([{ id: "conn-x", platform: "x" }]);
+    stubResults(["x"]);
+    const step = fakeStep();
+
+    await handlerOf(retryPlatforms)({
+      event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms: ["x"] } },
+      step,
+    });
+
+    expect(db.mediaItemFindUnique).toHaveBeenCalledWith({ where: { id: "media-1" } });
+    expect(step.order).toEqual(["run:fetch-retry-data", "run:retry-x", "run:finalize-retry", "sendEvent:notify-outcome"]);
+    expect(Object.keys(step.outputs["fetch-retry-data"] as object)).toEqual([
+      "user",
+      "workspace",
+      "mediaItem",
+      "mediaItems",
+      "photoUnavailable",
+      "connections",
+      "resultRecords",
+      "publishMetadata",
+      "captionSource",
+    ]);
+    expect(textCtxs).toEqual([]);
+  });
+
+  function retryText(platforms: Platform[], step: FakeStep, publishMetadata: unknown = null) {
+    db.postJobFindUnique.mockResolvedValue({ ...TEXT_JOB, publishMetadata });
+    db.connectionFindMany.mockResolvedValue(platforms.map((p) => ({ id: `conn-${p}`, platform: p })));
+    stubResults(platforms);
+    return handlerOf(retryPlatforms)({
+      event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms } },
+      step,
+    }) as Promise<RunOut>;
+  }
+
+  it("a retried text post stays a text post, with its Google options", async () => {
+    const step = fakeStep();
+
+    const out = await retryText(["google_business_profile"], step, { googleBusinessProfile: GOOGLE_OFFER });
+
+    expect(db.mediaItemFindUnique).not.toHaveBeenCalled();
+    expect(videoCalls).toBe(0);
+    expect(step.order).toEqual([
+      "run:fetch-retry-data",
+      "run:retry-google_business_profile",
+      "run:finalize-retry",
+      "sendEvent:notify-outcome",
+    ]);
+    expect(textCtxs).toHaveLength(1);
+    expect(textCtxs[0]).toMatchObject({
+      baseCaption: "Lessons cancelled today",
+      caption: buildCaptionWithFooter("Lessons cancelled today", WORKSPACE, "google_business_profile"),
+      googleBusinessProfileMetadata: GOOGLE_OFFER,
+    });
+    expect(textCtxs[0]).not.toHaveProperty("mediaItem");
+    expect(out.results).toEqual([{ platform: "google_business_profile", status: "success" }]);
+  });
+
+  it("a retried text post on a platform without publishText fails only that platform", async () => {
+    const out = await retryText(["pinterest", "facebook_page"], fakeStep());
+    expect(out.results).toEqual([
+      { platform: "pinterest", status: "failed", error: "Pinterest needs a photo or video." },
+      { platform: "facebook_page", status: "success" },
+    ]);
+  });
+});

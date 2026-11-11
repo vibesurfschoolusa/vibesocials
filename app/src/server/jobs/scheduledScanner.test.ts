@@ -680,3 +680,23 @@ describe("materializeAndDispatchChunk", () => {
     expect(send.mock.calls.length).toBeGreaterThan(1);
   });
 });
+
+describe("materializeClaimedJobs - a post without a file", () => {
+  it("carries a text post's event through unchanged in shape", async () => {
+    const event = {
+      postJobId: "t",
+      userId: "user-t",
+      workspaceId: "ws-t",
+      mediaItemId: null,
+      baseCaption: "Wind is onshore",
+      perPlatformOverrides: null,
+    };
+    prepareDeferredMock.mockResolvedValue({ ok: true, event });
+
+    const out = await materializeClaimedJobs(["t"], vi.fn(async () => undefined));
+
+    expect(out.publishEvents).toEqual([
+      { id: "publish-t", name: "post/publish.requested", data: { ...event, immediate: false } },
+    ]);
+  });
+});

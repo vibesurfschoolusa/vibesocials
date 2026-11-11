@@ -64,6 +64,7 @@ import {
 } from "@/server/jobs/connectionHealthSweep";
 import { platformLabel } from "@/lib/platforms";
 import { billingFieldsSelect } from "@/lib/billing";
+import { needsMediaMessage } from "@/lib/postTargets";
 import {
   blockedResultFailure,
   splitWorkspaceStatus,
@@ -120,6 +121,7 @@ import type {
   InstagramPostMetadata,
   PublishContext,
   PublishResult,
+  TextPublishContext,
   TikTokPostMetadata,
   YouTubePostMetadata,
 } from "@/server/platforms/types";
@@ -153,8 +155,9 @@ interface ConnectionRef {
 
 interface PublishToPlatformArgs {
   connectionRef: ConnectionRef;
-  mediaItem: SerializedMediaItem;
-  /** The post's media in order (07a); `mediaItem` is the first. */
+  /** Null for a post that is only text: the client's `publishText` is called. */
+  mediaItem: SerializedMediaItem | null;
+  /** The post's media in order (07a); `mediaItem` is the first. Empty for a text post. */
   mediaItems: SerializedMediaItem[];
   /** The text to publish (override or base caption + workspace footer). */
   caption: string;
@@ -522,6 +525,19 @@ async function publishToPlatform({
     return { platform: connectionRef.platform, status: "failed", error: "No client" };
   }
 
+  // A post without a file (2026-11-10) goes only to a client that publishes text
+  // alone. The route refuses any other target; this keeps the job safe anyway,
+  // failing this platform only.
+  if (mediaItem === null && !client.publishText) {
+    const errorMessage = needsMediaMessage([connectionRef.platform]);
+    await finalizeClaimedResult(resultRecordId, runId, {
+      status: "failed",
+      errorCode: "PLATFORM_NEEDS_MEDIA",
+      errorMessage,
+    });
+    return { platform: connectionRef.platform, status: "failed", error: errorMessage };
+  }
+
   // Only the platform call (and the failures that happen before it) live in the
   // try below. Once `publishVideo` returned, the post is live: recording it is
   // done AFTER the try/catch, so a database error on that write propagates
@@ -571,7 +587,7 @@ async function publishToPlatform({
     // same mimeType test), so a photo costs no extra read.
     const xUploadBegun =
       connection.platform === "x" &&
-      mediaItem.mimeType?.startsWith("video/") === true &&
+      mediaItem?.mimeType?.startsWith("video/") === true &&
       (await uploadState.load(X_UPLOAD_STATE_KIND)) !== null;
     if (connection.platform === "x" && !xUploadBegun) {
       const refusal = await checkXMonthlyLimit(connection.workspaceId);
@@ -682,7 +698,10 @@ async function publishToPlatform({
     // funnels through publishToPlatform. A retry only starts while enough of
     // the step's budget is left (see MIN_RETRY_WINDOW_MS).
     publishResult = await withTransientRetries(
-      () => client.publishVideo(publishContext),
+      () =>
+        mediaItem === null && client.publishText
+          ? client.publishText(textContextOf(publishContext))
+          : client.publishVideo(publishContext),
       { deadline },
     );
   } catch (error: unknown) {
@@ -753,6 +772,14 @@ async function publishToPlatform({
     ...(publishResult.externalPostUrl ? { externalPostUrl: publishResult.externalPostUrl } : {}),
   });
   return { platform: connectionRef.platform, status: "success" };
+}
+
+/** A post's publish context without the file fields, for `publishText`. */
+function textContextOf(ctx: PublishContext): TextPublishContext {
+  const textContext: Partial<PublishContext> = { ...ctx };
+  delete textContext.mediaItem;
+  delete textContext.mediaItems;
+  return textContext as TextPublishContext;
 }
 
 /**
@@ -960,6 +987,9 @@ export const publishToAllPlatforms = inngest.createFunction(
         throw new NonRetriableError("Missing required data");
       }
 
+      // A post without a file (2026-11-10) has no media to load. Decided by the
+      // job row; a post with a file loads its media exactly as before.
+      const textPost = postJob.mediaItemId === null;
       const [user, workspaceRow, mediaItem, socialConnections] = await Promise.all([
         prisma.user.findUnique({
           where: { id: userId },
@@ -978,14 +1008,14 @@ export const publishToAllPlatforms = inngest.createFunction(
             ...billingFieldsSelect(),
           },
         }),
-        prisma.mediaItem.findUnique({ where: { id: mediaItemId } }),
+        textPost ? null : prisma.mediaItem.findUnique({ where: { id: mediaItemId } }),
         prisma.socialConnection.findMany({
           where: { workspaceId: postJob.workspaceId },
           select: { id: true, platform: true },
         }),
       ]);
 
-      if (!user || !workspaceRow || !mediaItem) {
+      if (!user || !workspaceRow || (!mediaItem && !textPost)) {
         throw new NonRetriableError("Missing required data");
       }
 
@@ -1003,8 +1033,8 @@ export const publishToAllPlatforms = inngest.createFunction(
       // photo fails the results here with a sentence that says so (a deterministic
       // failure, like the missing media above), then ends the run; onFailure then
       // finds nothing pending. A single-media post loads nothing more.
-      let mediaItems: MediaItem[] = [mediaItem];
-      if ((postJob._count?.media ?? 0) > 0) {
+      let mediaItems: MediaItem[] = mediaItem ? [mediaItem] : [];
+      if (mediaItem && (postJob._count?.media ?? 0) > 0) {
         const photos = await loadAvailablePhotos(postJobId);
         if (!photos) {
           await failPendingPostJobResults(postJobId, PHOTO_UNAVAILABLE);
@@ -1026,7 +1056,7 @@ export const publishToAllPlatforms = inngest.createFunction(
       return {
         user,
         workspace,
-        mediaItem: mediaItems[0],
+        mediaItem: mediaItem ? mediaItems[0] : null,
         mediaItems: mediaItemsForStepOutput(mediaItems),
         socialConnections: socialConnections as ConnectionRef[],
         resultRecords,
@@ -1446,7 +1476,8 @@ export const retryPlatforms = inngest.createFunction(
             ...billingFieldsSelect(),
           },
         }),
-        prisma.mediaItem.findUnique({ where: { id: postJob.mediaItemId } }),
+        // A post without a file (2026-11-10) has no media to load.
+        postJob.mediaItemId === null ? null : prisma.mediaItem.findUnique({ where: { id: postJob.mediaItemId } }),
         prisma.socialConnection.findMany({
           where: {
             workspaceId: postJob.workspaceId,
@@ -1501,7 +1532,11 @@ export const retryPlatforms = inngest.createFunction(
         resultRecords,
         publishMetadata,
         // Job-first caption (the text typed for THIS post), media fallback.
-        captionSource: mediaItem ? resolvePostCaptionSource(postJob, mediaItem) : null,
+        // A text post's caption is its own snapshot; it has no media fallback.
+        captionSource:
+          mediaItem || postJob.mediaItemId === null ? resolvePostCaptionSource(postJob, mediaItem) : null,
+        // Only on a text post, so a post with a file memoizes what it did before.
+        ...(postJob.mediaItemId === null ? { textPost: true as const } : {}),
       };
     });
 
@@ -1536,6 +1571,7 @@ export const retryPlatforms = inngest.createFunction(
     } = setupData;
     // A run whose fetch-retry-data output was memoized before 07a has neither field.
     const photoUnavailable = setupData.photoUnavailable === true;
+    const textPost = "textPost" in setupData && setupData.textPost === true;
     const retryMediaItems =
       setupData.mediaItems ??
       (mediaItem ? [{ ...mediaItem, baseCaption: "", perPlatformOverrides: null }] : []);
@@ -1551,9 +1587,8 @@ export const retryPlatforms = inngest.createFunction(
     if (
       !user ||
       !workspace ||
-      !mediaItem ||
+      (!textPost && (!mediaItem || mediaItem.deletedAt !== null)) ||
       !captionSource ||
-      mediaItem.deletedAt !== null ||
       photoUnavailable
     ) {
       const failure = photoUnavailable ? PHOTO_UNAVAILABLE : MEDIA_UNAVAILABLE;

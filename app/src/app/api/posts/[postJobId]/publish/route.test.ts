@@ -925,3 +925,37 @@ describe("POST /api/posts/[postJobId]/publish — publishing now counts toward t
     expect(stamped.toISOString().slice(0, 10)).toBe(new Date().toISOString().slice(0, 10));
   });
 });
+
+describe("POST /api/posts/[postJobId]/publish - a post without a file", () => {
+  it("promotes a text draft: the event carries the text and no file", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft", mediaItemId: null, mediaItem: null });
+    prepareDispatchMock.mockResolvedValue({
+      ok: true,
+      event: {
+        postJobId: "job-1",
+        userId: "user-1",
+        workspaceId: "ws-1",
+        mediaItemId: null,
+        baseCaption: "Wind is onshore",
+        perPlatformOverrides: null,
+      },
+    });
+
+    const res = await POST(req({}), ctx("job-1"));
+
+    expect(res.status).toBe(202);
+    expect(inngestSendMock).toHaveBeenCalledWith({
+      id: "publish-job-1",
+      name: "post/publish.requested",
+      data: {
+        postJobId: "job-1",
+        userId: "user-1",
+        workspaceId: "ws-1",
+        mediaItemId: null,
+        baseCaption: "Wind is onshore",
+        perPlatformOverrides: null,
+        immediate: true,
+      },
+    });
+  });
+});
