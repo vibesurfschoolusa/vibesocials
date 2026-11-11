@@ -10,6 +10,7 @@ import {
 
 import type { Platform } from "@prisma/client";
 
+import { formatNumber } from "@/lib/formatNumber";
 import { platformLabel } from "@/lib/platforms";
 import { countWord } from "@/lib/plural";
 import type { PostJobResultDTO, PostMetricDTO } from "@/lib/postsDto";
@@ -20,9 +21,12 @@ import type { PostJobResultDTO, PostMetricDTO } from "@/lib/postsDto";
  */
 const DAILY_METRIC_PLATFORMS: readonly Platform[] = ["instagram", "facebook_page", "linkedin", "pinterest"];
 
-/** Format a count for display: thousands-separated, or "—" when null (never 0). */
+/**
+ * Format a count for display: thousands-separated in the app's one format
+ * (formatNumber, not the browser's locale), or "—" when null (never 0).
+ */
 function formatCount(value: number | null): string {
-  return value == null ? "—" : value.toLocaleString();
+  return value == null ? "—" : formatNumber(value);
 }
 
 interface StatProps {

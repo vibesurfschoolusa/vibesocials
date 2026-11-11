@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { PostJobResultDTO, PostMetricDTO } from "@/lib/postsDto";
 
@@ -119,5 +119,39 @@ describe("counts take the singular for 1", () => {
       }),
     );
     expect(text(html)).toContain("Instagram 1 view 1 like 1 comment 1 share 1 click 1 save");
+  });
+});
+
+// A German browser: toLocaleString() with no locale given formats as de-DE.
+function asGermanBrowser() {
+  const original = Number.prototype.toLocaleString;
+  return vi.spyOn(Number.prototype, "toLocaleString").mockImplementation(function (
+    this: number,
+    locales?: Intl.LocalesArgument,
+    options?: Intl.NumberFormatOptions,
+  ) {
+    return original.call(this, locales ?? "de-DE", options);
+  });
+}
+
+// F1 round 2: the dashboard's numbers followed the browser's locale (1.238 in
+// German) beside the listing card's 1,238.
+describe("post numbers use the app's number format, whatever the browser's locale", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    [999, "999"],
+    [1000, "1,000"],
+    [1238, "1,238"],
+  ])("%i reads %s", (value, shown) => {
+    asGermanBrowser();
+    const youtube = renderToStaticMarkup(createElement(PostMetricStats, { metric: metric({ views: value }) }));
+    expect(text(youtube)).toContain(`${shown} views`);
+    const daily = renderToStaticMarkup(
+      createElement(DailyMetricStats, { results: [result({ metric: metric({ likes: value }) })] }),
+    );
+    expect(text(daily)).toContain(`${shown} likes`);
   });
 });

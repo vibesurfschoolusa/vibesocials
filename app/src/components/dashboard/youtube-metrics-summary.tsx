@@ -12,6 +12,7 @@ import {
 import { summarizeYouTubeMetrics } from "@/lib/metricsSummary";
 import type { Platform } from "@prisma/client";
 
+import { formatNumber } from "@/lib/formatNumber";
 import { metricsMaturityNote } from "@/lib/platforms";
 import type { UsePostJobsResult } from "@/hooks/usePostJobs";
 
@@ -29,7 +30,7 @@ function SummaryStat({ icon: Icon, label, value }: SummaryStatProps) {
         {label}
       </dt>
       <dd className="text-2xl font-semibold tabular-nums tracking-tight text-foreground">
-        {value.toLocaleString()}
+        {formatNumber(value)}
       </dd>
     </div>
   );

@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PLATFORM_ORDER } from "@/lib/platforms";
 import type { PostJobDTO } from "@/lib/postsDto";
@@ -34,5 +34,42 @@ describe("YouTubeMetricsSummary — the daily platforms it names", () => {
     const html = render(PLATFORM_ORDER.filter((platform) => platform !== "pinterest"));
     expect(html).toContain("Instagram, Facebook and LinkedIn numbers update once a day");
     expect(html).not.toContain("Pinterest");
+  });
+});
+
+// A German browser: toLocaleString() with no locale given formats as de-DE.
+function asGermanBrowser() {
+  const original = Number.prototype.toLocaleString;
+  return vi.spyOn(Number.prototype, "toLocaleString").mockImplementation(function (
+    this: number,
+    locales?: Intl.LocalesArgument,
+    options?: Intl.NumberFormatOptions,
+  ) {
+    return original.call(this, locales ?? "de-DE", options);
+  });
+}
+
+// F1 round 2: the card's totals followed the browser's locale (1.238 in German).
+describe("YouTubeMetricsSummary — the app's number format, whatever the browser's locale", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    [999, "999"],
+    [1000, "1,000"],
+    [1238, "1,238"],
+  ])("%i reads %s", (value, shown) => {
+    asGermanBrowser();
+    const jobs = [
+      {
+        id: "job",
+        results: [
+          { platform: "youtube", status: "success", externalPostId: "v1", metric: { views: value, likes: 0, comments: 0 } },
+        ],
+      },
+    ] as unknown as PostJobDTO[];
+    const html = renderToStaticMarkup(createElement(YouTubeMetricsSummary, { jobs, availablePlatforms: PLATFORM_ORDER }));
+    expect(html).toContain(`>${shown}</dd>`);
   });
 });
