@@ -72,6 +72,26 @@ describe("findActiveUploadLink", () => {
     });
   });
 
+  it("gives null while the workspace is paused, and the link again after a resume", async () => {
+    const { raw } = generateInviteToken();
+    findUniqueMock.mockResolvedValue(
+      linkRow({ workspace: { name: "Surf Co", pausedAt: new Date("2026-11-10T08:00:00Z"), pausedReason: "Unpaid." } }),
+    );
+    expect(await findActiveUploadLink(raw)).toBeNull();
+
+    findUniqueMock.mockResolvedValue(linkRow({ workspace: { name: "Surf Co", pausedAt: null, pausedReason: null } }));
+    expect(await findActiveUploadLink(raw)).toMatchObject({ id: "link-1", workspaceId: "ws-1", workspaceName: "Surf Co" });
+  });
+
+  it("reads the pause fields with the link, in the same query", async () => {
+    const { raw } = generateInviteToken();
+    findUniqueMock.mockResolvedValue(linkRow());
+    await findActiveUploadLink(raw);
+    expect(findUniqueMock.mock.calls[0][0].select.workspace).toEqual({
+      select: { name: true, pausedAt: true, pausedReason: true },
+    });
+  });
+
   it("gives null for an unknown token and for a revoked one alike", async () => {
     const { raw } = generateInviteToken();
     findUniqueMock.mockResolvedValue(null);

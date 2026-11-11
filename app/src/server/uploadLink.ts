@@ -3,6 +3,7 @@ import { hashInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
 import { consumeFixedWindow } from "@/lib/rateLimit";
 import { isUploadLinkTokenShape, uploadLinkHourWindow } from "@/lib/uploadLink";
+import { workspaceBlock } from "@/lib/workspaceStatus";
 import { buildClientUploadEmail } from "@/server/notifications/clientUploadEmail";
 import { sendEmail } from "@/server/notifications/email";
 
@@ -21,7 +22,9 @@ export type ActiveUploadLink = {
 /**
  * The active link a raw token names, or null. Unknown and revoked both give
  * null, so every caller answers them the same way. The public routes take the
- * workspace, the owner and the link id from this, never from the request.
+ * workspace, the owner and the link id from this, never from the request. A
+ * paused workspace's link is not active either (workspaceBlock) until it is
+ * resumed; the client is not told why.
  */
 export async function findActiveUploadLink(token: string): Promise<ActiveUploadLink | null> {
   if (!isUploadLinkTokenShape(token)) return null;
@@ -32,10 +35,10 @@ export async function findActiveUploadLink(token: string): Promise<ActiveUploadL
       workspaceId: true,
       createdById: true,
       revokedAt: true,
-      workspace: { select: { name: true } },
+      workspace: { select: { name: true, pausedAt: true, pausedReason: true } },
     },
   });
-  if (!row || row.revokedAt) return null;
+  if (!row || row.revokedAt || workspaceBlock(row.workspace)) return null;
   return {
     id: row.id,
     workspaceId: row.workspaceId,

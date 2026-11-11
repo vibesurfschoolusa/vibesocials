@@ -15,6 +15,7 @@ import {
   type ReviewPostDTO,
 } from "@/lib/reviewLink";
 import { STORY_NO_CAPTION, storyListing, storyPlatformsOf } from "@/lib/storyPlacement";
+import { workspaceBlock } from "@/lib/workspaceStatus";
 import { resolvePlatformCaptions } from "@/server/jobs/posting";
 import { buildClientChangeRequestEmail } from "@/server/notifications/clientChangeRequestEmail";
 import { sendEmail } from "@/server/notifications/email";
@@ -34,15 +35,21 @@ export type ActiveReviewLink = {
 /**
  * The active link a raw token names, or null. Unknown and revoked both give
  * null, so every caller answers them the same way. The public routes take the
- * workspace from this, never from the request.
+ * workspace from this, never from the request. A paused workspace's link is not
+ * active either (workspaceBlock) until it is resumed; the client is not told why.
  */
 export async function findActiveReviewLink(token: string): Promise<ActiveReviewLink | null> {
   if (!isReviewLinkTokenShape(token)) return null;
   const row = await prisma.workspaceReviewLink.findUnique({
     where: { tokenHash: hashInviteToken(token) },
-    select: { id: true, workspaceId: true, revokedAt: true, workspace: { select: { name: true } } },
+    select: {
+      id: true,
+      workspaceId: true,
+      revokedAt: true,
+      workspace: { select: { name: true, pausedAt: true, pausedReason: true } },
+    },
   });
-  if (!row || row.revokedAt) return null;
+  if (!row || row.revokedAt || workspaceBlock(row.workspace)) return null;
   return { id: row.id, workspaceId: row.workspaceId, workspaceName: row.workspace.name };
 }
 
