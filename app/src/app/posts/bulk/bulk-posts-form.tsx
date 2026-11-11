@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { upload } from "@vercel/blob/client";
 import type { Platform } from "@prisma/client";
@@ -40,7 +40,6 @@ import {
   refreshedFirstDay,
   rowSendBlock,
   rowsToSend,
-  tomorrowLocalDate,
   youtubePrivacyShown,
 } from "@/lib/bulkPosts";
 import { Select } from "@/components/ui/select";
@@ -106,6 +105,8 @@ function newRow(file: File): BulkRow {
   };
 }
 
+const noSubscription = () => () => {};
+
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
@@ -121,8 +122,10 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
   const [tooMany, setTooMany] = useState(false);
   const [sendingMode, setSendingMode] = useState<BulkFinishMode | null>(null);
 
+  // The first day starts empty and is filled on mount: the server's clock and
+  // zone are not the browser's, and a different first render is React #418.
   const [controls, setControls] = useState<BulkScheduleControls>(() => ({
-    firstDay: tomorrowLocalDate(new Date()),
+    firstDay: "",
     timeOfDay: "18:00",
     everyDays: 1,
   }));
@@ -140,7 +143,9 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
   const firstDaySetByUserRef = useRef(false);
   // The clock behind the inputs' `min` and the "tomorrow" default, kept current
   // while the page stays open. The press itself reads a fresh clock.
-  const [now, setNow] = useState(() => new Date());
+  // Null until mount, for the same reason as the first day.
+  const [now, setNow] = useState<Date | null>(null);
+  const zone = useSyncExternalStore(noSubscription, localTimeZoneLabel, () => null);
   const [youtubePrivacy, setYoutubePrivacy] =
     useState<YouTubePostMetadata["privacyStatus"]>(BULK_YOUTUBE_PRIVACY_DEFAULT);
   // Object URLs made for photo thumbnails, revoked on removal and on unmount.
@@ -465,7 +470,8 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
     }
   }
 
-  // Every 30 s: move the inputs' `min` on, and the default first day past midnight.
+  // On mount (the first fill) and every 30 s: move the inputs' `min` on, and the
+  // default first day past midnight.
   const tick = useEffectEvent(() => {
     const current = new Date();
     setNow(current);
@@ -476,8 +482,12 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
     if (firstDay) changeControls({ firstDay });
   });
   useEffect(() => {
+    const first = setTimeout(() => tick(), 0);
     const timer = setInterval(() => tick(), 30_000);
-    return () => clearInterval(timer);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
   }, []);
 
   const workState = rows.map((r) => ({ id: r.id, upload: r.upload, caption: r.captionStatus }));
@@ -594,7 +604,7 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
                 type="date"
                 disabled={useSlots}
                 className="h-11"
-                min={minFirstDay(now)}
+                min={now ? minFirstDay(now) : undefined}
                 value={controls.firstDay}
                 onChange={(event) => {
                   firstDaySetByUserRef.current = true;
@@ -652,7 +662,7 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
             )
           ) : null}
           <p className="text-sm text-muted-foreground">
-            Times are in {localTimeZoneLabel()}. A date you change by hand on a row stays as you set it.
+            Times are in {zone ?? "your local time"}. A date you change by hand on a row stays as you set it.
           </p>
         </fieldset>
       </Card>
@@ -667,7 +677,7 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
               count={rows.length}
               skipped={platformsForRow(selectedPlatforms, row.mimeType).skipped}
               locked={sendingMode !== null}
-              minWhen={minRowTime(now)}
+              minWhen={minRowTime(now ?? new Date())}
               onConfirmInQueue={() => markInQueue(row.id)}
               onSendAgain={() => sendAgain(row.id)}
               onCaptionChange={(caption) => updateRow(row.id, { caption, sendError: null })}
