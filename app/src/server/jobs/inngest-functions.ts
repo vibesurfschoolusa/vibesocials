@@ -48,6 +48,7 @@ import {
 import { deliverPostOutcomeNotification } from "@/server/notifications/postOutcomeEmail";
 import { buildReconnectEmail } from "@/server/notifications/reconnectEmail";
 import { collectProblemDigests, sendProblemDigests } from "@/server/jobs/problemDigest";
+import { runMonthlyReportEmails } from "@/server/jobs/monthlyReportEmail";
 import {
   checkReviewConnections,
   collectReviewAlertConnections,
@@ -2501,6 +2502,28 @@ export const socialPostMetricsSync = inngest.createFunction(
   },
 );
 
+/**
+ * The monthly report email (18b): each workspace that published anything in
+ * the month just ended gets one email to its owners (logic in
+ * monthlyReportEmail.ts). 15:00 UTC on the 1st, 2nd and 3rd, one step each:
+ * three executions a month. A run stops starting workspaces after 150 s and
+ * the next day's carries on from the per-workspace marker.
+ * SEC: the step output is counts only; addresses are read inside the step.
+ */
+export const monthlyReportEmail = inngest.createFunction(
+  {
+    id: "monthly-report-email",
+    name: "Monthly Report Email",
+    singleton: { mode: "skip" },
+  },
+  { cron: "0 15 1-3 * *" },
+  async ({ step }) => {
+    const summary = await step.run("send", () => runMonthlyReportEmails());
+    logger.info("[Inngest] Monthly report emails sent", summary);
+    return summary;
+  },
+);
+
 export const inngestFunctions = [
   publishToAllPlatforms,
   mediaRetentionSweep,
@@ -2515,4 +2538,5 @@ export const inngestFunctions = [
   googleReviewAlerts,
   googleListingMetricsSync,
   socialPostMetricsSync,
+  monthlyReportEmail,
 ];
