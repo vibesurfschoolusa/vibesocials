@@ -227,8 +227,8 @@ export async function listCustomerSubscriptions(
   customer: string,
   env: BillingEnv = process.env,
   timeoutMs?: number,
-): Promise<Array<Pick<StripeSubscription, "id" | "status">>> {
-  const list = await stripeRequest<{ data: Array<Pick<StripeSubscription, "id" | "status">> }>("GET", "/subscriptions", {
+): Promise<StripeSubscription[]> {
+  const list = await stripeRequest<{ data: StripeSubscription[] }>("GET", "/subscriptions", {
     query: new URLSearchParams({ customer, status: "all", limit: "100" }),
     env,
     timeoutMs,

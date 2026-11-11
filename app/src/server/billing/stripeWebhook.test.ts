@@ -396,6 +396,83 @@ describe("more than one live subscription (fix round 1, item 3)", () => {
   });
 });
 
+/**
+ * Fix round 2, item 1: with two live subscriptions, cancelling the one the
+ * workspace stores must not end a workspace whose other plan is still paid.
+ */
+describe("two live subscriptions, one cancelled", () => {
+  const growth = (id: string, status: string, workspaceId = "ws_a") =>
+    sub({
+      id,
+      status,
+      metadata: { workspaceId },
+      items: { data: [{ price: { id: "price_example_growth" }, current_period_end: PERIOD_END }] },
+    });
+
+  beforeEach(() => {
+    m.workspaces.set("ws_a", row({ plan: "starter", planStatus: "active", stripeSubscriptionId: "sub_1" }));
+  });
+
+  it("the stored one is cancelled: the workspace moves to the other, active", async () => {
+    m.retrieveSubscription.mockResolvedValue(sub({ status: "canceled" }));
+    m.listCustomerSubscriptions.mockResolvedValue([sub({ status: "canceled" }), growth("sub_2", "active")]);
+    expect(await handleStripeEvent(subscriptionEvent("evt_d", "customer.subscription.deleted"), ENV)).toBe(200);
+    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_2", plan: "growth", planStatus: "active" });
+  });
+
+  it("the stored one goes unpaid while another is live: the workspace moves to the other", async () => {
+    m.retrieveSubscription.mockResolvedValue(sub({ status: "unpaid" }));
+    m.listCustomerSubscriptions.mockResolvedValue([sub({ status: "unpaid" }), growth("sub_2", "trialing")]);
+    await handleStripeEvent(subscriptionEvent("evt_u", "customer.subscription.updated"), ENV);
+    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_2", planStatus: "trialing" });
+  });
+
+  it("the other one is cancelled: nothing changes for the workspace", async () => {
+    const before = { ...ws() };
+    m.retrieveSubscription.mockResolvedValue(growth("sub_2", "canceled"));
+    m.listCustomerSubscriptions.mockResolvedValue([sub({ status: "active" }), growth("sub_2", "canceled")]);
+    await handleStripeEvent(subscriptionEvent("evt_o", "customer.subscription.deleted", { id: "sub_2" }), ENV);
+    expect(ws()).toEqual(before);
+  });
+
+  it("only one, cancelled: canceled is written as before", async () => {
+    m.retrieveSubscription.mockResolvedValue(sub({ status: "canceled" }));
+    m.listCustomerSubscriptions.mockResolvedValue([sub({ status: "canceled" })]);
+    await handleStripeEvent(subscriptionEvent("evt_c", "customer.subscription.deleted"), ENV);
+    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_1", planStatus: "canceled" });
+  });
+
+  it("the other live one names a different workspace: not used, canceled is written", async () => {
+    m.retrieveSubscription.mockResolvedValue(sub({ status: "canceled" }));
+    m.listCustomerSubscriptions.mockResolvedValue([sub({ status: "canceled" }), growth("sub_2", "active", "ws_b")]);
+    await handleStripeEvent(subscriptionEvent("evt_c", "customer.subscription.deleted"), ENV);
+    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_1", planStatus: "canceled" });
+  });
+
+  it("the list call fails: canceled is written as before, and logged", async () => {
+    m.retrieveSubscription.mockResolvedValue(sub({ status: "canceled" }));
+    m.listCustomerSubscriptions.mockRejectedValue(new StripeApiError("Stripe answered 500", 500));
+    expect(await handleStripeEvent(subscriptionEvent("evt_c", "customer.subscription.deleted"), ENV)).toBe(200);
+    expect(ws().planStatus).toBe("canceled");
+    expect(m.logger.error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ eventId: "evt_c" }));
+  });
+
+  it("the two-live log names the stored subscription and the one in use", async () => {
+    m.retrieveSubscription.mockResolvedValue(growth("sub_2", "active"));
+    m.listCustomerSubscriptions.mockResolvedValue([sub({ status: "active" }), growth("sub_2", "active")]);
+    await handleStripeEvent(subscriptionEvent("evt_2", "customer.subscription.updated", { id: "sub_2" }), ENV);
+    expect(m.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("more than one live subscription"),
+      expect.objectContaining({
+        workspaceId: "ws_a",
+        liveSubscriptions: 2,
+        storedSubscriptionId: "sub_1",
+        usingSubscriptionId: "sub_2",
+      }),
+    );
+  });
+});
+
 describe("payloads and collisions (fix round 1, item 9)", () => {
   it("a subscription event with no object id answers 200 and logs that the endpoint must send snapshot payloads", async () => {
     const status = await handleStripeEvent(

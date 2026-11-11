@@ -35,6 +35,9 @@ type StripeEventBody = {
   data: { object: Record<string, unknown> };
 };
 
+/** Statuses that end a plan for the workspace (planState reads them as ended). */
+const ENDED_FOR_THE_WORKSPACE = new Set(["canceled", "unpaid", "incomplete_expired"]);
+
 const SNAPSHOT_REQUIRED =
   "[stripe webhook] Event without a usable object: the endpoint must send snapshot payloads, not thin ones";
 
@@ -103,17 +106,33 @@ async function syncSubscription(
     return 500;
   }
 
-  // Only for the operator: a customer should never have two live plans
-  // (fix round 1). Not reading the count does not stop the write.
+  // The customer's other subscriptions. A customer should never have two
+  // live plans, so more than one is logged for the operator (fix round 1).
+  // And when this one has ended while another live one names the same
+  // workspace, the workspace takes the live one (fix round 2), so cancelling
+  // the extra plan cannot end a workspace that is still paying. Not reading
+  // the list leaves the write as it would have been.
   let liveSubscriptions: number | null = null;
+  let replacement: StripeSubscription | null = null;
+  const ended = ENDED_FOR_THE_WORKSPACE.has(subscription.status);
   const customer = stripeIdOf(subscription.customer);
   if (customer) {
     try {
-      liveSubscriptions = (await listCustomerSubscriptions(customer, env)).filter((s) =>
-        isLiveSubscriptionStatus(s.status),
-      ).length;
+      const all = await listCustomerSubscriptions(customer, env);
+      liveSubscriptions = all.filter((s) => isLiveSubscriptionStatus(s.status)).length;
+      const workspaceId = subscription.metadata?.workspaceId;
+      if (ended && workspaceId) {
+        replacement =
+          all.find(
+            (s) =>
+              s.id !== subscription.id &&
+              isLiveSubscriptionStatus(s.status) &&
+              !ENDED_FOR_THE_WORKSPACE.has(s.status) &&
+              s.metadata?.workspaceId === workspaceId,
+          ) ?? null;
+      }
     } catch (error) {
-      logger.warn("[stripe webhook] Could not count the customer's subscriptions", {
+      (ended ? logger.error : logger.warn)("[stripe webhook] Could not list the customer's subscriptions", {
         eventId: event.id,
         error: errorFields(error),
       });
@@ -137,7 +156,10 @@ async function syncSubscription(
             },
           })
         : null;
-      const result = subscriptionWrite(subscription, workspace, claim, env, event.createdAt);
+      // Only in place of the subscription the workspace is using; an ended
+      // extra one changes nothing either way.
+      const chosen = replacement && workspace?.stripeSubscriptionId === subscription.id ? replacement : subscription;
+      const result = subscriptionWrite(chosen, workspace, claim, env, event.createdAt);
       if (!result.ok) {
         const log = result.level === "error" ? logger.error : logger.info;
         log("[stripe webhook] Subscription not written", {
@@ -154,6 +176,8 @@ async function syncSubscription(
           eventId: event.id,
           workspaceId: workspace!.id,
           liveSubscriptions,
+          storedSubscriptionId: workspace!.stripeSubscriptionId,
+          usingSubscriptionId: result.data.stripeSubscriptionId,
         });
       }
       for (const warning of result.warnings) {
