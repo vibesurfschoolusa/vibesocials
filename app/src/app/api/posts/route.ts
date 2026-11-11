@@ -6,7 +6,7 @@ import { findOverlongCaption, pickPlatformOverrides } from "@/lib/captionLimits"
 import { captionTooLongResponse, invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { parsePostMediaFields, type PostMediaFields } from "@/lib/mediaInput";
-import { validatePostMediaList, type PostMediaEntry } from "@/lib/postMedia";
+import { readAltTextField, validatePostMediaList, type PostMediaEntry } from "@/lib/postMedia";
 import {
   INVALID_WORKSPACE_ID_CODE,
   INVALID_WORKSPACE_ID_MESSAGE,
@@ -23,6 +23,7 @@ import {
   resolvePlatformCaptions,
 } from "@/server/jobs/posting";
 import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
+import { saveMediaAltTexts } from "@/server/jobs/postMedia";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
 import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 import { prisma } from "@/lib/db";
@@ -429,9 +430,12 @@ interface CreatePostBody {
   mimeType?: string;
   sizeBytes?: number;
   // Several photos in one post (07a): 1 to MAX_POST_MEDIA files, in order, each
-  // `{ blobUrl, filename, mimeType, sizeBytes }`. Never together with
+  // `{ blobUrl, filename, mimeType, sizeBytes, altText? }`. Never together with
   // `blobUrl` / `mediaItemId`; one entry is the same as those blob fields.
   media?: unknown;
+  // 07d: the photo's description, beside `blobUrl` or `mediaItemId` (and in
+  // each `media` entry). Ignored for a video; absent keeps a reused photo's own.
+  altText?: unknown;
   baseCaption?: unknown;
   location?: unknown;
   perPlatformOverrides?: unknown;
@@ -568,6 +572,9 @@ export async function POST(request: Request) {
   // Several photos (07a): the photos after the first, in order. Stays undefined
   // for one file, so a one-entry list takes the blobUrl path unchanged.
   let extraMedia: PostMediaEntry[] | undefined;
+  // 07d: each file's cleaned description, in the post's order; undefined for a
+  // file without one (or a video). Written onto the media rows once they exist.
+  let altTexts: (string | undefined)[] = [];
   if (hasMediaList) {
     const listValidation = validatePostMediaList(body.media);
     if (!listValidation.ok) {
@@ -576,7 +583,16 @@ export async function POST(request: Request) {
     const [first, ...rest] = listValidation.value;
     storedBlobUrl = first.storageLocation;
     mediaFields = { filename: first.originalFilename, mimeType: first.mimeType, sizeBytes: first.sizeBytes };
-    if (rest.length > 0) extraMedia = rest;
+    altTexts = listValidation.value.map((entry) => entry.altText);
+    // The create helper gets the file info only, exactly as before alt text.
+    if (rest.length > 0) {
+      extraMedia = rest.map((entry) => ({
+        storageLocation: entry.storageLocation,
+        originalFilename: entry.originalFilename,
+        mimeType: entry.mimeType,
+        sizeBytes: entry.sizeBytes,
+      }));
+    }
   } else if (hasBlobUrl) {
     const canonical = canonicalBlobUrl(body.blobUrl as string);
     if (!canonical) {
@@ -588,6 +604,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: mediaValidation.error }, { status: 400 });
     }
     mediaFields = mediaValidation.value;
+  }
+  if (!hasMediaList) {
+    // The reuse path has no mimeType here: the write is limited to photos.
+    const altText = readAltTextField(body.altText, mediaFields?.mimeType ?? "image/");
+    if (!altText.ok) {
+      return NextResponse.json({ error: altText.error }, { status: 400 });
+    }
+    altTexts = [altText.value];
   }
 
   const baseCaptionRaw = body?.baseCaption;
@@ -885,6 +909,21 @@ export async function POST(request: Request) {
       });
       postJobId = created.postJobId;
       mediaItemId = created.mediaItemId;
+    }
+
+    // 07d: before the publish event, so the publish reads the descriptions.
+    // Best effort: the post exists now, and one without alt text is still the
+    // post the user asked for. The text itself is never logged.
+    if (altTexts.some((text) => text)) {
+      try {
+        await saveMediaAltTexts({ workspaceId: context.workspace.id, postJobId, mediaItemId, altTexts });
+      } catch (altTextError: unknown) {
+        logger.error("[POST /api/posts] Couldn't save the photo descriptions; publishing without them", {
+          error: altTextError instanceof Error ? altTextError.name : "unknown",
+          postJobId,
+          workspaceId: context.workspace.id,
+        });
+      }
     }
 
     // Immediate posts trigger the background publish now. Scheduled/draft jobs

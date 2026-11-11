@@ -1,5 +1,6 @@
 import type { Platform } from "@prisma/client";
 
+import { cleanAltText } from "./altText";
 import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "./blobUrl";
 import { parsePostMediaFields } from "./mediaInput";
 
@@ -24,6 +25,25 @@ export interface PostMediaEntry {
   originalFilename: string;
   mimeType: string;
   sizeBytes: number;
+  /**
+   * 07d: the photo's description, cleaned (lib/altText.ts). Absent for a video
+   * and when none (or only whitespace) was sent.
+   */
+  altText?: string;
+}
+
+/**
+ * The cleaned description sent beside a file, or undefined. Only a photo takes
+ * one: a video's is ignored. A value that is not text is refused.
+ */
+export function readAltTextField(
+  raw: unknown,
+  mimeType: string,
+): { ok: true; value: string | undefined } | { ok: false; error: string } {
+  if (raw == null) return { ok: true, value: undefined };
+  if (typeof raw !== "string") return { ok: false, error: "altText must be text." };
+  if (!mimeType.startsWith("image/")) return { ok: true, value: undefined };
+  return { ok: true, value: cleanAltText(raw) || undefined };
 }
 
 export type PostMediaListResult =
@@ -44,6 +64,8 @@ function validateEntry(raw: unknown): { ok: true; value: PostMediaEntry } | { ok
   }
   const fields = parsePostMediaFields(entry);
   if (!fields.ok) return fields;
+  const altText = readAltTextField(entry.altText, fields.value.mimeType);
+  if (!altText.ok) return altText;
   return {
     ok: true,
     value: {
@@ -51,6 +73,7 @@ function validateEntry(raw: unknown): { ok: true; value: PostMediaEntry } | { ok
       originalFilename: fields.value.filename,
       mimeType: fields.value.mimeType,
       sizeBytes: fields.value.sizeBytes,
+      ...(altText.value ? { altText: altText.value } : {}),
     },
   };
 }

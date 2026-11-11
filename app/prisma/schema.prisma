@@ -333,6 +333,10 @@ model MediaItem {
   // library upload, which is exempt from the sweep).
   deletedAt            DateTime?
   lastUsedAt           DateTime?
+  // The photo's description for screen readers (07d), cleaned to at most 1,000
+  // characters (lib/altText.ts). It belongs to the photo, so a reuse keeps it.
+  // Null for a video and for a photo nobody described.
+  altText              String?
 
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   // Team Workspaces. Tenant owner; userId above stays as uploader

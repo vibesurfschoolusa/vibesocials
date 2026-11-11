@@ -34,6 +34,47 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+describe("validatePostMediaList - alt text (07d)", () => {
+  it("keeps each photo's cleaned description with its own photo", () => {
+    const result = validatePostMediaList([
+      { ...photo(1), altText: "  A dog\non a beach. " },
+      photo(2),
+      { ...photo(3), altText: "A red boat." },
+    ]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.map((m) => m.altText)).toEqual(["A dog on a beach.", undefined, "A red boat."]);
+  });
+
+  it("leaves altText out of an entry without one, so the entry is exactly what it was", () => {
+    const result = validatePostMediaList([photo(1), { ...photo(2), altText: " \n " }]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.every((m) => !("altText" in m))).toBe(true);
+  });
+
+  it("ignores a description sent with a video", () => {
+    const result = validatePostMediaList([{ ...photo(1, "video/mp4"), altText: "A clip." }]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect("altText" in result.value[0]).toBe(false);
+  });
+
+  it("refuses an altText that is not text", () => {
+    expect(validatePostMediaList([photo(1), { ...photo(2), altText: 7 }])).toEqual({
+      ok: false,
+      error: "File 2: altText must be text.",
+    });
+  });
+
+  it("caps a long description at 1,000 characters", () => {
+    const result = validatePostMediaList([{ ...photo(1), altText: "word ".repeat(400) }]);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value[0].altText?.length).toBeLessThanOrEqual(1000);
+  });
+});
+
 describe("postMedia constants", () => {
   it("allows up to 10 photos of JPEG, PNG or WebP", () => {
     expect(MAX_POST_MEDIA).toBe(10);
