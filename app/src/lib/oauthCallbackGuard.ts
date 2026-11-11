@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { Platform } from "@prisma/client";
 
 import { getCurrentUser } from "@/lib/auth";
+import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { logger } from "@/lib/logger";
 
 /**
@@ -36,12 +37,23 @@ export async function guardOAuthCallbackSession({
   platform,
   stateUserId,
   baseUrl,
+  link = null,
 }: {
   platform: Platform;
   stateUserId: string;
   /** Base for the redirect: the callback's own request URL/origin, or NEXTAUTH_URL. */
   baseUrl: string | URL;
+  /**
+   * A client connect link flow (lib/connectLink.ts), already bound to this
+   * browser by its sealed cookie (server/connectLink/callback.ts). The visitor
+   * has no session, so none is asked for. Null: the signed-in check below.
+   */
+  link?: ConnectLinkFlow | null;
 }): Promise<NextResponse | null> {
+  if (link) {
+    return guardConnectLinkFlow({ platform, stateUserId, baseUrl, link });
+  }
+
   const user = await getCurrentUser();
 
   if (!user) {
@@ -62,6 +74,28 @@ export async function guardOAuthCallbackSession({
   }
 
   return null;
+}
+
+/** A link flow acts as the link's creator: the state (or handshake row) must name exactly that user. */
+function guardConnectLinkFlow({
+  platform,
+  stateUserId,
+  baseUrl,
+  link,
+}: {
+  platform: Platform;
+  stateUserId: string;
+  baseUrl: string | URL;
+  link: ConnectLinkFlow;
+}): NextResponse | null {
+  if (link.userId === stateUserId) return null;
+  logger.warn("[OAuth callback] A connect-link flow names someone other than the link's creator", {
+    platform,
+    connectLinkId: link.id,
+  });
+  const settingsUrl = new URL("/settings", baseUrl);
+  settingsUrl.searchParams.set("error", OAUTH_SESSION_MISMATCH);
+  return NextResponse.redirect(settingsUrl);
 }
 
 /**
