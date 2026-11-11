@@ -1,5 +1,8 @@
 import { currentPacificMidnight, nextPacificMidnight } from "@/server/platforms/rateLimited";
 
+import { billingEnabled, billingStartedAt, planState, type BillingFields } from "./billing";
+import { isPlanKey, PLANS, type PlanLimits } from "./plans";
+
 /**
  * Per-workspace usage limits (2026-11-10). Pure: no database. The numbers, the
  * windows they count in and every sentence a user or an owner reads about them
@@ -44,35 +47,67 @@ function envLimit(env: Record<string, string | undefined>, name: string): number
   return Number.isSafeInteger(value) ? value : null;
 }
 
-function pick(column: number | null | undefined, fromEnv: number | null, builtIn: number): number {
+function pick(
+  column: number | null | undefined,
+  fromPlan: number | null,
+  fromEnv: number | null,
+  builtIn: number,
+): number {
   if (column !== null && column !== undefined) return column;
+  if (fromPlan !== null) return fromPlan;
   if (fromEnv !== null) return fromEnv;
   return builtIn;
 }
 
-/** The workspace column if set, else a valid environment value, else the built-in. Zero is a limit. */
+/**
+ * The plan's limits (21a), or null to resolve as before: billing off, an exempt
+ * workspace, or no known plan and no trial. A workspace in trial gets starter's.
+ */
+function planLimits(
+  workspace: BillingFields & { plan?: string | null },
+  env: Record<string, string | undefined>,
+  now: Date,
+): PlanLimits | null {
+  if (!billingEnabled(env)) return null;
+  const state = planState(workspace, now, billingStartedAt(env));
+  if (state === "exempt") return null;
+  if (isPlanKey(workspace.plan)) return PLANS[workspace.plan].limits;
+  if (state === "trial") return PLANS.starter.limits;
+  return null;
+}
+
+/**
+ * The workspace column if set, else (billing on) its plan's limit, else a valid
+ * environment value, else the built-in. Zero is a limit.
+ */
 export function resolveWorkspaceLimits(
-  overrides: WorkspaceLimitOverrides,
+  overrides: WorkspaceLimitOverrides & BillingFields,
   env: Record<string, string | undefined> = process.env,
+  now: Date = new Date(),
 ): WorkspaceLimits {
+  const plan = planLimits(overrides, env, now);
   return {
     postsPerDay: pick(
       overrides.limitPostsPerDay,
+      plan?.postsPerDay ?? null,
       envLimit(env, "LIMIT_POSTS_PER_DAY"),
       DEFAULT_WORKSPACE_LIMITS.postsPerDay,
     ),
     xPostsPerMonth: pick(
       overrides.limitXPostsPerMonth,
+      plan?.xPostsPerMonth ?? null,
       envLimit(env, "LIMIT_X_POSTS_PER_MONTH"),
       DEFAULT_WORKSPACE_LIMITS.xPostsPerMonth,
     ),
     youtubeUploadsPerDay: pick(
       overrides.limitYoutubeUploadsPerDay,
+      plan?.youtubeUploadsPerDay ?? null,
       envLimit(env, "LIMIT_YOUTUBE_UPLOADS_PER_DAY"),
       DEFAULT_WORKSPACE_LIMITS.youtubeUploadsPerDay,
     ),
     storageBytes:
-      pick(overrides.limitStorageMb, envLimit(env, "LIMIT_STORAGE_MB"), DEFAULT_STORAGE_MB) * MB,
+      pick(overrides.limitStorageMb, plan?.storageMb ?? null, envLimit(env, "LIMIT_STORAGE_MB"), DEFAULT_STORAGE_MB) *
+      MB,
   };
 }
 

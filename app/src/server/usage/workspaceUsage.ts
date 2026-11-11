@@ -1,3 +1,4 @@
+import { billingFieldsSelect } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { consumeFixedWindow } from "@/lib/rateLimit";
@@ -67,6 +68,8 @@ async function loadWorkspace(workspaceId: string): Promise<{ name: string; limit
       limitXPostsPerMonth: true,
       limitYoutubeUploadsPerDay: true,
       limitStorageMb: true,
+      // 21a: the plan columns, only with billing on (the query is today's with it off).
+      ...billingFieldsSelect(),
     },
   });
   return { name: row?.name ?? "Your workspace", limits: resolveWorkspaceLimits(row ?? {}) };
