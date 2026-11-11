@@ -8,6 +8,7 @@ import { toMediaItemDto } from "@/lib/mediaDto";
 import { MAX_MEDIA_BYTES, isImageOrVideoMimeType } from "@/lib/mediaInput";
 import { decodePostsCursor, encodePostsCursor } from "@/lib/postsDto";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { workspaceBlockResponse } from "@/lib/workspaceStatus";
 import {
   INVALID_WORKSPACE_ID_CODE,
   INVALID_WORKSPACE_ID_MESSAGE,
@@ -126,6 +127,10 @@ export async function POST(request: Request) {
   if (!context) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // Pause (2026-11-10): a paused workspace cannot create or move work.
+  const blocked = workspaceBlockResponse(context.workspace);
+  if (blocked) return blocked;
 
   const contentType = request.headers.get("content-type") || "";
   if (!contentType.includes("application/json")) {

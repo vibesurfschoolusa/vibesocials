@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { getWorkspaceContext } from "@/lib/workspace";
+import { workspaceBlockResponse } from "@/lib/workspaceStatus";
 import { prisma } from "@/lib/db";
 import {
   holdForApprovalData,
@@ -69,6 +70,10 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   if (!workspaceContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // Pause (2026-11-10): a paused workspace cannot create or move work.
+  const blocked = workspaceBlockResponse(workspaceContext.workspace);
+  if (blocked) return blocked;
 
   const rateLimit = await checkRateLimit({
     userId: workspaceContext.user.id,

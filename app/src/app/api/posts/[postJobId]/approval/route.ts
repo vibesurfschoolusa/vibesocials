@@ -15,6 +15,7 @@ import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { SCHEDULE_BUFFER_MS } from "@/lib/scheduling";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { workspaceBlockResponse } from "@/lib/workspaceStatus";
 import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
 import { buildPublishEvent, prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
 import { sendEmail } from "@/server/notifications/email";
@@ -84,6 +85,10 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   if (!workspaceContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // Pause (2026-11-10): a paused workspace cannot create or move work.
+  const blocked = workspaceBlockResponse(workspaceContext.workspace);
+  if (blocked) return blocked;
 
   const rateLimit = await checkRateLimit({
     userId: workspaceContext.user.id,

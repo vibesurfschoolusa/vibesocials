@@ -6,6 +6,7 @@ import { logger } from "@/lib/logger";
 import { UPLOAD_ALLOWED_CONTENT_TYPES } from "@/lib/mediaInput";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { workspaceBlockResponse } from "@/lib/workspaceStatus";
 import { checkStorageLimit } from "@/server/usage/workspaceUsage";
 
 /**
@@ -41,6 +42,11 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!context) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  // Pause (2026-11-10): a paused workspace cannot create or move work.
+  const blocked = workspaceBlockResponse(context.workspace);
+  if (blocked) return blocked;
+
   const { user } = context;
 
   // Cap client upload-token issuance (each call can authorize up to 512MB).

@@ -18,6 +18,7 @@ import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@
 import { checkRateLimit } from "@/lib/rateLimit";
 import { MAX_VIDEO_FRAMES, parseVideoFrames } from "@/lib/videoFrames";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { workspaceBlockResponse } from "@/lib/workspaceStatus";
 
 export const dynamic = "force-dynamic";
 
@@ -71,6 +72,10 @@ export async function POST(request: Request) {
     if (!context) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    // Pause (2026-11-10): a paused workspace cannot create or move work.
+    const blocked = workspaceBlockResponse(context.workspace);
+    if (blocked) return blocked;
 
     const parsedBody = await readJsonObject(request);
     if (!parsedBody) {
