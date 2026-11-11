@@ -5,13 +5,14 @@ import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { UsageSection } from "@/components/usage-section";
+import { PLAN_STATE_LABELS } from "@/lib/billing";
 import { checkAdminRateLimit, getOperator } from "@/lib/operator";
 import { platformLabel } from "@/lib/platforms";
 import { formatStorageGb, type WorkspaceLimits } from "@/lib/usageLimits";
 import { LIMIT_FIELDS, LIMIT_MAX, type LimitField } from "@/server/admin/actions";
 import { getAdminWorkspaceDetail } from "@/server/admin/queries";
 
-import { AdminLimitsForm, AdminPauseControls, type LimitFieldView } from "./admin-controls";
+import { AdminBillingControls, AdminLimitsForm, AdminPauseControls, type LimitFieldView } from "./admin-controls";
 
 // No metadata on purpose: a page title would show on the 404 a non-operator gets.
 export const dynamic = "force-dynamic";
@@ -33,6 +34,11 @@ function describeAction(action: string, detail: unknown): string {
   const d = (detail ?? {}) as { old?: Record<string, unknown>; new?: Record<string, unknown> };
   if (action === "pause") return `Paused: ${String(d.new?.pausedReason ?? "")}`;
   if (action === "resume") return "Resumed";
+  if (action === "exempt") return d.new?.billingExempt ? "Exempted from billing" : "Billing exemption ended";
+  if (action === "trial") {
+    const end = d.new?.trialEndsAt;
+    return typeof end === "string" ? `Trial end set to ${dateTimeLabel(end)}` : "Trial cleared";
+  }
   if (action === "limits") {
     const changes = Object.keys(d.new ?? {}).map((field) => {
       const label = LIMIT_VIEW[field as LimitField]?.label ?? field;
@@ -171,6 +177,53 @@ export default async function AdminWorkspacePage({ params }: { params: Promise<{
             <p className="text-sm text-foreground">Not paused.</p>
           )}
           <AdminPauseControls workspaceId={workspace.id} paused={Boolean(workspace.pausedAt)} />
+        </Card>
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <h2 className="text-lg font-semibold text-foreground">Billing</h2>
+        <Card className="flex flex-col gap-3 p-4">
+          <p className="text-sm text-foreground">
+            {detail.billing.enabled
+              ? "Billing is on: this state is enforced."
+              : "Billing is off: nothing here is enforced and no workspace is blocked for its plan. The state is what these fields would give once it is on."}
+          </p>
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
+            <div>
+              <dt className="text-xs text-muted-foreground">State</dt>
+              <dd>{PLAN_STATE_LABELS[detail.billing.state]}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Exempt</dt>
+              <dd>{detail.billing.billingExempt ? "Yes" : "No"}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Plan</dt>
+              <dd>{detail.billing.plan ?? "None"}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Subscription status</dt>
+              <dd>{detail.billing.planStatus ?? "None"}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Trial ends</dt>
+              <dd>{detail.billing.trialEndsAt ? dateTimeLabel(detail.billing.trialEndsAt) : "No trial"}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Period ends</dt>
+              <dd>{detail.billing.currentPeriodEnd ? dateTimeLabel(detail.billing.currentPeriodEnd) : "None"}</dd>
+            </div>
+          </dl>
+          <p className="text-sm text-muted-foreground">
+            With billing on, a workspace in the Ended state cannot upload, create, schedule or publish, like a paused one:
+            posts that come due are marked failed and can be retried once a plan is active. Only a workspace created
+            after BILLING_STARTED_AT that is not exempt can end. Nothing is charged or deleted.
+          </p>
+          <AdminBillingControls
+            workspaceId={workspace.id}
+            exempt={detail.billing.billingExempt}
+            trialEndDate={detail.billing.trialEndsAt ? detail.billing.trialEndsAt.toISOString().slice(0, 10) : null}
+          />
         </Card>
       </section>
 

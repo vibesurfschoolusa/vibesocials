@@ -1,11 +1,13 @@
 import type { Prisma } from "@prisma/client";
 
+import { MAX_TRIAL_DAYS } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import type { Operator } from "@/lib/operator";
+import { utcDateLabel } from "@/lib/usageLimits";
 
 /**
  * What the operator can change on /admin (2026-11-10): a workspace's limit
- * overrides, and pause / resume. Each change and its AdminAction record are
+ * overrides, pause / resume, and (21a) its billing exemption and trial end. Each change and its AdminAction record are
  * written in one transaction that first takes the Workspace row lock, so two
  * operators (or two clicks) cannot both see "not paused" and both record a
  * pause. Nothing here deletes anything.
@@ -81,6 +83,49 @@ export function validatePauseBody(body: unknown): { ok: true; reason: string } |
   return { ok: true, reason };
 }
 
+/** The exempt body: `{ exempt: true | false }`, nothing else. */
+export function validateExemptBody(body: unknown): { ok: true; exempt: boolean } | Invalid {
+  if (!isPlainObject(body) || typeof body.exempt !== "boolean" || Object.keys(body).length !== 1) {
+    return { ok: false, error: "Send exempt as true or false." };
+  }
+  return { ok: true, exempt: body.exempt };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * The trial body: `{ trialEndsAt: "YYYY-MM-DD" }` from today to MAX_TRIAL_DAYS
+ * ahead (UTC calendar days), stored as the end of that UTC day so the trial
+ * runs through the date shown; or `{ trialEndsAt: null }` to clear it.
+ */
+export function validateTrialBody(body: unknown, now: Date): { ok: true; trialEndsAt: Date | null } | Invalid {
+  const shape = "Send trialEndsAt as a date (YYYY-MM-DD), or null to clear it.";
+  if (!isPlainObject(body) || !("trialEndsAt" in body) || Object.keys(body).length !== 1) {
+    return { ok: false, error: shape };
+  }
+  const value = body.trialEndsAt;
+  if (value === null) return { ok: true, trialEndsAt: null };
+  const match = typeof value === "string" ? DATE_ONLY.exec(value) : null;
+  if (!match) return { ok: false, error: shape };
+
+  const [year, month, day] = [Number(match[1]), Number(match[2]) - 1, Number(match[3])];
+  const start = new Date(Date.UTC(year, month, day));
+  if (start.getUTCFullYear() !== year || start.getUTCMonth() !== month || start.getUTCDate() !== day) {
+    return { ok: false, error: shape };
+  }
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const last = new Date(today + MAX_TRIAL_DAYS * DAY_MS);
+  if (start.getTime() < today) return { ok: false, error: "Pick today or a later date." };
+  if (start.getTime() > last.getTime()) {
+    return {
+      ok: false,
+      error: `Pick a date at most ${MAX_TRIAL_DAYS} days ahead (${utcDateLabel(last)} or earlier).`,
+    };
+  }
+  return { ok: true, trialEndsAt: new Date(start.getTime() + DAY_MS - 1) };
+}
+
 export type ChangeResult =
   | { status: "not_found" }
   | { status: "unchanged" }
@@ -100,6 +145,8 @@ const LOCKED_ROW_SELECT = {
   limitStorageMb: true,
   pausedAt: true,
   pausedReason: true,
+  billingExempt: true,
+  trialEndsAt: true,
 } satisfies Prisma.WorkspaceSelect;
 
 type LockedRow = Prisma.WorkspaceGetPayload<{ select: typeof LOCKED_ROW_SELECT }>;
@@ -121,7 +168,7 @@ function record(
   tx: Prisma.TransactionClient,
   operator: Operator,
   row: LockedRow,
-  action: "limits" | "pause" | "resume",
+  action: "limits" | "pause" | "resume" | "exempt" | "trial",
   detail: { old: Prisma.InputJsonObject; new: Prisma.InputJsonObject },
 ) {
   return tx.adminAction.create({
@@ -196,5 +243,43 @@ export async function resumeWorkspace(args: {
       new: { pausedAt: null, pausedReason: null },
     });
     return { status: "changed" as const, actionId: action.id, workspaceName: row.name };
+  });
+}
+
+/** Exempt a workspace from billing, or end the exemption. Setting what is already set records nothing. */
+export async function setBillingExempt(args: {
+  operator: Operator;
+  workspaceId: string;
+  exempt: boolean;
+}): Promise<ChangeResult> {
+  return withLockedWorkspace(args.workspaceId, async (tx, row) => {
+    if (row.billingExempt === args.exempt) return { status: "unchanged" as const };
+
+    await tx.workspace.update({ where: { id: row.id }, data: { billingExempt: args.exempt } });
+    await record(tx, args.operator, row, "exempt", {
+      old: { billingExempt: row.billingExempt },
+      new: { billingExempt: args.exempt },
+    });
+    return { status: "changed" as const };
+  });
+}
+
+/** Set or clear the end of the workspace's free trial. The bounds are checked by validateTrialBody. */
+export async function setTrialEndsAt(args: {
+  operator: Operator;
+  workspaceId: string;
+  trialEndsAt: Date | null;
+}): Promise<ChangeResult> {
+  return withLockedWorkspace(args.workspaceId, async (tx, row) => {
+    if ((row.trialEndsAt?.getTime() ?? null) === (args.trialEndsAt?.getTime() ?? null)) {
+      return { status: "unchanged" as const };
+    }
+
+    await tx.workspace.update({ where: { id: row.id }, data: { trialEndsAt: args.trialEndsAt } });
+    await record(tx, args.operator, row, "trial", {
+      old: { trialEndsAt: row.trialEndsAt?.toISOString() ?? null },
+      new: { trialEndsAt: args.trialEndsAt?.toISOString() ?? null },
+    });
+    return { status: "changed" as const };
   });
 }

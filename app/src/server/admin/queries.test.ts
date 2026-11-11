@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => ({
   workspaceFindMany: vi.fn(),
@@ -23,6 +23,7 @@ vi.mock("@/lib/db", () => ({
 }));
 vi.mock("@/server/usage/workspaceUsage", () => ({ getWorkspaceUsageOrNull: db.usage }));
 
+import { PLANS } from "@/lib/plans";
 import { DEFAULT_WORKSPACE_LIMITS } from "@/lib/usageLimits";
 
 import { ADMIN_PAGE_SIZE, getAdminWorkspaceDetail, listAdminWorkspaces } from "./queries";
@@ -71,7 +72,7 @@ describe("listAdminWorkspaces", () => {
   it("lists newest first, 50 a page, with each workspace's counts from grouped queries", async () => {
     db.workspaceFindMany.mockResolvedValue([
       workspaceRow("ws-a", CREATED_A, ["a1@example.com", "a2@example.com"], { pausedAt: NOW }),
-      workspaceRow("ws-b", CREATED_B, ["b@example.com"]),
+      workspaceRow("ws-b", CREATED_B, ["b@example.com"], { billingExempt: true }),
     ]);
     stubCounts();
 
@@ -110,6 +111,8 @@ describe("listAdminWorkspaces", () => {
         failed30d: 2,
         storageBytes: 3_000_000_000,
         pausedAt: NOW,
+        // 21a: computed from the plan columns; this row has none and no start date applies.
+        planState: "ended",
       },
       {
         id: "ws-b",
@@ -123,6 +126,7 @@ describe("listAdminWorkspaces", () => {
         failed30d: 4,
         storageBytes: 1024,
         pausedAt: null,
+        planState: "exempt",
       },
     ]);
   });
@@ -135,6 +139,12 @@ describe("listAdminWorkspaces", () => {
       name: true,
       createdAt: true,
       pausedAt: true,
+      // 21a: the plan columns, always: the list shows each workspace's plan state.
+      billingExempt: true,
+      plan: true,
+      planStatus: true,
+      trialEndsAt: true,
+      currentPeriodEnd: true,
       members: {
         where: { role: "owner" },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -159,6 +169,7 @@ describe("listAdminWorkspaces", () => {
         "name",
         "ownerEmails",
         "pausedAt",
+        "planState",
         "platforms",
         "published30d",
         "reconnectCount",
@@ -243,6 +254,11 @@ describe("getAdminWorkspaceDetail", () => {
         limitXPostsPerMonth: true,
         limitYoutubeUploadsPerDay: true,
         limitStorageMb: true,
+        billingExempt: true,
+        plan: true,
+        planStatus: true,
+        trialEndsAt: true,
+        currentPeriodEnd: true,
         members: {
           where: { role: "owner" },
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -259,7 +275,7 @@ describe("getAdminWorkspaceDetail", () => {
     expect(db.usage).toHaveBeenCalledWith("ws-a", NOW);
 
     expect(Object.keys(detail!).sort()).toEqual(
-      ["actions", "defaultLimits", "effectiveLimits", "overrides", "pausedReason", "usage", "workspace"].sort(),
+      ["actions", "billing", "defaultLimits", "effectiveLimits", "overrides", "pausedReason", "usage", "workspace"].sort(),
     );
     expect(detail!.workspace).toMatchObject({ id: "ws-a", memberCount: 3, reconnectCount: 1, pausedAt: NOW });
     expect(detail!.pausedReason).toBe("Unpaid invoice.");
@@ -276,5 +292,69 @@ describe("getAdminWorkspaceDetail", () => {
     );
     expect(detail!.usage).toBe(USAGE);
     expect(detail!.actions).toHaveLength(1);
+  });
+});
+
+// 21a: the stored plan fields and the computed state, billing on or off.
+describe("getAdminWorkspaceDetail billing", () => {
+  function stubDetail(extra: Record<string, unknown>) {
+    db.workspaceFindUnique.mockResolvedValue({
+      ...workspaceRow("ws-a", CREATED_A, ["a@example.com"]),
+      pausedReason: null,
+      limitPostsPerDay: null,
+      limitXPostsPerMonth: null,
+      limitYoutubeUploadsPerDay: null,
+      limitStorageMb: null,
+      billingExempt: false,
+      plan: null,
+      planStatus: null,
+      trialEndsAt: null,
+      currentPeriodEnd: null,
+      ...extra,
+    });
+    stubCounts();
+    db.usage.mockResolvedValue(null);
+    db.actionFindMany.mockResolvedValue([]);
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("with billing off, shows the stored fields and the state they would give, and that it is off", async () => {
+    vi.stubEnv("BILLING_ENABLED", "");
+    const trialEndsAt = new Date("2026-11-20T00:00:00Z");
+    stubDetail({ trialEndsAt });
+    const detail = await getAdminWorkspaceDetail("ws-a", NOW);
+    expect(detail!.billing).toEqual({
+      enabled: false,
+      state: "trial",
+      billingExempt: false,
+      plan: null,
+      planStatus: null,
+      trialEndsAt,
+      currentPeriodEnd: null,
+    });
+    expect(detail!.workspace.planState).toBe("trial");
+  });
+
+  it("with billing on, a workspace older than BILLING_STARTED_AT is exempt and its limits are today's", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    vi.stubEnv("BILLING_STARTED_AT", "2026-11-05T00:00:00Z");
+    stubDetail({ plan: "pro", planStatus: "active" });
+    const detail = await getAdminWorkspaceDetail("ws-a", NOW);
+    expect(detail!.billing.enabled).toBe(true);
+    expect(detail!.billing.state).toBe("exempt");
+  });
+
+  it("with billing on, the limits in effect and the defaults are the plan's", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    vi.stubEnv("BILLING_STARTED_AT", "2026-10-15T00:00:00Z");
+    stubDetail({ plan: "pro", planStatus: "active", limitPostsPerDay: 3 });
+    const detail = await getAdminWorkspaceDetail("ws-a", NOW);
+    expect(detail!.billing.state).toBe("active");
+    expect(detail!.effectiveLimits.postsPerDay).toBe(3);
+    expect(detail!.effectiveLimits.xPostsPerMonth).toBe(PLANS.pro.limits.xPostsPerMonth);
+    expect(detail!.defaultLimits.postsPerDay).toBe(PLANS.pro.limits.postsPerDay);
   });
 });

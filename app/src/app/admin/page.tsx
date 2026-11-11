@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { buttonVariants } from "@/components/ui/button";
+import { PLAN_STATE_LABELS } from "@/lib/billing";
 import { checkAdminRateLimit, getOperator } from "@/lib/operator";
 import { platformLabel } from "@/lib/platforms";
 import { formatStorageGb } from "@/lib/usageLimits";
@@ -60,7 +61,11 @@ function WorkspaceRowCard({ row }: { row: AdminWorkspaceRow }) {
           <dt className="text-xs text-muted-foreground">Storage</dt>
           <dd>{formatStorageGb(row.storageBytes)}</dd>
         </div>
-        <div className="col-span-2 sm:col-span-4">
+        <div>
+          <dt className="text-xs text-muted-foreground">Plan</dt>
+          <dd>{PLAN_STATE_LABELS[row.planState]}</dd>
+        </div>
+        <div className="sm:col-span-3">
           <dt className="text-xs text-muted-foreground">Connected</dt>
           <dd>
             {row.platforms.length ? row.platforms.map(platformLabel).join(", ") : "Nothing connected"}

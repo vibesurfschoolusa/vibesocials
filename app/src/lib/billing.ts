@@ -148,3 +148,11 @@ export const BILLING_FIELDS_SELECT = {
 export function billingFieldsSelect(env: BillingEnv = process.env): Partial<typeof BILLING_FIELDS_SELECT> {
   return billingEnabled(env) ? BILLING_FIELDS_SELECT : {};
 }
+
+/** One word per state, for the operator's admin pages. */
+export const PLAN_STATE_LABELS: Record<PlanState, string> = {
+  exempt: "Exempt",
+  active: "Active",
+  trial: "Trial",
+  ended: "Ended",
+};

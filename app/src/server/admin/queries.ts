@@ -1,5 +1,6 @@
 import { Prisma, type Platform } from "@prisma/client";
 
+import { billingEnabled, billingStartedAt, planState, type PlanState } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { PLATFORM_ORDER } from "@/lib/platforms";
 import { resolveWorkspaceLimits, type WorkspaceLimits } from "@/lib/usageLimits";
@@ -35,6 +36,8 @@ export type AdminWorkspaceRow = {
   failed30d: number;
   storageBytes: number;
   pausedAt: Date | null;
+  /** 21a: the state the plan columns give, whether or not billing is on. */
+  planState: PlanState;
 };
 
 const OWNERS_SELECT = {
@@ -43,7 +46,18 @@ const OWNERS_SELECT = {
   select: { user: { select: { email: true } } },
 } satisfies Prisma.Workspace$membersArgs;
 
-type Counts = Omit<AdminWorkspaceRow, "id" | "name" | "createdAt" | "ownerEmails" | "pausedAt">;
+type Counts = Omit<AdminWorkspaceRow, "id" | "name" | "createdAt" | "ownerEmails" | "pausedAt" | "planState">;
+
+/** 21a: the plan columns, read on both admin pages billing on or off. */
+const BILLING_SELECT = {
+  billingExempt: true,
+  plan: true,
+  planStatus: true,
+  trialEndsAt: true,
+  currentPeriodEnd: true,
+} satisfies Prisma.WorkspaceSelect;
+
+type BillingColumns = Prisma.WorkspaceGetPayload<{ select: typeof BILLING_SELECT }>;
 
 /** Members, connections, recent outcomes and storage for these workspaces, one query each. */
 async function countsFor(ids: string[], now: Date): Promise<Map<string, Counts>> {
@@ -113,8 +127,15 @@ async function countsFor(ids: string[], now: Date): Promise<Map<string, Counts>>
 }
 
 function toRow(
-  workspace: { id: string; name: string; createdAt: Date; pausedAt: Date | null; members: { user: { email: string } }[] },
+  workspace: {
+    id: string;
+    name: string;
+    createdAt: Date;
+    pausedAt: Date | null;
+    members: { user: { email: string } }[];
+  } & BillingColumns,
   counts: Counts | undefined,
+  now: Date,
 ): AdminWorkspaceRow {
   return {
     id: workspace.id,
@@ -128,6 +149,7 @@ function toRow(
     failed30d: counts?.failed30d ?? 0,
     storageBytes: counts?.storageBytes ?? 0,
     pausedAt: workspace.pausedAt,
+    planState: planState(workspace, now, billingStartedAt()),
   };
 }
 
@@ -156,7 +178,7 @@ export async function listAdminWorkspaces(args: {
     skip: page * ADMIN_PAGE_SIZE,
     // One more than a page, to know whether there is a next one.
     take: ADMIN_PAGE_SIZE + 1,
-    select: { id: true, name: true, createdAt: true, pausedAt: true, members: OWNERS_SELECT },
+    select: { id: true, name: true, createdAt: true, pausedAt: true, ...BILLING_SELECT, members: OWNERS_SELECT },
   });
   const shown = found.slice(0, ADMIN_PAGE_SIZE);
   const counts = await countsFor(
@@ -164,7 +186,7 @@ export async function listAdminWorkspaces(args: {
     args.now,
   );
   return {
-    rows: shown.map((workspace) => toRow(workspace, counts.get(workspace.id))),
+    rows: shown.map((workspace) => toRow(workspace, counts.get(workspace.id), args.now)),
     hasNextPage: found.length > ADMIN_PAGE_SIZE,
   };
 }
@@ -180,10 +202,12 @@ export type AdminActionEntry = {
 export type AdminWorkspaceDetail = {
   workspace: AdminWorkspaceRow;
   pausedReason: string | null;
+  /** 21a: the stored plan fields, the state they give, and whether billing is on (enforced). */
+  billing: BillingColumns & { state: PlanState; enabled: boolean };
   /** The override columns as stored; null means the default applies. */
   overrides: Record<LimitField, number | null>;
   effectiveLimits: WorkspaceLimits;
-  /** What the workspace would get with no overrides (environment, else built-in). */
+  /** What the workspace would get with no overrides (its plan with billing on, else environment, else built-in). */
   defaultLimits: WorkspaceLimits;
   /** Null when it could not be read; the page still renders. */
   usage: WorkspaceUsage | null;
@@ -203,6 +227,7 @@ export async function getAdminWorkspaceDetail(id: string, now: Date): Promise<Ad
       limitXPostsPerMonth: true,
       limitYoutubeUploadsPerDay: true,
       limitStorageMb: true,
+      ...BILLING_SELECT,
       members: OWNERS_SELECT,
     },
   });
@@ -224,12 +249,24 @@ export async function getAdminWorkspaceDetail(id: string, now: Date): Promise<Ad
     number | null
   >;
 
+  const row = toRow(workspace, counts.get(workspace.id), now);
+  const billingColumns: BillingColumns = {
+    billingExempt: workspace.billingExempt,
+    plan: workspace.plan,
+    planStatus: workspace.planStatus,
+    trialEndsAt: workspace.trialEndsAt,
+    currentPeriodEnd: workspace.currentPeriodEnd,
+  };
+  // The limits resolve with the plan only with billing on, exactly as enforced.
+  const forLimits = { ...billingColumns, createdAt: workspace.createdAt };
+
   return {
-    workspace: toRow(workspace, counts.get(workspace.id)),
+    workspace: row,
     pausedReason: workspace.pausedReason,
+    billing: { ...billingColumns, state: row.planState, enabled: billingEnabled() },
     overrides,
-    effectiveLimits: resolveWorkspaceLimits(overrides),
-    defaultLimits: resolveWorkspaceLimits({}),
+    effectiveLimits: resolveWorkspaceLimits({ ...overrides, ...forLimits }, process.env, now),
+    defaultLimits: resolveWorkspaceLimits(forLimits, process.env, now),
     usage,
     actions,
   };

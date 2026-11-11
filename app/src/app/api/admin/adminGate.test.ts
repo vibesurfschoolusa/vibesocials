@@ -21,6 +21,8 @@ const h = vi.hoisted(() => ({
   setWorkspaceLimits: vi.fn(),
   pauseWorkspace: vi.fn(),
   resumeWorkspace: vi.fn(),
+  setBillingExempt: vi.fn(),
+  setTrialEndsAt: vi.fn(),
   NOT_FOUND: "NEXT_NOT_FOUND (test)",
 }));
 
@@ -66,6 +68,8 @@ vi.mock("@/server/admin/actions", async (importOriginal) => ({
   setWorkspaceLimits: h.setWorkspaceLimits,
   pauseWorkspace: h.pauseWorkspace,
   resumeWorkspace: h.resumeWorkspace,
+  setBillingExempt: h.setBillingExempt,
+  setTrialEndsAt: h.setTrialEndsAt,
 }));
 
 import { adminOtherMethods } from "@/lib/operator";
@@ -94,6 +98,8 @@ const OPERATOR_CASES: Record<string, { body?: unknown; expectStatus?: number }> 
   "app/api/admin/workspaces/[id]/limits/route.ts POST": { body: { limitPostsPerDay: 5 }, expectStatus: 200 },
   "app/api/admin/workspaces/[id]/pause/route.ts POST": { body: { reason: "Unpaid invoice." }, expectStatus: 200 },
   "app/api/admin/workspaces/[id]/resume/route.ts POST": { body: {}, expectStatus: 200 },
+  "app/api/admin/workspaces/[id]/exempt/route.ts POST": { body: { exempt: true }, expectStatus: 200 },
+  "app/api/admin/workspaces/[id]/trial/route.ts POST": { body: { trialEndsAt: null }, expectStatus: 200 },
 };
 
 const ARGS = { params: Promise.resolve({ id: "ws-1" }), searchParams: Promise.resolve({}) };
@@ -162,6 +168,8 @@ beforeEach(() => {
     h.setWorkspaceLimits,
     h.pauseWorkspace,
     h.resumeWorkspace,
+    h.setBillingExempt,
+    h.setTrialEndsAt,
   ]) {
     mock.mockReset();
   }
@@ -181,8 +189,18 @@ beforeEach(() => {
       failed30d: 0,
       storageBytes: 0,
       pausedAt: null,
+      planState: "exempt",
     },
     pausedReason: null,
+    billing: {
+      enabled: false,
+      state: "exempt",
+      billingExempt: true,
+      plan: null,
+      planStatus: null,
+      trialEndsAt: null,
+      currentPeriodEnd: null,
+    },
     overrides: { limitPostsPerDay: null, limitXPostsPerMonth: null, limitYoutubeUploadsPerDay: null, limitStorageMb: null },
     effectiveLimits: { postsPerDay: 20, xPostsPerMonth: 30, youtubeUploadsPerDay: 10, storageBytes: 1 },
     defaultLimits: { postsPerDay: 20, xPostsPerMonth: 30, youtubeUploadsPerDay: 10, storageBytes: 1 },
@@ -192,10 +210,12 @@ beforeEach(() => {
   h.setWorkspaceLimits.mockResolvedValue({ status: "changed" });
   h.pauseWorkspace.mockResolvedValue({ status: "changed", actionId: "act-1", workspaceName: "Surf Co" });
   h.resumeWorkspace.mockResolvedValue({ status: "changed", actionId: "act-2", workspaceName: "Surf Co" });
+  h.setBillingExempt.mockResolvedValue({ status: "changed" });
+  h.setTrialEndsAt.mockResolvedValue({ status: "changed" });
 });
 
 describe("the admin files", () => {
-  it("are the two pages and the three routes, each with an operator case", async () => {
+  it("are the two pages and the five routes, each with an operator case", async () => {
     expect(PAGE_FILES.map(key).sort()).toEqual(["app/admin/page.tsx", "app/admin/workspaces/[id]/page.tsx"]);
     const real = (await entries()).filter((entry) => entry.real).map((entry) => entry.name);
     expect(real.sort()).toEqual(Object.keys(OPERATOR_CASES).sort());
@@ -229,6 +249,8 @@ describe.each(NON_OPERATORS)("for %s", (_label, arrange) => {
       h.setWorkspaceLimits,
       h.pauseWorkspace,
       h.resumeWorkspace,
+      h.setBillingExempt,
+      h.setTrialEndsAt,
       h.after,
     ]) {
       expect(mock).not.toHaveBeenCalled();

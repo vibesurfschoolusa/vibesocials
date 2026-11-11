@@ -168,3 +168,96 @@ export function AdminPauseControls({ workspaceId, paused }: { workspaceId: strin
     </div>
   );
 }
+
+/**
+ * 21a: exempt the workspace from billing or end that, and set or clear its
+ * trial end (a UTC date up to 90 days ahead). Each is its own change, recorded.
+ */
+export function AdminBillingControls({
+  workspaceId,
+  exempt,
+  trialEndDate,
+}: {
+  workspaceId: string;
+  exempt: boolean;
+  /** The stored trial end as YYYY-MM-DD (UTC), or null. */
+  trialEndDate: string | null;
+}) {
+  const router = useRouter();
+  const [date, setDate] = useState(trialEndDate ?? "");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function send(kind: "exempt" | "trial", body: unknown, done: string) {
+    setBusy(true);
+    setMessage(null);
+    const result = await post(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/${kind}`, body);
+    setBusy(false);
+    if (!result.ok) {
+      setMessage(result.error ?? null);
+      return;
+    }
+    setMessage(result.changed ? done : "Nothing changed.");
+    router.refresh();
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          type="button"
+          variant={exempt ? "outline" : "primary"}
+          onClick={() => send("exempt", { exempt: !exempt }, exempt ? "Exemption ended." : "Workspace exempted.")}
+          loading={busy}
+        >
+          {exempt ? "End exemption" : "Exempt from billing"}
+        </Button>
+        <p className="text-sm text-muted-foreground">
+          {exempt
+            ? "Exempt: never blocked for its plan and on the default limits."
+            : "Not exempt: needs a trial or a plan once billing is on."}
+        </p>
+      </div>
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="trial-ends">Free trial ends (UTC date, up to 90 days ahead)</Label>
+        <div className="flex flex-wrap items-center gap-3">
+          <Input
+            id="trial-ends"
+            type="date"
+            className="w-auto"
+            value={date}
+            onChange={(event) => setDate(event.target.value)}
+            disabled={busy}
+          />
+          <Button
+            type="button"
+            onClick={() =>
+              date
+                ? send("trial", { trialEndsAt: date }, "Trial end saved.")
+                : setMessage("Pick a date, or use Clear to remove the trial.")
+            }
+            loading={busy}
+          >
+            Save trial end
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              setDate("");
+              void send("trial", { trialEndsAt: null }, "Trial cleared.");
+            }}
+            disabled={busy || trialEndDate === null}
+          >
+            Clear
+          </Button>
+        </div>
+      </div>
+      {message ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          {message}
+        </p>
+      ) : null}
+    </div>
+  );
+}
