@@ -11,7 +11,7 @@ import { platformLabel } from "@/lib/platforms";
 import { formatStorageGb, type WorkspaceLimits } from "@/lib/usageLimits";
 import { LIMIT_FIELDS, LIMIT_MAX, type LimitField } from "@/server/admin/actions";
 import { getAdminWorkspaceDetail } from "@/server/admin/queries";
-import { stripeLinkFlags } from "@/server/billing/adminStripeLinks";
+import { periodEndLabel, stripeLinkFlags } from "@/server/billing/adminStripeLinks";
 
 import { AdminBillingControls, AdminLimitsForm, AdminPauseControls, type LimitFieldView } from "./admin-controls";
 import { adminBillingLines } from "./billingSentence";
@@ -211,7 +211,7 @@ export default async function AdminWorkspacePage({ params }: { params: Promise<{
               <dd>{detail.billing.trialEndsAt ? dateTimeLabel(detail.billing.trialEndsAt) : "No trial"}</dd>
             </div>
             <div>
-              <dt className="text-xs text-muted-foreground">Period ends</dt>
+              <dt className="text-xs text-muted-foreground">{periodEndLabel(detail.billing.planStatus)}</dt>
               <dd>{detail.billing.currentPeriodEnd ? dateTimeLabel(detail.billing.currentPeriodEnd) : "None"}</dd>
             </div>
             <div>
