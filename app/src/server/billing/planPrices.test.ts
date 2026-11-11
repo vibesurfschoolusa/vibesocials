@@ -85,6 +85,16 @@ describe("getPlanOffers", () => {
     expect(m.retrievePrice).toHaveBeenCalledTimes(2);
   });
 
+  it("reads the first id of a plan's list", async () => {
+    await getPlanOffers(["growth"], { ...ENV, STRIPE_PRICE_GROWTH: "price_example_growth_new, price_example_growth" }, NOW);
+    expect(m.retrievePrice).toHaveBeenCalledWith("price_example_growth_new", expect.anything());
+  });
+
+  it("an id listed under two plans is logged once for the render", async () => {
+    await getPlanOffers(["starter", "growth"], { ...ENV, STRIPE_PRICE_STARTER: "price_example_starter, price_example_growth" }, NOW);
+    expect(m.logger.error.mock.calls.filter(([message]) => String(message).includes("two plans"))).toHaveLength(1);
+  });
+
   it("a plan with no price is not offered", async () => {
     expect(await getPlanOffers(["pro"], ENV, NOW)).toEqual([]);
     expect(m.retrievePrice).not.toHaveBeenCalled();

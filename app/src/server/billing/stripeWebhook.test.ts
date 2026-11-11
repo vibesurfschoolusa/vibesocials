@@ -356,6 +356,23 @@ describe("choosing among the workspace's subscriptions", () => {
     );
   });
 
+  it("several price ids per plan: a subscription on the old growth price maps to growth", async () => {
+    const env = { ...ENV, STRIPE_PRICE_GROWTH: "price_example_growth_new, price_example_growth_old" };
+    stripeHas(sub(priced("price_example_growth_old")));
+    await handleStripeEvent(subscriptionEvent("evt_g", "customer.subscription.updated"), env);
+    expect(ws()).toMatchObject({ plan: "growth", planStatus: "active" });
+  });
+
+  it("an id listed under two plans: logged once for the event, and a subscription on it changes nothing", async () => {
+    const env = { ...ENV, STRIPE_PRICE_STARTER: "price_example_starter, price_example_shared", STRIPE_PRICE_PRO: "price_example_shared" };
+    const before = { ...ws() };
+    stripeHas(sub(priced("price_example_shared")));
+    await handleStripeEvent(subscriptionEvent("evt_d", "customer.subscription.updated"), env);
+    expect(ws()).toEqual(before);
+    const twoPlans = m.logger.error.mock.calls.filter(([message]) => String(message).includes("two plans"));
+    expect(twoPlans).toHaveLength(1);
+  });
+
   it("active (older) and past_due (newer): the workspace stays active on the older one", async () => {
     stripeHas(
       sub({ id: "sub_1", created: T }),

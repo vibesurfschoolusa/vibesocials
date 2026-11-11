@@ -4,6 +4,7 @@ import { logger } from "@/lib/logger";
 import { sendEmail } from "@/server/notifications/email";
 
 import { buildPaymentFailedEmail } from "./billingEmails";
+import { reportDuplicatePriceIds } from "./priceConfig";
 import {
   listAllCustomerSubscriptions,
   retrieveSubscription,
@@ -102,6 +103,7 @@ async function syncSubscription(
   claim: CheckoutClaim | null,
   env: BillingEnv,
 ): Promise<200 | 500> {
+  reportDuplicatePriceIds("webhook", env);
   // 1. Which workspace: read only to know which row to lock.
   let identified: StripeSubscription;
   try {

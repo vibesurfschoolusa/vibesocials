@@ -366,6 +366,20 @@ describe("an expire that fails because the session was just paid", () => {
   });
 });
 
+describe("several price ids per plan (fix round 7)", () => {
+  it("checkout uses the first id of the plan's list", async () => {
+    await startCheckout(input("growth"), { ...ENV, STRIPE_PRICE_GROWTH: "price_example_growth_new, price_example_growth_old" });
+    expect(m.createCheckoutSession.mock.calls[0][0].priceId).toBe("price_example_growth_new");
+  });
+
+  it("an id listed under two plans is logged once for the request and never used", async () => {
+    const env = { ...ENV, STRIPE_PRICE_STARTER: "price_example_shared, price_example_starter", STRIPE_PRICE_GROWTH: "price_example_shared" };
+    await startCheckout(input("starter"), env);
+    expect(m.createCheckoutSession.mock.calls[0][0].priceId).toBe("price_example_starter");
+    expect(m.logger.error.mock.calls.filter(([message]) => String(message).includes("two plans"))).toHaveLength(1);
+  });
+});
+
 describe("openPortal", () => {
   it("returns the portal address for the workspace's customer", async () => {
     m.row = trialRow({ stripeCustomerId: "cus_1" });

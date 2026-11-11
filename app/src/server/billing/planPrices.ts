@@ -2,6 +2,7 @@ import { priceIdForPlan, type BillingEnv } from "@/lib/billing";
 import { logger } from "@/lib/logger";
 import { PLANS, type PlanKey } from "@/lib/plans";
 
+import { reportDuplicatePriceIds } from "./priceConfig";
 import { retrievePrice, StripeApiError, type StripePrice } from "./stripeApi";
 
 /**
@@ -68,6 +69,7 @@ export async function getPlanOffers(
   env: BillingEnv = process.env,
   now: number = Date.now(),
 ): Promise<PlanOffer[]> {
+  reportDuplicatePriceIds("settings prices", env);
   const priced = plans.flatMap((plan) => {
     const priceId = priceIdForPlan(plan, env);
     return priceId ? [{ plan, priceId }] : [];

@@ -123,20 +123,55 @@ function envValue(env: BillingEnv, name: string): string | null {
   return value ? value : null;
 }
 
-/** The plan's Stripe price id, or null when the operator set none (the plan is not offered). */
-export function priceIdForPlan(plan: PlanKey, env: BillingEnv = process.env): string | null {
-  return envValue(env, PRICE_ENV[plan]);
+/**
+ * Each plan's Stripe price ids (fix round 7). A variable holds one id or
+ * several separated by commas; spaces are ignored and empty entries dropped.
+ * Every id in a plan's list maps to that plan; the first is the one a new
+ * checkout uses and the one Settings shows. So a price change puts the new
+ * id first and keeps the old one after it, and subscribers on the old price
+ * are still recognised. Everything that reads these variables goes through
+ * this function.
+ */
+export function planPriceIds(env: BillingEnv = process.env): Record<PlanKey, string[]> {
+  const parse = (plan: PlanKey) => [
+    ...new Set(
+      (env[PRICE_ENV[plan]] ?? "")
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean),
+    ),
+  ];
+  return { starter: parse("starter"), growth: parse("growth"), pro: parse("pro") };
 }
 
-/** The plans that have a price, in plan order. */
+/** Ids listed under more than one plan: a configuration error; each maps to no plan. */
+export function duplicatePriceIds(env: BillingEnv = process.env): string[] {
+  const lists = planPriceIds(env);
+  const seen = new Map<string, number>();
+  for (const plan of PLAN_KEYS) for (const id of lists[plan]) seen.set(id, (seen.get(id) ?? 0) + 1);
+  return [...seen].filter(([, count]) => count > 1).map(([id]) => id);
+}
+
+/**
+ * The price id a new checkout uses for the plan (the first in its list that
+ * is not also listed under another plan), or null: the plan is not offered.
+ */
+export function priceIdForPlan(plan: PlanKey, env: BillingEnv = process.env): string | null {
+  const duplicates = new Set(duplicatePriceIds(env));
+  return planPriceIds(env)[plan].find((id) => !duplicates.has(id)) ?? null;
+}
+
+/** The plans that have a usable price, in plan order. */
 export function offeredPlans(env: BillingEnv = process.env): PlanKey[] {
   return PLAN_KEYS.filter((plan) => priceIdForPlan(plan, env) !== null);
 }
 
-/** Which plan a Stripe price id stands for, or null for a price the app does not know. */
+/** Which plan a Stripe price id stands for: any id in a plan's list, unless it is in two lists. */
 export function planForPriceId(priceId: string | null | undefined, env: BillingEnv = process.env): PlanKey | null {
   if (!priceId) return null;
-  return PLAN_KEYS.find((plan) => priceIdForPlan(plan, env) === priceId) ?? null;
+  if (duplicatePriceIds(env).includes(priceId)) return null;
+  const lists = planPriceIds(env);
+  return PLAN_KEYS.find((plan) => lists[plan].includes(priceId)) ?? null;
 }
 
 /**

@@ -15,6 +15,7 @@ import {
   stripeIdempotencyKey,
   StripeApiError,
 } from "./stripeApi";
+import { reportDuplicatePriceIds } from "./priceConfig";
 import { isLiveSubscriptionStatus } from "./subscriptionSync";
 
 /**
@@ -70,6 +71,7 @@ export async function startCheckout(
   input: { workspaceId: string; ownerEmail: string; plan: PlanKey; now: Date; baseUrl: string },
   env: BillingEnv = process.env,
 ): Promise<CheckoutResult> {
+  reportDuplicatePriceIds("checkout", env);
   const priceId = priceIdForPlan(input.plan, env);
   if (!priceId) return { ok: false, status: 400, error: CHECKOUT_MESSAGES.notOffered };
 
