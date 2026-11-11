@@ -14,7 +14,8 @@ import { workspaceDeletionRefusal } from "@/server/account/deleteWorkspace";
 import { UsageSection } from "@/components/usage-section";
 import { WorkspaceLogoControl } from "@/components/workspace-logo-control";
 import { PlanSection } from "@/components/plan-section";
-import { planSectionLabel } from "@/components/planSectionView";
+import { planReturnNotice, planSectionActions, planSectionLabel } from "@/components/planSectionView";
+import { getPlanOffers } from "@/server/billing/planPrices";
 import { getWorkspaceUsageOrNull } from "@/server/usage/workspaceUsage";
 import { Alert } from "@/components/ui/alert";
 import { describeOAuthResult } from "@/lib/oauthResult";
@@ -28,7 +29,7 @@ import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; success?: string }>;
+  searchParams: Promise<{ error?: string; success?: string; billing?: string }>;
 }) {
   // Team Workspaces (Task 6): getWorkspaceContext() covers the auth gate
   // (null when unauthenticated, same as a bare getCurrentUser() check) and
@@ -101,6 +102,10 @@ export default async function SettingsPage({
   const usage = await getWorkspaceUsageOrNull(context.workspace.id, new Date());
   // 21a: owners only, and only with billing on (null otherwise: no section).
   const planLabel = planSectionLabel(context.role, context.workspace, new Date());
+  // 21b: the plan and portal buttons, only with payments configured (null otherwise).
+  const planActions = planLabel ? planSectionActions(context.role, context.workspace, new Date()) : null;
+  const planOffers = planActions ? await getPlanOffers(planActions.choose) : [];
+  const planNotice = planActions ? planReturnNotice(params.billing, context.workspace, new Date()) : null;
 
   // What the two delete confirmations say, computed with the same functions
   // the delete routes use, so the dialog shows the sentence the route would
@@ -222,7 +227,13 @@ export default async function SettingsPage({
                 This workspace&apos;s plan and the limits that come with it.
               </p>
             </div>
-            <PlanSection label={planLabel} usage={usage} />
+            <PlanSection
+              label={planLabel}
+              usage={usage}
+              notice={planNotice}
+              offers={planOffers}
+              manage={planActions?.manage ?? false}
+            />
           </section>
         ) : null}
 
