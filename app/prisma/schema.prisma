@@ -87,6 +87,27 @@ model WorkspaceReviewLink {
   @@index([workspaceId, revokedAt])
 }
 
+// Client connect link (2026-11-11). An owner sends /c/<token> to a client, who
+// connects the platforms it offers to this workspace without an account. The
+// flow acts as the link's creator (createdById), so it stops working by itself
+// once that person is no longer an owner. One active link per workspace.
+model WorkspaceConnectLink {
+  id          String     @id @default(cuid())
+  workspaceId String
+  tokenHash   String     @unique // sha256 hex of the raw token
+  tokenSealed String
+  createdById String
+  platforms   Platform[]
+  expiresAt   DateTime
+  createdAt   DateTime   @default(now())
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, revokedAt])
+}
+
 // Account lifecycle (scale-readiness spec §A). Discriminates the two kinds of
 // short-lived, single-use AccountToken: password reset (60 min TTL) and email
 // verification (7 day TTL). See src/lib/accountToken.ts for the TTLs.
@@ -155,6 +176,10 @@ model OAuthHandshake {
   workspaceId String
   expiresAt   DateTime
   createdAt   DateTime @default(now())
+  // Client connect link: set only for a flow started from /c/<token>, whose
+  // callback must find these equal to its sealed browser cookie.
+  connectLinkId    String?
+  connectLinkNonce String?
 
   @@index([expiresAt])
 }
@@ -238,6 +263,7 @@ model Workspace {
   invites            WorkspaceInvite[]
   uploadLinks        WorkspaceUploadLink[]
   reviewLinks        WorkspaceReviewLink[]
+  connectLinks       WorkspaceConnectLink[]
   connections        SocialConnection[]
   pendingConnections PendingConnection[]
   mediaItems         MediaItem[]
@@ -353,6 +379,9 @@ model PendingConnection {
   payload     String
   expiresAt   DateTime
   createdAt   DateTime @default(now())
+  // Client connect link: the link whose visitor chooses this account. Null
+  // for a choice an owner started in Settings.
+  connectLinkId String?
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
