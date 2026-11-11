@@ -153,12 +153,24 @@ export function emailUnconfirmedMessage(email: string): string {
 }
 
 /**
+ * Whether the app can send the confirmation link: the same test GET
+ * /api/auth/account-status answers as `verificationAvailable`, and the one the
+ * register and resend routes use before minting a link.
+ */
+export function emailVerificationAvailable(env: Record<string, string | undefined> = process.env): boolean {
+  return Boolean(env.RESEND_API_KEY);
+}
+
+/**
  * Whether this person may create or move work in this workspace (23): the
  * workspace's block first, then, with billing on only, an unconfirmed email
- * address in a workspace on a trial or a plan. Registration stays open, so this
- * is what keeps a stranger's unconfirmed account from posting. Exempt
- * workspaces (every one made before billing, and the operator's client ones)
- * and Google sign-ins, which prove the mailbox, are never refused for it.
+ * address while the workspace is on its free trial. Registration stays open,
+ * so this keeps a stranger's unconfirmed account from posting for free. It
+ * does not apply (fix round 1):
+ * - on a paid plan: a card was charged, and an existing customer who never had
+ *   to confirm would otherwise be refused the moment they paid;
+ * - when the app cannot send email, since no link could ever arrive;
+ * - in an exempt workspace, or for a Google sign-in, which proves the mailbox.
  */
 export function accessBlock(
   context: { user: AccessUser; workspace: WorkspaceStatusFields },
@@ -168,7 +180,7 @@ export function accessBlock(
   if (block) return block;
   const { user } = context;
   if (!billingEnabled() || user.emailVerifiedAt || user.googleLinkedAt) return null;
-  if (planState(context.workspace, now) === "exempt") return null;
+  if (!emailVerificationAvailable() || planState(context.workspace, now) !== "trial") return null;
   return { code: EMAIL_UNCONFIRMED_CODE, message: emailUnconfirmedMessage(user.email) };
 }
 

@@ -39,6 +39,7 @@ function context(
 beforeEach(() => {
   getWorkspaceContextMock.mockReset();
   vi.stubEnv("BILLING_ENABLED", "true");
+  vi.stubEnv("RESEND_API_KEY", "re_test_placeholder");
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
 });
@@ -80,6 +81,18 @@ describe("GET /api/workspaces/status with billing on", () => {
       blockedMessage: "Confirm your email address to start posting. We sent a link to new@example.com.",
       emailUnconfirmed: true,
     });
+  });
+
+  it("says nothing about the address when the app cannot send email, or on a paid plan", async () => {
+    const unconfirmed = { emailVerifiedAt: null, googleLinkedAt: null };
+    vi.stubEnv("RESEND_API_KEY", undefined);
+    getWorkspaceContextMock.mockResolvedValue(context("member", { trialEndsAt: new Date(NOW.getTime() + 5 * DAY) }, unconfirmed));
+    expect(await (await GET()).json()).toEqual({ blockedMessage: null });
+    vi.stubEnv("RESEND_API_KEY", "re_test_placeholder");
+    getWorkspaceContextMock.mockResolvedValue(
+      context("member", { plan: "starter", planStatus: "active", currentPeriodEnd: new Date(NOW.getTime() + 5 * DAY) }, unconfirmed),
+    );
+    expect(await (await GET()).json()).toEqual({ blockedMessage: null });
   });
 
   it("gives the workspace's block, not the address, when both apply", async () => {

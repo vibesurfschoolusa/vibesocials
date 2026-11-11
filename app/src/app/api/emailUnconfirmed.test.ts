@@ -7,9 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeWorkspaceContext } from "./__test-helpers__/workspaceContextMock";
 
 /**
- * 23: with billing on, every route that creates or moves work refuses a person
- * whose email address is not confirmed, in a workspace on a trial or a plan,
- * with 403 EMAIL_UNCONFIRMED before it reads or writes anything. The routes and
+ * 23: with billing on and email sending configured, every route that creates
+ * or moves work refuses a person whose email address is not confirmed, in a
+ * workspace on its free trial, with 403 EMAIL_UNCONFIRMED before it reads or
+ * writes anything. The routes and
  * the stand-ins are the pause test's (pausedWorkspace.test.ts); the last test
  * here checks this list is every route that makes the check.
  */
@@ -161,6 +162,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
   vi.stubEnv("BILLING_ENABLED", "true");
+  vi.stubEnv("RESEND_API_KEY", "re_test_placeholder");
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -185,12 +187,6 @@ describe("routes that create or move work, billing on, an unconfirmed address", 
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
 
-  it.each(GATED)("$name answers 403 EMAIL_UNCONFIRMED in a workspace on a paid plan", async (route) => {
-    getWorkspaceContextMock.mockResolvedValue(
-      trialContext(UNCONFIRMED, { trialEndsAt: null, plan: "starter", planStatus: "active", currentPeriodEnd: new Date(NOW.getTime() + 20 * DAY) }),
-    );
-    expect(codeOf(await call(route))).toBe("EMAIL_UNCONFIRMED");
-  });
 
   it.each(GATED)("$name lets a pause win, as it read before", async (route) => {
     getWorkspaceContextMock.mockResolvedValue(
@@ -210,7 +206,7 @@ describe("routes that create or move work, billing on, an unconfirmed address", 
     });
   });
 
-  it.each(GATED)("$name is not refused for a confirmed address, a Google sign-in, or an exempt workspace", async (route) => {
+  it.each(GATED)("$name is not refused for a confirmed address, a Google sign-in, a paid plan, an exempt workspace, or with no email sending", async (route) => {
     // The route's own throttle refusing is the cheapest proof it went past the check.
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 5 });
     for (const context of [
@@ -218,10 +214,14 @@ describe("routes that create or move work, billing on, an unconfirmed address", 
       trialContext({ emailVerifiedAt: null, googleLinkedAt: new Date("2026-12-01T00:00:00Z") }),
       trialContext(UNCONFIRMED, { trialEndsAt: null }),
       trialContext(UNCONFIRMED, { billingExempt: true }),
+      trialContext(UNCONFIRMED, { trialEndsAt: null, plan: "starter", planStatus: "active", currentPeriodEnd: new Date(NOW.getTime() + 20 * DAY) }),
     ]) {
       getWorkspaceContextMock.mockResolvedValue(context);
       expect(codeOf(await call(route))).toBeUndefined();
     }
+    vi.stubEnv("RESEND_API_KEY", undefined);
+    getWorkspaceContextMock.mockResolvedValue(trialContext(UNCONFIRMED));
+    expect(codeOf(await call(route))).toBeUndefined();
   });
 });
 
