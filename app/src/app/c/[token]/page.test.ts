@@ -59,9 +59,9 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("the connect link page", () => {
-  it("is not indexed and never passes its address on", () => {
+  it("is not indexed, and sends only the bare origin as referrer (never the address with the token)", () => {
     expect(metadata.robots).toEqual({ index: false, follow: false });
-    expect(metadata.referrer).toBe("no-referrer");
+    expect(metadata.referrer).toBe("strict-origin");
   });
 
   it("an inactive link shows only the sentence", async () => {

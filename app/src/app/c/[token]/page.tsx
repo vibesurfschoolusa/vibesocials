@@ -30,8 +30,11 @@ interface ConnectLinkPageProps {
 export const metadata: Metadata = {
   title: "Connect your accounts",
   robots: { index: false, follow: false },
-  // The token is in the address: never pass it on to another site.
-  referrer: "no-referrer",
+  // The token is in the address, so only the bare origin is ever sent as a
+  // referrer, here or to another site. Not "no-referrer" like /u and /v:
+  // under that policy a browser without fetch metadata sends `Origin: null`
+  // on the Connect form, and the start route could not tell it is ours.
+  referrer: "strict-origin",
 };
 
 function first(value: string | string[] | undefined): string | null {
