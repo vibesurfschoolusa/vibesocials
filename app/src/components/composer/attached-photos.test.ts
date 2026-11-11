@@ -1,16 +1,21 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import { movePhoto, removePhoto } from "@/lib/postMedia";
 
 import {
   AttachedPhotos,
   patchPhoto,
+  PhotoDescriptionField,
   photoSetProgress,
   photoSetReady,
   preparePhotos,
   removeAllClearsCaption,
   removeAllTitle,
+  requestPhotoDescription,
   uploadPhotosInOrder,
+  withPhotoDescriptions,
   type AttachedPhoto,
 } from "./attached-photos";
 
@@ -282,7 +287,15 @@ describe("AttachedPhotos", () => {
   const noop = () => {};
   const render = (photos: AttachedPhoto[]) =>
     renderToStaticMarkup(
-      createElement(AttachedPhotos, { photos, onRemove: noop, onMove: noop, onRetry: noop, onRemoveAll: noop, removeAllClearsCaption: false }),
+      createElement(AttachedPhotos, {
+        photos,
+        onRemove: noop,
+        onMove: noop,
+        onRetry: noop,
+        onRemoveAll: noop,
+        removeAllClearsCaption: false,
+        onDescribe: noop,
+      }),
     );
 
   it("marks the first photo Cover and gives each photo remove and move buttons", () => {
@@ -398,5 +411,150 @@ describe("preparePhotos", () => {
         isAttached: () => true,
       }),
     ).rejects.toThrow("We couldn't convert this iPhone (HEIC) photo.");
+  });
+});
+
+// 07d: each photo's description lives on its AttachedPhoto, so the list rules
+// (lib/postMedia.ts) carry it wherever the photo goes.
+describe("photo descriptions follow their photos", () => {
+  const described = () => [
+    photo("a", { altText: "A dog." }),
+    photo("b", { altText: "A boat." }),
+    photo("c", { altText: "" }),
+  ];
+
+  it("removing a photo removes its description and keeps the others with theirs", () => {
+    const next = removePhoto(described(), "b");
+    expect(next.map((p) => [p.key, p.altText])).toEqual([
+      ["a", "A dog."],
+      ["c", ""],
+    ]);
+  });
+
+  it("moving a photo moves its description with it", () => {
+    const next = movePhoto(described(), "a", 1);
+    expect(next.map((p) => [p.key, p.altText])).toEqual([
+      ["b", "A boat."],
+      ["a", "A dog."],
+      ["c", ""],
+    ]);
+  });
+
+  it("editing one description changes only that photo", () => {
+    const next = patchPhoto(described(), "c", { altText: "A red door." });
+    expect(next.map((p) => p.altText)).toEqual(["A dog.", "A boat.", "A red door."]);
+  });
+});
+
+describe("withPhotoDescriptions", () => {
+  const single = { blobUrl: "u1", filename: "a.jpg", mimeType: "image/jpeg", sizeBytes: 1, baseCaption: "hi" };
+  const several = {
+    baseCaption: "hi",
+    media: [
+      { blobUrl: "u1", filename: "a.jpg", mimeType: "image/jpeg", sizeBytes: 1 },
+      { blobUrl: "u2", filename: "b.jpg", mimeType: "image/jpeg", sizeBytes: 1 },
+    ],
+  };
+
+  it("adds a single photo's cleaned description beside its fields", () => {
+    expect(withPhotoDescriptions(single, ["  A dog\non a beach. "])).toEqual({ ...single, altText: "A dog on a beach." });
+  });
+
+  it("adds each description to its own media entry, in order", () => {
+    expect(withPhotoDescriptions(several, ["", "A boat."])).toEqual({
+      baseCaption: "hi",
+      media: [several.media[0], { ...several.media[1], altText: "A boat." }],
+    });
+  });
+
+  it("leaves the body exactly as it was when no photo has a description", () => {
+    expect(withPhotoDescriptions(single, ["  "])).toBe(single);
+    expect(withPhotoDescriptions(single, [])).toBe(single);
+    expect(withPhotoDescriptions(several, [undefined, ""])).toBe(several);
+  });
+});
+
+describe("requestPhotoDescription", () => {
+  const blob = { url: "https://b.public.blob.vercel-storage.com/a.jpg", filename: "a.jpg", mimeType: "image/jpeg", sizeBytes: 1 };
+
+  it("asks the AI caption route for the photo's description and gives it back", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ altText: "A dog on a beach." }), { status: 200 }));
+
+    await expect(requestPhotoDescription(blob, fetchImpl)).resolves.toBe("A dog on a beach.");
+    expect(fetchImpl).toHaveBeenCalledWith("/api/posts/auto-caption", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ blobUrl: blob.url, mimeType: "image/jpeg", purpose: "altText" }),
+    });
+  });
+
+  it("rejects with the route's own sentence", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: "Your workspace has reached today's AI limit. Try again tomorrow." }), {
+          status: 429,
+        }),
+    );
+
+    await expect(requestPhotoDescription(blob, fetchImpl)).rejects.toThrow(
+      "Your workspace has reached today's AI limit. Try again tomorrow.",
+    );
+  });
+
+  it("rejects with a plain sentence when the answer has no description", async () => {
+    const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
+
+    await expect(requestPhotoDescription(blob, fetchImpl)).rejects.toThrow(
+      "The AI didn't write a description. Try again or write it yourself.",
+    );
+  });
+});
+
+describe("PhotoDescriptionField", () => {
+  const render = (value: string, canWrite = true) =>
+    renderToStaticMarkup(
+      createElement(PhotoDescriptionField, {
+        id: "alt-1",
+        label: "Describe this photo (alt text)",
+        value,
+        onChange: () => {},
+        onWrite: canWrite ? async () => "x" : null,
+      }),
+    );
+
+  it("shows the label, a one-line field capped at 1,000 characters, a count and the AI button", () => {
+    const html = render("A dog.");
+    expect(html).toContain("Describe this photo (alt text)");
+    expect(html).toContain('maxLength="1000"');
+    expect(html).toContain("6/1000");
+    expect(html).toContain("Write it for me");
+  });
+
+  it("disables the AI button until the photo has uploaded", () => {
+    expect(render("", false)).toMatch(/<button[^>]*disabled=""[^>]*>[^]*Write it for me/);
+  });
+});
+
+describe("AttachedPhotos - descriptions", () => {
+  const noop = () => {};
+
+  it("gives every photo its own description field, numbered like its tile", () => {
+    const html = renderToStaticMarkup(
+      createElement(AttachedPhotos, {
+        photos: [photo("a", { altText: "A dog." }), photo("b")],
+        onRemove: noop,
+        onMove: noop,
+        onRetry: noop,
+        onRemoveAll: noop,
+        removeAllClearsCaption: false,
+        onDescribe: noop,
+      }),
+    );
+    expect(html.match(/Photo \d: describe this photo \(alt text\)/g)).toEqual([
+      "Photo 1: describe this photo (alt text)",
+      "Photo 2: describe this photo (alt text)",
+    ]);
+    expect(html).toContain('value="A dog."');
+    expect(html.match(/Write it for me/g)).toHaveLength(2);
   });
 });

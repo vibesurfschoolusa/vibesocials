@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronLeft, ChevronRight, ImagePlus, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, ImagePlus, Sparkles, X } from "lucide-react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { ALT_TEXT_MAX, cleanAltText } from "@/lib/altText";
 import { cn } from "@/lib/cn";
 import type { UploadedBlob } from "@/lib/createPostRequest";
 
@@ -29,6 +31,126 @@ export interface AttachedPhoto {
   blob: UploadedBlob | null;
   /** The sentence to show for a failed upload. */
   error: string | null;
+  /**
+   * 07d: the photo's description (alt text) as typed. Kept on the photo, so
+   * removing or moving the photo takes its description with it.
+   */
+  altText?: string;
+}
+
+/**
+ * 07d: the create body with each photo's cleaned description beside its file:
+ * `altText` next to the single-file fields, or in each `media` entry. The
+ * same body, untouched, when no photo has one.
+ */
+export function withPhotoDescriptions<T extends object>(body: T, descriptions: ReadonlyArray<string | undefined>): T {
+  const cleaned = descriptions.map((text) => cleanAltText(text));
+  if (!cleaned.some(Boolean)) return body;
+  const media = (body as { media?: unknown }).media;
+  if (Array.isArray(media)) {
+    return {
+      ...body,
+      media: media.map((entry: object, index) => (cleaned[index] ? { ...entry, altText: cleaned[index] } : entry)),
+    };
+  }
+  return cleaned[0] ? { ...body, altText: cleaned[0] } : body;
+}
+
+/**
+ * 07d: "Write it for me". Asks the AI caption route to describe the uploaded
+ * photo (same quota as a caption). Rejects with the sentence to show.
+ */
+export async function requestPhotoDescription(
+  blob: UploadedBlob,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
+  const response = await fetchImpl("/api/posts/auto-caption", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ blobUrl: blob.url, mimeType: blob.mimeType, purpose: "altText" }),
+  });
+  const data = (await response.json().catch(() => null)) as { altText?: unknown; error?: unknown } | null;
+  if (!response.ok) {
+    throw new Error(
+      typeof data?.error === "string" && data.error
+        ? data.error
+        : "The AI couldn't describe this photo. Try again or write it yourself.",
+    );
+  }
+  if (typeof data?.altText !== "string" || !data.altText.trim()) {
+    throw new Error("The AI didn't write a description. Try again or write it yourself.");
+  }
+  return data.altText;
+}
+
+/**
+ * 07d: one photo's description: a one-line field with a character count, and
+ * "Write it for me". `onWrite` is null until the photo has uploaded; a write
+ * that resolves to null (the photo was replaced meanwhile) changes nothing.
+ * What the AI wrote goes into the field for the person to edit.
+ */
+export function PhotoDescriptionField({
+  id,
+  label,
+  value,
+  onChange,
+  onWrite,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange(text: string): void;
+  onWrite: (() => Promise<string | null>) | null;
+}) {
+  const [writing, setWriting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function write() {
+    if (!onWrite) return;
+    setWriting(true);
+    setError(null);
+    try {
+      const text = await onWrite();
+      if (text !== null) onChange(text);
+    } catch (err: unknown) {
+      setError(err instanceof Error && err.message ? err.message : "The AI couldn't describe this photo.");
+    } finally {
+      setWriting(false);
+    }
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <label htmlFor={id} className="text-xs font-medium text-foreground">
+          {label}
+        </label>
+        <span id={`${id}-count`} className="text-xs text-muted-foreground">
+          {`${value.length}/${ALT_TEXT_MAX}`}
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <Input
+          id={id}
+          value={value}
+          maxLength={ALT_TEXT_MAX}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder="What is in the photo, for someone who can't see it"
+          aria-describedby={`${id}-count`}
+          className="h-9"
+        />
+        <Button type="button" variant="outline" size="sm" onClick={write} loading={writing} disabled={writing || !onWrite}>
+          {!writing && <Sparkles className="h-4 w-4" aria-hidden />}
+          Write it for me
+        </Button>
+      </div>
+      {error && (
+        <p className="text-xs text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
 }
 
 /** The list with that photo changed; the same list if it was removed meanwhile. */
@@ -174,6 +296,8 @@ export interface AttachedPhotosProps {
   onRemoveAll(): void;
   /** Whether "Remove all" will also clear the caption (removeAllClearsCaption). */
   removeAllClearsCaption: boolean;
+  /** 07d: the photo's description changed (typed, or written by the AI). */
+  onDescribe(key: string, text: string): void;
 }
 
 export function AttachedPhotos({
@@ -183,6 +307,7 @@ export function AttachedPhotos({
   onRetry,
   onRemoveAll,
   removeAllClearsCaption: clearsCaption,
+  onDescribe,
 }: AttachedPhotosProps) {
   const progress = photoSetProgress(photos);
   const preparing = photos.some((photo) => photo.status === "preparing");
@@ -201,6 +326,20 @@ export function AttachedPhotos({
             onMove={(direction) => onMove(photo.key, direction)}
             onRetry={() => onRetry(photo.key)}
           />
+        ))}
+      </ol>
+      {/* 07d: one description per photo, in the same order and numbering as the tiles. */}
+      <ol className="space-y-2" aria-label="Photo descriptions">
+        {photos.map((photo, index) => (
+          <li key={photo.key}>
+            <PhotoDescriptionField
+              id={`alt-${photo.key}`}
+              label={`Photo ${index + 1}: describe this photo (alt text)`}
+              value={photo.altText ?? ""}
+              onChange={(text) => onDescribe(photo.key, text)}
+              onWrite={photo.blob ? () => requestPhotoDescription(photo.blob as UploadedBlob) : null}
+            />
+          </li>
         ))}
       </ol>
       {preparing && (
