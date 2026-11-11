@@ -204,6 +204,38 @@ export interface PostJobDTO {
    * without one. Optional so other builders of this DTO need not set it.
    */
   storyPlatforms?: Platform[];
+  /**
+   * Repeat (brief 11) — the series this post was created in, or null for a post
+   * created on its own. For a post in a series, its place by time and the
+   * number of the series' posts that still exist ("Repeats: 3 of 8"). Optional
+   * so other builders of this DTO need not set them.
+   */
+  seriesId?: string | null;
+  seriesPosition?: number;
+  seriesCount?: number;
+}
+
+/**
+ * Each post's place in its series and the series' size, from every existing
+ * post of the series on the page: ordered by time (a post without one last),
+ * then id. Posts without a series are left out.
+ */
+export function seriesPlaces(
+  rows: readonly { id: string; seriesId: string | null; scheduledFor: Date | null }[],
+): Map<string, { position: number; count: number }> {
+  const bySeries = new Map<string, { id: string; at: number }[]>();
+  for (const row of rows) {
+    if (!row.seriesId) continue;
+    const list = bySeries.get(row.seriesId) ?? [];
+    list.push({ id: row.id, at: row.scheduledFor?.getTime() ?? Number.POSITIVE_INFINITY });
+    bySeries.set(row.seriesId, list);
+  }
+  const places = new Map<string, { position: number; count: number }>();
+  for (const list of bySeries.values()) {
+    list.sort((a, b) => (a.at === b.at ? a.id.localeCompare(b.id) : a.at - b.at));
+    list.forEach((entry, index) => places.set(entry.id, { position: index + 1, count: list.length }));
+  }
+  return places;
 }
 
 /** Response body of `GET /api/posts`. */

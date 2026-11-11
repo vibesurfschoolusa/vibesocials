@@ -1070,3 +1070,42 @@ describe("GET /api/posts - client change requests on the Queue's first page (cli
     }
   });
 });
+
+// 11: a post in a series carries its place and the series' size.
+describe("GET /api/posts - series", () => {
+  const at = (day: number) => new Date(Date.UTC(2026, 10, day, 9, 0));
+
+  it("reads the existing posts of the page's series in this workspace, and numbers each", async () => {
+    postJobFindManyMock
+      .mockResolvedValueOnce([
+        { ...jobWithYouTube(), id: "job-b", seriesId: "s1", scheduledFor: at(19) },
+        { ...jobWithYouTube(), id: "job-z", seriesId: null },
+      ])
+      .mockResolvedValueOnce([
+        { id: "job-a", seriesId: "s1", scheduledFor: at(12) },
+        { id: "job-b", seriesId: "s1", scheduledFor: at(19) },
+        { id: "job-c", seriesId: "s1", scheduledFor: at(26) },
+      ]);
+
+    const body = (await (await GET(getRequest())).json()) as PostsResponse;
+
+    expect(postJobFindManyMock).toHaveBeenCalledTimes(2);
+    expect(postJobFindManyMock.mock.calls[1][0]).toEqual({
+      where: { workspaceId: "ws-1", seriesId: { in: ["s1"] } },
+      select: { id: true, seriesId: true, scheduledFor: true },
+    });
+    expect(body.jobs[0]).toMatchObject({ seriesId: "s1", seriesPosition: 2, seriesCount: 3 });
+    expect(body.jobs[1].seriesId).toBeNull();
+    expect(body.jobs[1]).not.toHaveProperty("seriesPosition");
+  });
+
+  it("a page without a series makes no extra query", async () => {
+    postJobFindManyMock.mockResolvedValue([jobWithYouTube()]);
+
+    const body = (await (await GET(getRequest())).json()) as PostsResponse;
+
+    expect(postJobFindManyMock).toHaveBeenCalledTimes(1);
+    expect(postJobFindManyMock.mock.calls[0][0].select.seriesId).toBe(true);
+    expect(body.jobs[0].seriesId).toBeNull();
+  });
+});

@@ -5,6 +5,8 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { parseGoogleButton } from "@/lib/googlePostOptions";
 import { cleanBrandVoice, cleanBrandVoiceExamples } from "@/lib/brandVoice";
+import { normalizePostingSlots, type PostingSlot } from "@/lib/postingSlots";
+import { Prisma } from "@prisma/client";
 
 export const COMPANY_WEBSITE_MAX_LENGTH = 2048;
 export const DEFAULT_HASHTAGS_MAX_LENGTH = 1024;
@@ -60,6 +62,12 @@ export interface ParsedSettingsInput {
    * on. Workspace-level and OWNER-ONLY; null normalizes to off.
    */
   trackWebsiteLinks?: boolean;
+  /**
+   * Posting times (brief 11): the workspace's usual weekly times, sorted and
+   * de-duplicated by lib/postingSlots.ts. Workspace-level and OWNER-ONLY; null
+   * or an empty list clears them.
+   */
+  postingSlots?: PostingSlot[];
 }
 
 export type SettingsValidationResult =
@@ -250,6 +258,14 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
     data.trackWebsiteLinks = record.trackWebsiteLinks === true;
   }
 
+  if (hasKey(record, "postingSlots")) {
+    const result = normalizePostingSlots(record.postingSlots);
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    data.postingSlots = result.slots;
+  }
+
   return { ok: true, data };
 }
 
@@ -275,7 +291,8 @@ export function touchesOwnerOnlyWorkspaceFields(data: ParsedSettingsInput): bool
     "googleButtonType" in data ||
     "brandVoice" in data ||
     "brandVoiceExamples" in data ||
-    "trackWebsiteLinks" in data
+    "trackWebsiteLinks" in data ||
+    "postingSlots" in data
   );
 }
 
@@ -320,6 +337,7 @@ export async function POST(request: Request) {
         brandVoice?: string | null;
         brandVoiceExamples?: string | null;
         trackWebsiteLinks?: boolean;
+        postingSlots?: Prisma.InputJsonValue | typeof Prisma.DbNull;
       } = {};
       if ("companyWebsite" in data) {
         workspaceData.companyWebsite = data.companyWebsite;
@@ -342,6 +360,13 @@ export async function POST(request: Request) {
       }
       if ("trackWebsiteLinks" in data) {
         workspaceData.trackWebsiteLinks = data.trackWebsiteLinks;
+      }
+      if (data.postingSlots) {
+        // No times is a null column, the same as a workspace that never saved any.
+        workspaceData.postingSlots =
+          data.postingSlots.length > 0
+            ? (data.postingSlots as unknown as Prisma.InputJsonValue)
+            : Prisma.DbNull;
       }
 
       await prisma.workspace.update({
@@ -374,12 +399,19 @@ export async function POST(request: Request) {
 
     // The brand voice is cleaned (cut, hashtags removed), so the form puts back
     // what was stored and the owner sees it without reloading.
-    const stored: { brandVoice?: string | null; brandVoiceExamples?: string | null } = {};
+    const stored: {
+      brandVoice?: string | null;
+      brandVoiceExamples?: string | null;
+      postingSlots?: PostingSlot[];
+    } = {};
     if ("brandVoice" in data) {
       stored.brandVoice = data.brandVoice;
     }
     if ("brandVoiceExamples" in data) {
       stored.brandVoiceExamples = data.brandVoiceExamples;
+    }
+    if (data.postingSlots) {
+      stored.postingSlots = data.postingSlots;
     }
 
     return NextResponse.json({ success: true, ...stored }, { status: 200 });

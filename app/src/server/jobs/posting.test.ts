@@ -1540,3 +1540,148 @@ describe("createPostJobOnly / createPostJobForExistingMedia - alt text (07d)", (
     expect(mediaItemUpdateMock).not.toHaveBeenCalled();
   });
 });
+
+describe("createPostJobOnly / createPostJobForExistingMedia - a series (repeat)", () => {
+  const photo = (n: number) => ({
+    storageLocation: `https://example.public.blob.vercel-storage.com/p${n}.jpg`,
+    originalFilename: `p${n}.jpg`,
+    mimeType: "image/jpeg",
+    sizeBytes: 100 + n,
+  });
+  const times = [
+    new Date("2026-11-12T09:00:00.000Z"),
+    new Date("2026-11-19T09:00:00.000Z"),
+    new Date("2026-11-26T09:00:00.000Z"),
+  ];
+
+  beforeEach(() => {
+    mediaItemCreateMock.mockReset();
+    mediaItemUpdateMock.mockReset();
+    findUniqueMock.mockReset();
+    findManyConnectionsMock.mockReset();
+    postJobCreateMock.mockReset();
+    postJobResultCreateMock.mockReset();
+    postJobMediaCreateManyMock.mockReset();
+    executeRawMock.mockReset();
+
+    let media = 0;
+    mediaItemCreateMock.mockImplementation((args: { data: { altText?: string } }) => {
+      media += 1;
+      return Promise.resolve(makeMediaItem({ id: `media-${media}`, mimeType: "image/jpeg", ...args.data }));
+    });
+    let jobs = 0;
+    postJobCreateMock.mockImplementation(() => {
+      jobs += 1;
+      return Promise.resolve({ id: `job-${jobs}` });
+    });
+    postJobMediaCreateManyMock.mockResolvedValue({ count: 2 });
+    mediaItemUpdateMock.mockResolvedValue(makeMediaItem());
+  });
+
+  it("writes the files and their descriptions once and one scheduled job per time, all with the series id", async () => {
+    const result = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: { ...photo(1), altText: "A wave." },
+      extraMedia: [photo(2)],
+      baseCaption: "Book your lesson",
+      perPlatformOverrides: { x: "Book now" },
+      intent: "scheduled",
+      scheduledFor: times[0],
+      targetPlatforms: ["x", "instagram"],
+      series: { seriesId: "series-1", times },
+    });
+
+    expect(mediaItemCreateMock).toHaveBeenCalledTimes(2);
+    expect(mediaItemCreateMock.mock.calls[0][0].data.altText).toBe("A wave.");
+    expect(postJobCreateMock).toHaveBeenCalledTimes(3);
+    const jobs = postJobCreateMock.mock.calls.map((c) => c[0].data);
+    jobs.forEach((data, i) => {
+      expect(data).toMatchObject({
+        userId: "user-1",
+        workspaceId: "workspace-1",
+        mediaItemId: "media-1",
+        status: "scheduled",
+        scheduledFor: times[i],
+        baseCaption: "Book your lesson",
+        perPlatformOverrides: { x: "Book now" },
+        publishMetadata: { targetPlatforms: ["x", "instagram"] },
+        seriesId: "series-1",
+      });
+      expect(data).not.toHaveProperty("submittedForApprovalAt");
+    });
+    // Every post of the series shows both photos, in order.
+    expect(postJobMediaCreateManyMock.mock.calls.map((c) => c[0].data)).toEqual(
+      ["job-1", "job-2", "job-3"].map((postJobId) => [
+        { postJobId, mediaItemId: "media-1", position: 0 },
+        { postJobId, mediaItemId: "media-2", position: 1 },
+      ]),
+    );
+    expect(postJobResultCreateMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      postJobId: "job-1",
+      postJobIds: ["job-1", "job-2", "job-3"],
+      mediaItemId: "media-1",
+      resultIds: [],
+    });
+  });
+
+  it("a series held for approval: every job is a submitted draft that keeps its own time", async () => {
+    const submittedAt = new Date("2026-11-10T12:00:00.000Z");
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: photo(1),
+      baseCaption: "hi",
+      intent: "draft",
+      scheduledFor: times[0],
+      series: { seriesId: "series-1", times, submittedForApprovalAt: submittedAt },
+    });
+
+    const jobs = postJobCreateMock.mock.calls.map((c) => c[0].data);
+    expect(jobs).toHaveLength(3);
+    jobs.forEach((data, i) => {
+      expect(data).toMatchObject({
+        status: "draft",
+        scheduledFor: times[i],
+        submittedForApprovalAt: submittedAt,
+        seriesId: "series-1",
+      });
+    });
+  });
+
+  it("a post without a series writes no series id", async () => {
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: photo(1),
+      baseCaption: "hi",
+      intent: "scheduled",
+      scheduledFor: times[0],
+    });
+
+    expect(postJobCreateMock).toHaveBeenCalledTimes(1);
+    expect(postJobCreateMock.mock.calls[0][0].data).not.toHaveProperty("seriesId");
+  });
+
+  it("reuse: one lock and one media update, then one job per time", async () => {
+    findUniqueMock.mockResolvedValue(makeMediaItem({ workspaceId: "workspace-1", mimeType: "image/jpeg" }));
+
+    const result = await createPostJobForExistingMedia({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      mediaItemId: "media-1",
+      baseCaption: "hi",
+      intent: "scheduled",
+      scheduledFor: times[0],
+      series: { seriesId: "series-1", times },
+    });
+
+    expect(executeRawMock).toHaveBeenCalledTimes(1);
+    expect(mediaItemUpdateMock).toHaveBeenCalledTimes(1);
+    expect(postJobCreateMock.mock.calls.map((c) => [c[0].data.scheduledFor, c[0].data.seriesId])).toEqual(
+      times.map((time) => [time, "series-1"]),
+    );
+    expect(result.postJobIds).toEqual(["job-1", "job-2", "job-3"]);
+  });
+});

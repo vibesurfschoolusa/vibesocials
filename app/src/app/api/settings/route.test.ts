@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Prisma } from "@prisma/client";
 
 // vi.mock + vi.hoisted are hoisted above imports by vitest (mirrors
 // workspaces/switch/route.test.ts). route.ts imports `@/lib/db` (a real
@@ -893,5 +894,81 @@ describe("trackWebsiteLinks (tracking tags)", () => {
     await expect(response.json()).resolves.toEqual({ error: OWNER_ONLY_FOOTER_ERROR });
     expect(workspaceUpdateMock).not.toHaveBeenCalled();
     expect(userUpdateMock).not.toHaveBeenCalled();
+  });
+});
+
+// 11: the workspace's posting times (lib/postingSlots.ts), owner only.
+describe("postingSlots (posting times)", () => {
+  it("normalises the list (sorted, duplicates dropped) and reads null as none", () => {
+    expect(
+      parseSettingsInput({
+        postingSlots: [
+          { day: 4, time: "18:00" },
+          { day: 1, time: "09:00" },
+          { day: 4, time: "18:00" },
+        ],
+      }),
+    ).toEqual({
+      ok: true,
+      data: {
+        postingSlots: [
+          { day: 1, time: "09:00" },
+          { day: 4, time: "18:00" },
+        ],
+      },
+    });
+    expect(parseSettingsInput({ postingSlots: null })).toEqual({ ok: true, data: { postingSlots: [] } });
+  });
+
+  it("rejects a bad entry with 400 and writes nothing", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+
+    const response = await POST(jsonRequest({ postingSlots: [{ day: 9, time: "09:00" }] }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Each posting time needs a weekday and a time like 09:30.",
+    });
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("is owner-only", () => {
+    expect(touchesOwnerOnlyWorkspaceFields({ postingSlots: [] })).toBe(true);
+  });
+
+  it("is saved by an owner on the workspace row and echoed back as stored", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    workspaceUpdateMock.mockResolvedValue({});
+
+    const response = await POST(
+      jsonRequest({ postingSlots: [{ day: 4, time: "18:00" }, { day: 2, time: "09:00" }] }),
+    );
+
+    expect(response.status).toBe(200);
+    const stored = [
+      { day: 2, time: "09:00" },
+      { day: 4, time: "18:00" },
+    ];
+    expect(workspaceUpdateMock).toHaveBeenCalledWith({ where: { id: "ws-1" }, data: { postingSlots: stored } });
+    await expect(response.json()).resolves.toEqual({ success: true, postingSlots: stored });
+  });
+
+  it("an empty list clears the column", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    workspaceUpdateMock.mockResolvedValue({});
+
+    await POST(jsonRequest({ postingSlots: [] }));
+
+    expect(workspaceUpdateMock.mock.calls[0][0].data.postingSlots).toBe(Prisma.DbNull);
+  });
+
+  it("refuses a member's save (403), writing nothing", async () => {
+    getWorkspaceContextMock.mockResolvedValue(MEMBER_CONTEXT);
+
+    const response = await POST(jsonRequest({ postingSlots: [{ day: 1, time: "09:00" }] }));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: OWNER_ONLY_FOOTER_ERROR });
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
   });
 });

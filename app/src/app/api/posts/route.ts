@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { NextResponse } from "next/server";
 
 import { getWorkspaceContext, getWorkspaceMemberCount } from "@/lib/workspace";
@@ -31,6 +33,7 @@ import { inngest } from "@/lib/inngest";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { isValidPerPlatformOverrides, validateScheduledFor, type PostJobIntent } from "@/lib/scheduling";
 import { deriveApprovalState, shouldHoldForApproval } from "@/lib/approval";
+import { REPEAT_STORY_MESSAGE, validateRepeatAt } from "@/lib/repeatSchedule";
 import type {
   FacebookPostMetadata,
   GoogleBusinessPostMetadata,
@@ -51,6 +54,7 @@ import { deferralKindFromErrorCode } from "@/lib/resultDeferral";
 import type { PostsResponse } from "@/lib/postsDto";
 import {
   isUnconfirmedResult,
+  seriesPlaces,
   toPostJobDetailDto,
   toPostJobResultSummaryDto,
   encodePostsCursor,
@@ -90,6 +94,8 @@ const POSTS_LIST_SELECT = {
   clientApprovedAt: true,
   clientChangeRequestedAt: true,
   clientNote: true,
+  // Repeat (brief 11): the series it was created in, for "Repeats: 3 of 8".
+  seriesId: true,
   mediaItem: {
     select: {
       baseCaption: true,
@@ -293,6 +299,21 @@ export async function GET(request: Request) {
       photoCountRows.map((row) => [row.postJobId, row._count._all]),
     );
 
+    // Repeat (brief 11): every existing post of the page's series, not only the
+    // ones on this page, so "3 of 8" counts the whole series. A series has at
+    // most 12 posts, so this reads at most 12 rows per post on the page; the
+    // seriesId index serves it.
+    const seriesIds = Array.from(
+      new Set(jobs.map((job) => job.seriesId).filter((id): id is string => Boolean(id))),
+    );
+    const seriesRows = seriesIds.length
+      ? await prisma.postJob.findMany({
+          where: { workspaceId: context.workspace.id, seriesId: { in: seriesIds } },
+          select: { id: true, seriesId: true, scheduledFor: true },
+        })
+      : [];
+    const placeByJobId = seriesPlaces(seriesRows);
+
     const payload: PostsResponse = {
       // 2026-11-01 scale audit (W3): counted here, on demand — it is no longer
       // a field of the workspace context every route pays for.
@@ -332,6 +353,13 @@ export async function GET(request: Request) {
           clientApprovedAt: job.clientApprovedAt?.toISOString() ?? null,
           clientChangeRequestedAt: job.clientChangeRequestedAt?.toISOString() ?? null,
           clientNote: job.clientNote ?? null,
+          seriesId: job.seriesId ?? null,
+          ...(placeByJobId.has(job.id)
+            ? {
+                seriesPosition: placeByJobId.get(job.id)!.position,
+                seriesCount: placeByJobId.get(job.id)!.count,
+              }
+            : {}),
           // Scheduled/draft jobs snapshot their caption on the job itself so
           // editing them never mutates shared reused media; fall back to the
           // media item's caption for immediate/older jobs.
@@ -454,6 +482,9 @@ interface CreatePostBody {
   // the cron claims it when due). Absent both = immediate (today's behavior).
   draft?: unknown;
   scheduledFor?: unknown;
+  // 11: 1 to 11 further ISO instants, only with `scheduledFor`; one post is
+  // created per instant, all in one transaction (lib/repeatSchedule.ts).
+  repeatAt?: unknown;
   // 2026-11-01 audit (M3): the workspace the composer was rendered for. Optional
   // for API compatibility; when present it must equal the active workspace.
   workspaceId?: unknown;
@@ -805,6 +836,26 @@ export async function POST(request: Request) {
     scheduledForDate = validation.date;
   }
 
+  // Repeat (brief 11): every time of the series, the first included. Null for
+  // a post on its own, which goes down exactly the path it always did.
+  let seriesTimes: Date[] | null = null;
+  if (body?.repeatAt != null) {
+    if (intent !== "scheduled" || !scheduledForDate) {
+      return NextResponse.json(
+        { error: "A repeating post needs a date and time (scheduledFor). Schedule it, then choose Repeat." },
+        { status: 400 },
+      );
+    }
+    if (instagramMetadata || facebookMetadata) {
+      return NextResponse.json({ error: REPEAT_STORY_MESSAGE }, { status: 400 });
+    }
+    const repeats = validateRepeatAt(body.repeatAt, scheduledForDate, new Date());
+    if (!repeats.ok) {
+      return NextResponse.json({ error: repeats.error }, { status: 400 });
+    }
+    seriesTimes = [scheduledForDate, ...repeats.dates];
+  }
+
   // Approval workflow (2026-07-26): a MEMBER's post that would publish or
   // schedule is held as a `draft` for an owner to approve. The chosen
   // `scheduledFor` is PRESERVED on the row (re-applied below — the create
@@ -819,7 +870,7 @@ export async function POST(request: Request) {
 
   // Usage limits (2026-11-10): a post committed to a day counts toward that UTC
   // day's limit. A draft (including one held for approval) is not committed yet.
-  if (effectiveIntent !== "draft") {
+  if (effectiveIntent !== "draft" && !seriesTimes) {
     const refusal = await checkDailyPostLimit({
       workspaceId: context.workspace.id,
       day: scheduledForDate ?? new Date(),
@@ -829,6 +880,48 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });
     }
   }
+  // A series: each post counts toward its own UTC day, as if scheduled by hand,
+  // and one full day refuses the whole series. The X and YouTube limits count
+  // what has published, so each post meets them when it publishes, like any
+  // scheduled post.
+  if (effectiveIntent !== "draft" && seriesTimes) {
+    for (const time of seriesTimes) {
+      const refusal = await checkDailyPostLimit({
+        workspaceId: context.workspace.id,
+        day: time,
+        mode: "schedule",
+      });
+      if (refusal) {
+        // The limit counts UTC days, so the UTC date is the one that is full.
+        const day = time.toLocaleDateString("en-US", {
+          timeZone: "UTC",
+          weekday: "long",
+          month: "long",
+          day: "numeric",
+          year: "numeric",
+        });
+        return NextResponse.json(
+          {
+            error: `The post on ${day} (UTC) can't be scheduled. ${refusal.error}`,
+            code: refusal.code,
+            date: time.toISOString(),
+          },
+          { status: 429 },
+        );
+      }
+    }
+  }
+
+  // Every post of a series is created by the one create-helper call below, in
+  // its transaction; a member's series is held there too, each post keeping
+  // its own time, so a failure leaves no half-held series.
+  const series = seriesTimes
+    ? {
+        seriesId: randomUUID(),
+        times: seriesTimes,
+        ...(heldForApproval ? { submittedForApprovalAt: new Date() } : {}),
+      }
+    : undefined;
 
   // Publishing needs no verified email (2026-11-09): only the person's own
   // platform accounts, connected through each platform's sign-in, receive it.
@@ -867,6 +960,7 @@ export async function POST(request: Request) {
         ...placementArgs,
         // Task 7 — chosen platform subset; undefined = every connection.
         targetPlatforms,
+        ...(series ? { series } : {}),
       });
       postJobId = created.postJobId;
       mediaItemId = created.mediaItemId;
@@ -907,6 +1001,7 @@ export async function POST(request: Request) {
         ...placementArgs,
         // Task 7 — chosen platform subset; undefined = every connection.
         targetPlatforms,
+        ...(series ? { series } : {}),
       });
       postJobId = created.postJobId;
       mediaItemId = created.mediaItemId;
@@ -924,15 +1019,19 @@ export async function POST(request: Request) {
     // so it is re-applied here rather than threading an extra param through
     // both helpers (and their tests).
     if (heldForApproval) {
-      await prisma.postJob.update({
-        where: { id: postJobId },
-        data: {
-          submittedForApprovalAt: new Date(),
-          ...(scheduledForDate ? { scheduledFor: scheduledForDate } : {}),
-        },
-      });
+      // A series was held in its own transaction (above).
+      if (!series) {
+        await prisma.postJob.update({
+          where: { id: postJobId },
+          data: {
+            submittedForApprovalAt: new Date(),
+            ...(scheduledForDate ? { scheduledFor: scheduledForDate } : {}),
+          },
+        });
+      }
 
       // 2026-11-01 audit: tell the owners something is waiting. Never throws.
+      // A series sends this one email, not one per post.
       await notifyOwnersOfApprovalRequest({
         workspaceId: context.workspace.id,
         workspaceName: context.workspace.name,
@@ -1013,7 +1112,11 @@ export async function POST(request: Request) {
       where: { postJobId },
     });
 
-    const message = heldForApproval
+    const message = series
+      ? heldForApproval
+        ? `Sent for approval: ${series.times.length} posts. An owner will review each one before it publishes.`
+        : `${series.times.length} posts scheduled.`
+      : heldForApproval
       ? "Sent for approval — an owner will review it before it publishes."
       : intent === "draft"
         ? "Draft saved."
@@ -1035,6 +1138,8 @@ export async function POST(request: Request) {
       // Approval workflow: lets the composer tell the member their post is
       // queued for review rather than published/scheduled.
       ...(heldForApproval ? { awaitingApproval: true } : {}),
+      // Repeat: `postJob` is the first post of the series.
+      ...(series ? { series: { id: series.seriesId, count: series.times.length } } : {}),
     });
   } catch (error: unknown) {
     if (error instanceof Error && error.message === "NO_CONNECTIONS") {

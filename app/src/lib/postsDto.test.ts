@@ -1,7 +1,13 @@
 import type { PostJobResult } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
-import { decodePostsCursor, encodePostsCursor, isUnconfirmedResult, toPostJobResultSummaryDto } from "./postsDto";
+import {
+  decodePostsCursor,
+  encodePostsCursor,
+  isUnconfirmedResult,
+  seriesPlaces,
+  toPostJobResultSummaryDto,
+} from "./postsDto";
 
 /**
  * Pure unit tests for the keyset pagination cursor helpers (activity
@@ -131,4 +137,45 @@ describe("isUnconfirmedResult", () => {
       expect(isUnconfirmedResult({ status: "failed", errorCode })).toBe(false);
     },
   );
+});
+
+// 11: "Repeats: 3 of 8" is counted over the series' posts that still exist.
+describe("seriesPlaces", () => {
+  const at = (day: number) => new Date(Date.UTC(2026, 10, day, 9, 0));
+
+  it("numbers each post by its time among the posts of its series that exist", () => {
+    const places = seriesPlaces([
+      { id: "c", seriesId: "s1", scheduledFor: at(26) },
+      { id: "a", seriesId: "s1", scheduledFor: at(12) },
+      { id: "b", seriesId: "s1", scheduledFor: at(19) },
+      { id: "x", seriesId: "s2", scheduledFor: at(13) },
+    ]);
+    expect(places.get("a")).toEqual({ position: 1, count: 3 });
+    expect(places.get("b")).toEqual({ position: 2, count: 3 });
+    expect(places.get("c")).toEqual({ position: 3, count: 3 });
+    expect(places.get("x")).toEqual({ position: 1, count: 1 });
+  });
+
+  it("a deleted post no longer counts", () => {
+    const places = seriesPlaces([
+      { id: "a", seriesId: "s1", scheduledFor: at(12) },
+      { id: "c", seriesId: "s1", scheduledFor: at(26) },
+    ]);
+    expect(places.get("c")).toEqual({ position: 2, count: 2 });
+  });
+
+  it("a post without a time goes last, and ties keep id order", () => {
+    const places = seriesPlaces([
+      { id: "b", seriesId: "s1", scheduledFor: null },
+      { id: "d", seriesId: "s1", scheduledFor: at(12) },
+      { id: "c", seriesId: "s1", scheduledFor: at(12) },
+    ]);
+    expect(places.get("c")).toEqual({ position: 1, count: 3 });
+    expect(places.get("d")).toEqual({ position: 2, count: 3 });
+    expect(places.get("b")).toEqual({ position: 3, count: 3 });
+  });
+
+  it("ignores posts without a series", () => {
+    expect(seriesPlaces([{ id: "a", seriesId: null, scheduledFor: at(12) }]).size).toBe(0);
+  });
 });

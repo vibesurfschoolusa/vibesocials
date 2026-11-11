@@ -2290,3 +2290,184 @@ describe("POST /api/posts - alt text (07d)", () => {
     }
   });
 });
+
+// 11: a repeating post is a series of ordinary scheduled posts, created in one
+// call to the create helper (one transaction).
+describe("POST /api/posts - repeat (repeatAt)", () => {
+  const HOST = "https://test.public.blob.vercel-storage.com";
+  const photo = (n: number) => ({
+    blobUrl: `${HOST}/p${n}.jpg`,
+    filename: `p${n}.jpg`,
+    mimeType: "image/jpeg",
+    sizeBytes: 100 + n,
+  });
+  const DAY = 24 * 60 * 60 * 1000;
+  const FIRST = new Date(Date.now() + 2 * 60 * 60 * 1000);
+  const weekly = (n: number) => Array.from({ length: n }, (_, i) => new Date(FIRST.getTime() + (i + 1) * 7 * DAY));
+  const iso = (dates: Date[]) => dates.map((d) => d.toISOString());
+  const NEEDS_TIME = "A repeating post needs a date and time (scheduledFor). Schedule it, then choose Repeat.";
+
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({
+      postJobId: "job-1",
+      postJobIds: ["job-1", "job-2", "job-3", "job-4"],
+      mediaItemId: "media-1",
+      resultIds: [],
+    });
+    createPostJobForExistingMediaMock.mockResolvedValue({
+      postJobId: "job-1",
+      postJobIds: ["job-1", "job-2"],
+      mediaItemId: "media-9",
+      resultIds: [],
+    });
+  });
+
+  async function refused(body: Record<string, unknown>): Promise<string> {
+    const response = await POST(jsonRequest({ ...photo(1), baseCaption: "hi", ...body }));
+    expect(response.status).toBe(400);
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    expect(createPostJobForExistingMediaMock).not.toHaveBeenCalled();
+    return ((await response.json()) as { error: string }).error;
+  }
+
+  it("refuses repeatAt without scheduledFor, and with a draft", async () => {
+    expect(await refused({ repeatAt: iso(weekly(1)) })).toBe(NEEDS_TIME);
+    expect(await refused({ draft: true, scheduledFor: FIRST.toISOString(), repeatAt: iso(weekly(1)) })).toBe(
+      NEEDS_TIME,
+    );
+  });
+
+  it("refuses repeats out of order, too close together, in the past, or more than 11", async () => {
+    const [a, b] = weekly(2);
+    expect(await refused({ scheduledFor: FIRST.toISOString(), repeatAt: iso([b, a]) })).toBe(
+      "Repeat 2 must be later than the one before it.",
+    );
+    const hourLater = new Date(FIRST.getTime() + 60 * 60 * 1000).toISOString();
+    expect(await refused({ scheduledFor: FIRST.toISOString(), repeatAt: [hourLater] })).toBe(
+      "Repeat 1 is less than 23 hours after the one before it. Space the repeats at least a day apart.",
+    );
+    expect(await refused({ scheduledFor: FIRST.toISOString(), repeatAt: ["2020-01-01T00:00:00.000Z"] })).toBe(
+      "Repeat 1 must be at least a minute in the future.",
+    );
+    expect(await refused({ scheduledFor: FIRST.toISOString(), repeatAt: iso(weekly(12)) })).toBe(
+      "A post can repeat at most 12 times in total. Choose fewer repeats.",
+    );
+  });
+
+  it("refuses a Story that repeats", async () => {
+    expect(
+      await refused({
+        scheduledFor: FIRST.toISOString(),
+        repeatAt: iso(weekly(1)),
+        platforms: ["instagram"],
+        instagramMetadata: { placement: "story" },
+      }),
+    ).toBe("A Story cannot repeat.");
+  });
+
+  it("creates the whole series in one helper call: same files, captions, targets and options, one series id", async () => {
+    const repeats = weekly(3);
+    const response = await POST(
+      jsonRequest({
+        media: [photo(1), { ...photo(2), altText: "Two boards." }],
+        baseCaption: "Book your lesson",
+        perPlatformOverrides: { x: "Book now" },
+        platforms: ["x", "instagram"],
+        googleMetadata: null,
+        scheduledFor: FIRST.toISOString(),
+        repeatAt: iso(repeats),
+      }),
+    );
+    const body = (await response.json()) as { message: string; series?: { id: string; count: number } };
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledTimes(1);
+    const args = createPostJobOnlyMock.mock.calls[0][0];
+    expect(args).toMatchObject({
+      intent: "scheduled",
+      scheduledFor: FIRST,
+      baseCaption: "Book your lesson",
+      perPlatformOverrides: { x: "Book now" },
+      targetPlatforms: ["x", "instagram"],
+      extraMedia: [expect.objectContaining({ altText: "Two boards." })],
+      series: { seriesId: expect.any(String), times: [FIRST, ...repeats] },
+    });
+    expect(args.series).not.toHaveProperty("submittedForApprovalAt");
+    expect(body.series).toEqual({ id: args.series.seriesId, count: 4 });
+    expect(body.message).toBe("4 posts scheduled.");
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("a reused file makes a series too", async () => {
+    const response = await POST(
+      jsonRequest({
+        mediaItemId: "media-9",
+        baseCaption: "hi",
+        scheduledFor: FIRST.toISOString(),
+        repeatAt: iso(weekly(1)),
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(createPostJobForExistingMediaMock.mock.calls[0][0].series.times).toEqual([FIRST, ...weekly(1)]);
+  });
+
+  it("a post without repeatAt passes no series", async () => {
+    await POST(jsonRequest({ ...photo(1), baseCaption: "hi", scheduledFor: FIRST.toISOString() }));
+    expect(createPostJobOnlyMock.mock.calls[0][0]).not.toHaveProperty("series");
+  });
+
+  it("checks every date's daily limit; a limit on the fifth date creates nothing and names the date", async () => {
+    const repeats = weekly(5);
+    const fifth = repeats[3];
+    const SENTENCE = "That day already has 20 posts, which is this workspace's daily limit. Pick another day.";
+    checkDailyPostLimitMock.mockImplementation(({ day }: { day: Date }) =>
+      Promise.resolve(
+        day.getTime() === fifth.getTime() ? { error: SENTENCE, code: "WORKSPACE_DAILY_POST_LIMIT" } : null,
+      ),
+    );
+
+    const response = await POST(
+      jsonRequest({ ...photo(1), baseCaption: "hi", scheduledFor: FIRST.toISOString(), repeatAt: iso(repeats) }),
+    );
+    const body = (await response.json()) as { error: string; code: string; date: string };
+
+    expect(response.status).toBe(429);
+    expect(checkDailyPostLimitMock).toHaveBeenCalledTimes(5);
+    for (const call of checkDailyPostLimitMock.mock.calls) expect(call[0].mode).toBe("schedule");
+    const label = fifth.toLocaleDateString("en-US", {
+      timeZone: "UTC",
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+    });
+    expect(body.error).toBe(`The post on ${label} (UTC) can't be scheduled. ${SENTENCE}`);
+    expect(body.code).toBe("WORKSPACE_DAILY_POST_LIMIT");
+    expect(body.date).toBe(fifth.toISOString());
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("a member under approval: every post held in the same transaction, and one approval email", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: true }));
+
+    const response = await POST(
+      jsonRequest({ ...photo(1), baseCaption: "hi", scheduledFor: FIRST.toISOString(), repeatAt: iso(weekly(3)) }),
+    );
+    const body = (await response.json()) as { awaitingApproval?: boolean; message: string };
+
+    expect(response.status).toBe(200);
+    const args = createPostJobOnlyMock.mock.calls[0][0];
+    expect(args.intent).toBe("draft");
+    expect(args.series).toEqual({
+      seriesId: expect.any(String),
+      times: [FIRST, ...weekly(3)],
+      submittedForApprovalAt: expect.any(Date),
+    });
+    // The hold is written with the posts, not by a second update afterwards.
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
+    expect(checkDailyPostLimitMock).not.toHaveBeenCalled();
+    expect(notifyOwnersMock).toHaveBeenCalledTimes(1);
+    expect(body.awaitingApproval).toBe(true);
+    expect(body.message).toBe("Sent for approval: 4 posts. An owner will review each one before it publishes.");
+  });
+});

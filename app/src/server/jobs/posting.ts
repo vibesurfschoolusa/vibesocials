@@ -43,6 +43,38 @@ export interface PostJobSchedulingParams {
    * replayed by {@link prepareDeferredPostJobDispatch} at run time.
    */
   targetPlatforms?: Platform[];
+  /**
+   * Repeat (2026-11-10): create one job per time in `series.times`, all in
+   * this helper's one transaction, sharing the files written once. Absent = the
+   * single job, written exactly as before.
+   */
+  series?: PostSeriesParams;
+}
+
+/**
+ * A series: one job per time (the first included, ascending), each carrying
+ * `seriesId`. `intent` is `scheduled`, or `draft` with `submittedForApprovalAt`
+ * for a member's series held for approval; each held job keeps its own time
+ * for the owner to honour, as the route does for a single held post.
+ */
+export interface PostSeriesParams {
+  seriesId: string;
+  times: Date[];
+  submittedForApprovalAt?: Date;
+}
+
+/**
+ * The extra columns of one job of a series. Applied after
+ * buildPostJobCreateData, which writes no time for a draft.
+ */
+function seriesJobData(series: PostSeriesParams | undefined, time: Date | undefined) {
+  if (!series || !time) return {};
+  return {
+    seriesId: series.seriesId,
+    ...(series.submittedForApprovalAt
+      ? { scheduledFor: time, submittedForApprovalAt: series.submittedForApprovalAt }
+      : {}),
+  };
 }
 
 export interface CreatePostJobOnlyParams extends PostJobSchedulingParams {
@@ -150,6 +182,8 @@ export function buildPublishMetadataSnapshot(
 
 export interface PostJobCreated {
   postJobId: string;
+  /** A series only: every job created, in time order; `postJobId` is the first. */
+  postJobIds?: string[];
   mediaItemId: string;
   resultIds: string[];
 }
@@ -286,7 +320,7 @@ export async function createPostJobOnly(
 
   // Atomic media + job + results so a mid-path failure never leaves orphans
   // (mirrors createPostJobForExistingMedia).
-  const { postJob, mediaItem, resultRecords } = await prisma.$transaction(
+  const { postJob, postJobs, mediaItem, resultRecords } = await prisma.$transaction(
     async (tx) => {
       const mediaItemRow = await createMediaItem(tx, media);
       // One after another, so the rows are created in the post's order.
@@ -295,37 +329,45 @@ export async function createPostJobOnly(
         extraRows.push(await createMediaItem(tx, file));
       }
 
-      const job = await tx.postJob.create({
-        data: {
-          ...buildPostJobCreateData({
-            userId,
-            mediaItemId: mediaItemRow.id,
-            intent,
-            scheduledFor: params.scheduledFor ?? null,
-            baseCaption,
-            perPlatformOverrides,
-            tiktokMetadata: params.tiktokMetadata,
-            youtubeMetadata: params.youtubeMetadata,
-            googleMetadata: params.googleMetadata,
-            instagramMetadata: params.instagramMetadata,
-            facebookMetadata: params.facebookMetadata,
-            targetPlatforms,
-          }),
-          workspaceId,
-        },
-      });
-
-      // Only a post with two or more photos gets rows; the first is the job's
-      // own media item, so code that ignores this table publishes it.
-      if (extraRows.length > 0) {
-        await tx.postJobMedia.createMany({
-          data: [mediaItemRow, ...extraRows].map((row, position) => ({
-            postJobId: job.id,
-            mediaItemId: row.id,
-            position,
-          })),
+      // A series writes the files once and one job per time; every job points
+      // at the same media rows.
+      const jobs = [];
+      for (const time of params.series?.times ?? [undefined]) {
+        const created = await tx.postJob.create({
+          data: {
+            ...buildPostJobCreateData({
+              userId,
+              mediaItemId: mediaItemRow.id,
+              intent,
+              scheduledFor: time ?? params.scheduledFor ?? null,
+              baseCaption,
+              perPlatformOverrides,
+              tiktokMetadata: params.tiktokMetadata,
+              youtubeMetadata: params.youtubeMetadata,
+              googleMetadata: params.googleMetadata,
+              instagramMetadata: params.instagramMetadata,
+              facebookMetadata: params.facebookMetadata,
+              targetPlatforms,
+            }),
+            workspaceId,
+            ...seriesJobData(params.series, time),
+          },
         });
+
+        // Only a post with two or more photos gets rows; the first is the job's
+        // own media item, so code that ignores this table publishes it.
+        if (extraRows.length > 0) {
+          await tx.postJobMedia.createMany({
+            data: [mediaItemRow, ...extraRows].map((row, position) => ({
+              postJobId: created.id,
+              mediaItemId: row.id,
+              position,
+            })),
+          });
+        }
+        jobs.push(created);
       }
+      const job = jobs[0];
 
       // Scheduled/draft jobs get NO results here — the cron/promote create them
       // at run time from the connections that exist then.
@@ -348,12 +390,13 @@ export async function createPostJobOnly(
             )
           : [];
 
-      return { postJob: job, mediaItem: mediaItemRow, resultRecords: results };
+      return { postJob: job, postJobs: jobs, mediaItem: mediaItemRow, resultRecords: results };
     },
   );
 
   return {
     postJobId: postJob.id,
+    ...(params.series ? { postJobIds: postJobs.map((j) => j.id) } : {}),
     mediaItemId: mediaItem.id,
     resultIds: resultRecords.map((r) => r.id),
   };
@@ -541,7 +584,7 @@ export async function createPostJobForExistingMedia(
   // blob first, our post-lock re-check sees `deletedAt` and aborts; if we create
   // the job first, the sweep sees the new non-terminal job and skips. Closes the
   // check-then-act reuse race the Phase-1 review flagged.
-  const { postJob, resultRecords } = await prisma.$transaction(async (tx) => {
+  const { postJob, postJobs, resultRecords } = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT id FROM "MediaItem" WHERE id = ${mediaItemId} FOR UPDATE`;
 
     // Re-assert under the row lock — a concurrent sweep may have soft-deleted the
@@ -566,25 +609,33 @@ export async function createPostJobForExistingMedia(
       },
     });
 
-    const job = await tx.postJob.create({
-      data: {
-        ...buildPostJobCreateData({
-          userId,
-          mediaItemId,
-          intent,
-          scheduledFor: params.scheduledFor ?? null,
-          baseCaption,
-          perPlatformOverrides,
-          tiktokMetadata: params.tiktokMetadata,
-          youtubeMetadata: params.youtubeMetadata,
-          googleMetadata: params.googleMetadata,
-          instagramMetadata: params.instagramMetadata,
-          facebookMetadata: params.facebookMetadata,
-          targetPlatforms,
+    // A series: one job per time, under the one lock taken above.
+    const jobs = [];
+    for (const time of params.series?.times ?? [undefined]) {
+      jobs.push(
+        await tx.postJob.create({
+          data: {
+            ...buildPostJobCreateData({
+              userId,
+              mediaItemId,
+              intent,
+              scheduledFor: time ?? params.scheduledFor ?? null,
+              baseCaption,
+              perPlatformOverrides,
+              tiktokMetadata: params.tiktokMetadata,
+              youtubeMetadata: params.youtubeMetadata,
+              googleMetadata: params.googleMetadata,
+              instagramMetadata: params.instagramMetadata,
+              facebookMetadata: params.facebookMetadata,
+              targetPlatforms,
+            }),
+            workspaceId,
+            ...seriesJobData(params.series, time),
+          },
         }),
-        workspaceId,
-      },
-    });
+      );
+    }
+    const job = jobs[0];
 
     // Scheduled/draft reuse creates no results here (run-time creation, §6.3).
     const results =
@@ -605,11 +656,12 @@ export async function createPostJobForExistingMedia(
           )
         : [];
 
-    return { postJob: job, resultRecords: results };
+    return { postJob: job, postJobs: jobs, resultRecords: results };
   });
 
   return {
     postJobId: postJob.id,
+    ...(params.series ? { postJobIds: postJobs.map((j) => j.id) } : {}),
     mediaItemId,
     resultIds: resultRecords.map(r => r.id),
   };
