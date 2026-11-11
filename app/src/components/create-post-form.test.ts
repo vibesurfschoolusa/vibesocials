@@ -16,6 +16,7 @@ import {
   isTextPostMode,
   nextPreparingPick,
   noFileSubmitError,
+  platformListAlert,
   repeatCautionNote,
   type PickEvent,
 } from "./create-post-form";
@@ -170,5 +171,25 @@ describe("repeatCautionNote", () => {
   it("with a file the X caution stays as it is", () => {
     expect(repeatCautionNote({ noFile: false, xSelected: true })).toBe(REPEAT_X_NOTE);
     expect(repeatCautionNote({ noFile: false, xSelected: false })).toBeNull();
+  });
+});
+
+describe("platformListAlert", () => {
+  it("a text post whose connected platforms all need a file says so only once the person tries to send", () => {
+    const state = { selectedCount: 0, allDisabled: true, noFile: true };
+    expect(platformListAlert({ ...state, triedSend: false })).toBeNull();
+    expect(platformListAlert({ ...state, triedSend: true })).toBe(
+      "None of your connected platforms can publish a post without a photo or video.",
+    );
+  });
+
+  it("with a file it shows as before, without waiting for a send", () => {
+    expect(platformListAlert({ selectedCount: 0, allDisabled: true, noFile: false, triedSend: false })).toBe(
+      "None of your connected platforms can publish this media.",
+    );
+    expect(platformListAlert({ selectedCount: 0, allDisabled: false, noFile: false, triedSend: false })).toBe(
+      "Select at least one platform.",
+    );
+    expect(platformListAlert({ selectedCount: 1, allDisabled: false, noFile: false, triedSend: true })).toBeNull();
   });
 });

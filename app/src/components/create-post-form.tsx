@@ -172,6 +172,23 @@ export function repeatCautionNote(state: { noFile: boolean; xSelected: boolean }
   return state.xSelected ? REPEAT_X_NOTE : null;
 }
 
+/**
+ * The line under the platform list when nothing is selected, or null. For a text
+ * post whose connected platforms all need a file it waits until the person tries
+ * to send: on load it would be a red alert about a post nobody has written yet.
+ */
+export function platformListAlert(state: {
+  selectedCount: number;
+  allDisabled: boolean;
+  noFile: boolean;
+  triedSend: boolean;
+}): string | null {
+  if (state.selectedCount > 0) return null;
+  if (!state.allDisabled) return "Select at least one platform.";
+  if (!state.noFile) return "None of your connected platforms can publish this media.";
+  return state.triedSend ? "None of your connected platforms can publish a post without a photo or video." : null;
+}
+
 /** The switch read once per page load, so rendering calls no function the compiler cannot see into. */
 const TEXT_POSTS_ON = textPostsEnabled();
 
@@ -510,6 +527,14 @@ function CreatePostFormInner({
     () => deriveComposerPlatforms(connectedPlatforms, deselected, activeMimeType, { noFile }),
     [connectedPlatforms, deselected, activeMimeType, noFile],
   );
+  // Set by the first press of the submit button (platformListAlert).
+  const [triedSend, setTriedSend] = useState(false);
+  const platformAlert = platformListAlert({
+    selectedCount: selectedPlatforms.length,
+    allDisabled: platformChoices.every((choice) => choice.disabledReason !== null),
+    noFile,
+    triedSend,
+  });
   const tiktokSelected = selectedPlatforms.includes("tiktok");
   // Why Publish is blocked for TikTok right now, or null (lib/tiktokPostRules.ts).
   const tiktokBlock = tiktokPublishBlock({
@@ -1402,6 +1427,7 @@ function CreatePostFormInner({
 
   async function handleUploadSubmit(event: React.FormEvent) {
     event.preventDefault();
+    setTriedSend(true);
     setUploadError(null);
     setShowSuccess(false);
 
@@ -2030,13 +2056,9 @@ function CreatePostFormInner({
                 );
               })}
             </div>
-            {selectedPlatforms.length === 0 ? (
+            {platformAlert ? (
               <p className="text-xs text-destructive" role="alert">
-                {platformChoices.every((choice) => choice.disabledReason !== null)
-                  ? noFile
-                    ? "None of your connected platforms can publish a post without a photo or video."
-                    : "None of your connected platforms can publish this media."
-                  : "Select at least one platform."}
+                {platformAlert}
               </p>
             ) : null}
             {multiPhotoPlatformNotes(selectedPlatforms, photoSet.length).map((note) => (
