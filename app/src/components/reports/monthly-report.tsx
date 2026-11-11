@@ -19,13 +19,16 @@ import {
 import { formatNumber } from "@/lib/formatNumber";
 import { countWord } from "@/lib/plural";
 
+import { LocalDay } from "./local-day";
+
 /**
  * The monthly report (18a), as both pages show it: the workspace's /reports and
  * the client's /v/[token]/report. It renders the report object and nothing
  * else, so the two pages cannot differ in what they show. No hooks: it renders
  * on the server for the workspace and in the browser for the client.
  *
- * Dates are written in UTC, the same calendar the month is counted in.
+ * A post belongs to the month it was published in, counted in UTC; its date is
+ * shown in the viewer's own time zone (LocalDay), as Activity shows it.
  */
 
 /**
@@ -68,15 +71,6 @@ const PRINT_CSS = `
 }
 `;
 
-function formatDay(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
-  });
-}
-
 function PostPicture({ post }: { post: ReportPost }) {
   // A post without a file (mediaCount 0) never had a picture to remove.
   if (post.mediaCount === 0) return null;
@@ -101,7 +95,7 @@ function PostRow({ post }: { post: ReportPost }) {
         <PostPicture post={post} />
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium">
-            <time dateTime={post.publishedAt}>{formatDay(post.publishedAt)}</time>
+            <LocalDay iso={post.publishedAt} />
             {post.mediaCount > 1 ? (
               <span className="ml-2 font-normal text-muted-foreground">{`${formatNumber(post.mediaCount)} photos`}</span>
             ) : null}
