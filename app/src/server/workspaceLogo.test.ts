@@ -111,10 +111,10 @@ describe("normalizeLogo", () => {
 });
 
 describe("logoBlobPath", () => {
-  it("is logos/<workspaceId>/<16 random hex>.png, new each time", () => {
-    const a = logoBlobPath("ws-1");
-    const b = logoBlobPath("ws-1");
-    expect(a).toMatch(/^logos\/ws-1\/[0-9a-f]{16}\.png$/);
+  it("is logos/<32 random hex>.png, naming no workspace, new each time", () => {
+    const a = logoBlobPath();
+    const b = logoBlobPath();
+    expect(a).toMatch(/^logos\/[0-9a-f]{32}\.png$/);
     expect(a).not.toBe(b);
   });
 });

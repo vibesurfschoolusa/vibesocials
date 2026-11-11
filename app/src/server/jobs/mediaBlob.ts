@@ -2,9 +2,27 @@ import type { Prisma } from "@prisma/client";
 import { del } from "@vercel/blob";
 
 import { guardBlobKey } from "@/lib/blobUrl";
+import { isLogoAddress } from "@/lib/workspaceLogo";
 
 /** The slice of a Prisma transaction client {@link deleteBlobUnlessShared} needs. */
-export type MediaBlobTx = Pick<Prisma.TransactionClient, "$executeRaw" | "mediaItem">;
+export type MediaBlobTx = Pick<Prisma.TransactionClient, "$executeRaw" | "mediaItem" | "workspace">;
+
+/**
+ * True when a workspace's report logo (Workspace.logoUrl) is this file. A logo
+ * has no MediaItem row of its own, so a media row that points at one (the
+ * logos/ prefix is refused at every client route, but a row may predate that)
+ * must not delete it. Only addresses under logos/ are asked about: the server
+ * stores every logo there and nowhere else (lib/workspaceLogo.ts), so other
+ * files cost no query.
+ */
+export async function isLiveLogo(
+  db: { workspace: Pick<Prisma.TransactionClient["workspace"], "count"> },
+  key: string,
+  spellings: string[],
+): Promise<boolean> {
+  if (!isLogoAddress(key)) return false;
+  return (await db.workspace.count({ where: { logoUrl: { in: spellings } } })) > 0;
+}
 
 export type BlobDeleteOutcome = "deleted" | "kept_shared";
 
@@ -80,7 +98,7 @@ export async function deleteBlobUnlessShared(
       deletedAt: null,
     },
   });
-  if (otherLiveReferences > 0) {
+  if (otherLiveReferences > 0 || (await isLiveLogo(tx, key, spellings))) {
     return "kept_shared";
   }
 

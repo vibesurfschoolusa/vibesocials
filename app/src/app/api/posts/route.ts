@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { getWorkspaceContext, getWorkspaceMemberCount } from "@/lib/workspace";
 import { workspaceBlockResponse } from "@/lib/workspaceStatus";
 import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "@/lib/blobUrl";
+import { logoAddressRefusal } from "@/lib/workspaceLogo";
 import { findOverlongCaption, pickPlatformOverrides } from "@/lib/captionLimits";
 import { captionTooLongResponse, invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
@@ -627,6 +628,11 @@ export async function POST(request: Request) {
     const canonical = canonicalBlobUrl(body.blobUrl as string);
     if (!canonical) {
       return NextResponse.json({ error: BLOB_URL_REJECTED_MESSAGE }, { status: 400 });
+    }
+    // A workspace's logo has no media row to protect it (lib/workspaceLogo.ts).
+    const logoRefusal = logoAddressRefusal(body.blobUrl as string);
+    if (logoRefusal) {
+      return NextResponse.json({ error: logoRefusal }, { status: 400 });
     }
     storedBlobUrl = canonical;
     const mediaValidation = parsePostMediaFields(body);

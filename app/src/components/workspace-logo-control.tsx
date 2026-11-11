@@ -10,13 +10,23 @@ import {
   LOGO_REMOVE_FAILED_MESSAGE,
   LOGO_SAVE_FAILED_MESSAGE,
   LOGO_TOO_LARGE_MESSAGE,
+  logoEndpoint,
 } from "@/lib/workspaceLogo";
 
 /**
  * The workspace's report logo in Settings (18b). An owner uploads, replaces
  * and removes it through /api/workspaces/logo; a member only sees it.
  */
-export function WorkspaceLogoControl({ logoUrl, isOwner }: { logoUrl: string | null; isOwner: boolean }) {
+export function WorkspaceLogoControl({
+  logoUrl,
+  isOwner,
+  workspaceId,
+}: {
+  logoUrl: string | null;
+  isOwner: boolean;
+  /** The workspace this page was rendered for, so a switch in another tab is refused. */
+  workspaceId: string;
+}) {
   const router = useRouter();
   const input = useRef<HTMLInputElement>(null);
   const [current, setCurrent] = useState(logoUrl);
@@ -28,7 +38,7 @@ export function WorkspaceLogoControl({ logoUrl, isOwner }: { logoUrl: string | n
     setError(null);
     const fallback = method === "POST" ? LOGO_SAVE_FAILED_MESSAGE : LOGO_REMOVE_FAILED_MESSAGE;
     try {
-      const response = await fetch("/api/workspaces/logo", {
+      const response = await fetch(logoEndpoint(workspaceId), {
         method,
         ...(file ? { body: file, headers: { "Content-Type": file.type || "application/octet-stream" } } : {}),
       });

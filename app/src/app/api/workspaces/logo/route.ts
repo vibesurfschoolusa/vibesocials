@@ -6,6 +6,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requireOwnerContext, type WorkspaceContext } from "@/lib/workspace";
+import { WORKSPACE_CHANGED_CODE, WORKSPACE_CHANGED_MESSAGE } from "@/lib/workspaceChanged";
 import {
   LOGO_CHANGES_PER_HOUR,
   LOGO_EMPTY_MESSAGE,
@@ -29,11 +30,21 @@ import { LogoRejectedError, logoBlobPath, normalizeLogo, readBodyAtMost } from "
  * changes Workspace.logoUrl, for the hourly drain to delete. So the old file
  * is never gone while the workspace still points at it, and a failed write
  * cleans up the file it just stored.
+ *
+ * The active workspace is a cookie every tab shares, so the Settings control
+ * sends the workspace its page was rendered for as `?workspaceId=` (the body
+ * is the picture). A mismatch is a 409 with the library's sentence, checked
+ * before the body is read; an absent id keeps the plain behaviour, as the
+ * review-link owner routes do.
  */
 
-async function gate(): Promise<WorkspaceContext | NextResponse> {
+async function gate(request: Request): Promise<WorkspaceContext | NextResponse> {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) return contextOrError;
+  const sent = new URL(request.url).searchParams.get("workspaceId");
+  if (sent !== null && sent !== contextOrError.workspace.id) {
+    return NextResponse.json({ error: WORKSPACE_CHANGED_MESSAGE, code: WORKSPACE_CHANGED_CODE }, { status: 409 });
+  }
   const limit = await checkRateLimit({
     userId: contextOrError.user.id,
     route: "workspaces/logo",
@@ -82,7 +93,7 @@ async function discardStoredFile(url: string, workspaceId: string) {
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
-  const contextOrError = await gate();
+  const contextOrError = await gate(request);
   if (contextOrError instanceof NextResponse) return contextOrError;
   const workspaceId = contextOrError.workspace.id;
 
@@ -103,7 +114,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   let url: string;
   try {
-    const blob = await put(logoBlobPath(workspaceId), png, {
+    const blob = await put(logoBlobPath(), png, {
       access: "public",
       contentType: "image/png",
       addRandomSuffix: false,
@@ -124,8 +135,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   return NextResponse.json({ logoUrl: url });
 }
 
-export async function DELETE(): Promise<NextResponse> {
-  const contextOrError = await gate();
+export async function DELETE(request: Request): Promise<NextResponse> {
+  const contextOrError = await gate(request);
   if (contextOrError instanceof NextResponse) return contextOrError;
   const workspaceId = contextOrError.workspace.id;
 

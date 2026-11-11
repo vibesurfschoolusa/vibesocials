@@ -1,6 +1,7 @@
 import type { Prisma } from "@prisma/client";
 
 import { guardBlobKey } from "@/lib/blobUrl";
+import { isLogoAddress } from "@/lib/workspaceLogo";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { deleteBlobsWithTimeout } from "@/server/jobs/pendingBlobDeletion";
@@ -141,10 +142,13 @@ export async function queueWorkspaceFiles(
     cursor = page[page.length - 1].id;
   }
 
-  const logos = await tx.workspace.findMany({
-    where: { id: { in: workspaceIds }, logoUrl: { not: null } },
-    select: { logoUrl: true },
-  });
+  // The rows are locked as POST/DELETE /api/workspaces/logo lock them (FOR
+  // UPDATE), every row and not only those with a logo: an upload waits for
+  // this commit and then finds its workspace gone, instead of saving a logo
+  // after this read that nothing would queue. Sorted, so two deletions that
+  // share workspaces take the locks in one order.
+  const logos = await tx.$queryRaw<{ logoUrl: string | null }[]>`
+    SELECT "logoUrl" FROM "Workspace" WHERE "id" = ANY(${workspaceIds}) ORDER BY "id" FOR UPDATE`;
   for (const { logoUrl } of logos) {
     if (!logoUrl) continue;
     const key = guardBlobKey(logoUrl);
@@ -174,6 +178,17 @@ export async function queueWorkspaceFiles(
       select: { storageLocation: true },
     });
     const usedElsewhere = new Set(elsewhere.map((row) => row.storageLocation));
+    // A surviving workspace's live logo has no media row of its own, so a
+    // media row here that points at one must not get it deleted. Logos live
+    // only under logos/ (lib/workspaceLogo.ts), so other files cost no query.
+    const logoSpellings = allSpellings.filter((value) => isLogoAddress(value));
+    if (logoSpellings.length > 0) {
+      const liveLogos = await tx.workspace.findMany({
+        where: { logoUrl: { in: logoSpellings }, id: { notIn: workspaceIds } },
+        select: { logoUrl: true },
+      });
+      for (const { logoUrl } of liveLogos) if (logoUrl) usedElsewhere.add(logoUrl);
+    }
     for (const key of chunk) {
       if (![...(spellingsByKey.get(key) ?? [])].some((value) => usedElsewhere.has(value))) {
         toQueue.push(key);

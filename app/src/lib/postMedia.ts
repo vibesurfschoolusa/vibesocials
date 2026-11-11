@@ -2,6 +2,7 @@ import type { Platform } from "@prisma/client";
 
 import { cleanAltText } from "./altText";
 import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "./blobUrl";
+import { logoAddressRefusal } from "./workspaceLogo";
 import { parsePostMediaFields } from "./mediaInput";
 
 /**
@@ -62,6 +63,9 @@ function validateEntry(raw: unknown): { ok: true; value: PostMediaEntry } | { ok
   if (!storageLocation) {
     return { ok: false, error: BLOB_URL_REJECTED_MESSAGE };
   }
+  // A workspace's logo has no media row to protect it (lib/workspaceLogo.ts).
+  const logoRefusal = logoAddressRefusal(entry.blobUrl);
+  if (logoRefusal) return { ok: false, error: logoRefusal };
   const fields = parsePostMediaFields(entry);
   if (!fields.ok) return fields;
   const altText = readAltTextField(entry.altText, fields.value.mimeType);

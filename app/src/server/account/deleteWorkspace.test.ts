@@ -8,7 +8,8 @@ const m = vi.hoisted(() => ({
   del: vi.fn(),
   rows: [] as { id: string; workspaceId: string; storageLocation: string; deletedAt: Date | null }[],
   mediaFindMany: vi.fn(),
-  workspaceFindMany: vi.fn(),
+  logoQuery: vi.fn(),
+  survivingLogos: vi.fn(),
   postJobFindFirst: vi.fn(),
   memberCount: vi.fn(),
   workspaceDeleteMany: vi.fn(),
@@ -66,7 +67,8 @@ function fakeFindMany({ where, take }: { where: Where; take?: number }) {
 const tx = {
   $executeRaw: m.executeRaw,
   mediaItem: { findMany: m.mediaFindMany },
-  workspace: { findMany: m.workspaceFindMany },
+  $queryRaw: m.logoQuery,
+  workspace: { findMany: m.survivingLogos },
   pendingBlobDeletion: { createManyAndReturn: m.queueCreate },
 } as unknown as Prisma.TransactionClient;
 
@@ -84,7 +86,8 @@ beforeEach(() => {
   m.log.length = 0;
   m.executeRaw.mockResolvedValue(0);
   m.mediaFindMany.mockImplementation(fakeFindMany);
-  m.workspaceFindMany.mockResolvedValue([]);
+  m.logoQuery.mockResolvedValue([]);
+  m.survivingLogos.mockResolvedValue([]);
   m.queueCreate.mockImplementation(async ({ data }: { data: { url: string }[] }) =>
     data.map((row, index) => ({ id: `q${index}`, url: row.url })),
   );
@@ -208,23 +211,59 @@ describe("queueWorkspaceFiles", () => {
 
   it("queues the workspaces' logos with their media files", async () => {
     m.rows.push({ id: "m1", workspaceId: "ws-1", storageLocation: url("a"), deletedAt: null });
-    m.workspaceFindMany.mockResolvedValue([{ logoUrl: url("logos/ws-1/0123456789abcdef") }]);
+    m.logoQuery.mockResolvedValue([{ logoUrl: url("logos/0123456789abcdef0123456789abcdef") }]);
 
     await queueWorkspaceFiles(tx, ["ws-1"]);
 
-    expect(m.workspaceFindMany).toHaveBeenCalledWith({
-      where: { id: { in: ["ws-1"] }, logoUrl: { not: null } },
-      select: { logoUrl: true },
-    });
-    expect(queuedUrls().sort()).toEqual([url("a"), url("logos/ws-1/0123456789abcdef")]);
+    expect(queuedUrls().sort()).toEqual([url("a"), url("logos/0123456789abcdef0123456789abcdef")]);
   });
 
-  it("queues a logo of a workspace with no media", async () => {
-    m.workspaceFindMany.mockResolvedValue([{ logoUrl: url("logos/ws-1/0123456789abcdef") }]);
+  it("reads the logos with every workspace row locked, so an upload cannot commit one in between", async () => {
+    await queueWorkspaceFiles(tx, ["ws-2", "ws-1"]);
 
-    const queued = await queueWorkspaceFiles(tx, ["ws-1"]);
+    // Tagged template: (strings, ...values).
+    const [strings, ids] = m.logoQuery.mock.calls[0] as [TemplateStringsArray, string[]];
+    const sql = strings.join("?").replace(/\s+/g, " ").trim();
+    expect(sql).toBe('SELECT "logoUrl" FROM "Workspace" WHERE "id" = ANY(?) ORDER BY "id" FOR UPDATE');
+    // Every row, logo or not: a row without one is locked too, or an upload
+    // could give it one after this read.
+    expect(ids).toEqual(["ws-2", "ws-1"]);
+  });
 
-    expect(queued).toEqual([{ id: "q0", url: url("logos/ws-1/0123456789abcdef") }]);
+  it("queues a logo of a workspace with no media, and skips workspaces without one", async () => {
+    m.logoQuery.mockResolvedValue([{ logoUrl: url("logos/0123456789abcdef0123456789abcdef") }, { logoUrl: null }]);
+
+    const queued = await queueWorkspaceFiles(tx, ["ws-1", "ws-2"]);
+
+    expect(queued).toEqual([{ id: "q0", url: url("logos/0123456789abcdef0123456789abcdef") }]);
+  });
+
+  // Fix round 1 (18b): a media row in the deleted workspace that points at a
+  // surviving workspace's live logo must not get that logo deleted.
+  it("does not queue another workspace's live logo that a media row here points at", async () => {
+    const victim = url("logos/0123456789abcdef0123456789abcdef");
+    m.rows.push(
+      { id: "m1", workspaceId: "ws-attacker", storageLocation: victim, deletedAt: null },
+      { id: "m2", workspaceId: "ws-attacker", storageLocation: url("own"), deletedAt: null },
+    );
+    m.survivingLogos.mockImplementation(
+      async ({ where }: { where: { logoUrl: { in: string[] }; id: { notIn: string[] } } }) =>
+        where.logoUrl.in.includes(victim) && !where.id.notIn.includes("ws-victim") ? [{ logoUrl: victim }] : [],
+    );
+
+    await queueWorkspaceFiles(tx, ["ws-attacker"]);
+
+    expect(queuedUrls()).toEqual([url("own")]);
+    expect(m.survivingLogos).toHaveBeenCalledWith({
+      where: { logoUrl: { in: [victim] }, id: { notIn: ["ws-attacker"] } },
+      select: { logoUrl: true },
+    });
+  });
+
+  it("asks nothing of the surviving workspaces when no file is under logos/", async () => {
+    m.rows.push({ id: "m1", workspaceId: "ws-1", storageLocation: url("a"), deletedAt: null });
+    await queueWorkspaceFiles(tx, ["ws-1"]);
+    expect(m.survivingLogos).not.toHaveBeenCalled();
   });
 
   it("queues nothing for a workspace with no media", async () => {

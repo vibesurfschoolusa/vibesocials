@@ -49,6 +49,8 @@ vi.mock("@/lib/accountEmails", async (importOriginal) => ({
 vi.mock("@/lib/db", () => {
   const prisma: Record<string, unknown> = {
     $executeRaw: m.executeRaw,
+    // The deleted workspaces' report logos, read under a row lock (none here).
+    $queryRaw: async () => [],
     workspaceMember: { findMany: m.memberFindMany, count: m.memberCount },
     workspace: { findMany: m.workspaceFindMany, deleteMany: m.workspaceDeleteMany },
     socialConnection: { findMany: m.connectionFindMany, updateMany: m.connectionUpdateMany },

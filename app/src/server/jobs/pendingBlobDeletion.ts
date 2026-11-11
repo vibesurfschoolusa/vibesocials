@@ -3,7 +3,7 @@ import { del } from "@vercel/blob";
 import { guardBlobKey } from "@/lib/blobUrl";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { BLOB_DELETE_TIMEOUT_MS } from "@/server/jobs/mediaBlob";
+import { BLOB_DELETE_TIMEOUT_MS, isLiveLogo } from "@/server/jobs/mediaBlob";
 
 /**
  * The PendingBlobDeletion queue: stored files of deleted workspaces. A
@@ -77,7 +77,8 @@ export async function drainPendingBlobDeletions(
     const inUse = await prisma.mediaItem.count({
       where: { storageLocation: { in: spellings }, deletedAt: null },
     });
-    if (inUse > 0) {
+    // Or a workspace's live report logo, which has no media row of its own.
+    if (inUse > 0 || (await isLiveLogo(prisma, key, spellings))) {
       await prisma.pendingBlobDeletion.deleteMany({ where: { id: row.id } });
       result.kept += 1;
       continue;

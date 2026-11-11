@@ -59,21 +59,30 @@ import {
   LOGO_TOO_LARGE_MESSAGE,
 } from "@/lib/workspaceLogo";
 
+import { WORKSPACE_CHANGED_CODE, WORKSPACE_CHANGED_MESSAGE } from "@/lib/workspaceChanged";
+
 import { DELETE, POST } from "./route";
 
 const OWNER = { user: { id: "user-1" }, workspace: { id: "ws-1", name: "Surf Co" }, role: "owner" as const };
-const OLD = "https://abc.public.blob.vercel-storage.com/logos/ws-1/aaaaaaaaaaaaaaaa.png";
+const OLD = "https://abc.public.blob.vercel-storage.com/logos/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png";
 const blobUrl = (pathname: string) => `https://abc.public.blob.vercel-storage.com/${pathname}`;
 const forbidden = () => NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 });
 
-function upload(body: BodyInit | null, headers: Record<string, string> = {}): Request {
-  return new Request("http://localhost/api/workspaces/logo", {
+const BASE = "http://localhost/api/workspaces/logo";
+/** The workspace the Settings page was rendered for; null sends none. */
+const address = (workspaceId: string | null) =>
+  workspaceId === null ? BASE : `${BASE}?workspaceId=${encodeURIComponent(workspaceId)}`;
+
+function upload(body: BodyInit | null, headers: Record<string, string> = {}, workspaceId: string | null = "ws-1"): Request {
+  return new Request(address(workspaceId), {
     method: "POST",
     body,
     headers,
     duplex: "half",
   } as RequestInit);
 }
+
+const remove = (workspaceId: string | null = "ws-1") => new Request(address(workspaceId), { method: "DELETE" });
 
 async function picture(width: number, height: number) {
   return sharp({ create: { width, height, channels: 3, background: "#0ea5e9" } }).jpeg().toBuffer();
@@ -182,13 +191,14 @@ describe("POST /api/workspaces/logo", () => {
     expect(m.put).not.toHaveBeenCalled();
   });
 
-  it("stores the server's own PNG within 600 by 300, at logos/<workspace>/<16 hex>.png, public", async () => {
+  it("stores the server's own PNG within 600 by 300, at logos/<32 random hex>.png, public", async () => {
     const input = await picture(1500, 500);
     const response = await POST(upload(input));
 
     expect(response.status).toBe(200);
     const [pathname, bytes, options] = m.put.mock.calls[0];
-    expect(pathname).toMatch(/^logos\/ws-1\/[0-9a-f]{16}\.png$/);
+    // Nothing in the address names the workspace.
+    expect(pathname).toMatch(/^logos\/[0-9a-f]{32}\.png$/);
     expect(options).toMatchObject({ access: "public", contentType: "image/png" });
     expect(bytes.equals(input)).toBe(false);
     const meta = await sharp(storedBytes()).metadata();
@@ -250,20 +260,62 @@ describe("POST /api/workspaces/logo", () => {
 
   it("never creates or reads a media item", async () => {
     await POST(upload(await picture(100, 100)));
-    await DELETE();
+    await DELETE(remove());
     expect(m.mediaAny).not.toHaveBeenCalled();
+  });
+});
+
+// Fix round 1 (18b): the active workspace is a cookie every tab shares, so the
+// control sends the workspace its page was rendered for.
+describe("the workspace the page was rendered for", () => {
+  it("lets an upload and a removal through when it matches, or when none is sent", async () => {
+    expect((await POST(upload(await picture(50, 50)))).status).toBe(200);
+    expect((await POST(upload(await picture(50, 50), {}, null))).status).toBe(200);
+    expect((await DELETE(remove())).status).toBe(200);
+    expect((await DELETE(remove(null))).status).toBe(200);
+  });
+
+  it("answers an upload for another workspace 409 before reading the body or storing anything", async () => {
+    const state = { pulled: 0 };
+    // highWaterMark 0: the stream reads nothing ahead by itself, so any pull is the route's.
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          state.pulled += 1;
+          controller.enqueue(new Uint8Array(1024));
+        },
+      },
+      { highWaterMark: 0 },
+    );
+
+    const response = await POST(upload(body, {}, "ws-2"));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: WORKSPACE_CHANGED_MESSAGE, code: WORKSPACE_CHANGED_CODE });
+    expect(state.pulled).toBe(0);
+    expect(m.checkRateLimit).not.toHaveBeenCalled();
+    expect(m.put).not.toHaveBeenCalled();
+    expect(m.transaction).not.toHaveBeenCalled();
+  });
+
+  it("answers a removal for another workspace 409 and changes nothing", async () => {
+    const response = await DELETE(remove("ws-2"));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: WORKSPACE_CHANGED_MESSAGE, code: WORKSPACE_CHANGED_CODE });
+    expect(m.transaction).not.toHaveBeenCalled();
   });
 });
 
 describe("DELETE /api/workspaces/logo", () => {
   it("refuses a member", async () => {
     m.requireOwnerContext.mockResolvedValue(forbidden());
-    expect((await DELETE()).status).toBe(403);
+    expect((await DELETE(remove())).status).toBe(403);
     expect(m.transaction).not.toHaveBeenCalled();
   });
 
   it("queues the old logo and clears the address in one transaction, deleting nothing itself", async () => {
-    const response = await DELETE();
+    const response = await DELETE(remove());
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ logoUrl: null });
     expect(m.log).toEqual(["begin", "lock workspace", `queue in tx ${OLD} true`, "save null", "commit"]);
@@ -272,7 +324,7 @@ describe("DELETE /api/workspaces/logo", () => {
 
   it("does nothing when there is no logo", async () => {
     m.queryRaw.mockResolvedValue([{ logoUrl: null }]);
-    const response = await DELETE();
+    const response = await DELETE(remove());
     expect(response.status).toBe(200);
     expect(m.txQueueCreate).not.toHaveBeenCalled();
     expect(m.workspaceUpdate).not.toHaveBeenCalled();
@@ -280,7 +332,7 @@ describe("DELETE /api/workspaces/logo", () => {
 
   it("is rate limited with the upload", async () => {
     m.checkRateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 60 });
-    expect((await DELETE()).status).toBe(429);
+    expect((await DELETE(remove())).status).toBe(429);
     expect(m.transaction).not.toHaveBeenCalled();
   });
 });

@@ -52,6 +52,51 @@ afterEach(() => {
 });
 
 describe("deleteBlobUnlessShared", () => {
+  // Fix round 1 (18b): a workspace logo has no media row of its own, so a media
+  // row that points at one (registered before the logos/ prefix was reserved)
+  // must not be able to delete it.
+  describe("a file a workspace's logo points at", () => {
+    const LOGO = "https://abc123.public.blob.vercel-storage.com/logos/0123456789abcdef0123456789abcdef.png";
+
+    function withLogos(rows: Row[], logoUrls: string[]) {
+      const made = makeTx(rows);
+      const workspaceCount = vi.fn(async ({ where }: { where: { logoUrl: { in: string[] } } }) =>
+        logoUrls.filter((logo) => where.logoUrl.in.includes(logo)).length,
+      );
+      (made.tx as unknown as { workspace: unknown }).workspace = { count: workspaceCount };
+      return { ...made, workspaceCount };
+    }
+
+    it("is kept while it is a live logo, even with no other media row", async () => {
+      const { tx, workspaceCount } = withLogos([{ id: "attacker", storageLocation: LOGO, deletedAt: null }], [LOGO]);
+
+      await expect(deleteBlobUnlessShared(tx, { id: "attacker", storageLocation: LOGO })).resolves.toBe("kept_shared");
+
+      expect(delMock).not.toHaveBeenCalled();
+      expect(workspaceCount).toHaveBeenCalledWith({ where: { logoUrl: { in: [LOGO] } } });
+    });
+
+    it("is matched by another spelling of the address too", async () => {
+      const { tx } = withLogos([], [LOGO]);
+      await expect(
+        deleteBlobUnlessShared(tx, { id: "attacker", storageLocation: `${LOGO}?download=1` }),
+      ).resolves.toBe("kept_shared");
+      expect(delMock).not.toHaveBeenCalled();
+    });
+
+    it("is deleted once no workspace points at it any more", async () => {
+      const { tx } = withLogos([], []);
+      await expect(deleteBlobUnlessShared(tx, { id: "attacker", storageLocation: LOGO })).resolves.toBe("deleted");
+      expect(delMock).toHaveBeenCalledWith(LOGO, TIMED);
+    });
+
+    it("asks nothing of the workspaces for an ordinary media file", async () => {
+      const { tx, workspaceCount } = withLogos([], [LOGO]);
+      await expect(deleteBlobUnlessShared(tx, { id: "a", storageLocation: U })).resolves.toBe("deleted");
+      expect(workspaceCount).not.toHaveBeenCalled();
+    });
+  });
+
   it("deletes the blob when no other live row references it", async () => {
     const { tx } = makeTx([{ id: "a", storageLocation: U, deletedAt: null }]);
 

@@ -88,7 +88,11 @@ export async function normalizeLogo(input: Buffer): Promise<Buffer> {
   }
 }
 
-/** Where a new logo is stored: a fresh name each time, so a replaced file is never overwritten. */
-export function logoBlobPath(workspaceId: string): string {
-  return `logos/${workspaceId}/${randomBytes(8).toString("hex")}.png`;
+/**
+ * Where a new logo is stored: a fresh name each time, so a replaced file is
+ * never overwritten. The address is public (the client's report, the email),
+ * so it names no workspace; the workspace is only ever Workspace.logoUrl's row.
+ */
+export function logoBlobPath(): string {
+  return `logos/${randomBytes(16).toString("hex")}.png`;
 }

@@ -6,6 +6,7 @@ import { logger } from "@/lib/logger";
 import { UPLOAD_ALLOWED_CONTENT_TYPES } from "@/lib/mediaInput";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { logoAddressRefusal } from "@/lib/workspaceLogo";
 import { workspaceBlockResponse } from "@/lib/workspaceStatus";
 import { checkStorageLimit } from "@/server/usage/workspaceUsage";
 
@@ -83,6 +84,14 @@ export async function POST(request: Request): Promise<NextResponse> {
   // over its storage limit. Checked before the file exists, so one upload can
   // take it over the limit; that is accepted.
   if (body.type === "blob.generate-client-token") {
+    // logos/ holds the server's own workspace logos (lib/workspaceLogo.ts):
+    // no client token may write there.
+    const payload = body.payload as { pathname?: unknown } | null | undefined;
+    const logoRefusal =
+      payload && typeof payload.pathname === "string" ? logoAddressRefusal(payload.pathname) : null;
+    if (logoRefusal) {
+      return NextResponse.json({ error: logoRefusal }, { status: 400 });
+    }
     const refusal = await checkStorageLimit(context.workspace.id);
     if (refusal) {
       return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 403 });

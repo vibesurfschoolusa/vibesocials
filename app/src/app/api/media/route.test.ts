@@ -33,6 +33,7 @@ vi.mock("@/lib/workspace", () => ({
 }));
 
 import { BLOB_URL_REJECTED_MESSAGE, MAX_BLOB_URL_LENGTH } from "@/lib/blobUrl";
+import { LOGO_ADDRESS_RESERVED_MESSAGE } from "@/lib/workspaceLogo";
 import { decodePostsCursor, encodePostsCursor } from "@/lib/postsDto";
 import { INVALID_WORKSPACE_ID_MESSAGE, WORKSPACE_CHANGED_MESSAGE } from "@/lib/workspaceChanged";
 
@@ -237,6 +238,24 @@ describe("POST /api/media", () => {
       expect(response.status).toBe(400);
       await expect(response.json()).resolves.toEqual({ error: BLOB_URL_REJECTED_MESSAGE });
       expect(createMock).not.toHaveBeenCalled();
+    });
+
+    // Fix round 1 (18b): a workspace's logo is public (report, email). Registered
+    // as someone's media, deleting that media would delete the logo file.
+    it("refuses another workspace's logo address with a plain 400 and stores nothing", async () => {
+      const logo = "https://test.public.blob.vercel-storage.com/logos/0123456789abcdef0123456789abcdef.png";
+      for (const blobUrl of [logo, logo.replace("/logos/", "/%6Cogos/")]) {
+        const response = await POST(jsonRequest(body(blobUrl)));
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toEqual({ error: LOGO_ADDRESS_RESERVED_MESSAGE });
+      }
+      expect(createMock).not.toHaveBeenCalled();
+    });
+
+    it("still registers an ordinary media address", async () => {
+      const response = await POST(jsonRequest(body(U)));
+      expect(response.status).toBe(201);
+      expect(createMock).toHaveBeenCalled();
     });
 
     it("returns 400 with the allowed-host message and stores nothing for a blobUrl longer than MAX_BLOB_URL_LENGTH", async () => {

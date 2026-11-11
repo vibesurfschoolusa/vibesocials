@@ -8,6 +8,7 @@ import {
   ownBlobStoreId,
 } from "@/lib/blobUrl";
 import { prisma } from "@/lib/db";
+import { logoAddressRefusal } from "@/lib/workspaceLogo";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { FILENAME_MAX_LENGTH, MAX_MEDIA_BYTES, UPLOAD_ALLOWED_CONTENT_TYPES } from "@/lib/mediaInput";
@@ -74,6 +75,9 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
   // Only these four fields are read; anything else in the body is ignored.
   const blobUrl = canonicalBlobUrl(typeof body.blobUrl === "string" ? body.blobUrl : "");
   if (!blobUrl) return refuse(BLOB_URL_REJECTED_MESSAGE);
+  // A workspace's logo has no media row to protect it (lib/workspaceLogo.ts).
+  const logoRefusal = logoAddressRefusal(body.blobUrl as string);
+  if (logoRefusal) return refuse(logoRefusal);
   const urlLinkId = uploadLinkIdOfBlobUrl(blobUrl, ownBlobStoreId());
   if (!urlLinkId) return refuse(NOT_THROUGH_LINK_MESSAGE);
   const filename =

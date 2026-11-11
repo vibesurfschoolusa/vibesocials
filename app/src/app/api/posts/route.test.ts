@@ -89,6 +89,7 @@ vi.mock("@/server/jobs/failPendingResults", async () => {
 });
 
 import { BLOB_URL_REJECTED_MESSAGE, MAX_BLOB_URL_LENGTH } from "@/lib/blobUrl";
+import { LOGO_ADDRESS_RESERVED_MESSAGE } from "@/lib/workspaceLogo";
 import { PostTargetingError } from "@/lib/postTargets";
 import { MediaItemUnavailableError } from "@/server/jobs/posting";
 import { POST } from "./route";
@@ -1122,6 +1123,16 @@ describe("POST /api/posts — canonical blob URLs (2026-11-01 audit, M2)", () =>
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
   });
 
+  it("refuses a workspace logo's address in blobUrl with a plain 400 and creates nothing", async () => {
+    const response = await POST(
+      jsonRequest(body("https://test.public.blob.vercel-storage.com/logos/0123456789abcdef0123456789abcdef.png")),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: LOGO_ADDRESS_RESERVED_MESSAGE });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
   it("returns 400 with the allowed-host message and creates nothing for a blobUrl longer than MAX_BLOB_URL_LENGTH", async () => {
     const response = await POST(jsonRequest(body(U + "a".repeat(MAX_BLOB_URL_LENGTH - U.length + 1))));
 
@@ -1962,6 +1973,11 @@ describe("POST /api/posts - the media list (several photos, 07a)", () => {
       "A post with several photos can't include a GIF. Post a GIF on its own.",
     ],
     ["a bad host", [photo(1), { ...photo(2), blobUrl: "https://evil.example/x.jpg" }], `File 2: ${BLOB_URL_REJECTED_MESSAGE}`],
+    [
+      "a workspace logo's address",
+      [photo(1), { ...photo(2), blobUrl: `${HOST}/logos/0123456789abcdef0123456789abcdef.png` }],
+      `File 2: ${LOGO_ADDRESS_RESERVED_MESSAGE}`,
+    ],
   ])("%s is a 400 that names the rule", async (_name, media, error) => {
     const response = await POST(jsonRequest({ media, baseCaption: "hi" }));
 

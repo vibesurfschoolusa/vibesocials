@@ -6,6 +6,7 @@ const m = vi.hoisted(() => ({
   deleteRow: vi.fn(),
   updateRow: vi.fn(),
   mediaCount: vi.fn(),
+  logoCount: vi.fn(),
   loggerInfo: vi.fn(),
 }));
 
@@ -17,6 +18,7 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     pendingBlobDeletion: { findMany: m.findMany, deleteMany: m.deleteRow, updateMany: m.updateRow },
     mediaItem: { count: m.mediaCount },
+    workspace: { count: m.logoCount },
   },
 }));
 
@@ -36,6 +38,7 @@ beforeEach(() => {
   m.deleteRow.mockResolvedValue({ count: 1 });
   m.updateRow.mockResolvedValue({ count: 1 });
   m.mediaCount.mockResolvedValue(0);
+  m.logoCount.mockResolvedValue(0);
   vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
   vi.stubEnv("BLOB_STORE_ID", "");
 });
@@ -45,6 +48,31 @@ afterEach(() => {
 });
 
 describe("drainPendingBlobDeletions", () => {
+  // Fix round 1 (18b): a workspace's live logo counts as in use.
+  it("after a logo is replaced, deletes the old file and keeps the live one", async () => {
+    const old = url("logos/0123456789abcdef0123456789abcdef");
+    const live = url("logos/fedcba9876543210fedcba9876543210");
+    m.findMany.mockResolvedValue([
+      { id: "old", url: old, attempts: 0, createdAt: new Date() },
+      { id: "live", url: live, attempts: 0, createdAt: new Date() },
+    ]);
+    m.logoCount.mockImplementation(async ({ where }: { where: { logoUrl: { in: string[] } } }) =>
+      where.logoUrl.in.includes(live) ? 1 : 0,
+    );
+
+    await expect(drainPendingBlobDeletions()).resolves.toEqual({ deleted: 1, kept: 1, left: 0 });
+
+    expect(m.del).toHaveBeenCalledTimes(1);
+    expect(m.del).toHaveBeenCalledWith(old, { abortSignal: expect.any(AbortSignal) });
+    expect(m.deleteRow).toHaveBeenCalledWith({ where: { id: "live" } });
+  });
+
+  it("asks nothing of the workspaces for an ordinary media file", async () => {
+    m.findMany.mockResolvedValue([row("a")]);
+    await drainPendingBlobDeletions();
+    expect(m.logoCount).not.toHaveBeenCalled();
+  });
+
   it("takes up to 200 rows, fewest attempts first, then oldest", async () => {
     m.findMany.mockResolvedValue([]);
 

@@ -200,6 +200,7 @@ export default async function SettingsPage({
             key={`logo-${context.workspace.id}`}
             logoUrl={logo?.logoUrl ?? null}
             isOwner={context.role === "owner"}
+            workspaceId={context.workspace.id}
           />
           <TeamSection
             key={context.workspace.id}

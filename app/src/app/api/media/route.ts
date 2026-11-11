@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "@/lib/blobUrl";
+import { logoAddressRefusal } from "@/lib/workspaceLogo";
 import { prisma } from "@/lib/db";
 import { findOverlongCaption } from "@/lib/captionLimits";
 import { captionTooLongResponse, invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
@@ -179,6 +180,11 @@ export async function POST(request: Request) {
   const blobUrl = canonicalBlobUrl(rawBlobUrl);
   if (!blobUrl) {
     return NextResponse.json({ error: BLOB_URL_REJECTED_MESSAGE }, { status: 400 });
+  }
+  // A workspace's logo has no media row to protect it (lib/workspaceLogo.ts).
+  const logoRefusal = logoAddressRefusal(rawBlobUrl);
+  if (logoRefusal) {
+    return NextResponse.json({ error: logoRefusal }, { status: 400 });
   }
   // The image/video rule is shared with POST /api/posts (lib/mediaInput.ts).
   if (!isImageOrVideoMimeType(body.mimeType)) {

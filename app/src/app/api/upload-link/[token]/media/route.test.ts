@@ -52,6 +52,7 @@ vi.mock("next/server", async (importOriginal) => ({
 import { BlobNotFoundError, BlobServiceNotAvailable } from "@vercel/blob";
 
 import { BLOB_URL_REJECTED_MESSAGE, guardBlobKey } from "@/lib/blobUrl";
+import { LOGO_ADDRESS_RESERVED_MESSAGE } from "@/lib/workspaceLogo";
 import { MAX_MEDIA_BYTES } from "@/lib/mediaInput";
 import { UPLOAD_LINK_DAILY_LIMIT_MESSAGE, UPLOAD_LINK_INACTIVE_MESSAGE } from "@/lib/uploadLink";
 
@@ -209,6 +210,16 @@ describe("the request body", () => {
     }
     const rejected = await call(mediaRequest(goodBody({ blobUrl: "https://evil.example/ul/link-1/a.jpg" })));
     await expect(rejected.json()).resolves.toEqual({ error: BLOB_URL_REJECTED_MESSAGE });
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+    expect(headMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a workspace logo's address with the plain logo sentence, before anything else", async () => {
+    const response = await call(
+      mediaRequest(goodBody({ blobUrl: `${HOST}/logos/0123456789abcdef0123456789abcdef.png` })),
+    );
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: LOGO_ADDRESS_RESERVED_MESSAGE });
     expect(checkRateLimitMock).not.toHaveBeenCalled();
     expect(headMock).not.toHaveBeenCalled();
   });

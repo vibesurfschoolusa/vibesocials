@@ -17,6 +17,8 @@ vi.mock("@vercel/blob/client", () => ({ handleUpload: handleUploadMock }));
 // Usage limits (2026-11-10): the storage sum has its own suite (workspaceUsage.test.ts).
 vi.mock("@/server/usage/workspaceUsage", () => ({ checkStorageLimit: checkStorageLimitMock }));
 
+import { LOGO_ADDRESS_RESERVED_MESSAGE } from "@/lib/workspaceLogo";
+
 import { GET, POST } from "./route";
 
 const FULL =
@@ -71,6 +73,27 @@ describe("POST /api/upload — storage limit (usage limits)", () => {
 
     expect(res.status).toBe(403);
     await expect(res.json()).resolves.toEqual({ error: FULL, code: "WORKSPACE_STORAGE_FULL" });
+    expect(handleUploadMock).not.toHaveBeenCalled();
+  });
+});
+
+// Fix round 1 (18b): logos/ is the server's own; no client token may name it.
+describe("POST /api/upload — the logos/ prefix is reserved", () => {
+  it("refuses a token for a pathname under logos/ with a plain 400", async () => {
+    for (const pathname of ["logos/0123456789abcdef0123456789abcdef.png", "/logos/x.png", "LOGOS/x.png"]) {
+      const res = await POST(
+        new Request("http://localhost/api/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "blob.generate-client-token",
+            payload: { pathname, clientPayload: null, multipart: false },
+          }),
+        }),
+      );
+      expect(res.status, pathname).toBe(400);
+      await expect(res.json()).resolves.toEqual({ error: LOGO_ADDRESS_RESERVED_MESSAGE });
+    }
     expect(handleUploadMock).not.toHaveBeenCalled();
   });
 });
