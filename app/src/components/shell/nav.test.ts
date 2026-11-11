@@ -1,3 +1,7 @@
+import { readdirSync, statSync } from "node:fs";
+import { join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import { isPublicRoute, NAV_ITEMS, pricingShellProps, PUBLIC_ROUTE_PREFIXES, sectionTitle } from "./nav";
@@ -102,5 +106,60 @@ describe("/pricing in the shell (23, fix round 1)", () => {
         STRIPE_PRICE_PRO: "price_pro",
       }),
     ).toEqual({ pricingPublic: true });
+  });
+});
+
+// Go-live check 2026-11-11: /posts/bulk showed "Vibe Socials" in the top bar.
+describe("sectionTitle — every signed-in route has its own name", () => {
+  it.each([
+    ["/", "Dashboard"],
+    ["/posts/new", "Create"],
+    ["/posts/bulk", "Add many posts"],
+    ["/queue", "Queue"],
+    ["/activity", "Activity"],
+    ["/reports", "Reports"],
+    ["/media", "Media"],
+    ["/reviews", "Reviews"],
+    ["/reviews/print-card", "Reviews"],
+    ["/settings", "Settings"],
+    ["/workspaces", "Workspaces"],
+    ["/join/abc123", "Join a workspace"],
+    // Not pages: the 404 keeps the product name.
+    ["/posts", "Vibe Socials"],
+    ["/nowhere", "Vibe Socials"],
+  ])("%s reads %s", (pathname, title) => {
+    expect(sectionTitle(pathname)).toBe(title);
+  });
+
+  // Pages under src/app that render inside the shell and still read the
+  // product name, each with the reason.
+  const NO_OWN_NAME: Record<string, string> = {
+    // Redirects to /settings before anything renders.
+    "/connections": "redirect",
+    // In the shell only when payments are off, and then it is the 404.
+    "/pricing": "404",
+    // nav.ts reaches every browser; the admin path may not (noAdminInClientCode.test.ts).
+    "/admin": "operator only",
+    "/admin/workspaces/x": "operator only",
+  };
+
+  const APP = fileURLToPath(new URL("../../app", import.meta.url));
+  function pageRoutes(dir: string): string[] {
+    return readdirSync(dir).flatMap((entry) => {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) return entry === "api" ? [] : pageRoutes(full);
+      if (entry !== "page.tsx") return [];
+      const route = relative(APP, dir).split(sep).join("/").replace(/\[[^\]]+\]/g, "x");
+      return [`/${route}`.replace(/\/$/, "") || "/"];
+    });
+  }
+
+  it("covers every page in src/app that the shell shows", () => {
+    const routes = pageRoutes(APP).filter((route) => !isPublicRoute(route));
+    expect(routes).toContain("/posts/bulk");
+    for (const route of routes) {
+      if (route in NO_OWN_NAME) continue;
+      expect(sectionTitle(route), route).not.toBe("Vibe Socials");
+    }
   });
 });

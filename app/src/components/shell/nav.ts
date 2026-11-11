@@ -33,6 +33,8 @@ export const NAV_ITEMS: NavItemDef[] = [
 /** Pages the top bar titles that are not in the sidebar. */
 const TITLE_ONLY_ITEMS: Pick<NavItemDef, "label" | "href">[] = [
   { label: "Workspaces", href: "/workspaces" },
+  { label: "Add many posts", href: "/posts/bulk" },
+  { label: "Join a workspace", href: "/join" },
 ];
 
 /**
