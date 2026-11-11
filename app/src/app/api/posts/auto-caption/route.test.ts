@@ -804,3 +804,66 @@ Keep the caption short (1-2 sentences, max ~150 characters).`,
     expect(sentBody().max_tokens).toBe(150);
   });
 });
+
+// Go-live check F2 item 5: a person never reads a configuration or provider
+// error; the detail goes to the server log only.
+describe("POST /api/posts/auto-caption - failures a person reads", () => {
+  const CAPTION_FAILED = "The AI could not write a caption. Try again, or write one yourself.";
+  const DESCRIBE_FAILED = "The AI could not describe this photo. Try again or write it yourself.";
+  const providerError = () =>
+    new Response(JSON.stringify({ error: { message: "Incorrect API key provided: xai-k***" } }), { status: 401 });
+
+  function logged(): string {
+    return JSON.stringify(vi.mocked(console.error).mock.calls, (_key, value) =>
+      value instanceof Error ? value.message : value,
+    );
+  }
+
+  it("not configured: a plain sentence, and the configuration detail only in the log", async () => {
+    vi.stubEnv("XAI_API_KEY", "");
+    const response = await post(validBody);
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body).toEqual({ error: CAPTION_FAILED });
+    expect(JSON.stringify(body)).not.toMatch(/XAI_API_KEY|OPENAI|configured/);
+    expect(logged()).toContain("not configured");
+  });
+
+  it("not configured, describing a photo: the description's own sentence", async () => {
+    vi.stubEnv("XAI_API_KEY", "");
+    const response = await post({ ...validBody, purpose: "altText" });
+    await expect(response.json()).resolves.toEqual({ error: DESCRIBE_FAILED });
+  });
+
+  it("a provider error: a plain sentence, the provider's words only in the log", async () => {
+    fetchMock.mockResolvedValue(providerError());
+    const response = await post(validBody);
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: CAPTION_FAILED });
+    expect(logged()).toContain("Incorrect API key");
+  });
+
+  it("a thrown error and an empty answer: the same plain sentence", async () => {
+    fetchMock.mockRejectedValue(new TypeError("getaddrinfo ENOTFOUND api.x.ai"));
+    const thrown = await post(validBody);
+    await expect(thrown.json()).resolves.toEqual({ error: CAPTION_FAILED });
+    expect(logged()).toContain("ENOTFOUND");
+
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(providerOk("   "));
+    const empty = await post(validBody);
+    await expect(empty.json()).resolves.toEqual({ error: CAPTION_FAILED });
+  });
+
+  it("keeps the sentences a person can act on: too many requests and too long", async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
+    const limited = await post(validBody);
+    expect(limited.status).toBe(429);
+    await expect(limited.json()).resolves.toMatchObject({ error: "Too many requests, slow down." });
+
+    checkRateLimitMock.mockResolvedValue({ allowed: true });
+    const tooLong = await post({ ...validBody, blobUrl: `${BLOB_URL}?${"a".repeat(2300)}` });
+    expect(tooLong.status).toBe(400);
+    await expect(tooLong.json()).resolves.toMatchObject({ error: "blobUrl is too long (max 2200 characters)." });
+  });
+});

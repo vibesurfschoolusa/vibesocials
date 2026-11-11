@@ -338,3 +338,53 @@ ${REVIEW_LINE}`,
     expect(system.endsWith(`${CLOSING}\n${REVIEW_LINE}`)).toBe(true);
   });
 });
+
+// Go-live check F2 item 5: a person never reads a configuration or provider
+// error; the detail goes to the server log only.
+describe("POST /api/reviews/draft-response - failures a person reads", () => {
+  const DRAFT_FAILED = "The AI could not write a reply. Try again, or write one yourself.";
+  const providerError = () =>
+    new Response(JSON.stringify({ error: { message: "Incorrect API key provided: xai-k***" } }), { status: 401 });
+
+  function logged(): string {
+    return JSON.stringify(vi.mocked(console.error).mock.calls, (_key, value) =>
+      value instanceof Error ? value.message : value,
+    );
+  }
+
+  it("not configured: a plain sentence, the detail only in the log", async () => {
+    vi.stubEnv("XAI_API_KEY", "");
+    const response = await post(validBody);
+    expect(response.status).toBe(500);
+    const json = await response.json();
+    expect(json).toEqual({ error: DRAFT_FAILED });
+    expect(JSON.stringify(json)).not.toMatch(/XAI_API_KEY|OPENAI|configured/);
+    expect(logged()).toContain("not configured");
+  });
+
+  it("a provider error, a thrown error and an empty answer: the plain sentence", async () => {
+    fetchMock.mockResolvedValue(providerError());
+    await expect((await post(validBody)).json()).resolves.toEqual({ error: DRAFT_FAILED });
+    expect(logged()).toContain("Incorrect API key");
+
+    fetchMock.mockReset();
+    fetchMock.mockRejectedValue(new TypeError("getaddrinfo ENOTFOUND api.x.ai"));
+    await expect((await post(validBody)).json()).resolves.toEqual({ error: DRAFT_FAILED });
+    expect(logged()).toContain("ENOTFOUND");
+
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(providerOk("  "));
+    await expect((await post(validBody)).json()).resolves.toEqual({ error: DRAFT_FAILED });
+  });
+
+  it("keeps the sentences a person can act on: too many requests and a missing name", async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
+    const limited = await post(validBody);
+    expect(limited.status).toBe(429);
+    await expect(limited.json()).resolves.toMatchObject({ error: "Too many requests, slow down." });
+
+    checkRateLimitMock.mockResolvedValue({ allowed: true });
+    const missing = await post({ ...validBody, reviewerName: "" });
+    await expect(missing.json()).resolves.toEqual({ error: "Reviewer name and star rating are required" });
+  });
+});

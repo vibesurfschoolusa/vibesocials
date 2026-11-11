@@ -52,6 +52,23 @@ function Thumbnail({ row }: { row: BulkRow }) {
   );
 }
 
+/**
+ * What of a failed caption call the row may say, or null. Only a refusal the
+ * person can act on (too many requests, the day's limit, a paused workspace)
+ * is passed on; a server failure's own words (configuration, the provider's
+ * error) are never shown, and the browser console keeps the detail.
+ */
+export function captionFailureReason(status: number | null, error: unknown): string | null {
+  if (status === null || status < 400 || status >= 500 || status === 401) return null;
+  return typeof error === "string" && error.trim() ? error : null;
+}
+
+export function captionFailedText(reason: string | null): string {
+  return reason
+    ? `No caption was written (${reason}). Write one yourself, or ask again.`
+    : "No caption was written. Write one yourself, or ask again.";
+}
+
 function uploadText(row: BulkRow): string | null {
   if (row.upload === "queued") return "Waiting to upload";
   if (row.upload === "working") return row.progress === null ? "Preparing" : `Uploading ${Math.round(row.progress)}%`;
@@ -145,7 +162,7 @@ export function BulkPostRow({
           />
           {row.captionStatus === "failed" ? (
             <p className="text-sm text-muted-foreground">
-              No caption was written ({row.captionError}). Write one yourself, or ask again.
+              {captionFailedText(row.captionError)}
             </p>
           ) : null}
           {editable && row.upload === "done" && (row.captionStatus === "done" || row.captionStatus === "failed") ? (

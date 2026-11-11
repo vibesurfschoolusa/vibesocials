@@ -51,7 +51,7 @@ import { prepareUploadFile } from "@/lib/prepareUploadFile";
 import { localDateTimeToUtcIso, localTimeZoneLabel } from "@/lib/scheduling";
 import type { PostingSlot } from "@/lib/postingSlots";
 import { explainUploadFailure } from "@/lib/uploadFailure";
-import { BulkPostRow } from "./bulk-post-row";
+import { BulkPostRow, captionFailureReason } from "./bulk-post-row";
 
 export interface BulkRow {
   id: string;
@@ -308,7 +308,13 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
       });
       const data = (await response.json().catch(() => null)) as { caption?: unknown; error?: unknown } | null;
       if (!response.ok || typeof data?.caption !== "string" || !data.caption.trim()) {
-        throw new Error(typeof data?.error === "string" && data.error ? data.error : "No caption came back.");
+        console.error("[Add many] Caption failed", { status: response.status, error: data?.error });
+        updateRow(id, {
+          captionStatus: "failed",
+          captionOverwrite: false,
+          captionError: captionFailureReason(response.ok ? null : response.status, data?.error),
+        });
+        return;
       }
       const caption = data.caption;
       updateRow(id, (current) => ({
@@ -322,7 +328,8 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
       updateRow(id, {
         captionStatus: "failed",
         captionOverwrite: false,
-        captionError: errorMessage(error, "No caption came back."),
+        // No answer at all (the network, or reading the file's frames): plain sentence.
+        captionError: null,
       });
     }
   }

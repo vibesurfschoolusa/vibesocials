@@ -18,6 +18,10 @@ import { checkRateLimit } from "@/lib/rateLimit";
 
 export const dynamic = "force-dynamic";
 
+// What a person reads when the AI did not answer, whatever the cause: the
+// cause (configuration, the provider's own error) goes to the server log only.
+const DRAFT_FAILED_MESSAGE = "The AI could not write a reply. Try again, or write one yourself.";
+
 /**
  * POST /api/reviews/draft-response - Generate AI-powered review response.
  * Any member may draft a reply (Team Workspaces — design §1: "Reply to
@@ -101,7 +105,8 @@ export async function POST(request: Request) {
 
     const llm = resolveLlmConfig();
     if (!llm) {
-      return NextResponse.json({ error: LLM_NOT_CONFIGURED_MESSAGE }, { status: 500 });
+      console.error(`[Draft Response] ${LLM_NOT_CONFIGURED_MESSAGE}`);
+      return NextResponse.json({ error: DRAFT_FAILED_MESSAGE }, { status: 500 });
     }
 
     // 2026-11-01 scale audit (W6): per-workspace daily budget, spent only once
@@ -175,20 +180,15 @@ Generate a professional, warm response to this review.`;
     if (!llmResponse.ok) {
       const errorData = await llmResponse.json().catch(() => ({}));
       console.error(`[Draft Response] ${llm.providerLabel} API error:`, errorData);
-      return NextResponse.json(
-        { error: "Failed to generate AI response" },
-        { status: 500 },
-      );
+      return NextResponse.json({ error: DRAFT_FAILED_MESSAGE }, { status: 500 });
     }
 
     const llmData = await llmResponse.json();
     const draftResponse = llmData.choices?.[0]?.message?.content?.trim() || "";
 
     if (!draftResponse) {
-      return NextResponse.json(
-        { error: "AI generated empty response" },
-        { status: 500 }
-      );
+      console.error(`[Draft Response] ${llm.providerLabel} returned an empty reply`);
+      return NextResponse.json({ error: DRAFT_FAILED_MESSAGE }, { status: 500 });
     }
 
     console.log("[Draft Response] Generated successfully", {
@@ -207,9 +207,6 @@ Generate a professional, warm response to this review.`;
       return aiTimeoutResponse();
     }
     console.error("[Draft Response] Error:", error);
-    return NextResponse.json(
-      { error: (error as Error).message || "Failed to generate response" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: DRAFT_FAILED_MESSAGE }, { status: 500 });
   }
 }

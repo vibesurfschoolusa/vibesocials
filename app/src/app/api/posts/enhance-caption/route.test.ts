@@ -419,3 +419,61 @@ ${CLOSING}`;
     await expect(response.json()).resolves.toEqual({ enhancedCaption: "Fresh bread bakery local" });
   });
 });
+
+// Go-live check F2 item 5: a person never reads a configuration or provider
+// error; the detail goes to the server log only.
+describe("POST /api/posts/enhance-caption - failures a person reads", () => {
+  const ENHANCE_FAILED = "The AI could not improve the caption. Try again.";
+  const ADAPT_FAILED = "Couldn't adapt the caption for LinkedIn. Try again.";
+  const body = { caption: "Fresh bread today" };
+  const providerError = () =>
+    new Response(JSON.stringify({ error: { message: "Incorrect API key provided: xai-k***" } }), { status: 401 });
+
+  function logged(): string {
+    return JSON.stringify(vi.mocked(console.error).mock.calls, (_key, value) =>
+      value instanceof Error ? value.message : value,
+    );
+  }
+
+  it("not configured: a plain sentence, the detail only in the log", async () => {
+    vi.stubEnv("XAI_API_KEY", "");
+    const response = await post(body);
+    expect(response.status).toBe(500);
+    const json = await response.json();
+    expect(json).toEqual({ error: ENHANCE_FAILED });
+    expect(JSON.stringify(json)).not.toMatch(/XAI_API_KEY|OPENAI|configured/);
+    expect(logged()).toContain("not configured");
+  });
+
+  it("adapting for a platform: that platform's own sentence", async () => {
+    vi.stubEnv("XAI_API_KEY", "");
+    const response = await post({ ...body, platform: "linkedin" });
+    await expect(response.json()).resolves.toEqual({ error: ADAPT_FAILED });
+  });
+
+  it("a provider error, a thrown error and an empty answer: the plain sentence", async () => {
+    fetchMock.mockResolvedValue(providerError());
+    await expect((await post(body)).json()).resolves.toEqual({ error: ENHANCE_FAILED });
+    expect(logged()).toContain("Incorrect API key");
+
+    fetchMock.mockReset();
+    fetchMock.mockRejectedValue(new TypeError("getaddrinfo ENOTFOUND api.x.ai"));
+    await expect((await post(body)).json()).resolves.toEqual({ error: ENHANCE_FAILED });
+    expect(logged()).toContain("ENOTFOUND");
+
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(providerOk("  "));
+    await expect((await post({ ...body, platform: "linkedin" })).json()).resolves.toEqual({ error: ADAPT_FAILED });
+  });
+
+  it("keeps the sentences a person can act on: too many requests and too long", async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
+    const limited = await post(body);
+    expect(limited.status).toBe(429);
+    await expect(limited.json()).resolves.toMatchObject({ error: "Too many requests, slow down." });
+
+    checkRateLimitMock.mockResolvedValue({ allowed: true });
+    const tooLong = await post({ caption: "a".repeat(2300) });
+    await expect(tooLong.json()).resolves.toMatchObject({ error: "caption is too long (max 2200 characters)." });
+  });
+});

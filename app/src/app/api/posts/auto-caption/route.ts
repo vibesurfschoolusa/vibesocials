@@ -36,6 +36,11 @@ Your description must:
 
 Return ONLY the description.`;
 
+// What a person reads when the AI did not answer, whatever the cause: the
+// cause (configuration, the provider's own error) goes to the server log only.
+const CAPTION_FAILED_MESSAGE = "The AI could not write a caption. Try again, or write one yourself.";
+const DESCRIBE_FAILED_MESSAGE = "The AI could not describe this photo. Try again or write it yourself.";
+
 /** The longest description the AI may hand back (the field holds up to 1,000). */
 const AI_ALT_TEXT_MAX = 250;
 
@@ -58,6 +63,8 @@ interface AutoCaptionRequestBody {
 }
 
 export async function POST(request: Request) {
+  // Set once the request says what it asks for; the catch below reads it.
+  let failedMessage = CAPTION_FAILED_MESSAGE;
   try {
     // Team Workspaces sweep (Task 8): was `getCurrentUser()` reading
     // `user.companyWebsite` directly — that column stopped being written
@@ -121,6 +128,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'purpose must be "altText" when given.' }, { status: 400 });
     }
     const wantsAltText = body.purpose === "altText";
+    if (wantsAltText) failedMessage = DESCRIBE_FAILED_MESSAGE;
 
     // Throttle per user: vision calls are the most expensive, so keep this tight.
     // Fail closed — a limiter outage must not open unlimited LLM spend.
@@ -207,7 +215,8 @@ export async function POST(request: Request) {
 
     const llm = resolveLlmConfig();
     if (!llm) {
-      return NextResponse.json({ error: LLM_NOT_CONFIGURED_MESSAGE }, { status: 500 });
+      console.error(`[Auto Caption] ${LLM_NOT_CONFIGURED_MESSAGE}`);
+      return NextResponse.json({ error: failedMessage }, { status: 500 });
     }
 
     // 2026-11-01 scale audit (W6): per-workspace daily budget, spent only once
@@ -353,10 +362,7 @@ The media is a short social media video. You do not have direct access to the vi
     if (!llmResponse.ok) {
       const errorData = await llmResponse.json().catch(() => ({}));
       console.error(`[Auto Caption] ${llm.providerLabel} API error:`, errorData);
-      return NextResponse.json(
-        { error: "Failed to generate caption from media" },
-        { status: 500 },
-      );
+      return NextResponse.json({ error: CAPTION_FAILED_MESSAGE }, { status: 500 });
     }
 
     const llmData = await llmResponse.json();
@@ -369,10 +375,8 @@ The media is a short social media video. You do not have direct access to the vi
     }
 
     if (!caption) {
-      return NextResponse.json(
-        { error: "AI generated empty caption" },
-        { status: 500 },
-      );
+      console.error(`[Auto Caption] ${llm.providerLabel} returned an empty caption`);
+      return NextResponse.json({ error: CAPTION_FAILED_MESSAGE }, { status: 500 });
     }
 
     console.log("[Auto Caption] Generated successfully", {
@@ -391,10 +395,7 @@ The media is a short social media video. You do not have direct access to the vi
       return aiTimeoutResponse();
     }
     console.error("[Auto Caption] Error:", error);
-    return NextResponse.json(
-      { error: (error as Error).message || "Failed to generate caption from media" },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: failedMessage }, { status: 500 });
   }
 }
 
@@ -443,10 +444,7 @@ async function describePhoto(args: {
 
   if (!llmResponse.ok) {
     console.error(`[Auto Caption] ${llm.providerLabel} API error (alt text)`, { status: llmResponse.status });
-    return NextResponse.json(
-      { error: "The AI could not describe this photo. Try again or write it yourself." },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: DESCRIBE_FAILED_MESSAGE }, { status: 500 });
   }
 
   const llmData = await llmResponse.json();

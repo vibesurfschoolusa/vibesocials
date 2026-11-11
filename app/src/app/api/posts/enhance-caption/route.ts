@@ -54,10 +54,17 @@ ${lines.join("\n")}
 ${PROMPT_OUTPUT_RULES}`;
 }
 
+// What a person reads when the AI did not answer, whatever the cause: the
+// cause (configuration, the provider's own error) goes to the server log only.
+const ENHANCE_FAILED_MESSAGE = "The AI could not improve the caption. Try again.";
+const adaptFailedMessage = (platform: Platform) => `Couldn't adapt the caption for ${platformLabel(platform)}. Try again.`;
+
 /**
  * POST /api/posts/enhance-caption - Generate AI-enhanced SEO-optimized caption
  */
 export async function POST(request: Request) {
+  // Set once the request names a platform to adapt for; the catch below reads it.
+  let failedMessage = ENHANCE_FAILED_MESSAGE;
   try {
     // 2026-11-01 scale audit (W6): was `getCurrentUser()`. The per-workspace
     // daily AI quota needs a workspace id, so this resolves the workspace
@@ -109,6 +116,7 @@ export async function POST(request: Request) {
     }
     const adaptPlatform = platform as Platform | undefined;
     const adaptMaxLength = maxLength as number | undefined;
+    if (adaptPlatform) failedMessage = adaptFailedMessage(adaptPlatform);
 
     // Fail closed — a limiter outage must not open unlimited LLM spend.
     const rateLimit = await checkRateLimit({
@@ -138,7 +146,8 @@ export async function POST(request: Request) {
 
     const llm = resolveLlmConfig();
     if (!llm) {
-      return NextResponse.json({ error: LLM_NOT_CONFIGURED_MESSAGE }, { status: 500 });
+      console.error(`[Enhance Caption] ${LLM_NOT_CONFIGURED_MESSAGE}`);
+      return NextResponse.json({ error: failedMessage }, { status: 500 });
     }
 
     // 2026-11-01 scale audit (W6): per-workspace daily budget, spent only once
@@ -201,10 +210,7 @@ Create an enhanced version that's perfect for social media.`;
     if (!llmResponse.ok) {
       const errorData = await llmResponse.json().catch(() => ({}));
       console.error(`[Enhance Caption] ${llm.providerLabel} API error:`, errorData);
-      return NextResponse.json(
-        { error: "Failed to generate enhanced caption" },
-        { status: 500 },
-      );
+      return NextResponse.json({ error: failedMessage }, { status: 500 });
     }
 
     const llmData = await llmResponse.json();
@@ -213,7 +219,8 @@ Create an enhanced version that's perfect for social media.`;
     enhancedCaption = enhancedCaption.replace(/#/g, "").trim();
 
     if (!enhancedCaption) {
-      return NextResponse.json({ error: "AI generated empty caption" }, { status: 500 });
+      console.error(`[Enhance Caption] ${llm.providerLabel} returned an empty caption`);
+      return NextResponse.json({ error: failedMessage }, { status: 500 });
     }
 
     console.log("[Enhance Caption] Generated successfully", {
@@ -232,9 +239,6 @@ Create an enhanced version that's perfect for social media.`;
       return aiTimeoutResponse();
     }
     console.error("[Enhance Caption] Error:", error);
-    return NextResponse.json(
-      { error: (error as Error).message || "Failed to enhance caption" },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: failedMessage }, { status: 500 });
   }
 }
