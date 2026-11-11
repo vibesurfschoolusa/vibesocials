@@ -110,6 +110,24 @@ export function sortQueue(jobs: PostJobDTO[]): PostJobDTO[] {
   return [...clientChanges, ...pendingApproval, ...scheduled, ...drafts];
 }
 
+/** "Repeats: 3 of 8" for a post created as part of a series (brief 11), else null. */
+export function seriesLabel(job: PostJobDTO): string | null {
+  if (!job.seriesId || !job.seriesPosition || !job.seriesCount) return null;
+  return `Repeats: ${job.seriesPosition} of ${job.seriesCount}`;
+}
+
+export type CancelScope = "one" | "rest";
+
+/**
+ * Which route a cancel uses: this post alone, or (for a post in a series) this
+ * post and every later one of the series still scheduled or a draft.
+ */
+export function cancelRequest(job: PostJobDTO, scope: CancelScope): { url: string; series: boolean } {
+  return scope === "rest" && job.seriesId
+    ? { url: `/api/posts/${job.id}/cancel-series`, series: true }
+    : { url: `/api/posts/${job.id}/cancel`, series: false };
+}
+
 interface QueueCardProps {
   job: PostJobDTO;
   /** Team Workspaces (Task 7, design §7) — show `by {createdBy.name}` next to the timestamp. */
@@ -153,6 +171,7 @@ function QueueCard({
   const platformCaptions = platformCaptionEntries(listing.platformCaptions);
   // 2026-11-10: "Offer", "Book button"; null for a plain Google update.
   const googleLabel = googleQueueLabel(job.publish?.googlePostType ?? null, job.publish?.googleButton ?? null);
+  const repeats = seriesLabel(job);
 
   return (
     <Card className="p-4 sm:p-5">
@@ -208,6 +227,7 @@ function QueueCard({
           {listing.storyOnlyNote ? (
             <p className="mt-1 text-xs text-muted-foreground">{listing.storyOnlyNote}</p>
           ) : null}
+          {repeats ? <p className="mt-1 text-xs text-muted-foreground">{repeats}</p> : null}
           {platformCaptions.length > 0 ? (
             <div className="mt-2 rounded-md border border-border bg-muted/40 p-2.5">
               <p className="text-xs font-medium text-foreground">{PLATFORM_CAPTIONS_HEADING}</p>
@@ -784,6 +804,8 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
 
   const [editTarget, setEditTarget] = useState<PostJobDTO | null>(null);
   const [cancelTarget, setCancelTarget] = useState<PostJobDTO | null>(null);
+  // For a post in a series: cancel it alone, or it and the later ones.
+  const [cancelScope, setCancelScope] = useState<CancelScope>("one");
   const [publishTarget, setPublishTarget] = useState<PostJobDTO | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<PostJobDTO | null>(null);
   // List stays the default; the calendar is an alternate lens on the SAME
@@ -936,17 +958,31 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
   // failure, per the dialog's contract).
   const confirmCancel = useCallback(async () => {
     if (!cancelTarget) return;
-    const response = await fetch(`/api/posts/${cancelTarget.id}/cancel`, {
+    const request = cancelRequest(cancelTarget, cancelScope);
+    const response = await fetch(request.url, {
       method: "POST",
     });
+    const data = (await response.json().catch(() => null)) as
+      | { error?: string; cancelled?: number; notCancelled?: number }
+      | null;
     if (!response.ok) {
-      const data = (await response.json().catch(() => null)) as { error?: string } | null;
       toast.error(data?.error ?? "Couldn't cancel this post.");
       throw new Error("CANCEL_FAILED");
     }
-    removeJob(cancelTarget.id);
-    toast.success("Scheduled post cancelled.");
-  }, [cancelTarget, removeJob, toast]);
+    if (!request.series) {
+      removeJob(cancelTarget.id);
+      toast.success("Scheduled post cancelled.");
+      return;
+    }
+    // Several cards went; read the Queue again rather than guess which.
+    void load({ silent: true });
+    const cancelled = data?.cancelled ?? 0;
+    const left = data?.notCancelled ?? 0;
+    toast.success(
+      `${cancelled} ${cancelled === 1 ? "post" : "posts"} cancelled.` +
+        (left > 0 ? ` ${left} had already started publishing, so ${left === 1 ? "it was" : "they were"} not cancelled.` : ""),
+    );
+  }, [cancelScope, cancelTarget, load, removeJob, toast]);
 
   const confirmDelete = useCallback(async () => {
     if (!deleteTarget) return;
@@ -1103,7 +1139,10 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
                     viewer={viewer}
                     nowMs={nowMs}
                     onEdit={setEditTarget}
-                    onCancel={setCancelTarget}
+                    onCancel={(target) => {
+                      setCancelScope("one");
+                      setCancelTarget(target);
+                    }}
                     onPublish={setPublishTarget}
                     onDelete={setDeleteTarget}
                     onDecide={handleDecide}
@@ -1147,8 +1186,34 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
           if (!open) setCancelTarget(null);
         }}
         title="Cancel this scheduled post?"
-        description="It won't be published. You can recreate it later from the composer."
-        confirmText="Cancel post"
+        description={
+          cancelTarget?.seriesId ? (
+            <span className="block space-y-2">
+              <span className="block">This post repeats. Cancelled posts won&apos;t be published.</span>
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="cancel-scope"
+                  checked={cancelScope === "one"}
+                  onChange={() => setCancelScope("one")}
+                />
+                Cancel this post
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="cancel-scope"
+                  checked={cancelScope === "rest"}
+                  onChange={() => setCancelScope("rest")}
+                />
+                Cancel this and all later posts in the series
+              </label>
+            </span>
+          ) : (
+            "It won't be published. You can recreate it later from the composer."
+          )
+        }
+        confirmText={cancelScope === "rest" && cancelTarget?.seriesId ? "Cancel posts" : "Cancel post"}
         cancelText="Keep it"
         destructive
         onConfirm={confirmCancel}
