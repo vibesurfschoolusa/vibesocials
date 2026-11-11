@@ -20,7 +20,7 @@ export const STRIPE_API_VERSION = "2026-10-28.endive";
 const STRIPE_API_BASE = "https://api.stripe.com/v1";
 
 /** Webhook handling and page renders wait on these calls, so they must not hang. */
-const STRIPE_TIMEOUT_MS = 10_000;
+export const STRIPE_TIMEOUT_MS = 10_000;
 
 /** A Stripe refusal or an unreachable Stripe. `status` 0 means no answer arrived. */
 export class StripeApiError extends Error {
@@ -105,7 +105,14 @@ function secretKey(env: BillingEnv): string {
 async function stripeRequest<T>(
   method: "GET" | "POST" | "DELETE",
   path: string,
-  options: { form?: URLSearchParams; query?: URLSearchParams; idempotencyKey?: string; env: BillingEnv },
+  options: {
+    form?: URLSearchParams;
+    query?: URLSearchParams;
+    idempotencyKey?: string;
+    env: BillingEnv;
+    /** Shorter than the default when the caller has a budget of its own. */
+    timeoutMs?: number;
+  },
 ): Promise<T> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${secretKey(options.env)}`,
@@ -120,7 +127,7 @@ async function stripeRequest<T>(
     response = await fetchWithTimeout(
       url,
       { method, headers, body: options.form ? options.form.toString() : undefined, cache: "no-store" },
-      STRIPE_TIMEOUT_MS,
+      Math.max(1, Math.min(options.timeoutMs ?? STRIPE_TIMEOUT_MS, STRIPE_TIMEOUT_MS)),
     );
   } catch (error) {
     // The cause can carry the request; only its name is kept.
@@ -207,25 +214,35 @@ export function createPortalSession(
 }
 
 /** GET /v1/subscriptions/:id: what Stripe says about the subscription now. */
-export function retrieveSubscription(id: string, env: BillingEnv = process.env): Promise<StripeSubscription> {
-  return stripeRequest("GET", `/subscriptions/${segment(id)}`, { env });
+export function retrieveSubscription(
+  id: string,
+  env: BillingEnv = process.env,
+  timeoutMs?: number,
+): Promise<StripeSubscription> {
+  return stripeRequest("GET", `/subscriptions/${segment(id)}`, { env, timeoutMs });
 }
 
 /** GET /v1/subscriptions?customer=&status=all: every subscription of the customer, ended ones included. */
 export async function listCustomerSubscriptions(
   customer: string,
   env: BillingEnv = process.env,
+  timeoutMs?: number,
 ): Promise<Array<Pick<StripeSubscription, "id" | "status">>> {
   const list = await stripeRequest<{ data: Array<Pick<StripeSubscription, "id" | "status">> }>("GET", "/subscriptions", {
     query: new URLSearchParams({ customer, status: "all", limit: "100" }),
     env,
+    timeoutMs,
   });
   return list.data;
 }
 
 /** DELETE /v1/subscriptions/:id: cancels now. Stripe ignores idempotency keys on DELETE. */
-export function cancelSubscription(id: string, env: BillingEnv = process.env): Promise<StripeSubscription> {
-  return stripeRequest("DELETE", `/subscriptions/${segment(id)}`, { env });
+export function cancelSubscription(
+  id: string,
+  env: BillingEnv = process.env,
+  timeoutMs?: number,
+): Promise<StripeSubscription> {
+  return stripeRequest("DELETE", `/subscriptions/${segment(id)}`, { env, timeoutMs });
 }
 
 /** GET /v1/prices/:id: the amount Settings shows. */
