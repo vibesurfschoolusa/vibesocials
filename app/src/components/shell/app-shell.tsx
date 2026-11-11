@@ -45,6 +45,9 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerPath, setDrawerPath] = useState(pathname);
+  // 23: true while the workspace banner asks this person to confirm their
+  // address (billing on only); the older verify nudge then stays hidden.
+  const [confirmEmailShown, setConfirmEmailShown] = useState(false);
 
   // Close the mobile drawer on any route change (nav click, back button, etc.).
   // Render-time state adjustment — React's recommended alternative to a
@@ -72,8 +75,8 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
           {/* Soft email-verification nudge. Self-gates: renders nothing unless
               the authenticated user is unverified AND email is configured, so it
               is safe to mount unconditionally inside the authed chrome. */}
-          <VerifyEmailBanner />
-          <WorkspacePausedBanner />
+          <VerifyEmailBanner suppressed={confirmEmailShown} />
+          <WorkspacePausedBanner onConfirmEmailShownChange={setConfirmEmailShown} />
           {children}
         </main>
       </div>

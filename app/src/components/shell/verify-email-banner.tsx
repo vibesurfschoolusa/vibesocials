@@ -30,7 +30,16 @@ import { useToast } from "@/components/ui/toast";
  * "loading"; fetching then would 401 and wrongly hide the banner with no later
  * retry.
  */
-export function VerifyEmailBanner() {
+/**
+ * Fix round 1 (23): the nudge stays hidden while the workspace banner asks the
+ * same person to confirm their address (billing on only), so one person never
+ * sees two banners about it. With billing off `suppressed` is never true.
+ */
+export function verifyEmailBannerShown(accountSaysShow: boolean, suppressed: boolean): boolean {
+  return accountSaysShow && !suppressed;
+}
+
+export function VerifyEmailBanner({ suppressed = false }: { suppressed?: boolean }) {
   const { status } = useSession();
   const { success, error } = useToast();
   const [show, setShow] = useState(false);
@@ -75,7 +84,7 @@ export function VerifyEmailBanner() {
     }
   }
 
-  if (!show) return null;
+  if (!verifyEmailBannerShown(show, suppressed)) return null;
 
   return (
     <div className="px-4 pt-4 md:px-6">

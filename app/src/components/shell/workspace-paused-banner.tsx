@@ -18,7 +18,12 @@ import { useToast } from "@/components/ui/toast";
  * email address is not confirmed gets the routes' sentence and a button that
  * sends the link again.
  */
-export function WorkspacePausedBanner() {
+export function WorkspacePausedBanner({
+  onConfirmEmailShownChange,
+}: {
+  /** Tells the shell when the confirm-your-address line is up, so it can hide the older nudge. */
+  onConfirmEmailShownChange?: (shown: boolean) => void;
+} = {}) {
   const { status } = useSession();
   const pathname = usePathname();
   const { success, error } = useToast();
@@ -43,6 +48,11 @@ export function WorkspacePausedBanner() {
       cancelled = true;
     };
   }, [status, pathname]);
+
+  const confirmShown = confirmEmailBannerShown(workspaceStatus);
+  useEffect(() => {
+    onConfirmEmailShownChange?.(confirmShown);
+  }, [confirmShown, onConfirmEmailShownChange]);
 
   async function handleResend() {
     setSending(true);
@@ -78,6 +88,11 @@ export function readWorkspaceStatus(data: unknown): WorkspaceStatus {
     notice: typeof body.trialNotice === "string" ? body.trialNotice : null,
     emailUnconfirmed: message !== null && body.emailUnconfirmed === true,
   };
+}
+
+/** Whether the banner shows the confirm-your-address line (billing on only). */
+export function confirmEmailBannerShown(status: WorkspaceStatus): boolean {
+  return status.emailUnconfirmed;
 }
 
 export function WorkspaceStatusAlert({
