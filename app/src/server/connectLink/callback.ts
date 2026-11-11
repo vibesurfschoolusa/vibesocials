@@ -10,6 +10,7 @@ import { looksLikeConnectLinkState, readConnectLinkState } from "@/lib/oauthStat
 
 import { clearConnectCookie, rawConnectCookie, readConnectCookie, type ConnectCookie } from "./cookie";
 import { findActiveConnectLink, linkOffers, placeTaken } from "./link";
+import { appOrigin } from "./origin";
 
 /**
  * withConnectLink (2026-11-11): the one place a platform callback learns about
@@ -84,15 +85,6 @@ function sameText(a: string, b: string): boolean {
   const left = Buffer.from(a, "utf8");
   const right = Buffer.from(b, "utf8");
   return left.length === right.length && timingSafeEqual(left, right);
-}
-
-function appOrigin(request: Request): string {
-  try {
-    if (process.env.NEXTAUTH_URL) return new URL(process.env.NEXTAUTH_URL).origin;
-  } catch {
-    // Fall back to the request's own origin.
-  }
-  return new URL(request.url).origin;
 }
 
 function visitorPage(origin: string, token: string): URL {
