@@ -1,0 +1,1546 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`'facebook_page' callback, signed in: unchanged > invalid_state 1`] = `
+{
+  "calls": [],
+  "headers": {
+    "location": "https://app.example.com/settings?error=facebook_page_invalid_state",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'facebook_page' callback, signed in: unchanged > missing_params 1`] = `
+{
+  "calls": [],
+  "headers": {
+    "location": "https://app.example.com/settings?error=facebook_page_missing_code_or_state",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'facebook_page' callback, signed in: unchanged > no_session 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/login?callbackUrl=%2Fsettings",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'facebook_page' callback, signed in: unchanged > not_owner 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "isWorkspaceOwner",
+      "user-owner",
+      "ws-1",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=facebook_page_not_workspace_owner",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'facebook_page' callback, signed in: unchanged > provider_error 1`] = `
+{
+  "calls": [
+    [
+      "console.error",
+      "[FacebookPage OAuth] Error from provider:",
+      "access_denied",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=access_denied",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'facebook_page' callback, signed in: unchanged > success 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "isWorkspaceOwner",
+      "user-owner",
+      "ws-1",
+    ],
+    [
+      "fetch",
+      "GET",
+      "https://graph.facebook.com/v26.0/oauth/access_token?client_id=fb-id&client_secret=fb-secret&redirect_uri=https%3A%2F%2Fapp.example.com%2Fapi%2Fauth%2Ffacebook_page%2Fcallback&code=auth-code",
+    ],
+    [
+      "fetch",
+      "GET",
+      "https://graph.facebook.com/v26.0/oauth/access_token?grant_type=fb_exchange_token&client_id=fb-id&client_secret=fb-secret&fb_exchange_token=fb-user-token",
+    ],
+    [
+      "fetch",
+      "GET",
+      "https://graph.facebook.com/v26.0/me/accounts?access_token=fb-user-token&fields=id%2Cname%2Caccess_token",
+    ],
+    [
+      "console.log",
+      "[FacebookPage OAuth] Pages fetched:",
+      {
+        "count": 1,
+        "pages": [
+          {
+            "id": "page-1",
+            "name": "Page",
+          },
+        ],
+      },
+    ],
+    [
+      "prisma.socialConnection.upsert",
+      {
+        "create": {
+          "accessToken": "page-token",
+          "accountIdentifier": "page-1",
+          "expiresAt": "2027-01-10T08:00:00.000Z",
+          "lastRefreshErrorCode": null,
+          "metadata": {
+            "pageName": "Page",
+          },
+          "needsReconnect": false,
+          "platform": "facebook_page",
+          "refreshFailedAt": null,
+          "refreshToken": null,
+          "userId": "user-owner",
+          "workspaceId": "ws-1",
+        },
+        "update": {
+          "accessToken": "page-token",
+          "accountIdentifier": "page-1",
+          "expiresAt": "2027-01-10T08:00:00.000Z",
+          "lastRefreshErrorCode": null,
+          "metadata": {
+            "pageName": "Page",
+          },
+          "needsReconnect": false,
+          "refreshFailedAt": null,
+          "refreshToken": null,
+        },
+        "where": {
+          "workspaceId_platform": {
+            "platform": "facebook_page",
+            "workspaceId": "ws-1",
+          },
+        },
+      },
+    ],
+    [
+      "console.log",
+      "[FacebookPage OAuth] Connection successful",
+      {
+        "pageId": "page-1",
+        "pageName": "Page",
+        "userId": "user-owner",
+      },
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?success=facebook_page_connected",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'facebook_page' callback, signed in: unchanged > wrong_session 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "logger.warn",
+      "[OAuth callback] Signed-in user is not the user who started the connect flow",
+      {
+        "platform": "facebook_page",
+        "sessionUserId": "user-other",
+        "stateUserId": "user-owner",
+      },
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=oauth_session_mismatch",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'google_business_profile' callback, signed in: unchanged > invalid_state 1`] = `
+{
+  "calls": [],
+  "headers": {
+    "location": "https://app.example.com/settings?error=invalid_state",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'google_business_profile' callback, signed in: unchanged > missing_params 1`] = `
+{
+  "calls": [],
+  "headers": {
+    "location": "https://app.example.com/settings?error=missing_code_or_state",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'google_business_profile' callback, signed in: unchanged > no_session 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/login?callbackUrl=%2Fsettings",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'google_business_profile' callback, signed in: unchanged > not_owner 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "isWorkspaceOwner",
+      "user-owner",
+      "ws-1",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=google_business_profile_not_workspace_owner",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'google_business_profile' callback, signed in: unchanged > provider_error 1`] = `
+{
+  "calls": [],
+  "headers": {
+    "location": "https://app.example.com/settings?error=access_denied",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'google_business_profile' callback, signed in: unchanged > success 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "isWorkspaceOwner",
+      "user-owner",
+      "ws-1",
+    ],
+    [
+      "fetch",
+      "POST",
+      "https://oauth2.googleapis.com/token",
+    ],
+    [
+      "prisma.socialConnection.upsert",
+      {
+        "create": {
+          "accessToken": "gbp-access",
+          "accountIdentifier": "google_business_profile",
+          "expiresAt": null,
+          "lastRefreshErrorCode": null,
+          "metadata": {
+            "locationName": null,
+          },
+          "needsReconnect": false,
+          "platform": "google_business_profile",
+          "refreshFailedAt": null,
+          "refreshToken": null,
+          "userId": "user-owner",
+          "workspaceId": "ws-1",
+        },
+        "update": {
+          "accessToken": "gbp-access",
+          "accountIdentifier": "google_business_profile",
+          "expiresAt": null,
+          "lastRefreshErrorCode": null,
+          "needsReconnect": false,
+          "refreshFailedAt": null,
+          "refreshToken": null,
+        },
+        "where": {
+          "workspaceId_platform": {
+            "platform": "google_business_profile",
+            "workspaceId": "ws-1",
+          },
+        },
+      },
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?success=google_business_profile_connected",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'google_business_profile' callback, signed in: unchanged > wrong_session 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "logger.warn",
+      "[OAuth callback] Signed-in user is not the user who started the connect flow",
+      {
+        "platform": "google_business_profile",
+        "sessionUserId": "user-other",
+        "stateUserId": "user-owner",
+      },
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=oauth_session_mismatch",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'instagram' callback, signed in: unchanged > invalid_state 1`] = `
+{
+  "calls": [],
+  "headers": {
+    "location": "https://app.example.com/settings?error=instagram_invalid_state",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'instagram' callback, signed in: unchanged > missing_params 1`] = `
+{
+  "calls": [],
+  "headers": {
+    "location": "https://app.example.com/settings?error=instagram_missing_code_or_state",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'instagram' callback, signed in: unchanged > no_session 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/login?callbackUrl=%2Fsettings",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'instagram' callback, signed in: unchanged > not_owner 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "isWorkspaceOwner",
+      "user-owner",
+      "ws-1",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=instagram_not_workspace_owner",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'instagram' callback, signed in: unchanged > provider_error 1`] = `
+{
+  "calls": [
+    [
+      "console.error",
+      "[Instagram OAuth] Error from provider:",
+      "access_denied",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=access_denied",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'instagram' callback, signed in: unchanged > success 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "isWorkspaceOwner",
+      "user-owner",
+      "ws-1",
+    ],
+    [
+      "fetch",
+      "GET",
+      "https://graph.facebook.com/v26.0/oauth/access_token?client_id=fb-id&client_secret=fb-secret&redirect_uri=https%3A%2F%2Fapp.example.com%2Fapi%2Fauth%2Finstagram%2Fcallback&code=auth-code",
+    ],
+    [
+      "fetch",
+      "GET",
+      "https://graph.facebook.com/v26.0/oauth/access_token?grant_type=fb_exchange_token&client_id=fb-id&client_secret=fb-secret&fb_exchange_token=fb-user-token",
+    ],
+    [
+      "fetch",
+      "GET",
+      "https://graph.facebook.com/v26.0/me/accounts?access_token=fb-user-token&fields=id%2Cname%2Caccess_token%2Cinstagram_business_account",
+    ],
+    [
+      "console.log",
+      "[Instagram OAuth] Pages fetched:",
+      {
+        "count": 1,
+        "pages": [
+          {
+            "id": "page-1",
+            "name": "Page",
+          },
+        ],
+      },
+    ],
+    [
+      "fetch",
+      "GET",
+      "https://graph.facebook.com/v26.0/ig-1?fields=username%2Cprofile_picture_url&access_token=page-token",
+    ],
+    [
+      "prisma.socialConnection.upsert",
+      {
+        "create": {
+          "accessToken": "page-token",
+          "accountIdentifier": "ig-1",
+          "expiresAt": "2027-01-10T08:00:00.000Z",
+          "lastRefreshErrorCode": null,
+          "metadata": {
+            "pageId": "page-1",
+            "profilePicture": null,
+            "username": "brand",
+          },
+          "needsReconnect": false,
+          "platform": "instagram",
+          "refreshFailedAt": null,
+          "refreshToken": null,
+          "userId": "user-owner",
+          "workspaceId": "ws-1",
+        },
+        "update": {
+          "accessToken": "page-token",
+          "accountIdentifier": "ig-1",
+          "expiresAt": "2027-01-10T08:00:00.000Z",
+          "lastRefreshErrorCode": null,
+          "metadata": {
+            "pageId": "page-1",
+            "profilePicture": null,
+            "username": "brand",
+          },
+          "needsReconnect": false,
+          "refreshFailedAt": null,
+          "refreshToken": null,
+        },
+        "where": {
+          "workspaceId_platform": {
+            "platform": "instagram",
+            "workspaceId": "ws-1",
+          },
+        },
+      },
+    ],
+    [
+      "console.log",
+      "[Instagram OAuth] Connection successful",
+      {
+        "igAccountId": "ig-1",
+        "userId": "user-owner",
+        "username": "brand",
+      },
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?success=instagram_connected",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'instagram' callback, signed in: unchanged > wrong_session 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "logger.warn",
+      "[OAuth callback] Signed-in user is not the user who started the connect flow",
+      {
+        "platform": "instagram",
+        "sessionUserId": "user-other",
+        "stateUserId": "user-owner",
+      },
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=oauth_session_mismatch",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'linkedin' callback, signed in: unchanged > invalid_state 1`] = `
+{
+  "calls": [
+    [
+      "console.error",
+      "[LinkedIn OAuth] Invalid state",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=linkedin_invalid_state",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'linkedin' callback, signed in: unchanged > missing_params 1`] = `
+{
+  "calls": [
+    [
+      "console.error",
+      "[LinkedIn OAuth] Missing code or state",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=linkedin_missing_params",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'linkedin' callback, signed in: unchanged > no_session 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/login?callbackUrl=%2Fsettings",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'linkedin' callback, signed in: unchanged > not_owner 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "isWorkspaceOwner",
+      "user-owner",
+      "ws-1",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=linkedin_not_workspace_owner",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'linkedin' callback, signed in: unchanged > provider_error 1`] = `
+{
+  "calls": [
+    [
+      "console.error",
+      "[LinkedIn OAuth] Authorization error:",
+      "access_denied",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=linkedin_auth_failed",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'linkedin' callback, signed in: unchanged > success 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "isWorkspaceOwner",
+      "user-owner",
+      "ws-1",
+    ],
+    [
+      "console.log",
+      "[LinkedIn OAuth] Exchanging code for token",
+      {
+        "userId": "user-owner",
+      },
+    ],
+    [
+      "fetch",
+      "POST",
+      "https://www.linkedin.com/oauth/v2/accessToken",
+    ],
+    [
+      "console.log",
+      "[LinkedIn OAuth] Token received",
+      {
+        "expiresIn": 3600,
+        "scope": "w_organization_social",
+      },
+    ],
+    [
+      "console.log",
+      "[LinkedIn OAuth] Profile data",
+      {
+        "hasEmail": false,
+        "name": "LinkedIn User",
+        "sub": "linkedin_1794384000000",
+      },
+    ],
+    [
+      "console.log",
+      "[LinkedIn OAuth] Attempting to fetch organizations - Strategy 1: organizationAcls",
+    ],
+    [
+      "fetch",
+      "GET",
+      "https://api.linkedin.com/rest/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED&start=0&count=10",
+    ],
+    [
+      "fetch",
+      "GET",
+      "https://api.linkedin.com/rest/organizations/101",
+    ],
+    [
+      "console.log",
+      "[LinkedIn OAuth] Strategy 1 SUCCESS",
+      {
+        "count": 1,
+        "orgs": [
+          {
+            "id": "101",
+            "name": "Org",
+          },
+        ],
+      },
+    ],
+    [
+      "console.log",
+      "[LinkedIn OAuth] Final organizations result",
+      {
+        "count": 1,
+        "organizations": [
+          {
+            "id": "101",
+            "name": "Org",
+          },
+        ],
+      },
+    ],
+    [
+      "prisma.socialConnection.upsert",
+      {
+        "create": {
+          "accessToken": "li-access",
+          "accountIdentifier": "linkedin_1794384000000",
+          "expiresAt": "2026-11-11T09:00:00.000Z",
+          "lastRefreshErrorCode": null,
+          "metadata": {
+            "email": null,
+            "name": "LinkedIn User",
+            "organizations": [
+              {
+                "id": "101",
+                "name": "Org",
+              },
+            ],
+            "organizationsFetchedAt": "2026-11-11T08:00:00.000Z",
+            "picture": null,
+            "username": "Org",
+          },
+          "needsReconnect": false,
+          "platform": "linkedin",
+          "refreshFailedAt": null,
+          "refreshToken": null,
+          "scopes": "w_organization_social",
+          "userId": "user-owner",
+          "workspaceId": "ws-1",
+        },
+        "update": {
+          "accessToken": "li-access",
+          "expiresAt": "2026-11-11T09:00:00.000Z",
+          "lastRefreshErrorCode": null,
+          "metadata": {
+            "email": null,
+            "name": "LinkedIn User",
+            "organizations": [
+              {
+                "id": "101",
+                "name": "Org",
+              },
+            ],
+            "organizationsFetchedAt": "2026-11-11T08:00:00.000Z",
+            "picture": null,
+            "username": "Org",
+          },
+          "needsReconnect": false,
+          "refreshFailedAt": null,
+          "refreshToken": null,
+          "scopes": "w_organization_social",
+        },
+        "where": {
+          "workspaceId_platform": {
+            "platform": "linkedin",
+            "workspaceId": "ws-1",
+          },
+        },
+      },
+    ],
+    [
+      "console.log",
+      "[LinkedIn OAuth] Connection saved successfully",
+      {
+        "userId": "user-owner",
+      },
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?success=linkedin_connected",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'linkedin' callback, signed in: unchanged > wrong_session 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "logger.warn",
+      "[OAuth callback] Signed-in user is not the user who started the connect flow",
+      {
+        "platform": "linkedin",
+        "sessionUserId": "user-other",
+        "stateUserId": "user-owner",
+      },
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=oauth_session_mismatch",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'pinterest' callback, signed in: unchanged > invalid_state 1`] = `
+{
+  "calls": [],
+  "headers": {
+    "location": "https://app.example.com/settings?error=pinterest_invalid_state",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'pinterest' callback, signed in: unchanged > missing_params 1`] = `
+{
+  "calls": [],
+  "headers": {
+    "location": "https://app.example.com/settings?error=pinterest_missing_params",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'pinterest' callback, signed in: unchanged > no_session 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/login?callbackUrl=%2Fsettings",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'pinterest' callback, signed in: unchanged > not_owner 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "isWorkspaceOwner",
+      "user-owner",
+      "ws-1",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=pinterest_not_workspace_owner",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'pinterest' callback, signed in: unchanged > provider_error 1`] = `
+{
+  "calls": [],
+  "headers": {
+    "location": "https://app.example.com/settings?error=pinterest_access_denied",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'pinterest' callback, signed in: unchanged > success 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "isWorkspaceOwner",
+      "user-owner",
+      "ws-1",
+    ],
+    [
+      "fetch",
+      "POST",
+      "https://api.pinterest.com/v5/oauth/token",
+    ],
+    [
+      "fetch",
+      "GET",
+      "https://api.pinterest.com/v5/user_account",
+    ],
+    [
+      "fetch",
+      "GET",
+      "https://api.pinterest.com/v5/boards?page_size=250",
+    ],
+    [
+      "prisma.socialConnection.upsert",
+      {
+        "create": {
+          "accessToken": "pin-access",
+          "accountIdentifier": "brand",
+          "expiresAt": "2026-12-11T08:00:00.000Z",
+          "lastRefreshErrorCode": null,
+          "metadata": {
+            "accountId": "9001",
+            "accountType": "BUSINESS",
+            "boardId": "555",
+            "boardName": "Board",
+            "username": "brand",
+          },
+          "needsReconnect": false,
+          "platform": "pinterest",
+          "refreshFailedAt": null,
+          "refreshToken": "pin-refresh",
+          "scopes": [
+            "boards:read",
+            "boards:write",
+            "pins:read",
+            "pins:write",
+            "user_accounts:read",
+          ],
+          "userId": "user-owner",
+          "workspaceId": "ws-1",
+        },
+        "update": {
+          "accessToken": "pin-access",
+          "accountIdentifier": "brand",
+          "expiresAt": "2026-12-11T08:00:00.000Z",
+          "lastRefreshErrorCode": null,
+          "metadata": {
+            "accountId": "9001",
+            "accountType": "BUSINESS",
+            "boardId": "555",
+            "boardName": "Board",
+            "username": "brand",
+          },
+          "needsReconnect": false,
+          "refreshFailedAt": null,
+          "refreshToken": "pin-refresh",
+          "scopes": [
+            "boards:read",
+            "boards:write",
+            "pins:read",
+            "pins:write",
+            "user_accounts:read",
+          ],
+        },
+        "where": {
+          "workspaceId_platform": {
+            "platform": "pinterest",
+            "workspaceId": "ws-1",
+          },
+        },
+      },
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?success=pinterest_connected",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'pinterest' callback, signed in: unchanged > wrong_session 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "logger.warn",
+      "[OAuth callback] Signed-in user is not the user who started the connect flow",
+      {
+        "platform": "pinterest",
+        "sessionUserId": "user-other",
+        "stateUserId": "user-owner",
+      },
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=oauth_session_mismatch",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'tiktok' callback, signed in: unchanged > invalid_state 1`] = `
+{
+  "calls": [],
+  "headers": {
+    "location": "https://app.example.com/settings?error=tiktok_invalid_state",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'tiktok' callback, signed in: unchanged > missing_params 1`] = `
+{
+  "calls": [],
+  "headers": {
+    "location": "https://app.example.com/settings?error=tiktok_missing_code_or_state",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'tiktok' callback, signed in: unchanged > no_session 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/login?callbackUrl=%2Fsettings",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'tiktok' callback, signed in: unchanged > not_owner 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "isWorkspaceOwner",
+      "user-owner",
+      "ws-1",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=tiktok_not_workspace_owner",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'tiktok' callback, signed in: unchanged > provider_error 1`] = `
+{
+  "calls": [],
+  "headers": {
+    "location": "https://app.example.com/settings?error=access_denied",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'tiktok' callback, signed in: unchanged > success 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "isWorkspaceOwner",
+      "user-owner",
+      "ws-1",
+    ],
+    [
+      "fetch",
+      "POST",
+      "https://open.tiktokapis.com/v2/oauth/token/",
+    ],
+    [
+      "console.log",
+      "[TikTok OAuth] Token response received:",
+      {
+        "hasAccessToken": true,
+        "hasOpenId": true,
+        "hasRefreshToken": false,
+        "scope": "user.info.basic",
+        "tokenType": "Bearer",
+      },
+    ],
+    [
+      "fetch",
+      "GET",
+      "https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name",
+    ],
+    [
+      "prisma.socialConnection.upsert",
+      {
+        "create": {
+          "accessToken": "tt-access",
+          "accountIdentifier": "open-1",
+          "expiresAt": null,
+          "lastRefreshErrorCode": null,
+          "metadata": {
+            "username": "Brand",
+          },
+          "needsReconnect": false,
+          "platform": "tiktok",
+          "refreshFailedAt": null,
+          "refreshToken": null,
+          "scopes": [
+            "user.info.basic",
+          ],
+          "userId": "user-owner",
+          "workspaceId": "ws-1",
+        },
+        "update": {
+          "accessToken": "tt-access",
+          "accountIdentifier": "open-1",
+          "expiresAt": null,
+          "lastRefreshErrorCode": null,
+          "metadata": {
+            "username": "Brand",
+          },
+          "needsReconnect": false,
+          "refreshFailedAt": null,
+          "refreshToken": null,
+          "scopes": [
+            "user.info.basic",
+          ],
+        },
+        "where": {
+          "workspaceId_platform": {
+            "platform": "tiktok",
+            "workspaceId": "ws-1",
+          },
+        },
+      },
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?success=tiktok_connected",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'tiktok' callback, signed in: unchanged > wrong_session 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "logger.warn",
+      "[OAuth callback] Signed-in user is not the user who started the connect flow",
+      {
+        "platform": "tiktok",
+        "sessionUserId": "user-other",
+        "stateUserId": "user-owner",
+      },
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=oauth_session_mismatch",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'x' callback, signed in: unchanged > invalid_state 1`] = `
+{
+  "calls": [
+    [
+      "prisma.oAuthHandshake.findUnique",
+      {
+        "where": {
+          "token": "req-token",
+        },
+      },
+    ],
+    [
+      "console.error",
+      "[X OAuth 1.0a] Missing or expired handshake",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=x_session_expired",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'x' callback, signed in: unchanged > missing_params 1`] = `
+{
+  "calls": [
+    [
+      "console.error",
+      "[X OAuth 1.0a] Missing oauth_token or oauth_verifier",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=x_missing_params",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'x' callback, signed in: unchanged > no_session 1`] = `
+{
+  "calls": [
+    [
+      "prisma.oAuthHandshake.findUnique",
+      {
+        "where": {
+          "token": "req-token",
+        },
+      },
+    ],
+    [
+      "getCurrentUser",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/login?callbackUrl=%2Fsettings",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'x' callback, signed in: unchanged > not_owner 1`] = `
+{
+  "calls": [
+    [
+      "prisma.oAuthHandshake.findUnique",
+      {
+        "where": {
+          "token": "req-token",
+        },
+      },
+    ],
+    [
+      "getCurrentUser",
+    ],
+    [
+      "isWorkspaceOwner",
+      "user-owner",
+      "ws-1",
+    ],
+    [
+      "prisma.oAuthHandshake.delete",
+      {
+        "where": {
+          "token": "req-token",
+        },
+      },
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=x_not_workspace_owner",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'x' callback, signed in: unchanged > provider_error 1`] = `
+{
+  "calls": [
+    [
+      "console.error",
+      "[X OAuth 1.0a] Authorization denied",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=x_auth_denied",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'x' callback, signed in: unchanged > success 1`] = `
+{
+  "calls": [
+    [
+      "prisma.oAuthHandshake.findUnique",
+      {
+        "where": {
+          "token": "req-token",
+        },
+      },
+    ],
+    [
+      "getCurrentUser",
+    ],
+    [
+      "isWorkspaceOwner",
+      "user-owner",
+      "ws-1",
+    ],
+    [
+      "console.log",
+      "[X OAuth 1.0a] Exchanging for access token",
+      {
+        "userId": "user-owner",
+      },
+    ],
+    [
+      "fetch",
+      "POST",
+      "https://api.twitter.com/oauth/access_token",
+    ],
+    [
+      "console.log",
+      "[X OAuth 1.0a] Access token received",
+      {
+        "screenName": "brand",
+        "userIdFromX": "42",
+      },
+    ],
+    [
+      "prisma.socialConnection.upsert",
+      {
+        "create": {
+          "accessToken": "access-token",
+          "accountIdentifier": "42",
+          "expiresAt": null,
+          "lastRefreshErrorCode": null,
+          "metadata": {
+            "user_id": "42",
+            "username": "brand",
+          },
+          "needsReconnect": false,
+          "platform": "x",
+          "refreshFailedAt": null,
+          "refreshToken": "access-secret",
+          "scopes": "read write",
+          "userId": "user-owner",
+          "workspaceId": "ws-1",
+        },
+        "update": {
+          "accessToken": "access-token",
+          "accountIdentifier": "42",
+          "expiresAt": null,
+          "lastRefreshErrorCode": null,
+          "metadata": {
+            "user_id": "42",
+            "username": "brand",
+          },
+          "needsReconnect": false,
+          "refreshFailedAt": null,
+          "refreshToken": "access-secret",
+          "scopes": "read write",
+        },
+        "where": {
+          "workspaceId_platform": {
+            "platform": "x",
+            "workspaceId": "ws-1",
+          },
+        },
+      },
+    ],
+    [
+      "console.log",
+      "[X OAuth 1.0a] Connection saved",
+      {
+        "userId": "user-owner",
+        "workspaceId": "ws-1",
+      },
+    ],
+    [
+      "prisma.oAuthHandshake.delete",
+      {
+        "where": {
+          "token": "req-token",
+        },
+      },
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?success=x_connected",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'x' callback, signed in: unchanged > wrong_session 1`] = `
+{
+  "calls": [
+    [
+      "prisma.oAuthHandshake.findUnique",
+      {
+        "where": {
+          "token": "req-token",
+        },
+      },
+    ],
+    [
+      "getCurrentUser",
+    ],
+    [
+      "logger.warn",
+      "[OAuth callback] Signed-in user is not the user who started the connect flow",
+      {
+        "platform": "x",
+        "sessionUserId": "user-other",
+        "stateUserId": "user-owner",
+      },
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=oauth_session_mismatch",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'youtube' callback, signed in: unchanged > invalid_state 1`] = `
+{
+  "calls": [
+    [
+      "console.error",
+      "[YouTube OAuth] Invalid state parameter",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=youtube_oauth_invalid_state",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'youtube' callback, signed in: unchanged > missing_params 1`] = `
+{
+  "calls": [],
+  "headers": {
+    "location": "https://app.example.com/settings?error=youtube_oauth_missing_params",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'youtube' callback, signed in: unchanged > no_session 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/login?callbackUrl=%2Fsettings",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'youtube' callback, signed in: unchanged > not_owner 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "isWorkspaceOwner",
+      "user-owner",
+      "ws-1",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=youtube_not_workspace_owner",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'youtube' callback, signed in: unchanged > provider_error 1`] = `
+{
+  "calls": [
+    [
+      "console.error",
+      "[YouTube OAuth] User denied access or error:",
+      "access_denied",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=youtube_oauth_denied",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'youtube' callback, signed in: unchanged > success 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "isWorkspaceOwner",
+      "user-owner",
+      "ws-1",
+    ],
+    [
+      "fetch",
+      "POST",
+      "https://oauth2.googleapis.com/token",
+    ],
+    [
+      "fetch",
+      "GET",
+      "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
+    ],
+    [
+      "prisma.socialConnection.upsert",
+      {
+        "create": {
+          "accessToken": "yt-access",
+          "accountIdentifier": "My Channel",
+          "expiresAt": "2026-11-11T09:00:00.000Z",
+          "lastRefreshErrorCode": null,
+          "metadata": {
+            "channelId": "chan-1",
+            "channelTitle": "My Channel",
+          },
+          "needsReconnect": false,
+          "platform": "youtube",
+          "refreshFailedAt": null,
+          "refreshToken": null,
+          "userId": "user-owner",
+          "workspaceId": "ws-1",
+        },
+        "update": {
+          "accessToken": "yt-access",
+          "accountIdentifier": "My Channel",
+          "expiresAt": "2026-11-11T09:00:00.000Z",
+          "lastRefreshErrorCode": null,
+          "needsReconnect": false,
+          "refreshFailedAt": null,
+          "refreshToken": null,
+        },
+        "where": {
+          "workspaceId_platform": {
+            "platform": "youtube",
+            "workspaceId": "ws-1",
+          },
+        },
+      },
+    ],
+    [
+      "console.log",
+      "[YouTube OAuth] Successfully connected channel:",
+      "My Channel",
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?success=youtube_connected",
+  },
+  "status": 307,
+}
+`;
+
+exports[`'youtube' callback, signed in: unchanged > wrong_session 1`] = `
+{
+  "calls": [
+    [
+      "getCurrentUser",
+    ],
+    [
+      "logger.warn",
+      "[OAuth callback] Signed-in user is not the user who started the connect flow",
+      {
+        "platform": "youtube",
+        "sessionUserId": "user-other",
+        "stateUserId": "user-owner",
+      },
+    ],
+  ],
+  "headers": {
+    "location": "https://app.example.com/settings?error=oauth_session_mismatch",
+  },
+  "status": 307,
+}
+`;
