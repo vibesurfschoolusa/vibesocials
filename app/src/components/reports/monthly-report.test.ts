@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -149,6 +152,53 @@ describe("MonthlyReportView", () => {
     expect(html).toContain("aside");
     // The sheet hides header and nav elements, so the report itself uses neither.
     expect(html).not.toMatch(/<(header|nav|aside)[\s>]/);
+  });
+});
+
+/** The text of the report's @media print block, as rendered. */
+function printBlock(): string {
+  const html = render(report());
+  const css = html.slice(html.indexOf("@media print"));
+  return css.slice(0, css.indexOf("</style>"));
+}
+
+/** Every selector in globals.css that sets the theme's text colour (--foreground). */
+function themeSelectors(): string[] {
+  const css = readFileSync(fileURLToPath(new URL("../../app/globals.css", import.meta.url)), "utf8").replace(
+    /\/\*[\s\S]*?\*\//g,
+    "",
+  );
+  const selectors = new Set<string>();
+  for (const match of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!/--foreground\s*:/.test(match[2])) continue;
+    // Only the selector list: drop any statement (an @import) before it.
+    const list = match[1].split(";").pop() ?? "";
+    for (const selector of list.split(",")) selectors.add(selector.trim());
+  }
+  return [...selectors];
+}
+
+describe("the print sheet beats every theme state", () => {
+  it("finds the theme selectors globals.css uses, including the system dark mode one", () => {
+    expect(themeSelectors()).toEqual(expect.arrayContaining([":root", ":root:not(.light)", ":root.dark"]));
+  });
+
+  it("names each theme selector and sets every colour variable it sets with !important", () => {
+    const block = printBlock();
+    const rule = block.match(/([^{}]*):root[^{}]*\{([^{}]*--foreground[^{}]*)\}/);
+    expect(rule, "a :root rule in the print block").not.toBeNull();
+    const selectorList = rule![0].slice(0, rule![0].indexOf("{")).split(",").map((s) => s.trim());
+    for (const selector of themeSelectors()) expect(selectorList, selector).toContain(selector);
+
+    const declarations = rule![2].split(";").map((d) => d.trim()).filter((d) => d.startsWith("--"));
+    expect(declarations.length).toBeGreaterThan(0);
+    for (const declaration of declarations) expect(declaration, declaration).toMatch(/!important$/);
+  });
+
+  it("forces every text in the report to dark on white, not only the page", () => {
+    const block = printBlock();
+    expect(block).toMatch(/\[data-report\] \*[^{]*\{[^}]*color: #000000 !important/);
+    expect(block).toMatch(/\[data-report\] \*[^{]*\{[^}]*background: transparent !important/);
   });
 });
 

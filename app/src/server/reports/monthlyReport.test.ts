@@ -101,7 +101,8 @@ describe("buildMonthlyReport", () => {
     // Every query is scoped to the workspace, and the result queries to the month.
     expect(m.workspaceFindUnique.mock.calls[0][0].where).toEqual({ id: WS });
     const grouped = m.resultGroupBy.mock.calls[0][0].where;
-    expect(grouped).toMatchObject({ workspaceId: WS, postJob: { workspaceId: WS }, updatedAt: OCT });
+    // The result's own (denormalised) workspace id: no join over PostJob.
+    expect(grouped).toEqual({ workspaceId: WS, status: { in: ["success", "failed"] }, updatedAt: OCT });
     expect(m.postCount.mock.calls[0][0].where).toEqual({
       workspaceId: WS,
       results: { some: { workspaceId: WS, status: "success", updatedAt: OCT } },
@@ -109,7 +110,6 @@ describe("buildMonthlyReport", () => {
     const recent = m.resultFindMany.mock.calls[0][0];
     expect(recent.where).toEqual({
       workspaceId: WS,
-      postJob: { workspaceId: WS },
       status: "success",
       updatedAt: OCT,
     });

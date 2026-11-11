@@ -29,21 +29,33 @@ import {
 /**
  * Print: the app's sidebar, top bar and drawer (aside, header, nav) and every
  * control go; the shell's sidebar gutter closes; dark text on white whatever
- * the theme; a post never splits across pages; a link's address is printed
+ * the theme. The variables are set on every selector globals.css themes with
+ * (its system dark mode rule `:root:not(.light)` is more specific than
+ * `:root`) and marked !important, and every text in the report is forced to
+ * black, since browsers do not print backgrounds. A post never splits across pages; a link's address is printed
  * beside its label. Set as a string: React would escape characters in a
  * <style> child.
  */
 const PRINT_CSS = `
 @media print {
   @page { margin: 12mm; }
-  :root, :root.dark, :root.light {
-    color-scheme: light;
-    --background: #ffffff; --foreground: #000000;
-    --card: #ffffff; --card-foreground: #000000;
-    --muted: #ffffff; --muted-foreground: #334155;
-    --border: #94a3b8;
+  :root, :root:not(.light), :root.dark, :root.light {
+    color-scheme: light !important;
+    --background: #ffffff !important;
+    --foreground: #000000 !important;
+    --card: #ffffff !important;
+    --card-foreground: #000000 !important;
+    --muted: #ffffff !important;
+    --muted-foreground: #334155 !important;
+    --border: #94a3b8 !important;
+    --primary: #000000 !important;
   }
   html, body { background: #ffffff !important; color: #000000 !important; }
+  [data-report], [data-report] * {
+    color: #000000 !important;
+    background: transparent !important;
+    border-color: #94a3b8 !important;
+  }
   aside, header, nav, [data-report-noprint] { display: none !important; }
   [class~="md:pl-64"] { padding-left: 0 !important; }
   [data-report-post], [data-report-block] { break-inside: avoid; page-break-inside: avoid; }

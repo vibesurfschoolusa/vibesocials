@@ -58,9 +58,9 @@ export async function buildMonthlyReport(
   // by the [workspaceId, updatedAt] index publish-health uses.
   const groups = await prisma.postJobResult.groupBy({
     by: ["platform", "status"],
+    // The result's own workspace id, as publish-health: no join over PostJob.
     where: {
       workspaceId,
-      postJob: { workspaceId },
       status: { in: ["success", "failed"] },
       updatedAt: inMonth,
     },
@@ -81,7 +81,7 @@ export async function buildMonthlyReport(
   // contain them, and this read stays bounded however busy the month was.
   const recent = postCount
     ? await prisma.postJobResult.findMany({
-        where: { workspaceId, postJob: { workspaceId }, status: "success", updatedAt: inMonth },
+        where: { workspaceId, status: "success", updatedAt: inMonth },
         orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
         take: REPORT_POST_MAX * PLATFORM_ORDER.length,
         select: { postJobId: true },
