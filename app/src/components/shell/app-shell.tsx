@@ -19,7 +19,7 @@ import { isPublicRoute } from "./nav";
  * dashboard landing render bare. Server-side auth redirects still run first —
  * this is presentational chrome around whatever the page renders.
  */
-export function AppShell({ children }: { children: ReactNode }) {
+export function AppShell({ children, pricingPublic }: { children: ReactNode; pricingPublic?: boolean }) {
   const pathname = usePathname();
   const { status } = useSession();
 
@@ -30,9 +30,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   // prior behavior (bare while loading/signed-out, shell only once
   // authenticated) since it's excluded from `isAppRoute` and hosts both the
   // signed-out Landing and the signed-in Dashboard.
-  const isAppRoute = !isPublicRoute(pathname) && pathname !== "/";
+  const isPublic = isPublicRoute(pathname, { pricingPublic });
+  const isAppRoute = !isPublic && pathname !== "/";
   const showShell =
-    status === "authenticated" ? !isPublicRoute(pathname) : isAppRoute && status === "loading";
+    status === "authenticated" ? !isPublic : isAppRoute && status === "loading";
 
   return (
     <ToastProvider>

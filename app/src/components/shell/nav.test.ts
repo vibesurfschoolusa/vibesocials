@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isPublicRoute, NAV_ITEMS, PUBLIC_ROUTE_PREFIXES, sectionTitle } from "./nav";
+import { isPublicRoute, NAV_ITEMS, pricingShellProps, PUBLIC_ROUTE_PREFIXES, sectionTitle } from "./nav";
 
 describe("isPublicRoute", () => {
   it("treats the help page as public", () => {
@@ -66,8 +66,8 @@ describe("Reports", () => {
   });
 });
 
-describe("PUBLIC_ROUTE_PREFIXES — pricing (23)", () => {
-  it("adds /pricing and nothing else", () => {
+describe("/pricing in the shell (23, fix round 1)", () => {
+  it("leaves the public list as it was", () => {
     expect(PUBLIC_ROUTE_PREFIXES).toEqual([
       "/login",
       "/register",
@@ -81,9 +81,25 @@ describe("PUBLIC_ROUTE_PREFIXES — pricing (23)", () => {
       "/help",
       "/u",
       "/v",
-      "/pricing",
     ]);
-    expect(isPublicRoute("/pricing")).toBe(true);
-    expect(isPublicRoute("/pricings")).toBe(false);
+  });
+
+  it("is an app page (its 404 inside the shell, like any unknown page) unless pricing is public", () => {
+    expect(isPublicRoute("/pricing")).toBe(false);
+    expect(isPublicRoute("/pricing", { pricingPublic: true })).toBe(true);
+    expect(isPublicRoute("/pricings", { pricingPublic: true })).toBe(false);
+  });
+
+  it("gives the shell no prop at all without payments configured, so the page is as before", () => {
+    expect(pricingShellProps({})).toEqual({});
+    expect(pricingShellProps({ BILLING_ENABLED: "true" })).toEqual({});
+    expect(
+      pricingShellProps({
+        BILLING_ENABLED: "true",
+        STRIPE_SECRET_KEY: "sk_test_placeholder",
+        STRIPE_WEBHOOK_SECRET: "whsec_placeholder",
+        STRIPE_PRICE_PRO: "price_pro",
+      }),
+    ).toEqual({ pricingPublic: true });
   });
 });

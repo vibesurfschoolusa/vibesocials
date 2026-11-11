@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { PUBLIC_ROUTE_PREFIXES } from "./components/shell/nav";
-import { isPublicPath } from "./proxy";
+import { authorizeRequest, isPublicPath } from "./proxy";
 
 describe("isPublicPath", () => {
   it("lets signed-out visitors open the help page", () => {
@@ -45,19 +45,39 @@ describe("isPublicPath", () => {
   });
 });
 
-describe("isPublicPath — pricing (23)", () => {
-  it("lets a signed-out visitor reach /pricing, which answers the 404 until payments are configured", () => {
-    expect(isPublicPath("/pricing")).toBe(true);
-    expect(isPublicPath("/pricings")).toBe(false);
-    expect(isPublicPath("/price")).toBe(false);
+const PAYMENTS = {
+  BILLING_ENABLED: "true",
+  STRIPE_SECRET_KEY: "sk_test_placeholder",
+  STRIPE_WEBHOOK_SECRET: "whsec_placeholder",
+  STRIPE_PRICE_STARTER: "price_starter",
+};
+
+function signedOut(pathname: string, env: Record<string, string | undefined> = {}) {
+  return authorizeRequest({ token: null, req: { nextUrl: new URL(`https://example.test${pathname}`) } }, env);
+}
+
+describe("/pricing in the proxy (23, fix round 1)", () => {
+  it("without payments configured, sends a signed-out visitor to sign-in exactly like an address that does not exist", () => {
+    expect(isPublicPath("/pricing", {})).toBe(false);
+    expect(signedOut("/pricing")).toBe(false);
+    expect(signedOut("/no-such-page")).toBe(false);
+    // Billing on alone is not enough.
+    expect(isPublicPath("/pricing", { BILLING_ENABLED: "true" })).toBe(false);
+  });
+
+  it("with payments configured, lets a signed-out visitor open /pricing, and nothing that only starts with it", () => {
+    expect(isPublicPath("/pricing", PAYMENTS)).toBe(true);
+    expect(signedOut("/pricing", PAYMENTS)).toBe(true);
+    expect(isPublicPath("/pricings", PAYMENTS)).toBe(false);
+    expect(signedOut("/no-such-page", PAYMENTS)).toBe(false);
   });
 
   it("opens nothing else new: the public pages are the ones the shell treats as public, plus the two app files", () => {
     for (const prefix of PUBLIC_ROUTE_PREFIXES) {
-      expect(isPublicPath(prefix), prefix).toBe(true);
+      expect(isPublicPath(prefix, {}), prefix).toBe(true);
     }
     for (const path of ["/settings", "/queue", "/posts/new", "/media", "/reports", "/reviews", "/workspaces", "/admin", "/join/abc", "/connections"]) {
-      expect(isPublicPath(path), path).toBe(false);
+      expect(isPublicPath(path, PAYMENTS), path).toBe(false);
     }
   });
 });

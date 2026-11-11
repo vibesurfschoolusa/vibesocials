@@ -4,6 +4,7 @@ import "./globals.css";
 import { ServiceWorkerRegistration } from "@/components/service-worker-registration";
 import { AppSessionProvider } from "@/components/session-provider";
 import { AppShell } from "@/components/shell/app-shell";
+import { pricingShellProps } from "@/components/shell/nav";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -55,7 +56,8 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
         <ServiceWorkerRegistration />
         <AppSessionProvider>
-          <AppShell>{children}</AppShell>
+          {/* 23: no prop at all until payments are configured. */}
+          <AppShell {...pricingShellProps()}>{children}</AppShell>
         </AppSessionProvider>
       </body>
     </html>

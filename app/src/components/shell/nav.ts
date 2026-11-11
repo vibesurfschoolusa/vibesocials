@@ -10,6 +10,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { paymentsConfigured, type BillingEnv } from "@/lib/billing";
+
 export interface NavItemDef {
   label: string;
   href: string;
@@ -53,14 +55,29 @@ export const PUBLIC_ROUTE_PREFIXES = [
   "/u",
   // Client review links (2026-11-10): the client has no account, so no shell.
   "/v",
-  // The pricing page (23), for visitors without an account.
-  "/pricing",
 ];
 
-export function isPublicRoute(pathname: string): boolean {
-  return PUBLIC_ROUTE_PREFIXES.some(
+/**
+ * `pricingPublic`: /pricing renders with no shell too (23). The shell runs in
+ * the browser, which cannot read the billing setting, so the root layout
+ * passes it in (pricingShellProps). Without it /pricing is an unknown app page:
+ * its 404 shows inside the shell, like any other.
+ */
+export function isPublicRoute(pathname: string, options: { pricingPublic?: boolean } = {}): boolean {
+  const prefixes = options.pricingPublic ? [...PUBLIC_ROUTE_PREFIXES, "/pricing"] : PUBLIC_ROUTE_PREFIXES;
+  return prefixes.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
   );
+}
+
+/**
+ * For the root layout, on the server: the AppShell prop that makes /pricing
+ * public, only once payments are configured (the proxy's isPublicPath reads
+ * the same function). Without them it is no prop at all, so every page's
+ * markup is what it was before pricing existed.
+ */
+export function pricingShellProps(env: BillingEnv = process.env): { pricingPublic?: true } {
+  return paymentsConfigured(env) ? { pricingPublic: true } : {};
 }
 
 /** Active-nav matching: exact for the dashboard root, prefix for the rest. */
