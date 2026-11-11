@@ -220,6 +220,14 @@ model Workspace {
   trialEndsAt      DateTime?
   currentPeriodEnd DateTime?
   billingExempt    Boolean   @default(false)
+  // Stripe (21b, 2026-11-10). The customer is created by checkout; the
+  // subscription id is written only by the Stripe webhook, with the plan
+  // columns above. The two markers say a trial reminder or trial-ended email
+  // went out (src/server/billing/reminders.ts).
+  stripeCustomerId      String?   @unique
+  stripeSubscriptionId  String?   @unique
+  trialReminderSentAt   DateTime?
+  trialEndedEmailSentAt DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -774,4 +782,15 @@ model AdminAction {
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId, createdAt])
+}
+
+// Stripe webhook events already handled (21b, 2026-11-10): Stripe sends an
+// event more than once, so the webhook inserts the event id here in the same
+// transaction as its write and stops when the id is already present. A
+// failed-payment notice also stores "invoice.payment_failed:<invoice id>" so
+// owners hear about one invoice once, whichever event carried it.
+model StripeEvent {
+  id         String   @id
+  type       String
+  receivedAt DateTime @default(now())
 }
