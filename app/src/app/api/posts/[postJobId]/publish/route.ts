@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { getWorkspaceContext } from "@/lib/workspace";
-import { workspaceBlockResponse } from "@/lib/workspaceStatus";
+import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { prisma } from "@/lib/db";
 import {
   holdForApprovalData,
@@ -72,7 +72,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   }
 
   // Pause (2026-11-10): a paused workspace cannot create or move work.
-  const blocked = workspaceBlockResponse(workspaceContext.workspace);
+  const blocked = accessBlockResponse(workspaceContext);
   if (blocked) return blocked;
 
   const rateLimit = await checkRateLimit({

@@ -7,7 +7,7 @@ import { UPLOAD_ALLOWED_CONTENT_TYPES } from "@/lib/mediaInput";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { logoAddressRefusal } from "@/lib/workspaceLogo";
-import { workspaceBlockResponse } from "@/lib/workspaceStatus";
+import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { checkStorageLimit } from "@/server/usage/workspaceUsage";
 
 /**
@@ -45,7 +45,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   // Pause (2026-11-10): a paused workspace cannot create or move work.
-  const blocked = workspaceBlockResponse(context.workspace);
+  const blocked = accessBlockResponse(context);
   if (blocked) return blocked;
 
   const { user } = context;

@@ -140,3 +140,44 @@ export function workspaceBlockResponse(
   if (!block) return null;
   return NextResponse.json({ error: block.message, code: block.code }, { status: 403 });
 }
+
+export const EMAIL_UNCONFIRMED_CODE = "EMAIL_UNCONFIRMED";
+
+export type AccessBlock = { code: WorkspaceBlockCode | typeof EMAIL_UNCONFIRMED_CODE; message: string };
+
+/** The person's side of the check: the signed-in user's own row. */
+export type AccessUser = { email: string; emailVerifiedAt: Date | null; googleLinkedAt: Date | null };
+
+export function emailUnconfirmedMessage(email: string): string {
+  return `Confirm your email address to start posting. We sent a link to ${email}.`;
+}
+
+/**
+ * Whether this person may create or move work in this workspace (23): the
+ * workspace's block first, then, with billing on only, an unconfirmed email
+ * address in a workspace on a trial or a plan. Registration stays open, so this
+ * is what keeps a stranger's unconfirmed account from posting. Exempt
+ * workspaces (every one made before billing, and the operator's client ones)
+ * and Google sign-ins, which prove the mailbox, are never refused for it.
+ */
+export function accessBlock(
+  context: { user: AccessUser; workspace: WorkspaceStatusFields },
+  now: Date = new Date(),
+): AccessBlock | null {
+  const block = workspaceBlock(context.workspace, now);
+  if (block) return block;
+  const { user } = context;
+  if (!billingEnabled() || user.emailVerifiedAt || user.googleLinkedAt) return null;
+  if (planState(context.workspace, now) === "exempt") return null;
+  return { code: EMAIL_UNCONFIRMED_CODE, message: emailUnconfirmedMessage(user.email) };
+}
+
+/** For a route that creates or moves work: the 403 to return as-is, or null to carry on. */
+export function accessBlockResponse(
+  context: { user: AccessUser; workspace: WorkspaceStatusFields },
+  now: Date = new Date(),
+): NextResponse | null {
+  const block = accessBlock(context, now);
+  if (!block) return null;
+  return NextResponse.json({ error: block.message, code: block.code }, { status: 403 });
+}

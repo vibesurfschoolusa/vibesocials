@@ -12,7 +12,7 @@ import {
 import { BRAND_VOICE_REVIEW_LINE, brandVoicePrompt } from "@/lib/brandVoice";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { getWorkspaceContext } from "@/lib/workspace";
-import { workspaceBlockResponse } from "@/lib/workspaceStatus";
+import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
 
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     }
 
     // Pause (2026-11-10): a paused workspace cannot create or move work.
-    const blocked = workspaceBlockResponse(context.workspace);
+    const blocked = accessBlockResponse(context);
     if (blocked) return blocked;
 
     const body = await readJsonObject(request);

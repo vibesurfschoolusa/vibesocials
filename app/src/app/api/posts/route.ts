@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { getWorkspaceContext, getWorkspaceMemberCount } from "@/lib/workspace";
-import { workspaceBlockResponse } from "@/lib/workspaceStatus";
+import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "@/lib/blobUrl";
 import { logoAddressRefusal } from "@/lib/workspaceLogo";
 import { findOverlongCaption, pickPlatformOverrides } from "@/lib/captionLimits";
@@ -526,7 +526,7 @@ export async function POST(request: Request) {
   }
 
   // Pause (2026-11-10): a paused workspace cannot create or move work.
-  const blocked = workspaceBlockResponse(context.workspace);
+  const blocked = accessBlockResponse(context);
   if (blocked) return blocked;
 
   // Roadmap Phase 2 (spec §1.2): POST /api/posts triggers live

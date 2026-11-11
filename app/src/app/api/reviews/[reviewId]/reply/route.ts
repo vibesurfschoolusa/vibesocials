@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { getWorkspaceContext } from "@/lib/workspace";
-import { workspaceBlockResponse } from "@/lib/workspaceStatus";
+import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { prisma } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +20,7 @@ export async function POST(request: Request) {
     }
 
     // Pause (2026-11-10): a paused workspace cannot create or move work.
-    const blocked = workspaceBlockResponse(context.workspace);
+    const blocked = accessBlockResponse(context);
     if (blocked) return blocked;
 
     const body = await readJsonObject(request);

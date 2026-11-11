@@ -9,7 +9,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { logger } from "@/lib/logger";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { getWorkspaceContext } from "@/lib/workspace";
-import { workspaceBlockResponse } from "@/lib/workspaceStatus";
+import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { recomputeAndStorePostJobStatus } from "@/server/jobs/failPendingResults";
 import { buildRetryEvent } from "@/server/jobs/posting";
 import { isPostMediaComplete } from "@/server/jobs/postMedia";
@@ -84,7 +84,7 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
   }
 
   // Pause (2026-11-10): a paused workspace cannot create or move work.
-  const blocked = workspaceBlockResponse(workspaceContext.workspace);
+  const blocked = accessBlockResponse(workspaceContext);
   if (blocked) return blocked;
 
   // Tight rate limit right after auth, before any parsing/DB work. Retrying is

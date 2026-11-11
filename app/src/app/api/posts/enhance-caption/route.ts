@@ -18,7 +18,7 @@ import { ADAPT_MAX_LENGTH_MAX, ADAPT_MAX_LENGTH_MIN } from "@/lib/platformOverri
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
-import { workspaceBlockResponse } from "@/lib/workspaceStatus";
+import { accessBlockResponse } from "@/lib/workspaceStatus";
 
 export const dynamic = "force-dynamic";
 
@@ -70,7 +70,7 @@ export async function POST(request: Request) {
     }
 
     // Pause (2026-11-10): a paused workspace cannot create or move work.
-    const blocked = workspaceBlockResponse(context.workspace);
+    const blocked = accessBlockResponse(context);
     if (blocked) return blocked;
 
     const body = await readJsonObject(request);
