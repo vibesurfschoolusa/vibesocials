@@ -4,6 +4,7 @@ import {
   PAST_DUE_GRACE_DAYS,
   paymentsConfigured,
   planState,
+  stripeReachable,
   toBillingDate,
   type BillingEnv,
   type BillingFields,
@@ -20,7 +21,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function planSectionLabel(
   role: "owner" | "member",
-  workspace: BillingFields,
+  // 21b fix round 1: planEndsAt, when a plan set to cancel stops.
+  workspace: BillingFields & { planEndsAt?: Date | string | null },
   now: Date,
   env: BillingEnv = process.env,
 ): string | null {
@@ -42,27 +44,34 @@ export function planSectionLabel(
     const stops = new Date(periodEnd.getTime() + PAST_DUE_GRACE_DAYS * DAY_MS);
     return `${name}. The last payment did not go through; posting stops on ${utcDayMonthLabel(stops)}.`;
   }
+  const endsAt = toBillingDate(workspace.planEndsAt);
+  if (endsAt) return `${name}, ends on ${utcDayMonthLabel(endsAt)}`;
   return periodEnd ? `${name}, renews ${utcDayMonthLabel(periodEnd)}` : name;
 }
+
+/** 21b fix round 1: the Plan section's line with billing off, when only the portal button shows. */
+export const PLAN_PORTAL_ONLY_LABEL = "Your card, invoices and plan are with Stripe.";
 
 /** 21b: the line after returning from Stripe Checkout, until the webhook has written the plan. */
 export const PLAN_RETURN_NOTICE = "Thanks. Your plan appears here within a minute.";
 
 /**
- * 21b: the Plan section's buttons. Null (no buttons) unless payments are
- * configured and the viewer is an owner. In a trial or ended: one button per
- * plan that has a price. With a plan (active or ended): the customer portal.
+ * 21b: the Plan section's buttons, for owners. One per plan that has a price,
+ * in a trial or ended, only with payments configured. The customer portal
+ * whenever the Stripe key is set and the workspace has a plan or a Stripe
+ * customer, whatever its state and whether billing is on (fix round 1), so an
+ * owner can always reach their card, invoices and cancel. Null: no buttons.
  */
 export function planSectionActions(
   role: "owner" | "member",
-  workspace: BillingFields,
+  workspace: BillingFields & { stripeCustomerId?: string | null },
   now: Date,
   env: BillingEnv = process.env,
 ): { choose: PlanKey[]; manage: boolean } | null {
-  if (role !== "owner" || !paymentsConfigured(env)) return null;
+  if (role !== "owner" || !stripeReachable(env)) return null;
   const state = planState(workspace, now);
-  const choose = state === "trial" || state === "ended" ? offeredPlans(env) : [];
-  const manage = Boolean(workspace.plan) && state !== "exempt";
+  const choose = paymentsConfigured(env) && (state === "trial" || state === "ended") ? offeredPlans(env) : [];
+  const manage = Boolean(workspace.plan || workspace.stripeCustomerId);
   if (choose.length === 0 && !manage) return null;
   return { choose, manage };
 }

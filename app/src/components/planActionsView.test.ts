@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { PLAN_RETURN_NOTICE, planReturnNotice, planSectionActions } from "./planSectionView";
+import { PLAN_RETURN_NOTICE, planReturnNotice, planSectionActions, planSectionLabel } from "./planSectionView";
 
 /** 21b: which buttons Settings → Plan shows, and the line after returning from Stripe. */
 
@@ -19,12 +19,19 @@ const ACTIVE = { ...TRIAL, plan: "starter", planStatus: "active", currentPeriodE
 const CANCELED = { ...ACTIVE, planStatus: "canceled", currentPeriodEnd: new Date(NOW.getTime() - 20 * DAY) };
 
 describe("planSectionActions", () => {
-  it("no buttons with payments not configured", () => {
-    for (const env of [{}, { ...CONFIGURED, BILLING_ENABLED: "" }, { ...CONFIGURED, STRIPE_SECRET_KEY: "" }]) {
-      for (const workspace of [TRIAL, ENDED, ACTIVE]) {
+  it("no buttons at all without the Stripe secret key", () => {
+    for (const env of [{}, { ...CONFIGURED, STRIPE_SECRET_KEY: "" }]) {
+      for (const workspace of [TRIAL, ENDED, ACTIVE, { ...ACTIVE, stripeCustomerId: "cus_1" }]) {
         expect(planSectionActions("owner", workspace, NOW, env)).toBeNull();
       }
     }
+  });
+
+  it("billing off with the key set: no plan buttons, but Manage for a workspace with a plan or a customer", () => {
+    const off = { ...CONFIGURED, BILLING_ENABLED: "" };
+    expect(planSectionActions("owner", TRIAL, NOW, off)).toBeNull();
+    expect(planSectionActions("owner", ACTIVE, NOW, off)).toEqual({ choose: [], manage: true });
+    expect(planSectionActions("owner", { ...TRIAL, stripeCustomerId: "cus_1" }, NOW, off)).toEqual({ choose: [], manage: true });
   });
 
   it("no buttons for members", () => {
@@ -44,9 +51,21 @@ describe("planSectionActions", () => {
     expect(planSectionActions("owner", CANCELED, NOW, CONFIGURED)).toEqual({ choose: ["starter", "pro"], manage: true });
   });
 
-  it("exempt: no buttons", () => {
+  it("exempt with no plan and no customer: no buttons", () => {
     expect(planSectionActions("owner", { ...TRIAL, billingExempt: true }, NOW, CONFIGURED)).toBeNull();
     expect(planSectionActions("owner", { ...TRIAL, trialEndsAt: null }, NOW, CONFIGURED)).toBeNull();
+  });
+
+  it("a plan or a Stripe customer always gets Manage, whatever the state, exempt included (fix round 1)", () => {
+    expect(planSectionActions("owner", { ...ACTIVE, billingExempt: true }, NOW, CONFIGURED)).toEqual({ choose: [], manage: true });
+    expect(planSectionActions("owner", { ...TRIAL, trialEndsAt: null, stripeCustomerId: "cus_1" }, NOW, CONFIGURED)).toEqual({
+      choose: [],
+      manage: true,
+    });
+    expect(planSectionActions("owner", { ...TRIAL, stripeCustomerId: "cus_1" }, NOW, CONFIGURED)).toEqual({
+      choose: ["starter", "pro"],
+      manage: true,
+    });
   });
 });
 
@@ -61,5 +80,17 @@ describe("planReturnNotice", () => {
   it("not without the return marker", () => {
     expect(planReturnNotice(undefined, TRIAL, NOW)).toBeNull();
     expect(planReturnNotice("other", TRIAL, NOW)).toBeNull();
+  });
+});
+
+describe("planSectionLabel with planEndsAt (fix round 1)", () => {
+  const ON = { BILLING_ENABLED: "true" };
+  it("a plan set to cancel says when it ends, not that it renews", () => {
+    const endsAt = new Date(NOW.getTime() + 20 * DAY);
+    expect(planSectionLabel("owner", { ...ACTIVE, planEndsAt: endsAt }, NOW, ON)).toBe("Starter plan, ends on 30 December");
+  });
+
+  it("without planEndsAt it still renews", () => {
+    expect(planSectionLabel("owner", { ...ACTIVE, planEndsAt: null }, NOW, ON)).toBe("Starter plan, renews 30 December");
   });
 });

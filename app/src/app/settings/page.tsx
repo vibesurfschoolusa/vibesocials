@@ -14,7 +14,13 @@ import { workspaceDeletionRefusal } from "@/server/account/deleteWorkspace";
 import { UsageSection } from "@/components/usage-section";
 import { WorkspaceLogoControl } from "@/components/workspace-logo-control";
 import { PlanSection } from "@/components/plan-section";
-import { planReturnNotice, planSectionActions, planSectionLabel } from "@/components/planSectionView";
+import {
+  PLAN_PORTAL_ONLY_LABEL,
+  planReturnNotice,
+  planSectionActions,
+  planSectionLabel,
+} from "@/components/planSectionView";
+import { paymentsConfigured, stripeReachable } from "@/lib/billing";
 import { getPlanOffers } from "@/server/billing/planPrices";
 import { getWorkspaceUsageOrNull } from "@/server/usage/workspaceUsage";
 import { Alert } from "@/components/ui/alert";
@@ -100,12 +106,24 @@ export default async function SettingsPage({
   // Usage limits (2026-11-10): the same counts the limits are enforced with.
   // Null when they cannot be read: the section says so and the page still renders.
   const usage = await getWorkspaceUsageOrNull(context.workspace.id, new Date());
-  // 21a: owners only, and only with billing on (null otherwise: no section).
-  const planLabel = planSectionLabel(context.role, context.workspace, new Date());
-  // 21b: the plan and portal buttons, only with payments configured (null otherwise).
-  const planActions = planLabel ? planSectionActions(context.role, context.workspace, new Date()) : null;
-  const planOffers = planActions ? await getPlanOffers(planActions.choose) : [];
-  const planNotice = planActions ? planReturnNotice(params.billing, context.workspace, new Date()) : null;
+  // 21b: the Stripe columns, read only for owners and only when Stripe is set up.
+  const stripeRow =
+    context.role === "owner" && stripeReachable()
+      ? await prisma.workspace.findUnique({
+          where: { id: context.workspace.id },
+          select: { stripeCustomerId: true, planEndsAt: true },
+        })
+      : null;
+  const planWorkspace = { ...context.workspace, ...(stripeRow ?? {}) };
+  // 21b: the plan buttons (payments configured) and the portal (the Stripe key
+  // and a plan or customer, billing on or off); null: no buttons.
+  const planActions = planSectionActions(context.role, planWorkspace, new Date());
+  // 21a: owners only, and only with billing on. 21b fix round 1: with billing
+  // off, the section still shows when the portal does.
+  const planLabel =
+    planSectionLabel(context.role, planWorkspace, new Date()) ?? (planActions?.manage ? PLAN_PORTAL_ONLY_LABEL : null);
+  const planOffers = planActions && planActions.choose.length > 0 ? await getPlanOffers(planActions.choose) : [];
+  const planNotice = paymentsConfigured() ? planReturnNotice(params.billing, planWorkspace, new Date()) : null;
 
   // What the two delete confirmations say, computed with the same functions
   // the delete routes use, so the dialog shows the sentence the route would
