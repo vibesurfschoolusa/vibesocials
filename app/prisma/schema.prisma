@@ -206,6 +206,16 @@ model Workspace {
   // Monthly report email (2026-11-10): the month (YYYY-MM) this workspace was
   // last handled for, whether an email went out or there was nothing to report.
   monthlyReportSentFor String?
+  // Plans and the free trial (21a, 2026-11-10). Read only through planState()
+  // (src/lib/billing.ts) and only with billing on. plan is starter, growth or
+  // pro (null: no paid plan); planStatus and currentPeriodEnd are the payment
+  // provider's subscription status and period end, written only by its webhook.
+  // billingExempt was set on every workspace that existed when it was added.
+  plan             String?
+  planStatus       String?
+  trialEndsAt      DateTime?
+  currentPeriodEnd DateTime?
+  billingExempt    Boolean   @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
