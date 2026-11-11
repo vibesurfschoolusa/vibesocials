@@ -1,5 +1,6 @@
 import type { Prisma, SocialConnection } from "@prisma/client";
 
+import { altTextOf } from "@/lib/altText";
 import { DEFAULT_FETCH_TIMEOUT_MS, FETCH_TIMEOUT_CODE, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import {
   PINTEREST_API_BASE_URL,
@@ -343,6 +344,13 @@ type PinMediaSource =
   | { source_type: "video_id"; media_id: string; cover_image_key_frame_time: number };
 
 /**
+ * 07d: Pinterest API v5 OpenAPI description (read 2026-11-10,
+ * https://github.com/pinterest/api-description, v5/openapi.yaml), PinCreate:
+ * `alt_text`, string, maxLength 500, nullable. Sent for a photo Pin only.
+ */
+const PINTEREST_ALT_TEXT_LIMIT = 500;
+
+/**
  * POST /pins: the commit call. A 5xx, a timeout or a dropped connection after it
  * was sent is PUBLISH_UNCONFIRMED (the Pin may exist) and is never re-run; a
  * 4xx / 429 is a definitive refusal, sorted below.
@@ -354,6 +362,8 @@ async function createPin(args: {
   mediaSource: PinMediaSource;
 }): Promise<PublishResult> {
   const { ctx, connection, boardId, mediaSource } = args;
+  const altText =
+    mediaSource.source_type === "image_url" ? altTextOf(ctx.mediaItem, PINTEREST_ALT_TEXT_LIMIT) : undefined;
 
   // Checked first, so a spent step budget sends nothing (and reads nothing).
   const timeoutMs = budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, ctx.deadline);
@@ -366,6 +376,7 @@ async function createPin(args: {
     board_id: boardId,
     ...(title ? { title } : {}),
     ...(description ? { description } : {}),
+    ...(altText ? { alt_text: altText } : {}),
     media_source: mediaSource,
   };
 

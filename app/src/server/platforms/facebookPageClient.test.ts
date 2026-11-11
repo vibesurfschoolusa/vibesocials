@@ -1052,3 +1052,99 @@ describe("facebookPageClient.publishVideo — Story", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+// 07d: Page photos reference (read 2026-11-10): `alt_text_custom`, "Accessible
+// alternative description for an image", in the Creating parameters of
+// POST /{page-id}/photos. It goes on the single photo and on each unpublished
+// photo of a post with several; a photo without one sends exactly today's body.
+describe("facebookPageClient.publishVideo — alt text (07d)", () => {
+  const bodyOf = (i: number) =>
+    Object.fromEntries(new URLSearchParams(String((fetchMock.mock.calls[i][1] as RequestInit).body)));
+
+  it("a single photo with a description: alt_text_custom after today's fields", async () => {
+    fetchMock.mockResolvedValue(response(200, { id: "post-123" }));
+
+    await facebookPageClient.publishVideo(makeContext({}, { altText: "A dog on a beach." }));
+
+    const body = new URLSearchParams(String((fetchMock.mock.calls[0][1] as RequestInit).body));
+    expect([...body.keys()]).toEqual(["url", "caption", "access_token", "alt_text_custom"]);
+    expect(body.get("alt_text_custom")).toBe("A dog on a beach.");
+  });
+
+  it("a single photo without one sends exactly today's body", async () => {
+    for (const altText of [null, "", "  "]) {
+      fetchMock.mockReset();
+      fetchMock.mockResolvedValue(response(200, { id: "post-123" }));
+      await facebookPageClient.publishVideo(makeContext({}, { altText }));
+      expect(bodyOf(0)).toEqual({
+        url: "https://blob.example.com/photo.jpg",
+        caption: "hello",
+        access_token: "page-access-token",
+      });
+    }
+  });
+
+  it("cuts a long description to 1,000 characters at a word boundary", async () => {
+    fetchMock.mockResolvedValue(response(200, { id: "post-123" }));
+
+    await facebookPageClient.publishVideo(makeContext({}, { altText: "word ".repeat(300) }));
+
+    expect(bodyOf(0).alt_text_custom.length).toBeLessThanOrEqual(1000);
+    expect(bodyOf(0).alt_text_custom.endsWith("word")).toBe(true);
+  });
+
+  it("a video never gets one", async () => {
+    fetchMock.mockResolvedValue(response(200, { id: "video-1" }));
+
+    await facebookPageClient.publishVideo(
+      makeContext({}, { mimeType: "video/mp4", storageLocation: "https://blob.example.com/v.mp4", altText: "A clip." }),
+    );
+
+    expect(bodyOf(0).alt_text_custom).toBeUndefined();
+  });
+
+  it("several photos: each unpublished upload carries its own description; the feed post none", async () => {
+    const items = ["First photo.", null, "Third photo."].map(
+      (altText, i) =>
+        ({
+          id: `media-${i + 1}`,
+          mimeType: "image/jpeg",
+          storageLocation: `https://blob.example.com/photo-${i + 1}.jpg`,
+          baseCaption: "",
+          perPlatformOverrides: null,
+          altText,
+        }) as MediaItem,
+    );
+    for (let i = 1; i <= 3; i++) fetchMock.mockImplementationOnce(async () => response(200, { id: `photo-${i}` }));
+    fetchMock.mockImplementationOnce(async () => response(200, { id: "page-1_post-9" }));
+
+    await facebookPageClient.publishVideo({
+      user: { id: "user-1" } as User,
+      socialConnection: makeConnection(),
+      mediaItem: items[0],
+      mediaItems: items,
+      caption: "Surf day",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect([0, 1, 2].map((i) => bodyOf(i).alt_text_custom)).toEqual(["First photo.", undefined, "Third photo."]);
+    expect(Object.keys(bodyOf(1)).sort()).toEqual(["access_token", "published", "url"]);
+    expect(bodyOf(3).alt_text_custom).toBeUndefined();
+  });
+
+  it("a photo Story never gets one", async () => {
+    fetchMock.mockImplementationOnce(async () => response(200, { id: "photo-1" }));
+    fetchMock.mockImplementationOnce(async () => response(200, { success: true, post_id: "story-1" }));
+
+    await facebookPageClient
+      .publishVideo({
+        ...makeContext({}, { altText: "A dog." }),
+        facebookMetadata: { placement: "story" },
+      })
+      .catch(() => null);
+
+    for (const call of fetchMock.mock.calls) {
+      expect(String((call[1] as RequestInit).body ?? "")).not.toContain("alt_text");
+    }
+  });
+});

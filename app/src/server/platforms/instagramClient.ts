@@ -1,6 +1,7 @@
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { SocialConnection } from "@prisma/client";
 
+import { altTextOf } from "@/lib/altText";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
@@ -23,6 +24,15 @@ import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { MULTI_PHOTO_MIME_TYPES } from "@/lib/postMedia";
 import { instagramImageUrl } from "./instagramPhoto";
 import { classifyRateLimit } from "./rateLimited";
+
+/**
+ * 07d: IG User Media reference (read 2026-11-10,
+ * https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media):
+ * `alt_text` is "Alternative text, up to 1000 character, for an image", "for image
+ * posts only", on "a single image or image media in a carousel"; "Reels and stories
+ * are not supported".
+ */
+const INSTAGRAM_ALT_TEXT_LIMIT = 1000;
 
 // COR-5: Instagram token expiry handling.
 //
@@ -459,8 +469,11 @@ async function createInstagramContainer(args: {
   deadline: number | undefined;
   /** A Story (2026-11-10) instead of a feed post. */
   story: boolean;
+  /** 07d: the photo's description; sent for a feed photo only. */
+  altText?: string;
 }): Promise<string> {
-  const { igAccountId, accessToken, connection, caption, mediaUrl, isVideo, locationId, deadline, story } = args;
+  const { igAccountId, accessToken, connection, caption, mediaUrl, isVideo, locationId, deadline, story, altText } =
+    args;
 
   if (story) {
     // IG User Media reference (read 2026-11-10): a Story container takes
@@ -495,6 +508,7 @@ async function createInstagramContainer(args: {
     // A JPEG copy cropped into Instagram's 4:5..1.91:1 range (instagramPhoto.ts);
     // the stored URL only when the app has no public address (local dev).
     containerParams.image_url = instagramImageUrl(mediaUrl, process.env.NEXTAUTH_URL);
+    if (altText) containerParams.alt_text = altText;
   }
 
   if (locationId) {
@@ -741,8 +755,10 @@ async function createCarouselItem(args: {
   position: number;
   count: number;
   deadline: number | undefined;
+  /** 07d: this photo's description, if it has one. */
+  altText?: string;
 }): Promise<string> {
-  const { igAccountId, accessToken, connection, photoUrl, position, count, deadline } = args;
+  const { igAccountId, accessToken, connection, photoUrl, position, count, deadline, altText } = args;
   console.log("[Instagram] Creating carousel item", { position, count });
   try {
     return await postInstagramContainer({
@@ -752,6 +768,7 @@ async function createCarouselItem(args: {
         is_carousel_item: "true",
         // The same fitted JPEG copy the single-photo path hands Instagram (instagramPhoto.ts).
         image_url: instagramImageUrl(photoUrl, process.env.NEXTAUTH_URL),
+        ...(altText ? { alt_text: altText } : {}),
       },
       connection,
       deadline,
@@ -822,6 +839,7 @@ async function publishInstagramCarousel(args: {
             position: index + 1,
             count: mediaItems.length,
             deadline,
+            altText: altTextOf(item, INSTAGRAM_ALT_TEXT_LIMIT),
           }),
         );
       }
@@ -996,6 +1014,7 @@ export const instagramClient: PlatformClient = {
           locationId,
           deadline,
           story,
+          altText: altTextOf(mediaItem, INSTAGRAM_ALT_TEXT_LIMIT),
         });
 
         if (store) {

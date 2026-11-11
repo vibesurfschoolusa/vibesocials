@@ -1,6 +1,7 @@
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { MediaItem, SocialConnection } from "@prisma/client";
 
+import { altTextOf } from "@/lib/altText";
 import { assertOk } from "@/lib/assertOk";
 import { mediaKindOf, unsupportedMediaReason } from "@/lib/platformLimits";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
@@ -710,17 +711,32 @@ interface LinkedInPostBody {
         media: {
           id: string;
           title?: string;
+          /** 07d: the photo's description; absent when it has none. */
+          altText?: string;
         };
       }
     | {
         /** A post with several photos (MultiImage API): the image URNs in order, 2 to 20. */
         multiImage: {
-          images: Array<{ id: string }>;
+          images: LinkedInPostImage[];
         };
       };
   lifecycleState: "PUBLISHED";
   isReshareDisabledByAuthor: false;
 }
+
+/**
+ * 07d: one image of a post. Post schema (read 2026-11-10,
+ * https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/post-api-schema):
+ * Media `altText`, "The alternate text for the media". The MultiImage page's sample puts it
+ * on each image; its only stated limit (4,086, for the thumbnail) is above the app's own cap.
+ */
+interface LinkedInPostImage {
+  id: string;
+  altText?: string;
+}
+
+const LINKEDIN_ALT_TEXT_LIMIT = 4086;
 
 async function createPost(
   accessToken: string,
@@ -730,12 +746,14 @@ async function createPost(
   mediaUrn?: string,
   isVideo: boolean = false,
   deadline?: number,
-  /** Several photos: the post's content is a multiImage of these URNs, in order (mediaUrn is then unused). */
-  imageUrns?: string[],
+  /** Several photos: the post's content is a multiImage of these images, in order (mediaUrn is then unused). */
+  images?: LinkedInPostImage[],
+  /** 07d: a single image's description; never sent for a video. */
+  altText?: string,
 ): Promise<string> {
   console.log("[LinkedIn] Creating post", {
     authorUrn,
-    hasMedia: !!mediaUrn || !!imageUrns,
+    hasMedia: !!mediaUrn || !!images,
     isVideo,
   });
 
@@ -755,16 +773,16 @@ async function createPost(
   };
 
   // Add media if provided
-  if (imageUrns) {
+  if (images) {
     // MultiImage API: `content.multiImage.images` is an array of Media, each with its image URN
-    // as `id` (altText is optional and not sent; a single image sends none either).
-    postBody.content = { multiImage: { images: imageUrns.map((id) => ({ id })) } };
-    console.log("[LinkedIn] Post body includes several images", { images: imageUrns.length, author: authorUrn });
+    // as `id` and, when the photo has a description, its `altText` (07d).
+    postBody.content = { multiImage: { images } };
+    console.log("[LinkedIn] Post body includes several images", { images: images.length, author: authorUrn });
   } else if (mediaUrn) {
     // A video keeps the title the ugcPosts body gave it ("Video"); an image has none. The title
     // is optional for both (the Post schema requires it only for documents).
     postBody.content = {
-      media: isVideo ? { id: mediaUrn, title: "Video" } : { id: mediaUrn },
+      media: isVideo ? { id: mediaUrn, title: "Video" } : altText ? { id: mediaUrn, altText } : { id: mediaUrn },
     };
 
     console.log("[LinkedIn] Post body includes media", {
@@ -778,8 +796,8 @@ async function createPost(
   console.log("[LinkedIn] Sending post to API", {
     endpoint: LINKEDIN_POSTS_URL,
     author: postBody.author,
-    mediaType: imageUrns ? "MULTI_IMAGE" : mediaUrn ? (isVideo ? "VIDEO" : "IMAGE") : "NONE",
-    hasMedia: !!mediaUrn || !!imageUrns,
+    mediaType: images ? "MULTI_IMAGE" : mediaUrn ? (isVideo ? "VIDEO" : "IMAGE") : "NONE",
+    hasMedia: !!mediaUrn || !!images,
   });
 
   // Log full post body for debugging
@@ -1745,17 +1763,19 @@ async function publishMultiImage(args: {
   const { items, accessToken, authorUrn, caption, connection, deadline } = args;
   console.log("[LinkedIn] Starting a post with several photos", { photos: items.length, authorUrn });
 
-  const imageUrns: string[] = [];
+  const images: LinkedInPostImage[] = [];
   for (const [index, item] of items.entries()) {
     try {
-      imageUrns.push(await uploadImage(accessToken, authorUrn, item.storageLocation, connection, deadline));
+      const id = await uploadImage(accessToken, authorUrn, item.storageLocation, connection, deadline);
+      const altText = altTextOf(item, LINKEDIN_ALT_TEXT_LIMIT);
+      images.push(altText ? { id, altText } : { id });
     } catch (error) {
       throw photoFailed(error, index, items.length);
     }
   }
 
   if (remainingMs(deadline) < LINKEDIN_POST_MIN_WINDOW_MS) throw publishBudgetExceededError();
-  const postId = await createPost(accessToken, authorUrn, caption, connection, undefined, false, deadline, imageUrns);
+  const postId = await createPost(accessToken, authorUrn, caption, connection, undefined, false, deadline, images);
   console.log("[LinkedIn] Publish successful", { postId, photos: items.length });
   return { externalPostId: postId };
 }
@@ -1900,6 +1920,8 @@ export const linkedinClient: PlatformClient = {
         mediaUrn,
         isVideo,
         deadline,
+        undefined,
+        isVideo ? undefined : altTextOf(mediaItem, LINKEDIN_ALT_TEXT_LIMIT),
       );
 
       console.log("[LinkedIn] Publish successful", { postId });

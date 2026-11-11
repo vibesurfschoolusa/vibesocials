@@ -2620,3 +2620,119 @@ describe("instagramClient.publishVideo — Story", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+// 07d: alt text. IG User Media reference (read 2026-11-10): `alt_text`, "up to 1000
+// character", "for image posts only", "on a single image or image media in a
+// carousel"; "Reels and stories are not supported". A photo without a description
+// sends exactly the container it sent before.
+describe("instagramClient.publishVideo — alt text (07d)", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubEnv("NEXTAUTH_URL", "https://vibesocials.wtf");
+    vi.stubEnv("NEXTAUTH_SECRET", "test-secret");
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  function single(mimeType: string, altText: string | null, story = false) {
+    return {
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+      get mediaItems(): MediaItem[] { return [this.mediaItem]; },
+      mediaItem: {
+        mimeType,
+        storageLocation: "https://blob.example.com/m",
+        metadata: null,
+        altText,
+      } as unknown as MediaItem,
+      caption: "Two spots left today",
+      ...(story ? { instagramMetadata: { placement: "story" as const } } : {}),
+    };
+  }
+
+  /** The params of every container request; containers fail after `failAfter` of them. */
+  async function containerParams(c: Parameters<typeof instagramClient.publishVideo>[0], failAfter = 0) {
+    let n = 0;
+    const fetchMock = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/ig-account-1/media")) {
+        n += 1;
+        return Promise.resolve(
+          n <= failAfter
+            ? new Response(JSON.stringify({ id: `child-${n}` }), { status: 200 })
+            : new Response("{}", { status: 400 }),
+        );
+      }
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await instagramClient.publishVideo(c).catch(() => null);
+    return fetchMock.mock.calls.map(([input]) => Object.fromEntries(new URL(String(input)).searchParams));
+  }
+
+  it("a photo with a description: alt_text on its container", async () => {
+    const [params] = await containerParams(single("image/jpeg", "A dog on a beach."));
+
+    expect(Object.keys(params).sort()).toEqual(["access_token", "alt_text", "caption", "image_url"]);
+    expect(params.alt_text).toBe("A dog on a beach.");
+  });
+
+  it("cuts the description to Instagram's 1,000 characters at a word boundary", async () => {
+    const [params] = await containerParams(single("image/jpeg", `${"word ".repeat(199)}lastword`));
+
+    expect(params.alt_text.length).toBeLessThanOrEqual(1000);
+    expect(params.alt_text.endsWith("word")).toBe(true);
+  });
+
+  it("a photo without one sends exactly today's container", async () => {
+    for (const altText of [null, "", "   "]) {
+      const [params] = await containerParams(single("image/jpeg", altText));
+      expect(Object.keys(params).sort()).toEqual(["access_token", "caption", "image_url"]);
+    }
+  });
+
+  it("a video (Reel) never gets one", async () => {
+    const [params] = await containerParams(single("video/mp4", "A clip."));
+
+    expect(params.alt_text).toBeUndefined();
+  });
+
+  it("a Story never gets one", async () => {
+    const [params] = await containerParams(single("image/jpeg", "A dog.", true));
+
+    expect(Object.keys(params).sort()).toEqual(["access_token", "image_url", "media_type"]);
+  });
+
+  it("a carousel: each child carries its own photo's description; the parent none", async () => {
+    const mediaItems = ["First photo.", null, "Third photo."].map((altText, i) => ({
+      mimeType: "image/jpeg",
+      storageLocation: `https://blob.example.com/p${i}`,
+      metadata: null,
+      baseCaption: "",
+      perPlatformOverrides: null,
+      altText,
+    })) as unknown as MediaItem[];
+
+    const requests = await containerParams(
+      {
+        user: { id: "user-1" } as unknown as User,
+        socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+        mediaItem: mediaItems[0],
+        mediaItems,
+        caption: "hello carousel",
+      },
+      3,
+    );
+
+    expect(requests).toHaveLength(4);
+    expect(requests.slice(0, 3).map((p) => p.alt_text)).toEqual(["First photo.", undefined, "Third photo."]);
+    expect(Object.keys(requests[1]).sort()).toEqual(["access_token", "image_url", "is_carousel_item"]);
+    expect(requests[3].media_type).toBe("CAROUSEL");
+    expect(requests[3].alt_text).toBeUndefined();
+  });
+});

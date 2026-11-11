@@ -3,6 +3,7 @@ import OAuth from "oauth-1.0a";
 import crypto from "crypto";
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 
+import { altTextOf } from "@/lib/altText";
 import { assertOk } from "@/lib/assertOk";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
@@ -809,6 +810,67 @@ async function postTweet(args: {
   };
 }
 
+/**
+ * 07d: X API reference "Create Media metadata" (read 2026-11-10,
+ * https://docs.x.com/x-api/media/metadata-create): POST /2/media/metadata with a JSON body
+ * `{"id": <media id>, "metadata": {"alt_text": {"text": ...}}}`, `text` at most 1,000
+ * characters, authorized by OAuth 2 (media.write) or the OAuth 1.0a user token this client
+ * already signs every request with. The JSON body is not part of the OAuth 1.0a signature,
+ * as for the v2 tweet below.
+ */
+const X_MEDIA_METADATA_URL = "https://api.x.com/2/media/metadata";
+const X_ALT_TEXT_LIMIT = 1000;
+/** One metadata call's own timeout; it is also kept short of the tweet's window. */
+const X_ALT_TEXT_TIMEOUT_MS = 10_000;
+
+/**
+ * Set each uploaded photo's description, between the uploads and the tweet, inside the same
+ * step. Best effort: nothing it does can fail the post. A refusal, a rate limit, a timeout or
+ * a dropped connection is logged (never the text) and the photo is posted without alt text;
+ * nothing is retried, so no upload or tweet is ever repeated because of it. A call is only
+ * started while the tweet keeps its full window (X_TWEET_MIN_WINDOW_MS).
+ */
+async function setAltTexts(args: {
+  oauth: OAuth;
+  token: XToken;
+  photos: ReadonlyArray<{ mediaId: string; altText: string | undefined }>;
+  deadline: number | undefined;
+}): Promise<void> {
+  const { oauth, token, photos, deadline } = args;
+  for (const { mediaId, altText } of photos) {
+    if (!altText) continue;
+    const spare = remainingMs(deadline) - X_TWEET_MIN_WINDOW_MS;
+    if (spare < MIN_REQUEST_WINDOW_MS) {
+      console.warn("[X OAuth 1.0a] Not enough step time to set alt text; posting without it", { mediaId });
+      continue;
+    }
+    try {
+      const authHeader = oauth.toHeader(oauth.authorize({ url: X_MEDIA_METADATA_URL, method: "POST" }, token));
+      const response = await fetchWithTimeout(
+        X_MEDIA_METADATA_URL,
+        {
+          method: "POST",
+          headers: { ...authHeader, "Content-Type": "application/json" },
+          body: JSON.stringify({ id: mediaId, metadata: { alt_text: { text: altText } } }),
+        },
+        Math.min(X_ALT_TEXT_TIMEOUT_MS, spare),
+      );
+      if (!response.ok) {
+        // The body is not read: it may repeat the description.
+        console.warn("[X OAuth 1.0a] X did not take the alt text; posting without it", {
+          mediaId,
+          status: response.status,
+        });
+      }
+    } catch (error: unknown) {
+      console.warn("[X OAuth 1.0a] Could not set the alt text; posting without it", {
+        mediaId,
+        error: error instanceof Error ? error.name : "unknown",
+      });
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Chunked path (2026-11-02 scale audit, jobs B3/M3)
 // ---------------------------------------------------------------------------
@@ -1448,6 +1510,13 @@ async function publishPhotos(args: {
     }
   }
 
+  await setAltTexts({
+    oauth,
+    token,
+    photos: mediaIds.map((mediaId, index) => ({ mediaId, altText: altTextOf(sent[index], X_ALT_TEXT_LIMIT) })),
+    deadline,
+  });
+
   return postTweet({ oauth, token, tweetText: computeTweetText(caption), mediaIds, deadline });
 }
 
@@ -1559,6 +1628,9 @@ export const xClient: PlatformClient = {
       mediaItem.mimeType || "",
       deadline,
     );
+
+    // 07d: a photo's description, before the tweet (a video has none).
+    await setAltTexts({ oauth, token, photos: [{ mediaId, altText: altTextOf(mediaItem, X_ALT_TEXT_LIMIT) }], deadline });
 
     // X tweet character limit is 280 (see lib/platformLimits.ts). If caption
     // is longer, we'll truncate with ellipsis.

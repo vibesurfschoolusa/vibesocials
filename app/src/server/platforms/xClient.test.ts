@@ -2569,3 +2569,196 @@ describe("xClient.publishVideo — several photos in one post (07b)", () => {
     expect(x.fetchMock).not.toHaveBeenCalled();
   });
 });
+
+// 07d: alt text. X API reference "Create Media metadata" (read 2026-11-10):
+// POST https://api.x.com/2/media/metadata, JSON {"id", "metadata": {"alt_text": {"text"}}},
+// text maxLength 1000, OAuth 2 (media.write) or the OAuth 1.0a user token this client
+// signs with. It is set on the uploaded media before the post; a failure posts the
+// photo without it and never repeats an upload or the post.
+describe("xClient.publishVideo — alt text (07d)", () => {
+  type Call = Parameters<typeof fetch>;
+  type Reply = () => Response | Promise<Response>;
+  const META_URL = "https://api.x.com/2/media/metadata";
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+  const photo = (n: number, altText: string | null, mimeType = "image/jpeg") =>
+    ({
+      id: `media-${n}`,
+      mimeType,
+      storageLocation: `https://blob.example.com/p${n}`,
+      sizeBytes: 1,
+      originalFilename: `p${n}.jpg`,
+      baseCaption: "",
+      perPlatformOverrides: null,
+      altText,
+    }) as unknown as MediaItem;
+
+  function ctx(items: MediaItem[], over: Partial<PublishContext> = {}): PublishContext {
+    return {
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: {
+        id: "conn-x",
+        platform: "x",
+        accessToken: "access-token",
+        refreshToken: "access-token-secret",
+      } as unknown as SocialConnection,
+      mediaItem: items[0],
+      mediaItems: items,
+      caption: "hello",
+      ...over,
+    };
+  }
+
+  const labelOf = (call: Call): string => {
+    const url = String(call[0]);
+    const blob = /blob\.example\.com\/(p\d+)/.exec(url);
+    if (blob) return blob[1];
+    if (url.includes("upload.twitter.com")) return "IMAGE";
+    if (url === META_URL) return "META";
+    if (url.includes("statuses/update.json")) return "v1";
+    if (url.includes("/2/tweets")) return "v2";
+    return "?";
+  };
+
+  function stubX(opts: { meta?: Reply } = {}) {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      const blob = /blob\.example\.com\/p(\d+)/.exec(url);
+      if (blob) return new Response(new Uint8Array([Number(blob[1])]));
+      if (url.includes("upload.twitter.com")) {
+        const data = (init?.body as URLSearchParams).get("media_data") ?? "";
+        return json({ media_id_string: `10${Buffer.from(data, "base64")[0]}` });
+      }
+      if (url === META_URL) {
+        return (opts.meta ?? (() => json({ data: { id: "x", associated_metadata: {} } })))();
+      }
+      if (url.includes("statuses/update.json")) return json({ id_str: "tweet-1" });
+      if (url.includes("/2/tweets")) return json({ data: { id: "tweet-2", text: "x" } }, 201);
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return {
+      fetchMock,
+      sequence: () => fetchMock.mock.calls.map(labelOf),
+      metaCalls: () => fetchMock.mock.calls.filter((c) => labelOf(c) === "META"),
+      v1Calls: () => fetchMock.mock.calls.filter((c) => labelOf(c) === "v1"),
+    };
+  }
+  const jsonOf = (call: Call | undefined) => JSON.parse(String((call?.[1] as RequestInit).body)) as unknown;
+  const logged = () =>
+    JSON.stringify((["log", "warn", "error"] as const).map((level) => vi.mocked(console[level]).mock.calls));
+
+  beforeEach(() => {
+    vi.stubEnv("X_CONSUMER_KEY", "consumer-key");
+    vi.stubEnv("X_CONSUMER_SECRET", "consumer-secret");
+    for (const level of ["log", "warn", "error"] as const) vi.spyOn(console, level).mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("one photo with a description: upload, then the metadata call, then the post", async () => {
+    const x = stubX();
+
+    const result = await xClient.publishVideo(ctx([photo(1, "A dog on a beach.")]));
+
+    expect(result).toEqual({ externalPostId: "tweet-1" });
+    expect(x.sequence()).toEqual(["p1", "IMAGE", "META", "v1"]);
+    const [meta] = x.metaCalls();
+    const init = meta[1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+    expect((init.headers as Record<string, string>).Authorization).toMatch(/^OAuth /);
+    expect(jsonOf(meta)).toEqual({ id: "101", metadata: { alt_text: { text: "A dog on a beach." } } });
+    expect(Object.fromEntries((x.v1Calls()[0][1] as RequestInit).body as URLSearchParams)).toEqual({
+      status: "hello",
+      media_ids: "101",
+    });
+  });
+
+  it("one photo without one: exactly today's requests, no metadata call", async () => {
+    for (const altText of [null, "", "  "]) {
+      const x = stubX();
+      await xClient.publishVideo(ctx([photo(1, altText)]));
+      expect(x.sequence()).toEqual(["p1", "IMAGE", "v1"]);
+    }
+  });
+
+  it("several photos: each uploaded photo with a description gets its own call, all before the one post", async () => {
+    const x = stubX();
+
+    await xClient.publishVideo(ctx([photo(1, "First."), photo(2, null), photo(3, "Third.")]));
+
+    expect(x.sequence()).toEqual(["p1", "IMAGE", "p2", "IMAGE", "p3", "IMAGE", "META", "META", "v1"]);
+    expect(x.metaCalls().map(jsonOf)).toEqual([
+      { id: "101", metadata: { alt_text: { text: "First." } } },
+      { id: "103", metadata: { alt_text: { text: "Third." } } },
+    ]);
+  });
+
+  it("a fifth photo, left out of the post, gets no call", async () => {
+    const x = stubX();
+
+    await xClient.publishVideo(ctx([1, 2, 3, 4, 5].map((n) => photo(n, `Photo ${n}.`))));
+
+    expect(x.metaCalls().map((c) => (jsonOf(c) as { id: string }).id)).toEqual(["101", "102", "103", "104"]);
+  });
+
+  it("cuts the description to X's 1,000 characters", async () => {
+    const x = stubX();
+
+    await xClient.publishVideo(ctx([photo(1, "word ".repeat(300))]));
+
+    const text = (jsonOf(x.metaCalls()[0]) as { metadata: { alt_text: { text: string } } }).metadata.alt_text.text;
+    expect(text.length).toBeLessThanOrEqual(1000);
+  });
+
+  it.each([
+    ["a 400", () => json({ errors: [{ message: "bad" }] }, 400)],
+    ["a 429", () => json({}, 429)],
+    ["a 500", () => json({}, 500)],
+    ["a network error", () => Promise.reject(new TypeError("fetch failed"))],
+  ])("%s on the metadata call: the photo still posts once, without the text in the log", async (_name, meta) => {
+    const x = stubX({ meta });
+
+    const result = await withTransientRetries(
+      () => xClient.publishVideo(ctx([photo(1, "Secret description words.")])),
+      { sleep: async () => {} },
+    );
+
+    expect(result).toEqual({ externalPostId: "tweet-1" });
+    // One upload, one metadata call, one post: never a second upload or post.
+    expect(x.sequence()).toEqual(["p1", "IMAGE", "META", "v1"]);
+    expect(logged()).not.toContain("Secret description words.");
+  });
+
+  it("skips the metadata call when the step has too little time left for it and the post", async () => {
+    const x = stubX();
+    const deadline = Date.now() + X_TWEET_MIN_WINDOW_MS + 1_000;
+
+    await xClient.publishVideo(ctx([photo(1, "A dog.")], { deadline }));
+
+    expect(x.sequence()).toEqual(["p1", "IMAGE", "v1"]);
+  });
+
+  it("a video never gets a metadata call", async () => {
+    const x = stubX();
+    x.fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("blob.example.com")) return new Response(new Uint8Array([1, 2, 3]));
+      if (url.includes("upload.twitter.com")) {
+        return json({ media_id_string: "900", processing_info: { state: "succeeded" } });
+      }
+      if (url.includes("statuses/update.json")) return json({ id_str: "tweet-1" });
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+
+    await xClient.publishVideo(ctx([photo(1, "A clip.", "video/mp4")])).catch(() => null);
+
+    expect(x.metaCalls()).toHaveLength(0);
+  });
+});

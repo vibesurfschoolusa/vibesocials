@@ -755,3 +755,85 @@ describe("pinterestClient.refreshToken", () => {
     expect(refreshed?.accessToken).toBe("pin-access-2");
   });
 });
+
+// 07d: Pinterest API v5 OpenAPI (read 2026-11-10), PinCreate: `alt_text`, string,
+// maxLength 500, nullable. A photo without a description sends exactly today's Pin.
+describe("pinterestClient.publishVideo: alt text (07d)", () => {
+  const bodyOf = (call: number) => JSON.parse(requestOf(call).init.body as string) as Record<string, unknown>;
+
+  it("a photo with a description: alt_text on the Pin", async () => {
+    fetchMock.mockResolvedValueOnce(json(201, { id: "1" }));
+
+    await pinterestClient.publishVideo(makeContext({}, { altText: "A surfer on a small wave." }));
+
+    expect(bodyOf(0)).toEqual({
+      board_id: "555",
+      title: "Catch your first wave.",
+      description: "Catch your first wave.\n\nFor more info visit www.vibesurfschool.com",
+      alt_text: "A surfer on a small wave.",
+      media_source: { source_type: "image_url", url: "https://blob.example.com/photo.jpg" },
+    });
+  });
+
+  it("a photo without one sends exactly today's Pin", async () => {
+    for (const altText of [null, "", "  "]) {
+      fetchMock.mockReset();
+      fetchMock.mockResolvedValueOnce(json(201, { id: "1" }));
+      await pinterestClient.publishVideo(makeContext({}, { altText }));
+      expect(bodyOf(0)).not.toHaveProperty("alt_text");
+      expect(Object.keys(bodyOf(0))).toEqual(["board_id", "title", "description", "media_source"]);
+    }
+  });
+
+  it("cuts the description to Pinterest's 500 characters at a word boundary", async () => {
+    fetchMock.mockResolvedValueOnce(json(201, { id: "1" }));
+
+    await pinterestClient.publishVideo(makeContext({}, { altText: "wave ".repeat(150) }));
+
+    const altText = bodyOf(0).alt_text as string;
+    expect(altText.length).toBeLessThanOrEqual(500);
+    expect(altText.length).toBeGreaterThan(490);
+    expect(altText.endsWith("wave")).toBe(true);
+  });
+
+  it("keeps the description when the Pin is sent again without its link", async () => {
+    workspaceFindUniqueMock.mockResolvedValue({ companyWebsite: "bit.ly/surf" });
+    fetchMock
+      .mockResolvedValueOnce(json(400, { code: 1, message: "Invalid link" }))
+      .mockResolvedValueOnce(json(201, { id: "42" }));
+
+    await pinterestClient.publishVideo(makeContext({}, { altText: "A surfer." }));
+
+    expect(bodyOf(0).alt_text).toBe("A surfer.");
+    expect(bodyOf(1).alt_text).toBe("A surfer.");
+  });
+
+  it("a post with several photos: the Pin is the first photo, with the first photo's description", async () => {
+    fetchMock.mockResolvedValueOnce(json(201, { id: "1" }));
+    const first = { id: "m1", mimeType: "image/jpeg", storageLocation: "https://blob.example.com/1.jpg", altText: "First." };
+    const second = { id: "m2", mimeType: "image/jpeg", storageLocation: "https://blob.example.com/2.jpg", altText: "Second." };
+
+    await pinterestClient.publishVideo({
+      ...makeContext({}, first as Partial<MediaItem>),
+      mediaItems: [first, second] as unknown as MediaItem[],
+    });
+
+    expect(bodyOf(0).alt_text).toBe("First.");
+  });
+
+  it("a video Pin never gets one", async () => {
+    const store = makeStore({ data: { mediaId: "424242", createdAt: new Date().toISOString(), checks: 1 } });
+    fetchMock
+      .mockResolvedValueOnce(json(200, { media_id: "424242", media_type: "video", status: "succeeded" }))
+      .mockResolvedValueOnce(json(201, { id: "777" }));
+
+    await pinterestClient.publishVideo(
+      makeContext(
+        { uploadState: store },
+        { mimeType: "video/mp4", storageLocation: "https://blob.example.com/clip.mp4", altText: "A clip." },
+      ),
+    );
+
+    expect(bodyOf(1)).not.toHaveProperty("alt_text");
+  });
+});

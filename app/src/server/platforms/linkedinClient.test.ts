@@ -4150,3 +4150,116 @@ describe("linkedinClient — several photos in one post", () => {
     expect(li.urls()).toEqual([...photoCalls(1), ...photoCalls(2)]);
   });
 });
+
+// 07d: Post schema (read 2026-11-10): Media `altText`, "The alternate text for the
+// media"; the MultiImage sample puts `altText` on each image. A photo without a
+// description sends exactly today's body.
+describe("linkedinClient — alt text (07d)", () => {
+  const REST = "https://api.linkedin.com/rest";
+  const INIT = `${REST}/images?action=initializeUpload`;
+  const POSTS = `${REST}/posts`;
+  const uploadUrl = (n: number) => `https://www.linkedin.com/dms-uploads/IMG${n}/uploaded-image/0?ut=image-secret-${n}`;
+  const imageUrn = (n: number) => `urn:li:image:IMG${n}`;
+
+  type Call = [string, RequestInit];
+
+  function stub() {
+    let inits = 0;
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (/photo-(\d+)\.jpg$/.test(url)) return new Response(Uint8Array.of(1));
+      if (url === INIT) {
+        inits += 1;
+        return new Response(
+          JSON.stringify({ value: { uploadUrlExpiresAt: 1650567510704, uploadUrl: uploadUrl(inits), image: imageUrn(inits) } }),
+          { status: 200 },
+        );
+      }
+      if (/dms-uploads\/IMG(\d+)\//.test(url)) return new Response("", { status: 201 });
+      if (url === POSTS) return new Response(null, { status: 201, headers: { "x-restli-id": "urn:li:share:1" } });
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return () => JSON.parse(String((fetchMock.mock.calls as unknown as Call[]).find(([u]) => u === POSTS)?.[1].body)) as Record<string, any>;
+  }
+
+  function photo(n: number, altText: string | null) {
+    return {
+      id: `media-${n}`,
+      mimeType: "image/jpeg",
+      storageLocation: `https://blob.example.com/photo-${n}.jpg`,
+      originalFilename: `photo-${n}.jpg`,
+      sizeBytes: 1,
+      baseCaption: "",
+      perPlatformOverrides: null,
+      altText,
+    };
+  }
+
+  function ctx(items: ReturnType<typeof photo>[]) {
+    return {
+      user: { id: "user-1" },
+      socialConnection: makeConnection({ id: "conn-li", expiresAt: new Date(Date.now() + 3_600_000) }),
+      mediaItem: items[0],
+      mediaItems: items,
+      caption: "hello",
+    } as unknown as PublishContext;
+  }
+
+  beforeEach(() => {
+    for (const level of ["log", "warn", "error"] as const) vi.spyOn(console, level).mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("a single photo with a description: altText on content.media", async () => {
+    const postBody = stub();
+
+    await linkedinClient.publishVideo(ctx([photo(1, "A dog on a beach.")]));
+
+    expect(postBody().content).toEqual({ media: { id: imageUrn(1), altText: "A dog on a beach." } });
+  });
+
+  it("a single photo without one: exactly today's content.media", async () => {
+    for (const altText of [null, "", " "]) {
+      const postBody = stub();
+      await linkedinClient.publishVideo(ctx([photo(1, altText)]));
+      expect(postBody().content).toEqual({ media: { id: imageUrn(1) } });
+    }
+  });
+
+  it("several photos: each image carries its own description, in order", async () => {
+    const postBody = stub();
+
+    await linkedinClient.publishVideo(ctx([photo(1, "First photo."), photo(2, null), photo(3, "Third photo.")]));
+
+    expect(postBody().content).toEqual({
+      multiImage: {
+        images: [
+          { id: imageUrn(1), altText: "First photo." },
+          { id: imageUrn(2) },
+          { id: imageUrn(3), altText: "Third photo." },
+        ],
+      },
+    });
+  });
+
+  it("several photos without descriptions: exactly today's images", async () => {
+    const postBody = stub();
+
+    await linkedinClient.publishVideo(ctx([photo(1, null), photo(2, null)]));
+
+    expect(postBody().content).toEqual({ multiImage: { images: [{ id: imageUrn(1) }, { id: imageUrn(2) }] } });
+  });
+
+  it("a description is never longer than the app's 1,000-character cap", async () => {
+    const postBody = stub();
+
+    await linkedinClient.publishVideo(ctx([photo(1, "word ".repeat(300))]));
+
+    expect(postBody().content.media.altText.length).toBeLessThanOrEqual(1000);
+  });
+});

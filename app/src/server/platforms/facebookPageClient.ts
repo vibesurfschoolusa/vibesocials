@@ -1,6 +1,7 @@
 import type { PlatformClient, PublishContext, PublishResult } from "./types";
 import type { SocialConnection } from "@prisma/client";
 
+import { altTextOf } from "@/lib/altText";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { MAX_POST_MEDIA, MULTI_PHOTO_MIME_TYPES } from "@/lib/postMedia";
 import { connectionTokenChangedError, flagRejectedToken } from "./connectionHealth";
@@ -116,6 +117,21 @@ async function throwRejected(
  * or repeated upload leaves nothing visible; only the feed post is the commit
  * call. Its id ("<page>_<post>") is recorded like the single photo's id.
  */
+/**
+ * 07d: Page photos reference (read 2026-11-10,
+ * https://developers.facebook.com/docs/graph-api/reference/page/photos/): `alt_text_custom`,
+ * "Accessible alternative description for an image", among the Creating parameters. The
+ * page states no length limit, so the app's own cap (lib/altText.ts) applies.
+ */
+const FACEBOOK_ALT_TEXT_LIMIT = 1000;
+
+/** The photo request's body with `alt_text_custom` added last, only when the photo has a description. */
+function withAltText(body: URLSearchParams, item: PublishContext["mediaItem"]): URLSearchParams {
+  const altText = altTextOf(item, FACEBOOK_ALT_TEXT_LIMIT);
+  if (altText) body.append("alt_text_custom", altText);
+  return body;
+}
+
 async function publishSeveralPhotos(
   ctx: PublishContext,
   accessToken: string,
@@ -155,11 +171,14 @@ async function publishSeveralPhotos(
       {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          url: item.storageLocation,
-          published: "false",
-          access_token: accessToken,
-        }),
+        body: withAltText(
+          new URLSearchParams({
+            url: item.storageLocation,
+            published: "false",
+            access_token: accessToken,
+          }),
+          item,
+        ),
       },
       budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, ctx.deadline),
     );
@@ -458,11 +477,14 @@ export const facebookPageClient: PlatformClient = {
           description: caption ?? "",
           access_token: accessToken,
         })
-      : new URLSearchParams({
-          url: mediaItem.storageLocation,
-          caption: caption ?? "",
-          access_token: accessToken,
-        });
+      : withAltText(
+          new URLSearchParams({
+            url: mediaItem.storageLocation,
+            caption: caption ?? "",
+            access_token: accessToken,
+          }),
+          mediaItem,
+        );
 
     // Checked before the commit call, so a spent step budget sends nothing.
     const timeoutMs = isVideo
