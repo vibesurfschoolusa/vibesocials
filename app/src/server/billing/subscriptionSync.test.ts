@@ -243,3 +243,23 @@ describe("isLiveSubscriptionStatus", () => {
     }
   });
 });
+
+describe("event order (fix round 1)", () => {
+  const AT = new Date(1799000000 * 1000);
+
+  it("stores the event's time, and refuses one older than the stored time", () => {
+    const first = subscriptionWrite(sub(), WS, null, ENV, AT);
+    expect(first.ok && first.data.stripeLastEventAt).toEqual(AT);
+    const older = subscriptionWrite(sub(), { ...WS, stripeLastEventAt: AT }, null, ENV, new Date(AT.getTime() - 1000));
+    expect(older).toMatchObject({ ok: false, level: "info" });
+  });
+
+  it("the same time is not older", () => {
+    expect(subscriptionWrite(sub(), { ...WS, stripeLastEventAt: AT }, null, ENV, AT).ok).toBe(true);
+  });
+
+  it("an event with no time cannot be ordered, so it does not overwrite a timed write", () => {
+    expect(subscriptionWrite(sub(), { ...WS, stripeLastEventAt: AT }, null, ENV, null)).toMatchObject({ ok: false });
+    expect(subscriptionWrite(sub(), WS, null, ENV, null).ok).toBe(true);
+  });
+});

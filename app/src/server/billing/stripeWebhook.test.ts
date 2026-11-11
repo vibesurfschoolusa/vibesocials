@@ -15,6 +15,8 @@ type Row = {
   planStatus: string | null;
   trialEndsAt: Date | null;
   currentPeriodEnd: Date | null;
+  planEndsAt?: Date | null;
+  stripeLastEventAt?: Date | null;
 };
 
 const m = vi.hoisted(() => ({
@@ -22,8 +24,10 @@ const m = vi.hoisted(() => ({
   workspaces: new Map<string, Row>(),
   owners: new Map<string, Array<{ userId: string; email: string }>>(),
   retrieveSubscription: vi.fn(),
+  listCustomerSubscriptions: vi.fn(),
   sendEmail: vi.fn(),
   failNextUpdate: false,
+  collideNextUpdate: false,
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
@@ -35,6 +39,7 @@ vi.mock("@/server/notifications/email", () => ({
 vi.mock("./stripeApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./stripeApi")>()),
   retrieveSubscription: m.retrieveSubscription,
+  listCustomerSubscriptions: m.listCustomerSubscriptions,
 }));
 vi.mock("@/lib/db", () => {
   function client(events: Map<string, string>, workspaces: Map<string, Row>) {
@@ -65,6 +70,13 @@ vi.mock("@/lib/db", () => {
           if (m.failNextUpdate) {
             m.failNextUpdate = false;
             throw new Error("database unavailable");
+          }
+          if (m.collideNextUpdate) {
+            m.collideNextUpdate = false;
+            throw Object.assign(new Error("Unique constraint failed on the fields: (stripeSubscriptionId)"), {
+              code: "P2002",
+              meta: { modelName: "Workspace", target: ["stripeSubscriptionId"] },
+            });
           }
           const row = workspaces.get(where.id)!;
           workspaces.set(where.id, { ...row, ...data });
@@ -116,9 +128,14 @@ function sub(overrides: Partial<StripeSubscription> = {}): StripeSubscription {
   };
 }
 
-function subscriptionEvent(id: string, type: string, payload: Partial<StripeSubscription> = {}) {
+function subscriptionEvent(id: string, type: string, payload: Partial<StripeSubscription> = {}, created?: number) {
   // The payload deliberately disagrees with Stripe's answer: it must not be read.
-  return { id, type, data: { object: { id: "sub_1", object: "subscription", status: "incomplete", ...payload } } };
+  return {
+    id,
+    type,
+    ...(created === undefined ? {} : { created }),
+    data: { object: { id: "sub_1", object: "subscription", status: "incomplete", ...payload } },
+  };
 }
 
 function row(overrides: Partial<Row> = {}): Row {
@@ -143,6 +160,9 @@ beforeEach(() => {
   m.workspaces.clear();
   m.owners.clear();
   m.failNextUpdate = false;
+  m.collideNextUpdate = false;
+  m.listCustomerSubscriptions.mockReset();
+  m.listCustomerSubscriptions.mockResolvedValue([{ id: "sub_1", status: "active" }]);
   m.retrieveSubscription.mockReset();
   m.sendEmail.mockReset();
   m.sendEmail.mockResolvedValue(undefined);
@@ -188,7 +208,7 @@ describe("subscription events", () => {
       {
         id: "evt_c",
         type: "checkout.session.completed",
-        data: { object: { mode: "subscription", subscription: "sub_1", client_reference_id: "ws_a", customer: "cus_a" } },
+        data: { object: { id: "cs_2", mode: "subscription", subscription: "sub_1", client_reference_id: "ws_a", customer: "cus_a" } },
       },
       ENV,
     );
@@ -197,7 +217,7 @@ describe("subscription events", () => {
 
   it("a payment-mode checkout session is recorded and ignored", async () => {
     const status = await handleStripeEvent(
-      { id: "evt_p", type: "checkout.session.completed", data: { object: { mode: "payment", subscription: null } } },
+      { id: "evt_p", type: "checkout.session.completed", data: { object: { id: "cs_p", mode: "payment", subscription: null } } },
       ENV,
     );
     expect(status).toBe(200);
@@ -311,6 +331,101 @@ describe("subscription events", () => {
     await handleStripeEvent(subscriptionEvent("evt_e", "customer.subscription.created"), ENV);
     expect(ws().plan).toBe("starter");
     expect(m.logger.error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ eventId: "evt_e", workspaceId: "ws_a" }));
+  });
+});
+
+/** Fix round 1, item 8: deliveries that commit out of order. */
+describe("event order", () => {
+  const T = 1799000000;
+
+  it("newer then older: the older changes nothing and is recorded as handled", async () => {
+    m.retrieveSubscription.mockResolvedValueOnce(sub({ status: "past_due" }));
+    await handleStripeEvent(subscriptionEvent("evt_new", "customer.subscription.updated", {}, T + 10), ENV);
+    m.retrieveSubscription.mockResolvedValueOnce(sub({ status: "active" }));
+    expect(await handleStripeEvent(subscriptionEvent("evt_old", "customer.subscription.updated", {}, T), ENV)).toBe(200);
+    expect(ws()).toMatchObject({ planStatus: "past_due", stripeLastEventAt: new Date((T + 10) * 1000) });
+    expect(m.events.has("evt_old")).toBe(true);
+  });
+
+  it("older then newer: both write, the newer last", async () => {
+    m.retrieveSubscription.mockResolvedValueOnce(sub({ status: "active" }));
+    await handleStripeEvent(subscriptionEvent("evt_old", "customer.subscription.updated", {}, T), ENV);
+    expect(ws().stripeLastEventAt).toEqual(new Date(T * 1000));
+    m.retrieveSubscription.mockResolvedValueOnce(sub({ status: "past_due" }));
+    await handleStripeEvent(subscriptionEvent("evt_new", "customer.subscription.updated", {}, T + 10), ENV);
+    expect(ws()).toMatchObject({ planStatus: "past_due", stripeLastEventAt: new Date((T + 10) * 1000) });
+  });
+
+  it("the same time twice: the second still writes", async () => {
+    m.retrieveSubscription.mockResolvedValueOnce(sub({ status: "active" }));
+    await handleStripeEvent(subscriptionEvent("evt_a", "customer.subscription.updated", {}, T), ENV);
+    m.retrieveSubscription.mockResolvedValueOnce(sub({ status: "past_due" }));
+    await handleStripeEvent(subscriptionEvent("evt_b", "customer.subscription.updated", {}, T), ENV);
+    expect(ws().planStatus).toBe("past_due");
+  });
+});
+
+describe("more than one live subscription (fix round 1, item 3)", () => {
+  it("still writes, and logs an error naming the workspace and the count", async () => {
+    m.listCustomerSubscriptions.mockResolvedValue([
+      { id: "sub_1", status: "active" },
+      { id: "sub_2", status: "trialing" },
+      { id: "sub_0", status: "canceled" },
+    ]);
+    m.retrieveSubscription.mockResolvedValue(sub());
+    await handleStripeEvent(subscriptionEvent("evt_m", "customer.subscription.created"), ENV);
+    expect(m.listCustomerSubscriptions).toHaveBeenCalledWith("cus_a", ENV);
+    expect(ws().plan).toBe("starter");
+    expect(m.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("more than one live subscription"),
+      expect.objectContaining({ workspaceId: "ws_a", liveSubscriptions: 2, eventId: "evt_m" }),
+    );
+  });
+
+  it("one live subscription logs nothing", async () => {
+    m.retrieveSubscription.mockResolvedValue(sub());
+    await handleStripeEvent(subscriptionEvent("evt_1", "customer.subscription.created"), ENV);
+    expect(m.logger.error).not.toHaveBeenCalled();
+  });
+
+  it("when the count cannot be read, still writes", async () => {
+    m.listCustomerSubscriptions.mockRejectedValue(new StripeApiError("Stripe answered 500", 500));
+    m.retrieveSubscription.mockResolvedValue(sub());
+    expect(await handleStripeEvent(subscriptionEvent("evt_1", "customer.subscription.created"), ENV)).toBe(200);
+    expect(ws().plan).toBe("starter");
+  });
+});
+
+describe("payloads and collisions (fix round 1, item 9)", () => {
+  it("a subscription event with no object id answers 200 and logs that the endpoint must send snapshot payloads", async () => {
+    const status = await handleStripeEvent(
+      { id: "evt_thin", type: "customer.subscription.updated", related_object: { id: "sub_1" } },
+      ENV,
+    );
+    expect(status).toBe(200);
+    expect(m.retrieveSubscription).not.toHaveBeenCalled();
+    expect(m.logger.error).toHaveBeenCalledWith(expect.stringContaining("snapshot"), expect.objectContaining({ eventId: "evt_thin" }));
+  });
+
+  it("a checkout event with no object logs the same", async () => {
+    expect(await handleStripeEvent({ id: "evt_thin2", type: "checkout.session.completed" }, ENV)).toBe(200);
+    expect(m.logger.error).toHaveBeenCalledWith(expect.stringContaining("snapshot"), expect.objectContaining({ eventId: "evt_thin2" }));
+  });
+
+  it("a collision on a unique Stripe id is logged with the event id and answered 200, so it is not retried for days", async () => {
+    m.retrieveSubscription.mockResolvedValue(sub());
+    m.collideNextUpdate = true;
+    expect(await handleStripeEvent(subscriptionEvent("evt_dup", "customer.subscription.updated"), ENV)).toBe(200);
+    expect(m.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("unique"),
+      expect.objectContaining({ eventId: "evt_dup" }),
+    );
+  });
+
+  it("writes planEndsAt from the subscription", async () => {
+    m.retrieveSubscription.mockResolvedValue(sub({ cancel_at_period_end: true }));
+    await handleStripeEvent(subscriptionEvent("evt_c", "customer.subscription.updated"), ENV);
+    expect(ws().planEndsAt).toEqual(new Date(PERIOD_END * 1000));
   });
 });
 

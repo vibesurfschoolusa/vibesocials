@@ -4,8 +4,14 @@ import { logger } from "@/lib/logger";
 import { sendEmail } from "@/server/notifications/email";
 
 import { buildPaymentFailedEmail } from "./billingEmails";
-import { retrieveSubscription, StripeApiError, type StripeId, type StripeSubscription } from "./stripeApi";
-import { stripeIdOf, subscriptionWrite, type CheckoutClaim } from "./subscriptionSync";
+import {
+  listCustomerSubscriptions,
+  retrieveSubscription,
+  StripeApiError,
+  type StripeId,
+  type StripeSubscription,
+} from "./stripeApi";
+import { isLiveSubscriptionStatus, stripeIdOf, subscriptionWrite, type CheckoutClaim } from "./subscriptionSync";
 
 /**
  * What POST /api/webhooks/stripe does with an event whose signature has been
@@ -21,17 +27,36 @@ import { stripeIdOf, subscriptionWrite, type CheckoutClaim } from "./subscriptio
  * leaves the event unrecorded and answers 500.
  */
 
-type StripeEventBody = { id: string; type: string; data: { object: Record<string, unknown> } };
+type StripeEventBody = {
+  id: string;
+  type: string;
+  /** When Stripe created the event; orders two deliveries that commit out of order. */
+  createdAt: Date | null;
+  data: { object: Record<string, unknown> };
+};
+
+const SNAPSHOT_REQUIRED =
+  "[stripe webhook] Event without a usable object: the endpoint must send snapshot payloads, not thin ones";
+
+/** Prisma's unique-constraint failure, without importing its runtime class. */
+const isUniqueCollision = (error: unknown) =>
+  typeof error === "object" && error !== null && (error as { code?: unknown }).code === "P2002";
 
 /** A failed-payment notice is keyed on the invoice, whichever event carried it. */
 const paymentFailedMarker = (invoiceId: string) => `invoice.payment_failed:${invoiceId}`;
 
 function asEvent(value: unknown): StripeEventBody | null {
   if (!value || typeof value !== "object") return null;
-  const event = value as Partial<StripeEventBody>;
+  const event = value as { id?: unknown; type?: unknown; created?: unknown; data?: { object?: unknown } };
   if (typeof event.id !== "string" || !event.id || typeof event.type !== "string" || !event.type) return null;
   const object = event.data?.object;
-  return { id: event.id, type: event.type, data: { object: object && typeof object === "object" ? object : {} } };
+  const createdAt = typeof event.created === "number" && Number.isFinite(event.created) ? new Date(event.created * 1000) : null;
+  return {
+    id: event.id,
+    type: event.type,
+    createdAt,
+    data: { object: object && typeof object === "object" ? (object as Record<string, unknown>) : {} },
+  };
 }
 
 const errorFields = (error: unknown) =>
@@ -78,6 +103,23 @@ async function syncSubscription(
     return 500;
   }
 
+  // Only for the operator: a customer should never have two live plans
+  // (fix round 1). Not reading the count does not stop the write.
+  let liveSubscriptions: number | null = null;
+  const customer = stripeIdOf(subscription.customer);
+  if (customer) {
+    try {
+      liveSubscriptions = (await listCustomerSubscriptions(customer, env)).filter((s) =>
+        isLiveSubscriptionStatus(s.status),
+      ).length;
+    } catch (error) {
+      logger.warn("[stripe webhook] Could not count the customer's subscriptions", {
+        eventId: event.id,
+        error: errorFields(error),
+      });
+    }
+  }
+
   try {
     await prisma.$transaction(async (tx) => {
       if (!(await record(tx, event))) return;
@@ -86,10 +128,16 @@ async function syncSubscription(
       const workspace = workspaceId
         ? await tx.workspace.findUnique({
             where: { id: workspaceId },
-            select: { id: true, stripeCustomerId: true, stripeSubscriptionId: true, billingExempt: true },
+            select: {
+              id: true,
+              stripeCustomerId: true,
+              stripeSubscriptionId: true,
+              billingExempt: true,
+              stripeLastEventAt: true,
+            },
           })
         : null;
-      const result = subscriptionWrite(subscription, workspace, claim, env);
+      const result = subscriptionWrite(subscription, workspace, claim, env, event.createdAt);
       if (!result.ok) {
         const log = result.level === "error" ? logger.error : logger.info;
         log("[stripe webhook] Subscription not written", {
@@ -101,6 +149,13 @@ async function syncSubscription(
         return;
       }
       await tx.workspace.update({ where: { id: workspace!.id }, data: result.data });
+      if (liveSubscriptions !== null && liveSubscriptions > 1) {
+        logger.error("[stripe webhook] The customer has more than one live subscription; cancel the extra one in Stripe", {
+          eventId: event.id,
+          workspaceId: workspace!.id,
+          liveSubscriptions,
+        });
+      }
       for (const warning of result.warnings) {
         logger.error("[stripe webhook] Subscription written onto an exempt workspace", {
           eventId: event.id,
@@ -111,6 +166,16 @@ async function syncSubscription(
     });
     return 200;
   } catch (error) {
+    if (isUniqueCollision(error)) {
+      // Another workspace already holds this Stripe id: every retry would fail
+      // the same way for days, so answer 200 and leave it to the operator.
+      logger.error("[stripe webhook] A Stripe id in this subscription is already on another workspace (unique column); not written", {
+        eventId: event.id,
+        type: event.type,
+        target: (error as { meta?: { target?: unknown } }).meta?.target ?? null,
+      });
+      return 200;
+    }
     logger.error("[stripe webhook] Could not write the subscription; Stripe will send the event again", {
       eventId: event.id,
       type: event.type,
@@ -124,7 +189,7 @@ async function notifyPaymentFailed(event: StripeEventBody): Promise<200 | 500> {
   const invoiceId = typeof event.data.object.id === "string" ? event.data.object.id : null;
   const customer = stripeIdOf(event.data.object.customer as StripeId | null | undefined);
   if (!invoiceId || !customer) {
-    logger.error("[stripe webhook] invoice.payment_failed without an invoice or customer id", { eventId: event.id });
+    logger.error(SNAPSHOT_REQUIRED, { eventId: event.id, type: event.type });
     return recordOnly(event);
   }
   const marker = paymentFailedMarker(invoiceId);
@@ -179,6 +244,15 @@ export async function handleStripeEvent(body: unknown, env: BillingEnv = process
   }
 
   const object = event.data.object;
+  const handled =
+    event.type === "checkout.session.completed" ||
+    event.type.startsWith("customer.subscription.") ||
+    event.type === "invoice.payment_failed";
+  if (handled && typeof object.id !== "string") {
+    // A thin payload names the object elsewhere; there is nothing to fetch.
+    logger.error(SNAPSHOT_REQUIRED, { eventId: event.id, type: event.type });
+    return recordOnly(event);
+  }
   if (event.type === "checkout.session.completed") {
     const subscriptionId = stripeIdOf(object.subscription as StripeId | null | undefined);
     if (object.mode !== "subscription" || !subscriptionId) return recordOnly(event);

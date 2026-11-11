@@ -46,6 +46,8 @@ export type SyncWorkspace = {
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
   billingExempt: boolean;
+  /** The created time of the newest event written (fix round 1). */
+  stripeLastEventAt?: Date | null;
 };
 
 /** What a checkout.session.completed event says: this session, for this workspace, made this subscription. */
@@ -60,6 +62,7 @@ export type PlanWrite = {
   trialEndsAt?: Date;
   stripeSubscriptionId: string;
   stripeCustomerId?: string;
+  stripeLastEventAt?: Date;
 };
 
 export type SyncResult =
@@ -74,13 +77,16 @@ const fromUnixSeconds = (value: number | null | undefined): Date | null =>
  * subscription's, or it has no customer yet and the checkout session that
  * made this subscription names it. A subscription other than the one the
  * workspace holds replaces it only while live, so an ended one's late event
- * cannot overwrite a newer plan.
+ * cannot overwrite a newer plan. An event created before the newest one
+ * already written changes nothing (fix round 1): two deliveries can commit in
+ * either order, and the later commit must not be the older state.
  */
 export function subscriptionWrite(
   subscription: StripeSubscription,
   workspace: SyncWorkspace | null,
   claim: CheckoutClaim | null,
   env: BillingEnv = process.env,
+  eventAt: Date | null = null,
 ): SyncResult {
   if (!workspace) return { ok: false, level: "error", reason: "the workspace named in the subscription does not exist" };
 
@@ -96,6 +102,11 @@ export function subscriptionWrite(
       claim.subscription === subscription.id;
     if (!claimed) return { ok: false, level: "error", reason: "the subscription's customer is not this workspace's" };
     bindCustomer = true;
+  }
+
+  const lastWritten = workspace.stripeLastEventAt ?? null;
+  if (lastWritten && (!eventAt || eventAt.getTime() < lastWritten.getTime())) {
+    return { ok: false, level: "info", reason: "an event older than the one last written" };
   }
 
   if (!(SUBSCRIPTION_STATUSES as readonly string[]).includes(subscription.status)) {
@@ -132,6 +143,7 @@ export function subscriptionWrite(
   const trialEnd = fromUnixSeconds(subscription.trial_end);
   if (trialEnd) data.trialEndsAt = trialEnd;
   if (bindCustomer) data.stripeCustomerId = customer;
+  if (eventAt) data.stripeLastEventAt = eventAt;
 
   const warnings = workspace.billingExempt
     ? ["the workspace is exempt by its flag, so it keeps the default limits until the operator clears the exemption"]
