@@ -45,8 +45,9 @@ const SNAPSHOT_REQUIRED =
 
 /**
  * Long enough for the calls made under the lock: one fetch and up to three
- * list pages, each bounded by the client's 10-second timeout. maxWait covers
- * waiting for the connection, not the lock (that wait is inside the timeout).
+ * list pages, each bounded as a whole (headers and body) to 10 seconds by
+ * stripeApi, so at most 40 seconds of Stripe. maxWait covers waiting for the
+ * connection, not the lock (that wait is inside the timeout).
  */
 export const SYNC_TRANSACTION_OPTIONS = { timeout: 50_000, maxWait: 10_000 } as const;
 

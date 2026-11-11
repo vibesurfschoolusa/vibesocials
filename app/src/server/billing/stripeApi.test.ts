@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   STRIPE_API_VERSION,
+  STRIPE_TIMEOUT_MS,
   StripeApiError,
   cancelSubscription,
   createCheckoutSession,
@@ -106,6 +107,54 @@ describe("every request", () => {
     expect(error).toBeInstanceOf(StripeApiError);
     expect((error as StripeApiError).status).toBe(0);
     expect(String((error as Error).message)).not.toContain(SECRET);
+  });
+
+  it("bounds the whole call, body included: a body that never finishes fails at the 10-second limit", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockImplementation(async (_url: string, init: RequestInit) => ({
+        ok: true,
+        status: 200,
+        // Headers arrived; the body never does, unless the request is aborted.
+        json: () =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+          }),
+      }));
+      const pending = retrieveSubscription("sub_1", ENV).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(STRIPE_TIMEOUT_MS + 1);
+      const error = await pending;
+      expect(error).toBeInstanceOf(StripeApiError);
+      expect((error as StripeApiError).status).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a shorter budget from the caller bounds the whole call too", async () => {
+    vi.useFakeTimers();
+    try {
+      let aborted = false;
+      fetchMock.mockImplementation(async (_url: string, init: RequestInit) => ({
+        ok: true,
+        status: 200,
+        json: () =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener("abort", () => {
+              aborted = true;
+              reject(new DOMException("aborted", "AbortError"));
+            });
+          }),
+      }));
+      const pending = cancelSubscription("sub_1", ENV, 3_000).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(2);
+      expect(await pending).toBeInstanceOf(StripeApiError);
+      expect(aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses to call Stripe without a secret", async () => {

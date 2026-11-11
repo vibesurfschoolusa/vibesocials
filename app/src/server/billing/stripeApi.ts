@@ -106,6 +106,23 @@ function secretKey(env: BillingEnv): string {
   return secret;
 }
 
+/**
+ * Runs one Stripe call, headers and body read together, within `limitMs`.
+ * fetchWithTimeout bounds only the wait for headers; this signal, passed as
+ * the request's own signal, bounds the whole request including the body, so
+ * a caller can add up its calls' limits (the webhook holds a row lock across
+ * them).
+ */
+async function withCallDeadline<T>(limitMs: number, call: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), limitMs);
+  try {
+    return await call(controller.signal);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function stripeRequest<T>(
   method: "GET" | "POST" | "DELETE",
   path: string,
@@ -126,24 +143,29 @@ async function stripeRequest<T>(
   if (options.idempotencyKey) headers["Idempotency-Key"] = options.idempotencyKey;
 
   const url = `${STRIPE_API_BASE}${path}${options.query ? `?${options.query.toString()}` : ""}`;
-  let response: Response;
-  try {
-    response = await fetchWithTimeout(
-      url,
-      { method, headers, body: options.form ? options.form.toString() : undefined, cache: "no-store" },
-      Math.max(1, Math.min(options.timeoutMs ?? STRIPE_TIMEOUT_MS, STRIPE_TIMEOUT_MS)),
-    );
-  } catch (error) {
-    // The cause can carry the request; only its name is kept.
-    throw new StripeApiError(`Stripe could not be reached (${error instanceof Error ? error.name : "error"})`, 0);
-  }
+  const limitMs = Math.max(1, Math.min(options.timeoutMs ?? STRIPE_TIMEOUT_MS, STRIPE_TIMEOUT_MS));
+  const { response, body } = await withCallDeadline(limitMs, async (signal) => {
+    let answer: Response;
+    try {
+      answer = await fetchWithTimeout(
+        url,
+        { method, headers, body: options.form ? options.form.toString() : undefined, cache: "no-store", signal },
+        limitMs,
+      );
+    } catch (error) {
+      // The cause can carry the request; only its name is kept.
+      throw new StripeApiError(`Stripe could not be reached (${error instanceof Error ? error.name : "error"})`, 0);
+    }
+    let parsed: unknown = null;
+    try {
+      parsed = await answer.json();
+    } catch {
+      parsed = null;
+    }
+    if (signal.aborted) throw new StripeApiError(`Stripe took longer than ${limitMs} ms`, 0);
+    return { response: answer, body: parsed };
+  });
 
-  let body: unknown = null;
-  try {
-    body = await response.json();
-  } catch {
-    body = null;
-  }
   if (!response.ok) {
     // Stripe's message can quote what was sent (an email address), so only its code is kept.
     const detail = (body as { error?: { code?: string; type?: string } } | null)?.error;
