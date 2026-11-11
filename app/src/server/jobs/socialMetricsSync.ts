@@ -71,6 +71,11 @@ export interface SocialMetricEligibleResult {
   publishedAt: Date;
   /** The post's file is a video (Facebook reads a video differently). */
   isVideo: boolean;
+  /**
+   * Its job sent this platform a Story (publishMetadata, lib/storyPlacement.ts).
+   * A Story has no lasting numbers: the sync asks nothing for it and only stamps it.
+   */
+  isStory: boolean;
 }
 
 /**
@@ -92,14 +97,10 @@ export async function selectSocialMetricEligibleResults(
         { metricsCheckedAt: null },
         { metricsCheckedAt: { lt: new Date(now.getTime() - SOCIAL_METRICS_MIN_REFRESH_MS) } },
       ],
-      // A Story has no lasting numbers: it is marked only on its job
-      // (publishMetadata, lib/storyPlacement.ts), and is left out here so it is
-      // never read or stamped and never takes a place in the selection. The
-      // relation filter is a subquery, so a job without the snapshot is kept.
-      NOT: [
-        { platform: "instagram", postJob: { publishMetadata: { path: ["instagram", "placement"], equals: "story" } } },
-        { platform: "facebook_page", postJob: { publishMetadata: { path: ["facebook", "placement"], equals: "story" } } },
-      ],
+      // No condition on publishMetadata here: a feed post's job has no
+      // placement path (often no snapshot at all), and a NOT over that NULL
+      // comparison would drop every ordinary post. Stories are recognised in
+      // code below, from the selected snapshot.
     },
     select: {
       id: true,
@@ -116,9 +117,6 @@ export async function selectSocialMetricEligibleResults(
   const eligible: SocialMetricEligibleResult[] = [];
   for (const row of rows) {
     if (!row.externalPostId || !(SOCIAL_METRICS_PLATFORMS as readonly Platform[]).includes(row.platform)) continue;
-    // The same rule as the query, read the way the rest of the app reads it,
-    // in case the snapshot's shape ever drifts from the JSON path above.
-    if ((storyPlatformsOf(row.postJob.publishMetadata) as Platform[]).includes(row.platform)) continue;
     eligible.push({
       resultId: row.id,
       platform: row.platform as SocialMetricsPlatform,
@@ -127,6 +125,8 @@ export async function selectSocialMetricEligibleResults(
       workspaceId: row.postJob.workspaceId,
       publishedAt: row.updatedAt,
       isVideo: (row.postJob.mediaItem?.mimeType ?? "").startsWith("video/"),
+      // The one place a Story is recognised, by the rule the rest of the app uses.
+      isStory: (storyPlatformsOf(row.postJob.publishMetadata) as Platform[]).includes(row.platform),
     });
   }
   return eligible;
@@ -135,12 +135,14 @@ export async function selectSocialMetricEligibleResults(
 /** What one run did. Counts are in results unless named otherwise. SEC: counts only. */
 export interface SocialMetricsSyncResult {
   selected: number;
-  /** Stamped: `updated + notFound + errors + skippedOtherWorkspace`. */
+  /** Stamped: `updated + notFound + errors + skippedOtherWorkspace + stories`. */
   attempted: number;
   /** A row was written. */
   updated: number;
   /** A row for the same post already belongs to another workspace: left alone. */
   skippedOtherWorkspace: number;
+  /** Results sent as a Story: nothing asked, nothing written, stamped. */
+  stories: number;
   /** The platform no longer has the post, or gave no number for it: nothing written. */
   notFound: number;
   /** The platform's answer was unusable, the write failed, or the connection was skipped. */
@@ -213,6 +215,7 @@ export async function syncSocialPostMetrics(
     attempted: 0,
     updated: 0,
     skippedOtherWorkspace: 0,
+    stories: 0,
     notFound: 0,
     errors: 0,
     skippedConnections: 0,
@@ -221,17 +224,27 @@ export async function syncSocialPostMetrics(
   };
   if (eligible.length === 0) return result;
 
+  // A Story makes no request and gets no row. It is stamped with the rest, so
+  // it goes to the back of the queue instead of sorting first ("never checked")
+  // on every run for 60 days and taking real posts' places.
+  const stamped: string[] = [];
+  for (const item of eligible) {
+    if (!item.isStory) continue;
+    result.stories += 1;
+    stamped.push(item.resultId);
+  }
+
   // Grouped by the connection that published each result, in the order of each
   // group's stalest result. A removed connection's results form one group per platform.
   const groups = new Map<string, SocialMetricEligibleResult[]>();
   for (const item of eligible) {
+    if (item.isStory) continue;
     const key = item.socialConnectionId ?? `none:${item.platform}`;
     const group = groups.get(key);
     if (group) group.push(item);
     else groups.set(key, [item]);
   }
 
-  const stamped: string[] = [];
   const limited = new Set<SocialMetricsPlatform>();
 
   const skip = (items: SocialMetricEligibleResult[]) => {

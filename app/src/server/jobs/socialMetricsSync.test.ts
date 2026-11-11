@@ -151,11 +151,11 @@ describe("selectSocialMetricEligibleResults", () => {
       { metricsCheckedAt: { lt: new Date(NOW.getTime() - SOCIAL_METRICS_MIN_REFRESH_MS) } },
     ]);
     expect(args.orderBy[0]).toEqual({ metricsCheckedAt: { sort: "asc", nulls: "first" } });
-    // A Story is left out in the query, so it is never selected, read or stamped.
-    expect(args.where.NOT).toEqual([
-      { platform: "instagram", postJob: { publishMetadata: { path: ["instagram", "placement"], equals: "story" } } },
-      { platform: "facebook_page", postJob: { publishMetadata: { path: ["facebook", "placement"], equals: "story" } } },
-    ]);
+    // No JSON condition in the query: a feed post's job has no placement path
+    // (or no publishMetadata), and a NOT over a NULL comparison would drop it.
+    // Stories are recognised in code, from the selected publishMetadata.
+    expect(Object.keys(args.where).sort()).toEqual(["OR", "externalPostId", "platform", "status", "updatedAt"]);
+    expect(JSON.stringify(args.where)).not.toMatch(/publishMetadata|path|story/);
     expect(args.select.postJob.select.publishMetadata).toBe(true);
     expect(SOCIAL_METRICS_MAX_AGE_MS).toBe(60 * 86_400_000);
     expect(SOCIAL_METRICS_MIN_REFRESH_MS).toBe(20 * 3_600_000);
@@ -169,13 +169,14 @@ describe("selectSocialMetricEligibleResults", () => {
         workspaceId: "ws-1",
         publishedAt: new Date("2026-11-05T09:00:00.000Z"),
         isVideo: false,
+        isStory: false,
       },
     ]);
   });
 });
 
 describe("selectSocialMetricEligibleResults: Stories", () => {
-  it("drops a Story result the query let through, keeping the job's other platforms", async () => {
+  it("marks a result a Story only for the platform its job sent as one", async () => {
     const story = { instagram: { placement: "story" }, facebook: { placement: "feed" } };
     m.findMany.mockResolvedValue([
       row("r1", "instagram", "m1", { publishMetadata: story }),
@@ -183,7 +184,22 @@ describe("selectSocialMetricEligibleResults: Stories", () => {
       row("r3", "facebook_page", "9_2", { publishMetadata: { facebook: { placement: "story" } } }),
     ]);
     const rows = await selectSocialMetricEligibleResults(NOW);
-    expect(rows.map((r) => r.resultId)).toEqual(["r2"]);
+    expect(rows.map((r) => [r.resultId, r.isStory])).toEqual([
+      ["r1", true],
+      ["r2", false],
+      ["r3", true],
+    ]);
+  });
+
+  it("never takes a job with null, empty or unrelated publishMetadata for a Story", async () => {
+    m.findMany.mockResolvedValue([
+      row("r1", "instagram", "m1", { publishMetadata: null }),
+      row("r2", "instagram", "m2", { publishMetadata: {} }),
+      row("r3", "facebook_page", "9_1", { publishMetadata: { youtube: { privacyStatus: "public" } } }),
+      row("r4", "facebook_page", "9_2", { publishMetadata: { instagram: { placement: "story" } } }),
+    ]);
+    const rows = await selectSocialMetricEligibleResults(NOW);
+    expect(rows.map((r) => r.isStory)).toEqual([false, false, false, false]);
   });
 });
 
@@ -213,6 +229,7 @@ describe("syncSocialPostMetrics", () => {
       attempted: 5,
       updated: 5,
       skippedOtherWorkspace: 0,
+      stories: 0,
       notFound: 0,
       errors: 0,
       skippedConnections: 0,
@@ -486,6 +503,41 @@ describe("syncSocialPostMetrics", () => {
     expect(stamped()).not.toContain("r25");
     expect(stamped()).not.toContain("r26");
     expect(out).toMatchObject({ left: 2, attempted: 25, updated: 25 });
+  });
+
+  it("reads the feed posts, asks nothing for Stories, and stamps them all in the one update", async () => {
+    const story = { instagram: { placement: "story" }, facebook: { placement: "story" } };
+    m.findMany.mockResolvedValue([
+      row("f1", "instagram", "m1", { publishMetadata: null }),
+      row("f2", "instagram", "m2", { publishMetadata: null }),
+      row("f3", "facebook_page", "9_1", { publishMetadata: null }),
+      row("f4", "instagram", "m3", { publishMetadata: { youtube: { privacyStatus: "public" } } }),
+      row("f5", "facebook_page", "9_2", { publishMetadata: { instagram: { placement: "story" } } }),
+      row("s1", "instagram", "m4", { publishMetadata: story }),
+      row("s2", "facebook_page", "9_3", { publishMetadata: story }),
+    ]);
+
+    const out = await syncSocialPostMetrics(NOW);
+
+    const asked = [
+      ...m.instagram.mock.calls.flatMap((call) => call[0] as string[]),
+      ...m.facebook.mock.calls.flatMap((call) => (call[0] as Array<{ id: string }>).map((r) => r.id)),
+    ].sort();
+    expect(asked).toEqual(["9_1", "9_2", "m1", "m2", "m3"]);
+    expect(m.upsert).toHaveBeenCalledTimes(5);
+    expect(m.upsert.mock.calls.map((call) => call[0].create.externalPostId)).not.toContain("m4");
+    expect(m.executeRaw).toHaveBeenCalledTimes(1);
+    expect(stamped().sort()).toEqual(["f1", "f2", "f3", "f4", "f5", "s1", "s2"]);
+    expect(out).toMatchObject({ selected: 7, stories: 2, updated: 5, attempted: 7 });
+  });
+
+  it("a run of only Stories makes no request and still stamps them", async () => {
+    m.findMany.mockResolvedValue([row("s1", "instagram", "m4", { publishMetadata: { instagram: { placement: "story" } } })]);
+    const out = await syncSocialPostMetrics(NOW);
+    expect(m.findUnique).not.toHaveBeenCalled();
+    expect(m.instagram).not.toHaveBeenCalled();
+    expect(stamped()).toEqual(["s1"]);
+    expect(out).toMatchObject({ stories: 1, attempted: 1 });
   });
 
   it("does nothing when nothing is eligible", async () => {
