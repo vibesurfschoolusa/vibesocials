@@ -2,6 +2,7 @@ import type { Platform, PostJobResultStatus, PostJobStatus } from "@prisma/clien
 
 import { prisma } from "@/lib/db";
 import { platformLabel } from "@/lib/platforms";
+import { WORKSPACE_PAUSED_CODE } from "@/lib/workspaceStatus";
 import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
 
 /**
@@ -235,6 +236,8 @@ export async function deliverPostOutcomeNotification({
             select: {
               platform: true,
               status: true,
+              // Pause (2026-11-10): to send nothing for a paused workspace's job.
+              errorCode: true,
               errorMessage: true,
             },
           },
@@ -249,6 +252,12 @@ export async function deliverPostOutcomeNotification({
     });
 
     if (!shouldSend || !user || !postJob) {
+      return;
+    }
+
+    // Pause (2026-11-10): a paused workspace's due posts are all failed with this
+    // code. The owners had the pause email; one more per post would flood them.
+    if (postJob.results.some((result) => result.errorCode === WORKSPACE_PAUSED_CODE)) {
       return;
     }
 

@@ -36,6 +36,16 @@ export function workspaceBlock(workspace: WorkspaceStatusFields): WorkspaceBlock
   return { code: WORKSPACE_PAUSED_CODE, message: workspacePausedMessage(workspace.pausedReason) };
 }
 
+/**
+ * What the publish and retry functions write on a paused workspace's pending
+ * results. A result failed this way is retryable after a resume; nothing
+ * publishes it by itself later.
+ */
+export const WORKSPACE_PAUSED_RESULT_FAILURE = {
+  errorCode: WORKSPACE_PAUSED_CODE,
+  errorMessage: "Not published: this workspace was paused.",
+} as const;
+
 /** For a route: the 403 to return as-is, or null to carry on. */
 export function workspaceBlockResponse(workspace: WorkspaceStatusFields): NextResponse | null {
   const block = workspaceBlock(workspace);

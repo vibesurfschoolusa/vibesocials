@@ -4606,7 +4606,15 @@ describe("publish functions - tracking tags on the website link (20)", () => {
         await run(null);
         expect(db.workspaceFindUnique).toHaveBeenCalledWith({
           where: { id: "ws-1" },
-          select: { id: true, companyWebsite: true, defaultHashtags: true, trackWebsiteLinks: true },
+          // Pause (2026-11-10): the pause columns are read too, never memoized.
+          select: {
+            id: true,
+            companyWebsite: true,
+            defaultHashtags: true,
+            trackWebsiteLinks: true,
+            pausedAt: true,
+            pausedReason: true,
+          },
         });
       });
 
@@ -4669,4 +4677,151 @@ describe("publish functions - tracking tags on the website link (20)", () => {
       });
     });
   }
+});
+
+// Pause (2026-11-10): a paused workspace's due post publishes nothing. Its
+// pending results are failed WORKSPACE_PAUSED, like the no-connections path, and
+// no outcome email is enqueued. A workspace that is not paused runs exactly the
+// steps, with exactly the outputs, it ran before.
+describe("publishToAllPlatforms and retryPlatforms — paused workspace", () => {
+  const PAUSED_FAILURE = {
+    errorCode: "WORKSPACE_PAUSED",
+    errorMessage: "Not published: this workspace was paused.",
+  };
+  const PAUSED_AT = new Date("2026-11-10T08:00:00Z");
+
+  function setUp(workspace: Record<string, unknown>) {
+    db.postJobFindUnique.mockResolvedValue({
+      id: "job-1",
+      workspaceId: WORKSPACE.id,
+      mediaItemId: "media-1",
+      baseCaption: "Waves",
+      perPlatformOverrides: null,
+      publishMetadata: null,
+    });
+    db.workspaceFindUnique.mockResolvedValue(workspace);
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "Waves", deletedAt: null });
+    db.connectionFindMany.mockResolvedValue([
+      { id: "conn-x", platform: "x" },
+      { id: "conn-linkedin", platform: "linkedin" },
+    ]);
+    stubResults(["x", "linkedin"]);
+    failPendingMock.mockResolvedValue({ failedCount: 2, unconfirmedCount: 0, status: "failed" });
+  }
+
+  function publish(step: FakeStep) {
+    return handlerOf(publishToAllPlatforms)({
+      event: {
+        name: "post/publish.requested",
+        data: { postJobId: "job-1", userId: "user-1", mediaItemId: "media-1", baseCaption: "Waves", perPlatformOverrides: null },
+      },
+      step,
+    });
+  }
+
+  function retry(step: FakeStep) {
+    return handlerOf(retryPlatforms)({
+      event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms: ["x", "linkedin"] } },
+      step,
+    });
+  }
+
+  it("publish: reads the pause fields with the footer fields", async () => {
+    setUp({ ...WORKSPACE, pausedAt: null, pausedReason: null });
+    await publish(fakeStep());
+    expect(db.workspaceFindUnique).toHaveBeenCalledWith({
+      where: { id: "ws-1" },
+      select: {
+        id: true,
+        companyWebsite: true,
+        defaultHashtags: true,
+        trackWebsiteLinks: true,
+        pausedAt: true,
+        pausedReason: true,
+      },
+    });
+  });
+
+  it("publish: a paused workspace publishes nothing, fails its pending results and sends no outcome email", async () => {
+    setUp({ ...WORKSPACE, pausedAt: PAUSED_AT, pausedReason: "Unpaid invoice." });
+    const step = fakeStep();
+
+    const out = await publish(step);
+
+    expect(step.order).toEqual(["run:fetch-data", "run:mark-failed-workspace-paused"]);
+    expect(failPendingMock).toHaveBeenCalledTimes(1);
+    expect(failPendingMock).toHaveBeenCalledWith("job-1", PAUSED_FAILURE);
+    expect(getPlatformClientMock).not.toHaveBeenCalled();
+    expect(publishCtxs).toEqual([]);
+    expect(step.sendEvent).not.toHaveBeenCalled();
+    expect(out).toEqual({ error: "Workspace paused" });
+    // The memoized output says only that it was paused: no reason, no rows.
+    expect(step.outputs["fetch-data"]).toEqual({ paused: true });
+  });
+
+  it("publish: a workspace that is not paused runs the same steps with the same outputs as before", async () => {
+    setUp({ ...WORKSPACE, pausedAt: null, pausedReason: null });
+    const step = fakeStep();
+
+    await publish(step);
+
+    expect(step.order).toEqual([
+      "run:fetch-data",
+      "run:publish-to-x",
+      "run:publish-to-linkedin",
+      "run:finalize-job",
+      "sendEvent:notify-outcome",
+    ]);
+    const fetched = step.outputs["fetch-data"] as Record<string, unknown>;
+    expect(Object.keys(fetched).sort()).toEqual(
+      ["mediaItem", "mediaItems", "resultRecords", "socialConnections", "user", "workspace"].sort(),
+    );
+    // The pause columns are read but never memoized: the workspace output is today's.
+    expect(fetched.workspace).toEqual(WORKSPACE);
+    expect(failPendingMock).not.toHaveBeenCalled();
+  });
+
+  it("retry: a paused workspace retries nothing and fails only the re-queued platforms", async () => {
+    setUp({ ...WORKSPACE, pausedAt: PAUSED_AT, pausedReason: "Unpaid invoice." });
+    const step = fakeStep();
+
+    const out = await retry(step);
+
+    expect(step.order).toEqual(["run:fetch-retry-data", "run:mark-failed-workspace-paused"]);
+    expect(failPendingMock).toHaveBeenCalledWith("job-1", PAUSED_FAILURE, { platforms: ["x", "linkedin"] });
+    expect(publishCtxs).toEqual([]);
+    expect(step.sendEvent).not.toHaveBeenCalled();
+    expect(out).toEqual({ postJobId: "job-1", error: "Workspace paused" });
+    expect(step.outputs["fetch-retry-data"]).toEqual({ paused: true });
+  });
+
+  it("retry: a workspace that is not paused runs the same steps with the same outputs as before", async () => {
+    setUp({ ...WORKSPACE, pausedAt: null, pausedReason: null });
+    const step = fakeStep();
+
+    await retry(step);
+
+    expect(step.order).toEqual([
+      "run:fetch-retry-data",
+      "run:retry-x",
+      "run:retry-linkedin",
+      "run:finalize-retry",
+      "sendEvent:notify-outcome",
+    ]);
+    const fetched = step.outputs["fetch-retry-data"] as Record<string, unknown>;
+    expect(Object.keys(fetched).sort()).toEqual(
+      [
+        "captionSource",
+        "connections",
+        "mediaItem",
+        "mediaItems",
+        "photoUnavailable",
+        "publishMetadata",
+        "resultRecords",
+        "user",
+        "workspace",
+      ].sort(),
+    );
+    expect(fetched.workspace).toEqual(WORKSPACE);
+  });
 });

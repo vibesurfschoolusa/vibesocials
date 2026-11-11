@@ -296,6 +296,44 @@ describe("deliverPostOutcomeNotification", () => {
     expect(arg.html).toContain("Settings");
   });
 
+  // Pause (2026-11-10): every due post of a paused workspace is failed
+  // WORKSPACE_PAUSED; one email per post would flood the owner, who already had
+  // the pause email.
+  it("does not send for a job whose results were failed because the workspace was paused", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    findUniqueUserMock.mockResolvedValue({ email: "user@example.com", notifyOnPostComplete: true });
+    findUniquePostJobMock.mockResolvedValue({
+      status: "failed",
+      results: [
+        { platform: "x", status: "failed", errorCode: "WORKSPACE_PAUSED", errorMessage: "Not published: this workspace was paused." },
+        { platform: "linkedin", status: "failed", errorCode: "WORKSPACE_PAUSED", errorMessage: "Not published: this workspace was paused." },
+      ],
+    });
+
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
+
+    expect(findUniquePostJobMock.mock.calls[0][0].select.results.select).toEqual({
+      platform: true,
+      status: true,
+      errorCode: true,
+      errorMessage: true,
+    });
+    expect(sendEmailMock).not.toHaveBeenCalled();
+  });
+
+  it("still sends for a failed job with any other error code", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    findUniqueUserMock.mockResolvedValue({ email: "user@example.com", notifyOnPostComplete: true });
+    findUniquePostJobMock.mockResolvedValue({
+      status: "failed",
+      results: [{ platform: "x", status: "failed", errorCode: "CONNECTION_GONE", errorMessage: "Gone." }],
+    });
+
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
+
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not send when the user's preference is off", async () => {
     vi.stubEnv("RESEND_API_KEY", "re_test_key");
     findUniqueUserMock.mockResolvedValue({

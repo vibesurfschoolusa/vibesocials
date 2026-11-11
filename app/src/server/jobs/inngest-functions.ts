@@ -62,6 +62,7 @@ import {
   proactiveRefreshWhere,
 } from "@/server/jobs/connectionHealthSweep";
 import { platformLabel } from "@/lib/platforms";
+import { WORKSPACE_PAUSED_RESULT_FAILURE, workspaceBlock } from "@/lib/workspaceStatus";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import {
   claimResult,
@@ -952,14 +953,21 @@ export const publishToAllPlatforms = inngest.createFunction(
         throw new NonRetriableError("Missing required data");
       }
 
-      const [user, workspace, mediaItem, socialConnections] = await Promise.all([
+      const [user, workspaceRow, mediaItem, socialConnections] = await Promise.all([
         prisma.user.findUnique({
           where: { id: userId },
           select: { id: true },
         }),
         prisma.workspace.findUnique({
           where: { id: postJob.workspaceId },
-          select: { id: true, companyWebsite: true, defaultHashtags: true, trackWebsiteLinks: true },
+          select: {
+            id: true,
+            companyWebsite: true,
+            defaultHashtags: true,
+            trackWebsiteLinks: true,
+            pausedAt: true,
+            pausedReason: true,
+          },
         }),
         prisma.mediaItem.findUnique({ where: { id: mediaItemId } }),
         prisma.socialConnection.findMany({
@@ -968,8 +976,16 @@ export const publishToAllPlatforms = inngest.createFunction(
         }),
       ]);
 
-      if (!user || !workspace || !mediaItem) {
+      if (!user || !workspaceRow || !mediaItem) {
         throw new NonRetriableError("Missing required data");
+      }
+
+      // Pause (2026-11-10): the pause columns are read here but never memoized,
+      // so a workspace that is not paused returns exactly the output it did
+      // before. A paused one returns only that, and the run ends below.
+      const { pausedAt, pausedReason, ...workspace } = workspaceRow;
+      if (workspaceBlock({ pausedAt, pausedReason })) {
+        return { paused: true as const };
       }
 
       // 07a: a post with several photos publishes all of them or none. A gone
@@ -1005,6 +1021,19 @@ export const publishToAllPlatforms = inngest.createFunction(
         resultRecords,
       };
     });
+
+    if ("paused" in setupData) {
+      // Pause (2026-11-10): publish nothing. Like the no-connections path below,
+      // the pending results are failed through the shared helper (a claimed one
+      // becomes PUBLISH_UNCONFIRMED) and the job recomputed; no outcome email,
+      // so a burst of due posts does not flood the owner. The owner can retry
+      // them after a resume; nothing publishes by itself later.
+      await step.run("mark-failed-workspace-paused", async () => {
+        await failPendingPostJobResults(postJobId, WORKSPACE_PAUSED_RESULT_FAILURE);
+      });
+      return { error: "Workspace paused" };
+    }
+
     // A run whose fetch-data output was memoized before 07a has no list.
     const publishMediaItems = setupData.mediaItems ?? [
       { ...setupData.mediaItem, baseCaption: "", perPlatformOverrides: null },
@@ -1387,14 +1416,21 @@ export const retryPlatforms = inngest.createFunction(
         return null;
       }
 
-      const [user, workspace, mediaItem, connections, resultRecords] = await Promise.all([
+      const [user, workspaceRow, mediaItem, connections, resultRecords] = await Promise.all([
         prisma.user.findUnique({
           where: { id: userId },
           select: { id: true },
         }),
         prisma.workspace.findUnique({
           where: { id: postJob.workspaceId },
-          select: { id: true, companyWebsite: true, defaultHashtags: true, trackWebsiteLinks: true },
+          select: {
+            id: true,
+            companyWebsite: true,
+            defaultHashtags: true,
+            trackWebsiteLinks: true,
+            pausedAt: true,
+            pausedReason: true,
+          },
         }),
         prisma.mediaItem.findUnique({ where: { id: postJob.mediaItemId } }),
         prisma.socialConnection.findMany({
@@ -1410,6 +1446,17 @@ export const retryPlatforms = inngest.createFunction(
           select: { id: true, platform: true },
         }),
       ]);
+
+      // Pause (2026-11-10): as in fetch-data, the pause columns are never
+      // memoized; a paused workspace's run ends below without retrying anything.
+      let workspace: Omit<NonNullable<typeof workspaceRow>, "pausedAt" | "pausedReason"> | null = null;
+      if (workspaceRow) {
+        const { pausedAt, pausedReason, ...footerFields } = workspaceRow;
+        if (workspaceBlock({ pausedAt, pausedReason })) {
+          return { paused: true as const };
+        }
+        workspace = footerFields;
+      }
 
       // Privacy snapshot once (not per platform step) for retry replay.
       const publishMetadata = postJob.publishMetadata as {
@@ -1446,6 +1493,16 @@ export const retryPlatforms = inngest.createFunction(
     if (!setupData) {
       logger.error("[Inngest] Retry job not found", { postJobId });
       return { postJobId, error: "Job not found" };
+    }
+
+    if ("paused" in setupData) {
+      // Pause (2026-11-10): the retry route refuses a paused workspace, so this
+      // is a retry queued just before the pause. Fail only this run's platforms,
+      // as fail-media-unavailable does, and send no outcome email.
+      await step.run("mark-failed-workspace-paused", async () => {
+        await failPendingPostJobResults(postJobId, WORKSPACE_PAUSED_RESULT_FAILURE, { platforms });
+      });
+      return { postJobId, error: "Workspace paused" };
     }
 
     const {
