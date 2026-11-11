@@ -15,7 +15,7 @@ import { generateInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { openSecret, sealSecret } from "@/lib/tokenCrypto";
-import { requireOwnerContext } from "@/lib/workspace";
+import { isWorkspaceOwner, requireOwnerContext } from "@/lib/workspace";
 import {
   INVALID_WORKSPACE_ID_CODE,
   INVALID_WORKSPACE_ID_MESSAGE,
@@ -77,10 +77,13 @@ export async function GET(request: Request) {
   const mismatch = workspaceMismatch(new URL(request.url).searchParams.get("workspaceId") ?? undefined, workspaceId);
   if (mismatch) return mismatch;
 
-  const link = await prisma.workspaceConnectLink.findFirst({
+  const row = await prisma.workspaceConnectLink.findFirst({
     where: { workspaceId, revokedAt: null, expiresAt: { gt: new Date() } },
     orderBy: { createdAt: "desc" },
   });
+  // A link acts as its creator, so once they are no longer an owner it works
+  // for no visitor (server/connectLink/link.ts): show it as no link at all.
+  const link = row && (await isWorkspaceOwner(row.createdById, workspaceId)) ? row : null;
   return NextResponse.json({
     link: link ? toLinkDto(link, workspaceId) : null,
     available: configuredConnectLinkPlatforms(),

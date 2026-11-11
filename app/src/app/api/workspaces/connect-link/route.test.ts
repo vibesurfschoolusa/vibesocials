@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   requireOwnerContext: vi.fn(),
   rateLimit: vi.fn(),
   generateInviteToken: vi.fn(),
+  isOwner: vi.fn(),
 }));
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -26,7 +27,7 @@ vi.mock("@/lib/db", () => ({
       }),
   },
 }));
-vi.mock("@/lib/workspace", () => ({ requireOwnerContext: h.requireOwnerContext }));
+vi.mock("@/lib/workspace", () => ({ requireOwnerContext: h.requireOwnerContext, isWorkspaceOwner: h.isOwner }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: h.rateLimit }));
 vi.mock("@/lib/logger", () => ({ logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("@/lib/inviteToken", async () => {
@@ -88,6 +89,7 @@ beforeEach(() => {
   h.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => linkRow(data));
   h.updateMany.mockResolvedValue({ count: 0 });
   h.findFirst.mockResolvedValue(null);
+  h.isOwner.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -189,5 +191,56 @@ describe("DELETE: revoke", () => {
     const res = await DELETE(body("DELETE", { workspaceId: "ws-1" }));
     expect(await res.json()).toEqual({ ok: true });
     expect(h.updateMany).toHaveBeenCalledWith({ where: { workspaceId: "ws-1", revokedAt: null }, data: { revokedAt: NOW } });
+  });
+});
+
+// Fix round 1: a link whose creator is no longer an owner works for no
+// visitor (server/connectLink/link.ts), so Settings must not show it either.
+describe("a link whose creator is no longer an owner", () => {
+  const live = linkRow({ createdById: "user-2" });
+
+  it("creator still an owner: shown, as before", async () => {
+    h.findFirst.mockResolvedValue(live);
+    const res = await GET(new Request(BASE));
+    expect((await res.json()).link.url).toBe(`${ORIGIN}/c/${RAW}`);
+    expect(h.isOwner).toHaveBeenCalledWith("user-2", "ws-1");
+  });
+
+  it("creator removed or demoted: no link, so the group offers Create link", async () => {
+    h.findFirst.mockResolvedValue(live);
+    h.isOwner.mockResolvedValue(false);
+    const res = await GET(new Request(BASE));
+    expect(await res.json()).toEqual({ link: null, available: ["tiktok", "instagram"] });
+  });
+
+  it("revoked and expired rows are not even read, as before", async () => {
+    await GET(new Request(BASE));
+    expect(h.findFirst.mock.calls[0][0].where).toEqual({ workspaceId: "ws-1", revokedAt: null, expiresAt: { gt: NOW } });
+    expect(h.isOwner).not.toHaveBeenCalled();
+  });
+
+  it("a paused workspace with a live creator: shown, as before (the pause banner tells the owner)", async () => {
+    h.requireOwnerContext.mockResolvedValue({
+      ...OWNER,
+      workspace: { ...OWNER.workspace, pausedAt: NOW, pausedReason: "Unpaid" },
+    });
+    h.findFirst.mockResolvedValue(live);
+    const res = await GET(new Request(BASE));
+    expect((await res.json()).link).not.toBeNull();
+  });
+
+  it("POST with a dead link in place creates a new one and the old row ends revoked", async () => {
+    h.updateMany.mockResolvedValue({ count: 1 });
+    const res = await POST(body("POST", { platforms: ["tiktok"] }));
+    expect(res.status).toBe(200);
+    expect(h.updateMany).toHaveBeenCalledWith({ where: { workspaceId: "ws-1", revokedAt: null }, data: { revokedAt: NOW } });
+    expect(h.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("DELETE when the only row is a dead one answers as for nothing to revoke", async () => {
+    h.updateMany.mockResolvedValue({ count: 1 });
+    const res = await DELETE(body("DELETE", {}));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
   });
 });
