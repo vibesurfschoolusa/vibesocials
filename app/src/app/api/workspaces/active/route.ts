@@ -20,6 +20,11 @@ import {
   workspaceDeletionRefusal,
   type QueuedFile,
 } from "@/server/account/deleteWorkspace";
+import {
+  CANCELLED_WORKSPACE_KEPT_MESSAGE,
+  CANCELLED_WORKSPACE_KEPT_PREFIX,
+  cancelSubscriptionsBeforeDelete,
+} from "@/server/billing/cancelOnDelete";
 
 // The transaction is capped at 15 s and the file deletion after it at 20 s
 // (AFTER_COMMIT_BUDGET_MS), so this leaves room for both.
@@ -114,15 +119,28 @@ export async function DELETE(request: Request) {
     );
   }
 
+  // 21b: cancel the plan at Stripe first; a no-op with payments not configured.
+  const cancel = await cancelSubscriptionsBeforeDelete([workspaceId], {
+    precheck: () => workspaceDeletionRefusal(workspaceId, context.user.id),
+  });
+  if (!cancel.ok) {
+    return NextResponse.json({ error: cancel.error }, { status: cancel.status });
+  }
+  const cancelled = cancel.cancelled > 0;
+
   let queued: QueuedFile[];
   try {
     queued = await deleteInTransaction(workspaceId, context.user.id);
   } catch (error) {
     if (error instanceof DeletionRefusedError) {
-      return NextResponse.json({ error: error.message }, { status: 409 });
+      const message = cancelled ? `${CANCELLED_WORKSPACE_KEPT_PREFIX} ${error.message}` : error.message;
+      return NextResponse.json({ error: message }, { status: 409 });
     }
     logger.error("[DELETE /api/workspaces/active] Transaction failed", { workspaceId, error });
-    return NextResponse.json({ error: WORKSPACE_DELETE_FAILED_MESSAGE }, { status: 500 });
+    return NextResponse.json(
+      { error: cancelled ? CANCELLED_WORKSPACE_KEPT_MESSAGE : WORKSPACE_DELETE_FAILED_MESSAGE },
+      { status: 500 },
+    );
   }
 
   // Never throws; what it cannot finish stays queued.

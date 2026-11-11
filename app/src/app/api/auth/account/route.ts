@@ -8,7 +8,7 @@ import { normalizeEmail } from "@/lib/email";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
-import { blockedMessage, loadAccountDeletion } from "@/server/account/accountDeletion";
+import { accountDeletionRefusal, blockedMessage, loadAccountDeletion } from "@/server/account/accountDeletion";
 import {
   DeletionRefusedError,
   POST_PUBLISHING_MESSAGE,
@@ -20,6 +20,11 @@ import {
   type QueuedFile,
 } from "@/server/account/deleteWorkspace";
 import { samePlan, type AccountDeletionPlan } from "@/server/account/deletionPlan";
+import {
+  CANCELLED_ACCOUNT_KEPT_MESSAGE,
+  CANCELLED_ACCOUNT_KEPT_PREFIX,
+  cancelSubscriptionsBeforeDelete,
+} from "@/server/billing/cancelOnDelete";
 
 // Same bound as DELETE /api/workspaces/active: a 15 s transaction, then at
 // most 20 s of file deletion.
@@ -88,15 +93,28 @@ export async function DELETE(request: Request) {
     return NextResponse.json({ error: blockedMessage(plan.blocked) }, { status: 409 });
   }
 
+  // 21b: cancel the deleted workspaces' plans at Stripe first; a no-op with payments not configured.
+  const cancel = await cancelSubscriptionsBeforeDelete(plan.deleteWorkspaceIds, {
+    precheck: () => accountDeletionRefusal(plan),
+  });
+  if (!cancel.ok) {
+    return NextResponse.json({ error: cancel.error }, { status: cancel.status });
+  }
+  const cancelled = cancel.cancelled > 0;
+
   let queued: QueuedFile[];
   try {
     queued = await deleteInTransaction(user.id, plan);
   } catch (error) {
     if (error instanceof DeletionRefusedError) {
-      return NextResponse.json({ error: error.message }, { status: 409 });
+      const message = cancelled ? `${CANCELLED_ACCOUNT_KEPT_PREFIX} ${error.message}` : error.message;
+      return NextResponse.json({ error: message }, { status: 409 });
     }
     logger.error("[DELETE /api/auth/account] Transaction failed", { userId: user.id, error });
-    return NextResponse.json({ error: ACCOUNT_DELETE_FAILED_MESSAGE }, { status: 500 });
+    return NextResponse.json(
+      { error: cancelled ? CANCELLED_ACCOUNT_KEPT_MESSAGE : ACCOUNT_DELETE_FAILED_MESSAGE },
+      { status: 500 },
+    );
   }
 
   // Never throws; what it cannot finish stays queued for the hourly drain.
