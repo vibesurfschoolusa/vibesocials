@@ -311,3 +311,18 @@ describe("the platform's own refusal in a link flow", () => {
     expect(res.headers.get("location")).toBe(`${ORIGIN}/c/${TOKEN}?error=tiktok_already_connected`);
   });
 });
+
+// Fix round 2: X treats only a non-empty `denied` as a refusal, and so must the wrapper.
+describe("x: an empty denied parameter", () => {
+  it("with a token and verifier that connect, the success passes through and the use is recorded", async () => {
+    const request = linkRequest("x");
+    const url = new URL(request.url);
+    url.searchParams.set("denied", "");
+
+    const res = await xGET(new NextRequest(url, { headers: { cookie: cookie() } }));
+
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/c/${TOKEN}?success=x_connected`);
+    expect(h.upsert).toHaveBeenCalledTimes(1);
+    expect(h.linkUpdate).toHaveBeenCalledWith({ where: { id: "link-1" }, data: { lastUsedAt: NOW } });
+  });
+});

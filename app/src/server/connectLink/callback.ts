@@ -153,7 +153,8 @@ async function runLinkFlow<R extends Request>(
  */
 function platformRefusal(platform: Platform, request: Request): "cancelled" | "failed" | null {
   const params = new URL(request.url).searchParams;
-  if (platform === "x") return params.has("denied") ? "cancelled" : null;
+  // Only a non-empty `denied`, the same test the X callback applies.
+  if (platform === "x") return params.get("denied") ? "cancelled" : null;
   const error = params.get("error");
   if (!error) return null;
   if (error === "access_denied" || error.startsWith("user_cancelled") || params.get("error_reason") === "user_denied") {
