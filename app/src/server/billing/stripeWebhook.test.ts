@@ -368,6 +368,77 @@ describe("choosing among the workspace's subscriptions", () => {
     expect(m.logger.error).not.toHaveBeenCalled();
   });
 
+  /**
+   * Fix round 6: the stored subscription S is on an old, unconfigured price
+   * (plan growth kept); another subscription C is on a configured price.
+   * The workspace stays on S, the one it is paying for, until S ends.
+   */
+  describe("a kept-plan subscription beside a configured one", () => {
+    const S = (overrides: Partial<Sub> = {}) => sub({ id: "sub_1", created: T, ...priced("price_example_legacy"), ...overrides });
+    const C = (overrides: Partial<Sub> = {}) => sub({ id: "sub_2", created: T + DAY, ...priced("price_example_pro"), ...overrides });
+    const handle = (n: number, about: string) =>
+      handleStripeEvent(subscriptionEvent(`evt_${n}`, "customer.subscription.updated", about), ENV);
+    const onS = () => ({ stripeSubscriptionId: "sub_1", plan: "growth" });
+
+    beforeEach(() => {
+      m.workspaces.set("ws_a", row({ stripeSubscriptionId: "sub_1", plan: "growth", planStatus: "active" }));
+    });
+
+    it("C past_due, then paid, then cancelled, then S past_due and cancelled: S throughout, then the workspace ends", async () => {
+      stripeHas(S(), C({ status: "past_due" }));
+      expect(await handle(1, "sub_2")).toBe(200);
+      expect(ws()).toMatchObject({ ...onS(), planStatus: "active" });
+
+      stripeHas(C());
+      const before = { ...ws() };
+      expect(await handle(2, "sub_2")).toBe(200);
+      expect(ws()).toEqual(before);
+      expect(m.events.has("evt_2")).toBe(true);
+      expect(m.logger.error).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ eventId: "evt_2", workspaceId: "ws_a", storedSubscriptionId: "sub_1", rankedSubscriptionId: "sub_2" }),
+      );
+
+      stripeHas(C({ status: "canceled", ended_at: T + 3 * DAY }));
+      expect(await handle(3, "sub_2")).toBe(200);
+      expect(ws()).toMatchObject({ ...onS(), planStatus: "active" });
+
+      stripeHas(S({ status: "past_due", ...priced("price_example_legacy", PERIOD_END, PERIOD_END + 30 * DAY) }));
+      await handle(4, "sub_1");
+      expect(ws()).toMatchObject({ ...onS(), planStatus: "past_due", currentPeriodEnd: new Date(PERIOD_END * 1000) });
+
+      stripeHas(S({ status: "canceled", ended_at: T + 5 * DAY }));
+      await handle(5, "sub_1");
+      expect(ws()).toMatchObject({ ...onS(), planStatus: "canceled" });
+    });
+
+    it("C active while S goes past_due: nothing changes; once S is cancelled, C is written (pro, active)", async () => {
+      stripeHas(S(), C());
+      await handle(1, "sub_2");
+      expect(ws()).toMatchObject({ ...onS(), planStatus: "active" });
+
+      stripeHas(S({ status: "past_due" }));
+      const before = { ...ws() };
+      await handle(2, "sub_1");
+      expect(ws()).toEqual(before);
+
+      stripeHas(S({ status: "canceled", ended_at: T + 5 * DAY }));
+      await handle(3, "sub_1");
+      expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_2", plan: "pro", planStatus: "active" });
+
+      // And from then on the ordinary rule: C's cancel ends the workspace.
+      stripeHas(C({ status: "canceled", ended_at: T + 6 * DAY }));
+      await handle(4, "sub_2");
+      expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_2", plan: "pro", planStatus: "canceled" });
+    });
+
+    it("S cancelled first while C is active: C is written", async () => {
+      stripeHas(S({ status: "canceled", ended_at: T + 2 * DAY }), C());
+      await handle(1, "sub_1");
+      expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_2", plan: "pro", planStatus: "active" });
+    });
+  });
+
   it("a first purchase on an unconfigured price: nothing written, error logged", async () => {
     const before = { ...ws() };
     stripeHas(sub(priced("price_example_legacy")));

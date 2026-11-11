@@ -187,6 +187,7 @@ async function syncSubscription(
           type: event.type,
           workspaceId,
           reason: result.reason,
+          ...(result.held ?? {}),
         });
         return;
       }

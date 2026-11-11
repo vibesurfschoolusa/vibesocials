@@ -89,7 +89,14 @@ export type SyncResult =
       /** The stored subscription in use on a price no longer configured: its stored plan is kept (a warning). */
       keptPlan: UnconfiguredPrice[];
     }
-  | { ok: false; level: "error" | "info"; reason: string; unconfigured: UnconfiguredPrice[] };
+  | {
+      ok: false;
+      level: "error" | "info";
+      reason: string;
+      unconfigured: UnconfiguredPrice[];
+      /** Set when a kept-plan subscription holds the workspace against a higher-ranked one. */
+      held?: { storedSubscriptionId: string | null; rankedSubscriptionId: string };
+    };
 
 const fromUnixSeconds = (value: number | null | undefined): Date | null =>
   typeof value === "number" && Number.isFinite(value) ? new Date(value * 1000) : null;
@@ -112,7 +119,8 @@ const endedOf = (s: StripeSubscription) => s.ended_at ?? s.canceled_at ?? s.crea
  *    plan: if it is the workspace's stored subscription and the workspace has
  *    a stored plan, it stays a candidate and keeps that plan, so a subscriber
  *    left on an old price keeps the plan they bought while their payment
- *    state follows Stripe (fix round 5). Any other such candidate means
+ *    state follows Stripe (fix round 5). While it is in use, no other
+ *    subscription replaces it (fix round 6). Any other such candidate means
  *    nothing is written: a paying customer on a price the app does not know
  *    must not be written as ended or as a wrong plan.
  * 5. The effective one: the candidate in use ranked first by active or
@@ -180,6 +188,21 @@ export function syncFromCustomerList(
     .sort((a, b) => endedOf(b) - endedOf(a) || byId(a, b));
   const effective = ranked[0] ?? ended[0] ?? null;
   if (!effective) return refuse("error", "no subscription of the customer names this workspace");
+
+  // While the stored subscription is in use on a kept plan, it is the one
+  // the workspace is paying for: nothing else may replace it, or once
+  // replaced it would block every later sync as an unknown price that is not
+  // the stored one (fix round 6). Once it is no longer in use, the ordinary
+  // rule applies.
+  if (keptPlan.length > 0 && effective.id !== workspace.stripeSubscriptionId) {
+    return {
+      ok: false,
+      level: "error",
+      reason: "the stored subscription is in use on a kept plan, and another one would outrank it",
+      unconfigured: [],
+      held: { storedSubscriptionId: workspace.stripeSubscriptionId, rankedSubscriptionId: effective.id },
+    };
+  }
 
   const item = effective.items?.data?.[0];
   const periodEnd = fromUnixSeconds(item?.current_period_end);
