@@ -51,7 +51,7 @@ import { prepareUploadFile } from "@/lib/prepareUploadFile";
 import { localDateTimeToUtcIso, localTimeZoneLabel } from "@/lib/scheduling";
 import type { PostingSlot } from "@/lib/postingSlots";
 import { explainUploadFailure } from "@/lib/uploadFailure";
-import { BulkPostRow, captionFailureReason } from "./bulk-post-row";
+import { BulkPostRow, captionFailedText } from "./bulk-post-row";
 
 export interface BulkRow {
   id: string;
@@ -66,6 +66,7 @@ export interface BulkRow {
   captionStatus: BulkCaptionStatus;
   /** Set by "Write again": the new caption replaces what is in the box. */
   captionOverwrite: boolean;
+  /** The sentence the row shows when no caption came back (captionFailedText). */
   captionError: string | null;
   /** datetime-local value. */
   when: string;
@@ -306,13 +307,15 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
           ...(frames.length > 0 ? { frames } : {}),
         }),
       });
-      const data = (await response.json().catch(() => null)) as { caption?: unknown; error?: unknown } | null;
+      const data = (await response.json().catch(() => null)) as
+        | { caption?: unknown; error?: unknown; code?: unknown }
+        | null;
       if (!response.ok || typeof data?.caption !== "string" || !data.caption.trim()) {
-        console.error("[Add many] Caption failed", { status: response.status, error: data?.error });
+        console.error("[Add many] Caption failed", { status: response.status, code: data?.code, error: data?.error });
         updateRow(id, {
           captionStatus: "failed",
           captionOverwrite: false,
-          captionError: captionFailureReason(response.ok ? null : response.status, data?.error),
+          captionError: captionFailedText(response.ok ? null : response.status, data?.code),
         });
         return;
       }
@@ -329,7 +332,7 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
         captionStatus: "failed",
         captionOverwrite: false,
         // No answer at all (the network, or reading the file's frames): plain sentence.
-        captionError: null,
+        captionError: captionFailedText(null, undefined),
       });
     }
   }

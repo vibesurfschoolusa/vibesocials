@@ -1,35 +1,54 @@
 import { describe, expect, it } from "vitest";
 
-import { captionFailedText, captionFailureReason } from "./bulk-post-row";
+import { captionFailedText } from "./bulk-post-row";
 
-// Go-live check F2 item 5: the row read "No caption was written (AI is not
-// configured. Set XAI_API_KEY ...)". A person never reads the server's own error.
+// Go-live check F2 item 5 and fix round 1 item 4: the row read "No caption was
+// written (AI is not configured. Set XAI_API_KEY ...)" and later "(blobUrl is
+// required)". It shows only sentences written for a person, never the server's
+// own text in brackets.
 describe("Add many: a caption that failed", () => {
-  it("not configured, a provider error or a timeout: the plain sentence alone", () => {
-    for (const status of [500, 502, 504]) {
-      const reason = captionFailureReason(status, "AI is not configured. Set XAI_API_KEY (preferred) or OPENAI_API_KEY.");
-      expect(reason, String(status)).toBeNull();
-      expect(captionFailedText(reason)).toBe("No caption was written. Write one yourself, or ask again.");
+  const PLAIN = "No caption was written. Write one yourself, or ask again.";
+
+  it("504: the timeout sentence", () => {
+    expect(captionFailedText(504, "AI_TIMEOUT")).toBe(
+      "No caption was written: the AI service took too long. Write one yourself, or ask again.",
+    );
+  });
+
+  it("429: the too-many-requests sentence", () => {
+    expect(captionFailedText(429, undefined)).toBe(
+      "No caption was written: too many requests. Wait a few minutes, then ask again, or write one yourself.",
+    );
+  });
+
+  it("the daily limit: its own sentence", () => {
+    expect(captionFailedText(429, "AI_WORKSPACE_DAILY_LIMIT")).toBe(
+      "No caption was written: your workspace has reached today's AI limit. Write one yourself, or try again tomorrow.",
+    );
+  });
+
+  it("file too large: its own sentence", () => {
+    expect(captionFailedText(413, undefined)).toBe(
+      "No caption was written: the file is too large for the AI to read. Write one yourself.",
+    );
+  });
+
+  it("a 400 with a field name in its text: the plain sentence, no brackets", () => {
+    expect(captionFailedText(400, "AI_INPUT_TOO_LONG")).toBe(PLAIN);
+    expect(captionFailedText(400, undefined)).toBe(PLAIN);
+  });
+
+  it("a 500: the plain sentence", () => {
+    expect(captionFailedText(500, undefined)).toBe(PLAIN);
+  });
+
+  it("a network failure (no answer): the plain sentence", () => {
+    expect(captionFailedText(null, undefined)).toBe(PLAIN);
+  });
+
+  it("never brackets", () => {
+    for (const [status, code] of [[504, "AI_TIMEOUT"], [429, undefined], [429, "AI_WORKSPACE_DAILY_LIMIT"], [413, undefined], [400, undefined], [403, undefined], [500, undefined], [null, undefined]] as const) {
+      expect(captionFailedText(status, code)).not.toMatch(/[()]/);
     }
-  });
-
-  it("no answer at all (the network failed): the plain sentence alone", () => {
-    expect(captionFailureReason(null, undefined)).toBeNull();
-  });
-
-  it("too many requests or the day's limit: that sentence, as today", () => {
-    const reason = captionFailureReason(429, "Too many requests, slow down.");
-    expect(captionFailedText(reason)).toBe(
-      "No caption was written (Too many requests, slow down.). Write one yourself, or ask again.",
-    );
-    expect(captionFailureReason(429, "Your workspace has reached today's AI limit. Try again tomorrow.")).toBe(
-      "Your workspace has reached today's AI limit. Try again tomorrow.",
-    );
-  });
-
-  it("a refusal that is the person's to fix keeps its sentence; one without words is plain", () => {
-    expect(captionFailureReason(403, "This workspace is paused.")).toBe("This workspace is paused.");
-    expect(captionFailureReason(400, "")).toBeNull();
-    expect(captionFailureReason(400, { nested: true })).toBeNull();
   });
 });

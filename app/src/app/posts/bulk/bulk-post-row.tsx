@@ -53,20 +53,25 @@ function Thumbnail({ row }: { row: BulkRow }) {
 }
 
 /**
- * What of a failed caption call the row may say, or null. Only a refusal the
- * person can act on (too many requests, the day's limit, a paused workspace)
- * is passed on; a server failure's own words (configuration, the provider's
- * error) are never shown, and the browser console keeps the detail.
+ * What the row says when no caption came back (`status` null: no answer at
+ * all). Only sentences written here for a person, for the causes they can act
+ * on; the server's own text (a field name, a configuration or provider error)
+ * is never shown, and the browser console keeps it.
  */
-export function captionFailureReason(status: number | null, error: unknown): string | null {
-  if (status === null || status < 400 || status >= 500 || status === 401) return null;
-  return typeof error === "string" && error.trim() ? error : null;
-}
-
-export function captionFailedText(reason: string | null): string {
-  return reason
-    ? `No caption was written (${reason}). Write one yourself, or ask again.`
-    : "No caption was written. Write one yourself, or ask again.";
+export function captionFailedText(status: number | null, code: unknown): string {
+  if (status === 504) {
+    return "No caption was written: the AI service took too long. Write one yourself, or ask again.";
+  }
+  if (status === 429 && code === "AI_WORKSPACE_DAILY_LIMIT") {
+    return "No caption was written: your workspace has reached today's AI limit. Write one yourself, or try again tomorrow.";
+  }
+  if (status === 429) {
+    return "No caption was written: too many requests. Wait a few minutes, then ask again, or write one yourself.";
+  }
+  if (status === 413) {
+    return "No caption was written: the file is too large for the AI to read. Write one yourself.";
+  }
+  return "No caption was written. Write one yourself, or ask again.";
 }
 
 function uploadText(row: BulkRow): string | null {
@@ -162,7 +167,7 @@ export function BulkPostRow({
           />
           {row.captionStatus === "failed" ? (
             <p className="text-sm text-muted-foreground">
-              {captionFailedText(row.captionError)}
+              {row.captionError ?? captionFailedText(null, undefined)}
             </p>
           ) : null}
           {editable && row.upload === "done" && (row.captionStatus === "done" || row.captionStatus === "failed") ? (
