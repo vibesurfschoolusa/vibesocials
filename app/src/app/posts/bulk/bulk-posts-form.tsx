@@ -28,6 +28,7 @@ import {
   type BulkUploadStatus,
   allRowsCreated,
   applySchedule,
+  applySlotSchedule,
   captionProgressText,
   classifySendResponse,
   filesThatFit,
@@ -49,6 +50,7 @@ import { extractVideoFrames } from "@/lib/extractVideoFrames";
 import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 import { prepareUploadFile } from "@/lib/prepareUploadFile";
 import { localDateTimeToUtcIso, localTimeZoneLabel } from "@/lib/scheduling";
+import type { PostingSlot } from "@/lib/postingSlots";
 import { explainUploadFailure } from "@/lib/uploadFailure";
 import { BulkPostRow } from "./bulk-post-row";
 
@@ -125,6 +127,13 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
     everyDays: 1,
   }));
   const controlsRef = useRef(controls);
+  // "Use my posting times" (brief 11): rows take the next free slots instead of
+  // the first day / time / every N days spread. The slots and the times posts
+  // already hold come from GET /api/posts/scheduled-times, read once.
+  const [useSlots, setUseSlots] = useState(false);
+  const useSlotsRef = useRef(false);
+  const [slotData, setSlotData] = useState<{ slots: PostingSlot[]; taken: Date[] } | "error" | null>(null);
+  const slotDataRef = useRef<{ slots: PostingSlot[]; taken: Date[] } | null>(null);
   // Raw text of the "every N days" box, so it can be cleared while typing.
   const [everyDaysText, setEveryDaysText] = useState("1");
   // Once the user picks a first day it is theirs; until then it follows "tomorrow".
@@ -182,7 +191,36 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
   }
 
   function respread(change: (rows: BulkRow[]) => BulkRow[] = (r) => r) {
-    updateRows((current) => applySchedule(change(current), controlsRef.current));
+    const slotInfo = useSlotsRef.current ? slotDataRef.current : null;
+    updateRows((current) =>
+      slotInfo
+        ? applySlotSchedule(change(current), slotInfo.slots, slotInfo.taken, new Date())
+        : applySchedule(change(current), controlsRef.current),
+    );
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/posts/scheduled-times")
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error("not ok"))))
+      .then((body: { times?: string[]; slots?: PostingSlot[] }) => {
+        if (cancelled) return;
+        const data = { slots: body.slots ?? [], taken: (body.times ?? []).map((time) => new Date(time)) };
+        slotDataRef.current = data;
+        setSlotData(data);
+      })
+      .catch(() => {
+        if (!cancelled) setSlotData("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function changeUseSlots(on: boolean) {
+    useSlotsRef.current = on;
+    setUseSlots(on);
+    respread();
   }
 
   async function uploadRow(id: string) {
@@ -554,6 +592,7 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
               <Input
                 id="bulk-first-day"
                 type="date"
+                disabled={useSlots}
                 className="h-11"
                 min={minFirstDay(now)}
                 value={controls.firstDay}
@@ -568,6 +607,7 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
               <Input
                 id="bulk-time"
                 type="time"
+                disabled={useSlots}
                 className="h-11"
                 value={controls.timeOfDay}
                 onChange={(event) => changeControls({ timeOfDay: event.target.value })}
@@ -578,6 +618,7 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
               <Input
                 id="bulk-every"
                 type="number"
+                disabled={useSlots}
                 inputMode="numeric"
                 min={1}
                 step={1}
@@ -590,6 +631,26 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
               />
             </div>
           </div>
+          {slotData && slotData !== "error" ? (
+            slotData.slots.length > 0 ? (
+              <label className="flex items-center gap-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  checked={useSlots}
+                  disabled={sendingMode !== null}
+                  onChange={(event) => changeUseSlots(event.target.checked)}
+                />
+                Use my posting times: each post gets the next free one, in order
+              </label>
+            ) : (
+              <Link
+                href="/settings#posting-times"
+                className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+              >
+                Set your posting times
+              </Link>
+            )
+          ) : null}
           <p className="text-sm text-muted-foreground">
             Times are in {localTimeZoneLabel()}. A date you change by hand on a row stays as you set it.
           </p>

@@ -2,6 +2,7 @@ import type { Platform } from "@prisma/client";
 
 import { composerSubmitOutcome } from "@/lib/composerSubmitOutcome";
 import { platformAcceptsMedia } from "@/lib/platformLimits";
+import { nextFreeSlots, type PostingSlot } from "@/lib/postingSlots";
 import { SCHEDULE_BUFFER_MS, toDateTimeLocalValue } from "@/lib/scheduling";
 import type { YouTubePostMetadata } from "@/server/platforms/types";
 
@@ -103,6 +104,32 @@ export function applySchedule<T extends { when: string } & TimeLockState>(
   const slots = spreadSchedule({ ...controls, count: rows.length });
   if (slots.length !== rows.length) return rows;
   return rows.map((row, i) => (rowTimeLocked(row) || row.when === slots[i] ? row : { ...row, when: slots[i] }));
+}
+
+/**
+ * "Use my posting times" (brief 11): give each row whose time is not locked
+ * (rowTimeLocked) the next free posting slot, in list order. A locked row
+ * keeps its time, and that time counts as taken, as do `taken` (the times the
+ * workspace's posts hold). Rows past the free slots found keep their time.
+ */
+export function applySlotSchedule<T extends { when: string } & TimeLockState>(
+  rows: T[],
+  slots: readonly PostingSlot[],
+  taken: readonly Date[],
+  now: Date,
+): T[] {
+  const lockedTimes = rows
+    .filter((row) => rowTimeLocked(row) && row.when)
+    .map((row) => new Date(row.when))
+    .filter((date) => !Number.isNaN(date.getTime()));
+  const open = rows.filter((row) => !rowTimeLocked(row)).length;
+  const free = nextFreeSlots(slots, [...taken, ...lockedTimes], now, open).map(toDateTimeLocalValue);
+  let next = 0;
+  return rows.map((row) => {
+    if (rowTimeLocked(row)) return row;
+    const when = free[next++];
+    return when === undefined || row.when === when ? row : { ...row, when };
+  });
 }
 
 /** Move the row with `id` up (-1) or down (+1) by one place. */

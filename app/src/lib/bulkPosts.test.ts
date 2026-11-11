@@ -16,6 +16,7 @@ import {
   type BulkScheduleControls,
   type BulkSendableRow,
   applySchedule,
+  applySlotSchedule,
   captionProgressText,
   classifySendResponse,
   filesThatFit,
@@ -573,5 +574,37 @@ describe("captionProgressText", () => {
   it("says nothing once no caption is waiting", () => {
     expect(captionProgressText([{ id: "a", upload: "done", caption: "done" }])).toBeNull();
     expect(captionProgressText([])).toBeNull();
+  });
+});
+
+// 11: "Use my posting times" gives the rows the next free slots in order.
+describe("applySlotSchedule", () => {
+  // Tuesday 10 November 2026, 08:00 local; slots Tuesday 09:00 and Thursday 18:00.
+  // Built when each test runs: a test above changes the process time zone.
+  const now = () => new Date(2026, 10, 10, 8, 0);
+  const slots = [
+    { day: 2, time: "09:00" },
+    { day: 4, time: "18:00" },
+  ];
+
+  it("fills the unlocked rows with the next free slots, in order", () => {
+    const rows = applySlotSchedule(autoRows(3), slots, [], now());
+    expect(rows.map((r) => r.when)).toEqual(["2026-11-10T09:00", "2026-11-12T18:00", "2026-11-17T09:00"]);
+  });
+
+  it("keeps a locked row's time, counts it as taken, and skips times other posts hold", () => {
+    const start = autoRows(3).map((r) =>
+      r.id === "r2" ? { ...r, when: "2026-11-12T18:00", whenSetByHand: true } : r,
+    );
+    const taken = [new Date(2026, 10, 10, 9, 2)];
+
+    const rows = applySlotSchedule(start, slots, taken, now());
+
+    expect(rows.map((r) => r.when)).toEqual(["2026-11-17T09:00", "2026-11-12T18:00", "2026-11-19T18:00"]);
+  });
+
+  it("leaves the rows as they are with no posting times", () => {
+    const start = applySchedule(autoRows(2), CONTROLS);
+    expect(applySlotSchedule(start, [], [], now())).toEqual(start);
   });
 });
