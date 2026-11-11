@@ -12,11 +12,17 @@ import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GoogleSignInButton } from "@/components/google-sign-in-button";
-import { REGISTER_AGREEMENT } from "@/lib/billingTerms";
 import { authPageHref, safeCallbackPath } from "@/lib/safeRedirect";
 
-/** What the page says about billing; null with billing off, when it says nothing. */
-export type RegisterBilling = { trialDays: number } | null;
+/**
+ * What the page says about billing, as plain strings from the server page;
+ * null with billing off, when it says nothing. Strings, not an import of
+ * billingTerms.ts, so the draft wording never ships in this client bundle.
+ */
+export type RegisterBilling = {
+  trialLine: string;
+  agreement: { before: string; terms: string; between: string; privacy: string; after: string };
+} | null;
 
 function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
   const router = useRouter();
@@ -173,17 +179,17 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
 
               {billing ? (
                 <div className="space-y-1 text-center text-xs text-muted-foreground">
-                  <p>{billing.trialDays}-day free trial. No card needed.</p>
+                  <p>{billing.trialLine}</p>
                   <p>
-                    {REGISTER_AGREEMENT.before}
+                    {billing.agreement.before}
                     <Link href="/terms" className="underline underline-offset-2 hover:text-foreground">
-                      {REGISTER_AGREEMENT.terms}
+                      {billing.agreement.terms}
                     </Link>
-                    {REGISTER_AGREEMENT.between}
+                    {billing.agreement.between}
                     <Link href="/privacy" className="underline underline-offset-2 hover:text-foreground">
-                      {REGISTER_AGREEMENT.privacy}
+                      {billing.agreement.privacy}
                     </Link>
-                    {REGISTER_AGREEMENT.after}
+                    {billing.agreement.after}
                   </p>
                 </div>
               ) : null}
