@@ -169,6 +169,30 @@ export function isTextPostMode(
 }
 
 /**
+ * Which page the person sees. "untouched" (no file and no text anywhere) looks
+ * like the page with a file: the main thing people do there is add a photo, so
+ * greying out the photo platforms before anything is written reads wrong.
+ */
+export type ComposerPageState = "untouched" | "text" | "file";
+
+export function composerPageState(
+  state: Parameters<typeof hasNoFile>[0] & { caption: string; overrides: PlatformOverrides | null },
+  enabled?: boolean,
+): ComposerPageState {
+  if (!isTextPostMode(state, enabled)) return "file";
+  const hasText =
+    state.caption.trim() !== "" || Object.values(state.overrides ?? {}).some((text) => (text ?? "").trim() !== "");
+  return hasText ? "text" : "untouched";
+}
+
+export const UNTOUCHED_SUBMIT_MESSAGE = "Add a photo or video, or write the text of your post.";
+
+/** The sentence by the button after a press on the untouched page, or null. */
+export function untouchedSubmitMessage(state: { untouched: boolean; pressed: boolean }): string | null {
+  return state.untouched && state.pressed ? UNTOUCHED_SUBMIT_MESSAGE : null;
+}
+
+/**
  * Is a file shared into the Android app still on its way? The page was opened
  * with ?shared=1 and the take has not finished (attached, or found nothing).
  */
@@ -706,30 +730,41 @@ function CreatePostFormInner({
   // choices. See lib/postTargets.ts / PLATFORM_ACCEPTED_MEDIA.
   // Posts without a photo (2026-11-10): with nothing attached only the platforms
   // that take text alone can be chosen; attaching a file restores the rest.
-  // isTextPostMode, with the switch read at load (TEXT_POSTS_ON).
-  const noFile = isTextPostMode({
+  // composerPageState, with the switch read at load (TEXT_POSTS_ON). `noFile`
+  // keeps its meaning (no file, switch on); the platform list, the notice and
+  // the button wait for text before they read as a text post (`textPage`).
+  const pageState = composerPageState({
     preparingFile,
     sharedFilePending,
     reuseLoading,
     hasReuseItem: reuseItem !== null,
     hasUploadFile: uploadFile !== null,
     photoCount: photoSet.length,
+    caption: uploadCaption,
+    overrides: platformOverrides,
   }, TEXT_POSTS_ON);
+  const noFile = pageState !== "file";
+  const textPage = pageState === "text";
+  const untouched = pageState === "untouched";
+  // Set by a press on the untouched page; it goes once there is a file or text.
+  const [untouchedPressed, setUntouchedPressed] = useState(false);
+  if (untouchedPressed && !untouched) setUntouchedPressed(false);
+  const untouchedMessage = untouchedSubmitMessage({ untouched, pressed: untouchedPressed });
   const { choices: platformChoices, selected: selectedPlatforms } = useMemo(
-    () => deriveComposerPlatforms(connectedPlatforms, deselected, activeMimeType, { noFile }),
-    [connectedPlatforms, deselected, activeMimeType, noFile],
+    () => deriveComposerPlatforms(connectedPlatforms, deselected, activeMimeType, { noFile: textPage }),
+    [connectedPlatforms, deselected, activeMimeType, textPage],
   );
   // Set by the first press of the submit button (platformListAlert).
   const [triedSend, setTriedSend] = useState(false);
   const platformAlert = platformListAlert({
     selectedCount: selectedPlatforms.length,
     allDisabled: platformChoices.every((choice) => choice.disabledReason !== null),
-    noFile,
+    noFile: textPage,
     triedSend,
   });
   // Text mode says so where the person presses (textOnlyNotice).
   const textNotice = textOnlyNotice({
-    noFile,
+    noFile: textPage,
     connected: connectedPlatforms,
     deselected,
     selected: selectedPlatforms,
@@ -1679,6 +1714,12 @@ function CreatePostFormInner({
       return;
     }
 
+    // Nothing to send yet: say so by the button (untouchedSubmitMessage).
+    if (untouched) {
+      setUntouchedPressed(true);
+      return;
+    }
+
     if (noFile) {
       const textError = noFileSubmitError({
         caption: uploadCaption,
@@ -2463,9 +2504,14 @@ function CreatePostFormInner({
                 }) !== null
               }
             >
-              {submitButtonLabel({ mode: publishMode, noFile, loading: uploadLoading })}
+              {submitButtonLabel({ mode: publishMode, noFile: textPage, loading: uploadLoading })}
             </Button>
             </span>
+            {untouchedMessage ? (
+              <p className="text-sm text-muted-foreground" role="status">
+                {untouchedMessage}
+              </p>
+            ) : null}
             {tiktokBlock ? (
               <p className="text-sm text-muted-foreground" role="status">
                 TikTok: {tiktokBlock}

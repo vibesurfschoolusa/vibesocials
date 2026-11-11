@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { deriveComposerPlatforms } from "@/lib/postTargets";
 import { REPEAT_X_NOTE } from "@/lib/repeatSchedule";
 
 // The release switch (platformLimits.ts textPostsEnabled), overridden per test.
@@ -11,6 +12,7 @@ vi.mock("@/lib/platformLimits", async (importOriginal) => ({
 
 import {
   buildTextPostBody,
+  composerPageState,
   FILE_LOST_MESSAGE,
   fileLostBlocksSubmit,
   fileLostNoticeShown,
@@ -32,6 +34,8 @@ import {
   textOnlyNotice,
   textPostConfirmCopy,
   type PickEvent,
+  UNTOUCHED_SUBMIT_MESSAGE,
+  untouchedSubmitMessage,
 } from "./create-post-form";
 
 // Posts without a photo (2026-11-10): the Create page's pure helpers.
@@ -437,5 +441,111 @@ describe("scheduleWhenText", () => {
   it("says the chosen time, or nothing when there is no valid one", () => {
     expect(scheduleWhenText("")).toBeNull();
     expect(scheduleWhenText("2030-12-02T09:00")).toMatch(/2|Dec/);
+  });
+});
+
+// Go-live check F2 item 1: a page nobody has touched (no file, no text) is not a
+// text post yet. It looks like the page with a file until text is typed.
+describe("the untouched Create page", () => {
+  type Platform = Parameters<typeof textOnlyNotice>[0]["connected"][number];
+  const nothing = { reuseLoading: false, hasReuseItem: false, hasUploadFile: false, photoCount: 0 };
+  const empty = { ...nothing, caption: "", overrides: null };
+  const connected: Platform[] = ["instagram", "facebook_page", "tiktok", "x", "youtube"];
+  afterEach(() => {
+    textPosts.enabled = true;
+  });
+
+  /** What the page shows for a state: the platform list, the notice and the button. */
+  function page(state: ReturnType<typeof composerPageState>, deselected: Set<Platform> = new Set()) {
+    const textPage = state === "text";
+    const { choices, selected } = deriveComposerPlatforms(connected, deselected, null, { noFile: textPage });
+    return {
+      disabled: choices.filter((c) => c.disabledReason !== null).map((c) => c.platform),
+      selected,
+      notice: textOnlyNotice({ noFile: textPage, connected, deselected, selected }),
+      button: submitButtonLabel({ mode: "now", noFile: textPage, loading: false }),
+    };
+  }
+
+  it("untouched: every platform selectable and ticked, no notice, the button as with a file", () => {
+    expect(composerPageState(empty, true)).toBe("untouched");
+    expect(page("untouched")).toEqual({ disabled: [], selected: connected, notice: null, button: "Publish post" });
+  });
+
+  it("whitespace alone, in the main or a per-platform caption, is still untouched", () => {
+    expect(composerPageState({ ...empty, caption: "  \t " }, true)).toBe("untouched");
+    expect(composerPageState({ ...empty, overrides: { x: "   " } }, true)).toBe("untouched");
+  });
+
+  it("text typed: today's text post page; cleared again: untouched", () => {
+    expect(composerPageState({ ...empty, caption: "Open today" }, true)).toBe("text");
+    expect(page("text").disabled).toEqual(["instagram", "tiktok", "youtube"]);
+    expect(page("text").button).toBe("Publish without a photo");
+    expect(page("text").notice).toContain("This post has no photo or video.");
+    expect(composerPageState({ ...empty, caption: "" }, true)).toBe("untouched");
+  });
+
+  it("a per-platform caption typed while the main one is empty is text", () => {
+    expect(composerPageState({ ...empty, overrides: { x: "Only on X" } }, true)).toBe("text");
+  });
+
+  it("a file, with or without text, is the page with a file", () => {
+    expect(composerPageState({ ...empty, hasUploadFile: true }, true)).toBe("file");
+    expect(composerPageState({ ...empty, hasUploadFile: true, caption: "Hi" }, true)).toBe("file");
+    expect(composerPageState({ ...empty, photoCount: 3 }, true)).toBe("file");
+    expect(composerPageState({ ...empty, hasReuseItem: true }, true)).toBe("file");
+  });
+
+  it("the file removed: text present is a text post, no text is untouched", () => {
+    expect(composerPageState({ ...empty, caption: "Hi" }, true)).toBe("text");
+    expect(composerPageState(empty, true)).toBe("untouched");
+  });
+
+  it("a shared file on its way and a library item loading count as files, as today", () => {
+    expect(composerPageState({ ...empty, sharedFilePending: true }, true)).toBe("file");
+    expect(composerPageState({ ...empty, reuseLoading: true }, true)).toBe("file");
+    expect(composerPageState({ ...empty, preparingFile: true }, true)).toBe("file");
+  });
+
+  it("text posts switched off: always the page with a file, exactly today's", () => {
+    textPosts.enabled = false;
+    expect(composerPageState(empty)).toBe("file");
+    expect(composerPageState({ ...empty, caption: "Hi" })).toBe("file");
+    expect(composerPageState(empty, false)).toBe("file");
+  });
+
+  it("a hand-made selection is kept across untouched, text and file", () => {
+    const deselected = new Set<Platform>(["x"]);
+    expect(page("untouched", deselected).selected).toEqual(["instagram", "facebook_page", "tiktok", "youtube"]);
+    expect(page("text", deselected).selected).toEqual(["facebook_page"]);
+    expect(page("untouched", deselected).selected).toEqual(["instagram", "facebook_page", "tiktok", "youtube"]);
+  });
+
+  it("a workspace whose platforms all need a file: selectable while untouched, greyed once text is typed", () => {
+    const onlyMedia: Platform[] = ["instagram", "tiktok", "youtube"];
+    const untouched = deriveComposerPlatforms(onlyMedia, new Set(), null, { noFile: false });
+    expect(untouched.selected).toEqual(onlyMedia);
+    const text = deriveComposerPlatforms(onlyMedia, new Set(), null, { noFile: true });
+    expect(text.selected).toEqual([]);
+    expect(platformListAlert({ selectedCount: 0, allDisabled: true, noFile: true, triedSend: false })).toBeNull();
+  });
+
+  it("draft and schedule read as with a file while untouched", () => {
+    expect(submitButtonLabel({ mode: "schedule", noFile: false, loading: false })).toBe("Schedule post");
+    expect(submitButtonLabel({ mode: "draft", noFile: false, loading: false })).toBe("Save draft");
+  });
+
+  it("pressing the button while untouched sends nothing and says what to do, by the button", () => {
+    expect(UNTOUCHED_SUBMIT_MESSAGE).toBe("Add a photo or video, or write the text of your post.");
+    expect(untouchedSubmitMessage({ untouched: true, pressed: true })).toBe(UNTOUCHED_SUBMIT_MESSAGE);
+    expect(untouchedSubmitMessage({ untouched: true, pressed: false })).toBeNull();
+    // Text typed or a file added: the sentence goes.
+    expect(untouchedSubmitMessage({ untouched: false, pressed: true })).toBeNull();
+  });
+
+  it("the lost-file notice is unchanged: it is shown while there is no file, text or not", () => {
+    const fresh = nextFileLostNotice("none", { type: "lost", reason: "library-failed" });
+    expect(composerPageState(empty, true) !== "file" && fileLostNoticeShown(fresh)).toBe(true);
+    expect(fileLostBlocksSubmit(fresh)).toBe(true);
   });
 });
