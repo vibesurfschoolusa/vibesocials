@@ -51,3 +51,17 @@ describe("isPublicRoute — client review link", () => {
     expect(isPublicRoute("/videos")).toBe(false);
   });
 });
+
+describe("Reports", () => {
+  it("is in the navigation, after Activity, and is an app page", () => {
+    const hrefs = NAV_ITEMS.map((item) => item.href);
+    expect(hrefs).toContain("/reports");
+    expect(hrefs.indexOf("/reports")).toBe(hrefs.indexOf("/activity") + 1);
+    expect(isPublicRoute("/reports")).toBe(false);
+    expect(sectionTitle("/reports")).toBe("Reports");
+  });
+
+  it("renders the client's report with no app shell: /v already covers it", () => {
+    expect(isPublicRoute("/v/abc/report")).toBe(true);
+  });
+});

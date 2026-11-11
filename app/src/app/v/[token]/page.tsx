@@ -33,6 +33,9 @@ export default async function ReviewLinkPage({ params }: ReviewLinkPageProps) {
       <div className="mx-auto w-full max-w-2xl">
         {link ? (
           <>
+            <a href={`/v/${token}/report`} className="mb-4 inline-block text-sm underline">
+              Reports
+            </a>
             <h1 className="break-words text-2xl font-bold tracking-tight">
               {link.workspaceName}: upcoming posts
             </h1>

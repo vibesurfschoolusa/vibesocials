@@ -43,6 +43,7 @@ describe("the review link page", () => {
     expect(unknown).toBe(revoked);
     expect(unknown).toContain(REVIEW_LINK_INACTIVE_MESSAGE);
     expect(unknown).not.toContain("<section");
+    expect(unknown).not.toContain("Reports");
     expect(viewPropsMock).not.toHaveBeenCalled();
   });
 
@@ -61,5 +62,14 @@ describe("the review link page", () => {
     expect(viewPropsMock).toHaveBeenCalledWith({ token: TOKEN });
     expect(html).not.toContain("ws-1");
     expect(html).not.toContain("link-1");
+  });
+
+  it("links to the link's monthly reports at the top", async () => {
+    findActiveReviewLinkMock.mockResolvedValue({ id: "link-1", workspaceId: "ws-1", workspaceName: "Surf Co" });
+
+    const html = await render();
+
+    expect(html).toMatch(new RegExp(`<a[^>]*href="/v/${TOKEN}/report"[^>]*>Reports</a>`));
+    expect(html.indexOf("Reports")).toBeLessThan(html.indexOf("upcoming posts"));
   });
 });
