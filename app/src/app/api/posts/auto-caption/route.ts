@@ -11,6 +11,7 @@ import {
   isAiTimeoutError,
 } from "@/lib/aiGuards";
 import { BLOB_URL_REJECTED_MESSAGE, isAllowedBlobUrl } from "@/lib/blobUrl";
+import { brandVoicePrompt } from "@/lib/brandVoice";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -205,7 +206,11 @@ ${brandPieces.length > 0 ? `\nBrand context:\n${brandPieces.join("\n")}` : ""}
 IMPORTANT:
 - Do NOT include hashtags.
 - Do NOT include any meta-commentary or instructions.
-- Return ONLY the caption text.`;
+- Return ONLY the caption text.${brandVoicePrompt(
+      // The caller's own workspace only, never the request body (brief 15).
+      context.workspace.brandVoice,
+      context.workspace.brandVoiceExamples,
+    )}`;
 
     const baseUserPrompt = `Create a social media caption for a ${mediaKind} for this business.
 ${platformText}

@@ -11,6 +11,11 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
+import {
+  BRAND_VOICE_MAX_EXAMPLES,
+  BRAND_VOICE_MAX_LENGTH,
+  examplesFromCaptions,
+} from "@/lib/brandVoice";
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
 import {
   GOOGLE_BUTTON_LABELS,
@@ -22,6 +27,9 @@ import type { UserSettings } from "@/lib/userSettings";
 
 // Mirrors tiktok-post-settings.tsx's checkbox styling for a consistent look
 // across the app's few native checkbox controls.
+const BRAND_VOICE_PLACEHOLDER =
+  "Friendly and short. We say 'surf fam'. No exclamation marks in a row. Always mention the beach we are on.";
+
 const checkboxClass =
   "h-4 w-4 rounded border-input accent-[var(--primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
 
@@ -61,7 +69,33 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
     ? parseGoogleButton({ type: googleButtonType, url: googleButtonUrl })
     : null;
   const googleButtonError = googleButtonCheck && !googleButtonCheck.ok ? googleButtonCheck.error : null;
+  const [brandVoice, setBrandVoice] = useState(settings.brandVoice ?? "");
+  const [brandVoiceExamples, setBrandVoiceExamples] = useState(settings.brandVoiceExamples ?? "");
+  const [isFillingExamples, setIsFillingExamples] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+
+  // Fills the box only; the owner edits and then saves with the rest of the form.
+  const fillExamplesFromRecentPosts = async () => {
+    setIsFillingExamples(true);
+    try {
+      const response = await fetch("/api/posts?status=completed");
+      if (!response.ok) {
+        throw new Error("Failed to load posts");
+      }
+      const data = (await response.json()) as { jobs?: Array<{ caption?: string | null }> };
+      const examples = examplesFromCaptions((data.jobs ?? []).map((job) => job.caption));
+      if (!examples) {
+        toast.error("No published posts with a caption yet. Type a few example captions instead.");
+        return;
+      }
+      setBrandVoiceExamples(examples);
+      toast.success("Filled in from your recent posts. Edit them if you like, then save.");
+    } catch {
+      toast.error("Could not load your recent posts. Try again.");
+    } finally {
+      setIsFillingExamples(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -86,6 +120,9 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
             // Owner-only too (the default Google button).
             googleButtonType: googleButtonType || null,
             googleButtonUrl: googleButtonUrl.trim(),
+            // Owner-only too; POST /api/settings cleans both (lib/brandVoice.ts).
+            brandVoice,
+            brandVoiceExamples,
             notifyOnPostComplete,
             notifyDailyDigest,
             notifyNewReviews,
@@ -179,6 +216,71 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
             {previewCaption()}
           </div>
         </div>
+
+        {/* Brand voice (brief 15): workspace-level, owner-only to change. A
+            member sees it read-only, like the footer above. */}
+        {isOwner ? (
+          <div className="flex flex-col gap-1.5 border-t border-border pt-6">
+            <h3 className="text-sm font-medium text-foreground">Brand voice</h3>
+            <p className="text-sm text-muted-foreground">
+              The AI follows this when it writes or rewrites a caption and when it drafts a reply to a
+              Google review.
+            </p>
+            <Label htmlFor="brandVoice" className="mt-2">
+              How you sound
+            </Label>
+            <Textarea
+              id="brandVoice"
+              placeholder={BRAND_VOICE_PLACEHOLDER}
+              value={brandVoice}
+              maxLength={BRAND_VOICE_MAX_LENGTH}
+              onChange={(e) => setBrandVoice(e.target.value)}
+              rows={3}
+            />
+            <Label htmlFor="brandVoiceExamples" className="mt-2">
+              Example captions, one per line (up to {BRAND_VOICE_MAX_EXAMPLES})
+            </Label>
+            <Textarea
+              id="brandVoiceExamples"
+              value={brandVoiceExamples}
+              onChange={(e) => setBrandVoiceExamples(e.target.value)}
+              rows={5}
+            />
+            <div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                loading={isFillingExamples}
+                onClick={fillExamplesFromRecentPosts}
+              >
+                Use my recent posts
+              </Button>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Fills the box with the captions of your last {BRAND_VOICE_MAX_EXAMPLES} published posts.
+              Nothing is saved until you press Save settings.
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3 rounded-[var(--radius)] border border-border bg-muted/50 p-4">
+            <h3 className="text-sm font-semibold text-foreground">Brand voice</h3>
+            <div>
+              <h3 className="text-sm font-medium text-foreground">How you sound</h3>
+              <p className="mt-0.5 text-sm text-muted-foreground">{brandVoice || "Not set."}</p>
+            </div>
+            <div>
+              <h3 className="text-sm font-medium text-foreground">Example captions</h3>
+              <p className="mt-0.5 whitespace-pre-wrap text-sm text-muted-foreground">
+                {brandVoiceExamples || "Not set."}
+              </p>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Only the workspace owner can change these. The AI follows them when it writes captions
+              and review replies.
+            </p>
+          </div>
+        )}
 
         {/* Approval workflow (2026-07-26): owner-only workspace policy. Hidden
             from members entirely — they can't change it, and the route 403s a

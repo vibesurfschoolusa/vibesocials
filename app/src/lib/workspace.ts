@@ -22,6 +22,8 @@ export interface WorkspaceContext {
     | "requireApproval"
     | "googleButtonType"
     | "googleButtonUrl"
+    | "brandVoice"
+    | "brandVoiceExamples"
   >;
   role: WorkspaceRole;
 }
@@ -276,6 +278,10 @@ export async function getWorkspaceContext(
       // 2026-11-10: the default Google button, shown in Settings and Create.
       googleButtonType: active.workspace.googleButtonType,
       googleButtonUrl: active.workspace.googleButtonUrl,
+      // Brand voice: the AI routes append it to their prompts, so it must come
+      // from the caller's own workspace (lib/brandVoice.ts).
+      brandVoice: active.workspace.brandVoice,
+      brandVoiceExamples: active.workspace.brandVoiceExamples,
     },
     role: active.role,
   };

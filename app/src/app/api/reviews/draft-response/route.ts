@@ -9,6 +9,7 @@ import {
   findOverlongAiField,
   isAiTimeoutError,
 } from "@/lib/aiGuards";
+import { BRAND_VOICE_REVIEW_LINE, brandVoicePrompt } from "@/lib/brandVoice";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
@@ -115,6 +116,13 @@ export async function POST(request: Request) {
       tone = "empathetic, apologetic, and focused on making things right";
     }
 
+    // After the route's own rules, from the caller's own workspace only (brief 15).
+    const voiceBlock = brandVoicePrompt(
+      context.workspace.brandVoice,
+      context.workspace.brandVoiceExamples,
+    );
+    const voiceSection = voiceBlock ? [voiceBlock, BRAND_VOICE_REVIEW_LINE].join("\n") : "";
+
     // Build the prompt
     const systemPrompt = `You are a professional business owner responding to a Google review. Your responses should be:
 - Professional yet warm and personable
@@ -132,7 +140,7 @@ IMPORTANT: Write ONLY the response text. Do NOT include:
 - Your name or business name at the end
 - Any meta-commentary
 
-Just write the actual reply message that will be posted publicly.`;
+Just write the actual reply message that will be posted publicly.${voiceSection}`;
 
     const userPrompt = `Review from ${reviewerName}:
 Rating: ${ratingNumber}/5 stars

@@ -18,6 +18,8 @@ const SETTINGS: UserSettings = {
   requireApproval: false,
   googleButtonType: null,
   googleButtonUrl: null,
+  brandVoice: null,
+  brandVoiceExamples: null,
 };
 
 const render = (settings: UserSettings, role: "owner" | "member" = "owner") =>
@@ -80,5 +82,60 @@ describe("SettingsForm — Google posts", () => {
 
   it("is not shown to a member (owner only)", () => {
     expect(render(SETTINGS, "member")).not.toContain("Google posts");
+  });
+});
+
+// 15: the workspace's brand voice, after the hashtags.
+describe("SettingsForm — Brand voice", () => {
+  const saved = {
+    ...SETTINGS,
+    brandVoice: "Friendly and short.",
+    brandVoiceExamples: "Waves are up\nLesson at 9",
+  };
+
+  it("shows an owner the group after the hashtags, with both boxes and the button", () => {
+    const html = render(SETTINGS);
+
+    expect(html).toContain("Brand voice");
+    expect(html.indexOf("Brand voice")).toBeGreaterThan(html.indexOf('id="defaultHashtags"'));
+    expect(html).toContain("How you sound");
+    expect(html).toContain('id="brandVoice"');
+    expect(html).toContain("Example captions, one per line (up to 5)");
+    expect(html).toContain('id="brandVoiceExamples"');
+    expect(html).toMatch(/<button[^>]*type="button"[^>]*>Use my recent posts<\/button>/);
+  });
+
+  it("uses the brief's example as the placeholder and limits the description to 600 characters", () => {
+    const html = render(SETTINGS);
+
+    expect(html).toContain(
+      'placeholder="Friendly and short. We say &#x27;surf fam&#x27;. No exclamation marks in a row. Always mention the beach we are on."',
+    );
+    expect(html).toMatch(/<textarea[^>]*maxLength="600"[^>]*id="brandVoice"|<textarea[^>]*id="brandVoice"[^>]*maxLength="600"/);
+  });
+
+  it("fills the boxes with what is saved", () => {
+    const html = render(saved);
+
+    expect(html).toMatch(/id="brandVoice"[^>]*>Friendly and short\.<\/textarea>/);
+    expect(html).toMatch(/id="brandVoiceExamples"[^>]*>Waves are up\nLesson at 9<\/textarea>/);
+  });
+
+  it("shows a member the saved voice read-only, without boxes or the button", () => {
+    const html = render(saved, "member");
+
+    expect(html).toContain("Brand voice");
+    expect(html).toContain("Friendly and short.");
+    expect(html).toContain("Waves are up\nLesson at 9");
+    expect(html).not.toContain('id="brandVoice"');
+    expect(html).not.toContain('id="brandVoiceExamples"');
+    expect(html).not.toContain("Use my recent posts");
+  });
+
+  it("tells a member when nothing is saved", () => {
+    const html = render(SETTINGS, "member");
+
+    expect(html).toMatch(/How you sound<\/h3><p[^>]*>Not set\.<\/p>/);
+    expect(html).toMatch(/Example captions<\/h3><p[^>]*>Not set\.<\/p>/);
   });
 });

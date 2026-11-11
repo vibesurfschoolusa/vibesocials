@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { parseGoogleButton } from "@/lib/googlePostOptions";
+import { cleanBrandVoice, cleanBrandVoiceExamples } from "@/lib/brandVoice";
 
 export const COMPANY_WEBSITE_MAX_LENGTH = 2048;
 export const DEFAULT_HASHTAGS_MAX_LENGTH = 1024;
@@ -48,6 +49,12 @@ export interface ParsedSettingsInput {
    */
   googleButtonType?: string | null;
   googleButtonUrl?: string | null;
+  /**
+   * Brand voice (brief 15): how the business sounds, appended to the AI prompts.
+   * Workspace-level and OWNER-ONLY. Cleaned by lib/brandVoice.ts; null clears.
+   */
+  brandVoice?: string | null;
+  brandVoiceExamples?: string | null;
 }
 
 export type SettingsValidationResult =
@@ -214,6 +221,22 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
     }
   }
 
+  if (hasKey(record, "brandVoice")) {
+    const result = cleanBrandVoice(record.brandVoice);
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    data.brandVoice = result.value;
+  }
+
+  if (hasKey(record, "brandVoiceExamples")) {
+    const result = cleanBrandVoiceExamples(record.brandVoiceExamples);
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    data.brandVoiceExamples = result.value;
+  }
+
   return { ok: true, data };
 }
 
@@ -228,11 +251,18 @@ export function touchesWorkspaceFooter(data: ParsedSettingsInput): boolean {
 
 /**
  * True when the body touches ANY workspace-level, owner-only field: the caption
- * footer (above), the approval flag or the default Google button. This is the gate for both the 403 and the
+ * footer (above), the approval flag, the default Google button or the brand
+ * voice. This is the gate for both the 403 and the
  * `workspace.update` branch in `POST`.
  */
 export function touchesOwnerOnlyWorkspaceFields(data: ParsedSettingsInput): boolean {
-  return touchesWorkspaceFooter(data) || "requireApproval" in data || "googleButtonType" in data;
+  return (
+    touchesWorkspaceFooter(data) ||
+    "requireApproval" in data ||
+    "googleButtonType" in data ||
+    "brandVoice" in data ||
+    "brandVoiceExamples" in data
+  );
 }
 
 export async function POST(request: Request) {
@@ -273,6 +303,8 @@ export async function POST(request: Request) {
         requireApproval?: boolean;
         googleButtonType?: string | null;
         googleButtonUrl?: string | null;
+        brandVoice?: string | null;
+        brandVoiceExamples?: string | null;
       } = {};
       if ("companyWebsite" in data) {
         workspaceData.companyWebsite = data.companyWebsite;
@@ -286,6 +318,12 @@ export async function POST(request: Request) {
       if ("googleButtonType" in data) {
         workspaceData.googleButtonType = data.googleButtonType;
         workspaceData.googleButtonUrl = data.googleButtonUrl;
+      }
+      if ("brandVoice" in data) {
+        workspaceData.brandVoice = data.brandVoice;
+      }
+      if ("brandVoiceExamples" in data) {
+        workspaceData.brandVoiceExamples = data.brandVoiceExamples;
       }
 
       await prisma.workspace.update({

@@ -157,6 +157,12 @@ model Workspace {
   // SIGN_UP, CALL (src/lib/googlePostOptions.ts); the url is null for CALL.
   googleButtonType String?
   googleButtonUrl  String?
+  // Brand voice (2026-11-10): how the business sounds, appended to the AI
+  // caption and review-reply prompts (src/lib/brandVoice.ts). Owner-only.
+  // brandVoice is one line, at most 600 characters; brandVoiceExamples is up
+  // to 5 example captions, one per line.
+  brandVoice         String?
+  brandVoiceExamples String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

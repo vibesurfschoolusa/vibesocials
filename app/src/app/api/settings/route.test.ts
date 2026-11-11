@@ -30,6 +30,7 @@ import {
   OWNER_ONLY_FOOTER_ERROR,
   parseSettingsInput,
   POST,
+  touchesOwnerOnlyWorkspaceFields,
   touchesWorkspaceFooter,
 } from "./route";
 
@@ -725,5 +726,80 @@ describe("POST /api/settings", () => {
 describe("NOTIFY_ON_POST_COMPLETE_DEFAULT", () => {
   it("is true, matching the Prisma schema's @default(true)", () => {
     expect(NOTIFY_ON_POST_COMPLETE_DEFAULT).toBe(true);
+  });
+});
+
+// 15: the workspace's brand voice, saved by the owner (lib/brandVoice.ts).
+describe("brandVoice / brandVoiceExamples (brand voice)", () => {
+  it("parses and cleans both fields", () => {
+    expect(
+      parseSettingsInput({
+        brandVoice: "  Friendly\nand short.\u0000 ",
+        brandVoiceExamples: "One\n\n  Two \n",
+      }),
+    ).toEqual({
+      ok: true,
+      data: { brandVoice: "Friendly and short.", brandVoiceExamples: "One\nTwo" },
+    });
+  });
+
+  it("caps the description and keeps at most five examples", () => {
+    const result = parseSettingsInput({
+      brandVoice: "v".repeat(700),
+      brandVoiceExamples: ["1", "2", "3", "4", "5", "6"].join("\n"),
+    });
+    expect(result).toEqual({
+      ok: true,
+      data: { brandVoice: "v".repeat(600), brandVoiceExamples: "1\n2\n3\n4\n5" },
+    });
+  });
+
+  it("clears with null or blank text", () => {
+    expect(parseSettingsInput({ brandVoice: null, brandVoiceExamples: " \n " })).toEqual({
+      ok: true,
+      data: { brandVoice: null, brandVoiceExamples: null },
+    });
+  });
+
+  it("rejects a non-string with 400 and writes nothing", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+
+    const response = await POST(jsonRequest({ brandVoice: 5 }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "brandVoice must be a string" });
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("is owner-only", () => {
+    expect(touchesOwnerOnlyWorkspaceFields({ brandVoice: null })).toBe(true);
+    expect(touchesOwnerOnlyWorkspaceFields({ brandVoiceExamples: null })).toBe(true);
+  });
+
+  it("is saved by an owner on the workspace row", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    workspaceUpdateMock.mockResolvedValue({});
+
+    const response = await POST(
+      jsonRequest({ brandVoice: "Friendly.", brandVoiceExamples: "Waves are up" }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(workspaceUpdateMock).toHaveBeenCalledWith({
+      where: { id: "ws-1" },
+      data: { brandVoice: "Friendly.", brandVoiceExamples: "Waves are up" },
+    });
+  });
+
+  it("refuses a member's save (403), writing nothing", async () => {
+    getWorkspaceContextMock.mockResolvedValue(MEMBER_CONTEXT);
+
+    for (const body of [{ brandVoice: "Friendly." }, { brandVoiceExamples: "Waves are up" }]) {
+      const response = await POST(jsonRequest({ ...body, notifyOnPostComplete: false }));
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toEqual({ error: OWNER_ONLY_FOOTER_ERROR });
+    }
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
+    expect(userUpdateMock).not.toHaveBeenCalled();
   });
 });

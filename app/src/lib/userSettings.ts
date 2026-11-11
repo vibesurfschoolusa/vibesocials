@@ -55,4 +55,11 @@ export interface UserSettings {
    */
   googleButtonType: string | null;
   googleButtonUrl: string | null;
+  /**
+   * Brand voice (brief 15) — how the business sounds, and up to five example
+   * captions one per line, appended to the AI prompts (lib/brandVoice.ts).
+   * Workspace-level and owner-only to change. Sourced from the active Workspace.
+   */
+  brandVoice: string | null;
+  brandVoiceExamples: string | null;
 }

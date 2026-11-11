@@ -54,6 +54,8 @@ export default async function SettingsPage({
     requireApproval: context.workspace.requireApproval,
     googleButtonType: context.workspace.googleButtonType,
     googleButtonUrl: context.workspace.googleButtonUrl,
+    brandVoice: context.workspace.brandVoice,
+    brandVoiceExamples: context.workspace.brandVoiceExamples,
   };
 
   // Fetch the WORKSPACE's connections (shared by every member — design §2),

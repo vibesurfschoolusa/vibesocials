@@ -110,6 +110,8 @@ function makeMembership(
       requireApproval: false,
       googleButtonType: "BOOK",
       googleButtonUrl: "https://example.com/book",
+      brandVoice: "Friendly and short.",
+      brandVoiceExamples: "Waves are up",
       limitPostsPerDay: null,
       limitXPostsPerMonth: null,
       limitYoutubeUploadsPerDay: null,
@@ -422,6 +424,9 @@ describe("getWorkspaceContext", () => {
         // 2026-11-10: the default Google button, for Settings and Create.
         googleButtonType: "BOOK",
         googleButtonUrl: "https://example.com/book",
+        // Brand voice: the AI routes read it from the caller's own workspace.
+        brandVoice: "Friendly and short.",
+        brandVoiceExamples: "Waves are up",
       },
       role: "owner",
     });
