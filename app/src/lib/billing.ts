@@ -11,6 +11,8 @@
  * off has neither and stays exempt, whenever billing is switched on.
  */
 
+import { PLAN_KEYS, type PlanKey } from "./plans";
+
 export type BillingEnv = Record<string, string | undefined>;
 
 export type PlanState = "exempt" | "active" | "trial" | "ended";
@@ -108,3 +110,45 @@ export const PLAN_STATE_LABELS: Record<PlanState, string> = {
   trial: "Trial",
   ended: "Ended",
 };
+
+/** The environment variable holding each plan's Stripe price id (21b). */
+const PRICE_ENV: Record<PlanKey, string> = {
+  starter: "STRIPE_PRICE_STARTER",
+  growth: "STRIPE_PRICE_GROWTH",
+  pro: "STRIPE_PRICE_PRO",
+};
+
+function envValue(env: BillingEnv, name: string): string | null {
+  const value = env[name]?.trim();
+  return value ? value : null;
+}
+
+/** The plan's Stripe price id, or null when the operator set none (the plan is not offered). */
+export function priceIdForPlan(plan: PlanKey, env: BillingEnv = process.env): string | null {
+  return envValue(env, PRICE_ENV[plan]);
+}
+
+/** The plans that have a price, in plan order. */
+export function offeredPlans(env: BillingEnv = process.env): PlanKey[] {
+  return PLAN_KEYS.filter((plan) => priceIdForPlan(plan, env) !== null);
+}
+
+/** Which plan a Stripe price id stands for, or null for a price the app does not know. */
+export function planForPriceId(priceId: string | null | undefined, env: BillingEnv = process.env): PlanKey | null {
+  if (!priceId) return null;
+  return PLAN_KEYS.find((plan) => priceIdForPlan(plan, env) === priceId) ?? null;
+}
+
+/**
+ * True only when billing is on, both Stripe secrets are set and at least one
+ * plan has a price (21b). Every Stripe route, button and call checks this
+ * first, so with it false nothing behaves differently from before payments.
+ */
+export function paymentsConfigured(env: BillingEnv = process.env): boolean {
+  return (
+    billingEnabled(env) &&
+    envValue(env, "STRIPE_SECRET_KEY") !== null &&
+    envValue(env, "STRIPE_WEBHOOK_SECRET") !== null &&
+    offeredPlans(env).length > 0
+  );
+}
