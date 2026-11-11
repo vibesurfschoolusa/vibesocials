@@ -5,13 +5,13 @@ import { sendEmail } from "@/server/notifications/email";
 
 import { buildPaymentFailedEmail } from "./billingEmails";
 import {
-  listCustomerSubscriptions,
+  listAllCustomerSubscriptions,
   retrieveSubscription,
   StripeApiError,
   type StripeId,
   type StripeSubscription,
 } from "./stripeApi";
-import { stripeIdOf, syncFromCustomerList, type CheckoutClaim } from "./subscriptionSync";
+import { isInUse, stripeIdOf, syncFromCustomerList, type CheckoutClaim } from "./subscriptionSync";
 
 /**
  * What POST /api/webhooks/stripe does with an event whose signature has been
@@ -20,13 +20,18 @@ import { stripeIdOf, syncFromCustomerList, type CheckoutClaim } from "./subscrip
  *
  * Stripe sends events more than once and out of order, so an event's payload
  * is never trusted for a subscription's state: it gives only the subscription
- * id. That subscription is fetched from Stripe now to find the workspace and
- * its customer, and the customer's whole list of subscriptions decides what
- * is written (fix round 3, syncFromCustomerList). The fetches (and the
- * failed-payment emails) come first; then one transaction records the event id
- * in StripeEvent and writes the workspace. The insert skips an id already
- * there, and then nothing is written. Anything that throws before the commit
- * leaves the event unrecorded and answers 500.
+ * id. For a subscription event (fix round 4):
+ *   1. Outside any transaction, the subscription is fetched once only to learn
+ *      which workspace its metadata names.
+ *   2. One transaction then locks that workspace's row (FOR UPDATE), records
+ *      the event id (already there: stop), fetches the subscription again and
+ *      lists the customer's subscriptions, and writes what
+ *      syncFromCustomerList decides. Handlers for one workspace therefore run
+ *      one after another, each reading Stripe while it holds the lock, so the
+ *      last one to run writes Stripe's latest state whatever order the events
+ *      were created or delivered in.
+ * A Stripe or database failure inside rolls everything back, records nothing
+ * and answers 500, so Stripe sends the event again.
  */
 
 type StripeEventBody = {
@@ -39,6 +44,13 @@ type StripeEventBody = {
 
 const SNAPSHOT_REQUIRED =
   "[stripe webhook] Event without a usable object: the endpoint must send snapshot payloads, not thin ones";
+
+/**
+ * Long enough for the calls made under the lock: one fetch and up to three
+ * list pages, each bounded by the client's 10-second timeout. maxWait covers
+ * waiting for the connection, not the lock (that wait is inside the timeout).
+ */
+export const SYNC_TRANSACTION_OPTIONS = { timeout: 50_000, maxWait: 10_000 } as const;
 
 /** Prisma's unique-constraint failure, without importing its runtime class. */
 const isUniqueCollision = (error: unknown) =>
@@ -93,9 +105,10 @@ async function syncSubscription(
   claim: CheckoutClaim | null,
   env: BillingEnv,
 ): Promise<200 | 500> {
-  let subscription: StripeSubscription;
+  // 1. Which workspace: read only to know which row to lock.
+  let identified: StripeSubscription;
   try {
-    subscription = await retrieveSubscription(subscriptionId, env);
+    identified = await retrieveSubscription(subscriptionId, env);
   } catch (error) {
     logger.error("[stripe webhook] Could not fetch the subscription; Stripe will send the event again", {
       eventId: event.id,
@@ -104,49 +117,55 @@ async function syncSubscription(
     });
     return 500;
   }
-
-  // The customer's whole list is what is written, so without it nothing is:
-  // the event goes back to Stripe to be sent again (fix round 3). Only the
-  // customer's own subscriptions are listed; the transaction then checks that
-  // this customer is the workspace's.
-  const customer = stripeIdOf(subscription.customer);
-  let list: StripeSubscription[] = [];
-  if (customer) {
-    try {
-      list = await listCustomerSubscriptions(customer, env);
-    } catch (error) {
-      logger.error("[stripe webhook] Could not list the customer's subscriptions; Stripe will send the event again", {
-        eventId: event.id,
-        type: event.type,
-        error: errorFields(error),
-      });
-      return 500;
-    }
+  const workspaceId = identified.metadata?.workspaceId;
+  if (!workspaceId) {
+    logger.error("[stripe webhook] Subscription not written", {
+      eventId: event.id,
+      type: event.type,
+      workspaceId: null,
+      reason: "the subscription names no workspace",
+    });
+    return recordOnly(event);
   }
 
+  // 2. Everything else under the workspace's row lock.
   try {
     await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT 1 FROM "Workspace" WHERE "id" = ${workspaceId} FOR UPDATE`;
       if (!(await record(tx, event))) return;
 
-      const workspaceId = subscription.metadata?.workspaceId;
-      const workspace = workspaceId
-        ? await tx.workspace.findUnique({
-            where: { id: workspaceId },
-            select: {
-              id: true,
-              stripeCustomerId: true,
-              stripeSubscriptionId: true,
-              billingExempt: true,
-              stripeLastEventAt: true,
-            },
-          })
-        : null;
-      const result = syncFromCustomerList(subscription, workspace, claim, list, env, event.createdAt);
-      for (const { subscriptionId, priceId } of result.unconfigured) {
-        logger.error("[stripe webhook] A subscription in use has a price that is none of the plan prices; not used", {
+      const workspace = await tx.workspace.findUnique({
+        where: { id: workspaceId },
+        select: { id: true, stripeCustomerId: true, stripeSubscriptionId: true, billingExempt: true },
+      });
+
+      // Read Stripe now, while no other handler for this workspace can run.
+      const subscription = await retrieveSubscription(subscriptionId, env);
+      const customer = stripeIdOf(subscription.customer);
+      let list: StripeSubscription[] = [];
+      let complete = true;
+      if (customer) {
+        try {
+          ({ data: list, complete } = await listAllCustomerSubscriptions(customer, env));
+        } catch (error) {
+          // An ended subscription's cancel must not be lost to a failed list:
+          // it is written from that subscription alone. One in use needs the
+          // list (another could rank ahead of it), so the event comes back.
+          if (isInUse(subscription.status)) throw error;
+          logger.warn("[stripe webhook] Could not list the customer's subscriptions; syncing the ended one alone", {
+            eventId: event.id,
+            error: errorFields(error),
+          });
+          list = [subscription];
+        }
+      }
+
+      const result = syncFromCustomerList(subscription, workspace, claim, list, env, complete);
+      for (const { subscriptionId: unknownId, priceId } of result.unconfigured) {
+        logger.error("[stripe webhook] A subscription in use has a price that is none of the plan prices; nothing written", {
           eventId: event.id,
-          workspaceId: workspace?.id ?? null,
-          subscriptionId,
+          workspaceId,
+          subscriptionId: unknownId,
           priceId,
         });
       }
@@ -155,7 +174,7 @@ async function syncSubscription(
         log("[stripe webhook] Subscription not written", {
           eventId: event.id,
           type: event.type,
-          workspaceId: workspaceId ?? null,
+          workspaceId,
           reason: result.reason,
         });
         return;
@@ -177,7 +196,7 @@ async function syncSubscription(
           reason: warning,
         });
       }
-    });
+    }, SYNC_TRANSACTION_OPTIONS);
     return 200;
   } catch (error) {
     if (isUniqueCollision(error)) {
@@ -190,7 +209,7 @@ async function syncSubscription(
       });
       return 200;
     }
-    logger.error("[stripe webhook] Could not write the subscription; Stripe will send the event again", {
+    logger.error("[stripe webhook] Could not sync the subscription; Stripe will send the event again", {
       eventId: event.id,
       type: event.type,
       error: errorFields(error),

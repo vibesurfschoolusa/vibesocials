@@ -1,4 +1,4 @@
--- Stripe payments (21b, 2026-11-10). Additive: six nullable columns on
+-- Stripe payments (21b, 2026-11-10). Additive: five nullable columns on
 -- Workspace, two unique indexes on them and one new table. The code still
 -- serving during the release never reads any of them. Every statement is
 -- IF NOT EXISTS, so a second run changes nothing.
@@ -8,8 +8,7 @@ ALTER TABLE "Workspace" ADD COLUMN IF NOT EXISTS "stripeCustomerId" TEXT,
 ADD COLUMN IF NOT EXISTS "stripeSubscriptionId" TEXT,
 ADD COLUMN IF NOT EXISTS "trialReminderSentAt" TIMESTAMP(3),
 ADD COLUMN IF NOT EXISTS "trialEndedEmailSentAt" TIMESTAMP(3),
-ADD COLUMN IF NOT EXISTS "planEndsAt" TIMESTAMP(3),
-ADD COLUMN IF NOT EXISTS "stripeLastEventAt" TIMESTAMP(3);
+ADD COLUMN IF NOT EXISTS "planEndsAt" TIMESTAMP(3);
 
 -- CreateIndex: every value is NULL when this runs, so it cannot fail on duplicates
 CREATE UNIQUE INDEX IF NOT EXISTS "Workspace_stripeCustomerId_key" ON "Workspace"("stripeCustomerId");

@@ -240,6 +240,36 @@ export async function listCustomerSubscriptions(
   return list.data;
 }
 
+/** The webhook reads at most this many pages of 100 subscriptions. */
+export const SUBSCRIPTION_LIST_MAX_PAGES = 3;
+
+/**
+ * Every subscription of the customer, following has_more with starting_after
+ * for at most SUBSCRIPTION_LIST_MAX_PAGES pages. `complete` is false when
+ * Stripe had more than that.
+ */
+export async function listAllCustomerSubscriptions(
+  customer: string,
+  env: BillingEnv = process.env,
+  timeoutMs?: number,
+): Promise<{ data: StripeSubscription[]; complete: boolean }> {
+  const data: StripeSubscription[] = [];
+  let startingAfter: string | null = null;
+  for (let page = 0; page < SUBSCRIPTION_LIST_MAX_PAGES; page++) {
+    const query = new URLSearchParams({ customer, status: "all", limit: "100" });
+    if (startingAfter) query.set("starting_after", startingAfter);
+    const list: { data: StripeSubscription[]; has_more?: boolean } = await stripeRequest("GET", "/subscriptions", {
+      query,
+      env,
+      timeoutMs,
+    });
+    data.push(...list.data);
+    if (!list.has_more || list.data.length === 0) return { data, complete: true };
+    startingAfter = list.data[list.data.length - 1].id;
+  }
+  return { data, complete: false };
+}
+
 /** DELETE /v1/subscriptions/:id: cancels now. Stripe ignores idempotency keys on DELETE. */
 export function cancelSubscription(
   id: string,

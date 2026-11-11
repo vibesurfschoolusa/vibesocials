@@ -6,9 +6,8 @@ import type { StripeSubscription } from "./stripeApi";
 import { isLiveSubscriptionStatus, syncFromCustomerList, type SyncWorkspace } from "./subscriptionSync";
 
 /**
- * Fix round 3: the workspace is synced from the customer's whole list of
- * subscriptions, not from the one an event is about. The tests read as a
- * table: one subscription through its life, then two at once.
+ * What the webhook writes, from the customer's list of subscriptions (fix
+ * round 4). The describe and test names read as the specification.
  */
 
 const ENV = {
@@ -18,8 +17,9 @@ const ENV = {
 };
 
 const T0 = 1798000000;
-const PERIOD_END = 1800000000;
 const DAY = 86400;
+const PERIOD_START = 1799000000;
+const PERIOD_END = PERIOD_START + 30 * DAY;
 
 function sub(overrides: Partial<StripeSubscription> = {}): StripeSubscription {
   return {
@@ -27,210 +27,212 @@ function sub(overrides: Partial<StripeSubscription> = {}): StripeSubscription {
     status: "active",
     customer: "cus_1",
     created: T0,
+    ended_at: null,
+    canceled_at: null,
     metadata: { workspaceId: "ws_1" },
     trial_end: null,
     cancel_at_period_end: false,
-    items: { data: [{ price: { id: "price_example_growth" }, current_period_start: PERIOD_END - 30 * DAY, current_period_end: PERIOD_END }] },
+    cancel_at: null,
+    items: {
+      data: [{ price: { id: "price_example_growth" }, current_period_start: PERIOD_START, current_period_end: PERIOD_END }],
+    },
     ...overrides,
   };
 }
 
+const priced = (price: string, start = PERIOD_START, end = PERIOD_END) => ({
+  items: { data: [{ price: { id: price }, current_period_start: start, current_period_end: end }] },
+});
+
 const WS: SyncWorkspace = { id: "ws_1", stripeCustomerId: "cus_1", stripeSubscriptionId: "sub_1", billingExempt: false };
 
-/** The event is about `about`; Stripe's list for the customer is `list`. */
-const sync = (about: StripeSubscription, list: StripeSubscription[], workspace: SyncWorkspace | null = WS, eventAt: Date | null = null) =>
-  syncFromCustomerList(about, workspace, null, list, ENV, eventAt);
+const sync = (about: StripeSubscription, list: StripeSubscription[], workspace: SyncWorkspace | null = WS, complete = true) =>
+  syncFromCustomerList(about, workspace, null, list, ENV, complete);
 
 const dataOf = (result: ReturnType<typeof sync>) => (result.ok ? result.data : null);
 const stateAt = (data: Record<string, unknown> | null, seconds: number) =>
   planState({ billingExempt: false, ...(data ?? {}) }, new Date(seconds * 1000));
 
 describe("one subscription through its life", () => {
-  it("created: plan, status, period end, no plan end, the subscription id", () => {
-    const s = sub({ status: "active" });
+  it("trialing: trialing, with its trial end", () => {
+    const s = sub({ status: "trialing", trial_end: PERIOD_END });
     expect(dataOf(sync(s, [s]))).toEqual({
       plan: "growth",
-      planStatus: "active",
+      planStatus: "trialing",
       currentPeriodEnd: new Date(PERIOD_END * 1000),
       planEndsAt: null,
+      trialEndsAt: new Date(PERIOD_END * 1000),
       stripeSubscriptionId: "sub_1",
     });
   });
 
-  it("created in a trial: trialing with its trial end", () => {
-    const s = sub({ status: "trialing", trial_end: T0 + 14 * DAY });
-    expect(dataOf(sync(s, [s]))).toMatchObject({ planStatus: "trialing", trialEndsAt: new Date((T0 + 14 * DAY) * 1000) });
+  it("active: active, renews at the period end", () => {
+    const s = sub();
+    expect(dataOf(sync(s, [s]))).toMatchObject({ planStatus: "active", currentPeriodEnd: new Date(PERIOD_END * 1000), planEndsAt: null });
   });
 
   it("renewed: the new period end", () => {
-    const s = sub({
-      items: { data: [{ price: { id: "price_example_growth" }, current_period_start: PERIOD_END, current_period_end: PERIOD_END + 30 * DAY }] },
-    });
+    const s = sub(priced("price_example_growth", PERIOD_END, PERIOD_END + 30 * DAY));
     expect(dataOf(sync(s, [s]))?.currentPeriodEnd).toEqual(new Date((PERIOD_END + 30 * DAY) * 1000));
   });
 
-  it("past_due after a failed renewal: the date is the renewal, so posting stops 7 days after it", () => {
-    const s = sub({
-      status: "past_due",
-      items: { data: [{ price: { id: "price_example_growth" }, current_period_start: PERIOD_END, current_period_end: PERIOD_END + 30 * DAY }] },
-    });
+  it("past_due: the date is the end of the last paid period, so posting stops 7 days after the failed renewal", () => {
+    const s = sub({ status: "past_due", ...priced("price_example_growth", PERIOD_END, PERIOD_END + 30 * DAY) });
     const data = dataOf(sync(s, [s]));
     expect(data?.currentPeriodEnd).toEqual(new Date(PERIOD_END * 1000));
     expect(stateAt(data, PERIOD_END + 6 * DAY)).toBe("active");
     expect(stateAt(data, PERIOD_END + 7 * DAY + 60)).toBe("ended");
   });
 
-  it("past_due with no period start falls back to the period end", () => {
-    const s = sub({ status: "past_due", items: { data: [{ price: { id: "price_example_growth" }, current_period_end: PERIOD_END }] } });
-    expect(dataOf(sync(s, [s]))?.currentPeriodEnd).toEqual(new Date(PERIOD_END * 1000));
-  });
-
   it("paid again: active with the new period end", () => {
-    const s = sub({
-      status: "active",
-      items: { data: [{ price: { id: "price_example_growth" }, current_period_start: PERIOD_END, current_period_end: PERIOD_END + 30 * DAY }] },
-    });
+    const s = sub(priced("price_example_growth", PERIOD_END, PERIOD_END + 30 * DAY));
     const data = dataOf(sync(s, [s]));
     expect(data).toMatchObject({ planStatus: "active", currentPeriodEnd: new Date((PERIOD_END + 30 * DAY) * 1000) });
     expect(stateAt(data, PERIOD_END + 20 * DAY)).toBe("active");
   });
 
-  it("cancelled at period end: still active, with the plan end", () => {
+  it("cancel at period end: still active, with the plan end", () => {
     const s = sub({ cancel_at_period_end: true });
     expect(dataOf(sync(s, [s]))).toMatchObject({ planStatus: "active", planEndsAt: new Date(PERIOD_END * 1000) });
   });
 
-  it("a set cancel date is the plan end; undoing the cancellation clears it", () => {
+  it("a set cancel date is the plan end; undoing it clears the plan end", () => {
     const s = sub({ cancel_at: PERIOD_END - DAY });
     expect(dataOf(sync(s, [s]))?.planEndsAt).toEqual(new Date((PERIOD_END - DAY) * 1000));
-    const undone = sub({ cancel_at: null, cancel_at_period_end: false });
+    const undone = sub();
     expect(dataOf(sync(undone, [undone]))?.planEndsAt).toBeNull();
   });
 
-  it("cancelled now: canceled, the plan kept, so the block says the plan has ended", () => {
-    const s = sub({ status: "canceled", ended_at: T0 + 40 * DAY, canceled_at: T0 + 40 * DAY });
+  it("cancelled: canceled, the plan kept, so the block says the plan has ended", () => {
+    const s = sub({ status: "canceled", ended_at: PERIOD_END, canceled_at: PERIOD_END });
     const data = dataOf(sync(s, [s]));
     expect(data).toMatchObject({ plan: "growth", planStatus: "canceled", stripeSubscriptionId: "sub_1" });
-    expect(stateAt(data, PERIOD_END + 10 * DAY)).toBe("ended");
+    expect(stateAt(data, PERIOD_END + DAY)).toBe("ended");
   });
 
-  it("every status that is not active, trialing or past_due ends the plan as canceled", () => {
-    for (const status of ["incomplete", "incomplete_expired", "canceled", "unpaid", "paused", "something_new"]) {
+  it("unpaid: written as unpaid, which reads as ended", () => {
+    const s = sub({ status: "unpaid" });
+    const data = dataOf(sync(s, [s]));
+    expect(data?.planStatus).toBe("unpaid");
+    expect(stateAt(data, PERIOD_START + DAY)).toBe("ended");
+  });
+
+  it("every status not in use is written as Stripe has it, and reads as ended", () => {
+    for (const status of ["incomplete", "incomplete_expired", "canceled", "unpaid", "paused"]) {
       const s = sub({ status });
-      expect(dataOf(sync(s, [s]))?.planStatus, status).toBe("canceled");
-    }
-    for (const status of ["active", "trialing", "past_due"]) {
-      const s = sub({ status });
-      expect(dataOf(sync(s, [s]))?.planStatus, status).toBe(status);
+      const data = dataOf(sync(s, [s]));
+      expect(data?.planStatus, status).toBe(status);
+      expect(stateAt(data, PERIOD_START + DAY), status).toBe("ended");
     }
   });
 });
 
-describe("two subscriptions at once", () => {
-  const older = (overrides: Partial<StripeSubscription> = {}) => sub({ id: "sub_1", created: T0, ...overrides });
-  const newer = (overrides: Partial<StripeSubscription> = {}) =>
-    sub({
-      id: "sub_2",
-      created: T0 + DAY,
-      items: { data: [{ price: { id: "price_example_pro" }, current_period_end: PERIOD_END + DAY }] },
-      ...overrides,
-    });
-
-  it("two live: the most recently created one is used, and both are reported", () => {
-    const result = sync(older(), [older(), newer()]);
-    expect(dataOf(result)).toMatchObject({ stripeSubscriptionId: "sub_2", plan: "pro", planStatus: "active" });
-    expect(result.ok && result.liveCandidateIds).toEqual(["sub_2", "sub_1"]);
-  });
-
-  it("two live, the stored one is cancelled: the workspace is on the other, active", () => {
-    const list = [older({ status: "canceled", ended_at: T0 + 2 * DAY }), newer()];
-    expect(dataOf(sync(list[0], list))).toMatchObject({ stripeSubscriptionId: "sub_2", planStatus: "active" });
-    // Stored the older one, cancelled the newer: the older is the only live one left.
-    const list2 = [older(), newer({ status: "canceled", ended_at: T0 + 2 * DAY })];
-    expect(dataOf(sync(list2[1], list2, { ...WS, stripeSubscriptionId: "sub_2" }))).toMatchObject({
-      stripeSubscriptionId: "sub_1",
-      planStatus: "active",
-    });
-  });
-
-  it("two live, the other is cancelled: the workspace stays on the stored one when it is the newest live one", () => {
-    const list = [older({ status: "canceled", ended_at: T0 + 2 * DAY }), newer()];
-    expect(dataOf(sync(list[0], list, { ...WS, stripeSubscriptionId: "sub_2" }))).toMatchObject({
-      stripeSubscriptionId: "sub_2",
-      planStatus: "active",
-    });
-  });
-
-  it("two live, the other is cancelled, a third live one is newer than the stored: it moves to the newest live one", () => {
-    const third = sub({ id: "sub_3", created: T0 + 2 * DAY });
-    const list = [older(), newer({ status: "canceled", ended_at: T0 + 3 * DAY }), third];
-    expect(dataOf(sync(list[1], list))).toMatchObject({ stripeSubscriptionId: "sub_3" });
-  });
-
-  it("both cancelled close together, whichever event is handled: canceled, on the one that ended last", () => {
-    const list = [
-      older({ status: "canceled", ended_at: T0 + 5 * DAY }),
-      newer({ status: "canceled", ended_at: T0 + 5 * DAY + 2 }),
-    ];
-    for (const about of list) {
-      expect(dataOf(sync(about, list)), about.id).toMatchObject({ planStatus: "canceled", stripeSubscriptionId: "sub_2", plan: "pro" });
-    }
-  });
-
-  it("an ended one is ranked by ended_at, then canceled_at, then created", () => {
-    const a = older({ status: "canceled", ended_at: null, canceled_at: T0 + 9 * DAY });
-    const b = newer({ status: "canceled", ended_at: T0 + 8 * DAY });
-    expect(dataOf(sync(a, [a, b]))?.stripeSubscriptionId).toBe("sub_1");
-    const c = older({ status: "incomplete_expired", ended_at: null, canceled_at: null });
-    const d = newer({ status: "incomplete_expired", ended_at: null, canceled_at: null });
-    expect(dataOf(sync(c, [c, d]))?.stripeSubscriptionId).toBe("sub_2");
-  });
-});
-
-describe("prices that are not configured", () => {
-  it("the only live candidate has an unknown price: not chosen; with an ended candidate the workspace is canceled", () => {
-    const live = sub({ id: "sub_2", created: T0 + DAY, items: { data: [{ price: { id: "price_example_other" }, current_period_end: PERIOD_END }] } });
-    const ended = sub({ id: "sub_1", status: "canceled", ended_at: T0 + DAY });
-    const result = sync(live, [live, ended]);
-    expect(dataOf(result)).toMatchObject({ planStatus: "canceled", stripeSubscriptionId: "sub_1", plan: "growth" });
-    expect(result.unconfigured).toEqual([{ subscriptionId: "sub_2", priceId: "price_example_other" }]);
-  });
-
-  it("the only candidate is live with an unknown price: nothing is written, and the price is reported", () => {
-    const live = sub({ items: { data: [{ price: { id: "price_example_other" }, current_period_end: PERIOD_END }] } });
-    const result = sync(live, [live]);
+describe("a subscription in use on a price that is not configured", () => {
+  it("with an older ended one: nothing changes, and the price is reported", () => {
+    const old = sub({ id: "sub_2", created: T0 + DAY, ...priced("price_example_legacy") });
+    const ended = sub({ id: "sub_1", status: "canceled", ended_at: T0 + 2 * DAY });
+    const result = sync(old, [old, ended]);
     expect(result).toMatchObject({ ok: false, level: "error" });
-    expect(result.unconfigured).toEqual([{ subscriptionId: "sub_1", priceId: "price_example_other" }]);
+    expect(result.unconfigured).toEqual([{ subscriptionId: "sub_2", priceId: "price_example_legacy" }]);
   });
 
-  it("an ended effective subscription with an unknown price writes canceled and keeps the stored plan", () => {
-    const ended = sub({ status: "canceled", items: { data: [{ price: { id: "price_example_old" }, current_period_end: PERIOD_END }] } });
+  it("alone: nothing changes", () => {
+    const old = sub(priced("price_example_legacy"));
+    expect(sync(old, [old])).toMatchObject({ ok: false, level: "error" });
+  });
+
+  it("next to another one in use on a known price: still nothing changes", () => {
+    const old = sub({ id: "sub_2", ...priced("price_example_legacy") });
+    expect(sync(sub(), [sub(), old])).toMatchObject({ ok: false, level: "error" });
+  });
+
+  it("an ended one on an unknown price is fine: canceled, the stored plan kept", () => {
+    const ended = sub({ status: "canceled", ended_at: T0 + DAY, ...priced("price_example_legacy") });
     const data = dataOf(sync(ended, [ended]));
     expect(data).toMatchObject({ planStatus: "canceled", stripeSubscriptionId: "sub_1" });
     expect(data && "plan" in data).toBe(false);
   });
 });
 
-describe("who is a candidate", () => {
-  it("a live subscription of the customer naming a different workspace, or none, is never chosen", () => {
+describe("choosing among subscriptions in use", () => {
+  it("active (older) and past_due (newer): the workspace stays active on the older one", () => {
+    const active = sub({ id: "sub_1", created: T0 });
+    const pastDue = sub({ id: "sub_2", created: T0 + DAY, status: "past_due", ...priced("price_example_pro") });
+    expect(dataOf(sync(pastDue, [active, pastDue]))).toMatchObject({ stripeSubscriptionId: "sub_1", planStatus: "active" });
+  });
+
+  it("trialing counts with active, ahead of past_due", () => {
+    const trialing = sub({ id: "sub_1", created: T0, status: "trialing" });
+    const pastDue = sub({ id: "sub_2", created: T0 + DAY, status: "past_due" });
+    expect(dataOf(sync(trialing, [trialing, pastDue]))?.stripeSubscriptionId).toBe("sub_1");
+  });
+
+  it("two active: the most recently created, and both are reported", () => {
+    const a = sub({ id: "sub_1", created: T0 });
+    const b = sub({ id: "sub_2", created: T0 + DAY, ...priced("price_example_pro") });
+    const result = sync(a, [a, b]);
+    expect(dataOf(result)).toMatchObject({ stripeSubscriptionId: "sub_2", plan: "pro" });
+    expect(result.ok && result.liveCandidateIds).toEqual(["sub_2", "sub_1"]);
+  });
+
+  it("two in use, one cancelled: the one left in use", () => {
+    const a = sub({ id: "sub_1", created: T0, status: "canceled", ended_at: T0 + 3 * DAY });
+    const b = sub({ id: "sub_2", created: T0 + DAY });
+    expect(dataOf(sync(a, [a, b]))).toMatchObject({ stripeSubscriptionId: "sub_2", planStatus: "active" });
+    expect(dataOf(sync(b, [a, b]))).toMatchObject({ stripeSubscriptionId: "sub_2", planStatus: "active" });
+  });
+});
+
+describe("none in use: the one that ended most recently", () => {
+  it("both cancelled: the later ended_at, with its real status", () => {
+    const a = sub({ id: "sub_1", status: "canceled", ended_at: T0 + 5 * DAY });
+    const b = sub({ id: "sub_2", status: "unpaid", created: T0 + DAY, ended_at: null, canceled_at: T0 + 6 * DAY });
+    for (const about of [a, b]) {
+      expect(dataOf(sync(about, [a, b])), about.id).toMatchObject({ stripeSubscriptionId: "sub_2", planStatus: "unpaid" });
+    }
+  });
+
+  it("ranked by ended_at, else canceled_at, else created", () => {
+    const a = sub({ id: "sub_1", status: "canceled", canceled_at: T0 + 9 * DAY });
+    const b = sub({ id: "sub_2", status: "canceled", ended_at: T0 + 8 * DAY });
+    expect(dataOf(sync(a, [a, b]))?.stripeSubscriptionId).toBe("sub_1");
+    const c = sub({ id: "sub_1", status: "incomplete_expired", created: T0 });
+    const d = sub({ id: "sub_2", status: "incomplete_expired", created: T0 + DAY });
+    expect(dataOf(sync(c, [c, d]))?.stripeSubscriptionId).toBe("sub_2");
+  });
+});
+
+describe("the candidates", () => {
+  it("the event's own subscription is merged in when the list lacks it", () => {
+    const fresh = sub({ id: "sub_9", created: T0 + 9 * DAY });
+    expect(dataOf(sync(fresh, [sub({ status: "canceled", ended_at: T0 + DAY })]))?.stripeSubscriptionId).toBe("sub_9");
+  });
+
+  it("the event's own subscription replaces the list's copy of it", () => {
+    const stale = sub({ status: "active" });
+    const fresh = sub({ status: "canceled", ended_at: T0 + DAY });
+    expect(dataOf(sync(fresh, [stale]))?.planStatus).toBe("canceled");
+  });
+
+  it("a subscription of the customer naming another workspace, or none, is never a candidate", () => {
     const mine = sub({ status: "canceled", ended_at: T0 + DAY });
-    const other = sub({ id: "sub_9", created: T0 + 5 * DAY, metadata: { workspaceId: "ws_2" } });
-    const bare = sub({ id: "sub_8", created: T0 + 6 * DAY, metadata: {} });
+    const other = sub({ id: "sub_8", created: T0 + 5 * DAY, metadata: { workspaceId: "ws_2" } });
+    const bare = sub({ id: "sub_7", created: T0 + 6 * DAY, metadata: {} });
     expect(dataOf(sync(mine, [mine, other, bare]))).toMatchObject({ planStatus: "canceled", stripeSubscriptionId: "sub_1" });
   });
 
-  it("a subscription in the list on another customer is never chosen", () => {
+  it("a subscription on another customer is never a candidate", () => {
     const mine = sub({ status: "canceled", ended_at: T0 + DAY });
     const foreign = sub({ id: "sub_x", customer: "cus_attacker", created: T0 + 5 * DAY });
     expect(dataOf(sync(mine, [mine, foreign]))?.stripeSubscriptionId).toBe("sub_1");
   });
 
-  it("no candidates at all: nothing is written", () => {
-    expect(sync(sub(), [])).toMatchObject({ ok: false });
+  it("a list Stripe had more of than was read: nothing changes", () => {
+    expect(sync(sub(), [sub()], WS, false)).toMatchObject({ ok: false, level: "error" });
   });
 });
 
-describe("finding the workspace (unchanged)", () => {
+describe("finding the workspace", () => {
   it("the named workspace must exist", () => {
     expect(sync(sub(), [sub()], null)).toMatchObject({ ok: false, level: "error" });
   });
@@ -276,33 +278,12 @@ describe("finding the workspace (unchanged)", () => {
   it("a workspace exempt only for having no plan and no trial is active once written", () => {
     const before = { billingExempt: false, plan: null, planStatus: null, trialEndsAt: null, currentPeriodEnd: null };
     const data = dataOf(sync(sub(), [sub()]));
-    expect(planState(before, new Date((PERIOD_END - DAY) * 1000))).toBe("exempt");
-    expect(planState({ ...before, ...data }, new Date((PERIOD_END - DAY) * 1000))).toBe("active");
+    expect(planState(before, new Date((PERIOD_START + DAY) * 1000))).toBe("exempt");
+    expect(planState({ ...before, ...data }, new Date((PERIOD_START + DAY) * 1000))).toBe("active");
   });
 });
 
-describe("event order (unchanged)", () => {
-  const AT = new Date(1799000000 * 1000);
-
-  it("stores the event's time, and refuses one older than the stored time", () => {
-    expect(dataOf(sync(sub(), [sub()], WS, AT))?.stripeLastEventAt).toEqual(AT);
-    expect(sync(sub(), [sub()], { ...WS, stripeLastEventAt: AT }, new Date(AT.getTime() - 1000))).toMatchObject({
-      ok: false,
-      level: "info",
-    });
-  });
-
-  it("the same time is not older", () => {
-    expect(sync(sub(), [sub()], { ...WS, stripeLastEventAt: AT }, AT).ok).toBe(true);
-  });
-
-  it("an event with no time does not overwrite a timed write", () => {
-    expect(sync(sub(), [sub()], { ...WS, stripeLastEventAt: AT }, null)).toMatchObject({ ok: false });
-    expect(sync(sub(), [sub()], WS, null).ok).toBe(true);
-  });
-});
-
-describe("isLiveSubscriptionStatus", () => {
+describe("isLiveSubscriptionStatus (checkout and deletion)", () => {
   it("is false only for the two terminal statuses and anything unknown", () => {
     for (const status of ["incomplete", "trialing", "active", "past_due", "unpaid", "paused"]) {
       expect(isLiveSubscriptionStatus(status), status).toBe(true);

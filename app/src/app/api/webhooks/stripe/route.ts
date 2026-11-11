@@ -6,6 +6,9 @@ import { verifyStripeSignature } from "@/server/billing/stripeSignature";
 import { handleStripeEvent } from "@/server/billing/stripeWebhook";
 
 export const dynamic = "force-dynamic";
+// One identifying fetch (10 s) plus the locked transaction (at most 50 s, see
+// SYNC_TRANSACTION_OPTIONS), with room to answer.
+export const maxDuration = 90;
 
 /**
  * POST /api/webhooks/stripe (21b). Public: Stripe calls it with no session,

@@ -10,6 +10,7 @@ import {
   encodeForm,
   expireCheckoutSession,
   listCheckoutSessions,
+  listAllCustomerSubscriptions,
   listCustomerSubscriptions,
   retrievePrice,
   retrieveSubscription,
@@ -194,6 +195,29 @@ describe("the calls", () => {
     expect(list).toEqual([{ id: "sub_1", status: "active" }]);
     expect(lastCall().url).toBe("https://api.stripe.com/v1/subscriptions?customer=cus_1&status=all&limit=100");
     expect(lastCall().init.method).toBe("GET");
+  });
+
+  it("listAllCustomerSubscriptions follows has_more for up to three pages", async () => {
+    fetchMock
+      .mockResolvedValueOnce(ok({ object: "list", data: [{ id: "sub_3" }, { id: "sub_2" }], has_more: true }))
+      .mockResolvedValueOnce(ok({ object: "list", data: [{ id: "sub_1" }], has_more: false }));
+    expect(await listAllCustomerSubscriptions("cus_1", ENV)).toEqual({
+      data: [{ id: "sub_3" }, { id: "sub_2" }, { id: "sub_1" }],
+      complete: true,
+    });
+    const urls = fetchMock.mock.calls.map((call) => call[0]);
+    expect(urls).toEqual([
+      "https://api.stripe.com/v1/subscriptions?customer=cus_1&status=all&limit=100",
+      "https://api.stripe.com/v1/subscriptions?customer=cus_1&status=all&limit=100&starting_after=sub_2",
+    ]);
+  });
+
+  it("listAllCustomerSubscriptions stops after three pages and says the list is not complete", async () => {
+    fetchMock.mockImplementation(async () => ok({ object: "list", data: [{ id: `sub_${Math.random()}` }], has_more: true }));
+    const result = await listAllCustomerSubscriptions("cus_1", ENV);
+    expect(result.complete).toBe(false);
+    expect(result.data).toHaveLength(3);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("cancelSubscription sends DELETE with no idempotency key", async () => {

@@ -18,14 +18,13 @@ const statements = SQL.replace(/--.*$/gm, "")
   .filter(Boolean);
 
 describe("20261110370000_stripe_billing", () => {
-  it("adds six nullable Workspace columns, each only if missing", () => {
+  it("adds five nullable Workspace columns, each only if missing", () => {
     expect(statements).toContain(
       'ALTER TABLE "Workspace" ADD COLUMN IF NOT EXISTS "stripeCustomerId" TEXT, ' +
         'ADD COLUMN IF NOT EXISTS "stripeSubscriptionId" TEXT, ' +
         'ADD COLUMN IF NOT EXISTS "trialReminderSentAt" TIMESTAMP(3), ' +
         'ADD COLUMN IF NOT EXISTS "trialEndedEmailSentAt" TIMESTAMP(3), ' +
-        'ADD COLUMN IF NOT EXISTS "planEndsAt" TIMESTAMP(3), ' +
-        'ADD COLUMN IF NOT EXISTS "stripeLastEventAt" TIMESTAMP(3)',
+        'ADD COLUMN IF NOT EXISTS "planEndsAt" TIMESTAMP(3)',
     );
   });
 
