@@ -4263,3 +4263,91 @@ describe("linkedinClient — alt text (07d)", () => {
     expect(postBody().content.media.altText.length).toBeLessThanOrEqual(1000);
   });
 });
+
+// 07d fix round 1: the "Full post body" log line stays what it was on main: the
+// body without any description, and nothing added.
+describe("linkedinClient — the post body log carries no description (07d)", () => {
+  const REST = "https://api.linkedin.com/rest";
+  const INIT = `${REST}/images?action=initializeUpload`;
+  const POSTS = `${REST}/posts`;
+  const imageUrn = (n: number) => `urn:li:image:IMG${n}`;
+
+  function stub() {
+    let inits = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        const url = String(input);
+        if (/photo-(\d+)\.jpg$/.test(url)) return new Response(Uint8Array.of(1));
+        if (url === INIT) {
+          inits += 1;
+          return new Response(
+            JSON.stringify({
+              value: {
+                uploadUrlExpiresAt: 1650567510704,
+                uploadUrl: `https://www.linkedin.com/dms-uploads/IMG${inits}/uploaded-image/0?ut=s`,
+                image: imageUrn(inits),
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("/dms-uploads/")) return new Response("", { status: 201 });
+        if (url === POSTS) return new Response(null, { status: 201, headers: { "x-restli-id": "urn:li:share:1" } });
+        throw new Error(`Unexpected fetch in test: ${url}`);
+      }),
+    );
+  }
+
+  const photo = (n: number, altText: string | null) => ({
+    id: `media-${n}`,
+    mimeType: "image/jpeg",
+    storageLocation: `https://blob.example.com/photo-${n}.jpg`,
+    originalFilename: `photo-${n}.jpg`,
+    sizeBytes: 1,
+    baseCaption: "",
+    perPlatformOverrides: null,
+    altText,
+  });
+
+  const ctx = (items: ReturnType<typeof photo>[]) =>
+    ({
+      user: { id: "user-1" },
+      socialConnection: makeConnection({ id: "conn-li", expiresAt: new Date(Date.now() + 3_600_000) }),
+      mediaItem: items[0],
+      mediaItems: items,
+      caption: "hello",
+    }) as unknown as PublishContext;
+
+  /** The logged body, parsed back from the "Full post body:" line. */
+  const loggedBody = () => {
+    const line = vi.mocked(console.log).mock.calls.find((c) => c[0] === "[LinkedIn] Full post body:");
+    return JSON.parse(String(line?.[1])) as Record<string, unknown>;
+  };
+
+  beforeEach(() => {
+    for (const level of ["log", "warn", "error"] as const) vi.spyOn(console, level).mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("a single photo: the logged content is main's, with no altText", async () => {
+    stub();
+
+    await linkedinClient.publishVideo(ctx([photo(1, "Secret single description.")]));
+
+    expect(loggedBody().content).toEqual({ media: { id: imageUrn(1) } });
+    expect(JSON.stringify(vi.mocked(console.log).mock.calls)).not.toContain("Secret single description.");
+  });
+
+  it("several photos: the logged images are main's, with no altText", async () => {
+    stub();
+
+    await linkedinClient.publishVideo(ctx([photo(1, "Secret one."), photo(2, null)]));
+
+    expect(loggedBody().content).toEqual({ multiImage: { images: [{ id: imageUrn(1) }, { id: imageUrn(2) }] } });
+    expect(JSON.stringify(vi.mocked(console.log).mock.calls)).not.toContain("Secret one.");
+  });
+});

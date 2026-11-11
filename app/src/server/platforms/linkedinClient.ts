@@ -738,6 +738,18 @@ interface LinkedInPostImage {
 
 const LINKEDIN_ALT_TEXT_LIMIT = 4086;
 
+/** The post body as logged: every image's `altText` left out. */
+function postBodyForLog(postBody: LinkedInPostBody): LinkedInPostBody {
+  const content = postBody.content;
+  if (!content) return postBody;
+  if ("multiImage" in content) {
+    return { ...postBody, content: { multiImage: { images: content.multiImage.images.map(({ id }) => ({ id })) } } };
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- left out of the log on purpose
+  const { altText, ...media } = content.media;
+  return { ...postBody, content: { media } };
+}
+
 async function createPost(
   accessToken: string,
   authorUrn: string,
@@ -800,8 +812,9 @@ async function createPost(
     hasMedia: !!mediaUrn || !!images,
   });
 
-  // Log full post body for debugging
-  console.log("[LinkedIn] Full post body:", JSON.stringify(postBody, null, 2));
+  // Log full post body for debugging. 07d: without the photo descriptions, which
+  // are the user's text; the line is otherwise what it always was.
+  console.log("[LinkedIn] Full post body:", JSON.stringify(postBodyForLog(postBody), null, 2));
 
   // 2026-11-01 scale audit (jobs H6, Review Focus 5): POST /rest/posts is the
   // commit call. A 5xx, a timeout or a dropped connection after it was sent is

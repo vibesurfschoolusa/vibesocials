@@ -108,16 +108,6 @@ async function throwRejected(
 }
 
 /**
- * 07b: a post with several photos. Per the Page photos reference
- * (https://developers.facebook.com/docs/graph-api/reference/page/photos/,
- * "Publishing Multiple Photos"): each photo is uploaded to /{page}/photos with
- * `published=false`, then one POST /{page}/feed names them all as
- * `attached_media[i]={"media_fbid":"<photo id>"}`, in order. Unpublished photos
- * that never get attached are deleted by Facebook after 24 hours, so a failed
- * or repeated upload leaves nothing visible; only the feed post is the commit
- * call. Its id ("<page>_<post>") is recorded like the single photo's id.
- */
-/**
  * 07d: Page photos reference (read 2026-11-10,
  * https://developers.facebook.com/docs/graph-api/reference/page/photos/): `alt_text_custom`,
  * "Accessible alternative description for an image", among the Creating parameters. The
@@ -132,6 +122,41 @@ function withAltText(body: URLSearchParams, item: PublishContext["mediaItem"]): 
   return body;
 }
 
+/**
+ * 07d: whether a photo upload that carried `alt_text_custom` should be sent once more
+ * without it. Neither Facebook's length limit nor the parameter on an unpublished photo is
+ * confirmed, so a description must never cost the post: any 4xx refusal that is not about
+ * the token qualifies. Rate limits are classified (and thrown) before this is asked. A 4xx
+ * means Facebook made nothing, so the second send cannot duplicate a photo or a post. The
+ * body is read from a clone, so the caller can still read it.
+ */
+async function refusedForDescription(body: URLSearchParams, response: Response): Promise<boolean> {
+  if (!body.has("alt_text_custom")) return false;
+  if (response.status < 400 || response.status >= 500 || response.status === 401) return false;
+  const text = await response.clone().text().catch(() => "");
+  return !isFacebookAuthErrorBody(text);
+}
+
+/** The same body without the description, logged without its text. */
+function withoutAltText(body: URLSearchParams, label: string, status: number): URLSearchParams {
+  console.warn(`[FacebookPage] ${label} refused with its description; sending it once more without the description`, {
+    status,
+  });
+  const plain = new URLSearchParams(body);
+  plain.delete("alt_text_custom");
+  return plain;
+}
+
+/**
+ * 07b: a post with several photos. Per the Page photos reference
+ * (https://developers.facebook.com/docs/graph-api/reference/page/photos/,
+ * "Publishing Multiple Photos"): each photo is uploaded to /{page}/photos with
+ * `published=false`, then one POST /{page}/feed names them all as
+ * `attached_media[i]={"media_fbid":"<photo id>"}`, in order. Unpublished photos
+ * that never get attached are deleted by Facebook after 24 hours, so a failed
+ * or repeated upload leaves nothing visible; only the feed post is the commit
+ * call. Its id ("<page>_<post>") is recorded like the single photo's id.
+ */
 async function publishSeveralPhotos(
   ctx: PublishContext,
   accessToken: string,
@@ -166,25 +191,35 @@ async function publishSeveralPhotos(
     const which = `photo ${index + 1} of ${total}`;
     // An upload is not a commit (the photo stays unpublished), so a plain
     // fetch: a 5xx or a network failure here may be retried.
-    const response = await fetchWithTimeout(
-      `${META_GRAPH_BASE_URL}/${pageId}/photos`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: withAltText(
-          new URLSearchParams({
-            url: item.storageLocation,
-            published: "false",
-            access_token: accessToken,
-          }),
-          item,
-        ),
-      },
-      budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, ctx.deadline),
+    const upload = (body: URLSearchParams) =>
+      fetchWithTimeout(
+        `${META_GRAPH_BASE_URL}/${pageId}/photos`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body,
+        },
+        budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, ctx.deadline),
+      );
+    const body = withAltText(
+      new URLSearchParams({
+        url: item.storageLocation,
+        published: "false",
+        access_token: accessToken,
+      }),
+      item,
     );
+    let response = await upload(body);
 
-    const limited = await classifyRateLimit("facebook_page", response);
+    let limited = await classifyRateLimit("facebook_page", response);
     if (limited) throw limited;
+    // 07d: a refused description must not cost the post. Only the photo id of the
+    // upload that succeeds is attached, so no photo can be in the post twice.
+    if (await refusedForDescription(body, response)) {
+      response = await upload(withoutAltText(body, `Upload of ${which}`, response.status));
+      limited = await classifyRateLimit("facebook_page", response);
+      if (limited) throw limited;
+    }
     if (!response.ok) {
       await throwRejected(
         response,
@@ -495,25 +530,36 @@ export const facebookPageClient: PlatformClient = {
     // /videos) is the commit call. A 5xx, a timeout or a dropped connection
     // after it was sent is PUBLISH_UNCONFIRMED (the post may be live) and is
     // never re-run; a 4xx / 429 is returned and handled below as before.
-    const response = await commitRequest("facebook_page", () =>
-      fetchWithTimeout(
-        endpoint.toString(),
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
+    const send = (requestBody: URLSearchParams) =>
+      commitRequest("facebook_page", () =>
+        fetchWithTimeout(
+          endpoint.toString(),
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: requestBody,
           },
-          body,
-        },
-        timeoutMs,
-      ),
-    );
+          timeoutMs,
+        ),
+      );
+    let response = await send(body);
 
     // 2026-11-01 scale audit (platform limits): a Meta throttle (code 4, 17, 32,
     // 613, 80001 or HTTP 429) is RATE_LIMITED, with the wait from the
     // X-Business-Use-Case-Usage header, not FACEBOOK_PAGE_PUBLISH_FAILED.
-    const limited = await classifyRateLimit("facebook_page", response);
+    let limited = await classifyRateLimit("facebook_page", response);
     if (limited) throw limited;
+
+    // 07d: a photo refused with its description is sent once more without it. The
+    // first send was answered with a 4xx, so nothing was published; a 5xx, a timeout
+    // or a dropped connection never gets here (commitRequest: PUBLISH_UNCONFIRMED).
+    if (await refusedForDescription(body, response)) {
+      response = await send(withoutAltText(body, "Photo", response.status));
+      limited = await classifyRateLimit("facebook_page", response);
+      if (limited) throw limited;
+    }
 
     if (!response.ok) {
       await throwRejected(

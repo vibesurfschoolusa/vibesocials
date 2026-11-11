@@ -17,6 +17,7 @@ import {
   removeAllClearsCaption,
   requestPhotoDescription,
   uploadPhotosInOrder,
+  whereDescriptionGoes,
   withPhotoDescriptions,
   type AttachedPhoto,
 } from "./composer/attached-photos";
@@ -198,6 +199,9 @@ function CreatePostFormInner({
   // 07d: the description (alt text) of a single photo, uploaded or reused. With
   // several photos each one keeps its own on its AttachedPhoto.
   const [singleAltText, setSingleAltText] = useState("");
+  // The photo the single field is for right now (the picked File, or the reused
+  // item), so a "Write it for me" answer finds its photo when it comes back.
+  const singlePhotoRef = useRef<object | null>(null);
 
   // Roadmap Phase 5 — publish timing. `scheduledForLocal` is the raw
   // datetime-local (browser-local wall time) string; it's converted to a UTC
@@ -427,6 +431,7 @@ function CreatePostFormInner({
         const item = data.item;
         setReuseItem(item);
         setSingleAltText("");
+        singlePhotoRef.current = item;
         setUploadCaption(item.baseCaption ?? "");
         setPlatformOverrides(
           (item.perPlatformOverrides as Partial<Record<Platform, string>> | null) ?? null,
@@ -491,6 +496,7 @@ function CreatePostFormInner({
   const handleDismissReuse = useCallback(() => {
     setReuseItem(null);
     setSingleAltText("");
+    singlePhotoRef.current = null;
     setPlatformOverrides(null);
     setUploadCaption("");
   }, []);
@@ -654,6 +660,7 @@ function CreatePostFormInner({
     setUploadedBlob(null);
     // A description belongs to its photo: a new pick starts without one.
     setSingleAltText("");
+    singlePhotoRef.current = null;
     setShowSuccess(false);
     // Changing (or clearing) the file invalidates any
     // in-flight/completed upload for the previous file so it
@@ -686,6 +693,7 @@ function CreatePostFormInner({
         return;
       }
       setUploadFile(nextFile);
+      singlePhotoRef.current = nextFile;
 
       const blobInfo = await ensureUploaded(nextFile);
       // A newer pick replaced this one while it uploaded: its
@@ -744,12 +752,17 @@ function CreatePostFormInner({
     }
   }
 
-  // 07d: "Write it for me" for the single photo. Dropped (null) when another
-  // file was picked while the AI wrote, so it never lands on the wrong photo.
-  async function describeSinglePhoto(blob: UploadedBlobInfo): Promise<string | null> {
-    const selection = fileSelectionRef.current;
+  // 07d: "Write it for me" for the single photo. The answer goes to that photo
+  // wherever it is now: still the single photo (returned, for the field), moved
+  // into the set by "Add photos" (written onto its place there), or gone (dropped).
+  async function describeSinglePhoto(blob: UploadedBlobInfo, photo: object): Promise<string | null> {
     const text = await requestPhotoDescription(blob);
-    return selection === fileSelectionRef.current ? text : null;
+    const target = whereDescriptionGoes(photo, { single: singlePhotoRef.current, set: photoSetRef.current });
+    if (target?.to === "set") {
+      changePhotoSet((prev) => patchPhoto(prev, target.key, { altText: text }));
+      return null;
+    }
+    return target?.to === "single" ? text : null;
   }
 
   const isPhotoAttached = (key: string) => photoSetRef.current.some((photo) => photo.key === key);
@@ -834,6 +847,7 @@ function CreatePostFormInner({
       setUploadFile(null);
       setUploadedBlob(null);
       setSingleAltText("");
+      singlePhotoRef.current = null;
     }
     // Shown at once, marked "Preparing", while HEIC photos convert.
     const placeholders: AttachedPhoto[] = picked.map((file) => ({
@@ -1109,6 +1123,7 @@ function CreatePostFormInner({
       setUploadFile(null);
       setUploadedBlob(null);
       setSingleAltText("");
+      singlePhotoRef.current = null;
       changePhotoSet(() => []);
       activeUploadRef.current = null;
       // Clear the finished upload's bar and remount the file input, so the old
@@ -1448,12 +1463,15 @@ function CreatePostFormInner({
                   value={singleAltText}
                   onChange={setSingleAltText}
                   onWrite={() =>
-                    describeSinglePhoto({
-                      url: reuseItem.storageLocation,
-                      filename: reuseItem.originalFilename,
-                      mimeType: reuseItem.mimeType,
-                      sizeBytes: reuseItem.sizeBytes,
-                    })
+                    describeSinglePhoto(
+                      {
+                        url: reuseItem.storageLocation,
+                        filename: reuseItem.originalFilename,
+                        mimeType: reuseItem.mimeType,
+                        sizeBytes: reuseItem.sizeBytes,
+                      },
+                      reuseItem,
+                    )
                   }
                 />
               )}
@@ -1529,7 +1547,7 @@ function CreatePostFormInner({
                       label="Describe this photo (alt text)"
                       value={singleAltText}
                       onChange={setSingleAltText}
-                      onWrite={uploadedBlob ? () => describeSinglePhoto(uploadedBlob) : null}
+                      onWrite={uploadedBlob ? () => describeSinglePhoto(uploadedBlob, uploadFile) : null}
                     />
                   )}
                 </div>

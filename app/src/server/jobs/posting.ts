@@ -13,6 +13,12 @@ import { platformAcceptsMedia } from "@/lib/platformLimits";
 import { assertPostTargetsValid, narrowConnectionsForPost } from "@/lib/postTargets";
 
 /**
+ * A new file of a post, as the create helper stores it. 07d: `altText` is the
+ * photo's cleaned description (lib/altText.ts); absent writes no description.
+ */
+export type PostFileInfo = SavedFileInfo & { altText?: string };
+
+/**
  * Fields shared by every create-post helper controlling WHEN/HOW the job runs
  * (Roadmap Phase 5). `intent` defaults to `immediate` (today's behavior:
  * results created up-front, publish event sent by the caller). For `scheduled`
@@ -50,14 +56,14 @@ export interface CreatePostJobOnlyParams extends PostJobSchedulingParams {
    */
   workspaceId: string;
   /** The post's first (or only) file: `PostJob.mediaItemId`. */
-  media: SavedFileInfo;
+  media: PostFileInfo;
   /**
    * Several photos in one post (07a): the photos after `media`, in order. Each
    * becomes its own MediaItem, and the post gets one PostJobMedia row per photo
    * (positions 0 to n-1, `media` first). Absent or empty = a single-file post,
    * written exactly as before (no PostJobMedia rows).
    */
-  extraMedia?: SavedFileInfo[];
+  extraMedia?: PostFileInfo[];
   baseCaption: string;
   location?: string;
   perPlatformOverrides?: Partial<Record<Platform, string>> | null;
@@ -257,7 +263,7 @@ export async function createPostJobOnly(
   // PostJob and correctly leave `lastUsedAt = null`.
   const now = new Date();
 
-  const createMediaItem = (tx: Prisma.TransactionClient, file: SavedFileInfo) =>
+  const createMediaItem = (tx: Prisma.TransactionClient, file: PostFileInfo) =>
     tx.mediaItem.create({
       data: {
         userId,
@@ -272,6 +278,8 @@ export async function createPostJobOnly(
         perPlatformOverrides: perPlatformOverrides
           ? (perPlatformOverrides as unknown as Record<string, string>)
           : undefined,
+        // 07d: only when there is one, so a post without descriptions writes today's row.
+        ...(file.altText ? { altText: file.altText } : {}),
       },
     });
   const extraMedia = params.extraMedia ?? [];
@@ -449,6 +457,12 @@ export interface CreatePostJobForExistingMediaParams
   instagramMetadata?: InstagramPostMetadata;
   /** See `baseCaption` above: carried by the event payload, not this helper. */
   facebookMetadata?: FacebookPostMetadata;
+  /**
+   * 07d: the reused photo's new description, cleaned. Written onto the reused
+   * item in the same update, only when sent and only for a photo; absent keeps
+   * the description it has.
+   */
+  altText?: string;
 }
 
 /**
@@ -547,6 +561,8 @@ export async function createPostJobForExistingMedia(
         // reuse call that omits `location` doesn't clobber the item's existing
         // one (platform clients read it fresh from this row at publish time).
         ...(location ? { metadata: { location: { description: location } } } : {}),
+        // 07d: the item was checked to be in this workspace under the lock above.
+        ...(params.altText && mediaItem.mimeType.startsWith("image/") ? { altText: params.altText } : {}),
       },
     });
 

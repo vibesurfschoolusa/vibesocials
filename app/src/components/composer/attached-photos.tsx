@@ -57,6 +57,21 @@ export function withPhotoDescriptions<T extends object>(body: T, descriptions: R
 }
 
 /**
+ * 07d: where a "Write it for me" answer for the single photo goes once it comes
+ * back. "Add photos" may have moved the photo into the set meanwhile (the set
+ * keeps the same File), or the photo may be gone. `photo` is the File (or the
+ * reused item) it was asked for; `single` is what the single field shows now.
+ */
+export function whereDescriptionGoes(
+  photo: object,
+  now: { single: object | null; set: readonly AttachedPhoto[] },
+): { to: "single" } | { to: "set"; key: string } | null {
+  const inSet = now.set.find((entry) => entry.file === photo);
+  if (inSet) return { to: "set", key: inSet.key };
+  return now.single === photo ? { to: "single" } : null;
+}
+
+/**
  * 07d: "Write it for me". Asks the AI caption route to describe the uploaded
  * photo (same quota as a caption). Rejects with the sentence to show.
  */

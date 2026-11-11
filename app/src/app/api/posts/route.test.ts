@@ -20,7 +20,6 @@ const {
   notifyOwnersMock,
   failPendingMock,
   checkDailyPostLimitMock,
-  saveMediaAltTextsMock,
 } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
@@ -33,12 +32,7 @@ const {
   notifyOwnersMock: vi.fn(),
   failPendingMock: vi.fn(),
   checkDailyPostLimitMock: vi.fn(),
-  saveMediaAltTextsMock: vi.fn(),
 }));
-
-// 07d: the alt-text write has its own suite (server/jobs/postMedia.test.ts);
-// here only what the route hands it, and when.
-vi.mock("@/server/jobs/postMedia", () => ({ saveMediaAltTexts: saveMediaAltTextsMock }));
 
 // Team Workspaces (Task 4) — route.ts now resolves the caller via
 // `getWorkspaceContext` instead of `getCurrentUser` (design doc §3/§4).
@@ -158,8 +152,6 @@ beforeEach(() => {
   failPendingMock.mockResolvedValue({ failedCount: 1, status: "failed" });
   checkDailyPostLimitMock.mockReset();
   checkDailyPostLimitMock.mockResolvedValue(null);
-  saveMediaAltTextsMock.mockReset();
-  saveMediaAltTextsMock.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -2213,6 +2205,8 @@ describe("POST /api/posts - the approval email for a Story (fix round 1)", () =>
   });
 });
 
+// 07d: the route hands each cleaned description to the create helper, which
+// writes it with the media row in the post's transaction (posting.test.ts).
 describe("POST /api/posts - alt text (07d)", () => {
   const HOST = "https://test.public.blob.vercel-storage.com";
   const photo = (n: number, mimeType = "image/jpeg") => ({
@@ -2227,32 +2221,22 @@ describe("POST /api/posts - alt text (07d)", () => {
     mimeType,
     sizeBytes: 100 + n,
   });
+  const created = () => createPostJobOnlyMock.mock.calls[0][0];
+  const reused = () => createPostJobForExistingMediaMock.mock.calls[0][0];
 
   beforeEach(() => {
     createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["r1"] });
     createPostJobForExistingMediaMock.mockResolvedValue({ postJobId: "job-2", mediaItemId: "media-9", resultIds: [] });
   });
 
-  it("stores a single photo's cleaned description, before the publish event is sent", async () => {
-    const order: string[] = [];
-    saveMediaAltTextsMock.mockImplementation(async () => void order.push("alt"));
-    inngestSendMock.mockImplementation(async () => void order.push("send"));
-
+  it("hands a single photo's cleaned description to the create helper with its file", async () => {
     const response = await POST(jsonRequest({ ...photo(1), baseCaption: "hi", altText: " A dog\non a beach. " }));
 
     expect(response.status).toBe(200);
-    expect(saveMediaAltTextsMock).toHaveBeenCalledWith({
-      workspaceId: "ws-1",
-      postJobId: "job-1",
-      mediaItemId: "media-1",
-      altTexts: ["A dog on a beach."],
-    });
-    expect(order).toEqual(["alt", "send"]);
-    // The create helper gets exactly what it got before alt text existed.
-    expect(createPostJobOnlyMock.mock.calls[0][0].media).toStrictEqual(stored(1));
+    expect(created().media).toStrictEqual({ ...stored(1), altText: "A dog on a beach." });
   });
 
-  it("stores each of several photos' descriptions by position, and hands the helper plain file info", async () => {
+  it("hands each of several photos its own description, in order", async () => {
     const response = await POST(
       jsonRequest({
         media: [{ ...photo(1), altText: "First." }, photo(2), { ...photo(3), altText: "Third." }],
@@ -2261,29 +2245,25 @@ describe("POST /api/posts - alt text (07d)", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(saveMediaAltTextsMock).toHaveBeenCalledWith({
-      workspaceId: "ws-1",
-      postJobId: "job-1",
-      mediaItemId: "media-1",
-      altTexts: ["First.", undefined, "Third."],
-    });
-    expect(createPostJobOnlyMock.mock.calls[0][0].media).toStrictEqual(stored(1));
-    expect(createPostJobOnlyMock.mock.calls[0][0].extraMedia).toStrictEqual([stored(2), stored(3)]);
+    expect(created().media).toStrictEqual({ ...stored(1), altText: "First." });
+    expect(created().extraMedia).toStrictEqual([stored(2), { ...stored(3), altText: "Third." }]);
   });
 
-  it("writes nothing for a post without descriptions (today's request)", async () => {
-    await POST(jsonRequest({ ...photo(1), baseCaption: "hi" }));
-    await POST(jsonRequest({ media: [photo(1), photo(2)], baseCaption: "hi" }));
+  it("a post without descriptions hands the helper exactly today's file info", async () => {
     await POST(jsonRequest({ ...photo(1), baseCaption: "hi", altText: "  \n " }));
+    expect(created().media).toStrictEqual(stored(1));
+    createPostJobOnlyMock.mockClear();
 
-    expect(saveMediaAltTextsMock).not.toHaveBeenCalled();
+    await POST(jsonRequest({ media: [photo(1), photo(2)], baseCaption: "hi" }));
+    expect(created().media).toStrictEqual(stored(1));
+    expect(created().extraMedia).toStrictEqual([stored(2)]);
   });
 
   it("ignores a description sent with a video", async () => {
     const response = await POST(jsonRequest({ ...photo(1, "video/mp4"), baseCaption: "hi", altText: "A clip." }));
 
     expect(response.status).toBe(200);
-    expect(saveMediaAltTextsMock).not.toHaveBeenCalled();
+    expect(created().media).toStrictEqual(stored(1, "video/mp4"));
   });
 
   it("refuses an altText that is not text, creating nothing", async () => {
@@ -2294,48 +2274,19 @@ describe("POST /api/posts - alt text (07d)", () => {
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
   });
 
-  it("a reused photo: a sent description replaces the stored one, in the active workspace", async () => {
+  it("a reused photo: a sent description goes to the reuse helper, with the active workspace", async () => {
     const response = await POST(jsonRequest({ mediaItemId: "media-9", baseCaption: "hi", altText: "A new one." }));
 
     expect(response.status).toBe(200);
-    expect(saveMediaAltTextsMock).toHaveBeenCalledWith({
-      workspaceId: "ws-1",
-      postJobId: "job-2",
-      mediaItemId: "media-9",
-      altTexts: ["A new one."],
-    });
+    expect(reused()).toMatchObject({ workspaceId: "ws-1", mediaItemId: "media-9", altText: "A new one." });
   });
 
-  it("a reused photo without a description keeps the stored one (nothing is written)", async () => {
+  it("a reused photo without a description sends the helper no altText, so the stored one stays", async () => {
     await POST(jsonRequest({ mediaItemId: "media-9", baseCaption: "hi" }));
     await POST(jsonRequest({ mediaItemId: "media-9", baseCaption: "hi", altText: "" }));
 
-    expect(saveMediaAltTextsMock).not.toHaveBeenCalled();
-  });
-
-  it("never writes for another workspace's item: the reuse helper's 404 comes first", async () => {
-    createPostJobForExistingMediaMock.mockRejectedValue(
-      new MediaItemUnavailableError("NOT_FOUND", "Media item not found."),
-    );
-
-    const response = await POST(jsonRequest({ mediaItemId: "foreign", baseCaption: "hi", altText: "Mine now." }));
-
-    expect(response.status).toBe(404);
-    expect(saveMediaAltTextsMock).not.toHaveBeenCalled();
-  });
-
-  it("publishes anyway when the description can't be saved, and says nothing of its text in the log", async () => {
-    saveMediaAltTextsMock.mockRejectedValue(new Error("db down"));
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const response = await POST(jsonRequest({ ...photo(1), baseCaption: "hi", altText: "Secret words." }));
-
-    expect(response.status).toBe(200);
-    expect(inngestSendMock).toHaveBeenCalledTimes(1);
-    const logged = JSON.stringify([...errorSpy.mock.calls, ...warnSpy.mock.calls]);
-    expect(logged).not.toContain("Secret words.");
-    errorSpy.mockRestore();
-    warnSpy.mockRestore();
+    for (const [args] of createPostJobForExistingMediaMock.mock.calls) {
+      expect(args).not.toHaveProperty("altText");
+    }
   });
 });

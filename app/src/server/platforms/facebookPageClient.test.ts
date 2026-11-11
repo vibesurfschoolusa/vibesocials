@@ -1148,3 +1148,157 @@ describe("facebookPageClient.publishVideo — alt text (07d)", () => {
     }
   });
 });
+
+// 07d fix round 1: a description never costs a post. Facebook's length limit and
+// alt_text_custom on unpublished photos are unconfirmed, so an upload refused with
+// its description (a 4xx that is not the token or a rate limit) is sent once more
+// without it. A refusal of an upload that carried none behaves as before.
+describe("facebookPageClient.publishVideo — a refused description is dropped (07d)", () => {
+  type CodedError = Error & { code?: string };
+  const bodyOf = (i: number) =>
+    Object.fromEntries(new URLSearchParams(String((fetchMock.mock.calls[i][1] as RequestInit).body)));
+  const refused = () => response(400, { error: { type: "OAuthException", code: 100, message: "Invalid parameter" } });
+  const failure = (ctx: PublishContext) =>
+    facebookPageClient.publishVideo(ctx).then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+  const warned = () => JSON.stringify(vi.mocked(console.warn).mock.calls);
+
+  beforeEach(() => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  function several(altTexts: Array<string | null>): PublishContext {
+    const items = altTexts.map(
+      (altText, i) =>
+        ({
+          id: `media-${i + 1}`,
+          mimeType: "image/jpeg",
+          storageLocation: `https://blob.example.com/photo-${i + 1}.jpg`,
+          baseCaption: "",
+          perPlatformOverrides: null,
+          altText,
+        }) as MediaItem,
+    );
+    return {
+      user: { id: "user-1" } as User,
+      socialConnection: makeConnection(),
+      mediaItem: items[0],
+      mediaItems: items,
+      caption: "Surf day",
+    };
+  }
+
+  describe("a single photo (the upload is the post)", () => {
+    it("refused with its description: sent once more without it, published once, the drop logged without the text", async () => {
+      fetchMock.mockResolvedValueOnce(refused()).mockResolvedValueOnce(response(200, { id: "post-123" }));
+
+      const result = await facebookPageClient.publishVideo(makeContext({}, { altText: "Secret words here." }));
+
+      expect(result.externalPostId).toBe("post-123");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(bodyOf(0).alt_text_custom).toBe("Secret words here.");
+      expect(bodyOf(1)).toEqual({
+        url: "https://blob.example.com/photo.jpg",
+        caption: "hello",
+        access_token: "page-access-token",
+      });
+      expect(warned()).toContain("description");
+      expect(warned()).not.toContain("Secret words here.");
+    });
+
+    it("refused again without it: fails as before, after exactly two requests", async () => {
+      fetchMock.mockResolvedValueOnce(refused()).mockResolvedValueOnce(refused());
+
+      const error = await failure(makeContext({}, { altText: "A dog." }));
+
+      expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("a 5xx after sending (the post may be live) is PUBLISH_UNCONFIRMED and is never sent again", async () => {
+      fetchMock.mockResolvedValueOnce(response(500, { error: { message: "boom" } }));
+
+      const error = await failure(makeContext({}, { altText: "A dog." }));
+
+      expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("a dead token is the reconnect error, not a second send", async () => {
+      fetchMock.mockResolvedValueOnce(response(400, { error: { type: "OAuthException", code: 190 } }));
+
+      const error = await failure(makeContext({}, { altText: "A dog." }));
+
+      expect(error?.code).toBe("FACEBOOK_PAGE_RECONNECT_REQUIRED");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("a rate limit is RATE_LIMITED, not a second send", async () => {
+      fetchMock.mockResolvedValueOnce(response(400, { error: { code: 4, message: "Application request limit reached" } }));
+
+      const error = await failure(makeContext({}, { altText: "A dog." }));
+
+      expect(error?.code).toBe("RATE_LIMITED");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("a refused photo that carried no description fails exactly as before: one request", async () => {
+      fetchMock.mockResolvedValueOnce(refused());
+
+      const error = await failure(makeContext());
+
+      expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("several photos", () => {
+    it("a photo refused with its description is uploaded once more without it; each photo is attached once", async () => {
+      fetchMock
+        .mockResolvedValueOnce(response(200, { id: "photo-1" }))
+        .mockResolvedValueOnce(refused())
+        .mockResolvedValueOnce(response(200, { id: "photo-2" }))
+        .mockResolvedValueOnce(response(200, { id: "photo-3" }))
+        .mockResolvedValueOnce(response(200, { id: "page-1_post-9" }));
+
+      const result = await facebookPageClient.publishVideo(several(["One.", "Two.", null]));
+
+      expect(result).toEqual({ externalPostId: "page-1_post-9" });
+      expect(fetchMock).toHaveBeenCalledTimes(5);
+      expect(bodyOf(1).alt_text_custom).toBe("Two.");
+      expect(bodyOf(2)).toEqual({
+        url: "https://blob.example.com/photo-2.jpg",
+        published: "false",
+        access_token: "page-access-token",
+      });
+      const feed = new URLSearchParams(String((fetchMock.mock.calls[4][1] as RequestInit).body));
+      expect([...feed.keys()].filter((k) => k.startsWith("attached_media"))).toHaveLength(3);
+      expect([0, 1, 2].map((i) => feed.get(`attached_media[${i}]`))).toEqual([
+        '{"media_fbid":"photo-1"}',
+        '{"media_fbid":"photo-2"}',
+        '{"media_fbid":"photo-3"}',
+      ]);
+      expect(warned()).not.toContain("Two.");
+    });
+
+    it("refused again without it: no post, after exactly two tries of that photo", async () => {
+      fetchMock.mockResolvedValueOnce(refused()).mockResolvedValueOnce(refused());
+
+      const error = await failure(several(["One.", null]));
+
+      expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("a refused upload that carried no description fails exactly as before", async () => {
+      fetchMock.mockResolvedValueOnce(refused());
+
+      const error = await failure(several([null, "Two."]));
+
+      expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
+});

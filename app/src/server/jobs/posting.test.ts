@@ -1405,3 +1405,138 @@ describe("createPostJobOnly - several photos (07a)", () => {
     expect(postJobCreateMock.mock.calls[0][0].data.status).toBe("scheduled");
   });
 });
+
+// 07d fix round 1: the description is written with the media row, inside the
+// transaction that creates the post.
+describe("createPostJobOnly / createPostJobForExistingMedia - alt text (07d)", () => {
+  const photo = (n: number, altText?: string) => ({
+    storageLocation: `https://example.public.blob.vercel-storage.com/p${n}.jpg`,
+    originalFilename: `p${n}.jpg`,
+    mimeType: "image/jpeg",
+    sizeBytes: 100 + n,
+    ...(altText !== undefined ? { altText } : {}),
+  });
+  const createdData = () =>
+    mediaItemCreateMock.mock.calls.map((c) => (c[0] as { data: Record<string, unknown> }).data);
+
+  beforeEach(() => {
+    mediaItemCreateMock.mockReset();
+    mediaItemUpdateMock.mockReset();
+    findUniqueMock.mockReset();
+    findManyConnectionsMock.mockReset();
+    postJobCreateMock.mockReset();
+    postJobResultCreateMock.mockReset();
+    postJobMediaCreateManyMock.mockReset();
+    let created = 0;
+    mediaItemCreateMock.mockImplementation(() => {
+      created += 1;
+      return Promise.resolve(makeMediaItem({ id: `media-${created}`, mimeType: "image/jpeg" }));
+    });
+    mediaItemUpdateMock.mockResolvedValue(makeMediaItem());
+    postJobCreateMock.mockResolvedValue({ id: "job-1" });
+    postJobMediaCreateManyMock.mockResolvedValue({ count: 3 });
+    postJobResultCreateMock.mockImplementation((args: { data: { platform: string } }) =>
+      Promise.resolve({ id: `result-${args.data.platform}` }),
+    );
+    findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-x", platform: "x" })]);
+  });
+
+  it("writes each photo's description on its own new row", async () => {
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: photo(1, "First."),
+      extraMedia: [photo(2), photo(3, "Third.")],
+      baseCaption: "hello",
+    });
+
+    expect(createdData().map((d) => d.altText)).toEqual(["First.", undefined, "Third."]);
+    expect("altText" in createdData()[1]).toBe(false);
+  });
+
+  it("a post without descriptions creates exactly today's rows (no altText key)", async () => {
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: photo(1),
+      extraMedia: [photo(2)],
+      baseCaption: "hello",
+    });
+
+    expect(createdData().every((d) => !("altText" in d))).toBe(true);
+    expect(Object.keys(createdData()[0]).sort()).toEqual(
+      [
+        "baseCaption",
+        "lastUsedAt",
+        "metadata",
+        "mimeType",
+        "originalFilename",
+        "perPlatformOverrides",
+        "sizeBytes",
+        "storageLocation",
+        "userId",
+        "workspaceId",
+      ].sort(),
+    );
+  });
+
+  it("reuse: a sent description replaces the photo's stored one, in the same update", async () => {
+    findUniqueMock.mockResolvedValue(makeMediaItem({ workspaceId: "workspace-1", mimeType: "image/jpeg" }));
+
+    await createPostJobForExistingMedia({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      mediaItemId: "media-1",
+      baseCaption: "hello",
+      altText: "A new one.",
+    });
+
+    expect(mediaItemUpdateMock).toHaveBeenCalledTimes(1);
+    expect(mediaItemUpdateMock.mock.calls[0][0]).toEqual({
+      where: { id: "media-1" },
+      data: { lastUsedAt: expect.any(Date), altText: "A new one." },
+    });
+  });
+
+  it("reuse without a description leaves the stored one: exactly today's update", async () => {
+    findUniqueMock.mockResolvedValue(makeMediaItem({ workspaceId: "workspace-1", mimeType: "image/jpeg" }));
+
+    await createPostJobForExistingMedia({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      mediaItemId: "media-1",
+      baseCaption: "hello",
+    });
+
+    expect(mediaItemUpdateMock.mock.calls[0][0].data).toEqual({ lastUsedAt: expect.any(Date) });
+  });
+
+  it("reuse of a video ignores a description", async () => {
+    findUniqueMock.mockResolvedValue(makeMediaItem({ workspaceId: "workspace-1", mimeType: "video/mp4" }));
+
+    await createPostJobForExistingMedia({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      mediaItemId: "media-1",
+      baseCaption: "hello",
+      altText: "A clip.",
+    });
+
+    expect(mediaItemUpdateMock.mock.calls[0][0].data).not.toHaveProperty("altText");
+  });
+
+  it("reuse of another workspace's photo writes nothing", async () => {
+    findUniqueMock.mockResolvedValue(makeMediaItem({ workspaceId: "someone-elses", mimeType: "image/jpeg" }));
+
+    await expect(
+      createPostJobForExistingMedia({
+        userId: "user-1",
+        workspaceId: "workspace-1",
+        mediaItemId: "media-1",
+        baseCaption: "hello",
+        altText: "Mine now.",
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(mediaItemUpdateMock).not.toHaveBeenCalled();
+  });
+});

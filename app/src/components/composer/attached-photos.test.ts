@@ -15,6 +15,7 @@ import {
   removeAllTitle,
   requestPhotoDescription,
   uploadPhotosInOrder,
+  whereDescriptionGoes,
   withPhotoDescriptions,
   type AttachedPhoto,
 } from "./attached-photos";
@@ -556,5 +557,27 @@ describe("AttachedPhotos - descriptions", () => {
     ]);
     expect(html).toContain('value="A dog."');
     expect(html.match(/Write it for me/g)).toHaveLength(2);
+  });
+});
+
+// Fix round 1: "Write it for me" answers the photo it was asked for, wherever
+// that photo is when the answer comes back.
+describe("whereDescriptionGoes", () => {
+  const file = new File(["x"], "single.jpg", { type: "image/jpeg" });
+
+  it("to the single field while the photo is still the single photo", () => {
+    expect(whereDescriptionGoes(file, { single: file, set: [] })).toEqual({ to: "single" });
+  });
+
+  it("to its place in the set once Add photos moved it there", () => {
+    const set = [photo("p1", { file }), photo("p2")];
+    expect(whereDescriptionGoes(file, { single: null, set })).toEqual({ to: "set", key: "p1" });
+  });
+
+  it("nowhere once the photo is gone (replaced, removed or posted)", () => {
+    const other = new File(["y"], "other.jpg", { type: "image/jpeg" });
+    expect(whereDescriptionGoes(file, { single: other, set: [] })).toBeNull();
+    expect(whereDescriptionGoes(file, { single: null, set: [photo("p2")] })).toBeNull();
+    expect(whereDescriptionGoes(file, { single: null, set: [] })).toBeNull();
   });
 });

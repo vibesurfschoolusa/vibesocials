@@ -122,8 +122,18 @@ export async function POST(request: Request) {
     // The Add-many page (/posts/bulk) captions up to 20 files one after another,
     // which the 10-per-5-minutes counter would stretch to ten minutes, so it
     // asks for its own counter. The workspace's daily AI quota still applies.
+    // 07d: a description ("Write it for me", once per photo of up to ten) has its
+    // own counter, so describing a set never uses up the caption's.
     const rateLimit = await checkRateLimit(
-      body.bulk === true
+      wantsAltText
+        ? {
+            userId: context.user.id,
+            route: "posts/auto-caption-alt-text",
+            limit: 30,
+            windowMs: 15 * 60 * 1000,
+            failClosed: true,
+          }
+        : body.bulk === true
         ? {
             userId: context.user.id,
             route: "posts/auto-caption-bulk",

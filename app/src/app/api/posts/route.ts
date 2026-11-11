@@ -23,7 +23,6 @@ import {
   resolvePlatformCaptions,
 } from "@/server/jobs/posting";
 import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
-import { saveMediaAltTexts } from "@/server/jobs/postMedia";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
 import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 import { prisma } from "@/lib/db";
@@ -572,9 +571,10 @@ export async function POST(request: Request) {
   // Several photos (07a): the photos after the first, in order. Stays undefined
   // for one file, so a one-entry list takes the blobUrl path unchanged.
   let extraMedia: PostMediaEntry[] | undefined;
-  // 07d: each file's cleaned description, in the post's order; undefined for a
-  // file without one (or a video). Written onto the media rows once they exist.
-  let altTexts: (string | undefined)[] = [];
+  // 07d: the first (or only) file's cleaned description; undefined for none or a
+  // video. The files after it carry their own in `extraMedia`. The create
+  // helper writes them with the media rows, in the post's transaction.
+  let firstAltText: string | undefined;
   if (hasMediaList) {
     const listValidation = validatePostMediaList(body.media);
     if (!listValidation.ok) {
@@ -583,16 +583,9 @@ export async function POST(request: Request) {
     const [first, ...rest] = listValidation.value;
     storedBlobUrl = first.storageLocation;
     mediaFields = { filename: first.originalFilename, mimeType: first.mimeType, sizeBytes: first.sizeBytes };
-    altTexts = listValidation.value.map((entry) => entry.altText);
-    // The create helper gets the file info only, exactly as before alt text.
-    if (rest.length > 0) {
-      extraMedia = rest.map((entry) => ({
-        storageLocation: entry.storageLocation,
-        originalFilename: entry.originalFilename,
-        mimeType: entry.mimeType,
-        sizeBytes: entry.sizeBytes,
-      }));
-    }
+    firstAltText = first.altText;
+    // An entry carries `altText` only when it has one (validatePostMediaList).
+    if (rest.length > 0) extraMedia = rest;
   } else if (hasBlobUrl) {
     const canonical = canonicalBlobUrl(body.blobUrl as string);
     if (!canonical) {
@@ -611,7 +604,7 @@ export async function POST(request: Request) {
     if (!altText.ok) {
       return NextResponse.json({ error: altText.error }, { status: 400 });
     }
-    altTexts = [altText.value];
+    firstAltText = altText.value;
   }
 
   const baseCaptionRaw = body?.baseCaption;
@@ -854,6 +847,8 @@ export async function POST(request: Request) {
         userId: context.user.id,
         workspaceId: context.workspace.id,
         mediaItemId: body.mediaItemId as string,
+        // 07d: absent keeps the reused photo's stored description.
+        ...(firstAltText ? { altText: firstAltText } : {}),
         baseCaption: baseCaptionRaw,
         perPlatformOverrides,
         location,
@@ -891,6 +886,7 @@ export async function POST(request: Request) {
           originalFilename: mediaFields.filename,
           mimeType: mediaFields.mimeType,
           sizeBytes: mediaFields.sizeBytes,
+          ...(firstAltText ? { altText: firstAltText } : {}),
         },
         ...(extraMedia ? { extraMedia } : {}),
         baseCaption: baseCaptionRaw,
@@ -909,21 +905,6 @@ export async function POST(request: Request) {
       });
       postJobId = created.postJobId;
       mediaItemId = created.mediaItemId;
-    }
-
-    // 07d: before the publish event, so the publish reads the descriptions.
-    // Best effort: the post exists now, and one without alt text is still the
-    // post the user asked for. The text itself is never logged.
-    if (altTexts.some((text) => text)) {
-      try {
-        await saveMediaAltTexts({ workspaceId: context.workspace.id, postJobId, mediaItemId, altTexts });
-      } catch (altTextError: unknown) {
-        logger.error("[POST /api/posts] Couldn't save the photo descriptions; publishing without them", {
-          error: altTextError instanceof Error ? altTextError.name : "unknown",
-          postJobId,
-          workspaceId: context.workspace.id,
-        });
-      }
     }
 
     // Immediate posts trigger the background publish now. Scheduled/draft jobs
