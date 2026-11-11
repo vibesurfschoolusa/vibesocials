@@ -35,6 +35,7 @@ import { generateBlobKey } from "@/lib/blobKey";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { isHeicFile, prepareUploadFile } from "@/lib/prepareUploadFile";
 import { explainUploadFailure } from "@/lib/uploadFailure";
+import { countWord } from "@/lib/plural";
 import {
   appendMediaPage,
   buildMediaCreateBody,
@@ -66,6 +67,11 @@ interface ListResponse {
 
 interface CreateResponse {
   mediaItem: MediaItemDto;
+}
+
+/** The card's retention note: "soon" at 0, else "in 1 day" / "in N days". */
+export function retentionText(days: number): string {
+  return days === 0 ? "auto-removes soon" : `auto-removes in ${days} ${countWord(days, "day", "days")}`;
 }
 
 function formatBytes(bytes: number): string {
@@ -165,7 +171,7 @@ function MediaCard({ item, onReuse, onDeleteRequest }: MediaCardProps) {
             {retentionDays !== null && (
               <>
                 {" · "}
-                {retentionDays === 0 ? "auto-removes soon" : `auto-removes in ${retentionDays} days`}
+                {retentionText(retentionDays)}
               </>
             )}
           </p>
