@@ -970,6 +970,31 @@ describe("facebookPageClient.publishVideo — Story", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  // Fix round 1: a 200 that carries a Graph error is a failed transfer.
+  it("a transfer answered 200 with an error body fails before finish, keeping the error text out of the logs", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    fetchMock.mockImplementationOnce(async () => response(200, { video_id: "video-5", upload_url: UPLOAD_URL }));
+    fetchMock.mockImplementationOnce(async () =>
+      response(200, { error: { code: 1, type: "OAuthException", message: "bad token EAAB-secret-token" } }),
+    );
+
+    const error = await failure(videoStory());
+
+    expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+    expect(error?.message).toContain("No Story was made");
+    expect(error?.message).not.toContain("EAAB");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain("EAAB-secret-token");
+  });
+
+  it("a transfer answered 200 with a body that is not JSON still goes on to finish", async () => {
+    fetchMock.mockImplementationOnce(async () => response(200, { video_id: "video-5", upload_url: UPLOAD_URL }));
+    fetchMock.mockImplementationOnce(async () => response(200, "ok"));
+    fetchMock.mockImplementationOnce(async () => response(200, { success: true, post_id: "story-5" }));
+
+    expect(await facebookPageClient.publishVideo(videoStory())).toEqual({ externalPostId: "story-5" });
+  });
+
   it("a lost answer on finish is PUBLISH_UNCONFIRMED and finish is never sent again", async () => {
     answerVideo(() => response(502, "bad gateway"));
     fetchMock.mockImplementation(async () => response(200, { video_id: "video-6", upload_url: UPLOAD_URL }));

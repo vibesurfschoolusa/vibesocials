@@ -129,6 +129,14 @@ export function PostJobCard({
 
   const status = JOB_STATUS_META[job.status];
   const results = orderResults(job.results);
+  // 2026-11-10: platforms this post went to as a Story (labelled, and no link built from the id).
+  const isStory = (platform: Platform) => job.storyPlatforms?.includes(platform) ?? false;
+  const postUrl = (result: PostJobDTO["results"][number]) =>
+    result.status === "success"
+      ? platformPostUrl(result.platform, result.externalPostId, result.externalPostUrl, {
+          story: isStory(result.platform),
+        })
+      : null;
 
   // Roadmap Phase 8: a job fans out to one result per platform, so there is at
   // most one YouTube result. Show its engagement stats once it succeeded (only
@@ -274,13 +282,20 @@ export function PostJobCard({
 
       {results.length > 0 ? (
         <div className="mt-3 flex flex-wrap gap-1.5">
-          {results.map((result) => (
-            <PlatformResultBadge
-              key={result.platform}
-              platform={result.platform}
-              status={displayStatus(result)}
-            />
-          ))}
+          {results.map((result) =>
+            isStory(result.platform) ? (
+              <span key={result.platform} className="inline-flex items-center gap-1">
+                <PlatformResultBadge platform={result.platform} status={displayStatus(result)} />
+                <span className="text-xs text-muted-foreground">Story</span>
+              </span>
+            ) : (
+              <PlatformResultBadge
+                key={result.platform}
+                platform={result.platform}
+                status={displayStatus(result)}
+              />
+            ),
+          )}
         </div>
       ) : null}
 
@@ -306,10 +321,10 @@ export function PostJobCard({
         </p>
       ) : null}
 
-      {results.some((r) => r.status === "success" && platformPostUrl(r.platform, r.externalPostId, r.externalPostUrl)) ? (
+      {results.some((r) => postUrl(r)) ? (
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
           {results.map((result) => {
-            const url = result.status === "success" ? platformPostUrl(result.platform, result.externalPostId, result.externalPostUrl) : null;
+            const url = postUrl(result);
             if (!url) return null;
             return (
               <a

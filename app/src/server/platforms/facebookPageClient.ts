@@ -316,8 +316,9 @@ async function publishStory(
     );
     const transferLimited = await classifyRateLimit("facebook_page", transfer);
     if (transferLimited) throw transferLimited;
+    // A body that is not JSON is not a refusal, so it may go on to finish.
     const transferred = transfer.ok
-      ? ((await transfer.json().catch(() => null)) as { success?: unknown } | null)
+      ? ((await transfer.json().catch(() => null)) as { success?: unknown; error?: unknown } | null)
       : null;
     if (!transfer.ok) {
       await throwRejected(
@@ -328,7 +329,15 @@ async function publishStory(
         transfer.status,
       );
     }
-    if (transferred?.success === false) {
+    // A 200 can still carry a Graph error. Nothing is published before finish,
+    // so this fails the transfer and a retry is safe. Only the error's numeric
+    // code and type are logged: its message may quote the request, token included.
+    if (transferred?.success === false || (transferred?.error !== undefined && transferred.error !== null)) {
+      const graphError = (transferred.error ?? {}) as { code?: unknown; type?: unknown };
+      console.error("[FacebookPage] Video Story transfer answered with an error", {
+        code: typeof graphError.code === "number" ? graphError.code : undefined,
+        type: typeof graphError.type === "string" ? graphError.type : undefined,
+      });
       throw publishFailedError("Facebook Page could not fetch the video for the Story. No Story was made.");
     }
     commitFields = { video_id: videoId, upload_phase: "finish" };

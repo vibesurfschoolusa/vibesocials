@@ -2156,3 +2156,51 @@ describe("POST /api/posts - Story placement", () => {
     expect(createPostJobOnlyMock).toHaveBeenCalledWith(expect.objectContaining({ facebookMetadata: STORY }));
   });
 });
+
+describe("POST /api/posts - the approval email for a Story (fix round 1)", () => {
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: [] });
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: true }));
+  });
+
+  it("lists a Story platform as 'Story, no caption', even over its own override", async () => {
+    await POST(
+      jsonRequest({
+        blobUrl: "https://test.public.blob.vercel-storage.com/x.jpg",
+        mimeType: "image/jpeg",
+        baseCaption: "Two spots left today",
+        perPlatformOverrides: { instagram: "IG text", x: "X text" },
+        platforms: ["instagram", "facebook_page", "x"],
+        instagramMetadata: { placement: "story" },
+        facebookMetadata: { placement: "story" },
+      }),
+    );
+
+    expect(notifyOwnersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platformCaptions: {
+          instagram: "Story, no caption",
+          facebook_page: "Story, no caption",
+          x: "X text",
+        },
+      }),
+    );
+  });
+
+  it("a feed post's email is unchanged", async () => {
+    await POST(
+      jsonRequest({
+        blobUrl: "https://test.public.blob.vercel-storage.com/x.jpg",
+        mimeType: "image/jpeg",
+        baseCaption: "Two spots left today",
+        perPlatformOverrides: { instagram: "IG text" },
+        platforms: ["instagram"],
+        instagramMetadata: { placement: "feed" },
+      }),
+    );
+
+    expect(notifyOwnersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ platformCaptions: { instagram: "IG text" } }),
+    );
+  });
+});

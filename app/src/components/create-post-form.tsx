@@ -70,8 +70,9 @@ import { isHeicFile, prepareUploadFile } from "@/lib/prepareUploadFile";
 import { shouldTakeSharedFile, takeSharedFile } from "@/lib/sharedFile";
 import { TIKTOK_DISCLOSURE_INCOMPLETE_TEXT, tiktokPublishBlock } from "@/lib/tiktokPostRules";
 import {
-  FEED_CHOICE,
+  initialPlacements,
   reconcilePlacement,
+  storyOnlyCaptionNote,
   storyVideoLengthRefusal,
   type PlacementChoice,
 } from "@/lib/storyPlacement";
@@ -292,8 +293,8 @@ function CreatePostFormInner({
     googleButtonDefault ? { postType: "update", button: googleButtonDefault } : { postType: "update" };
   const [googleMetadata, setGoogleMetadata] = useState<GoogleBusinessPostMetadata>(initialGoogleMetadata);
   // 2026-11-10 — Feed or Story, for Instagram and for Facebook separately. Feed is preselected.
-  const [instagramPlacement, setInstagramPlacement] = useState<PlacementChoice>(FEED_CHOICE);
-  const [facebookPlacement, setFacebookPlacement] = useState<PlacementChoice>(FEED_CHOICE);
+  const [instagramPlacement, setInstagramPlacement] = useState<PlacementChoice>(() => initialPlacements().instagram);
+  const [facebookPlacement, setFacebookPlacement] = useState<PlacementChoice>(() => initialPlacements().facebook);
 
   // Roadmap Phase 7 / Task 6 — single source of truth for connection state:
   // the same read-only `GET /api/connections` the dashboard's
@@ -370,6 +371,11 @@ function CreatePostFormInner({
   const storyLengthRefusal =
     (instagramStory ? storyVideoLengthRefusal("instagram", activeVideoDurationSec) : null) ??
     (facebookStory ? storyVideoLengthRefusal("facebook_page", activeVideoDurationSec) : null);
+  // Shown under the caption box while every selected platform is a Story.
+  const captionStoryNote = storyOnlyCaptionNote(selectedPlatforms, [
+    ...(instagramStory ? (["instagram"] as const) : []),
+    ...(facebookStory ? (["facebook_page"] as const) : []),
+  ]);
   // Sent only for a selected platform with Story chosen: a feed post's request stays as it was.
   const storyRequestFields = {
     ...(instagramStory ? { instagramMetadata: { placement: "story" as const } } : {}),
@@ -1080,6 +1086,10 @@ function CreatePostFormInner({
       setTiktokCommercialEnabled(false);
       setYoutubeMetadata({ privacyStatus: "unlisted" });
       setGoogleMetadata(initialGoogleMetadata());
+      // A Story never carries over to the next post: both go back to Feed.
+      const startPlacements = initialPlacements();
+      setInstagramPlacement(startPlacements.instagram);
+      setFacebookPlacement(startPlacements.facebook);
       setUploadLoading(false);
     } catch (err: unknown) {
       // An upload refused for full storage says so; anything else stays generic.
@@ -1548,6 +1558,7 @@ function CreatePostFormInner({
             aria-describedby="post-caption-count"
           />
           <CaptionCounter id="post-caption-count" text={uploadCaption} />
+          {captionStoryNote ? <p className="text-xs text-muted-foreground">{captionStoryNote}</p> : null}
         </div>
 
         <PlatformCaptionEditor

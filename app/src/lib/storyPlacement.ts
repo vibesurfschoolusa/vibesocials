@@ -1,3 +1,5 @@
+import type { Platform } from "@prisma/client";
+
 import { platformLabel } from "@/lib/platforms";
 
 /**
@@ -22,6 +24,9 @@ export const STORY_VIDEO_LIMIT_SEC: Record<StoryPlatform, number> = {
   instagram: 60,
   facebook_page: 90,
 };
+
+/** Shortest Story video both pages allow: "3 seconds minimum" / "3 to 90 seconds". */
+export const STORY_VIDEO_MIN_SEC = 3;
 
 export type ParsedPlacement =
   | { ok: true; value: { placement: StoryPlacement } | undefined }
@@ -49,14 +54,54 @@ export function storyMediaRefusal(platform: StoryPlatform, fileCount: number): s
 }
 
 /**
- * Why a Story cannot take a video this long, or null. Only the browser knows the
- * length; an unknown length (null) is allowed and the platform decides.
+ * Why a Story cannot take a video this long (or this short), or null. Only the
+ * browser knows the length; an unknown length (null) is allowed and the
+ * platform decides.
  */
 export function storyVideoLengthRefusal(platform: StoryPlatform, durationSec: number | null): string | null {
+  if (durationSec === null || !Number.isFinite(durationSec)) return null;
+  const label = platformLabel(platform);
+  if (durationSec < STORY_VIDEO_MIN_SEC) {
+    // Rounded down to a tenth, so a video just under the minimum never reads as equal to it.
+    const length = Math.floor(durationSec * 10) / 10;
+    return `${label} Stories need a video of at least ${STORY_VIDEO_MIN_SEC} seconds. This one is ${length} seconds.`;
+  }
   const limit = STORY_VIDEO_LIMIT_SEC[platform];
-  if (durationSec === null || !Number.isFinite(durationSec) || durationSec <= limit) return null;
+  if (durationSec <= limit) return null;
   // Rounded up, so a video a fraction over the limit never reads as equal to it.
-  return `${platformLabel(platform)} Stories take videos up to ${limit} seconds. This one is ${Math.ceil(durationSec)} seconds.`;
+  return `${label} Stories take videos up to ${limit} seconds. This one is ${Math.ceil(durationSec)} seconds.`;
+}
+
+/**
+ * The platforms a job sent as a Story, from its stored `publishMetadata`
+ * (PublishMetadataSnapshot's `instagram` / `facebook`). A job without the
+ * snapshot, or with anything but a Story there, has none.
+ */
+export function storyPlatformsOf(publishMetadata: unknown): StoryPlatform[] {
+  if (typeof publishMetadata !== "object" || publishMetadata === null) return [];
+  const snapshot = publishMetadata as { instagram?: { placement?: unknown }; facebook?: { placement?: unknown } };
+  const platforms: StoryPlatform[] = [];
+  if (snapshot.instagram?.placement === "story") platforms.push("instagram");
+  if (snapshot.facebook?.placement === "story") platforms.push("facebook_page");
+  return platforms;
+}
+
+/** What the approval email shows for a platform that publishes a Story. */
+export const STORY_NO_CAPTION = "Story, no caption";
+
+/**
+ * The per-platform captions an approver is shown, with each Story platform
+ * listed as {@link STORY_NO_CAPTION}: a Story publishes no caption, so no text
+ * may be presented as going there. Returns the input unchanged without a Story.
+ */
+export function withStoryCaptions(
+  platformCaptions: Partial<Record<Platform, string>> | null,
+  storyPlatforms: readonly StoryPlatform[],
+): Partial<Record<Platform, string>> | null {
+  if (storyPlatforms.length === 0) return platformCaptions;
+  const captions: Partial<Record<Platform, string>> = { ...platformCaptions };
+  for (const platform of storyPlatforms) captions[platform] = STORY_NO_CAPTION;
+  return captions;
 }
 
 /**
@@ -70,6 +115,14 @@ export interface PlacementChoice {
 }
 
 export const FEED_CHOICE: PlacementChoice = { placement: "feed", returnedToFeed: false };
+
+/**
+ * Both platforms' choices as the Create page starts, and as it returns there
+ * after a post is sent: Feed, so a Story never carries over to the next post.
+ */
+export function initialPlacements(): { instagram: PlacementChoice; facebook: PlacementChoice } {
+  return { instagram: FEED_CHOICE, facebook: FEED_CHOICE };
+}
 
 /** The person picks Feed or Story. Story is refused while two or more photos are attached. */
 export function choosePlacement(
@@ -102,4 +155,20 @@ export function placementNote(platform: StoryPlatform, choice: PlacementChoice, 
     return `Stories show for 24 hours and have no caption. Your caption is not used on ${platformLabel(platform)}.`;
   }
   return null;
+}
+
+/** The line under the caption box while every selected platform is a Story. */
+export const STORY_ONLY_CAPTION_NOTE = "Stories show no caption. This text is kept with the post but not published.";
+
+/**
+ * {@link STORY_ONLY_CAPTION_NOTE} when every selected platform publishes a
+ * Story, else null. The caption stays required: the job keeps it, and the
+ * Queue shows it and its edit route requires one.
+ */
+export function storyOnlyCaptionNote(
+  selectedPlatforms: readonly Platform[],
+  storyPlatforms: readonly Platform[],
+): string | null {
+  if (selectedPlatforms.length === 0) return null;
+  return selectedPlatforms.every((platform) => storyPlatforms.includes(platform)) ? STORY_ONLY_CAPTION_NOTE : null;
 }

@@ -41,6 +41,8 @@ import { parseGooglePostMetadata } from "@/lib/googlePostOptions";
 import {
   parsePlacementMetadata,
   storyMediaRefusal,
+  storyPlatformsOf,
+  withStoryCaptions,
   type StoryPlacementField,
   type StoryPlatform,
 } from "@/lib/storyPlacement";
@@ -313,6 +315,8 @@ export async function GET(request: Request) {
           updatedAt: job.updatedAt.toISOString(),
           scheduledFor: job.scheduledFor?.toISOString() ?? null,
           // Approval workflow — derived, never a stored enum (lib/approval.ts).
+          // 2026-11-10: which platforms this job sent as a Story.
+          storyPlatforms: storyPlatformsOf(job.publishMetadata),
           approvalState: deriveApprovalState({
             submittedForApprovalAt: job.submittedForApprovalAt,
             approvedAt: job.approvedAt,
@@ -905,14 +909,21 @@ export async function POST(request: Request) {
         caption: baseCaptionRaw,
         // 2026-11-01 audit (M1): the job just snapshotted exactly these
         // overrides and targets (buildPostJobCreateData), so the owners are
-        // shown what the publish path will read back.
-        platformCaptions: resolvePlatformCaptions(
-          {
-            baseCaption: baseCaptionRaw,
-            perPlatformOverrides: perPlatformOverrides ?? null,
-            publishMetadata: targetPlatforms ? { targetPlatforms } : null,
-          },
-          null,
+        // shown what the publish path will read back. A Story publishes no
+        // caption, so its platform reads "Story, no caption" (2026-11-10).
+        platformCaptions: withStoryCaptions(
+          resolvePlatformCaptions(
+            {
+              baseCaption: baseCaptionRaw,
+              perPlatformOverrides: perPlatformOverrides ?? null,
+              publishMetadata: targetPlatforms ? { targetPlatforms } : null,
+            },
+            null,
+          ),
+          [
+            ...(instagramMetadata ? (["instagram"] as const) : []),
+            ...(facebookMetadata ? (["facebook_page"] as const) : []),
+          ],
         ),
       });
     }

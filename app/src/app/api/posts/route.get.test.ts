@@ -262,6 +262,30 @@ describe("GET /api/posts — media + publish snapshot (Task 8)", () => {
     expect(body.jobs[0].publish).toMatchObject({ googlePostType: "update", googleButton: "BOOK" });
   });
 
+  // Fix round 1 (Stories): which platforms the job sent as a Story.
+  it("lists the job's Story platforms from its publishMetadata", async () => {
+    postJobFindManyMock.mockResolvedValue([
+      {
+        ...jobWithYouTube(),
+        publishMetadata: { instagram: { placement: "story" }, facebook: { placement: "story" } },
+      },
+    ]);
+    postMetricFindManyMock.mockResolvedValue([]);
+
+    const body = (await (await GET(getRequest())).json()) as PostsResponse;
+
+    expect(body.jobs[0].storyPlatforms).toEqual(["instagram", "facebook_page"]);
+  });
+
+  it("a job without publishMetadata has no Story platforms", async () => {
+    postJobFindManyMock.mockResolvedValue([{ ...jobWithYouTube(), publishMetadata: null }]);
+    postMetricFindManyMock.mockResolvedValue([]);
+
+    const body = (await (await GET(getRequest())).json()) as PostsResponse;
+
+    expect(body.jobs[0].storyPlatforms).toEqual([]);
+  });
+
   it("maps a null publishMetadata (legacy/immediate job) to publish: null", async () => {
     postJobFindManyMock.mockResolvedValue([
       {

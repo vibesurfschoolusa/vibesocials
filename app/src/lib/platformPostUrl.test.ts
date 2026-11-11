@@ -22,6 +22,15 @@ describe("platformPostUrl", () => {
   it("builds a Facebook post URL", () => {
     expect(platformPostUrl("facebook_page", "111_222")).toBe("https://www.facebook.com/111_222");
   });
+  // Fix round 1 (Stories): a Facebook Story's id opens no Story, so no link is
+  // built from it; a link the platform returned is still used.
+  it("builds no link from the id of a Story, but keeps a returned one", () => {
+    expect(platformPostUrl("facebook_page", "111_222", null, { story: true })).toBeNull();
+    expect(platformPostUrl("instagram", "1789", "https://www.instagram.com/stories/acme/1/", { story: true })).toBe(
+      "https://www.instagram.com/stories/acme/1/",
+    );
+    expect(platformPostUrl("facebook_page", "111_222", null, { story: false })).toBe("https://www.facebook.com/111_222");
+  });
   it("builds a Pinterest Pin URL", () => {
     expect(platformPostUrl("pinterest", "987654321")).toBe("https://www.pinterest.com/pin/987654321/");
   });

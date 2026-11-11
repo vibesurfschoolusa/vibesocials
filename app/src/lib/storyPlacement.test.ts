@@ -3,6 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   choosePlacement,
   FEED_CHOICE,
+  initialPlacements,
+  STORY_NO_CAPTION,
+  STORY_ONLY_CAPTION_NOTE,
+  storyOnlyCaptionNote,
+  STORY_VIDEO_MIN_SEC,
+  storyPlatformsOf,
+  withStoryCaptions,
   parsePlacementMetadata,
   placementNote,
   reconcilePlacement,
@@ -74,6 +81,18 @@ describe("storyVideoLengthRefusal", () => {
     );
   });
 
+  it("refuses a known length under 3 seconds (both pages: 3 seconds minimum)", () => {
+    expect(STORY_VIDEO_MIN_SEC).toBe(3);
+    expect(storyVideoLengthRefusal("instagram", 2)).toBe(
+      "Instagram Stories need a video of at least 3 seconds. This one is 2 seconds.",
+    );
+    // Rounded down to a tenth, so a video just under the minimum never reads as 3.
+    expect(storyVideoLengthRefusal("facebook_page", 2.99)).toBe(
+      "Facebook Page Stories need a video of at least 3 seconds. This one is 2.9 seconds.",
+    );
+    expect(storyVideoLengthRefusal("instagram", 3)).toBeNull();
+  });
+
   it("allows a length at or under the limit", () => {
     expect(storyVideoLengthRefusal("instagram", 60)).toBeNull();
     expect(storyVideoLengthRefusal("facebook_page", 12)).toBeNull();
@@ -127,5 +146,62 @@ describe("the Create page's choice", () => {
 
   it("drops the returned-to-Feed note once the person chooses again", () => {
     expect(choosePlacement({ placement: "feed", returnedToFeed: true }, "feed", 1)).toEqual(FEED_CHOICE);
+  });
+});
+
+describe("initialPlacements", () => {
+  it("puts both platforms back on Feed, as a fresh object each time", () => {
+    const start = initialPlacements();
+    expect(start).toEqual({ instagram: FEED_CHOICE, facebook: FEED_CHOICE });
+    expect(initialPlacements()).not.toBe(start);
+  });
+});
+
+describe("storyPlatformsOf (the job's stored publishMetadata)", () => {
+  it("lists the platforms that were sent as a Story", () => {
+    expect(
+      storyPlatformsOf({ instagram: { placement: "story" }, facebook: { placement: "story" }, targetPlatforms: ["x"] }),
+    ).toEqual(["instagram", "facebook_page"]);
+    expect(storyPlatformsOf({ facebook: { placement: "story" } })).toEqual(["facebook_page"]);
+  });
+
+  it("a job without the snapshot, or with feed or junk, has none", () => {
+    for (const value of [null, undefined, "x", [], {}, { instagram: { placement: "feed" } }, { instagram: "story" }]) {
+      expect(storyPlatformsOf(value)).toEqual([]);
+    }
+  });
+});
+
+describe("withStoryCaptions (the approval email)", () => {
+  it("shows a Story platform as having no caption, replacing any override", () => {
+    expect(STORY_NO_CAPTION).toBe("Story, no caption");
+    expect(withStoryCaptions({ instagram: "IG text", x: "X text" }, ["instagram", "facebook_page"])).toEqual({
+      instagram: "Story, no caption",
+      facebook_page: "Story, no caption",
+      x: "X text",
+    });
+  });
+
+  it("changes nothing without a Story", () => {
+    const captions = { x: "X text" };
+    expect(withStoryCaptions(captions, [])).toBe(captions);
+    expect(withStoryCaptions(null, [])).toBeNull();
+    expect(withStoryCaptions(null, ["instagram"])).toEqual({ instagram: "Story, no caption" });
+  });
+});
+
+describe("storyOnlyCaptionNote (the line under the caption box)", () => {
+  it("shows while every selected platform is a Story", () => {
+    expect(STORY_ONLY_CAPTION_NOTE).toBe("Stories show no caption. This text is kept with the post but not published.");
+    expect(storyOnlyCaptionNote(["instagram"], ["instagram"])).toBe(STORY_ONLY_CAPTION_NOTE);
+    expect(storyOnlyCaptionNote(["instagram", "facebook_page"], ["instagram", "facebook_page"])).toBe(
+      STORY_ONLY_CAPTION_NOTE,
+    );
+  });
+
+  it("does not show when a selected platform publishes the caption, or nothing is selected", () => {
+    expect(storyOnlyCaptionNote(["instagram", "x"], ["instagram"])).toBeNull();
+    expect(storyOnlyCaptionNote(["instagram", "facebook_page"], ["instagram"])).toBeNull();
+    expect(storyOnlyCaptionNote([], [])).toBeNull();
   });
 });

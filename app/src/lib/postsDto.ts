@@ -182,6 +182,12 @@ export interface PostJobDTO {
   clientApprovedAt?: string | null;
   clientChangeRequestedAt?: string | null;
   clientNote?: string | null;
+  /**
+   * 2026-11-10 — the platforms this job sent as a Story, from its stored
+   * `publishMetadata` (lib/storyPlacement.ts storyPlatformsOf); empty for a job
+   * without one. Optional so other builders of this DTO need not set it.
+   */
+  storyPlatforms?: Platform[];
 }
 
 /** Response body of `GET /api/posts`. */
