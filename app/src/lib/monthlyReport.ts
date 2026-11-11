@@ -90,6 +90,8 @@ export interface MonthlyReport {
   /** YYYY-MM, a UTC calendar month. */
   month: string;
   workspaceName: string;
+  /** The workspace's logo, a public PNG address; null when it has none. */
+  logoUrl: string | null;
   /** The month is not over yet. */
   inProgress: boolean;
   /** Posts with a result that succeeded in the month (all of them, not only those listed). */
@@ -122,6 +124,7 @@ export function publicMonthlyReport(report: MonthlyReport): MonthlyReport {
   return {
     month: report.month,
     workspaceName: report.workspaceName,
+    logoUrl: report.logoUrl,
     inProgress: report.inProgress,
     postCount: report.postCount,
     posts: report.posts.map((post) => ({

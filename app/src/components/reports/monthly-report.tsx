@@ -62,6 +62,7 @@ const PRINT_CSS = `
   [data-report-url] { display: inline !important; }
   [data-report] a { color: #000000 !important; }
   [data-report] img, [data-report] video { width: 2.5rem !important; height: 2.5rem !important; }
+  [data-report] img[data-report-logo] { width: auto !important; height: auto !important; max-height: 48px !important; }
 }
 `;
 
@@ -183,9 +184,15 @@ export function MonthlyReportView({
       <style dangerouslySetInnerHTML={{ __html: PRINT_CSS }} />
       {/* A div, not a header: the print sheet hides the app's header elements. */}
       <div data-report-block className="space-y-1">
-        <h1 className="break-words text-2xl font-bold tracking-tight">
-          {`${report.workspaceName}: ${monthLabel(report.month)}`}
-        </h1>
+        <div className="flex items-center gap-3">
+          {report.logoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element -- the logo's public storage address, as media-thumb.tsx; alt is empty because the name is beside it
+            <img data-report-logo src={report.logoUrl} alt="" className="max-h-12 w-auto max-w-[12rem] shrink-0 object-contain" />
+          ) : null}
+          <h1 className="min-w-0 break-words text-2xl font-bold tracking-tight">
+            {`${report.workspaceName}: ${monthLabel(report.month)}`}
+          </h1>
+        </div>
         <p className="text-sm text-muted-foreground">
           {REPORT_UTC_NOTE}
           {report.inProgress ? " This month is not over yet: the report shows it so far." : null}

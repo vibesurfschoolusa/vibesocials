@@ -27,6 +27,7 @@ function context(role: "owner" | "member" = "member") {
 const REPORT = {
   month: "2026-10",
   workspaceName: "Surf Co",
+  logoUrl: "https://abc.public.blob.vercel-storage.com/logos/ws-1/0123456789abcdef.png",
   inProgress: false,
   postCount: 0,
   posts: [],
@@ -68,6 +69,7 @@ describe("the Reports page", () => {
     const html = await render();
     expect(buildMonthlyReportMock).toHaveBeenCalledWith("ws-1", "2026-10", expect.any(Date));
     expect(html).toContain("Surf Co: October 2026");
+    expect(html).toContain('src="https://abc.public.blob.vercel-storage.com/logos/ws-1/0123456789abcdef.png"');
     expect(html).toContain("Print or save as PDF");
     expect(html).toContain('name="month"');
     // The workspace's own page links failures to Activity.

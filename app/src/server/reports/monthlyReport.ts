@@ -51,7 +51,7 @@ export async function buildMonthlyReport(
 
   const workspace = await prisma.workspace.findUnique({
     where: { id: workspaceId },
-    select: { name: true },
+    select: { name: true, logoUrl: true },
   });
 
   // Results per platform and failures per platform: one grouped count, served
@@ -199,6 +199,7 @@ export async function buildMonthlyReport(
   return {
     month,
     workspaceName: workspace?.name ?? "",
+    logoUrl: workspace?.logoUrl ?? null,
     inProgress: now.toISOString().slice(0, 7) === month,
     postCount,
     posts: posts.map((post) => ({

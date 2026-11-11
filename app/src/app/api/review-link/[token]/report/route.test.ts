@@ -22,6 +22,9 @@ function report() {
   return {
     month: "2026-10",
     workspaceName: "Surf Co",
+    // The logo's path names its workspace (logos/<workspaceId>/, brief 18b): a
+    // different id here, so the leak checks below still see the other fields.
+    logoUrl: "https://abc.public.blob.vercel-storage.com/logos/ws-9/0123456789abcdef.png",
     inProgress: false,
     postCount: 1,
     posts: [
@@ -109,6 +112,7 @@ describe("GET /api/review-link/[token]/report", () => {
       [
         ".month",
         ".workspaceName",
+        ".logoUrl",
         ".inProgress",
         ".postCount",
         ".posts",

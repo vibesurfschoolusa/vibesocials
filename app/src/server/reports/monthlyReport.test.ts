@@ -62,7 +62,7 @@ function job(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   for (const fn of Object.values(m)) fn.mockReset();
-  m.workspaceFindUnique.mockResolvedValue({ name: "Surf Co" });
+  m.workspaceFindUnique.mockResolvedValue({ name: "Surf Co", logoUrl: "https://abc.public.blob.vercel-storage.com/logos/ws-1/0123456789abcdef.png" });
   m.resultGroupBy.mockResolvedValue([{ platform: "instagram", status: "success", _count: { _all: 1 } }]);
   m.postCount.mockResolvedValue(1);
   m.resultFindMany.mockResolvedValue([{ postJobId: "post-1" }]);
@@ -74,12 +74,18 @@ beforeEach(() => {
 });
 
 describe("buildMonthlyReport", () => {
+  it("carries no logo when the workspace has none", async () => {
+    m.workspaceFindUnique.mockResolvedValue({ name: "Surf Co", logoUrl: null });
+    expect((await buildMonthlyReport(WS, "2026-10", NOW)).logoUrl).toBeNull();
+  });
+
   it("builds the month's report from this workspace's data only", async () => {
     const report = await buildMonthlyReport(WS, "2026-10", NOW);
 
     expect(report).toEqual({
       month: "2026-10",
       workspaceName: "Surf Co",
+      logoUrl: "https://abc.public.blob.vercel-storage.com/logos/ws-1/0123456789abcdef.png",
       inProgress: false,
       postCount: 1,
       posts: [

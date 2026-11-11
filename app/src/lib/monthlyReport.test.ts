@@ -232,6 +232,9 @@ describe("publicMonthlyReport", () => {
       ...extra,
       month: "2026-10",
       workspaceName: "Surf Co",
+      // The logo's path names its workspace (logos/<workspaceId>/, brief 18b): a
+      // different id here, so the leak check below still sees the other fields.
+      logoUrl: "https://abc.public.blob.vercel-storage.com/logos/ws-9/0123456789abcdef.png",
       inProgress: false,
       postCount: 1,
       posts: [
@@ -268,6 +271,7 @@ describe("publicMonthlyReport", () => {
     expect(copy).toEqual({
       month: "2026-10",
       workspaceName: "Surf Co",
+      logoUrl: "https://abc.public.blob.vercel-storage.com/logos/ws-9/0123456789abcdef.png",
       inProgress: false,
       postCount: 1,
       posts: [

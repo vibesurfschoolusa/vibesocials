@@ -13,6 +13,7 @@ function report(overrides: Partial<MonthlyReport> = {}): MonthlyReport {
   return {
     month: "2026-10",
     workspaceName: "Surf & Co",
+    logoUrl: null,
     inProgress: false,
     postCount: 2,
     posts: [
@@ -57,6 +58,23 @@ describe("MonthlyReportView", () => {
     expect(html).toContain("Surf &amp; Co");
     expect(html).toContain("October 2026");
     expect(html).toContain("Months are counted in UTC.");
+  });
+
+  it("shows the workspace's logo beside its name, at most 48 pixels high, and nothing without one", () => {
+    const logo = "https://abc.public.blob.vercel-storage.com/logos/ws-1/0123456789abcdef.png";
+    const html = render(report({ logoUrl: logo }));
+    const img = html.match(/<img[^>]*data-report-logo[^>]*>/)?.[0] ?? "";
+    expect(img).toContain(`src="${logo}"`);
+    expect(img).toContain("max-h-12");
+    // The logo sits in the same block as the heading, before it.
+    expect(html.indexOf(img)).toBeLessThan(html.indexOf("Surf &amp; Co: October 2026"));
+    expect(render(report())).not.toMatch(/<img[^>]*data-report-logo/);
+  });
+
+  it("keeps the logo's own shape in print, at most 48 pixels high", () => {
+    const block = printBlock();
+    expect(block).toMatch(/\[data-report\] img\[data-report-logo\][^{]*\{[^}]*height: auto !important[^}]*max-height: 48px !important/);
+    expect(block).toMatch(/\[data-report\] img\[data-report-logo\][^{]*\{[^}]*width: auto !important/);
   });
 
   it("shows each post with its platforms, Stories, links and numbers", () => {

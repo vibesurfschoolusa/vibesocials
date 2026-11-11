@@ -122,6 +122,9 @@ model User {
   // 2026-11-10: the email to owners when their Google listing gets a new review
   // (server/jobs/reviewAlerts.ts). Defaults to true, like the fields above.
   notifyNewReviews     Boolean   @default(true)
+  // 2026-11-10: the monthly report email to owners (server/jobs/monthlyReportEmail.ts).
+  // Defaults to true, like the fields above.
+  notifyMonthlyReport  Boolean   @default(true)
   // Bumped on password reset so outstanding next-auth JWTs (which embed the
   // prior version) fail getCurrentUser until the user signs in again.
   sessionVersion       Int       @default(0)
@@ -196,6 +199,13 @@ model Workspace {
   // Sunday, wall-clock times in the viewer's own time zone
   // (src/lib/postingSlots.ts). Null = none saved. Owner-only.
   postingSlots       Json?
+  // Report logo (2026-11-10): the public address of the PNG the server made from
+  // the owner's upload (logos/<workspaceId>/<random>.png). Not a MediaItem, so
+  // it never counts toward storage or meets the retention sweep. Null = none.
+  logoUrl            String?
+  // Monthly report email (2026-11-10): the month (YYYY-MM) this workspace was
+  // last handled for, whether an email went out or there was nothing to report.
+  monthlyReportSentFor String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
