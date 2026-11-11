@@ -1,4 +1,4 @@
-import type { PlatformClient, PublishContext, PublishResult } from "./types";
+import type { PlatformClient, PublishContext, PublishResult, TextPublishContext } from "./types";
 import type { MediaItem, SocialConnection } from "@prisma/client";
 
 import { altTextOf } from "@/lib/altText";
@@ -1793,7 +1793,51 @@ async function publishMultiImage(args: {
   return { externalPostId: postId };
 }
 
+/** The connection has no company page to post as; this app never posts to a personal profile. */
+function linkedinNoOrganizationError(): Error & { code: string } {
+  const error = new Error(
+    "No LinkedIn company pages configured. This app only posts to company pages, not personal profiles.\n\n" +
+    "To fix this:\n" +
+    "1. Ensure you are an ADMINISTRATOR of a LinkedIn Company Page\n" +
+    "2. Go to Settings → Connections\n" +
+    "3. Disconnect and reconnect your LinkedIn account\n" +
+    "4. The app will automatically detect your company pages\n\n" +
+    "If this still fails, contact support with error code: LINKEDIN_NO_ORGANIZATION"
+  ) as Error & { code: string };
+  error.code = "LINKEDIN_NO_ORGANIZATION";
+  return error;
+}
+
 export const linkedinClient: PlatformClient = {
+  /**
+   * A post without a photo (2026-11-10): the same POST /rest/posts as any post
+   * (createPost) with the commentary and no `content` block, as the Posts API's
+   * "Text-Only Post Creation Sample Request" builds it
+   * (https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api,
+   * read 2026-11-10). It answers 201 with the post URN in `x-restli-id`. A lost
+   * answer is PUBLISH_UNCONFIRMED (createPost's commit-call guard).
+   */
+  async publishText(ctx: TextPublishContext): Promise<PublishResult> {
+    const { caption, deadline } = ctx;
+    const socialConnection = await ensureFreshLinkedInToken(ctx.socialConnection, deadline);
+
+    const accessToken = socialConnection.accessToken;
+    if (!accessToken) {
+      const error = new Error("Missing access token for LinkedIn") as Error & { code: string };
+      error.code = "LINKEDIN_NO_ACCESS_TOKEN";
+      throw error;
+    }
+
+    const metadata = (socialConnection.metadata as { organizations?: Array<{ id: string; name?: string }> } | null) || {};
+    const organizations = metadata.organizations || [];
+    if (organizations.length === 0) throw linkedinNoOrganizationError();
+    const authorUrn = `urn:li:organization:${organizations[0].id}`;
+
+    const postId = await createPost(accessToken, authorUrn, caption, socialConnection, undefined, false, deadline);
+    console.log("[LinkedIn] Text post published", { postId });
+    return { externalPostId: postId };
+  },
+
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
     let { socialConnection } = ctx;
     const { mediaItem, caption, deadline } = ctx;
@@ -1820,17 +1864,7 @@ export const linkedinClient: PlatformClient = {
     
     // REQUIRE organization - never post to personal profile
     if (organizations.length === 0) {
-      const error = new Error(
-        "No LinkedIn company pages configured. This app only posts to company pages, not personal profiles.\n\n" +
-        "To fix this:\n" +
-        "1. Ensure you are an ADMINISTRATOR of a LinkedIn Company Page\n" +
-        "2. Go to Settings → Connections\n" +
-        "3. Disconnect and reconnect your LinkedIn account\n" +
-        "4. The app will automatically detect your company pages\n\n" +
-        "If this still fails, contact support with error code: LINKEDIN_NO_ORGANIZATION"
-      ) as Error & { code: string };
-      error.code = "LINKEDIN_NO_ORGANIZATION";
-      throw error;
+      throw linkedinNoOrganizationError();
     }
     
     // Use first organization

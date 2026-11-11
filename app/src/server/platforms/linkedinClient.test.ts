@@ -4351,3 +4351,83 @@ describe("linkedinClient — the post body log carries no description (07d)", ()
     expect(JSON.stringify(vi.mocked(console.log).mock.calls)).not.toContain("Secret one.");
   });
 });
+
+describe("linkedinClient.publishText - a post without a photo", () => {
+  const POSTS_URL = "https://api.linkedin.com/rest/posts";
+  type Reply = () => Response | Promise<Response>;
+
+  function stubPosts(post?: Reply) {
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url === POSTS_URL) {
+        return (post ?? (() => new Response(null, { status: 201, headers: { "x-restli-id": "urn:li:share:1" } })))();
+      }
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  function textCtx(overrides: Partial<SocialConnection> = {}) {
+    return {
+      user: { id: "user-1" } as User,
+      socialConnection: makeConnection({ expiresAt: new Date(Date.now() + 3_600_000), ...overrides }),
+      caption: "Lessons cancelled (wind)",
+      baseCaption: "Lessons cancelled (wind)",
+    };
+  }
+
+  const failure = (promise: Promise<unknown>) =>
+    promise.then(
+      () => null,
+      (e: unknown) => e as Error & { code?: string },
+    );
+
+  beforeEach(() => {
+    for (const level of ["log", "warn", "error"] as const) vi.spyOn(console, level).mockImplementation(() => {});
+  });
+
+  it("sends the Posts API call with the commentary and no content block, and no upload", async () => {
+    const fetchMock = stubPosts();
+
+    await expect(linkedinClient.publishText!(textCtx())).resolves.toEqual({ externalPostId: "urn:li:share:1" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const init = fetchMock.mock.calls[0][1] as unknown as RequestInit;
+    expect(JSON.parse(String(init.body))).toEqual({
+      author: "urn:li:organization:123",
+      commentary: "Lessons cancelled \\(wind\\)",
+      visibility: "PUBLIC",
+      distribution: { feedDistribution: "MAIN_FEED", targetEntities: [], thirdPartyDistributionChannels: [] },
+      lifecycleState: "PUBLISHED",
+      isReshareDisabledByAuthor: false,
+    });
+    expect((init.headers as Record<string, string>)["Linkedin-Version"]).toBe(LINKEDIN_API_VERSION);
+  });
+
+  it.each([
+    ["a 503", () => new Response("down", { status: 503 })],
+    ["a 201 without an id", () => new Response("not json", { status: 201 })],
+  ] as const)("a lost answer (%s) is PUBLISH_UNCONFIRMED, requested once", async (_name, answer) => {
+    const fetchMock = stubPosts(answer);
+
+    const error = await failure(linkedinClient.publishText!(textCtx()));
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses without a company page, sending nothing", async () => {
+    const fetchMock = stubPosts();
+    const error = await failure(linkedinClient.publishText!(textCtx({ metadata: { organizations: [] } })));
+    expect(error?.code).toBe("LINKEDIN_NO_ORGANIZATION");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("a 401 is the reconnect error", async () => {
+    stubPosts(() => new Response("{}", { status: 401 }));
+    const error = await failure(linkedinClient.publishText!(textCtx()));
+    expect(error?.code).toBe("LINKEDIN_RECONNECT_REQUIRED");
+  });
+});
