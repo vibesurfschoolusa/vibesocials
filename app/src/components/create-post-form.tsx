@@ -36,6 +36,7 @@ import { ConfirmDialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { fieldBaseClasses, Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
@@ -104,6 +105,16 @@ import type {
   YouTubePostMetadata,
 } from "@/server/platforms/types";
 import type { GoogleButton } from "@/lib/googlePostOptions";
+import {
+  REPEAT_DEFAULT_COUNT,
+  REPEAT_MAX_COUNT,
+  REPEAT_MIN_COUNT,
+  REPEAT_STORY_MESSAGE,
+  REPEAT_X_NOTE,
+  repeatSchedule,
+  type RepeatInterval,
+} from "@/lib/repeatSchedule";
+import { nextFreeSlots, type PostingSlot } from "@/lib/postingSlots";
 
 interface UploadedBlobInfo {
   url: string;
@@ -215,6 +226,16 @@ function CreatePostFormInner({
   const [minScheduleLocal] = useState(() =>
     toDateTimeLocalValue(new Date(Date.now() + SCHEDULE_BUFFER_MS)),
   );
+  // Repeat (brief 11): Schedule mode only. Sent as `repeatAt`, the dates after
+  // the first, worked out here in the viewer's zone (lib/repeatSchedule.ts).
+  const [repeat, setRepeat] = useState<RepeatInterval | "none">("none");
+  const [repeatCount, setRepeatCount] = useState(REPEAT_DEFAULT_COUNT);
+  // Posting times and the times posts already hold, read once Schedule is
+  // chosen (GET /api/posts/scheduled-times); "Next free slot" works from them.
+  const [slotData, setSlotData] = useState<{ slots: PostingSlot[]; taken: Date[] } | "error" | null>(null);
+  // How many times "Next free slot" was pressed since the time was last typed:
+  // each press moves to the free slot after the one before.
+  const [slotPresses, setSlotPresses] = useState(0);
   // The mode that produced the current success banner (so it reads correctly
   // for now / schedule / draft).
   const [submittedMode, setSubmittedMode] = useState<PublishMode>("now");
@@ -386,6 +407,12 @@ function CreatePostFormInner({
     ...(instagramStory ? (["instagram"] as const) : []),
     ...(facebookStory ? (["facebook_page"] as const) : []),
   ]);
+  // A Story repeated for weeks is rarely meant, so Repeat is off for one.
+  const storyChosen = instagramStory || facebookStory;
+  const repeatOn = publishMode === "schedule" && repeat !== "none" && !storyChosen;
+  const repeatDates = repeatOn
+    ? repeatSchedule(new Date(scheduledForLocal), repeat as RepeatInterval, repeatCount)
+    : [];
   // Sent only for a selected platform with Story chosen: a feed post's request stays as it was.
   const storyRequestFields = {
     ...(instagramStory ? { instagramMetadata: { placement: "story" as const } } : {}),
@@ -964,6 +991,35 @@ function CreatePostFormInner({
     })();
   }, [sharedParam, composerGate]);
 
+  useEffect(() => {
+    if (publishMode !== "schedule" || slotData !== null) return;
+    let cancelled = false;
+    fetch("/api/posts/scheduled-times")
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error("not ok"))))
+      .then((body: { times?: string[]; slots?: PostingSlot[] }) => {
+        if (cancelled) return;
+        setSlotData({ slots: body.slots ?? [], taken: (body.times ?? []).map((time) => new Date(time)) });
+      })
+      .catch(() => {
+        if (!cancelled) setSlotData("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [publishMode, slotData]);
+
+  function fillNextFreeSlot() {
+    if (!slotData || slotData === "error") return;
+    const presses = slotPresses + 1;
+    const next = nextFreeSlots(slotData.slots, slotData.taken, new Date(), presses)[presses - 1];
+    if (!next) {
+      toast.error("No free posting time was found. Pick a date and time by hand.");
+      return;
+    }
+    setScheduledForLocal(toDateTimeLocalValue(next));
+    setSlotPresses(presses);
+  }
+
   // Extracted from handleUploadSubmit below (Task 7 / Step 5) so it can run
   // either directly (schedule/draft — no confirmation needed) or via the
   // publish-now confirmation dialog's onConfirm (immediate publish). Every
@@ -1073,18 +1129,29 @@ function CreatePostFormInner({
       // a reused photo an empty field sends none, so it keeps the one it has.
       postData = withPhotoDescriptions(postData, photoDescriptions);
 
+      // Repeat: the dates after the first; the first is `scheduledFor`.
+      const repeatFields =
+        repeatOn && repeatDates.length >= REPEAT_MIN_COUNT
+          ? { repeatAt: repeatDates.slice(1).map((date) => date.toISOString()) }
+          : {};
+
       const response = await fetch("/api/posts", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ ...postData, ...storyRequestFields }),
+        body: JSON.stringify({ ...postData, ...storyRequestFields, ...repeatFields }),
       });
 
       const data: unknown = await response.json().catch(() => null);
 
       // Response → what the composer does (lib/composerSubmitOutcome.ts).
       const outcome = composerSubmitOutcome({ ok: response.ok, body: data, mode: publishMode });
+      // A series says how many posts it made ("4 posts scheduled.").
+      const seriesMessage =
+        "repeatAt" in repeatFields && outcome.kind === "success"
+          ? (data as { message?: unknown } | null)?.message
+          : null;
 
       // Nothing was created: keep the form so the user can fix and resend.
       if (!outcome.resetForm) {
@@ -1107,7 +1174,7 @@ function CreatePostFormInner({
       if (outcome.kind === "dispatch_failed") {
         toast.error(outcome.toast);
       } else {
-        toast.success(outcome.toast);
+        toast.success(typeof seriesMessage === "string" && seriesMessage ? seriesMessage : outcome.toast);
       }
       setDispatchFailed(outcome.kind === "dispatch_failed");
       setAwaitingApproval(outcome.kind === "success" && outcome.heldForApproval);
@@ -1134,6 +1201,11 @@ function CreatePostFormInner({
       setPlatformOverrides(null);
       setPublishMode("now");
       setScheduledForLocal("");
+      setRepeat("none");
+      setRepeatCount(REPEAT_DEFAULT_COUNT);
+      setSlotPresses(0);
+      // Read the taken times again next time: this post holds one now.
+      setSlotData(null);
       // Task 7 — every connected platform defaults back to selected for the
       // next post.
       setDeselected(new Set());
@@ -1220,6 +1292,10 @@ function CreatePostFormInner({
       }
       if (new Date(iso).getTime() < Date.now() + SCHEDULE_BUFFER_MS) {
         setUploadError("Scheduled time must be at least a minute in the future.");
+        return;
+      }
+      if (repeatOn && repeatDates.length < REPEAT_MIN_COUNT) {
+        setUploadError("Choose how many times the post repeats, then press the button again.");
         return;
       }
     }
@@ -1833,17 +1909,45 @@ function CreatePostFormInner({
           {publishMode === "schedule" && (
             <div className="space-y-1.5">
               <Label htmlFor="post-schedule">Publish at</Label>
-              <input
-                id="post-schedule"
-                type="datetime-local"
-                value={scheduledForLocal}
-                min={minScheduleLocal || undefined}
-                onChange={(event) => setScheduledForLocal(event.target.value)}
-                className={cn(fieldBaseClasses, "h-10 px-3 py-2")}
-              />
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  id="post-schedule"
+                  type="datetime-local"
+                  value={scheduledForLocal}
+                  min={minScheduleLocal || undefined}
+                  onChange={(event) => {
+                    setScheduledForLocal(event.target.value);
+                    setSlotPresses(0);
+                  }}
+                  className={cn(fieldBaseClasses, "h-10 w-auto px-3 py-2")}
+                />
+                {slotData && slotData !== "error" ? (
+                  slotData.slots.length > 0 ? (
+                    <Button type="button" variant="outline" size="sm" onClick={fillNextFreeSlot}>
+                      Next free slot
+                    </Button>
+                  ) : (
+                    <Link
+                      href="/settings#posting-times"
+                      className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+                    >
+                      Set your posting times
+                    </Link>
+                  )
+                ) : null}
+              </div>
               <p className="text-xs text-muted-foreground">
                 Times are in {localTimeZoneLabel()} (your browser&apos;s timezone).
               </p>
+              <RepeatControls
+                repeat={repeat}
+                onRepeatChange={setRepeat}
+                count={repeatCount}
+                onCountChange={setRepeatCount}
+                storyChosen={storyChosen}
+                dates={repeatDates}
+                xSelected={selectedPlatforms.includes("x")}
+              />
             </div>
           )}
 
@@ -1919,6 +2023,88 @@ function CreatePostFormInner({
         onConfirm={performSubmit}
       />
     </Card>
+  );
+}
+
+const REPEAT_CHOICES: [RepeatInterval | "none", string][] = [
+  ["none", "Does not repeat"],
+  ["weekly", "Every week"],
+  ["biweekly", "Every 2 weeks"],
+  ["monthly", "Every month"],
+];
+
+/**
+ * Repeat (brief 11), under the schedule time: how often and how many posts in
+ * total, then the dates that will be created, in the viewer's zone.
+ */
+function RepeatControls(props: {
+  repeat: RepeatInterval | "none";
+  onRepeatChange: (repeat: RepeatInterval | "none") => void;
+  count: number;
+  onCountChange: (count: number) => void;
+  storyChosen: boolean;
+  dates: Date[];
+  xSelected: boolean;
+}) {
+  const { repeat, count, storyChosen, dates } = props;
+  const on = repeat !== "none" && !storyChosen;
+  return (
+    <div className="space-y-1.5 pt-2">
+      <Label htmlFor="post-repeat">Repeat</Label>
+      <Select
+        id="post-repeat"
+        value={storyChosen ? "none" : repeat}
+        disabled={storyChosen}
+        onChange={(event) => props.onRepeatChange(event.target.value as RepeatInterval | "none")}
+      >
+        {REPEAT_CHOICES.map(([value, label]) => (
+          <option key={value} value={value}>
+            {label}
+          </option>
+        ))}
+      </Select>
+      {storyChosen ? <p className="text-xs text-muted-foreground">{REPEAT_STORY_MESSAGE}</p> : null}
+      {on ? (
+        <div className="space-y-1.5">
+          <Label htmlFor="post-repeat-count">How many times in total</Label>
+          <Select
+            id="post-repeat-count"
+            value={String(count)}
+            onChange={(event) => props.onCountChange(Number(event.target.value))}
+          >
+            {Array.from({ length: REPEAT_MAX_COUNT - REPEAT_MIN_COUNT + 1 }, (_, i) => i + REPEAT_MIN_COUNT).map(
+              (n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ),
+            )}
+          </Select>
+          {dates.length > 0 ? (
+            <div className="text-sm text-foreground">
+              <p className="text-xs text-muted-foreground">This creates {dates.length} posts:</p>
+              <ul className="mt-1 list-disc pl-5">
+                {dates.map((date) => (
+                  <li key={date.getTime()}>
+                    {date.toLocaleString(undefined, {
+                      weekday: "short",
+                      day: "numeric",
+                      month: "short",
+                      year: "numeric",
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">Pick a date and time to see the dates.</p>
+          )}
+          {props.xSelected ? <p className="text-xs text-muted-foreground">{REPEAT_X_NOTE}</p> : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

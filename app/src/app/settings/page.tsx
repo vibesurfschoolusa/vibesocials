@@ -4,6 +4,8 @@ import Link from "next/link";
 import { getWorkspaceContext, getWorkspaceMemberCount } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { SettingsForm } from "@/components/settings-form";
+import { PostingSlotsForm } from "@/components/posting-slots-form";
+import { readPostingSlots } from "@/lib/postingSlots";
 import { ConnectionsSection } from "@/components/connections-section";
 import { TeamSection, type WorkspaceDeletionInfo } from "@/components/team-section";
 import { AccountSection } from "@/components/account-section";
@@ -78,6 +80,13 @@ export default async function SettingsPage({
 
   const connections: ConnectionSummary[] = rows.map(toConnectionSummary);
 
+  // Posting times (brief 11): read here, not carried in every route's context.
+  const slotRow = await prisma.workspace.findUnique({
+    where: { id: context.workspace.id },
+    select: { postingSlots: true },
+  });
+  const postingSlots = readPostingSlots(slotRow?.postingSlots);
+
   // Usage limits (2026-11-10): the same counts the limits are enforced with.
   // Null when they cannot be read: the section says so and the page still renders.
   const usage = await getWorkspaceUsageOrNull(context.workspace.id, new Date());
@@ -139,6 +148,17 @@ export default async function SettingsPage({
               client state — without the key, workspace A's values would stay
               on screen under workspace B after an in-page switch. */}
           <SettingsForm key={context.workspace.id} settings={settings} role={context.role} />
+        </section>
+
+        <section id="posting-times" className="scroll-mt-20">
+          <div className="mb-4">
+            <h2 className="text-lg font-semibold tracking-tight text-foreground">Posting times</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              The times you usually post each week. Create and Add many can fill in the next free one.
+            </p>
+          </div>
+          {/* key: remount on a workspace switch, like SettingsForm. */}
+          <PostingSlotsForm key={context.workspace.id} slots={postingSlots} role={context.role} />
         </section>
 
         <section id="connections" className="scroll-mt-20">

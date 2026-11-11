@@ -2,13 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeWorkspaceContext } from "../../__test-helpers__/workspaceContextMock";
 
-const { getWorkspaceContextMock, findManyMock } = vi.hoisted(() => ({
+const { getWorkspaceContextMock, findManyMock, workspaceFindUniqueMock } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
   findManyMock: vi.fn(),
+  workspaceFindUniqueMock: vi.fn(),
 }));
 
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
-vi.mock("@/lib/db", () => ({ prisma: { postJob: { findMany: findManyMock } } }));
+vi.mock("@/lib/db", () => ({
+  prisma: { postJob: { findMany: findManyMock }, workspace: { findUnique: workspaceFindUniqueMock } },
+}));
 
 import { GET } from "./route";
 
@@ -21,6 +24,8 @@ beforeEach(() => {
   findManyMock.mockReset();
   getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ workspaceId: "ws-7" }));
   findManyMock.mockResolvedValue([]);
+  workspaceFindUniqueMock.mockReset();
+  workspaceFindUniqueMock.mockResolvedValue({ postingSlots: null });
 });
 
 afterEach(() => {
@@ -52,17 +57,28 @@ describe("GET /api/posts/scheduled-times", () => {
     });
   });
 
-  it("answers with the times and nothing else", async () => {
+  it("answers with the times and nothing else about the posts, beside this workspace's posting times", async () => {
     findManyMock.mockResolvedValue([
       { scheduledFor: new Date("2026-11-12T09:00:00.000Z") },
       { scheduledFor: new Date("2026-11-19T09:00:00.000Z") },
     ]);
+    workspaceFindUniqueMock.mockResolvedValue({ postingSlots: [{ day: 4, time: "09:00" }] });
 
     const res = await GET();
 
     expect(res.status).toBe(200);
+    expect(workspaceFindUniqueMock).toHaveBeenCalledWith({
+      where: { id: "ws-7" },
+      select: { postingSlots: true },
+    });
     await expect(res.json()).resolves.toEqual({
       times: ["2026-11-12T09:00:00.000Z", "2026-11-19T09:00:00.000Z"],
+      slots: [{ day: 4, time: "09:00" }],
     });
+  });
+
+  it("gives no posting times when none are saved", async () => {
+    const res = await GET();
+    await expect(res.json()).resolves.toEqual({ times: [], slots: [] });
   });
 });
