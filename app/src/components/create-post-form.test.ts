@@ -549,3 +549,68 @@ describe("the untouched Create page", () => {
     expect(fileLostBlocksSubmit(fresh)).toBe(true);
   });
 });
+
+// F2 fix round 1, item 1: a platform's own caption counts as text only when that
+// platform takes a post without a photo. Otherwise typing into Instagram's box
+// turned the page into a text post, greyed Instagram out and hid its own box.
+describe("composerPageState: own captions for platforms that need a file", () => {
+  type Platform = Parameters<typeof textOnlyNotice>[0]["connected"][number];
+  const nothing = { reuseLoading: false, hasReuseItem: false, hasUploadFile: false, photoCount: 0, caption: "" };
+  const connected: Platform[] = ["instagram", "tiktok", "youtube", "x", "linkedin"];
+  afterEach(() => {
+    textPosts.enabled = true;
+  });
+
+  function selectedFor(overrides: Partial<Record<Platform, string>>) {
+    const state = composerPageState({ ...nothing, overrides }, true);
+    return deriveComposerPlatforms(connected, new Set(), null, { noFile: state === "text" }).selected;
+  }
+
+  it("own caption for Instagram only: stays untouched, Instagram stays ticked", () => {
+    expect(composerPageState({ ...nothing, overrides: { instagram: "a" } }, true)).toBe("untouched");
+    expect(selectedFor({ instagram: "a" })).toContain("instagram");
+  });
+
+  it("own caption for TikTok only: stays untouched, TikTok stays ticked", () => {
+    expect(composerPageState({ ...nothing, overrides: { tiktok: "a" } }, true)).toBe("untouched");
+    expect(selectedFor({ tiktok: "a" })).toContain("tiktok");
+  });
+
+  it("own caption for YouTube only: stays untouched, YouTube stays ticked", () => {
+    expect(composerPageState({ ...nothing, overrides: { youtube: "a" } }, true)).toBe("untouched");
+    expect(selectedFor({ youtube: "a" })).toContain("youtube");
+  });
+
+  it("own caption for X or LinkedIn only: a text post, as before", () => {
+    expect(composerPageState({ ...nothing, overrides: { x: "a" } }, true)).toBe("text");
+    expect(composerPageState({ ...nothing, overrides: { linkedin: "a" } }, true)).toBe("text");
+  });
+
+  it("both kinds typed: a text post", () => {
+    expect(composerPageState({ ...nothing, overrides: { instagram: "a", x: "b" } }, true)).toBe("text");
+  });
+
+  it("main caption typed: a text post, as before", () => {
+    expect(composerPageState({ ...nothing, caption: "Hi", overrides: null }, true)).toBe("text");
+  });
+
+  it("a file attached with any captions: the file page, as before", () => {
+    for (const overrides of [{ instagram: "a" }, { x: "b" }, { instagram: "a", x: "b" }]) {
+      expect(composerPageState({ ...nothing, hasUploadFile: true, caption: "Hi", overrides }, true)).toBe("file");
+    }
+  });
+
+  it("Instagram's caption, then the main one: a text post, Instagram's caption kept for a file later", () => {
+    const overrides = { instagram: "For the photo" };
+    expect(composerPageState({ ...nothing, overrides }, true)).toBe("untouched");
+    expect(composerPageState({ ...nothing, caption: "Open today", overrides }, true)).toBe("text");
+    expect(overrides).toEqual({ instagram: "For the photo" });
+    expect(composerPageState({ ...nothing, caption: "Open today", overrides, hasUploadFile: true }, true)).toBe("file");
+  });
+
+  it("text posts switched off: the old page", () => {
+    textPosts.enabled = false;
+    expect(composerPageState({ ...nothing, overrides: { instagram: "a" } })).toBe("file");
+    expect(composerPageState({ ...nothing, overrides: { x: "a" } })).toBe("file");
+  });
+});

@@ -180,8 +180,13 @@ export function composerPageState(
   enabled?: boolean,
 ): ComposerPageState {
   if (!isTextPostMode(state, enabled)) return "file";
+  // A platform's own caption is text only where that platform takes text alone:
+  // Instagram's would make a text post that greys Instagram out and hides its box.
   const hasText =
-    state.caption.trim() !== "" || Object.values(state.overrides ?? {}).some((text) => (text ?? "").trim() !== "");
+    state.caption.trim() !== "" ||
+    (Object.entries(state.overrides ?? {}) as [Platform, string | undefined][]).some(
+      ([platform, text]) => platformAcceptsTextOnly(platform) && (text ?? "").trim() !== "",
+    );
   return hasText ? "text" : "untouched";
 }
 
