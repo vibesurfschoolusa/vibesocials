@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { LegalPage, LegalSection } from "@/components/legal-page";
 import { billingEnabled } from "@/lib/billing";
-import { PRIVACY_PAYMENTS } from "@/lib/billingTerms";
+import { BILLING_TERMS_LAST_UPDATED, PRIVACY_PAYMENTS } from "@/lib/billingTerms";
 import { OPERATOR_LOCATION, OPERATOR_NAME, PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/siteInfo";
 
 export const metadata = {
@@ -13,17 +13,32 @@ export const metadata = {
 
 const mail = <a href={`mailto:${SUPPORT_EMAIL}`} className="underline underline-offset-2">{SUPPORT_EMAIL}</a>;
 
+// Billing on adds a paragraph and, as section 10 promises for any change, a new
+// date (src/lib/billingTerms.ts). The billing-off markup is today's, whole.
 export default function PrivacyPage() {
+  const billing = billingEnabled();
+  const intro = (
+    <p>
+      {PRODUCT_NAME} (&quot;we&quot;, &quot;the Service&quot;) is a web app that lets businesses and
+      creators upload a photo or video once and publish it to the social media accounts they
+      connect. {PRODUCT_NAME} is operated by {OPERATOR_NAME}, {OPERATOR_LOCATION}. This policy
+      explains what we collect, why, who processes it, and how you can delete it.
+    </p>
+  );
   return (
     <LegalPage
       title="Privacy Policy"
+      // LegalPage prints siteInfo's date; with billing on, the billing text's own, as on the Terms.
+      showUpdated={!billing}
       intro={
-        <p>
-          {PRODUCT_NAME} (&quot;we&quot;, &quot;the Service&quot;) is a web app that lets businesses and
-          creators upload a photo or video once and publish it to the social media accounts they
-          connect. {PRODUCT_NAME} is operated by {OPERATOR_NAME}, {OPERATOR_LOCATION}. This policy
-          explains what we collect, why, who processes it, and how you can delete it.
-        </p>
+        billing ? (
+          <>
+            <p className="mb-4 text-xs text-muted-foreground">Last updated: {BILLING_TERMS_LAST_UPDATED}</p>
+            {intro}
+          </>
+        ) : (
+          intro
+        )
       }
     >
       <LegalSection title="1. Information we collect">
@@ -170,7 +185,7 @@ export default function PrivacyPage() {
           <li>Google Maps Platform (place search, when you add a location to a post).</li>
         </ul>
         {/* Billing on only (src/lib/billingTerms.ts); with it off nothing renders here. */}
-        {billingEnabled() ? <p className="mt-2">{PRIVACY_PAYMENTS}</p> : null}
+        {billing ? <p className="mt-2">{PRIVACY_PAYMENTS}</p> : null}
         <p className="mt-2">
           Your content is also sent to each social platform you choose to post to. We share
           information with authorities only where the law requires it.

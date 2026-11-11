@@ -8,7 +8,7 @@
 
 import { PAST_DUE_GRACE_DAYS } from "./billing";
 
-/** The Terms' "Last updated" date with billing on. The operator sets it when approving this text. */
+/** The Terms' and Privacy's "Last updated" date with billing on. The operator sets it when approving this text. */
 export const BILLING_TERMS_LAST_UPDATED = "November 10, 2026";
 
 /** Terms, section 7, with billing on. The first sentence is split around its link to the pricing page. */
@@ -38,7 +38,7 @@ export const TERMS_LIABILITY =
 
 /** Privacy, section 5 (who processes your information), with billing on. */
 export const PRIVACY_PAYMENTS =
-  "Card payments are handled by Stripe. We never see or store your card number. We store your plan, its status and its dates, and the customer and subscription identifiers Stripe gives us.";
+  "Card payments are handled by Stripe. To set up a workspace as a Stripe customer, we give Stripe the workspace owner's email address and the workspace's identifier. We never see or store your card number. We store your plan, its status and its dates, and the customer and subscription identifiers Stripe gives us.";
 
 /** Register, under the button, with billing on. Split around its two links. */
 export const REGISTER_AGREEMENT = {

@@ -70,8 +70,15 @@ describe("Privacy with billing on", () => {
   it("says Stripe handles card payments and what the app keeps", () => {
     const page = text(PrivacyPage());
     expect(page).toContain(
-      "Card payments are handled by Stripe. We never see or store your card number. We store your plan, its status and its dates, and the customer and subscription identifiers Stripe gives us.",
+      "Card payments are handled by Stripe. To set up a workspace as a Stripe customer, we give Stripe the workspace owner's email address and the workspace's identifier. We never see or store your card number. We store your plan, its status and its dates, and the customer and subscription identifiers Stripe gives us.",
     );
+  });
+
+  it("shows the billing terms' date, the same as the Terms, once", () => {
+    const page = text(PrivacyPage());
+    expect(page).toContain(`Last updated: ${BILLING_TERMS_LAST_UPDATED}`);
+    expect(page).not.toContain(LEGAL_LAST_UPDATED);
+    expect(page.match(/Last updated:/g)).toHaveLength(1);
   });
 });
 
