@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { planState } from "@/lib/billing";
+import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { workspaceBlock } from "@/lib/workspaceStatus";
 
 import { newWorkspaceBillingData, type TrialClient } from "./newWorkspaceTrial";
@@ -74,7 +75,7 @@ describe("newWorkspaceBillingData", () => {
     expect(data).toEqual({ billingExempt: false, trialEndsAt: new Date(NOW.getTime() - 6 * DAY) });
     expect(planState(data, NOW)).toBe("ended");
     expect(workspaceBlock(data, NOW)?.message).toBe(
-      "Your free trial has ended. Choose a plan in Settings to keep posting.",
+      `Your free trial has ended. Choose a plan in Settings to keep posting, or contact ${SUPPORT_EMAIL}.`,
     );
   });
 

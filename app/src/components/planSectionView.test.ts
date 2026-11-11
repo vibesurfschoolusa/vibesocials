@@ -49,8 +49,8 @@ describe("planSectionLabel", () => {
   });
 
   it("exempt, by its flag or by never having had a trial or a plan", () => {
-    expect(planSectionLabel("owner", { ...NEW, billingExempt: true }, NOW, ON)).toBe("Exempt: billed by invoice");
-    expect(planSectionLabel("owner", NEW, NOW, ON)).toBe("Exempt: billed by invoice");
+    expect(planSectionLabel("owner", { ...NEW, billingExempt: true }, NOW, ON)).toBe("No plan is needed for this workspace.");
+    expect(planSectionLabel("owner", NEW, NOW, ON)).toBe("No plan is needed for this workspace.");
   });
 
   it("ended: a plan, or a trial", () => {

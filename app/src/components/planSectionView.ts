@@ -25,7 +25,8 @@ export function planSectionLabel(
   if (role !== "owner" || !billingEnabled(env)) return null;
 
   const state = planState(workspace, now);
-  if (state === "exempt") return "Exempt: billed by invoice";
+  // Not "billed by invoice": a customer's own workspace can be exempt only because it predates billing.
+  if (state === "exempt") return "No plan is needed for this workspace.";
   if (state === "ended") return workspace.plan ? "Your plan has ended" : "Your free trial has ended";
 
   if (state === "trial") {

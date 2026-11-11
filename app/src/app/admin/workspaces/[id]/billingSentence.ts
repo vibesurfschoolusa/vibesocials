@@ -20,12 +20,12 @@ function stateSentence(billing: BillingFields, now: Date): string {
   const state = planState(billing, now);
   if (state === "exempt") {
     return billing.billingExempt
-      ? "Exempt: never blocked for its plan, and on the default limits."
+      ? "Exempt: never blocked for its plan, and on the default limits unless overridden below."
       : "Exempt: it was never offered a trial and has no plan (it was created while billing was off), so it is never blocked for its plan.";
   }
   if (state === "trial") {
     const endsAt = toBillingDate(billing.trialEndsAt) as Date;
-    return `In a free trial until ${utcDateLabel(endsAt)}, on the Starter limits. Posting stops then unless a plan is chosen.`;
+    return `In a free trial until ${utcDateLabel(endsAt)}, on the Starter limits unless overridden below. Posting stops then unless a plan is chosen.`;
   }
   if (state === "active") {
     const periodEnd = toBillingDate(billing.currentPeriodEnd);

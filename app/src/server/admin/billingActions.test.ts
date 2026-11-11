@@ -32,7 +32,7 @@ vi.mock("@/lib/db", () => {
 
 import { planState } from "@/lib/billing";
 
-import { exemptWorkspace, startTrial, validateTrialBody } from "./actions";
+import { endTrialNow, exemptWorkspace, startTrial, validateTrialBody } from "./actions";
 
 const OPS = { userId: "op-1", email: "ops@example.com" };
 const NOW = new Date("2026-11-10T12:00:00Z");
@@ -60,10 +60,10 @@ beforeEach(() => {
 });
 
 describe("validateTrialBody", () => {
-  it("takes a date from today to 90 days ahead, as the end of that UTC day", () => {
-    expect(validateTrialBody({ trialEndsAt: "2026-11-10" }, NOW)).toEqual({
+  it("takes a date from tomorrow to 90 days ahead (UTC), as the end of that UTC day", () => {
+    expect(validateTrialBody({ trialEndsAt: "2026-11-11" }, NOW)).toEqual({
       ok: true,
-      trialEndsAt: new Date("2026-11-10T23:59:59.999Z"),
+      trialEndsAt: new Date("2026-11-11T23:59:59.999Z"),
     });
     expect(validateTrialBody({ trialEndsAt: "2027-02-08" }, NOW)).toEqual({
       ok: true,
@@ -71,11 +71,23 @@ describe("validateTrialBody", () => {
     });
   });
 
-  it("refuses a past date, one more than 90 days ahead, null, and anything not a date", () => {
-    expect(validateTrialBody({ trialEndsAt: "2026-11-09" }, NOW)).toEqual({
+  it("judges today by the UTC date, not the operator's", () => {
+    // 23:30 UTC on the 10th is still the 10th: the 11th is tomorrow and accepted.
+    const lateUtc = new Date("2026-11-10T23:30:00Z");
+    expect(validateTrialBody({ trialEndsAt: "2026-11-11" }, lateUtc).ok).toBe(true);
+    expect(validateTrialBody({ trialEndsAt: "2026-11-10" }, lateUtc).ok).toBe(false);
+  });
+
+  it("refuses today and yesterday with a pointer to End the trial now", () => {
+    const refusal = {
       ok: false,
-      error: "Pick today or a later date. To end a trial now, pick today.",
-    });
+      error: 'Pick a date after today (UTC). To end the trial today, use "End the trial now".',
+    };
+    expect(validateTrialBody({ trialEndsAt: "2026-11-10" }, NOW)).toEqual(refusal);
+    expect(validateTrialBody({ trialEndsAt: "2026-11-09" }, NOW)).toEqual(refusal);
+  });
+
+  it("refuses 91 days ahead, null, and anything not a date", () => {
     expect(validateTrialBody({ trialEndsAt: "2027-02-09" }, NOW)).toEqual({
       ok: false,
       error: "Pick a date at most 90 days ahead (8 February 2027 or earlier).",
@@ -168,13 +180,61 @@ describe("startTrial", () => {
     db.workspaceFindUnique.mockImplementation(async () => ({ ...stored }));
     db.workspaceUpdate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => Object.assign(stored, data));
 
-    const today = validateTrialBody({ trialEndsAt: "2026-11-10" }, NOW);
-    if (!today.ok) throw new Error(today.error);
-    await startTrial({ operator: OPS, workspaceId: "ws-1", trialEndsAt: today.trialEndsAt });
+    const tomorrow = validateTrialBody({ trialEndsAt: "2026-11-11" }, NOW);
+    if (!tomorrow.ok) throw new Error(tomorrow.error);
+    await startTrial({ operator: OPS, workspaceId: "ws-1", trialEndsAt: tomorrow.trialEndsAt });
     expect(planState(stored, NOW)).toBe("trial");
-    expect(planState(stored, new Date("2026-11-11T00:00:00Z"))).toBe("ended");
+    expect(planState(stored, new Date("2026-11-12T00:00:00Z"))).toBe("ended");
 
     await exemptWorkspace({ operator: OPS, workspaceId: "ws-1" });
-    expect(planState(stored, new Date("2026-11-11T00:00:00Z"))).toBe("exempt");
+    expect(planState(stored, new Date("2026-11-12T00:00:00Z"))).toBe("exempt");
+  });
+});
+
+describe("endTrialNow", () => {
+  it("ends a running trial at this instant, in one transaction, and records old and new", async () => {
+    const running = new Date("2026-11-20T23:59:59.999Z");
+    db.workspaceFindUnique.mockResolvedValue(row({ trialEndsAt: running }));
+
+    expect(await endTrialNow({ operator: OPS, workspaceId: "ws-1", now: NOW })).toEqual({ status: "changed" });
+
+    expect(db.transaction).toHaveBeenCalledTimes(1);
+    expect(db.executeRaw).toHaveBeenCalledTimes(1);
+    expect(db.workspaceUpdate).toHaveBeenCalledWith({
+      where: { id: "ws-1" },
+      data: { billingExempt: false, trialEndsAt: NOW },
+    });
+    expect(db.actionCreate.mock.calls[0][0].data).toMatchObject({
+      action: "trial",
+      detail: {
+        old: { billingExempt: false, trialEndsAt: running.toISOString() },
+        new: { billingExempt: false, trialEndsAt: NOW.toISOString() },
+      },
+    });
+    expect(planState({ billingExempt: false, trialEndsAt: NOW }, NOW)).toBe("ended");
+  });
+
+  it("ends an exempt workspace's exemption, with an ended trial", async () => {
+    db.workspaceFindUnique.mockResolvedValue(row({ billingExempt: true, trialEndsAt: null }));
+    expect(await endTrialNow({ operator: OPS, workspaceId: "ws-1", now: NOW })).toEqual({ status: "changed" });
+    expect(db.workspaceUpdate).toHaveBeenCalledWith({
+      where: { id: "ws-1" },
+      data: { billingExempt: false, trialEndsAt: NOW },
+    });
+    expect(db.actionCreate.mock.calls[0][0].data.detail).toEqual({
+      old: { billingExempt: true, trialEndsAt: null },
+      new: { billingExempt: false, trialEndsAt: NOW.toISOString() },
+    });
+  });
+
+  it("changes and records nothing for a trial that has already ended, and answers not found for no workspace", async () => {
+    db.workspaceFindUnique.mockResolvedValue(row({ trialEndsAt: new Date("2026-11-01T00:00:00Z") }));
+    expect(await endTrialNow({ operator: OPS, workspaceId: "ws-1", now: NOW })).toEqual({ status: "unchanged" });
+    db.workspaceFindUnique.mockResolvedValue(row({ trialEndsAt: NOW }));
+    expect(await endTrialNow({ operator: OPS, workspaceId: "ws-1", now: NOW })).toEqual({ status: "unchanged" });
+    db.workspaceFindUnique.mockResolvedValue(null);
+    expect(await endTrialNow({ operator: OPS, workspaceId: "x", now: NOW })).toEqual({ status: "not_found" });
+    expect(db.workspaceUpdate).not.toHaveBeenCalled();
+    expect(db.actionCreate).not.toHaveBeenCalled();
   });
 });

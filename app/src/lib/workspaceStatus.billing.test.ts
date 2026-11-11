@@ -52,8 +52,8 @@ for (const billingExempt of [undefined, false, true]) {
   }
 }
 
-const TRIAL_ENDED = "Your free trial has ended. Choose a plan in Settings to keep posting.";
-const PLAN_ENDED = "Your plan has ended. Choose a plan in Settings to keep posting.";
+const TRIAL_ENDED = `Your free trial has ended. Choose a plan in Settings to keep posting, or contact ${SUPPORT_EMAIL}.`;
+const PLAN_ENDED = `Your plan has ended. Choose a plan in Settings to keep posting, or contact ${SUPPORT_EMAIL}.`;
 const NONE = { billingExempt: false, plan: null, planStatus: null, trialEndsAt: null, currentPeriodEnd: null };
 
 /**
@@ -137,7 +137,7 @@ describe("with billing on", () => {
   it("blocks a workspace whose trial ended, with the trial sentence", () => {
     expect(workspaceBlock(ENDED_TRIAL, NOW)).toEqual({
       code: "PLAN_ENDED",
-      message: "Your free trial has ended. Choose a plan in Settings to keep posting.",
+      message: `Your free trial has ended. Choose a plan in Settings to keep posting, or contact ${SUPPORT_EMAIL}.`,
     });
     expect(PLAN_ENDED_CODE).toBe("PLAN_ENDED");
   });
@@ -145,7 +145,7 @@ describe("with billing on", () => {
   it("blocks a workspace whose plan ended, with the plan sentence", () => {
     expect(workspaceBlock(ENDED_PLAN, NOW)).toEqual({
       code: "PLAN_ENDED",
-      message: "Your plan has ended. Choose a plan in Settings to keep posting.",
+      message: `Your plan has ended. Choose a plan in Settings to keep posting, or contact ${SUPPORT_EMAIL}.`,
     });
   });
 
@@ -182,7 +182,7 @@ describe("with billing on", () => {
     const response = workspaceBlockResponse(ENDED_TRIAL, NOW);
     expect(response?.status).toBe(403);
     expect(await response?.json()).toEqual({
-      error: "Your free trial has ended. Choose a plan in Settings to keep posting.",
+      error: `Your free trial has ended. Choose a plan in Settings to keep posting, or contact ${SUPPORT_EMAIL}.`,
       code: "PLAN_ENDED",
     });
   });

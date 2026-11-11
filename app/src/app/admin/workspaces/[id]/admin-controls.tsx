@@ -170,11 +170,12 @@ export function AdminPauseControls({ workspaceId, paused }: { workspaceId: strin
 }
 
 /**
- * 21a (fix round 1): "Exempt this workspace" (sets the exemption, nothing
- * else), and "Start or change the trial" (ends any exemption and sets the
- * trial to end with a UTC date from today to 90 days ahead; today ends it
- * now). There is no clearing a trial: with no plan and no trial a workspace is
- * exempt by rule, which is what the first button is for. Each is recorded.
+ * 21a: "Exempt this workspace" (sets the exemption, nothing else), "End the
+ * trial now" (ends any exemption, trial over at this instant) and "Set the
+ * trial's end" (ends any exemption, the trial runs to the end of a UTC date
+ * from tomorrow to 90 days ahead; the server judges the date in UTC). There is
+ * no clearing a trial: with no plan and no trial a workspace is exempt by
+ * rule, which is what the first button is for. Each is recorded.
  */
 export function AdminBillingControls({
   workspaceId,
@@ -191,7 +192,7 @@ export function AdminBillingControls({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  async function send(kind: "exempt" | "trial", body: unknown, done: string) {
+  async function send(kind: "exempt" | "trial" | "end-trial", body: unknown, done: string) {
     setBusy(true);
     setMessage(null);
     const result = await post(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/${kind}`, body);
@@ -216,10 +217,12 @@ export function AdminBillingControls({
         >
           Exempt this workspace
         </Button>
-        {exempt ? <p className="text-sm text-muted-foreground">Already exempt.</p> : null}
+        <Button type="button" variant="outline" onClick={() => send("end-trial", {}, "Trial ended.")} loading={busy}>
+          End the trial now
+        </Button>
       </div>
       <div className="flex flex-col gap-1">
-        <Label htmlFor="trial-ends">Start or change the trial: it ends with this UTC date (today to 90 days ahead)</Label>
+        <Label htmlFor="trial-ends">Set the trial&apos;s end (tomorrow to 90 days ahead)</Label>
         <div className="flex flex-wrap items-center gap-3">
           <Input
             id="trial-ends"
@@ -231,16 +234,14 @@ export function AdminBillingControls({
           />
           <Button
             type="button"
-            onClick={() =>
-              date ? send("trial", { trialEndsAt: date }, "Trial saved.") : setMessage("Pick a date. Today ends the trial now.")
-            }
+            onClick={() => (date ? send("trial", { trialEndsAt: date }, "Trial end saved.") : setMessage("Pick a date."))}
             loading={busy}
           >
-            {trialEndDate && !exempt ? "Change the trial" : "Start the trial"}
+            Set the trial&apos;s end
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
-          This ends any exemption. To end a trial now, pick today.
+          The trial runs to the end of that day, UTC. Both trial controls end any exemption.
         </p>
       </div>
       {message ? (

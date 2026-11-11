@@ -21,7 +21,7 @@ describe("adminBillingLines", () => {
 
   it("exempt by its flag", () => {
     expect(lines({ billingExempt: true, trialEndsAt: new Date("2026-11-01T00:00:00Z") }).state).toBe(
-      "Exempt: never blocked for its plan, and on the default limits.",
+      "Exempt: never blocked for its plan, and on the default limits unless overridden below.",
     );
   });
 
@@ -33,7 +33,7 @@ describe("adminBillingLines", () => {
 
   it("in a trial", () => {
     expect(lines({ trialEndsAt: new Date("2026-11-24T23:59:59.999Z") }).state).toBe(
-      "In a free trial until 24 November 2026, on the Starter limits. Posting stops then unless a plan is chosen.",
+      "In a free trial until 24 November 2026, on the Starter limits unless overridden below. Posting stops then unless a plan is chosen.",
     );
   });
 

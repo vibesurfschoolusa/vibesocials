@@ -87,11 +87,12 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 /**
- * The trial body: `{ trialEndsAt: "YYYY-MM-DD" }` from today to MAX_TRIAL_DAYS
- * ahead (UTC calendar days), stored as the end of that UTC day so the trial
- * runs through the date shown. There is no clearing a trial: with no plan and
- * no trial date a workspace is exempt by rule, which is what "Exempt" is for.
- * Ending a trial early is choosing today.
+ * The trial body: `{ trialEndsAt: "YYYY-MM-DD" }`, a UTC date after today's
+ * UTC date and at most MAX_TRIAL_DAYS ahead, stored as the end of that UTC day
+ * so the trial runs through the date shown. Today is refused: the end of today
+ * would not end the trial now, which is what endTrialNow is for. There is no
+ * clearing a trial: with no plan and no trial date a workspace is exempt by
+ * rule, which is what "Exempt" is for.
  */
 export function validateTrialBody(body: unknown, now: Date): { ok: true; trialEndsAt: Date } | Invalid {
   const shape = "Send trialEndsAt as a date (YYYY-MM-DD).";
@@ -109,7 +110,9 @@ export function validateTrialBody(body: unknown, now: Date): { ok: true; trialEn
   }
   const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   const last = new Date(today + MAX_TRIAL_DAYS * DAY_MS);
-  if (start.getTime() < today) return { ok: false, error: "Pick today or a later date. To end a trial now, pick today." };
+  if (start.getTime() <= today) {
+    return { ok: false, error: 'Pick a date after today (UTC). To end the trial today, use "End the trial now".' };
+  }
   if (start.getTime() > last.getTime()) {
     return {
       ok: false,
@@ -274,6 +277,29 @@ export async function startTrial(args: {
     await record(tx, args.operator, row, "trial", {
       old: { billingExempt: row.billingExempt, trialEndsAt: row.trialEndsAt?.toISOString() ?? null },
       new: { billingExempt: false, trialEndsAt: args.trialEndsAt.toISOString() },
+    });
+    return { status: "changed" as const };
+  });
+}
+
+/**
+ * "End the trial now": billingExempt false and the trial end at this instant,
+ * so the workspace is ended from now (with billing on). A trial that has
+ * already ended, on a workspace that is not exempt, changes and records nothing.
+ */
+export async function endTrialNow(args: { operator: Operator; workspaceId: string; now: Date }): Promise<ChangeResult> {
+  return withLockedWorkspace(args.workspaceId, async (tx, row) => {
+    if (!row.billingExempt && row.trialEndsAt && row.trialEndsAt.getTime() <= args.now.getTime()) {
+      return { status: "unchanged" as const };
+    }
+
+    await tx.workspace.update({
+      where: { id: row.id },
+      data: { billingExempt: false, trialEndsAt: args.now },
+    });
+    await record(tx, args.operator, row, "trial", {
+      old: { billingExempt: row.billingExempt, trialEndsAt: row.trialEndsAt?.toISOString() ?? null },
+      new: { billingExempt: false, trialEndsAt: args.now.toISOString() },
     });
     return { status: "changed" as const };
   });

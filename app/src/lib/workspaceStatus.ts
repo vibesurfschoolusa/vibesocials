@@ -48,8 +48,9 @@ export function workspacePausedMessage(reason: string | null | undefined): strin
   return `This workspace is paused: ${sentence} Contact ${SUPPORT_EMAIL}.`;
 }
 
-export const TRIAL_ENDED_MESSAGE = "Your free trial has ended. Choose a plan in Settings to keep posting.";
-export const PLAN_ENDED_MESSAGE = "Your plan has ended. Choose a plan in Settings to keep posting.";
+// Until payments exist (21b) there is nothing to click, so both name who to contact.
+export const TRIAL_ENDED_MESSAGE = `Your free trial has ended. Choose a plan in Settings to keep posting, or contact ${SUPPORT_EMAIL}.`;
+export const PLAN_ENDED_MESSAGE = `Your plan has ended. Choose a plan in Settings to keep posting, or contact ${SUPPORT_EMAIL}.`;
 
 /** Null when the workspace may work; otherwise why not, in words its members read. The pause wins. */
 export function workspaceBlock(workspace: WorkspaceStatusFields, now: Date = new Date()): WorkspaceBlock | null {

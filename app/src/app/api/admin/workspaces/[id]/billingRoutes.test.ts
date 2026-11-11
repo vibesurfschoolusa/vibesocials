@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   requireOperator: vi.fn(),
   exemptWorkspace: vi.fn(),
   startTrial: vi.fn(),
+  endTrialNow: vi.fn(),
 }));
 
 vi.mock("@/lib/operator", async (importOriginal) => ({
@@ -19,10 +20,12 @@ vi.mock("@/server/admin/actions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/admin/actions")>()),
   exemptWorkspace: h.exemptWorkspace,
   startTrial: h.startTrial,
+  endTrialNow: h.endTrialNow,
 }));
 
 import { adminNotFoundResponse, adminOtherMethods } from "@/lib/operator";
 
+import * as endTrialRoute from "./end-trial/route";
 import * as exemptRoute from "./exempt/route";
 import * as trialRoute from "./trial/route";
 
@@ -48,13 +51,15 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("both count against the operator's change budget and re-export the other methods as the 404", async () => {
+it("all three count against the operator's change budget and re-export the other methods as the 404", async () => {
   h.exemptWorkspace.mockResolvedValue({ status: "unchanged" });
   h.startTrial.mockResolvedValue({ status: "unchanged" });
+  h.endTrialNow.mockResolvedValue({ status: "unchanged" });
   await exemptRoute.POST(req({}), ctx);
   await trialRoute.POST(req({ trialEndsAt: "2026-11-20" }), ctx);
-  expect(h.requireOperator.mock.calls).toEqual([["change"], ["change"]]);
-  for (const mod of [exemptRoute, trialRoute] as Record<string, unknown>[]) {
+  await endTrialRoute.POST(req({}), ctx);
+  expect(h.requireOperator.mock.calls).toEqual([["change"], ["change"], ["change"]]);
+  for (const mod of [exemptRoute, trialRoute, endTrialRoute] as Record<string, unknown>[]) {
     for (const method of ["GET", "PUT", "PATCH", "DELETE", "OPTIONS"] as const) {
       expect(mod[method]).toBe(adminOtherMethods[method]);
     }
@@ -66,12 +71,28 @@ it("a non-operator gets the plain 404 and nothing is written", async () => {
   for (const response of [
     await exemptRoute.POST(req({}), ctx),
     await trialRoute.POST(req({ trialEndsAt: "2026-11-20" }), ctx),
+    await endTrialRoute.POST(req({}), ctx),
   ]) {
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: "Not found" });
   }
   expect(h.exemptWorkspace).not.toHaveBeenCalled();
   expect(h.startTrial).not.toHaveBeenCalled();
+  expect(h.endTrialNow).not.toHaveBeenCalled();
+});
+
+describe("POST end-trial", () => {
+  it("ends the trial at the current instant, as the operator", async () => {
+    h.endTrialNow.mockResolvedValue({ status: "changed" });
+    const response = await endTrialRoute.POST(req({}), ctx);
+    expect(await response.json()).toEqual({ ok: true, changed: true });
+    expect(h.endTrialNow).toHaveBeenCalledWith({ operator: OPS, workspaceId: "ws-1", now: NOW });
+  });
+
+  it("answers the plain 404 for a workspace that does not exist", async () => {
+    h.endTrialNow.mockResolvedValue({ status: "not_found" });
+    expect((await endTrialRoute.POST(req({}), ctx)).status).toBe(404);
+  });
 });
 
 describe("POST exempt", () => {
@@ -91,11 +112,16 @@ describe("POST exempt", () => {
 });
 
 describe("POST trial", () => {
-  it("refuses a date more than 90 days ahead, in the past, or null, before writing", async () => {
+  it("refuses a date more than 90 days ahead, today, in the past, or null, before writing", async () => {
     const far = await trialRoute.POST(req({ trialEndsAt: "2027-02-09" }), ctx);
     expect(far.status).toBe(400);
     expect(await far.json()).toEqual({ error: "Pick a date at most 90 days ahead (8 February 2027 or earlier)." });
     expect((await trialRoute.POST(req({ trialEndsAt: "2026-11-01" }), ctx)).status).toBe(400);
+    const today = await trialRoute.POST(req({ trialEndsAt: "2026-11-10" }), ctx);
+    expect(today.status).toBe(400);
+    expect(await today.json()).toEqual({
+      error: 'Pick a date after today (UTC). To end the trial today, use "End the trial now".',
+    });
     expect((await trialRoute.POST(req({ trialEndsAt: null }), ctx)).status).toBe(400);
     expect((await trialRoute.POST(req("not json"), ctx)).status).toBe(400);
     expect(h.startTrial).not.toHaveBeenCalled();

@@ -8,10 +8,10 @@ type AdminWorkspaceRouteContext = { params: Promise<{ id: string }> };
 
 /**
  * POST /api/admin/workspaces/[id]/trial { trialEndsAt: "YYYY-MM-DD" } —
- * operator only (21a). "Start or change the trial": ends the exemption and
- * sets the trial to end with that UTC day, from today to 90 days ahead, and
- * records it. Ending a trial early is choosing today. Anyone else gets the
- * plain 404 of a route that does not exist.
+ * operator only (21a). "Set the trial's end": ends the exemption and sets the
+ * trial to run to the end of that UTC day, from tomorrow (UTC) to 90 days
+ * ahead, and records it. Ending a trial now is POST .../end-trial. Anyone else
+ * gets the plain 404 of a route that does not exist.
  */
 export async function POST(request: Request, context: AdminWorkspaceRouteContext) {
   const operator = await requireOperator("change");

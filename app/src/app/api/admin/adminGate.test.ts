@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   resumeWorkspace: vi.fn(),
   exemptWorkspace: vi.fn(),
   startTrial: vi.fn(),
+  endTrialNow: vi.fn(),
   NOT_FOUND: "NEXT_NOT_FOUND (test)",
 }));
 
@@ -70,6 +71,7 @@ vi.mock("@/server/admin/actions", async (importOriginal) => ({
   resumeWorkspace: h.resumeWorkspace,
   exemptWorkspace: h.exemptWorkspace,
   startTrial: h.startTrial,
+  endTrialNow: h.endTrialNow,
 }));
 
 import { adminOtherMethods } from "@/lib/operator";
@@ -91,8 +93,8 @@ const ROUTE_FILES = walk(join(SRC, "app", "api", "admin"), "route.ts");
 
 type AnyHandler = (...args: unknown[]) => Promise<unknown>;
 
-/** The trial route takes a date from today on. */
-const TODAY = new Date().toISOString().slice(0, 10);
+/** The trial route takes a date after today (UTC). */
+const TOMORROW = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 /** What each real page or handler is called with, and what an operator should get. */
 const OPERATOR_CASES: Record<string, { body?: unknown; expectStatus?: number }> = {
@@ -102,7 +104,8 @@ const OPERATOR_CASES: Record<string, { body?: unknown; expectStatus?: number }> 
   "app/api/admin/workspaces/[id]/pause/route.ts POST": { body: { reason: "Unpaid invoice." }, expectStatus: 200 },
   "app/api/admin/workspaces/[id]/resume/route.ts POST": { body: {}, expectStatus: 200 },
   "app/api/admin/workspaces/[id]/exempt/route.ts POST": { body: {}, expectStatus: 200 },
-  "app/api/admin/workspaces/[id]/trial/route.ts POST": { body: { trialEndsAt: TODAY }, expectStatus: 200 },
+  "app/api/admin/workspaces/[id]/trial/route.ts POST": { body: { trialEndsAt: TOMORROW }, expectStatus: 200 },
+  "app/api/admin/workspaces/[id]/end-trial/route.ts POST": { body: {}, expectStatus: 200 },
 };
 
 const ARGS = { params: Promise.resolve({ id: "ws-1" }), searchParams: Promise.resolve({}) };
@@ -173,6 +176,7 @@ beforeEach(() => {
     h.resumeWorkspace,
     h.exemptWorkspace,
     h.startTrial,
+    h.endTrialNow,
   ]) {
     mock.mockReset();
   }
@@ -215,10 +219,11 @@ beforeEach(() => {
   h.resumeWorkspace.mockResolvedValue({ status: "changed", actionId: "act-2", workspaceName: "Surf Co" });
   h.exemptWorkspace.mockResolvedValue({ status: "changed" });
   h.startTrial.mockResolvedValue({ status: "changed" });
+  h.endTrialNow.mockResolvedValue({ status: "changed" });
 });
 
 describe("the admin files", () => {
-  it("are the two pages and the five routes, each with an operator case", async () => {
+  it("are the two pages and the six routes, each with an operator case", async () => {
     expect(PAGE_FILES.map(key).sort()).toEqual(["app/admin/page.tsx", "app/admin/workspaces/[id]/page.tsx"]);
     const real = (await entries()).filter((entry) => entry.real).map((entry) => entry.name);
     expect(real.sort()).toEqual(Object.keys(OPERATOR_CASES).sort());
@@ -254,6 +259,7 @@ describe.each(NON_OPERATORS)("for %s", (_label, arrange) => {
       h.resumeWorkspace,
       h.exemptWorkspace,
       h.startTrial,
+      h.endTrialNow,
       h.after,
     ]) {
       expect(mock).not.toHaveBeenCalled();

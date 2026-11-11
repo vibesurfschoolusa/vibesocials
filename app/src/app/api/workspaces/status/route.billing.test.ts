@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeWorkspaceContext } from "../../__test-helpers__/workspaceContextMock";
+import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 
 const { getWorkspaceContextMock } = vi.hoisted(() => ({ getWorkspaceContextMock: vi.fn() }));
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
@@ -44,7 +45,7 @@ describe("GET /api/workspaces/status with billing on", () => {
     for (const role of ["owner", "member"] as const) {
       getWorkspaceContextMock.mockResolvedValue(context(role, { trialEndsAt: new Date(NOW.getTime() - DAY) }));
       expect(await (await GET()).json()).toEqual({
-        blockedMessage: "Your free trial has ended. Choose a plan in Settings to keep posting.",
+        blockedMessage: `Your free trial has ended. Choose a plan in Settings to keep posting, or contact ${SUPPORT_EMAIL}.`,
       });
     }
   });
