@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { Alert } from "@/components/ui/alert";
@@ -17,10 +17,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
 
+const noSubscription = () => () => {};
+
 export function LinkedInSetupDialog() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const showSetup = searchParams.get("linkedin_setup") === "true";
+  // Opens only after hydration, as PendingConnectionDialog does: the server
+  // sends no dialog HTML, so an open first render would be React #418.
+  const hydrated = useSyncExternalStore(noSubscription, () => true, () => false);
+  const showSetup = hydrated && searchParams.get("linkedin_setup") === "true";
 
   const [vanityName, setVanityName] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);

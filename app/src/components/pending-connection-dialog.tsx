@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { cn } from "@/lib/cn";
@@ -54,6 +54,8 @@ type LoadState =
   | { status: "expired" }
   | { status: "error" };
 
+const noSubscription = () => () => {};
+
 /**
  * Opens when Settings has `?choose=<id>`: a Facebook, Instagram or LinkedIn
  * connect found several accounts and connected none of them. The user picks
@@ -62,8 +64,12 @@ type LoadState =
 export function PendingConnectionDialog() {
   const searchParams = useSearchParams();
   const pendingId = searchParams.get("choose");
+  // False on the server and on the hydrating render, true after. The server
+  // has no document, so <Dialog> sends no HTML; opening on the hydrating render
+  // would portal into <body> against that empty HTML: React #418.
+  const hydrated = useSyncExternalStore(noSubscription, () => true, () => false);
 
-  if (!pendingId) return null;
+  if (!pendingId || !hydrated) return null;
 
   // key: a different ?choose= id starts over — fresh fetch, no stale choice.
   return <PendingConnectionChoice key={pendingId} pendingId={pendingId} />;
