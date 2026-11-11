@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { ErrorState } from "@/components/reviews/error-state";
+import { initialLocation } from "@/components/reviews/initial-location";
 import { LocationPicker } from "@/components/reviews/location-picker";
 import { ReviewCard } from "@/components/reviews/review-card";
 import type { GoogleReview, Location } from "@/components/reviews/types";
@@ -19,8 +20,12 @@ import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 
 import { ReviewLinkPanel } from "./review-link-panel";
 
-/** Client-rendered reviews view. The parent server component gates access. */
-export function ReviewsView() {
+/**
+ * Client-rendered reviews view. The parent server component gates access.
+ * `savedLocation`: the Google location Settings saved for posts; the view
+ * opens on it when Google lists it. Picking another one is not saved.
+ */
+export function ReviewsView({ savedLocation }: { savedLocation: string | null }) {
   const toast = useToast();
 
   const [reviews, setReviews] = useState<GoogleReview[]>([]);
@@ -57,9 +62,10 @@ export function ReviewsView() {
       setLocations(locs);
       setGbpConnected(data.connected === true);
 
-      // Auto-select first location if only one exists
-      if (locs.length === 1) {
-        setSelectedLocation(locs[0].name);
+      // The saved location when listed, else the only one; else the person picks.
+      const initial = initialLocation(locs, savedLocation);
+      if (initial) {
+        setSelectedLocation(initial);
       }
     } catch (err: unknown) {
       console.error("Error fetching locations:", err);
@@ -67,7 +73,7 @@ export function ReviewsView() {
     } finally {
       setLoadingLocations(false);
     }
-  }, []);
+  }, [savedLocation]);
 
   const loadReviews = useCallback(async () => {
     if (!selectedLocation) return;

@@ -1,15 +1,25 @@
 import { redirect } from "next/navigation";
 
-import { getCurrentUser } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+import { getWorkspaceContext } from "@/lib/workspace";
 import { ReviewsView } from "./reviews-view";
 
 // Server-side auth gate (matches queue/activity): signed-out users are
 // redirected before the client view ever fetches — no more raw
 // "Unauthorized" error page.
 export default async function ReviewsPage() {
-  const user = await getCurrentUser();
-  if (!user) {
+  const context = await getWorkspaceContext();
+  if (!context) {
     redirect(`/login?callbackUrl=${encodeURIComponent("/reviews")}`);
   }
-  return <ReviewsView />;
+  // The Google location Settings saved for posts, so the page opens on it
+  // (go-live check 2026-11-11). Only its name leaves the server.
+  const connection = await prisma.socialConnection.findFirst({
+    where: { workspaceId: context.workspace.id, platform: "google_business_profile" },
+    select: { metadata: true },
+  });
+  const metadata = connection?.metadata as { locationName?: unknown } | null | undefined;
+  const savedLocation =
+    typeof metadata?.locationName === "string" && metadata.locationName ? metadata.locationName : null;
+  return <ReviewsView savedLocation={savedLocation} />;
 }
