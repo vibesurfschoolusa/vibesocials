@@ -39,7 +39,8 @@ vi.mock("@/lib/db", () => {
   // workspaces/leave/route.test.ts), so tx.<model> resolves to these mocks.
   const prisma: Record<string, unknown> = {
     $executeRaw: m.executeRaw,
-    workspace: { update: m.update, deleteMany: m.workspaceDeleteMany },
+    // findMany: the workspace's report logo, queued with its files (none here).
+    workspace: { update: m.update, deleteMany: m.workspaceDeleteMany, findMany: async () => [] },
     workspaceMember: { count: m.memberCount, findMany: m.memberFindMany },
     postJob: { findFirst: m.postJobFindFirst },
     mediaItem: { findMany: m.mediaFindMany },

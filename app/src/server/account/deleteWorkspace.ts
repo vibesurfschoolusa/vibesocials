@@ -109,6 +109,9 @@ export type QueuedFile = { id: string; url: string };
  * neither deleting the file. All keys are collected first and locked in one
  * sorted pass, so two deletions sharing files cannot deadlock on each other.
  * One lock statement per distinct file.
+ *
+ * The workspaces' report logos (Workspace.logoUrl, not media rows) are
+ * candidates too, so they are locked, checked and queued the same way.
  */
 export async function queueWorkspaceFiles(
   tx: Prisma.TransactionClient,
@@ -136,6 +139,18 @@ export async function queueWorkspaceFiles(
     }
     if (page.length < BLOB_DELETE_BATCH_SIZE) break;
     cursor = page[page.length - 1].id;
+  }
+
+  const logos = await tx.workspace.findMany({
+    where: { id: { in: workspaceIds }, logoUrl: { not: null } },
+    select: { logoUrl: true },
+  });
+  for (const { logoUrl } of logos) {
+    if (!logoUrl) continue;
+    const key = guardBlobKey(logoUrl);
+    const spellings = spellingsByKey.get(key) ?? new Set([key]);
+    spellings.add(logoUrl);
+    spellingsByKey.set(key, spellings);
   }
 
   const keys = [...spellingsByKey.keys()].sort();

@@ -39,6 +39,8 @@ export interface ParsedSettingsInput {
   notifyDailyDigest?: boolean;
   /** The new Google review email (2026-11-10). Per-user, like notifyOnPostComplete. */
   notifyNewReviews?: boolean;
+  /** The monthly report email (18b). Per-user, like notifyOnPostComplete. */
+  notifyMonthlyReport?: boolean;
   /**
    * Approval workflow (2026-07-26). Workspace-level and OWNER-ONLY, same class
    * as the footer fields — it governs whether members' posts publish directly.
@@ -206,6 +208,15 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
       return { ok: false, error: result.error };
     }
     data.notifyNewReviews = result.value;
+  }
+
+  if (hasKey(record, "notifyMonthlyReport")) {
+    // Null normalizes to on, the schema default, like notifyOnPostComplete.
+    const result = validateBoolean(record.notifyMonthlyReport, "notifyMonthlyReport");
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    data.notifyMonthlyReport = result.value;
   }
 
   if (hasKey(record, "requireApproval")) {
@@ -380,6 +391,7 @@ export async function POST(request: Request) {
       notifyOnPostComplete?: boolean;
       notifyDailyDigest?: boolean;
       notifyNewReviews?: boolean;
+      notifyMonthlyReport?: boolean;
     } = {};
     if ("notifyOnPostComplete" in data) {
       userData.notifyOnPostComplete = data.notifyOnPostComplete;
@@ -389,6 +401,9 @@ export async function POST(request: Request) {
     }
     if ("notifyNewReviews" in data) {
       userData.notifyNewReviews = data.notifyNewReviews;
+    }
+    if ("notifyMonthlyReport" in data) {
+      userData.notifyMonthlyReport = data.notifyMonthlyReport;
     }
     if (Object.keys(userData).length > 0) {
       await prisma.user.update({

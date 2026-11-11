@@ -104,6 +104,7 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
   );
   const [notifyDailyDigest, setNotifyDailyDigest] = useState(settings.notifyDailyDigest);
   const [notifyNewReviews, setNotifyNewReviews] = useState(settings.notifyNewReviews);
+  const [notifyMonthlyReport, setNotifyMonthlyReport] = useState(settings.notifyMonthlyReport);
   const [requireApproval, setRequireApproval] = useState(settings.requireApproval);
   const [trackWebsiteLinks, setTrackWebsiteLinks] = useState(settings.trackWebsiteLinks);
   // 2026-11-10: the default Google button. "" = no button. The link starts as
@@ -201,8 +202,9 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
             notifyOnPostComplete,
             notifyDailyDigest,
             notifyNewReviews,
+            notifyMonthlyReport,
           }
-        : { notifyOnPostComplete, notifyDailyDigest, notifyNewReviews };
+        : { notifyOnPostComplete, notifyDailyDigest, notifyNewReviews, notifyMonthlyReport };
 
       const response = await fetch("/api/settings", {
         method: "POST",
@@ -509,6 +511,19 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
           </label>
           <p className="text-sm text-muted-foreground">
             Sent to workspace owners, once a day, on days when the Google listing gets new reviews.
+          </p>
+          <label className="mt-3 flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={notifyMonthlyReport}
+              onChange={(e) => setNotifyMonthlyReport(e.target.checked)}
+              className={checkboxClass}
+            />
+            <span className="text-sm text-foreground">Email me the monthly report</span>
+          </label>
+          <p className="text-sm text-muted-foreground">
+            Sent to workspace owners in the first days of each month, when something was published the
+            month before.
           </p>
         </div>
 

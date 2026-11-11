@@ -8,6 +8,7 @@ const m = vi.hoisted(() => ({
   del: vi.fn(),
   rows: [] as { id: string; workspaceId: string; storageLocation: string; deletedAt: Date | null }[],
   mediaFindMany: vi.fn(),
+  workspaceFindMany: vi.fn(),
   postJobFindFirst: vi.fn(),
   memberCount: vi.fn(),
   workspaceDeleteMany: vi.fn(),
@@ -65,6 +66,7 @@ function fakeFindMany({ where, take }: { where: Where; take?: number }) {
 const tx = {
   $executeRaw: m.executeRaw,
   mediaItem: { findMany: m.mediaFindMany },
+  workspace: { findMany: m.workspaceFindMany },
   pendingBlobDeletion: { createManyAndReturn: m.queueCreate },
 } as unknown as Prisma.TransactionClient;
 
@@ -82,6 +84,7 @@ beforeEach(() => {
   m.log.length = 0;
   m.executeRaw.mockResolvedValue(0);
   m.mediaFindMany.mockImplementation(fakeFindMany);
+  m.workspaceFindMany.mockResolvedValue([]);
   m.queueCreate.mockImplementation(async ({ data }: { data: { url: string }[] }) =>
     data.map((row, index) => ({ id: `q${index}`, url: row.url })),
   );
@@ -201,6 +204,27 @@ describe("queueWorkspaceFiles", () => {
       lock(url("zeta")),
       "check elsewhere",
     ]);
+  });
+
+  it("queues the workspaces' logos with their media files", async () => {
+    m.rows.push({ id: "m1", workspaceId: "ws-1", storageLocation: url("a"), deletedAt: null });
+    m.workspaceFindMany.mockResolvedValue([{ logoUrl: url("logos/ws-1/0123456789abcdef") }]);
+
+    await queueWorkspaceFiles(tx, ["ws-1"]);
+
+    expect(m.workspaceFindMany).toHaveBeenCalledWith({
+      where: { id: { in: ["ws-1"] }, logoUrl: { not: null } },
+      select: { logoUrl: true },
+    });
+    expect(queuedUrls().sort()).toEqual([url("a"), url("logos/ws-1/0123456789abcdef")]);
+  });
+
+  it("queues a logo of a workspace with no media", async () => {
+    m.workspaceFindMany.mockResolvedValue([{ logoUrl: url("logos/ws-1/0123456789abcdef") }]);
+
+    const queued = await queueWorkspaceFiles(tx, ["ws-1"]);
+
+    expect(queued).toEqual([{ id: "q0", url: url("logos/ws-1/0123456789abcdef") }]);
   });
 
   it("queues nothing for a workspace with no media", async () => {

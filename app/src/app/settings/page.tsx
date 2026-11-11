@@ -12,6 +12,7 @@ import { AccountSection } from "@/components/account-section";
 import { accountDeletionPreview } from "@/server/account/accountDeletion";
 import { workspaceDeletionRefusal } from "@/server/account/deleteWorkspace";
 import { UsageSection } from "@/components/usage-section";
+import { WorkspaceLogoControl } from "@/components/workspace-logo-control";
 import { getWorkspaceUsageOrNull } from "@/server/usage/workspaceUsage";
 import { Alert } from "@/components/ui/alert";
 import { describeOAuthResult } from "@/lib/oauthResult";
@@ -53,6 +54,7 @@ export default async function SettingsPage({
     notifyOnPostComplete: context.user.notifyOnPostComplete,
     notifyDailyDigest: context.user.notifyDailyDigest,
     notifyNewReviews: context.user.notifyNewReviews,
+    notifyMonthlyReport: context.user.notifyMonthlyReport,
     requireApproval: context.workspace.requireApproval,
     googleButtonType: context.workspace.googleButtonType,
     googleButtonUrl: context.workspace.googleButtonUrl,
@@ -86,6 +88,11 @@ export default async function SettingsPage({
     select: { postingSlots: true },
   });
   const postingSlots = readPostingSlots(slotRow?.postingSlots);
+  // The report logo (18b): its public address only, for every member to see.
+  const logo = await prisma.workspace.findUnique({
+    where: { id: context.workspace.id },
+    select: { logoUrl: true },
+  });
 
   // Usage limits (2026-11-10): the same counts the limits are enforced with.
   // Null when they cannot be read: the section says so and the page still renders.
@@ -189,6 +196,11 @@ export default async function SettingsPage({
               owner view's invite/member fetch effects run once per mount and
               its rename state seeds from props, all assuming one workspace
               per mounted instance. */}
+          <WorkspaceLogoControl
+            key={`logo-${context.workspace.id}`}
+            logoUrl={logo?.logoUrl ?? null}
+            isOwner={context.role === "owner"}
+          />
           <TeamSection
             key={context.workspace.id}
             role={context.role}

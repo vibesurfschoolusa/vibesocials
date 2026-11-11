@@ -15,6 +15,7 @@ const SETTINGS: UserSettings = {
   notifyOnPostComplete: true,
   notifyDailyDigest: true,
   notifyNewReviews: true,
+  notifyMonthlyReport: true,
   requireApproval: false,
   googleButtonType: null,
   googleButtonUrl: null,
@@ -38,6 +39,23 @@ describe("SettingsForm — Notifications", () => {
 
   it("shows it unchecked when the preference is off, to a member too", () => {
     const match = reviewBox.exec(render({ ...SETTINGS, notifyNewReviews: false }, "member"));
+    expect(match).not.toBeNull();
+    expect(match?.[1]).not.toContain("checked");
+  });
+});
+
+// 18b: the monthly report email preference, beside the other email switches.
+describe("SettingsForm — monthly report email", () => {
+  const monthlyBox = /<input type="checkbox"([^>]*)\/><span[^>]*>Email me the monthly report<\/span>/;
+
+  it("shows the monthly report checkbox, checked when the preference is on", () => {
+    const match = monthlyBox.exec(render(SETTINGS));
+    expect(match).not.toBeNull();
+    expect(match?.[1]).toContain('checked=""');
+  });
+
+  it("shows it unchecked when the preference is off, to a member too", () => {
+    const match = monthlyBox.exec(render({ ...SETTINGS, notifyMonthlyReport: false }, "member"));
     expect(match).not.toBeNull();
     expect(match?.[1]).not.toContain("checked");
   });

@@ -483,6 +483,60 @@ describe("notifyNewReviews (new Google review email)", () => {
   });
 });
 
+describe("notifyMonthlyReport (monthly report email)", () => {
+  it("parses a boolean and normalizes null to on", () => {
+    expect(parseSettingsInput({ notifyMonthlyReport: false })).toEqual({
+      ok: true,
+      data: { notifyMonthlyReport: false },
+    });
+    expect(parseSettingsInput({ notifyMonthlyReport: null })).toEqual({
+      ok: true,
+      data: { notifyMonthlyReport: true },
+    });
+  });
+
+  it("rejects a non-boolean with 400 and writes nothing", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+
+    const response = await POST(jsonRequest({ notifyMonthlyReport: "no" }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "notifyMonthlyReport must be a boolean",
+    });
+    expect(userUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("is not owner-only: a member saves it to their own row", async () => {
+    getWorkspaceContextMock.mockResolvedValue(MEMBER_CONTEXT);
+    userUpdateMock.mockResolvedValue({});
+
+    const response = await POST(jsonRequest({ notifyMonthlyReport: false }));
+
+    expect(response.status).toBe(200);
+    expect(userUpdateMock).toHaveBeenCalledWith({
+      where: { id: "user-member" },
+      data: { notifyMonthlyReport: false },
+    });
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("saves with the other email preferences in one write", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    userUpdateMock.mockResolvedValue({});
+
+    await POST(
+      jsonRequest({ notifyOnPostComplete: true, notifyDailyDigest: true, notifyNewReviews: true, notifyMonthlyReport: false }),
+    );
+
+    expect(userUpdateMock).toHaveBeenCalledTimes(1);
+    expect(userUpdateMock).toHaveBeenCalledWith({
+      where: { id: "user-owner" },
+      data: { notifyOnPostComplete: true, notifyDailyDigest: true, notifyNewReviews: true, notifyMonthlyReport: false },
+    });
+  });
+});
+
 describe("touchesWorkspaceFooter", () => {
   it("is false when neither footer key is present", () => {
     expect(touchesWorkspaceFooter({})).toBe(false);
