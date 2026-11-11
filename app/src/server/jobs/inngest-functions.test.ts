@@ -4825,3 +4825,173 @@ describe("publishToAllPlatforms and retryPlatforms — paused workspace", () => 
     expect(fetched.workspace).toEqual(WORKSPACE);
   });
 });
+
+// 21a: with billing on, a workspace whose trial or plan ended is blocked like a
+// paused one, with its own sentence on the results. The plan columns are read
+// in the same query and, like the pause columns, never memoized: a workspace
+// that is not blocked runs the same steps with the same outputs as today.
+describe("publishToAllPlatforms and retryPlatforms — plan ended (billing on)", () => {
+  const PLAN_FAILURE = {
+    errorCode: "PLAN_ENDED",
+    errorMessage: "Not published: this workspace has no active plan.",
+  };
+  const NOW = new Date("2026-12-10T12:00:00Z");
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const BILLING_ROW = {
+    pausedAt: null,
+    pausedReason: null,
+    createdAt: new Date("2026-12-02T00:00:00Z"),
+    billingExempt: false,
+    plan: null,
+    planStatus: null,
+    trialEndsAt: new Date(NOW.getTime() - DAY_MS),
+    currentPeriodEnd: null,
+  };
+  const SELECT_WITH_BILLING = {
+    id: true,
+    companyWebsite: true,
+    defaultHashtags: true,
+    trackWebsiteLinks: true,
+    pausedAt: true,
+    pausedReason: true,
+    createdAt: true,
+    billingExempt: true,
+    plan: true,
+    planStatus: true,
+    trialEndsAt: true,
+    currentPeriodEnd: true,
+  };
+
+  function setUp(workspace: Record<string, unknown>) {
+    db.postJobFindUnique.mockResolvedValue({
+      id: "job-1",
+      workspaceId: WORKSPACE.id,
+      mediaItemId: "media-1",
+      baseCaption: "Waves",
+      perPlatformOverrides: null,
+      publishMetadata: null,
+    });
+    db.workspaceFindUnique.mockResolvedValue(workspace);
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "Waves", deletedAt: null });
+    db.connectionFindMany.mockResolvedValue([
+      { id: "conn-x", platform: "x" },
+      { id: "conn-linkedin", platform: "linkedin" },
+    ]);
+    stubResults(["x", "linkedin"]);
+    failPendingMock.mockResolvedValue({ failedCount: 2, unconfirmedCount: 0, status: "failed" });
+  }
+
+  function publish(step: FakeStep) {
+    return handlerOf(publishToAllPlatforms)({
+      event: {
+        name: "post/publish.requested",
+        data: { postJobId: "job-1", userId: "user-1", mediaItemId: "media-1", baseCaption: "Waves", perPlatformOverrides: null },
+      },
+      step,
+    });
+  }
+
+  function retry(step: FakeStep) {
+    return handlerOf(retryPlatforms)({
+      event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms: ["x", "linkedin"] } },
+      step,
+    });
+  }
+
+  beforeEach(() => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    vi.stubEnv("BILLING_STARTED_AT", "2026-12-01T00:00:00Z");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  it("publish: reads the plan columns with the footer and pause fields, in the same query", async () => {
+    setUp({ ...WORKSPACE, ...BILLING_ROW, trialEndsAt: new Date(NOW.getTime() + DAY_MS) });
+    await publish(fakeStep());
+    expect(db.workspaceFindUnique).toHaveBeenCalledWith({ where: { id: "ws-1" }, select: SELECT_WITH_BILLING });
+  });
+
+  it("publish: an ended workspace's due job publishes nothing and fails with the plan sentence", async () => {
+    setUp({ ...WORKSPACE, ...BILLING_ROW });
+    const step = fakeStep();
+
+    const out = await publish(step);
+
+    expect(step.order).toEqual(["run:fetch-data", "run:mark-failed-workspace-paused"]);
+    expect(failPendingMock).toHaveBeenCalledTimes(1);
+    expect(failPendingMock).toHaveBeenCalledWith("job-1", PLAN_FAILURE);
+    expect(getPlatformClientMock).not.toHaveBeenCalled();
+    expect(publishCtxs).toEqual([]);
+    expect(step.sendEvent).not.toHaveBeenCalled();
+    expect(out).toEqual({ error: "Workspace has no active plan" });
+    expect(step.outputs["fetch-data"]).toEqual({ paused: true, planEnded: true });
+  });
+
+  it("publish: the pause wins over an ended plan", async () => {
+    setUp({ ...WORKSPACE, ...BILLING_ROW, pausedAt: NOW, pausedReason: "Unpaid invoice." });
+    const step = fakeStep();
+    await publish(step);
+    expect(failPendingMock).toHaveBeenCalledWith("job-1", {
+      errorCode: "WORKSPACE_PAUSED",
+      errorMessage: "Not published: this workspace was paused.",
+    });
+    expect(step.outputs["fetch-data"]).toEqual({ paused: true });
+  });
+
+  it("publish: a workspace in trial runs today's steps, and its memoized workspace is today's", async () => {
+    setUp({ ...WORKSPACE, ...BILLING_ROW, trialEndsAt: new Date(NOW.getTime() + DAY_MS) });
+    const step = fakeStep();
+
+    await publish(step);
+
+    expect(step.order).toEqual([
+      "run:fetch-data",
+      "run:publish-to-x",
+      "run:publish-to-linkedin",
+      "run:finalize-job",
+      "sendEvent:notify-outcome",
+    ]);
+    const fetched = step.outputs["fetch-data"] as Record<string, unknown>;
+    expect(Object.keys(fetched).sort()).toEqual(
+      ["mediaItem", "mediaItems", "resultRecords", "socialConnections", "user", "workspace"].sort(),
+    );
+    expect(fetched.workspace).toEqual(WORKSPACE);
+    expect(failPendingMock).not.toHaveBeenCalled();
+  });
+
+  it("retry: an ended workspace retries nothing and fails only the re-queued platforms with the plan sentence", async () => {
+    setUp({ ...WORKSPACE, ...BILLING_ROW, plan: "growth", planStatus: "canceled" });
+    const step = fakeStep();
+
+    const out = await retry(step);
+
+    expect(db.workspaceFindUnique).toHaveBeenCalledWith({ where: { id: "ws-1" }, select: SELECT_WITH_BILLING });
+    expect(step.order).toEqual(["run:fetch-retry-data", "run:mark-failed-workspace-paused"]);
+    expect(failPendingMock).toHaveBeenCalledWith("job-1", PLAN_FAILURE, { platforms: ["x", "linkedin"] });
+    expect(publishCtxs).toEqual([]);
+    expect(step.sendEvent).not.toHaveBeenCalled();
+    expect(out).toEqual({ postJobId: "job-1", error: "Workspace has no active plan" });
+    expect(step.outputs["fetch-retry-data"]).toEqual({ paused: true, planEnded: true });
+  });
+
+  it("retry: an active plan runs today's steps, and its memoized workspace is today's", async () => {
+    setUp({ ...WORKSPACE, ...BILLING_ROW, plan: "growth", planStatus: "active" });
+    const step = fakeStep();
+
+    await retry(step);
+
+    expect(step.order).toEqual([
+      "run:fetch-retry-data",
+      "run:retry-x",
+      "run:retry-linkedin",
+      "run:finalize-retry",
+      "sendEvent:notify-outcome",
+    ]);
+    const fetched = step.outputs["fetch-retry-data"] as Record<string, unknown>;
+    expect(fetched.workspace).toEqual(WORKSPACE);
+  });
+});

@@ -63,7 +63,13 @@ import {
   proactiveRefreshWhere,
 } from "@/server/jobs/connectionHealthSweep";
 import { platformLabel } from "@/lib/platforms";
-import { WORKSPACE_PAUSED_RESULT_FAILURE, workspaceBlock } from "@/lib/workspaceStatus";
+import { billingFieldsSelect } from "@/lib/billing";
+import {
+  blockedResultFailure,
+  splitWorkspaceStatus,
+  workspaceBlock,
+  type WorkspaceStatusFields,
+} from "@/lib/workspaceStatus";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import {
   claimResult,
@@ -968,6 +974,8 @@ export const publishToAllPlatforms = inngest.createFunction(
             trackWebsiteLinks: true,
             pausedAt: true,
             pausedReason: true,
+            // 21a: the plan columns, only with billing on; never memoized either.
+            ...billingFieldsSelect(),
           },
         }),
         prisma.mediaItem.findUnique({ where: { id: mediaItemId } }),
@@ -984,9 +992,11 @@ export const publishToAllPlatforms = inngest.createFunction(
       // Pause (2026-11-10): the pause columns are read here but never memoized,
       // so a workspace that is not paused returns exactly the output it did
       // before. A paused one returns only that, and the run ends below.
-      const { pausedAt, pausedReason, ...workspace } = workspaceRow;
-      if (workspaceBlock({ pausedAt, pausedReason })) {
-        return { paused: true as const };
+      const { status, rest: workspace } = splitWorkspaceStatus(workspaceRow);
+      const block = workspaceBlock(status);
+      if (block) {
+        // 21a: an ended plan says so, so the results get its own sentence.
+        return block.code === "PLAN_ENDED" ? { paused: true as const, planEnded: true as const } : { paused: true as const };
       }
 
       // 07a: a post with several photos publishes all of them or none. A gone
@@ -1029,10 +1039,11 @@ export const publishToAllPlatforms = inngest.createFunction(
       // becomes PUBLISH_UNCONFIRMED) and the job recomputed; no outcome email,
       // so a burst of due posts does not flood the owner. The owner can retry
       // them after a resume; nothing publishes by itself later.
+      const planEnded = "planEnded" in setupData;
       await step.run("mark-failed-workspace-paused", async () => {
-        await failPendingPostJobResults(postJobId, WORKSPACE_PAUSED_RESULT_FAILURE);
+        await failPendingPostJobResults(postJobId, blockedResultFailure(planEnded ? "PLAN_ENDED" : "WORKSPACE_PAUSED"));
       });
-      return { error: "Workspace paused" };
+      return { error: planEnded ? "Workspace has no active plan" : "Workspace paused" };
     }
 
     // A run whose fetch-data output was memoized before 07a has no list.
@@ -1431,6 +1442,8 @@ export const retryPlatforms = inngest.createFunction(
             trackWebsiteLinks: true,
             pausedAt: true,
             pausedReason: true,
+            // 21a: the plan columns, only with billing on; never memoized either.
+            ...billingFieldsSelect(),
           },
         }),
         prisma.mediaItem.findUnique({ where: { id: postJob.mediaItemId } }),
@@ -1450,11 +1463,12 @@ export const retryPlatforms = inngest.createFunction(
 
       // Pause (2026-11-10): as in fetch-data, the pause columns are never
       // memoized; a paused workspace's run ends below without retrying anything.
-      let workspace: Omit<NonNullable<typeof workspaceRow>, "pausedAt" | "pausedReason"> | null = null;
+      let workspace: Omit<NonNullable<typeof workspaceRow>, keyof WorkspaceStatusFields> | null = null;
       if (workspaceRow) {
-        const { pausedAt, pausedReason, ...footerFields } = workspaceRow;
-        if (workspaceBlock({ pausedAt, pausedReason })) {
-          return { paused: true as const };
+        const { status, rest: footerFields } = splitWorkspaceStatus(workspaceRow);
+        const block = workspaceBlock(status);
+        if (block) {
+          return block.code === "PLAN_ENDED" ? { paused: true as const, planEnded: true as const } : { paused: true as const };
         }
         workspace = footerFields;
       }
@@ -1500,10 +1514,15 @@ export const retryPlatforms = inngest.createFunction(
       // Pause (2026-11-10): the retry route refuses a paused workspace, so this
       // is a retry queued just before the pause. Fail only this run's platforms,
       // as fail-media-unavailable does, and send no outcome email.
+      const planEnded = "planEnded" in setupData;
       await step.run("mark-failed-workspace-paused", async () => {
-        await failPendingPostJobResults(postJobId, WORKSPACE_PAUSED_RESULT_FAILURE, { platforms });
+        await failPendingPostJobResults(
+          postJobId,
+          blockedResultFailure(planEnded ? "PLAN_ENDED" : "WORKSPACE_PAUSED"),
+          { platforms },
+        );
       });
-      return { postJobId, error: "Workspace paused" };
+      return { postJobId, error: planEnded ? "Workspace has no active plan" : "Workspace paused" };
     }
 
     const {

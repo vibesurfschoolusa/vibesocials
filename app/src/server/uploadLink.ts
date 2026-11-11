@@ -3,6 +3,7 @@ import { hashInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
 import { consumeFixedWindow } from "@/lib/rateLimit";
 import { isUploadLinkTokenShape, uploadLinkHourWindow } from "@/lib/uploadLink";
+import { billingFieldsSelect } from "@/lib/billing";
 import { workspaceBlock } from "@/lib/workspaceStatus";
 import { buildClientUploadEmail } from "@/server/notifications/clientUploadEmail";
 import { sendEmail } from "@/server/notifications/email";
@@ -35,7 +36,8 @@ export async function findActiveUploadLink(token: string): Promise<ActiveUploadL
       workspaceId: true,
       createdById: true,
       revokedAt: true,
-      workspace: { select: { name: true, pausedAt: true, pausedReason: true } },
+      // 21a: the plan columns too, only with billing on.
+      workspace: { select: { name: true, pausedAt: true, pausedReason: true, ...billingFieldsSelect() } },
     },
   });
   if (!row || row.revokedAt || workspaceBlock(row.workspace)) return null;

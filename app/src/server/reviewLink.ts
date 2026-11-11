@@ -15,6 +15,7 @@ import {
   type ReviewPostDTO,
 } from "@/lib/reviewLink";
 import { STORY_NO_CAPTION, storyListing, storyPlatformsOf } from "@/lib/storyPlacement";
+import { billingFieldsSelect } from "@/lib/billing";
 import { workspaceBlock } from "@/lib/workspaceStatus";
 import { resolvePlatformCaptions } from "@/server/jobs/posting";
 import { buildClientChangeRequestEmail } from "@/server/notifications/clientChangeRequestEmail";
@@ -46,7 +47,8 @@ export async function findActiveReviewLink(token: string): Promise<ActiveReviewL
       id: true,
       workspaceId: true,
       revokedAt: true,
-      workspace: { select: { name: true, pausedAt: true, pausedReason: true } },
+      // 21a: the plan columns too, only with billing on.
+      workspace: { select: { name: true, pausedAt: true, pausedReason: true, ...billingFieldsSelect() } },
     },
   });
   if (!row || row.revokedAt || workspaceBlock(row.workspace)) return null;
