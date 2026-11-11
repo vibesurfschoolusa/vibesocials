@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  repeatRefusalText,
   REPEAT_MAX_COUNT,
   REPEAT_MIN_COUNT,
   repeatSchedule,
@@ -147,5 +148,24 @@ describe("validateRepeatAt", () => {
       ok: false,
       error: "Repeat 1 is less than 23 hours after the one before it. Space the repeats at least a day apart.",
     });
+  });
+});
+
+describe("repeatRefusalText", () => {
+  const formatDate = (d: Date) => `local ${d.toISOString().slice(0, 10)}`;
+
+  it("names the refused post's date as the viewer reads it", () => {
+    expect(
+      repeatRefusalText(
+        { error: "The post on Friday (UTC) can't be scheduled. Full.", date: "2026-12-11T03:00:00.000Z", reason: "Full." },
+        formatDate,
+      ),
+    ).toBe("The post on local 2026-12-11 can't be scheduled. Full.");
+  });
+
+  it("is null without a date and a reason, so the server's sentence is shown", () => {
+    expect(repeatRefusalText({ error: "Nope." }, formatDate)).toBeNull();
+    expect(repeatRefusalText({ date: "bad", reason: "Full." }, formatDate)).toBeNull();
+    expect(repeatRefusalText(null, formatDate)).toBeNull();
   });
 });

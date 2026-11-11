@@ -55,6 +55,25 @@ function platformCaptionsBlock(
   ].join("\n");
 }
 
+/** "Thursday, November 12, 2026 (UTC)": the server does not know the owner's zone. */
+function utcDate(date: Date): string {
+  return `${date.toLocaleDateString("en-US", {
+    timeZone: "UTC",
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  })} (UTC)`;
+}
+
+/** The line a held series adds; empty for a single post. */
+function seriesLine(series: { count: number; first: Date; last: Date } | undefined): string {
+  if (!series) return "";
+  return `<p>This post repeats: ${series.count} posts from ${utcDate(series.first)} to ${utcDate(
+    series.last,
+  )}. Each one needs its own approval in the Queue.</p>`;
+}
+
 /** Sent to every workspace OWNER when a member submits a post for approval. */
 export function buildApprovalRequestedEmail(params: {
   submitterName: string;
@@ -64,6 +83,8 @@ export function buildApprovalRequestedEmail(params: {
   platformCaptions?: Partial<Record<Platform, string>> | null;
   /** `process.env.NEXTAUTH_URL`. Omit/null to render the email with no link. */
   appBaseUrl: string | null;
+  /** A held repeating post (brief 11): how many posts, and the first and last times. */
+  series?: { count: number; first: Date; last: Date };
 }): { subject: string; html: string } {
   const submitter = escapeHtml(params.submitterName);
   const workspace = escapeHtml(params.workspaceName);
@@ -78,6 +99,7 @@ export function buildApprovalRequestedEmail(params: {
       `<p>${submitter} submitted a post in <strong>${workspace}</strong> and it is waiting for your approval.</p>`,
       captionBlock(params.caption),
       platformCaptionsBlock(params.platformCaptions),
+      seriesLine(params.series),
       `<p>It will not publish until you approve it.</p>`,
       cta,
       `<p>— Vibe Socials</p>`,

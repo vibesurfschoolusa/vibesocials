@@ -111,6 +111,7 @@ import {
   REPEAT_MIN_COUNT,
   REPEAT_STORY_MESSAGE,
   REPEAT_X_NOTE,
+  repeatRefusalText,
   repeatSchedule,
   type RepeatInterval,
 } from "@/lib/repeatSchedule";
@@ -1155,7 +1156,19 @@ function CreatePostFormInner({
 
       // Nothing was created: keep the form so the user can fix and resend.
       if (!outcome.resetForm) {
-        toast.error(outcome.toast);
+        // A refused series names the date in the viewer's own zone.
+        const localRefusal =
+          "repeatAt" in repeatFields
+            ? repeatRefusalText(data, (date) =>
+                date.toLocaleDateString(undefined, {
+                  weekday: "long",
+                  day: "numeric",
+                  month: "long",
+                  year: "numeric",
+                }),
+              )
+            : null;
+        toast.error(localRefusal ?? outcome.toast);
         // 2026-11-01 audit (M3): the workspace was switched in another tab, so
         // pressing Post again can only 409 again until the page is reloaded.
         // A toast fades; pin the server's message in the form's error banner.

@@ -58,6 +58,21 @@ export function repeatSchedule(first: Date, interval: RepeatInterval, count: num
   });
 }
 
+/**
+ * The Create page's sentence for a series refused by the daily post limit,
+ * with the refused post's date as `formatDate` writes it in the viewer's zone.
+ * Null when the answer has no `date` and `reason` (POST /api/posts), so the
+ * server's own sentence, which names the UTC date, is shown instead.
+ */
+export function repeatRefusalText(body: unknown, formatDate: (date: Date) => string): string | null {
+  if (typeof body !== "object" || body === null) return null;
+  const { date, reason } = body as { date?: unknown; reason?: unknown };
+  if (typeof date !== "string" || typeof reason !== "string" || !reason) return null;
+  const at = new Date(date);
+  if (Number.isNaN(at.getTime())) return null;
+  return `The post on ${formatDate(at)} can't be scheduled. ${reason}`;
+}
+
 export type RepeatAtValidation = { ok: true; dates: Date[] } | { ok: false; error: string };
 
 /**

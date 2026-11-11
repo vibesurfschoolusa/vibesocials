@@ -35,7 +35,8 @@ export async function POST(_request: NextRequest, context: PostJobRouteContext) 
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // The workspace pause check goes here once it exists, like the other routes that move work.
+  // No pause check: cancelling only stops work, so it stays allowed while the
+  // workspace is paused, like the single cancel.
 
   const rateLimit = await checkRateLimit({
     userId: workspaceContext.user.id,

@@ -219,11 +219,16 @@ export async function checkDailyPostLimit(args: {
   day: Date;
   mode: DailyPostLimitMode;
   excludePostJobId?: string;
+  /**
+   * Posts of the same request already counted for this UTC day but not stored
+   * yet: the earlier posts of a repeating post that fall on the same day.
+   */
+  alsoOnDay?: number;
 }): Promise<LimitRefusal | null> {
   const { workspaceId, day, mode, excludePostJobId } = args;
   try {
     const { name, limits } = await loadWorkspace(workspaceId);
-    const used = await countPostsOnUtcDay(workspaceId, day, excludePostJobId);
+    const used = (await countPostsOnUtcDay(workspaceId, day, excludePostJobId)) + (args.alsoOnDay ?? 0);
     if (used < limits.postsPerDay) return null;
 
     const { end } = utcDayRange(day);

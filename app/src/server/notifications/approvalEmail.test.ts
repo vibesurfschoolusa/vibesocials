@@ -159,3 +159,43 @@ describe("buildApprovalDecisionEmail", () => {
     expect(evil.html).not.toContain("<script>");
   });
 });
+
+// 11 polish: a held series is one email, and it says so.
+describe("buildApprovalRequestedEmail - a series", () => {
+  const base = {
+    submitterName: "Sam",
+    workspaceName: "Acme",
+    caption: "Book your lesson",
+    appBaseUrl: null,
+  };
+  const LINE =
+    "This post repeats: 4 posts from Thursday, November 12, 2026 (UTC) to Thursday, December 3, 2026 (UTC). Each one needs its own approval in the Queue.";
+
+  it("adds one line with the count and the first and last dates in UTC", () => {
+    const email = buildApprovalRequestedEmail({
+      ...base,
+      series: {
+        count: 4,
+        first: new Date("2026-11-12T09:00:00.000Z"),
+        last: new Date("2026-12-03T09:00:00.000Z"),
+      },
+    });
+    expect(email.html).toContain(`<p>${LINE}</p>`);
+  });
+
+  it("writes the UTC date even when the local day differs", () => {
+    const email = buildApprovalRequestedEmail({
+      ...base,
+      series: {
+        count: 2,
+        first: new Date("2026-11-12T23:30:00.000Z"),
+        last: new Date("2026-11-19T23:30:00.000Z"),
+      },
+    });
+    expect(email.html).toContain("from Thursday, November 12, 2026 (UTC) to Thursday, November 19, 2026 (UTC)");
+  });
+
+  it("a single held post's email is unchanged", () => {
+    expect(buildApprovalRequestedEmail(base).html).not.toContain("repeats");
+  });
+});

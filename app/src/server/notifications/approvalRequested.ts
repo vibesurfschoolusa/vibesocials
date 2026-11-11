@@ -29,6 +29,8 @@ export async function notifyOwnersOfApprovalRequest(params: {
    * caption.
    */
   platformCaptions: Partial<Record<Platform, string>> | null;
+  /** A held repeating post (brief 11): the one email says how many posts and when. */
+  series?: { count: number; first: Date; last: Date };
 }): Promise<void> {
   try {
     const owners = await prisma.workspaceMember.findMany({
@@ -47,6 +49,7 @@ export async function notifyOwnersOfApprovalRequest(params: {
       caption: params.caption,
       platformCaptions: params.platformCaptions,
       appBaseUrl: process.env.NEXTAUTH_URL ?? null,
+      ...(params.series ? { series: params.series } : {}),
     });
 
     await Promise.all(owners.map((owner) => sendEmail({ to: owner.user.email, ...email })));

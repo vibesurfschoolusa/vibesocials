@@ -1092,7 +1092,7 @@ describe("GET /api/posts - series", () => {
     expect(postJobFindManyMock).toHaveBeenCalledTimes(2);
     expect(postJobFindManyMock.mock.calls[1][0]).toEqual({
       where: { workspaceId: "ws-1", seriesId: { in: ["s1"] } },
-      select: { id: true, seriesId: true, scheduledFor: true },
+      select: { id: true, seriesId: true, scheduledFor: true, status: true },
     });
     expect(body.jobs[0]).toMatchObject({ seriesId: "s1", seriesPosition: 2, seriesCount: 3 });
     expect(body.jobs[1].seriesId).toBeNull();

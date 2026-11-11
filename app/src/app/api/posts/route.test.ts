@@ -2444,6 +2444,8 @@ describe("POST /api/posts - repeat (repeatAt)", () => {
     expect(body.error).toBe(`The post on ${label} (UTC) can't be scheduled. ${SENTENCE}`);
     expect(body.code).toBe("WORKSPACE_DAILY_POST_LIMIT");
     expect(body.date).toBe(fifth.toISOString());
+    // 11 polish: the limit's own sentence, so the Create page can name the date in the viewer's zone.
+    expect((body as unknown as { reason: string }).reason).toBe(SENTENCE);
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
   });
 
@@ -2467,7 +2469,59 @@ describe("POST /api/posts - repeat (repeatAt)", () => {
     expect(postJobUpdateMock).not.toHaveBeenCalled();
     expect(checkDailyPostLimitMock).not.toHaveBeenCalled();
     expect(notifyOwnersMock).toHaveBeenCalledTimes(1);
+    // 11 polish: the one email says the post repeats.
+    expect(notifyOwnersMock.mock.calls[0][0].series).toEqual({
+      count: 4,
+      first: FIRST,
+      last: weekly(3)[2],
+    });
     expect(body.awaitingApproval).toBe(true);
     expect(body.message).toBe("Sent for approval: 4 posts. An owner will review each one before it publishes.");
+  });
+});
+
+// 11 polish: a series counts its own earlier posts on the same UTC day.
+describe("POST /api/posts - repeat, posts of one request on the same day", () => {
+  const BLOB = "https://test.public.blob.vercel-storage.com/x";
+  // 00:30 and 23:40 UTC on one day are 23 hours 10 minutes apart.
+  const DAY = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const EARLY = new Date(`${DAY}T00:30:00.000Z`);
+  const LATE = new Date(`${DAY}T23:40:00.000Z`);
+  const NEXT_DAY = new Date(LATE.getTime() + 24 * 60 * 60 * 1000);
+
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", postJobIds: ["job-1", "job-2"], mediaItemId: "media-1", resultIds: [] });
+    // The day holds the limit minus one: refused only when the request adds another.
+    checkDailyPostLimitMock.mockImplementation(({ alsoOnDay }: { alsoOnDay?: number }) =>
+      Promise.resolve((alsoOnDay ?? 0) >= 1 ? { error: "Full.", code: "WORKSPACE_DAILY_POST_LIMIT" } : null),
+    );
+  });
+
+  it("two occurrences on a day at the limit minus one: refused, naming the second", async () => {
+    const response = await POST(
+      jsonRequest({ blobUrl: BLOB, baseCaption: "hi", scheduledFor: EARLY.toISOString(), repeatAt: [LATE.toISOString()] }),
+    );
+    const body = (await response.json()) as { date: string };
+
+    expect(response.status).toBe(429);
+    expect(checkDailyPostLimitMock.mock.calls.map((c) => c[0].alsoOnDay)).toEqual([0, 1]);
+    expect(body.date).toBe(LATE.toISOString());
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("occurrences on different days count only the stored posts", async () => {
+    const response = await POST(
+      jsonRequest({ blobUrl: BLOB, baseCaption: "hi", scheduledFor: LATE.toISOString(), repeatAt: [NEXT_DAY.toISOString()] }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(checkDailyPostLimitMock.mock.calls.map((c) => c[0].alsoOnDay)).toEqual([0, 0]);
+  });
+
+  it("a single post is checked as before, with nothing else on the day", async () => {
+    const response = await POST(jsonRequest({ blobUrl: BLOB, baseCaption: "hi", scheduledFor: EARLY.toISOString() }));
+
+    expect(response.status).toBe(200);
+    expect(checkDailyPostLimitMock.mock.calls[0][0]).not.toHaveProperty("alsoOnDay");
   });
 });

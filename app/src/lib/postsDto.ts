@@ -218,14 +218,16 @@ export interface PostJobDTO {
 /**
  * Each post's place in its series and the series' size, from every existing
  * post of the series on the page: ordered by time (a post without one last),
- * then id. Posts without a series are left out.
+ * then id. Posts without a series are left out, and so are cancelled ones, so
+ * the rest of a series reads "1 of 2" once its later posts are cancelled;
+ * published posts still count.
  */
 export function seriesPlaces(
-  rows: readonly { id: string; seriesId: string | null; scheduledFor: Date | null }[],
+  rows: readonly { id: string; seriesId: string | null; scheduledFor: Date | null; status?: string }[],
 ): Map<string, { position: number; count: number }> {
   const bySeries = new Map<string, { id: string; at: number }[]>();
   for (const row of rows) {
-    if (!row.seriesId) continue;
+    if (!row.seriesId || row.status === "cancelled") continue;
     const list = bySeries.get(row.seriesId) ?? [];
     list.push({ id: row.id, at: row.scheduledFor?.getTime() ?? Number.POSITIVE_INFINITY });
     bySeries.set(row.seriesId, list);

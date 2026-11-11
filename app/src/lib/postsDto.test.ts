@@ -179,3 +179,34 @@ describe("seriesPlaces", () => {
     expect(seriesPlaces([{ id: "a", seriesId: null, scheduledFor: at(12) }]).size).toBe(0);
   });
 });
+
+// 11 polish: cancelled posts leave the count; published ones stay.
+describe("seriesPlaces leaves cancelled posts out", () => {
+  const at = (day: number) => new Date(Date.UTC(2026, 10, day, 9, 0));
+  const series = (statuses: string[]) =>
+    statuses.map((status, i) => ({ id: `p${i + 1}`, seriesId: "s1", scheduledFor: at(i + 1), status }));
+
+  it("a full series", () => {
+    const places = seriesPlaces(series(["completed", "scheduled", "scheduled", "scheduled"]));
+    expect(places.get("p1")).toEqual({ position: 1, count: 4 });
+    expect(places.get("p4")).toEqual({ position: 4, count: 4 });
+  });
+
+  it("after cancelling from the third on, the first two read 1 of 2 and 2 of 2", () => {
+    const places = seriesPlaces(series(["completed", "scheduled", "cancelled", "cancelled", "cancelled"]));
+    expect(places.get("p1")).toEqual({ position: 1, count: 2 });
+    expect(places.get("p2")).toEqual({ position: 2, count: 2 });
+    expect(places.has("p3")).toBe(false);
+  });
+
+  it("after one in the middle is cancelled alone", () => {
+    const places = seriesPlaces(series(["scheduled", "cancelled", "scheduled"]));
+    expect(places.get("p1")).toEqual({ position: 1, count: 2 });
+    expect(places.get("p3")).toEqual({ position: 2, count: 2 });
+  });
+
+  it("only one post left", () => {
+    const places = seriesPlaces(series(["cancelled", "scheduled", "cancelled"]));
+    expect(places.get("p2")).toEqual({ position: 1, count: 1 });
+  });
+});

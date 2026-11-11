@@ -167,6 +167,18 @@ describe("checkDailyPostLimit", () => {
       checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" }),
     ).resolves.toBeNull();
   });
+
+  // 11 polish: a series counts its own earlier posts on the same day too.
+  it("counts the request's own earlier posts on that day as well", async () => {
+    db.postJobCount.mockResolvedValue(19);
+
+    expect(
+      await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "schedule", alsoOnDay: 1 }),
+    ).toMatchObject({ code: "WORKSPACE_DAILY_POST_LIMIT" });
+    expect(
+      await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "schedule", alsoOnDay: 0 }),
+    ).toBeNull();
+  });
 });
 
 describe("the limit-reached email", () => {

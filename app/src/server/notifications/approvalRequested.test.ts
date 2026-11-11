@@ -122,3 +122,19 @@ describe("notifyOwnersOfApprovalRequest", () => {
     consoleSpy.mockRestore();
   });
 });
+
+describe("notifyOwnersOfApprovalRequest - a series", () => {
+  it("passes the series to the email: one email that says the post repeats", async () => {
+    await notifyOwnersOfApprovalRequest({
+      ...PARAMS,
+      series: {
+        count: 3,
+        first: new Date("2026-11-12T09:00:00.000Z"),
+        last: new Date("2026-11-26T09:00:00.000Z"),
+      },
+    });
+
+    expect(sendEmailMock).toHaveBeenCalledTimes(2);
+    expect(sendEmailMock.mock.calls[0][0].html).toContain("This post repeats: 3 posts from");
+  });
+});

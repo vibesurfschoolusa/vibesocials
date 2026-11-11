@@ -34,6 +34,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { isValidPerPlatformOverrides, validateScheduledFor, type PostJobIntent } from "@/lib/scheduling";
 import { deriveApprovalState, shouldHoldForApproval } from "@/lib/approval";
 import { REPEAT_STORY_MESSAGE, validateRepeatAt } from "@/lib/repeatSchedule";
+import { utcDayKey } from "@/lib/usageLimits";
 import type {
   FacebookPostMetadata,
   GoogleBusinessPostMetadata,
@@ -309,7 +310,7 @@ export async function GET(request: Request) {
     const seriesRows = seriesIds.length
       ? await prisma.postJob.findMany({
           where: { workspaceId: context.workspace.id, seriesId: { in: seriesIds } },
-          select: { id: true, seriesId: true, scheduledFor: true },
+          select: { id: true, seriesId: true, scheduledFor: true, status: true },
         })
       : [];
     const placeByJobId = seriesPlaces(seriesRows);
@@ -885,11 +886,17 @@ export async function POST(request: Request) {
   // what has published, so each post meets them when it publishes, like any
   // scheduled post.
   if (effectiveIntent !== "draft" && seriesTimes) {
-    for (const time of seriesTimes) {
+    for (const [index, time] of seriesTimes.entries()) {
+      // The stored posts do not include this request's earlier posts on the
+      // same UTC day (23 hours apart can share one), so they are added.
+      const alsoOnDay = seriesTimes
+        .slice(0, index)
+        .filter((earlier) => utcDayKey(earlier) === utcDayKey(time)).length;
       const refusal = await checkDailyPostLimit({
         workspaceId: context.workspace.id,
         day: time,
         mode: "schedule",
+        alsoOnDay,
       });
       if (refusal) {
         // The limit counts UTC days, so the UTC date is the one that is full.
@@ -904,7 +911,10 @@ export async function POST(request: Request) {
           {
             error: `The post on ${day} (UTC) can't be scheduled. ${refusal.error}`,
             code: refusal.code,
+            // The Create page names this instant in the viewer's own zone,
+            // with `reason`; `error` is the sentence for other callers.
             date: time.toISOString(),
+            reason: refusal.error,
           },
           { status: 429 },
         );
@@ -1031,7 +1041,7 @@ export async function POST(request: Request) {
       }
 
       // 2026-11-01 audit: tell the owners something is waiting. Never throws.
-      // A series sends this one email, not one per post.
+      // A series sends this one email, not one per post, and it says so.
       await notifyOwnersOfApprovalRequest({
         workspaceId: context.workspace.id,
         workspaceName: context.workspace.name,
@@ -1055,6 +1065,15 @@ export async function POST(request: Request) {
             ...(facebookMetadata ? (["facebook_page"] as const) : []),
           ],
         ),
+        ...(series
+          ? {
+              series: {
+                count: series.times.length,
+                first: series.times[0],
+                last: series.times[series.times.length - 1],
+              },
+            }
+          : {}),
       });
     }
 
