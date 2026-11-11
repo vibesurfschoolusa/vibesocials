@@ -8,6 +8,8 @@ import {
   createCustomer,
   createPortalSession,
   encodeForm,
+  expireCheckoutSession,
+  listOpenCheckoutSessions,
   listCustomerSubscriptions,
   retrievePrice,
   retrieveSubscription,
@@ -202,6 +204,22 @@ describe("the calls", () => {
     expect(url).toBe("https://api.stripe.com/v1/subscriptions/sub_1");
     expect(init.method).toBe("DELETE");
     expect(headers.get("Idempotency-Key")).toBeNull();
+  });
+
+  it("listOpenCheckoutSessions reads the customer's open sessions", async () => {
+    fetchMock.mockResolvedValue(ok({ object: "list", data: [{ id: "cs_1", status: "open" }], has_more: false }));
+    expect(await listOpenCheckoutSessions("cus_1", ENV)).toEqual([{ id: "cs_1", status: "open" }]);
+    expect(lastCall().url).toBe("https://api.stripe.com/v1/checkout/sessions?customer=cus_1&status=open&limit=100");
+    expect(lastCall().init.method).toBe("GET");
+  });
+
+  it("expireCheckoutSession posts to the session's expire path with a key", async () => {
+    fetchMock.mockResolvedValue(ok({ id: "cs_1", status: "expired" }));
+    await expireCheckoutSession("cs_1", "vs-expire-cs_1", ENV);
+    const { url, init, headers } = lastCall();
+    expect(url).toBe("https://api.stripe.com/v1/checkout/sessions/cs_1/expire");
+    expect(init.method).toBe("POST");
+    expect(headers.get("Idempotency-Key")).toBe("vs-expire-cs_1");
   });
 
   it("retrievePrice reads one price", async () => {

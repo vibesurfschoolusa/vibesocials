@@ -249,3 +249,24 @@ export function cancelSubscription(
 export function retrievePrice(id: string, env: BillingEnv = process.env): Promise<StripePrice> {
   return stripeRequest("GET", `/prices/${segment(id)}`, { env });
 }
+
+/** GET /v1/checkout/sessions?customer=&status=open: Checkout pages of the customer that can still be paid. */
+export async function listOpenCheckoutSessions(
+  customer: string,
+  env: BillingEnv = process.env,
+): Promise<Array<{ id: string; status: string }>> {
+  const list = await stripeRequest<{ data: Array<{ id: string; status: string }> }>("GET", "/checkout/sessions", {
+    query: new URLSearchParams({ customer, status: "open", limit: "100" }),
+    env,
+  });
+  return list.data;
+}
+
+/** POST /v1/checkout/sessions/:id/expire: only an open session can be expired; anything else is an error. */
+export function expireCheckoutSession(
+  id: string,
+  idempotencyKey: string,
+  env: BillingEnv = process.env,
+): Promise<{ id: string; status: string }> {
+  return stripeRequest("POST", `/checkout/sessions/${segment(id)}/expire`, { idempotencyKey, env });
+}

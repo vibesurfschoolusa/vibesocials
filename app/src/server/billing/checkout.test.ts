@@ -17,6 +17,9 @@ const m = vi.hoisted(() => ({
   createCheckoutSession: vi.fn(),
   createPortalSession: vi.fn(),
   listCustomerSubscriptions: vi.fn(),
+  listOpenCheckoutSessions: vi.fn(),
+  expireCheckoutSession: vi.fn(),
+  order: [] as string[],
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
@@ -27,6 +30,8 @@ vi.mock("./stripeApi", async (importOriginal) => ({
   createCheckoutSession: m.createCheckoutSession,
   createPortalSession: m.createPortalSession,
   listCustomerSubscriptions: m.listCustomerSubscriptions,
+  listOpenCheckoutSessions: m.listOpenCheckoutSessions,
+  expireCheckoutSession: m.expireCheckoutSession,
 }));
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -88,6 +93,14 @@ beforeEach(() => {
   m.createPortalSession.mockResolvedValue({ id: "bps_1", url: "https://billing.stripe.com/p/session/x" });
   m.listCustomerSubscriptions.mockReset();
   m.listCustomerSubscriptions.mockResolvedValue([]);
+  m.order = [];
+  m.listOpenCheckoutSessions.mockReset();
+  m.listOpenCheckoutSessions.mockResolvedValue([]);
+  m.expireCheckoutSession.mockReset();
+  m.expireCheckoutSession.mockImplementation(async (id: string) => {
+    m.order.push(`expire:${id}`);
+    return { id, status: "expired" };
+  });
   for (const fn of Object.values(m.logger)) fn.mockReset();
 });
 
@@ -208,6 +221,58 @@ describe("startCheckout", () => {
   it("a missing workspace answers 404", async () => {
     m.row = null;
     expect(await startCheckout(input(), ENV)).toMatchObject({ ok: false, status: 404 });
+  });
+});
+
+/** Fix round 1: an abandoned Checkout page paid later, or two tabs, would make a second subscription. */
+describe("open Checkout sessions are expired first", () => {
+  beforeEach(() => {
+    m.createCheckoutSession.mockImplementation(async () => {
+      m.order.push("create");
+      return { id: "cs_new", url: "https://checkout.stripe.com/c/pay/cs_new" };
+    });
+  });
+
+  it("expires each of the customer's open sessions, then creates the new one", async () => {
+    m.row = trialRow({ stripeCustomerId: "cus_1" });
+    m.listOpenCheckoutSessions.mockResolvedValue([
+      { id: "cs_a", status: "open" },
+      { id: "cs_b", status: "open" },
+    ]);
+    expect((await startCheckout(input(), ENV)).ok).toBe(true);
+    expect(m.listOpenCheckoutSessions).toHaveBeenCalledWith("cus_1", ENV);
+    expect(m.order).toEqual(["expire:cs_a", "expire:cs_b", "create"]);
+    expect(m.expireCheckoutSession).toHaveBeenCalledWith("cs_a", "vs-expire-cs_a", ENV);
+  });
+
+  it("checks a new customer too", async () => {
+    await startCheckout(input(), ENV);
+    expect(m.listOpenCheckoutSessions).toHaveBeenCalledWith("cus_1", ENV);
+  });
+
+  it("a second click expires the first page and gets a new one, not the expired one back", async () => {
+    m.row = trialRow({ stripeCustomerId: "cus_1" });
+    await startCheckout(input(), ENV);
+    m.listOpenCheckoutSessions.mockResolvedValue([{ id: "cs_new", status: "open" }]);
+    await startCheckout(input(), ENV);
+    const [first, second] = m.createCheckoutSession.mock.calls.map((call) => call[1]);
+    expect(first).not.toBe(second);
+  });
+
+  it("two clicks that both find nothing open share one key, so Stripe makes one session", async () => {
+    m.row = trialRow({ stripeCustomerId: "cus_1" });
+    await startCheckout(input(), ENV);
+    await startCheckout(input(), ENV);
+    const [first, second] = m.createCheckoutSession.mock.calls.map((call) => call[1]);
+    expect(first).toBe(second);
+  });
+
+  it("an expire Stripe refuses stops before a new session is made", async () => {
+    m.row = trialRow({ stripeCustomerId: "cus_1" });
+    m.listOpenCheckoutSessions.mockResolvedValue([{ id: "cs_a", status: "open" }]);
+    m.expireCheckoutSession.mockRejectedValue(new StripeApiError("Stripe answered 400", 400));
+    expect(await startCheckout(input(), ENV)).toMatchObject({ ok: false, status: 502 });
+    expect(m.createCheckoutSession).not.toHaveBeenCalled();
   });
 });
 

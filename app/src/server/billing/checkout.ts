@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 import { planState, priceIdForPlan, toBillingDate, type BillingEnv } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
@@ -7,7 +9,9 @@ import {
   createCheckoutSession,
   createCustomer,
   createPortalSession,
+  expireCheckoutSession,
   listCustomerSubscriptions,
+  listOpenCheckoutSessions,
   stripeIdempotencyKey,
   StripeApiError,
 } from "./stripeApi";
@@ -56,7 +60,9 @@ function logStripeFailure(what: string, workspaceId: string, error: unknown) {
 /**
  * Order: refuse (no price, exempt by flag, a live subscription stored or at
  * Stripe), then the customer (created once and saved only where none is
- * saved), then the Checkout Session. A failure after the customer is saved
+ * saved), then expire the customer's open Checkout sessions, then the new
+ * Checkout Session. Expiring first (fix round 1) means an abandoned page or a
+ * second tab can no longer be paid for a second subscription. A failure after the customer is saved
  * leaves just that id, which the next attempt reuses.
  */
 export async function startCheckout(
@@ -118,6 +124,19 @@ export async function startCheckout(
       trialEndsAt !== null &&
       trialEndsAt.getTime() - input.now.getTime() >= MIN_TRIAL_LEAD_MS;
 
+    const open = await listOpenCheckoutSessions(customer, env);
+    for (const stale of open) {
+      await expireCheckoutSession(stale.id, stripeIdempotencyKey(["expire", stale.id]), env);
+    }
+    // The key names the sessions just expired: a later click must not get an
+    // expired session back from Stripe's idempotency store, while two clicks
+    // that both found nothing open still share one session.
+    const keyParts = ["checkout", input.workspaceId, input.plan];
+    if (open.length > 0) {
+      const ids = open.map((o) => o.id).sort().join(",");
+      keyParts.push(crypto.createHash("sha256").update(ids).digest("hex").slice(0, 16));
+    }
+
     const session = await createCheckoutSession(
       {
         customer,
@@ -127,7 +146,7 @@ export async function startCheckout(
         successUrl: `${input.baseUrl}/settings?billing=success#plan`,
         cancelUrl: `${input.baseUrl}/settings#plan`,
       },
-      stripeIdempotencyKey(["checkout", input.workspaceId, input.plan], CHECKOUT_KEY_BUCKET_MS, input.now.getTime()),
+      stripeIdempotencyKey(keyParts, CHECKOUT_KEY_BUCKET_MS, input.now.getTime()),
       env,
     );
     if (!session.url) return stripeDown();
