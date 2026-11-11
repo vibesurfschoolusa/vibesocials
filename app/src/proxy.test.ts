@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { PUBLIC_ROUTE_PREFIXES } from "./components/shell/nav";
 import { isPublicPath } from "./proxy";
 
 describe("isPublicPath", () => {
@@ -41,5 +42,22 @@ describe("isPublicPath", () => {
     expect(isPublicPath("/v/abc")).toBe(true);
     expect(isPublicPath("/videos")).toBe(false);
     expect(isPublicPath("/verify")).toBe(false);
+  });
+});
+
+describe("isPublicPath — pricing (23)", () => {
+  it("lets a signed-out visitor reach /pricing, which answers the 404 until payments are configured", () => {
+    expect(isPublicPath("/pricing")).toBe(true);
+    expect(isPublicPath("/pricings")).toBe(false);
+    expect(isPublicPath("/price")).toBe(false);
+  });
+
+  it("opens nothing else new: the public pages are the ones the shell treats as public, plus the two app files", () => {
+    for (const prefix of PUBLIC_ROUTE_PREFIXES) {
+      expect(isPublicPath(prefix), prefix).toBe(true);
+    }
+    for (const path of ["/settings", "/queue", "/posts/new", "/media", "/reports", "/reviews", "/workspaces", "/admin", "/join/abc", "/connections"]) {
+      expect(isPublicPath(path), path).toBe(false);
+    }
   });
 });

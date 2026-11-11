@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isPublicRoute, NAV_ITEMS, sectionTitle } from "./nav";
+import { isPublicRoute, NAV_ITEMS, PUBLIC_ROUTE_PREFIXES, sectionTitle } from "./nav";
 
 describe("isPublicRoute", () => {
   it("treats the help page as public", () => {
@@ -63,5 +63,27 @@ describe("Reports", () => {
 
   it("renders the client's report with no app shell: /v already covers it", () => {
     expect(isPublicRoute("/v/abc/report")).toBe(true);
+  });
+});
+
+describe("PUBLIC_ROUTE_PREFIXES — pricing (23)", () => {
+  it("adds /pricing and nothing else", () => {
+    expect(PUBLIC_ROUTE_PREFIXES).toEqual([
+      "/login",
+      "/register",
+      "/forgot-password",
+      "/reset-password",
+      "/verify-email",
+      "/privacy",
+      "/terms",
+      "/data-deletion",
+      "/about",
+      "/help",
+      "/u",
+      "/v",
+      "/pricing",
+    ]);
+    expect(isPublicRoute("/pricing")).toBe(true);
+    expect(isPublicRoute("/pricings")).toBe(false);
   });
 });

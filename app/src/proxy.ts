@@ -75,6 +75,8 @@ export function isPublicPath(pathname: string): boolean {
     "/u",
     // Client review links: a client looks over upcoming posts without an account (2026-11-10).
     "/v",
+    // The plans and prices (23); the page answers the 404 until payments are configured.
+    "/pricing",
   ];
   return prefixes.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),

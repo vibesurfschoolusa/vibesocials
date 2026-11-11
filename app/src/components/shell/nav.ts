@@ -53,6 +53,8 @@ export const PUBLIC_ROUTE_PREFIXES = [
   "/u",
   // Client review links (2026-11-10): the client has no account, so no shell.
   "/v",
+  // The pricing page (23), for visitors without an account.
+  "/pricing",
 ];
 
 export function isPublicRoute(pathname: string): boolean {

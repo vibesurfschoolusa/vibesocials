@@ -13,6 +13,7 @@ import type { LucideIcon } from "lucide-react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
+import { paymentsConfigured } from "@/lib/billing";
 import { platformLabel } from "@/lib/platforms";
 import { OPERATOR_NAME, PRODUCT_NAME } from "@/lib/siteInfo";
 
@@ -48,6 +49,15 @@ export function Landing() {
           </span>
         </span>
         <nav aria-label="Main" className="flex items-center gap-1">
+          {/* 23: only once /pricing exists; with payments not configured it is a 404. */}
+          {paymentsConfigured() ? (
+            <Link
+              href="/pricing"
+              className={buttonVariants({ variant: "ghost", size: "sm" })}
+            >
+              Pricing
+            </Link>
+          ) : null}
           <Link
             href="/about"
             className={buttonVariants({ variant: "ghost", size: "sm" })}
