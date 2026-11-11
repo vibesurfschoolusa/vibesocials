@@ -55,6 +55,9 @@ describe("PLATFORM_GUIDES", () => {
   it("has no review note for X and Pinterest", () => {
     expect(PLATFORM_GUIDES.x.status).toBeUndefined();
     expect(PLATFORM_GUIDES.pinterest.status).toBeUndefined();
+    // Google approved the YouTube scopes on 2026-11-11, so its warning screen is gone for YouTube.
+    expect(PLATFORM_GUIDES.youtube.status).toBeUndefined();
+    expect(PLATFORM_GUIDES.google_business_profile.status).toMatch(/has not verified/);
   });
 });
 

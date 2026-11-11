@@ -68,7 +68,6 @@ export const PLATFORM_GUIDES: Record<Platform, PlatformGuide> = {
       "Videos only.",
       "To post to a channel you do not own, its owner adds your Google account as a manager (this works for Brand Account channels).",
     ],
-    status: GOOGLE_VERIFICATION,
   },
   google_business_profile: {
     anchor: "google-business-profile",
