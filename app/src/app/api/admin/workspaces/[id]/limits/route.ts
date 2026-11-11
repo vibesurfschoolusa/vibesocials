@@ -1,0 +1,33 @@
+import { NextResponse } from "next/server";
+
+import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
+import { adminNotFoundResponse, adminOtherMethods, requireOperator } from "@/lib/operator";
+import { setWorkspaceLimits, validateLimitsBody } from "@/server/admin/actions";
+
+type AdminWorkspaceRouteContext = { params: Promise<{ id: string }> };
+
+/**
+ * POST /api/admin/workspaces/[id]/limits — operator only. Sets or clears the
+ * workspace's limit overrides (null = use the default) and records the old and
+ * new values. Anyone else gets the plain 404 of a route that does not exist.
+ */
+export async function POST(request: Request, context: AdminWorkspaceRouteContext) {
+  const operator = await requireOperator("change");
+  if (operator instanceof NextResponse) return operator;
+
+  const { id } = await context.params;
+  const body = await readJsonObject(request);
+  if (!body) return invalidJsonBodyResponse();
+  const parsed = validateLimitsBody(body);
+  if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
+
+  const result = await setWorkspaceLimits({ operator, workspaceId: id, limits: parsed.limits });
+  if (result.status === "not_found") return adminNotFoundResponse();
+  return NextResponse.json({ ok: true, changed: result.status === "changed" });
+}
+
+export const GET = adminOtherMethods.GET;
+export const PUT = adminOtherMethods.PUT;
+export const PATCH = adminOtherMethods.PATCH;
+export const DELETE = adminOtherMethods.DELETE;
+export const OPTIONS = adminOtherMethods.OPTIONS;

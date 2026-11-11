@@ -65,7 +65,6 @@ export function validateLimitsBody(body: unknown): { ok: true; limits: LimitChan
 }
 
 /** Control characters, including line breaks: the reason is one line of plain text. */
-// eslint-disable-next-line no-control-regex -- matching control characters is the point
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
 
 /** The pause body: a reason the workspace's members will read, required. */

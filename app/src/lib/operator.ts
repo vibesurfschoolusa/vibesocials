@@ -84,10 +84,11 @@ export async function requireOperator(kind: AdminRequestKind): Promise<Operator 
 /**
  * Every other method of an admin route. Without these, Next answers 405 (and
  * OPTIONS answers 204 with an Allow header), which would tell anyone the path
- * exists. Spread into a route module: `export const { GET, PUT, ... } = ...`.
+ * exists. Each route module re-exports the ones it does not implement.
  */
 export const adminOtherMethods = {
   GET: async () => adminNotFoundResponse(),
+  POST: async () => adminNotFoundResponse(),
   PUT: async () => adminNotFoundResponse(),
   PATCH: async () => adminNotFoundResponse(),
   DELETE: async () => adminNotFoundResponse(),
