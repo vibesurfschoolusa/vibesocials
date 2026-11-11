@@ -5225,3 +5225,99 @@ describe("publish functions - a post without a file (text only)", () => {
     ]);
   });
 });
+
+// Fix round 1: a text post meets the same blocked path as any post, after the
+// rebase onto plans and trials.
+describe("publish functions - a post without a file in a blocked workspace", () => {
+  const NOW = new Date("2026-12-10T12:00:00Z");
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const ENDED = {
+    pausedAt: null,
+    pausedReason: null,
+    billingExempt: false,
+    plan: null,
+    planStatus: null,
+    trialEndsAt: new Date(NOW.getTime() - DAY_MS),
+    currentPeriodEnd: null,
+  };
+  const PAUSED_FAILURE = { errorCode: "WORKSPACE_PAUSED", errorMessage: "Not published: this workspace was paused." };
+  const PLAN_FAILURE = { errorCode: "PLAN_ENDED", errorMessage: "Not published: this workspace has no active plan." };
+
+  let textCalls: number;
+
+  function setUp(workspace: Record<string, unknown>) {
+    textCalls = 0;
+    db.postJobFindUnique.mockResolvedValue({
+      id: "job-1",
+      workspaceId: WORKSPACE.id,
+      mediaItemId: null,
+      baseCaption: "Wind is onshore",
+      perPlatformOverrides: null,
+      publishMetadata: null,
+      _count: { media: 0 },
+    });
+    db.workspaceFindUnique.mockResolvedValue(workspace);
+    db.connectionFindMany.mockResolvedValue([{ id: "conn-x", platform: "x" }]);
+    stubResults(["x"]);
+    failPendingMock.mockResolvedValue({ failedCount: 1, unconfirmedCount: 0, status: "failed" });
+    getPlatformClientMock.mockImplementation(() => ({
+      publishVideo: vi.fn(),
+      publishText: vi.fn(async () => {
+        textCalls++;
+        return { externalPostId: "t" };
+      }),
+    }));
+  }
+
+  const publish = (step: FakeStep) =>
+    handlerOf(publishToAllPlatforms)({
+      event: {
+        name: "post/publish.requested",
+        data: { postJobId: "job-1", userId: "user-1", mediaItemId: null, baseCaption: "Wind is onshore", perPlatformOverrides: null },
+      },
+      step,
+    });
+  const retry = (step: FakeStep) =>
+    handlerOf(retryPlatforms)({
+      event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms: ["x"] } },
+      step,
+    });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  it("paused: publish and retry send nothing and fail with the pause sentence", async () => {
+    setUp({ ...WORKSPACE, pausedAt: NOW, pausedReason: "Unpaid invoice." });
+    const publishStep = fakeStep();
+    expect(await publish(publishStep)).toEqual({ error: "Workspace paused" });
+    expect(publishStep.order).toEqual(["run:fetch-data", "run:mark-failed-workspace-paused"]);
+    expect(failPendingMock).toHaveBeenLastCalledWith("job-1", PAUSED_FAILURE);
+
+    const retryStep = fakeStep();
+    await retry(retryStep);
+    expect(retryStep.order).toEqual(["run:fetch-retry-data", "run:mark-failed-workspace-paused"]);
+    expect(failPendingMock).toHaveBeenLastCalledWith("job-1", PAUSED_FAILURE, { platforms: ["x"] });
+    expect(textCalls).toBe(0);
+    expect(db.mediaItemFindUnique).not.toHaveBeenCalled();
+  });
+
+  it("plan ended: publish and retry send nothing and fail with the plan sentence", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    setUp({ ...WORKSPACE, ...ENDED });
+
+    const publishStep = fakeStep();
+    expect(await publish(publishStep)).toEqual({ error: "Workspace has no active plan" });
+    expect(publishStep.outputs["fetch-data"]).toEqual({ paused: true, planEnded: true });
+    expect(failPendingMock).toHaveBeenLastCalledWith("job-1", PLAN_FAILURE);
+
+    const retryStep = fakeStep();
+    await retry(retryStep);
+    expect(retryStep.order).toEqual(["run:fetch-retry-data", "run:mark-failed-workspace-paused"]);
+    expect(failPendingMock).toHaveBeenLastCalledWith("job-1", PLAN_FAILURE, { platforms: ["x"] });
+    expect(textCalls).toBe(0);
+  });
+});
