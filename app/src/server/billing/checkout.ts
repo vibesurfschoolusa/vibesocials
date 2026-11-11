@@ -11,7 +11,7 @@ import {
   createPortalSession,
   expireCheckoutSession,
   listCustomerSubscriptions,
-  listOpenCheckoutSessions,
+  listCheckoutSessions,
   stripeIdempotencyKey,
   StripeApiError,
 } from "./stripeApi";
@@ -31,6 +31,7 @@ export const CHECKOUT_MESSAGES = {
   noCustomer: "This workspace has no plan to manage yet. Choose a plan first.",
   noWorkspace: "This workspace no longer exists.",
   stripeDown: "We could not reach the payment page. Nothing was charged. Try again in a minute.",
+  alreadyPaid: "You already have a plan. It appears here within a minute.",
 } as const;
 
 /**
@@ -124,18 +125,39 @@ export async function startCheckout(
       trialEndsAt !== null &&
       trialEndsAt.getTime() - input.now.getTime() >= MIN_TRIAL_LEAD_MS;
 
-    const open = await listOpenCheckoutSessions(customer, env);
-    for (const stale of open) {
-      await expireCheckoutSession(stale.id, stripeIdempotencyKey(["expire", stale.id]), env);
+    // Every session of the customer, any status: the open ones are expired,
+    // and the whole list goes into the idempotency key below.
+    const listed = await listCheckoutSessions(customer, env);
+    const expired: string[] = [];
+    for (const stale of listed.filter((s) => s.status === "open")) {
+      try {
+        await expireCheckoutSession(stale.id, stripeIdempotencyKey(["expire", stale.id]), env);
+      } catch (error) {
+        // Only an open session can be expired: one paid a moment ago is no
+        // longer open, so its subscription may exist already (fix round 2).
+        if (!(error instanceof StripeApiError)) throw error;
+        const subscriptions = await listCustomerSubscriptions(customer, env).catch(() => []);
+        if (subscriptions.some((s) => isLiveSubscriptionStatus(s.status))) {
+          return { ok: false, status: 409, error: CHECKOUT_MESSAGES.alreadyPaid };
+        }
+        throw error;
+      }
+      expired.push(stale.id);
     }
-    // The key names the sessions just expired: a later click must not get an
-    // expired session back from Stripe's idempotency store, while two clicks
-    // that both found nothing open still share one session.
-    const keyParts = ["checkout", input.workspaceId, input.plan];
-    if (open.length > 0) {
-      const ids = open.map((o) => o.id).sort().join(",");
-      keyParts.push(crypto.createHash("sha256").update(ids).digest("hex").slice(0, 16));
-    }
+    // Stripe replays the saved answer for a repeated key, and that answer can
+    // be a session expired since. So the key names what this request saw and
+    // did: the count and ids of the customer's sessions and the ids it
+    // expired (fix round 2). Any session made or expired in between changes
+    // the key; two clicks that saw the same sessions and expired none share
+    // one key and so one session.
+    const seen = `${listed.map((s) => s.id).sort().join(",")}|${expired.sort().join(",")}`;
+    const keyParts = [
+      "checkout",
+      input.workspaceId,
+      input.plan,
+      `n${listed.length}`,
+      crypto.createHash("sha256").update(seen).digest("hex").slice(0, 16),
+    ];
 
     const session = await createCheckoutSession(
       {

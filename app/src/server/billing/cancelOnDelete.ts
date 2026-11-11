@@ -40,7 +40,7 @@ export const CANCELLED_ACCOUNT_KEPT_MESSAGE = `${CANCELLED_ACCOUNT_KEPT_PREFIX} 
 export const CANCEL_PHASE_BUDGET_MS = 20_000;
 
 export function partialCancelMessage(cancelled: number): string {
-  return `${cancelled} of your plans were cancelled, but we could not finish. Nothing was deleted. Try again.`;
+  return `${cancelled} of your plans ${cancelled === 1 ? "was" : "were"} cancelled, but we could not finish. Nothing was deleted. Try again.`;
 }
 
 export type CancelResult = { ok: true; cancelled: number } | { ok: false; status: 409 | 502; error: string };

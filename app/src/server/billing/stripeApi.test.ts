@@ -9,7 +9,7 @@ import {
   createPortalSession,
   encodeForm,
   expireCheckoutSession,
-  listOpenCheckoutSessions,
+  listCheckoutSessions,
   listCustomerSubscriptions,
   retrievePrice,
   retrieveSubscription,
@@ -206,10 +206,15 @@ describe("the calls", () => {
     expect(headers.get("Idempotency-Key")).toBeNull();
   });
 
-  it("listOpenCheckoutSessions reads the customer's open sessions", async () => {
-    fetchMock.mockResolvedValue(ok({ object: "list", data: [{ id: "cs_1", status: "open" }], has_more: false }));
-    expect(await listOpenCheckoutSessions("cus_1", ENV)).toEqual([{ id: "cs_1", status: "open" }]);
-    expect(lastCall().url).toBe("https://api.stripe.com/v1/checkout/sessions?customer=cus_1&status=open&limit=100");
+  it("listCheckoutSessions reads the customer's sessions of every status", async () => {
+    fetchMock.mockResolvedValue(
+      ok({ object: "list", data: [{ id: "cs_2", status: "open" }, { id: "cs_1", status: "expired" }], has_more: false }),
+    );
+    expect(await listCheckoutSessions("cus_1", ENV)).toEqual([
+      { id: "cs_2", status: "open" },
+      { id: "cs_1", status: "expired" },
+    ]);
+    expect(lastCall().url).toBe("https://api.stripe.com/v1/checkout/sessions?customer=cus_1&limit=100");
     expect(lastCall().init.method).toBe("GET");
   });
 

@@ -210,6 +210,7 @@ describe("the 20-second bound and partial cancels (fix round 1)", () => {
     const result = await run(["ws_1", "ws_2", "ws_3"]);
     expect(result).toEqual({ ok: false, status: 502, error: "2 of your plans were cancelled, but we could not finish. Nothing was deleted. Try again." });
     expect(partialCancelMessage(2)).toBe("2 of your plans were cancelled, but we could not finish. Nothing was deleted. Try again.");
+    expect(partialCancelMessage(1)).toBe("1 of your plans was cancelled, but we could not finish. Nothing was deleted. Try again.");
   });
 
   it("a cancel that fails after others succeeded deletes nothing and says how many", async () => {

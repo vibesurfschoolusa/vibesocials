@@ -250,13 +250,13 @@ export function retrievePrice(id: string, env: BillingEnv = process.env): Promis
   return stripeRequest("GET", `/prices/${segment(id)}`, { env });
 }
 
-/** GET /v1/checkout/sessions?customer=&status=open: Checkout pages of the customer that can still be paid. */
-export async function listOpenCheckoutSessions(
+/** GET /v1/checkout/sessions?customer=: the customer's Checkout sessions of every status, newest first, at most 100. */
+export async function listCheckoutSessions(
   customer: string,
   env: BillingEnv = process.env,
 ): Promise<Array<{ id: string; status: string }>> {
   const list = await stripeRequest<{ data: Array<{ id: string; status: string }> }>("GET", "/checkout/sessions", {
-    query: new URLSearchParams({ customer, status: "open", limit: "100" }),
+    query: new URLSearchParams({ customer, limit: "100" }),
     env,
   });
   return list.data;

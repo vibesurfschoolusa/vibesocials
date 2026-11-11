@@ -17,7 +17,7 @@ const m = vi.hoisted(() => ({
   createCheckoutSession: vi.fn(),
   createPortalSession: vi.fn(),
   listCustomerSubscriptions: vi.fn(),
-  listOpenCheckoutSessions: vi.fn(),
+  listCheckoutSessions: vi.fn(),
   expireCheckoutSession: vi.fn(),
   order: [] as string[],
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -30,7 +30,7 @@ vi.mock("./stripeApi", async (importOriginal) => ({
   createCheckoutSession: m.createCheckoutSession,
   createPortalSession: m.createPortalSession,
   listCustomerSubscriptions: m.listCustomerSubscriptions,
-  listOpenCheckoutSessions: m.listOpenCheckoutSessions,
+  listCheckoutSessions: m.listCheckoutSessions,
   expireCheckoutSession: m.expireCheckoutSession,
 }));
 vi.mock("@/lib/db", () => ({
@@ -94,8 +94,8 @@ beforeEach(() => {
   m.listCustomerSubscriptions.mockReset();
   m.listCustomerSubscriptions.mockResolvedValue([]);
   m.order = [];
-  m.listOpenCheckoutSessions.mockReset();
-  m.listOpenCheckoutSessions.mockResolvedValue([]);
+  m.listCheckoutSessions.mockReset();
+  m.listCheckoutSessions.mockResolvedValue([]);
   m.expireCheckoutSession.mockReset();
   m.expireCheckoutSession.mockImplementation(async (id: string) => {
     m.order.push(`expire:${id}`);
@@ -125,7 +125,7 @@ describe("startCheckout", () => {
       successUrl: "https://app.example/settings?billing=success#plan",
       cancelUrl: "https://app.example/settings#plan",
     });
-    expect(key).toMatch(/^vs-checkout-ws_1-starter-\d+$/);
+    expect(key).toMatch(/^vs-checkout-ws_1-starter-n0-[0-9a-f]{16}-\d+$/);
   });
 
   it("writes nothing to the plan columns", async () => {
@@ -235,25 +235,25 @@ describe("open Checkout sessions are expired first", () => {
 
   it("expires each of the customer's open sessions, then creates the new one", async () => {
     m.row = trialRow({ stripeCustomerId: "cus_1" });
-    m.listOpenCheckoutSessions.mockResolvedValue([
+    m.listCheckoutSessions.mockResolvedValue([
       { id: "cs_a", status: "open" },
       { id: "cs_b", status: "open" },
     ]);
     expect((await startCheckout(input(), ENV)).ok).toBe(true);
-    expect(m.listOpenCheckoutSessions).toHaveBeenCalledWith("cus_1", ENV);
+    expect(m.listCheckoutSessions).toHaveBeenCalledWith("cus_1", ENV);
     expect(m.order).toEqual(["expire:cs_a", "expire:cs_b", "create"]);
     expect(m.expireCheckoutSession).toHaveBeenCalledWith("cs_a", "vs-expire-cs_a", ENV);
   });
 
   it("checks a new customer too", async () => {
     await startCheckout(input(), ENV);
-    expect(m.listOpenCheckoutSessions).toHaveBeenCalledWith("cus_1", ENV);
+    expect(m.listCheckoutSessions).toHaveBeenCalledWith("cus_1", ENV);
   });
 
   it("a second click expires the first page and gets a new one, not the expired one back", async () => {
     m.row = trialRow({ stripeCustomerId: "cus_1" });
     await startCheckout(input(), ENV);
-    m.listOpenCheckoutSessions.mockResolvedValue([{ id: "cs_new", status: "open" }]);
+    m.listCheckoutSessions.mockResolvedValue([{ id: "cs_new", status: "open" }]);
     await startCheckout(input(), ENV);
     const [first, second] = m.createCheckoutSession.mock.calls.map((call) => call[1]);
     expect(first).not.toBe(second);
@@ -269,10 +269,100 @@ describe("open Checkout sessions are expired first", () => {
 
   it("an expire Stripe refuses stops before a new session is made", async () => {
     m.row = trialRow({ stripeCustomerId: "cus_1" });
-    m.listOpenCheckoutSessions.mockResolvedValue([{ id: "cs_a", status: "open" }]);
+    m.listCheckoutSessions.mockResolvedValue([{ id: "cs_a", status: "open" }]);
     m.expireCheckoutSession.mockRejectedValue(new StripeApiError("Stripe answered 400", 400));
     expect(await startCheckout(input(), ENV)).toMatchObject({ ok: false, status: 502 });
     expect(m.createCheckoutSession).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Fix round 2: Stripe replays a saved answer for a repeated idempotency key,
+ * so the key must change whenever the sessions Stripe holds have changed.
+ * This fake keeps the customer's sessions and Stripe's idempotency store.
+ */
+describe("idempotency keys never replay an expired session", () => {
+  let sessions: Array<{ id: string; status: string }>;
+  let saved: Map<string, { id: string; url: string }>;
+  let failNextCreate: boolean;
+
+  beforeEach(() => {
+    m.row = trialRow({ stripeCustomerId: "cus_1" });
+    sessions = [];
+    saved = new Map();
+    failNextCreate = false;
+    m.listCheckoutSessions.mockImplementation(async () => sessions.map((s) => ({ ...s })));
+    m.expireCheckoutSession.mockImplementation(async (id: string) => {
+      const session = sessions.find((s) => s.id === id)!;
+      session.status = "expired";
+      return { ...session };
+    });
+    m.createCheckoutSession.mockImplementation(async (_args: unknown, key: string) => {
+      const replay = saved.get(key);
+      if (replay) return replay;
+      if (failNextCreate) {
+        failNextCreate = false;
+        throw new StripeApiError("Stripe answered 500", 500);
+      }
+      const id = `cs_${sessions.length + 1}`;
+      sessions.unshift({ id, status: "open" });
+      const answer = { id, url: `https://checkout.stripe.com/c/pay/${id}` };
+      saved.set(key, answer);
+      return answer;
+    });
+  });
+
+  const statusOf = (url: string) => sessions.find((s) => url.endsWith(s.id))?.status;
+
+  it("click, then click again with the first still open: the first is expired and the second is new", async () => {
+    const first = await startCheckout(input(), ENV);
+    const second = await startCheckout(input(), ENV);
+    expect(first.ok && second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+    expect(second.url).not.toBe(first.url);
+    expect(statusOf(first.url)).toBe("expired");
+    expect(statusOf(second.url)).toBe("open");
+    const [k1, k2] = m.createCheckoutSession.mock.calls.map((call) => call[1]);
+    expect(k1).not.toBe(k2);
+  });
+
+  it("click; click that expires it and whose create fails; click: ends on a live session", async () => {
+    await startCheckout(input(), ENV);
+    failNextCreate = true;
+    expect((await startCheckout(input(), ENV)).ok).toBe(false);
+    const third = await startCheckout(input(), ENV);
+    expect(third.ok).toBe(true);
+    if (third.ok) expect(statusOf(third.url)).toBe("open");
+  });
+
+  it("a plain double click within a second creates one session", async () => {
+    // Both requests list before either creates.
+    const [a, b] = await Promise.all([startCheckout(input(), ENV), startCheckout(input(), ENV)]);
+    expect(a.ok && b.ok && a.url === b.url).toBe(true);
+    expect(sessions).toHaveLength(1);
+  });
+});
+
+/** Fix round 2: a session paid a moment ago cannot be expired; that is not a Stripe outage. */
+describe("an expire that fails because the session was just paid", () => {
+  beforeEach(() => {
+    m.row = trialRow({ stripeCustomerId: "cus_1" });
+    m.listCheckoutSessions.mockResolvedValue([{ id: "cs_a", status: "open" }]);
+    m.expireCheckoutSession.mockRejectedValue(new StripeApiError("Stripe answered 400", 400));
+  });
+
+  it("checks the subscriptions again; with one live, says the plan is on its way", async () => {
+    m.listCustomerSubscriptions.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: "sub_1", status: "active" }]);
+    expect(await startCheckout(input(), ENV)).toEqual({
+      ok: false,
+      status: 409,
+      error: "You already have a plan. It appears here within a minute.",
+    });
+    expect(m.createCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it("with none live, it is the plain Stripe sentence", async () => {
+    expect(await startCheckout(input(), ENV)).toEqual({ ok: false, status: 502, error: CHECKOUT_MESSAGES.stripeDown });
   });
 });
 
