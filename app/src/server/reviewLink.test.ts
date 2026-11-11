@@ -558,3 +558,22 @@ describe("listReviewPosts with Stories", () => {
     expect(post.caption).toBe("This goes out as a Story, with no caption.");
   });
 });
+
+describe("listReviewPosts - a post without a file", () => {
+  it("lists a text post with its text and no picture, naming only platforms that take text alone", async () => {
+    postFindManyMock
+      .mockResolvedValueOnce([postRow({ mediaItemId: null, mediaItem: null, publishMetadata: null })])
+      .mockResolvedValueOnce([]);
+    connectionFindManyMock.mockResolvedValue([{ platform: "instagram" }, { platform: "x" }, { platform: "linkedin" }]);
+
+    const [post] = await listReviewPosts("ws-1", NOW);
+
+    expect(postFindManyMock.mock.calls[0][0].select).toHaveProperty("mediaItemId", true);
+    expect(post).toMatchObject({
+      caption: "Dawn patrol tomorrow",
+      media: null,
+      mediaCount: 0,
+      platforms: ["X", "LinkedIn"],
+    });
+  });
+});

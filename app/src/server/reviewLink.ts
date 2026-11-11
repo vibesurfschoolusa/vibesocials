@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { hashInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
 import { buildPlatformPreview } from "@/lib/platformPreview";
+import { platformAcceptsTextOnly } from "@/lib/platformLimits";
 import { PLATFORM_ORDER, platformCaptionEntries } from "@/lib/platforms";
 import {
   DAY_MS,
@@ -72,6 +73,8 @@ const REVIEW_POST_SELECT = {
   clientApprovedAt: true,
   clientChangeRequestedAt: true,
   clientNote: true,
+  // Null for a post without a file (2026-11-10).
+  mediaItemId: true,
   mediaItem: {
     select: { baseCaption: true, perPlatformOverrides: true, storageLocation: true, mimeType: true },
   },
@@ -158,7 +161,10 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
     // its client columns say (every write that schedules a post clears them).
     const changeRequested = row.status === "draft" && row.clientChangeRequestedAt !== null;
     const caption = row.baseCaption ?? row.mediaItem?.baseCaption ?? "";
-    const targets = chosenPlatforms(row.publishMetadata) ?? connected;
+    // A post without a file goes only to the connected platforms that take text alone.
+    const textPost = row.mediaItemId === null;
+    const targets =
+      chosenPlatforms(row.publishMetadata) ?? (textPost ? connected.filter(platformAcceptsTextOnly) : connected);
     // A Story publishes no caption, so none may be shown as going out.
     // Only a platform the post goes to: a Story choice for any other adds nothing.
     const stories: Platform[] = storyPlatformsOf(row.publishMetadata).filter((p) => targets.includes(p));
@@ -181,7 +187,7 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
       media: row.mediaItem
         ? { url: row.mediaItem.storageLocation, mimeType: row.mediaItem.mimeType }
         : null,
-      mediaCount: photoCountById.get(row.id) ?? 1,
+      mediaCount: textPost ? 0 : (photoCountById.get(row.id) ?? 1),
       state: changeRequested ? "change_requested" : row.clientApprovedAt ? "approved" : "none",
       note: changeRequested ? row.clientNote : null,
       version: row.updatedAt.toISOString(),
