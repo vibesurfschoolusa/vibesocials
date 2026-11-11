@@ -136,7 +136,7 @@ async function syncSubscription(
 
       const workspace = await tx.workspace.findUnique({
         where: { id: workspaceId },
-        select: { id: true, stripeCustomerId: true, stripeSubscriptionId: true, billingExempt: true },
+        select: { id: true, stripeCustomerId: true, stripeSubscriptionId: true, billingExempt: true, plan: true },
       });
 
       // Read Stripe now, while no other handler for this workspace can run.
@@ -168,6 +168,16 @@ async function syncSubscription(
           subscriptionId: unknownId,
           priceId,
         });
+      }
+      if (result.ok) {
+        for (const { subscriptionId: keptId, priceId } of result.keptPlan) {
+          logger.warn("[stripe webhook] The stored subscription's price is no longer configured; its plan is kept", {
+            eventId: event.id,
+            workspaceId,
+            subscriptionId: keptId,
+            priceId,
+          });
+        }
       }
       if (!result.ok) {
         const log = result.level === "error" ? logger.error : logger.info;
