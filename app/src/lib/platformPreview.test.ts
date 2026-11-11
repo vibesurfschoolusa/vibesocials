@@ -278,3 +278,31 @@ describe("buildPlatformPreview with tracking tags", () => {
     }
   });
 });
+
+// Go-live check 2026-11-11: with nothing typed, the LinkedIn, Facebook and
+// Google previews began with an empty line and a blank line, then the footer.
+describe("buildPlatformPreview — empty caption", () => {
+  const footer = { companyWebsite: "www.example.com", defaultHashtags: "#surf #school" };
+
+  it.each(["linkedin", "facebook_page", "google_business_profile", "instagram", "x"] as const)(
+    "%s shows the footer alone",
+    (platform) => {
+      expect(buildPlatformPreview({ platform, caption: "", user: footer }).rendered).toBe(
+        "For more info visit www.example.com\n\n#surf #school",
+      );
+      expect(buildPlatformPreview({ platform, caption: "  \n ", user: footer }).rendered).toBe(
+        "For more info visit www.example.com\n\n#surf #school",
+      );
+    },
+  );
+
+  it("with a caption, shows exactly what it showed before", () => {
+    expect(buildPlatformPreview({ platform: "linkedin", caption: "Dawn patrol", user: footer }).rendered).toBe(
+      "Dawn patrol\n\nFor more info visit www.example.com\n\n#surf #school",
+    );
+  });
+
+  it("with no footer and no caption, stays empty", () => {
+    expect(buildPlatformPreview({ platform: "linkedin", caption: "", user: {} }).rendered).toBe("");
+  });
+});

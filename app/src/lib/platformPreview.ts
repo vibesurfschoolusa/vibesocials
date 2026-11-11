@@ -78,6 +78,12 @@ export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPrevi
   // The platform is passed, as the publish function does, so the footer carries
   // this platform's tracking tags when the workspace has them on.
   let fullCaption = buildCaptionWithFooter(effectiveCaption, input.user ?? {}, input.platform);
+  // With nothing typed the footer would follow an empty first line and a blank
+  // line. POST /api/posts refuses an empty caption, so no such text is ever
+  // sent: the preview shows the footer alone (go-live check 2026-11-11).
+  if (!effectiveCaption.trim()) {
+    fullCaption = fullCaption.replace(/^\n\n/, "");
+  }
 
   // TikTok gets no substitute title for an empty caption (computeTikTokCaption):
   // the preview stays empty, as for every other platform.
