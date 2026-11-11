@@ -38,4 +38,9 @@ export async function POST(request: Request) {
   return NextResponse.json({ error: status === 400 ? "Invalid event" : "Not handled; send it again" }, { status });
 }
 
-export const { GET, PUT, PATCH, DELETE, OPTIONS } = adminOtherMethods;
+// Every other method answers the same 404, so the path never shows it exists.
+export const GET = adminOtherMethods.GET;
+export const PUT = adminOtherMethods.PUT;
+export const PATCH = adminOtherMethods.PATCH;
+export const DELETE = adminOtherMethods.DELETE;
+export const OPTIONS = adminOtherMethods.OPTIONS;
