@@ -112,3 +112,12 @@ describe("describeListingChange", () => {
     expect(describeListingChange(5, null)).toBeNull();
   });
 });
+
+// Go-live check 2026-11-11: the change reads like the number beside it.
+describe("describeListingChange — thousands separators", () => {
+  it("formats the difference", () => {
+    expect(describeListingChange(2388, 1000)).toBe("up 1,388");
+    expect(describeListingChange(1000, 2388)).toBe("down 1,388");
+    expect(describeListingChange(1999, 1000)).toBe("up 999");
+  });
+});

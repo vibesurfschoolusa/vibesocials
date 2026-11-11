@@ -9,6 +9,7 @@
  */
 
 import type { ListingMetricRow, ListingMetricTotals } from "./listingMetrics";
+import { formatNumber } from "./formatNumber";
 import { countWord } from "./plural";
 import { truncateGraphemes } from "./truncate";
 
@@ -234,18 +235,22 @@ export function summarizePostNumbers(posts: ReportPost[]): ReportNumberTotal[] {
   });
 }
 
-function plural(count: number, one: string, many: string): string {
-  return `${count} ${countWord(count, one, many)}`;
+function plural(count: number, one: string, many: string, format: (n: number) => string = formatNumber): string {
+  return `${format(count)} ${countWord(count, one, many)}`;
 }
 
-/** "Likes: 312 across 18 posts". */
-export function numberLine(total: ReportNumberTotal): string {
-  return `${total.label}: ${total.sum} across ${plural(total.posts, "post", "posts")}`;
+/**
+ * "Likes: 312 across 18 posts"; the report page passes formatNumber ("1,388").
+ * The default leaves the monthly report email's text as it was: its builder
+ * (src/server/notifications) is outside the 2026-11-11 go-live fixes.
+ */
+export function numberLine(total: ReportNumberTotal, format: (n: number) => string = String): string {
+  return `${total.label}: ${format(total.sum)} across ${plural(total.posts, "post", "posts", format)}`;
 }
 
 /** Null when every post is listed. */
 export function showingLine(shown: number, total: number): string | null {
-  return total > shown ? `Showing the ${shown} most recent of ${total}.` : null;
+  return total > shown ? `Showing the ${formatNumber(shown)} most recent of ${formatNumber(total)}.` : null;
 }
 
 export function failedLine(entry: { platform: string; count: number }): string {

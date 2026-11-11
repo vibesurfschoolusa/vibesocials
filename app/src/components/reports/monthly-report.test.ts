@@ -256,3 +256,38 @@ describe("MonthlyReportView — counted words", () => {
     expect(render(report({ inProgress: true, listing }))).toContain("Numbers for 1 of 1 day so far");
   });
 });
+
+// Go-live check 2026-11-11: the report printed 1388 where the dashboard printed 1,238.
+describe("MonthlyReportView — thousands separators", () => {
+  it("formats every number a person reads", () => {
+    const base = report();
+    const html = render(
+      report({
+        postCount: 1388,
+        posts: [{ ...base.posts[0], mediaCount: 1000, platforms: [{ platform: "X", story: false, url: null, numbers: { views: 1234567 } }] }],
+        totals: {
+          resultsByPlatform: [{ platform: "Instagram", count: 1388 }],
+          numbers: [{ key: "views", label: "Views", sum: 1234567, posts: 1000 }],
+        },
+        listing: {
+          daysCovered: 30,
+          daysCounted: 30,
+          partial: false,
+          totals: { views: 1388, calls: 1000, directionRequests: 999, websiteClicks: 1234567 },
+          previous: { views: 1000, calls: 1000, directionRequests: 999, websiteClicks: 1234567 },
+        },
+        failed: [{ platform: "X", count: 1000 }],
+      }),
+    );
+    expect(html).toContain("Posts published: 1,388");
+    expect(html).toContain("Instagram: 1,388");
+    expect(html).toContain("Views: 1,234,567 across 1,000 posts");
+    expect(html).toContain("1,000 photos");
+    expect(html).toContain("Views 1,234,567");
+    expect(html).toContain(">1,388<");
+    expect(html).toContain(">1,234,567<");
+    expect(html).toContain("up 388");
+    expect(html).toContain("1,000 posts did not publish on X");
+    expect(html).toContain("Showing the 1 most recent of 1,388.");
+  });
+});

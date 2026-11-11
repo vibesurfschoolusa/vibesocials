@@ -16,6 +16,7 @@ import {
   type ReportListing,
   type ReportPost,
 } from "@/lib/monthlyReport";
+import { formatNumber } from "@/lib/formatNumber";
 import { countWord } from "@/lib/plural";
 
 /**
@@ -102,7 +103,7 @@ function PostRow({ post }: { post: ReportPost }) {
           <p className="text-sm font-medium">
             <time dateTime={post.publishedAt}>{formatDay(post.publishedAt)}</time>
             {post.mediaCount > 1 ? (
-              <span className="ml-2 font-normal text-muted-foreground">{`${post.mediaCount} photos`}</span>
+              <span className="ml-2 font-normal text-muted-foreground">{`${formatNumber(post.mediaCount)} photos`}</span>
             ) : null}
           </p>
           {post.caption ? <p className="mt-1 whitespace-pre-wrap break-words text-sm">{post.caption}</p> : null}
@@ -130,7 +131,7 @@ function PostRow({ post }: { post: ReportPost }) {
               ) : null}
               {numbers.length > 0 ? (
                 <span className="mt-0.5 block text-muted-foreground">
-                  {numbers.map((key) => `${REPORT_NUMBER_LABELS[key]} ${p.numbers[key]}`).join(" · ")}
+                  {numbers.map((key) => `${REPORT_NUMBER_LABELS[key]} ${formatNumber(p.numbers[key] ?? 0)}`).join(" · ")}
                 </span>
               ) : null}
             </li>
@@ -153,7 +154,7 @@ function ListingSection({ listing }: { listing: ReportListing }) {
     <section data-report-block className="space-y-2">
       <h2 className="text-lg font-semibold">Google listing</h2>
       <p className="text-sm text-muted-foreground">
-        {`Numbers for ${listing.daysCovered} of ${listing.daysCounted} ${countWord(listing.daysCounted, "day", "days")}${listing.partial ? " so far" : ""}.`}
+        {`Numbers for ${formatNumber(listing.daysCovered)} of ${formatNumber(listing.daysCounted)} ${countWord(listing.daysCounted, "day", "days")}${listing.partial ? " so far" : ""}.`}
         {listing.partial ? " This month is not over yet, so these numbers are partial." : null}
         {!listing.partial && !listing.previous ? " No comparison with the month before: one of the two months has days without numbers." : null}
       </p>
@@ -163,7 +164,7 @@ function ListingSection({ listing }: { listing: ReportListing }) {
           return (
             <li key={key} className="rounded-[var(--radius)] border border-border p-3 text-sm">
               <span className="block text-muted-foreground">{label}</span>
-              <span className="text-lg font-semibold">{listing.totals[key]}</span>
+              <span className="text-lg font-semibold">{formatNumber(listing.totals[key])}</span>
               {change ? <span className="ml-2 text-muted-foreground">{`${change} on the month before`}</span> : null}
             </li>
           );
@@ -204,12 +205,12 @@ export function MonthlyReportView({
 
       <section data-report-block className="space-y-1 text-sm">
         <h2 className="text-lg font-semibold">Totals</h2>
-        <p>{`Posts published: ${report.postCount}`}</p>
+        <p>{`Posts published: ${formatNumber(report.postCount)}`}</p>
         {report.totals.resultsByPlatform.length > 0 ? (
-          <p>{report.totals.resultsByPlatform.map((r) => `${r.platform}: ${r.count}`).join(" · ")}</p>
+          <p>{report.totals.resultsByPlatform.map((r) => `${r.platform}: ${formatNumber(r.count)}`).join(" · ")}</p>
         ) : null}
         {report.totals.numbers.map((total) => (
-          <p key={total.key}>{numberLine(total)}</p>
+          <p key={total.key}>{numberLine(total, formatNumber)}</p>
         ))}
         {showing && report.totals.numbers.length > 0 ? (
           <p className="text-muted-foreground">The numbers cover the posts listed below.</p>

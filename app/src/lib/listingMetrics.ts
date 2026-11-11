@@ -3,6 +3,8 @@
  * of LocationMetricDaily for one workspace and location and hands them here.
  */
 
+import { formatNumber } from "./formatNumber";
+
 export interface ListingMetricRow {
   /** The day the numbers are for: a Date at UTC midnight (Prisma's @db.Date), or YYYY-MM-DD. */
   day: Date | string;
@@ -103,7 +105,7 @@ export function summarizeListingMetrics(rows: ListingMetricRow[], windowDays: nu
 export function describeListingChange(current: number, previous: number | null): string | null {
   if (previous === null) return null;
   const change = current - previous;
-  if (change > 0) return `up ${change}`;
-  if (change < 0) return `down ${-change}`;
+  if (change > 0) return `up ${formatNumber(change)}`;
+  if (change < 0) return `down ${formatNumber(-change)}`;
   return "no change";
 }
