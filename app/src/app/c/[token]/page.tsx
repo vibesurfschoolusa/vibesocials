@@ -63,10 +63,16 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
   );
 
   const outcome = new URLSearchParams();
-  for (const key of ["error", "success", "linkedin_setup"]) {
+  for (const key of ["error", "linkedin_setup"]) {
     const value = first(query[key]);
     if (value) outcome.set(key, value);
   }
+  // Anyone can type ?success=… by hand, so a success is told only when the
+  // workspace really has a working connection for that platform.
+  const success = first(query.success);
+  const succeeded = PLATFORM_ORDER.find((platform) => success === `${platform}_connected`);
+  const working = succeeded ? byPlatform.get(succeeded) : undefined;
+  if (success && working && !working.needsReconnect) outcome.set("success", success);
   const result = describeConnectLinkResult(outcome, link.workspaceName);
   const pendingId = first(query.choose);
   const action = `/api/connect-link/${encodeURIComponent(token)}/start`;

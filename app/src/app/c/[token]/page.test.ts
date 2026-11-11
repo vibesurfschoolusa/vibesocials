@@ -112,7 +112,6 @@ describe("the connect link page", () => {
   });
 
   it.each([
-    [{ success: "tiktok_connected" }, "TikTok is connected."],
     [{ error: "tiktok_cancelled" }, "You cancelled. Nothing was connected."],
     [{ error: "youtube_oauth_denied" }, "We couldn&#x27;t connect YouTube. Try again, or tell Surf &amp; Co."],
     [{ error: "linkedin_auth_failed" }, "We couldn&#x27;t connect LinkedIn. Try again, or tell Surf &amp; Co."],
@@ -137,5 +136,57 @@ describe("the connect link page", () => {
     expect(html).not.toContain("ws-1");
     expect(html).not.toContain("link-1");
     expect(html).not.toContain("owner-1");
+  });
+});
+
+// Fix round 2: a success sentence only when the workspace really has a
+// working connection for that platform; the query alone is not enough.
+describe("the success sentence is checked against the connection", () => {
+  const youtube = (needsReconnect: boolean) => ({
+    platform: "youtube",
+    accountIdentifier: "chan-1",
+    username: "Channel",
+    locationName: null,
+    needsReconnect,
+  });
+
+  it("YouTube connected and working: the sentence", async () => {
+    h.listConnections.mockResolvedValue([youtube(false)]);
+    expect(await render({ success: "youtube_connected" })).toContain("YouTube is connected.");
+  });
+
+  it("no YouTube connection: no sentence", async () => {
+    const html = await render({ success: "youtube_connected" });
+    expect(html).not.toContain("is connected");
+    expect(html).not.toContain('role="status"');
+  });
+
+  it("a YouTube connection that needs reconnecting: no sentence", async () => {
+    h.listConnections.mockResolvedValue([youtube(true)]);
+    expect(await render({ success: "youtube_connected" })).not.toContain("is connected");
+  });
+
+  it("Google Business Profile working: the sentence with the business-location part", async () => {
+    h.listConnections.mockResolvedValue([
+      { platform: "google_business_profile", accountIdentifier: "", username: null, locationName: null, needsReconnect: false },
+    ]);
+    expect(await render({ success: "google_business_profile_connected" })).toContain(
+      "Google Business Profile is connected. Surf &amp; Co will choose the business location.",
+    );
+  });
+
+  it("a success naming no known platform: no sentence", async () => {
+    h.listConnections.mockResolvedValue([youtube(false)]);
+    const html = await render({ success: "myspace_connected" });
+    expect(html).not.toContain("is connected");
+    expect(html).not.toContain('role="status"');
+  });
+
+  it("an error query is unchanged by this", async () => {
+    expect(await render({ error: "tiktok_cancelled" })).toContain("You cancelled. Nothing was connected.");
+  });
+
+  it("a waiting choice is unchanged by this", async () => {
+    expect(await render({ choose: "pending-1" })).toContain("<section>choice</section>");
   });
 });
