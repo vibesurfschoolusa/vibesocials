@@ -98,6 +98,8 @@ export async function buildMonthlyReport(
             workspaceId: true,
             baseCaption: true,
             publishMetadata: true,
+            // Null for a post without a file (2026-11-10): no picture, not a removed one.
+            mediaItemId: true,
             mediaItem: {
               select: { baseCaption: true, storageLocation: true, mimeType: true, deletedAt: true },
             },
@@ -175,7 +177,7 @@ export async function buildMonthlyReport(
         caption: reportCaption(row.baseCaption ?? media?.baseCaption ?? ""),
         // A file the retention sweep removed has no picture left to show.
         media: media && !media.deletedAt ? { url: media.storageLocation, mimeType: media.mimeType } : null,
-        mediaCount: photoCountById.get(row.id) ?? 1,
+        mediaCount: row.mediaItemId === null ? 0 : (photoCountById.get(row.id) ?? 1),
         platforms: results.map((r) => {
           const story = stories.includes(r.platform);
           const metric = r.externalPostId ? metricByPost.get(metricKey(r.platform, r.externalPostId)) : undefined;

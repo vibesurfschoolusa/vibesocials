@@ -342,3 +342,14 @@ describe("buildMonthlyReport", () => {
     expect((await buildMonthlyReport(WS, "2026-10", NOW)).listing).toBeNull();
   });
 });
+
+describe("buildMonthlyReport - a post without a file", () => {
+  it("lists a text post with no picture and a mediaCount of 0", async () => {
+    m.postFindMany.mockResolvedValue([job({ mediaItemId: null, mediaItem: null, baseCaption: "Wind is onshore" })]);
+
+    const report = await buildMonthlyReport(WS, "2026-10", NOW);
+
+    expect(m.postFindMany.mock.calls[0][0].select).toHaveProperty("mediaItemId", true);
+    expect(report.posts[0]).toMatchObject({ caption: "Wind is onshore", media: null, mediaCount: 0 });
+  });
+});

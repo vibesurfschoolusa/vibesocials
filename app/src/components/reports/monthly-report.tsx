@@ -76,6 +76,8 @@ function formatDay(iso: string): string {
 }
 
 function PostPicture({ post }: { post: ReportPost }) {
+  // A post without a file (mediaCount 0) never had a picture to remove.
+  if (post.mediaCount === 0) return null;
   if (!post.media) {
     return (
       <div

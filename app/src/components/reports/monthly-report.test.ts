@@ -232,3 +232,13 @@ describe("ReportMonthPicker", () => {
     expect(html).toContain('method="get"');
   });
 });
+
+describe("MonthlyReportView - a post without a file", () => {
+  it("shows no picture and no removed-file placeholder", () => {
+    const text = { ...report().posts[1], caption: "Wind is onshore", media: null, mediaCount: 0 };
+    const html = render(report({ posts: [text] }));
+    expect(html).toContain("Wind is onshore");
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("File removed");
+  });
+});
