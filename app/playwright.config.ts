@@ -46,7 +46,8 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     // `npm run build` (prisma generate + next build) plus `next start` can
     // take a while on a cold cache or a slow CI runner; generous on purpose.
-    timeout: 180_000,
+    // The UI audit (e2e/ui-audit.spec.ts) builds twice in one job: more room.
+    timeout: process.env.UI_AUDIT === "1" ? 600_000 : 180_000,
     env: {
       // DATABASE_URL resolution:
       //  - Smoke-only run (no E2E_DATABASE_URL): a dummy, unreachable DB so

@@ -1,0 +1,166 @@
+# UI audit (task A1): pictures of every screen on a phone and a desktop, for
+# the lead to look at. Runs only on audit/** branches, which are never merged.
+#
+# Same throwaway Postgres, migrations, browser and file store double as the e2e
+# job in ci.yml. Two passes, each its own `playwright test` so the server is
+# built and started again with different settings:
+#   1. billing off (as production is today), the seeded owner as operator, and
+#      every platform configured with dummy values;
+#   2. billing on, with a dummy Stripe key that Stripe refuses ("prices
+#      unavailable" is the wanted state).
+# Every value below is a dummy for this runner only. The pictures and
+# report.json are uploaded as the `ui-audit` artifact, also when a pass fails.
+
+name: UI audit
+
+on:
+  push:
+    branches: ["audit/**"]
+
+concurrency:
+  group: ui-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ui-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    defaults:
+      run:
+        working-directory: app
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: vibesocials_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/vibesocials_e2e
+      E2E_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/vibesocials_e2e
+      NEXTAUTH_SECRET: ui-audit-ci-secret-not-for-production
+      NEXT_PUBLIC_VERCEL_BLOB_API_URL: http://localhost:9366
+      VERCEL_BLOB_API_URL: http://localhost:9366
+      BLOB_READ_WRITE_TOKEN: vercel_blob_rw_e2eteststore_e2etestsecrettoken0123456789
+      # 32 zero bytes: links and connection tokens are sealed in production mode.
+      TOKEN_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      UI_AUDIT: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Apply migrations to the test database
+        run: npx prisma migrate deploy
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      # A short H.264 clip like a phone makes. Without ffmpeg the spec records
+      # a WebM in the browser instead.
+      - name: Make the sample video
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update -q && sudo apt-get install -y -q ffmpeg || true
+          fi
+          ffmpeg -hide_banner -loglevel error \
+            -f lavfi -i "testsrc2=size=720x1280:rate=30:duration=8" \
+            -f lavfi -i "sine=frequency=330:duration=8" \
+            -c:v libx264 -pix_fmt yuv420p -profile:v main -c:a aac -shortest -movflags +faststart \
+            "$RUNNER_TEMP/ui-audit-video.mp4" || echo "No video made; the spec records one in the browser."
+
+      - name: "Pass 1: billing off"
+        env:
+          UI_AUDIT_PASS: main
+          UI_AUDIT_OUT: ${{ github.workspace }}/app/ui-audit-output/main
+          UI_AUDIT_VIDEO: ${{ runner.temp }}/ui-audit-video.mp4
+          ADMIN_EMAILS: owner.harborsurf@example.test
+          TIKTOK_CLIENT_KEY: dummy-tiktok-client-key
+          TIKTOK_CLIENT_SECRET: dummy-tiktok-client-secret
+          TIKTOK_REDIRECT_URI: http://127.0.0.1:3000/api/auth/tiktok/callback
+          GOOGLE_GBP_CLIENT_ID: dummy-google-client-id.apps.googleusercontent.com
+          GOOGLE_GBP_CLIENT_SECRET: dummy-google-client-secret
+          GOOGLE_GBP_REDIRECT_URI: http://127.0.0.1:3000/api/auth/google_business_profile/callback
+          YOUTUBE_REDIRECT_URI: http://127.0.0.1:3000/api/auth/youtube/callback
+          FACEBOOK_APP_ID: "000000000000000"
+          FACEBOOK_APP_SECRET: dummy-facebook-app-secret
+          INSTAGRAM_REDIRECT_URI: http://127.0.0.1:3000/api/auth/instagram/callback
+          FACEBOOK_PAGE_REDIRECT_URI: http://127.0.0.1:3000/api/auth/facebook_page/callback
+          LINKEDIN_CLIENT_ID: dummy-linkedin-client-id
+          LINKEDIN_CLIENT_SECRET: dummy-linkedin-client-secret
+          LINKEDIN_REDIRECT_URI: http://127.0.0.1:3000/api/auth/linkedin/callback
+          PINTEREST_APP_ID: "0000000"
+          PINTEREST_APP_SECRET: dummy-pinterest-app-secret
+          PINTEREST_REDIRECT_URI: http://127.0.0.1:3000/api/auth/pinterest/callback
+          X_CONSUMER_KEY: dummy-x-consumer-key
+          X_CONSUMER_SECRET: dummy-x-consumer-secret
+          X_CALLBACK_URL: http://127.0.0.1:3000/api/auth/x/callback
+        run: |
+          node e2e/ui-audit/mock-blob-server.mjs &
+          MOCK_BLOB_PID=$!
+          for _ in $(seq 1 40); do
+            curl -s -o /dev/null "http://localhost:9366/" && break
+            sleep 0.25
+          done
+          set +e
+          npx playwright test ui-audit.spec.ts
+          status=$?
+          kill "$MOCK_BLOB_PID" 2>/dev/null || true
+          exit $status
+
+      - name: "Pass 2: billing on"
+        if: ${{ !cancelled() }}
+        env:
+          UI_AUDIT_PASS: billing
+          UI_AUDIT_OUT: ${{ github.workspace }}/app/ui-audit-output/billing
+          BILLING_ENABLED: "true"
+          STRIPE_SECRET_KEY: sk_test_dummy_ui_audit_not_a_real_key
+          STRIPE_WEBHOOK_SECRET: whsec_dummy_ui_audit_not_a_real_secret
+          STRIPE_PRICE_STARTER: price_dummy_ui_audit_starter
+          STRIPE_PRICE_GROWTH: price_dummy_ui_audit_growth
+          STRIPE_PRICE_PRO: price_dummy_ui_audit_pro
+          # Only so the confirm-your-email banner can show (it needs the app to
+          # be able to send the link). No screen in this pass sends an email.
+          RESEND_API_KEY: re_dummy_ui_audit_not_a_real_key
+        run: |
+          node e2e/ui-audit/mock-blob-server.mjs &
+          MOCK_BLOB_PID=$!
+          for _ in $(seq 1 40); do
+            curl -s -o /dev/null "http://localhost:9366/" && break
+            sleep 0.25
+          done
+          set +e
+          npx playwright test ui-audit.spec.ts
+          status=$?
+          kill "$MOCK_BLOB_PID" 2>/dev/null || true
+          exit $status
+
+      - name: Join the two reports
+        if: always()
+        run: node e2e/ui-audit/merge-reports.mjs ui-audit-output || true
+
+      - name: Upload the pictures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-audit
+          path: app/ui-audit-output
+          retention-days: 7
+          if-no-files-found: warn
