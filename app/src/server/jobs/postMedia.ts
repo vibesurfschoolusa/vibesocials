@@ -28,7 +28,8 @@ export class PostMediaUnavailableError extends Error {
  * judged here; callers check them.
  */
 export function isPostMediaComplete(
-  mediaItemId: string,
+  // Null for a post without a file, which never has rows: never complete.
+  mediaItemId: string | null,
   rows: ReadonlyArray<{ position: number; mediaItem: { id: string } }>,
 ): boolean {
   return (
@@ -60,7 +61,9 @@ export async function loadPostMediaItems(
       media: { orderBy: { position: "asc" }, select: { position: true, mediaItem: true } },
     },
   });
-  if (!job) throw new PostMediaUnavailableError();
+  // A post without a file (2026-11-10) has no media to load. Callers only ask for
+  // a post's photos when it has some, so this is a guard, not a path.
+  if (!job || !job.mediaItem) throw new PostMediaUnavailableError();
   if (job.media.length === 0) return [job.mediaItem];
 
   if (!isPostMediaComplete(job.mediaItemId, job.media)) throw new PostMediaUnavailableError();

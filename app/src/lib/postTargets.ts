@@ -1,6 +1,11 @@
 import type { Platform } from "@prisma/client";
 
-import { PLATFORM_ACCEPTED_MEDIA, platformAcceptsMedia, unsupportedMediaReason } from "./platformLimits";
+import {
+  PLATFORM_ACCEPTED_MEDIA,
+  platformAcceptsMedia,
+  platformAcceptsTextOnly,
+  unsupportedMediaReason,
+} from "./platformLimits";
 import { platformLabel } from "./platforms";
 
 /**
@@ -90,6 +95,7 @@ export function isTikTokBrandedContentPrivate(
 
 export type PostTargetingErrorCode =
   | "PLATFORM_MEDIA_MISMATCH"
+  | "PLATFORM_NEEDS_MEDIA"
   | "NO_COMPATIBLE_PLATFORMS"
   | "TIKTOK_PRIVACY_REQUIRED"
   | "TIKTOK_BRANDED_CONTENT_PRIVATE";
@@ -199,6 +205,54 @@ export function narrowConnectionsForPost<T extends { platform: Platform }>(args:
   return compatible;
 }
 
+/** Shown beside a platform the composer can't offer for a post without a file. */
+export const NEEDS_MEDIA_REASON = "Needs a photo or video";
+
+/** "Instagram needs a photo or video." / "Instagram and TikTok need a photo or video." */
+export function needsMediaMessage(platforms: readonly Platform[]): string {
+  const labels = platforms.map(platformLabel);
+  if (labels.length === 1) return `${labels[0]} needs a photo or video.`;
+  const named = `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+  return `${named} need a photo or video.`;
+}
+
+/**
+ * Validate an EXPLICIT platform list for a post without a file: every platform
+ * must be one that publishes text alone. No-op when no list was sent.
+ */
+export function assertTextPostTargetsValid(targetPlatforms: readonly Platform[] | undefined): void {
+  if (!targetPlatforms) return;
+  const needMedia = targetPlatforms.filter((platform) => !platformAcceptsTextOnly(platform));
+  if (needMedia.length > 0) {
+    throw new PostTargetingError("PLATFORM_NEEDS_MEDIA", needsMediaMessage(needMedia), needMedia);
+  }
+}
+
+/**
+ * Which healthy connections an IMMEDIATE post without a file fans out to: the
+ * explicit list (validated), or with none every connection that publishes text
+ * alone. TikTok never takes text alone, so its privacy rule cannot apply.
+ */
+export function narrowConnectionsForTextPost<T extends { platform: Platform }>(args: {
+  connections: readonly T[];
+  targetPlatforms: readonly Platform[] | undefined;
+}): T[] {
+  const { connections, targetPlatforms } = args;
+  if (targetPlatforms) {
+    assertTextPostTargetsValid(targetPlatforms);
+    return connections.filter((c) => targetPlatforms.includes(c.platform));
+  }
+  const compatible = connections.filter((c) => platformAcceptsTextOnly(c.platform));
+  if (connections.length > 0 && compatible.length === 0) {
+    throw new PostTargetingError(
+      "NO_COMPATIBLE_PLATFORMS",
+      "None of your connected platforms can publish a post without a photo or video.",
+      connections.map((c) => c.platform),
+    );
+  }
+  return compatible;
+}
+
 export interface ComposerPlatformChoice {
   platform: Platform;
   /** Checked = will be published to. Always false when disabled. */
@@ -212,14 +266,22 @@ export interface ComposerPlatformChoice {
  * user's explicit opt-outs and the chosen media. Platforms the media can't go
  * to render disabled-and-unchecked with a reason. Derived rather than written
  * into state, so choosing different media later restores the user's own choices.
+ *
+ * `opts.noFile`: the person has written a post with no file attached, so only
+ * the platforms that publish text alone can be chosen. Without it, a null
+ * `mimeType` still means "no media chosen yet" and accepts everything.
  */
 export function deriveComposerPlatforms(
   connected: readonly Platform[],
   deselected: ReadonlySet<Platform>,
   mimeType: string | null | undefined,
+  opts: { noFile?: boolean } = {},
 ): { choices: ComposerPlatformChoice[]; selected: Platform[] } {
   const choices = connected.map((platform): ComposerPlatformChoice => {
-    const disabledReason = unsupportedMediaReason(platform, mimeType);
+    const disabledReason =
+      opts.noFile && !platformAcceptsTextOnly(platform)
+        ? NEEDS_MEDIA_REASON
+        : unsupportedMediaReason(platform, mimeType);
     return {
       platform,
       checked: disabledReason === null && !deselected.has(platform),

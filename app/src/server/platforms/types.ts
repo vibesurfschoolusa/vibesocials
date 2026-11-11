@@ -118,6 +118,13 @@ export interface PublishContext {
   facebookMetadata?: FacebookPostMetadata;
 }
 
+/**
+ * A post that is only text (2026-11-10): the context without the file fields.
+ * `baseCaption` is always the post's own text here (a text post always has its
+ * snapshot on the job).
+ */
+export type TextPublishContext = Omit<PublishContext, "mediaItem" | "mediaItems">;
+
 export interface PublishResult {
   externalPostId?: string | null;
   /**
@@ -140,6 +147,12 @@ export interface PublishResult {
 
 export interface PlatformClient {
   publishVideo(ctx: PublishContext): Promise<PublishResult>;
+  /**
+   * Publish a post that has no file (2026-11-10). Only the clients of
+   * TEXT_ONLY_PLATFORMS (lib/platformLimits.ts) have it; the publish function
+   * fails a platform without it instead of calling `publishVideo`.
+   */
+  publishText?(ctx: TextPublishContext): Promise<PublishResult>;
   /**
    * Refresh the connection's OAuth tokens and persist them. Raw: it takes no
    * lock, so callers go through `refreshConnectionToken` (connectionRefresh.ts),

@@ -62,6 +62,24 @@ export const PLATFORM_CAPTION_LIMITS: Record<Platform, PlatformCaptionLimit> = {
 };
 
 
+/**
+ * Platforms whose client publishes a post that is only text (2026-11-10): each
+ * implements `publishText` (server/platforms/types.ts). Instagram, TikTok,
+ * YouTube and Pinterest need a file. The posts route and the composer both read
+ * this list, so neither can offer what the publish path cannot do.
+ */
+export const TEXT_ONLY_PLATFORMS: readonly Platform[] = [
+  "facebook_page",
+  "x",
+  "linkedin",
+  "google_business_profile",
+];
+
+/** Can `platform` publish a post that has no file? */
+export function platformAcceptsTextOnly(platform: Platform): boolean {
+  return TEXT_ONLY_PLATFORMS.includes(platform);
+}
+
 /** The two kinds of media a post can carry. */
 export type MediaKind = "image" | "video";
 

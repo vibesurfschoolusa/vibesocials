@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { Platform } from "@prisma/client";
 
 import {
+  NEEDS_MEDIA_REASON,
   PostTargetingError,
   assertPostTargetsValid,
+  assertTextPostTargetsValid,
+  needsMediaMessage,
+  narrowConnectionsForTextPost,
   deriveComposerPlatforms,
   incompatibleMediaMessage,
   isTikTokPrivacyMissing,
@@ -256,5 +260,79 @@ describe("deriveComposerPlatforms", () => {
     const { selected, choices } = deriveComposerPlatforms(connected, none, "application/pdf");
     expect(selected).toEqual([]);
     expect(choices.every((c) => c.disabledReason === "Unsupported file type")).toBe(true);
+  });
+});
+
+describe("posts without a photo", () => {
+  const all: Platform[] = ["facebook_page", "instagram", "x", "tiktok", "linkedin", "google_business_profile"];
+
+  it("deriveComposerPlatforms with no file disables the platforms that need one, with their reason", () => {
+    const { choices, selected } = deriveComposerPlatforms(all, new Set(), null, { noFile: true });
+    expect(selected).toEqual(["facebook_page", "x", "linkedin", "google_business_profile"]);
+    expect(choices.find((c) => c.platform === "instagram")).toEqual({
+      platform: "instagram",
+      checked: false,
+      disabledReason: NEEDS_MEDIA_REASON,
+    });
+    expect(NEEDS_MEDIA_REASON).toBe("Needs a photo or video");
+    expect(choices.find((c) => c.platform === "tiktok")?.disabledReason).toBe("Needs a photo or video");
+  });
+
+  it("deriveComposerPlatforms with no file still honours the person's own opt-outs", () => {
+    const { selected } = deriveComposerPlatforms(all, new Set<Platform>(["x"]), null, { noFile: true });
+    expect(selected).toEqual(["facebook_page", "linkedin", "google_business_profile"]);
+  });
+
+  it("deriveComposerPlatforms without the option is unchanged (no media chosen accepts everything)", () => {
+    const { selected } = deriveComposerPlatforms(all, new Set(), null);
+    expect(selected).toEqual(all);
+  });
+
+  it("needsMediaMessage names one platform, or several", () => {
+    expect(needsMediaMessage(["instagram"])).toBe("Instagram needs a photo or video.");
+    expect(needsMediaMessage(["instagram", "tiktok"])).toBe("Instagram and TikTok need a photo or video.");
+    expect(needsMediaMessage(["instagram", "tiktok", "youtube"])).toBe(
+      "Instagram, TikTok and YouTube need a photo or video.",
+    );
+  });
+
+  it("assertTextPostTargetsValid accepts the four text platforms and no list at all", () => {
+    expect(() => assertTextPostTargetsValid(["facebook_page", "x", "linkedin", "google_business_profile"])).not.toThrow();
+    expect(() => assertTextPostTargetsValid(undefined)).not.toThrow();
+  });
+
+  it("assertTextPostTargetsValid refuses a platform that needs a file, naming it", () => {
+    try {
+      assertTextPostTargetsValid(["x", "pinterest"]);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(PostTargetingError);
+      expect((error as PostTargetingError).code).toBe("PLATFORM_NEEDS_MEDIA");
+      expect((error as PostTargetingError).message).toBe("Pinterest needs a photo or video.");
+      expect((error as PostTargetingError).platforms).toEqual(["pinterest"]);
+    }
+  });
+
+  it("narrowConnectionsForTextPost narrows an explicit list, and skips file-only platforms without one", () => {
+    const connections = all.map((platform) => ({ platform }));
+    expect(narrowConnectionsForTextPost({ connections, targetPlatforms: ["x"] })).toEqual([{ platform: "x" }]);
+    expect(narrowConnectionsForTextPost({ connections, targetPlatforms: undefined }).map((c) => c.platform)).toEqual([
+      "facebook_page",
+      "x",
+      "linkedin",
+      "google_business_profile",
+    ]);
+    expect(() =>
+      narrowConnectionsForTextPost({ connections, targetPlatforms: ["tiktok"] }),
+    ).toThrow("TikTok needs a photo or video.");
+  });
+
+  it("narrowConnectionsForTextPost refuses when connections exist but none takes text alone", () => {
+    try {
+      narrowConnectionsForTextPost({ connections: [{ platform: "instagram" as Platform }], targetPlatforms: undefined });
+      expect.unreachable();
+    } catch (error) {
+      expect((error as PostTargetingError).code).toBe("NO_COMPATIBLE_PLATFORMS");
+    }
   });
 });

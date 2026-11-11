@@ -1685,3 +1685,105 @@ describe("createPostJobOnly / createPostJobForExistingMedia - a series (repeat)"
     expect(result.postJobIds).toEqual(["job-1", "job-2", "job-3"]);
   });
 });
+
+describe("createPostJobOnly - a post without a file (text only)", () => {
+  beforeEach(() => {
+    mediaItemCreateMock.mockReset();
+    findManyConnectionsMock.mockReset();
+    postJobCreateMock.mockReset();
+    postJobResultCreateMock.mockReset();
+    postJobMediaCreateManyMock.mockReset();
+
+    let n = 0;
+    postJobCreateMock.mockImplementation(() => Promise.resolve({ id: `job-${++n}` }));
+    postJobResultCreateMock.mockImplementation((args: { data: { platform: string } }) =>
+      Promise.resolve({ id: `result-${args.data.platform}` }),
+    );
+  });
+
+  it("creates the job with no MediaItem, a null mediaItemId and the text snapshot", async () => {
+    findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-x", platform: "x" })]);
+
+    const result = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: null,
+      baseCaption: "Lessons cancelled today",
+      targetPlatforms: ["x"],
+    });
+
+    expect(mediaItemCreateMock).not.toHaveBeenCalled();
+    expect(postJobMediaCreateManyMock).not.toHaveBeenCalled();
+    expect(postJobCreateMock).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        mediaItemId: null,
+        baseCaption: "Lessons cancelled today",
+        status: "in_progress",
+        workspaceId: "workspace-1",
+      }),
+    });
+    expect(result).toEqual({ postJobId: "job-1", mediaItemId: null, resultIds: ["result-x"] });
+  });
+
+  it("with no platform list fans out only to the connections that take text alone", async () => {
+    findManyConnectionsMock.mockResolvedValue([
+      makeConnection({ id: "conn-ig", platform: "instagram" }),
+      makeConnection({ id: "conn-li", platform: "linkedin" }),
+      makeConnection({ id: "conn-yt", platform: "youtube" }),
+    ]);
+
+    const result = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: null,
+      baseCaption: "hi",
+    });
+
+    expect(result.resultIds).toEqual(["result-linkedin"]);
+  });
+
+  it("refuses an explicit platform that needs a file before writing anything", async () => {
+    findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-ig", platform: "instagram" })]);
+
+    await expect(
+      createPostJobOnly({
+        userId: "user-1",
+        workspaceId: "workspace-1",
+        media: null,
+        baseCaption: "hi",
+        intent: "scheduled",
+        scheduledFor: new Date("2030-01-01T00:00:00Z"),
+        targetPlatforms: ["instagram"],
+      }),
+    ).rejects.toThrow("Instagram needs a photo or video.");
+    expect(postJobCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("a series of text posts creates one job per time, each with no file", async () => {
+    const times = [new Date("2030-01-01T09:00:00Z"), new Date("2030-01-08T09:00:00Z")];
+    const result = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: null,
+      baseCaption: "Weekly update",
+      intent: "scheduled",
+      scheduledFor: times[0],
+      targetPlatforms: ["facebook_page"],
+      series: { seriesId: "series-1", times },
+    });
+
+    expect(mediaItemCreateMock).not.toHaveBeenCalled();
+    expect(postJobCreateMock).toHaveBeenCalledTimes(2);
+    for (const call of postJobCreateMock.mock.calls) {
+      expect(call[0].data).toMatchObject({ mediaItemId: null, seriesId: "series-1" });
+    }
+    expect(result).toEqual({ postJobId: "job-1", postJobIds: ["job-1", "job-2"], mediaItemId: null, resultIds: [] });
+  });
+
+  it("resolvePostCaptionSource reads a text post's own snapshot without any media row", () => {
+    expect(resolvePostCaptionSource({ baseCaption: "Text", perPlatformOverrides: { x: "X text" } }, null)).toEqual({
+      baseCaption: "Text",
+      perPlatformOverrides: { x: "X text" },
+    });
+  });
+});

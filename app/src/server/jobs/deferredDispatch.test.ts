@@ -340,3 +340,64 @@ describe("prepareDeferredPostJobDispatch", () => {
     });
   });
 });
+
+describe("prepareDeferredPostJobDispatch - a post without a file", () => {
+  it("carries a text post through: no file in the event, and only text platforms when no list was chosen", async () => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({ mediaItemId: null, mediaItem: null, baseCaption: "Wind is onshore" }),
+    );
+    connectionFindManyMock.mockResolvedValue([
+      { id: "c-ig", platform: "instagram" },
+      { id: "c-x", platform: "x" },
+      { id: "c-gbp", platform: "google_business_profile" },
+    ]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(resultCreateManyMock).toHaveBeenCalledWith({
+      data: [
+        { postJobId: "job-1", workspaceId: "workspace-1", platform: "x", socialConnectionId: "c-x", status: "pending" },
+        {
+          postJobId: "job-1",
+          workspaceId: "workspace-1",
+          platform: "google_business_profile",
+          socialConnectionId: "c-gbp",
+          status: "pending",
+        },
+      ],
+    });
+    expect(result).toEqual({
+      ok: true,
+      event: {
+        postJobId: "job-1",
+        userId: "user-1",
+        workspaceId: "workspace-1",
+        mediaItemId: null,
+        baseCaption: "Wind is onshore",
+        perPlatformOverrides: null,
+      },
+    });
+  });
+
+  it("replays a text post's Google options and its chosen platforms", async () => {
+    const googleBusinessProfile = { postType: "offer", offer: { title: "10% off", startDate: "2030-01-01", endDate: "2030-01-31" } };
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({
+        mediaItemId: null,
+        mediaItem: null,
+        publishMetadata: { targetPlatforms: ["google_business_profile"], googleBusinessProfile },
+      }),
+    );
+    connectionFindManyMock.mockResolvedValue([
+      { id: "c-x", platform: "x" },
+      { id: "c-gbp", platform: "google_business_profile" },
+    ]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(result).toMatchObject({ ok: true, event: { mediaItemId: null, googleMetadata: googleBusinessProfile } });
+    expect(resultCreateManyMock.mock.calls[0][0].data.map((r: { platform: string }) => r.platform)).toEqual([
+      "google_business_profile",
+    ]);
+  });
+});

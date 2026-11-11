@@ -101,3 +101,20 @@ describe("loadPostMediaItems", () => {
     await expect(loadPostMediaItems("job-1")).rejects.toBeInstanceOf(PostMediaUnavailableError);
   });
 });
+
+describe("loadPostMediaItems - a post without a file", () => {
+  it("has no media to load: it reports the post's media unavailable instead of returning an empty list", async () => {
+    postJobFindUniqueMock.mockResolvedValue({ mediaItemId: null, mediaItem: null, media: [] });
+    await expect(loadPostMediaItems("job-1")).rejects.toBeInstanceOf(PostMediaUnavailableError);
+  });
+
+  it("isPostMediaComplete is false for a post without a file", async () => {
+    const { isPostMediaComplete } = await import("./postMedia");
+    expect(
+      isPostMediaComplete(null, [
+        { position: 0, mediaItem: { id: "m1" } },
+        { position: 1, mediaItem: { id: "m2" } },
+      ]),
+    ).toBe(false);
+  });
+});

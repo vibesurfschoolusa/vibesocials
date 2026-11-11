@@ -409,7 +409,9 @@ model PostJob {
   id                   String        @id @default(cuid())
   userId               String
   workspaceId          String
-  mediaItemId          String
+  // Null for a post that is only text (2026-11-10); such a post goes only to the
+  // platforms in TEXT_ONLY_PLATFORMS (src/lib/platformLimits.ts).
+  mediaItemId          String?
   status               PostJobStatus @default(pending)
   // Roadmap Phase 5. `scheduledFor` is null for immediate posts and set for
   // `scheduled` jobs; the cron due-scanner claims `status=scheduled` rows whose
@@ -460,7 +462,7 @@ model PostJob {
   // server/notifications/postOutcomeEmail.ts). Cascade: deleting a workspace
   // removes its post jobs.
   workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  mediaItem MediaItem       @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  mediaItem MediaItem?      @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
   results   PostJobResult[]
   // Several photos in one post (2026-11-10): one row per photo, positions 0 to
   // n-1, written only for a post with two or more. A post without rows has the

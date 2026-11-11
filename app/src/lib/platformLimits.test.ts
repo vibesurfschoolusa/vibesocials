@@ -4,7 +4,9 @@ import type { Platform } from "@prisma/client";
 
 import {
   PLATFORM_CAPTION_LIMITS,
+  TEXT_ONLY_PLATFORMS,
   mediaKindOf,
+  platformAcceptsTextOnly,
   platformAcceptsMedia,
   unsupportedMediaReason,
 } from "./platformLimits";
@@ -156,5 +158,22 @@ describe("unsupportedMediaReason", () => {
     // Other platforms are unchanged.
     expect(platformAcceptsMedia("x", "image/webp")).toBe(true);
     expect(platformAcceptsMedia("facebook_page", "video/webm")).toBe(true);
+  });
+});
+
+describe("TEXT_ONLY_PLATFORMS (posts without a photo)", () => {
+  it("lists exactly Facebook, X, LinkedIn and Google Business Profile", () => {
+    expect([...TEXT_ONLY_PLATFORMS].sort()).toEqual(
+      ["facebook_page", "google_business_profile", "linkedin", "x"],
+    );
+  });
+
+  it("platformAcceptsTextOnly is true for those four and false for the platforms that need a file", () => {
+    for (const platform of ["facebook_page", "x", "linkedin", "google_business_profile"] as Platform[]) {
+      expect(platformAcceptsTextOnly(platform)).toBe(true);
+    }
+    for (const platform of ["instagram", "tiktok", "youtube", "pinterest"] as Platform[]) {
+      expect(platformAcceptsTextOnly(platform)).toBe(false);
+    }
   });
 });

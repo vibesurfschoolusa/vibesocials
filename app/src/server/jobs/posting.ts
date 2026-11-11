@@ -9,8 +9,13 @@ import type {
   YouTubePostMetadata,
 } from "@/server/platforms/types";
 import { postJobStatusForIntent, type PostJobIntent } from "@/lib/scheduling";
-import { platformAcceptsMedia } from "@/lib/platformLimits";
-import { assertPostTargetsValid, narrowConnectionsForPost } from "@/lib/postTargets";
+import { platformAcceptsMedia, platformAcceptsTextOnly } from "@/lib/platformLimits";
+import {
+  assertPostTargetsValid,
+  assertTextPostTargetsValid,
+  narrowConnectionsForPost,
+  narrowConnectionsForTextPost,
+} from "@/lib/postTargets";
 
 /**
  * A new file of a post, as the create helper stores it. 07d: `altText` is the
@@ -87,8 +92,12 @@ export interface CreatePostJobOnlyParams extends PostJobSchedulingParams {
    * own personal workspace.
    */
   workspaceId: string;
-  /** The post's first (or only) file: `PostJob.mediaItemId`. */
-  media: PostFileInfo;
+  /**
+   * The post's first (or only) file: `PostJob.mediaItemId`. Null for a post that
+   * is only text (2026-11-10): no MediaItem is written, the job's
+   * `mediaItemId` is null, and only TEXT_ONLY_PLATFORMS may be targeted.
+   */
+  media: PostFileInfo | null;
   /**
    * Several photos in one post (07a): the photos after `media`, in order. Each
    * becomes its own MediaItem, and the post gets one PostJobMedia row per photo
@@ -184,7 +193,8 @@ export interface PostJobCreated {
   postJobId: string;
   /** A series only: every job created, in time order; `postJobId` is the first. */
   postJobIds?: string[];
-  mediaItemId: string;
+  /** Null for a post that is only text (createPostJobOnly with `media: null`). */
+  mediaItemId: string | null;
   resultIds: string[];
 }
 
@@ -252,7 +262,8 @@ export async function createPostJobOnly(
   // intent - against this media's type (a platform whose client rejects it is a
   // PostTargetingError, not a doomed result row) and the TikTok privacy rule -
   // before anything is written.
-  assertPostTargetsValid(targetPlatforms, media.mimeType, params.tiktokMetadata);
+  if (media) assertPostTargetsValid(targetPlatforms, media.mimeType, params.tiktokMetadata);
+  else assertTextPostTargetsValid(targetPlatforms);
 
   // Only the immediate path materializes the fan-out (and thus requires a
   // connection) up front. Scheduled/draft jobs defer result creation to run
@@ -272,14 +283,16 @@ export async function createPostJobOnly(
   // means "every connection" (legacy/default behavior) — now minus the
   // connections whose client can't publish this media (2026-11-01 audit).
   const targeted =
-    intent === "immediate"
-      ? narrowConnectionsForPost({
-          connections: socialConnections,
-          targetPlatforms,
-          mimeType: media.mimeType,
-          tiktokMetadata: params.tiktokMetadata,
-        })
-      : [];
+    intent !== "immediate"
+      ? []
+      : media
+        ? narrowConnectionsForPost({
+            connections: socialConnections,
+            targetPlatforms,
+            mimeType: media.mimeType,
+            tiktokMetadata: params.tiktokMetadata,
+          })
+        : narrowConnectionsForTextPost({ connections: socialConnections, targetPlatforms });
 
   if (intent === "immediate" && targeted.length === 0) {
     throw new Error("NO_CONNECTIONS");
@@ -316,13 +329,14 @@ export async function createPostJobOnly(
         ...(file.altText ? { altText: file.altText } : {}),
       },
     });
-  const extraMedia = params.extraMedia ?? [];
+  // A post without a file has no photos after the first either.
+  const extraMedia = media ? (params.extraMedia ?? []) : [];
 
   // Atomic media + job + results so a mid-path failure never leaves orphans
   // (mirrors createPostJobForExistingMedia).
   const { postJob, postJobs, mediaItem, resultRecords } = await prisma.$transaction(
     async (tx) => {
-      const mediaItemRow = await createMediaItem(tx, media);
+      const mediaItemRow = media ? await createMediaItem(tx, media) : null;
       // One after another, so the rows are created in the post's order.
       const extraRows = [];
       for (const file of extraMedia) {
@@ -337,7 +351,7 @@ export async function createPostJobOnly(
           data: {
             ...buildPostJobCreateData({
               userId,
-              mediaItemId: mediaItemRow.id,
+              mediaItemId: mediaItemRow?.id ?? null,
               intent,
               scheduledFor: time ?? params.scheduledFor ?? null,
               baseCaption,
@@ -356,7 +370,7 @@ export async function createPostJobOnly(
 
         // Only a post with two or more photos gets rows; the first is the job's
         // own media item, so code that ignores this table publishes it.
-        if (extraRows.length > 0) {
+        if (mediaItemRow && extraRows.length > 0) {
           await tx.postJobMedia.createMany({
             data: [mediaItemRow, ...extraRows].map((row, position) => ({
               postJobId: created.id,
@@ -397,7 +411,7 @@ export async function createPostJobOnly(
   return {
     postJobId: postJob.id,
     ...(params.series ? { postJobIds: postJobs.map((j) => j.id) } : {}),
-    mediaItemId: mediaItem.id,
+    mediaItemId: mediaItem?.id ?? null,
     resultIds: resultRecords.map((r) => r.id),
   };
 }
@@ -414,7 +428,8 @@ export async function createPostJobOnly(
  */
 export function buildPostJobCreateData(args: {
   userId: string;
-  mediaItemId: string;
+  /** Null for a post that is only text. */
+  mediaItemId: string | null;
   intent: PostJobIntent;
   scheduledFor: Date | null;
   baseCaption: string;
@@ -686,12 +701,17 @@ export interface PostCaptionSource {
  */
 export function resolvePostCaptionSource(
   job: { baseCaption: string | null; perPlatformOverrides: Prisma.JsonValue | null },
-  mediaItem: { baseCaption: string; perPlatformOverrides: Prisma.JsonValue | null },
+  // Null for a post without a file. Such a post was created with its snapshot,
+  // so the legacy fallback below never needs a media row for it.
+  mediaItem: { baseCaption: string; perPlatformOverrides: Prisma.JsonValue | null } | null,
 ): PostCaptionSource {
   const source =
     job.baseCaption !== null
       ? { baseCaption: job.baseCaption, perPlatformOverrides: job.perPlatformOverrides }
-      : { baseCaption: mediaItem.baseCaption, perPlatformOverrides: mediaItem.perPlatformOverrides };
+      : {
+          baseCaption: mediaItem?.baseCaption ?? "",
+          perPlatformOverrides: mediaItem?.perPlatformOverrides ?? null,
+        };
   return {
     baseCaption: source.baseCaption,
     perPlatformOverrides:
@@ -775,7 +795,11 @@ export interface PublishRequestedEventData {
    * still publishes.
    */
   workspaceId: string;
-  mediaItemId: string;
+  /**
+   * Null for a post that is only text (2026-11-10). The publish function decides
+   * by the job row's own `mediaItemId`, not by this field.
+   */
+  mediaItemId: string | null;
   baseCaption: string;
   perPlatformOverrides: Partial<Record<Platform, string>> | null;
   /**
@@ -898,9 +922,13 @@ export async function prepareDeferredPostJobDispatch(
   // ones whose client can't publish this media (a YouTube result for an image
   // could only ever fail). An explicit list was validated against the media at
   // create time and is left exactly as chosen.
+  // A post without a file goes only to the platforms that take text alone.
+  const media = job.mediaItem;
   const eligible = target?.length
     ? connections.filter((c) => target.includes(c.platform))
-    : connections.filter((c) => platformAcceptsMedia(c.platform, job.mediaItem.mimeType));
+    : media === null
+      ? connections.filter((c) => platformAcceptsTextOnly(c.platform))
+      : connections.filter((c) => platformAcceptsMedia(c.platform, media.mimeType));
 
   if (eligible.length === 0) {
     // No eligible connections at run time → fail the job (mirrors
