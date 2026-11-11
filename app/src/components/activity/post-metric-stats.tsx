@@ -11,6 +11,7 @@ import {
 import type { Platform } from "@prisma/client";
 
 import { platformLabel } from "@/lib/platforms";
+import { countWord } from "@/lib/plural";
 import type { PostJobResultDTO, PostMetricDTO } from "@/lib/postsDto";
 
 /**
@@ -26,16 +27,19 @@ function formatCount(value: number | null): string {
 
 interface StatProps {
   icon: LucideIcon;
+  /** The word for 1, e.g. "view". */
+  one: string;
+  /** The word for every other count, e.g. "views". */
   label: string;
   value: number | null;
 }
 
-function Stat({ icon: Icon, label, value }: StatProps) {
+function Stat({ icon: Icon, one, label, value }: StatProps) {
   return (
     <span className="flex items-center gap-1.5">
       <Icon aria-hidden className="h-3.5 w-3.5 text-muted-foreground" />
       <span className="font-medium tabular-nums text-foreground">{formatCount(value)}</span>
-      <span className="text-muted-foreground">{label}</span>
+      <span className="text-muted-foreground">{countWord(value, one, label)}</span>
     </span>
   );
 }
@@ -47,13 +51,18 @@ function Stat({ icon: Icon, label, value }: StatProps) {
  * (only for successful YouTube results).
  */
 /** The numbers the daily platforms can carry, in the order they are shown. */
-const DAILY_STATS: Array<{ key: keyof Omit<PostMetricDTO, "fetchedAt">; label: string; icon: LucideIcon }> = [
-  { key: "views", label: "views", icon: Eye },
-  { key: "likes", label: "likes", icon: ThumbsUp },
-  { key: "comments", label: "comments", icon: MessageCircle },
-  { key: "shares", label: "shares", icon: Share2 },
-  { key: "clicks", label: "clicks", icon: MousePointerClick },
-  { key: "saves", label: "saves", icon: Bookmark },
+const DAILY_STATS: Array<{
+  key: keyof Omit<PostMetricDTO, "fetchedAt">;
+  one: string;
+  label: string;
+  icon: LucideIcon;
+}> = [
+  { key: "views", one: "view", label: "views", icon: Eye },
+  { key: "likes", one: "like", label: "likes", icon: ThumbsUp },
+  { key: "comments", one: "comment", label: "comments", icon: MessageCircle },
+  { key: "shares", one: "share", label: "shares", icon: Share2 },
+  { key: "clicks", one: "click", label: "clicks", icon: MousePointerClick },
+  { key: "saves", one: "save", label: "saves", icon: Bookmark },
 ];
 
 type DailyResult = PostJobResultDTO & { metric: PostMetricDTO };
@@ -104,8 +113,8 @@ export function DailyMetricStats({
           className="flex flex-wrap items-center gap-x-4 gap-y-1"
         >
           <span className="font-medium text-foreground">{platformLabel(result.platform)}</span>
-          {DAILY_STATS.filter(({ key }) => result.metric[key] != null).map(({ key, label, icon }) => (
-            <Stat key={key} icon={icon} label={label} value={result.metric[key]} />
+          {DAILY_STATS.filter(({ key }) => result.metric[key] != null).map(({ key, one, label, icon }) => (
+            <Stat key={key} icon={icon} one={one} label={label} value={result.metric[key]} />
           ))}
         </div>
       ))}
@@ -121,9 +130,9 @@ export function PostMetricStats({ metric }: { metric: PostMetricDTO | null }) {
       aria-label="YouTube engagement"
       className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs"
     >
-      <Stat icon={Eye} label="views" value={metric?.views ?? null} />
-      <Stat icon={ThumbsUp} label="likes" value={metric?.likes ?? null} />
-      <Stat icon={MessageCircle} label="comments" value={metric?.comments ?? null} />
+      <Stat icon={Eye} one="view" label="views" value={metric?.views ?? null} />
+      <Stat icon={ThumbsUp} one="like" label="likes" value={metric?.likes ?? null} />
+      <Stat icon={MessageCircle} one="comment" label="comments" value={metric?.comments ?? null} />
     </div>
   );
 }

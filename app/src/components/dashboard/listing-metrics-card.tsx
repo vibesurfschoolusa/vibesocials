@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import type { ListingMetricsResponse } from "@/app/api/insights/listing-metrics/route";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { describeListingChange, type ListingMetricTotals } from "@/lib/listingMetrics";
+import { countWord } from "@/lib/plural";
 
 type Listing = NonNullable<ListingMetricsResponse["listing"]>;
 
@@ -46,7 +47,7 @@ export function ListingMetricsCardView({ listing, today }: { listing: Listing | 
     <Card>
       <CardHeader>
         <CardTitle className="text-base">
-          Google listing, {listing.windowDays} days to {end}
+          Google listing, {listing.windowDays} {countWord(listing.windowDays, "day", "days")} to {end}
         </CardTitle>
         <CardDescription>
           From Google, for {listing.title}. Google&apos;s numbers arrive two to three days late.

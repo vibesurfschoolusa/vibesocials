@@ -16,6 +16,7 @@ import {
   type ReportListing,
   type ReportPost,
 } from "@/lib/monthlyReport";
+import { countWord } from "@/lib/plural";
 
 /**
  * The monthly report (18a), as both pages show it: the workspace's /reports and
@@ -152,7 +153,7 @@ function ListingSection({ listing }: { listing: ReportListing }) {
     <section data-report-block className="space-y-2">
       <h2 className="text-lg font-semibold">Google listing</h2>
       <p className="text-sm text-muted-foreground">
-        {`Numbers for ${listing.daysCovered} of ${listing.daysCounted} days${listing.partial ? " so far" : ""}.`}
+        {`Numbers for ${listing.daysCovered} of ${listing.daysCounted} ${countWord(listing.daysCounted, "day", "days")}${listing.partial ? " so far" : ""}.`}
         {listing.partial ? " This month is not over yet, so these numbers are partial." : null}
         {!listing.partial && !listing.previous ? " No comparison with the month before: one of the two months has days without numbers." : null}
       </p>

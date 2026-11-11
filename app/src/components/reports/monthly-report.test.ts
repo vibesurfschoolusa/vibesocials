@@ -242,3 +242,17 @@ describe("MonthlyReportView - a post without a file", () => {
     expect(html).not.toContain("File removed");
   });
 });
+
+// Go-live check 2026-11-11: on the first of a month the coverage read "1 of 1 days".
+describe("MonthlyReportView — counted words", () => {
+  it("reads 1 day when one day is counted", () => {
+    const listing = {
+      daysCovered: 1,
+      daysCounted: 1,
+      partial: true,
+      totals: { views: 1, calls: 0, directionRequests: 0, websiteClicks: 0 },
+      previous: null,
+    };
+    expect(render(report({ inProgress: true, listing }))).toContain("Numbers for 1 of 1 day so far");
+  });
+});

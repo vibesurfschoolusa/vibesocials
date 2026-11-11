@@ -9,6 +9,7 @@
  */
 
 import type { ListingMetricRow, ListingMetricTotals } from "./listingMetrics";
+import { countWord } from "./plural";
 import { truncateGraphemes } from "./truncate";
 
 /** Most posts one report lists. */
@@ -234,7 +235,7 @@ export function summarizePostNumbers(posts: ReportPost[]): ReportNumberTotal[] {
 }
 
 function plural(count: number, one: string, many: string): string {
-  return `${count} ${count === 1 ? one : many}`;
+  return `${count} ${countWord(count, one, many)}`;
 }
 
 /** "Likes: 312 across 18 posts". */

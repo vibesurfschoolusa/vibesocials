@@ -60,3 +60,11 @@ describe("ListingMetricsCardView", () => {
     expect(render(null)).toBe("");
   });
 });
+
+// Go-live check 2026-11-11: a number beside a counted word takes the singular for 1.
+describe("ListingMetricsCardView — the window's days", () => {
+  it("reads 1 day for a one-day window and 28 days otherwise", () => {
+    expect(render({ ...LISTING, windowDays: 1 })).toContain("1 day to");
+    expect(render(LISTING)).toContain("28 days to");
+  });
+});

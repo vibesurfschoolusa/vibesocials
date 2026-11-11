@@ -72,7 +72,7 @@ describe("DailyMetricStats", () => {
     const shown = text(html);
     expect(shown).toContain("Instagram 12 likes 3 comments");
     expect(shown).toContain("Pinterest 2,400 views 37 clicks 20 saves");
-    expect(shown).toContain("LinkedIn 500 views 9 likes 0 comments 1 shares 20 clicks");
+    expect(shown).toContain("LinkedIn 500 views 9 likes 0 comments 1 share 20 clicks");
     expect(shown.endsWith("Updated once a day.")).toBe(true);
     expect(shown.match(/Updated once a day\./g)).toHaveLength(1);
     expect(shown).not.toContain("—");
@@ -100,5 +100,24 @@ describe("DailyMetricStats", () => {
 
   it("renders nothing without a result to show", () => {
     expect(renderToStaticMarkup(createElement(DailyMetricStats, { results: [] }))).toBe("");
+  });
+});
+
+// Go-live check 2026-11-11: "5 likes · 1 comments" on Activity and the dashboard.
+describe("counts take the singular for 1", () => {
+  it("YouTube: 1 view, 1 like, 1 comment; 0 and 2 stay plural", () => {
+    const one = renderToStaticMarkup(createElement(PostMetricStats, { metric: metric({ views: 1, likes: 1, comments: 1 }) }));
+    expect(text(one)).toBe("1 view 1 like 1 comment");
+    const other = renderToStaticMarkup(createElement(PostMetricStats, { metric: metric({ views: 0, likes: 2, comments: 1000 }) }));
+    expect(text(other)).toBe("0 views 2 likes 1,000 comments");
+  });
+
+  it("the daily platforms: every word in the singular for 1", () => {
+    const html = renderToStaticMarkup(
+      createElement(DailyMetricStats, {
+        results: [result({ metric: metric({ views: 1, likes: 1, comments: 1, shares: 1, clicks: 1, saves: 1 }) })],
+      }),
+    );
+    expect(text(html)).toContain("Instagram 1 view 1 like 1 comment 1 share 1 click 1 save");
   });
 });
