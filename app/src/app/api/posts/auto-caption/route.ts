@@ -10,6 +10,7 @@ import {
   findOverlongAiField,
   isAiTimeoutError,
 } from "@/lib/aiGuards";
+import { cleanAltText, fitAltText } from "@/lib/altText";
 import { BLOB_URL_REJECTED_MESSAGE, isAllowedBlobUrl } from "@/lib/blobUrl";
 import { brandVoicePrompt } from "@/lib/brandVoice";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
@@ -19,6 +20,26 @@ import { MAX_VIDEO_FRAMES, parseVideoFrames } from "@/lib/videoFrames";
 import { getWorkspaceContext } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * 07d: what "Write it for me" asks for. Alt text describes; it does not sell,
+ * so neither the brand website nor the brand voice is part of it.
+ */
+const ALT_TEXT_SYSTEM_PROMPT = `You write alt text: a short description of a photo for someone who cannot see it.
+Your description must:
+- Be one or two plain sentences, at most 250 characters
+- Say what is in the photo: the people, things, place and action, and any words shown in it
+- Use no hashtags and no emoji
+- Give no opinions and do not sell or promote anything
+- Not start with "Image of" or "Photo of"
+
+Return ONLY the description.`;
+
+/** The longest description the AI may hand back (the field holds up to 1,000). */
+const AI_ALT_TEXT_MAX = 250;
+
+// An emoji, and the skin-tone modifier or variation selector that may follow it.
+const EMOJI = /[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Variation_Selector}]/gu;
 
 interface AutoCaptionRequestBody {
   blobUrl: string;
@@ -31,6 +52,8 @@ interface AutoCaptionRequestBody {
   frames?: string[];
   /** True from the Add-many page: a separate per-user counter (40 per 15 minutes). */
   bulk?: boolean;
+  /** 07d: "altText" asks for the photo's description instead of a caption. Absent: a caption. */
+  purpose?: "altText";
 }
 
 export async function POST(request: Request) {
@@ -88,6 +111,11 @@ export async function POST(request: Request) {
     if (body.bulk !== undefined && typeof body.bulk !== "boolean") {
       return NextResponse.json({ error: "bulk must be true or false" }, { status: 400 });
     }
+
+    if (body.purpose !== undefined && body.purpose !== "altText") {
+      return NextResponse.json({ error: 'purpose must be "altText" when given.' }, { status: 400 });
+    }
+    const wantsAltText = body.purpose === "altText";
 
     // Throttle per user: vision calls are the most expensive, so keep this tight.
     // Fail closed — a limiter outage must not open unlimited LLM spend.
@@ -158,6 +186,10 @@ export async function POST(request: Request) {
       );
     }
 
+    if (wantsAltText && !isImage) {
+      return NextResponse.json({ error: "Only a photo can be described." }, { status: 400 });
+    }
+
     const llm = resolveLlmConfig();
     if (!llm) {
       return NextResponse.json({ error: LLM_NOT_CONFIGURED_MESSAGE }, { status: 500 });
@@ -168,6 +200,15 @@ export async function POST(request: Request) {
     const quota = await checkWorkspaceAiQuota(context.workspace.id);
     if (!quota.allowed) {
       return aiWorkspaceLimitResponse(quota.retryAfterSeconds);
+    }
+
+    if (wantsAltText) {
+      return await describePhoto({
+        llm,
+        imageUrl: trimmedBlobUrl,
+        language,
+        userId: context.user.id,
+      });
     }
 
     const mediaKind = isImage ? "photo" : "video";
@@ -340,4 +381,73 @@ The media is a short social media video. You do not have direct access to the vi
       { status: 500 },
     );
   }
+}
+
+/**
+ * 07d: one vision call that describes the photo, under the guards and counters
+ * the caller already passed. The answer is cleaned like a typed description
+ * (lib/altText.ts), with hashtags and emoji removed, and cut to 250 characters.
+ * Its text is never logged.
+ */
+async function describePhoto(args: {
+  llm: NonNullable<ReturnType<typeof resolveLlmConfig>>;
+  imageUrl: string;
+  language: string | undefined;
+  userId: string;
+}): Promise<Response> {
+  const { llm, imageUrl, language, userId } = args;
+  const languageText = language
+    ? `Write the description in this language: ${language}.`
+    : "Write the description in English.";
+  const model = llm.visionModel;
+
+  const llmResponse = await fetch(`${llm.baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${llm.apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: ALT_TEXT_SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: `Describe this photo for its alt text.\n${languageText}` },
+            { type: "image_url", image_url: { url: imageUrl } },
+          ],
+        },
+      ],
+      temperature: 0.3,
+      max_tokens: 150,
+      ...reasoningParams(llm.provider, model),
+    }),
+    signal: AbortSignal.timeout(AI_PROVIDER_TIMEOUT_MS),
+  });
+
+  if (!llmResponse.ok) {
+    console.error(`[Auto Caption] ${llm.providerLabel} API error (alt text)`, { status: llmResponse.status });
+    return NextResponse.json(
+      { error: "The AI could not describe this photo. Try again or write it yourself." },
+      { status: 500 },
+    );
+  }
+
+  const llmData = await llmResponse.json();
+  const raw = llmData.choices?.[0]?.message?.content;
+  const altText = fitAltText(
+    cleanAltText(typeof raw === "string" ? raw.replace(/#/g, "").replace(EMOJI, "") : "").replace(/ {2,}/g, " "),
+    AI_ALT_TEXT_MAX,
+  );
+
+  if (!altText) {
+    return NextResponse.json(
+      { error: "The AI wrote an empty description. Try again or write it yourself." },
+      { status: 500 },
+    );
+  }
+
+  console.log("[Auto Caption] Photo description generated", { userId, length: altText.length });
+  return NextResponse.json({ altText });
 }

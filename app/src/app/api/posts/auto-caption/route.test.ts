@@ -571,3 +571,189 @@ Keep the caption short (1-2 sentences, max ~150 characters).`);
     expect(userText()).toContain(DEFAULT_TONE);
   });
 });
+
+// 07d: "Write it for me" on the Create page asks this route for a photo's
+// description (alt text) instead of a caption. Same guards, same counters, its
+// own instruction, and never the brand website or voice.
+describe("POST /api/posts/auto-caption - alt text mode (07d)", () => {
+  const ALT_SYSTEM_PROMPT = `You write alt text: a short description of a photo for someone who cannot see it.
+Your description must:
+- Be one or two plain sentences, at most 250 characters
+- Say what is in the photo: the people, things, place and action, and any words shown in it
+- Use no hashtags and no emoji
+- Give no opinions and do not sell or promote anything
+- Not start with "Image of" or "Photo of"
+
+Return ONLY the description.`;
+
+  const altBody = { ...validBody, purpose: "altText" };
+
+  function withBrand() {
+    getWorkspaceContextMock.mockResolvedValue({
+      ...CONTEXT,
+      workspace: {
+        ...CONTEXT.workspace,
+        companyWebsite: "www.surf.example",
+        brandVoice: "Loud and salesy. Always say BOOK NOW.",
+        brandVoiceExamples: "BOOK NOW surf fam",
+      },
+    });
+  }
+
+  function messages(): Array<{ role: string; content: unknown }> {
+    return sentBody().messages as Array<{ role: string; content: unknown }>;
+  }
+
+  it("uses its own instruction, with the photo, and answers { altText }", async () => {
+    fetchMock.mockImplementation(async () => providerOk("A surfer rides a small green wave at sunrise."));
+
+    const response = await post(altBody);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ altText: "A surfer rides a small green wave at sunrise." });
+    const [system, user] = messages();
+    expect(system).toEqual({ role: "system", content: ALT_SYSTEM_PROMPT });
+    expect(user).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "Describe this photo for its alt text.\nWrite the description in English." },
+        { type: "image_url", image_url: { url: BLOB_URL } },
+      ],
+    });
+    expect(sentBody().model).toBe("grok-4.5");
+  });
+
+  it("writes in the language the request names", async () => {
+    await post({ ...altBody, language: "German" });
+
+    expect(JSON.stringify(messages()[1])).toContain("Write the description in this language: German.");
+  });
+
+  it("never uses the brand website or the brand voice", async () => {
+    withBrand();
+
+    await post(altBody);
+
+    expect(messages()[0].content).toBe(ALT_SYSTEM_PROMPT);
+    expect(sentPrompt()).not.toContain("surf.example");
+    expect(sentPrompt()).not.toContain("BOOK NOW");
+  });
+
+  it("cleans the answer: no hashtags, no emoji, one line, at most 250 characters", async () => {
+    fetchMock.mockImplementation(async () =>
+      providerOk(`A dog 🐕 on a #beach.\nIt runs. ${"Very fast and happy. ".repeat(20)}`),
+    );
+
+    const response = await post(altBody);
+
+    const { altText } = (await response.json()) as { altText: string };
+    expect(altText.startsWith("A dog on a beach. It runs.")).toBe(true);
+    expect(altText).not.toMatch(/[#\n]/);
+    expect(altText).not.toContain("🐕");
+    expect(altText.length).toBeLessThanOrEqual(250);
+  });
+
+  it("an empty answer is a 500 that says so", async () => {
+    fetchMock.mockImplementation(async () => providerOk("  #  "));
+
+    const response = await post(altBody);
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: "The AI wrote an empty description. Try again or write it yourself." });
+  });
+
+  it("keeps the per-user counter and the workspace quota of the caption mode", async () => {
+    await post(altBody);
+
+    const calls = checkRateLimitMock.mock.calls.map(([opts]) => opts);
+    expect(calls).toContainEqual({
+      userId: "user-1",
+      route: "posts/auto-caption",
+      limit: 10,
+      windowMs: 5 * 60 * 1000,
+      failClosed: true,
+    });
+    expect(calls).toContainEqual(expect.objectContaining({ userId: "ai:workspace:ws-1", limit: 200 }));
+  });
+
+  it("is refused when the workspace quota is spent, without calling the provider", async () => {
+    checkRateLimitMock.mockImplementation(async (opts: { userId: string }) =>
+      opts.userId.startsWith("ai:workspace:") ? { allowed: false, retryAfterSeconds: 3600 } : { allowed: true },
+    );
+
+    const response = await post(altBody);
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toMatchObject({ code: "AI_WORKSPACE_DAILY_LIMIT" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("is refused when the per-user limit trips, without calling the provider", async () => {
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
+
+    const response = await post(altBody);
+
+    expect(response.status).toBe(429);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the field caps", async () => {
+    const response = await post({ ...altBody, language: "x".repeat(41) });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ code: "AI_INPUT_TOO_LONG" });
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+  });
+
+  it("describes photos only: a video is a 400 and no provider call", async () => {
+    const response = await post({ ...altBody, mimeType: "video/mp4" });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Only a photo can be described." });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unknown purpose before any counter is spent", async () => {
+    const response = await post({ ...validBody, purpose: "poem" });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: 'purpose must be "altText" when given.' });
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+  });
+
+  it("logs no description text", async () => {
+    fetchMock.mockImplementation(async () => providerOk("A secret harbour at dusk."));
+
+    await post(altBody);
+
+    const logged = JSON.stringify([...vi.mocked(console.log).mock.calls, ...vi.mocked(console.error).mock.calls]);
+    expect(logged).not.toContain("secret harbour");
+  });
+
+  it("the default request (no purpose) still builds exactly today's prompt", async () => {
+    withBrand();
+
+    await post(validBody);
+
+    const [system, user] = messages();
+    expect(system.content).toContain("You are a social media expert creating short, engaging captions");
+    expect(system.content).toContain("Brand context:\nBrand website: www.surf.example");
+    expect(system.content).toContain("Brand voice:");
+    expect(user).toEqual({
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: `Create a social media caption for a photo for this business.
+
+Write the caption in the same language as the example content or English.
+Tone: follow the brand voice in the instructions.
+Keep the caption short (1-2 sentences, max ~150 characters).`,
+        },
+        { type: "image_url", image_url: { url: BLOB_URL } },
+      ],
+    });
+    expect(sentBody().temperature).toBe(0.8);
+    expect(sentBody().max_tokens).toBe(150);
+  });
+});
