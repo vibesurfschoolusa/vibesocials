@@ -2762,3 +2762,120 @@ describe("xClient.publishVideo — alt text (07d)", () => {
     expect(x.metaCalls()).toHaveLength(0);
   });
 });
+
+describe("xClient.publishText - a post without a photo", () => {
+  type Reply = () => Response | Promise<Response>;
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+  function textCtx(caption = "Lessons cancelled today") {
+    return {
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: {
+        id: "conn-x",
+        platform: "x",
+        accessToken: "access-token",
+        refreshToken: "access-token-secret",
+      } as unknown as SocialConnection,
+      caption,
+      baseCaption: caption,
+    };
+  }
+
+  function stubX(opts: { v1?: Reply[]; v2?: Reply[] } = {}) {
+    const v1 = [...(opts.v1 ?? [])];
+    const v2 = [...(opts.v2 ?? [])];
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.includes("statuses/update.json")) return (v1.shift() ?? (() => json({ id_str: "tweet-1" })))();
+      if (url.includes("/2/tweets")) return (v2.shift() ?? (() => json({ data: { id: "tweet-2", text: "x" } }, 201)))();
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  const failure = (caption?: string) =>
+    xClient.publishText!(textCtx(caption)).then(
+      () => null,
+      (e: unknown) => e as Error & { code?: string },
+    );
+
+  beforeEach(() => {
+    vi.stubEnv("X_CONSUMER_KEY", "consumer-key");
+    vi.stubEnv("X_CONSUMER_SECRET", "consumer-secret");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("sends the create-post call with the text and no media ids, and no upload call", async () => {
+    const fetchMock = stubX();
+
+    await expect(xClient.publishText!(textCtx())).resolves.toEqual({ externalPostId: "tweet-1" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe("https://api.twitter.com/1.1/statuses/update.json");
+    expect(Object.fromEntries(init?.body as URLSearchParams)).toEqual({ status: "Lessons cancelled today" });
+  });
+
+  it("falls back to v2 with only the text when v1.1 refuses", async () => {
+    const fetchMock = stubX({ v1: [() => json({ errors: [{ code: 453 }] }, 403)] });
+
+    await expect(xClient.publishText!(textCtx())).resolves.toEqual({ externalPostId: "tweet-2" });
+
+    const v2 = fetchMock.mock.calls.find(([u]) => String(u).includes("/2/tweets"));
+    expect(JSON.parse(String(v2?.[1]?.body))).toEqual({ text: "Lessons cancelled today" });
+  });
+
+  it("truncates the text to X's limit as for any post", async () => {
+    const fetchMock = stubX();
+    await xClient.publishText!(textCtx("a".repeat(300)));
+    expect((fetchMock.mock.calls[0][1]?.body as URLSearchParams).get("status")).toBe(computeTweetText("a".repeat(300)));
+  });
+
+  it.each([
+    ["a timeout", () => Promise.reject(Object.assign(new Error("Request timed out"), { name: "AbortError" }))],
+    ["a 503", () => new Response("down", { status: 503 })],
+    ["a 2xx without an id", () => json({})],
+  ] as const)("a lost answer (%s) on v1.1 is PUBLISH_UNCONFIRMED and v2 is never tried", async (_name, answer) => {
+    const fetchMock = stubX({ v1: [answer as Reply] });
+
+    const error = await failure();
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("turns X's duplicate refusal into a plain sentence", async () => {
+    stubX({
+      v1: [() => json({ errors: [{ code: 187, message: "Status is a duplicate." }] }, 403)],
+      v2: [
+        () =>
+          json(
+            { detail: "You are not allowed to create a Tweet with duplicate content.", type: "about:blank", title: "Forbidden", status: 403 },
+            403,
+          ),
+      ],
+    });
+
+    const error = await failure();
+
+    expect(error?.code).toBe("X_DUPLICATE_POST");
+    expect(error?.message).toBe("X refused this post because it is the same as a recent one.");
+  });
+
+  it("refuses without a token, sending nothing", async () => {
+    const fetchMock = stubX();
+    const ctx = textCtx();
+    (ctx.socialConnection as { refreshToken: string | null }).refreshToken = null;
+    await expect(xClient.publishText!(ctx)).rejects.toMatchObject({ code: "X_NO_ACCESS_TOKEN" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

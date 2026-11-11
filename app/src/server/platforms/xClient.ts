@@ -1,7 +1,7 @@
 import type { SocialConnection } from "@prisma/client";
 import OAuth from "oauth-1.0a";
 import crypto from "crypto";
-import type { PlatformClient, PublishContext, PublishResult } from "./types";
+import type { PlatformClient, PublishContext, PublishResult, TextPublishContext } from "./types";
 
 import { altTextOf } from "@/lib/altText";
 import { assertOk } from "@/lib/assertOk";
@@ -652,6 +652,23 @@ export async function classifyXAccessError(
   return error;
 }
 
+export const X_DUPLICATE_POST_MESSAGE = "X refused this post because it is the same as a recent one.";
+
+/**
+ * X refuses a post whose text matches a recent one: v2 answers 403 with "You are
+ * not allowed to create a Tweet with duplicate content." (v1.1: code 187, which
+ * falls back to v2 and meets the same refusal). X's reference for POST /2/tweets
+ * does not document it (checked 2026-11-10); the wording is matched loosely.
+ * Reads a clone, so the body stays readable for the generic failure.
+ */
+async function classifyXDuplicate(response: Response): Promise<(Error & { code: string; status: number }) | null> {
+  if (response.status !== 403) return null;
+  const body = await response.clone().text().catch(() => "");
+  if (!/duplicate/i.test(body)) return null;
+  console.error("[X OAuth 1.0a] X refused the post as a duplicate", { status: response.status });
+  return Object.assign(new Error(X_DUPLICATE_POST_MESSAGE), { code: "X_DUPLICATE_POST", status: response.status });
+}
+
 /**
  * Create the tweet with the uploaded media: the COMMIT call, shared by the small and the
  * chunked path. v1.1 `statuses/update` first, then a v2 fallback; no v2 after an ambiguous
@@ -662,9 +679,14 @@ async function postTweet(args: {
   oauth: OAuth;
   token: XToken;
   tweetText: string;
-  /** In the order they appear on the post; one for a single photo or video, up to 4 photos. */
+  /**
+   * In the order they appear on the post; one for a single photo or video, up to 4 photos.
+   * Empty for a post that is only text: no media field is sent at all.
+   */
   mediaIds: string[];
   deadline: number | undefined;
+  /** A text post: X's duplicate refusal gets its own sentence. */
+  refuseDuplicate?: boolean;
 }): Promise<PublishResult> {
   const { oauth, token, tweetText, mediaIds, deadline } = args;
 
@@ -677,11 +699,14 @@ async function postTweet(args: {
   // Try v1.1 API first (more reliable with OAuth 1.0a), fallback to v2
   // v1.1 statuses/update uses form data, v2 uses JSON
   const v1Url = "https://api.twitter.com/1.1/statuses/update.json";
-  const v1Params = {
-    status: tweetText,
-    // v1.1 takes a comma-separated list; one id is the same string as before.
-    media_ids: mediaIds.join(","),
-  };
+  const v1Params: Record<string, string> =
+    mediaIds.length > 0
+      ? {
+          status: tweetText,
+          // v1.1 takes a comma-separated list; one id is the same string as before.
+          media_ids: mediaIds.join(","),
+        }
+      : { status: tweetText };
 
   const v1RequestData = {
     url: v1Url,
@@ -742,12 +767,16 @@ async function postTweet(args: {
   });
 
   const tweetUrl = "https://api.twitter.com/2/tweets";
-  const tweetPayload = {
-    text: tweetText,
-    media: {
-      media_ids: [...mediaIds],
-    },
-  };
+  // X's schema wants at least one id in media_ids, so a text post sends no media.
+  const tweetPayload =
+    mediaIds.length > 0
+      ? {
+          text: tweetText,
+          media: {
+            media_ids: [...mediaIds],
+          },
+        }
+      : { text: tweetText };
 
   const requestData = {
     url: tweetUrl,
@@ -784,6 +813,11 @@ async function postTweet(args: {
   // An account-level refusal (no API plan, credits used up) says what to do.
   const accessError = await classifyXAccessError(tweetResponse);
   if (accessError) throw accessError;
+
+  if (args.refuseDuplicate) {
+    const duplicate = await classifyXDuplicate(tweetResponse);
+    if (duplicate) throw duplicate;
+  }
 
   // v1Response's status/body are already logged above; assertOk
   // additionally logs tweetResponse's own status + body server-side.
@@ -1637,6 +1671,44 @@ export const xClient: PlatformClient = {
     const tweetText = computeTweetText(caption);
 
     return postTweet({ oauth, token, tweetText, mediaIds: [mediaId], deadline });
+  },
+
+  /**
+   * A post without a photo (2026-11-10): the same create-post call as any post
+   * (postTweet: v1.1 statuses/update, then v2 POST /2/tweets), with the text
+   * and no media. X's reference for POST /2/tweets: `text` is "Required unless
+   * media is provided" (read 2026-11-10). The same lost-answer rule applies: an
+   * ambiguous v1.1 answer is PUBLISH_UNCONFIRMED and v2 is never tried.
+   */
+  async publishText(ctx: TextPublishContext): Promise<PublishResult> {
+    const { socialConnection, caption, deadline } = ctx;
+
+    const accessToken = socialConnection.accessToken;
+    const accessTokenSecret = socialConnection.refreshToken; // Stored as refreshToken
+    const consumerKey = process.env.X_CONSUMER_KEY;
+    const consumerSecret = process.env.X_CONSUMER_SECRET;
+
+    if (!accessToken || !accessTokenSecret) {
+      const error = new Error("Missing access token for X") as Error & { code: string };
+      error.code = "X_NO_ACCESS_TOKEN";
+      throw error;
+    }
+    if (!consumerKey || !consumerSecret) {
+      const error = new Error("Missing X consumer credentials") as Error & { code: string };
+      error.code = "X_NO_CONSUMER_KEYS";
+      throw error;
+    }
+
+    console.log("[X OAuth 1.0a] Starting text post", { captionLength: caption.length });
+
+    return postTweet({
+      oauth: createOAuth(consumerKey, consumerSecret),
+      token: { key: accessToken, secret: accessTokenSecret },
+      tweetText: computeTweetText(caption),
+      mediaIds: [],
+      deadline,
+      refuseDuplicate: true,
+    });
   },
 
   async refreshToken(connection: SocialConnection): Promise<SocialConnection> {
