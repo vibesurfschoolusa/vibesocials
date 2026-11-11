@@ -210,7 +210,7 @@ export function MonthlyReportView({
           <p>{report.totals.resultsByPlatform.map((r) => `${r.platform}: ${formatNumber(r.count)}`).join(" · ")}</p>
         ) : null}
         {report.totals.numbers.map((total) => (
-          <p key={total.key}>{numberLine(total, formatNumber)}</p>
+          <p key={total.key}>{numberLine(total)}</p>
         ))}
         {showing && report.totals.numbers.length > 0 ? (
           <p className="text-muted-foreground">The numbers cover the posts listed below.</p>

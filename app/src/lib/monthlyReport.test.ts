@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { formatNumber } from "./formatNumber";
 import {
   REPORT_CAPTION_MAX,
   REPORT_MONTH_INVALID_MESSAGE,
@@ -302,12 +301,8 @@ describe("publicMonthlyReport", () => {
 
 // Go-live check 2026-11-11: every number in the report has a thousands separator.
 describe("report lines — thousands separators", () => {
-  it("numberLine leaves the email's text as it was unless the page asks", () => {
-    expect(numberLine({ key: "views", label: "Views", sum: 5400, posts: 9 })).toBe("Views: 5400 across 9 posts");
-  });
-
   it("numberLine, showingLine and failedLine", () => {
-    expect(numberLine({ key: "views", label: "Views", sum: 1234567, posts: 1388 }, formatNumber)).toBe(
+    expect(numberLine({ key: "views", label: "Views", sum: 1234567, posts: 1388 })).toBe(
       "Views: 1,234,567 across 1,388 posts",
     );
     expect(showingLine(200, 1388)).toBe("Showing the 200 most recent of 1,388.");

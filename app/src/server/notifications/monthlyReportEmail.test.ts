@@ -46,7 +46,8 @@ describe("buildMonthlyReportEmail", () => {
 
   it("gives each number with a value as its sum and the posts it covers, as the report does", () => {
     const { html } = build(report());
-    expect(html).toContain("Views: 5400 across 9 posts");
+    // Was "5400" before the go-live check (2026-11-11): every number now has a thousands separator.
+    expect(html).toContain("Views: 5,400 across 9 posts");
     expect(html).toContain("Likes: 312 across 1 post");
     expect(html).not.toContain("Comments");
   });
@@ -115,5 +116,92 @@ describe("buildMonthlyReportEmail", () => {
     expect(html).not.toContain("<i>");
     expect(html).not.toContain("<u>");
     expect(html).toContain("&lt;b&gt;Surf &amp; &quot;Co&quot;&lt;/b&gt;");
+  });
+});
+
+// Go-live check 2026-11-11: the email reads its numbers as the report page does.
+// 1 takes the singular, every other number the plural; every number a person
+// reads has a thousands separator.
+describe("buildMonthlyReportEmail — counted words and thousands separators", () => {
+  const withPosts = (posts: number) =>
+    build(report({ totals: { resultsByPlatform: [], numbers: [{ key: "likes", label: "Likes", sum: 4, posts }] } })).html;
+
+  it("0 posts: plural", () => {
+    expect(withPosts(0)).toContain("Likes: 4 across 0 posts");
+  });
+
+  it("1 post: singular", () => {
+    expect(withPosts(1)).toContain("Likes: 4 across 1 post");
+  });
+
+  it("2 posts: plural", () => {
+    expect(withPosts(2)).toContain("Likes: 4 across 2 posts");
+  });
+
+  it("1388 posts: plural, with a separator", () => {
+    expect(withPosts(1388)).toContain("Likes: 4 across 1,388 posts");
+  });
+
+  const listing = (daysCovered: number, daysCounted: number) => ({
+    daysCovered,
+    daysCounted,
+    partial: true,
+    totals: { views: 1388, calls: 1000, directionRequests: 999, websiteClicks: 1234567 },
+    previous: null,
+  });
+
+  it('reads "1 of 1 day" on the first of a month', () => {
+    expect(build(report({ inProgress: true, listing: listing(1, 1) })).html).toContain("Numbers for 1 of 1 day so far.");
+  });
+
+  it('reads "10 of 11 days"', () => {
+    expect(build(report({ inProgress: true, listing: listing(10, 11) })).html).toContain(
+      "Numbers for 10 of 11 days so far.",
+    );
+  });
+
+  it("formats the posts published, the per-platform counts and the listing's numbers", () => {
+    const { html } = build(
+      report({
+        postCount: 1388,
+        totals: {
+          resultsByPlatform: [{ platform: "Instagram", count: 1234567 }],
+          numbers: [{ key: "views", label: "Views", sum: 1234567, posts: 1000 }],
+        },
+        listing: listing(10, 11),
+      }),
+    );
+    expect(html).toContain("Posts published: 1,388");
+    expect(html).toContain("Instagram: 1,234,567");
+    expect(html).toContain("Views: 1,234,567 across 1,000 posts");
+    expect(html).toContain("Views (Search and Maps): 1,388");
+    expect(html).toContain("Calls: 1,000");
+    expect(html).toContain("Direction requests: 999");
+    expect(html).toContain("Website clicks: 1,234,567");
+  });
+
+  it("formats how many posts the numbers cover when not all are listed", () => {
+    const posts = Array.from({ length: 1000 }, () => report().posts[0]);
+    expect(build(report({ postCount: 1388, posts })).html).toContain("The numbers cover the 1,000 most recent posts.");
+  });
+
+  it("the subject carries no count, and there is no plain-text part", () => {
+    const email = build(report({ postCount: 1388 }));
+    expect(email.subject).toBe("Surf Co: your report for October 2026");
+    expect(Object.keys(email).sort()).toEqual(["html", "subject"]);
+  });
+
+  it("an email with nothing to count is exactly as before", () => {
+    const email = build(report({ postCount: 0, totals: { resultsByPlatform: [], numbers: [] } }));
+    expect(email).toEqual({
+      subject: "Surf Co: your report for October 2026",
+      html: [
+        "<p>Here is the report for <strong>Surf Co</strong> for October 2026.</p>",
+        "<p>Posts published: 0</p>",
+        '<p><a href="https://app.example.com/reports?month=2026-10" style="display:inline-block;padding:10px 16px;background:#111827;color:#ffffff;text-decoration:none;border-radius:6px">Open the report</a></p>',
+        "<p>To stop this monthly email, turn it off in Settings, Notifications.</p>",
+        "<p>— Vibe Socials</p>",
+      ].join("\n"),
+    });
   });
 });

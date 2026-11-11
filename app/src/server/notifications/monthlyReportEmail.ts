@@ -1,4 +1,6 @@
+import { formatNumber } from "@/lib/formatNumber";
 import { monthLabel, numberLine, type MonthlyReport } from "@/lib/monthlyReport";
+import { countWord } from "@/lib/plural";
 
 /**
  * The monthly report email (18b), sent by the `monthly-report-email` cron to a
@@ -42,10 +44,10 @@ export function buildMonthlyReportEmail(params: {
   }
   lines.push(`<p>Here is the report for <strong>${name}</strong> for ${escapeHtml(month)}.</p>`);
 
-  lines.push(`<p>Posts published: ${report.postCount}</p>`);
+  lines.push(`<p>Posts published: ${formatNumber(report.postCount)}</p>`);
   if (report.totals.resultsByPlatform.length > 0) {
     const items = report.totals.resultsByPlatform.map(
-      (entry) => `<li>${escapeHtml(entry.platform)}: ${entry.count}</li>`,
+      (entry) => `<li>${escapeHtml(entry.platform)}: ${formatNumber(entry.count)}</li>`,
     );
     lines.push(`<ul>\n${items.join("\n")}\n</ul>`);
   }
@@ -53,7 +55,7 @@ export function buildMonthlyReportEmail(params: {
     const items = report.totals.numbers.map((total) => `<li>${escapeHtml(numberLine(total))}</li>`);
     lines.push(`<ul>\n${items.join("\n")}\n</ul>`);
     if (report.postCount > report.posts.length) {
-      lines.push(`<p>The numbers cover the ${report.posts.length} most recent posts.</p>`);
+      lines.push(`<p>The numbers cover the ${formatNumber(report.posts.length)} most recent ${countWord(report.posts.length, "post", "posts")}.</p>`);
     }
   }
 
@@ -61,9 +63,13 @@ export function buildMonthlyReportEmail(params: {
     const { listing } = report;
     lines.push(`<p><strong>Google listing</strong></p>`);
     lines.push(
-      `<p>Numbers for ${listing.daysCovered} of ${listing.daysCounted} days${listing.partial ? " so far" : ""}.</p>`,
+      `<p>Numbers for ${formatNumber(listing.daysCovered)} of ${formatNumber(listing.daysCounted)} ${countWord(
+        listing.daysCounted,
+        "day",
+        "days",
+      )}${listing.partial ? " so far" : ""}.</p>`,
     );
-    const items = LISTING_LINES.map(({ key, label }) => `<li>${label}: ${listing.totals[key]}</li>`);
+    const items = LISTING_LINES.map(({ key, label }) => `<li>${label}: ${formatNumber(listing.totals[key])}</li>`);
     lines.push(`<ul>\n${items.join("\n")}\n</ul>`);
   }
 

@@ -235,17 +235,13 @@ export function summarizePostNumbers(posts: ReportPost[]): ReportNumberTotal[] {
   });
 }
 
-function plural(count: number, one: string, many: string, format: (n: number) => string = formatNumber): string {
-  return `${format(count)} ${countWord(count, one, many)}`;
+function plural(count: number, one: string, many: string): string {
+  return `${formatNumber(count)} ${countWord(count, one, many)}`;
 }
 
-/**
- * "Likes: 312 across 18 posts"; the report page passes formatNumber ("1,388").
- * The default leaves the monthly report email's text as it was: its builder
- * (src/server/notifications) is outside the 2026-11-11 go-live fixes.
- */
-export function numberLine(total: ReportNumberTotal, format: (n: number) => string = String): string {
-  return `${total.label}: ${format(total.sum)} across ${plural(total.posts, "post", "posts", format)}`;
+/** "Likes: 1,312 across 18 posts", on the report page and in the email. */
+export function numberLine(total: ReportNumberTotal): string {
+  return `${total.label}: ${formatNumber(total.sum)} across ${plural(total.posts, "post", "posts")}`;
 }
 
 /** Null when every post is listed. */
