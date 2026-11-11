@@ -100,7 +100,7 @@ describe("MonthlyReportView", () => {
   it("states totals with the posts each number covers", () => {
     const html = render(report());
     expect(html).toContain("Posts published");
-    expect(html).toContain("Likes: 4 across 1 post");
+    expect(totalCards(html)).toContainEqual(["Likes", "4", "across 1 post"]);
   });
 
   it("says when only the 200 most recent are shown", () => {
@@ -279,9 +279,9 @@ describe("MonthlyReportView — thousands separators", () => {
         failed: [{ platform: "X", count: 1000 }],
       }),
     );
-    expect(html).toContain("Posts published: 1,388");
+    expect(totalCards(html)).toContainEqual(["Posts published", "1,388"]);
     expect(html).toContain("Instagram: 1,388");
-    expect(html).toContain("Views: 1,234,567 across 1,000 posts");
+    expect(totalCards(html)).toContainEqual(["Views", "1,234,567", "across 1,000 posts"]);
     expect(html).toContain("1,000 photos");
     expect(html).toContain("Views 1,234,567");
     expect(html).toContain(">1,388<");
@@ -289,5 +289,62 @@ describe("MonthlyReportView — thousands separators", () => {
     expect(html).toContain("up 388");
     expect(html).toContain("1,000 posts did not publish on X");
     expect(html).toContain("Showing the 1 most recent of 1,388.");
+  });
+});
+
+/** Each Totals card's texts, in order: label, number and, for a number, "across N posts". */
+function totalCards(html: string): string[][] {
+  const list = html.match(/<ul[^>]*data-report-totals[^>]*>([\s\S]*?)<\/ul>/)?.[1] ?? "";
+  return [...list.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/g)].map((card) =>
+    [...card[1].matchAll(/<span[^>]*>([^<]*)<\/span>/g)].map((span) => span[1]),
+  );
+}
+
+// Go-live check F2 item 3: the Totals are cards like the listing numbers.
+describe("MonthlyReportView — totals as cards", () => {
+  it("shows posts published first, then each number with the posts it covers", () => {
+    const html = render(
+      report({
+        totals: {
+          resultsByPlatform: [{ platform: "Instagram", count: 1 }],
+          numbers: [
+            { key: "views", label: "Views", sum: 4821, posts: 1 },
+            { key: "likes", label: "Likes", sum: 12, posts: 2 },
+          ],
+        },
+      }),
+    );
+    expect(totalCards(html)).toEqual([
+      ["Posts published", "2"],
+      ["Views", "4,821", "across 1 post"],
+      ["Likes", "12", "across 2 posts"],
+    ]);
+  });
+
+  it("puts the per-platform counts on one line under the cards", () => {
+    const html = render(report());
+    const cardsEnd = html.indexOf("</ul>", html.indexOf("data-report-totals"));
+    expect(html.indexOf("Instagram: 1 · X: 1")).toBeGreaterThan(cardsEnd);
+  });
+
+  it("uses the listing cards' look, two per row on a phone", () => {
+    const html = render(report());
+    const list = html.match(/<ul[^>]*data-report-totals[^>]*>/)?.[0] ?? "";
+    expect(list).toContain("grid-cols-2");
+    const card = html.match(/<ul[^>]*data-report-totals[^>]*><li[^>]*>/)?.[0] ?? "";
+    expect(card).toContain("rounded-[var(--radius)] border border-border p-3");
+    // A long number wraps inside its card instead of pushing it wider.
+    expect(card).toContain("min-w-0");
+  });
+
+  it("a month with nothing published: only the posts published card, no empty ones", () => {
+    const html = render(report({ postCount: 0, posts: [], totals: { resultsByPlatform: [], numbers: [] } }));
+    expect(totalCards(html)).toEqual([["Posts published", "0"]]);
+    expect(html).toContain("Nothing was published this month.");
+  });
+
+  it("only the kinds of number present get a card", () => {
+    const html = render(report());
+    expect(totalCards(html).map((card) => card[0])).toEqual(["Posts published", "Likes"]);
   });
 });

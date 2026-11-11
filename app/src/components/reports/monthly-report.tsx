@@ -10,7 +10,6 @@ import {
   REPORT_UTC_NOTE,
   failedLine,
   monthLabel,
-  numberLine,
   showingLine,
   type MonthlyReport,
   type ReportListing,
@@ -136,7 +135,18 @@ function PostRow({ post }: { post: ReportPost }) {
   );
 }
 
-const LISTING_LINES: { key: keyof ListingMetricTotals; label: string }[] = [
+/** One Totals number, in the listing cards' look; `covers` is "across N posts". */
+function TotalCard({ label, value, covers }: { label: string; value: number; covers?: string }) {
+  return (
+    <li className="min-w-0 rounded-[var(--radius)] border border-border p-3 text-sm">
+      <span className="block text-muted-foreground">{label}</span>
+      <span className="block break-words text-lg font-semibold">{formatNumber(value)}</span>
+      {covers ? <span className="block text-muted-foreground">{covers}</span> : null}
+    </li>
+  );
+}
+
+const LISTING_LINES:{ key: keyof ListingMetricTotals; label: string }[] = [
   { key: "views", label: "Views (Search and Maps)" },
   { key: "calls", label: "Calls" },
   { key: "directionRequests", label: "Direction requests" },
@@ -197,15 +207,23 @@ export function MonthlyReportView({
         </p>
       </div>
 
-      <section data-report-block className="space-y-1 text-sm">
+      <section data-report-block className="space-y-2 text-sm">
         <h2 className="text-lg font-semibold">Totals</h2>
-        <p>{`Posts published: ${formatNumber(report.postCount)}`}</p>
+        {/* The listing's cards, two to a row even on a phone: the labels are short. */}
+        <ul data-report-totals className="grid grid-cols-2 gap-2">
+          <TotalCard label="Posts published" value={report.postCount} />
+          {report.totals.numbers.map((total) => (
+            <TotalCard
+              key={total.key}
+              label={total.label}
+              value={total.sum}
+              covers={`across ${formatNumber(total.posts)} ${countWord(total.posts, "post", "posts")}`}
+            />
+          ))}
+        </ul>
         {report.totals.resultsByPlatform.length > 0 ? (
           <p>{report.totals.resultsByPlatform.map((r) => `${r.platform}: ${formatNumber(r.count)}`).join(" · ")}</p>
         ) : null}
-        {report.totals.numbers.map((total) => (
-          <p key={total.key}>{numberLine(total)}</p>
-        ))}
         {showing && report.totals.numbers.length > 0 ? (
           <p className="text-muted-foreground">The numbers cover the posts listed below.</p>
         ) : null}
