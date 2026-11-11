@@ -44,9 +44,12 @@ function cleanLine(line: string): string {
  * model's output, so an example ending in "#surf #florida" taught the model to
  * end captions in the bare words "surf florida".
  */
+function stripExampleLine(line: string): string {
+  return cleanLine(line).replace(HASHTAG, "").replace(/ {2,}/g, " ").trim();
+}
+
 function cleanExampleLine(line: string): string {
-  const text = cleanLine(line).replace(HASHTAG, "").replace(/ {2,}/g, " ").trim();
-  return capLength(text, BRAND_VOICE_EXAMPLE_MAX_LENGTH);
+  return capLength(stripExampleLine(line), BRAND_VOICE_EXAMPLE_MAX_LENGTH);
 }
 
 /** Every cleaned, non-empty example line in the text (not yet cut to five). */
@@ -137,14 +140,21 @@ export function mergeExampleCaptions(
   return { kind: "added", added: added.length, text };
 }
 
-/** For the live line under the examples box: how many, and whether saving will cut. */
+/**
+ * For the live line under the examples box: how many examples the save will
+ * see, and whether it will cut. Counts the way the save cleans, so a line that
+ * is only hashtags is not counted and length is measured without hashtags.
+ */
 export function exampleBoxStatus(text: string): { count: number; willShorten: boolean } {
-  const lines = text.split(LINE_BREAK).filter((line) => line.trim().length > 0);
+  const lines = text
+    .split(LINE_BREAK)
+    .map(stripExampleLine)
+    .filter((line) => line.length > 0);
   return {
     count: lines.length,
     willShorten:
       lines.length > BRAND_VOICE_MAX_EXAMPLES ||
-      lines.some((line) => Array.from(line.trim()).length > BRAND_VOICE_EXAMPLE_MAX_LENGTH),
+      lines.some((line) => Array.from(line).length > BRAND_VOICE_EXAMPLE_MAX_LENGTH),
   };
 }
 

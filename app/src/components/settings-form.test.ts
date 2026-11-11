@@ -181,3 +181,19 @@ describe("SettingsForm — Brand voice limits shown live", () => {
     expect(html).not.toContain("of 600 characters");
   });
 });
+
+// Polish: where hashtags go.
+describe("SettingsForm — Brand voice hashtag hint", () => {
+  it("tells an owner under How you sound that hashtags belong in Default hashtags", () => {
+    const html = render(SETTINGS);
+
+    const hint = "Put hashtags in Default hashtags above. The AI does not write hashtags.";
+    expect(html).toContain(hint);
+    expect(html.indexOf(hint)).toBeGreaterThan(html.indexOf('id="brandVoice"'));
+    expect(html.indexOf(hint)).toBeLessThan(html.indexOf('id="brandVoiceExamples"'));
+  });
+
+  it("is not shown to a member", () => {
+    expect(render(SETTINGS, "member")).not.toContain("Put hashtags in Default hashtags above.");
+  });
+});

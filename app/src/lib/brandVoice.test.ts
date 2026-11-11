@@ -343,3 +343,25 @@ describe("the cleaners are idempotent", () => {
     expect(cleanBrandVoiceExamples(value)).toEqual(once);
   });
 });
+
+// Polish: the live count agrees with what the save keeps.
+describe("exampleBoxStatus counts the way the save does", () => {
+  it("does not count a line that is only hashtags", () => {
+    const text = "#surf #florida\nOne\nTwo\nThree\nFour\nFive";
+    expect(exampleBoxStatus(text)).toEqual({ count: 5, willShorten: false });
+    expect(cleanBrandVoiceExamples(text)).toEqual({ ok: true, value: "One\nTwo\nThree\nFour\nFive" });
+  });
+
+  it("measures a line after its hashtags and control characters are removed", () => {
+    expect(exampleBoxStatus(`${"x".repeat(495)} #florida #surf`)).toEqual({ count: 1, willShorten: false });
+    expect(exampleBoxStatus(`${"x".repeat(501)} #surf`)).toEqual({ count: 1, willShorten: true });
+  });
+
+  it("agrees with the save on the number kept, for any count", () => {
+    for (const text of ["#a\n#b", "One #x\n\n#y\nTwo", "1\n2\n3\n4\n5\n6\n#7"]) {
+      const kept = cleanBrandVoiceExamples(text);
+      const keptCount = kept.ok && kept.value ? kept.value.split("\n").length : 0;
+      expect(Math.min(exampleBoxStatus(text).count, 5)).toBe(keptCount);
+    }
+  });
+});

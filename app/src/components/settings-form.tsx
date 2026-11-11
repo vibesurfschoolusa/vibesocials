@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { WorkspaceRole } from "@prisma/client";
 
@@ -72,7 +72,14 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
     : null;
   const googleButtonError = googleButtonCheck && !googleButtonCheck.ok ? googleButtonCheck.error : null;
   const [brandVoice, setBrandVoice] = useState(settings.brandVoice ?? "");
-  const [brandVoiceExamples, setBrandVoiceExamples] = useState(settings.brandVoiceExamples ?? "");
+  const [brandVoiceExamples, setExamplesState] = useState(settings.brandVoiceExamples ?? "");
+  // The box's current text, for "Use my recent posts": it merges after the posts
+  // load, so it must see what was typed meanwhile, not the text from the click.
+  const examplesRef = useRef(brandVoiceExamples);
+  const setBrandVoiceExamples = (text: string) => {
+    examplesRef.current = text;
+    setExamplesState(text);
+  };
   const [isFillingExamples, setIsFillingExamples] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -81,7 +88,7 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
   // Adds to the box only (never replaces what was typed); the owner edits and
   // then saves with the rest of the form.
   const fillExamplesFromRecentPosts = async () => {
-    if (mergeExampleCaptions(brandVoiceExamples, []).kind === "full") {
+    if (mergeExampleCaptions(examplesRef.current, []).kind === "full") {
       toast.error("You already have five examples. Remove one to add another.");
       return;
     }
@@ -93,7 +100,7 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
       }
       const data = (await response.json()) as { jobs?: Array<{ caption?: string | null }> };
       const result = mergeExampleCaptions(
-        brandVoiceExamples,
+        examplesRef.current,
         (data.jobs ?? []).map((job) => job.caption),
       );
       if (result.kind === "full") {
@@ -272,6 +279,9 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
             />
             <p id="brandVoiceCount" className="text-xs text-muted-foreground">
               {brandVoice.length} of {BRAND_VOICE_MAX_LENGTH} characters
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Put hashtags in Default hashtags above. The AI does not write hashtags.
             </p>
             <Label htmlFor="brandVoiceExamples" className="mt-2">
               Example captions, one per line (up to {BRAND_VOICE_MAX_EXAMPLES})
