@@ -1,4 +1,4 @@
-import type { PlatformClient, PublishContext, PublishResult } from "./types";
+import type { PlatformClient, PublishContext, PublishResult, TextPublishContext } from "./types";
 import type { SocialConnection } from "@prisma/client";
 
 import { altTextOf } from "@/lib/altText";
@@ -592,6 +592,65 @@ export const facebookPageClient: PlatformClient = {
     return {
       externalPostId,
     };
+  },
+
+  /**
+   * A post without a photo (2026-11-10): POST /{page}/feed with `message`, per
+   * the Pages API "Publish a Post" page
+   * (https://developers.facebook.com/docs/pages-api/posts/, read 2026-11-10),
+   * which answers `{ "id": "<page>_<post>" }`. The same call publishSeveralPhotos
+   * makes, so the same Page token and permissions. It is the commit call: a lost
+   * answer is PUBLISH_UNCONFIRMED and is never sent again.
+   */
+  async publishText(ctx: TextPublishContext): Promise<PublishResult> {
+    const { socialConnection, caption } = ctx;
+
+    const accessToken = socialConnection.accessToken;
+    if (!accessToken) {
+      const error = new Error("Missing access token for Facebook Page") as Error & { code: string };
+      error.code = "FACEBOOK_PAGE_NO_ACCESS_TOKEN";
+      throw error;
+    }
+    const pageId = socialConnection.accountIdentifier;
+    if (!pageId) {
+      const error = new Error("Missing Facebook Page ID") as Error & { code: string };
+      error.code = "FACEBOOK_PAGE_NO_ID";
+      throw error;
+    }
+
+    console.log("[FacebookPage] Starting text post", { pageId, captionLength: caption?.length ?? 0 });
+
+    const body = new URLSearchParams({ message: caption ?? "", access_token: accessToken });
+    // Checked before the commit call, so a spent step budget sends nothing.
+    const timeoutMs = budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, ctx.deadline);
+    const response = await commitRequest("facebook_page", () =>
+      fetchWithTimeout(
+        `${META_GRAPH_BASE_URL}/${pageId}/feed`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body,
+        },
+        timeoutMs,
+      ),
+    );
+
+    const limited = await classifyRateLimit("facebook_page", response);
+    if (limited) throw limited;
+    if (!response.ok) {
+      await throwRejected(
+        response,
+        socialConnection,
+        "Text post failed",
+        `Facebook Page post failed (status ${response.status})`,
+      );
+    }
+
+    const data = await readCommitBody<{ id?: unknown } | null>("facebook_page", response, "json");
+    const externalPostId = requireCommitId("facebook_page", data?.id, "id");
+
+    console.log("[FacebookPage] Text post published", { pageId, externalPostId });
+    return { externalPostId };
   },
 
   async refreshToken(connection: SocialConnection): Promise<SocialConnection> {

@@ -1302,3 +1302,80 @@ describe("facebookPageClient.publishVideo — a refused description is dropped (
     });
   });
 });
+
+describe("facebookPageClient.publishText - a post without a photo (POST /{page}/feed)", () => {
+  function textContext(connectionOverrides: Partial<SocialConnection> = {}) {
+    return {
+      user: { id: "user-1" } as User,
+      socialConnection: makeConnection(connectionOverrides),
+      caption: "Lessons cancelled today",
+      baseCaption: "Lessons cancelled today",
+    };
+  }
+
+  async function textFailure() {
+    return facebookPageClient.publishText!(textContext()).then(
+      () => null,
+      (e: Error & { code?: string }) => e,
+    );
+  }
+
+  it("posts the message to the Page feed, with no photo or video call", async () => {
+    fetchMock.mockResolvedValueOnce(response(200, { id: "page-1_post-1" }));
+
+    await expect(facebookPageClient.publishText!(textContext())).resolves.toEqual({
+      externalPostId: "page-1_post-1",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toMatch(/^https:\/\/graph\.facebook\.com\/v[\d.]+\/page-1\/feed$/);
+    expect(init.method).toBe("POST");
+    expect(Object.fromEntries(init.body as URLSearchParams)).toEqual({
+      message: "Lessons cancelled today",
+      access_token: "page-access-token",
+    });
+  });
+
+  it.each([
+    ["a timeout", () => Promise.reject(Object.assign(new Error("Request timed out"), { code: "FETCH_TIMEOUT" }))],
+    ["a 503", async () => response(503, "<html>Service Unavailable</html>")],
+    ["a 2xx without an id", async () => response(200, {})],
+  ] as const)("a lost answer (%s) is PUBLISH_UNCONFIRMED and is not sent again", async (_name, answer) => {
+    fetchMock.mockImplementationOnce(answer);
+
+    const error = await textFailure();
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a dead token is the reconnect error and flags the connection", async () => {
+    fetchMock.mockResolvedValueOnce(response(400, { error: { type: "OAuthException", code: 190 } }));
+    expect((await textFailure())?.code).toBe("FACEBOOK_PAGE_RECONNECT_REQUIRED");
+    expect(updateMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a 4xx refusal fails without the raw body", async () => {
+    fetchMock.mockResolvedValueOnce(response(400, { error: { code: 100, message: "SECRET-DETAIL" } }));
+    const error = await textFailure();
+    expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+    expect(error?.message).toBe("Facebook Page post failed (status 400)");
+  });
+
+  it("a throttle is RATE_LIMITED", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("", { status: 429, headers: { "Retry-After": "60" } }));
+    expect((await textFailure())?.code).toBe("RATE_LIMITED");
+  });
+
+  it("refuses without a token or Page id, sending nothing", async () => {
+    await expect(facebookPageClient.publishText!(textContext({ accessToken: "" }))).rejects.toMatchObject({
+      code: "FACEBOOK_PAGE_NO_ACCESS_TOKEN",
+    });
+    await expect(facebookPageClient.publishText!(textContext({ accountIdentifier: "" }))).rejects.toMatchObject({
+      code: "FACEBOOK_PAGE_NO_ID",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
