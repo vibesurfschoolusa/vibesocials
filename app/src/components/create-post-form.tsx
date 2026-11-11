@@ -91,6 +91,7 @@ import { extractVideoFrames } from "@/lib/extractVideoFrames";
 import {
   deriveComposerPlatforms,
   isTikTokPrivacyMissing,
+  TEXT_POST_EMPTY_MESSAGE,
   TIKTOK_PRIVACY_REQUIRED_MESSAGE,
 } from "@/lib/postTargets";
 import {
@@ -128,6 +129,67 @@ interface UploadedBlobInfo {
 // immediate flow; `schedule` sends a `scheduledFor` (UTC ISO); `draft` sends
 // `draft: true`. Both deferred modes create no results / send no event now.
 type PublishMode = "now" | "schedule" | "draft";
+
+/**
+ * Posts without a photo (2026-11-10): the page is writing a text post when no
+ * file is attached and no library item is still loading (`?mediaItemId=`).
+ */
+export function hasNoFile(state: {
+  reuseLoading: boolean;
+  hasReuseItem: boolean;
+  hasUploadFile: boolean;
+  photoCount: number;
+}): boolean {
+  return !state.reuseLoading && !state.hasReuseItem && !state.hasUploadFile && state.photoCount === 0;
+}
+
+/** Why a text post cannot be sent yet, or null. The file checks do not apply to it. */
+export function noFileSubmitError(state: {
+  caption: string;
+  selectedCount: number;
+  allDisabled: boolean;
+}): string | null {
+  if (!state.caption.trim()) return TEXT_POST_EMPTY_MESSAGE;
+  if (state.selectedCount === 0) {
+    return state.allDisabled
+      ? "None of your connected platforms can publish a post without a photo or video. Add a photo or video."
+      : "Select at least one platform to publish to.";
+  }
+  return null;
+}
+
+/** The POST /api/posts body of a text post: `textOnly` and none of the file fields. */
+export interface CreateTextPostRequest extends DeferredPostFields {
+  textOnly: true;
+  baseCaption: string;
+  platforms: Platform[];
+  workspaceId: string;
+  perPlatformOverrides?: Partial<Record<Platform, string>>;
+  googleMetadata?: GoogleBusinessPostMetadata;
+}
+
+export function buildTextPostBody(input: {
+  baseCaption: string;
+  platforms: Platform[];
+  deferred: DeferredPostFields;
+  workspaceId: string;
+  perPlatformOverrides?: Partial<Record<Platform, string>> | null;
+  /** Pass only when Google Business Profile is a selected target. */
+  googleMetadata?: GoogleBusinessPostMetadata;
+}): CreateTextPostRequest {
+  const body: CreateTextPostRequest = {
+    textOnly: true,
+    baseCaption: input.baseCaption,
+    platforms: input.platforms,
+    ...input.deferred,
+    workspaceId: input.workspaceId,
+  };
+  // Cleaned the same way as the file bodies (lib/createPostRequest.ts).
+  const overrides = cleanPlatformOverrides(input.perPlatformOverrides, input.baseCaption, input.platforms);
+  if (overrides) body.perPlatformOverrides = overrides;
+  if (input.googleMetadata) body.googleMetadata = input.googleMetadata;
+  return body;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -372,9 +434,17 @@ function CreatePostFormInner({
   // sent, previewed or given settings. Derived from `deselected` + the media -
   // not written into state - so picking different media restores the user's own
   // choices. See lib/postTargets.ts / PLATFORM_ACCEPTED_MEDIA.
+  // Posts without a photo (2026-11-10): with nothing attached only the platforms
+  // that take text alone can be chosen; attaching a file restores the rest.
+  const noFile = hasNoFile({
+    reuseLoading,
+    hasReuseItem: reuseItem !== null,
+    hasUploadFile: uploadFile !== null,
+    photoCount: photoSet.length,
+  });
   const { choices: platformChoices, selected: selectedPlatforms } = useMemo(
-    () => deriveComposerPlatforms(connectedPlatforms, deselected, activeMimeType),
-    [connectedPlatforms, deselected, activeMimeType],
+    () => deriveComposerPlatforms(connectedPlatforms, deselected, activeMimeType, { noFile }),
+    [connectedPlatforms, deselected, activeMimeType, noFile],
   );
   const tiktokSelected = selectedPlatforms.includes("tiktok");
   // Why Publish is blocked for TikTok right now, or null (lib/tiktokPostRules.ts).
@@ -386,8 +456,10 @@ function CreatePostFormInner({
   });
   const youtubeSelected = selectedPlatforms.includes("youtube");
   // Google's options apply to a photo post only; a video goes to the gallery.
+  // A text post is always a post, so its options apply too.
   const googleOptionsShown =
-    selectedPlatforms.includes("google_business_profile") && Boolean(activeMimeType?.startsWith("image/"));
+    selectedPlatforms.includes("google_business_profile") &&
+    (noFile || Boolean(activeMimeType?.startsWith("image/")));
   // 2026-11-10 — Feed or Story (lib/storyPlacement.ts). A second photo turns a
   // chosen Story back to Feed; it is adjusted while rendering, so no render, and
   // no request, ever has a Story with several photos (the server refuses those).
@@ -396,8 +468,12 @@ function CreatePostFormInner({
   if (instagramChoice !== instagramPlacement) setInstagramPlacement(instagramChoice);
   const facebookChoice = reconcilePlacement(facebookPlacement, attachedFileCount);
   if (facebookChoice !== facebookPlacement) setFacebookPlacement(facebookChoice);
-  const instagramStory = selectedPlatforms.includes("instagram") && instagramChoice.placement === "story";
-  const facebookStory = selectedPlatforms.includes("facebook_page") && facebookChoice.placement === "story";
+  // A Story needs a file: with none, a Story chosen earlier is not sent (it
+  // comes back when a file is attached again).
+  const instagramStory =
+    !noFile && selectedPlatforms.includes("instagram") && instagramChoice.placement === "story";
+  const facebookStory =
+    !noFile && selectedPlatforms.includes("facebook_page") && facebookChoice.placement === "story";
   const activeVideoDurationSec = activeMimeType?.startsWith("video/") ? videoDurationSec : null;
   // Why a chosen Story cannot take this video, or null.
   const storyLengthRefusal =
@@ -1058,9 +1134,19 @@ function CreatePostFormInner({
           : [];
 
     try {
-      let postData: CreatePostRequest | CreatePostReuseRequest | CreatePostMediaRequest;
+      let postData: CreatePostRequest | CreatePostReuseRequest | CreatePostMediaRequest | CreateTextPostRequest;
 
-      if (reuseItem) {
+      if (noFile) {
+        // A post without a photo: no upload, no file fields.
+        postData = buildTextPostBody({
+          baseCaption: uploadCaption,
+          platforms: selectedPlatforms,
+          deferred,
+          workspaceId,
+          perPlatformOverrides: platformOverrides,
+          googleMetadata: googleOptionsShown ? googleMetadata : undefined,
+        });
+      } else if (reuseItem) {
         // Roadmap Phase 2 — reuse: no upload, attach the existing MediaItem.
         postData = buildReusePostBody({
           mediaItemId: reuseItem.id,
@@ -1250,7 +1336,17 @@ function CreatePostFormInner({
     setUploadError(null);
     setShowSuccess(false);
 
-    if (!reuseItem && !uploadFile && photoSet.length === 0) {
+    if (noFile) {
+      const textError = noFileSubmitError({
+        caption: uploadCaption,
+        selectedCount: selectedPlatforms.length,
+        allDisabled: platformChoices.every((choice) => choice.disabledReason !== null),
+      });
+      if (textError) {
+        setUploadError(textError);
+        return;
+      }
+    } else if (!reuseItem && !uploadFile && photoSet.length === 0) {
       setUploadError("Please choose a file to upload.");
       return;
     }
@@ -1593,6 +1689,11 @@ function CreatePostFormInner({
                     }}
                     className="cursor-pointer"
                   />
+                  {noFile ? (
+                    <p className="text-xs text-muted-foreground">
+                      Optional: without a file the post is text only, for Facebook, X, LinkedIn and Google.
+                    </p>
+                  ) : null}
                 </>
               ) : (
                 <p className="text-sm font-medium text-foreground">Photos</p>
@@ -1856,7 +1957,9 @@ function CreatePostFormInner({
             {selectedPlatforms.length === 0 ? (
               <p className="text-xs text-destructive" role="alert">
                 {platformChoices.every((choice) => choice.disabledReason !== null)
-                  ? "None of your connected platforms can publish this media."
+                  ? noFile
+                    ? "None of your connected platforms can publish a post without a photo or video."
+                    : "None of your connected platforms can publish this media."
                   : "Select at least one platform."}
               </p>
             ) : null}
