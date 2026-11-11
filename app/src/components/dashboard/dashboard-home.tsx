@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { Link2, PenSquare } from "lucide-react";
+import type { Platform } from "@prisma/client";
 
 import { buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,7 +29,7 @@ import {
  * it without the shell, then remounted it inside (a visible jump and a second
  * round of fetches).
  */
-export function DashboardHome() {
+export function DashboardHome({ availablePlatforms }: { availablePlatforms: readonly Platform[] }) {
   const { status } = useSession();
   if (status !== "authenticated") {
     return (
@@ -37,10 +38,10 @@ export function DashboardHome() {
       </div>
     );
   }
-  return <Dashboard />;
+  return <Dashboard availablePlatforms={availablePlatforms} />;
 }
 
-function Dashboard() {
+function Dashboard({ availablePlatforms }: { availablePlatforms: readonly Platform[] }) {
   // Task 8 — single fetch/poll owner for the dashboard: both widgets below
   // took this over their own `usePostJobs()` call, so the dashboard makes one
   // `/api/posts` request (and one poll timer) instead of two. Same pattern
@@ -128,7 +129,7 @@ function Dashboard() {
             jobs={postJobs.jobs}
           />
           {/* Roadmap Phase 8 — renders only once a YouTube post has fetched metrics. */}
-          <YouTubeMetricsSummary jobs={postJobs.jobs} />
+          <YouTubeMetricsSummary jobs={postJobs.jobs} availablePlatforms={availablePlatforms} />
           {/* While the checklist is up it owns the "create your first post"
               instruction; a second copy of it directly below competes with the
               step the user is actually on. */}

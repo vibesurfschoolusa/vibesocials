@@ -100,8 +100,20 @@ export const PLATFORM_CONNECT_REQUIREMENTS: Partial<Record<Platform, string>> =
  * (youtubeMetricsSync.ts hourly, socialMetricsSync.ts daily) and where the
  * other platforms' numbers show.
  */
-export const METRICS_MATURITY_NOTE =
-  "YouTube numbers update every hour. Instagram, Facebook, LinkedIn and Pinterest numbers update once a day and show on each post in Activity.";
+export function metricsMaturityNote(available: readonly Platform[]): string {
+  // The platforms socialMetricsSync.ts reads daily, as the sentence names them;
+  // only those the site offers (Pinterest needs its app set: advertisedPlatforms).
+  const daily = DAILY_METRIC_NAMES.filter(([platform]) => available.includes(platform)).map(([, name]) => name);
+  const list = daily.length > 1 ? `${daily.slice(0, -1).join(", ")} and ${daily[daily.length - 1]}` : daily.join("");
+  return `YouTube numbers update every hour. ${list} numbers update once a day and show on each post in Activity.`;
+}
+
+const DAILY_METRIC_NAMES: ReadonlyArray<readonly [Platform, string]> = [
+  ["instagram", "Instagram"],
+  ["facebook_page", "Facebook"],
+  ["linkedin", "LinkedIn"],
+  ["pinterest", "Pinterest"],
+];
 
 /**
  * Task 7 — human-readable labels for TikTok's privacy levels, shown in the

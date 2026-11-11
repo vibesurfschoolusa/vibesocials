@@ -1,7 +1,7 @@
 import { Platform } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
-import { METRICS_MATURITY_NOTE, PLATFORM_CAPTIONS_HEADING, PLATFORM_ORDER, platformCaptionEntries } from "./platforms";
+import { PLATFORM_CAPTIONS_HEADING, PLATFORM_ORDER, platformCaptionEntries, metricsMaturityNote } from "./platforms";
 
 // Final review (T7): platformCaptionEntries() lists captions in PLATFORM_ORDER
 // and drops anything not in it, so a platform added to the Prisma enum but not to
@@ -61,11 +61,19 @@ describe("platformCaptionEntries", () => {
 
 // 2026-11-10: the dashboard's YouTube card shows this. Since the daily post
 // numbers sync it must say what is synced and how often, not "not synced yet".
-describe("METRICS_MATURITY_NOTE", () => {
-  it("says YouTube updates hourly and the other four platforms once a day, on Activity", () => {
-    expect(METRICS_MATURITY_NOTE).toBe(
+// Go-live check 2026-11-11: it names only the daily platforms this site offers.
+describe("metricsMaturityNote", () => {
+  it("names Pinterest where the site offers it", () => {
+    expect(metricsMaturityNote(PLATFORM_ORDER)).toBe(
       "YouTube numbers update every hour. Instagram, Facebook, LinkedIn and Pinterest numbers update once a day and show on each post in Activity.",
     );
-    expect(METRICS_MATURITY_NOTE).not.toMatch(/not synced/i);
+    expect(metricsMaturityNote(PLATFORM_ORDER)).not.toMatch(/not synced/i);
+  });
+
+  it("leaves Pinterest out where it is not configured", () => {
+    const withoutPinterest = PLATFORM_ORDER.filter((platform) => platform !== "pinterest");
+    expect(metricsMaturityNote(withoutPinterest)).toBe(
+      "YouTube numbers update every hour. Instagram, Facebook and LinkedIn numbers update once a day and show on each post in Activity.",
+    );
   });
 });

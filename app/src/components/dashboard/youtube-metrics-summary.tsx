@@ -10,7 +10,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { summarizeYouTubeMetrics } from "@/lib/metricsSummary";
-import { METRICS_MATURITY_NOTE } from "@/lib/platforms";
+import type { Platform } from "@prisma/client";
+
+import { metricsMaturityNote } from "@/lib/platforms";
 import type { UsePostJobsResult } from "@/hooks/usePostJobs";
 
 interface SummaryStatProps {
@@ -45,7 +47,13 @@ function SummaryStat({ icon: Icon, label, value }: SummaryStatProps) {
  * `Dashboard` (src/app/page.tsx) is the single fetch/poll owner, shared with
  * `RecentActivity` beside it.
  */
-export function YouTubeMetricsSummary({ jobs }: Pick<UsePostJobsResult, "jobs">) {
+export function YouTubeMetricsSummary({
+  jobs,
+  availablePlatforms,
+}: Pick<UsePostJobsResult, "jobs"> & {
+  /** The platforms this site offers (advertisedPlatforms, read on the server). */
+  availablePlatforms: readonly Platform[];
+}) {
   if (!jobs) {
     return null;
   }
@@ -59,7 +67,7 @@ export function YouTubeMetricsSummary({ jobs }: Pick<UsePostJobsResult, "jobs">)
     <Card>
       <CardHeader>
         <CardTitle className="text-base">YouTube performance</CardTitle>
-        <CardDescription className="text-xs">{METRICS_MATURITY_NOTE}</CardDescription>
+        <CardDescription className="text-xs">{metricsMaturityNote(availablePlatforms)}</CardDescription>
         <CardDescription>
           {/* "recent" is honest: the aggregate covers the recent jobs the
               activity feed loads, not the user's entire history (review Minor #4). */}
