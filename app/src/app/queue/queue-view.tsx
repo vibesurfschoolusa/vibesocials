@@ -39,7 +39,7 @@ import {
 } from "@/lib/platforms";
 import { googleQueueLabel } from "@/lib/googlePostOptions";
 import type { PostJobDTO, PostsResponse } from "@/lib/postsDto";
-import { storyListing } from "@/lib/storyPlacement";
+import { queueEditorPlatforms, storyChoiceSuffix, storyListing } from "@/lib/storyPlacement";
 import { appendJobsPage } from "@/lib/postsPagination";
 import {
   applyJobPatch,
@@ -200,7 +200,7 @@ function QueueCard({
           <p className="mt-1 text-xs text-muted-foreground">
             {job.publish?.targetPlatforms?.length
               ? `Publishing to ${listing.platformLabels.join(", ")}`
-              : "Publishing to all platforms connected at publish time"}
+              : `Publishing to all platforms connected at publish time${storyChoiceSuffix(stories)}`}
             {job.publish?.youtubePrivacy ? ` · YouTube: ${job.publish.youtubePrivacy}` : ""}
             {job.publish?.tiktokPrivacy ? ` · TikTok: ${TIKTOK_PRIVACY_LABELS[job.publish.tiktokPrivacy] ?? job.publish.tiktokPrivacy}` : ""}
             {googleLabel ? ` · Google: ${googleLabel}` : ""}
@@ -357,16 +357,18 @@ function QueueEditDialog({
   // caption, so a saved caption is never hidden while connections load.
   const { connections } = useConnections();
   const targetPlatforms = job.publish?.targetPlatforms ?? null;
-  // A Story has no caption to edit, so it gets no own-caption editor.
+  // A Story has no caption to edit, so it gets no own-caption editor, but its
+  // stored caption must still be sent back with the others.
   const storyPlatforms = job.storyPlatforms ?? [];
-  const editorPlatforms = (
+  const allPlatforms = (
     targetPlatforms ??
     PLATFORM_ORDER.filter(
       (platform) =>
         typeof job.platformCaptions?.[platform] === "string" ||
         connections?.some((c) => c.platform === platform && c.connected),
     )
-  ).filter((platform) => !storyPlatforms.includes(platform));
+  );
+  const editorPlatforms = queueEditorPlatforms(allPlatforms, storyPlatforms);
   // Whether the post has a caption of its own. The list's `caption` and
   // `platformCaptions` fall back to the media item's for an older post that
   // has none (resolvePostCaptionSource); only the single-post read says which.
@@ -436,7 +438,7 @@ function QueueEditDialog({
       current: platformOverrides,
       saved: savedOverrides,
       mainCaption: trimmed,
-      platforms: editorPlatforms,
+      platforms: editorPlatforms.sent,
       hasOwnCaption,
     });
     const overridesEdited = overridesToSend !== undefined;
@@ -530,7 +532,7 @@ function QueueEditDialog({
         </div>
         <PlatformCaptionEditor
           idPrefix="queue-edit-platform-caption"
-          platforms={editorPlatforms}
+          platforms={editorPlatforms.shown}
           caption={caption}
           overrides={platformOverrides}
           onChange={setPlatformOverrides}

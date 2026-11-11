@@ -201,3 +201,22 @@ export function storyListing(
     storyOnlyNote,
   };
 }
+
+/**
+ * The Queue edit dialog's two platform lists. `shown` leaves out Story
+ * platforms (nothing to edit); `sent` is every platform, because what is sent
+ * is cleaned against it and a shorter list would delete a Story platform's
+ * stored caption (and withdraw a client's approval of it).
+ */
+export function queueEditorPlatforms(
+  platforms: readonly Platform[],
+  storyPlatforms: readonly Platform[],
+): { shown: Platform[]; sent: Platform[] } {
+  return { shown: platforms.filter((p) => !storyPlatforms.includes(p)), sent: [...platforms] };
+}
+
+/** " (Instagram as a Story)" for a post with no chosen platforms that carries a Story choice, else "". */
+export function storyChoiceSuffix(storyPlatforms: readonly Platform[]): string {
+  if (storyPlatforms.length === 0) return "";
+  return ` (${storyPlatforms.map((p) => `${platformLabel(p)} as a Story`).join(", ")})`;
+}

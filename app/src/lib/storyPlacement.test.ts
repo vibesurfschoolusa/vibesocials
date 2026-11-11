@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { queueOverridesToSend } from "./platformOverrides";
 import {
   choosePlacement,
   FEED_CHOICE,
@@ -11,6 +12,8 @@ import {
   storyPlatformsOf,
   storyPlatformLabel,
   storyListing,
+  queueEditorPlatforms,
+  storyChoiceSuffix,
   withStoryCaptions,
   parsePlacementMetadata,
   placementNote,
@@ -245,5 +248,50 @@ describe("storyListing (what the Queue and the review page say)", () => {
     const none = storyListing([], null, ["instagram"]);
     expect(none.storyOnly).toBe(false);
     expect(none.platformLabels).toEqual([]);
+  });
+});
+
+describe("queueEditorPlatforms (Queue edit dialog)", () => {
+  const both = ["instagram", "facebook_page"] as const;
+
+  it("shows no editor for a Story but keeps every platform for what is sent", () => {
+    const sets = queueEditorPlatforms(both, ["instagram"]);
+    expect(sets.shown).toEqual(["facebook_page"]);
+    expect(sets.sent).toEqual(["instagram", "facebook_page"]);
+  });
+
+  it("an edit to the feed caption sends both captions, the Story one unchanged", () => {
+    const saved = { instagram: "IG stored", facebook_page: "FB stored" };
+    const sent = queueOverridesToSend({
+      current: { ...saved, facebook_page: "FB edited" },
+      saved,
+      mainCaption: "Main",
+      platforms: queueEditorPlatforms(both, ["instagram"]).sent,
+      hasOwnCaption: true,
+    });
+    expect(sent).toEqual({ instagram: "IG stored", facebook_page: "FB edited" });
+  });
+
+  it("a save with no edit sends nothing for captions", () => {
+    const saved = { instagram: "IG stored", facebook_page: "FB stored" };
+    expect(
+      queueOverridesToSend({
+        current: saved,
+        saved,
+        mainCaption: "Main",
+        platforms: queueEditorPlatforms(both, ["instagram"]).sent,
+        hasOwnCaption: true,
+      }),
+    ).toBeUndefined();
+  });
+});
+
+describe("storyChoiceSuffix (a post with no chosen platforms)", () => {
+  it("names the Story choice, or nothing", () => {
+    expect(storyChoiceSuffix([])).toBe("");
+    expect(storyChoiceSuffix(["instagram"])).toBe(" (Instagram as a Story)");
+    expect(storyChoiceSuffix(["instagram", "facebook_page"])).toBe(
+      " (Instagram as a Story, Facebook Page as a Story)",
+    );
   });
 });

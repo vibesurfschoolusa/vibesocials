@@ -515,4 +515,26 @@ describe("listReviewPosts with Stories", () => {
     expect(post.caption).toContain("Dawn patrol tomorrow");
     expect(post.platformCaptions).toEqual([]);
   });
+
+  it("adds the Story entry only for a platform the post goes to", async () => {
+    postFindManyMock.mockResolvedValueOnce([
+      postRow({
+        perPlatformOverrides: { instagram: "IG own text" },
+        publishMetadata: { targetPlatforms: ["facebook_page"], instagram: story("story") },
+      }),
+    ]);
+    const [post] = await listReviewPosts("ws-1", NOW);
+    expect(post.platforms).toEqual(["Facebook Page"]);
+    expect(post.platformCaptions.map((e) => e.label)).not.toContain("Instagram");
+  });
+
+  it("with no chosen platforms, uses the connected ones for the Story entry", async () => {
+    connectionFindManyMock.mockResolvedValue([{ platform: "instagram" }]);
+    postFindManyMock.mockResolvedValueOnce([
+      postRow({ publishMetadata: { instagram: story("story") } }),
+    ]);
+    const [post] = await listReviewPosts("ws-1", NOW);
+    expect(post.platforms).toEqual(["Instagram (Story)"]);
+    expect(post.caption).toBe("This goes out as a Story, with no caption.");
+  });
 });

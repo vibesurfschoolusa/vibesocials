@@ -151,7 +151,8 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
     const caption = row.baseCaption ?? row.mediaItem?.baseCaption ?? "";
     const targets = chosenPlatforms(row.publishMetadata) ?? connected;
     // A Story publishes no caption, so none may be shown as going out.
-    const stories: Platform[] = storyPlatformsOf(row.publishMetadata);
+    // Only a platform the post goes to: a Story choice for any other adds nothing.
+    const stories: Platform[] = storyPlatformsOf(row.publishMetadata).filter((p) => targets.includes(p));
     const listing = storyListing(targets, resolvePlatformCaptions(row, row.mediaItem), stories);
     return {
       id: row.id,
