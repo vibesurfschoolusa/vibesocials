@@ -21,5 +21,7 @@ export default async function ReviewsPage() {
   const metadata = connection?.metadata as { locationName?: unknown } | null | undefined;
   const savedLocation =
     typeof metadata?.locationName === "string" && metadata.locationName ? metadata.locationName : null;
-  return <ReviewsView savedLocation={savedLocation} />;
+  // key: remount on a workspace switch (router.refresh keeps client state),
+  // so the previous workspace's selection and reviews never carry over.
+  return <ReviewsView key={context.workspace.id} savedLocation={savedLocation} />;
 }

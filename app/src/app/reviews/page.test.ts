@@ -47,3 +47,25 @@ describe("ReviewsPage", () => {
     await expect(ReviewsPage()).rejects.toThrow("REDIRECT /login?callbackUrl=%2Freviews");
   });
 });
+
+// F1 round 2: a workspace switch (router.refresh keeps client state) must not
+// carry the previous workspace's selection and reviews over. Keyed by the
+// workspace, as Settings does: same key keeps state, a new key remounts.
+describe("ReviewsPage — keyed by workspace", () => {
+  it("keeps the same key for the same workspace, so a re-render keeps its state", async () => {
+    findFirstMock.mockResolvedValue(null);
+    const first = (await ReviewsPage()) as unknown as { key: string | null };
+    const again = (await ReviewsPage()) as unknown as { key: string | null };
+    expect(first.key).toBe("ws-1");
+    expect(again.key).toBe(first.key);
+  });
+
+  it("gives another workspace a new key and its own saved location", async () => {
+    getWorkspaceContextMock.mockResolvedValue({ user: { id: "u1" }, workspace: { id: "ws-2" }, role: "owner" });
+    findFirstMock.mockResolvedValue({ metadata: { locationName: "accounts/9/locations/9" } });
+    const element = (await ReviewsPage()) as unknown as Element & { key: string | null };
+    expect(element.key).toBe("ws-2");
+    expect(element.props.savedLocation).toBe("accounts/9/locations/9");
+    expect(findFirstMock.mock.calls[0][0].where.workspaceId).toBe("ws-2");
+  });
+});
