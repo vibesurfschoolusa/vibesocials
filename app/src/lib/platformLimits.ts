@@ -82,7 +82,7 @@ export const TEXT_ONLY_PLATFORMS: readonly Platform[] = [
  * rollback by one deployment never meets a text post the older code cannot read.
  * Tests override the function, not this constant.
  */
-const TEXT_POSTS_ENABLED = false;
+const TEXT_POSTS_ENABLED = true;
 
 /** Can a person create a post without a photo (POST /api/posts `textOnly`, the Create page)? */
 export function textPostsEnabled(): boolean {

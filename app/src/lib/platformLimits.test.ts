@@ -180,7 +180,7 @@ describe("TEXT_ONLY_PLATFORMS (posts without a photo)", () => {
 });
 
 describe("textPostsEnabled (release switch)", () => {
-  it("is off in this release: the second release turns it on", () => {
-    expect(textPostsEnabled()).toBe(false);
+  it("is on: posts without a photo can be created", () => {
+    expect(textPostsEnabled()).toBe(true);
   });
 });
