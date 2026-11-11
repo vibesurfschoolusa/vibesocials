@@ -20,6 +20,7 @@ const SETTINGS: UserSettings = {
   googleButtonUrl: null,
   brandVoice: null,
   brandVoiceExamples: null,
+  trackWebsiteLinks: false,
 };
 
 const render = (settings: UserSettings, role: "owner" | "member" = "owner") =>
@@ -195,5 +196,53 @@ describe("SettingsForm — Brand voice hashtag hint", () => {
 
   it("is not shown to a member", () => {
     expect(render(SETTINGS, "member")).not.toContain("Put hashtags in Default hashtags above.");
+  });
+});
+
+// 20: tracking tags on the website link, under the website field.
+describe("SettingsForm — Tracking tags", () => {
+  const box = /<input type="checkbox"([^>]*)\/><span[^>]*>Add tracking tags to my website link<\/span>/;
+  const FACEBOOK_EXAMPLE =
+    "www.example.com/?utm_source=facebook&amp;utm_medium=social&amp;utm_campaign=vibesocials";
+
+  it("shows an owner the checkbox under the website field, off by default, with both lines", () => {
+    const html = render(SETTINGS);
+    const match = box.exec(html);
+
+    expect(match).not.toBeNull();
+    expect(match?.[1]).not.toContain('checked=""');
+    expect(match?.[1]).not.toContain('disabled=""');
+    expect(html.indexOf("Add tracking tags")).toBeGreaterThan(html.indexOf('id="companyWebsite"'));
+    expect(html.indexOf("Add tracking tags")).toBeLessThan(html.indexOf('id="defaultHashtags"'));
+    expect(html).toContain(
+      "Your Google Analytics will then show which platform each visit came from. The link in your posts gets longer.",
+    );
+    expect(html).toContain("Applies to posts published from now on, including ones already scheduled.");
+    // Off: no example link.
+    expect(html).not.toContain(FACEBOOK_EXAMPLE);
+  });
+
+  it("when on, shows the Facebook example link built from the website", () => {
+    const html = render({ ...SETTINGS, trackWebsiteLinks: true });
+
+    expect(box.exec(html)?.[1]).toContain('checked=""');
+    expect(html).toContain(FACEBOOK_EXAMPLE);
+  });
+
+  it("keeps the footer preview untagged", () => {
+    const html = render({ ...SETTINGS, trackWebsiteLinks: true });
+
+    expect(html).toContain("Check out this amazing content!\n\nFor more info visit www.example.com</div>");
+    expect(html).not.toMatch(/For more info visit [^<]*utm_/);
+  });
+
+  it("shows a member the setting read-only", () => {
+    const html = render({ ...SETTINGS, trackWebsiteLinks: true }, "member");
+    const match = box.exec(html);
+
+    expect(match).not.toBeNull();
+    expect(match?.[1]).toContain('checked=""');
+    expect(match?.[1]).toContain('disabled=""');
+    expect(html).toContain(FACEBOOK_EXAMPLE);
   });
 });

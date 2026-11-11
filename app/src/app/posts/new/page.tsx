@@ -26,6 +26,7 @@ export default async function NewPostPage() {
   const footerSettings: CaptionFooterUser = {
     companyWebsite: context.workspace.companyWebsite,
     defaultHashtags: context.workspace.defaultHashtags,
+    trackWebsiteLinks: context.workspace.trackWebsiteLinks,
   };
 
   // 2026-11-01 audit: a member's publish is held for an owner's approval on the

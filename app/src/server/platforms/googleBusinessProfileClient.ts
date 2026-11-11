@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { resolveGooglePostMetadata } from "@/lib/googlePostOptions";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
+import { trackedGoogleButtonUrl } from "@/lib/trackingTags";
 import { truncateGraphemes } from "@/lib/truncate";
 
 import { refreshConnectionToken } from "./connectionRefresh";
@@ -245,14 +246,22 @@ function gbpSchedule(startDate: string, endDate: string, startTime?: string, end
  * A photo post's options: the post's own, or, for a post that has none (from
  * before 2026-11-10, or the API), the workspace's default button. Read before
  * the create request is sent, so a failure here is safe to retry.
+ *
+ * With tracking tags on, a button that links to the workspace website's site is
+ * tagged as a Google visit (lib/trackingTags.ts). A post whose own options have
+ * no link has nothing to tag, so the workspace is not read for it.
  */
 async function resolvePostOptions(ctx: PublishContext): Promise<GoogleBusinessPostMetadata | undefined> {
-  if (ctx.googleBusinessProfileMetadata) return ctx.googleBusinessProfileMetadata;
+  const own = ctx.googleBusinessProfileMetadata;
+  if (own && !own.button?.url) return own;
   const workspace = await prisma.workspace.findUnique({
     where: { id: ctx.socialConnection.workspaceId },
-    select: { googleButtonType: true, googleButtonUrl: true },
+    select: { googleButtonType: true, googleButtonUrl: true, companyWebsite: true, trackWebsiteLinks: true },
   });
-  return resolveGooglePostMetadata(undefined, workspace);
+  const options = own ?? resolveGooglePostMetadata(undefined, workspace);
+  const url = options?.button?.url;
+  if (!options?.button || !url || !workspace?.trackWebsiteLinks) return options;
+  return { ...options, button: { ...options.button, url: trackedGoogleButtonUrl(url, workspace.companyWebsite) } };
 }
 
 async function ensureLocationName(

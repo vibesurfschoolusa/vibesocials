@@ -3,6 +3,7 @@ import type { Prisma, SocialConnection } from "@prisma/client";
 import { DEFAULT_FETCH_TIMEOUT_MS, FETCH_TIMEOUT_CODE, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import {
   PINTEREST_API_BASE_URL,
+  PINTEREST_LINK_MAX,
   PINTEREST_TOKEN_URL,
   fitPinterestDescription,
   fitPinterestTitle,
@@ -12,6 +13,7 @@ import {
   readPinterestErrorCode,
 } from "@/lib/pinterestApi";
 import { mediaKindOf } from "@/lib/platformLimits";
+import { trackedWebsiteLink } from "@/lib/trackingTags";
 import type { UploadStateStore } from "@/server/jobs/uploadState";
 
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
@@ -320,9 +322,14 @@ async function loadPinLink(workspaceId: string): Promise<string | null> {
     const { prisma } = await import("@/lib/db");
     const workspace = await prisma.workspace.findUnique({
       where: { id: workspaceId },
-      select: { companyWebsite: true },
+      select: { companyWebsite: true, trackWebsiteLinks: true },
     });
-    return pinterestPinLink(workspace?.companyWebsite);
+    const link = pinterestPinLink(workspace?.companyWebsite);
+    if (!link || !workspace?.trackWebsiteLinks) return link;
+    // A link the tags would push past Pinterest's limit goes untagged: a Pin
+    // with the plain link is better than one with none.
+    const tagged = trackedWebsiteLink(link, "pinterest");
+    return tagged.length <= PINTEREST_LINK_MAX ? tagged : link;
   } catch (error) {
     console.warn("[Pinterest] Could not read the workspace website; creating the Pin without a link", {
       name: error instanceof Error ? error.name : typeof error,

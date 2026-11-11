@@ -23,6 +23,7 @@ export default async function QueuePage() {
     ? {
         companyWebsite: context.workspace.companyWebsite,
         defaultHashtags: context.workspace.defaultHashtags,
+        trackWebsiteLinks: context.workspace.trackWebsiteLinks,
       }
     : undefined;
 

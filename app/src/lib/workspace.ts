@@ -24,6 +24,7 @@ export interface WorkspaceContext {
     | "googleButtonUrl"
     | "brandVoice"
     | "brandVoiceExamples"
+    | "trackWebsiteLinks"
   >;
   role: WorkspaceRole;
 }
@@ -282,6 +283,9 @@ export async function getWorkspaceContext(
       // from the caller's own workspace (lib/brandVoice.ts).
       brandVoice: active.workspace.brandVoice,
       brandVoiceExamples: active.workspace.brandVoiceExamples,
+      // Tracking tags: the Create and Queue footers carry it with the website,
+      // so their previews and counters show the tagged link.
+      trackWebsiteLinks: active.workspace.trackWebsiteLinks,
     },
     role: active.role,
   };

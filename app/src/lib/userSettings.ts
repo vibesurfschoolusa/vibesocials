@@ -62,4 +62,10 @@ export interface UserSettings {
    */
   brandVoice: string | null;
   brandVoiceExamples: string | null;
+  /**
+   * Tracking tags (brief 20) — when true, the website link the app adds to a
+   * post names the platform it was posted on (lib/trackingTags.ts).
+   * Workspace-level and owner-only to change. Sourced from the active Workspace.
+   */
+  trackWebsiteLinks: boolean;
 }

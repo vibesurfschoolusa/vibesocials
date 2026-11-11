@@ -46,6 +46,7 @@ export function makeWorkspaceContext(
       googleButtonUrl: null,
       brandVoice: null,
       brandVoiceExamples: null,
+      trackWebsiteLinks: false,
     },
     role: overrides.role ?? "owner",
   };

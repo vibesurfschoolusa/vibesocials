@@ -55,6 +55,11 @@ export interface ParsedSettingsInput {
    */
   brandVoice?: string | null;
   brandVoiceExamples?: string | null;
+  /**
+   * Tracking tags (brief 20): the website link names the platform it was posted
+   * on. Workspace-level and OWNER-ONLY; null normalizes to off.
+   */
+  trackWebsiteLinks?: boolean;
 }
 
 export type SettingsValidationResult =
@@ -237,6 +242,14 @@ export function parseSettingsInput(body: unknown): SettingsValidationResult {
     data.brandVoiceExamples = result.value;
   }
 
+  if (hasKey(record, "trackWebsiteLinks")) {
+    // Null normalizes to off, the schema default, like requireApproval.
+    if (record.trackWebsiteLinks !== null && typeof record.trackWebsiteLinks !== "boolean") {
+      return { ok: false, error: "trackWebsiteLinks must be a boolean" };
+    }
+    data.trackWebsiteLinks = record.trackWebsiteLinks === true;
+  }
+
   return { ok: true, data };
 }
 
@@ -251,8 +264,8 @@ export function touchesWorkspaceFooter(data: ParsedSettingsInput): boolean {
 
 /**
  * True when the body touches ANY workspace-level, owner-only field: the caption
- * footer (above), the approval flag, the default Google button or the brand
- * voice. This is the gate for both the 403 and the
+ * footer (above), the approval flag, the default Google button, the brand
+ * voice or the tracking tags. This is the gate for both the 403 and the
  * `workspace.update` branch in `POST`.
  */
 export function touchesOwnerOnlyWorkspaceFields(data: ParsedSettingsInput): boolean {
@@ -261,7 +274,8 @@ export function touchesOwnerOnlyWorkspaceFields(data: ParsedSettingsInput): bool
     "requireApproval" in data ||
     "googleButtonType" in data ||
     "brandVoice" in data ||
-    "brandVoiceExamples" in data
+    "brandVoiceExamples" in data ||
+    "trackWebsiteLinks" in data
   );
 }
 
@@ -305,6 +319,7 @@ export async function POST(request: Request) {
         googleButtonUrl?: string | null;
         brandVoice?: string | null;
         brandVoiceExamples?: string | null;
+        trackWebsiteLinks?: boolean;
       } = {};
       if ("companyWebsite" in data) {
         workspaceData.companyWebsite = data.companyWebsite;
@@ -324,6 +339,9 @@ export async function POST(request: Request) {
       }
       if ("brandVoiceExamples" in data) {
         workspaceData.brandVoiceExamples = data.brandVoiceExamples;
+      }
+      if ("trackWebsiteLinks" in data) {
+        workspaceData.trackWebsiteLinks = data.trackWebsiteLinks;
       }
 
       await prisma.workspace.update({

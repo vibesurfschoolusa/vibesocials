@@ -23,8 +23,8 @@ export interface PlatformPreviewInput {
    * Per-platform caption override, if the user set one for this platform
    * (`perPlatformOverrides`). Mirrors the real posting path's truthiness
    * check EXACTLY — see `server/jobs/inngest-functions.ts`:
-   * `captionOverride ? buildCaptionWithFooter(captionOverride, user) :
-   * fullBaseCaption`. That means an empty string is "not set" and falls back
+   * the override when it is truthy, else the base caption, then
+   * `buildCaptionWithFooter(..., workspace, platform)`. That means an empty string is "not set" and falls back
    * to `caption`, but a whitespace-only override IS honored verbatim (odd,
    * but that is what actually gets posted, so the preview must match it).
    */
@@ -75,7 +75,9 @@ export interface PlatformPreviewResult {
  */
 export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPreviewResult {
   const effectiveCaption = input.override ? input.override : input.caption;
-  let fullCaption = buildCaptionWithFooter(effectiveCaption, input.user ?? {});
+  // The platform is passed, as the publish function does, so the footer carries
+  // this platform's tracking tags when the workspace has them on.
+  let fullCaption = buildCaptionWithFooter(effectiveCaption, input.user ?? {}, input.platform);
 
   // TikTok gets no substitute title for an empty caption (computeTikTokCaption):
   // the preview stays empty, as for every other platform.

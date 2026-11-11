@@ -196,3 +196,31 @@ describe("queueOverridesToSend", () => {
     ).toBeNull();
   });
 });
+
+// 20: the room for a platform's caption counts that platform's tagged footer.
+describe("platformCaptionCounter and adaptMaxLength with tracking tags", () => {
+  const off = { companyWebsite: "a.co", defaultHashtags: null };
+  const on = { ...off, trackWebsiteLinks: true };
+  // "\n\nFor more info visit a.co" is 26; the X tags add
+  // "/?utm_source=x&utm_medium=social&utm_campaign=vibesocials", 57 more.
+  it("leaves X 57 characters less room with the setting on", () => {
+    expect(platformCaptionCounter("hello", "x", off).max).toBe(254);
+    expect(platformCaptionCounter("hello", "x", on).max).toBe(254 - 57);
+    expect(adaptMaxLength("x", on)).toBe(254 - 57);
+  });
+
+  it("counts each platform's own tags", () => {
+    // utm_source=pinterest is 8 characters longer than utm_source=x.
+    expect(platformCaptionCounter("hi", "pinterest", on).max).toBe(800 - 26 - 57 - 8);
+    // Instagram is never tagged.
+    expect(platformCaptionCounter("hi", "instagram", on).max).toBe(2200 - 26);
+  });
+
+  it("is today's room with the setting off", () => {
+    for (const platform of ["x", "pinterest", "google_business_profile", "tiktok"] as const) {
+      expect(platformCaptionCounter("hi", platform, { ...off, trackWebsiteLinks: false }).max).toBe(
+        platformCaptionCounter("hi", platform, off).max,
+      );
+    }
+  });
+});

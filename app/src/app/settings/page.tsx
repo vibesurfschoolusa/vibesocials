@@ -56,6 +56,7 @@ export default async function SettingsPage({
     googleButtonUrl: context.workspace.googleButtonUrl,
     brandVoice: context.workspace.brandVoice,
     brandVoiceExamples: context.workspace.brandVoiceExamples,
+    trackWebsiteLinks: context.workspace.trackWebsiteLinks,
   };
 
   // Fetch the WORKSPACE's connections (shared by every member — design §2),

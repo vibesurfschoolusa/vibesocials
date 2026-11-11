@@ -843,3 +843,55 @@ describe("POST /api/settings - returns the stored brand voice", () => {
     await expect(response.json()).resolves.toEqual({ success: true });
   });
 });
+
+// 20: tracking tags on the website link (lib/trackingTags.ts), owner only.
+describe("trackWebsiteLinks (tracking tags)", () => {
+  it("accepts a boolean and normalizes null to off", () => {
+    expect(parseSettingsInput({ trackWebsiteLinks: true })).toEqual({
+      ok: true,
+      data: { trackWebsiteLinks: true },
+    });
+    expect(parseSettingsInput({ trackWebsiteLinks: null })).toEqual({
+      ok: true,
+      data: { trackWebsiteLinks: false },
+    });
+  });
+
+  it("rejects a non-boolean with 400 and writes nothing", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+
+    const response = await POST(jsonRequest({ trackWebsiteLinks: "yes" }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "trackWebsiteLinks must be a boolean" });
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("is owner-only", () => {
+    expect(touchesOwnerOnlyWorkspaceFields({ trackWebsiteLinks: false })).toBe(true);
+  });
+
+  it("is saved by an owner on the workspace row", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    workspaceUpdateMock.mockResolvedValue({});
+
+    const response = await POST(jsonRequest({ companyWebsite: "vibesurfschool.com", trackWebsiteLinks: true }));
+
+    expect(response.status).toBe(200);
+    expect(workspaceUpdateMock).toHaveBeenCalledWith({
+      where: { id: "ws-1" },
+      data: { companyWebsite: "vibesurfschool.com", trackWebsiteLinks: true },
+    });
+  });
+
+  it("refuses a member's save (403), writing nothing", async () => {
+    getWorkspaceContextMock.mockResolvedValue(MEMBER_CONTEXT);
+
+    const response = await POST(jsonRequest({ trackWebsiteLinks: true, notifyOnPostComplete: false }));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: OWNER_ONLY_FOOTER_ERROR });
+    expect(workspaceUpdateMock).not.toHaveBeenCalled();
+    expect(userUpdateMock).not.toHaveBeenCalled();
+  });
+});

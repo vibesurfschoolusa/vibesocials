@@ -4538,3 +4538,107 @@ describe("publish functions - a post's photos (07a)", () => {
     ]);
   });
 });
+
+// 20: tracking tags. Each platform's step gets its own footer, tagged for that
+// platform when the workspace has the setting on; with it off every caption is
+// what it was before (the footer built once, without a platform).
+describe("publish functions - tracking tags on the website link (20)", () => {
+  const SITE = { id: "ws-1", companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf" };
+  const TRACKED = { ...SITE, trackWebsiteLinks: true };
+  const UNTRACKED = { ...SITE, trackWebsiteLinks: false };
+  const tagged = (source: string) =>
+    `For more info visit vibesurfschool.com/?utm_source=${source}&utm_medium=social&utm_campaign=vibesocials`;
+  const PLATFORMS: Platform[] = ["x", "linkedin", "facebook_page", "instagram"];
+
+  beforeEach(() => {
+    db.mediaItemFindUnique.mockResolvedValue({
+      id: "media-1",
+      baseCaption: "Media caption",
+      perPlatformOverrides: null,
+      deletedAt: null,
+      mimeType: "image/jpeg",
+    });
+    db.connectionFindMany.mockResolvedValue(PLATFORMS.map((p) => ({ id: `conn-${p}`, platform: p })));
+    stubResults(PLATFORMS);
+  });
+
+  function publish(perPlatformOverrides: Partial<Record<Platform, string>> | null) {
+    db.postJobFindUnique.mockResolvedValue({ id: "job-1", workspaceId: "ws-1" });
+    return handlerOf(publishToAllPlatforms)({
+      event: {
+        name: "post/publish.requested",
+        data: {
+          postJobId: "job-1",
+          userId: "user-1",
+          mediaItemId: "media-1",
+          baseCaption: "Waves",
+          perPlatformOverrides,
+        },
+      },
+      step: fakeStep(),
+    });
+  }
+
+  function retry(perPlatformOverrides: Partial<Record<Platform, string>> | null) {
+    db.postJobFindUnique.mockResolvedValue({
+      id: "job-1",
+      workspaceId: "ws-1",
+      mediaItemId: "media-1",
+      baseCaption: "Waves",
+      perPlatformOverrides,
+      publishMetadata: null,
+    });
+    return handlerOf(retryPlatforms)({
+      event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms: PLATFORMS } },
+      step: fakeStep(),
+    });
+  }
+
+  for (const [name, run] of [
+    ["publishToAllPlatforms", publish],
+    ["retryPlatforms", retry],
+  ] as const) {
+    describe(name, () => {
+      it("reads the setting with the footer fields", async () => {
+        db.workspaceFindUnique.mockResolvedValue(TRACKED);
+        await run(null);
+        expect(db.workspaceFindUnique).toHaveBeenCalledWith({
+          where: { id: "ws-1" },
+          select: { id: true, companyWebsite: true, defaultHashtags: true, trackWebsiteLinks: true },
+        });
+      });
+
+      it("with the setting on, gives each platform its own tagged footer", async () => {
+        db.workspaceFindUnique.mockResolvedValue(TRACKED);
+        await run(null);
+        expect(ctxFor("x").caption).toBe(`Waves\n\n${tagged("x")}\n\n#surf`);
+        expect(ctxFor("linkedin").caption).toBe(`Waves\n\n${tagged("linkedin")}\n\n#surf`);
+        expect(ctxFor("facebook_page").caption).toBe(`Waves\n\n${tagged("facebook")}\n\n#surf`);
+        // Links in Instagram captions cannot be clicked: never tagged.
+        expect(ctxFor("instagram").caption).toBe(
+          "Waves\n\nFor more info visit vibesurfschool.com\n\n#surf",
+        );
+      });
+
+      it("with the setting on, tags a per-platform caption's footer for that platform", async () => {
+        db.workspaceFindUnique.mockResolvedValue(TRACKED);
+        await run({ linkedin: "Own LinkedIn text" });
+        expect(ctxFor("linkedin").caption).toBe(`Own LinkedIn text\n\n${tagged("linkedin")}\n\n#surf`);
+        expect(ctxFor("x").caption).toBe(`Waves\n\n${tagged("x")}\n\n#surf`);
+      });
+
+      it("with the setting off, every caption equals today's", async () => {
+        for (const workspace of [UNTRACKED, SITE]) {
+          publishCtxs.length = 0;
+          db.workspaceFindUnique.mockResolvedValue(workspace);
+          await run({ linkedin: "Own LinkedIn text" });
+          for (const platform of PLATFORMS) {
+            const text = platform === "linkedin" ? "Own LinkedIn text" : "Waves";
+            expect(ctxFor(platform).caption).toBe(buildCaptionWithFooter(text, workspace));
+            expect(ctxFor(platform).caption).toBe(`${text}\n\nFor more info visit vibesurfschool.com\n\n#surf`);
+          }
+        }
+      });
+    });
+  }
+});

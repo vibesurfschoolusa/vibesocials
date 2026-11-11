@@ -112,6 +112,7 @@ function makeMembership(
       googleButtonUrl: "https://example.com/book",
       brandVoice: "Friendly and short.",
       brandVoiceExamples: "Waves are up",
+      trackWebsiteLinks: true,
       limitPostsPerDay: null,
       limitXPostsPerMonth: null,
       limitYoutubeUploadsPerDay: null,
@@ -427,6 +428,8 @@ describe("getWorkspaceContext", () => {
         // Brand voice: the AI routes read it from the caller's own workspace.
         brandVoice: "Friendly and short.",
         brandVoiceExamples: "Waves are up",
+        // Tracking tags: the Create and Queue footers read it with the website.
+        trackWebsiteLinks: true,
       },
       role: "owner",
     });

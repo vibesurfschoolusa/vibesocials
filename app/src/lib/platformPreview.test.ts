@@ -4,6 +4,7 @@ import { buildCaptionWithFooter } from "./captionFooter";
 import { buildPlatformPreview } from "./platformPreview";
 import { truncateGraphemes } from "./truncate";
 import { computeGbpPostSummary } from "@/server/platforms/googleBusinessProfileClient";
+import { computeTweetText } from "@/server/platforms/xClient";
 
 describe("buildPlatformPreview", () => {
   it("renders the plain caption for a null-limit platform with no footer/override", () => {
@@ -194,5 +195,54 @@ describe("buildPlatformPreview", () => {
     const caption = "😀👨‍👩‍👧🇺🇸".repeat(60);
     const result = buildPlatformPreview({ platform: "x", caption });
     expect(result.rendered).toBe(truncateGraphemes(caption, 280, { ellipsis: "..." }));
+  });
+});
+
+// 20: with tracking tags on, the preview shows each platform's tagged link,
+// exactly as the publish function builds it (buildCaptionWithFooter with the
+// platform) and as the X client cuts it.
+describe("buildPlatformPreview with tracking tags", () => {
+  const off = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf" };
+  const on = { ...off, trackWebsiteLinks: true };
+  const X_TAGGED =
+    "vibesurfschool.com/?utm_source=x&utm_medium=social&utm_campaign=vibesocials";
+
+  it("shows X the tagged link, matching what the X client posts", () => {
+    const result = buildPlatformPreview({ platform: "x", caption: "Waves", user: on });
+    expect(result.rendered).toBe(`Waves\n\nFor more info visit ${X_TAGGED}\n\n#surf`);
+    expect(result.rendered).toBe(computeTweetText(buildCaptionWithFooter("Waves", on, "x")));
+  });
+
+  it("counts the tagged link's full text against X's 280 and cuts as the X client does", () => {
+    const caption = "a".repeat(200);
+    const result = buildPlatformPreview({ platform: "x", caption, user: on });
+    const sent = computeTweetText(buildCaptionWithFooter(caption, on, "x"));
+    expect(result.charCount).toBe(buildCaptionWithFooter(caption, on, "x").length);
+    expect(result.willTruncate).toBe(true);
+    expect(result.rendered).toBe(sent);
+    // The same caption fits untagged: the tags alone push it over.
+    expect(buildPlatformPreview({ platform: "x", caption, user: off }).willTruncate).toBe(false);
+  });
+
+  it("uses a per-platform caption with that platform's own tagged footer", () => {
+    const result = buildPlatformPreview({
+      platform: "linkedin",
+      caption: "Main",
+      override: "Own LinkedIn text",
+      user: on,
+    });
+    expect(result.rendered).toBe(buildCaptionWithFooter("Own LinkedIn text", on, "linkedin"));
+    expect(result.rendered).toContain("utm_source=linkedin");
+  });
+
+  it("leaves Instagram untagged and every platform as today with the setting off", () => {
+    expect(buildPlatformPreview({ platform: "instagram", caption: "Waves", user: on }).rendered).toBe(
+      buildCaptionWithFooter("Waves", off),
+    );
+    for (const platform of ["x", "linkedin", "facebook_page", "pinterest"] as const) {
+      expect(buildPlatformPreview({ platform, caption: "Waves", user: off }).rendered).toBe(
+        buildCaptionWithFooter("Waves", off),
+      );
+    }
   });
 });

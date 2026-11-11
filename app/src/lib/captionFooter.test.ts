@@ -97,3 +97,51 @@ describe("buildCaptionWithFooter", () => {
     ).toBe("Mixed");
   });
 });
+
+// 20: tracking tags on the website link, per platform, opt-in.
+describe("buildCaptionWithFooter with a platform", () => {
+  const PLATFORMS = [
+    "facebook_page",
+    "linkedin",
+    "x",
+    "youtube",
+    "pinterest",
+    "google_business_profile",
+    "instagram",
+    "tiktok",
+  ] as const;
+  const off = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf" };
+  const on = { ...off, trackWebsiteLinks: true };
+  const today = "Waves\n\nFor more info visit vibesurfschool.com\n\n#surf";
+
+  it.each(PLATFORMS)("with the setting off equals today on %s", (platform) => {
+    expect(buildCaptionWithFooter("Waves", off, platform)).toBe(today);
+    expect(buildCaptionWithFooter("Waves", { ...off, trackWebsiteLinks: false }, platform)).toBe(today);
+    expect(buildCaptionWithFooter("Waves", { ...off, trackWebsiteLinks: null }, platform)).toBe(today);
+  });
+
+  it("with no platform passed equals today, even with the setting on", () => {
+    expect(buildCaptionWithFooter("Waves", on)).toBe(today);
+  });
+
+  it.each([
+    ["facebook_page", "facebook"],
+    ["linkedin", "linkedin"],
+    ["x", "x"],
+    ["youtube", "youtube"],
+    ["pinterest", "pinterest"],
+    ["google_business_profile", "google"],
+  ] as const)("with the setting on tags the link on %s", (platform, source) => {
+    expect(buildCaptionWithFooter("Waves", on, platform)).toBe(
+      `Waves\n\nFor more info visit vibesurfschool.com/?utm_source=${source}&utm_medium=social&utm_campaign=vibesocials\n\n#surf`,
+    );
+  });
+
+  it.each(["instagram", "tiktok"] as const)("with the setting on leaves %s untagged", (platform) => {
+    expect(buildCaptionWithFooter("Waves", on, platform)).toBe(today);
+  });
+
+  it("with the setting on and no website adds nothing", () => {
+    expect(buildCaptionWithFooter("Waves", { trackWebsiteLinks: true }, "x")).toBe("Waves");
+  });
+});

@@ -1,3 +1,7 @@
+import type { Platform } from "@prisma/client";
+
+import { trackedWebsiteLink } from "@/lib/trackingTags";
+
 /**
  * The subset of the posting user that contributes an optional footer to a
  * published caption. Only the fields actually read are modeled here; a full
@@ -7,6 +11,8 @@
 export interface CaptionFooterUser {
   companyWebsite?: string | null;
   defaultHashtags?: string | null;
+  /** The workspace's tracking-tags setting; only read when a platform is passed. */
+  trackWebsiteLinks?: boolean | null;
 }
 
 /**
@@ -17,15 +23,22 @@ export interface CaptionFooterUser {
  * asserted by captionFooter.test.ts. Each footer segment is omitted when its
  * source field is empty, whitespace-only, null, or undefined. The base caption
  * is always included (trimmed), even when empty.
+ *
+ * With a `platform` and `trackWebsiteLinks` on, the website carries that
+ * platform's tracking tags (lib/trackingTags.ts). Without either, the output
+ * is exactly what it was before tracking tags existed.
  */
 export function buildCaptionWithFooter(
   baseCaption: string,
   user: CaptionFooterUser,
+  platform?: Platform,
 ): string {
   const parts = [baseCaption.trim()];
 
-  if (user.companyWebsite?.trim()) {
-    parts.push(`For more info visit ${user.companyWebsite.trim()}`);
+  const website = user.companyWebsite?.trim();
+  if (website) {
+    const link = platform && user.trackWebsiteLinks ? trackedWebsiteLink(website, platform) : website;
+    parts.push(`For more info visit ${link}`);
   }
 
   if (user.defaultHashtags?.trim()) {

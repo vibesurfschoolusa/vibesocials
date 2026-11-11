@@ -199,6 +199,41 @@ describe("pinterestClient.publishVideo: a photo", () => {
     expect(JSON.parse(requestOf(0).init.body as string).link).toBe("https://www.vibesurfschool.com/");
   });
 
+  // 20: tracking tags on the Pin's link.
+  it("tags the Pin's link as a Pinterest visit when the setting is on", async () => {
+    workspaceFindUniqueMock.mockResolvedValue({ companyWebsite: "www.vibesurfschool.com", trackWebsiteLinks: true });
+    fetchMock.mockResolvedValueOnce(json(201, { id: "1" }));
+
+    await pinterestClient.publishVideo(makeContext());
+
+    expect(workspaceFindUniqueMock).toHaveBeenCalledWith({
+      where: { id: "workspace-1" },
+      select: { companyWebsite: true, trackWebsiteLinks: true },
+    });
+    expect(JSON.parse(requestOf(0).init.body as string).link).toBe(
+      "https://www.vibesurfschool.com/?utm_source=pinterest&utm_medium=social&utm_campaign=vibesocials",
+    );
+  });
+
+  it("keeps the untagged link when the tags would make it longer than Pinterest takes", async () => {
+    const website = `https://vibesurfschool.com/${"a".repeat(2000)}`;
+    workspaceFindUniqueMock.mockResolvedValue({ companyWebsite: website, trackWebsiteLinks: true });
+    fetchMock.mockResolvedValueOnce(json(201, { id: "1" }));
+
+    await pinterestClient.publishVideo(makeContext());
+
+    expect(JSON.parse(requestOf(0).init.body as string).link).toBe(website);
+  });
+
+  it("links the Pin as today when the setting is off", async () => {
+    workspaceFindUniqueMock.mockResolvedValue({ companyWebsite: "www.vibesurfschool.com", trackWebsiteLinks: false });
+    fetchMock.mockResolvedValueOnce(json(201, { id: "1" }));
+
+    await pinterestClient.publishVideo(makeContext());
+
+    expect(JSON.parse(requestOf(0).init.body as string).link).toBe("https://www.vibesurfschool.com/");
+  });
+
   it("still creates the Pin, without a link, when the website can't be read", async () => {
     workspaceFindUniqueMock.mockRejectedValue(new Error("db down"));
     fetchMock.mockResolvedValueOnce(json(201, { id: "1" }));

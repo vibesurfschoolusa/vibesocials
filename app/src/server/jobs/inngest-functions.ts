@@ -958,7 +958,7 @@ export const publishToAllPlatforms = inngest.createFunction(
         }),
         prisma.workspace.findUnique({
           where: { id: postJob.workspaceId },
-          select: { id: true, companyWebsite: true, defaultHashtags: true },
+          select: { id: true, companyWebsite: true, defaultHashtags: true, trackWebsiteLinks: true },
         }),
         prisma.mediaItem.findUnique({ where: { id: mediaItemId } }),
         prisma.socialConnection.findMany({
@@ -1027,7 +1027,9 @@ export const publishToAllPlatforms = inngest.createFunction(
     // WORKSPACE's brand fields (companyWebsite/defaultHashtags — design §2),
     // never the acting user's — a member can publish/retry a teammate's
     // post, and the footer must stay deterministic regardless of who acts.
-    const fullBaseCaption = buildCaptionWithFooter(baseCaption, setupData.workspace);
+    // The footer is built per platform (below): with tracking tags on, each
+    // platform's website link names that platform (lib/trackingTags.ts); with
+    // them off, every platform gets the same text as before.
     const overrides = perPlatformOverrides as Partial<Record<Platform, string>> | null;
 
     // Process each platform as a separate step (allows longer execution per
@@ -1052,9 +1054,11 @@ export const publishToAllPlatforms = inngest.createFunction(
       }
 
       const captionOverride = overrides?.[connection.platform] ?? null;
-      const caption = captionOverride
-        ? buildCaptionWithFooter(captionOverride, setupData.workspace)
-        : fullBaseCaption;
+      const caption = buildCaptionWithFooter(
+        captionOverride ? captionOverride : baseCaption,
+        setupData.workspace,
+        connection.platform,
+      );
 
       // Each platform upload is a separate step - this allows checkpointing
       plans.push({
@@ -1389,7 +1393,7 @@ export const retryPlatforms = inngest.createFunction(
         }),
         prisma.workspace.findUnique({
           where: { id: postJob.workspaceId },
-          select: { id: true, companyWebsite: true, defaultHashtags: true },
+          select: { id: true, companyWebsite: true, defaultHashtags: true, trackWebsiteLinks: true },
         }),
         prisma.mediaItem.findUnique({ where: { id: postJob.mediaItemId } }),
         prisma.socialConnection.findMany({
@@ -1489,8 +1493,8 @@ export const retryPlatforms = inngest.createFunction(
     // Team Workspaces (Task 6, controller-added scope): footer source is the
     // JOB's workspace, not the retrying member — same reasoning as
     // publishToAllPlatforms above. `user` is kept (existence-checked above)
-    // for `userId`'s continued use below; it no longer feeds the footer.
-    const fullBaseCaption = buildCaptionWithFooter(captionSource.baseCaption, workspace);
+    // for `userId`'s continued use below; it no longer feeds the footer. The
+    // footer is built per platform, as in publishToAllPlatforms (tracking tags).
     const overrides = captionSource.perPlatformOverrides;
 
     // Planned here, run by runPlatformStepsWithDeferrals (platformSteps.ts): each
@@ -1547,9 +1551,11 @@ export const retryPlatforms = inngest.createFunction(
           await repointResultConnection(resultRecord.id, connection.id);
 
           const captionOverride = overrides?.[platform] ?? null;
-          const caption = captionOverride
-            ? buildCaptionWithFooter(captionOverride, workspace)
-            : fullBaseCaption;
+          const caption = buildCaptionWithFooter(
+            captionOverride ? captionOverride : captionSource.baseCaption,
+            workspace,
+            platform,
+          );
 
           // Replay publishMetadata from the job when present (immediate jobs now
           // snapshot it too). Fallback: YouTube private, so a retry is never MORE

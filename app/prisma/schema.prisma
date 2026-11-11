@@ -182,6 +182,10 @@ model Workspace {
   // to 5 example captions, one per line.
   brandVoice         String?
   brandVoiceExamples String?
+  // Tracking tags (2026-11-10): when true, the website link the app adds to a
+  // post carries utm tags naming the platform (src/lib/trackingTags.ts).
+  // Owner-only, off by default.
+  trackWebsiteLinks  Boolean  @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

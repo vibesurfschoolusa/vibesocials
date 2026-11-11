@@ -795,7 +795,7 @@ describe("googleBusinessProfileClient.publishVideo — post options and the work
     await googleBusinessProfileClient.publishVideo(makeContext());
     expect(workspaceFindUniqueMock).toHaveBeenCalledWith({
       where: { id: "ws-1" },
-      select: { googleButtonType: true, googleButtonUrl: true },
+      select: { googleButtonType: true, googleButtonUrl: true, companyWebsite: true, trackWebsiteLinks: true },
     });
     expect(sentBody(fetchMock)).toEqual({
       languageCode: "en-US",
@@ -847,5 +847,77 @@ describe("googleBusinessProfileClient.publishVideo — post options and the work
     expect(workspaceFindUniqueMock).not.toHaveBeenCalled();
     workspaceFindUniqueMock.mockReset();
     workspaceFindUniqueMock.mockImplementation(async () => null);
+  });
+});
+
+// 20: tracking tags. The button is tagged as a Google visit only when it links
+// to the workspace website's own site and the setting is on.
+describe("googleBusinessProfileClient.publishVideo — tracking tags on the button", () => {
+  const TAGS = "utm_source=google&utm_medium=social&utm_campaign=vibesocials";
+  function stubOk() {
+    const fetchMock = vi.fn<typeof fetch>(() =>
+      Promise.resolve(new Response(JSON.stringify({ name: "accounts/111/locations/999/localPosts/p1" }))),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+  const sentButton = (fetchMock: ReturnType<typeof stubOk>) =>
+    (JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as Record<string, unknown>).callToAction;
+  const ownButton = (url: string) => ({
+    ...makeContext(),
+    googleBusinessProfileMetadata: { postType: "update" as const, button: { type: "BOOK" as const, url } },
+  });
+
+  afterEach(() => {
+    workspaceFindUniqueMock.mockReset();
+    workspaceFindUniqueMock.mockImplementation(async () => null);
+  });
+
+  it("tags the post's own button when it links to the workspace website", async () => {
+    workspaceFindUniqueMock.mockResolvedValueOnce({ companyWebsite: "vibesurfschool.com", trackWebsiteLinks: true });
+    const fetchMock = stubOk();
+    await googleBusinessProfileClient.publishVideo(ownButton("https://www.vibesurfschool.com/book"));
+    expect(sentButton(fetchMock)).toEqual({
+      actionType: "BOOK",
+      url: `https://www.vibesurfschool.com/book?${TAGS}`,
+    });
+  });
+
+  it("tags the workspace's default button the same way", async () => {
+    workspaceFindUniqueMock.mockResolvedValueOnce({
+      googleButtonType: "LEARN_MORE",
+      googleButtonUrl: "https://vibesurfschool.com",
+      companyWebsite: "vibesurfschool.com",
+      trackWebsiteLinks: true,
+    });
+    const fetchMock = stubOk();
+    await googleBusinessProfileClient.publishVideo(makeContext());
+    expect(sentButton(fetchMock)).toEqual({ actionType: "LEARN_MORE", url: `https://vibesurfschool.com/?${TAGS}` });
+  });
+
+  it("leaves a button on another site alone", async () => {
+    workspaceFindUniqueMock.mockResolvedValueOnce({ companyWebsite: "vibesurfschool.com", trackWebsiteLinks: true });
+    const fetchMock = stubOk();
+    await googleBusinessProfileClient.publishVideo(ownButton("https://booking.example.org/vibe"));
+    expect(sentButton(fetchMock)).toEqual({ actionType: "BOOK", url: "https://booking.example.org/vibe" });
+  });
+
+  it("with the setting off sends the button as today", async () => {
+    workspaceFindUniqueMock.mockResolvedValueOnce({ companyWebsite: "vibesurfschool.com", trackWebsiteLinks: false });
+    const fetchMock = stubOk();
+    await googleBusinessProfileClient.publishVideo(ownButton("https://vibesurfschool.com/book"));
+    expect(sentButton(fetchMock)).toEqual({ actionType: "BOOK", url: "https://vibesurfschool.com/book" });
+  });
+
+  it("with the setting off sends the default button as today", async () => {
+    workspaceFindUniqueMock.mockResolvedValueOnce({
+      googleButtonType: "BOOK",
+      googleButtonUrl: "https://vibesurfschool.com/book",
+      companyWebsite: "vibesurfschool.com",
+      trackWebsiteLinks: false,
+    });
+    const fetchMock = stubOk();
+    await googleBusinessProfileClient.publishVideo(makeContext());
+    expect(sentButton(fetchMock)).toEqual({ actionType: "BOOK", url: "https://vibesurfschool.com/book" });
   });
 });

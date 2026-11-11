@@ -25,6 +25,7 @@ import {
   defaultGoogleButtonUrl,
   parseGoogleButton,
 } from "@/lib/googlePostOptions";
+import { trackedWebsiteLink } from "@/lib/trackingTags";
 import type { UserSettings } from "@/lib/userSettings";
 
 // Mirrors tiktok-post-settings.tsx's checkbox styling for a consistent look
@@ -34,6 +35,50 @@ const BRAND_VOICE_PLACEHOLDER =
 
 const checkboxClass =
   "h-4 w-4 rounded border-input accent-[var(--primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
+
+/**
+ * The tracking-tags checkbox (brief 20), under the website. A member gets it
+ * disabled: it is the owner's setting, but it changes the member's posts too.
+ */
+function TrackingTagsField({
+  checked,
+  onChange,
+  website,
+  disabled,
+}: {
+  checked: boolean;
+  onChange?: (checked: boolean) => void;
+  website: string;
+  disabled?: boolean;
+}) {
+  const example = website.trim() ? trackedWebsiteLink(website.trim(), "facebook_page") : "";
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          onChange={(e) => onChange?.(e.target.checked)}
+          className={checkboxClass}
+        />
+        <span className="text-sm text-foreground">Add tracking tags to my website link</span>
+      </label>
+      <p className="text-sm text-muted-foreground">
+        Your Google Analytics will then show which platform each visit came from. The link in your
+        posts gets longer.
+      </p>
+      <p className="text-sm text-muted-foreground">
+        Applies to posts published from now on, including ones already scheduled.
+      </p>
+      {checked && example ? (
+        <p className="break-all text-sm text-muted-foreground">
+          On Facebook the link reads: <span className="text-foreground">{example}</span>
+        </p>
+      ) : null}
+    </div>
+  );
+}
 
 interface SettingsFormProps {
   settings: UserSettings;
@@ -60,6 +105,7 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
   const [notifyDailyDigest, setNotifyDailyDigest] = useState(settings.notifyDailyDigest);
   const [notifyNewReviews, setNotifyNewReviews] = useState(settings.notifyNewReviews);
   const [requireApproval, setRequireApproval] = useState(settings.requireApproval);
+  const [trackWebsiteLinks, setTrackWebsiteLinks] = useState(settings.trackWebsiteLinks);
   // 2026-11-10: the default Google button. "" = no button. The link starts as
   // the company website until one is saved.
   const [googleButtonType, setGoogleButtonType] = useState(settings.googleButtonType ?? "");
@@ -141,6 +187,8 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
         ? {
             companyWebsite: companyWebsite.trim(),
             defaultHashtags: defaultHashtags.trim(),
+            // Owner-only too (tracking tags on the website link).
+            trackWebsiteLinks,
             // Owner-only, same class as the footer fields — a member's body
             // must omit it entirely or the route 403s the whole request.
             requireApproval,
@@ -211,6 +259,12 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
               </p>
             </div>
 
+            <TrackingTagsField
+              checked={trackWebsiteLinks}
+              onChange={setTrackWebsiteLinks}
+              website={companyWebsite}
+            />
+
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="defaultHashtags">Default hashtags</Label>
               <Textarea
@@ -233,6 +287,7 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
                 {companyWebsite || "Not set."}
               </p>
             </div>
+            <TrackingTagsField checked={trackWebsiteLinks} website={companyWebsite} disabled />
             <div>
               <h3 className="text-sm font-medium text-foreground">Default hashtags</h3>
               <p className="mt-0.5 whitespace-pre-wrap text-sm text-muted-foreground">
