@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { verifyOAuthState } from "@/lib/oauthState";
@@ -9,8 +10,9 @@ import {
   saveInstagramConnection,
 } from "@/server/connections/saveConnection";
 import { Platform } from "@prisma/client";
+import { withConnectLink } from "@/server/connectLink/callback";
 
-export async function GET(request: NextRequest) {
+async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
   const state = searchParams.get("state");
@@ -29,7 +31,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const stateCheck = verifyOAuthState(state);
+  const stateCheck = verifyOAuthState(state, link);
   if (!stateCheck.valid || !stateCheck.userId || !stateCheck.workspaceId) {
     return NextResponse.redirect(
       new URL("/settings?error=instagram_invalid_state", request.url),
@@ -46,6 +48,7 @@ export async function GET(request: NextRequest) {
       platform: Platform.instagram,
       stateUserId: userId,
       baseUrl: request.url,
+      link,
     });
     if (sessionRedirect) {
       return sessionRedirect;
@@ -235,3 +238,5 @@ export async function GET(request: NextRequest) {
     return oauthCallbackFailed({ platform: Platform.instagram, baseUrl: request.url, error });
   }
 }
+
+export const GET = withConnectLink("instagram", handleCallback);

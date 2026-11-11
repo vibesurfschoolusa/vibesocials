@@ -85,11 +85,11 @@ function setCookie(res: Response): string {
   return res.headers.get("set-cookie") ?? "";
 }
 
+type Handler = (request: Request, link: ConnectLinkFlow | null) => Promise<Response>;
+
 /** A fake callback answering the given /settings (or other) redirect. */
 function handlerAnswering(path: string) {
-  return vi.fn(async (_request: Request, _link: ConnectLinkFlow | null) =>
-    NextResponse.redirect(new URL(path, ORIGIN)),
-  );
+  return vi.fn<Handler>(async () => NextResponse.redirect(new URL(path, ORIGIN)));
 }
 
 beforeEach(() => {
@@ -379,7 +379,7 @@ describe("withConnectLink: X", () => {
   it("with a cookie but an ordinary handshake row: the callback runs with null", async () => {
     h.handshakeFind.mockResolvedValue(linkHandshake({ connectLinkId: null, connectLinkNonce: null }));
     const answer = NextResponse.redirect(new URL("/settings?success=x_connected", ORIGIN));
-    const handler = vi.fn(async () => answer);
+    const handler = vi.fn<Handler>(async () => answer);
 
     const res = await withConnectLink("x", handler)(xRequest(cookieFor()));
 

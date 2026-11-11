@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
+import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
+import { withConnectLink } from "@/server/connectLink/callback";
 
 interface GoogleTokenResponse {
   access_token: string;
@@ -14,7 +16,7 @@ interface GoogleTokenResponse {
   scope?: string;
 }
 
-export async function GET(request: NextRequest) {
+async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
   const encodedState = searchParams.get("state");
@@ -33,7 +35,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const stateCheck = verifyOAuthState(encodedState);
+  const stateCheck = verifyOAuthState(encodedState, link);
   if (!stateCheck.valid || !stateCheck.userId || !stateCheck.workspaceId) {
     console.error("[YouTube OAuth] Invalid state parameter");
     return NextResponse.redirect(
@@ -51,6 +53,7 @@ export async function GET(request: NextRequest) {
       platform: "youtube",
       stateUserId: userId,
       baseUrl: request.url,
+      link,
     });
     if (sessionRedirect) {
       return sessionRedirect;
@@ -196,3 +199,5 @@ export async function GET(request: NextRequest) {
     return oauthCallbackFailed({ platform: "youtube", baseUrl: request.url, error });
   }
 }
+
+export const GET = withConnectLink("youtube", handleCallback);

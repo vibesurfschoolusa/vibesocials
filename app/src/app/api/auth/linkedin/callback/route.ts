@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
@@ -15,8 +16,9 @@ import {
   type LinkedInProfile,
 } from "@/server/connections/saveConnection";
 import { Platform } from "@prisma/client";
+import { withConnectLink } from "@/server/connectLink/callback";
 
-export async function GET(request: Request) {
+async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
   const state = searchParams.get("state");
@@ -40,7 +42,7 @@ export async function GET(request: Request) {
   // An optional vanity-name hint may be appended after a "." separator (unsigned;
   // used only as an organization lookup fallback, never as a source of identity).
   const [signedState, encodedVanityName] = state.split(".");
-  const stateCheck = verifyOAuthState(signedState);
+  const stateCheck = verifyOAuthState(signedState, link);
   if (!stateCheck.valid || !stateCheck.userId || !stateCheck.workspaceId) {
     console.error("[LinkedIn OAuth] Invalid state");
     return NextResponse.redirect(
@@ -67,6 +69,7 @@ export async function GET(request: Request) {
       platform: "linkedin",
       stateUserId: userId,
       baseUrl: process.env.NEXTAUTH_URL!,
+      link,
     });
     if (sessionRedirect) {
       return sessionRedirect;
@@ -330,3 +333,5 @@ export async function GET(request: Request) {
     });
   }
 }
+
+export const GET = withConnectLink("linkedin", handleCallback);

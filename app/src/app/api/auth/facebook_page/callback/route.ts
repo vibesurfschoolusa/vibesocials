@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { verifyOAuthState } from "@/lib/oauthState";
@@ -6,8 +7,9 @@ import { isWorkspaceOwner } from "@/lib/workspace";
 import { createPendingConnection } from "@/server/connections/pendingConnection";
 import { saveFacebookPageConnection } from "@/server/connections/saveConnection";
 import { Platform } from "@prisma/client";
+import { withConnectLink } from "@/server/connectLink/callback";
 
-export async function GET(request: NextRequest) {
+async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
   const state = searchParams.get("state");
@@ -26,7 +28,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const stateCheck = verifyOAuthState(state);
+  const stateCheck = verifyOAuthState(state, link);
   if (!stateCheck.valid || !stateCheck.userId || !stateCheck.workspaceId) {
     return NextResponse.redirect(
       new URL("/settings?error=facebook_page_invalid_state", request.url),
@@ -43,6 +45,7 @@ export async function GET(request: NextRequest) {
       platform: Platform.facebook_page,
       stateUserId: userId,
       baseUrl: request.url,
+      link,
     });
     if (sessionRedirect) {
       return sessionRedirect;
@@ -195,3 +198,5 @@ export async function GET(request: NextRequest) {
     return oauthCallbackFailed({ platform: Platform.facebook_page, baseUrl: request.url, error });
   }
 }
+
+export const GET = withConnectLink("facebook_page", handleCallback);

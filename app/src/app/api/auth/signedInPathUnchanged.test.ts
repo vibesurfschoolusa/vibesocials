@@ -71,6 +71,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { createOAuthState } from "@/lib/oauthState";
+import { connectLinkWrappedPlatform } from "@/server/connectLink/callback";
 import { GET as facebookPageGET } from "./facebook_page/callback/route";
 import { GET as gbpGET } from "./google_business_profile/callback/route";
 import { GET as instagramGET } from "./instagram/callback/route";
@@ -280,6 +281,10 @@ afterEach(() => {
 });
 
 describe.each(CALLBACKS)("$platform callback, signed in: unchanged", ({ platform, GET }) => {
+  it("exports the handler wrapped by withConnectLink for its own platform", () => {
+    expect(connectLinkWrappedPlatform(GET)).toBe(platform);
+  });
+
   it.each(OUTCOMES)("%s", async (outcome) => {
     expect(await run(platform, GET, outcome)).toMatchSnapshot();
   });

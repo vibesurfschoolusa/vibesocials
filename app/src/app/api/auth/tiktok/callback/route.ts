@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
+import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { verifyOAuthState } from "@/lib/oauthState";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { Platform, type Prisma } from "@prisma/client";
+import { withConnectLink } from "@/server/connectLink/callback";
 
 export const runtime = "nodejs";
 
@@ -19,7 +21,7 @@ interface TikTokTokenResponse {
   token_type: string;
 }
 
-export async function GET(request: NextRequest) {
+async function handleCallback(request: NextRequest, link: ConnectLinkFlow | null) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
@@ -37,7 +39,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(settingsUrl);
   }
 
-  const stateCheck = verifyOAuthState(state);
+  const stateCheck = verifyOAuthState(state, link);
   if (!stateCheck.valid || !stateCheck.userId || !stateCheck.workspaceId) {
     settingsUrl.searchParams.set("error", "tiktok_invalid_state");
     return NextResponse.redirect(settingsUrl);
@@ -53,6 +55,7 @@ export async function GET(request: NextRequest) {
       platform: Platform.tiktok,
       stateUserId: userId,
       baseUrl: url.origin,
+      link,
     });
     if (sessionRedirect) {
       return sessionRedirect;
@@ -187,6 +190,8 @@ export async function GET(request: NextRequest) {
     return oauthCallbackFailed({ platform: Platform.tiktok, baseUrl: url.origin, error });
   }
 }
+
+export const GET = withConnectLink("tiktok", handleCallback);
 
 /**
  * The TikTok account's display name from /v2/user/info (scope user.info.basic),

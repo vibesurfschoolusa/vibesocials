@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { createHmac } from "crypto";
 import { prisma } from "@/lib/db";
+import type { ConnectLinkFlow } from "@/lib/connectLink";
 import { guardOAuthCallbackSession, oauthCallbackFailed } from "@/lib/oauthCallbackGuard";
 import { isWorkspaceOwner } from "@/lib/workspace";
 import { Platform } from "@prisma/client";
+import { withConnectLink } from "@/server/connectLink/callback";
 
 /**
  * OAuth 1.0a signature generation
@@ -31,7 +33,7 @@ function generateOAuthSignature(
   return createHmac("sha1", signingKey).update(signatureBase).digest("base64");
 }
 
-export async function GET(request: Request) {
+async function handleCallback(request: Request, link: ConnectLinkFlow | null) {
   const { searchParams } = new URL(request.url);
   const oauthToken = searchParams.get("oauth_token");
   const oauthVerifier = searchParams.get("oauth_verifier");
@@ -67,6 +69,18 @@ export async function GET(request: Request) {
       );
     }
 
+    // Client connect link: a handshake row belongs to a link flow exactly when
+    // withConnectLink found that flow's cookie, so an ordinary flow never
+    // finishes a link's handshake and a link flow never finishes an owner's.
+    if (
+      (handshake.connectLinkId ?? null) !== (link?.id ?? null) ||
+      (handshake.connectLinkNonce ?? null) !== (link?.nonce ?? null)
+    ) {
+      return NextResponse.redirect(
+        new URL("/settings?error=x_session_expired", process.env.NEXTAUTH_URL!),
+      );
+    }
+
     const { tokenSecret: oauthTokenSecret, userId, workspaceId } = handshake;
 
     // Connection-CSRF guard: the browser finishing this flow must be signed
@@ -76,6 +90,7 @@ export async function GET(request: Request) {
       platform: Platform.x,
       stateUserId: userId,
       baseUrl: process.env.NEXTAUTH_URL!,
+      link,
     });
     if (sessionRedirect) {
       return sessionRedirect;
@@ -222,3 +237,5 @@ export async function GET(request: Request) {
     return oauthCallbackFailed({ platform: Platform.x, baseUrl: process.env.NEXTAUTH_URL!, error });
   }
 }
+
+export const GET = withConnectLink("x", handleCallback);
