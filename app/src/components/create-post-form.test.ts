@@ -22,6 +22,7 @@ import {
   nextFileLostNotice,
   nextPreparingPick,
   noFileSubmitError,
+  photosFailureLosesFile,
   scheduleWhenText,
   platformListAlert,
   repeatCautionNote,
@@ -358,6 +359,23 @@ describe("the page says a text post has no photo", () => {
     });
   });
 
+  it("the Schedule confirmation of a repeating text post says how many more follow", () => {
+    const base = { mode: "schedule" as const, holdsForApproval: false, platforms: ["X"], notice: NOTICE, whenText: "Mon, Dec 1, 9:00 AM" };
+    expect(textPostConfirmCopy({ ...base, repeatCount: 4 }).lead).toBe(
+      "It publishes Mon, Dec 1, 9:00 AM to X, then repeats 3 more times.",
+    );
+    expect(textPostConfirmCopy({ ...base, repeatCount: 2 }).lead).toBe(
+      "It publishes Mon, Dec 1, 9:00 AM to X, then repeats 1 more time.",
+    );
+    // One post, or no repeat given: the sentence is the plain one.
+    expect(textPostConfirmCopy({ ...base, repeatCount: 1 }).lead).toBe("It publishes Mon, Dec 1, 9:00 AM to X.");
+    expect(textPostConfirmCopy(base).lead).toBe("It publishes Mon, Dec 1, 9:00 AM to X.");
+    // A held series says it too.
+    expect(textPostConfirmCopy({ ...base, holdsForApproval: true, repeatCount: 3 }).lead).toBe(
+      "An owner will review this post before it publishes Mon, Dec 1, 9:00 AM to X, then repeats 2 more times.",
+    );
+  });
+
   it("a held member is told the post goes for approval, with the line", () => {
     const copy = textPostConfirmCopy({ mode: "schedule", holdsForApproval: true, platforms: ["X"], notice: NOTICE, whenText: "Mon" });
     expect(copy.title).toBe("Submit for approval?");
@@ -378,6 +396,21 @@ describe("a file that went away leaves a notice that stays", () => {
     expect(nextFileLostNotice("fresh", { type: "attached" })).toBe("none");
     expect(nextFileLostNotice("seen", { type: "attached" })).toBe("none");
     expect(nextFileLostNotice("fresh", { type: "dismissed" })).toBe("none");
+  });
+
+  it("the form's own reset clears it, so a new post never starts with an old notice", () => {
+    // After a successful submit, "Remove all", removing the last photo, or clearing the pick.
+    for (const state of ["none", "fresh", "seen"] as const) {
+      expect(nextFileLostNotice(state, { type: "reset" })).toBe("none");
+    }
+  });
+
+  it("photos that fail to prepare lose a file only when nothing stays attached", () => {
+    // Added to photos that stay attached: nothing went away, no notice.
+    expect(photosFailureLosesFile({ attachedBefore: 2 })).toBe(false);
+    expect(photosFailureLosesFile({ attachedBefore: 1 })).toBe(false);
+    // They replaced what was attached: the page is left with no file.
+    expect(photosFailureLosesFile({ attachedBefore: 0 })).toBe(true);
   });
 
   it("the first press while it shows stops before any dialog; the notice survives the press", () => {

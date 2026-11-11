@@ -270,6 +270,8 @@ export function textPostConfirmCopy(input: {
   notice: string | null;
   /** The chosen time as the person reads it; Schedule only. */
   whenText: string | null;
+  /** How many posts a repeating post creates in all; absent or 1 when it does not repeat. */
+  repeatCount?: number;
 }): ComposerConfirmCopy & { notice: string | null } {
   if (input.mode === "now") {
     const base = composerPublishConfirmCopy({ holdsForApproval: input.holdsForApproval, platforms: input.platforms });
@@ -280,10 +282,13 @@ export function textPostConfirmCopy(input: {
     };
   }
   const when = input.whenText ? ` ${input.whenText}` : "";
+  // The dialog names the first time; a repeating post says how many more follow.
+  const more = (input.repeatCount ?? 1) - 1;
+  const repeats = more > 0 ? `, then repeats ${more} more ${more === 1 ? "time" : "times"}` : "";
   if (input.holdsForApproval) {
     return {
       title: "Submit for approval?",
-      lead: `An owner will review this post before it publishes${when} to ${joinNames(input.platforms)}.`,
+      lead: `An owner will review this post before it publishes${when} to ${joinNames(input.platforms)}${repeats}.`,
       notice: input.notice,
       trail: null,
       confirmText: "Submit for approval",
@@ -291,7 +296,7 @@ export function textPostConfirmCopy(input: {
   }
   return {
     title: "Schedule without a photo?",
-    lead: `It publishes${when} to ${joinNames(input.platforms)}.`,
+    lead: `It publishes${when} to ${joinNames(input.platforms)}${repeats}.`,
     notice: input.notice,
     trail: null,
     confirmText: "Schedule without a photo",
@@ -325,16 +330,26 @@ export type FileLostEvent =
   | { type: "lost"; reason: "prepare-failed" | "library-failed" | "photos-failed" }
   | { type: "attached" }
   | { type: "dismissed" }
+  /** The form emptied by the person or after a post was saved: a new post starts clean. */
+  | { type: "reset" }
   | { type: "pressed" };
 
 export function nextFileLostNotice(current: FileLostNotice, event: FileLostEvent): FileLostNotice {
   if (event.type === "lost") return "fresh";
-  if (event.type === "attached" || event.type === "dismissed") return "none";
+  if (event.type === "attached" || event.type === "dismissed" || event.type === "reset") return "none";
   return current === "fresh" ? "seen" : current;
 }
 
 export function fileLostNoticeShown(state: FileLostNotice): boolean {
   return state !== "none";
+}
+
+/**
+ * Photos that could not be prepared take a file away only when nothing stays
+ * attached: added beside photos that stay, nothing went away and no notice is due.
+ */
+export function photosFailureLosesFile(input: { attachedBefore: number }): boolean {
+  return input.attachedBefore === 0;
 }
 
 /** The first press while the notice is fresh stops there, before any dialog. */
@@ -1038,6 +1053,10 @@ function CreatePostFormInner({
     setPreparingPick((current) =>
       nextPreparingPick(current, pickedFile ? { type: "pick", selection } : { type: "clear" }),
     );
+    // Clearing the pick is the person's own doing (or the form's reset): no
+    // "file went away" notice is left over from before. A pick that then fails
+    // sets it again below.
+    if (!pickedFile) setFileLost((current) => nextFileLostNotice(current, { type: "reset" }));
     // A new pick (or none) replaces any attached photos too.
     changePhotoSet((prev) => (prev.length === 0 ? prev : []));
     setUploadFile(null);
@@ -1275,7 +1294,9 @@ function CreatePostFormInner({
       // Attach nothing from this pick.
       changePhotoSet((prev) => prev.filter((photo) => !pickKeys.has(photo.key)));
       setUploadError((err as Error).message || "Failed to prepare media for posting. Please try again.");
-      setFileLost((current) => nextFileLostNotice(current, { type: "lost", reason: "photos-failed" }));
+      if (photosFailureLosesFile({ attachedBefore: attachedCount })) {
+        setFileLost((current) => nextFileLostNotice(current, { type: "lost", reason: "photos-failed" }));
+      }
       if (replace) {
         setFileInputKey((key) => key + 1);
         setAutoCaptionLoading(false);
@@ -1579,6 +1600,8 @@ function CreatePostFormInner({
       setUploadLocation("");
       // A new post has not been tried yet (platformListAlert).
       setTriedSend(false);
+      // Nor has it lost a file: an old notice must not show on the next post.
+      setFileLost((current) => nextFileLostNotice(current, { type: "reset" }));
       // Detach the media once the post is saved. For the reuse path this
       // prevents an accidental second submit from re-posting the same item;
       // for the upload path it clears the file state as before. Clearing
@@ -1635,7 +1658,11 @@ function CreatePostFormInner({
     // any error beside it) still showing, so the person sees it before a dialog.
     if (fileLostShown) {
       setFileLost((current) => nextFileLostNotice(current, { type: "pressed" }));
-      if (fileLostBlocksSubmit(fileLost)) return;
+      if (fileLostBlocksSubmit(fileLost)) {
+        // The press did nothing else, so say why.
+        toast.error("Nothing was sent. The photo or video could not be added: see the notice above the buttons.");
+        return;
+      }
     }
     setUploadError(null);
     setShowSuccess(false);
@@ -1862,6 +1889,9 @@ function CreatePostFormInner({
           platforms: selectedPlatforms.map(platformLabel),
           notice: textNotice,
           whenText: scheduleWhenText(scheduledForLocal),
+          // The chosen count (a plain number): reading `repeatDates` here trips the
+          // compiler's purity check on the submit handler's Date.now().
+          repeatCount: repeatOn ? repeatCount : undefined,
         })
       : composerPublishConfirmCopy({
           holdsForApproval,
