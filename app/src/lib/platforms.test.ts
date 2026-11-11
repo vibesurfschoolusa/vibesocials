@@ -1,7 +1,7 @@
 import { Platform } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
-import { PLATFORM_CAPTIONS_HEADING, PLATFORM_ORDER, platformCaptionEntries } from "./platforms";
+import { METRICS_MATURITY_NOTE, PLATFORM_CAPTIONS_HEADING, PLATFORM_ORDER, platformCaptionEntries } from "./platforms";
 
 // Final review (T7): platformCaptionEntries() lists captions in PLATFORM_ORDER
 // and drops anything not in it, so a platform added to the Prisma enum but not to
@@ -56,5 +56,16 @@ describe("platformCaptionEntries", () => {
       "linkedin",
       "google_business_profile",
     ]);
+  });
+});
+
+// 2026-11-10: the dashboard's YouTube card shows this. Since the daily post
+// numbers sync it must say what is synced and how often, not "not synced yet".
+describe("METRICS_MATURITY_NOTE", () => {
+  it("says YouTube updates hourly and the other four platforms once a day, on Activity", () => {
+    expect(METRICS_MATURITY_NOTE).toBe(
+      "YouTube numbers update every hour. Instagram, Facebook, LinkedIn and Pinterest numbers update once a day and show on each post in Activity.",
+    );
+    expect(METRICS_MATURITY_NOTE).not.toMatch(/not synced/i);
   });
 });

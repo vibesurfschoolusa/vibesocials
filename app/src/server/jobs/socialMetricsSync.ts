@@ -2,6 +2,7 @@ import type { Platform, Prisma, SocialConnection } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { storyPlatformsOf } from "@/lib/storyPlacement";
 import {
   FACEBOOK_METRICS_ITEMS_PER_BATCH,
   fetchFacebookPostMetricsBatch,
@@ -91,6 +92,14 @@ export async function selectSocialMetricEligibleResults(
         { metricsCheckedAt: null },
         { metricsCheckedAt: { lt: new Date(now.getTime() - SOCIAL_METRICS_MIN_REFRESH_MS) } },
       ],
+      // A Story has no lasting numbers: it is marked only on its job
+      // (publishMetadata, lib/storyPlacement.ts), and is left out here so it is
+      // never read or stamped and never takes a place in the selection. The
+      // relation filter is a subquery, so a job without the snapshot is kept.
+      NOT: [
+        { platform: "instagram", postJob: { publishMetadata: { path: ["instagram", "placement"], equals: "story" } } },
+        { platform: "facebook_page", postJob: { publishMetadata: { path: ["facebook", "placement"], equals: "story" } } },
+      ],
     },
     select: {
       id: true,
@@ -98,7 +107,7 @@ export async function selectSocialMetricEligibleResults(
       externalPostId: true,
       socialConnectionId: true,
       updatedAt: true,
-      postJob: { select: { workspaceId: true, mediaItem: { select: { mimeType: true } } } },
+      postJob: { select: { workspaceId: true, publishMetadata: true, mediaItem: { select: { mimeType: true } } } },
     },
     orderBy: [{ metricsCheckedAt: { sort: "asc", nulls: "first" } }, { updatedAt: "desc" }],
     take,
@@ -107,6 +116,9 @@ export async function selectSocialMetricEligibleResults(
   const eligible: SocialMetricEligibleResult[] = [];
   for (const row of rows) {
     if (!row.externalPostId || !(SOCIAL_METRICS_PLATFORMS as readonly Platform[]).includes(row.platform)) continue;
+    // The same rule as the query, read the way the rest of the app reads it,
+    // in case the snapshot's shape ever drifts from the JSON path above.
+    if ((storyPlatformsOf(row.postJob.publishMetadata) as Platform[]).includes(row.platform)) continue;
     eligible.push({
       resultId: row.id,
       platform: row.platform as SocialMetricsPlatform,
@@ -123,10 +135,12 @@ export async function selectSocialMetricEligibleResults(
 /** What one run did. Counts are in results unless named otherwise. SEC: counts only. */
 export interface SocialMetricsSyncResult {
   selected: number;
-  /** Stamped: `updated + notFound + errors`. */
+  /** Stamped: `updated + notFound + errors + skippedOtherWorkspace`. */
   attempted: number;
   /** A row was written. */
   updated: number;
+  /** A row for the same post already belongs to another workspace: left alone. */
+  skippedOtherWorkspace: number;
   /** The platform no longer has the post, or gave no number for it: nothing written. */
   notFound: number;
   /** The platform's answer was unusable, the write failed, or the connection was skipped. */
@@ -198,6 +212,7 @@ export async function syncSocialPostMetrics(
     selected: eligible.length,
     attempted: 0,
     updated: 0,
+    skippedOtherWorkspace: 0,
     notFound: 0,
     errors: 0,
     skippedConnections: 0,
@@ -260,7 +275,13 @@ export async function syncSocialPostMetrics(
           fetchedAt: now,
         };
         await prisma.postMetric.upsert({
-          where: { platform_externalPostId: { platform: item.platform, externalPostId: id } },
+          // Matches only this workspace's row. A row for the same post owned by
+          // another workspace is not matched, so the create hits the unique key
+          // (P2002, below) and that row is left as it is.
+          where: {
+            platform_externalPostId: { platform: item.platform, externalPostId: id },
+            workspaceId: item.workspaceId,
+          },
           // The workspace is the result's; the connection was checked to be of the same one.
           create: {
             userId: connection.userId,
@@ -274,6 +295,14 @@ export async function syncSocialPostMetrics(
         });
         result.updated += 1;
       } catch (error) {
+        if ((error as { code?: unknown } | null)?.code === "P2002") {
+          result.skippedOtherWorkspace += 1;
+          logger.warn("[post-metrics] A post's numbers belong to another workspace; left alone", {
+            platform: item.platform,
+            resultId: item.resultId,
+          });
+          continue;
+        }
         result.errors += 1;
         logger.error("[post-metrics] Couldn't save a post's numbers; carrying on", {
           platform: item.platform,
@@ -338,12 +367,15 @@ export async function syncSocialPostMetrics(
     const live = connection;
     const accessToken = token;
     /** One request (or, for Pinterest, one run of requests) for `chunk`, unless time or the platform's limit is up. */
-    const read = async (chunk: SocialMetricEligibleResult[], fetch: () => Promise<PostMetricsBatch>) => {
+    const read = async <B extends PostMetricsBatch>(
+      chunk: SocialMetricEligibleResult[],
+      fetch: () => Promise<B>,
+    ): Promise<B | null> => {
       if (timeUp() || limited.has(platform)) {
         result.left += chunk.length;
-        return;
+        return null;
       }
-      let batch: PostMetricsBatch;
+      let batch: B;
       try {
         batch = await fetch();
       } catch (error) {
@@ -356,9 +388,10 @@ export async function syncSocialPostMetrics(
           platform,
           ...errorFields(error),
         });
-        return;
+        return null;
       }
       await record(chunk, batch, live);
+      return batch;
     };
 
     if (platform === "instagram") {
@@ -371,9 +404,20 @@ export async function syncSocialPostMetrics(
         );
       }
     } else if (platform === "facebook_page") {
+      // Once Meta refuses the comment totals for a permission, the rest of this
+      // connection's posts are asked without them (likes and shares still come).
+      let withComments = true;
+      const refusals: Record<string, number> = {};
       for (const chunk of chunks(items, FACEBOOK_METRICS_ITEMS_PER_BATCH)) {
         const refs = chunk.map((item) => ({ id: item.externalPostId, kind: facebookKind(item) }));
-        await read(chunk, () => fetchFacebookPostMetricsBatch(refs, accessToken));
+        const batch = await read(chunk, () => fetchFacebookPostMetricsBatch(refs, accessToken, { withComments }));
+        if (!batch) continue;
+        if (batch.commentsRefused) withComments = false;
+        for (const [reason, count] of Object.entries(batch.refusals)) refusals[reason] = (refusals[reason] ?? 0) + count;
+      }
+      if (Object.keys(refusals).length > 0) {
+        // One line per connection: reasons and counts only, no post, page or message.
+        logger.warn("[post-metrics] Facebook refused some reads", { connectionId: key, platform, refusals });
       }
     } else if (platform === "linkedin") {
       const organizationUrn = linkedinOrganizationUrn(live);

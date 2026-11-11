@@ -61,12 +61,18 @@ type DailyResult = PostJobResultDTO & { metric: PostMetricDTO };
 /**
  * The results whose numbers the card shows for the daily platforms
  * (Instagram, Facebook, LinkedIn, Pinterest): successful, with an id, and with
- * at least one stored number.
+ * at least one stored number. A platform the post went to as a Story
+ * (`storyPlatforms`, the job's PostJobDTO.storyPlatforms) shows none: a Story
+ * is not read.
  */
-export function dailyMetricResults(results: PostJobResultDTO[]): DailyResult[] {
+export function dailyMetricResults(
+  results: PostJobResultDTO[],
+  storyPlatforms: readonly Platform[] = [],
+): DailyResult[] {
   return results.filter(
     (result): result is DailyResult =>
       DAILY_METRIC_PLATFORMS.includes(result.platform) &&
+      !storyPlatforms.includes(result.platform) &&
       result.status === "success" &&
       Boolean(result.externalPostId) &&
       result.metric !== null &&
@@ -79,8 +85,14 @@ export function dailyMetricResults(results: PostJobResultDTO[]): DailyResult[] {
  * number only when the platform gave it, then one line saying how fresh they
  * are. Renders nothing when there is nothing to show.
  */
-export function DailyMetricStats({ results }: { results: PostJobResultDTO[] }) {
-  const shown = dailyMetricResults(results);
+export function DailyMetricStats({
+  results,
+  storyPlatforms = [],
+}: {
+  results: PostJobResultDTO[];
+  storyPlatforms?: readonly Platform[];
+}) {
+  const shown = dailyMetricResults(results, storyPlatforms);
   if (shown.length === 0) return null;
   return (
     <div className="mt-3 space-y-1 text-xs">

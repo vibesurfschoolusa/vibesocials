@@ -53,14 +53,23 @@ const NOW = new Date("2026-11-10T10:45:00.000Z");
 type Platform = "instagram" | "facebook_page" | "linkedin" | "pinterest";
 
 /** A result row as the selector's findMany returns it. */
-function row(id: string, platform: Platform, externalPostId: string, opts: Partial<{ connection: string | null; workspace: string; mime: string }> = {}) {
+function row(
+  id: string,
+  platform: Platform,
+  externalPostId: string,
+  opts: Partial<{ connection: string | null; workspace: string; mime: string; publishMetadata: unknown }> = {},
+) {
   return {
     id,
     platform,
     externalPostId,
     socialConnectionId: opts.connection === undefined ? `conn-${platform}` : opts.connection,
     updatedAt: new Date("2026-11-05T09:00:00.000Z"),
-    postJob: { workspaceId: opts.workspace ?? "ws-1", mediaItem: { mimeType: opts.mime ?? "image/jpeg" } },
+    postJob: {
+      workspaceId: opts.workspace ?? "ws-1",
+      mediaItem: { mimeType: opts.mime ?? "image/jpeg" },
+      publishMetadata: opts.publishMetadata ?? null,
+    },
   };
 }
 
@@ -115,6 +124,11 @@ beforeEach(() => {
   m.linkedin.mockImplementation(async (_org: string, urns: string[]) => allFound(urns));
   m.pinterest.mockImplementation(async (pins: Array<{ id: string }>) => allFound(pins.map((p) => p.id)));
   m.upsert.mockResolvedValue({});
+  m.facebook.mockImplementation(async (refs: Array<{ id: string }>) => ({
+    ...allFound(refs.map((r) => r.id)),
+    refusals: {},
+    commentsRefused: false,
+  }));
   m.executeRaw.mockResolvedValue(1);
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -137,6 +151,12 @@ describe("selectSocialMetricEligibleResults", () => {
       { metricsCheckedAt: { lt: new Date(NOW.getTime() - SOCIAL_METRICS_MIN_REFRESH_MS) } },
     ]);
     expect(args.orderBy[0]).toEqual({ metricsCheckedAt: { sort: "asc", nulls: "first" } });
+    // A Story is left out in the query, so it is never selected, read or stamped.
+    expect(args.where.NOT).toEqual([
+      { platform: "instagram", postJob: { publishMetadata: { path: ["instagram", "placement"], equals: "story" } } },
+      { platform: "facebook_page", postJob: { publishMetadata: { path: ["facebook", "placement"], equals: "story" } } },
+    ]);
+    expect(args.select.postJob.select.publishMetadata).toBe(true);
     expect(SOCIAL_METRICS_MAX_AGE_MS).toBe(60 * 86_400_000);
     expect(SOCIAL_METRICS_MIN_REFRESH_MS).toBe(20 * 3_600_000);
 
@@ -151,6 +171,19 @@ describe("selectSocialMetricEligibleResults", () => {
         isVideo: false,
       },
     ]);
+  });
+});
+
+describe("selectSocialMetricEligibleResults: Stories", () => {
+  it("drops a Story result the query let through, keeping the job's other platforms", async () => {
+    const story = { instagram: { placement: "story" }, facebook: { placement: "feed" } };
+    m.findMany.mockResolvedValue([
+      row("r1", "instagram", "m1", { publishMetadata: story }),
+      row("r2", "facebook_page", "9_1", { publishMetadata: story }),
+      row("r3", "facebook_page", "9_2", { publishMetadata: { facebook: { placement: "story" } } }),
+    ]);
+    const rows = await selectSocialMetricEligibleResults(NOW);
+    expect(rows.map((r) => r.resultId)).toEqual(["r2"]);
   });
 });
 
@@ -179,6 +212,7 @@ describe("syncSocialPostMetrics", () => {
       selected: 5,
       attempted: 5,
       updated: 5,
+      skippedOtherWorkspace: 0,
       notFound: 0,
       errors: 0,
       skippedConnections: 0,
@@ -195,7 +229,10 @@ describe("syncSocialPostMetrics", () => {
     await syncSocialPostMetrics(NOW);
 
     const call = m.upsert.mock.calls[0][0];
-    expect(call.where).toEqual({ platform_externalPostId: { platform: "pinterest", externalPostId: "555" } });
+    expect(call.where).toEqual({
+      platform_externalPostId: { platform: "pinterest", externalPostId: "555" },
+      workspaceId: "ws-1",
+    });
     expect(call.create).toMatchObject({
       userId: "connector-pinterest",
       workspaceId: "ws-1",
@@ -219,6 +256,10 @@ describe("syncSocialPostMetrics", () => {
     await syncSocialPostMetrics(NOW);
     await syncSocialPostMetrics(NOW);
     const keys = m.upsert.mock.calls.map((call) => JSON.stringify(call[0].where));
+    expect(m.upsert.mock.calls[0][0].where).toEqual({
+      platform_externalPostId: { platform: "instagram", externalPostId: "m1" },
+      workspaceId: "ws-1",
+    });
     expect(new Set(keys).size).toBe(1);
     expect(m.upsert).toHaveBeenCalledTimes(2);
   });
@@ -290,6 +331,8 @@ describe("syncSocialPostMetrics", () => {
       failed: new Set(),
       unchecked: new Set(["9_1"]),
       rateLimited: true,
+      refusals: {},
+      commentsRefused: false,
     });
 
     const out = await syncSocialPostMetrics(NOW);
@@ -375,6 +418,74 @@ describe("syncSocialPostMetrics", () => {
     const logged = JSON.stringify(spies.map((spy) => spy.mock.calls));
     expect(logged).not.toContain("token-conn-instagram");
     expect(logged).not.toContain("m1-secret-id");
+  });
+
+  it("never rewrites a row of another workspace: the conflict is counted as skipped, not as an error", async () => {
+    m.findMany.mockResolvedValue([row("r1", "instagram", "m1"), row("r2", "instagram", "m2")]);
+    m.upsert
+      .mockRejectedValueOnce(Object.assign(new Error("Unique constraint failed"), { code: "P2002" }))
+      .mockResolvedValueOnce({});
+    const out = await syncSocialPostMetrics(NOW);
+    expect(out).toMatchObject({ skippedOtherWorkspace: 1, updated: 1, errors: 0, attempted: 2 });
+    expect(stamped().sort()).toEqual(["r1", "r2"]);
+  });
+
+  it("logs one line per Facebook connection with its refusals per code, and no post id", async () => {
+    const items = Array.from({ length: 51 }, (_, i) => row(`r${i}`, "facebook_page", `9_${i}`));
+    m.findMany.mockResolvedValue(items);
+    m.facebook.mockImplementation(async (refs: Array<{ id: string }>) => ({
+      ...allFound([]),
+      failed: new Set(refs.map((r) => r.id)),
+      refusals: { "2": refs.length - 1, no_answer: 1 },
+      commentsRefused: false,
+    }));
+    const warn = vi.mocked(console.warn);
+
+    await syncSocialPostMetrics(NOW);
+
+    expect(m.facebook).toHaveBeenCalledTimes(2);
+    const lines = warn.mock.calls.filter((call) => String(call[0]).includes("refused"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0][1]).toEqual({
+      connectionId: "conn-facebook_page",
+      platform: "facebook_page",
+      refusals: { "2": 49, no_answer: 2 },
+    });
+    expect(JSON.stringify(lines[0])).not.toContain("9_1");
+  });
+
+  it("after a comment-total refusal, asks the rest of that connection's posts without them", async () => {
+    const items = Array.from({ length: 51 }, (_, i) => row(`r${i}`, "facebook_page", `9_${i}`));
+    m.findMany.mockResolvedValue(items);
+    m.facebook.mockImplementation(async (refs: Array<{ id: string }>, _t: string, opts?: { withComments?: boolean }) => ({
+      ...allFound(refs.map((r) => r.id), counts({ comments: null })),
+      refusals: opts?.withComments === false ? {} : { "10": 1 },
+      commentsRefused: opts?.withComments !== false,
+    }));
+
+    const out = await syncSocialPostMetrics(NOW);
+
+    expect(m.facebook.mock.calls[0][2]).toEqual({ withComments: true });
+    expect(m.facebook.mock.calls[1][2]).toEqual({ withComments: false });
+    expect(out.updated).toBe(51);
+    expect(m.upsert.mock.calls[0][0].create.comments).toBeNull();
+    expect(m.upsert.mock.calls[0][0].create.likes).toBe(5);
+  });
+
+  it("reads at most 25 Pins per connection a day; the rest stay unstamped and so go first tomorrow", async () => {
+    const pins = Array.from({ length: 27 }, (_, i) => row(`r${i}`, "pinterest", `${1000 + i}`));
+    m.findMany.mockResolvedValue(pins);
+
+    const out = await syncSocialPostMetrics(NOW);
+
+    expect(m.pinterest).toHaveBeenCalledTimes(1);
+    expect(m.pinterest.mock.calls[0][0].map((p: { id: string }) => p.id)).toEqual(
+      pins.slice(0, 25).map((p) => p.externalPostId),
+    );
+    expect(stamped()).toHaveLength(25);
+    expect(stamped()).not.toContain("r25");
+    expect(stamped()).not.toContain("r26");
+    expect(out).toMatchObject({ left: 2, attempted: 25, updated: 25 });
   });
 
   it("does nothing when nothing is eligible", async () => {

@@ -80,6 +80,24 @@ describe("DailyMetricStats", () => {
     expect(shown).not.toMatch(/Instagram[^P]*views/);
   });
 
+  it("shows no numbers row for a platform the post went to as a Story", () => {
+    const results = [
+      result({ platform: "instagram", metric: metric({ likes: 12 }) }),
+      result({ platform: "facebook_page", externalPostId: "9_1", metric: metric({ likes: 4 }) }),
+    ];
+    const shown = text(
+      renderToStaticMarkup(createElement(DailyMetricStats, { results, storyPlatforms: ["instagram"] })),
+    );
+    expect(shown).not.toContain("Instagram");
+    expect(shown).toContain("Facebook");
+    expect(dailyMetricResults(results, ["instagram", "facebook_page"])).toEqual([]);
+    expect(
+      renderToStaticMarkup(
+        createElement(DailyMetricStats, { results, storyPlatforms: ["instagram", "facebook_page"] }),
+      ),
+    ).toBe("");
+  });
+
   it("renders nothing without a result to show", () => {
     expect(renderToStaticMarkup(createElement(DailyMetricStats, { results: [] }))).toBe("");
   });

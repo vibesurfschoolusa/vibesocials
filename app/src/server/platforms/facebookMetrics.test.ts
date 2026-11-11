@@ -226,6 +226,131 @@ describe("fetchFacebookPostMetricsBatch", () => {
     expect(JSON.stringify(error.mock.calls)).not.toContain("page-token-secret");
   });
 
+  it("counts the refusals per error code, with no post id in them", async () => {
+    fetchMock.mockResolvedValueOnce(
+      batchAnswer([
+        { code: 500, body: { error: { code: 2, message: "unknown" } } },
+        { code: 500, body: { error: { code: 2, message: "unknown" } } },
+        { code: 400, body: { error: { code: 100, error_subcode: 33 } } },
+        null,
+        { code: 400, body: "not json" },
+      ]),
+    );
+    const out = await fetchFacebookPostMetricsBatch(
+      ["1_a", "1_b", "1_c", "1_d", "1_e"].map((id) => ({ id, kind: "post" as const })),
+      "t",
+    );
+    expect(out.refusals).toEqual({ "2": 2, no_answer: 1, unreadable: 1 });
+    expect(JSON.stringify(out.refusals)).not.toContain("1_");
+  });
+
+  it("a whole-batch refusal is counted under its status", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 500 }));
+    const out = await fetchFacebookPostMetricsBatch(
+      [
+        { id: "1_a", kind: "post" },
+        { id: "1_b", kind: "post" },
+      ],
+      "t",
+    );
+    expect(out.refusals).toEqual({ http_500: 2 });
+  });
+
+  it("a permission refusal is read once more without the comment totals: likes and shares kept, comments null", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        batchAnswer([
+          { code: 403, body: { error: { code: 10, message: "requires pages_read_user_content" } } },
+          { code: 200, body: postBody(4, 2, 1) },
+          { code: 400, body: { error: { code: 283, message: "extended permission" } } },
+        ]),
+      )
+      .mockResolvedValueOnce(
+        batchAnswer([
+          { code: 200, body: { id: "x", reactions: { summary: { total_count: 7 } }, shares: { count: 3 } } },
+          { code: 200, body: { id: "v", likes: { summary: { total_count: 5 } } } },
+        ]),
+      );
+
+    const out = await fetchFacebookPostMetricsBatch(
+      [
+        { id: "1_a", kind: "post" },
+        { id: "1_b", kind: "post" },
+        { id: "v1", kind: "video" },
+      ],
+      "t",
+    );
+
+    expect(sentBatches()[1]).toEqual([
+      { method: "GET", relative_url: "1_a?fields=shares,reactions.summary(total_count).limit(0)" },
+      { method: "GET", relative_url: "v1?fields=likes.summary(total_count).limit(0)" },
+    ]);
+    expect(out.byId.get("1_a")?.counts).toMatchObject({ likes: 7, shares: 3, comments: null });
+    expect(out.byId.get("1_b")?.counts).toMatchObject({ likes: 4, comments: 2 });
+    expect(out.byId.get("v1")?.counts).toMatchObject({ likes: 5, comments: null });
+    expect(out.commentsRefused).toBe(true);
+    expect(out.refusals).toEqual({ "10": 1, "283": 1 });
+    expect(out.failed.size).toBe(0);
+  });
+
+  it("asks without the comment totals from the start when told to, and retries nothing", async () => {
+    fetchMock.mockResolvedValueOnce(
+      batchAnswer([{ code: 403, body: { error: { code: 10 } } }]),
+    );
+    const out = await fetchFacebookPostMetricsBatch([{ id: "1_a", kind: "post" }], "t", { withComments: false });
+    expect(sentBatches()).toEqual([
+      [{ method: "GET", relative_url: "1_a?fields=shares,reactions.summary(total_count).limit(0)" }],
+    ]);
+    expect([...out.failed]).toEqual(["1_a"]);
+    expect(out.commentsRefused).toBe(false);
+  });
+
+  it("a post refused again on the second read is failed", async () => {
+    fetchMock
+      .mockResolvedValueOnce(batchAnswer([{ code: 403, body: { error: { code: 10 } } }]))
+      .mockResolvedValueOnce(batchAnswer([{ code: 403, body: { error: { code: 200 } } }]));
+    const out = await fetchFacebookPostMetricsBatch([{ id: "1_a", kind: "post" }], "t");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect([...out.failed]).toEqual(["1_a"]);
+    expect(out.commentsRefused).toBe(false);
+    expect(out.refusals).toEqual({ "10": 1, "200": 1 });
+  });
+
+  it("a rate limit during the photo lookup asks nothing more and leaves every post unchecked", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 429 }));
+    const out = await fetchFacebookPostMetricsBatch(
+      [
+        { id: "p1", kind: "photo" },
+        { id: "1_a", kind: "post" },
+        { id: "v1", kind: "video" },
+      ],
+      "t",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(out.rateLimited).toBe(true);
+    expect([...out.unchecked].sort()).toEqual(["1_a", "p1", "v1"]);
+    expect(out.byId.size + out.failed.size).toBe(0);
+  });
+
+  it("an item throttled in the photo lookup leaves the rest unchecked too", async () => {
+    fetchMock.mockResolvedValueOnce(
+      batchAnswer([
+        { code: 200, body: { id: "p1", page_story_id: "9_1" } },
+        { code: 400, body: { error: { code: 32 } } },
+      ]),
+    );
+    const out = await fetchFacebookPostMetricsBatch(
+      [
+        { id: "p1", kind: "photo" },
+        { id: "p2", kind: "photo" },
+        { id: "1_a", kind: "post" },
+      ],
+      "t",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect([...out.unchecked].sort()).toEqual(["1_a", "p1", "p2"]);
+  });
+
   it("caps a batch at 50 requests, as Meta's batch page states", () => {
     expect(FACEBOOK_METRICS_ITEMS_PER_BATCH).toBe(50);
   });

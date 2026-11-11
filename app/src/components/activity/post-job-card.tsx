@@ -345,7 +345,7 @@ export function PostJobCard({
       {youtubeResult ? <PostMetricStats metric={youtubeResult.metric} /> : null}
 
       {/* Instagram, Facebook, LinkedIn and Pinterest numbers, read once a day. */}
-      <DailyMetricStats results={results} />
+      <DailyMetricStats results={results} storyPlatforms={job.storyPlatforms ?? []} />
 
       {unconfirmed.length > 0 ? (
         <ul className="mt-3 space-y-1.5">

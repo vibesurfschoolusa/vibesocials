@@ -116,28 +116,49 @@ export function hasAnyCount(counts: SocialPostCounts): boolean {
   return Object.values(counts).some((value) => value !== null);
 }
 
-/** One answer of a Graph batch, as Meta sends it. */
-type BatchEntry = { kind: "ok"; body: unknown } | { kind: "gone" } | { kind: "failed" } | { kind: "limited" };
+/**
+ * One answer of a Graph batch. A refusal carries `reason`, a label safe to log
+ * (the Graph error code, or what went wrong): never a message, an id or a name.
+ * `denied` marks a permission error.
+ */
+type BatchEntry =
+  | { kind: "ok"; body: unknown }
+  | { kind: "gone" }
+  | { kind: "failed"; reason: string; denied: boolean }
+  | { kind: "limited" };
 
 /** Graph `error.code` 100 is "does not exist / cannot be loaded": a deleted post. */
 const GRAPH_NOT_FOUND_CODE = 100;
 
+/** Graph permission errors: 10 ("does not have permission") and 200-299 (283: "requires the extended permission"). */
+function isPermissionCode(code: number): boolean {
+  return code === 10 || (code >= 200 && code < 300);
+}
+
+const failedEntry = (reason: string, denied = false): BatchEntry => ({ kind: "failed", reason, denied });
+
 async function readEntry(platform: Platform, entry: unknown): Promise<BatchEntry> {
   const item = entry as { code?: unknown; body?: unknown } | null;
-  if (!item || typeof item.code !== "number") return { kind: "failed" };
+  // A request the batch did not finish comes back as null.
+  if (!item) return failedEntry("no_answer");
+  if (typeof item.code !== "number") return failedEntry("unreadable");
   let body: unknown = null;
   try {
     body = typeof item.body === "string" ? JSON.parse(item.body) : null;
   } catch {
     body = null;
   }
-  if (item.code >= 200 && item.code < 300) return body ? { kind: "ok", body } : { kind: "failed" };
+  if (item.code >= 200 && item.code < 300) {
+    return body && typeof body === "object" ? { kind: "ok", body } : failedEntry("unreadable");
+  }
 
   // classifyRateLimit reads a Response; one is built from the entry's own code and body.
   const limited = await classifyRateLimit(platform, new Response(JSON.stringify(body ?? {}), { status: item.code }));
   if (limited) return { kind: "limited" };
   const code = (body as { error?: { code?: unknown } } | null)?.error?.code;
-  return code === GRAPH_NOT_FOUND_CODE ? { kind: "gone" } : { kind: "failed" };
+  if (typeof code !== "number" || !Number.isInteger(code)) return failedEntry("unreadable");
+  if (code === GRAPH_NOT_FOUND_CODE) return { kind: "gone" };
+  return failedEntry(String(code), isPermissionCode(code));
 }
 
 /**
@@ -151,7 +172,7 @@ export async function graphBatch(
   relativeUrls: string[],
   accessToken: string,
 ): Promise<BatchEntry[]> {
-  const all = (kind: "failed" | "limited"): BatchEntry[] => relativeUrls.map(() => ({ kind }));
+  const all = (entry: BatchEntry): BatchEntry[] => relativeUrls.map(() => entry);
   try {
     const response = await fetchWithTimeout(
       `${META_GRAPH_BASE_URL}/`,
@@ -166,14 +187,14 @@ export async function graphBatch(
       },
       SOCIAL_METRICS_TIMEOUT_MS,
     );
-    if (await classifyRateLimit(platform, response)) return all("limited");
+    if (await classifyRateLimit(platform, response)) return all({ kind: "limited" });
     if (!response.ok) {
       void response.body?.cancel().catch(() => {});
       console.error("[PostMetrics] Graph batch refused", { platform, status: response.status });
-      return all("failed");
+      return all(failedEntry(`http_${response.status}`));
     }
     const entries = (await response.json()) as unknown;
-    if (!Array.isArray(entries)) return all("failed");
+    if (!Array.isArray(entries)) return all(failedEntry("unreadable"));
     return Promise.all(relativeUrls.map((_, index) => readEntry(platform, entries[index])));
   } catch (error) {
     console.error("[PostMetrics] Graph batch failed", {
@@ -181,7 +202,7 @@ export async function graphBatch(
       error: error instanceof Error ? error.name : "unknown",
       code: (error as { code?: unknown } | null)?.code,
     });
-    return all("failed");
+    return all(failedEntry("request_failed"));
   }
 }
 
@@ -202,43 +223,69 @@ export interface FacebookPostRef {
   kind: FacebookPostKind;
 }
 
-const POST_FIELDS = "shares,reactions.summary(total_count).limit(0),comments.summary(total_count).limit(0)";
-const VIDEO_FIELDS = "likes.summary(total_count).limit(0),comments.summary(total_count).limit(0)";
+export interface FacebookPostMetricsBatch extends PostMetricsBatch {
+  /** Refused reads by reason (Graph error code, `no_answer`, `http_<status>`...): counts only, for the log. */
+  refusals: Record<string, number>;
+  /**
+   * A read refused for a permission succeeded without the comment totals: the
+   * caller asks without them for the rest of the connection's run.
+   */
+  commentsRefused: boolean;
+}
+
+const LIKES = "likes.summary(total_count).limit(0)";
+const REACTIONS = "reactions.summary(total_count).limit(0)";
+const COMMENTS = "comments.summary(total_count).limit(0)";
+
+function fieldsFor(video: boolean, withComments: boolean): string {
+  const fields = video ? [LIKES] : ["shares", REACTIONS];
+  if (withComments) fields.push(COMMENTS);
+  return fields.join(",");
+}
 
 const totalOf = (edge: unknown) => countOf((edge as { summary?: { total_count?: unknown } } | null)?.summary?.total_count);
 
-function postCounts(body: unknown): FoundPostMetrics {
-  const post = body as { reactions?: unknown; comments?: unknown; shares?: { count?: unknown } } | null;
-  const reactions = totalOf(post?.reactions);
-  const comments = totalOf(post?.comments);
-  const shares = countOf(post?.shares?.count);
+/** A post's (or a video's) numbers; an edge not asked for or not sent stays null. */
+function readCounts(body: unknown, video: boolean): FoundPostMetrics {
+  const node = body as { reactions?: unknown; likes?: unknown; comments?: unknown; shares?: { count?: unknown } } | null;
+  const comments = totalOf(node?.comments);
+  if (video) {
+    const likes = totalOf(node?.likes);
+    return { counts: { ...NO_COUNTS, likes, comments }, raw: rawCounts({ likes, comments }) };
+  }
+  const reactions = totalOf(node?.reactions);
+  const shares = countOf(node?.shares?.count);
   return {
     counts: { ...NO_COUNTS, likes: reactions, comments, shares },
     raw: rawCounts({ reactions, comments, shares }),
   };
 }
 
-function videoCounts(body: unknown): FoundPostMetrics {
-  const video = body as { likes?: unknown; comments?: unknown } | null;
-  const likes = totalOf(video?.likes);
-  const comments = totalOf(video?.comments);
-  return { counts: { ...NO_COUNTS, likes, comments }, raw: rawCounts({ likes, comments }) };
-}
-
 /**
  * The numbers of up to FACEBOOK_METRICS_ITEMS_PER_BATCH posts of one Page:
- * one batch to find the photos' posts (when there are photos), one to read
- * them all. Best effort, never throws.
+ * one batch to find the photos' posts (when there are photos) and one to read
+ * them all. When a read is refused for a permission while the comment totals
+ * were asked for, those posts are read once more without them: likes and
+ * shares are kept and comments stay null (whether Meta wants
+ * pages_read_user_content for the totals is not stated; the app does not hold
+ * it). `withComments: false` leaves them out from the start. Best effort,
+ * never throws.
  */
 export async function fetchFacebookPostMetricsBatch(
   refs: FacebookPostRef[],
   accessToken: string,
-): Promise<PostMetricsBatch> {
-  const batch = emptyBatch();
+  opts: { withComments?: boolean } = {},
+): Promise<FacebookPostMetricsBatch> {
+  const withComments = opts.withComments ?? true;
+  const batch: FacebookPostMetricsBatch = { ...emptyBatch(), refusals: {}, commentsRefused: false };
   if (refs.length === 0) return batch;
 
-  // The post to read for each stored id.
-  const targets = new Map<string, { url: string; video: boolean }>();
+  const note = (entry: BatchEntry) => {
+    if (entry.kind === "failed") batch.refusals[entry.reason] = (batch.refusals[entry.reason] ?? 0) + 1;
+  };
+
+  // The node to read for each stored id.
+  const targets = new Map<string, { node: string; video: boolean }>();
   const photos = refs.filter((ref) => ref.kind === "photo");
   if (photos.length > 0) {
     const entries = await graphBatch(
@@ -248,34 +295,58 @@ export async function fetchFacebookPostMetricsBatch(
     );
     photos.forEach((photo, index) => {
       const entry = entries[index];
+      note(entry);
       if (entry.kind !== "ok") return settle(batch, photo.id, entry);
       const storyId = (entry.body as { page_story_id?: unknown } | null)?.page_story_id;
       // No page_story_id ("may not be on all photos"): nothing to read.
-      if (typeof storyId === "string" && storyId !== "") {
-        targets.set(photo.id, { url: `${encodeURIComponent(storyId)}?fields=${POST_FIELDS}`, video: false });
-      }
+      if (typeof storyId === "string" && storyId !== "") targets.set(photo.id, { node: storyId, video: false });
     });
     if (batch.rateLimited) {
-      for (const ref of refs) if (ref.kind !== "photo") batch.unchecked.add(ref.id);
+      // Nothing more is asked this run: every post not read yet is unchecked,
+      // including photos whose post was found.
+      for (const ref of refs) if (!batch.failed.has(ref.id)) batch.unchecked.add(ref.id);
       return batch;
     }
   }
   for (const ref of refs) {
-    if (ref.kind === "post") targets.set(ref.id, { url: `${encodeURIComponent(ref.id)}?fields=${POST_FIELDS}`, video: false });
-    if (ref.kind === "video") targets.set(ref.id, { url: `${encodeURIComponent(ref.id)}?fields=${VIDEO_FIELDS}`, video: true });
+    if (ref.kind !== "photo") targets.set(ref.id, { node: ref.id, video: ref.kind === "video" });
   }
   if (targets.size === 0) return batch;
 
+  const read = (ids: string[], comments: boolean) =>
+    graphBatch(
+      "facebook_page",
+      ids.map((id) => {
+        const target = targets.get(id)!;
+        return `${encodeURIComponent(target.node)}?fields=${fieldsFor(target.video, comments)}`;
+      }),
+      accessToken,
+    );
+
   const ids = [...targets.keys()];
-  const entries = await graphBatch(
-    "facebook_page",
-    ids.map((id) => targets.get(id)!.url),
-    accessToken,
-  );
+  const entries = await read(ids, withComments);
+  const denied: string[] = [];
   ids.forEach((id, index) => {
     const entry = entries[index];
-    if (entry.kind !== "ok") return settle(batch, id, entry);
-    batch.byId.set(id, targets.get(id)!.video ? videoCounts(entry.body) : postCounts(entry.body));
+    note(entry);
+    if (entry.kind === "ok") batch.byId.set(id, readCounts(entry.body, targets.get(id)!.video));
+    else if (withComments && entry.kind === "failed" && entry.denied) denied.push(id);
+    else settle(batch, id, entry);
+  });
+  if (denied.length === 0) return batch;
+  if (batch.rateLimited) {
+    for (const id of denied) batch.unchecked.add(id);
+    return batch;
+  }
+
+  const again = await read(denied, false);
+  denied.forEach((id, index) => {
+    const entry = again[index];
+    note(entry);
+    if (entry.kind === "ok") {
+      batch.byId.set(id, readCounts(entry.body, targets.get(id)!.video));
+      batch.commentsRefused = true;
+    } else settle(batch, id, entry);
   });
   return batch;
 }

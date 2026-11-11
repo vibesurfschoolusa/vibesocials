@@ -95,9 +95,13 @@ export const PLATFORM_CONNECT_REQUIREMENTS: Partial<Record<Platform, string>> =
     google_business_profile: "Business Profile required",
   };
 
-/** Short dashboard note: engagement metrics are YouTube-only in v1. */
+/**
+ * Short note on the dashboard's YouTube card: how often numbers are read
+ * (youtubeMetricsSync.ts hourly, socialMetricsSync.ts daily) and where the
+ * other platforms' numbers show.
+ */
 export const METRICS_MATURITY_NOTE =
-  "Engagement metrics currently include YouTube only. Other platforms are not synced yet.";
+  "YouTube numbers update every hour. Instagram, Facebook, LinkedIn and Pinterest numbers update once a day and show on each post in Activity.";
 
 /**
  * Task 7 — human-readable labels for TikTok's privacy levels, shown in the
