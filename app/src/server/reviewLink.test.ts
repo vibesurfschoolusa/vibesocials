@@ -470,3 +470,49 @@ describe("notifyOwnersOfClientChange", () => {
     expect(settled).toBe(true);
   });
 });
+
+describe("listReviewPosts with Stories", () => {
+  const story = (placement: "story" | "feed") => ({ placement });
+
+  it("marks the Story platform, gives it no caption, and keeps the footer on the feed one", async () => {
+    workspaceFindUniqueMock.mockResolvedValue({ companyWebsite: null, defaultHashtags: "#surf" });
+    postFindManyMock.mockResolvedValueOnce([
+      postRow({
+        perPlatformOverrides: { instagram: "IG own text", facebook_page: "FB own text" },
+        publishMetadata: {
+          targetPlatforms: ["instagram", "facebook_page"],
+          instagram: story("story"),
+          facebook: story("feed"),
+        },
+      }),
+    ]);
+    const [post] = await listReviewPosts("ws-1", NOW);
+    expect(post.platforms).toEqual(["Instagram (Story)", "Facebook Page"]);
+    expect(post.platformCaptions).toEqual([
+      { label: "Instagram", text: "Story, no caption" },
+      { label: "Facebook Page", text: expect.stringContaining("FB own text") },
+    ]);
+    expect(post.platformCaptions[1].text).toContain("#surf");
+    expect(post.caption).toContain("Dawn patrol tomorrow");
+  });
+
+  it("replaces the caption with one line when every platform is a Story", async () => {
+    postFindManyMock.mockResolvedValueOnce([
+      postRow({
+        publishMetadata: { targetPlatforms: ["instagram"], instagram: story("story") },
+      }),
+    ]);
+    const [post] = await listReviewPosts("ws-1", NOW);
+    expect(post.platforms).toEqual(["Instagram (Story)"]);
+    expect(post.caption).toBe("This goes out as a Story, with no caption.");
+    expect(post.platformCaptions).toEqual([{ label: "Instagram", text: "Story, no caption" }]);
+  });
+
+  it("lists a post from before Stories as it did", async () => {
+    postFindManyMock.mockResolvedValueOnce([postRow()]);
+    const [post] = await listReviewPosts("ws-1", NOW);
+    expect(post.platforms).toEqual(["Instagram", "Facebook Page"]);
+    expect(post.caption).toContain("Dawn patrol tomorrow");
+    expect(post.platformCaptions).toEqual([]);
+  });
+});

@@ -172,3 +172,32 @@ export function storyOnlyCaptionNote(
   if (selectedPlatforms.length === 0) return null;
   return selectedPlatforms.every((platform) => storyPlatforms.includes(platform)) ? STORY_ONLY_CAPTION_NOTE : null;
 }
+
+/** A platform's name, with "(Story)" when the post sends it as a Story. */
+export function storyPlatformLabel(platform: Platform, storyPlatforms: readonly Platform[]): string {
+  return storyPlatforms.includes(platform) ? `${platformLabel(platform)} (Story)` : platformLabel(platform);
+}
+
+/**
+ * How the Queue and the client review page list a post's platforms and own
+ * captions once Stories are known. `storyOnly` is true when every target is a
+ * Story, so the main caption is not published anywhere.
+ */
+export function storyListing(
+  targetPlatforms: readonly Platform[],
+  platformCaptions: Partial<Record<Platform, string>> | null,
+  storyPlatforms: readonly Platform[],
+): {
+  platformLabels: string[];
+  platformCaptions: Partial<Record<Platform, string>> | null;
+  storyOnly: boolean;
+  storyOnlyNote: string | null;
+} {
+  const storyOnlyNote = storyOnlyCaptionNote(targetPlatforms, storyPlatforms);
+  return {
+    platformLabels: targetPlatforms.map((platform) => storyPlatformLabel(platform, storyPlatforms)),
+    platformCaptions: withStoryCaptions(platformCaptions, storyPlatforms as readonly StoryPlatform[]),
+    storyOnly: storyOnlyNote !== null,
+    storyOnlyNote,
+  };
+}

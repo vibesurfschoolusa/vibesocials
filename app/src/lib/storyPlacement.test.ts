@@ -9,6 +9,8 @@ import {
   storyOnlyCaptionNote,
   STORY_VIDEO_MIN_SEC,
   storyPlatformsOf,
+  storyPlatformLabel,
+  storyListing,
   withStoryCaptions,
   parsePlacementMetadata,
   placementNote,
@@ -203,5 +205,45 @@ describe("storyOnlyCaptionNote (the line under the caption box)", () => {
     expect(storyOnlyCaptionNote(["instagram", "x"], ["instagram"])).toBeNull();
     expect(storyOnlyCaptionNote(["instagram", "facebook_page"], ["instagram"])).toBeNull();
     expect(storyOnlyCaptionNote([], [])).toBeNull();
+  });
+});
+
+describe("storyPlatformLabel", () => {
+  it("adds (Story) for a Story platform only", () => {
+    expect(storyPlatformLabel("instagram", ["instagram"])).toBe("Instagram (Story)");
+    expect(storyPlatformLabel("facebook_page", ["instagram"])).toBe("Facebook Page");
+    expect(storyPlatformLabel("instagram", [])).toBe("Instagram");
+  });
+});
+
+describe("storyListing (what the Queue and the review page say)", () => {
+  it("feed on both: nothing changes", () => {
+    const captions = { instagram: "IG text" };
+    const listing = storyListing(["instagram", "facebook_page"], captions, []);
+    expect(listing.platformLabels).toEqual(["Instagram", "Facebook Page"]);
+    expect(listing.platformCaptions).toBe(captions);
+    expect(listing.storyOnly).toBe(false);
+    expect(listing.storyOnlyNote).toBeNull();
+  });
+
+  it("a Story beside a feed post: labelled, and its entry reads Story, no caption", () => {
+    const listing = storyListing(["instagram", "facebook_page"], { x: "X text" }, ["instagram"]);
+    expect(listing.platformLabels).toEqual(["Instagram (Story)", "Facebook Page"]);
+    expect(listing.platformCaptions).toEqual({ x: "X text", instagram: "Story, no caption" });
+    expect(listing.storyOnly).toBe(false);
+    expect(listing.storyOnlyNote).toBeNull();
+  });
+
+  it("only Stories: the note is given", () => {
+    const listing = storyListing(["instagram", "facebook_page"], null, ["instagram", "facebook_page"]);
+    expect(listing.storyOnly).toBe(true);
+    expect(listing.storyOnlyNote).toBe(STORY_ONLY_CAPTION_NOTE);
+  });
+
+  it("a job with no stored placement (or no targets) is listed as before", () => {
+    expect(storyListing(["instagram"], null, []).platformLabels).toEqual(["Instagram"]);
+    const none = storyListing([], null, ["instagram"]);
+    expect(none.storyOnly).toBe(false);
+    expect(none.platformLabels).toEqual([]);
   });
 });

@@ -5,7 +5,7 @@ import { prisma } from "@/lib/db";
 import { hashInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
 import { buildPlatformPreview } from "@/lib/platformPreview";
-import { PLATFORM_ORDER, platformCaptionEntries, platformLabel } from "@/lib/platforms";
+import { PLATFORM_ORDER, platformCaptionEntries } from "@/lib/platforms";
 import {
   DAY_MS,
   REVIEW_CHANGE_SHOWN_DAYS,
@@ -14,6 +14,7 @@ import {
   reviewWindowEnd,
   type ReviewPostDTO,
 } from "@/lib/reviewLink";
+import { STORY_NO_CAPTION, storyListing, storyPlatformsOf } from "@/lib/storyPlacement";
 import { resolvePlatformCaptions } from "@/server/jobs/posting";
 import { buildClientChangeRequestEmail } from "@/server/notifications/clientChangeRequestEmail";
 import { sendEmail } from "@/server/notifications/email";
@@ -68,6 +69,9 @@ const REVIEW_POST_SELECT = {
 } satisfies Prisma.PostJobSelect;
 
 type ReviewPostRow = Prisma.PostJobGetPayload<{ select: typeof REVIEW_POST_SELECT }>;
+
+/** What the client sees in place of the caption when nothing of it is published. */
+const REVIEW_STORY_ONLY_LINE = "This goes out as a Story, with no caption.";
 
 const KNOWN_PLATFORMS: ReadonlySet<string> = new Set(PLATFORM_ORDER);
 
@@ -145,19 +149,25 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
     // its client columns say (every write that schedules a post clears them).
     const changeRequested = row.status === "draft" && row.clientChangeRequestedAt !== null;
     const caption = row.baseCaption ?? row.mediaItem?.baseCaption ?? "";
+    const targets = chosenPlatforms(row.publishMetadata) ?? connected;
+    // A Story publishes no caption, so none may be shown as going out.
+    const stories: Platform[] = storyPlatformsOf(row.publishMetadata);
+    const listing = storyListing(targets, resolvePlatformCaptions(row, row.mediaItem), stories);
     return {
       id: row.id,
       scheduledFor: row.scheduledFor?.toISOString() ?? null,
-      platforms: (chosenPlatforms(row.publishMetadata) ?? connected).map(platformLabel),
-      caption: buildCaptionWithFooter(caption, footer),
+      platforms: listing.platformLabels,
+      caption: listing.storyOnly ? REVIEW_STORY_ONLY_LINE : buildCaptionWithFooter(caption, footer),
       // Each platform's own text as that platform posts it: footer added, X
       // without @-mentions, cut to the platform's length (lib/platformPreview.ts).
-      platformCaptions: platformCaptionEntries(resolvePlatformCaptions(row, row.mediaItem)).map(
-        ({ platform, label, text }) => ({
-          label,
-          text: buildPlatformPreview({ platform, caption, override: text, user: footer }).rendered,
-        }),
-      ),
+      platformCaptions: platformCaptionEntries(listing.platformCaptions).map(({ platform, label, text }) => ({
+        label,
+        // The Story entry is a fixed note, not caption text: no footer, no cut.
+        text:
+          stories.includes(platform) && text === STORY_NO_CAPTION
+            ? text
+            : buildPlatformPreview({ platform, caption, override: text, user: footer }).rendered,
+      })),
       media: row.mediaItem
         ? { url: row.mediaItem.storageLocation, mimeType: row.mediaItem.mimeType }
         : null,

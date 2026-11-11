@@ -35,11 +35,11 @@ import {
   PLATFORM_CAPTIONS_HEADING,
   PLATFORM_ORDER,
   platformCaptionEntries,
-  platformLabel,
   TIKTOK_PRIVACY_LABELS,
 } from "@/lib/platforms";
 import { googleQueueLabel } from "@/lib/googlePostOptions";
 import type { PostJobDTO, PostsResponse } from "@/lib/postsDto";
+import { storyListing } from "@/lib/storyPlacement";
 import { appendJobsPage } from "@/lib/postsPagination";
 import {
   applyJobPatch,
@@ -147,7 +147,10 @@ function QueueCard({
   // 2026-11-01 audit (M1): the per-platform texts that REPLACE the base caption
   // on publish. Shown on every card that has them, most importantly to the owner
   // deciding on a pending post - approving means approving these too.
-  const platformCaptions = platformCaptionEntries(job.platformCaptions);
+  const stories = job.storyPlatforms ?? [];
+  const targets = job.publish?.targetPlatforms ?? [];
+  const listing = storyListing(targets, job.platformCaptions, stories);
+  const platformCaptions = platformCaptionEntries(listing.platformCaptions);
   // 2026-11-10: "Offer", "Book button"; null for a plain Google update.
   const googleLabel = googleQueueLabel(job.publish?.googlePostType ?? null, job.publish?.googleButton ?? null);
 
@@ -196,12 +199,15 @@ function QueueCard({
           )}
           <p className="mt-1 text-xs text-muted-foreground">
             {job.publish?.targetPlatforms?.length
-              ? `Publishing to ${job.publish.targetPlatforms.map(platformLabel).join(", ")}`
+              ? `Publishing to ${listing.platformLabels.join(", ")}`
               : "Publishing to all platforms connected at publish time"}
             {job.publish?.youtubePrivacy ? ` · YouTube: ${job.publish.youtubePrivacy}` : ""}
             {job.publish?.tiktokPrivacy ? ` · TikTok: ${TIKTOK_PRIVACY_LABELS[job.publish.tiktokPrivacy] ?? job.publish.tiktokPrivacy}` : ""}
             {googleLabel ? ` · Google: ${googleLabel}` : ""}
           </p>
+          {listing.storyOnlyNote ? (
+            <p className="mt-1 text-xs text-muted-foreground">{listing.storyOnlyNote}</p>
+          ) : null}
           {platformCaptions.length > 0 ? (
             <div className="mt-2 rounded-md border border-border bg-muted/40 p-2.5">
               <p className="text-xs font-medium text-foreground">{PLATFORM_CAPTIONS_HEADING}</p>
@@ -351,13 +357,16 @@ function QueueEditDialog({
   // caption, so a saved caption is never hidden while connections load.
   const { connections } = useConnections();
   const targetPlatforms = job.publish?.targetPlatforms ?? null;
-  const editorPlatforms =
+  // A Story has no caption to edit, so it gets no own-caption editor.
+  const storyPlatforms = job.storyPlatforms ?? [];
+  const editorPlatforms = (
     targetPlatforms ??
     PLATFORM_ORDER.filter(
       (platform) =>
         typeof job.platformCaptions?.[platform] === "string" ||
         connections?.some((c) => c.platform === platform && c.connected),
-    );
+    )
+  ).filter((platform) => !storyPlatforms.includes(platform));
   // Whether the post has a caption of its own. The list's `caption` and
   // `platformCaptions` fall back to the media item's for an older post that
   // has none (resolvePostCaptionSource); only the single-post read says which.
