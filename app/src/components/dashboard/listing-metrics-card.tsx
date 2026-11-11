@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import type { ListingMetricsResponse } from "@/app/api/insights/listing-metrics/route";
@@ -15,16 +16,50 @@ const NUMBERS: Array<{ key: keyof ListingMetricTotals; label: string }> = [
   { key: "websiteClicks", label: "Website clicks" },
 ];
 
+/** After this many days without a new number, the card says Google has sent nothing new. */
+const STALE_AFTER_DAYS = 10;
+
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+/** "6 November", with the year when it is not `today`'s. */
+function dayLabel(key: string, today: Date): string {
+  const [year, month, day] = key.split("-").map(Number);
+  return `${day} ${MONTHS[month - 1]}${year === today.getFullYear() ? "" : ` ${year}`}`;
+}
+
+/** Whole days from `key` (YYYY-MM-DD) to the viewer's calendar day `today`. */
+function daysSince(key: string, today: Date): number {
+  const [year, month, day] = key.split("-").map(Number);
+  return Math.round(
+    (Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()) - Date.UTC(year, month - 1, day)) / 86_400_000,
+  );
+}
+
 /** The card itself, from the route's answer; nothing without a listing. */
-export function ListingMetricsCardView({ listing }: { listing: Listing | null }) {
+export function ListingMetricsCardView({ listing, today }: { listing: Listing | null; today: Date }) {
   if (!listing) return null;
+  const end = dayLabel(listing.endDay, today);
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Google listing, last {listing.windowDays} days</CardTitle>
+        <CardTitle className="text-base">
+          Google listing, {listing.windowDays} days to {end}
+        </CardTitle>
         <CardDescription>
           From Google, for {listing.title}. Google&apos;s numbers arrive two to three days late.
         </CardDescription>
+        {daysSince(listing.endDay, today) > STALE_AFTER_DAYS ? (
+          <p className="text-sm text-warning-ontint">
+            Google has sent no new numbers since {end}. Check the Google connection on the{" "}
+            <Link href="/connections" className="underline">
+              Connections page
+            </Link>
+            .
+          </p>
+        ) : null}
       </CardHeader>
       <CardContent>
         <dl className="grid grid-cols-2 gap-4">
@@ -72,5 +107,5 @@ export function ListingMetricsCard() {
     };
   }, []);
 
-  return <ListingMetricsCardView listing={listing} />;
+  return <ListingMetricsCardView listing={listing} today={new Date()} />;
 }

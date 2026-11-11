@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
-import { summarizeListingMetrics, type ListingMetricTotals } from "@/lib/listingMetrics";
+import { shiftDay, summarizeListingMetrics, type ListingMetricTotals } from "@/lib/listingMetrics";
 import { getWorkspaceContext } from "@/lib/workspace";
 
 export const dynamic = "force-dynamic";
@@ -32,8 +32,10 @@ function nonEmptyString(value: unknown): string | null {
  * 28 stored days and the 28 before. Any member may read it, like publish health.
  *
  * Only the CURRENT location's rows are read: rows of a listing the owner picked
- * before stay stored but never mix into this one. With one row per day, the 56
- * newest rows cover both windows. Calls no Google API.
+ * before stay stored but never mix into this one. Rows are chosen by date: the
+ * current window ends on the newest day with a number (later days are not
+ * counted yet, lib/listingMetrics.ts), so that day is found first and the rows
+ * of the two windows before it are read. Calls no Google API.
  */
 export async function GET() {
   const context = await getWorkspaceContext();
@@ -54,10 +56,40 @@ export async function GET() {
   const locationName = nonEmptyString(metadata.locationName);
   if (!locationName) return NextResponse.json(empty);
 
+  const scope = { workspaceId, locationName };
+  const counted =
+    (await prisma.locationMetricDaily.findFirst({
+      where: {
+        ...scope,
+        OR: [
+          { searchViews: { gt: 0 } },
+          { mapsViews: { gt: 0 } },
+          { calls: { gt: 0 } },
+          { directionRequests: { gt: 0 } },
+          { websiteClicks: { gt: 0 } },
+        ],
+      },
+      orderBy: { day: "desc" },
+      select: { day: true },
+    })) ??
+    // Every stored day is zero: the windows end on the newest one.
+    (await prisma.locationMetricDaily.findFirst({
+      where: scope,
+      orderBy: { day: "desc" },
+      select: { day: true },
+    }));
+  if (!counted) return NextResponse.json(empty);
+
+  const endDay = counted.day.toISOString().slice(0, 10);
   const rows = await prisma.locationMetricDaily.findMany({
-    where: { workspaceId, locationName },
-    orderBy: { day: "desc" },
-    take: 2 * LISTING_METRICS_WINDOW_DAYS,
+    where: {
+      ...scope,
+      day: {
+        gte: new Date(`${shiftDay(endDay, -(2 * LISTING_METRICS_WINDOW_DAYS - 1))}T00:00:00.000Z`),
+        lte: counted.day,
+      },
+    },
+    orderBy: { day: "asc" },
     select: {
       day: true,
       searchViews: true,

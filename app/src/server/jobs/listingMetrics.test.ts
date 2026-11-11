@@ -8,6 +8,7 @@ const db = vi.hoisted(() => ({
   metricUpsert: vi.fn(),
   metricDeleteMany: vi.fn(),
   transaction: vi.fn(),
+  executeRaw: vi.fn(),
 }));
 const { loggerMock, fetchMock, refreshMock, resolveMock } = vi.hoisted(() => ({
   loggerMock: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -29,6 +30,7 @@ vi.mock("@/lib/db", () => ({
       deleteMany: db.metricDeleteMany,
     },
     $transaction: db.transaction,
+    $executeRaw: db.executeRaw,
   },
 }));
 vi.mock("@/lib/logger", () => ({ logger: loggerMock }));
@@ -45,6 +47,7 @@ import {
   buildListingMetricsUrl,
   fetchListingDailyMetrics,
   listingMetricsRange,
+  listingMetricsRangeAfter,
   parseListingMetrics,
   saveListingMetricsCheckedAt,
   splitDayRange,
@@ -119,7 +122,9 @@ beforeEach(() => {
   for (const mock of [fetchMock, refreshMock, resolveMock]) mock.mockReset();
   for (const mock of Object.values(loggerMock)) mock.mockReset();
   db.connectionUpdate.mockResolvedValue({});
-  db.metricFindFirst.mockResolvedValue({ id: "existing" });
+  // The newest stored day is yesterday: the usual daily run.
+  db.metricFindFirst.mockResolvedValue({ day: new Date("2026-11-09T00:00:00.000Z") });
+  db.executeRaw.mockResolvedValue(1);
   db.metricUpsert.mockImplementation((args: unknown) => args);
   db.transaction.mockImplementation(async (ops: unknown[]) => ops);
   resolveMock.mockImplementation(async (_token: string, name: string) => name);
@@ -143,6 +148,30 @@ describe("the request", () => {
       { start: "2026-01-09", end: "2026-01-10" },
     ]);
     expect(splitDayRange(range, 10)).toEqual([range]);
+  });
+
+  describe("from the newest stored day", () => {
+    const after = (day: string | null) =>
+      listingMetricsRangeAfter(NOW, day === null ? null : new Date(`${day}T00:00:00.000Z`));
+
+    it("asks for ninety days with no stored day", () => {
+      expect(after(null)).toEqual({ start: "2026-08-12", end: "2026-11-09" });
+    });
+
+    it("asks for ten days when the newest stored day is yesterday, or later", () => {
+      expect(after("2026-11-09")).toEqual({ start: "2026-10-31", end: "2026-11-09" });
+      expect(after("2026-11-10")).toEqual({ start: "2026-10-31", end: "2026-11-09" });
+    });
+
+    it("re-reads ten days before the newest stored day and every day since, after a pause", () => {
+      expect(after("2026-11-08")).toEqual({ start: "2026-10-30", end: "2026-11-09" });
+      // Six weeks needing reconnection.
+      expect(after("2026-09-29")).toEqual({ start: "2026-09-20", end: "2026-11-09" });
+    });
+
+    it("never asks for more than ninety days", () => {
+      expect(after("2026-03-01")).toEqual({ start: "2026-08-12", end: "2026-11-09" });
+    });
   });
 
   it("keeps the ninety-day first request in one request", () => {
@@ -270,28 +299,34 @@ describe("parseListingMetrics", () => {
 });
 
 describe("saveListingMetricsCheckedAt", () => {
-  it("merges the check time and its location onto the metadata as it is now", async () => {
-    db.connectionFindUnique.mockResolvedValue({ metadata: { locationName: LOCATION, reviewsCheckedAt: "x" } });
+  /** The SQL text and the bound values of the one raw statement. */
+  function statement() {
+    expect(db.executeRaw).toHaveBeenCalledTimes(1);
+    const [strings, ...values] = db.executeRaw.mock.calls[0] as [TemplateStringsArray, ...unknown[]];
+    return { sql: strings.join("$"), values };
+  }
+
+  it("merges the two keys into the stored JSON in one statement, matching only while the location is the one checked", async () => {
     await expect(saveListingMetricsCheckedAt("conn-1", LOCATION, NOW)).resolves.toBe(true);
-    expect(db.connectionUpdate).toHaveBeenCalledWith({
-      where: { id: "conn-1" },
-      data: {
-        metadata: {
-          locationName: LOCATION,
-          reviewsCheckedAt: "x",
-          listingMetricsCheckedAt: NOW.toISOString(),
-          listingMetricsCheckedFor: LOCATION,
-        },
-      },
-    });
+
+    const { sql, values } = statement();
+    expect(sql).toMatch(/UPDATE "SocialConnection"/);
+    expect(sql).toMatch(/\|\| jsonb_build_object\('listingMetricsCheckedAt', \$::text, 'listingMetricsCheckedFor', \$::text\)/);
+    expect(sql).toMatch(/"metadata"->>'locationName'/);
+    expect(values).toEqual([NOW.toISOString(), LOCATION, "conn-1", LOCATION]);
+    // Nothing read first and written back whole.
+    expect(db.connectionFindUnique).not.toHaveBeenCalled();
+    expect(db.connectionUpdate).not.toHaveBeenCalled();
   });
 
-  it("writes nothing when another location was chosen meanwhile, or the connection is gone", async () => {
-    db.connectionFindUnique.mockResolvedValueOnce({ metadata: { locationName: OTHER_LOCATION } });
+  it("reports false when no row matched: gone, or another location chosen meanwhile", async () => {
+    db.executeRaw.mockResolvedValue(0);
     await expect(saveListingMetricsCheckedAt("conn-1", LOCATION, NOW)).resolves.toBe(false);
-    db.connectionFindUnique.mockResolvedValueOnce(null);
-    await expect(saveListingMetricsCheckedAt("conn-1", LOCATION, NOW)).resolves.toBe(false);
-    expect(db.connectionUpdate).not.toHaveBeenCalled();
+  });
+
+  it("puts nothing into the SQL text but placeholders", async () => {
+    await saveListingMetricsCheckedAt("conn-1", "accounts/1/locations/22'; DROP TABLE x; --", NOW);
+    expect(statement().sql).not.toContain("DROP");
   });
 });
 
@@ -337,7 +372,7 @@ describe("syncListingMetrics", () => {
     expect(first.update.calls).toBe(3);
   });
 
-  it("asks for ten days once the listing has rows, and ninety the first time", async () => {
+  it("asks for ten days when yesterday is stored, and ninety the first time", async () => {
     useRows([conn()]);
     await syncListingMetrics(NOW, () => 0);
     let url = new URL(String(fetchMock.mock.calls[0][0]));
@@ -351,14 +386,26 @@ describe("syncListingMetrics", () => {
     expect(url.searchParams.get("dailyRange.start_date.day")).toBe("12");
     expect(db.metricFindFirst).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", locationName: LOCATION },
-      select: { id: true },
+      orderBy: { day: "desc" },
+      select: { day: true },
     });
+  });
+
+  it("after a pause, asks for every day since the newest stored one, with the overlap", async () => {
+    useRows([conn()]);
+    db.metricFindFirst.mockResolvedValue({ day: new Date("2026-09-29T00:00:00.000Z") });
+
+    await syncListingMetrics(NOW, () => 0);
+
+    const url = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(url.searchParams.get("dailyRange.start_date.month")).toBe("9");
+    expect(url.searchParams.get("dailyRange.start_date.day")).toBe("20");
   });
 
   it("after a change of listing, reads the new one's history from scratch and leaves the old rows alone", async () => {
     useRows([conn({ metadata: { locationName: OTHER_LOCATION } })]);
     db.metricFindFirst.mockImplementation(async ({ where }: { where: { locationName: string } }) =>
-      where.locationName === LOCATION ? { id: "old" } : null,
+      where.locationName === LOCATION ? { day: new Date("2026-11-09T00:00:00.000Z") } : null,
     );
 
     await syncListingMetrics(NOW, () => 0);
@@ -404,7 +451,7 @@ describe("syncListingMetrics", () => {
     expect(logged).not.toContain("locations/22");
     expect(logged).not.toContain("Surf Co");
     // Both stamped: a connection that keeps failing goes behind the others.
-    expect(db.connectionUpdate).toHaveBeenCalledTimes(2);
+    expect(db.executeRaw).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes an expired token through the saved-token path", async () => {

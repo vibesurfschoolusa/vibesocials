@@ -1,5 +1,3 @@
-import type { Prisma } from "@prisma/client";
-
 import { prisma } from "@/lib/db";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { logger } from "@/lib/logger";
@@ -14,16 +12,19 @@ import { accessTokenOf } from "@/server/jobs/reviewAlerts";
  * asks Google's Business Profile Performance API for the daily numbers and
  * upserts one LocationMetricDaily row per day.
  *
- * Google's numbers arrive late and are revised, so every run asks for the last
- * LISTING_METRICS_RECENT_DAYS days again; a listing with no rows yet (new, or
- * just picked instead of another) gets LISTING_METRICS_FIRST_DAYS, so the
- * dashboard and the monthly report have history. Rows are keyed by workspace,
+ * Google's numbers arrive late and are revised, so every run asks again from
+ * LISTING_METRICS_RECENT_DAYS days before the newest stored day up to yesterday:
+ * after a pause (a connection needing reconnection for weeks, a listing picked
+ * again after another) the missed days come in too. Never more than
+ * LISTING_METRICS_FIRST_DAYS; a listing with no rows yet gets exactly that, so
+ * the dashboard and the monthly report have history. Rows are keyed by workspace,
  * location and day, so a repeated run rewrites the same rows and a change of
  * listing never mixes two listings' numbers.
  *
  * Kept in `SocialConnection.metadata`: `listingMetricsCheckedAt` (the order of
  * the next run) and `listingMetricsCheckedFor` (the location it was checked
- * for), written by a guarded merge onto the row as it is at that moment.
+ * for), merged into the stored JSON by one statement that matches only while the
+ * row still names the location checked.
  *
  * Reading these numbers changes nothing at Google. The step output is counts
  * only; logs name the connection id, never the location.
@@ -95,6 +96,23 @@ function msOf(key: string): number {
 export function listingMetricsRange(now: Date, days: number): DayRange {
   const end = msOf(keyOf(now.getTime())) - DAY_MS;
   return { start: keyOf(end - (days - 1) * DAY_MS), end: keyOf(end) };
+}
+
+/**
+ * The days to ask for: from LISTING_METRICS_RECENT_DAYS days before
+ * `newestStored` (the revision overlap) to yesterday, at least
+ * LISTING_METRICS_RECENT_DAYS and at most LISTING_METRICS_FIRST_DAYS days; with
+ * nothing stored, LISTING_METRICS_FIRST_DAYS.
+ */
+export function listingMetricsRangeAfter(now: Date, newestStored: Date | null): DayRange {
+  if (!newestStored) return listingMetricsRange(now, LISTING_METRICS_FIRST_DAYS);
+  const { end } = listingMetricsRange(now, 1);
+  const missed = Math.round((msOf(end) - msOf(keyOf(newestStored.getTime()))) / DAY_MS);
+  const days = Math.min(
+    Math.max(missed + LISTING_METRICS_RECENT_DAYS, LISTING_METRICS_RECENT_DAYS),
+    LISTING_METRICS_FIRST_DAYS,
+  );
+  return listingMetricsRange(now, days);
 }
 
 /** `range` in consecutive pieces of at most `maxDays` days, oldest first. */
@@ -231,31 +249,24 @@ export async function fetchListingDailyMetrics(
 }
 
 /**
- * Saves the check time and the location it was for, merged onto the metadata
- * as it is NOW. Writes nothing when the connection is gone or another location
- * was chosen meanwhile.
+ * Saves the check time and the location it was for, merged into the stored
+ * JSON in ONE statement, so nothing written meanwhile (another listing picked,
+ * the review check's marker) is overwritten. Matches nothing, and returns
+ * false, when the connection is gone or names another location by then.
  */
 export async function saveListingMetricsCheckedAt(
   id: string,
   locationName: string,
   checkedAt: Date,
 ): Promise<boolean> {
-  const fresh = await prisma.socialConnection.findUnique({ where: { id }, select: { metadata: true } });
-  if (!fresh) return false;
-  const metadata = metadataOf(fresh);
-  if (nonEmptyString(metadata.locationName) !== locationName) return false;
-
-  await prisma.socialConnection.update({
-    where: { id },
-    data: {
-      metadata: {
-        ...metadata,
-        listingMetricsCheckedAt: checkedAt.toISOString(),
-        listingMetricsCheckedFor: locationName,
-      } as Prisma.InputJsonValue,
-    },
-  });
-  return true;
+  const updated = await prisma.$executeRaw`
+    UPDATE "SocialConnection"
+    SET "metadata" = "metadata" || jsonb_build_object('listingMetricsCheckedAt', ${checkedAt.toISOString()}::text, 'listingMetricsCheckedFor', ${locationName}::text),
+        "updatedAt" = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+    WHERE "id" = ${id}
+      AND jsonb_typeof("metadata") = 'object'
+      AND btrim("metadata"->>'locationName') = ${locationName}`;
+  return updated > 0;
 }
 
 export interface ListingMetricsSyncResult {
@@ -337,11 +348,12 @@ export async function syncListingMetrics(
     result.checked++;
     try {
       const accessToken = await accessTokenOf(connection, now);
-      const seen = await prisma.locationMetricDaily.findFirst({
+      const newest = await prisma.locationMetricDaily.findFirst({
         where: { workspaceId: connection.workspaceId, locationName },
-        select: { id: true },
+        orderBy: { day: "desc" },
+        select: { day: true },
       });
-      const range = listingMetricsRange(now, seen ? LISTING_METRICS_RECENT_DAYS : LISTING_METRICS_FIRST_DAYS);
+      const range = listingMetricsRangeAfter(now, newest?.day ?? null);
       const days = await fetchListingDailyMetrics(accessToken, locationName, range);
 
       if (days.length > 0) {

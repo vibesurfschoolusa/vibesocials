@@ -38,24 +38,58 @@ describe("summarizeListingMetrics", () => {
     expect(summarizeListingMetrics(days("2026-11-07", 10, { calls: 1 }), 28).previous).toBeNull();
   });
 
-  it("sums the 28 days before the current window as the previous totals", () => {
-    const rows = [
-      ...days("2026-11-07", 28, { calls: 2 }),
-      ...days("2026-10-10", 28, { calls: 1, websiteClicks: 1 }),
-      // Older than both windows: not counted anywhere.
-      row("2026-09-12", { calls: 100 }),
-    ];
+  // Current window 2026-10-11 .. 2026-11-07; previous 2026-09-13 .. 2026-10-10.
+  it("sums the 28 days before the current window when the history covers all of them", () => {
+    const rows = [...days("2026-11-07", 28, { calls: 2 }), ...days("2026-10-10", 28, { calls: 1, websiteClicks: 1 })];
     const summary = summarizeListingMetrics(rows, 28);
     expect(summary.current?.calls).toBe(56);
     expect(summary.previous).toEqual({ views: 0, calls: 28, directionRequests: 0, websiteClicks: 28 });
   });
 
-  it("counts days missing inside a window as zero", () => {
-    const rows = [row("2026-11-07", { calls: 3 }), row("2026-10-20", { calls: 2 }), row("2026-10-05", { calls: 4 })];
+  it("gives no previous totals when the history starts inside the previous window", () => {
+    const rows = [...days("2026-11-07", 28, { calls: 2 }), ...days("2026-10-10", 20, { calls: 1 })];
+    expect(summarizeListingMetrics(rows, 28).previous).toBeNull();
+  });
+
+  it("never lets rows older than the previous window switch the comparison on, nor count", () => {
+    const rows = [
+      ...days("2026-11-07", 28, { calls: 2 }),
+      ...days("2026-10-10", 5, { calls: 1 }),
+      row("2026-09-12", { calls: 100 }),
+      row("2026-08-01", { calls: 100 }),
+    ];
+    expect(summarizeListingMetrics(rows, 28).previous).toBeNull();
+  });
+
+  it("counts days missing inside a covered window as zero", () => {
+    const rows = [
+      row("2026-11-07", { calls: 3 }),
+      row("2026-10-20", { calls: 2 }),
+      row("2026-10-05", { calls: 4 }),
+      row("2026-09-13"),
+    ];
     const summary = summarizeListingMetrics(rows, 28);
-    // Current window 2026-10-11 .. 2026-11-07; previous 2026-09-13 .. 2026-10-10.
     expect(summary.current?.calls).toBe(5);
     expect(summary.previous?.calls).toBe(4);
+  });
+
+  it("ends the current window on the newest day with a number above zero; later zero days are not counted yet", () => {
+    const rows = [
+      row("2026-11-09"),
+      row("2026-11-08"),
+      ...days("2026-11-07", 56, { calls: 1 }),
+    ];
+    const summary = summarizeListingMetrics(rows, 28);
+    expect(summary.endDay).toBe("2026-11-07");
+    expect(summary.current?.calls).toBe(28);
+    // The previous window moves back with it: 2026-09-13 .. 2026-10-10, fully covered.
+    expect(summary.previous?.calls).toBe(28);
+  });
+
+  it("ends on the newest stored day when every stored day is zero", () => {
+    const summary = summarizeListingMetrics([row("2026-11-09"), row("2026-11-01")], 28);
+    expect(summary.endDay).toBe("2026-11-09");
+    expect(summary.current).toEqual({ views: 0, calls: 0, directionRequests: 0, websiteClicks: 0 });
   });
 
   it("accepts days as YYYY-MM-DD strings, as JSON brings them", () => {
