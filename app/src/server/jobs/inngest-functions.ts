@@ -54,6 +54,7 @@ import {
   sendReviewAlerts,
 } from "@/server/jobs/reviewAlerts";
 import { syncListingMetrics } from "@/server/jobs/listingMetrics";
+import { syncSocialPostMetrics } from "@/server/jobs/socialMetricsSync";
 import { sendEmail } from "@/server/notifications/email";
 import {
   HEALTH_SWEEP_PAGE_SIZE,
@@ -2421,6 +2422,28 @@ export const googleListingMetricsSync = inngest.createFunction(
   },
 );
 
+/**
+ * Post numbers for Instagram, Facebook Pages, LinkedIn and Pinterest
+ * (2026-11-10), stored where the YouTube numbers are (logic in
+ * socialMetricsSync.ts). Daily and one step, because the plan's monthly
+ * executions are more than half used: the step reads for at most 150 s and its
+ * rows are upserts, so a re-run writes the same rows again. Reading changes
+ * nothing on the platforms. SEC: the step output is counts only.
+ */
+export const socialPostMetricsSync = inngest.createFunction(
+  {
+    id: "social-post-metrics-sync",
+    name: "Social Post Metrics Sync",
+    singleton: { mode: "skip" },
+  },
+  { cron: "45 10 * * *" },
+  async ({ step }) => {
+    const summary = await step.run("sync", () => syncSocialPostMetrics(new Date()));
+    logger.info("[Inngest] Social post numbers synced", summary);
+    return summary;
+  },
+);
+
 export const inngestFunctions = [
   publishToAllPlatforms,
   mediaRetentionSweep,
@@ -2434,4 +2457,5 @@ export const inngestFunctions = [
   dailyProblemDigest,
   googleReviewAlerts,
   googleListingMetricsSync,
+  socialPostMetricsSync,
 ];

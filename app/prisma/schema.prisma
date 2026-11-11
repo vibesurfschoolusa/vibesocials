@@ -644,6 +644,10 @@ model PostMetric {
   // Not exposed by the YouTube `videos.list` statistics part → always null for
   // YouTube v1. Kept in the schema for platform-extensibility.
   shares          Int?
+  // 2026-11-10 (socialMetricsSync.ts): LinkedIn and Pinterest clicks, Pinterest
+  // saves. Null when the platform gives no such number, never 0.
+  clicks          Int?
+  saves           Int?
   // Raw provider statistics payload for debugging/audit. MUST NOT be surfaced in
   // any DTO (SEC-1) — it is never a token store, but keep the read path minimal.
   raw             Json?
