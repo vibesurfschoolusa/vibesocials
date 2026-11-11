@@ -1,13 +1,14 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
-import { billingFieldsSelect, newWorkspaceBillingData } from "@/lib/billing";
+import { billingFieldsSelect } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { isOperatorUser } from "@/lib/operator";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
+import { newWorkspaceBillingData } from "@/server/billing/newWorkspaceTrial";
 import { createWorkspaceWhileBlockedMessage, workspaceBlock } from "@/lib/workspaceStatus";
 
 /** The longest workspace name accepted (it shows in the account menu). */
@@ -131,8 +132,9 @@ export async function POST(request: Request) {
   }
 
   const workspace = await prisma.$transaction(async (tx) => {
-    // 21a: a free trial with billing on; exactly today's row with it off.
-    const created = await tx.workspace.create({ data: { name, ...newWorkspaceBillingData(new Date()) } });
+    // 21a: the caller's trial (or an operator's exemption) with billing on; exactly today's row with it off.
+    const billing = await newWorkspaceBillingData(tx, context.user.id, new Date());
+    const created = await tx.workspace.create({ data: { name, ...billing } });
     await tx.workspaceMember.create({
       data: { workspaceId: created.id, userId: context.user.id, role: "owner" },
     });

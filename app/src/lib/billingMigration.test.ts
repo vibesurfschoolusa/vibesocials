@@ -36,8 +36,12 @@ describe("20261110350000_workspace_plan", () => {
     expect(flip).toBeGreaterThan(add);
   });
 
+  it("adds the user's trial start, nullable", () => {
+    expect(statements).toContain('ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "trialStartedAt" TIMESTAMP(3)');
+  });
+
   it("is safe to run twice: no statement fails or touches a row on a second run", () => {
-    expect(statements).toHaveLength(3);
+    expect(statements).toHaveLength(4);
     // No UPDATE: a second run would otherwise exempt workspaces created since.
     const code = statements.join(";\n");
     expect(code).not.toMatch(/\bUPDATE\b/i);

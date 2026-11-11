@@ -4,10 +4,9 @@ import { planSectionLabel } from "./planSectionView";
 
 /** 21a: what Settings → Plan says, and when it is there at all. */
 
-const ON = { BILLING_ENABLED: "true", BILLING_STARTED_AT: "2026-12-01T00:00:00Z" };
+const ON = { BILLING_ENABLED: "true" };
 const NOW = new Date("2026-12-10T12:00:00Z");
 const NEW = {
-  createdAt: new Date("2026-12-02T00:00:00Z"),
   billingExempt: false,
   plan: null,
   planStatus: null,
@@ -17,7 +16,7 @@ const NEW = {
 
 describe("planSectionLabel", () => {
   it("is absent with billing off, whatever the workspace", () => {
-    for (const env of [{}, { BILLING_ENABLED: "true" }, { ...ON, BILLING_ENABLED: "false" }]) {
+    for (const env of [{}, { BILLING_ENABLED: "TRUE" }, { ...ON, BILLING_ENABLED: "false" }]) {
       expect(planSectionLabel("owner", { ...NEW, trialEndsAt: new Date("2026-12-24T00:00:00Z") }, NOW, env)).toBeNull();
       expect(planSectionLabel("owner", { billingExempt: true }, NOW, env)).toBeNull();
     }
@@ -49,11 +48,9 @@ describe("planSectionLabel", () => {
     );
   });
 
-  it("exempt, by its flag or by being older than billing", () => {
+  it("exempt, by its flag or by never having had a trial or a plan", () => {
     expect(planSectionLabel("owner", { ...NEW, billingExempt: true }, NOW, ON)).toBe("Exempt: billed by invoice");
-    expect(planSectionLabel("owner", { ...NEW, createdAt: new Date("2026-11-01T00:00:00Z") }, NOW, ON)).toBe(
-      "Exempt: billed by invoice",
-    );
+    expect(planSectionLabel("owner", NEW, NOW, ON)).toBe("Exempt: billed by invoice");
   });
 
   it("ended: a plan, or a trial", () => {

@@ -1,5 +1,6 @@
 -- Plans and the free trial (21a, 2026-11-10). Additive: five new columns on
--- Workspace, four nullable and one with a default. The code still serving
+-- Workspace, four nullable and one with a default, and one nullable column on
+-- User (when that person's one trial window started). The code still serving
 -- during the release never reads them.
 --
 -- Every workspace that exists when this runs must be exempt, so the operator's
@@ -21,3 +22,6 @@ ALTER TABLE "Workspace" ADD COLUMN IF NOT EXISTS "billingExempt" BOOLEAN NOT NUL
 
 -- AlterTable: new workspaces not exempt
 ALTER TABLE "Workspace" ALTER COLUMN "billingExempt" SET DEFAULT false;
+
+-- AlterTable: one trial window per person
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "trialStartedAt" TIMESTAMP(3);

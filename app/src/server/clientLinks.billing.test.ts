@@ -27,7 +27,6 @@ const WORKSPACE_SELECT_ON = {
   name: true,
   pausedAt: true,
   pausedReason: true,
-  createdAt: true,
   billingExempt: true,
   plan: true,
   planStatus: true,
@@ -40,7 +39,6 @@ function workspace(overrides: Record<string, unknown> = {}) {
     name: "Surf Co",
     pausedAt: null,
     pausedReason: null,
-    createdAt: new Date("2026-12-02T00:00:00Z"),
     billingExempt: false,
     plan: null,
     planStatus: null,
@@ -63,7 +61,6 @@ beforeEach(() => {
   h.uploadFind.mockReset();
   h.reviewFind.mockReset();
   vi.stubEnv("BILLING_ENABLED", "true");
-  vi.stubEnv("BILLING_STARTED_AT", "2026-12-01T00:00:00Z");
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
 });

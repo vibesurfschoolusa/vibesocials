@@ -32,7 +32,6 @@ beforeEach(() => {
     vi.stubEnv(name, "");
   }
   vi.stubEnv("BILLING_ENABLED", "");
-  vi.stubEnv("BILLING_STARTED_AT", "");
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -47,10 +46,8 @@ describe("getWorkspaceLimits", () => {
 
   it("with billing on, reads the plan columns too and resolves the plan's limits", async () => {
     vi.stubEnv("BILLING_ENABLED", "true");
-    vi.stubEnv("BILLING_STARTED_AT", "2026-11-01T00:00:00Z");
     db.workspaceFindUnique.mockResolvedValue({
       ...ROW,
-      createdAt: new Date("2026-11-05T00:00:00Z"),
       billingExempt: false,
       plan: "growth",
       planStatus: "active",
@@ -64,7 +61,6 @@ describe("getWorkspaceLimits", () => {
       where: { id: "ws-1" },
       select: {
         ...LIMIT_SELECT,
-        createdAt: true,
         billingExempt: true,
         plan: true,
         planStatus: true,

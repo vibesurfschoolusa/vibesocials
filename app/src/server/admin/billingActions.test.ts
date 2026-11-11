@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-/** 21a: the operator's two billing changes, recorded like the limits and the pause. */
+/**
+ * 21a (fix round 1): the operator's two billing changes, recorded like the
+ * limits and the pause: "Exempt this workspace" and "Start or change the
+ * trial". There is no clearing a trial: that would make it exempt by rule.
+ */
 
 const db = vi.hoisted(() => ({
   executeRaw: vi.fn(),
@@ -26,7 +30,9 @@ vi.mock("@/lib/db", () => {
   };
 });
 
-import { setBillingExempt, setTrialEndsAt, validateExemptBody, validateTrialBody } from "./actions";
+import { planState } from "@/lib/billing";
+
+import { exemptWorkspace, startTrial, validateTrialBody } from "./actions";
 
 const OPS = { userId: "op-1", email: "ops@example.com" };
 const NOW = new Date("2026-11-10T12:00:00Z");
@@ -53,16 +59,6 @@ beforeEach(() => {
   db.actionCreate.mockResolvedValue({ id: "act-1" });
 });
 
-describe("validateExemptBody", () => {
-  it("takes true or false, nothing else", () => {
-    expect(validateExemptBody({ exempt: true })).toEqual({ ok: true, exempt: true });
-    expect(validateExemptBody({ exempt: false })).toEqual({ ok: true, exempt: false });
-    for (const body of [{}, { exempt: "true" }, { exempt: 1 }, { exempt: null }, null, [], { exempt: true, x: 1 }]) {
-      expect(validateExemptBody(body).ok, JSON.stringify(body)).toBe(false);
-    }
-  });
-});
-
 describe("validateTrialBody", () => {
   it("takes a date from today to 90 days ahead, as the end of that UTC day", () => {
     expect(validateTrialBody({ trialEndsAt: "2026-11-10" }, NOW)).toEqual({
@@ -75,36 +71,33 @@ describe("validateTrialBody", () => {
     });
   });
 
-  it("takes null to clear it", () => {
-    expect(validateTrialBody({ trialEndsAt: null }, NOW)).toEqual({ ok: true, trialEndsAt: null });
-  });
-
-  it("refuses a past date, one more than 90 days ahead, and anything not a date", () => {
+  it("refuses a past date, one more than 90 days ahead, null, and anything not a date", () => {
     expect(validateTrialBody({ trialEndsAt: "2026-11-09" }, NOW)).toEqual({
       ok: false,
-      error: "Pick today or a later date.",
+      error: "Pick today or a later date. To end a trial now, pick today.",
     });
     expect(validateTrialBody({ trialEndsAt: "2027-02-09" }, NOW)).toEqual({
       ok: false,
       error: "Pick a date at most 90 days ahead (8 February 2027 or earlier).",
     });
-    for (const value of [undefined, "", "tomorrow", "2026-11-31", "2026-11-20T00:00:00Z", 20261120, true]) {
+    for (const value of [null, undefined, "", "tomorrow", "2026-11-31", "2026-11-20T00:00:00Z", 20261120, true]) {
       expect(validateTrialBody({ trialEndsAt: value }, NOW).ok, String(value)).toBe(false);
     }
     expect(validateTrialBody(null, NOW).ok).toBe(false);
-    expect(validateTrialBody({ trialEndsAt: null, other: 1 }, NOW).ok).toBe(false);
+    expect(validateTrialBody({ trialEndsAt: "2026-11-20", other: 1 }, NOW).ok).toBe(false);
   });
 });
 
-describe("setBillingExempt", () => {
-  it("sets it in one transaction, under the row lock, and records old and new", async () => {
-    db.workspaceFindUnique.mockResolvedValue(row());
+describe("exemptWorkspace", () => {
+  it("sets billingExempt in one transaction, under the row lock, and records old and new", async () => {
+    db.workspaceFindUnique.mockResolvedValue(row({ trialEndsAt: new Date("2026-11-01T00:00:00Z") }));
 
-    expect(await setBillingExempt({ operator: OPS, workspaceId: "ws-1", exempt: true })).toEqual({ status: "changed" });
+    expect(await exemptWorkspace({ operator: OPS, workspaceId: "ws-1" })).toEqual({ status: "changed" });
 
     expect(db.transaction).toHaveBeenCalledTimes(1);
     expect(db.executeRaw.mock.invocationCallOrder[0]).toBeLessThan(db.workspaceFindUnique.mock.invocationCallOrder[0]);
     expect(db.workspaceFindUnique.mock.calls[0][0].select).toMatchObject({ billingExempt: true, trialEndsAt: true });
+    // Nothing else: the trial date stays as it was.
     expect(db.workspaceUpdate).toHaveBeenCalledWith({ where: { id: "ws-1" }, data: { billingExempt: true } });
     expect(db.actionCreate).toHaveBeenCalledWith({
       data: {
@@ -119,61 +112,69 @@ describe("setBillingExempt", () => {
     });
   });
 
-  it("clears it", async () => {
+  it("writes and records nothing when already exempt, and answers not found for no workspace", async () => {
     db.workspaceFindUnique.mockResolvedValue(row({ billingExempt: true }));
-    await setBillingExempt({ operator: OPS, workspaceId: "ws-1", exempt: false });
-    expect(db.workspaceUpdate).toHaveBeenCalledWith({ where: { id: "ws-1" }, data: { billingExempt: false } });
-    expect(db.actionCreate.mock.calls[0][0].data.detail).toEqual({
-      old: { billingExempt: true },
-      new: { billingExempt: false },
-    });
-  });
-
-  it("writes and records nothing when it is already so, and answers not found for no workspace", async () => {
-    db.workspaceFindUnique.mockResolvedValue(row({ billingExempt: true }));
-    expect(await setBillingExempt({ operator: OPS, workspaceId: "ws-1", exempt: true })).toEqual({ status: "unchanged" });
+    expect(await exemptWorkspace({ operator: OPS, workspaceId: "ws-1" })).toEqual({ status: "unchanged" });
     db.workspaceFindUnique.mockResolvedValue(null);
-    expect(await setBillingExempt({ operator: OPS, workspaceId: "x", exempt: true })).toEqual({ status: "not_found" });
+    expect(await exemptWorkspace({ operator: OPS, workspaceId: "x" })).toEqual({ status: "not_found" });
     expect(db.workspaceUpdate).not.toHaveBeenCalled();
     expect(db.actionCreate).not.toHaveBeenCalled();
   });
 });
 
-describe("setTrialEndsAt", () => {
+describe("startTrial", () => {
   const END = new Date("2026-12-01T23:59:59.999Z");
 
-  it("sets it in one transaction and records old and new", async () => {
-    db.workspaceFindUnique.mockResolvedValue(row({ trialEndsAt: new Date("2026-11-20T00:00:00Z") }));
+  it("sets billingExempt false and the trial end in one transaction, and records old and new", async () => {
+    db.workspaceFindUnique.mockResolvedValue(row({ billingExempt: true, trialEndsAt: null }));
 
-    expect(await setTrialEndsAt({ operator: OPS, workspaceId: "ws-1", trialEndsAt: END })).toEqual({ status: "changed" });
+    expect(await startTrial({ operator: OPS, workspaceId: "ws-1", trialEndsAt: END })).toEqual({ status: "changed" });
 
     expect(db.transaction).toHaveBeenCalledTimes(1);
     expect(db.executeRaw).toHaveBeenCalledTimes(1);
-    expect(db.workspaceUpdate).toHaveBeenCalledWith({ where: { id: "ws-1" }, data: { trialEndsAt: END } });
+    expect(db.workspaceUpdate).toHaveBeenCalledWith({
+      where: { id: "ws-1" },
+      data: { billingExempt: false, trialEndsAt: END },
+    });
     expect(db.actionCreate.mock.calls[0][0].data).toMatchObject({
       action: "trial",
-      detail: { old: { trialEndsAt: "2026-11-20T00:00:00.000Z" }, new: { trialEndsAt: END.toISOString() } },
+      detail: {
+        old: { billingExempt: true, trialEndsAt: null },
+        new: { billingExempt: false, trialEndsAt: END.toISOString() },
+      },
     });
   });
 
-  it("clears it", async () => {
-    db.workspaceFindUnique.mockResolvedValue(row({ trialEndsAt: END }));
-    await setTrialEndsAt({ operator: OPS, workspaceId: "ws-1", trialEndsAt: null });
-    expect(db.workspaceUpdate).toHaveBeenCalledWith({ where: { id: "ws-1" }, data: { trialEndsAt: null } });
+  it("changes the date of a running trial", async () => {
+    db.workspaceFindUnique.mockResolvedValue(row({ trialEndsAt: new Date("2026-11-20T23:59:59.999Z") }));
+    await startTrial({ operator: OPS, workspaceId: "ws-1", trialEndsAt: END });
     expect(db.actionCreate.mock.calls[0][0].data.detail).toEqual({
-      old: { trialEndsAt: END.toISOString() },
-      new: { trialEndsAt: null },
+      old: { billingExempt: false, trialEndsAt: "2026-11-20T23:59:59.999Z" },
+      new: { billingExempt: false, trialEndsAt: END.toISOString() },
     });
   });
 
-  it("writes and records nothing when it is the same, and answers not found for no workspace", async () => {
+  it("writes and records nothing when it is already so, and answers not found for no workspace", async () => {
     db.workspaceFindUnique.mockResolvedValue(row({ trialEndsAt: new Date(END) }));
-    expect(await setTrialEndsAt({ operator: OPS, workspaceId: "ws-1", trialEndsAt: END })).toEqual({ status: "unchanged" });
-    db.workspaceFindUnique.mockResolvedValue(row());
-    expect(await setTrialEndsAt({ operator: OPS, workspaceId: "ws-1", trialEndsAt: null })).toEqual({ status: "unchanged" });
+    expect(await startTrial({ operator: OPS, workspaceId: "ws-1", trialEndsAt: END })).toEqual({ status: "unchanged" });
     db.workspaceFindUnique.mockResolvedValue(null);
-    expect(await setTrialEndsAt({ operator: OPS, workspaceId: "x", trialEndsAt: END })).toEqual({ status: "not_found" });
+    expect(await startTrial({ operator: OPS, workspaceId: "x", trialEndsAt: END })).toEqual({ status: "not_found" });
     expect(db.workspaceUpdate).not.toHaveBeenCalled();
     expect(db.actionCreate).not.toHaveBeenCalled();
+  });
+
+  it("a trial started on an exempt workspace ends when its date passes; exempting it again makes it exempt", async () => {
+    const stored: Record<string, unknown> = row({ billingExempt: true, trialEndsAt: null });
+    db.workspaceFindUnique.mockImplementation(async () => ({ ...stored }));
+    db.workspaceUpdate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => Object.assign(stored, data));
+
+    const today = validateTrialBody({ trialEndsAt: "2026-11-10" }, NOW);
+    if (!today.ok) throw new Error(today.error);
+    await startTrial({ operator: OPS, workspaceId: "ws-1", trialEndsAt: today.trialEndsAt });
+    expect(planState(stored, NOW)).toBe("trial");
+    expect(planState(stored, new Date("2026-11-11T00:00:00Z"))).toBe("ended");
+
+    await exemptWorkspace({ operator: OPS, workspaceId: "ws-1" });
+    expect(planState(stored, new Date("2026-11-11T00:00:00Z"))).toBe("exempt");
   });
 });

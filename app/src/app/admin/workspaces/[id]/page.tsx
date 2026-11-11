@@ -13,6 +13,7 @@ import { LIMIT_FIELDS, LIMIT_MAX, type LimitField } from "@/server/admin/actions
 import { getAdminWorkspaceDetail } from "@/server/admin/queries";
 
 import { AdminBillingControls, AdminLimitsForm, AdminPauseControls, type LimitFieldView } from "./admin-controls";
+import { adminBillingLines } from "./billingSentence";
 
 // No metadata on purpose: a page title would show on the 404 a non-operator gets.
 export const dynamic = "force-dynamic";
@@ -34,10 +35,10 @@ function describeAction(action: string, detail: unknown): string {
   const d = (detail ?? {}) as { old?: Record<string, unknown>; new?: Record<string, unknown> };
   if (action === "pause") return `Paused: ${String(d.new?.pausedReason ?? "")}`;
   if (action === "resume") return "Resumed";
-  if (action === "exempt") return d.new?.billingExempt ? "Exempted from billing" : "Billing exemption ended";
+  if (action === "exempt") return "Exempted from billing";
   if (action === "trial") {
     const end = d.new?.trialEndsAt;
-    return typeof end === "string" ? `Trial end set to ${dateTimeLabel(end)}` : "Trial cleared";
+    return typeof end === "string" ? `Trial set to end ${dateTimeLabel(end)}` : "Trial changed";
   }
   if (action === "limits") {
     const changes = Object.keys(d.new ?? {}).map((field) => {
@@ -75,6 +76,7 @@ export default async function AdminWorkspacePage({ params }: { params: Promise<{
   if (!detail) notFound();
 
   const { workspace } = detail;
+  const billingLines = adminBillingLines(detail.billing, new Date());
   const limitFields: LimitFieldView[] = LIMIT_FIELDS.map((field) => ({
     field,
     label: LIMIT_VIEW[field].label,
@@ -183,11 +185,7 @@ export default async function AdminWorkspacePage({ params }: { params: Promise<{
       <section className="flex flex-col gap-2">
         <h2 className="text-lg font-semibold text-foreground">Billing</h2>
         <Card className="flex flex-col gap-3 p-4">
-          <p className="text-sm text-foreground">
-            {detail.billing.enabled
-              ? "Billing is on: this state is enforced."
-              : "Billing is off: nothing here is enforced and no workspace is blocked for its plan. The state is what these fields would give once it is on."}
-          </p>
+          <p className="text-sm text-foreground">{billingLines.enforcement}</p>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
             <div>
               <dt className="text-xs text-muted-foreground">State</dt>
@@ -214,11 +212,7 @@ export default async function AdminWorkspacePage({ params }: { params: Promise<{
               <dd>{detail.billing.currentPeriodEnd ? dateTimeLabel(detail.billing.currentPeriodEnd) : "None"}</dd>
             </div>
           </dl>
-          <p className="text-sm text-muted-foreground">
-            With billing on, a workspace in the Ended state cannot upload, create, schedule or publish, like a paused one:
-            posts that come due are marked failed and can be retried once a plan is active. Only a workspace created
-            after BILLING_STARTED_AT that is not exempt can end. Nothing is charged or deleted.
-          </p>
+          <p className="text-sm text-muted-foreground">{billingLines.state}</p>
           <AdminBillingControls
             workspaceId={workspace.id}
             exempt={detail.billing.billingExempt}

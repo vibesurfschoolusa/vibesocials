@@ -106,6 +106,10 @@ model User {
   // their email. The backfill migration grandfathers every EXISTING user as
   // verified (stamped CURRENT_TIMESTAMP) so this rollout locks nobody out.
   emailVerifiedAt      DateTime?
+  // 21a: when this person's one free-trial window started: the first workspace
+  // they created with billing on. Every later workspace's trial ends at this
+  // plus the trial days. Never reset, also when a workspace is deleted.
+  trialStartedAt       DateTime?
   // When this account was first signed into with Google SSO (null = never).
   // A Google sign-in only auto-links into an existing account that is already
   // linked, or that has no password — see planGoogleSsoLink in

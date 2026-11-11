@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-/** 21a: POST exempt and POST trial, shaped exactly like the limits route. */
+/**
+ * 21a (fix round 1): POST exempt ("Exempt this workspace") and POST trial
+ * ("Start or change the trial"), shaped exactly like the limits route.
+ */
 
 const h = vi.hoisted(() => ({
   requireOperator: vi.fn(),
-  setBillingExempt: vi.fn(),
-  setTrialEndsAt: vi.fn(),
+  exemptWorkspace: vi.fn(),
+  startTrial: vi.fn(),
 }));
 
 vi.mock("@/lib/operator", async (importOriginal) => ({
@@ -14,8 +17,8 @@ vi.mock("@/lib/operator", async (importOriginal) => ({
 }));
 vi.mock("@/server/admin/actions", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/admin/actions")>()),
-  setBillingExempt: h.setBillingExempt,
-  setTrialEndsAt: h.setTrialEndsAt,
+  exemptWorkspace: h.exemptWorkspace,
+  startTrial: h.startTrial,
 }));
 
 import { adminNotFoundResponse, adminOtherMethods } from "@/lib/operator";
@@ -46,10 +49,10 @@ afterEach(() => {
 });
 
 it("both count against the operator's change budget and re-export the other methods as the 404", async () => {
-  h.setBillingExempt.mockResolvedValue({ status: "unchanged" });
-  h.setTrialEndsAt.mockResolvedValue({ status: "unchanged" });
-  await exemptRoute.POST(req({ exempt: true }), ctx);
-  await trialRoute.POST(req({ trialEndsAt: null }), ctx);
+  h.exemptWorkspace.mockResolvedValue({ status: "unchanged" });
+  h.startTrial.mockResolvedValue({ status: "unchanged" });
+  await exemptRoute.POST(req({}), ctx);
+  await trialRoute.POST(req({ trialEndsAt: "2026-11-20" }), ctx);
   expect(h.requireOperator.mock.calls).toEqual([["change"], ["change"]]);
   for (const mod of [exemptRoute, trialRoute] as Record<string, unknown>[]) {
     for (const method of ["GET", "PUT", "PATCH", "DELETE", "OPTIONS"] as const) {
@@ -61,66 +64,56 @@ it("both count against the operator's change budget and re-export the other meth
 it("a non-operator gets the plain 404 and nothing is written", async () => {
   h.requireOperator.mockImplementation(async () => adminNotFoundResponse());
   for (const response of [
-    await exemptRoute.POST(req({ exempt: true }), ctx),
+    await exemptRoute.POST(req({}), ctx),
     await trialRoute.POST(req({ trialEndsAt: "2026-11-20" }), ctx),
   ]) {
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: "Not found" });
   }
-  expect(h.setBillingExempt).not.toHaveBeenCalled();
-  expect(h.setTrialEndsAt).not.toHaveBeenCalled();
+  expect(h.exemptWorkspace).not.toHaveBeenCalled();
+  expect(h.startTrial).not.toHaveBeenCalled();
 });
 
 describe("POST exempt", () => {
-  it("validates the body before writing", async () => {
-    expect((await exemptRoute.POST(req({ exempt: "yes" }), ctx)).status).toBe(400);
-    expect((await exemptRoute.POST(req("not json"), ctx)).status).toBe(400);
-    expect(h.setBillingExempt).not.toHaveBeenCalled();
-  });
-
-  it("writes the change as the operator", async () => {
-    h.setBillingExempt.mockResolvedValue({ status: "changed" });
-    const response = await exemptRoute.POST(req({ exempt: true }), ctx);
+  it("exempts the workspace as the operator; the body says nothing", async () => {
+    h.exemptWorkspace.mockResolvedValue({ status: "changed" });
+    const response = await exemptRoute.POST(req({ exempt: false }), ctx);
     expect(await response.json()).toEqual({ ok: true, changed: true });
-    expect(h.setBillingExempt).toHaveBeenCalledWith({ operator: OPS, workspaceId: "ws-1", exempt: true });
+    expect(h.exemptWorkspace).toHaveBeenCalledWith({ operator: OPS, workspaceId: "ws-1" });
   });
 
   it("answers the plain 404 for a workspace that does not exist", async () => {
-    h.setBillingExempt.mockResolvedValue({ status: "not_found" });
-    const response = await exemptRoute.POST(req({ exempt: false }), ctx);
+    h.exemptWorkspace.mockResolvedValue({ status: "not_found" });
+    const response = await exemptRoute.POST(req({}), ctx);
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: "Not found" });
   });
 });
 
 describe("POST trial", () => {
-  it("refuses a date more than 90 days ahead, or in the past, before writing", async () => {
+  it("refuses a date more than 90 days ahead, in the past, or null, before writing", async () => {
     const far = await trialRoute.POST(req({ trialEndsAt: "2027-02-09" }), ctx);
     expect(far.status).toBe(400);
     expect(await far.json()).toEqual({ error: "Pick a date at most 90 days ahead (8 February 2027 or earlier)." });
     expect((await trialRoute.POST(req({ trialEndsAt: "2026-11-01" }), ctx)).status).toBe(400);
-    expect(h.setTrialEndsAt).not.toHaveBeenCalled();
+    expect((await trialRoute.POST(req({ trialEndsAt: null }), ctx)).status).toBe(400);
+    expect((await trialRoute.POST(req("not json"), ctx)).status).toBe(400);
+    expect(h.startTrial).not.toHaveBeenCalled();
   });
 
-  it("sets the end of the chosen UTC day, as the operator", async () => {
-    h.setTrialEndsAt.mockResolvedValue({ status: "changed" });
+  it("starts or changes the trial to the end of the chosen UTC day, as the operator", async () => {
+    h.startTrial.mockResolvedValue({ status: "changed" });
     const response = await trialRoute.POST(req({ trialEndsAt: "2026-11-24" }), ctx);
     expect(await response.json()).toEqual({ ok: true, changed: true });
-    expect(h.setTrialEndsAt).toHaveBeenCalledWith({
+    expect(h.startTrial).toHaveBeenCalledWith({
       operator: OPS,
       workspaceId: "ws-1",
       trialEndsAt: new Date("2026-11-24T23:59:59.999Z"),
     });
   });
 
-  it("clears it", async () => {
-    h.setTrialEndsAt.mockResolvedValue({ status: "unchanged" });
-    expect(await (await trialRoute.POST(req({ trialEndsAt: null }), ctx)).json()).toEqual({ ok: true, changed: false });
-    expect(h.setTrialEndsAt).toHaveBeenCalledWith({ operator: OPS, workspaceId: "ws-1", trialEndsAt: null });
-  });
-
   it("answers the plain 404 for a workspace that does not exist", async () => {
-    h.setTrialEndsAt.mockResolvedValue({ status: "not_found" });
-    expect((await trialRoute.POST(req({ trialEndsAt: null }), ctx)).status).toBe(404);
+    h.startTrial.mockResolvedValue({ status: "not_found" });
+    expect((await trialRoute.POST(req({ trialEndsAt: "2026-11-24" }), ctx)).status).toBe(404);
   });
 });

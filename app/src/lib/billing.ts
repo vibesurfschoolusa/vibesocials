@@ -1,16 +1,14 @@
-import { logger } from "@/lib/logger";
-
 /**
  * Billing on or off, and a workspace's plan state (21a, 2026-11-10). Pure apart
- * from reading the environment and one log line. Everything billing changes is
- * behind billingEnabled(): with it off, every caller treats a workspace as it
- * did before billing existed.
+ * from reading the environment. Everything billing changes is behind
+ * billingEnabled(): with it off, every caller treats a workspace as it did
+ * before billing existed.
  *
- * BILLING_STARTED_AT is what keeps workspaces created while billing was off
- * from being caught when it is switched on: anything created before it is
- * exempt, whatever its columns say. The operator sets it together with
- * BILLING_ENABLED, to the moment billing is switched on (never earlier: a
- * workspace created in between would have no trial).
+ * The rule that makes switching billing on safe (fix round 1): a workspace can
+ * be "ended" only if it was offered a trial or had a plan. Only creation with
+ * billing on writes a trial (src/server/billing/newWorkspaceTrial.ts) and only
+ * the payment provider writes a plan, so a workspace created while billing was
+ * off has neither and stays exempt, whenever billing is switched on.
  */
 
 export type BillingEnv = Record<string, string | undefined>;
@@ -18,12 +16,11 @@ export type BillingEnv = Record<string, string | undefined>;
 export type PlanState = "exempt" | "active" | "trial" | "ended";
 
 /**
- * The Workspace billing columns plus its creation date. Optional, and a Date
- * or its ISO string, like the pause fields: a job step's memoized output
- * carries dates as strings, and a query with billing off does not read them.
+ * The Workspace billing columns. Optional, and a Date or its ISO string, like
+ * the pause fields: a job step's memoized output carries dates as strings, and
+ * a query with billing off does not read them.
  */
 export type BillingFields = {
-  createdAt?: Date | string | null;
   billingExempt?: boolean | null;
   plan?: string | null;
   planStatus?: string | null;
@@ -39,64 +36,34 @@ export const PAST_DUE_GRACE_DAYS = 7;
 export const DEFAULT_TRIAL_DAYS = 14;
 export const MAX_TRIAL_DAYS = 90;
 
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2}))?$/;
-
-/** BILLING_STARTED_AT as a date, or null when unset or not an ISO date. */
-export function billingStartedAt(env: BillingEnv = process.env): Date | null {
-  const raw = env.BILLING_STARTED_AT?.trim();
-  if (!raw || !ISO_DATE.test(raw)) return null;
-  const date = new Date(raw);
-  if (Number.isNaN(date.getTime())) return null;
-  // "2026-02-30" parses as 2 March: refuse a calendar date that does not exist.
-  if (date.toISOString().slice(0, 10) !== raw.slice(0, 10) && raw.length === 10) return null;
-  return date;
-}
-
-let configErrorLogged = false;
-
-/**
- * True only when BILLING_ENABLED is exactly "true" and BILLING_STARTED_AT is a
- * valid date. Read at request time, so a change needs no deploy. Enabled
- * without a valid start date counts as off: logged once per process as a
- * configuration error, never thrown.
- */
+/** True exactly when BILLING_ENABLED is "true". Read at request time, so a change needs no deploy. */
 export function billingEnabled(env: BillingEnv = process.env): boolean {
-  if (env.BILLING_ENABLED !== "true") return false;
-  if (billingStartedAt(env)) return true;
-  if (!configErrorLogged) {
-    configErrorLogged = true;
-    logger.error(
-      "[billing] BILLING_ENABLED is true but BILLING_STARTED_AT is not a valid ISO date; billing stays off",
-      { billingStartedAt: env.BILLING_STARTED_AT ?? null },
-    );
-  }
-  return false;
+  return env.BILLING_ENABLED === "true";
 }
 
-function toDate(value: Date | string | null | undefined): Date | null {
+/** A Date or ISO string as a date; null when missing or unparseable. */
+export function toBillingDate(value: Date | string | null | undefined): Date | null {
   if (value === null || value === undefined) return null;
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
 /**
- * Which state a workspace is in at `now`. `startedAt` is BILLING_STARTED_AT;
- * null means no start date applies (the admin page with billing off).
+ * Which state a workspace is in at `now`, in this order: exempt by its flag;
+ * exempt with no plan and no (parseable) trial date; active on a plan that is
+ * active or trialing, or past_due less than 7 days after its period end; in
+ * trial with no plan and a trial date in the future; ended otherwise.
  */
-export function planState(
-  workspace: BillingFields,
-  now: Date,
-  startedAt: Date | null = billingStartedAt(),
-): PlanState {
+export function planState(workspace: BillingFields, now: Date): PlanState {
   if (workspace.billingExempt) return "exempt";
-  const createdAt = toDate(workspace.createdAt);
-  // A row read without its creation date cannot be shown to be new: never catch it.
-  if (!createdAt) return "exempt";
-  if (startedAt && createdAt < startedAt) return "exempt";
+
+  const trialEndsAt = toBillingDate(workspace.trialEndsAt);
+  // Never offered a trial and never on a plan: only creation with billing off makes this row.
+  if (!workspace.plan && !trialEndsAt) return "exempt";
 
   if (workspace.plan) {
     if (workspace.planStatus === "active" || workspace.planStatus === "trialing") return "active";
-    const periodEnd = toDate(workspace.currentPeriodEnd);
+    const periodEnd = toBillingDate(workspace.currentPeriodEnd);
     if (
       workspace.planStatus === "past_due" &&
       periodEnd &&
@@ -107,9 +74,7 @@ export function planState(
     return "ended";
   }
 
-  const trialEndsAt = toDate(workspace.trialEndsAt);
-  if (trialEndsAt && trialEndsAt.getTime() > now.getTime()) return "trial";
-  return "ended";
+  return trialEndsAt && trialEndsAt.getTime() > now.getTime() ? "trial" : "ended";
 }
 
 /** BILLING_TRIAL_DAYS: a whole number, 14 when unset or invalid, kept within 1 to 90. */
@@ -119,20 +84,7 @@ export function trialDays(env: BillingEnv = process.env): number {
   return Math.min(MAX_TRIAL_DAYS, Math.max(1, Number(raw)));
 }
 
-/**
- * What a new workspace is created with: nothing extra with billing off (it is
- * created exactly as before), a trial and no exemption with it on.
- */
-export function newWorkspaceBillingData(
-  now: Date,
-  env: BillingEnv = process.env,
-): { trialEndsAt?: Date; billingExempt?: boolean } {
-  if (!billingEnabled(env)) return {};
-  return { trialEndsAt: new Date(now.getTime() + trialDays(env) * DAY_MS), billingExempt: false };
-}
-
 export const BILLING_FIELDS_SELECT = {
-  createdAt: true,
   billingExempt: true,
   plan: true,
   planStatus: true,

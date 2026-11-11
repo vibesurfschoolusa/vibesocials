@@ -26,32 +26,72 @@ const NEW = new Date("2026-12-02T00:00:00Z");
 
 function billingOn() {
   vi.stubEnv("BILLING_ENABLED", "true");
-  vi.stubEnv("BILLING_STARTED_AT", "2026-12-01T00:00:00Z");
 }
 
 beforeEach(() => {
   vi.stubEnv("BILLING_ENABLED", "");
-  vi.stubEnv("BILLING_STARTED_AT", "");
 });
 afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const ENDED_TRIAL = { createdAt: NEW, billingExempt: false, plan: null, planStatus: null, trialEndsAt: new Date(NOW.getTime() - DAY) };
-const ENDED_PLAN = { createdAt: NEW, billingExempt: false, plan: "growth", planStatus: "canceled", currentPeriodEnd: NEW };
+const ENDED_TRIAL = { billingExempt: false, plan: null, planStatus: null, trialEndsAt: new Date(NOW.getTime() - DAY) };
+const ENDED_PLAN = { billingExempt: false, plan: "growth", planStatus: "canceled", currentPeriodEnd: NEW };
 
 /** Every combination of the new columns worth telling apart. */
 const BILLING_COMBINATIONS: Record<string, unknown>[] = [];
 for (const billingExempt of [undefined, false, true]) {
   for (const plan of [undefined, null, "starter", "pro", "unknown"]) {
     for (const planStatus of [undefined, null, "active", "past_due", "canceled"]) {
-      for (const trialEndsAt of [undefined, null, new Date(NOW.getTime() - DAY), new Date(NOW.getTime() + DAY)]) {
-        for (const createdAt of [undefined, new Date("2020-01-01T00:00:00Z"), NEW]) {
-          BILLING_COMBINATIONS.push({ billingExempt, plan, planStatus, trialEndsAt, createdAt, currentPeriodEnd: null });
+      for (const trialEndsAt of [undefined, null, "garbage", new Date(NOW.getTime() - DAY), new Date(NOW.getTime() + DAY)]) {
+        for (const currentPeriodEnd of [null, new Date(NOW.getTime() - 3 * DAY)]) {
+          BILLING_COMBINATIONS.push({ billingExempt, plan, planStatus, trialEndsAt, currentPeriodEnd });
         }
       }
     }
   }
+}
+
+const TRIAL_ENDED = "Your free trial has ended. Choose a plan in Settings to keep posting.";
+const PLAN_ENDED = "Your plan has ended. Choose a plan in Settings to keep posting.";
+const NONE = { billingExempt: false, plan: null, planStatus: null, trialEndsAt: null, currentPeriodEnd: null };
+
+/**
+ * Fix round 1: the rows each life of a workspace leaves, and the block each
+ * must get with billing on (null: none). With billing off, none is blocked.
+ */
+const CASES: Record<string, { fields: Record<string, unknown>; block: string | null }> = {
+  "created with billing off (column false, no trial): the bug": { fields: NONE, block: null },
+  "existed at the migration (column true)": { fields: { ...NONE, billingExempt: true }, block: null },
+  "created with billing on by a new user": { fields: { ...NONE, trialEndsAt: new Date(NOW.getTime() + 14 * DAY) }, block: null },
+  "a second workspace inside the window": { fields: { ...NONE, trialEndsAt: new Date(NOW.getTime() + 9 * DAY) }, block: null },
+  "a workspace created after the window": { fields: { ...NONE, trialEndsAt: new Date(NOW.getTime() - 6 * DAY) }, block: TRIAL_ENDED },
+  "created by an operator": { fields: { ...NONE, billingExempt: true }, block: null },
+  "admin started a trial and the date passed": {
+    fields: { ...NONE, trialEndsAt: new Date(NOW.getTime() - DAY) },
+    block: TRIAL_ENDED,
+  },
+  "then exempted again": { fields: { ...NONE, billingExempt: true, trialEndsAt: new Date(NOW.getTime() - DAY) }, block: null },
+  "plan active": { fields: { ...NONE, plan: "growth", planStatus: "active" }, block: null },
+  "plan trialing": { fields: { ...NONE, plan: "growth", planStatus: "trialing" }, block: null },
+  "plan past_due, 6 days after the period end": {
+    fields: { ...NONE, plan: "growth", planStatus: "past_due", currentPeriodEnd: new Date(NOW.getTime() - 6 * DAY) },
+    block: null,
+  },
+  "plan past_due, 7 days exactly after the period end": {
+    fields: { ...NONE, plan: "growth", planStatus: "past_due", currentPeriodEnd: new Date(NOW.getTime() - 7 * DAY) },
+    block: PLAN_ENDED,
+  },
+  "plan canceled": { fields: { ...NONE, plan: "growth", planStatus: "canceled" }, block: PLAN_ENDED },
+  "plan unpaid": { fields: { ...NONE, plan: "growth", planStatus: "unpaid" }, block: PLAN_ENDED },
+  "plan with an unknown status": { fields: { ...NONE, plan: "growth", planStatus: "paused_by_provider" }, block: PLAN_ENDED },
+  "plan with no status": { fields: { ...NONE, plan: "growth" }, block: PLAN_ENDED },
+  "unparseable trial date, no plan": { fields: { ...NONE, trialEndsAt: "not a date" }, block: null },
+};
+
+/** What a job step's memoized output carries: dates as strings. */
+function memoized(fields: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(fields)) as Record<string, unknown>;
 }
 
 describe("with billing off", () => {
@@ -74,10 +114,16 @@ describe("with billing off", () => {
     }
   });
 
-  it("with BILLING_ENABLED but no valid start date, is still off", () => {
-    vi.stubEnv("BILLING_ENABLED", "true");
-    vi.stubEnv("BILLING_STARTED_AT", "soon");
+  it("with BILLING_ENABLED anything but \"true\", is off", () => {
+    vi.stubEnv("BILLING_ENABLED", "TRUE");
     expect(workspaceBlock(ENDED_TRIAL, NOW)).toBeNull();
+  });
+
+  it("every fix-round case blocks nothing, fresh or memoized", () => {
+    for (const [name, row] of Object.entries(CASES)) {
+      expect(workspaceBlock(row.fields, NOW), name).toBeNull();
+      expect(workspaceBlock(memoized(row.fields), NOW), name).toBeNull();
+    }
   });
 
   it("shows no trial notice", () => {
@@ -103,11 +149,18 @@ describe("with billing on", () => {
     });
   });
 
-  it("does not block a workspace in trial, on an active plan, exempt, or created before billing started", () => {
+  it("each fix-round case gets its block, the same from fresh rows and from a memoized step output", () => {
+    for (const [name, row] of Object.entries(CASES)) {
+      const expected = row.block ? { code: "PLAN_ENDED", message: row.block } : null;
+      expect(workspaceBlock(row.fields, NOW), name).toEqual(expected);
+      expect(workspaceBlock(memoized(row.fields), NOW), name).toEqual(expected);
+    }
+  });
+
+  it("does not block a workspace in trial, on an active plan, or exempt", () => {
     expect(workspaceBlock({ ...ENDED_TRIAL, trialEndsAt: new Date(NOW.getTime() + DAY) }, NOW)).toBeNull();
     expect(workspaceBlock({ ...ENDED_PLAN, planStatus: "active" }, NOW)).toBeNull();
     expect(workspaceBlock({ ...ENDED_TRIAL, billingExempt: true }, NOW)).toBeNull();
-    expect(workspaceBlock({ ...ENDED_TRIAL, createdAt: new Date("2026-11-30T00:00:00Z") }, NOW)).toBeNull();
   });
 
   it("the pause wins when both apply", () => {
@@ -120,7 +173,7 @@ describe("with billing on", () => {
 
   it("accepts the dates as strings, as a memoized job step returns them", () => {
     expect(
-      workspaceBlock({ ...ENDED_TRIAL, createdAt: NEW.toISOString(), trialEndsAt: ENDED_TRIAL.trialEndsAt.toISOString() }, NOW)
+      workspaceBlock({ ...ENDED_TRIAL, trialEndsAt: ENDED_TRIAL.trialEndsAt.toISOString() }, NOW)
         ?.code,
     ).toBe("PLAN_ENDED");
   });
@@ -194,7 +247,6 @@ describe("splitWorkspaceStatus", () => {
       companyWebsite: "x.com",
       pausedAt: null,
       pausedReason: null,
-      createdAt: NEW,
       billingExempt: false,
       plan: null,
       planStatus: null,
@@ -206,7 +258,6 @@ describe("splitWorkspaceStatus", () => {
     expect(status).toEqual({
       pausedAt: null,
       pausedReason: null,
-      createdAt: NEW,
       billingExempt: false,
       plan: null,
       planStatus: null,

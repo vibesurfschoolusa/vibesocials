@@ -7,7 +7,7 @@ import { utcDateLabel } from "@/lib/usageLimits";
 
 /**
  * What the operator can change on /admin (2026-11-10): a workspace's limit
- * overrides, pause / resume, and (21a) its billing exemption and trial end. Each change and its AdminAction record are
+ * overrides, pause / resume, and (21a) exempting it or starting its trial. Each change and its AdminAction record are
  * written in one transaction that first takes the Workspace row lock, so two
  * operators (or two clicks) cannot both see "not paused" and both record a
  * pause. Nothing here deletes anything.
@@ -83,29 +83,22 @@ export function validatePauseBody(body: unknown): { ok: true; reason: string } |
   return { ok: true, reason };
 }
 
-/** The exempt body: `{ exempt: true | false }`, nothing else. */
-export function validateExemptBody(body: unknown): { ok: true; exempt: boolean } | Invalid {
-  if (!isPlainObject(body) || typeof body.exempt !== "boolean" || Object.keys(body).length !== 1) {
-    return { ok: false, error: "Send exempt as true or false." };
-  }
-  return { ok: true, exempt: body.exempt };
-}
-
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 /**
  * The trial body: `{ trialEndsAt: "YYYY-MM-DD" }` from today to MAX_TRIAL_DAYS
  * ahead (UTC calendar days), stored as the end of that UTC day so the trial
- * runs through the date shown; or `{ trialEndsAt: null }` to clear it.
+ * runs through the date shown. There is no clearing a trial: with no plan and
+ * no trial date a workspace is exempt by rule, which is what "Exempt" is for.
+ * Ending a trial early is choosing today.
  */
-export function validateTrialBody(body: unknown, now: Date): { ok: true; trialEndsAt: Date | null } | Invalid {
-  const shape = "Send trialEndsAt as a date (YYYY-MM-DD), or null to clear it.";
+export function validateTrialBody(body: unknown, now: Date): { ok: true; trialEndsAt: Date } | Invalid {
+  const shape = "Send trialEndsAt as a date (YYYY-MM-DD).";
   if (!isPlainObject(body) || !("trialEndsAt" in body) || Object.keys(body).length !== 1) {
     return { ok: false, error: shape };
   }
   const value = body.trialEndsAt;
-  if (value === null) return { ok: true, trialEndsAt: null };
   const match = typeof value === "string" ? DATE_ONLY.exec(value) : null;
   if (!match) return { ok: false, error: shape };
 
@@ -116,7 +109,7 @@ export function validateTrialBody(body: unknown, now: Date): { ok: true; trialEn
   }
   const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
   const last = new Date(today + MAX_TRIAL_DAYS * DAY_MS);
-  if (start.getTime() < today) return { ok: false, error: "Pick today or a later date." };
+  if (start.getTime() < today) return { ok: false, error: "Pick today or a later date. To end a trial now, pick today." };
   if (start.getTime() > last.getTime()) {
     return {
       ok: false,
@@ -246,39 +239,41 @@ export async function resumeWorkspace(args: {
   });
 }
 
-/** Exempt a workspace from billing, or end the exemption. Setting what is already set records nothing. */
-export async function setBillingExempt(args: {
-  operator: Operator;
-  workspaceId: string;
-  exempt: boolean;
-}): Promise<ChangeResult> {
+/** "Exempt this workspace": sets billingExempt, nothing else. Already exempt records nothing. */
+export async function exemptWorkspace(args: { operator: Operator; workspaceId: string }): Promise<ChangeResult> {
   return withLockedWorkspace(args.workspaceId, async (tx, row) => {
-    if (row.billingExempt === args.exempt) return { status: "unchanged" as const };
+    if (row.billingExempt) return { status: "unchanged" as const };
 
-    await tx.workspace.update({ where: { id: row.id }, data: { billingExempt: args.exempt } });
+    await tx.workspace.update({ where: { id: row.id }, data: { billingExempt: true } });
     await record(tx, args.operator, row, "exempt", {
       old: { billingExempt: row.billingExempt },
-      new: { billingExempt: args.exempt },
+      new: { billingExempt: true },
     });
     return { status: "changed" as const };
   });
 }
 
-/** Set or clear the end of the workspace's free trial. The bounds are checked by validateTrialBody. */
-export async function setTrialEndsAt(args: {
+/**
+ * "Start or change the trial": billingExempt false and the trial end set
+ * (bounds checked by validateTrialBody). The same values again record nothing.
+ */
+export async function startTrial(args: {
   operator: Operator;
   workspaceId: string;
-  trialEndsAt: Date | null;
+  trialEndsAt: Date;
 }): Promise<ChangeResult> {
   return withLockedWorkspace(args.workspaceId, async (tx, row) => {
-    if ((row.trialEndsAt?.getTime() ?? null) === (args.trialEndsAt?.getTime() ?? null)) {
+    if (!row.billingExempt && row.trialEndsAt?.getTime() === args.trialEndsAt.getTime()) {
       return { status: "unchanged" as const };
     }
 
-    await tx.workspace.update({ where: { id: row.id }, data: { trialEndsAt: args.trialEndsAt } });
+    await tx.workspace.update({
+      where: { id: row.id },
+      data: { billingExempt: false, trialEndsAt: args.trialEndsAt },
+    });
     await record(tx, args.operator, row, "trial", {
-      old: { trialEndsAt: row.trialEndsAt?.toISOString() ?? null },
-      new: { trialEndsAt: args.trialEndsAt?.toISOString() ?? null },
+      old: { billingExempt: row.billingExempt, trialEndsAt: row.trialEndsAt?.toISOString() ?? null },
+      new: { billingExempt: false, trialEndsAt: args.trialEndsAt.toISOString() },
     });
     return { status: "changed" as const };
   });

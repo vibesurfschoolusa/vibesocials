@@ -81,6 +81,7 @@ function makeUser(overrides: Partial<User> = {}): User {
     name: "Klaus",
     passwordHash: null,
     emailVerifiedAt: null,
+    trialStartedAt: null,
     googleLinkedAt: null,
     notifyOnPostComplete: true,
     notifyDailyDigest: true,

@@ -3,7 +3,9 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "./auth";
-import { billingEnabled, newWorkspaceBillingData } from "./billing";
+import { newWorkspaceBillingData, type TrialClient } from "@/server/billing/newWorkspaceTrial";
+
+import { billingEnabled } from "./billing";
 import { prisma } from "./db";
 
 /**
@@ -31,7 +33,7 @@ export interface WorkspaceContext {
   > &
     // 21a: present only with billing on, for workspaceBlock and the Plan section.
     Partial<
-      Pick<Workspace, "createdAt" | "billingExempt" | "plan" | "planStatus" | "trialEndsAt" | "currentPeriodEnd">
+      Pick<Workspace, "billingExempt" | "plan" | "planStatus" | "trialEndsAt" | "currentPeriodEnd">
     >;
   role: WorkspaceRole;
 }
@@ -63,7 +65,17 @@ export async function getWorkspaceMemberCount(workspaceId: string): Promise<numb
 export type PrismaClientLike = {
   workspace: { create: PrismaClient["workspace"]["create"] };
   workspaceMember: { create: PrismaClient["workspaceMember"]["create"] };
+  // 21a: read and written for the creator's trial, only with billing on. Every
+  // real caller passes prisma or a transaction's tx, which have it.
+  user?: TrialClient["user"];
 };
+
+/** 21a: the new workspace's billing columns: nothing with billing off. */
+async function billingDataFor(tx: PrismaClientLike, userId: string): Promise<Record<string, unknown>> {
+  if (!billingEnabled()) return {};
+  if (!tx.user) throw new Error("provisionPersonalWorkspace: billing is on, so the client needs its user delegate");
+  return newWorkspaceBillingData({ user: tx.user }, userId, new Date());
+}
 
 /**
  * Thrown by {@link getWorkspaceContext} when `opts.requireRole` isn't met.
@@ -133,8 +145,8 @@ export async function provisionPersonalWorkspace(
   const workspace = await tx.workspace.create({
     data: {
       name: personalWorkspaceName(user),
-      // 21a: a free trial with billing on; nothing extra with it off.
-      ...newWorkspaceBillingData(new Date()),
+      // 21a: the creator's trial (or an operator's exemption) with billing on; nothing with it off.
+      ...(await billingDataFor(tx, user.id)),
     },
   });
 
@@ -303,7 +315,6 @@ export async function getWorkspaceContext(
       // 21a: the plan columns, from the row already read, only with billing on.
       ...(billingEnabled()
         ? {
-            createdAt: active.workspace.createdAt,
             billingExempt: active.workspace.billingExempt,
             plan: active.workspace.plan,
             planStatus: active.workspace.planStatus,

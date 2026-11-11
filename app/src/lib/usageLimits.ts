@@ -1,6 +1,6 @@
 import { currentPacificMidnight, nextPacificMidnight } from "@/server/platforms/rateLimited";
 
-import { billingEnabled, billingStartedAt, planState, type BillingFields } from "./billing";
+import { billingEnabled, planState, type BillingFields } from "./billing";
 import { isPlanKey, PLANS, type PlanLimits } from "./plans";
 
 /**
@@ -69,7 +69,7 @@ function planLimits(
   now: Date,
 ): PlanLimits | null {
   if (!billingEnabled(env)) return null;
-  const state = planState(workspace, now, billingStartedAt(env));
+  const state = planState(workspace, now);
   if (state === "exempt") return null;
   if (isPlanKey(workspace.plan)) return PLANS[workspace.plan].limits;
   if (state === "trial") return PLANS.starter.limits;

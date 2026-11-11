@@ -19,7 +19,7 @@ export type WorkspaceBlockCode = typeof WORKSPACE_PAUSED_CODE | typeof PLAN_ENDE
 export type WorkspaceBlock = { code: WorkspaceBlockCode; message: string };
 
 /**
- * The pause columns, and the billing ones (createdAt among them). Optional,
+ * The pause columns, and the billing ones. Optional,
  * and a Date or its ISO string, because a job step's memoized output carries
  * dates as strings, a row read before the migration has none of them, and an
  * enforcement point reads the billing ones only with billing on.
@@ -32,7 +32,6 @@ export type WorkspaceStatusFields = {
 const STATUS_KEYS = [
   "pausedAt",
   "pausedReason",
-  "createdAt",
   "billingExempt",
   "plan",
   "planStatus",

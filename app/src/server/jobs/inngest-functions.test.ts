@@ -4840,7 +4840,6 @@ describe("publishToAllPlatforms and retryPlatforms — plan ended (billing on)",
   const BILLING_ROW = {
     pausedAt: null,
     pausedReason: null,
-    createdAt: new Date("2026-12-02T00:00:00Z"),
     billingExempt: false,
     plan: null,
     planStatus: null,
@@ -4854,7 +4853,6 @@ describe("publishToAllPlatforms and retryPlatforms — plan ended (billing on)",
     trackWebsiteLinks: true,
     pausedAt: true,
     pausedReason: true,
-    createdAt: true,
     billingExempt: true,
     plan: true,
     planStatus: true,
@@ -4900,7 +4898,6 @@ describe("publishToAllPlatforms and retryPlatforms — plan ended (billing on)",
 
   beforeEach(() => {
     vi.stubEnv("BILLING_ENABLED", "true");
-    vi.stubEnv("BILLING_STARTED_AT", "2026-12-01T00:00:00Z");
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(NOW);
   });

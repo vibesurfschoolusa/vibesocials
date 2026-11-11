@@ -18,7 +18,6 @@ function context(role: "owner" | "member", billing: Record<string, unknown>) {
     ...base,
     workspace: {
       ...base.workspace,
-      createdAt: new Date("2026-12-02T00:00:00Z"),
       billingExempt: false,
       plan: null,
       planStatus: null,
@@ -32,7 +31,6 @@ function context(role: "owner" | "member", billing: Record<string, unknown>) {
 beforeEach(() => {
   getWorkspaceContextMock.mockReset();
   vi.stubEnv("BILLING_ENABLED", "true");
-  vi.stubEnv("BILLING_STARTED_AT", "2026-12-01T00:00:00Z");
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
 });

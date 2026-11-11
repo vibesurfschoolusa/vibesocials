@@ -12,6 +12,8 @@ const h = vi.hoisted(() => ({
   transaction: vi.fn(),
   workspaceCreate: vi.fn(),
   memberCreate: vi.fn(),
+  userFindUnique: vi.fn(),
+  userUpdateMany: vi.fn(),
   getWorkspaceContext: vi.fn(),
   checkRateLimit: vi.fn(),
   cookieSet: vi.fn(),
@@ -35,7 +37,6 @@ const DAY = 24 * 60 * 60 * 1000;
 const PAUSE_AND_BILLING_SELECT = {
   pausedAt: true,
   pausedReason: true,
-  createdAt: true,
   billingExempt: true,
   plan: true,
   planStatus: true,
@@ -54,7 +55,7 @@ function request() {
 beforeEach(() => {
   for (const mock of Object.values(h)) mock.mockReset();
   vi.stubEnv("BILLING_ENABLED", "true");
-  vi.stubEnv("BILLING_STARTED_AT", "2026-12-01T00:00:00Z");
+  vi.stubEnv("ADMIN_EMAILS", "ops@example.com");
   vi.stubEnv("BILLING_TRIAL_DAYS", "");
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
@@ -68,8 +69,14 @@ beforeEach(() => {
   h.checkRateLimit.mockResolvedValue({ allowed: true });
   h.workspaceCreate.mockResolvedValue({ id: "ws-new", name: "Fresh start" });
   h.memberCreate.mockResolvedValue({});
+  h.userFindUnique.mockResolvedValue({ email: "owner@example.com", emailVerifiedAt: null, trialStartedAt: null });
+  h.userUpdateMany.mockResolvedValue({ count: 1 });
   h.transaction.mockImplementation(async (fn: (tx: unknown) => unknown) =>
-    fn({ workspace: { create: h.workspaceCreate }, workspaceMember: { create: h.memberCreate } }),
+    fn({
+      workspace: { create: h.workspaceCreate },
+      workspaceMember: { create: h.memberCreate },
+      user: { findUnique: h.userFindUnique, updateMany: h.userUpdateMany },
+    }),
   );
 });
 afterEach(() => {
@@ -78,12 +85,39 @@ afterEach(() => {
 });
 
 describe("POST /api/workspaces with billing on", () => {
-  it("creates the workspace with a free trial", async () => {
+  it("a first workspace starts the caller's free trial, in the same transaction", async () => {
     const response = await POST(request());
     expect(response.status).toBe(201);
     expect(h.workspaceCreate).toHaveBeenCalledWith({
       data: { name: "Fresh start", trialEndsAt: new Date(NOW.getTime() + 14 * DAY), billingExempt: false },
     });
+    expect(h.userUpdateMany).toHaveBeenCalledWith({
+      where: { id: "user-1", trialStartedAt: null },
+      data: { trialStartedAt: NOW },
+    });
+  });
+
+  it("a later workspace ends its trial with the caller's first window, even when that has passed", async () => {
+    h.userFindUnique.mockResolvedValue({
+      email: "owner@example.com",
+      emailVerifiedAt: null,
+      trialStartedAt: new Date(NOW.getTime() - 20 * DAY),
+    });
+    await POST(request());
+    expect(h.workspaceCreate).toHaveBeenCalledWith({
+      data: { name: "Fresh start", trialEndsAt: new Date(NOW.getTime() - 6 * DAY), billingExempt: false },
+    });
+    expect(h.userUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it("an operator's workspace is exempt with no trial", async () => {
+    h.userFindUnique.mockResolvedValue({
+      email: "ops@example.com",
+      emailVerifiedAt: new Date("2026-11-01T00:00:00Z"),
+      trialStartedAt: null,
+    });
+    await POST(request());
+    expect(h.workspaceCreate).toHaveBeenCalledWith({ data: { name: "Fresh start", billingExempt: true } });
   });
 
   it("reads the plan columns of the caller's owned workspaces in the same query", async () => {
@@ -100,7 +134,6 @@ describe("POST /api/workspaces with billing on", () => {
         workspace: {
           pausedAt: null,
           pausedReason: null,
-          createdAt: new Date("2026-12-02T00:00:00Z"),
           billingExempt: false,
           plan: null,
           planStatus: null,
@@ -121,9 +154,10 @@ describe("POST /api/workspaces with billing on", () => {
     expect(h.transaction).not.toHaveBeenCalled();
   });
 
-  it("lets an owner of exempt workspaces create one", async () => {
+  it("lets an owner of exempt workspaces (by flag, or never offered a trial) create one", async () => {
     h.findMany.mockResolvedValue([
-      { workspace: { pausedAt: null, pausedReason: null, createdAt: new Date("2026-01-01T00:00:00Z"), billingExempt: true } },
+      { workspace: { pausedAt: null, pausedReason: null, billingExempt: true } },
+      { workspace: { pausedAt: null, pausedReason: null, billingExempt: false, plan: null, trialEndsAt: null } },
     ]);
     expect((await POST(request())).status).toBe(201);
   });

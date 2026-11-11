@@ -1,6 +1,6 @@
 import { Prisma, type Platform } from "@prisma/client";
 
-import { billingEnabled, billingStartedAt, planState, type PlanState } from "@/lib/billing";
+import { billingEnabled, planState, type PlanState } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { PLATFORM_ORDER } from "@/lib/platforms";
 import { resolveWorkspaceLimits, type WorkspaceLimits } from "@/lib/usageLimits";
@@ -149,7 +149,7 @@ function toRow(
     failed30d: counts?.failed30d ?? 0,
     storageBytes: counts?.storageBytes ?? 0,
     pausedAt: workspace.pausedAt,
-    planState: planState(workspace, now, billingStartedAt()),
+    planState: planState(workspace, now),
   };
 }
 
@@ -258,15 +258,14 @@ export async function getAdminWorkspaceDetail(id: string, now: Date): Promise<Ad
     currentPeriodEnd: workspace.currentPeriodEnd,
   };
   // The limits resolve with the plan only with billing on, exactly as enforced.
-  const forLimits = { ...billingColumns, createdAt: workspace.createdAt };
 
   return {
     workspace: row,
     pausedReason: workspace.pausedReason,
     billing: { ...billingColumns, state: row.planState, enabled: billingEnabled() },
     overrides,
-    effectiveLimits: resolveWorkspaceLimits({ ...overrides, ...forLimits }, process.env, now),
-    defaultLimits: resolveWorkspaceLimits(forLimits, process.env, now),
+    effectiveLimits: resolveWorkspaceLimits({ ...overrides, ...billingColumns }, process.env, now),
+    defaultLimits: resolveWorkspaceLimits(billingColumns, process.env, now),
     usage,
     actions,
   };

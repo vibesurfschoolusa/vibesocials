@@ -21,8 +21,8 @@ const h = vi.hoisted(() => ({
   setWorkspaceLimits: vi.fn(),
   pauseWorkspace: vi.fn(),
   resumeWorkspace: vi.fn(),
-  setBillingExempt: vi.fn(),
-  setTrialEndsAt: vi.fn(),
+  exemptWorkspace: vi.fn(),
+  startTrial: vi.fn(),
   NOT_FOUND: "NEXT_NOT_FOUND (test)",
 }));
 
@@ -68,8 +68,8 @@ vi.mock("@/server/admin/actions", async (importOriginal) => ({
   setWorkspaceLimits: h.setWorkspaceLimits,
   pauseWorkspace: h.pauseWorkspace,
   resumeWorkspace: h.resumeWorkspace,
-  setBillingExempt: h.setBillingExempt,
-  setTrialEndsAt: h.setTrialEndsAt,
+  exemptWorkspace: h.exemptWorkspace,
+  startTrial: h.startTrial,
 }));
 
 import { adminOtherMethods } from "@/lib/operator";
@@ -91,6 +91,9 @@ const ROUTE_FILES = walk(join(SRC, "app", "api", "admin"), "route.ts");
 
 type AnyHandler = (...args: unknown[]) => Promise<unknown>;
 
+/** The trial route takes a date from today on. */
+const TODAY = new Date().toISOString().slice(0, 10);
+
 /** What each real page or handler is called with, and what an operator should get. */
 const OPERATOR_CASES: Record<string, { body?: unknown; expectStatus?: number }> = {
   "app/admin/page.tsx default": {},
@@ -98,8 +101,8 @@ const OPERATOR_CASES: Record<string, { body?: unknown; expectStatus?: number }> 
   "app/api/admin/workspaces/[id]/limits/route.ts POST": { body: { limitPostsPerDay: 5 }, expectStatus: 200 },
   "app/api/admin/workspaces/[id]/pause/route.ts POST": { body: { reason: "Unpaid invoice." }, expectStatus: 200 },
   "app/api/admin/workspaces/[id]/resume/route.ts POST": { body: {}, expectStatus: 200 },
-  "app/api/admin/workspaces/[id]/exempt/route.ts POST": { body: { exempt: true }, expectStatus: 200 },
-  "app/api/admin/workspaces/[id]/trial/route.ts POST": { body: { trialEndsAt: null }, expectStatus: 200 },
+  "app/api/admin/workspaces/[id]/exempt/route.ts POST": { body: {}, expectStatus: 200 },
+  "app/api/admin/workspaces/[id]/trial/route.ts POST": { body: { trialEndsAt: TODAY }, expectStatus: 200 },
 };
 
 const ARGS = { params: Promise.resolve({ id: "ws-1" }), searchParams: Promise.resolve({}) };
@@ -168,8 +171,8 @@ beforeEach(() => {
     h.setWorkspaceLimits,
     h.pauseWorkspace,
     h.resumeWorkspace,
-    h.setBillingExempt,
-    h.setTrialEndsAt,
+    h.exemptWorkspace,
+    h.startTrial,
   ]) {
     mock.mockReset();
   }
@@ -210,8 +213,8 @@ beforeEach(() => {
   h.setWorkspaceLimits.mockResolvedValue({ status: "changed" });
   h.pauseWorkspace.mockResolvedValue({ status: "changed", actionId: "act-1", workspaceName: "Surf Co" });
   h.resumeWorkspace.mockResolvedValue({ status: "changed", actionId: "act-2", workspaceName: "Surf Co" });
-  h.setBillingExempt.mockResolvedValue({ status: "changed" });
-  h.setTrialEndsAt.mockResolvedValue({ status: "changed" });
+  h.exemptWorkspace.mockResolvedValue({ status: "changed" });
+  h.startTrial.mockResolvedValue({ status: "changed" });
 });
 
 describe("the admin files", () => {
@@ -249,8 +252,8 @@ describe.each(NON_OPERATORS)("for %s", (_label, arrange) => {
       h.setWorkspaceLimits,
       h.pauseWorkspace,
       h.resumeWorkspace,
-      h.setBillingExempt,
-      h.setTrialEndsAt,
+      h.exemptWorkspace,
+      h.startTrial,
       h.after,
     ]) {
       expect(mock).not.toHaveBeenCalled();

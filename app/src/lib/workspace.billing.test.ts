@@ -10,6 +10,8 @@ const h = vi.hoisted(() => ({
   findMany: vi.fn(),
   workspaceCreate: vi.fn(),
   memberCreate: vi.fn(),
+  userFindUnique: vi.fn(),
+  userUpdateMany: vi.fn(),
   getCurrentUser: vi.fn(),
   cookieGet: vi.fn(),
 }));
@@ -60,7 +62,11 @@ function membership() {
 }
 
 function tx() {
-  return { workspace: { create: h.workspaceCreate }, workspaceMember: { create: h.memberCreate } };
+  return {
+    workspace: { create: h.workspaceCreate },
+    workspaceMember: { create: h.memberCreate },
+    user: { findUnique: h.userFindUnique, updateMany: h.userUpdateMany },
+  };
 }
 
 beforeEach(() => {
@@ -69,8 +75,9 @@ beforeEach(() => {
   h.findMany.mockResolvedValue([membership()]);
   h.workspaceCreate.mockResolvedValue({ id: "ws-new" });
   h.memberCreate.mockResolvedValue({});
+  h.userFindUnique.mockResolvedValue({ email: "a@example.com", emailVerifiedAt: null, trialStartedAt: null });
+  h.userUpdateMany.mockResolvedValue({ count: 1 });
   vi.stubEnv("BILLING_ENABLED", "");
-  vi.stubEnv("BILLING_STARTED_AT", "");
   vi.stubEnv("BILLING_TRIAL_DAYS", "");
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
@@ -82,21 +89,21 @@ afterEach(() => {
 
 function billingOn() {
   vi.stubEnv("BILLING_ENABLED", "true");
-  vi.stubEnv("BILLING_STARTED_AT", "2026-12-01T00:00:00Z");
 }
 
 describe("getWorkspaceContext", () => {
   it("with billing off, carries no billing field", async () => {
     const context = await getWorkspaceContext();
-    for (const key of ["createdAt", ...Object.keys(BILLING)]) {
+    for (const key of Object.keys(BILLING)) {
       expect(context?.workspace, key).not.toHaveProperty(key);
     }
   });
 
-  it("with billing on, carries the plan columns and the creation date from the row it already reads", async () => {
+  it("with billing on, carries the plan columns from the row it already reads", async () => {
     billingOn();
     const context = await getWorkspaceContext();
-    expect(context?.workspace).toMatchObject({ createdAt: CREATED, ...BILLING });
+    expect(context?.workspace).toMatchObject(BILLING);
+    expect(context?.workspace).not.toHaveProperty("createdAt");
     expect(h.findMany).toHaveBeenCalledTimes(1);
   });
 });
@@ -105,13 +112,20 @@ describe("provisionPersonalWorkspace", () => {
   it("with billing off, creates the workspace exactly as before", async () => {
     await provisionPersonalWorkspace(tx(), { id: "user-1", name: "Ann", email: "a@example.com" });
     expect(h.workspaceCreate).toHaveBeenCalledWith({ data: { name: "Ann's workspace" } });
+    expect(h.userFindUnique).not.toHaveBeenCalled();
+    expect(h.userUpdateMany).not.toHaveBeenCalled();
   });
 
-  it("with billing on, starts a free trial of BILLING_TRIAL_DAYS", async () => {
+  it("with billing on, starts the user's free trial of BILLING_TRIAL_DAYS", async () => {
     billingOn();
     await provisionPersonalWorkspace(tx(), { id: "user-1", name: "Ann", email: "a@example.com" });
     expect(h.workspaceCreate).toHaveBeenCalledWith({
       data: { name: "Ann's workspace", trialEndsAt: new Date(NOW.getTime() + 14 * DAY), billingExempt: false },
+    });
+
+    expect(h.userUpdateMany).toHaveBeenCalledWith({
+      where: { id: "user-1", trialStartedAt: null },
+      data: { trialStartedAt: NOW },
     });
 
     h.workspaceCreate.mockClear();

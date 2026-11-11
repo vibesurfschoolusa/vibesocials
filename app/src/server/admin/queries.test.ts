@@ -72,7 +72,7 @@ describe("listAdminWorkspaces", () => {
   it("lists newest first, 50 a page, with each workspace's counts from grouped queries", async () => {
     db.workspaceFindMany.mockResolvedValue([
       workspaceRow("ws-a", CREATED_A, ["a1@example.com", "a2@example.com"], { pausedAt: NOW }),
-      workspaceRow("ws-b", CREATED_B, ["b@example.com"], { billingExempt: true }),
+      workspaceRow("ws-b", CREATED_B, ["b@example.com"], { trialEndsAt: new Date("2026-11-01T00:00:00Z") }),
     ]);
     stubCounts();
 
@@ -111,8 +111,8 @@ describe("listAdminWorkspaces", () => {
         failed30d: 2,
         storageBytes: 3_000_000_000,
         pausedAt: NOW,
-        // 21a: computed from the plan columns; this row has none and no start date applies.
-        planState: "ended",
+        // 21a: computed from the plan columns; this row was never offered a trial.
+        planState: "exempt",
       },
       {
         id: "ws-b",
@@ -126,7 +126,7 @@ describe("listAdminWorkspaces", () => {
         failed30d: 4,
         storageBytes: 1024,
         pausedAt: null,
-        planState: "exempt",
+        planState: "ended",
       },
     ]);
   });
@@ -338,18 +338,20 @@ describe("getAdminWorkspaceDetail billing", () => {
     expect(detail!.workspace.planState).toBe("trial");
   });
 
-  it("with billing on, a workspace older than BILLING_STARTED_AT is exempt and its limits are today's", async () => {
+  it("with billing on, a workspace never offered a trial is exempt and its limits are today's", async () => {
     vi.stubEnv("BILLING_ENABLED", "true");
-    vi.stubEnv("BILLING_STARTED_AT", "2026-11-05T00:00:00Z");
-    stubDetail({ plan: "pro", planStatus: "active" });
+    stubDetail({});
     const detail = await getAdminWorkspaceDetail("ws-a", NOW);
     expect(detail!.billing.enabled).toBe(true);
     expect(detail!.billing.state).toBe("exempt");
+    expect(detail!.effectiveLimits).toEqual(detail!.defaultLimits);
+    expect(detail!.defaultLimits.postsPerDay).toBe(
+      Number(process.env.LIMIT_POSTS_PER_DAY ?? DEFAULT_WORKSPACE_LIMITS.postsPerDay),
+    );
   });
 
   it("with billing on, the limits in effect and the defaults are the plan's", async () => {
     vi.stubEnv("BILLING_ENABLED", "true");
-    vi.stubEnv("BILLING_STARTED_AT", "2026-10-15T00:00:00Z");
     stubDetail({ plan: "pro", planStatus: "active", limitPostsPerDay: 3 });
     const detail = await getAdminWorkspaceDetail("ws-a", NOW);
     expect(detail!.billing.state).toBe("active");

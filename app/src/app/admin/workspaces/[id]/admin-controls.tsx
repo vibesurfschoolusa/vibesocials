@@ -170,8 +170,11 @@ export function AdminPauseControls({ workspaceId, paused }: { workspaceId: strin
 }
 
 /**
- * 21a: exempt the workspace from billing or end that, and set or clear its
- * trial end (a UTC date up to 90 days ahead). Each is its own change, recorded.
+ * 21a (fix round 1): "Exempt this workspace" (sets the exemption, nothing
+ * else), and "Start or change the trial" (ends any exemption and sets the
+ * trial to end with a UTC date from today to 90 days ahead; today ends it
+ * now). There is no clearing a trial: with no plan and no trial a workspace is
+ * exempt by rule, which is what the first button is for. Each is recorded.
  */
 export function AdminBillingControls({
   workspaceId,
@@ -206,20 +209,17 @@ export function AdminBillingControls({
       <div className="flex flex-wrap items-center gap-3">
         <Button
           type="button"
-          variant={exempt ? "outline" : "primary"}
-          onClick={() => send("exempt", { exempt: !exempt }, exempt ? "Exemption ended." : "Workspace exempted.")}
+          variant="outline"
+          onClick={() => send("exempt", {}, "Workspace exempted.")}
           loading={busy}
+          disabled={exempt}
         >
-          {exempt ? "End exemption" : "Exempt from billing"}
+          Exempt this workspace
         </Button>
-        <p className="text-sm text-muted-foreground">
-          {exempt
-            ? "Exempt: never blocked for its plan and on the default limits."
-            : "Not exempt: needs a trial or a plan once billing is on."}
-        </p>
+        {exempt ? <p className="text-sm text-muted-foreground">Already exempt.</p> : null}
       </div>
       <div className="flex flex-col gap-1">
-        <Label htmlFor="trial-ends">Free trial ends (UTC date, up to 90 days ahead)</Label>
+        <Label htmlFor="trial-ends">Start or change the trial: it ends with this UTC date (today to 90 days ahead)</Label>
         <div className="flex flex-wrap items-center gap-3">
           <Input
             id="trial-ends"
@@ -232,26 +232,16 @@ export function AdminBillingControls({
           <Button
             type="button"
             onClick={() =>
-              date
-                ? send("trial", { trialEndsAt: date }, "Trial end saved.")
-                : setMessage("Pick a date, or use Clear to remove the trial.")
+              date ? send("trial", { trialEndsAt: date }, "Trial saved.") : setMessage("Pick a date. Today ends the trial now.")
             }
             loading={busy}
           >
-            Save trial end
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => {
-              setDate("");
-              void send("trial", { trialEndsAt: null }, "Trial cleared.");
-            }}
-            disabled={busy || trialEndDate === null}
-          >
-            Clear
+            {trialEndDate && !exempt ? "Change the trial" : "Start the trial"}
           </Button>
         </div>
+        <p className="text-xs text-muted-foreground">
+          This ends any exemption. To end a trial now, pick today.
+        </p>
       </div>
       {message ? (
         <p role="status" className="text-sm text-muted-foreground">
