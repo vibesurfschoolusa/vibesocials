@@ -1,6 +1,8 @@
 import Link from "next/link";
 
 import { LegalPage, LegalSection } from "@/components/legal-page";
+import { billingEnabled } from "@/lib/billing";
+import { PRIVACY_PAYMENTS } from "@/lib/billingTerms";
 import { OPERATOR_LOCATION, OPERATOR_NAME, PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/siteInfo";
 
 export const metadata = {
@@ -167,6 +169,8 @@ export default function PrivacyPage() {
           <li>xAI or OpenAI (AI caption and reply suggestions, for the media and text involved);</li>
           <li>Google Maps Platform (place search, when you add a location to a post).</li>
         </ul>
+        {/* Billing on only (src/lib/billingTerms.ts); with it off nothing renders here. */}
+        {billingEnabled() ? <p className="mt-2">{PRIVACY_PAYMENTS}</p> : null}
         <p className="mt-2">
           Your content is also sent to each social platform you choose to post to. We share
           information with authorities only where the law requires it.

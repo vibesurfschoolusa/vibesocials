@@ -1,6 +1,19 @@
 import Link from "next/link";
 
 import { LegalPage, LegalSection } from "@/components/legal-page";
+import { billingEnabled, trialDays } from "@/lib/billing";
+import {
+  BILLING_TERMS_LAST_UPDATED,
+  TERMS_FEES_CANCEL,
+  TERMS_FEES_FAILED_PAYMENT,
+  TERMS_FEES_PRICE_CHANGES,
+  TERMS_FEES_PRICING,
+  TERMS_FEES_REFUNDS,
+  TERMS_FEES_RENEWAL,
+  TERMS_FEES_TAXES,
+  TERMS_LIABILITY,
+  termsFeesTrial,
+} from "@/lib/billingTerms";
 import { OPERATOR_LOCATION, OPERATOR_NAME, PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/siteInfo";
 
 export const metadata = {
@@ -16,16 +29,32 @@ const externalLink = (href: string, label: string) => (
   </a>
 );
 
+// Billing on adds payment wording (src/lib/billingTerms.ts). Each billing-off
+// branch below is today's markup, whole, so the page reviewers read now does
+// not change by a byte.
 export default function TermsPage() {
+  const billing = billingEnabled();
+  const intro = (
+    <p>
+      These Terms govern your use of {PRODUCT_NAME} (the &quot;Service&quot;), operated by{" "}
+      {OPERATOR_NAME}, {OPERATOR_LOCATION} (&quot;we&quot;). By creating an account or using the
+      Service, you agree to them.
+    </p>
+  );
   return (
     <LegalPage
       title="Terms of Service"
+      // LegalPage prints siteInfo's date; with billing on the Terms show the billing text's own.
+      showUpdated={!billing}
       intro={
-        <p>
-          These Terms govern your use of {PRODUCT_NAME} (the &quot;Service&quot;), operated by{" "}
-          {OPERATOR_NAME}, {OPERATOR_LOCATION} (&quot;we&quot;). By creating an account or using the
-          Service, you agree to them.
-        </p>
+        billing ? (
+          <>
+            <p className="mb-4 text-xs text-muted-foreground">Last updated: {BILLING_TERMS_LAST_UPDATED}</p>
+            {intro}
+          </>
+        ) : (
+          intro
+        )
       }
     >
       <LegalSection title="1. The Service">
@@ -92,10 +121,24 @@ export default function TermsPage() {
       </LegalSection>
 
       <LegalSection title="7. Fees">
-        <p>
-          The Service is currently free. If we introduce paid plans, we will tell you and show the
-          price before anything is charged.
-        </p>
+        {billing ? (
+          <div className="space-y-2">
+            <p>
+              {TERMS_FEES_PRICING.before}
+              <Link href="/pricing" className="underline underline-offset-2">{TERMS_FEES_PRICING.link}</Link>
+              {TERMS_FEES_PRICING.after} {termsFeesTrial(trialDays())}
+            </p>
+            <p>{TERMS_FEES_RENEWAL} {TERMS_FEES_CANCEL}</p>
+            <p>{TERMS_FEES_FAILED_PAYMENT}</p>
+            <p>{TERMS_FEES_REFUNDS}</p>
+            <p>{TERMS_FEES_PRICE_CHANGES} {TERMS_FEES_TAXES}</p>
+          </div>
+        ) : (
+          <p>
+            The Service is currently free. If we introduce paid plans, we will tell you and show the
+            price before anything is charged.
+          </p>
+        )}
       </LegalSection>
 
       <LegalSection title="8. Availability and changes">
@@ -115,12 +158,16 @@ export default function TermsPage() {
       </LegalSection>
 
       <LegalSection title="10. Disclaimer and liability">
-        <p>
-          The Service is provided &quot;as is&quot;. To the extent the law allows, we are not liable for
-          indirect or consequential losses, lost data, or a platform&apos;s actions on your account,
-          and our total liability is limited to the amount you paid us in the 12 months before the
-          claim (currently zero).
-        </p>
+        {billing ? (
+          <p>{TERMS_LIABILITY}</p>
+        ) : (
+          <p>
+            The Service is provided &quot;as is&quot;. To the extent the law allows, we are not liable for
+            indirect or consequential losses, lost data, or a platform&apos;s actions on your account,
+            and our total liability is limited to the amount you paid us in the 12 months before the
+            claim (currently zero).
+          </p>
+        )}
       </LegalSection>
 
       <LegalSection title="11. Governing law">
