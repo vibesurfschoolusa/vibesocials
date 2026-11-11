@@ -13,6 +13,8 @@ import { accountDeletionPreview } from "@/server/account/accountDeletion";
 import { workspaceDeletionRefusal } from "@/server/account/deleteWorkspace";
 import { UsageSection } from "@/components/usage-section";
 import { WorkspaceLogoControl } from "@/components/workspace-logo-control";
+import { PlanSection } from "@/components/plan-section";
+import { planSectionLabel } from "@/components/planSectionView";
 import { getWorkspaceUsageOrNull } from "@/server/usage/workspaceUsage";
 import { Alert } from "@/components/ui/alert";
 import { describeOAuthResult } from "@/lib/oauthResult";
@@ -97,6 +99,8 @@ export default async function SettingsPage({
   // Usage limits (2026-11-10): the same counts the limits are enforced with.
   // Null when they cannot be read: the section says so and the page still renders.
   const usage = await getWorkspaceUsageOrNull(context.workspace.id, new Date());
+  // 21a: owners only, and only with billing on (null otherwise: no section).
+  const planLabel = planSectionLabel(context.role, context.workspace, new Date());
 
   // What the two delete confirmations say, computed with the same functions
   // the delete routes use, so the dialog shows the sentence the route would
@@ -209,6 +213,18 @@ export default async function SettingsPage({
             deletion={workspaceDeletion}
           />
         </section>
+
+        {planLabel ? (
+          <section id="plan" className="scroll-mt-20">
+            <div className="mb-4">
+              <h2 className="text-lg font-semibold tracking-tight text-foreground">Plan</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                This workspace&apos;s plan and the limits that come with it.
+              </p>
+            </div>
+            <PlanSection label={planLabel} usage={usage} />
+          </section>
+        ) : null}
 
         <section id="usage" className="scroll-mt-20">
           <div className="mb-4">

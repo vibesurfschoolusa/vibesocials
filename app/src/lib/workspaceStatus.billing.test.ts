@@ -55,15 +55,21 @@ for (const billingExempt of [undefined, false, true]) {
 }
 
 describe("with billing off", () => {
-  it("blocks exactly as the pause alone did, for any combination of the plan columns", () => {
+  it("blocks exactly as the pause alone did, for any combination of the plan columns", async () => {
     for (const pause of [
       { pausedAt: null, pausedReason: null },
       { pausedAt: new Date("2026-11-10T08:00:00Z"), pausedReason: "Unpaid invoice." },
       {},
     ]) {
       const today = workspaceBlock(pause);
+      const todayResponse = workspaceBlockResponse(pause);
       for (const columns of BILLING_COMBINATIONS) {
         expect(workspaceBlock({ ...pause, ...columns }, NOW)).toEqual(today);
+        // Every route answers through workspaceBlockResponse: same status, same body.
+        const response = workspaceBlockResponse({ ...pause, ...columns }, NOW);
+        expect(response?.status).toBe(todayResponse?.status);
+        expect(await response?.json()).toEqual(await todayResponse?.clone().json());
+        expect(trialEndingNotice({ ...pause, ...columns }, "owner", NOW)).toBeNull();
       }
     }
   });
