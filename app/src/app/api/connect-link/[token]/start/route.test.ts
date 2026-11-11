@@ -291,3 +291,54 @@ describe("x", () => {
     expect(res.headers.get("set-cookie")).toBeNull();
   });
 });
+
+// Fix round 1: one link may start at most 60 flows an hour, from any number
+// of networks, so it cannot be used to make unlimited X request-token calls.
+describe("the per-link start limit", () => {
+  const LINK_ROUTE = "connect-link/start-link";
+  const limitOnly = (blocked: (opts: { userId: string; route: string }) => boolean) =>
+    h.rateLimit.mockImplementation(async (opts: { userId: string; route: string }) =>
+      blocked(opts) ? { allowed: false, retryAfterSeconds: 120 } : { allowed: true },
+    );
+
+  it("under the cap a press starts as before, the per-IP limit checked first, then the link's", async () => {
+    const res = await press("tiktok");
+
+    expect(res.status).toBe(303);
+    expect(h.rateLimit.mock.calls.map(([opts]) => opts.route)).toEqual(["connect-link/start", LINK_ROUTE]);
+    expect(h.rateLimit.mock.calls[1][0]).toMatchObject({ limit: 60, windowMs: 60 * 60 * 1000, failClosed: true });
+  });
+
+  it("over the link's cap from a fresh network: the same 429, nothing sent to a platform, no cookie", async () => {
+    const fetchMock = vi.fn(async () => new Response("oauth_token=t&oauth_token_secret=s"));
+    vi.stubGlobal("fetch", fetchMock);
+    limitOnly(({ route }) => route === LINK_ROUTE);
+
+    const res = await press("x", { "sec-fetch-site": "same-origin", "x-forwarded-for": "203.0.113.9" });
+
+    expect(res.status).toBe(429);
+    expect(await res.text()).toBe("Too many requests from this network in the last hour. Try again later.");
+    expect(res.headers.get("Retry-After")).toBe("120");
+    expect(res.headers.get("set-cookie")).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(h.handshakeCreate).not.toHaveBeenCalled();
+  });
+
+  it("another link is not affected", async () => {
+    limitOnly(({ route, userId }) => route === LINK_ROUTE && userId.includes("link-1"));
+    h.linkFind.mockResolvedValue(linkRow({ id: "link-2" }));
+
+    const res = await press("tiktok");
+
+    expect(res.status).toBe(303);
+  });
+
+  it("is keyed by the link id, never the raw token", async () => {
+    await press("tiktok");
+
+    const key = h.rateLimit.mock.calls[1][0].userId as string;
+    expect(key).toContain("link-1");
+    expect(key).not.toContain(TOKEN);
+    for (const [opts] of h.rateLimit.mock.calls) expect(JSON.stringify(opts)).not.toContain(TOKEN);
+  });
+});

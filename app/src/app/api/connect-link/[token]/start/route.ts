@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import {
   CONNECT_LINK_RATE_LIMIT_MESSAGE,
   CONNECT_LINK_STARTS_PER_HOUR,
+  CONNECT_LINK_STARTS_PER_LINK_PER_HOUR,
   alreadyConnectedCode,
   connectFailedCode,
   isConnectLinkTokenShape,
@@ -39,6 +40,13 @@ function backToPage(request: Request, token: string, error?: string): NextRespon
   return NextResponse.redirect(url, 303);
 }
 
+function tooMany(retryAfterSeconds: number | undefined): NextResponse {
+  return new NextResponse(CONNECT_LINK_RATE_LIMIT_MESSAGE, {
+    status: 429,
+    headers: { "content-type": "text/plain; charset=utf-8", "Retry-After": String(retryAfterSeconds ?? 60) },
+  });
+}
+
 export async function POST(request: Request, context: RouteContext): Promise<NextResponse> {
   if (!isSameOriginRequest(request)) {
     return new NextResponse("Open the link you were sent and press Connect there.", {
@@ -54,12 +62,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     windowMs: 60 * 60 * 1000,
     failClosed: true,
   });
-  if (!limit.allowed) {
-    return new NextResponse(CONNECT_LINK_RATE_LIMIT_MESSAGE, {
-      status: 429,
-      headers: { "content-type": "text/plain; charset=utf-8", "Retry-After": String(limit.retryAfterSeconds ?? 60) },
-    });
-  }
+  if (!limit.allowed) return tooMany(limit.retryAfterSeconds);
 
   const { token } = await context.params;
   if (!isConnectLinkTokenShape(token)) {
@@ -77,6 +80,17 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     const link = await findActiveConnectLink(token);
     // The page says the link is not active.
     if (!link) return backToPage(request, token);
+
+    // Per link as well, from whatever network: one link cannot drive unlimited
+    // request-token calls (X) or flows. Keyed by the link id, never the token.
+    const linkLimit = await checkRateLimit({
+      userId: `connect-link:${link.id}`,
+      route: "connect-link/start-link",
+      limit: CONNECT_LINK_STARTS_PER_LINK_PER_HOUR,
+      windowMs: 60 * 60 * 1000,
+      failClosed: true,
+    });
+    if (!linkLimit.allowed) return tooMany(linkLimit.retryAfterSeconds);
 
     if (!isPlatform(platformValue)) return backToPage(request, token, "connect_failed");
     const platform = platformValue;

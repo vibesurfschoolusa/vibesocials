@@ -35,6 +35,8 @@ export const CONNECT_LINK_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 export const CONNECT_LINK_CREATES_PER_HOUR = 10;
 /** Connect presses from one network in an hour. */
 export const CONNECT_LINK_STARTS_PER_HOUR = 30;
+/** Connect presses one link takes in an hour, from any network. */
+export const CONNECT_LINK_STARTS_PER_LINK_PER_HOUR = 60;
 /** Choice requests (list, choose, cancel) from one network in an hour. */
 export const CONNECT_LINK_CHOICES_PER_HOUR = 60;
 
