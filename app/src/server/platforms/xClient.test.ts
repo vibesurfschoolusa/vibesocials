@@ -2879,3 +2879,60 @@ describe("xClient.publishText - a post without a photo", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("xClient.publishText - only X's duplicate-content wording is the duplicate refusal", () => {
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  const textCtx = () => ({
+    user: { id: "user-1" } as unknown as User,
+    socialConnection: {
+      id: "conn-x",
+      platform: "x",
+      accessToken: "access-token",
+      refreshToken: "access-token-secret",
+    } as unknown as SocialConnection,
+    caption: "Lessons cancelled today",
+    baseCaption: "Lessons cancelled today",
+  });
+
+  function stubV2(v2: () => Response) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        const url = String(input);
+        if (url.includes("statuses/update.json")) return json({ errors: [{ code: 187 }] }, 403);
+        if (url.includes("/2/tweets")) return v2();
+        throw new Error(`Unexpected fetch in test: ${url}`);
+      }),
+    );
+  }
+
+  beforeEach(() => {
+    vi.stubEnv("X_CONSUMER_KEY", "consumer-key");
+    vi.stubEnv("X_CONSUMER_SECRET", "consumer-secret");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  it("another 403 that only mentions a duplicate keeps the generic failure", async () => {
+    stubV2(() => json({ detail: "Duplicate request id.", title: "Forbidden", status: 403 }, 403));
+    const error = (await xClient.publishText!(textCtx()).catch((e: unknown) => e)) as { code?: string };
+    expect(error.code).toBe("X_TWEET_FAILED");
+  });
+
+  it("the no-API-plan refusal is still checked first", async () => {
+    stubV2(() => json({ reason: "client-not-enrolled", detail: "duplicate content" }, 403));
+    const error = (await xClient.publishText!(textCtx()).catch((e: unknown) => e)) as { code?: string };
+    expect(error.code).toBe("X_APP_NOT_ENROLLED");
+  });
+
+  it("the duplicate-content wording, in any case, is the duplicate refusal", async () => {
+    stubV2(() => json({ detail: "You are not allowed to create a Tweet with Duplicate Content." }, 403));
+    const error = (await xClient.publishText!(textCtx()).catch((e: unknown) => e)) as { code?: string };
+    expect(error.code).toBe("X_DUPLICATE_POST");
+  });
+});

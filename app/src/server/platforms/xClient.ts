@@ -658,13 +658,14 @@ export const X_DUPLICATE_POST_MESSAGE = "X refused this post because it is the s
  * X refuses a post whose text matches a recent one: v2 answers 403 with "You are
  * not allowed to create a Tweet with duplicate content." (v1.1: code 187, which
  * falls back to v2 and meets the same refusal). X's reference for POST /2/tweets
- * does not document it (checked 2026-11-10); the wording is matched loosely.
+ * does not document it (checked 2026-11-10). Only that wording ("duplicate
+ * content") counts, so no other 403 is read as a duplicate.
  * Reads a clone, so the body stays readable for the generic failure.
  */
 async function classifyXDuplicate(response: Response): Promise<(Error & { code: string; status: number }) | null> {
   if (response.status !== 403) return null;
   const body = await response.clone().text().catch(() => "");
-  if (!/duplicate/i.test(body)) return null;
+  if (!/duplicate content/i.test(body)) return null;
   console.error("[X OAuth 1.0a] X refused the post as a duplicate", { status: response.status });
   return Object.assign(new Error(X_DUPLICATE_POST_MESSAGE), { code: "X_DUPLICATE_POST", status: response.status });
 }
