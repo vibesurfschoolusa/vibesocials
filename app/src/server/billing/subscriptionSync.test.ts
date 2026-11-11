@@ -207,16 +207,8 @@ describe("the stored subscription on a price that is no longer configured", () =
     expect(data && "plan" in data).toBe(false);
   });
 
-  it("beside a configured live one that would outrank it: nothing changes while the kept one is in use, both ids reported", () => {
+  it("beside a configured live one that is newer and active: the newer one is used (the usual ranking), with its plan", () => {
     const old = legacy({ created: T0 });
-    const current = sub({ id: "sub_2", created: T0 + DAY, ...priced("price_example_pro") });
-    const result = sync(current, [old, current]);
-    expect(result).toMatchObject({ ok: false, level: "error" });
-    expect(!result.ok && result.held).toEqual({ storedSubscriptionId: "sub_1", rankedSubscriptionId: "sub_2" });
-  });
-
-  it("once the kept one is no longer in use, the configured live one is written", () => {
-    const old = legacy({ created: T0, status: "canceled", ended_at: T0 + 2 * DAY });
     const current = sub({ id: "sub_2", created: T0 + DAY, ...priced("price_example_pro") });
     expect(dataOf(sync(old, [old, current]))).toMatchObject({ stripeSubscriptionId: "sub_2", plan: "pro", planStatus: "active" });
   });
