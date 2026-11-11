@@ -3,7 +3,7 @@ import { timingSafeEqual } from "crypto";
 import { NextResponse } from "next/server";
 import type { Platform } from "@prisma/client";
 
-import { alreadyConnectedCode, connectFailedCode, type ConnectLinkFlow } from "@/lib/connectLink";
+import { alreadyConnectedCode, cancelledCode, connectFailedCode, type ConnectLinkFlow } from "@/lib/connectLink";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { looksLikeConnectLinkState, readConnectLinkState } from "@/lib/oauthState";
@@ -142,7 +142,24 @@ async function runLinkFlow<R extends Request>(
   }
 
   const response = await handler(request, flow);
-  return toVisitorPage(platform, response, flow, cookie);
+  return toVisitorPage(platform, request, response, flow, cookie);
+}
+
+/**
+ * What the platform itself said, when it sent the visitor back with a refusal:
+ * "cancelled" when the person said no, "failed" for any other platform error,
+ * null when it sent none. Several callbacks give one code for every provider
+ * error, so only the platform's own parameters can tell a "no" from a fault.
+ */
+function platformRefusal(platform: Platform, request: Request): "cancelled" | "failed" | null {
+  const params = new URL(request.url).searchParams;
+  if (platform === "x") return params.has("denied") ? "cancelled" : null;
+  const error = params.get("error");
+  if (!error) return null;
+  if (error === "access_denied" || error.startsWith("user_cancelled") || params.get("error_reason") === "user_denied") {
+    return "cancelled";
+  }
+  return "failed";
 }
 
 function withError(url: URL, code: string): URL {
@@ -156,6 +173,7 @@ function withError(url: URL, code: string): URL {
  */
 async function toVisitorPage(
   platform: Platform,
+  request: Request,
   response: Response,
   flow: ConnectLinkFlow,
   cookie: ConnectCookie,
@@ -165,6 +183,12 @@ async function toVisitorPage(
 
   const target = new URL(location);
   const page = visitorPage(target.origin, cookie.token);
+
+  const refusal = platformRefusal(platform, request);
+  if (refusal) {
+    const code = refusal === "cancelled" ? cancelledCode(platform) : connectFailedCode(platform);
+    return ending(withError(page, code), response.status);
+  }
 
   if (target.pathname !== "/settings") {
     // /login (and anything else) has nothing to tell the visitor.

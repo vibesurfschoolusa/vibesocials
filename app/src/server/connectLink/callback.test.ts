@@ -319,6 +319,16 @@ describe("withConnectLink: running the callback with the link", () => {
     expect(setCookie(res)).toMatch(/^vs_connect=;/);
   });
 
+  it.each(["facebook_page_no_pages", "linkedin_no_admin_pages", "facebook_page_already_connected"])(
+    "with no error from the platform, the callback's own %s passes through",
+    async (code) => {
+      const res = await withConnectLink("facebook_page", handlerAnswering(`/settings?error=${code}`))(
+        stateRequest(linkState(), cookieFor()),
+      );
+      expect(location(res).toString()).toBe(`${ORIGIN}/c/${TOKEN}?error=${code}`);
+    },
+  );
+
   it("a redirect to /login becomes the visitor's page with a generic error", async () => {
     const res = await withConnectLink("tiktok", handlerAnswering("/login?callbackUrl=%2Fsettings"))(
       stateRequest(linkState(), cookieFor()),
@@ -420,7 +430,7 @@ describe("withConnectLink: X", () => {
     expect(location(res).pathname).toBe("/c");
   });
 
-  it("X's denial in a link flow lands on the visitor's page", async () => {
+  it("X's denial in a link flow lands on the visitor's page as a cancellation", async () => {
     h.handshakeFind.mockResolvedValue(linkHandshake());
     const handler = handlerAnswering("/settings?error=x_auth_denied");
 
@@ -428,7 +438,7 @@ describe("withConnectLink: X", () => {
       new Request(`${ORIGIN}/api/auth/x/callback?denied=req-token`, { headers: { cookie: cookieFor() } }),
     );
 
-    expect(location(res).toString()).toBe(`${ORIGIN}/c/${TOKEN}?error=x_auth_denied`);
+    expect(location(res).toString()).toBe(`${ORIGIN}/c/${TOKEN}?error=x_cancelled`);
   });
 });
 

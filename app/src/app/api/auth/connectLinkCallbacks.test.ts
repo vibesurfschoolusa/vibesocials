@@ -269,3 +269,45 @@ describe("a choice at the end of a link flow", () => {
     expect(res.headers.get("set-cookie")).toBeNull();
   });
 });
+
+// Fix round 1: what the platform itself said decides the visitor's sentence,
+// not the code a callback picks for a provider error.
+describe("the platform's own refusal in a link flow", () => {
+  function refusal(platform: Platform, params: Record<string, string>): NextRequest {
+    const request = linkRequest(platform);
+    const url = new URL(request.url);
+    url.searchParams.delete("code");
+    url.searchParams.delete("oauth_verifier");
+    if (platform === "x") url.searchParams.delete("oauth_token");
+    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
+    return new NextRequest(url, { headers: { cookie: cookie() } });
+  }
+
+  it.each<[string, Platform, Record<string, string>, "cancelled" | "connect_failed"]>([
+    ["Google (YouTube) access_denied", "youtube", { error: "access_denied" }, "cancelled"],
+    ["Google (Business Profile) access_denied", "google_business_profile", { error: "access_denied" }, "cancelled"],
+    ["LinkedIn user_cancelled_login", "linkedin", { error: "user_cancelled_login" }, "cancelled"],
+    ["LinkedIn user_cancelled_authorize", "linkedin", { error: "user_cancelled_authorize" }, "cancelled"],
+    ["LinkedIn unauthorized_scope_error", "linkedin", { error: "unauthorized_scope_error" }, "connect_failed"],
+    ["Meta (Facebook Page) user_denied", "facebook_page", { error: "access_denied", error_reason: "user_denied" }, "cancelled"],
+    ["Meta (Instagram) user_denied", "instagram", { error: "access_denied", error_reason: "user_denied" }, "cancelled"],
+    ["Pinterest access_denied", "pinterest", { error: "access_denied" }, "cancelled"],
+    ["TikTok access_denied", "tiktok", { error: "access_denied" }, "cancelled"],
+    ["X denied", "x", { denied: "req-token" }, "cancelled"],
+    ["TikTok server_error", "tiktok", { error: "server_error" }, "connect_failed"],
+  ])("%s: the platform's answer decides the visitor's sentence, whatever code the callback chose", async (_name, platform, params, outcome) => {
+    const res = await CALLBACKS[platform](refusal(platform, params));
+
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/c/${TOKEN}?error=${platform}_${outcome}`);
+    expect(h.upsert).not.toHaveBeenCalled();
+    expect(res.headers.get("set-cookie")).toMatch(/^vs_connect=;/);
+  });
+
+  it("a refusal on a flow whose place is already taken still says already connected", async () => {
+    h.connectionFind.mockResolvedValue({ needsReconnect: false });
+
+    const res = await tiktokGET(refusal("tiktok", { error: "access_denied" }));
+
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/c/${TOKEN}?error=tiktok_already_connected`);
+  });
+});

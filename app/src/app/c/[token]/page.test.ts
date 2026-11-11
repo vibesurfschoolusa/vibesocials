@@ -113,7 +113,9 @@ describe("the connect link page", () => {
 
   it.each([
     [{ success: "tiktok_connected" }, "TikTok is connected."],
-    [{ error: "access_denied" }, "You cancelled. Nothing was connected."],
+    [{ error: "tiktok_cancelled" }, "You cancelled. Nothing was connected."],
+    [{ error: "youtube_oauth_denied" }, "We couldn&#x27;t connect YouTube. Try again, or tell Surf &amp; Co."],
+    [{ error: "linkedin_auth_failed" }, "We couldn&#x27;t connect LinkedIn. Try again, or tell Surf &amp; Co."],
     [{ error: "instagram_already_connected" }, "Instagram is already connected. Ask Surf &amp; Co if it should be changed."],
     [{ error: "pinterest_no_boards" }, "Create a board on Pinterest"],
     [{ error: "tiktok_token_exchange_failed" }, "We couldn&#x27;t connect TikTok. Try again, or tell Surf &amp; Co."],

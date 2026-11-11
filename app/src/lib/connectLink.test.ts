@@ -90,9 +90,21 @@ describe("the sentence the visitor reads after a flow", () => {
     );
   });
 
-  it("said no on the platform's screen", () => {
-    for (const error of ["access_denied", "x_auth_denied", "linkedin_auth_failed", "youtube_oauth_denied"]) {
+  it("said no on the platform's screen: only the wrapper's <platform>_cancelled", () => {
+    for (const error of ["x_cancelled", "linkedin_cancelled", "google_business_profile_cancelled"]) {
       expect(describe_({ error })?.message, error).toBe("You cancelled. Nothing was connected.");
+    }
+  });
+
+  it("a callback's own denied or auth_failed code is never read as a cancellation", () => {
+    expect(describe_({ error: "youtube_oauth_denied" })?.message).toBe(
+      "We couldn't connect YouTube. Try again, or tell Surf Co.",
+    );
+    expect(describe_({ error: "linkedin_auth_failed" })?.message).toBe(
+      "We couldn't connect LinkedIn. Try again, or tell Surf Co.",
+    );
+    for (const error of ["access_denied", "x_auth_denied"]) {
+      expect(describe_({ error })?.message, error).not.toContain("cancelled");
     }
   });
 

@@ -71,14 +71,14 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
     setBusy(null);
   }
 
-  async function cancel() {
+  async function cancel(platform: string) {
     setBusy("cancel");
     try {
       await fetch(base, { method: "DELETE" });
     } catch {
       // The choice expires by itself in 15 minutes.
     }
-    router.push(`${page}?error=access_denied`);
+    router.push(`${page}?error=${encodeURIComponent(`${platform}_cancelled`)}`);
   }
 
   if (state.status === "loading") return <p className="text-sm text-muted-foreground">Loading the accounts…</p>;
@@ -109,7 +109,7 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
         ))}
       </ul>
       {error ? <p className="mt-3 text-sm text-destructive">{error}</p> : null}
-      <Button type="button" variant="outline" size="sm" className="mt-4" disabled={busy !== null} onClick={cancel}>
+      <Button type="button" variant="outline" size="sm" className="mt-4" disabled={busy !== null} onClick={() => cancel(state.platform)}>
         Cancel
       </Button>
     </section>

@@ -116,6 +116,14 @@ export function alreadyConnectedCode(platform: Platform): string {
   return `${platform}_already_connected`;
 }
 
+/**
+ * The error code for a link flow the visitor said no to on the platform's own
+ * screen. Only the callback wrapper sets it, from the platform's parameters.
+ */
+export function cancelledCode(platform: Platform): string {
+  return `${platform}_cancelled`;
+}
+
 /** The error code for a link flow that failed for a reason the visitor cannot act on. */
 export function connectFailedCode(platform: Platform): string {
   return `${platform}_connect_failed`;
@@ -166,7 +174,7 @@ export function describeConnectLinkResult(query: URLSearchParams, workspaceName:
     const platform = platformOfCode(error);
     const label = platform ? PLATFORM_LABELS[platform] : null;
 
-    if (error.includes("denied") || error.endsWith("auth_failed")) {
+    if (platform && error === cancelledCode(platform)) {
       return { variant: "danger", message: "You cancelled. Nothing was connected." };
     }
     if (platform && error === alreadyConnectedCode(platform)) {
