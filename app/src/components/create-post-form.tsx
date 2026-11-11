@@ -45,7 +45,7 @@ import { generateBlobKey } from "@/lib/blobKey";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { cn } from "@/lib/cn";
-import { composerPublishConfirmCopy } from "@/lib/composerConfirm";
+import { composerPublishConfirmCopy, type ComposerConfirmCopy } from "@/lib/composerConfirm";
 import { deriveComposerGate } from "@/lib/composerGate";
 import {
   COMPOSER_DISPATCH_FAILED_MESSAGE,
@@ -72,7 +72,7 @@ import {
   removePhoto,
 } from "@/lib/postMedia";
 import { isHeicFile, prepareUploadFile } from "@/lib/prepareUploadFile";
-import { textPostsEnabled } from "@/lib/platformLimits";
+import { platformAcceptsTextOnly, textPostsEnabled } from "@/lib/platformLimits";
 import { shouldTakeSharedFile, takeSharedFile } from "@/lib/sharedFile";
 import { TIKTOK_DISCLOSURE_INCOMPLETE_TEXT, tiktokPublishBlock } from "@/lib/tiktokPostRules";
 import {
@@ -207,6 +207,151 @@ export function platformListAlert(state: {
 /** Location is read from a post's file (Instagram, YouTube), so a text post has no use for it. */
 export function showLocationField(state: { noFile: boolean }): boolean {
   return !state.noFile;
+}
+
+/** "X", "X and LinkedIn", "Facebook Page, X and LinkedIn". */
+function joinNames(names: readonly string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * The submit button's text. In text mode it says plainly that the post has no
+ * photo; with a file it is exactly what it was.
+ */
+export function submitButtonLabel(state: { mode: PublishMode; noFile: boolean; loading: boolean }): string {
+  if (state.loading) {
+    return state.mode === "draft" ? "Saving…" : state.mode === "schedule" ? "Scheduling…" : "Publishing…";
+  }
+  if (state.noFile) {
+    return state.mode === "draft"
+      ? "Save draft without a photo"
+      : state.mode === "schedule"
+        ? "Schedule without a photo"
+        : "Publish without a photo";
+  }
+  return state.mode === "draft" ? "Save draft" : state.mode === "schedule" ? "Schedule post" : "Publish post";
+}
+
+/**
+ * The line above the buttons in text mode, built from the actual selection:
+ * where the text goes, and which platforms that need a file are skipped (the
+ * connected ones the person has not unticked). Null with a file, or when no
+ * platform can take the post (the submit then says why).
+ */
+export function textOnlyNotice(state: {
+  noFile: boolean;
+  connected: readonly Platform[];
+  deselected: ReadonlySet<Platform>;
+  selected: readonly Platform[];
+}): string | null {
+  if (!state.noFile || state.selected.length === 0) return null;
+  const goes = `This post has no photo or video. It goes to ${joinNames(state.selected.map(platformLabel))} as text only.`;
+  const skipped = state.connected.filter(
+    (platform) => !platformAcceptsTextOnly(platform) && !state.deselected.has(platform),
+  );
+  if (skipped.length === 0) return goes;
+  const verb = skipped.length === 1 ? "needs a photo or video and is skipped." : "need a photo or video and are skipped.";
+  return `${goes} ${joinNames(skipped.map(platformLabel))} ${verb}`;
+}
+
+/** Does this press ask first? Publish always; Schedule for a text post only; a draft never. */
+export function needsSubmitConfirm(state: { mode: PublishMode; noFile: boolean }): boolean {
+  if (state.mode === "now") return true;
+  return state.mode === "schedule" && state.noFile;
+}
+
+/** The confirmation of a text post: the usual copy for Publish, plus the line. */
+export function textPostConfirmCopy(input: {
+  mode: "now" | "schedule";
+  holdsForApproval: boolean;
+  /** Display labels of the selected platforms, in order. */
+  platforms: string[];
+  notice: string | null;
+  /** The chosen time as the person reads it; Schedule only. */
+  whenText: string | null;
+}): ComposerConfirmCopy & { notice: string | null } {
+  if (input.mode === "now") {
+    const base = composerPublishConfirmCopy({ holdsForApproval: input.holdsForApproval, platforms: input.platforms });
+    return {
+      ...base,
+      notice: input.notice,
+      confirmText: input.holdsForApproval ? base.confirmText : "Publish without a photo",
+    };
+  }
+  const when = input.whenText ? ` ${input.whenText}` : "";
+  if (input.holdsForApproval) {
+    return {
+      title: "Submit for approval?",
+      lead: `An owner will review this post before it publishes${when} to ${joinNames(input.platforms)}.`,
+      notice: input.notice,
+      trail: null,
+      confirmText: "Submit for approval",
+    };
+  }
+  return {
+    title: "Schedule without a photo?",
+    lead: `It publishes${when} to ${joinNames(input.platforms)}.`,
+    notice: input.notice,
+    trail: null,
+    confirmText: "Schedule without a photo",
+  };
+}
+
+/** The chosen schedule time as the confirmation says it, or null when none is valid. */
+export function scheduleWhenText(scheduledForLocal: string): string | null {
+  const iso = localDateTimeToUtcIso(scheduledForLocal);
+  if (!iso) return null;
+  return new Date(iso).toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/** Shown, until a file is attached or dismissed, when a file went away by itself. */
+export const FILE_LOST_MESSAGE = "The photo or video could not be added. Add it again, or continue without one.";
+
+/**
+ * The "file went away" notice: none, fresh (not yet pressed past), or seen (the
+ * person pressed once with it showing). A toast fades; this stays, because the
+ * caption stays and the page is now in text mode.
+ */
+export type FileLostNotice = "none" | "fresh" | "seen";
+
+export type FileLostEvent =
+  | { type: "lost"; reason: "prepare-failed" | "library-failed" | "photos-failed" }
+  | { type: "attached" }
+  | { type: "dismissed" }
+  | { type: "pressed" };
+
+export function nextFileLostNotice(current: FileLostNotice, event: FileLostEvent): FileLostNotice {
+  if (event.type === "lost") return "fresh";
+  if (event.type === "attached" || event.type === "dismissed") return "none";
+  return current === "fresh" ? "seen" : current;
+}
+
+export function fileLostNoticeShown(state: FileLostNotice): boolean {
+  return state !== "none";
+}
+
+/** The first press while the notice is fresh stops there, before any dialog. */
+export function fileLostBlocksSubmit(state: FileLostNotice): boolean {
+  return state === "fresh";
+}
+
+/**
+ * Removing the last photo takes a caption the AI wrote for it, still unedited,
+ * with it (as "Remove all" does), so it never goes out as a text post.
+ */
+export function lastPhotoRemovalClearsCaption(state: {
+  remaining: number;
+  caption: string;
+  lastAiCaption: string | null;
+}): boolean {
+  return state.remaining === 0 && removeAllClearsCaption(state.caption, state.lastAiCaption);
 }
 
 /** The switch read once per page load, so rendering calls no function the compiler cannot see into. */
@@ -408,6 +553,9 @@ function CreatePostFormInner({
   // undone once sent, so `handleUploadSubmit` opens this instead of posting
   // directly when `publishMode === "now"`; schedule/draft submit right away.
   const [confirmPublishOpen, setConfirmPublishOpen] = useState(false);
+  // A file that went away by itself (FILE_LOST_MESSAGE): stays until a file is
+  // attached or the person dismisses it (nextFileLostNotice).
+  const [fileLost, setFileLost] = useState<FileLostNotice>("none");
   // Scrolled into view whenever the success banner appears (effect below) so
   // a submit from further down the form doesn't leave the confirmation
   // off-screen.
@@ -564,6 +712,15 @@ function CreatePostFormInner({
     noFile,
     triedSend,
   });
+  // Text mode says so where the person presses (textOnlyNotice).
+  const textNotice = textOnlyNotice({
+    noFile,
+    connected: connectedPlatforms,
+    deselected,
+    selected: selectedPlatforms,
+  });
+  // Only while the page is in text mode: with a file again it has nothing to say.
+  const fileLostShown = noFile && fileLostNoticeShown(fileLost);
   const tiktokSelected = selectedPlatforms.includes("tiktok");
   // Why Publish is blocked for TikTok right now, or null (lib/tiktokPostRules.ts).
   const tiktokBlock = tiktokPublishBlock({
@@ -646,12 +803,14 @@ function CreatePostFormInner({
           toast.error(
             data?.error ?? "Couldn't load that media item. Upload a new file instead.",
           );
+          setFileLost((current) => nextFileLostNotice(current, { type: "lost", reason: "library-failed" }));
           setReuseLoading(false);
           return;
         }
 
         const item = data.item;
         setReuseItem(item);
+        setFileLost((current) => nextFileLostNotice(current, { type: "attached" }));
         setSingleAltText("");
         singlePhotoRef.current = item;
         setUploadCaption(item.baseCaption ?? "");
@@ -662,6 +821,7 @@ function CreatePostFormInner({
       } catch {
         if (cancelled) return;
         toast.error("Couldn't load that media item. Upload a new file instead.");
+        setFileLost((current) => nextFileLostNotice(current, { type: "lost", reason: "library-failed" }));
         setReuseLoading(false);
       }
     })();
@@ -912,6 +1072,7 @@ function CreatePostFormInner({
         if (selection === fileSelectionRef.current) {
           // Clear the input so the same file can be picked again.
           setFileInputKey((key) => key + 1);
+          setFileLost((current) => nextFileLostNotice(current, { type: "lost", reason: "prepare-failed" }));
         }
         throw prepareError;
       }
@@ -920,6 +1081,7 @@ function CreatePostFormInner({
         return;
       }
       setUploadFile(nextFile);
+      setFileLost((current) => nextFileLostNotice(current, { type: "attached" }));
       singlePhotoRef.current = nextFile;
 
       const blobInfo = await ensureUploaded(nextFile);
@@ -1106,12 +1268,14 @@ function CreatePostFormInner({
       for (const { key, file } of prepared) {
         changePhotoSet((prev) => patchPhoto(prev, key, { file, status: "waiting" }));
       }
+      setFileLost((current) => nextFileLostNotice(current, { type: "attached" }));
       queuePhotoUploads(prepared, isStale, replace);
     } catch (err: unknown) {
       if (isStale()) return;
       // Attach nothing from this pick.
       changePhotoSet((prev) => prev.filter((photo) => !pickKeys.has(photo.key)));
       setUploadError((err as Error).message || "Failed to prepare media for posting. Please try again.");
+      setFileLost((current) => nextFileLostNotice(current, { type: "lost", reason: "photos-failed" }));
       if (replace) {
         setFileInputKey((key) => key + 1);
         setAutoCaptionLoading(false);
@@ -1142,6 +1306,12 @@ function CreatePostFormInner({
   function removeAttachedPhoto(key: string) {
     const current = photoSetRef.current;
     if (current.length === 1 && current[0].key === key) {
+      // The caption the AI wrote for it goes too, as "Remove all" does: it
+      // would otherwise go out as a text post.
+      if (lastPhotoRemovalClearsCaption({ remaining: 0, caption: uploadCaption, lastAiCaption })) {
+        setUploadCaption("");
+        setLastAiCaption(null);
+      }
       clearAttachedPhotos();
       return;
     }
@@ -1461,6 +1631,12 @@ function CreatePostFormInner({
   async function handleUploadSubmit(event: React.FormEvent) {
     event.preventDefault();
     setTriedSend(true);
+    // A file just went away: the first press stops here, with the notice (and
+    // any error beside it) still showing, so the person sees it before a dialog.
+    if (fileLostShown) {
+      setFileLost((current) => nextFileLostNotice(current, { type: "pressed" }));
+      if (fileLostBlocksSubmit(fileLost)) return;
+    }
     setUploadError(null);
     setShowSuccess(false);
 
@@ -1562,9 +1738,10 @@ function CreatePostFormInner({
       return;
     }
 
-    // Immediate publishes can't be undone once sent — confirm first. Deferred
-    // modes (schedule/draft) submit directly, same as before this task.
-    if (publishMode === "now") {
+    // Immediate publishes can't be undone once sent — confirm first. A text post
+    // is also confirmed when scheduled; a draft and a scheduled post with a file
+    // submit directly, as before.
+    if (needsSubmitConfirm({ mode: publishMode, noFile })) {
       setConfirmPublishOpen(true);
       return;
     }
@@ -1677,10 +1854,19 @@ function CreatePostFormInner({
 
   // Publish-now confirmation copy — a held member's post is submitted for
   // review, not published (lib/composerConfirm.ts).
-  const confirmCopy = composerPublishConfirmCopy({
-    holdsForApproval,
-    platforms: selectedPlatforms.map(platformLabel),
-  });
+  const confirmCopy: ComposerConfirmCopy & { notice?: string | null } =
+    noFile && publishMode !== "draft"
+      ? textPostConfirmCopy({
+          mode: publishMode,
+          holdsForApproval,
+          platforms: selectedPlatforms.map(platformLabel),
+          notice: textNotice,
+          whenText: scheduleWhenText(scheduledForLocal),
+        })
+      : composerPublishConfirmCopy({
+          holdsForApproval,
+          platforms: selectedPlatforms.map(platformLabel),
+        });
 
   return (
     <Card className="p-6">
@@ -2211,6 +2397,22 @@ function CreatePostFormInner({
             <TikTokConsentDeclaration brandedContent={tiktokMetadata.brandedContent === true} />
           ) : null}
 
+          {fileLostShown ? (
+            <Alert variant="warning">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <p>{FILE_LOST_MESSAGE}</p>
+                <button
+                  type="button"
+                  onClick={() => setFileLost((current) => nextFileLostNotice(current, { type: "dismissed" }))}
+                  className="text-xs font-medium text-primary underline-offset-4 hover:underline"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </Alert>
+          ) : null}
+          {textNotice ? <p className="text-sm font-medium text-foreground">{textNotice}</p> : null}
+
           <div className="flex flex-wrap items-center gap-3">
             {/* No `disabled` for the zero-connection case: the gate above
                 returns early, so the form only renders once at least one
@@ -2231,17 +2433,7 @@ function CreatePostFormInner({
                 }) !== null
               }
             >
-              {uploadLoading
-                ? publishMode === "draft"
-                  ? "Saving…"
-                  : publishMode === "schedule"
-                    ? "Scheduling…"
-                    : "Publishing…"
-                : publishMode === "draft"
-                  ? "Save draft"
-                  : publishMode === "schedule"
-                    ? "Schedule post"
-                    : "Publish post"}
+              {submitButtonLabel({ mode: publishMode, noFile, loading: uploadLoading })}
             </Button>
             </span>
             {tiktokBlock ? (
@@ -2264,6 +2456,7 @@ function CreatePostFormInner({
         description={
           <span className="block space-y-1">
             <span className="block">{confirmCopy.lead}</span>
+            {confirmCopy.notice ? <span className="block font-medium">{confirmCopy.notice}</span> : null}
             {selectedPlatforms.includes("youtube") ? (
               <span className="block">YouTube privacy: {youtubeMetadata.privacyStatus}</span>
             ) : null}
