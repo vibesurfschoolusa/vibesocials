@@ -110,9 +110,11 @@ describe("approve", () => {
     const response = await call({ decision: "approve", version: VERSION });
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, state: "approved" });
+    const body = await response.json();
     expect(postUpdateManyMock).toHaveBeenCalledTimes(1);
     const { where, data } = postUpdateManyMock.mock.calls[0][0];
+    // The version written is the one the answer carries.
+    expect(body).toEqual({ ok: true, state: "approved", version: data.updatedAt.toISOString() });
     // Pinned to the version the client looked at.
     expect(where).toEqual({ ...expectedWhere(), updatedAt: new Date(VERSION) });
     // Exactly these fields: no status, no time, no member-approval columns.
@@ -120,10 +122,21 @@ describe("approve", () => {
       clientApprovedAt: expect.any(Date),
       clientChangeRequestedAt: null,
       clientNote: null,
+      // Set by hand, to the same instant, so the new version is known without a read.
+      updatedAt: data.clientApprovedAt,
     });
     const limit = (where.scheduledFor.lte as Date).getTime();
     expect(limit).toBeGreaterThanOrEqual(before + 60 * DAY);
     expect(limit).toBeLessThanOrEqual(Date.now() + 60 * DAY);
+  });
+
+  it("answers the version the next approve must send, and that approve lands on it", async () => {
+    const first = await (await call({ decision: "approve", version: VERSION })).json();
+    const written = postUpdateManyMock.mock.calls[0][0].data.updatedAt as Date;
+
+    await call({ decision: "approve", version: first.version });
+
+    expect(postUpdateManyMock.mock.calls[1][0].where.updatedAt).toEqual(written);
   });
 
   it("sends no email", async () => {
@@ -146,7 +159,12 @@ describe("ask for a change", () => {
     const response = await call({ decision: "change", note: "  Use the other photo  " });
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, state: "change_requested" });
+    // The note as stored, so the card shows exactly what the owners will read.
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      state: "change_requested",
+      note: "Use the other photo",
+    });
     expect(postUpdateManyMock).toHaveBeenCalledTimes(1);
     const { where, data } = postUpdateManyMock.mock.calls[0][0];
     expect(where).toEqual(expectedWhere());
@@ -277,7 +295,7 @@ describe("a post that can no longer be changed here", () => {
 describe("approving a version the client did not see", () => {
   it("answers 409 with the changed sentence when the post is still there but was edited", async () => {
     postUpdateManyMock.mockResolvedValue({ count: 0 });
-    postFindFirstMock.mockResolvedValue({ id: "post-1" });
+    postFindFirstMock.mockResolvedValue({ updatedAt: new Date(), clientApprovedAt: null });
 
     const response = await call({ decision: "approve", version: VERSION });
 
@@ -291,6 +309,39 @@ describe("approving a version the client did not see", () => {
     expect(where).toEqual(expectedWhere());
     expect(postUpdateManyMock).toHaveBeenCalledTimes(1);
     expect(linkUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("lets a repeated approval stand: 200 with the current version, nothing written", async () => {
+    // Two phones, or a retry after a lost answer: the only change was the client's own approval.
+    postUpdateManyMock.mockResolvedValue({ count: 0 });
+    postFindFirstMock.mockResolvedValue({
+      updatedAt: new Date("2026-11-10T11:00:00.500Z"),
+      clientApprovedAt: new Date("2026-11-10T11:00:00.500Z"),
+    });
+
+    const response = await call({ decision: "approve", version: VERSION });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      state: "approved",
+      version: "2026-11-10T11:00:00.500Z",
+    });
+    // Scoped exactly like the write, minus the version.
+    expect(postFindFirstMock).toHaveBeenCalledWith({
+      where: expectedWhere(),
+      select: { updatedAt: true, clientApprovedAt: true },
+    });
+    expect(postUpdateManyMock).toHaveBeenCalledTimes(1);
+    expect(linkUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("answers the changed 409 when the post is in reach but not approved (an owner's edit cleared it)", async () => {
+    postUpdateManyMock.mockResolvedValue({ count: 0 });
+    postFindFirstMock.mockResolvedValue({ updatedAt: new Date(), clientApprovedAt: null });
+    const response = await call({ decision: "approve", version: VERSION });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({ error: REVIEW_POST_CHANGED_MESSAGE });
   });
 
   it("answers the plain 409 when the post is gone from the client's reach", async () => {

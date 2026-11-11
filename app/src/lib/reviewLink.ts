@@ -130,3 +130,37 @@ export interface ReviewPostDTO {
   /** The post's updatedAt (ISO-8601): an approval sends it back and lands only on this version. */
   version: string;
 }
+
+/** A 200 the page cannot read: it must not claim the decision was saved. */
+export const REVIEW_ANSWER_UNREADABLE_MESSAGE =
+  "Couldn't tell whether that was saved. Reload the page to see.";
+
+/** A refused decision with no sentence of its own. */
+const REVIEW_DECISION_FAILED_MESSAGE = "Couldn't save that. Try again.";
+
+/**
+ * What the page does with a decision's answer. A saved one updates that card
+ * from the answer alone (no list reload, which could fail and hide the save);
+ * only a "changed" 409 reloads the list; anything else shows its sentence on
+ * the card.
+ */
+export type ReviewDecisionOutcome =
+  | { kind: "saved"; patch: Partial<ReviewPostDTO> }
+  | { kind: "changed"; message: string }
+  | { kind: "refused"; message: string };
+
+export function reviewDecisionOutcome(status: number, data: unknown): ReviewDecisionOutcome {
+  const body = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+  if (status >= 200 && status < 300) {
+    if (body.state === "approved" && typeof body.version === "string") {
+      return { kind: "saved", patch: { state: "approved", version: body.version, note: null } };
+    }
+    if (body.state === "change_requested" && typeof body.note === "string") {
+      return { kind: "saved", patch: { state: "change_requested", note: body.note } };
+    }
+    return { kind: "refused", message: REVIEW_ANSWER_UNREADABLE_MESSAGE };
+  }
+  const message = typeof body.error === "string" && body.error ? body.error : REVIEW_DECISION_FAILED_MESSAGE;
+  if (status === 409 && message === REVIEW_POST_CHANGED_MESSAGE) return { kind: "changed", message };
+  return { kind: "refused", message };
+}

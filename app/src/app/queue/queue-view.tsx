@@ -81,23 +81,33 @@ function formatTimestamp(iso: string): string {
   });
 }
 
+/** A draft the client pulled out of the schedule through the review link. */
+function hasClientChangeRequest(job: PostJobDTO): boolean {
+  return job.status === "draft" && Boolean(job.clientChangeRequestedAt);
+}
+
 /**
- * Posts awaiting approval first (they block someone else's work — oldest
- * submission on top), then scheduled posts soonest-first (next up), then drafts
- * newest-first.
+ * Drafts the client asked to change first (the client is waiting on the owner:
+ * oldest request on top), then posts awaiting approval (they block someone
+ * else's work: oldest submission on top), then scheduled posts soonest-first
+ * (next up), then drafts newest-first.
  */
-function sortQueue(jobs: PostJobDTO[]): PostJobDTO[] {
-  const pendingApproval = jobs
+export function sortQueue(jobs: PostJobDTO[]): PostJobDTO[] {
+  const clientChanges = jobs
+    .filter(hasClientChangeRequest)
+    .sort((a, b) => (a.clientChangeRequestedAt ?? "").localeCompare(b.clientChangeRequestedAt ?? ""));
+  const others = jobs.filter((j) => !hasClientChangeRequest(j));
+  const pendingApproval = others
     .filter((j) => j.approvalState === "pending")
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  const rest = jobs.filter((j) => j.approvalState !== "pending");
+  const rest = others.filter((j) => j.approvalState !== "pending");
   const scheduled = rest
     .filter((j) => j.status === "scheduled")
     .sort((a, b) => (a.scheduledFor ?? "").localeCompare(b.scheduledFor ?? ""));
   const drafts = rest
     .filter((j) => j.status === "draft")
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  return [...pendingApproval, ...scheduled, ...drafts];
+  return [...clientChanges, ...pendingApproval, ...scheduled, ...drafts];
 }
 
 interface QueueCardProps {
@@ -775,7 +785,9 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
   const load = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent === true;
     try {
-      const response = await fetch("/api/posts?status=scheduled,draft");
+      // clientChangesFirst: the first page also carries every draft the client
+      // asked to change (up to 20), however old, so none hides behind Load more.
+      const response = await fetch("/api/posts?status=scheduled,draft&clientChangesFirst=1");
       if (!response.ok) {
         if (!silent) {
           setError(
@@ -1066,6 +1078,7 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
             {view === "calendar" ? (
               <QueueCalendar
                 jobs={jobs}
+                onShowList={() => setView("list")}
                 onEdit={setEditTarget}
                 onRescheduled={applyReschedule}
               />

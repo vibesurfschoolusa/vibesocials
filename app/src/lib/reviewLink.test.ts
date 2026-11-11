@@ -6,7 +6,11 @@ import {
   REVIEW_NOTE_TOO_LONG_MESSAGE,
   REVIEW_DECISION_INVALID_MESSAGE,
   REVIEW_VERSION_MISSING_MESSAGE,
+  REVIEW_POST_CHANGED_MESSAGE,
+  REVIEW_POST_LOCKED_MESSAGE,
+  REVIEW_ANSWER_UNREADABLE_MESSAGE,
   isReviewLinkTokenShape,
+  reviewDecisionOutcome,
   parseReviewDecision,
   reviewLinkUrl,
 } from "./reviewLink";
@@ -107,5 +111,50 @@ describe("parseReviewDecision", () => {
       decision: "change",
       note: "ab\nc",
     });
+  });
+});
+
+describe("reviewDecisionOutcome", () => {
+  const VERSION = "2026-11-10T12:00:00.000Z";
+
+  it("updates an approved card from the answer, with the version the next approve must send", () => {
+    expect(reviewDecisionOutcome(200, { ok: true, state: "approved", version: VERSION })).toEqual({
+      kind: "saved",
+      patch: { state: "approved", version: VERSION, note: null },
+    });
+  });
+
+  it("turns a change request's card into the Change requested card with the stored note", () => {
+    expect(
+      reviewDecisionOutcome(200, { ok: true, state: "change_requested", note: "Use the other photo" }),
+    ).toEqual({ kind: "saved", patch: { state: "change_requested", note: "Use the other photo" } });
+  });
+
+  it("asks for the list to be reloaded only when the post changed", () => {
+    expect(reviewDecisionOutcome(409, { error: REVIEW_POST_CHANGED_MESSAGE })).toEqual({
+      kind: "changed",
+      message: REVIEW_POST_CHANGED_MESSAGE,
+    });
+    expect(reviewDecisionOutcome(409, { error: REVIEW_POST_LOCKED_MESSAGE })).toEqual({
+      kind: "refused",
+      message: REVIEW_POST_LOCKED_MESSAGE,
+    });
+  });
+
+  it("always gives a refused decision a sentence", () => {
+    expect(reviewDecisionOutcome(429, { error: "Too many." })).toEqual({ kind: "refused", message: "Too many." });
+    expect(reviewDecisionOutcome(500, null)).toEqual({
+      kind: "refused",
+      message: "Couldn't save that. Try again.",
+    });
+  });
+
+  it("does not claim success from an answer it cannot read", () => {
+    for (const data of [null, { ok: true }, { ok: true, state: "approved" }, { ok: true, state: "change_requested" }]) {
+      expect(reviewDecisionOutcome(200, data)).toEqual({
+        kind: "refused",
+        message: REVIEW_ANSWER_UNREADABLE_MESSAGE,
+      });
+    }
   });
 });

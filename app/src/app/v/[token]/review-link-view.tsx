@@ -5,7 +5,16 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { REVIEW_NOTE_MAX, type ReviewPostDTO } from "@/lib/reviewLink";
+import {
+  REVIEW_NOTE_MAX,
+  reviewDecisionOutcome,
+  type ReviewPostDTO,
+} from "@/lib/reviewLink";
+
+/** Shown over a list on screen when reloading it failed. */
+const REFRESH_FAILED_MESSAGE = "Couldn't refresh the list. Check your connection and reload the page.";
+/** Shown when the first load failed. */
+const LOAD_FAILED_MESSAGE = "Couldn't load the posts. Check your connection and try again.";
 
 /**
  * The client's side of a review link (2026-11-10): the upcoming posts, each
@@ -67,9 +76,9 @@ function ReviewPostCard({
 }: {
   post: ReviewPostDTO;
   token: string;
-  /** Saved: take the new list (an approval changes the post's version). */
-  onDecided: () => Promise<void>;
-  /** 409: the post changed or left the schedule. Show why above the list and reload it. */
+  /** Saved: update this card from the answer (state, new version, stored note). */
+  onDecided: (patch: Partial<ReviewPostDTO>) => void;
+  /** The post changed since the page loaded: show why above the list and reload it. */
   onStale: (message: string) => void;
 }) {
   const [asking, setAsking] = useState(false);
@@ -96,17 +105,15 @@ function ReviewPostCard({
           body: JSON.stringify(body),
         },
       );
-      const data = (await response.json().catch(() => null)) as { error?: string } | null;
-      if (response.status === 409) {
-        onStale(data?.error ?? "This post can no longer be changed here.");
+      const outcome = reviewDecisionOutcome(response.status, await response.json().catch(() => null));
+      if (outcome.kind === "saved") {
+        setAsking(false);
+        onDecided(outcome.patch);
         return;
       }
-      if (!response.ok) {
-        setError(data?.error ?? "Couldn't save that. Try again.");
-        return;
-      }
-      setAsking(false);
-      await onDecided();
+      // A refused decision always says why on its own card.
+      setError(outcome.message);
+      if (outcome.kind === "changed") onStale(outcome.message);
     } catch {
       setError("Couldn't save that. Check your connection and try again.");
     } finally {
@@ -206,6 +213,7 @@ function ReviewPostCard({
 
 export function ReviewLinkView({ token }: { token: string }) {
   const [posts, setPosts] = useState<ReviewPostDTO[] | null>(null);
+  // A failed load: the server's sentence, or "" for no answer (network).
   const [error, setError] = useState<string | null>(null);
   // Why the list was just reloaded (a post changed, or left the schedule).
   const [notice, setNotice] = useState<string | null>(null);
@@ -219,13 +227,13 @@ export function ReviewLinkView({ token }: { token: string }) {
         | { posts?: ReviewPostDTO[]; error?: string }
         | null;
       if (!response.ok || !data?.posts) {
-        setError(data?.error ?? "Couldn't load the posts. Try again.");
+        setError(data?.error ?? "");
         return;
       }
       setError(null);
       setPosts(data.posts);
     } catch {
-      setError("Couldn't load the posts. Check your connection and try again.");
+      setError("");
     }
   }, [token]);
 
@@ -234,10 +242,11 @@ export function ReviewLinkView({ token }: { token: string }) {
     void load();
   }, [load]);
 
-  const afterDecision = useCallback(async () => {
-    setNotice(null);
-    await load();
-  }, [load]);
+  // The answer says what the card needs; no list reload that could fail and
+  // hide a saved decision.
+  const patch = useCallback((id: string, change: Partial<ReviewPostDTO>) => {
+    setPosts((prev) => (prev ? prev.map((p) => (p.id === id ? { ...p, ...change } : p)) : prev));
+  }, []);
 
   const stale = useCallback(
     (message: string) => {
@@ -247,10 +256,10 @@ export function ReviewLinkView({ token }: { token: string }) {
     [load],
   );
 
-  if (error && posts === null) {
+  if (error !== null && posts === null) {
     return (
       <div className="space-y-3">
-        <p className="text-sm">{error}</p>
+        <p className="text-sm">{error || LOAD_FAILED_MESSAGE}</p>
         <Button type="button" variant="outline" size="sm" onClick={() => void load()}>
           Try again
         </Button>
@@ -266,6 +275,15 @@ export function ReviewLinkView({ token }: { token: string }) {
   }
   return (
     <div className="space-y-4">
+      {error !== null ? (
+        // A failed reload while the list is on screen: say so, and how to recover.
+        <div role="alert" className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-border bg-muted/60 p-3">
+          <p className="text-sm">{error || REFRESH_FAILED_MESSAGE}</p>
+          <Button type="button" variant="outline" size="sm" onClick={() => void load()}>
+            Reload the list
+          </Button>
+        </div>
+      ) : null}
       {notice ? (
         <p role="status" className="rounded-[var(--radius)] border border-border bg-muted/60 p-3 text-sm">
           {notice}
@@ -276,12 +294,12 @@ export function ReviewLinkView({ token }: { token: string }) {
       ) : (
         <ul className="space-y-4">
           {posts.map((post) => (
-            // Keyed on the version too: a changed post gets a fresh card.
+            // Keyed on the id only, so a card keeps its sentence across a reload.
             <ReviewPostCard
-              key={`${post.id}:${post.version}`}
+              key={post.id}
               post={post}
               token={token}
-              onDecided={afterDecision}
+              onDecided={(change) => patch(post.id, change)}
               onStale={stale}
             />
           ))}

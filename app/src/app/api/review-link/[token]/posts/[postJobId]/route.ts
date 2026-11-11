@@ -98,7 +98,9 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     decision.decision === "approve"
       ? {
           where: { ...where, updatedAt: decision.version },
-          data: { clientApprovedAt: now, clientChangeRequestedAt: null, clientNote: null },
+          // updatedAt set by hand (Prisma keeps an explicit value), so the new
+          // version is known without a read and can go back in the answer.
+          data: { clientApprovedAt: now, clientChangeRequestedAt: null, clientNote: null, updatedAt: now },
         }
       : {
           where,
@@ -122,18 +124,27 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
   }
 
   if (count === 0) {
-    // An approval that missed: if the post is still one the client may decide
-    // on, only its version moved. A read, so nothing is written either way.
-    let changed = false;
+    // An approval that missed, read (never written) with the write's scope minus
+    // the version. Still in reach and still approved: the only change was an
+    // approval of this client's own (two phones, or a retry after a lost
+    // answer), since an owner's edit clears it, so it stands. In reach but not
+    // approved: the post changed. Out of reach: it can no longer be changed here.
+    let current: { updatedAt: Date; clientApprovedAt: Date | null } | null = null;
     if (decision.decision === "approve") {
       try {
-        changed = (await prisma.postJob.findFirst({ where, select: { id: true } })) !== null;
+        current = await prisma.postJob.findFirst({
+          where,
+          select: { updatedAt: true, clientApprovedAt: true },
+        });
       } catch (error) {
         logger.error("[review-link] Couldn't tell why an approval missed", { error, linkId: link.id });
       }
     }
+    if (current?.clientApprovedAt) {
+      return NextResponse.json({ ok: true, state: "approved", version: current.updatedAt.toISOString() });
+    }
     return NextResponse.json(
-      { error: changed ? REVIEW_POST_CHANGED_MESSAGE : REVIEW_POST_LOCKED_MESSAGE },
+      { error: current ? REVIEW_POST_CHANGED_MESSAGE : REVIEW_POST_LOCKED_MESSAGE },
       { status: 409 },
     );
   }
@@ -146,7 +157,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
   }
 
   if (decision.decision === "approve") {
-    return NextResponse.json({ ok: true, state: "approved" });
+    return NextResponse.json({ ok: true, state: "approved", version: now.toISOString() });
   }
 
   // After the response: the email never delays or fails the client's request.
@@ -165,5 +176,6 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     }
   });
 
-  return NextResponse.json({ ok: true, state: "change_requested" });
+  // The note as stored, so the card shows what the owners will read.
+  return NextResponse.json({ ok: true, state: "change_requested", note });
 }

@@ -40,6 +40,8 @@ function chipLabel(job: PostJobDTO): string {
 
 interface QueueCalendarProps {
   jobs: PostJobDTO[];
+  /** Switch the Queue to its list view (the same as its List toggle). */
+  onShowList: () => void;
   /** Open the existing edit dialog — also the keyboard path to reschedule. */
   onEdit: (job: PostJobDTO) => void;
   /**
@@ -70,7 +72,21 @@ export function offCalendarSummary<
   );
 }
 
-export function QueueCalendar({ jobs, onEdit, onRescheduled }: QueueCalendarProps) {
+/**
+ * The line above the grid when the client asked to change posts (client review
+ * link): those are drafts, which the grid does not plot. Null when there are none.
+ */
+export function clientChangeLine(
+  jobs: { status: string; clientChangeRequestedAt?: string | null }[],
+): string | null {
+  const n = jobs.filter((j) => j.status === "draft" && j.clientChangeRequestedAt).length;
+  if (n === 0) return null;
+  return n === 1
+    ? "1 post: your client asked for a change. It is in the list view."
+    : `${n} posts: your client asked for a change. They are in the list view.`;
+}
+
+export function QueueCalendar({ jobs, onEdit, onRescheduled, onShowList }: QueueCalendarProps) {
   const toast = useToast();
   const [monthCursor, setMonthCursor] = useState(() => {
     const now = new Date();
@@ -83,6 +99,7 @@ export function QueueCalendar({ jobs, onEdit, onRescheduled }: QueueCalendarProp
   // Posts the grid can't plot, split by why — a post awaiting approval often
   // HAS a proposed time, so it must not be described as "without a date".
   const offCalendar = useMemo(() => offCalendarSummary(jobs), [jobs]);
+  const clientChanges = useMemo(() => clientChangeLine(jobs), [jobs]);
   const weeks = useMemo(
     () => buildCalendarMonth(monthCursor.year, monthCursor.monthIndex),
     [monthCursor],
@@ -187,6 +204,15 @@ export function QueueCalendar({ jobs, onEdit, onRescheduled }: QueueCalendarProp
             .join(" · ")}{" "}
           — see List view.
         </p>
+      ) : null}
+
+      {clientChanges ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/40 p-2.5">
+          <p className="text-sm text-foreground">{clientChanges}</p>
+          <Button type="button" size="sm" variant="outline" onClick={onShowList}>
+            Show the list
+          </Button>
+        </div>
       ) : null}
 
       <div className="overflow-x-auto">

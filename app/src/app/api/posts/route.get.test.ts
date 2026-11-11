@@ -932,3 +932,61 @@ describe("GET /api/posts - the client's review (client review link)", () => {
     expect(postJobFindManyMock).not.toHaveBeenCalled();
   });
 });
+
+describe("GET /api/posts - client change requests on the Queue's first page (client review link)", () => {
+  const QUEUE_URL = "http://localhost/api/posts?status=scheduled,draft&clientChangesFirst=1";
+  const row = (id: string, extra: Record<string, unknown> = {}) => ({ ...jobWithYouTube(), id, ...extra });
+
+  it("adds up to 20 drafts with a client change request, oldest request first, to the first page", async () => {
+    postJobFindManyMock
+      .mockResolvedValueOnce([row("new-1"), row("changed-b", { status: "draft" })])
+      .mockResolvedValueOnce([
+        row("changed-a", { status: "draft" }),
+        row("changed-b", { status: "draft" }),
+      ]);
+
+    const body = (await (await GET(getRequest(QUEUE_URL))).json()) as PostsResponse;
+
+    expect(postJobFindManyMock).toHaveBeenCalledTimes(2);
+    const pinned = postJobFindManyMock.mock.calls[1][0];
+    expect(pinned.where).toEqual({
+      workspaceId: "ws-1",
+      status: "draft",
+      clientChangeRequestedAt: { not: null },
+    });
+    expect(pinned.orderBy).toEqual([{ clientChangeRequestedAt: "asc" }, { id: "asc" }]);
+    expect(pinned.take).toBe(20);
+    // The same display-safe select as the page.
+    expect(pinned.select).toEqual(postJobFindManyMock.mock.calls[0][0].select);
+    // Each post once; the page's own order and cursor are untouched.
+    expect(body.jobs.map((job) => job.id)).toEqual(["changed-a", "changed-b", "new-1"]);
+    expect(body.nextCursor).toBeNull();
+  });
+
+  it("keeps the cursor from the normal page, so the next page follows it as before", async () => {
+    const page = Array.from({ length: 51 }, (_, i) => row(`job-${i}`, {
+      createdAt: new Date(Date.UTC(2026, 6, 10, 0, 0, 51 - i)),
+    }));
+    postJobFindManyMock.mockResolvedValueOnce(page).mockResolvedValueOnce([row("changed-old", { status: "draft" })]);
+
+    const body = (await (await GET(getRequest(QUEUE_URL))).json()) as PostsResponse;
+
+    expect(body.jobs).toHaveLength(51);
+    expect(body.jobs[0].id).toBe("changed-old");
+    expect(body.nextCursor).toBe(encodePostsCursor(page[49].createdAt, "job-49"));
+  });
+
+  it("changes nothing for any other caller, a later page, or a list without drafts", async () => {
+    for (const url of [
+      "http://localhost/api/posts?status=scheduled,draft",
+      "http://localhost/api/posts",
+      `${QUEUE_URL}&cursor=${encodePostsCursor(new Date("2026-07-10T00:00:00Z"), "job-1")}`,
+      "http://localhost/api/posts?status=scheduled&clientChangesFirst=1",
+    ]) {
+      postJobFindManyMock.mockClear();
+      postJobFindManyMock.mockResolvedValue([]);
+      await GET(getRequest(url));
+      expect(postJobFindManyMock, url).toHaveBeenCalledTimes(1);
+    }
+  });
+});

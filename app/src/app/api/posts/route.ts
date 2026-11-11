@@ -55,6 +55,69 @@ const YOUTUBE_PRIVACY_STATUSES = ["public", "unlisted", "private"] as const;
 const POSTS_PAGE_SIZE = 50;
 
 /**
+ * What the list reads per job: display fields, plus what the DTO derives from.
+ * Shared by the page query and the Queue's client-change query below.
+ */
+const POSTS_LIST_SELECT = {
+  id: true,
+  status: true,
+  createdAt: true,
+  // 2026-11-01 audit — the version an owner reviews; echoed back as the
+  // approval route's `reviewedUpdatedAt` (CHANGED_SINCE_REVIEW guard).
+  updatedAt: true,
+  scheduledFor: true,
+  baseCaption: true,
+  // 2026-11-01 audit (M1): with the media item's caption + overrides and
+  // `publishMetadata` / `results` below, everything `resolvePlatformCaptions`
+  // reads to show the approver what will publish.
+  perPlatformOverrides: true,
+  // Approval workflow — feeds the derived `approvalState` DTO field.
+  submittedForApprovalAt: true,
+  approvedAt: true,
+  // Client review link — the client's approval or change request.
+  clientApprovedAt: true,
+  clientChangeRequestedAt: true,
+  clientNote: true,
+  mediaItem: {
+    select: {
+      baseCaption: true,
+      perPlatformOverrides: true,
+      storageLocation: true,
+      mimeType: true,
+    },
+  },
+  // Task 8 — compose-time publish snapshot (Task 7's `publishMetadata`),
+  // surfaced read-only via the `publish` DTO field below.
+  publishMetadata: true,
+  // Team Workspaces (Task 4) — creator attribution for the `createdBy`
+  // DTO field. Display fields only: name falls back to the email
+  // local-part at map time below, and the full email NEVER reaches the
+  // DTO (SEC-1).
+  user: { select: { name: true, email: true } },
+  results: {
+    select: {
+      platform: true,
+      status: true,
+      externalPostId: true,
+      externalPostUrl: true,
+      errorMessage: true,
+      // Platform limits: with the status they say a result is waiting out a
+      // rate limit or quota. `errorCode` is read only to tell a daily limit
+      // from a rate limit; it never reaches the DTO (SEC-1).
+      deferredUntil: true,
+      errorCode: true,
+    },
+    orderBy: { platform: "asc" },
+  },
+} satisfies Prisma.PostJobSelect;
+
+/**
+ * Client review link: drafts a client asked to change that the Queue's first
+ * page always carries (oldest request first), however old the post is.
+ */
+const CLIENT_CHANGES_FIRST_MAX = 20;
+
+/**
  * GET /api/posts
  *
  * Additive, read-only list endpoint powering the dashboard "recent activity"
@@ -119,58 +182,7 @@ export async function GET(request: Request) {
       where,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: POSTS_PAGE_SIZE + 1,
-      select: {
-        id: true,
-        status: true,
-        createdAt: true,
-        // 2026-11-01 audit — the version an owner reviews; echoed back as the
-        // approval route's `reviewedUpdatedAt` (CHANGED_SINCE_REVIEW guard).
-        updatedAt: true,
-        scheduledFor: true,
-        baseCaption: true,
-        // 2026-11-01 audit (M1): with the media item's caption + overrides and
-        // `publishMetadata` / `results` below, everything `resolvePlatformCaptions`
-        // reads to show the approver what will publish.
-        perPlatformOverrides: true,
-        // Approval workflow — feeds the derived `approvalState` DTO field.
-        submittedForApprovalAt: true,
-        approvedAt: true,
-        // Client review link — the client's approval or change request.
-        clientApprovedAt: true,
-        clientChangeRequestedAt: true,
-        clientNote: true,
-        mediaItem: {
-          select: {
-            baseCaption: true,
-            perPlatformOverrides: true,
-            storageLocation: true,
-            mimeType: true,
-          },
-        },
-        // Task 8 — compose-time publish snapshot (Task 7's `publishMetadata`),
-        // surfaced read-only via the `publish` DTO field below.
-        publishMetadata: true,
-        // Team Workspaces (Task 4) — creator attribution for the `createdBy`
-        // DTO field. Display fields only: name falls back to the email
-        // local-part at map time below, and the full email NEVER reaches the
-        // DTO (SEC-1).
-        user: { select: { name: true, email: true } },
-        results: {
-          select: {
-            platform: true,
-            status: true,
-            externalPostId: true,
-            externalPostUrl: true,
-            errorMessage: true,
-            // Platform limits: with the status they say a result is waiting out a
-            // rate limit or quota. `errorCode` is read only to tell a daily limit
-            // from a rate limit; it never reaches the DTO (SEC-1).
-            deferredUntil: true,
-            errorCode: true,
-          },
-          orderBy: { platform: "asc" },
-        },
-      },
+      select: POSTS_LIST_SELECT,
     });
 
     // Keyset windowing (activity pagination): we over-fetch one row beyond the
@@ -180,10 +192,34 @@ export async function GET(request: Request) {
     // this is the final page (nextCursor: null). Everything below — the metric
     // join and the DTO mapping — operates on the sliced `jobs`, unchanged.
     const hasMore = rows.length > POSTS_PAGE_SIZE;
-    const jobs = hasMore ? rows.slice(0, POSTS_PAGE_SIZE) : rows;
-    const lastJob = jobs[jobs.length - 1];
+    const pageJobs = hasMore ? rows.slice(0, POSTS_PAGE_SIZE) : rows;
+    const lastJob = pageJobs[pageJobs.length - 1];
     const nextCursor =
       hasMore && lastJob ? encodePostsCursor(lastJob.createdAt, lastJob.id) : null;
+
+    // Client review link: the Queue (opt-in `?clientChangesFirst=1`, first page
+    // only, when drafts are asked for) also gets up to 20 drafts the client
+    // asked to change, however old, so none hides behind "Load more". The
+    // cursor above still follows the normal page; the Queue de-dupes a later
+    // page by id. Every other caller pages exactly as before.
+    const wantsClientChanges =
+      url.searchParams.get("clientChangesFirst") === "1" &&
+      !cursor &&
+      (statusFilter.length === 0 || statusFilter.includes("draft"));
+    const clientChanges = wantsClientChanges
+      ? await prisma.postJob.findMany({
+          where: {
+            workspaceId: context.workspace.id,
+            status: "draft",
+            clientChangeRequestedAt: { not: null },
+          },
+          orderBy: [{ clientChangeRequestedAt: "asc" }, { id: "asc" }],
+          take: CLIENT_CHANGES_FIRST_MAX,
+          select: POSTS_LIST_SELECT,
+        })
+      : [];
+    const clientChangeIds = new Set(clientChanges.map((job) => job.id));
+    const jobs = [...clientChanges, ...pageJobs.filter((job) => !clientChangeIds.has(job.id))];
 
     // Roadmap Phase 8 (analytics): join the latest engagement snapshot per
     // result. Team Workspaces (Task 4): scoped to the active WORKSPACE, not
