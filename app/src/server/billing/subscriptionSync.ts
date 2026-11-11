@@ -55,6 +55,8 @@ export type PlanWrite = {
   plan: PlanKey;
   planStatus: string;
   currentPeriodEnd: Date | null;
+  /** When a plan set to cancel stops; null when it renews. */
+  planEndsAt: Date | null;
   trialEndsAt?: Date;
   stripeSubscriptionId: string;
   stripeCustomerId?: string;
@@ -112,10 +114,19 @@ export function subscriptionWrite(
   const plan = planForPriceId(item?.price?.id ?? null, env);
   if (!plan) return { ok: false, level: "error", reason: "the subscription's price is not one of the plan prices" };
 
+  const periodEnd = fromUnixSeconds(item?.current_period_end);
+  // Stripe starts the new period before it tries the card, so a past_due
+  // subscription's period end is the end of the unpaid period. The grace in
+  // planState runs from currentPeriodEnd, so it gets the failed renewal's
+  // date: the start of that period (fix round 1).
+  const currentPeriodEnd =
+    subscription.status === "past_due" ? (fromUnixSeconds(item?.current_period_start) ?? periodEnd) : periodEnd;
+  const planEndsAt = subscription.cancel_at_period_end ? periodEnd : fromUnixSeconds(subscription.cancel_at);
   const data: PlanWrite = {
     plan,
     planStatus: subscription.status,
-    currentPeriodEnd: fromUnixSeconds(item?.current_period_end),
+    currentPeriodEnd,
+    planEndsAt,
     stripeSubscriptionId: subscription.id,
   };
   const trialEnd = fromUnixSeconds(subscription.trial_end);

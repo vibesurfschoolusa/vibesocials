@@ -37,6 +37,7 @@ describe("subscriptionWrite", () => {
         plan: "growth",
         planStatus: "active",
         currentPeriodEnd: new Date(PERIOD_END * 1000),
+        planEndsAt: null,
         stripeSubscriptionId: "sub_1",
       },
       warnings: [],
@@ -165,6 +166,70 @@ describe("subscriptionWrite", () => {
     expect(planState(before, now)).toBe("exempt");
     const result = subscriptionWrite(sub(), WS, null, ENV);
     expect(planState({ ...before, ...(result.ok ? result.data : {}) }, now)).toBe("active");
+  });
+});
+
+/**
+ * Fix round 1: Stripe moves a renewing subscription into the new period
+ * before it tries the card, so on past_due the item's current_period_end is
+ * the end of the unpaid period. The 7 days of grace must run from the
+ * failed renewal, which is the item's current_period_start.
+ */
+describe("past_due and the period end", () => {
+  const RENEWAL = PERIOD_END; // the old period ended and the renewal was billed here
+  const NEXT_END = RENEWAL + 30 * 86400;
+  const renewed = (status: string) =>
+    sub({
+      status,
+      items: {
+        data: [{ price: { id: "price_example_growth" }, current_period_start: RENEWAL, current_period_end: NEXT_END }],
+      },
+    });
+  const DAY_S = 86400;
+  const stateAt = (data: Record<string, unknown>, seconds: number) =>
+    planState({ billingExempt: false, ...data }, new Date(seconds * 1000));
+
+  it("active: the period end is the item's period end", () => {
+    const result = subscriptionWrite(renewed("active"), WS, null, ENV);
+    expect(result.ok && result.data.currentPeriodEnd).toEqual(new Date(NEXT_END * 1000));
+  });
+
+  it("past_due just after a failed renewal: blocked 7 days after the renewal, not 37", () => {
+    const result = subscriptionWrite(renewed("past_due"), WS, null, ENV);
+    expect(result.ok && result.data.currentPeriodEnd).toEqual(new Date(RENEWAL * 1000));
+    const data = result.ok ? result.data : {};
+    expect(stateAt(data, RENEWAL + 6 * DAY_S)).toBe("active");
+    expect(stateAt(data, RENEWAL + 7 * DAY_S + 60)).toBe("ended");
+  });
+
+  it("past_due paid again: back to active with the new period end", () => {
+    subscriptionWrite(renewed("past_due"), WS, null, ENV);
+    const paid = subscriptionWrite(renewed("active"), WS, null, ENV);
+    const data = paid.ok ? paid.data : {};
+    expect(paid.ok && paid.data.currentPeriodEnd).toEqual(new Date(NEXT_END * 1000));
+    expect(stateAt(data, RENEWAL + 20 * DAY_S)).toBe("active");
+  });
+
+  it("past_due with no period start falls back to the period end", () => {
+    const result = subscriptionWrite(sub({ status: "past_due" }), WS, null, ENV);
+    expect(result.ok && result.data.currentPeriodEnd).toEqual(new Date(PERIOD_END * 1000));
+  });
+});
+
+describe("planEndsAt", () => {
+  it("is the period end when the plan cancels at the period's end", () => {
+    const result = subscriptionWrite(sub({ cancel_at_period_end: true }), WS, null, ENV);
+    expect(result.ok && result.data.planEndsAt).toEqual(new Date(PERIOD_END * 1000));
+  });
+
+  it("is cancel_at when a cancel date is set", () => {
+    const result = subscriptionWrite(sub({ cancel_at: PERIOD_END - 86400 }), WS, null, ENV);
+    expect(result.ok && result.data.planEndsAt).toEqual(new Date((PERIOD_END - 86400) * 1000));
+  });
+
+  it("is cleared when the cancellation is undone", () => {
+    const result = subscriptionWrite(sub({ cancel_at_period_end: false, cancel_at: null }), WS, null, ENV);
+    expect(result.ok && result.data.planEndsAt).toBeNull();
   });
 });
 

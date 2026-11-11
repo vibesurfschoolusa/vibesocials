@@ -228,6 +228,11 @@ model Workspace {
   stripeSubscriptionId  String?   @unique
   trialReminderSentAt   DateTime?
   trialEndedEmailSentAt DateTime?
+  // Fix round 1: when a plan set to cancel stops (null while it renews), and
+  // the created time of the newest Stripe event written, so a delivery that
+  // commits late cannot write an older state over a newer one.
+  planEndsAt            DateTime?
+  stripeLastEventAt     DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

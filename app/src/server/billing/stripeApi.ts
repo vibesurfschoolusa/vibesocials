@@ -47,10 +47,13 @@ export interface StripeSubscription {
   metadata?: Record<string, string> | null;
   trial_end?: number | null;
   cancel_at_period_end?: boolean;
+  /** A set date the subscription will be cancelled at. */
+  cancel_at?: number | null;
   items?: {
     data: Array<{
       price?: { id: string } | null;
       // In this API version the period lives on each item, not the subscription.
+      current_period_start?: number | null;
       current_period_end?: number | null;
     }>;
   };
