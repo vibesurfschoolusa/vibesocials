@@ -71,7 +71,9 @@ jobs:
         run: npx prisma migrate deploy
 
       - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
+        # The runner sometimes cannot reach Ubuntu's package servers; the browser
+        # itself runs with the libraries the image already has.
+        run: npx playwright install --with-deps chromium || npx playwright install chromium
 
       # A short H.264 clip like a phone makes. Without ffmpeg the spec records
       # a WebM in the browser instead.
