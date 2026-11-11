@@ -157,6 +157,19 @@ describe("setWorkspaceLimits", () => {
     });
   });
 
+  it("changes only the keys present, so another operator's edit to a different limit survives", async () => {
+    // Another operator set posts per day to 80 after this page was loaded.
+    db.workspaceFindUnique.mockResolvedValue(row({ limitPostsPerDay: 80 }));
+
+    await setWorkspaceLimits({ operator: OPS, workspaceId: "ws-1", limits: { limitStorageMb: 2048 } });
+
+    expect(db.workspaceUpdate).toHaveBeenCalledWith({ where: { id: "ws-1" }, data: { limitStorageMb: 2048 } });
+    expect(db.actionCreate.mock.calls[0][0].data.detail).toEqual({
+      old: { limitStorageMb: null },
+      new: { limitStorageMb: 2048 },
+    });
+  });
+
   it("records a second operator's change under their own email", async () => {
     db.workspaceFindUnique.mockResolvedValue(row({ limitPostsPerDay: 50 }));
     await setWorkspaceLimits({ operator: OPS_2, workspaceId: "ws-1", limits: { limitPostsPerDay: 60 } });

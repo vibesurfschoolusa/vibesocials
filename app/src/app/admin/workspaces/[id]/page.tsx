@@ -151,7 +151,8 @@ export default async function AdminWorkspacePage({ params }: { params: Promise<{
           </table>
         </Card>
         <Card className="p-4">
-          <AdminLimitsForm workspaceId={workspace.id} fields={limitFields} />
+          {/* Keyed by the stored values, so a refresh after anyone's change resets the inputs. */}
+          <AdminLimitsForm key={JSON.stringify(detail.overrides)} workspaceId={workspace.id} fields={limitFields} />
         </Card>
       </section>
 

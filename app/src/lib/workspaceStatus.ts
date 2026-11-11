@@ -46,6 +46,12 @@ export const WORKSPACE_PAUSED_RESULT_FAILURE = {
   errorMessage: "Not published: this workspace was paused.",
 } as const;
 
+/**
+ * POST /api/workspaces refuses an owner of any blocked workspace, so a paused
+ * customer cannot carry on in a new workspace in one click.
+ */
+export const CREATE_WORKSPACE_WHILE_BLOCKED_MESSAGE = `You cannot create a workspace while one of your workspaces is paused. Contact ${SUPPORT_EMAIL}.`;
+
 /** For a route: the 403 to return as-is, or null to carry on. */
 export function workspaceBlockResponse(workspace: WorkspaceStatusFields): NextResponse | null {
   const block = workspaceBlock(workspace);

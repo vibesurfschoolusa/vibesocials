@@ -321,6 +321,28 @@ describe("deliverPostOutcomeNotification", () => {
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
+  // Fix round 1: decided per result. After a resume the owner retries some
+  // platforms; that outcome is reported, the paused ones are left out.
+  it("leaves the paused results out and reports the rest", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    findUniqueUserMock.mockResolvedValue({ email: "user@example.com", notifyOnPostComplete: true });
+    findUniquePostJobMock.mockResolvedValue({
+      status: "completed",
+      results: [
+        { platform: "instagram", status: "failed", errorCode: "WORKSPACE_PAUSED", errorMessage: "Not published: this workspace was paused." },
+        { platform: "linkedin", status: "success", errorCode: null, errorMessage: null },
+      ],
+    });
+
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
+
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    const { html } = sendEmailMock.mock.calls[0][0] as { html: string };
+    expect(html).toContain("LinkedIn");
+    expect(html).not.toContain("Instagram");
+    expect(html).not.toContain("paused");
+  });
+
   it("still sends for a failed job with any other error code", async () => {
     vi.stubEnv("RESEND_API_KEY", "re_test_key");
     findUniqueUserMock.mockResolvedValue({ email: "user@example.com", notifyOnPostComplete: true });

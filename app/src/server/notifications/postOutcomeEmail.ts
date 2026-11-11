@@ -255,14 +255,18 @@ export async function deliverPostOutcomeNotification({
       return;
     }
 
-    // Pause (2026-11-10): a paused workspace's due posts are all failed with this
-    // code. The owners had the pause email; one more per post would flood them.
-    if (postJob.results.some((result) => result.errorCode === WORKSPACE_PAUSED_CODE)) {
+    // Pause (2026-11-10, decided per result in fix round 1): a paused workspace's
+    // due posts are failed with this code, and the owners already had the pause
+    // email. Those results are left out; the email goes only when something else
+    // is left to report (after a resume, a retry of some platforms is reported).
+    // A job that never had any result keeps its own "no connected platforms" email.
+    const results = postJob.results.filter((result) => result.errorCode !== WORKSPACE_PAUSED_CODE);
+    if (postJob.results.length > 0 && results.length === 0) {
       return;
     }
 
     const { subject, html } = buildPostOutcomeEmail({
-      results: postJob.results,
+      results,
       status: postJob.status,
       appBaseUrl: process.env.NEXTAUTH_URL || null,
       postJobId,

@@ -91,7 +91,6 @@ type AnyHandler = (...args: unknown[]) => Promise<unknown>;
 const OPERATOR_CASES: Record<string, { body?: unknown; expectStatus?: number }> = {
   "app/admin/page.tsx default": {},
   "app/admin/workspaces/[id]/page.tsx default": {},
-  "app/api/admin/session/route.ts GET": { expectStatus: 200 },
   "app/api/admin/workspaces/[id]/limits/route.ts POST": { body: { limitPostsPerDay: 5 }, expectStatus: 200 },
   "app/api/admin/workspaces/[id]/pause/route.ts POST": { body: { reason: "Unpaid invoice." }, expectStatus: 200 },
   "app/api/admin/workspaces/[id]/resume/route.ts POST": { body: {}, expectStatus: 200 },
@@ -196,7 +195,7 @@ beforeEach(() => {
 });
 
 describe("the admin files", () => {
-  it("are the two pages and the four routes, each with an operator case", async () => {
+  it("are the two pages and the three routes, each with an operator case", async () => {
     expect(PAGE_FILES.map(key).sort()).toEqual(["app/admin/page.tsx", "app/admin/workspaces/[id]/page.tsx"]);
     const real = (await entries()).filter((entry) => entry.real).map((entry) => entry.name);
     expect(real.sort()).toEqual(Object.keys(OPERATOR_CASES).sort());

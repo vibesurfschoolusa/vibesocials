@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
+import { limitsChangeBody } from "./limitsChange";
+
 /** Field name, label, and the default shown as the placeholder. */
 export type LimitFieldView = { field: string; label: string; value: number | null; defaultLabel: string; max: number };
 
@@ -37,20 +39,16 @@ export function AdminLimitsForm({ workspaceId, fields }: { workspaceId: string; 
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const body: Record<string, number | null> = {};
-    for (const f of fields) {
-      const raw = values[f.field].trim();
-      if (raw === "") {
-        body[f.field] = null;
-        continue;
-      }
-      const number = Number(raw);
-      if (!Number.isInteger(number) || number < 0 || number > f.max) {
-        setMessage(`${f.label}: enter a whole number from 0 to ${f.max.toLocaleString("en-US")}, or leave it empty for the default.`);
-        return;
-      }
-      body[f.field] = number;
+    // Only the edited fields: a stale value must not undo another operator's change.
+    const change = limitsChangeBody(
+      fields.map((f) => ({ field: f.field, label: f.label, initial: f.value, max: f.max })),
+      values,
+    );
+    if (!change.ok) {
+      setMessage(change.error);
+      return;
     }
+    const body = change.body;
     setBusy(true);
     setMessage(null);
     const result = await post(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/limits`, body);

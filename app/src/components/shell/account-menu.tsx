@@ -22,6 +22,12 @@ interface WorkspaceSummary {
   isActive: boolean;
 }
 
+/** Sent by GET /api/workspaces only to the app's operator; never named in this file. */
+interface OperatorLink {
+  href: string;
+  label: string;
+}
+
 /**
  * Account dropdown: signed-in email, workspace switcher, theme toggle, Help,
  * "Install app" (hidden when already installed) and sign-out. Implemented as a labelled popover (not an ARIA menu, since it
@@ -37,10 +43,9 @@ export function AccountMenu() {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
   const installApp = useInstallApp();
-  // The operator's "Admin" link (2026-11-10): asked once, the first time the
-  // menu opens. Anyone else gets the plain 404 and sees no link.
-  const [isOperator, setIsOperator] = useState(false);
-  const operatorAsked = useRef(false);
+  // The operator's link (2026-11-10): whatever GET /api/workspaces sends, which
+  // is nothing for everyone else, so this file names no path or label of its own.
+  const [operatorLink, setOperatorLink] = useState<OperatorLink | null>(null);
 
   // Team Workspaces (Task 7) — the switcher's memberships. Fetched fresh every
   // time the popover opens (a cheap, membership-checked route) rather than
@@ -77,14 +82,6 @@ export function AccountMenu() {
   }, [open]);
 
   useEffect(() => {
-    if (!open || operatorAsked.current) return;
-    operatorAsked.current = true;
-    void fetch("/api/admin/session")
-      .then((response) => setIsOperator(response.ok))
-      .catch(() => {});
-  }, [open]);
-
-  useEffect(() => {
     if (!open) return;
     let cancelled = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- loads workspaces when the menu opens; pre-existing pattern newly flagged by react-hooks 7.1 (required by eslint-config-next 16.4)
@@ -94,8 +91,15 @@ export function AccountMenu() {
       try {
         const response = await fetch("/api/workspaces");
         if (!response.ok) throw new Error("Failed to load workspaces");
-        const data: { workspaces: WorkspaceSummary[] } = await response.json();
-        if (!cancelled) setWorkspaces(data.workspaces);
+        const data: { workspaces: WorkspaceSummary[]; operatorLink?: OperatorLink } = await response.json();
+        if (!cancelled) {
+          setWorkspaces(data.workspaces);
+          setOperatorLink(
+            typeof data.operatorLink?.href === "string" && typeof data.operatorLink.label === "string"
+              ? data.operatorLink
+              : null,
+          );
+        }
       } catch {
         // Leave `workspaces` at its previous value (null on first failure) —
         // the render below already renders nothing for the workspace section
@@ -332,14 +336,14 @@ export function AccountMenu() {
             <CircleHelp aria-hidden className="h-4 w-4 text-muted-foreground" />
             Help
           </Link>
-          {isOperator ? (
+          {operatorLink ? (
             <Link
-              href="/admin"
+              href={operatorLink.href}
               onClick={() => setOpen(false)}
               className="flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-2 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               <Shield aria-hidden className="h-4 w-4 text-muted-foreground" />
-              Admin
+              {operatorLink.label}
             </Link>
           ) : null}
           {installApp.available ? (

@@ -64,6 +64,18 @@ describe("POST limits", () => {
     expect((await limits(req("not json"), ctx)).status).toBe(400);
   });
 
+  it("refuses an empty change", async () => {
+    const response = await limits(req({}), ctx);
+    expect(response.status).toBe(400);
+    expect(h.setWorkspaceLimits).not.toHaveBeenCalled();
+  });
+
+  it("passes on only the keys in the body", async () => {
+    h.setWorkspaceLimits.mockResolvedValue({ status: "changed" });
+    await limits(req({ limitStorageMb: 2048 }), ctx);
+    expect(h.setWorkspaceLimits.mock.calls[0][0].limits).toEqual({ limitStorageMb: 2048 });
+  });
+
   it("writes the change as the operator", async () => {
     h.setWorkspaceLimits.mockResolvedValue({ status: "changed" });
     const response = await limits(req({ limitPostsPerDay: 5, limitStorageMb: null }), ctx);

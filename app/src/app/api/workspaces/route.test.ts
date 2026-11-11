@@ -14,7 +14,9 @@ const {
   checkRateLimitMock,
   cookieSetMock,
   cookiesMock,
+  getOperatorMock,
 } = vi.hoisted(() => ({
+  getOperatorMock: vi.fn(),
   findManyMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
   countMock: vi.fn(),
@@ -42,9 +44,13 @@ vi.mock("@/lib/rateLimit", () => ({
   checkRateLimit: checkRateLimitMock,
 }));
 
+vi.mock("@/lib/operator", () => ({ getOperator: getOperatorMock }));
+
 vi.mock("next/headers", () => ({
   cookies: cookiesMock,
 }));
+
+import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 
 import { GET, MAX_OWNED_WORKSPACES, POST } from "./route";
 
@@ -79,6 +85,10 @@ beforeEach(() => {
   checkRateLimitMock.mockReset();
   cookieSetMock.mockReset();
   cookiesMock.mockReset();
+  getOperatorMock.mockReset();
+  getOperatorMock.mockResolvedValue(null);
+  // POST reads the caller's owned workspaces for the pause check; none paused.
+  findManyMock.mockResolvedValue([]);
 
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   cookiesMock.mockResolvedValue({ set: cookieSetMock });
@@ -160,6 +170,63 @@ describe("POST /api/workspaces", () => {
     expect(response.status).toBe(429);
     expect(response.headers.get("Retry-After")).toBe("120");
     expect(transactionMock).not.toHaveBeenCalled();
+  });
+});
+
+// Fix round 1 (2026-11-10): a paused owner must not carry on in a new workspace.
+describe("POST /api/workspaces while one of the caller's workspaces is paused", () => {
+  it("403s before counting or writing anything, with the support address", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeContext());
+    findManyMock.mockResolvedValue([
+      { workspace: { pausedAt: null, pausedReason: null } },
+      { workspace: { pausedAt: new Date("2026-11-10T08:00:00Z"), pausedReason: "Unpaid invoice." } },
+    ]);
+
+    const response = await POST(createRequest({ name: "Fresh start" }));
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: `You cannot create a workspace while one of your workspaces is paused. Contact ${SUPPORT_EMAIL}.`,
+      code: "WORKSPACE_PAUSED",
+    });
+    expect(findManyMock).toHaveBeenCalledWith({
+      where: { userId: "user-1", role: "owner" },
+      select: { workspace: { select: { pausedAt: true, pausedReason: true } } },
+    });
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+    expect(countMock).not.toHaveBeenCalled();
+    expect(transactionMock).not.toHaveBeenCalled();
+  });
+
+  it("still creates when none of the caller's owned workspaces is paused", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeContext());
+    findManyMock.mockResolvedValue([{ workspace: { pausedAt: null, pausedReason: null } }]);
+
+    const response = await POST(createRequest({ name: "Fresh start" }));
+
+    expect(response.status).toBe(201);
+  });
+});
+
+describe("GET /api/workspaces — the operator's link (fix round 1)", () => {
+  it("carries no link for anyone who is not an operator", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeContext());
+    findManyMock.mockResolvedValue([makeMembershipRow()]);
+
+    const body = await (await GET()).json();
+
+    expect(getOperatorMock).toHaveBeenCalledTimes(1);
+    expect(Object.keys(body)).toEqual(["workspaces"]);
+  });
+
+  it("carries the link's address and label for an operator", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeContext());
+    getOperatorMock.mockResolvedValue({ userId: "user-1", email: "ops@example.com" });
+    findManyMock.mockResolvedValue([makeMembershipRow()]);
+
+    const body = await (await GET()).json();
+
+    expect(body.operatorLink).toEqual({ href: "/admin", label: "Admin" });
   });
 });
 

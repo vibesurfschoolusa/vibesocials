@@ -3,8 +3,14 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
+import { getOperator } from "@/lib/operator";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
+import {
+  CREATE_WORKSPACE_WHILE_BLOCKED_MESSAGE,
+  WORKSPACE_PAUSED_CODE,
+  workspaceBlock,
+} from "@/lib/workspaceStatus";
 
 /** The longest workspace name accepted (it shows in the account menu). */
 export const WORKSPACE_NAME_MAX_LENGTH = 60;
@@ -31,11 +37,14 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const memberships = await prisma.workspaceMember.findMany({
-    where: { userId: context.user.id },
-    include: { workspace: true },
-    orderBy: { createdAt: "asc" },
-  });
+  const [memberships, operator] = await Promise.all([
+    prisma.workspaceMember.findMany({
+      where: { userId: context.user.id },
+      include: { workspace: true },
+      orderBy: { createdAt: "asc" },
+    }),
+    getOperator(),
+  ]);
 
   return NextResponse.json({
     workspaces: memberships.map((membership) => ({
@@ -44,6 +53,9 @@ export async function GET() {
       role: membership.role,
       isActive: membership.workspace.id === context.workspace.id,
     })),
+    // Only for the operator (2026-11-10): the account menu renders this link
+    // from the data, so no code every customer downloads names the admin page.
+    ...(operator ? { operatorLink: { href: "/admin", label: "Admin" } } : {}),
   });
 }
 
@@ -60,6 +72,20 @@ export async function POST(request: Request) {
 
   if (!context) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Pause (2026-11-10, fix round 1): an owner of a paused workspace cannot start
+  // another. Every owned workspace (at most MAX_OWNED_WORKSPACES) goes through
+  // workspaceBlock, so a later block cause is covered here too.
+  const owned = await prisma.workspaceMember.findMany({
+    where: { userId: context.user.id, role: "owner" },
+    select: { workspace: { select: { pausedAt: true, pausedReason: true } } },
+  });
+  if (owned.some((membership) => workspaceBlock(membership.workspace))) {
+    return NextResponse.json(
+      { error: CREATE_WORKSPACE_WHILE_BLOCKED_MESSAGE, code: WORKSPACE_PAUSED_CODE },
+      { status: 403 },
+    );
   }
 
   const rateLimit = await checkRateLimit({
@@ -88,10 +114,10 @@ export async function POST(request: Request) {
     );
   }
 
-  const owned = await prisma.workspaceMember.count({
+  const ownedCount = await prisma.workspaceMember.count({
     where: { userId: context.user.id, role: "owner" },
   });
-  if (owned >= MAX_OWNED_WORKSPACES) {
+  if (ownedCount >= MAX_OWNED_WORKSPACES) {
     return NextResponse.json(
       { error: `You can own up to ${MAX_OWNED_WORKSPACES} workspaces.` },
       { status: 409 },
