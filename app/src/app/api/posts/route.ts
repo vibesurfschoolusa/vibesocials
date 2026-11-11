@@ -31,11 +31,19 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { isValidPerPlatformOverrides, validateScheduledFor, type PostJobIntent } from "@/lib/scheduling";
 import { deriveApprovalState, shouldHoldForApproval } from "@/lib/approval";
 import type {
+  FacebookPostMetadata,
   GoogleBusinessPostMetadata,
+  InstagramPostMetadata,
   TikTokPostMetadata,
   YouTubePostMetadata,
 } from "@/server/platforms/types";
 import { parseGooglePostMetadata } from "@/lib/googlePostOptions";
+import {
+  parsePlacementMetadata,
+  storyMediaRefusal,
+  type StoryPlacementField,
+  type StoryPlatform,
+} from "@/lib/storyPlacement";
 import { deferralKindFromErrorCode } from "@/lib/resultDeferral";
 import type { PostsResponse } from "@/lib/postsDto";
 import {
@@ -421,6 +429,9 @@ interface CreatePostBody {
   youtubeMetadata?: { privacyStatus?: unknown };
   // 2026-11-10 — the Google post's options (lib/googlePostOptions.ts).
   googleMetadata?: unknown;
+  // 2026-11-10 — feed or Story, `{ placement }` (lib/storyPlacement.ts).
+  instagramMetadata?: unknown;
+  facebookMetadata?: unknown;
   // Task 7 — optional chosen subset of platforms to publish this post to.
   // Absent = every connected platform (legacy/default behavior).
   platforms?: unknown;
@@ -702,6 +713,34 @@ export async function POST(request: Request) {
     targetPlatforms = deduped;
   }
 
+  // 2026-11-10: feed or Story. Read only for a platform the post targets (with
+  // no list, every connection is a target). Only a Story is kept: feed is the
+  // same as no field, so a feed post creates exactly the job and event it did.
+  const readPlacement = (
+    platform: StoryPlatform,
+    field: StoryPlacementField,
+  ): { ok: true; value: { placement: "story" } | undefined } | { ok: false; response: Response } => {
+    if (targetPlatforms && !targetPlatforms.includes(platform)) return { ok: true, value: undefined };
+    const parsed = parsePlacementMetadata(body[field], field);
+    if (!parsed.ok) {
+      return { ok: false, response: NextResponse.json({ error: parsed.error }, { status: 400 }) };
+    }
+    if (parsed.value?.placement !== "story") return { ok: true, value: undefined };
+    const refusal = storyMediaRefusal(platform, 1 + (extraMedia?.length ?? 0));
+    if (refusal) return { ok: false, response: NextResponse.json({ error: refusal }, { status: 400 }) };
+    return { ok: true, value: { placement: "story" } };
+  };
+  const instagramPlacement = readPlacement("instagram", "instagramMetadata");
+  if (!instagramPlacement.ok) return instagramPlacement.response;
+  const facebookPlacement = readPlacement("facebook_page", "facebookMetadata");
+  if (!facebookPlacement.ok) return facebookPlacement.response;
+  const instagramMetadata: InstagramPostMetadata | undefined = instagramPlacement.value;
+  const facebookMetadata: FacebookPostMetadata | undefined = facebookPlacement.value;
+  const placementArgs = {
+    ...(instagramMetadata ? { instagramMetadata } : {}),
+    ...(facebookMetadata ? { facebookMetadata } : {}),
+  };
+
   // 2026-11-01 audit (Task 9): an EXPLICIT platform list is checked before any
   // row is written — every requested platform must be able to publish this
   // media (named in the 400 otherwise) and, ruling R5, a TikTok target needs an
@@ -791,6 +830,7 @@ export async function POST(request: Request) {
         tiktokMetadata,
         youtubeMetadata,
         googleMetadata,
+        ...placementArgs,
         // Task 7 — chosen platform subset; undefined = every connection.
         targetPlatforms,
       });
@@ -829,6 +869,7 @@ export async function POST(request: Request) {
         tiktokMetadata,
         youtubeMetadata,
         googleMetadata,
+        ...placementArgs,
         // Task 7 — chosen platform subset; undefined = every connection.
         targetPlatforms,
       });
@@ -898,6 +939,7 @@ export async function POST(request: Request) {
               tiktokMetadata,
               youtubeMetadata,
               googleMetadata,
+              ...placementArgs,
             },
             { immediate: true },
           ),

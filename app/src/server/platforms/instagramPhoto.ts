@@ -35,37 +35,59 @@ function signingSecret(): string {
   return secret;
 }
 
-function signature(src: string, expiresAt: number): string {
-  return createHmac("sha256", signingSecret())
-    .update(`instagram-photo\n${src}\n${expiresAt}`)
-    .digest("hex");
+/**
+ * Which copy: `feed` is cropped into 4:5..1.91:1; `story` (2026-11-10) keeps the
+ * photo's shape, since a Story is usually 9:16 and the IG User Media reference
+ * recommends 9:16 for a Story image.
+ */
+export type InstagramPhotoFit = "feed" | "story";
+
+function signature(src: string, expiresAt: number, fit: InstagramPhotoFit): string {
+  // The feed string is the one signed before Stories existed, so a feed URL
+  // handed out just before a deploy still verifies after it.
+  const signed = `instagram-photo\n${src}\n${expiresAt}` + (fit === "story" ? "\nstory" : "");
+  return createHmac("sha256", signingSecret()).update(signed).digest("hex");
 }
 
 /** The URL Instagram is given for `src` (a stored blob URL). */
-export function instagramPhotoUrl(appBaseUrl: string, src: string, now: number = Date.now()): string {
+export function instagramPhotoUrl(
+  appBaseUrl: string,
+  src: string,
+  now: number = Date.now(),
+  fit: InstagramPhotoFit = "feed",
+): string {
   const expiresAt = now + INSTAGRAM_PHOTO_URL_TTL_MS;
   const url = new URL(INSTAGRAM_PHOTO_PATH, appBaseUrl);
   url.searchParams.set("src", src);
   url.searchParams.set("exp", String(expiresAt));
-  url.searchParams.set("sig", signature(src, expiresAt));
+  if (fit === "story") url.searchParams.set("fit", "story");
+  url.searchParams.set("sig", signature(src, expiresAt, fit));
   return url.toString();
 }
 
-/** True when (src, exp, sig) was signed by {@link instagramPhotoUrl} and has not expired. */
+/**
+ * True when (src, exp, sig, fit) was signed by {@link instagramPhotoUrl} and has
+ * not expired. `fit` is the URL's `fit` parameter: absent (null) for the feed
+ * copy, "story" for the Story copy; anything else is refused.
+ */
 export function verifyInstagramPhotoRequest(
   src: string | null,
   exp: string | null,
   sig: string | null,
   now: number = Date.now(),
+  fit: string | null = null,
 ): src is string {
   if (!src || !exp || !sig || !/^\d{1,16}$/.test(exp) || !/^[0-9a-f]{64}$/.test(sig)) {
+    return false;
+  }
+  if (fit !== null && fit !== "story") {
     return false;
   }
   const expiresAt = Number(exp);
   if (expiresAt < now) {
     return false;
   }
-  const expected = Buffer.from(signature(src, expiresAt), "hex");
+  const expected = Buffer.from(signature(src, expiresAt, fit === "story" ? "story" : "feed"), "hex");
   const given = Buffer.from(sig, "hex");
   return expected.length === given.length && timingSafeEqual(expected, given);
 }
@@ -122,7 +144,11 @@ function widestWidthFor(height: number): number {
  * app, or the stored URL itself when the app has no public address Instagram
  * could reach (no NEXTAUTH_URL, or a localhost one in local development).
  */
-export function instagramImageUrl(mediaUrl: string, appBaseUrl: string | undefined): string {
+export function instagramImageUrl(
+  mediaUrl: string,
+  appBaseUrl: string | undefined,
+  fit: InstagramPhotoFit = "feed",
+): string {
   if (!appBaseUrl) return mediaUrl;
   let host: string;
   try {
@@ -133,7 +159,13 @@ export function instagramImageUrl(mediaUrl: string, appBaseUrl: string | undefin
   if (host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host.endsWith(".localhost")) {
     return mediaUrl;
   }
-  return instagramPhotoUrl(appBaseUrl, mediaUrl);
+  return instagramPhotoUrl(appBaseUrl, mediaUrl, Date.now(), fit);
+}
+
+/** A Story copy's size: the same shape, at most {@link INSTAGRAM_MAX_WIDTH} wide. */
+function storyOutputSize(width: number, height: number): { width: number; height: number } {
+  const scale = Math.min(1, INSTAGRAM_MAX_WIDTH / width);
+  return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
 }
 
 /** (width, height) after the EXIF orientation is applied (orientations 5-8 swap them). */
@@ -144,24 +176,26 @@ function orientedSize(metadata: Metadata): { width: number; height: number } {
 }
 
 /**
- * The photo as Instagram accepts it: an upright JPEG in range, at most
- * {@link INSTAGRAM_MAX_WIDTH} wide. A JPEG that already fits is returned as is.
+ * The photo as Instagram accepts it: an upright JPEG, at most
+ * {@link INSTAGRAM_MAX_WIDTH} wide, and for the feed cropped into range. A Story
+ * copy keeps its shape. A JPEG that already fits is returned as is.
  */
-export async function toInstagramJpeg(input: Buffer): Promise<Buffer> {
+export async function toInstagramJpeg(input: Buffer, fit: InstagramPhotoFit = "feed"): Promise<Buffer> {
   const metadata = await sharp(input, { failOn: "none" }).metadata();
   const { width, height } = orientedSize(metadata);
   if (!width || !height) {
     throw new Error("Could not read the photo's size");
   }
 
-  const crop = instagramCropSize(width, height);
+  const crop = fit === "story" ? null : instagramCropSize(width, height);
   const upright = (metadata.orientation ?? 1) === 1;
   if (metadata.format === "jpeg" && !crop && upright && width <= INSTAGRAM_MAX_WIDTH) {
     return input;
   }
 
   const target = crop ?? { width, height };
-  const { width: outWidth, height: outHeight } = instagramOutputSize(target.width, target.height);
+  const { width: outWidth, height: outHeight } =
+    fit === "story" ? storyOutputSize(width, height) : instagramOutputSize(target.width, target.height);
 
   return sharp(input, { failOn: "none" })
     .rotate() // apply the EXIF orientation, then drop it

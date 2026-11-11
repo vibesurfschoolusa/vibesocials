@@ -106,7 +106,9 @@ import {
   PostMediaUnavailableError,
 } from "@/server/jobs/postMedia";
 import type {
+  FacebookPostMetadata,
   GoogleBusinessPostMetadata,
+  InstagramPostMetadata,
   PublishContext,
   PublishResult,
   TikTokPostMetadata,
@@ -167,6 +169,8 @@ interface PublishToPlatformArgs {
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
   googleMetadata?: GoogleBusinessPostMetadata;
+  instagramMetadata?: InstagramPostMetadata;
+  facebookMetadata?: FacebookPostMetadata;
 }
 
 /**
@@ -483,6 +487,8 @@ async function publishToPlatform({
   tiktokMetadata,
   youtubeMetadata,
   googleMetadata,
+  instagramMetadata,
+  facebookMetadata,
 }: PublishToPlatformArgs): Promise<PlatformStepOutcome> {
   // ONE deadline for this step, stamped before anything else and shared by
   // every in-step retry: the platform work must end inside Vercel's 300s
@@ -604,6 +610,14 @@ async function publishToPlatform({
     // workspace's default button.
     if (connection.platform === "google_business_profile" && googleMetadata) {
       publishContext.googleBusinessProfileMetadata = googleMetadata;
+    }
+
+    // Feed or Story (2026-11-10). Absent: feed.
+    if (connection.platform === "instagram" && instagramMetadata) {
+      publishContext.instagramMetadata = instagramMetadata;
+    }
+    if (connection.platform === "facebook_page" && facebookMetadata) {
+      publishContext.facebookMetadata = facebookMetadata;
     }
 
     // YouTube's `videos.insert` has its own daily budget (100 a day by default,
@@ -912,6 +926,8 @@ export const publishToAllPlatforms = inngest.createFunction(
       tiktokMetadata,
       youtubeMetadata,
       googleMetadata,
+      instagramMetadata,
+      facebookMetadata,
     } = event.data;
 
     logger.info("[Inngest] Starting background publish job", { postJobId, mediaItemId });
@@ -1081,6 +1097,8 @@ export const publishToAllPlatforms = inngest.createFunction(
             tiktokMetadata,
             youtubeMetadata,
             googleMetadata,
+            instagramMetadata,
+            facebookMetadata,
           });
         },
       });
@@ -1393,6 +1411,8 @@ export const retryPlatforms = inngest.createFunction(
         tiktok?: TikTokPostMetadata;
         youtube?: YouTubePostMetadata;
         googleBusinessProfile?: GoogleBusinessPostMetadata;
+        instagram?: InstagramPostMetadata;
+        facebook?: FacebookPostMetadata;
       } | null;
 
       // 07a: a post with several photos retries all of them or none.
@@ -1554,6 +1574,8 @@ export const retryPlatforms = inngest.createFunction(
             tiktokMetadata: ttMeta,
             youtubeMetadata: ytMeta,
             googleMetadata: publishMetadata?.googleBusinessProfile,
+            instagramMetadata: publishMetadata?.instagram,
+            facebookMetadata: publishMetadata?.facebook,
           });
         },
       });

@@ -224,6 +224,163 @@ async function publishSeveralPhotos(
   return { externalPostId };
 }
 
+/**
+ * The Story's id from a 2xx commit body. The Page Stories page shows `post_id`
+ * as a number in its example (`"post_id": 1234`), so a number is accepted too;
+ * anything else is PUBLISH_UNCONFIRMED (requireCommitId).
+ */
+function storyPostId(value: unknown): string {
+  return requireCommitId("facebook_page", typeof value === "number" ? String(value) : value, "post_id");
+}
+
+/** The upload address a video Story start answers. The page says the host must be rupload.facebook.com. */
+function isRuploadUrl(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "rupload.facebook.com";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 2026-11-10: one photo or one video to the Page's Story, per the Page Stories
+ * API (https://developers.facebook.com/docs/page-stories-api, read 2026-11-10;
+ * the same pages_manage_posts, pages_read_engagement and pages_show_list as a
+ * feed post). A Story has no caption, so none is sent.
+ *
+ * Photo: POST /{page}/photos with `published=false` (nothing visible; may be
+ * repeated, as in publishSeveralPhotos), then POST /{page}/photo_stories with
+ * `photo_id`, the commit call.
+ * Video: POST /{page}/video_stories `upload_phase=start` (answers `video_id`
+ * and `upload_url`), POST the hosted file to `upload_url` with `file_url` and
+ * `Authorization: OAuth <token>` headers (both may be repeated: a new start
+ * makes a new, unused video), then POST /{page}/video_stories
+ * `upload_phase=finish` with `video_id`, the commit call.
+ *
+ * The commit call goes through commitRequest, so a lost answer is
+ * PUBLISH_UNCONFIRMED and never sent again. Both answer `success` and
+ * `post_id`, no link, so only the id is returned.
+ */
+async function publishStory(
+  ctx: PublishContext,
+  accessToken: string,
+  pageId: string,
+  isVideo: boolean,
+): Promise<PublishResult> {
+  const { socialConnection, mediaItem } = ctx;
+  const form = (fields: Record<string, string>) => ({
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ ...fields, access_token: accessToken }),
+  });
+  const storiesUrl = `${META_GRAPH_BASE_URL}/${pageId}/${isVideo ? "video_stories" : "photo_stories"}`;
+
+  console.log(`[FacebookPage] Starting ${isVideo ? "video" : "photo"} Story`, { pageId });
+
+  let commitFields: Record<string, string>;
+  if (isVideo) {
+    const start = await fetchWithTimeout(
+      storiesUrl,
+      form({ upload_phase: "start" }),
+      budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, ctx.deadline),
+    );
+    const startLimited = await classifyRateLimit("facebook_page", start);
+    if (startLimited) throw startLimited;
+    if (!start.ok) {
+      await throwRejected(
+        start,
+        socialConnection,
+        "Video Story start failed",
+        `Facebook Page could not start the video Story (status ${start.status}). No Story was made.`,
+        start.status,
+      );
+    }
+    const started = (await start.json().catch(() => null)) as { video_id?: unknown; upload_url?: unknown } | null;
+    const videoId = typeof started?.video_id === "number" ? String(started.video_id) : started?.video_id;
+    if (typeof videoId !== "string" || videoId.length === 0 || !isRuploadUrl(started?.upload_url)) {
+      console.error("[FacebookPage] Video Story start answered without a video id or a rupload address");
+      throw publishFailedError("Facebook Page could not start the video Story. No Story was made.");
+    }
+
+    // Facebook fetches the file before it answers, so this gets the feed video's
+    // longer timeout, cut short by the step's deadline.
+    const transfer = await fetchWithTimeout(
+      started.upload_url as string,
+      {
+        method: "POST",
+        headers: { Authorization: `OAuth ${accessToken}`, file_url: mediaItem.storageLocation },
+      },
+      budgetedTimeout(FACEBOOK_VIDEO_UPLOAD_TIMEOUT_MS, ctx.deadline),
+    );
+    const transferLimited = await classifyRateLimit("facebook_page", transfer);
+    if (transferLimited) throw transferLimited;
+    const transferred = transfer.ok
+      ? ((await transfer.json().catch(() => null)) as { success?: unknown } | null)
+      : null;
+    if (!transfer.ok) {
+      await throwRejected(
+        transfer,
+        socialConnection,
+        "Video Story transfer failed",
+        `Facebook Page could not fetch the video for the Story (status ${transfer.status}). No Story was made.`,
+        transfer.status,
+      );
+    }
+    if (transferred?.success === false) {
+      throw publishFailedError("Facebook Page could not fetch the video for the Story. No Story was made.");
+    }
+    commitFields = { video_id: videoId, upload_phase: "finish" };
+  } else {
+    const upload = await fetchWithTimeout(
+      `${META_GRAPH_BASE_URL}/${pageId}/photos`,
+      form({ url: mediaItem.storageLocation, published: "false" }),
+      budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, ctx.deadline),
+    );
+    const uploadLimited = await classifyRateLimit("facebook_page", upload);
+    if (uploadLimited) throw uploadLimited;
+    if (!upload.ok) {
+      await throwRejected(
+        upload,
+        socialConnection,
+        "Story photo upload failed",
+        `Facebook Page could not upload the photo for the Story (status ${upload.status}). No Story was made.`,
+        upload.status,
+      );
+    }
+    const uploaded = (await upload.json().catch(() => null)) as { id?: unknown } | null;
+    if (typeof uploaded?.id !== "string" || uploaded.id.length === 0) {
+      console.error("[FacebookPage] Story photo upload answered without a photo id");
+      throw publishFailedError("Facebook Page could not upload the photo for the Story. No Story was made.");
+    }
+    commitFields = { photo_id: uploaded.id };
+  }
+
+  // Checked before the commit call, so a spent step budget sends nothing.
+  const timeoutMs = budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, ctx.deadline);
+  const response = await commitRequest("facebook_page", () =>
+    fetchWithTimeout(storiesUrl, form(commitFields), timeoutMs),
+  );
+
+  const limited = await classifyRateLimit("facebook_page", response);
+  if (limited) throw limited;
+  if (!response.ok) {
+    await throwRejected(
+      response,
+      socialConnection,
+      `${isVideo ? "Video" : "Photo"} Story publish failed`,
+      `Facebook Page ${isVideo ? "video" : "photo"} Story publish failed (status ${response.status})`,
+    );
+  }
+
+  const data = await readCommitBody<{ post_id?: unknown } | null>("facebook_page", response, "json");
+  const externalPostId = storyPostId(data?.post_id);
+
+  console.log("[FacebookPage] Story published", { pageId, externalPostId });
+  return { externalPostId };
+}
+
 export const facebookPageClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
     const { socialConnection, mediaItem, caption } = ctx;
@@ -242,7 +399,17 @@ export const facebookPageClient: PlatformClient = {
       throw error;
     }
 
+    const story = ctx.facebookMetadata?.placement === "story";
+
     if (ctx.mediaItems.length > 1) {
+      // The posts route refuses this; a Story is never quietly turned into a feed post.
+      if (story) {
+        const error = new Error(
+          "A Story takes one photo or video. Choose Feed for Facebook Page, or remove the extra photos.",
+        ) as Error & { code: string };
+        error.code = "FACEBOOK_PAGE_STORY_ONE_FILE";
+        throw error;
+      }
       return publishSeveralPhotos(ctx, accessToken, pageId);
     }
 
@@ -256,6 +423,10 @@ export const facebookPageClient: PlatformClient = {
     }
     const isVideo = kind === "video";
     const what = isVideo ? "video" : "photo";
+
+    if (story) {
+      return publishStory(ctx, accessToken, pageId, isVideo);
+    }
 
     console.log(`[FacebookPage] Starting ${what} publish`, {
       pageId,

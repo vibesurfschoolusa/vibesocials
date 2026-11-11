@@ -12,7 +12,7 @@ import {
 export const runtime = "nodejs";
 
 /**
- * GET /api/instagram-photo?src=<blob url>&exp=<ms>&sig=<hmac>
+ * GET /api/instagram-photo?src=<blob url>&exp=<ms>[&fit=story]&sig=<hmac>
  *
  * Serves a stored photo the way Instagram accepts it (server/platforms/
  * instagramPhoto.ts). Instagram fetches it while the Instagram client creates a
@@ -23,8 +23,13 @@ export const runtime = "nodejs";
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const src = params.get("src");
+  // `fit=story` (2026-11-10): the uncropped Story copy. The signature covers it.
+  const fit = params.get("fit");
 
-  if (!verifyInstagramPhotoRequest(src, params.get("exp"), params.get("sig")) || !isAllowedBlobUrl(src)) {
+  if (
+    !verifyInstagramPhotoRequest(src, params.get("exp"), params.get("sig"), Date.now(), fit) ||
+    !isAllowedBlobUrl(src)
+  ) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
@@ -43,7 +48,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Photo too large" }, { status: 413 });
     }
 
-    const jpeg = await toInstagramJpeg(source);
+    const jpeg = await toInstagramJpeg(source, fit === "story" ? "story" : "feed");
     return new Response(new Uint8Array(jpeg), {
       status: 200,
       headers: {

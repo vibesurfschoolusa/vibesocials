@@ -1898,6 +1898,61 @@ describe("publish functions - finalize through the locked recompute, notify with
     expect(publishCtxs).toHaveLength(1);
     expect(publishCtxs[0].googleBusinessProfileMetadata).toEqual(GOOGLE);
   });
+
+  // 2026-11-10: feed or Story rides the event (and the job's snapshot, for a
+  // retry) and reaches its own platform's client only.
+  const STORY = { placement: "story" } as const;
+
+  it("hands the event's Story placements to the Instagram and Facebook clients only", async () => {
+    await publishRun(["instagram", "facebook_page", "x"], fakeStep(), {
+      ...publishEvent,
+      data: { ...publishEvent.data, instagramMetadata: STORY, facebookMetadata: STORY },
+    });
+
+    const byPlatform = Object.fromEntries(publishCtxs.map((c) => [c.socialConnection.platform, c]));
+    expect(byPlatform.instagram.instagramMetadata).toEqual(STORY);
+    expect(byPlatform.instagram).not.toHaveProperty("facebookMetadata");
+    expect(byPlatform.facebook_page.facebookMetadata).toEqual(STORY);
+    expect(byPlatform.facebook_page).not.toHaveProperty("instagramMetadata");
+    expect(byPlatform.x).not.toHaveProperty("instagramMetadata");
+    expect(byPlatform.x).not.toHaveProperty("facebookMetadata");
+  });
+
+  it("an event without a placement leaves both unset (feed, as before)", async () => {
+    await publishRun(["instagram", "facebook_page"]);
+
+    for (const ctx of publishCtxs) {
+      expect(ctx).not.toHaveProperty("instagramMetadata");
+      expect(ctx).not.toHaveProperty("facebookMetadata");
+    }
+  });
+
+  it("a retry keeps a Story a Story, from the job's snapshot", async () => {
+    db.postJobFindUnique.mockResolvedValue({
+      id: "job-1", workspaceId: WORKSPACE.id, mediaItemId: "media-1",
+      baseCaption: "c", perPlatformOverrides: null,
+      publishMetadata: { instagram: STORY, facebook: STORY },
+    });
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null, mimeType: "image/jpeg" });
+    db.connectionFindMany.mockResolvedValue([
+      { id: "conn-instagram", platform: "instagram" },
+      { id: "conn-facebook_page", platform: "facebook_page" },
+    ]);
+    stubResults(["instagram", "facebook_page"]);
+
+    await handlerOf(retryPlatforms)({
+      event: {
+        name: "post/retry.requested",
+        data: { postJobId: "job-1", userId: "user-1", platforms: ["instagram", "facebook_page"] },
+      },
+      step: fakeStep(),
+    });
+
+    const byPlatform = Object.fromEntries(publishCtxs.map((c) => [c.socialConnection.platform, c]));
+    expect(byPlatform.instagram.instagramMetadata).toEqual(STORY);
+    expect(byPlatform.facebook_page.facebookMetadata).toEqual(STORY);
+    expect(byPlatform.instagram).not.toHaveProperty("facebookMetadata");
+  });
 });
 
 // 2026-11-01 scale audit (platform limits): a platform that answers with a rate

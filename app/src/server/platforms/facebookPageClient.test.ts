@@ -7,6 +7,7 @@ import {
   isFacebookAuthErrorBody,
 } from "@/server/platforms/facebookPageClient";
 import type { PublishContext } from "@/server/platforms/types";
+import { withTransientRetries } from "@/server/platforms/transientRetry";
 
 // Facebook Page stores a long-lived PAGE token with no refresh path (the user
 // token that minted it is never stored), so the behavior to pin is publish-time
@@ -789,5 +790,240 @@ describe("facebookPageClient.publishVideo — commit call (POST /{page}/photos)"
     fetchMock.mockResolvedValue(response(401, { error: { type: "OAuthException", code: 190 } }));
     expect((await failure())?.code).toBe("FACEBOOK_PAGE_RECONNECT_REQUIRED");
     expect(updateMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// 2026-11-10: a Page Story (https://developers.facebook.com/docs/page-stories-api).
+// Photo: upload unpublished, then /photo_stories (the commit call). Video:
+// /video_stories start, the hosted file to the answered rupload address, then
+// /video_stories finish (the commit call).
+describe("facebookPageClient.publishVideo — Story", () => {
+  type CodedError = Error & { code?: string; status?: number };
+  const STORY = { placement: "story" } as const;
+
+  const photoStory = (extra: Partial<PublishContext> = {}): PublishContext => ({
+    ...makeContext(),
+    caption: "Two spots left today",
+    facebookMetadata: STORY,
+    ...extra,
+  });
+  const videoStory = (extra: Partial<PublishContext> = {}): PublishContext => ({
+    ...makeContext({}, { mimeType: "video/mp4", storageLocation: "https://blob.example.com/reel.mp4" }),
+    caption: "Two spots left today",
+    facebookMetadata: STORY,
+    ...extra,
+  });
+
+  function call(i: number) {
+    const [url, init, timeout] = fetchMock.mock.calls[i] as [string, RequestInit, number | undefined];
+    return {
+      url: new URL(url),
+      body: new URLSearchParams(String(init.body ?? "")),
+      headers: new Headers(init.headers),
+      init,
+      timeout,
+    };
+  }
+
+  const failure = (ctx: PublishContext) =>
+    facebookPageClient.publishVideo(ctx).then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+
+  const UPLOAD_URL = "https://rupload.facebook.com/video-upload/v26.0/video-5";
+  const answerVideo = (finish: () => Response = () => response(200, { success: true, post_id: "story-5" })) => {
+    fetchMock.mockImplementationOnce(async () => response(200, { video_id: "video-5", upload_url: UPLOAD_URL }));
+    fetchMock.mockImplementationOnce(async () => response(200, { success: true }));
+    fetchMock.mockImplementationOnce(async () => finish());
+  };
+
+  it("photo Story: uploads the photo unpublished, then one photo_stories call naming it; no caption", async () => {
+    fetchMock.mockImplementationOnce(async () => response(200, { id: "photo-1" }));
+    fetchMock.mockImplementationOnce(async () => response(200, { success: true, post_id: "story-1" }));
+
+    const result = await facebookPageClient.publishVideo(photoStory());
+
+    expect(result).toEqual({ externalPostId: "story-1" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const upload = call(0);
+    expect(upload.url.pathname).toMatch(/\/page-1\/photos$/);
+    expect(Object.fromEntries(upload.body)).toEqual({
+      url: "https://blob.example.com/photo.jpg",
+      published: "false",
+      access_token: "page-access-token",
+    });
+    const story = call(1);
+    expect(story.init.method).toBe("POST");
+    expect(story.url.host).toBe("graph.facebook.com");
+    expect(story.url.pathname).toMatch(/\/page-1\/photo_stories$/);
+    expect(Object.fromEntries(story.body)).toEqual({ photo_id: "photo-1", access_token: "page-access-token" });
+  });
+
+  it("accepts the numeric post_id the page's example shows", async () => {
+    fetchMock.mockImplementationOnce(async () => response(200, { id: "photo-1" }));
+    fetchMock.mockImplementationOnce(async () => response(200, { success: true, post_id: 1234 }));
+
+    expect(await facebookPageClient.publishVideo(photoStory())).toEqual({ externalPostId: "1234" });
+  });
+
+  it("a failed photo upload publishes nothing", async () => {
+    fetchMock.mockImplementationOnce(async () => response(400, { error: { code: 100, message: "bad" } }));
+
+    const error = await failure(photoStory());
+
+    expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+    expect(error?.message).toContain("No Story was made");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("an upload 5xx carries its status (nothing is visible yet, so it may be retried)", async () => {
+    fetchMock.mockImplementationOnce(async () => response(503, "busy"));
+
+    const error = await failure(photoStory());
+
+    expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+    expect(error?.status).toBe(503);
+  });
+
+  it("a lost answer on photo_stories is PUBLISH_UNCONFIRMED and photo_stories is never sent again", async () => {
+    fetchMock.mockImplementationOnce(async () => response(200, { id: "photo-1" }));
+    fetchMock.mockImplementationOnce(async () => {
+      throw Object.assign(new Error("Request timed out"), { code: "FETCH_TIMEOUT" });
+    });
+    fetchMock.mockImplementation(async () => response(200, { id: "photo-again" }));
+
+    await expect(
+      withTransientRetries(() => facebookPageClient.publishVideo(photoStory()), { sleep: async () => {} }),
+    ).rejects.toMatchObject({ code: "PUBLISH_UNCONFIRMED", message: PUBLISH_UNCONFIRMED_MESSAGE });
+    const storyCalls = fetchMock.mock.calls.filter((c) => String(c[0]).includes("/photo_stories"));
+    expect(storyCalls).toHaveLength(1);
+  });
+
+  it("photo_stories answering 2xx without post_id is PUBLISH_UNCONFIRMED", async () => {
+    fetchMock.mockImplementationOnce(async () => response(200, { id: "photo-1" }));
+    fetchMock.mockImplementationOnce(async () => response(200, { success: true }));
+
+    expect((await failure(photoStory()))?.code).toBe("PUBLISH_UNCONFIRMED");
+  });
+
+  it("video Story: start, the hosted file to the answered address, then finish; no caption", async () => {
+    answerVideo();
+
+    const result = await facebookPageClient.publishVideo(videoStory());
+
+    expect(result).toEqual({ externalPostId: "story-5" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const start = call(0);
+    expect(start.url.host).toBe("graph.facebook.com");
+    expect(start.url.pathname).toMatch(/\/page-1\/video_stories$/);
+    expect(Object.fromEntries(start.body)).toEqual({ upload_phase: "start", access_token: "page-access-token" });
+
+    const transfer = call(1);
+    expect(transfer.url.toString()).toBe(UPLOAD_URL);
+    expect(transfer.init.method).toBe("POST");
+    expect(transfer.headers.get("file_url")).toBe("https://blob.example.com/reel.mp4");
+    expect(transfer.headers.get("authorization")).toBe("OAuth page-access-token");
+
+    const finish = call(2);
+    expect(finish.url.pathname).toMatch(/\/page-1\/video_stories$/);
+    expect(Object.fromEntries(finish.body)).toEqual({
+      video_id: "video-5",
+      upload_phase: "finish",
+      access_token: "page-access-token",
+    });
+    for (const i of [0, 1, 2]) expect(call(i).body.has("description")).toBe(false);
+  });
+
+  it("gives the file transfer up to 2 minutes, but never past the step deadline", async () => {
+    answerVideo();
+    await facebookPageClient.publishVideo(videoStory());
+    expect(call(1).timeout).toBe(120_000);
+
+    fetchMock.mockReset();
+    answerVideo();
+    await facebookPageClient.publishVideo(videoStory({ deadline: Date.now() + 40_000 }));
+    expect(call(1).timeout).toBeLessThanOrEqual(40_000);
+    expect(call(1).timeout).toBeGreaterThan(35_000);
+  });
+
+  it("refuses an upload address that is not rupload.facebook.com, before sending the token there", async () => {
+    fetchMock.mockImplementationOnce(async () =>
+      response(200, { video_id: "video-5", upload_url: "https://evil.example.com/up" }),
+    );
+
+    const error = await failure(videoStory());
+
+    expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed start or transfer publishes nothing (no finish)", async () => {
+    fetchMock.mockImplementationOnce(async () => response(400, { error: { code: 100 } }));
+    expect((await failure(videoStory()))?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    fetchMock.mockReset();
+    fetchMock.mockImplementationOnce(async () => response(200, { video_id: "video-5", upload_url: UPLOAD_URL }));
+    fetchMock.mockImplementationOnce(async () => response(400, { error: { code: 100 } }));
+    expect((await failure(videoStory()))?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a lost answer on finish is PUBLISH_UNCONFIRMED and finish is never sent again", async () => {
+    answerVideo(() => response(502, "bad gateway"));
+    fetchMock.mockImplementation(async () => response(200, { video_id: "video-6", upload_url: UPLOAD_URL }));
+
+    await expect(
+      withTransientRetries(() => facebookPageClient.publishVideo(videoStory()), { sleep: async () => {} }),
+    ).rejects.toMatchObject({ code: "PUBLISH_UNCONFIRMED" });
+    const finishes = fetchMock.mock.calls.filter((c) =>
+      String((c[1] as RequestInit).body ?? "").includes("upload_phase=finish"),
+    );
+    expect(finishes).toHaveLength(1);
+  });
+
+  it("a dead token on the Story call is the reconnect error", async () => {
+    fetchMock.mockImplementationOnce(async () => response(200, { id: "photo-1" }));
+    fetchMock.mockImplementationOnce(async () =>
+      response(400, { error: { type: "OAuthException", code: 190, message: "expired" } }),
+    );
+
+    expect((await failure(photoStory()))?.code).toBe("FACEBOOK_PAGE_RECONNECT_REQUIRED");
+  });
+
+  it.each([undefined, { placement: "feed" as const }])(
+    "feed (%o): a photo and a video send exactly today's single request",
+    async (facebookMetadata) => {
+      fetchMock.mockImplementation(async () => response(200, { id: "post-1" }));
+
+      await facebookPageClient.publishVideo({ ...makeContext(), facebookMetadata });
+      await facebookPageClient.publishVideo({
+        ...makeContext({}, { mimeType: "video/mp4", storageLocation: "https://blob.example.com/reel.mp4" }),
+        facebookMetadata,
+      });
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(call(0).url.pathname).toMatch(/\/page-1\/photos$/);
+      expect(Object.fromEntries(call(0).body)).toEqual({
+        url: "https://blob.example.com/photo.jpg",
+        caption: "hello",
+        access_token: "page-access-token",
+      });
+      expect(call(1).url.host).toBe("graph-video.facebook.com");
+      expect(Object.fromEntries(call(1).body)).toEqual({
+        file_url: "https://blob.example.com/reel.mp4",
+        description: "hello",
+        access_token: "page-access-token",
+      });
+    },
+  );
+
+  it("several photos with Story chosen are refused before any request", async () => {
+    const ctx = photoStory();
+    const two = { ...ctx, mediaItems: [ctx.mediaItem, { ...ctx.mediaItem, id: "media-2" } as MediaItem] };
+
+    expect((await failure(two))?.code).toBe("FACEBOOK_PAGE_STORY_ONE_FILE");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

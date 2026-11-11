@@ -307,6 +307,23 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
     });
   });
 
+  it("snapshots a Story placement on the job (2026-11-10)", async () => {
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: { ...media, mimeType: "image/jpeg" },
+      baseCaption: "hello",
+      intent: "draft",
+      instagramMetadata: { placement: "story" },
+      facebookMetadata: { placement: "story" },
+    });
+
+    expect(postJobCreateMock.mock.calls[0][0].data.publishMetadata).toEqual({
+      instagram: { placement: "story" },
+      facebook: { placement: "story" },
+    });
+  });
+
 });
 
 describe("createPostJobForExistingMedia", () => {
@@ -379,6 +396,23 @@ describe("createPostJobForExistingMedia", () => {
 
     expect(postJobCreateMock.mock.calls[0][0].data.publishMetadata).toEqual({
       googleBusinessProfile: googleMetadata,
+    });
+  });
+
+  it("snapshots a Story placement on the reuse job (2026-11-10)", async () => {
+    findUniqueMock.mockResolvedValue(makeMediaItem({ workspaceId: "workspace-1" }));
+
+    await createPostJobForExistingMedia({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      mediaItemId: "media-1",
+      baseCaption: "hello",
+      intent: "draft",
+      instagramMetadata: { placement: "story" },
+    });
+
+    expect(postJobCreateMock.mock.calls[0][0].data.publishMetadata).toEqual({
+      instagram: { placement: "story" },
     });
   });
 
@@ -674,6 +708,18 @@ describe("buildPublishMetadataSnapshot (review B1)", () => {
       youtube: yt,
       targetPlatforms: ["youtube"],
       googleBusinessProfile: google,
+    });
+  });
+
+  // 2026-11-10 — fifth and sixth positional params: Instagram's and Facebook's placement.
+  it("includes a Story placement under instagram / facebook", () => {
+    const story = { placement: "story" as const };
+    expect(buildPublishMetadataSnapshot(undefined, undefined, undefined, undefined, story)).toEqual({
+      instagram: story,
+    });
+    expect(buildPublishMetadataSnapshot(undefined, undefined, ["facebook_page"], undefined, undefined, story)).toEqual({
+      targetPlatforms: ["facebook_page"],
+      facebook: story,
     });
   });
 

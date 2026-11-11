@@ -88,3 +88,25 @@ describe("GET /api/instagram-photo", () => {
     expect((await get(instagramPhotoUrl("https://vibesocials.wtf", OWN_BLOB))).status).toBe(500);
   });
 });
+
+describe("GET /api/instagram-photo - the Story copy (2026-11-10)", () => {
+  it("serves fit=story uncropped", async () => {
+    const source = await photo(1080, 1920);
+    stubBlob(() => new Response(new Uint8Array(source), { status: 200 }));
+
+    const response = await get(instagramPhotoUrl("https://vibesocials.wtf", OWN_BLOB, Date.now(), "story"));
+
+    expect(response.status).toBe(200);
+    const metadata = await sharp(Buffer.from(await response.arrayBuffer())).metadata();
+    expect({ width: metadata.width, height: metadata.height }).toEqual({ width: 1080, height: 1920 });
+  });
+
+  it("refuses fit=story added to a feed signature without fetching anything", async () => {
+    const fetchMock = stubBlob(() => new Response("never"));
+    const url = new URL(instagramPhotoUrl("https://vibesocials.wtf", OWN_BLOB));
+    url.searchParams.set("fit", "story");
+
+    expect((await get(url.toString())).status).toBe(404);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

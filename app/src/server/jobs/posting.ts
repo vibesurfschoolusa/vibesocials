@@ -2,7 +2,9 @@ import { Platform, type MediaItem, type Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import type { SavedFileInfo } from "@/server/storage";
 import type {
+  FacebookPostMetadata,
   GoogleBusinessPostMetadata,
+  InstagramPostMetadata,
   TikTokPostMetadata,
   YouTubePostMetadata,
 } from "@/server/platforms/types";
@@ -70,6 +72,9 @@ export interface CreatePostJobOnlyParams extends PostJobSchedulingParams {
   youtubeMetadata?: YouTubePostMetadata;
   /** The Google post's options (2026-11-10); snapshotted like YouTube's privacy. */
   googleMetadata?: GoogleBusinessPostMetadata;
+  /** Feed or Story (2026-11-10); snapshotted like the Google options. Absent: feed. */
+  instagramMetadata?: InstagramPostMetadata;
+  facebookMetadata?: FacebookPostMetadata;
 }
 
 /**
@@ -92,6 +97,12 @@ export interface PublishMetadataSnapshot {
    * gets the workspace's default button at publish time.
    */
   googleBusinessProfile?: GoogleBusinessPostMetadata;
+  /**
+   * 2026-11-10 — Instagram's and Facebook's placement. Absent means feed; a
+   * retry or a deferred publish without it would turn a Story into a feed post.
+   */
+  instagram?: InstagramPostMetadata;
+  facebook?: FacebookPostMetadata;
 }
 
 /**
@@ -107,14 +118,27 @@ export function buildPublishMetadataSnapshot(
   youtubeMetadata?: YouTubePostMetadata,
   targetPlatforms?: Platform[],
   googleMetadata?: GoogleBusinessPostMetadata,
+  instagramMetadata?: InstagramPostMetadata,
+  facebookMetadata?: FacebookPostMetadata,
 ): PublishMetadataSnapshot | undefined {
   const hasTargetPlatforms = Boolean(targetPlatforms && targetPlatforms.length > 0);
-  if (!tiktokMetadata && !youtubeMetadata && !hasTargetPlatforms && !googleMetadata) return undefined;
+  if (
+    !tiktokMetadata &&
+    !youtubeMetadata &&
+    !hasTargetPlatforms &&
+    !googleMetadata &&
+    !instagramMetadata &&
+    !facebookMetadata
+  ) {
+    return undefined;
+  }
   return {
     ...(tiktokMetadata ? { tiktok: tiktokMetadata } : {}),
     ...(youtubeMetadata ? { youtube: youtubeMetadata } : {}),
     ...(hasTargetPlatforms ? { targetPlatforms } : {}),
     ...(googleMetadata ? { googleBusinessProfile: googleMetadata } : {}),
+    ...(instagramMetadata ? { instagram: instagramMetadata } : {}),
+    ...(facebookMetadata ? { facebook: facebookMetadata } : {}),
   };
 }
 
@@ -275,6 +299,8 @@ export async function createPostJobOnly(
             tiktokMetadata: params.tiktokMetadata,
             youtubeMetadata: params.youtubeMetadata,
             googleMetadata: params.googleMetadata,
+            instagramMetadata: params.instagramMetadata,
+            facebookMetadata: params.facebookMetadata,
             targetPlatforms,
           }),
           workspaceId,
@@ -345,6 +371,8 @@ export function buildPostJobCreateData(args: {
   tiktokMetadata?: TikTokPostMetadata;
   youtubeMetadata?: YouTubePostMetadata;
   googleMetadata?: GoogleBusinessPostMetadata;
+  instagramMetadata?: InstagramPostMetadata;
+  facebookMetadata?: FacebookPostMetadata;
   /** Task 7 — chosen platform subset, persisted for deferred jobs so
    *  {@link prepareDeferredPostJobDispatch} can replay it at run time. */
   targetPlatforms?: Platform[];
@@ -361,6 +389,8 @@ export function buildPostJobCreateData(args: {
     args.youtubeMetadata,
     args.targetPlatforms,
     args.googleMetadata,
+    args.instagramMetadata,
+    args.facebookMetadata,
   );
   return {
     userId: args.userId,
@@ -415,6 +445,10 @@ export interface CreatePostJobForExistingMediaParams
   youtubeMetadata?: YouTubePostMetadata;
   /** See `baseCaption` above: carried by the event payload, not this helper. */
   googleMetadata?: GoogleBusinessPostMetadata;
+  /** See `baseCaption` above: carried by the event payload, not this helper. */
+  instagramMetadata?: InstagramPostMetadata;
+  /** See `baseCaption` above: carried by the event payload, not this helper. */
+  facebookMetadata?: FacebookPostMetadata;
 }
 
 /**
@@ -528,6 +562,8 @@ export async function createPostJobForExistingMedia(
           tiktokMetadata: params.tiktokMetadata,
           youtubeMetadata: params.youtubeMetadata,
           googleMetadata: params.googleMetadata,
+          instagramMetadata: params.instagramMetadata,
+          facebookMetadata: params.facebookMetadata,
           targetPlatforms,
         }),
         workspaceId,
@@ -683,6 +719,9 @@ export interface PublishRequestedEventData {
   youtubeMetadata?: YouTubePostMetadata;
   /** 2026-11-10 — the Google post's options; omitted when the post has none. */
   googleMetadata?: GoogleBusinessPostMetadata;
+  /** 2026-11-10 — feed or Story; omitted for a feed post. */
+  instagramMetadata?: InstagramPostMetadata;
+  facebookMetadata?: FacebookPostMetadata;
 }
 
 /**
@@ -845,6 +884,8 @@ export async function prepareDeferredPostJobDispatch(
       ...(publishMetadata?.googleBusinessProfile
         ? { googleMetadata: publishMetadata.googleBusinessProfile }
         : {}),
+      ...(publishMetadata?.instagram ? { instagramMetadata: publishMetadata.instagram } : {}),
+      ...(publishMetadata?.facebook ? { facebookMetadata: publishMetadata.facebook } : {}),
     },
   };
 }

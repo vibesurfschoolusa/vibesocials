@@ -184,6 +184,21 @@ describe("prepareDeferredPostJobDispatch", () => {
     if (result.ok) expect(result.event.googleMetadata).toEqual(google);
   });
 
+  it("replays a Story placement so a scheduled Story stays a Story (2026-11-10)", async () => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({ publishMetadata: { instagram: { placement: "story" }, facebook: { placement: "story" } } }),
+    );
+    connectionFindManyMock.mockResolvedValue([{ id: "c-ig", platform: "instagram" }]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.event.instagramMetadata).toEqual({ placement: "story" });
+      expect(result.event.facebookMetadata).toEqual({ placement: "story" });
+    }
+  });
+
   it("omits tiktok/youtube metadata from the event when the job has no publishMetadata", async () => {
     postJobFindUniqueMock.mockResolvedValue(makeJob({ publishMetadata: null }));
     connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x" }]);
@@ -195,6 +210,8 @@ describe("prepareDeferredPostJobDispatch", () => {
       expect(result.event).not.toHaveProperty("tiktokMetadata");
       expect(result.event).not.toHaveProperty("youtubeMetadata");
       expect(result.event).not.toHaveProperty("googleMetadata");
+      expect(result.event).not.toHaveProperty("instagramMetadata");
+      expect(result.event).not.toHaveProperty("facebookMetadata");
     }
   });
 

@@ -23,6 +23,7 @@ import { LocationAutocomplete } from "./location-autocomplete";
 import { TikTokConsentDeclaration, TikTokPostSettings } from "./tiktok-post-settings";
 import { YouTubePostSettings } from "./youtube-post-settings";
 import { GooglePostSettings } from "./google-post-settings";
+import { StoryPlacementSettings } from "./story-placement";
 import { CaptionCounter } from "@/components/caption-counter";
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -68,6 +69,12 @@ import {
 import { isHeicFile, prepareUploadFile } from "@/lib/prepareUploadFile";
 import { shouldTakeSharedFile, takeSharedFile } from "@/lib/sharedFile";
 import { TIKTOK_DISCLOSURE_INCOMPLETE_TEXT, tiktokPublishBlock } from "@/lib/tiktokPostRules";
+import {
+  FEED_CHOICE,
+  reconcilePlacement,
+  storyVideoLengthRefusal,
+  type PlacementChoice,
+} from "@/lib/storyPlacement";
 import {
   PLATFORM_ORDER,
   platformLabel,
@@ -284,6 +291,9 @@ function CreatePostFormInner({
   const initialGoogleMetadata = (): GoogleBusinessPostMetadata =>
     googleButtonDefault ? { postType: "update", button: googleButtonDefault } : { postType: "update" };
   const [googleMetadata, setGoogleMetadata] = useState<GoogleBusinessPostMetadata>(initialGoogleMetadata);
+  // 2026-11-10 — Feed or Story, for Instagram and for Facebook separately. Feed is preselected.
+  const [instagramPlacement, setInstagramPlacement] = useState<PlacementChoice>(FEED_CHOICE);
+  const [facebookPlacement, setFacebookPlacement] = useState<PlacementChoice>(FEED_CHOICE);
 
   // Roadmap Phase 7 / Task 6 — single source of truth for connection state:
   // the same read-only `GET /api/connections` the dashboard's
@@ -345,6 +355,26 @@ function CreatePostFormInner({
   // Google's options apply to a photo post only; a video goes to the gallery.
   const googleOptionsShown =
     selectedPlatforms.includes("google_business_profile") && Boolean(activeMimeType?.startsWith("image/"));
+  // 2026-11-10 — Feed or Story (lib/storyPlacement.ts). A second photo turns a
+  // chosen Story back to Feed; it is adjusted while rendering, so no render, and
+  // no request, ever has a Story with several photos (the server refuses those).
+  const attachedFileCount = photoSet.length > 0 ? photoSet.length : uploadFile || reuseItem ? 1 : 0;
+  const instagramChoice = reconcilePlacement(instagramPlacement, attachedFileCount);
+  if (instagramChoice !== instagramPlacement) setInstagramPlacement(instagramChoice);
+  const facebookChoice = reconcilePlacement(facebookPlacement, attachedFileCount);
+  if (facebookChoice !== facebookPlacement) setFacebookPlacement(facebookChoice);
+  const instagramStory = selectedPlatforms.includes("instagram") && instagramChoice.placement === "story";
+  const facebookStory = selectedPlatforms.includes("facebook_page") && facebookChoice.placement === "story";
+  const activeVideoDurationSec = activeMimeType?.startsWith("video/") ? videoDurationSec : null;
+  // Why a chosen Story cannot take this video, or null.
+  const storyLengthRefusal =
+    (instagramStory ? storyVideoLengthRefusal("instagram", activeVideoDurationSec) : null) ??
+    (facebookStory ? storyVideoLengthRefusal("facebook_page", activeVideoDurationSec) : null);
+  // Sent only for a selected platform with Story chosen: a feed post's request stays as it was.
+  const storyRequestFields = {
+    ...(instagramStory ? { instagramMetadata: { placement: "story" as const } } : {}),
+    ...(facebookStory ? { facebookMetadata: { placement: "story" as const } } : {}),
+  };
   // What the preview shows: what would really change the post (selected, not
   // blank, not the main caption). The request builders clean the same way.
   const previewOverrides = cleanPlatformOverrides(
@@ -984,7 +1014,7 @@ function CreatePostFormInner({
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(postData),
+        body: JSON.stringify({ ...postData, ...storyRequestFields }),
       });
 
       const data: unknown = await response.json().catch(() => null);
@@ -1104,6 +1134,11 @@ function CreatePostFormInner({
       !tiktokMetadata.brandOrganic;
     if (tiktokCommercialBlocked) {
       setUploadError(TIKTOK_DISCLOSURE_INCOMPLETE_TEXT);
+      return;
+    }
+
+    if (storyLengthRefusal) {
+      setUploadError(storyLengthRefusal);
       return;
     }
 
@@ -1561,6 +1596,24 @@ function CreatePostFormInner({
         )}
         {googleOptionsShown && (
           <GooglePostSettings metadata={googleMetadata} onChange={setGoogleMetadata} />
+        )}
+        {selectedPlatforms.includes("instagram") && activeMimeType && (
+          <StoryPlacementSettings
+            platform="instagram"
+            choice={instagramChoice}
+            fileCount={attachedFileCount}
+            videoDurationSec={activeVideoDurationSec}
+            onChange={setInstagramPlacement}
+          />
+        )}
+        {selectedPlatforms.includes("facebook_page") && activeMimeType && (
+          <StoryPlacementSettings
+            platform="facebook_page"
+            choice={facebookChoice}
+            fileCount={attachedFileCount}
+            videoDurationSec={activeVideoDurationSec}
+            onChange={setFacebookPlacement}
+          />
         )}
 
         {/* Task 7 — per-post platform targeting: defaults to every connected

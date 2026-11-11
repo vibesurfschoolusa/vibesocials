@@ -2040,3 +2040,119 @@ describe("POST /api/posts - the media list (several photos, 07a)", () => {
     );
   });
 });
+
+// 2026-11-10: feed or Story for Instagram and Facebook (lib/storyPlacement.ts).
+describe("POST /api/posts - Story placement", () => {
+  const HOST = "https://test.public.blob.vercel-storage.com";
+  const photo = (n: number) => ({
+    blobUrl: `${HOST}/p${n}.jpg`,
+    filename: `p${n}.jpg`,
+    mimeType: "image/jpeg",
+    sizeBytes: 100 + n,
+  });
+  const STORY = { placement: "story" };
+
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["r1"] });
+    createPostJobForExistingMediaMock.mockResolvedValue({ postJobId: "job-2", mediaItemId: "media-9", resultIds: [] });
+  });
+
+  it("hands a Story to the create helper (the snapshot) and to the publish event", async () => {
+    const response = await POST(
+      jsonRequest({
+        ...photo(1),
+        baseCaption: "hi",
+        platforms: ["instagram", "facebook_page"],
+        instagramMetadata: STORY,
+        facebookMetadata: STORY,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ instagramMetadata: STORY, facebookMetadata: STORY }),
+    );
+    expect(inngestSendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ instagramMetadata: STORY, facebookMetadata: STORY }),
+      }),
+    );
+  });
+
+  it("hands a Story to the reuse helper too", async () => {
+    await POST(jsonRequest({ mediaItemId: "media-9", baseCaption: "hi", draft: true, instagramMetadata: STORY }));
+
+    expect(createPostJobForExistingMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({ instagramMetadata: STORY }),
+    );
+  });
+
+  it("feed, or no field, creates the post exactly as before", async () => {
+    await POST(jsonRequest({ ...photo(1), baseCaption: "hi", platforms: ["instagram"] }));
+    const before = createPostJobOnlyMock.mock.calls[0][0];
+    const eventBefore = inngestSendMock.mock.calls[0][0];
+    createPostJobOnlyMock.mockClear();
+    inngestSendMock.mockClear();
+
+    await POST(
+      jsonRequest({
+        ...photo(1),
+        baseCaption: "hi",
+        platforms: ["instagram"],
+        instagramMetadata: { placement: "feed" },
+      }),
+    );
+
+    expect(createPostJobOnlyMock.mock.calls[0][0]).toStrictEqual(before);
+    expect(inngestSendMock.mock.calls[0][0]).toStrictEqual(eventBefore);
+  });
+
+  it("ignores the field of a platform the post does not target, even junk", async () => {
+    const response = await POST(
+      jsonRequest({ ...photo(1), baseCaption: "hi", platforms: ["x"], instagramMetadata: "junk", facebookMetadata: STORY }),
+    );
+
+    expect(response.status).toBe(200);
+    const args = createPostJobOnlyMock.mock.calls[0][0];
+    expect(args).not.toHaveProperty("instagramMetadata");
+    expect(args).not.toHaveProperty("facebookMetadata");
+  });
+
+  it.each([
+    ["instagramMetadata", { placement: "reel" }],
+    ["instagramMetadata", "story"],
+    ["facebookMetadata", { placement: "story", extra: true }],
+  ])("refuses junk in %s with a 400 naming the field", async (field, value) => {
+    const response = await POST(
+      jsonRequest({ ...photo(1), baseCaption: "hi", platforms: ["instagram", "facebook_page"], [field]: value }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain(field);
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a Story with several photos, with the sentence", async () => {
+    const response = await POST(
+      jsonRequest({
+        media: [photo(1), photo(2)],
+        baseCaption: "hi",
+        platforms: ["instagram", "x"],
+        instagramMetadata: STORY,
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toBe(
+      "A Story takes one photo or video. Choose Feed for Instagram, or remove the extra photos.",
+    );
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("reads the field when the post names no platforms (every connection is a target)", async () => {
+    await POST(jsonRequest({ ...photo(1), baseCaption: "hi", facebookMetadata: STORY }));
+
+    expect(createPostJobOnlyMock).toHaveBeenCalledWith(expect.objectContaining({ facebookMetadata: STORY }));
+  });
+});

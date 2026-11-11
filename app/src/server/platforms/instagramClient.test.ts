@@ -2391,3 +2391,232 @@ describe("instagramClient.publishVideo — several photos (carousel)", () => {
     expect(graph.fetchMock).not.toHaveBeenCalled();
   });
 });
+
+// 2026-11-10: a Story is the single-file path with a STORIES container: no
+// caption, the uncropped photo copy, then the same status check, media_publish
+// and permalink lookup as a feed post, with the same saved container state.
+describe("instagramClient.publishVideo — Story", () => {
+  const NOW = Date.parse("2026-11-02T10:00:00Z");
+  const STORY = { placement: "story" } as const;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.stubEnv("NEXTAUTH_URL", "https://vibesocials.wtf");
+    vi.stubEnv("NEXTAUTH_SECRET", "test-secret");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
+
+  function makeStore() {
+    const kept = new Map<string, UploadSnapshot<unknown, unknown>>();
+    const store = {
+      load: vi.fn(async (kind: string) => kept.get(kind) ?? null),
+      save: vi.fn(async (kind: string, snapshot: UploadSnapshot<unknown, unknown>) => {
+        kept.set(kind, snapshot);
+      }),
+      clear: vi.fn(async () => {
+        kept.clear();
+      }),
+    };
+    return { store: store as unknown as UploadStateStore, mocks: store };
+  }
+
+  function ctx(
+    mimeType: string,
+    extra: { instagramMetadata?: { placement: "feed" | "story" }; uploadState?: UploadStateStore } = {},
+  ) {
+    return {
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+      get mediaItems(): MediaItem[] { return [this.mediaItem]; },
+      mediaItem: {
+        mimeType,
+        storageLocation: "https://blob.example.com/m",
+        metadata: null,
+      } as unknown as MediaItem,
+      caption: "Two spots left today",
+      ...extra,
+    };
+  }
+
+  /** The params of the container request; the container fails, so the publish stops there. */
+  async function containerParamsFor(c: ReturnType<typeof ctx>): Promise<Record<string, string>> {
+    const fetchMock = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/ig-account-1/media")) return Promise.resolve(new Response("{}", { status: 400 }));
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await instagramClient.publishVideo(c).catch(() => null);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    return Object.fromEntries(new URL(String(fetchMock.mock.calls[0][0])).searchParams);
+  }
+
+  it("a photo Story: STORIES container, no caption, the uncropped signed copy", async () => {
+    const params = await containerParamsFor(ctx("image/jpeg", { instagramMetadata: STORY }));
+
+    expect(Object.keys(params).sort()).toEqual(["access_token", "image_url", "media_type"]);
+    expect(params.media_type).toBe("STORIES");
+    const imageUrl = new URL(params.image_url);
+    expect(`${imageUrl.origin}${imageUrl.pathname}`).toBe("https://vibesocials.wtf/api/instagram-photo");
+    expect(imageUrl.searchParams.get("fit")).toBe("story");
+    expect(
+      verifyInstagramPhotoRequest(
+        imageUrl.searchParams.get("src"),
+        imageUrl.searchParams.get("exp"),
+        imageUrl.searchParams.get("sig"),
+        NOW,
+        imageUrl.searchParams.get("fit"),
+      ),
+    ).toBe(true);
+  });
+
+  it("a video Story: STORIES container with the stored video URL and no caption", async () => {
+    const params = await containerParamsFor(ctx("video/mp4", { instagramMetadata: STORY }));
+
+    expect(params).toEqual({
+      access_token: "page-access-token",
+      media_type: "STORIES",
+      video_url: "https://blob.example.com/m",
+    });
+  });
+
+  it.each(["image/jpeg", "video/mp4"])(
+    "feed (%s): the requests are unchanged when the field is absent or feed",
+    async (mimeType) => {
+      const absent = await containerParamsFor(ctx(mimeType));
+      const feed = await containerParamsFor(ctx(mimeType, { instagramMetadata: { placement: "feed" } }));
+
+      expect(feed).toEqual(absent);
+      expect(absent.caption).toBe("Two spots left today");
+      if (mimeType === "video/mp4") {
+        expect(absent).toEqual({
+          access_token: "page-access-token",
+          caption: "Two spots left today",
+          media_type: "REELS",
+          video_url: "https://blob.example.com/m",
+        });
+      } else {
+        expect(Object.keys(absent).sort()).toEqual(["access_token", "caption", "image_url"]);
+        expect(new URL(absent.image_url).searchParams.has("fit")).toBe(false);
+      }
+    },
+  );
+
+  it("a video Story across steps: one container, one media_publish, then the permalink", async () => {
+    const { store } = makeStore();
+    let containers = 0;
+    let publishes = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string | URL) => {
+        const url = String(input);
+        if (url.includes("/media_publish")) {
+          publishes++;
+          return Promise.resolve(new Response(JSON.stringify({ id: "media-1" }), { status: 200 }));
+        }
+        if (url.includes("/ig-account-1/media")) {
+          containers++;
+          return Promise.resolve(new Response(JSON.stringify({ id: "container-1" }), { status: 200 }));
+        }
+        if (url.includes("fields=status_code")) {
+          return Promise.resolve(new Response(JSON.stringify({ status_code: "FINISHED" }), { status: 200 }));
+        }
+        if (url.includes("fields=permalink")) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ permalink: "https://www.instagram.com/stories/acme/1/" }), { status: 200 }),
+          );
+        }
+        throw new Error(`Unexpected fetch in test: ${url}`);
+      }),
+    );
+    const step = () =>
+      instagramClient.publishVideo(ctx("video/mp4", { instagramMetadata: STORY, uploadState: store }));
+
+    // Step 1 creates the Story container and continues.
+    expect(await step()).toEqual({ continuation: { resumeAt: NOW + 60_000 } });
+    // Step 2 checks the saved container and publishes it.
+    expect(await step()).toEqual({
+      externalPostId: "media-1",
+      externalPostUrl: "https://www.instagram.com/stories/acme/1/",
+    });
+    expect(containers).toBe(1);
+    expect(publishes).toBe(1);
+  });
+
+  it("a re-run of the creating step (its output was lost) checks the saved Story container instead of making a second", async () => {
+    const { store } = makeStore();
+    const container = vi.fn(() => new Response(JSON.stringify({ id: "container-1" }), { status: 200 }));
+    const status = vi.fn(() => new Response(JSON.stringify({ status_code: "IN_PROGRESS" }), { status: 200 }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string | URL) => {
+        const url = String(input);
+        if (url.includes("/media_publish")) throw new Error("must not publish");
+        if (url.includes("/ig-account-1/media")) return Promise.resolve(container());
+        if (url.includes("fields=status_code")) return Promise.resolve(status());
+        throw new Error(`Unexpected fetch in test: ${url}`);
+      }),
+    );
+    const step = () =>
+      instagramClient.publishVideo(ctx("video/mp4", { instagramMetadata: STORY, uploadState: store }));
+
+    await step();
+    await step();
+
+    expect(container).toHaveBeenCalledTimes(1);
+    expect(status).toHaveBeenCalledTimes(1);
+  });
+
+  it("media_publish answering 500 for a Story is PUBLISH_UNCONFIRMED and is not sent again", async () => {
+    const { store } = makeStore();
+    await store.save("instagram_container", {
+      data: { containerId: "container-1", createdAt: new Date(NOW - 60_000).toISOString(), checks: 0 },
+    });
+    const publish = vi.fn(() => new Response("oops", { status: 500 }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string | URL) => {
+        const url = String(input);
+        if (url.includes("/media_publish")) return Promise.resolve(publish());
+        if (url.includes("fields=status_code")) {
+          return Promise.resolve(new Response(JSON.stringify({ status_code: "FINISHED" }), { status: 200 }));
+        }
+        throw new Error(`Unexpected fetch in test: ${url}`);
+      }),
+    );
+
+    await expect(
+      withTransientRetries(
+        () => instagramClient.publishVideo(ctx("video/mp4", { instagramMetadata: STORY, uploadState: store })),
+        { sleep: async () => {} },
+      ),
+    ).rejects.toMatchObject({ message: PUBLISH_UNCONFIRMED_MESSAGE });
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("several photos with Story chosen are refused before any request (the route refuses them too)", async () => {
+    const fetchMock = vi.fn(() => {
+      throw new Error("no request expected");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const two = {
+      ...ctx("image/jpeg", { instagramMetadata: STORY }),
+      mediaItems: [
+        { mimeType: "image/jpeg", storageLocation: "https://blob.example.com/1" },
+        { mimeType: "image/jpeg", storageLocation: "https://blob.example.com/2" },
+      ] as unknown as MediaItem[],
+    };
+
+    await expect(instagramClient.publishVideo(two)).rejects.toMatchObject({ code: "INSTAGRAM_STORY_ONE_FILE" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

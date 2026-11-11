@@ -160,3 +160,53 @@ describe("toInstagramJpeg", () => {
     expect(await sizeOf(out)).toEqual({ format: "jpeg", width: 1440, height: 1080 });
   });
 });
+
+// 2026-11-10: a Story photo keeps its shape (9:16 is what a Story wants); only
+// the feed copy is cropped into 4:5..1.91:1.
+describe("the Story copy", () => {
+  const solid = (width: number, height: number) =>
+    sharp({ create: { width, height, channels: 3, background: { r: 30, g: 120, b: 200 } } });
+
+  async function sizeOf(buffer: Buffer) {
+    const metadata = await sharp(buffer).metadata();
+    return { format: metadata.format, width: metadata.width, height: metadata.height };
+  }
+
+  it("signs fit=story, and the signature covers it", () => {
+    const url = instagramPhotoUrl("https://vibesocials.wtf", SRC, NOW, "story");
+    const { src, exp, sig } = params(url);
+    expect(new URL(url).searchParams.get("fit")).toBe("story");
+
+    expect(verifyInstagramPhotoRequest(src, exp, sig, NOW, "story")).toBe(true);
+    // The same signature does not serve the other copy, either way round.
+    expect(verifyInstagramPhotoRequest(src, exp, sig, NOW)).toBe(false);
+    const feed = params(instagramPhotoUrl("https://vibesocials.wtf", SRC, NOW));
+    expect(verifyInstagramPhotoRequest(feed.src, feed.exp, feed.sig, NOW, "story")).toBe(false);
+    expect(verifyInstagramPhotoRequest(src, exp, sig, NOW, "other")).toBe(false);
+  });
+
+  it("leaves the feed URL exactly as before (no fit parameter)", () => {
+    const url = instagramPhotoUrl("https://vibesocials.wtf", SRC, NOW);
+    expect(new URL(url).searchParams.has("fit")).toBe(false);
+  });
+
+  it("instagramImageUrl hands out the Story copy when asked", () => {
+    expect(new URL(instagramImageUrl(SRC, "https://vibesocials.wtf", "story")).searchParams.get("fit")).toBe("story");
+    expect(instagramImageUrl(SRC, undefined, "story")).toBe(SRC);
+  });
+
+  it("keeps a 9:16 photo 9:16, within 1,440 px wide", async () => {
+    const out = await toInstagramJpeg(await solid(2160, 3840).jpeg().toBuffer(), "story");
+    expect(await sizeOf(out)).toEqual({ format: "jpeg", width: INSTAGRAM_MAX_WIDTH, height: 2560 });
+  });
+
+  it("keeps a 3:4 photo uncropped and turns a PNG into a JPEG", async () => {
+    const out = await toInstagramJpeg(await solid(768, 1024).png().toBuffer(), "story");
+    expect(await sizeOf(out)).toEqual({ format: "jpeg", width: 768, height: 1024 });
+  });
+
+  it("returns an upright JPEG that is small enough unchanged", async () => {
+    const fits = await solid(1080, 1920).jpeg().toBuffer();
+    expect(await toInstagramJpeg(fits, "story")).toBe(fits);
+  });
+});

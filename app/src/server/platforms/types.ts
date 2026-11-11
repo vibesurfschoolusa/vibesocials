@@ -47,6 +47,19 @@ export interface GoogleBusinessPostMetadata {
   };
 }
 
+/**
+ * Feed or Story (2026-11-10, lib/storyPlacement.ts). Absent means feed, the
+ * behaviour of every post before this option existed.
+ */
+export interface InstagramPostMetadata {
+  placement: "feed" | "story";
+}
+
+/** Feed or Story for a Facebook Page; absent means feed. */
+export interface FacebookPostMetadata {
+  placement: "feed" | "story";
+}
+
 export interface PublishContext {
   user: User;
   socialConnection: SocialConnection;
@@ -99,6 +112,10 @@ export interface PublishContext {
    * default button (googleBusinessProfileClient.ts).
    */
   googleBusinessProfileMetadata?: GoogleBusinessPostMetadata;
+  /** Instagram feed or Story. Absent: feed. */
+  instagramMetadata?: InstagramPostMetadata;
+  /** Facebook Page feed or Story. Absent: feed. */
+  facebookMetadata?: FacebookPostMetadata;
 }
 
 export interface PublishResult {

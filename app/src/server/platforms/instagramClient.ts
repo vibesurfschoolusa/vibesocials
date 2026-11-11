@@ -457,8 +457,30 @@ async function createInstagramContainer(args: {
   isVideo: boolean;
   locationId?: string;
   deadline: number | undefined;
+  /** A Story (2026-11-10) instead of a feed post. */
+  story: boolean;
 }): Promise<string> {
-  const { igAccountId, accessToken, connection, caption, mediaUrl, isVideo, locationId, deadline } = args;
+  const { igAccountId, accessToken, connection, caption, mediaUrl, isVideo, locationId, deadline, story } = args;
+
+  if (story) {
+    // IG User Media reference (read 2026-11-10): a Story container takes
+    // media_type=STORIES with image_url or video_url; caption is not among its
+    // parameters, so none is sent. The photo is the app's JPEG copy that keeps its
+    // shape (a Story is 9:16, which the feed crop would cut to 4:5).
+    console.log("[Instagram] Creating media container", { mediaType: "STORIES", isVideo });
+    return postInstagramContainer({
+      igAccountId,
+      params: {
+        access_token: accessToken,
+        media_type: "STORIES",
+        ...(isVideo
+          ? { video_url: mediaUrl }
+          : { image_url: instagramImageUrl(mediaUrl, process.env.NEXTAUTH_URL, "story") }),
+      },
+      connection,
+      deadline,
+    });
+  }
 
   const containerParams: Record<string, string> = {
     access_token: accessToken,
@@ -884,7 +906,16 @@ export const instagramClient: PlatformClient = {
       throw error;
     }
 
+    const story = ctx.instagramMetadata?.placement === "story";
+
     if (ctx.mediaItems.length > 1) {
+      // The posts route refuses this; a Story is never quietly turned into a carousel.
+      if (story) {
+        throw instagramCodedError(
+          "INSTAGRAM_STORY_ONE_FILE",
+          "A Story takes one photo or video. Choose Feed for Instagram, or remove the extra photos.",
+        );
+      }
       return publishInstagramCarousel({
         ctx,
         igAccountId,
@@ -964,6 +995,7 @@ export const instagramClient: PlatformClient = {
           isVideo,
           locationId,
           deadline,
+          story,
         });
 
         if (store) {
