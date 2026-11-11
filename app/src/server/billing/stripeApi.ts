@@ -49,6 +49,10 @@ export interface StripeSubscription {
   cancel_at_period_end?: boolean;
   /** A set date the subscription will be cancelled at. */
   cancel_at?: number | null;
+  /** Unix seconds: when it was created, ended and (last) cancelled; they rank candidates. */
+  created?: number;
+  ended_at?: number | null;
+  canceled_at?: number | null;
   items?: {
     data: Array<{
       price?: { id: string } | null;

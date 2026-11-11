@@ -11,7 +11,7 @@ import {
   type StripeId,
   type StripeSubscription,
 } from "./stripeApi";
-import { isLiveSubscriptionStatus, stripeIdOf, subscriptionWrite, type CheckoutClaim } from "./subscriptionSync";
+import { stripeIdOf, syncFromCustomerList, type CheckoutClaim } from "./subscriptionSync";
 
 /**
  * What POST /api/webhooks/stripe does with an event whose signature has been
@@ -20,7 +20,9 @@ import { isLiveSubscriptionStatus, stripeIdOf, subscriptionWrite, type CheckoutC
  *
  * Stripe sends events more than once and out of order, so an event's payload
  * is never trusted for a subscription's state: it gives only the subscription
- * id, and the subscription is fetched from Stripe now. The fetch (and the
+ * id. That subscription is fetched from Stripe now to find the workspace and
+ * its customer, and the customer's whole list of subscriptions decides what
+ * is written (fix round 3, syncFromCustomerList). The fetches (and the
  * failed-payment emails) come first; then one transaction records the event id
  * in StripeEvent and writes the workspace. The insert skips an id already
  * there, and then nothing is written. Anything that throws before the commit
@@ -34,9 +36,6 @@ type StripeEventBody = {
   createdAt: Date | null;
   data: { object: Record<string, unknown> };
 };
-
-/** Statuses that end a plan for the workspace (planState reads them as ended). */
-const ENDED_FOR_THE_WORKSPACE = new Set(["canceled", "unpaid", "incomplete_expired"]);
 
 const SNAPSHOT_REQUIRED =
   "[stripe webhook] Event without a usable object: the endpoint must send snapshot payloads, not thin ones";
@@ -106,36 +105,22 @@ async function syncSubscription(
     return 500;
   }
 
-  // The customer's other subscriptions. A customer should never have two
-  // live plans, so more than one is logged for the operator (fix round 1).
-  // And when this one has ended while another live one names the same
-  // workspace, the workspace takes the live one (fix round 2), so cancelling
-  // the extra plan cannot end a workspace that is still paying. Not reading
-  // the list leaves the write as it would have been.
-  let liveSubscriptions: number | null = null;
-  let replacement: StripeSubscription | null = null;
-  const ended = ENDED_FOR_THE_WORKSPACE.has(subscription.status);
+  // The customer's whole list is what is written, so without it nothing is:
+  // the event goes back to Stripe to be sent again (fix round 3). Only the
+  // customer's own subscriptions are listed; the transaction then checks that
+  // this customer is the workspace's.
   const customer = stripeIdOf(subscription.customer);
+  let list: StripeSubscription[] = [];
   if (customer) {
     try {
-      const all = await listCustomerSubscriptions(customer, env);
-      liveSubscriptions = all.filter((s) => isLiveSubscriptionStatus(s.status)).length;
-      const workspaceId = subscription.metadata?.workspaceId;
-      if (ended && workspaceId) {
-        replacement =
-          all.find(
-            (s) =>
-              s.id !== subscription.id &&
-              isLiveSubscriptionStatus(s.status) &&
-              !ENDED_FOR_THE_WORKSPACE.has(s.status) &&
-              s.metadata?.workspaceId === workspaceId,
-          ) ?? null;
-      }
+      list = await listCustomerSubscriptions(customer, env);
     } catch (error) {
-      (ended ? logger.error : logger.warn)("[stripe webhook] Could not list the customer's subscriptions", {
+      logger.error("[stripe webhook] Could not list the customer's subscriptions; Stripe will send the event again", {
         eventId: event.id,
+        type: event.type,
         error: errorFields(error),
       });
+      return 500;
     }
   }
 
@@ -156,10 +141,15 @@ async function syncSubscription(
             },
           })
         : null;
-      // Only in place of the subscription the workspace is using; an ended
-      // extra one changes nothing either way.
-      const chosen = replacement && workspace?.stripeSubscriptionId === subscription.id ? replacement : subscription;
-      const result = subscriptionWrite(chosen, workspace, claim, env, event.createdAt);
+      const result = syncFromCustomerList(subscription, workspace, claim, list, env, event.createdAt);
+      for (const { subscriptionId, priceId } of result.unconfigured) {
+        logger.error("[stripe webhook] A subscription in use has a price that is none of the plan prices; not used", {
+          eventId: event.id,
+          workspaceId: workspace?.id ?? null,
+          subscriptionId,
+          priceId,
+        });
+      }
       if (!result.ok) {
         const log = result.level === "error" ? logger.error : logger.info;
         log("[stripe webhook] Subscription not written", {
@@ -171,11 +161,11 @@ async function syncSubscription(
         return;
       }
       await tx.workspace.update({ where: { id: workspace!.id }, data: result.data });
-      if (liveSubscriptions !== null && liveSubscriptions > 1) {
+      if (result.liveCandidateIds.length > 1) {
         logger.error("[stripe webhook] The customer has more than one live subscription; cancel the extra one in Stripe", {
           eventId: event.id,
           workspaceId: workspace!.id,
-          liveSubscriptions,
+          liveSubscriptionIds: result.liveCandidateIds,
           storedSubscriptionId: workspace!.stripeSubscriptionId,
           usingSubscriptionId: result.data.stripeSubscriptionId,
         });

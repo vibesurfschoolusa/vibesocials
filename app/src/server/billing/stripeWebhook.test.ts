@@ -162,7 +162,11 @@ beforeEach(() => {
   m.failNextUpdate = false;
   m.collideNextUpdate = false;
   m.listCustomerSubscriptions.mockReset();
-  m.listCustomerSubscriptions.mockResolvedValue([{ id: "sub_1", status: "active" }]);
+  // Unless a test says otherwise, the customer holds exactly the subscription last fetched.
+  m.listCustomerSubscriptions.mockImplementation(async () => {
+    const last = m.retrieveSubscription.mock.results.at(-1);
+    return last ? [await last.value] : [];
+  });
   m.retrieveSubscription.mockReset();
   m.sendEmail.mockReset();
   m.sendEmail.mockResolvedValue(undefined);
@@ -365,111 +369,150 @@ describe("event order", () => {
   });
 });
 
-describe("more than one live subscription (fix round 1, item 3)", () => {
-  it("still writes, and logs an error naming the workspace and the count", async () => {
-    m.listCustomerSubscriptions.mockResolvedValue([
-      { id: "sub_1", status: "active" },
-      { id: "sub_2", status: "trialing" },
-      { id: "sub_0", status: "canceled" },
-    ]);
-    m.retrieveSubscription.mockResolvedValue(sub());
-    await handleStripeEvent(subscriptionEvent("evt_m", "customer.subscription.created"), ENV);
-    expect(m.listCustomerSubscriptions).toHaveBeenCalledWith("cus_a", ENV);
-    expect(ws().plan).toBe("starter");
-    expect(m.logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("more than one live subscription"),
-      expect.objectContaining({ workspaceId: "ws_a", liveSubscriptions: 2, eventId: "evt_m" }),
-    );
-  });
-
-  it("one live subscription logs nothing", async () => {
-    m.retrieveSubscription.mockResolvedValue(sub());
-    await handleStripeEvent(subscriptionEvent("evt_1", "customer.subscription.created"), ENV);
-    expect(m.logger.error).not.toHaveBeenCalled();
-  });
-
-  it("when the count cannot be read, still writes", async () => {
-    m.listCustomerSubscriptions.mockRejectedValue(new StripeApiError("Stripe answered 500", 500));
-    m.retrieveSubscription.mockResolvedValue(sub());
-    expect(await handleStripeEvent(subscriptionEvent("evt_1", "customer.subscription.created"), ENV)).toBe(200);
-    expect(ws().plan).toBe("starter");
-  });
-});
-
 /**
- * Fix round 2, item 1: with two live subscriptions, cancelling the one the
- * workspace stores must not end a workspace whose other plan is still paid.
+ * Fix round 3: the workspace is synced from the customer's whole list. The
+ * event only says which workspace and customer; the list decides the state.
  */
-describe("two live subscriptions, one cancelled", () => {
-  const growth = (id: string, status: string, workspaceId = "ws_a") =>
+describe("sync from the customer's list", () => {
+  const T = 1799000000;
+  const s1 = (overrides: Partial<StripeSubscription> = {}) => sub({ id: "sub_1", created: T - 100, ...overrides });
+  const s2 = (overrides: Partial<StripeSubscription> = {}) =>
     sub({
-      id,
-      status,
-      metadata: { workspaceId },
+      id: "sub_2",
+      created: T - 50,
       items: { data: [{ price: { id: "price_example_growth" }, current_period_end: PERIOD_END }] },
+      ...overrides,
     });
 
-  beforeEach(() => {
-    m.workspaces.set("ws_a", row({ plan: "starter", planStatus: "active", stripeSubscriptionId: "sub_1" }));
+  it("lists the subscriptions of the workspace's own customer", async () => {
+    m.retrieveSubscription.mockResolvedValue(s1());
+    await handleStripeEvent(subscriptionEvent("evt_1", "customer.subscription.created"), ENV);
+    expect(m.listCustomerSubscriptions).toHaveBeenCalledWith("cus_a", ENV);
+    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_1", plan: "starter", planStatus: "active" });
   });
 
-  it("the stored one is cancelled: the workspace moves to the other, active", async () => {
-    m.retrieveSubscription.mockResolvedValue(sub({ status: "canceled" }));
-    m.listCustomerSubscriptions.mockResolvedValue([sub({ status: "canceled" }), growth("sub_2", "active")]);
-    expect(await handleStripeEvent(subscriptionEvent("evt_d", "customer.subscription.deleted"), ENV)).toBe(200);
-    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_2", plan: "growth", planStatus: "active" });
-  });
-
-  it("the stored one goes unpaid while another is live: the workspace moves to the other", async () => {
-    m.retrieveSubscription.mockResolvedValue(sub({ status: "unpaid" }));
-    m.listCustomerSubscriptions.mockResolvedValue([sub({ status: "unpaid" }), growth("sub_2", "trialing")]);
-    await handleStripeEvent(subscriptionEvent("evt_u", "customer.subscription.updated"), ENV);
-    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_2", planStatus: "trialing" });
-  });
-
-  it("the other one is cancelled: nothing changes for the workspace", async () => {
+  it("an attacker's subscription on another customer naming this workspace: nothing written, B's list never read for A", async () => {
+    m.retrieveSubscription.mockResolvedValue(s1({ customer: "cus_b" }));
+    m.listCustomerSubscriptions.mockResolvedValue([s1({ customer: "cus_b" })]);
     const before = { ...ws() };
-    m.retrieveSubscription.mockResolvedValue(growth("sub_2", "canceled"));
-    m.listCustomerSubscriptions.mockResolvedValue([sub({ status: "active" }), growth("sub_2", "canceled")]);
-    await handleStripeEvent(subscriptionEvent("evt_o", "customer.subscription.deleted", { id: "sub_2" }), ENV);
+    await handleStripeEvent(subscriptionEvent("evt_x", "customer.subscription.created"), ENV);
     expect(ws()).toEqual(before);
   });
 
-  it("only one, cancelled: canceled is written as before", async () => {
-    m.retrieveSubscription.mockResolvedValue(sub({ status: "canceled" }));
-    m.listCustomerSubscriptions.mockResolvedValue([sub({ status: "canceled" })]);
-    await handleStripeEvent(subscriptionEvent("evt_c", "customer.subscription.deleted"), ENV);
-    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_1", planStatus: "canceled" });
-  });
-
-  it("the other live one names a different workspace: not used, canceled is written", async () => {
-    m.retrieveSubscription.mockResolvedValue(sub({ status: "canceled" }));
-    m.listCustomerSubscriptions.mockResolvedValue([sub({ status: "canceled" }), growth("sub_2", "active", "ws_b")]);
-    await handleStripeEvent(subscriptionEvent("evt_c", "customer.subscription.deleted"), ENV);
-    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_1", planStatus: "canceled" });
-  });
-
-  it("the list call fails: canceled is written as before, and logged", async () => {
-    m.retrieveSubscription.mockResolvedValue(sub({ status: "canceled" }));
-    m.listCustomerSubscriptions.mockRejectedValue(new StripeApiError("Stripe answered 500", 500));
-    expect(await handleStripeEvent(subscriptionEvent("evt_c", "customer.subscription.deleted"), ENV)).toBe(200);
-    expect(ws().planStatus).toBe("canceled");
-    expect(m.logger.error).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ eventId: "evt_c" }));
-  });
-
-  it("the two-live log names the stored subscription and the one in use", async () => {
-    m.retrieveSubscription.mockResolvedValue(growth("sub_2", "active"));
-    m.listCustomerSubscriptions.mockResolvedValue([sub({ status: "active" }), growth("sub_2", "active")]);
-    await handleStripeEvent(subscriptionEvent("evt_2", "customer.subscription.updated", { id: "sub_2" }), ENV);
+  it("two live: the most recently created is used, and the error names the workspace, the ids and the one in use", async () => {
+    m.workspaces.set("ws_a", row({ stripeSubscriptionId: "sub_1", plan: "starter", planStatus: "active" }));
+    m.retrieveSubscription.mockResolvedValue(s1());
+    m.listCustomerSubscriptions.mockResolvedValue([s1(), s2()]);
+    await handleStripeEvent(subscriptionEvent("evt_m", "customer.subscription.updated"), ENV);
+    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_2", plan: "growth", planStatus: "active" });
     expect(m.logger.error).toHaveBeenCalledWith(
       expect.stringContaining("more than one live subscription"),
       expect.objectContaining({
+        eventId: "evt_m",
         workspaceId: "ws_a",
-        liveSubscriptions: 2,
+        liveSubscriptionIds: ["sub_2", "sub_1"],
         storedSubscriptionId: "sub_1",
         usingSubscriptionId: "sub_2",
       }),
     );
+  });
+
+  it("one live: no error logged", async () => {
+    m.retrieveSubscription.mockResolvedValue(s1());
+    await handleStripeEvent(subscriptionEvent("evt_1", "customer.subscription.created"), ENV);
+    expect(m.logger.error).not.toHaveBeenCalled();
+  });
+
+  it("two live, the stored one is cancelled: the workspace is on the other, active", async () => {
+    m.workspaces.set("ws_a", row({ stripeSubscriptionId: "sub_2", plan: "growth", planStatus: "active" }));
+    m.retrieveSubscription.mockResolvedValue(s2({ status: "canceled", ended_at: T }));
+    m.listCustomerSubscriptions.mockResolvedValue([s1(), s2({ status: "canceled", ended_at: T })]);
+    await handleStripeEvent(subscriptionEvent("evt_d", "customer.subscription.deleted", { id: "sub_2" }), ENV);
+    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_1", plan: "starter", planStatus: "active" });
+  });
+
+  it("two live, the other is cancelled: the workspace stays on the stored one, the newest live one left", async () => {
+    m.workspaces.set("ws_a", row({ stripeSubscriptionId: "sub_2", plan: "growth", planStatus: "active" }));
+    m.retrieveSubscription.mockResolvedValue(s1({ status: "canceled", ended_at: T }));
+    m.listCustomerSubscriptions.mockResolvedValue([s1({ status: "canceled", ended_at: T }), s2()]);
+    await handleStripeEvent(subscriptionEvent("evt_o", "customer.subscription.deleted"), ENV);
+    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_2", plan: "growth", planStatus: "active" });
+  });
+
+  it("an event about a subscription that is not the stored one is synced like any other", async () => {
+    m.workspaces.set("ws_a", row({ stripeSubscriptionId: "sub_1", plan: "starter", planStatus: "active" }));
+    m.retrieveSubscription.mockResolvedValue(s2({ status: "canceled", ended_at: T }));
+    m.listCustomerSubscriptions.mockResolvedValue([s1({ status: "past_due" }), s2({ status: "canceled", ended_at: T })]);
+    await handleStripeEvent(subscriptionEvent("evt_n", "customer.subscription.deleted", { id: "sub_2" }), ENV);
+    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_1", planStatus: "past_due" });
+  });
+
+  describe("two live, both cancelled close together", () => {
+    const bothEnded = () => [s1({ status: "canceled", ended_at: T + 1 }), s2({ status: "canceled", ended_at: T + 2 })];
+    const staleForFirst = () => [s1({ status: "canceled", ended_at: T + 1 }), s2()];
+
+    beforeEach(() => {
+      m.workspaces.set("ws_a", row({ stripeSubscriptionId: "sub_2", plan: "growth", planStatus: "active" }));
+    });
+
+    it("the first cancellation's event commits first, then the second's: canceled", async () => {
+      m.retrieveSubscription.mockResolvedValueOnce(s1({ status: "canceled", ended_at: T + 1 }));
+      m.listCustomerSubscriptions.mockResolvedValueOnce(staleForFirst());
+      await handleStripeEvent(subscriptionEvent("evt_1", "customer.subscription.deleted", { id: "sub_1" }, T + 1), ENV);
+      expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_2", planStatus: "active" });
+
+      m.retrieveSubscription.mockResolvedValueOnce(s2({ status: "canceled", ended_at: T + 2 }));
+      m.listCustomerSubscriptions.mockResolvedValueOnce(bothEnded());
+      await handleStripeEvent(subscriptionEvent("evt_2", "customer.subscription.deleted", { id: "sub_2" }, T + 2), ENV);
+      expect(ws()).toMatchObject({ planStatus: "canceled", stripeSubscriptionId: "sub_2", plan: "growth" });
+    });
+
+    it("the second's event commits first, then the first's with its stale list: still canceled", async () => {
+      m.retrieveSubscription.mockResolvedValueOnce(s2({ status: "canceled", ended_at: T + 2 }));
+      m.listCustomerSubscriptions.mockResolvedValueOnce(bothEnded());
+      await handleStripeEvent(subscriptionEvent("evt_2", "customer.subscription.deleted", { id: "sub_2" }, T + 2), ENV);
+
+      m.retrieveSubscription.mockResolvedValueOnce(s1({ status: "canceled", ended_at: T + 1 }));
+      m.listCustomerSubscriptions.mockResolvedValueOnce(staleForFirst());
+      await handleStripeEvent(subscriptionEvent("evt_1", "customer.subscription.deleted", { id: "sub_1" }, T + 1), ENV);
+      expect(ws()).toMatchObject({ planStatus: "canceled", stripeSubscriptionId: "sub_2" });
+      expect(m.events.has("evt_1")).toBe(true);
+    });
+  });
+
+  it("the only live candidate has an unconfigured price: not chosen; with an ended one the workspace is canceled; the price is logged", async () => {
+    m.workspaces.set("ws_a", row({ stripeSubscriptionId: "sub_1", plan: "starter", planStatus: "active" }));
+    const odd = s2({ items: { data: [{ price: { id: "price_example_other" }, current_period_end: PERIOD_END }] } });
+    m.retrieveSubscription.mockResolvedValue(odd);
+    m.listCustomerSubscriptions.mockResolvedValue([s1({ status: "canceled", ended_at: T }), odd]);
+    await handleStripeEvent(subscriptionEvent("evt_p", "customer.subscription.created", { id: "sub_2" }), ENV);
+    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_1", planStatus: "canceled", plan: "starter" });
+    expect(m.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("price"),
+      expect.objectContaining({ eventId: "evt_p", subscriptionId: "sub_2", priceId: "price_example_other" }),
+    );
+  });
+
+  it("a live subscription of the customer naming another workspace, or none, is never chosen", async () => {
+    m.workspaces.set("ws_a", row({ stripeSubscriptionId: "sub_1", plan: "starter", planStatus: "active" }));
+    m.retrieveSubscription.mockResolvedValue(s1({ status: "canceled", ended_at: T }));
+    m.listCustomerSubscriptions.mockResolvedValue([
+      s1({ status: "canceled", ended_at: T }),
+      s2({ metadata: { workspaceId: "ws_b" } }),
+      sub({ id: "sub_3", created: T, metadata: {} }),
+    ]);
+    await handleStripeEvent(subscriptionEvent("evt_c", "customer.subscription.deleted"), ENV);
+    expect(ws()).toMatchObject({ stripeSubscriptionId: "sub_1", planStatus: "canceled" });
+  });
+
+  it("the list call fails: 500, nothing recorded, nothing written", async () => {
+    m.workspaces.set("ws_a", row({ stripeSubscriptionId: "sub_1", plan: "starter", planStatus: "active" }));
+    const before = { ...ws() };
+    m.retrieveSubscription.mockResolvedValue(s1({ status: "canceled" }));
+    m.listCustomerSubscriptions.mockRejectedValue(new StripeApiError("Stripe answered 500", 500));
+    expect(await handleStripeEvent(subscriptionEvent("evt_l", "customer.subscription.deleted"), ENV)).toBe(500);
+    expect(m.events.has("evt_l")).toBe(false);
+    expect(ws()).toEqual(before);
   });
 });
 
