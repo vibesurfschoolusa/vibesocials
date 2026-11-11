@@ -234,7 +234,7 @@ export interface ReviewCheckResult {
 }
 
 /** A usable access token: the stored one, or a refreshed one (saved by the shared refresh path). */
-async function accessTokenOf(connection: SocialConnection, now: Date): Promise<string> {
+export async function accessTokenOf(connection: SocialConnection, now: Date): Promise<string> {
   if (connection.expiresAt && new Date(connection.expiresAt).getTime() <= now.getTime()) {
     return (await refreshAccessToken(connection)).accessToken;
   }

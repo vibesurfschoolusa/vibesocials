@@ -53,6 +53,7 @@ import {
   collectReviewAlertConnections,
   sendReviewAlerts,
 } from "@/server/jobs/reviewAlerts";
+import { syncListingMetrics } from "@/server/jobs/listingMetrics";
 import { sendEmail } from "@/server/notifications/email";
 import {
   HEALTH_SWEEP_PAGE_SIZE,
@@ -2370,6 +2371,28 @@ export const googleReviewAlerts = inngest.createFunction(
   },
 );
 
+/**
+ * Google listing numbers (2026-11-10): each listing's daily views, calls,
+ * direction requests and website clicks, stored for the dashboard and the
+ * monthly report (logic in listingMetrics.ts). One step: Google is read for at
+ * most 120 s, oldest-checked first, and the rows are upserts, so a re-run of the
+ * step writes the same rows again. Reading changes nothing at Google.
+ * SEC: the step output is counts only.
+ */
+export const googleListingMetricsSync = inngest.createFunction(
+  {
+    id: "google-listing-metrics-sync",
+    name: "Google Listing Metrics Sync",
+    singleton: { mode: "skip" },
+  },
+  { cron: "30 9 * * *" },
+  async ({ step }) => {
+    const summary = await step.run("sync", () => syncListingMetrics(new Date()));
+    logger.info("[Inngest] Google listing numbers synced", summary);
+    return summary;
+  },
+);
+
 export const inngestFunctions = [
   publishToAllPlatforms,
   mediaRetentionSweep,
@@ -2382,4 +2405,5 @@ export const inngestFunctions = [
   refreshConnection,
   dailyProblemDigest,
   googleReviewAlerts,
+  googleListingMetricsSync,
 ];

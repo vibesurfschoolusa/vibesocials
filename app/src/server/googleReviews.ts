@@ -128,7 +128,7 @@ export async function fetchReviews(
 }
 
 /** The location id of `accounts/{a}/locations/{l}` or `locations/{l}`, or null. */
-function locationIdOf(resourceName: string): string | null {
+export function locationIdOf(resourceName: string): string | null {
   const match = /(?:^|\/)locations\/([^/]+)$/.exec(resourceName);
   return match ? match[1] : null;
 }

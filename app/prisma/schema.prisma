@@ -168,6 +168,7 @@ model Workspace {
   mediaItems         MediaItem[]
   postJobs           PostJob[]
   postMetrics        PostMetric[]
+  listingMetrics     LocationMetricDaily[]
 }
 
 // (workspace, user, role) membership row. The creator is `owner`; invite
@@ -640,4 +641,28 @@ model PostMetric {
   // userId. Re-created by 20261101160000_scale_indexes after 20260712120000
   // dropped it.
   @@index([userId])
+}
+
+// Google listing numbers (2026-11-10): one row per listing per day, as Google's
+// Business Profile Performance API reports them (server/jobs/listingMetrics.ts).
+// Keyed by location as well as workspace: when an owner picks a different
+// listing, the old one's history stays apart from the new one's.
+// searchViews = desktop + mobile Search impressions; mapsViews = desktop +
+// mobile Maps impressions.
+model LocationMetricDaily {
+  id                String   @id @default(cuid())
+  workspaceId       String
+  locationName      String
+  day               DateTime @db.Date
+  searchViews       Int      @default(0)
+  mapsViews         Int      @default(0)
+  calls             Int      @default(0)
+  directionRequests Int      @default(0)
+  websiteClicks     Int      @default(0)
+  fetchedAt         DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, locationName, day])
+  @@index([workspaceId, day])
 }

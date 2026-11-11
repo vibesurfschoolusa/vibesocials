@@ -12,6 +12,7 @@ import { ConnectionHealth } from "@/components/dashboard/connection-health";
 import { GettingStarted } from "@/components/dashboard/getting-started";
 import { YouTubeMetricsSummary } from "@/components/dashboard/youtube-metrics-summary";
 import { PublishHealthCard } from "@/components/dashboard/publish-health-card";
+import { ListingMetricsCard } from "@/components/dashboard/listing-metrics-card";
 import { useConnections } from "@/hooks/useConnections";
 import { usePostJobs } from "@/hooks/usePostJobs";
 import {
@@ -138,6 +139,9 @@ function Dashboard() {
           {/* Renders only once this workspace has finished at least one
               publish, so a new user never meets an empty "0%" card. */}
           <PublishHealthCard />
+          {/* Renders only once the workspace's chosen Google listing has a
+              stored day of numbers (google-listing-metrics-sync). */}
+          <ListingMetricsCard />
         </div>
       </div>
     </div>
