@@ -205,6 +205,12 @@ export function narrowConnectionsForPost<T extends { platform: Platform }>(args:
   return compatible;
 }
 
+/** 400 for a post without a photo whose text is empty after trimming. */
+export const TEXT_POST_EMPTY_MESSAGE = "Write something to post, or add a photo or video.";
+
+/** 400 for a post without a photo that asks for a Story placement. */
+export const TEXT_POST_STORY_MESSAGE = "A Story needs a photo or video.";
+
 /** Shown beside a platform the composer can't offer for a post without a file. */
 export const NEEDS_MEDIA_REASON = "Needs a photo or video";
 

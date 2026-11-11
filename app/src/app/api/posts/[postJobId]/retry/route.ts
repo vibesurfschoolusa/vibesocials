@@ -153,7 +153,9 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     photos.length > 0 &&
     (!isPostMediaComplete(postJob.mediaItemId, photos) ||
       photos.some((row) => row.mediaItem.deletedAt !== null));
-  if (postJob.mediaItem.deletedAt !== null || photoGone) {
+  // A post without a file (2026-11-10) has no media to lose.
+  const mediaGone = postJob.mediaItem !== null && postJob.mediaItem.deletedAt !== null;
+  if (mediaGone || photoGone) {
     return NextResponse.json(
       {
         error: "This post's media is no longer available — recreate the post.",

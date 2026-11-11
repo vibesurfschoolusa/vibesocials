@@ -17,7 +17,13 @@ import {
   WORKSPACE_CHANGED_CODE,
   WORKSPACE_CHANGED_MESSAGE,
 } from "@/lib/workspaceChanged";
-import { assertPostTargetsValid, PostTargetingError } from "@/lib/postTargets";
+import {
+  assertPostTargetsValid,
+  assertTextPostTargetsValid,
+  PostTargetingError,
+  TEXT_POST_EMPTY_MESSAGE,
+  TEXT_POST_STORY_MESSAGE,
+} from "@/lib/postTargets";
 import { PostJobStatus, Platform, type Prisma } from "@prisma/client";
 import {
   buildPublishEvent,
@@ -454,6 +460,9 @@ export async function GET(request: Request) {
 // `mediaItemId` and no `blobUrl` skips upload and re-attaches an existing,
 // already-persisted MediaItem instead.
 interface CreatePostBody {
+  // 2026-11-10: `true` makes this a post without a photo. The file fields
+  // below must then be absent, and only TEXT_ONLY_PLATFORMS may be targeted.
+  textOnly?: unknown;
   blobUrl?: string;
   mediaItemId?: string;
   filename?: string;
@@ -491,6 +500,11 @@ interface CreatePostBody {
   // for API compatibility; when present it must equal the active workspace.
   workspaceId?: unknown;
 }
+
+/** The body fields that describe a file; a `textOnly` post may carry none of them. */
+const FILE_FIELDS = ["blobUrl", "mediaItemId", "media", "filename", "mimeType", "sizeBytes", "altText"] as const;
+
+const TEXT_POST_WITH_FILE_MESSAGE = "A post without a photo can't carry a file. Remove textOnly, or remove the file.";
 
 /** 400 for a rejected platform choice; `code` + `platforms` let a client react without parsing `error`. */
 function postTargetingErrorResponse(error: PostTargetingError) {
@@ -577,6 +591,13 @@ export async function POST(request: Request) {
     }
   }
 
+  // Posts without a photo (2026-11-10). Only `true` turns it on, so every other
+  // body takes the file paths below exactly as before.
+  const textOnly = body.textOnly === true;
+  if (textOnly && FILE_FIELDS.some((field) => body[field] != null)) {
+    return NextResponse.json({ error: TEXT_POST_WITH_FILE_MESSAGE }, { status: 400 });
+  }
+
   const hasMediaList = body?.media != null;
   if (hasMediaList && (body.blobUrl != null || body.mediaItemId != null)) {
     return NextResponse.json(
@@ -592,7 +613,7 @@ export async function POST(request: Request) {
   // (pre-Phase-2) path byte-for-byte for every existing caller.
   const usingExistingMedia = hasMediaItemId && !hasBlobUrl && !hasMediaList;
 
-  if (!hasBlobUrl && !usingExistingMedia && !hasMediaList) {
+  if (!hasBlobUrl && !usingExistingMedia && !hasMediaList && !textOnly) {
     return NextResponse.json(
       { error: "blobUrl or mediaItemId is required" },
       { status: 400 },
@@ -641,7 +662,7 @@ export async function POST(request: Request) {
     }
     mediaFields = mediaValidation.value;
   }
-  if (!hasMediaList) {
+  if (!hasMediaList && !textOnly) {
     // The reuse path has no mimeType here: the write is limited to photos.
     const altText = readAltTextField(body.altText, mediaFields?.mimeType ?? "image/");
     if (!altText.ok) {
@@ -656,6 +677,10 @@ export async function POST(request: Request) {
   const tiktokMetadataRaw = body?.tiktokMetadata;
   const youtubeMetadataRaw = body?.youtubeMetadata;
 
+  // The text is the whole of a post without a photo, so its refusal says so.
+  if (textOnly && (typeof baseCaptionRaw !== "string" || !baseCaptionRaw.trim())) {
+    return NextResponse.json({ error: TEXT_POST_EMPTY_MESSAGE }, { status: 400 });
+  }
   if (typeof baseCaptionRaw !== "string" || !baseCaptionRaw.trim()) {
     return NextResponse.json(
       { error: "baseCaption is required" },
@@ -796,6 +821,9 @@ export async function POST(request: Request) {
       return { ok: false, response: NextResponse.json({ error: parsed.error }, { status: 400 }) };
     }
     if (parsed.value?.placement !== "story") return { ok: true, value: undefined };
+    if (textOnly) {
+      return { ok: false, response: NextResponse.json({ error: TEXT_POST_STORY_MESSAGE }, { status: 400 }) };
+    }
     const refusal = storyMediaRefusal(platform, 1 + (extraMedia?.length ?? 0));
     if (refusal) return { ok: false, response: NextResponse.json({ error: refusal }, { status: 400 }) };
     return { ok: true, value: { placement: "story" } };
@@ -819,7 +847,8 @@ export async function POST(request: Request) {
   // the create helper and surfaces below as the same PostTargetingError; the
   // TikTok rule needs no media and is applied here for both paths.
   try {
-    assertPostTargetsValid(targetPlatforms, mediaFields?.mimeType ?? null, tiktokMetadata);
+    if (textOnly) assertTextPostTargetsValid(targetPlatforms);
+    else assertPostTargetsValid(targetPlatforms, mediaFields?.mimeType ?? null, tiktokMetadata);
   } catch (error: unknown) {
     if (error instanceof PostTargetingError) return postTargetingErrorResponse(error);
     throw error;
@@ -952,9 +981,30 @@ export async function POST(request: Request) {
     // a shared (non-personal) workspace lands the job there — visible in the
     // shared workspace's activity feed — not in their own personal workspace.
     let postJobId: string;
-    let mediaItemId: string;
+    // Null for a post without a photo.
+    let mediaItemId: string | null;
 
-    if (usingExistingMedia) {
+    if (textOnly) {
+      // No MediaItem is written: the text lives on the job (baseCaption).
+      const created = await createPostJobOnly({
+        userId: context.user.id,
+        workspaceId: context.workspace.id,
+        media: null,
+        baseCaption: baseCaptionRaw,
+        location,
+        perPlatformOverrides,
+        intent: effectiveIntent,
+        scheduledFor: scheduledForDate,
+        tiktokMetadata,
+        youtubeMetadata,
+        googleMetadata,
+        ...placementArgs,
+        targetPlatforms,
+        ...(series ? { series } : {}),
+      });
+      postJobId = created.postJobId;
+      mediaItemId = null;
+    } else if (usingExistingMedia) {
       // assertMediaItemReusable (posting.ts) is workspace-scoped (Task 5): any
       // member of `context.workspace.id` may attach a teammate's media.
       const created = await createPostJobForExistingMedia({
@@ -1147,7 +1197,9 @@ export async function POST(request: Request) {
         ? "Draft saved."
         : intent === "scheduled"
           ? "Post scheduled."
-          : "Publishing in progress. Large videos may take a few minutes.";
+          : textOnly
+            ? "Publishing in progress."
+            : "Publishing in progress. Large videos may take a few minutes.";
 
     // SEC-1 (post-release review Task C): project to the display-safe DTOs —
     // the raw rows carry userId/workspaceId/publishMetadata (job) and

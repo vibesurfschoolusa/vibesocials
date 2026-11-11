@@ -603,3 +603,26 @@ describe("POST /api/posts/[postJobId]/retry - a post with several photos (07a)",
     expect(inngestSendMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("POST /api/posts/[postJobId]/retry - a post without a file", () => {
+  it("retries a text post: no media to check, the claim and the event as for any post", async () => {
+    postJobFindFirstMock.mockResolvedValue({
+      id: "job-1",
+      mediaItemId: null,
+      mediaItem: null,
+      media: [],
+      results: [{ platform: "x", status: "failed" }],
+    });
+    resultUpdateManyMock.mockResolvedValue({ count: 1 });
+
+    const res = await POST(req({ platform: "x" }), ctx("job-1"));
+
+    expect(res.status).toBe(202);
+    expect(inngestSendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "post/retry.requested",
+        data: expect.objectContaining({ postJobId: "job-1", platforms: ["x"] }),
+      }),
+    );
+  });
+});
