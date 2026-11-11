@@ -447,6 +447,39 @@ describe("POST /api/posts/[postJobId]/publish — approval enforcement (2026-11-
     );
   });
 
+  // 2026-11-10 (Stories): a Story publishes no caption, so none is shown as going there.
+  it("lists a Story platform as 'Story, no caption', even over its own override", async () => {
+    findFirstMock.mockResolvedValue(
+      jobRow({
+        perPlatformOverrides: { instagram: "IG text", linkedin: "Hidden text" },
+        publishMetadata: { targetPlatforms: ["instagram", "linkedin"], instagram: { placement: "story" } },
+      }),
+    );
+
+    await POST(req({}), ctx("job-1"));
+
+    expect(notifyOwnersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platformCaptions: { instagram: "Story, no caption", linkedin: "Hidden text" },
+      }),
+    );
+  });
+
+  it("a feed post's email keeps the Instagram caption", async () => {
+    findFirstMock.mockResolvedValue(
+      jobRow({
+        perPlatformOverrides: { instagram: "IG text" },
+        publishMetadata: { targetPlatforms: ["instagram"], instagram: { placement: "feed" } },
+      }),
+    );
+
+    await POST(req({}), ctx("job-1"));
+
+    expect(notifyOwnersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ platformCaptions: { instagram: "IG text" } }),
+    );
+  });
+
   it("a member scheduling a plain draft submits it with the requested time (not scheduled)", async () => {
     findFirstMock.mockResolvedValue(jobRow());
 

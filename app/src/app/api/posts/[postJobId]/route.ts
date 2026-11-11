@@ -17,6 +17,7 @@ import {
 } from "@/lib/scheduling";
 import { platformCaptionEntries } from "@/lib/platforms";
 import { resolvePlatformCaptions, resolvePostCaptionSource } from "@/server/jobs/posting";
+import { storyPlatformsOf, withStoryCaptions } from "@/lib/storyPlacement";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
 import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 import { utcDayKey } from "@/lib/usageLimits";
@@ -339,16 +340,20 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
       workspaceName: workspaceContext.workspace.name,
       submitter: workspaceContext.user,
       caption: editedCaption ?? existing.baseCaption ?? "",
-      platformCaptions: resolvePlatformCaptions(
-        {
-          baseCaption: editedCaption ?? existing.baseCaption,
-          perPlatformOverrides:
-            perPlatformOverrides !== undefined
-              ? (perPlatformOverrides as Prisma.JsonValue | null)
-              : existing.perPlatformOverrides,
-          publishMetadata: existing.publishMetadata,
-        },
-        existing.mediaItem,
+      // A Story publishes no caption: its platform reads "Story, no caption" (2026-11-10).
+      platformCaptions: withStoryCaptions(
+        resolvePlatformCaptions(
+          {
+            baseCaption: editedCaption ?? existing.baseCaption,
+            perPlatformOverrides:
+              perPlatformOverrides !== undefined
+                ? (perPlatformOverrides as Prisma.JsonValue | null)
+                : existing.perPlatformOverrides,
+            publishMetadata: existing.publishMetadata,
+          },
+          existing.mediaItem,
+        ),
+        storyPlatformsOf(existing.publishMetadata),
       ),
     });
   }

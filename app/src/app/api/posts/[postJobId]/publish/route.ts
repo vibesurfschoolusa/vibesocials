@@ -19,6 +19,7 @@ import {
   resolvePlatformCaptions,
 } from "@/server/jobs/posting";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
+import { storyPlatformsOf, withStoryCaptions } from "@/lib/storyPlacement";
 import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 import { MUTABLE_POST_JOB_STATUSES, validateScheduledFor } from "@/lib/scheduling";
 
@@ -183,7 +184,11 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       workspaceName: workspaceContext.workspace.name,
       submitter: workspaceContext.user,
       caption: job.baseCaption ?? "",
-      platformCaptions: resolvePlatformCaptions(job, job.mediaItem),
+      // A Story publishes no caption: its platform reads "Story, no caption" (2026-11-10).
+      platformCaptions: withStoryCaptions(
+        resolvePlatformCaptions(job, job.mediaItem),
+        storyPlatformsOf(job.publishMetadata),
+      ),
     });
 
     return NextResponse.json(

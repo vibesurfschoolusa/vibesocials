@@ -424,6 +424,39 @@ describe("PATCH /api/posts/[postJobId] — approval enforcement (2026-11-01 audi
     );
   });
 
+  // 2026-11-10 (Stories): a Story publishes no caption, so none is shown as going there.
+  it("lists a Story platform as 'Story, no caption' when it re-holds, even over its own override", async () => {
+    findFirstMock.mockResolvedValue(
+      existingRow({
+        status: "scheduled",
+        perPlatformOverrides: { instagram: "IG text" },
+        publishMetadata: { targetPlatforms: ["instagram"], instagram: { placement: "story" } },
+      }),
+    );
+
+    await PATCH(req({ baseCaption: "Edited" }), ctx("job-1"));
+
+    expect(notifyOwnersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ platformCaptions: { instagram: "Story, no caption" } }),
+    );
+  });
+
+  it("a feed post's re-hold email keeps the Instagram caption", async () => {
+    findFirstMock.mockResolvedValue(
+      existingRow({
+        status: "scheduled",
+        perPlatformOverrides: { instagram: "IG text" },
+        publishMetadata: { targetPlatforms: ["instagram"] },
+      }),
+    );
+
+    await PATCH(req({ baseCaption: "Edited" }), ctx("job-1"));
+
+    expect(notifyOwnersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ platformCaptions: { instagram: "IG text" } }),
+    );
+  });
+
   it("emails no per-platform captions when the edit clears the overrides", async () => {
     findFirstMock.mockResolvedValue(
       existingRow({ status: "scheduled", perPlatformOverrides: { linkedin: "Stored text" } }),
