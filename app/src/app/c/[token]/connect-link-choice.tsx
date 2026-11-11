@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 
@@ -19,6 +20,7 @@ type State =
   | { status: "gone"; message: string };
 
 export function ConnectLinkChoice({ token, pendingId }: { token: string; pendingId: string }) {
+  const router = useRouter();
   const [state, setState] = useState<State>({ status: "loading" });
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +61,7 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
       });
       const data = (await response.json().catch(() => null)) as { ok?: boolean; platform?: string; error?: string } | null;
       if (response.ok && data?.ok && data.platform) {
-        window.location.assign(`${page}?success=${encodeURIComponent(`${data.platform}_connected`)}`);
+        router.push(`${page}?success=${encodeURIComponent(`${data.platform}_connected`)}`);
         return;
       }
       setError(data?.error ?? "Couldn't connect that account. Try again.");
@@ -76,7 +78,7 @@ export function ConnectLinkChoice({ token, pendingId }: { token: string; pending
     } catch {
       // The choice expires by itself in 15 minutes.
     }
-    window.location.assign(`${page}?error=access_denied`);
+    router.push(`${page}?error=access_denied`);
   }
 
   if (state.status === "loading") return <p className="text-sm text-muted-foreground">Loading the accounts…</p>;

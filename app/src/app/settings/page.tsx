@@ -7,6 +7,7 @@ import { SettingsForm } from "@/components/settings-form";
 import { PostingSlotsForm } from "@/components/posting-slots-form";
 import { readPostingSlots } from "@/lib/postingSlots";
 import { ConnectionsSection } from "@/components/connections-section";
+import { ConnectLinkSection } from "@/components/connect-link-section";
 import { TeamSection, type WorkspaceDeletionInfo } from "@/components/team-section";
 import { AccountSection } from "@/components/account-section";
 import { accountDeletionPreview } from "@/server/account/accountDeletion";
@@ -208,6 +209,14 @@ export default async function SettingsPage({
             // Pinterest is listed once its app credentials are set (lib/advertisedPlatforms.ts).
             unavailablePlatforms={advertisedPlatforms().includes("pinterest") ? [] : ["pinterest"]}
           />
+          {/* Owners only; key: one link per workspace, so remount on a switch. */}
+          <div className="mt-4">
+            <ConnectLinkSection
+              key={`connect-link-${context.workspace.id}`}
+              workspaceId={context.workspace.id}
+              isOwner={context.role === "owner"}
+            />
+          </div>
         </section>
 
         <section>
