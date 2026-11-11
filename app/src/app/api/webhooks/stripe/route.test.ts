@@ -41,9 +41,12 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("POST /api/webhooks/stripe, payments not configured", () => {
-  it("answers the app's JSON 404 to every method and handles nothing, even with a valid signature", async () => {
-    configure({ ...CONFIGURED, BILLING_ENABLED: "" });
+describe("POST /api/webhooks/stripe, secrets not set", () => {
+  it("answers the app's JSON 404 to every method and handles nothing, without either secret", async () => {
+    configure({ ...CONFIGURED, STRIPE_SECRET_KEY: "" });
+    const noKey = await route.POST(post(BODY, signed(BODY)));
+    expect(noKey.status).toBe(404);
+    configure({ ...CONFIGURED, STRIPE_WEBHOOK_SECRET: "" });
     const res = await route.POST(post(BODY, signed(BODY)));
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "Not found" });
@@ -52,6 +55,15 @@ describe("POST /api/webhooks/stripe, payments not configured", () => {
       expect(other.status, method).toBe(404);
     }
     expect(m.handleStripeEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/webhooks/stripe, billing switched off", () => {
+  it("still handles events while both secrets are set, so Stripe keeps delivering", async () => {
+    configure({ ...CONFIGURED, BILLING_ENABLED: "", STRIPE_PRICE_STARTER: "" });
+    const res = await route.POST(post(BODY, signed(BODY)));
+    expect(res.status).toBe(200);
+    expect(m.handleStripeEvent).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -72,6 +72,25 @@ describe("payments not configured", () => {
   });
 });
 
+/** Fix round 1: the portal needs only the secret key; checkout needs everything. */
+describe("billing off, or only the secret key", () => {
+  for (const [name, env] of [
+    ["billing off", { ...CONFIGURED, BILLING_ENABLED: "" }],
+    ["only the secret key", { STRIPE_SECRET_KEY: "sk_test_example", NEXTAUTH_URL: "https://app.example" }],
+  ] as const) {
+    it(`${name}: the portal opens, checkout answers the JSON 404`, async () => {
+      configure({ ...CONFIGURED, BILLING_ENABLED: "", STRIPE_WEBHOOK_SECRET: "", STRIPE_PRICE_STARTER: "" });
+      configure(env);
+      const opened = await portal.POST(post("/api/billing/portal"));
+      expect(opened.status).toBe(200);
+      expect(m.openPortal).toHaveBeenCalledTimes(1);
+      const refused = await checkout.POST(post("/api/billing/checkout", { plan: "starter" }));
+      expect(refused.status).toBe(404);
+      expect(m.startCheckout).not.toHaveBeenCalled();
+    });
+  }
+});
+
 describe("POST /api/billing/checkout", () => {
   beforeEach(() => configure(CONFIGURED));
 

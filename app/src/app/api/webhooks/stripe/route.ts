@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { paymentsConfigured } from "@/lib/billing";
+import { stripeWebhookConfigured } from "@/lib/billing";
 import { adminNotFoundResponse, adminOtherMethods } from "@/lib/operator";
 import { verifyStripeSignature } from "@/server/billing/stripeSignature";
 import { handleStripeEvent } from "@/server/billing/stripeWebhook";
@@ -11,14 +11,16 @@ export const dynamic = "force-dynamic";
  * POST /api/webhooks/stripe (21b). Public: Stripe calls it with no session,
  * and the proxy lets every /api path through to the route's own checks.
  *
- * With payments not configured it answers the app's JSON 404, like any
- * unknown path. Otherwise the body is read as text before anything parses
+ * Without both Stripe secrets it answers the app's JSON 404, like any unknown
+ * path. With them it handles events even while BILLING_ENABLED is off, so
+ * Stripe keeps delivering and the plan columns stay true (fix round 1).
+ * Otherwise the body is read as text before anything parses
  * it, because the signature covers those exact bytes; a bad or missing
  * signature answers 400 and nothing else happens. A verified event goes to
  * handleStripeEvent, whose status is answered as is (500 makes Stripe retry).
  */
 export async function POST(request: Request) {
-  if (!paymentsConfigured()) return adminNotFoundResponse();
+  if (!stripeWebhookConfigured()) return adminNotFoundResponse();
 
   const rawBody = await request.text();
   const secret = process.env.STRIPE_WEBHOOK_SECRET?.trim() ?? "";

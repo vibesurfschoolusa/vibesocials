@@ -140,15 +140,28 @@ export function planForPriceId(priceId: string | null | undefined, env: BillingE
 }
 
 /**
- * True only when billing is on, both Stripe secrets are set and at least one
- * plan has a price (21b). Every Stripe route, button and call checks this
- * first, so with it false nothing behaves differently from before payments.
+ * The app can talk to Stripe: the secret key is set (fix round 1). Whatever
+ * BILLING_ENABLED says, so switching billing off never leaves an owner paying
+ * for a workspace they delete, and the customer portal still opens.
+ */
+export function stripeReachable(env: BillingEnv = process.env): boolean {
+  return envValue(env, "STRIPE_SECRET_KEY") !== null;
+}
+
+/**
+ * The webhook handles events: both secrets are set (fix round 1). Whatever
+ * BILLING_ENABLED says, so Stripe keeps delivering and the plan columns stay
+ * true while billing is off.
+ */
+export function stripeWebhookConfigured(env: BillingEnv = process.env): boolean {
+  return stripeReachable(env) && envValue(env, "STRIPE_WEBHOOK_SECRET") !== null;
+}
+
+/**
+ * Starting a checkout, the plan buttons and the trial emails: billing on,
+ * both secrets set and at least one plan with a price (21b). With it false
+ * no one can start paying.
  */
 export function paymentsConfigured(env: BillingEnv = process.env): boolean {
-  return (
-    billingEnabled(env) &&
-    envValue(env, "STRIPE_SECRET_KEY") !== null &&
-    envValue(env, "STRIPE_WEBHOOK_SECRET") !== null &&
-    offeredPlans(env).length > 0
-  );
+  return billingEnabled(env) && stripeWebhookConfigured(env) && offeredPlans(env).length > 0;
 }
