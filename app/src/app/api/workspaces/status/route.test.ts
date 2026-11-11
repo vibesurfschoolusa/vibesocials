@@ -34,4 +34,10 @@ describe("GET /api/workspaces/status", () => {
       blockedMessage: `This workspace is paused: Unpaid invoice. Contact ${SUPPORT_EMAIL}.`,
     });
   });
+
+  it("says nothing about an unconfirmed address with billing off", async () => {
+    const base = makeWorkspaceContext();
+    getWorkspaceContextMock.mockResolvedValue({ ...base, user: { ...base.user, emailVerifiedAt: null, googleLinkedAt: null } });
+    expect(await (await GET()).json()).toEqual({ blockedMessage: null });
+  });
 });

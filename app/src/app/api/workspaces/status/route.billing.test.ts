@@ -13,10 +13,17 @@ import { GET } from "./route";
 const NOW = new Date("2026-12-10T12:00:00Z");
 const DAY = 24 * 60 * 60 * 1000;
 
-function context(role: "owner" | "member", billing: Record<string, unknown>) {
-  const base = makeWorkspaceContext({ role });
+const CONFIRMED = { emailVerifiedAt: new Date("2026-12-01T00:00:00Z"), googleLinkedAt: null };
+
+function context(
+  role: "owner" | "member",
+  billing: Record<string, unknown>,
+  person: { emailVerifiedAt: Date | null; googleLinkedAt: Date | null } = CONFIRMED,
+) {
+  const base = makeWorkspaceContext({ role, email: "new@example.com" });
   return {
     ...base,
+    user: { ...base.user, ...person },
     workspace: {
       ...base.workspace,
       billingExempt: false,
@@ -62,6 +69,30 @@ describe("GET /api/workspaces/status with billing on", () => {
     getWorkspaceContextMock.mockResolvedValue(context("member", { trialEndsAt: new Date(NOW.getTime() + 2 * DAY) }));
     expect(await (await GET()).json()).toEqual({ blockedMessage: null });
     getWorkspaceContextMock.mockResolvedValue(context("owner", { trialEndsAt: new Date(NOW.getTime() + 10 * DAY) }));
+    expect(await (await GET()).json()).toEqual({ blockedMessage: null });
+  });
+
+  it("gives an unconfirmed address the sentence, and says the link can be sent again", async () => {
+    getWorkspaceContextMock.mockResolvedValue(
+      context("owner", { trialEndsAt: new Date(NOW.getTime() + 2 * DAY) }, { emailVerifiedAt: null, googleLinkedAt: null }),
+    );
+    expect(await (await GET()).json()).toEqual({
+      blockedMessage: "Confirm your email address to start posting. We sent a link to new@example.com.",
+      emailUnconfirmed: true,
+    });
+  });
+
+  it("gives the workspace's block, not the address, when both apply", async () => {
+    getWorkspaceContextMock.mockResolvedValue(
+      context("member", { trialEndsAt: new Date(NOW.getTime() - DAY) }, { emailVerifiedAt: null, googleLinkedAt: null }),
+    );
+    expect(await (await GET()).json()).toEqual({
+      blockedMessage: `Your free trial has ended. Choose a plan in Settings to keep posting, or contact ${SUPPORT_EMAIL}.`,
+    });
+  });
+
+  it("says nothing about the address in an exempt workspace", async () => {
+    getWorkspaceContextMock.mockResolvedValue(context("owner", {}, { emailVerifiedAt: null, googleLinkedAt: null }));
     expect(await (await GET()).json()).toEqual({ blockedMessage: null });
   });
 });
