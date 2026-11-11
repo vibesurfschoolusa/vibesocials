@@ -44,13 +44,7 @@ const priced = (price: string, start = PERIOD_START, end = PERIOD_END) => ({
   items: { data: [{ price: { id: price }, current_period_start: start, current_period_end: end }] },
 });
 
-const WS: SyncWorkspace = {
-  id: "ws_1",
-  stripeCustomerId: "cus_1",
-  stripeSubscriptionId: "sub_1",
-  billingExempt: false,
-  plan: "growth",
-};
+const WS: SyncWorkspace = { id: "ws_1", stripeCustomerId: "cus_1", stripeSubscriptionId: "sub_1", billingExempt: false };
 
 const sync = (about: StripeSubscription, list: StripeSubscription[], workspace: SyncWorkspace | null = WS, complete = true) =>
   syncFromCustomerList(about, workspace, null, list, ENV, complete);
@@ -142,16 +136,9 @@ describe("a subscription in use on a price that is not configured", () => {
     expect(result.unconfigured).toEqual([{ subscriptionId: "sub_2", priceId: "price_example_legacy" }]);
   });
 
-  it("a first purchase on an unconfigured price (no stored plan): nothing is written, the price reported", () => {
-    const first = sub(priced("price_example_legacy"));
-    const result = sync(first, [first], { ...WS, plan: null, stripeSubscriptionId: null });
-    expect(result).toMatchObject({ ok: false, level: "error" });
-    expect(result.unconfigured).toEqual([{ subscriptionId: "sub_1", priceId: "price_example_legacy" }]);
-  });
-
-  it("the stored subscription on an unconfigured price, but the workspace has no stored plan: nothing is written", () => {
+  it("alone: nothing changes", () => {
     const old = sub(priced("price_example_legacy"));
-    expect(sync(old, [old], { ...WS, plan: null })).toMatchObject({ ok: false, level: "error" });
+    expect(sync(old, [old])).toMatchObject({ ok: false, level: "error" });
   });
 
   it("next to another one in use on a known price: still nothing changes", () => {
@@ -163,61 +150,6 @@ describe("a subscription in use on a price that is not configured", () => {
     const ended = sub({ status: "canceled", ended_at: T0 + DAY, ...priced("price_example_legacy") });
     const data = dataOf(sync(ended, [ended]));
     expect(data).toMatchObject({ planStatus: "canceled", stripeSubscriptionId: "sub_1" });
-    expect(data && "plan" in data).toBe(false);
-  });
-});
-
-/**
- * Fix round 5: a subscriber the operator left on a price that is no longer
- * configured keeps the plan they bought, and their payment state still
- * follows Stripe. Workspace: stored plan growth, stored subscription sub_1.
- */
-describe("the stored subscription on a price that is no longer configured", () => {
-  const legacy = (overrides: Partial<StripeSubscription> = {}, start = PERIOD_START, end = PERIOD_END) =>
-    sub({ ...priced("price_example_legacy", start, end), ...overrides });
-
-  it("active: stays growth, active, dates from Stripe, and the kept plan is reported as a warning", () => {
-    const s = legacy({}, PERIOD_END, PERIOD_END + 30 * DAY);
-    const result = sync(s, [s]);
-    const data = dataOf(result);
-    expect(data).toMatchObject({ planStatus: "active", currentPeriodEnd: new Date((PERIOD_END + 30 * DAY) * 1000), stripeSubscriptionId: "sub_1" });
-    expect(data && "plan" in data).toBe(false);
-    expect(result.ok && result.keptPlan).toEqual([{ subscriptionId: "sub_1", priceId: "price_example_legacy" }]);
-    expect(result.unconfigured).toEqual([]);
-  });
-
-  it("past_due: growth, past_due, grace from the last paid period, then ended after 7 days", () => {
-    const s = legacy({ status: "past_due" }, PERIOD_END, PERIOD_END + 30 * DAY);
-    const data = dataOf(sync(s, [s]));
-    expect(data).toMatchObject({ planStatus: "past_due", currentPeriodEnd: new Date(PERIOD_END * 1000) });
-    const stored = { plan: "growth", ...data };
-    expect(stateAt(stored, PERIOD_END + 6 * DAY)).toBe("active");
-    expect(stateAt(stored, PERIOD_END + 7 * DAY + 60)).toBe("ended");
-  });
-
-  it("paid again: active", () => {
-    const s = legacy({}, PERIOD_END, PERIOD_END + 30 * DAY);
-    expect(dataOf(sync(s, [s]))?.planStatus).toBe("active");
-  });
-
-  it("cancelled: its real ended status, the plan kept", () => {
-    const s = legacy({ status: "canceled", ended_at: PERIOD_END });
-    const data = dataOf(sync(s, [s]));
-    expect(data).toMatchObject({ planStatus: "canceled", stripeSubscriptionId: "sub_1" });
-    expect(data && "plan" in data).toBe(false);
-  });
-
-  it("beside a configured live one that is newer and active: the newer one is used (the usual ranking), with its plan", () => {
-    const old = legacy({ created: T0 });
-    const current = sub({ id: "sub_2", created: T0 + DAY, ...priced("price_example_pro") });
-    expect(dataOf(sync(old, [old, current]))).toMatchObject({ stripeSubscriptionId: "sub_2", plan: "pro", planStatus: "active" });
-  });
-
-  it("beside a configured one that is past_due: the stored active one ranks first, so its stored plan stays", () => {
-    const old = legacy({ created: T0 });
-    const late = sub({ id: "sub_2", created: T0 + DAY, status: "past_due", ...priced("price_example_pro") });
-    const data = dataOf(sync(late, [old, late]));
-    expect(data).toMatchObject({ stripeSubscriptionId: "sub_1", planStatus: "active" });
     expect(data && "plan" in data).toBe(false);
   });
 });

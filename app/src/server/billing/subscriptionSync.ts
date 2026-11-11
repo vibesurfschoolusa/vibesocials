@@ -56,8 +56,6 @@ export type SyncWorkspace = {
   stripeCustomerId: string | null;
   stripeSubscriptionId: string | null;
   billingExempt: boolean;
-  /** The stored plan; kept when the stored subscription's price is no longer configured. */
-  plan?: string | null;
 };
 
 /** What a checkout.session.completed event says: this session, for this workspace, made this subscription. */
@@ -86,8 +84,6 @@ export type SyncResult =
       /** Candidates in use, in the order they were ranked. */
       liveCandidateIds: string[];
       unconfigured: UnconfiguredPrice[];
-      /** The stored subscription in use on a price no longer configured: its stored plan is kept (a warning). */
-      keptPlan: UnconfiguredPrice[];
     }
   | { ok: false; level: "error" | "info"; reason: string; unconfigured: UnconfiguredPrice[] };
 
@@ -108,13 +104,9 @@ const endedOf = (s: StripeSubscription) => s.ended_at ?? s.canceled_at ?? s.crea
  * 3. Candidates: the event's subscription, merged by id over the list, and
  *    every listed subscription on that customer whose metadata names this
  *    workspace.
- * 4. A candidate in use (active, trialing, past_due) whose price maps to no
- *    plan: if it is the workspace's stored subscription and the workspace has
- *    a stored plan, it stays a candidate and keeps that plan, so a subscriber
- *    left on an old price keeps the plan they bought while their payment
- *    state follows Stripe (fix round 5). Any other such candidate means
- *    nothing is written: a paying customer on a price the app does not know
- *    must not be written as ended or as a wrong plan.
+ * 4. If any candidate in use (active, trialing, past_due) has a price that
+ *    maps to no plan, nothing is written: a paying customer on a price the
+ *    app does not know must not be written as ended or as a wrong plan.
  * 5. The effective one: the candidate in use ranked first by active or
  *    trialing ahead of past_due, then the most recently created (ties to the
  *    larger id). With none in use, the candidate that ended most recently
@@ -163,11 +155,9 @@ export function syncFromCustomerList(
   );
 
   const inUse = candidates.filter((s) => isInUse(s.status));
-  const unknownPrice = inUse.filter((s) => planForPriceId(priceOf(s), env) === null);
-  const keepsStoredPlan = (s: StripeSubscription) => s.id === workspace.stripeSubscriptionId && Boolean(workspace.plan);
-  const asPrice = (s: StripeSubscription) => ({ subscriptionId: s.id, priceId: priceOf(s) });
-  const keptPlan = unknownPrice.filter(keepsStoredPlan).map(asPrice);
-  const unconfigured = unknownPrice.filter((s) => !keepsStoredPlan(s)).map(asPrice);
+  const unconfigured = inUse
+    .filter((s) => planForPriceId(priceOf(s), env) === null)
+    .map((s) => ({ subscriptionId: s.id, priceId: priceOf(s) }));
   if (unconfigured.length > 0) {
     return refuse("error", "a subscription in use has a price that is none of the plan prices", unconfigured);
   }
@@ -204,5 +194,5 @@ export function syncFromCustomerList(
   const warnings = workspace.billingExempt
     ? ["the workspace is exempt by its flag, so it keeps the default limits until the operator clears the exemption"]
     : [];
-  return { ok: true, data, warnings, liveCandidateIds: ranked.map((s) => s.id), unconfigured, keptPlan };
+  return { ok: true, data, warnings, liveCandidateIds: ranked.map((s) => s.id), unconfigured };
 }

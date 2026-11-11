@@ -340,8 +340,8 @@ describe("one subscription through its life", () => {
 });
 
 describe("choosing among the workspace's subscriptions", () => {
-  it("an old-price subscription in use, not the stored one, with an older ended one: nothing changes, error logged with the price id", async () => {
-    m.workspaces.set("ws_a", row({ stripeSubscriptionId: "sub_1", plan: "growth", planStatus: "active" }));
+  it("an old-price subscription in use with an older ended one: nothing changes, error logged with the price id", async () => {
+    m.workspaces.set("ws_a", row({ stripeSubscriptionId: "sub_2", plan: "growth", planStatus: "active" }));
     const before = { ...ws() };
     stripeHas(
       sub({ id: "sub_1", created: T, status: "canceled", ended_at: T + DAY }),
@@ -354,26 +354,6 @@ describe("choosing among the workspace's subscriptions", () => {
       expect.stringContaining("price"),
       expect.objectContaining({ eventId: "evt_l", workspaceId: "ws_a", subscriptionId: "sub_2", priceId: "price_example_legacy" }),
     );
-  });
-
-  it("the stored subscription on a price no longer configured: plan kept, payment state from Stripe, a warning logged", async () => {
-    m.workspaces.set("ws_a", row({ stripeSubscriptionId: "sub_1", plan: "growth", planStatus: "active" }));
-    stripeHas(sub({ status: "past_due", ...priced("price_example_legacy", PERIOD_END, PERIOD_END + 30 * DAY) }));
-    expect(await handleStripeEvent(subscriptionEvent("evt_k", "customer.subscription.updated"), ENV)).toBe(200);
-    expect(ws()).toMatchObject({ plan: "growth", planStatus: "past_due", currentPeriodEnd: new Date(PERIOD_END * 1000) });
-    expect(m.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("no longer configured"),
-      expect.objectContaining({ eventId: "evt_k", workspaceId: "ws_a", subscriptionId: "sub_1", priceId: "price_example_legacy" }),
-    );
-    expect(m.logger.error).not.toHaveBeenCalled();
-  });
-
-  it("a first purchase on an unconfigured price: nothing written, error logged", async () => {
-    const before = { ...ws() };
-    stripeHas(sub(priced("price_example_legacy")));
-    expect(await handleStripeEvent(subscriptionEvent("evt_f", "customer.subscription.created"), ENV)).toBe(200);
-    expect(ws()).toEqual(before);
-    expect(m.logger.error).toHaveBeenCalledWith(expect.stringContaining("price"), expect.objectContaining({ priceId: "price_example_legacy" }));
   });
 
   it("active (older) and past_due (newer): the workspace stays active on the older one", async () => {
@@ -532,8 +512,7 @@ describe("every refusal leaves the workspace's columns exactly as they were", ()
     ["B's customer on a subscription naming A", () => stripeHas(sub({ customer: "cus_b" })), 200],
     ["a subscription naming no workspace", () => stripeHas(sub({ metadata: {} })), 200],
     ["a subscription naming a workspace that does not exist", () => stripeHas(sub({ metadata: { workspaceId: "ws_gone" } })), 200],
-    ["an in-use subscription on an unknown price that is not the stored one", () =>
-      stripeHas(sub({ status: "canceled", ended_at: T + DAY }), sub({ id: "sub_7", created: T + 2 * DAY, ...priced("price_example_legacy") })), 200],
+    ["an in-use subscription on an unknown price", () => stripeHas(sub(priced("price_example_legacy"))), 200],
     ["the identifying fetch fails", () => undefined, 500],
     ["the list is incomplete", () => {
       stripeHas(sub());
