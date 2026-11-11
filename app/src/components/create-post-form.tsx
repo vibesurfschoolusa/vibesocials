@@ -176,16 +176,27 @@ export function isTextPostMode(
 export type ComposerPageState = "untouched" | "text" | "file";
 
 export function composerPageState(
-  state: Parameters<typeof hasNoFile>[0] & { caption: string; overrides: PlatformOverrides | null },
+  state: Parameters<typeof hasNoFile>[0] & {
+    caption: string;
+    overrides: PlatformOverrides | null;
+    connected: readonly Platform[];
+    deselected: ReadonlySet<Platform>;
+  },
   enabled?: boolean,
 ): ComposerPageState {
   if (!isTextPostMode(state, enabled)) return "file";
-  // A platform's own caption is text only where that platform takes text alone:
-  // Instagram's would make a text post that greys Instagram out and hides its box.
+  // A platform's own caption is text only where it would be sent: a connected,
+  // ticked platform that takes text alone. Instagram's would make a text post
+  // that greys Instagram out and hides its box; an unticked X's caption is not
+  // on the page, so nothing would say why the page is a text post.
   const hasText =
     state.caption.trim() !== "" ||
     (Object.entries(state.overrides ?? {}) as [Platform, string | undefined][]).some(
-      ([platform, text]) => platformAcceptsTextOnly(platform) && (text ?? "").trim() !== "",
+      ([platform, text]) =>
+        platformAcceptsTextOnly(platform) &&
+        state.connected.includes(platform) &&
+        !state.deselected.has(platform) &&
+        (text ?? "").trim() !== "",
     );
   return hasText ? "text" : "untouched";
 }
@@ -821,6 +832,8 @@ function CreatePostFormInner({
     photoCount: photoSet.length,
     caption: uploadCaption,
     overrides: platformOverrides,
+    connected: connectedPlatforms,
+    deselected,
   }, TEXT_POSTS_ON);
   // Set by the first press of the submit button (platformListAlert).
   const [triedSend, setTriedSend] = useState(false);

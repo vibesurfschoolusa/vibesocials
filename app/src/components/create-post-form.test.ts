@@ -452,8 +452,8 @@ describe("scheduleWhenText", () => {
 describe("the untouched Create page", () => {
   type Platform = Parameters<typeof textOnlyNotice>[0]["connected"][number];
   const nothing = { reuseLoading: false, hasReuseItem: false, hasUploadFile: false, photoCount: 0 };
-  const empty = { ...nothing, caption: "", overrides: null };
   const connected: Platform[] = ["instagram", "facebook_page", "tiktok", "x", "youtube"];
+  const empty = { ...nothing, caption: "", overrides: null, connected, deselected: new Set<Platform>() };
   afterEach(() => {
     textPosts.enabled = true;
   });
@@ -558,8 +558,8 @@ describe("the untouched Create page", () => {
 // turned the page into a text post, greyed Instagram out and hid its own box.
 describe("composerPageState: own captions for platforms that need a file", () => {
   type Platform = Parameters<typeof textOnlyNotice>[0]["connected"][number];
-  const nothing = { reuseLoading: false, hasReuseItem: false, hasUploadFile: false, photoCount: 0, caption: "" };
   const connected: Platform[] = ["instagram", "tiktok", "youtube", "x", "linkedin"];
+  const nothing = { reuseLoading: false, hasReuseItem: false, hasUploadFile: false, photoCount: 0, caption: "", connected, deselected: new Set<Platform>() };
   afterEach(() => {
     textPosts.enabled = true;
   });
@@ -660,8 +660,8 @@ describe("the untouched press where every platform needs a file", () => {
 // composerPageState, so the tests below run the form's own chain.
 describe("the form's chain: composerPageState, composerPageView, submitFirstStep", () => {
   type Platform = Parameters<typeof textOnlyNotice>[0]["connected"][number];
-  const nothing = { reuseLoading: false, hasReuseItem: false, hasUploadFile: false, photoCount: 0, overrides: null };
   const connected: Platform[] = ["instagram", "x", "youtube"];
+  const nothing = { reuseLoading: false, hasReuseItem: false, hasUploadFile: false, photoCount: 0, overrides: null, connected, deselected: new Set<Platform>() };
 
   function view(caption: string, extra: Partial<typeof nothing> = {}, triedSend = false) {
     const pageState = composerPageState({ ...nothing, ...extra, caption }, true);
@@ -738,5 +738,47 @@ describe("the form's chain: composerPageState, composerPageView, submitFirstStep
       message: fileBlock,
       countsAsTry: true,
     });
+  });
+});
+
+// F2 fix round 2, item 2: an own caption counts as text only for a platform that
+// takes text, is connected and is ticked. X's caption with X unticked kept the
+// page a text post with nothing on it to say why.
+describe("composerPageState: own captions the person can no longer see", () => {
+  type Platform = Parameters<typeof textOnlyNotice>[0]["connected"][number];
+  const connected: Platform[] = ["instagram", "x"];
+  const base = { reuseLoading: false, hasReuseItem: false, hasUploadFile: false, photoCount: 0, caption: "", connected };
+  const ticked = new Set<Platform>();
+  const xUnticked = new Set<Platform>(["x"]);
+
+  it("X's own caption with X ticked: a text post, as now", () => {
+    expect(composerPageState({ ...base, overrides: { x: "Hi" }, deselected: ticked }, true)).toBe("text");
+  });
+
+  it("X unticked: untouched again; X's caption is kept and counts again when X is ticked again", () => {
+    const overrides = { x: "Hi" };
+    expect(composerPageState({ ...base, overrides, deselected: xUnticked }, true)).toBe("untouched");
+    expect(overrides).toEqual({ x: "Hi" });
+    expect(composerPageState({ ...base, overrides, deselected: ticked }, true)).toBe("text");
+  });
+
+  it("X not connected: its caption does not count", () => {
+    expect(composerPageState({ ...base, connected: ["instagram"], overrides: { x: "Hi" }, deselected: ticked }, true)).toBe(
+      "untouched",
+    );
+  });
+
+  it("Instagram's own caption never counts, as now", () => {
+    expect(composerPageState({ ...base, overrides: { instagram: "Hi" }, deselected: ticked }, true)).toBe("untouched");
+  });
+
+  it("the main caption always counts, whatever is unticked", () => {
+    expect(composerPageState({ ...base, caption: "Hi", overrides: null, deselected: new Set<Platform>(["x", "instagram"]) }, true)).toBe(
+      "text",
+    );
+  });
+
+  it("with a file: the file page", () => {
+    expect(composerPageState({ ...base, hasUploadFile: true, overrides: { x: "Hi" }, deselected: xUnticked }, true)).toBe("file");
   });
 });
