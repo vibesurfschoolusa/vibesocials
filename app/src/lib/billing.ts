@@ -38,7 +38,11 @@ export const PAST_DUE_GRACE_DAYS = 7;
 export const DEFAULT_TRIAL_DAYS = 14;
 export const MAX_TRIAL_DAYS = 90;
 
-/** True exactly when BILLING_ENABLED is "true". Read at request time, so a change needs no deploy. */
+/**
+ * True exactly when BILLING_ENABLED is "true". Routes read it per request, but
+ * the Terms, Privacy and Register pages are built at deploy time, so switching
+ * billing on or off takes effect with the next deployment.
+ */
 export function billingEnabled(env: BillingEnv = process.env): boolean {
   return env.BILLING_ENABLED === "true";
 }
