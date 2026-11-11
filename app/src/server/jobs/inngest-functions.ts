@@ -63,8 +63,9 @@ import {
   proactiveRefreshWhere,
 } from "@/server/jobs/connectionHealthSweep";
 import { platformLabel } from "@/lib/platforms";
-import { billingFieldsSelect } from "@/lib/billing";
+import { billingEnabled, billingFieldsSelect } from "@/lib/billing";
 import { needsMediaMessage } from "@/lib/postTargets";
+import { runBillingReminders } from "@/server/billing/reminders";
 import {
   blockedResultFailure,
   splitWorkspaceStatus,
@@ -2578,6 +2579,28 @@ export const monthlyReportEmail = inngest.createFunction(
   },
 );
 
+/**
+ * The trial emails (21b): a reminder 3 days before a trial ends and a notice
+ * once it has ended, each once per workspace (logic in billing/reminders.ts).
+ * With billing off it returns before any step: no execution beyond the run
+ * itself. With billing on, one step that sends at most 40 emails. 16:00 UTC,
+ * after the other daily emails. SEC: the step output is counts only.
+ */
+export const billingReminders = inngest.createFunction(
+  {
+    id: "billing-reminders",
+    name: "Billing Reminders",
+    singleton: { mode: "skip" },
+  },
+  { cron: "0 16 * * *" },
+  async ({ step }) => {
+    if (!billingEnabled()) return { skipped: "billing off" };
+    const summary = await step.run("send", () => runBillingReminders(new Date()));
+    logger.info("[Inngest] Billing reminders sent", summary);
+    return summary;
+  },
+);
+
 export const inngestFunctions = [
   publishToAllPlatforms,
   mediaRetentionSweep,
@@ -2593,4 +2616,5 @@ export const inngestFunctions = [
   googleListingMetricsSync,
   socialPostMetricsSync,
   monthlyReportEmail,
+  billingReminders,
 ];
