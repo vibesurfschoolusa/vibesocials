@@ -35,9 +35,25 @@ export interface PostMetricDTO {
   comments: number | null;
   /** Not exposed by YouTube `videos.list` → always null for YouTube v1. */
   shares: number | null;
+  /** LinkedIn and Pinterest only (2026-11-10); null elsewhere. */
+  clicks: number | null;
+  /** Pinterest only (2026-11-10); null elsewhere. */
+  saves: number | null;
   /** ISO-8601 timestamp of the last successful fetch. */
   fetchedAt: string;
 }
+
+/**
+ * Platforms whose post numbers are stored: YouTube hourly
+ * (youtubeMetricsSync.ts), the other four daily (socialMetricsSync.ts).
+ */
+export const METRIC_PLATFORMS: readonly Platform[] = [
+  "youtube",
+  "instagram",
+  "facebook_page",
+  "linkedin",
+  "pinterest",
+];
 
 /** One platform's outcome for a post job. */
 export interface PostJobResultDTO {

@@ -54,6 +54,7 @@ import {
   toPostJobResultSummaryDto,
   encodePostsCursor,
   decodePostsCursor,
+  METRIC_PLATFORMS,
 } from "@/lib/postsDto";
 
 /** Runtime set of valid PostJobStatus values, for the `?status=` filter. */
@@ -238,39 +239,43 @@ export async function GET(request: Request) {
     // joined by (platform, externalPostId) — the metric's DURABLE identity —
     // so it stays correct across a connection removal (the originating result
     // now survives with a null socialConnectionId; the metric row is keyed by
-    // platform + externalPostId either way). YouTube-only in v1, so
-    // we only collect/join YouTube video ids. One extra bounded query.
-    const youtubeVideoIds = Array.from(
-      new Set(
-        jobs.flatMap((job) =>
-          job.results
-            .filter((result) => result.platform === "youtube" && result.externalPostId)
-            .map((result) => result.externalPostId as string),
-        ),
+    // platform + externalPostId either way). YouTube, and since 2026-11-10
+    // Instagram, Facebook, LinkedIn and Pinterest (METRIC_PLATFORMS). One
+    // extra bounded query; a row matching an id of another platform is
+    // dropped by the platform-and-id key below.
+    const metricResults = jobs.flatMap((job) =>
+      job.results.filter(
+        (result) => METRIC_PLATFORMS.includes(result.platform) && Boolean(result.externalPostId),
       ),
     );
+    const metricPlatforms = Array.from(new Set(metricResults.map((result) => result.platform)));
+    const metricPostIds = Array.from(new Set(metricResults.map((result) => result.externalPostId as string)));
 
-    const metricRows = youtubeVideoIds.length
+    const metricRows = metricPostIds.length
       ? await prisma.postMetric.findMany({
           where: {
             workspaceId: context.workspace.id,
-            platform: "youtube",
-            externalPostId: { in: youtubeVideoIds },
+            platform: { in: metricPlatforms },
+            externalPostId: { in: metricPostIds },
           },
           // SEC-1: display fields only — never raw payload, id, userId, or the
           // postJobResultId link.
           select: {
+            platform: true,
             externalPostId: true,
             views: true,
             likes: true,
             comments: true,
             shares: true,
+            clicks: true,
+            saves: true,
             fetchedAt: true,
           },
         })
       : [];
 
-    const metricByVideoId = new Map(metricRows.map((row) => [row.externalPostId, row]));
+    const metricKey = (platform: string, externalPostId: string) => `${platform}:${externalPostId}`;
+    const metricByPost = new Map(metricRows.map((row) => [metricKey(row.platform, row.externalPostId), row]));
 
     // 07a: a post with several photos has one PostJobMedia row per photo. One
     // grouped query for this page's ids (the (postJobId, position) index serves
@@ -358,10 +363,9 @@ export async function GET(request: Request) {
             ? { name: job.user.name ?? job.user.email.split("@")[0] }
             : null,
           results: job.results.map((result) => {
-            const metricRow =
-              result.platform === "youtube" && result.externalPostId
-                ? metricByVideoId.get(result.externalPostId)
-                : undefined;
+            const metricRow = result.externalPostId
+              ? metricByPost.get(metricKey(result.platform, result.externalPostId))
+              : undefined;
             return {
               platform: result.platform,
               status: result.status,
@@ -388,6 +392,8 @@ export async function GET(request: Request) {
                     likes: metricRow.likes,
                     comments: metricRow.comments,
                     shares: metricRow.shares,
+                    clicks: metricRow.clicks,
+                    saves: metricRow.saves,
                     fetchedAt: metricRow.fetchedAt.toISOString(),
                   }
                 : null,

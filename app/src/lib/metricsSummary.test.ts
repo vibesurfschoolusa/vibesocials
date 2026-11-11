@@ -9,6 +9,8 @@ function metric(partial: Partial<PostMetricDTO>): PostMetricDTO {
     likes: null,
     comments: null,
     shares: null,
+    clicks: null,
+    saves: null,
     fetchedAt: "2026-07-10T00:00:00.000Z",
     ...partial,
   };

@@ -113,15 +113,18 @@ describe("GET /api/posts — metrics join (Roadmap Phase 8)", () => {
     expect(postMetricFindManyMock).not.toHaveBeenCalled();
   });
 
-  it("scopes the metric query to the caller + youtube + the collected video ids, selecting display fields only", async () => {
+  it("scopes the metric query to the caller + the metric platforms + the collected post ids, selecting display fields only", async () => {
     postJobFindManyMock.mockResolvedValue([jobWithYouTube()]);
     postMetricFindManyMock.mockResolvedValue([
       {
+        platform: "youtube",
         externalPostId: "vidA",
         views: 100,
         likes: 5,
         comments: 2,
         shares: null,
+        clicks: null,
+        saves: null,
         fetchedAt: new Date("2026-07-10T01:00:00.000Z"),
       },
     ]);
@@ -134,16 +137,19 @@ describe("GET /api/posts — metrics join (Roadmap Phase 8)", () => {
     // and never just the caller — a teammate's metrics must show too).
     expect(arg.where).toEqual({
       workspaceId: "ws-1",
-      platform: "youtube",
+      platform: { in: ["youtube"] },
       externalPostId: { in: ["vidA"] },
     });
     // SEC-1: display fields only — no raw payload, id, userId, or postJobResultId.
     expect(arg.select).toEqual({
+      platform: true,
       externalPostId: true,
       views: true,
       likes: true,
       comments: true,
       shares: true,
+      clicks: true,
+      saves: true,
       fetchedAt: true,
     });
     expect(arg.select).not.toHaveProperty("raw");
@@ -154,11 +160,14 @@ describe("GET /api/posts — metrics join (Roadmap Phase 8)", () => {
     postJobFindManyMock.mockResolvedValue([jobWithYouTube()]);
     postMetricFindManyMock.mockResolvedValue([
       {
+        platform: "youtube",
         externalPostId: "vidA",
         views: 100,
         likes: 5,
         comments: 2,
         shares: null,
+        clicks: null,
+        saves: null,
         fetchedAt: new Date("2026-07-10T01:00:00.000Z"),
       },
     ]);
@@ -175,6 +184,8 @@ describe("GET /api/posts — metrics join (Roadmap Phase 8)", () => {
       likes: 5,
       comments: 2,
       shares: null,
+      clicks: null,
+      saves: null,
       fetchedAt: "2026-07-10T01:00:00.000Z",
     });
     // TikTok has no metric in v1.
@@ -185,6 +196,51 @@ describe("GET /api/posts — metrics join (Roadmap Phase 8)", () => {
     expect(serialized).not.toContain("raw");
     expect(serialized).not.toContain("postJobResultId");
     expect(serialized).not.toContain("accessToken");
+  });
+
+  it("joins the numbers of Instagram, Facebook, LinkedIn and Pinterest results by platform and post id", async () => {
+    const job = jobWithYouTube();
+    job.results = [
+      { platform: "instagram", status: "success", externalPostId: "same-id", errorMessage: null },
+      { platform: "pinterest", status: "success", externalPostId: "same-id", errorMessage: null },
+      { platform: "linkedin", status: "success", externalPostId: "urn:li:share:1", errorMessage: null },
+      { platform: "facebook_page", status: "success", externalPostId: "9_1", errorMessage: null },
+      { platform: "tiktok", status: "success", externalPostId: "tikA", errorMessage: null },
+    ];
+    postJobFindManyMock.mockResolvedValue([job]);
+    const fetchedAt = new Date("2026-11-10T10:46:00.000Z");
+    const metric = (platform: string, externalPostId: string, over: Record<string, number | null>) => ({
+      platform,
+      externalPostId,
+      views: null,
+      likes: null,
+      comments: null,
+      shares: null,
+      clicks: null,
+      saves: null,
+      fetchedAt,
+      ...over,
+    });
+    postMetricFindManyMock.mockResolvedValue([
+      metric("instagram", "same-id", { likes: 12, comments: 3 }),
+      metric("pinterest", "same-id", { views: 240, clicks: 37, saves: 20 }),
+      metric("linkedin", "urn:li:share:1", { views: 500, clicks: 20 }),
+    ]);
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+
+    const arg = postMetricFindManyMock.mock.calls[0][0];
+    expect(arg.where.platform.in.sort()).toEqual(["facebook_page", "instagram", "linkedin", "pinterest"]);
+    expect(arg.where.externalPostId.in.sort()).toEqual(["9_1", "same-id", "urn:li:share:1"]);
+
+    const byPlatform = Object.fromEntries(body.jobs[0].results.map((r) => [r.platform, r.metric]));
+    expect(byPlatform.instagram).toMatchObject({ likes: 12, comments: 3, saves: null });
+    expect(byPlatform.pinterest).toMatchObject({ views: 240, clicks: 37, saves: 20, likes: null });
+    expect(byPlatform.linkedin).toMatchObject({ views: 500, clicks: 20 });
+    expect(byPlatform.facebook_page).toBeNull();
+    expect(byPlatform.tiktok).toBeNull();
+    expect(JSON.stringify(body)).not.toContain("raw");
   });
 
   it("renders metric:null (not a crash) for a YouTube result with no fetched metric yet", async () => {

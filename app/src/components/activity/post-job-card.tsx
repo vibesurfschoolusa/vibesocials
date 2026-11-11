@@ -17,7 +17,7 @@ import type { PostJobDTO } from "@/lib/postsDto";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { describeDeferral, selectDeferrals } from "@/lib/resultDeferral";
 import { PlatformResultBadge } from "./platform-result";
-import { PostMetricStats } from "./post-metric-stats";
+import { DailyMetricStats, PostMetricStats } from "./post-metric-stats";
 
 // Exhaustive over PostJobStatus — adding an enum member (Roadmap Phase 5 added
 // draft/scheduled/cancelled) fails `tsc` here (TS2741) until it's listed, which
@@ -343,6 +343,9 @@ export function PostJobCard({
       ) : null}
 
       {youtubeResult ? <PostMetricStats metric={youtubeResult.metric} /> : null}
+
+      {/* Instagram, Facebook, LinkedIn and Pinterest numbers, read once a day. */}
+      <DailyMetricStats results={results} />
 
       {unconfirmed.length > 0 ? (
         <ul className="mt-3 space-y-1.5">
