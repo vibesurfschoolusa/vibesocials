@@ -41,7 +41,7 @@ export default async function SettingsPage({
   // Team Workspaces (Task 6): getWorkspaceContext() covers the auth gate
   // (null when unauthenticated, same as a bare getCurrentUser() check) and
   // additionally resolves the active workspace this page's data now reads
-  // from. Task 7 uses `context.role` below to split the Captions/Connections
+  // from. Task 7 uses `context.role` below to split the Posts and emails/Connections
   // forms into owner-mutation vs member-read-only, and to gate the new Team
   // card's management controls.
   const context = await getWorkspaceContext();
@@ -134,6 +134,18 @@ export default async function SettingsPage({
     context.role === "owner" ? loadWorkspaceDeletion(context.workspace.id, context.user.id) : null,
   ]);
 
+  // The jump links under the title: one per section this person sees, in page
+  // order, each to its heading's id (Plan only when it shows, below).
+  const sections = [
+    { id: "post-defaults", label: "Posts and emails" },
+    { id: "posting-times", label: "Posting times" },
+    { id: "connections", label: "Connections" },
+    { id: "team", label: "Team" },
+    ...(planLabel ? [{ id: "plan", label: "Plan" }] : []),
+    { id: "usage", label: "Usage" },
+    { id: "account", label: "Account" },
+  ];
+
   return (
     <div className="mx-auto max-w-4xl px-4 py-8 md:px-6 lg:px-8">
       {oauthResult ? (
@@ -163,17 +175,28 @@ export default async function SettingsPage({
       <header className="mb-8">
         <h1 className="text-2xl font-bold tracking-tight text-foreground">Settings</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Configure your default caption footer and manage social platform connections.
+          Your post defaults and emails, posting times, connections, team, usage and your account.
         </p>
+        <nav aria-label="Settings sections">
+          <ul className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-sm">
+            {sections.map((section) => (
+              <li key={section.id}>
+                <a href={`#${section.id}`} className="font-medium text-primary underline-offset-4 hover:underline">
+                  {section.label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
       </header>
 
       <div className="flex flex-col gap-10">
         <section>
           <div className="mb-4">
-            <h2 className="text-lg font-semibold tracking-tight text-foreground">Captions</h2>
+            <h2 id="post-defaults" className="scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Posts and emails</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              The footer added to every post, the brand voice the AI writes in, the defaults for
-              approvals and Google posts, and which emails you get.
+              What every post starts with (the footer, the brand voice the AI writes in, approvals
+              and Google post defaults) and which emails you get.
             </p>
           </div>
           {/* key: force a REMOUNT when the active workspace changes. This
@@ -185,9 +208,9 @@ export default async function SettingsPage({
           <SettingsForm key={context.workspace.id} settings={settings} role={context.role} />
         </section>
 
-        <section id="posting-times" className="scroll-mt-20">
+        <section>
           <div className="mb-4">
-            <h2 className="text-lg font-semibold tracking-tight text-foreground">Posting times</h2>
+            <h2 id="posting-times" className="scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Posting times</h2>
             <p className="mt-1 text-sm text-muted-foreground">
               The times you usually post each week. Create and Add many can fill in the next free one.
             </p>
@@ -196,9 +219,9 @@ export default async function SettingsPage({
           <PostingSlotsForm key={context.workspace.id} slots={postingSlots} role={context.role} />
         </section>
 
-        <section id="connections" className="scroll-mt-20">
+        <section>
           <div className="mb-4">
-            <h2 className="text-lg font-semibold tracking-tight text-foreground">Connections</h2>
+            <h2 id="connections" className="scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Connections</h2>
             <p className="mt-1 text-sm text-muted-foreground">
               Connect your social accounts so Vibe Socials can publish on your behalf.
             </p>
@@ -221,7 +244,7 @@ export default async function SettingsPage({
 
         <section>
           <div className="mb-4">
-            <h2 className="text-lg font-semibold tracking-tight text-foreground">Team</h2>
+            <h2 id="team" className="scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Team</h2>
             <p className="mt-1 text-sm text-muted-foreground">
               {context.role === "owner"
                 ? "Invite teammates and manage who has access to this workspace."
@@ -247,9 +270,9 @@ export default async function SettingsPage({
         </section>
 
         {planLabel ? (
-          <section id="plan" className="scroll-mt-20">
+          <section>
             <div className="mb-4">
-              <h2 className="text-lg font-semibold tracking-tight text-foreground">Plan</h2>
+              <h2 id="plan" className="scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Plan</h2>
               <p className="mt-1 text-sm text-muted-foreground">
                 This workspace&apos;s plan and the limits that come with it.
               </p>
@@ -264,9 +287,9 @@ export default async function SettingsPage({
           </section>
         ) : null}
 
-        <section id="usage" className="scroll-mt-20">
+        <section>
           <div className="mb-4">
-            <h2 className="text-lg font-semibold tracking-tight text-foreground">Usage</h2>
+            <h2 id="usage" className="scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Usage</h2>
             <p className="mt-1 text-sm text-muted-foreground">
               What this workspace has used of its limits. For a higher limit, write to {SUPPORT_EMAIL}.
             </p>
@@ -274,9 +297,9 @@ export default async function SettingsPage({
           <UsageSection usage={usage} />
         </section>
 
-        <section id="account" className="scroll-mt-20">
+        <section>
           <div className="mb-4">
-            <h2 className="text-lg font-semibold tracking-tight text-foreground">Account</h2>
+            <h2 id="account" className="scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Account</h2>
             <p className="mt-1 text-sm text-muted-foreground">
               Your sign-in, your password, and deleting your account.
             </p>
