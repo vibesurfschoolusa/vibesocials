@@ -55,6 +55,8 @@ export const PUBLIC_ROUTE_PREFIXES = [
   "/u",
   // Client review links (2026-11-10): the client has no account, so no shell.
   "/v",
+  // Client connect links (2026-11-11): the client has no account, so no shell.
+  "/c",
 ];
 
 /**

@@ -1,6 +1,7 @@
 import type { Platform } from "@prisma/client";
 
 import { billingFieldsSelect } from "@/lib/billing";
+import { toConnectionSummary, type ConnectionSummary } from "@/lib/connectionSummary";
 import { connectLinkPlatformConfigured, isConnectLinkTokenShape } from "@/lib/connectLink";
 import { prisma } from "@/lib/db";
 import { hashInviteToken } from "@/lib/inviteToken";
@@ -76,4 +77,16 @@ export async function placeTaken(workspaceId: string, platform: Platform): Promi
     select: { needsReconnect: true },
   });
   return !!existing && !existing.needsReconnect;
+}
+
+/**
+ * The workspace's connections as the visitor's page may show them: the
+ * browser-safe summary Settings uses (names only, never tokens).
+ */
+export async function listLinkConnections(workspaceId: string): Promise<ConnectionSummary[]> {
+  const rows = await prisma.socialConnection.findMany({
+    where: { workspaceId },
+    select: { platform: true, accountIdentifier: true, metadata: true, needsReconnect: true },
+  });
+  return rows.map(toConnectionSummary);
 }

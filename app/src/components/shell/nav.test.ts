@@ -81,6 +81,7 @@ describe("/pricing in the shell (23, fix round 1)", () => {
       "/help",
       "/u",
       "/v",
+      "/c",
     ]);
   });
 

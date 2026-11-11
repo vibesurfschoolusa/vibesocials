@@ -91,6 +91,8 @@ export function isPublicPath(pathname: string, env: BillingEnv = process.env): b
     "/u",
     // Client review links: a client looks over upcoming posts without an account (2026-11-10).
     "/v",
+    // Client connect links: a client connects their accounts without an account (2026-11-11).
+    "/c",
   ];
   return prefixes.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
