@@ -930,3 +930,96 @@ describe("googleBusinessProfileClient.publishVideo — tracking tags on the butt
     expect(sentButton(fetchMock)).toEqual({ actionType: "BOOK", url: "https://vibesurfschool.com/book" });
   });
 });
+
+describe("googleBusinessProfileClient.publishText - a post without a photo", () => {
+  function textCtx(extra: Record<string, unknown> = {}) {
+    const { mediaItem: _m, mediaItems: _ms, ...rest } = makeContext();
+    void _m;
+    void _ms;
+    return { ...rest, caption: "Lessons cancelled today", baseCaption: "Lessons cancelled today", ...extra };
+  }
+  const created = () =>
+    new Response(JSON.stringify({ name: "accounts/111/locations/999/localPosts/t1" }), { status: 200 });
+  const bodyOf = (fetchMock: ReturnType<typeof stubMediaCreate>) =>
+    JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as Record<string, unknown>;
+
+  beforeEach(() => {
+    workspaceFindUniqueMock.mockReset();
+    workspaceFindUniqueMock.mockImplementation(async () => null);
+  });
+
+  it("creates a standard local post with the summary and no media, and nothing else", async () => {
+    const fetchMock = stubMediaCreate(created);
+
+    await expect(googleBusinessProfileClient.publishText!(textCtx())).resolves.toEqual({
+      externalPostId: "accounts/111/locations/999/localPosts/t1",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "https://mybusiness.googleapis.com/v4/accounts/111/locations/999/localPosts",
+    );
+    expect(bodyOf(fetchMock)).toEqual({ languageCode: "en-US", topicType: "STANDARD", summary: "Lessons cancelled today" });
+  });
+
+  it("applies the workspace's default button when the post has no options", async () => {
+    workspaceFindUniqueMock.mockResolvedValueOnce({ googleButtonType: "BOOK", googleButtonUrl: "https://e.com/book" });
+    const fetchMock = stubMediaCreate(created);
+
+    await googleBusinessProfileClient.publishText!(textCtx());
+
+    expect(bodyOf(fetchMock)).toEqual({
+      languageCode: "en-US",
+      topicType: "STANDARD",
+      summary: "Lessons cancelled today",
+      callToAction: { actionType: "BOOK", url: "https://e.com/book" },
+    });
+  });
+
+  it("sends the post's own button, offer and event as for a photo post", async () => {
+    const offer = {
+      postType: "offer" as const,
+      offer: { title: "Half price", startDate: "2026-12-01", endDate: "2026-12-07", couponCode: "WIND" },
+    };
+    let fetchMock = stubMediaCreate(created);
+    await googleBusinessProfileClient.publishText!(textCtx({ googleBusinessProfileMetadata: offer }));
+    expect(bodyOf(fetchMock)).toEqual(buildLocalPostBody("Lessons cancelled today", null, offer));
+    expect(bodyOf(fetchMock)).toMatchObject({ topicType: "OFFER", offer: { couponCode: "WIND" } });
+    expect(bodyOf(fetchMock)).not.toHaveProperty("media");
+
+    const event = {
+      postType: "event" as const,
+      button: { type: "CALL" as const },
+      event: { title: "Beach day", startDate: "2026-12-01", endDate: "2026-12-01", startTime: "09:00" },
+    };
+    vi.unstubAllGlobals();
+    fetchMock = stubMediaCreate(created);
+    await googleBusinessProfileClient.publishText!(textCtx({ googleBusinessProfileMetadata: event }));
+    expect(bodyOf(fetchMock)).toMatchObject({ topicType: "EVENT", callToAction: { actionType: "CALL" } });
+    expect(bodyOf(fetchMock)).not.toHaveProperty("media");
+  });
+
+  it.each([
+    ["a 503", () => new Response("down", { status: 503 })],
+    ["a 200 without a name", () => new Response("{}", { status: 200 })],
+  ] as const)("a lost answer (%s) is PUBLISH_UNCONFIRMED, requested once", async (_name, answer) => {
+    const fetchMock = stubMediaCreate(answer);
+
+    const error = await failure(googleBusinessProfileClient.publishText!(textCtx()));
+
+    expect(error?.code).toBe("PUBLISH_UNCONFIRMED");
+    expect(error?.message).toBe(PUBLISH_UNCONFIRMED_MESSAGE);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a post Google rejects under its content policy fails with the sentence", async () => {
+    stubMediaCreate(
+      () => new Response(JSON.stringify({ name: "accounts/111/locations/999/localPosts/t1", state: "REJECTED" }), { status: 200 }),
+    );
+    expect((await failure(googleBusinessProfileClient.publishText!(textCtx())))?.code).toBe("GBP_POST_REJECTED");
+  });
+
+  it("a text post does not go to the gallery", () => {
+    expect(buildLocalPostBody("hi", null)).toEqual({ languageCode: "en-US", topicType: "STANDARD", summary: "hi" });
+  });
+});

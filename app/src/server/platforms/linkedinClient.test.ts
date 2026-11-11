@@ -4357,7 +4357,8 @@ describe("linkedinClient.publishText - a post without a photo", () => {
   type Reply = () => Response | Promise<Response>;
 
   function stubPosts(post?: Reply) {
-    const fetchMock = vi.fn(async (input: string | URL) => {
+    const fetchMock = vi.fn(async (input: string | URL, _init?: RequestInit) => {
+      void _init;
       const url = String(input);
       if (url === POSTS_URL) {
         return (post ?? (() => new Response(null, { status: 201, headers: { "x-restli-id": "urn:li:share:1" } })))();

@@ -14,7 +14,13 @@ import { refreshGoogleToken } from "./googleTokens";
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import { budgetedTimeout } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
-import type { GoogleBusinessPostMetadata, PlatformClient, PublishContext, PublishResult } from "./types";
+import type {
+  GoogleBusinessPostMetadata,
+  PlatformClient,
+  PublishContext,
+  PublishResult,
+  TextPublishContext,
+} from "./types";
 
 // Google Business Profile client (posts that appear on Google Search and Maps)
 //
@@ -151,6 +157,83 @@ export const googleBusinessProfileClient: PlatformClient = {
     };
   },
 
+  /**
+   * A post without a photo (2026-11-10): a local post with the summary and no
+   * `media`. Google's LocalPost reference (read 2026-11-10,
+   * https://developers.google.com/my-business/reference/rest/v4/accounts.locations.localPosts)
+   * marks only `topicType` required (and `event` for EVENT and OFFER); `media` is
+   * not. The post's own options, or the workspace's default button, apply
+   * exactly as for a photo. Never the gallery: a text post is always a post.
+   */
+  async publishText(ctx: TextPublishContext): Promise<PublishResult> {
+    let { socialConnection } = ctx;
+    const { deadline } = ctx;
+
+    // As publishVideo: refresh under the per-connection lock when expired.
+    if (socialConnection.expiresAt && socialConnection.expiresAt < new Date()) {
+      console.log("[GBP] Access token expired, refreshing...");
+      socialConnection = await refreshConnectionToken(
+        socialConnection,
+        (current) => refreshGoogleToken(current, { deadline }),
+        { deadline },
+      );
+    }
+
+    const accessToken = socialConnection.accessToken;
+    if (!accessToken) {
+      const error = new Error("Missing access token for Google Business Profile") as Error & { code: string };
+      error.code = "GBP_NO_ACCESS_TOKEN";
+      throw error;
+    }
+
+    const { locationName } = await ensureLocationName(socialConnection, accessToken, deadline);
+    const body = buildLocalPostBody(ctx.caption, null, await resolvePostOptions(ctx));
+
+    console.log("[GBP] Creating text post", { locationName });
+
+    // The commit call, as for a photo post: a lost answer is PUBLISH_UNCONFIRMED.
+    const createRes = await commitRequest("google_business_profile", () =>
+      fetchWithTimeout(
+        `https://mybusiness.googleapis.com/v4/${locationName}/localPosts`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        },
+        budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
+      ),
+    );
+
+    const limited = await classifyRateLimit("google_business_profile", createRes);
+    if (limited) throw limited;
+
+    await assertOk(createRes, {
+      code: "GBP_CREATE_POST_FAILED",
+      prefix: "Failed to create the Google Business Profile post",
+    });
+
+    const created = await readCommitBody<{ name?: unknown; state?: unknown } | null>(
+      "google_business_profile",
+      createRes,
+      "json",
+    );
+    const externalPostId = requireCommitId("google_business_profile", created?.name, "name");
+
+    if (created?.state === "REJECTED") {
+      const error = new Error(
+        "Google rejected this Business Profile post under its content policy, so it is not shown. Edit the caption and try again.",
+      ) as Error & { code: string };
+      error.code = "GBP_POST_REJECTED";
+      throw error;
+    }
+
+    console.log("[GBP] Text post created", { externalPostId, state: created?.state });
+    return { externalPostId };
+  },
+
   async refreshToken(
     connection: SocialConnection,
     opts?: { deadline?: number },
@@ -175,11 +258,12 @@ export function computeGbpPostSummary(caption: string): string {
 
 /**
  * The body of POST .../localPosts for one photo: a STANDARD post ("Update").
- * A post with no caption carries the photo alone (no empty `summary`).
+ * A post with no caption carries the photo alone (no empty `summary`). A null
+ * `photoUrl` is a post without a photo (2026-11-10): no `media` at all.
  */
 export function buildLocalPostBody(
   caption: string,
-  photoUrl: string,
+  photoUrl: string | null,
   options?: GoogleBusinessPostMetadata,
 ): Record<string, unknown> {
   const summary = computeGbpPostSummary(caption);
@@ -187,7 +271,7 @@ export function buildLocalPostBody(
     languageCode: "en-US",
     topicType: "STANDARD",
     ...(summary ? { summary } : {}),
-    media: [{ mediaFormat: "PHOTO", sourceUrl: photoUrl }],
+    ...(photoUrl !== null ? { media: [{ mediaFormat: "PHOTO", sourceUrl: photoUrl }] } : {}),
   };
   if (!options) return body;
 
@@ -254,7 +338,9 @@ function gbpSchedule(startDate: string, endDate: string, startTime?: string, end
  * the setting off and the post's own button goes out unchanged; the default
  * button still needs the read, and a failure there throws as before.
  */
-async function resolvePostOptions(ctx: PublishContext): Promise<GoogleBusinessPostMetadata | undefined> {
+async function resolvePostOptions(
+  ctx: Pick<TextPublishContext, "googleBusinessProfileMetadata" | "socialConnection">,
+): Promise<GoogleBusinessPostMetadata | undefined> {
   const own = ctx.googleBusinessProfileMetadata;
   if (own && !own.button?.url) return own;
   const read = prisma.workspace.findUnique({
