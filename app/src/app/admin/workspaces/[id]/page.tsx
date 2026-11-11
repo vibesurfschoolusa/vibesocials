@@ -11,6 +11,7 @@ import { platformLabel } from "@/lib/platforms";
 import { formatStorageGb, type WorkspaceLimits } from "@/lib/usageLimits";
 import { LIMIT_FIELDS, LIMIT_MAX, type LimitField } from "@/server/admin/actions";
 import { getAdminWorkspaceDetail } from "@/server/admin/queries";
+import { stripeLinkFlags } from "@/server/billing/adminStripeLinks";
 
 import { AdminBillingControls, AdminLimitsForm, AdminPauseControls, type LimitFieldView } from "./admin-controls";
 import { adminBillingLines } from "./billingSentence";
@@ -76,6 +77,8 @@ export default async function AdminWorkspacePage({ params }: { params: Promise<{
   if (!detail) notFound();
 
   const { workspace } = detail;
+  // 21b: yes or no only, never the Stripe ids.
+  const stripe = await stripeLinkFlags(workspace.id);
   const billingLines = adminBillingLines(detail.billing, new Date());
   const limitFields: LimitFieldView[] = LIMIT_FIELDS.map((field) => ({
     field,
@@ -210,6 +213,14 @@ export default async function AdminWorkspacePage({ params }: { params: Promise<{
             <div>
               <dt className="text-xs text-muted-foreground">Period ends</dt>
               <dd>{detail.billing.currentPeriodEnd ? dateTimeLabel(detail.billing.currentPeriodEnd) : "None"}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Has a Stripe customer</dt>
+              <dd>{stripe.hasCustomer ? "Yes" : "No"}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Has a Stripe subscription</dt>
+              <dd>{stripe.hasSubscription ? "Yes" : "No"}</dd>
             </div>
           </dl>
           <p className="text-sm text-muted-foreground">{billingLines.state}</p>
