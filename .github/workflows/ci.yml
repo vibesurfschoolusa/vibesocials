@@ -123,7 +123,9 @@ jobs:
         run: npx prisma migrate deploy
 
       - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
+        # The runner sometimes cannot reach Ubuntu's package servers (seen
+        # 2026-11-11). Those packages are extra fonts; the browser runs without.
+        run: npx playwright install --with-deps chromium || npx playwright install chromium
 
       - name: Run E2E (smoke + DB-only core flows + scheduled-post upload)
         run: |
