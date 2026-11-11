@@ -192,6 +192,10 @@ model Workspace {
   // (src/lib/workspaceStatus.ts), never by reading these columns directly.
   pausedAt     DateTime?
   pausedReason String?
+  // Posting times (2026-11-10): up to 21 `{ day: 0..6, time: "HH:MM" }`, day 0 =
+  // Sunday, wall-clock times in the viewer's own time zone
+  // (src/lib/postingSlots.ts). Null = none saved. Owner-only.
+  postingSlots       Json?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -419,6 +423,10 @@ model PostJob {
   clientApprovedAt        DateTime?
   clientChangeRequestedAt DateTime?
   clientNote              String?
+  // Repeat (2026-11-10): every post of a series created in one request carries
+  // the same generated id; a post created on its own has none. Each one is still
+  // an ordinary post: edited, approved, published and cancelled on its own.
+  seriesId                String?
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
 
@@ -454,6 +462,8 @@ model PostJob {
   @@index([workspaceId, status, createdAt])
   // 2026-11-01 scale audit: User -> PostJob ON DELETE CASCADE seeks by userId.
   @@index([userId])
+  // Repeat: the Queue's "3 of 8" and cancelling the rest of a series.
+  @@index([seriesId])
 }
 
 // Several photos in one post (2026-11-10). `PostJob.mediaItemId` stays the first
