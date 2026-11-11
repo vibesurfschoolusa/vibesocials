@@ -161,6 +161,17 @@ export function isTextPostMode(state: Parameters<typeof hasNoFile>[0]): boolean 
   return textPostsEnabled() && hasNoFile(state);
 }
 
+/**
+ * The caution under Repeat. A repeating text post sends the same text each
+ * time, which platforms may refuse; with a file only X's caution applies.
+ */
+export function repeatCautionNote(state: { noFile: boolean; xSelected: boolean }): string | null {
+  if (state.noFile) {
+    return "Platforms may refuse a post whose text is the same as a recent one. Change the text of each repeat in the Queue.";
+  }
+  return state.xSelected ? REPEAT_X_NOTE : null;
+}
+
 /** The switch read once per page load, so rendering calls no function the compiler cannot see into. */
 const TEXT_POSTS_ON = textPostsEnabled();
 
@@ -2128,6 +2139,7 @@ function CreatePostFormInner({
                 storyChosen={storyChosen}
                 dates={repeatDates}
                 xSelected={selectedPlatforms.includes("x")}
+                noFile={noFile}
               />
             </div>
           )}
@@ -2229,6 +2241,8 @@ function RepeatControls(props: {
   storyChosen: boolean;
   dates: Date[];
   xSelected: boolean;
+  /** A text post: the caution covers every platform. */
+  noFile: boolean;
 }) {
   const { repeat, count, storyChosen, dates } = props;
   const on = repeat !== "none" && !storyChosen;
@@ -2285,7 +2299,9 @@ function RepeatControls(props: {
           ) : (
             <p className="text-xs text-muted-foreground">Pick a date and time to see the dates.</p>
           )}
-          {props.xSelected ? <p className="text-xs text-muted-foreground">{REPEAT_X_NOTE}</p> : null}
+          {repeatCautionNote(props) ? (
+            <p className="text-xs text-muted-foreground">{repeatCautionNote(props)}</p>
+          ) : null}
         </div>
       ) : null}
     </div>

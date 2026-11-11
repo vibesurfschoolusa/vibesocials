@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { REPEAT_X_NOTE } from "@/lib/repeatSchedule";
+
 // The release switch (platformLimits.ts textPostsEnabled), overridden per test.
 const textPosts = vi.hoisted(() => ({ enabled: true }));
 vi.mock("@/lib/platformLimits", async (importOriginal) => ({
@@ -14,6 +16,7 @@ import {
   isTextPostMode,
   nextPreparingPick,
   noFileSubmitError,
+  repeatCautionNote,
   type PickEvent,
 } from "./create-post-form";
 
@@ -152,5 +155,20 @@ describe("isTextPostMode follows the release switch", () => {
     textPosts.enabled = false;
     expect(isTextPostMode(nothing)).toBe(false);
     expect(isTextPostMode({ ...nothing, preparingFile: true })).toBe(false);
+  });
+});
+
+describe("repeatCautionNote", () => {
+  const TEXT_NOTE =
+    "Platforms may refuse a post whose text is the same as a recent one. Change the text of each repeat in the Queue.";
+
+  it("a repeating text post gets the caution for every platform, in place of the X one", () => {
+    expect(repeatCautionNote({ noFile: true, xSelected: true })).toBe(TEXT_NOTE);
+    expect(repeatCautionNote({ noFile: true, xSelected: false })).toBe(TEXT_NOTE);
+  });
+
+  it("with a file the X caution stays as it is", () => {
+    expect(repeatCautionNote({ noFile: false, xSelected: true })).toBe(REPEAT_X_NOTE);
+    expect(repeatCautionNote({ noFile: false, xSelected: false })).toBeNull();
   });
 });
