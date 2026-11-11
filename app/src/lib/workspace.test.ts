@@ -400,6 +400,28 @@ describe("resolveWorkspaceForUser", () => {
   });
 });
 
+describe("getWorkspaceContext for an operator (2026-11-10)", () => {
+  it("gives an operator nothing in a workspace they are not a member of", async () => {
+    process.env.ADMIN_EMAILS = "ops@example.com";
+    try {
+      getCurrentUserMock.mockResolvedValue(
+        makeUser({ email: "ops@example.com", emailVerifiedAt: new Date("2026-11-01T00:00:00Z") }),
+      );
+      findManyMock.mockResolvedValue([makeMembership({ workspaceId: "ws-own", role: "owner" })]);
+      // The operator points the active-workspace cookie at a customer's workspace.
+      cookiesGetMock.mockReturnValue({ value: "ws-customer" });
+
+      const context = await getWorkspaceContext();
+
+      // Memberships are still the only source: the customer's workspace is never resolved.
+      expect(findManyMock).toHaveBeenCalledWith({ where: { userId: "user-1" }, include: { workspace: true } });
+      expect(context?.workspace.id).toBe("ws-own");
+    } finally {
+      delete process.env.ADMIN_EMAILS;
+    }
+  });
+});
+
 describe("getWorkspaceContext", () => {
   it("carries the pause fields of the active workspace, read fresh on every call", async () => {
     getCurrentUserMock.mockResolvedValue(makeUser());

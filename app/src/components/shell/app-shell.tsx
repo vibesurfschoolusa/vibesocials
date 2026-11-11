@@ -9,6 +9,7 @@ import { Sidebar } from "./sidebar";
 import { TopBar } from "./top-bar";
 import { MobileDrawer } from "./mobile-drawer";
 import { VerifyEmailBanner } from "./verify-email-banner";
+import { WorkspacePausedBanner } from "./workspace-paused-banner";
 import { isPublicRoute } from "./nav";
 
 /**
@@ -72,6 +73,7 @@ function AuthenticatedShell({ children }: { children: ReactNode }) {
               the authenticated user is unverified AND email is configured, so it
               is safe to mount unconditionally inside the authed chrome. */}
           <VerifyEmailBanner />
+          <WorkspacePausedBanner />
           {children}
         </main>
       </div>

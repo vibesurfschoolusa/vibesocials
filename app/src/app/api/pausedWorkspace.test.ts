@@ -26,7 +26,7 @@ vi.mock("@/lib/db", () => {
     new Proxy(
       {},
       {
-        get: (_target, method) => (..._args: unknown[]) => {
+        get: (_target, method) => () => {
           calls.push(`${name}.${String(method)}`);
           return Promise.resolve(null);
         },

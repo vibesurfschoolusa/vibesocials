@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
 import { signOut, useSession } from "next-auth/react";
-import { Check, ChevronDown, CircleHelp, Download, LayoutGrid, LogOut, Plus } from "lucide-react";
+import { Check, ChevronDown, CircleHelp, Download, LayoutGrid, LogOut, Plus, Shield } from "lucide-react";
 import type { WorkspaceRole } from "@prisma/client";
 
 import { cn } from "@/lib/cn";
@@ -37,6 +37,10 @@ export function AccountMenu() {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
   const installApp = useInstallApp();
+  // The operator's "Admin" link (2026-11-10): asked once, the first time the
+  // menu opens. Anyone else gets the plain 404 and sees no link.
+  const [isOperator, setIsOperator] = useState(false);
+  const operatorAsked = useRef(false);
 
   // Team Workspaces (Task 7) — the switcher's memberships. Fetched fresh every
   // time the popover opens (a cheap, membership-checked route) rather than
@@ -70,6 +74,14 @@ export function AccountMenu() {
       document.removeEventListener("mousedown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || operatorAsked.current) return;
+    operatorAsked.current = true;
+    void fetch("/api/admin/session")
+      .then((response) => setIsOperator(response.ok))
+      .catch(() => {});
   }, [open]);
 
   useEffect(() => {
@@ -320,6 +332,16 @@ export function AccountMenu() {
             <CircleHelp aria-hidden className="h-4 w-4 text-muted-foreground" />
             Help
           </Link>
+          {isOperator ? (
+            <Link
+              href="/admin"
+              onClick={() => setOpen(false)}
+              className="flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-2 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Shield aria-hidden className="h-4 w-4 text-muted-foreground" />
+              Admin
+            </Link>
+          ) : null}
           {installApp.available ? (
             <button
               type="button"
