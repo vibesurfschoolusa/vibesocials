@@ -18,6 +18,7 @@ import {
   noFileSubmitError,
   platformListAlert,
   repeatCautionNote,
+  sharedFileOnItsWay,
   showLocationField,
   type PickEvent,
 } from "./create-post-form";
@@ -199,5 +200,46 @@ describe("showLocationField", () => {
   it("hides Location on a text post, which nothing reads it for, and keeps it with a file", () => {
     expect(showLocationField({ noFile: true })).toBe(false);
     expect(showLocationField({ noFile: false })).toBe(true);
+  });
+});
+
+// Step 2: a file shared into the Android app (?shared=1) arrives after the page
+// opens. Until it has arrived or failed it counts as a file, as a pick being
+// prepared does.
+describe("a shared file on its way", () => {
+  const nothing = { reuseLoading: false, hasReuseItem: false, hasUploadFile: false, photoCount: 0 };
+  const notBlocked = { preparingFile: false, preparingPhotos: false, photosNotReady: false };
+
+  it("opened with ?shared=1 and the file not yet taken: not text mode, and sending is blocked", () => {
+    const pending = sharedFileOnItsWay("1", false);
+    expect(pending).toBe(true);
+    expect(isTextPostMode({ ...nothing, sharedFilePending: pending })).toBe(false);
+    expect(fileSubmitBlock({ ...notBlocked, sharedFilePending: pending })).toBe(
+      "Wait until the shared file has arrived, then press the button again.",
+    );
+  });
+
+  it("taken and attached: a file post", () => {
+    const pending = sharedFileOnItsWay("1", true);
+    expect(pending).toBe(false);
+    expect(isTextPostMode({ ...nothing, hasUploadFile: true, sharedFilePending: pending })).toBe(false);
+    expect(fileSubmitBlock({ ...notBlocked, sharedFilePending: pending })).toBeNull();
+  });
+
+  it("the take fails or finds nothing: back to no file, text mode allowed", () => {
+    const pending = sharedFileOnItsWay("1", true);
+    expect(isTextPostMode({ ...nothing, sharedFilePending: pending })).toBe(true);
+    expect(fileSubmitBlock({ ...notBlocked, sharedFilePending: pending })).toBeNull();
+  });
+
+  it("opened without ?shared=: unchanged", () => {
+    expect(sharedFileOnItsWay(null, false)).toBe(false);
+    expect(sharedFileOnItsWay("0", false)).toBe(false);
+    expect(isTextPostMode({ ...nothing, sharedFilePending: false })).toBe(true);
+  });
+
+  it("isTextPostMode takes the switch value it is given", () => {
+    expect(isTextPostMode(nothing, false)).toBe(false);
+    expect(isTextPostMode(nothing, true)).toBe(true);
   });
 });

@@ -142,9 +142,12 @@ export function hasNoFile(state: {
   photoCount: number;
   /** A single pick still being prepared (HEIC conversion, shrinking) is a file. */
   preparingFile?: boolean;
+  /** A file shared into the app (?shared=1) that has not arrived yet is a file. */
+  sharedFilePending?: boolean;
 }): boolean {
   return (
     !state.preparingFile &&
+    !state.sharedFilePending &&
     !state.reuseLoading &&
     !state.hasReuseItem &&
     !state.hasUploadFile &&
@@ -157,8 +160,20 @@ export function hasNoFile(state: {
  * switched on (platformLimits.ts textPostsEnabled). Switched off, the page is
  * exactly the one where a file is required.
  */
-export function isTextPostMode(state: Parameters<typeof hasNoFile>[0]): boolean {
-  return textPostsEnabled() && hasNoFile(state);
+export function isTextPostMode(
+  state: Parameters<typeof hasNoFile>[0],
+  /** The switch value; the form passes the one read at load. Absent: read it now. */
+  enabled?: boolean,
+): boolean {
+  return (enabled ?? textPostsEnabled()) && hasNoFile(state);
+}
+
+/**
+ * Is a file shared into the Android app still on its way? The page was opened
+ * with ?shared=1 and the take has not finished (attached, or found nothing).
+ */
+export function sharedFileOnItsWay(sharedParam: string | null, settled: boolean): boolean {
+  return sharedParam === "1" && !settled;
 }
 
 /**
@@ -215,7 +230,9 @@ export function fileSubmitBlock(state: {
   preparingFile: boolean;
   preparingPhotos: boolean;
   photosNotReady: boolean;
+  sharedFilePending?: boolean;
 }): string | null {
+  if (state.sharedFilePending) return "Wait until the shared file has arrived, then press the button again.";
   if (state.preparingFile) return "Wait until the file is ready, then press the button again.";
   if (state.preparingPhotos) return "Wait until the photos are ready, then press the button again.";
   if (state.photosNotReady) return "Wait until every photo has uploaded, or remove the ones that failed.";
@@ -446,6 +463,12 @@ function CreatePostFormInner({
   const [preparingPick, setPreparingPick] = useState<number | null>(null);
   // Switched off, the page keeps its earlier behaviour while a pick is prepared.
   const preparingFile = TEXT_POSTS_ON && preparingPick !== null;
+  const [sharedSettled, setSharedSettled] = useState(false);
+  // A file shared into the app (?shared=1) is a file until its take finishes
+  // (sharedFileOnItsWay). Copied into a plain boolean: passing the expression
+  // itself made the React compiler skip this component (lint).
+  const sharedFilePending = TEXT_POSTS_ON && sharedFileOnItsWay(searchParams.get("shared"), sharedSettled);
+  const sharedPendingNow = sharedFilePending === true;
   const photoKeyRef = useRef(0);
   // Chains every set upload so the photos upload one after another, retries too.
   const photoQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -521,13 +544,14 @@ function CreatePostFormInner({
   // Posts without a photo (2026-11-10): with nothing attached only the platforms
   // that take text alone can be chosen; attaching a file restores the rest.
   // isTextPostMode, with the switch read at load (TEXT_POSTS_ON).
-  const noFile = TEXT_POSTS_ON && hasNoFile({
+  const noFile = isTextPostMode({
     preparingFile,
+    sharedFilePending,
     reuseLoading,
     hasReuseItem: reuseItem !== null,
     hasUploadFile: uploadFile !== null,
     photoCount: photoSet.length,
-  });
+  }, TEXT_POSTS_ON);
   const { choices: platformChoices, selected: selectedPlatforms } = useMemo(
     () => deriveComposerPlatforms(connectedPlatforms, deselected, activeMimeType, { noFile }),
     [connectedPlatforms, deselected, activeMimeType, noFile],
@@ -1159,6 +1183,8 @@ function CreatePostFormInner({
     sharedTakenRef.current = true;
     void (async () => {
       const file = await takeSharedFile();
+      // Arrived (now a pick being prepared, in the same render) or found nothing.
+      setSharedSettled(true);
       if (!file) return;
       attachSharedFile(file);
       const url = new URL(window.location.href);
@@ -1381,6 +1407,8 @@ function CreatePostFormInner({
       setShowSuccess(true);
       setUploadCaption("");
       setUploadLocation("");
+      // A new post has not been tried yet (platformListAlert).
+      setTriedSend(false);
       // Detach the media once the post is saved. For the reuse path this
       // prevents an accidental second submit from re-posting the same item;
       // for the upload path it clears the file state as before. Clearing
@@ -1436,9 +1464,14 @@ function CreatePostFormInner({
     setUploadError(null);
     setShowSuccess(false);
 
-    if (preparingFile) {
+    if (preparingFile || sharedPendingNow) {
       setUploadError(
-        fileSubmitBlock({ preparingFile, preparingPhotos: false, photosNotReady: false }),
+        fileSubmitBlock({
+          preparingFile,
+          sharedFilePending: sharedPendingNow,
+          preparingPhotos: false,
+          photosNotReady: false,
+        }),
       );
       return;
     }
@@ -2192,6 +2225,7 @@ function CreatePostFormInner({
                 tiktokBlock !== null ||
                 fileSubmitBlock({
                   preparingFile,
+                  sharedFilePending: sharedPendingNow,
                   preparingPhotos,
                   photosNotReady: photoSet.length > 0 && !photoSetReady(photoSet),
                 }) !== null
