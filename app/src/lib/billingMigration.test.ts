@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
  * exempt, later ones are not, and a second run changes nothing.
  */
 const SQL = readFileSync(
-  fileURLToPath(new URL("../../prisma/migrations/20261110320000_workspace_plan/migration.sql", import.meta.url)),
+  fileURLToPath(new URL("../../prisma/migrations/20261110350000_workspace_plan/migration.sql", import.meta.url)),
   "utf8",
 );
 const statements = SQL.replace(/--.*$/gm, "")
@@ -17,7 +17,7 @@ const statements = SQL.replace(/--.*$/gm, "")
   .map((statement) => statement.replace(/\s+/g, " ").trim())
   .filter(Boolean);
 
-describe("20261110320000_workspace_plan", () => {
+describe("20261110350000_workspace_plan", () => {
   it("adds the five nullable or defaulted columns, each only if missing", () => {
     expect(statements).toContain(
       'ALTER TABLE "Workspace" ADD COLUMN IF NOT EXISTS "plan" TEXT, ' +
