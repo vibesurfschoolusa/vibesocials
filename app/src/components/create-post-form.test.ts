@@ -18,6 +18,7 @@ import {
   noFileSubmitError,
   platformListAlert,
   repeatCautionNote,
+  showLocationField,
   type PickEvent,
 } from "./create-post-form";
 
@@ -191,5 +192,12 @@ describe("platformListAlert", () => {
       "Select at least one platform.",
     );
     expect(platformListAlert({ selectedCount: 1, allDisabled: false, noFile: false, triedSend: true })).toBeNull();
+  });
+});
+
+describe("showLocationField", () => {
+  it("hides Location on a text post, which nothing reads it for, and keeps it with a file", () => {
+    expect(showLocationField({ noFile: true })).toBe(false);
+    expect(showLocationField({ noFile: false })).toBe(true);
   });
 });

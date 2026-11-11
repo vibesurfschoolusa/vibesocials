@@ -189,6 +189,11 @@ export function platformListAlert(state: {
   return state.triedSend ? "None of your connected platforms can publish a post without a photo or video." : null;
 }
 
+/** Location is read from a post's file (Instagram, YouTube), so a text post has no use for it. */
+export function showLocationField(state: { noFile: boolean }): boolean {
+  return !state.noFile;
+}
+
 /** The switch read once per page load, so rendering calls no function the compiler cannot see into. */
 const TEXT_POSTS_ON = textPostsEnabled();
 
@@ -1951,6 +1956,7 @@ function CreatePostFormInner({
           footer={footerSettings}
         />
 
+        {showLocationField({ noFile }) ? (
         <div className="space-y-1.5">
           <Label htmlFor="post-location">
             Location <span className="font-normal text-muted-foreground">(optional)</span>
@@ -1967,6 +1973,7 @@ function CreatePostFormInner({
             requires manual location setting via Studio)
           </p>
         </div>
+        ) : null}
 
         {tiktokSelected && activeMimeType && (
           <TikTokPostSettings

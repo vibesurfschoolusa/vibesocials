@@ -90,6 +90,26 @@ function orderResults(results: PostJobDTO["results"]): PostJobDTO["results"] {
  * below is replaced by that server data (it is reset whenever a fresh `job`
  * arrives), so it can no longer outlive the retry.
  */
+/**
+ * A post without a file (2026-11-10): the list says so with no media and no
+ * files. A post whose file row is gone still counts one, so it is not one.
+ */
+export function isTextPost(job: Pick<PostJobDTO, "media" | "mediaCount">): boolean {
+  return job.media === null && job.mediaCount === 0;
+}
+
+/** The small tile a text post shows where a photo's thumbnail would be (Activity and Queue). */
+export function TextPostTile() {
+  return (
+    <span
+      aria-label="Text post, no photo"
+      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[var(--radius)] border border-border bg-muted text-[11px] font-medium text-muted-foreground"
+    >
+      Text
+    </span>
+  );
+}
+
 export function PostJobCard({
   job,
   showAttribution = false,
@@ -257,7 +277,7 @@ export function PostJobCard({
   return (
     <Card className="p-4 sm:p-5">
       <div className="flex items-start justify-between gap-3">
-        <MediaThumb media={job.media} count={job.mediaCount} />
+        {isTextPost(job) ? <TextPostTile /> : <MediaThumb media={job.media} count={job.mediaCount} />}
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-foreground">
             {job.caption?.trim() || "Untitled post"}

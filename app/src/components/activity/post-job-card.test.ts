@@ -73,3 +73,17 @@ describe("PostJobCard - Stories", () => {
     expect(html).not.toContain(">Story<");
   });
 });
+
+describe("PostJobCard - a post without a photo", () => {
+  it("shows the Text tile where the thumbnail would be", () => {
+    const html = render(job({ media: null, mediaCount: 0, caption: "Wind is onshore" }));
+    expect(html).toContain('aria-label="Text post, no photo"');
+    expect(html).not.toContain("<img");
+  });
+
+  it("a post with a file shows no Text tile", () => {
+    const html = render(job({ media: { url: "https://blob.example.com/a.jpg", mimeType: "image/jpeg" } }));
+    expect(html).not.toContain("Text post, no photo");
+    expect(html).toContain("<img");
+  });
+});
