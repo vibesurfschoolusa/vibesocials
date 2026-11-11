@@ -12,9 +12,11 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import {
+  BRAND_VOICE_EXAMPLE_MAX_LENGTH,
   BRAND_VOICE_MAX_EXAMPLES,
   BRAND_VOICE_MAX_LENGTH,
-  examplesFromCaptions,
+  exampleBoxStatus,
+  mergeExampleCaptions,
 } from "@/lib/brandVoice";
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
 import {
@@ -74,8 +76,15 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
   const [isFillingExamples, setIsFillingExamples] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Fills the box only; the owner edits and then saves with the rest of the form.
+  const examplesStatus = exampleBoxStatus(brandVoiceExamples);
+
+  // Adds to the box only (never replaces what was typed); the owner edits and
+  // then saves with the rest of the form.
   const fillExamplesFromRecentPosts = async () => {
+    if (mergeExampleCaptions(brandVoiceExamples, []).kind === "full") {
+      toast.error("You already have five examples. Remove one to add another.");
+      return;
+    }
     setIsFillingExamples(true);
     try {
       const response = await fetch("/api/posts?status=completed");
@@ -83,13 +92,24 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
         throw new Error("Failed to load posts");
       }
       const data = (await response.json()) as { jobs?: Array<{ caption?: string | null }> };
-      const examples = examplesFromCaptions((data.jobs ?? []).map((job) => job.caption));
-      if (!examples) {
-        toast.error("No published posts with a caption yet. Type a few example captions instead.");
+      const result = mergeExampleCaptions(
+        brandVoiceExamples,
+        (data.jobs ?? []).map((job) => job.caption),
+      );
+      if (result.kind === "full") {
+        toast.error("You already have five examples. Remove one to add another.");
         return;
       }
-      setBrandVoiceExamples(examples);
-      toast.success("Filled in from your recent posts. Edit them if you like, then save.");
+      if (result.kind === "nothing-new") {
+        toast.error(
+          "Your recent published posts have no captions that are not already in the box. Type an example instead.",
+        );
+        return;
+      }
+      setBrandVoiceExamples(result.text);
+      toast.success(
+        `Added ${result.added} ${result.added === 1 ? "caption" : "captions"} from your recent posts. Edit them if you like, then save.`,
+      );
     } catch {
       toast.error("Could not load your recent posts. Try again.");
     } finally {
@@ -137,6 +157,18 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
 
       if (!response.ok) {
         throw new Error("Failed to update settings");
+      }
+
+      // Show what the server stored: it cuts over-long text and removes hashtags.
+      const saved = (await response.json().catch(() => ({}))) as {
+        brandVoice?: string | null;
+        brandVoiceExamples?: string | null;
+      };
+      if ("brandVoice" in saved) {
+        setBrandVoice(saved.brandVoice ?? "");
+      }
+      if ("brandVoiceExamples" in saved) {
+        setBrandVoiceExamples(saved.brandVoiceExamples ?? "");
       }
 
       toast.success("Settings saved successfully!");
@@ -236,7 +268,11 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
               maxLength={BRAND_VOICE_MAX_LENGTH}
               onChange={(e) => setBrandVoice(e.target.value)}
               rows={3}
+              aria-describedby="brandVoiceCount"
             />
+            <p id="brandVoiceCount" className="text-xs text-muted-foreground">
+              {brandVoice.length} of {BRAND_VOICE_MAX_LENGTH} characters
+            </p>
             <Label htmlFor="brandVoiceExamples" className="mt-2">
               Example captions, one per line (up to {BRAND_VOICE_MAX_EXAMPLES})
             </Label>
@@ -245,7 +281,18 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
               value={brandVoiceExamples}
               onChange={(e) => setBrandVoiceExamples(e.target.value)}
               rows={5}
+              aria-describedby="brandVoiceExamplesCount"
             />
+            <p id="brandVoiceExamplesCount" aria-live="polite" className="text-xs text-muted-foreground">
+              {examplesStatus.count} of {BRAND_VOICE_MAX_EXAMPLES} examples
+              {examplesStatus.willShorten ? (
+                <span className="text-destructive">
+                  {" "}
+                  Lines over {BRAND_VOICE_EXAMPLE_MAX_LENGTH} characters are shortened and only the first
+                  five are kept.
+                </span>
+              ) : null}
+            </p>
             <div>
               <Button
                 type="button"
@@ -258,8 +305,9 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
               </Button>
             </div>
             <p className="text-sm text-muted-foreground">
-              Fills the box with the captions of your last {BRAND_VOICE_MAX_EXAMPLES} published posts.
-              Nothing is saved until you press Save settings.
+              Adds the captions of your latest published posts to the box, without their hashtags, up
+              to {BRAND_VOICE_MAX_EXAMPLES} examples. What you typed stays. Nothing is saved until you
+              press Save settings.
             </p>
           </div>
         ) : (

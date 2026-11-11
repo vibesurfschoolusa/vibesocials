@@ -127,7 +127,8 @@ export default async function SettingsPage({
           <div className="mb-4">
             <h2 className="text-lg font-semibold tracking-tight text-foreground">Captions</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Configure the default footer appended to all your posts.
+              The footer added to every post, the brand voice the AI writes in, the defaults for
+              approvals and Google posts, and which emails you get.
             </p>
           </div>
           {/* key: force a REMOUNT when the active workspace changes. This

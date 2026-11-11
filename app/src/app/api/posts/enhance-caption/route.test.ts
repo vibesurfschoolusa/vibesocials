@@ -343,7 +343,7 @@ ${OUTPUT_RULES}`;
 Brand voice:
 Write in this business's own voice.
 How this business describes its voice: "Friendly and short."
-Captions this business has written. Match their tone, length and habits. Do not copy them.
+Captions this business has written. Match their tone and habits. Do not copy them. The length this request asks for still applies.
 - Waves are up, surf fam
 ${CLOSING}`;
 

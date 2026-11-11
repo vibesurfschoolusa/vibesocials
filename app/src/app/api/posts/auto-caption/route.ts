@@ -185,9 +185,18 @@ export async function POST(request: Request) {
     const languageText = language
       ? `Write the caption in this language: ${language}.`
       : "Write the caption in the same language as the example content or English.";
+    // The caller's own workspace only, never the request body (brief 15).
+    const voiceBlock = brandVoicePrompt(
+      context.workspace.brandVoice,
+      context.workspace.brandVoiceExamples,
+    );
+    // Neither composer sends a tone, so the generic default would contradict a
+    // saved voice on every request.
     const toneText = tone
       ? `Preferred tone: ${tone}.`
-      : "Tone: friendly, energetic, and on-brand for a local business.";
+      : voiceBlock
+        ? "Tone: follow the brand voice in the instructions."
+        : "Tone: friendly, energetic, and on-brand for a local business.";
 
     const lengthText =
       typeof maxLength === "number" && maxLength > 0
@@ -206,11 +215,7 @@ ${brandPieces.length > 0 ? `\nBrand context:\n${brandPieces.join("\n")}` : ""}
 IMPORTANT:
 - Do NOT include hashtags.
 - Do NOT include any meta-commentary or instructions.
-- Return ONLY the caption text.${brandVoicePrompt(
-      // The caller's own workspace only, never the request body (brief 15).
-      context.workspace.brandVoice,
-      context.workspace.brandVoiceExamples,
-    )}`;
+- Return ONLY the caption text.${voiceBlock}`;
 
     const baseUserPrompt = `Create a social media caption for a ${mediaKind} for this business.
 ${platformText}

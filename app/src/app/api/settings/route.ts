@@ -354,7 +354,17 @@ export async function POST(request: Request) {
       });
     }
 
-    return NextResponse.json({ success: true }, { status: 200 });
+    // The brand voice is cleaned (cut, hashtags removed), so the form puts back
+    // what was stored and the owner sees it without reloading.
+    const stored: { brandVoice?: string | null; brandVoiceExamples?: string | null } = {};
+    if ("brandVoice" in data) {
+      stored.brandVoice = data.brandVoice;
+    }
+    if ("brandVoiceExamples" in data) {
+      stored.brandVoiceExamples = data.brandVoiceExamples;
+    }
+
+    return NextResponse.json({ success: true, ...stored }, { status: 200 });
   } catch (error) {
     logger.error("[POST /api/settings] Error", { error, userId: context.user.id });
     return NextResponse.json(

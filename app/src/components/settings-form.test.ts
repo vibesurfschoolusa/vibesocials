@@ -139,3 +139,45 @@ describe("SettingsForm — Brand voice", () => {
     expect(html).toMatch(/Example captions<\/h3><p[^>]*>Not set\.<\/p>/);
   });
 });
+
+// Fix round 1: nothing is cut without the owner seeing it.
+describe("SettingsForm — Brand voice limits shown live", () => {
+  const WARNING = "Lines over 500 characters are shortened and only the first five are kept.";
+
+  it("counts the examples under the box", () => {
+    const html = render({ ...SETTINGS, brandVoiceExamples: "Waves are up\n\nLesson at 9" });
+
+    expect(html).toContain("2 of 5 examples");
+    expect(html).not.toContain(WARNING);
+  });
+
+  it("says 0 of 5 for an empty box", () => {
+    expect(render(SETTINGS)).toContain("0 of 5 examples");
+  });
+
+  it("warns when there are more than five", () => {
+    const html = render({ ...SETTINGS, brandVoiceExamples: "1\n2\n3\n4\n5\n6" });
+
+    expect(html).toContain("6 of 5 examples");
+    expect(html).toContain(WARNING);
+  });
+
+  it("warns when a line is over 500 characters", () => {
+    const html = render({ ...SETTINGS, brandVoiceExamples: "x".repeat(501) });
+
+    expect(html).toContain("1 of 5 examples");
+    expect(html).toContain(WARNING);
+  });
+
+  it("shows the description's character count against its 600 limit", () => {
+    expect(render({ ...SETTINGS, brandVoice: "Friendly and short." })).toContain("19 of 600 characters");
+    expect(render(SETTINGS)).toContain("0 of 600 characters");
+  });
+
+  it("shows a member no counts", () => {
+    const html = render({ ...SETTINGS, brandVoiceExamples: "1\n2" }, "member");
+
+    expect(html).not.toContain("of 5 examples");
+    expect(html).not.toContain("of 600 characters");
+  });
+});

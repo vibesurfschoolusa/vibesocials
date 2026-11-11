@@ -803,3 +803,43 @@ describe("brandVoice / brandVoiceExamples (brand voice)", () => {
     expect(userUpdateMock).not.toHaveBeenCalled();
   });
 });
+
+// Fix round 1: the form shows what was stored without a reload.
+describe("POST /api/settings - returns the stored brand voice", () => {
+  it("answers with the cleaned values it stored", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    workspaceUpdateMock.mockResolvedValue({});
+
+    const response = await POST(
+      jsonRequest({
+        brandVoice: " Calm\nand dry. ",
+        brandVoiceExamples: "Waves are up #surf\n\n#only\n" + "x".repeat(510),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      brandVoice: "Calm and dry.",
+      brandVoiceExamples: "Waves are up\n" + "x".repeat(500),
+    });
+  });
+
+  it("answers null for a cleared field and leaves out a field it did not touch", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    workspaceUpdateMock.mockResolvedValue({});
+
+    const response = await POST(jsonRequest({ brandVoice: "   " }));
+
+    await expect(response.json()).resolves.toEqual({ success: true, brandVoice: null });
+  });
+
+  it("answers as before when the body has no brand voice", async () => {
+    getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+    userUpdateMock.mockResolvedValue({});
+
+    const response = await POST(jsonRequest({ notifyOnPostComplete: true }));
+
+    await expect(response.json()).resolves.toEqual({ success: true });
+  });
+});

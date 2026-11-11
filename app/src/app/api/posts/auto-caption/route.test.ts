@@ -469,7 +469,7 @@ IMPORTANT:
 Brand voice:
 Write in this business's own voice.
 How this business describes its voice: "Friendly and short. We say 'surf fam'."
-Captions this business has written. Match their tone, length and habits. Do not copy them.
+Captions this business has written. Match their tone and habits. Do not copy them. The length this request asks for still applies.
 - Waves are up, surf fam
 - Lesson at 9
 ${CLOSING}`,
@@ -499,5 +499,75 @@ ${CLOSING}`,
     expect(voiceAt).toBeGreaterThan(rulesEnd);
     expect(system.endsWith(CLOSING)).toBe(true);
     await expect(response.json()).resolves.toEqual({ caption: "Surf's up surf waves" });
+  });
+});
+
+// Fix round 1: the default tone line no longer fights a saved voice.
+describe("POST /api/posts/auto-caption - tone with a brand voice", () => {
+  const DEFAULT_TONE = "Tone: friendly, energetic, and on-brand for a local business.";
+  const VOICE_TONE = "Tone: follow the brand voice in the instructions.";
+
+  function withVoice(brandVoice: string | null, brandVoiceExamples: string | null) {
+    getWorkspaceContextMock.mockResolvedValue({
+      ...CONTEXT,
+      workspace: { ...CONTEXT.workspace, brandVoice, brandVoiceExamples },
+    });
+  }
+
+  function userText(): string {
+    const messages = sentBody().messages as Array<{ role: string; content: unknown }>;
+    const user = messages.find((m) => m.role === "user");
+    const parts = user?.content as Array<{ type: string; text?: string }>;
+    return parts.find((p) => p.type === "text")?.text ?? "";
+  }
+
+  it("keeps today's user message, default tone included, when nothing is saved", async () => {
+    withVoice(null, null);
+
+    await post(validBody);
+
+    expect(userText()).toBe(`Create a social media caption for a photo for this business.
+
+Write the caption in the same language as the example content or English.
+${DEFAULT_TONE}
+Keep the caption short (1-2 sentences, max ~150 characters).`);
+  });
+
+  it("replaces the default tone line when a voice is saved and the request sent no tone", async () => {
+    withVoice("Calm and dry.", null);
+
+    await post(validBody);
+
+    expect(userText()).toBe(`Create a social media caption for a photo for this business.
+
+Write the caption in the same language as the example content or English.
+${VOICE_TONE}
+Keep the caption short (1-2 sentences, max ~150 characters).`);
+  });
+
+  it("does so when only examples are saved, too", async () => {
+    withVoice(null, "Waves are up");
+
+    await post(validBody);
+
+    expect(userText()).toContain(VOICE_TONE);
+    expect(userText()).not.toContain(DEFAULT_TONE);
+  });
+
+  it("keeps a tone the request sent, voice or not", async () => {
+    withVoice("Calm and dry.", null);
+
+    await post({ ...validBody, tone: "playful" });
+
+    expect(userText()).toContain("Preferred tone: playful.");
+    expect(userText()).not.toContain(VOICE_TONE);
+  });
+
+  it("keeps the default tone when the saved voice cleans to nothing", async () => {
+    withVoice("\u0000 ", "#surf #florida");
+
+    await post(validBody);
+
+    expect(userText()).toContain(DEFAULT_TONE);
   });
 });
