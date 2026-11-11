@@ -1,17 +1,14 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
+import { billingFieldsSelect, newWorkspaceBillingData } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { isOperatorUser } from "@/lib/operator";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
-import {
-  CREATE_WORKSPACE_WHILE_BLOCKED_MESSAGE,
-  WORKSPACE_PAUSED_CODE,
-  workspaceBlock,
-} from "@/lib/workspaceStatus";
+import { createWorkspaceWhileBlockedMessage, workspaceBlock } from "@/lib/workspaceStatus";
 
 /** The longest workspace name accepted (it shows in the account menu). */
 export const WORKSPACE_NAME_MAX_LENGTH = 60;
@@ -86,11 +83,13 @@ export async function POST(request: Request) {
   // workspaceBlock, so a later block cause is covered here too.
   const owned = await prisma.workspaceMember.findMany({
     where: { userId: context.user.id, role: "owner" },
-    select: { workspace: { select: { pausedAt: true, pausedReason: true } } },
+    // 21a: with billing on, the plan columns too, so an ended trial counts.
+    select: { workspace: { select: { pausedAt: true, pausedReason: true, ...billingFieldsSelect() } } },
   });
-  if (owned.some((membership) => workspaceBlock(membership.workspace))) {
+  const block = owned.map((membership) => workspaceBlock(membership.workspace)).find(Boolean);
+  if (block) {
     return NextResponse.json(
-      { error: CREATE_WORKSPACE_WHILE_BLOCKED_MESSAGE, code: WORKSPACE_PAUSED_CODE },
+      { error: createWorkspaceWhileBlockedMessage(block.code), code: block.code },
       { status: 403 },
     );
   }
@@ -132,7 +131,8 @@ export async function POST(request: Request) {
   }
 
   const workspace = await prisma.$transaction(async (tx) => {
-    const created = await tx.workspace.create({ data: { name } });
+    // 21a: a free trial with billing on; exactly today's row with it off.
+    const created = await tx.workspace.create({ data: { name, ...newWorkspaceBillingData(new Date()) } });
     await tx.workspaceMember.create({
       data: { workspaceId: created.id, userId: context.user.id, role: "owner" },
     });

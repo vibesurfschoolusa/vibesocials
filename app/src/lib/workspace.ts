@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { getCurrentUser } from "./auth";
+import { billingEnabled, newWorkspaceBillingData } from "./billing";
 import { prisma } from "./db";
 
 /**
@@ -27,7 +28,11 @@ export interface WorkspaceContext {
     | "trackWebsiteLinks"
     | "pausedAt"
     | "pausedReason"
-  >;
+  > &
+    // 21a: present only with billing on, for workspaceBlock and the Plan section.
+    Partial<
+      Pick<Workspace, "createdAt" | "billingExempt" | "plan" | "planStatus" | "trialEndsAt" | "currentPeriodEnd">
+    >;
   role: WorkspaceRole;
 }
 
@@ -128,6 +133,8 @@ export async function provisionPersonalWorkspace(
   const workspace = await tx.workspace.create({
     data: {
       name: personalWorkspaceName(user),
+      // 21a: a free trial with billing on; nothing extra with it off.
+      ...newWorkspaceBillingData(new Date()),
     },
   });
 
@@ -293,6 +300,17 @@ export async function getWorkspaceContext(
       // request, so a pause or resume takes effect on the next one.
       pausedAt: active.workspace.pausedAt,
       pausedReason: active.workspace.pausedReason,
+      // 21a: the plan columns, from the row already read, only with billing on.
+      ...(billingEnabled()
+        ? {
+            createdAt: active.workspace.createdAt,
+            billingExempt: active.workspace.billingExempt,
+            plan: active.workspace.plan,
+            planStatus: active.workspace.planStatus,
+            trialEndsAt: active.workspace.trialEndsAt,
+            currentPeriodEnd: active.workspace.currentPeriodEnd,
+          }
+        : {}),
     },
     role: active.role,
   };
