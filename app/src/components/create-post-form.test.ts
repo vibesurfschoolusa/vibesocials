@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTextPostBody, hasNoFile, noFileSubmitError } from "./create-post-form";
+import {
+  buildTextPostBody,
+  fileSubmitBlock,
+  hasNoFile,
+  nextPreparingPick,
+  noFileSubmitError,
+  type PickEvent,
+} from "./create-post-form";
 
 // Posts without a photo (2026-11-10): the Create page's pure helpers.
 describe("hasNoFile", () => {
@@ -69,5 +76,54 @@ describe("buildTextPostBody", () => {
     expect(
       buildTextPostBody({ baseCaption: "hi", platforms: ["x"], deferred: { draft: true }, workspaceId: "ws-1" }),
     ).toEqual({ textOnly: true, baseCaption: "hi", platforms: ["x"], draft: true, workspaceId: "ws-1" });
+  });
+});
+
+// Fix round 1: a single pick that is still being prepared (HEIC conversion,
+// shrinking) counts as a file, so the page never sends it as a text post.
+describe("a pick being prepared", () => {
+  const nothing = { reuseLoading: false, hasReuseItem: false, hasUploadFile: false, photoCount: 0 };
+
+  function run(events: PickEvent[]): number | null {
+    return events.reduce<number | null>(nextPreparingPick, null);
+  }
+
+  it("pick then submit at once: still a file, and sending is blocked", () => {
+    const preparing = run([{ type: "pick", selection: 1 }]);
+    expect(preparing).toBe(1);
+    expect(hasNoFile({ ...nothing, preparingFile: preparing !== null })).toBe(false);
+    expect(fileSubmitBlock({ preparingFile: preparing !== null, preparingPhotos: false, photosNotReady: false })).toBe(
+      "Wait until the file is ready, then press the button again.",
+    );
+  });
+
+  it("pick, wait, submit: the prepared file makes a photo post", () => {
+    const preparing = run([{ type: "pick", selection: 1 }, { type: "settled", selection: 1 }]);
+    expect(preparing).toBeNull();
+    expect(hasNoFile({ ...nothing, hasUploadFile: true, preparingFile: false })).toBe(false);
+    expect(fileSubmitBlock({ preparingFile: false, preparingPhotos: false, photosNotReady: false })).toBeNull();
+  });
+
+  it("pick, cancel the pick, submit with text: a text post", () => {
+    const preparing = run([{ type: "pick", selection: 1 }, { type: "clear" }, { type: "settled", selection: 1 }]);
+    expect(preparing).toBeNull();
+    expect(hasNoFile({ ...nothing, preparingFile: false })).toBe(true);
+  });
+
+  it("a failed preparation goes back to no file", () => {
+    // attachPickedFile settles the pick on failure too, before its toast.
+    const preparing = run([{ type: "pick", selection: 1 }, { type: "settled", selection: 1 }]);
+    expect(hasNoFile({ ...nothing, preparingFile: preparing !== null })).toBe(true);
+  });
+
+  it("an older pick settling never ends a newer pick's preparation", () => {
+    expect(run([{ type: "pick", selection: 1 }, { type: "pick", selection: 2 }, { type: "settled", selection: 1 }])).toBe(2);
+  });
+
+  it("several photos being prepared still block as before", () => {
+    expect(fileSubmitBlock({ preparingFile: false, preparingPhotos: true, photosNotReady: false })).not.toBeNull();
+    expect(fileSubmitBlock({ preparingFile: false, preparingPhotos: false, photosNotReady: true })).toBe(
+      "Wait until every photo has uploaded, or remove the ones that failed.",
+    );
   });
 });

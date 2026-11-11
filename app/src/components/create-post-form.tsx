@@ -139,8 +139,41 @@ export function hasNoFile(state: {
   hasReuseItem: boolean;
   hasUploadFile: boolean;
   photoCount: number;
+  /** A single pick still being prepared (HEIC conversion, shrinking) is a file. */
+  preparingFile?: boolean;
 }): boolean {
-  return !state.reuseLoading && !state.hasReuseItem && !state.hasUploadFile && state.photoCount === 0;
+  return (
+    !state.preparingFile &&
+    !state.reuseLoading &&
+    !state.hasReuseItem &&
+    !state.hasUploadFile &&
+    state.photoCount === 0
+  );
+}
+
+/** What happens to a single pick: picked, cleared (or replaced by photos), or prepared (or failed). */
+export type PickEvent = { type: "pick"; selection: number } | { type: "clear" } | { type: "settled"; selection: number };
+
+/**
+ * The pick still being prepared, or null. Only the latest pick counts: an older
+ * one settling after a newer pick, or after the pick was cleared, changes nothing.
+ */
+export function nextPreparingPick(current: number | null, event: PickEvent): number | null {
+  if (event.type === "pick") return event.selection;
+  if (event.type === "clear") return null;
+  return current === event.selection ? null : current;
+}
+
+/** Why the file side of the form cannot be sent yet, or null. The submit buttons are disabled while it is set. */
+export function fileSubmitBlock(state: {
+  preparingFile: boolean;
+  preparingPhotos: boolean;
+  photosNotReady: boolean;
+}): string | null {
+  if (state.preparingFile) return "Wait until the file is ready, then press the button again.";
+  if (state.preparingPhotos) return "Wait until the photos are ready, then press the button again.";
+  if (state.photosNotReady) return "Wait until every photo has uploaded, or remove the ones that failed.";
+  return null;
 }
 
 /** Why a text post cannot be sent yet, or null. The file checks do not apply to it. */
@@ -362,6 +395,10 @@ function CreatePostFormInner({
   const mountedRef = useRef(false);
   // A pick of several photos is being prepared (HEIC -> JPEG, shrinking).
   const [preparingPhotos, setPreparingPhotos] = useState(false);
+  // The single pick still being prepared (nextPreparingPick), or null. While it
+  // is set the page counts a file, so it never sends a text post by mistake.
+  const [preparingPick, setPreparingPick] = useState<number | null>(null);
+  const preparingFile = preparingPick !== null;
   const photoKeyRef = useRef(0);
   // Chains every set upload so the photos upload one after another, retries too.
   const photoQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -437,6 +474,7 @@ function CreatePostFormInner({
   // Posts without a photo (2026-11-10): with nothing attached only the platforms
   // that take text alone can be chosen; attaching a file restores the rest.
   const noFile = hasNoFile({
+    preparingFile,
     reuseLoading,
     hasReuseItem: reuseItem !== null,
     hasUploadFile: uploadFile !== null,
@@ -757,6 +795,9 @@ function CreatePostFormInner({
   // the installed app on Android (the effect below). Null clears the pick.
   async function attachPickedFile(pickedFile: File | null) {
     const selection = ++fileSelectionRef.current;
+    setPreparingPick((current) =>
+      nextPreparingPick(current, pickedFile ? { type: "pick", selection } : { type: "clear" }),
+    );
     // A new pick (or none) replaces any attached photos too.
     changePhotoSet((prev) => (prev.length === 0 ? prev : []));
     setUploadFile(null);
@@ -787,12 +828,14 @@ function CreatePostFormInner({
       try {
         nextFile = await prepareUploadFile(pickedFile);
       } catch (prepareError) {
+        setPreparingPick((current) => nextPreparingPick(current, { type: "settled", selection }));
         if (selection === fileSelectionRef.current) {
           // Clear the input so the same file can be picked again.
           setFileInputKey((key) => key + 1);
         }
         throw prepareError;
       }
+      setPreparingPick((current) => nextPreparingPick(current, { type: "settled", selection }));
       if (selection !== fileSelectionRef.current) {
         return;
       }
@@ -1335,6 +1378,13 @@ function CreatePostFormInner({
     event.preventDefault();
     setUploadError(null);
     setShowSuccess(false);
+
+    if (preparingFile) {
+      setUploadError(
+        fileSubmitBlock({ preparingFile, preparingPhotos: false, photosNotReady: false }),
+      );
+      return;
+    }
 
     if (noFile) {
       const textError = noFileSubmitError({
@@ -2084,8 +2134,11 @@ function CreatePostFormInner({
               disabled={
                 captionOver ||
                 tiktokBlock !== null ||
-                preparingPhotos ||
-                (photoSet.length > 0 && !photoSetReady(photoSet))
+                fileSubmitBlock({
+                  preparingFile,
+                  preparingPhotos,
+                  photosNotReady: photoSet.length > 0 && !photoSetReady(photoSet),
+                }) !== null
               }
             >
               {uploadLoading
