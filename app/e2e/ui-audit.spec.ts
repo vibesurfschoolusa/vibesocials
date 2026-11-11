@@ -516,7 +516,7 @@ function mainScreens(): Screen[] {
       await go(page, "/settings");
       await shot("full");
       for (const [heading, state] of [
-        ["Captions", "section-captions"],
+        ["Posts and emails", "section-captions"],
         ["Posting times", "section-posting-times"],
         ["Connections", "section-connections"],
         ["Team", "section-team"],
@@ -534,7 +534,7 @@ function mainScreens(): Screen[] {
     who: "owner",
     run: async ({ page, shot }) => {
       await go(page, `/settings?choose=${encodeURIComponent(m().pendingConnectionId)}`);
-      await page.getByText("Choose which Facebook Page to connect").waitFor({ timeout: 20_000 });
+      await page.getByRole("heading", { name: "Choose which Facebook Page to connect" }).waitFor({ timeout: 20_000 });
       await shot("choose-account", {
         fullPage: false,
         note: "The pending choice is a seeded PendingConnection row, the one a Facebook callback writes when it finds several Pages.",
