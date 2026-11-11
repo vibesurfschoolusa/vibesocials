@@ -23,7 +23,7 @@ import { isInUse, stripeIdOf, syncFromCustomerList, type CheckoutClaim } from ".
  * id. For a subscription event (fix round 4):
  *   1. Outside any transaction, the subscription is fetched once only to learn
  *      which workspace its metadata names.
- *   2. One transaction then locks that workspace's row (FOR UPDATE), records
+ *   2. One transaction then locks that workspace's row (FOR NO KEY UPDATE), records
  *      the event id (already there: stop), fetches the subscription again and
  *      lists the customer's subscriptions, and writes what
  *      syncFromCustomerList decides. Handlers for one workspace therefore run
@@ -37,8 +37,6 @@ import { isInUse, stripeIdOf, syncFromCustomerList, type CheckoutClaim } from ".
 type StripeEventBody = {
   id: string;
   type: string;
-  /** When Stripe created the event; orders two deliveries that commit out of order. */
-  createdAt: Date | null;
   data: { object: Record<string, unknown> };
 };
 
@@ -61,14 +59,12 @@ const paymentFailedMarker = (invoiceId: string) => `invoice.payment_failed:${inv
 
 function asEvent(value: unknown): StripeEventBody | null {
   if (!value || typeof value !== "object") return null;
-  const event = value as { id?: unknown; type?: unknown; created?: unknown; data?: { object?: unknown } };
+  const event = value as { id?: unknown; type?: unknown; data?: { object?: unknown } };
   if (typeof event.id !== "string" || !event.id || typeof event.type !== "string" || !event.type) return null;
   const object = event.data?.object;
-  const createdAt = typeof event.created === "number" && Number.isFinite(event.created) ? new Date(event.created * 1000) : null;
   return {
     id: event.id,
     type: event.type,
-    createdAt,
     data: { object: object && typeof object === "object" ? (object as Record<string, unknown>) : {} },
   };
 }
@@ -131,7 +127,11 @@ async function syncSubscription(
   // 2. Everything else under the workspace's row lock.
   try {
     await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT 1 FROM "Workspace" WHERE "id" = ${workspaceId} FOR UPDATE`;
+      // FOR NO KEY UPDATE, not FOR UPDATE: handlers for this workspace still
+      // queue behind each other (and behind updates of the row), but inserts of
+      // rows that reference the workspace (a post, a media item, a member) take
+      // only FOR KEY SHARE on it and are not blocked while this waits on Stripe.
+      await tx.$executeRaw`SELECT 1 FROM "Workspace" WHERE "id" = ${workspaceId} FOR NO KEY UPDATE`;
       if (!(await record(tx, event))) return;
 
       const workspace = await tx.workspace.findUnique({

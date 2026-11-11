@@ -31,6 +31,7 @@ const m = vi.hoisted(() => ({
   owners: new Map<string, Array<{ userId: string; email: string }>>(),
   world: new Map<string, Sub>(),
   calls: [] as string[],
+  sql: [] as string[],
   listFails: null as Error | null,
   listIncomplete: false,
   /** Runs after each list call returns; lets a test move Stripe on. */
@@ -76,7 +77,9 @@ vi.mock("@/lib/db", () => {
   function client(events: Map<string, string>, workspaces: Map<string, Row>) {
     return {
       $executeRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
-        m.calls.push(`${strings.join("?").includes("FOR UPDATE") ? "lock" : "sql"}:${String(values[0])}`);
+        const sql = strings.join("?");
+        m.sql.push(sql);
+        m.calls.push(`${sql.includes("FOR NO KEY UPDATE") ? "lock" : "sql"}:${String(values[0])}`);
         return 1;
       },
       stripeEvent: {
@@ -218,6 +221,7 @@ beforeEach(() => {
   m.owners.clear();
   m.world.clear();
   m.calls = [];
+  m.sql = [];
   m.listFails = null;
   m.listIncomplete = false;
   m.afterList = null;
@@ -238,6 +242,12 @@ describe("how a subscription event is handled", () => {
     stripeHas(sub());
     expect(await handleStripeEvent(subscriptionEvent("evt_1", "customer.subscription.created"), ENV)).toBe(200);
     expect(m.calls).toEqual(["retrieve:sub_1", "lock:ws_a", "record:evt_1", "retrieve:sub_1", "list:cus_a", "write:ws_a"]);
+  });
+
+  it("the lock is FOR NO KEY UPDATE on the workspace row, so inserts that reference the workspace are not blocked", async () => {
+    stripeHas(sub());
+    await handleStripeEvent(subscriptionEvent("evt_1", "customer.subscription.created"), ENV);
+    expect(m.sql).toEqual(['SELECT 1 FROM "Workspace" WHERE "id" = ? FOR NO KEY UPDATE']);
   });
 
   it("the transaction gets a timeout long enough for its Stripe calls", async () => {
