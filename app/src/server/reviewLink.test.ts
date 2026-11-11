@@ -8,7 +8,9 @@ const {
   connectionFindManyMock,
   memberFindManyMock,
   sendEmailMock,
+  workspaceFindUniqueMock,
 } = vi.hoisted(() => ({
+  workspaceFindUniqueMock: vi.fn(),
   linkFindUniqueMock: vi.fn(),
   postFindManyMock: vi.fn(),
   postFindFirstMock: vi.fn(),
@@ -25,6 +27,7 @@ vi.mock("@/lib/db", () => ({
     postJobMedia: { groupBy: groupByMock },
     socialConnection: { findMany: connectionFindManyMock },
     workspaceMember: { findMany: memberFindManyMock },
+    workspace: { findUnique: workspaceFindUniqueMock },
   },
 }));
 vi.mock("@/server/notifications/email", () => ({ sendEmail: sendEmailMock }));
@@ -79,6 +82,7 @@ beforeEach(() => {
     connectionFindManyMock,
     memberFindManyMock,
     sendEmailMock,
+    workspaceFindUniqueMock,
   ]) {
     mock.mockReset();
   }
@@ -88,6 +92,7 @@ beforeEach(() => {
   postFindManyMock.mockResolvedValue([]);
   groupByMock.mockResolvedValue([]);
   connectionFindManyMock.mockResolvedValue([]);
+  workspaceFindUniqueMock.mockResolvedValue({ companyWebsite: null, defaultHashtags: null });
   memberFindManyMock.mockResolvedValue([
     { user: { id: "owner-1", email: "a@example.com" } },
     { user: { id: "owner-2", email: "b@example.com" } },
@@ -265,6 +270,73 @@ describe("listReviewPosts", () => {
     expect(await listReviewPosts("ws-1", NOW)).toEqual([]);
     expect(groupByMock).not.toHaveBeenCalled();
     expect(connectionFindManyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("listReviewPosts - the text that will be published", () => {
+  const FOOTER = "\n\nFor more info visit surfco.example\n\n#surf #florida";
+
+  beforeEach(() => {
+    workspaceFindUniqueMock.mockResolvedValue({
+      companyWebsite: "surfco.example",
+      defaultHashtags: "#surf #florida",
+    });
+  });
+
+  it("reads only the footer fields of the link's workspace", async () => {
+    postFindManyMock.mockResolvedValueOnce([postRow()]).mockResolvedValueOnce([]);
+    await listReviewPosts("ws-1", NOW);
+    expect(workspaceFindUniqueMock).toHaveBeenCalledWith({
+      where: { id: "ws-1" },
+      select: { companyWebsite: true, defaultHashtags: true },
+    });
+  });
+
+  it("adds the workspace footer to the main caption and to each platform's own caption", async () => {
+    postFindManyMock
+      .mockResolvedValueOnce([postRow({ perPlatformOverrides: { instagram: "IG text" } })])
+      .mockResolvedValueOnce([]);
+
+    const [post] = await listReviewPosts("ws-1", NOW);
+
+    expect(post.caption).toBe(`Dawn patrol tomorrow${FOOTER}`);
+    expect(post.platformCaptions).toEqual([{ label: "Instagram", text: `IG text${FOOTER}` }]);
+  });
+
+  it("shows an X caption without @-mentions, as X publishes it", async () => {
+    postFindManyMock
+      .mockResolvedValueOnce([
+        postRow({
+          publishMetadata: { targetPlatforms: ["x"] },
+          perPlatformOverrides: { x: "Thanks @ana_surf for the lesson" },
+        }),
+      ])
+      .mockResolvedValueOnce([]);
+
+    const [post] = await listReviewPosts("ws-1", NOW);
+
+    expect(post.platformCaptions).toEqual([{ label: "X", text: `Thanks for the lesson${FOOTER}` }]);
+  });
+
+  it("shows the caption as is when the workspace has no footer", async () => {
+    workspaceFindUniqueMock.mockResolvedValue({ companyWebsite: null, defaultHashtags: "  " });
+    postFindManyMock.mockResolvedValueOnce([postRow()]).mockResolvedValueOnce([]);
+    const [post] = await listReviewPosts("ws-1", NOW);
+    expect(post.caption).toBe("Dawn patrol tomorrow");
+  });
+
+  it("puts no other workspace field into the answer", async () => {
+    workspaceFindUniqueMock.mockResolvedValue({
+      companyWebsite: "surfco.example",
+      defaultHashtags: null,
+      // Not selected by the real query; here to prove nothing else is copied.
+      name: "Secret Name",
+      googleButtonUrl: "https://private.example",
+    });
+    postFindManyMock.mockResolvedValueOnce([postRow()]).mockResolvedValueOnce([]);
+    const text = JSON.stringify(await listReviewPosts("ws-1", NOW));
+    expect(text).not.toContain("Secret Name");
+    expect(text).not.toContain("private.example");
   });
 });
 

@@ -15,7 +15,8 @@ import {
   MUTABLE_POST_JOB_STATUSES,
   validateScheduledFor,
 } from "@/lib/scheduling";
-import { resolvePlatformCaptions } from "@/server/jobs/posting";
+import { platformCaptionEntries } from "@/lib/platforms";
+import { resolvePlatformCaptions, resolvePostCaptionSource } from "@/server/jobs/posting";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
 import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 import { utcDayKey } from "@/lib/usageLimits";
@@ -35,6 +36,42 @@ async function enforceMutateRateLimit(userId: string): Promise<NextResponse | nu
     { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
     { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 1) } },
   );
+}
+
+type CaptionFacts = {
+  baseCaption: string | null;
+  perPlatformOverrides: Prisma.JsonValue | null;
+  publishMetadata: Prisma.JsonValue | null;
+  scheduledFor: Date | null;
+  mediaItem: { baseCaption: string; perPlatformOverrides: Prisma.JsonValue | null } | null;
+};
+
+/** The main text, each platform's own text and the time, as they would publish. */
+function publishedShape(job: CaptionFacts): string {
+  const media = job.mediaItem ?? { baseCaption: "", perPlatformOverrides: null };
+  return JSON.stringify([
+    resolvePostCaptionSource(job, media).baseCaption,
+    platformCaptionEntries(resolvePlatformCaptions(job, media)).map((e) => [e.platform, e.text]),
+    job.scheduledFor?.getTime() ?? null,
+  ]);
+}
+
+/** Does this PATCH change the caption, a platform's caption or the time? (Platforms cannot be edited here.) */
+function changesWhatClientApproved(
+  existing: CaptionFacts,
+  data: Prisma.PostJobUpdateInput,
+  perPlatformOverrides: Partial<Record<Platform, string>> | null | undefined,
+): boolean {
+  const after: CaptionFacts = {
+    ...existing,
+    baseCaption: typeof data.baseCaption === "string" ? data.baseCaption : existing.baseCaption,
+    perPlatformOverrides:
+      perPlatformOverrides !== undefined
+        ? (perPlatformOverrides as Prisma.JsonValue | null)
+        : existing.perPlatformOverrides,
+    scheduledFor: data.scheduledFor instanceof Date ? data.scheduledFor : existing.scheduledFor,
+  };
+  return publishedShape(after) !== publishedShape(existing);
 }
 
 /** Editable fields on a scheduled/draft job (Roadmap Phase 5 PATCH, §6.2). */
@@ -227,6 +264,15 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
       { error: "Nothing to update." },
       { status: 400 },
     );
+  }
+
+  // Client review link: the client approved this text at this time. An edit
+  // that changes what will publish withdraws that approval in the same write,
+  // so the page asks again. Compared as the publisher reads it (own caption or
+  // the media item's, overrides narrowed to the targets), so re-saving the same
+  // text and time, as the Queue's edit dialog does, leaves it alone.
+  if (changesWhatClientApproved(existing, data, perPlatformOverrides)) {
+    data.clientApprovedAt = null;
   }
 
   const memberUnderApproval =

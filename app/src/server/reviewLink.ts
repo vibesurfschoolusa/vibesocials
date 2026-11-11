@@ -1,8 +1,10 @@
 import type { Platform, Prisma } from "@prisma/client";
 
+import { buildCaptionWithFooter, type CaptionFooterUser } from "@/lib/captionFooter";
 import { prisma } from "@/lib/db";
 import { hashInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
+import { buildPlatformPreview } from "@/lib/platformPreview";
 import { PLATFORM_ORDER, platformCaptionEntries, platformLabel } from "@/lib/platforms";
 import {
   DAY_MS,
@@ -125,15 +127,30 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
     connected = PLATFORM_ORDER.filter((p) => present.has(p));
   }
 
+  // The footer the publisher adds to every caption (inngest-functions.ts). These
+  // two fields go out with every post, so they may appear in the text; nothing
+  // else of the workspace is read.
+  const footer: CaptionFooterUser =
+    (await prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { companyWebsite: true, defaultHashtags: true },
+    })) ?? {};
+
   const posts = rows.map((row): ReviewPostDTO => {
     const changeRequested = row.clientChangeRequestedAt !== null;
+    const caption = row.baseCaption ?? row.mediaItem?.baseCaption ?? "";
     return {
       id: row.id,
       scheduledFor: row.scheduledFor?.toISOString() ?? null,
       platforms: (chosenPlatforms(row.publishMetadata) ?? connected).map(platformLabel),
-      caption: row.baseCaption ?? row.mediaItem?.baseCaption ?? "",
+      caption: buildCaptionWithFooter(caption, footer),
+      // Each platform's own text as that platform posts it: footer added, X
+      // without @-mentions, cut to the platform's length (lib/platformPreview.ts).
       platformCaptions: platformCaptionEntries(resolvePlatformCaptions(row, row.mediaItem)).map(
-        ({ label, text }) => ({ label, text }),
+        ({ platform, label, text }) => ({
+          label,
+          text: buildPlatformPreview({ platform, caption, override: text, user: footer }).rendered,
+        }),
       ),
       media: row.mediaItem
         ? { url: row.mediaItem.storageLocation, mimeType: row.mediaItem.mimeType }

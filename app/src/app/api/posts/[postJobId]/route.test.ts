@@ -282,7 +282,8 @@ describe("PATCH /api/posts/[postJobId]", () => {
     expect(res.status).toBe(200);
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { id: "job-1", workspaceId: "ws-1", status: { in: ["scheduled", "draft"] } },
-      data: { baseCaption: "updated", scheduledFor: new Date(FUTURE) },
+      // The text and the time changed, so a client's approval of the old ones is withdrawn.
+      data: { baseCaption: "updated", scheduledFor: new Date(FUTURE), clientApprovedAt: null },
     });
   });
 
@@ -366,6 +367,7 @@ describe("PATCH /api/posts/[postJobId] — approval enforcement (2026-11-01 audi
         submittedForApprovalAt: expect.any(Date),
         approvedAt: null,
         approvedByUserId: null,
+        clientApprovedAt: null,
       },
     });
   });
@@ -459,7 +461,7 @@ describe("PATCH /api/posts/[postJobId] — approval enforcement (2026-11-01 audi
     await expect(res.json()).resolves.toEqual({ ok: true, status: "draft", approvalState: "pending" });
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { id: "job-1", workspaceId: "ws-1", status: "draft" },
-      data: { baseCaption: "Fixed typo", submittedForApprovalAt: expect.any(Date) },
+      data: { baseCaption: "Fixed typo", submittedForApprovalAt: expect.any(Date), clientApprovedAt: null },
     });
     expect(notifyOwnersMock).not.toHaveBeenCalled();
   });
@@ -472,7 +474,7 @@ describe("PATCH /api/posts/[postJobId] — approval enforcement (2026-11-01 audi
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({ ok: true });
     expect(updateManyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { baseCaption: "Draft text" } }),
+      expect.objectContaining({ data: { baseCaption: "Draft text", clientApprovedAt: null } }),
     );
     expect(notifyOwnersMock).not.toHaveBeenCalled();
   });
@@ -500,7 +502,7 @@ describe("PATCH /api/posts/[postJobId] — approval enforcement (2026-11-01 audi
     await expect(res.json()).resolves.toEqual({ ok: true });
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { id: "job-1", workspaceId: "ws-1", status: { in: ["scheduled", "draft"] } },
-      data: { baseCaption: "Owner tweak" },
+      data: { baseCaption: "Owner tweak", clientApprovedAt: null },
     });
     expect(notifyOwnersMock).not.toHaveBeenCalled();
   });
@@ -515,7 +517,7 @@ describe("PATCH /api/posts/[postJobId] — approval enforcement (2026-11-01 audi
 
     await expect(res.json()).resolves.toEqual({ ok: true });
     expect(updateManyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { baseCaption: "x" } }),
+      expect.objectContaining({ data: { baseCaption: "x", clientApprovedAt: null } }),
     );
   });
 });
@@ -611,7 +613,7 @@ describe("PATCH /api/posts/[postJobId] — caption length cap and override keys 
     expect(res.status).toBe(200);
     expect(updateManyMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: { baseCaption: AT_CAP, perPlatformOverrides: { x: AT_CAP } },
+        data: { baseCaption: AT_CAP, perPlatformOverrides: { x: AT_CAP }, clientApprovedAt: null },
       }),
     );
   });
@@ -626,7 +628,7 @@ describe("PATCH /api/posts/[postJobId] — caption length cap and override keys 
 
     expect(res.status).toBe(200);
     expect(updateManyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { perPlatformOverrides: { x: "hi" } } }),
+      expect.objectContaining({ data: { perPlatformOverrides: { x: "hi" }, clientApprovedAt: null } }),
     );
   });
 
@@ -709,5 +711,73 @@ describe("PATCH /api/posts/[postJobId] — daily post limit (usage limits)", () 
 
     expect(res.status).toBe(200);
     expect(checkDailyPostLimitMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("PATCH /api/posts/[postJobId] — the client's approval (client review link)", () => {
+  const AT = new Date(FUTURE);
+  /** A scheduled post the client approved, as the ownership read selects it. */
+  function approvedScheduled(overrides: Record<string, unknown> = {}) {
+    return {
+      status: "scheduled",
+      scheduledFor: AT,
+      submittedForApprovalAt: null,
+      approvedAt: null,
+      baseCaption: "Dawn patrol",
+      perPlatformOverrides: { instagram: "IG text" },
+      publishMetadata: { targetPlatforms: ["instagram", "x"] },
+      mediaItem: { baseCaption: "media caption", perPlatformOverrides: null },
+      ...overrides,
+    };
+  }
+  const written = () => updateManyMock.mock.calls[0][0].data as Record<string, unknown>;
+
+  it("withdraws it in the same update when the caption changes", async () => {
+    findFirstMock.mockResolvedValue(approvedScheduled());
+    expect((await PATCH(req({ baseCaption: "Sunset session" }), ctx("job-1"))).status).toBe(200);
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+    expect(written()).toEqual({ baseCaption: "Sunset session", clientApprovedAt: null });
+  });
+
+  it("withdraws it when a platform's own caption changes, is added or is removed", async () => {
+    for (const overrides of [{ instagram: "New IG text" }, { instagram: "IG text", x: "X text" }, null]) {
+      updateManyMock.mockClear();
+      findFirstMock.mockResolvedValue(approvedScheduled());
+      await PATCH(req({ perPlatformOverrides: overrides }), ctx("job-1"));
+      expect(written().clientApprovedAt, JSON.stringify(overrides)).toBeNull();
+    }
+  });
+
+  it("withdraws it when the time changes", async () => {
+    findFirstMock.mockResolvedValue(approvedScheduled());
+    const later = new Date(AT.getTime() + 60 * 60 * 1000).toISOString();
+    await PATCH(req({ scheduledFor: later }), ctx("job-1"));
+    expect(written()).toEqual({ scheduledFor: new Date(later), clientApprovedAt: null });
+  });
+
+  it("leaves it alone when the edit changes none of those (the Queue re-saving the same text and time)", async () => {
+    findFirstMock.mockResolvedValue(approvedScheduled());
+    await PATCH(
+      req({ baseCaption: "Dawn patrol", scheduledFor: FUTURE, perPlatformOverrides: { instagram: "IG text" } }),
+      ctx("job-1"),
+    );
+    expect(written()).not.toHaveProperty("clientApprovedAt");
+  });
+
+  it("ignores an override for a platform the post does not go to, as the publisher does", async () => {
+    findFirstMock.mockResolvedValue(approvedScheduled());
+    await PATCH(req({ perPlatformOverrides: { instagram: "IG text", linkedin: "Not a target" } }), ctx("job-1"));
+    expect(written()).not.toHaveProperty("clientApprovedAt");
+  });
+
+  it("compares an older post's caption with the media item's, which is what it publishes", async () => {
+    findFirstMock.mockResolvedValue(approvedScheduled({ baseCaption: null, perPlatformOverrides: null }));
+    await PATCH(req({ baseCaption: "media caption" }), ctx("job-1"));
+    expect(written()).not.toHaveProperty("clientApprovedAt");
+
+    updateManyMock.mockClear();
+    findFirstMock.mockResolvedValue(approvedScheduled({ baseCaption: null, perPlatformOverrides: null }));
+    await PATCH(req({ baseCaption: "typed for this post" }), ctx("job-1"));
+    expect(written().clientApprovedAt).toBeNull();
   });
 });
