@@ -782,3 +782,67 @@ describe("composerPageState: own captions the person can no longer see", () => {
     expect(composerPageState({ ...base, hasUploadFile: true, overrides: { x: "Hi" }, deselected: xUnticked }, true)).toBe("file");
   });
 });
+
+// F2 fix round 2, item 3: Location and the Repeat caution behave as with a file
+// on the untouched page, and exactly as before on the text-post and file pages.
+describe("composerPageView: Location and the Repeat caution", () => {
+  type Platform = Parameters<typeof textOnlyNotice>[0]["connected"][number];
+  const connected: Platform[] = ["instagram", "x"];
+  const base = {
+    reuseLoading: false,
+    hasReuseItem: false,
+    hasUploadFile: false,
+    photoCount: 0,
+    caption: "",
+    overrides: null,
+    connected,
+    deselected: new Set<Platform>(),
+  };
+  const TEXT_NOTE =
+    "Platforms may refuse a post whose text is the same as a recent one. Change the text of each repeat in the Queue.";
+  afterEach(() => {
+    textPosts.enabled = true;
+  });
+
+  function view(state: Partial<typeof base>, enabled?: boolean) {
+    const s = { ...base, ...state };
+    return composerPageView({
+      pageState: composerPageState(s, enabled),
+      connected,
+      deselected: s.deselected,
+      mimeType: s.hasUploadFile ? "image/jpeg" : null,
+      mode: "schedule",
+      loading: false,
+      triedSend: false,
+    });
+  }
+
+  it("untouched: Location shown, and X's note, as with a file", () => {
+    const v = view({}, true);
+    expect(v.showLocation).toBe(true);
+    expect(v.repeatNote).toBe(REPEAT_X_NOTE);
+  });
+
+  it("text only: Location hidden, and the text-post caution, as now", () => {
+    const v = view({ caption: "Open today" }, true);
+    expect(v.showLocation).toBe(false);
+    expect(v.repeatNote).toBe(TEXT_NOTE);
+  });
+
+  it("with a file: Location shown, and X's note, as now", () => {
+    const v = view({ caption: "Hi", hasUploadFile: true }, true);
+    expect(v.showLocation).toBe(true);
+    expect(v.repeatNote).toBe(REPEAT_X_NOTE);
+    // X unticked: no note with a file, as now.
+    expect(view({ caption: "Hi", hasUploadFile: true, deselected: new Set<Platform>(["x"]) }, true).repeatNote).toBeNull();
+  });
+
+  it("text posts switched off: the old page, Location shown and X's note", () => {
+    textPosts.enabled = false;
+    for (const caption of ["", "Hi"]) {
+      const v = view({ caption });
+      expect(v.showLocation).toBe(true);
+      expect(v.repeatNote).toBe(REPEAT_X_NOTE);
+    }
+  });
+});

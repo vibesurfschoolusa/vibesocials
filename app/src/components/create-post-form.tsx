@@ -259,6 +259,9 @@ export function composerPageView(input: {
     }),
     textNotice: textOnlyNotice({ noFile: textPage, connected: input.connected, deselected: input.deselected, selected }),
     buttonLabel: submitButtonLabel({ mode: input.mode, noFile: textPage, loading: input.loading }),
+    // Untouched, the page may still get a file: Location and X's note stay as with one.
+    showLocation: showLocationField({ noFile: textPage }),
+    repeatNote: repeatCautionNote({ noFile: textPage, xSelected: selected.includes("x") }),
   };
 }
 
@@ -2342,7 +2345,7 @@ function CreatePostFormInner({
           footer={footerSettings}
         />
 
-        {showLocationField({ noFile }) ? (
+        {pageView.showLocation ? (
         <div className="space-y-1.5">
           <Label htmlFor="post-location">
             Location <span className="font-normal text-muted-foreground">(optional)</span>
@@ -2553,8 +2556,7 @@ function CreatePostFormInner({
                 onCountChange={setRepeatCount}
                 storyChosen={storyChosen}
                 dates={repeatDates}
-                xSelected={selectedPlatforms.includes("x")}
-                noFile={noFile}
+                cautionNote={pageView.repeatNote}
               />
             </div>
           )}
@@ -2668,9 +2670,8 @@ function RepeatControls(props: {
   onCountChange: (count: number) => void;
   storyChosen: boolean;
   dates: Date[];
-  xSelected: boolean;
-  /** A text post: the caution covers every platform. */
-  noFile: boolean;
+  /** The caution under Repeat (repeatCautionNote), or null. */
+  cautionNote: string | null;
 }) {
   const { repeat, count, storyChosen, dates } = props;
   const on = repeat !== "none" && !storyChosen;
@@ -2727,8 +2728,8 @@ function RepeatControls(props: {
           ) : (
             <p className="text-xs text-muted-foreground">Pick a date and time to see the dates.</p>
           )}
-          {repeatCautionNote(props) ? (
-            <p className="text-xs text-muted-foreground">{repeatCautionNote(props)}</p>
+          {props.cautionNote ? (
+            <p className="text-xs text-muted-foreground">{props.cautionNote}</p>
           ) : null}
         </div>
       ) : null}
