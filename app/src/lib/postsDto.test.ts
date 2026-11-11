@@ -210,3 +210,19 @@ describe("seriesPlaces leaves cancelled posts out", () => {
     expect(places.get("p2")).toEqual({ position: 1, count: 1 });
   });
 });
+
+describe("toPostJobDetailDto - a post without a file", () => {
+  it("reports a null mediaItemId", async () => {
+    const { toPostJobDetailDto } = await import("./postsDto");
+    const dto = toPostJobDetailDto({
+      id: "job-1",
+      status: "draft",
+      createdAt: new Date("2026-11-10T00:00:00Z"),
+      scheduledFor: null,
+      baseCaption: "Wind is onshore",
+      perPlatformOverrides: null,
+      mediaItemId: null,
+    } as Parameters<typeof toPostJobDetailDto>[0]);
+    expect(dto.mediaItemId).toBeNull();
+  });
+});

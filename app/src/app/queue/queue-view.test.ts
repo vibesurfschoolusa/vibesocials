@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { PostJobDTO } from "@/lib/postsDto";
 
-import { cancelRequest, seriesLabel, sortQueue } from "./queue-view";
+import { cancelRequest, emptyCaptionMessage, isTextPost, seriesLabel, sortQueue } from "./queue-view";
 
 function job(id: string, overrides: Partial<PostJobDTO> = {}): PostJobDTO {
   return {
@@ -65,5 +65,19 @@ describe("cancelRequest", () => {
     });
     // A post without a series can only be cancelled on its own.
     expect(cancelRequest(job("b"), "rest")).toEqual({ url: "/api/posts/b/cancel", series: false });
+  });
+});
+
+describe("a post without a file in the Queue", () => {
+  it("is a text post when it has no media and no files", () => {
+    expect(isTextPost(job("t", { media: null, mediaCount: 0 }))).toBe(true);
+    expect(isTextPost(job("f", { media: { url: "https://blob.example.com/a.jpg", mimeType: "image/jpeg" } }))).toBe(false);
+    // A post whose file row is gone still counts its file: it is not a text post.
+    expect(isTextPost(job("gone", { media: null, mediaCount: 1 }))).toBe(false);
+  });
+
+  it("refuses emptying a text post's caption with its own sentence", () => {
+    expect(emptyCaptionMessage(job("t", { media: null, mediaCount: 0 }))).toBe("A post without a photo needs text.");
+    expect(emptyCaptionMessage(job("f"))).toBe("Caption can't be empty.");
   });
 });

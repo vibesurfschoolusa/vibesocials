@@ -1109,3 +1109,20 @@ describe("GET /api/posts - series", () => {
     expect(body.jobs[0].seriesId).toBeNull();
   });
 });
+
+describe("GET /api/posts - a post without a file", () => {
+  it("has no thumbnail and a mediaCount of 0, and the select reads mediaItemId", async () => {
+    postJobFindManyMock.mockResolvedValue([
+      { ...jobWithYouTube(), id: "job-text", mediaItemId: null, mediaItem: null, baseCaption: "Wind is onshore" },
+      { ...jobWithYouTube(), id: "job-file", mediaItemId: "media-1" },
+    ]);
+    postJobMediaGroupByMock.mockResolvedValue([]);
+
+    const body = (await (await GET(getRequest())).json()) as PostsResponse;
+
+    expect(postJobFindManyMock.mock.calls[0][0].select).toHaveProperty("mediaItemId", true);
+    const text = body.jobs.find((job) => job.id === "job-text");
+    expect(text).toMatchObject({ media: null, mediaCount: 0, caption: "Wind is onshore" });
+    expect(body.jobs.find((job) => job.id === "job-file")?.mediaCount).toBe(1);
+  });
+});

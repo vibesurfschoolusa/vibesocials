@@ -116,6 +116,31 @@ export function seriesLabel(job: PostJobDTO): string | null {
   return `Repeats: ${job.seriesPosition} of ${job.seriesCount}`;
 }
 
+/**
+ * A post without a file (2026-11-10): the list says so with no media and no
+ * files. A post whose file row is gone still counts one, so it is not one.
+ */
+export function isTextPost(job: Pick<PostJobDTO, "media" | "mediaCount">): boolean {
+  return job.media === null && job.mediaCount === 0;
+}
+
+/** The refusal for saving an empty caption: a text post's text is the whole post. */
+export function emptyCaptionMessage(job: Pick<PostJobDTO, "media" | "mediaCount">): string {
+  return isTextPost(job) ? "A post without a photo needs text." : "Caption can't be empty.";
+}
+
+/** The small tile a text post shows where a photo's thumbnail would be. */
+function TextTile() {
+  return (
+    <span
+      aria-label="Text post, no photo"
+      className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[var(--radius)] border border-border bg-muted text-[11px] font-medium text-muted-foreground"
+    >
+      Text
+    </span>
+  );
+}
+
 export type CancelScope = "one" | "rest";
 
 /**
@@ -187,7 +212,7 @@ function QueueCard({
         </div>
       ) : null}
       <div className="flex items-start justify-between gap-3">
-        <MediaThumb media={job.media} count={job.mediaCount} />
+        {isTextPost(job) ? <TextTile /> : <MediaThumb media={job.media} count={job.mediaCount} />}
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-foreground">{title}</p>
           {/* A post awaiting approval is technically a draft, but it may carry
@@ -434,7 +459,7 @@ function QueueEditDialog({
   const handleSave = async () => {
     const trimmed = caption.trim();
     if (!trimmed) {
-      toast.error("Caption can't be empty.");
+      toast.error(emptyCaptionMessage(job));
       return;
     }
     if (captionOver) {

@@ -151,7 +151,8 @@ export interface PostJobDTO {
   media: { url: string; mimeType: string } | null;
   /**
    * How many files the post has (07a): 1 for a single photo or video, 2 to
-   * MAX_POST_MEDIA for a post with several photos. `media` is the first.
+   * MAX_POST_MEDIA for a post with several photos. `media` is the first. 0 for
+   * a post without a file (2026-11-10), whose `media` is null.
    */
   mediaCount: number;
   /**
@@ -301,7 +302,8 @@ export interface PostJobDetailDTO {
   scheduledFor: string | null;
   baseCaption: string | null;
   perPlatformOverrides: Prisma.JsonValue | null;
-  mediaItemId: string;
+  /** Null for a post without a file (2026-11-10). */
+  mediaItemId: string | null;
 }
 
 /**

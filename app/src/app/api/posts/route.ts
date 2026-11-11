@@ -104,6 +104,8 @@ const POSTS_LIST_SELECT = {
   clientNote: true,
   // Repeat (brief 11): the series it was created in, for "Repeats: 3 of 8".
   seriesId: true,
+  // Null for a post without a file (2026-11-10): no thumbnail, no files.
+  mediaItemId: true,
   mediaItem: {
     select: {
       baseCaption: true,
@@ -381,7 +383,8 @@ export async function GET(request: Request) {
             ? { url: job.mediaItem.storageLocation, mimeType: job.mediaItem.mimeType }
             : null,
           // 07a: how many files the post has. A single-media post has no rows.
-          mediaCount: photoCountByJobId.get(job.id) ?? 1,
+          // A post without a file has none.
+          mediaCount: job.mediaItemId === null ? 0 : (photoCountByJobId.get(job.id) ?? 1),
           // Compose-time publish choices, null for legacy/immediate jobs with
           // no snapshot (see PublishMetadataSnapshot, src/server/jobs/posting.ts).
           publish: snapshot
