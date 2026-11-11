@@ -38,6 +38,14 @@ describe("Add many: a caption that failed", () => {
     expect(captionFailedText(400, undefined)).toBe(PLAIN);
   });
 
+  // Fix round 2: replaces "a refusal that is the person's to fix keeps its sentence".
+  it("a refusal that is the person's to fix (403, a blocked workspace) keeps a sentence of its own", () => {
+    expect(captionFailedText(403, "WORKSPACE_PAUSED")).toBe(
+      "No caption was written: this workspace can't use AI captions right now. See the notice at the top of the page.",
+    );
+    expect(captionFailedText(403, undefined)).toBe(captionFailedText(403, "TRIAL_ENDED"));
+  });
+
   it("a 500: the plain sentence", () => {
     expect(captionFailedText(500, undefined)).toBe(PLAIN);
   });
@@ -47,7 +55,7 @@ describe("Add many: a caption that failed", () => {
   });
 
   it("never brackets", () => {
-    for (const [status, code] of [[504, "AI_TIMEOUT"], [429, undefined], [429, "AI_WORKSPACE_DAILY_LIMIT"], [413, undefined], [400, undefined], [403, undefined], [500, undefined], [null, undefined]] as const) {
+    for (const [status, code] of [[504, "AI_TIMEOUT"], [429, undefined], [429, "AI_WORKSPACE_DAILY_LIMIT"], [413, undefined], [400, undefined], [403, undefined], [403, "WORKSPACE_PAUSED"], [500, undefined], [null, undefined]] as const) {
       expect(captionFailedText(status, code)).not.toMatch(/[()]/);
     }
   });

@@ -68,6 +68,11 @@ export function captionFailedText(status: number | null, code: unknown): string 
   if (status === 429) {
     return "No caption was written: too many requests. Wait a few minutes, then ask again, or write one yourself.";
   }
+  // Paused, plan or trial ended, email unconfirmed: asking again fails until
+  // that is fixed, and the page's own notice says how.
+  if (status === 403) {
+    return "No caption was written: this workspace can't use AI captions right now. See the notice at the top of the page.";
+  }
   if (status === 413) {
     return "No caption was written: the file is too large for the AI to read. Write one yourself.";
   }
