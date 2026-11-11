@@ -1,9 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// The release switch (platformLimits.ts textPostsEnabled), overridden per test.
+const textPosts = vi.hoisted(() => ({ enabled: true }));
+vi.mock("@/lib/platformLimits", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/platformLimits")>()),
+  textPostsEnabled: () => textPosts.enabled,
+}));
 
 import {
   buildTextPostBody,
   fileSubmitBlock,
   hasNoFile,
+  isTextPostMode,
   nextPreparingPick,
   noFileSubmitError,
   type PickEvent,
@@ -125,5 +133,24 @@ describe("a pick being prepared", () => {
     expect(fileSubmitBlock({ preparingFile: false, preparingPhotos: false, photosNotReady: true })).toBe(
       "Wait until every photo has uploaded, or remove the ones that failed.",
     );
+  });
+});
+
+describe("isTextPostMode follows the release switch", () => {
+  const nothing = { reuseLoading: false, hasReuseItem: false, hasUploadFile: false, photoCount: 0 };
+  afterEach(() => {
+    textPosts.enabled = true;
+  });
+
+  it("switched on: no file attached is a text post", () => {
+    textPosts.enabled = true;
+    expect(isTextPostMode(nothing)).toBe(true);
+    expect(isTextPostMode({ ...nothing, hasUploadFile: true })).toBe(false);
+  });
+
+  it("switched off: never a text post, so the page is main's (a file is required)", () => {
+    textPosts.enabled = false;
+    expect(isTextPostMode(nothing)).toBe(false);
+    expect(isTextPostMode({ ...nothing, preparingFile: true })).toBe(false);
   });
 });

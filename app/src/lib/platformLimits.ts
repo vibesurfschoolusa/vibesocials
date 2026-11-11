@@ -75,6 +75,20 @@ export const TEXT_ONLY_PLATFORMS: readonly Platform[] = [
   "google_business_profile",
 ];
 
+/**
+ * Release switch for posts without a photo (fix round 1). Released in two steps:
+ * first every reader learns to cope with a post that has no file while nobody
+ * can create one (false), then a one-line release turns creating them on. So a
+ * rollback by one deployment never meets a text post the older code cannot read.
+ * Tests override the function, not this constant.
+ */
+const TEXT_POSTS_ENABLED = false;
+
+/** Can a person create a post without a photo (POST /api/posts `textOnly`, the Create page)? */
+export function textPostsEnabled(): boolean {
+  return TEXT_POSTS_ENABLED;
+}
+
 /** Can `platform` publish a post that has no file? */
 export function platformAcceptsTextOnly(platform: Platform): boolean {
   return TEXT_ONLY_PLATFORMS.includes(platform);

@@ -72,6 +72,7 @@ import {
   removePhoto,
 } from "@/lib/postMedia";
 import { isHeicFile, prepareUploadFile } from "@/lib/prepareUploadFile";
+import { textPostsEnabled } from "@/lib/platformLimits";
 import { shouldTakeSharedFile, takeSharedFile } from "@/lib/sharedFile";
 import { TIKTOK_DISCLOSURE_INCOMPLETE_TEXT, tiktokPublishBlock } from "@/lib/tiktokPostRules";
 import {
@@ -150,6 +151,18 @@ export function hasNoFile(state: {
     state.photoCount === 0
   );
 }
+
+/**
+ * The page is writing a text post: no file, and posts without a photo are
+ * switched on (platformLimits.ts textPostsEnabled). Switched off, the page is
+ * exactly the one where a file is required.
+ */
+export function isTextPostMode(state: Parameters<typeof hasNoFile>[0]): boolean {
+  return textPostsEnabled() && hasNoFile(state);
+}
+
+/** The switch read once per page load, so rendering calls no function the compiler cannot see into. */
+const TEXT_POSTS_ON = textPostsEnabled();
 
 /** What happens to a single pick: picked, cleared (or replaced by photos), or prepared (or failed). */
 export type PickEvent = { type: "pick"; selection: number } | { type: "clear" } | { type: "settled"; selection: number };
@@ -398,7 +411,8 @@ function CreatePostFormInner({
   // The single pick still being prepared (nextPreparingPick), or null. While it
   // is set the page counts a file, so it never sends a text post by mistake.
   const [preparingPick, setPreparingPick] = useState<number | null>(null);
-  const preparingFile = preparingPick !== null;
+  // Switched off, the page keeps its earlier behaviour while a pick is prepared.
+  const preparingFile = TEXT_POSTS_ON && preparingPick !== null;
   const photoKeyRef = useRef(0);
   // Chains every set upload so the photos upload one after another, retries too.
   const photoQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -473,7 +487,8 @@ function CreatePostFormInner({
   // choices. See lib/postTargets.ts / PLATFORM_ACCEPTED_MEDIA.
   // Posts without a photo (2026-11-10): with nothing attached only the platforms
   // that take text alone can be chosen; attaching a file restores the rest.
-  const noFile = hasNoFile({
+  // isTextPostMode, with the switch read at load (TEXT_POSTS_ON).
+  const noFile = TEXT_POSTS_ON && hasNoFile({
     preparingFile,
     reuseLoading,
     hasReuseItem: reuseItem !== null,

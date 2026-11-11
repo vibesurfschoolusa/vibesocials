@@ -7,6 +7,7 @@ import {
   TEXT_ONLY_PLATFORMS,
   mediaKindOf,
   platformAcceptsTextOnly,
+  textPostsEnabled,
   platformAcceptsMedia,
   unsupportedMediaReason,
 } from "./platformLimits";
@@ -175,5 +176,11 @@ describe("TEXT_ONLY_PLATFORMS (posts without a photo)", () => {
     for (const platform of ["instagram", "tiktok", "youtube", "pinterest"] as Platform[]) {
       expect(platformAcceptsTextOnly(platform)).toBe(false);
     }
+  });
+});
+
+describe("textPostsEnabled (release switch)", () => {
+  it("is off in this release: the second release turns it on", () => {
+    expect(textPostsEnabled()).toBe(false);
   });
 });

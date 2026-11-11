@@ -76,6 +76,14 @@ vi.mock("@/server/usage/workspaceUsage", () => ({
   checkDailyPostLimit: checkDailyPostLimitMock,
 }));
 
+// The release switch (platformLimits.ts textPostsEnabled): on for the suite
+// below, off where a test says so.
+const textPosts = vi.hoisted(() => ({ enabled: true }));
+vi.mock("@/lib/platformLimits", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/platformLimits")>()),
+  textPostsEnabled: () => textPosts.enabled,
+}));
+
 vi.mock("@/server/notifications/approvalRequested", () => ({
   notifyOwnersOfApprovalRequest: notifyOwnersMock,
 }));
@@ -287,5 +295,33 @@ describe("POST /api/posts - textOnly (a post without a photo)", () => {
 
     const noCaption = await POST(jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x" }));
     await expect(noCaption.json()).resolves.toEqual({ error: "baseCaption is required" });
+  });
+});
+
+describe("POST /api/posts - textOnly while posts without a photo are switched off", () => {
+  beforeEach(() => {
+    textPosts.enabled = false;
+  });
+  afterEach(() => {
+    textPosts.enabled = true;
+  });
+
+  it("refuses textOnly with the sentence, before any other check, and creates nothing", async () => {
+    for (const body of [
+      { textOnly: true, baseCaption: "Lessons cancelled", platforms: ["x"] },
+      { textOnly: true, baseCaption: "", platforms: ["instagram"] },
+      { textOnly: true, blobUrl: "https://test.public.blob.vercel-storage.com/x.jpg", baseCaption: "hi" },
+    ]) {
+      const response = await POST(jsonRequest(body));
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ error: "Posts without a photo are not available yet." });
+    }
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("answers a body without textOnly exactly as before", async () => {
+    const missing = await POST(jsonRequest({ baseCaption: "hi" }));
+    await expect(missing.json()).resolves.toEqual({ error: "blobUrl or mediaItemId is required" });
   });
 });

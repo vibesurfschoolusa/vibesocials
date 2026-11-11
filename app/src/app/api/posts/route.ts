@@ -17,6 +17,7 @@ import {
   WORKSPACE_CHANGED_CODE,
   WORKSPACE_CHANGED_MESSAGE,
 } from "@/lib/workspaceChanged";
+import { textPostsEnabled } from "@/lib/platformLimits";
 import {
   assertPostTargetsValid,
   assertTextPostTargetsValid,
@@ -597,6 +598,10 @@ export async function POST(request: Request) {
   // Posts without a photo (2026-11-10). Only `true` turns it on, so every other
   // body takes the file paths below exactly as before.
   const textOnly = body.textOnly === true;
+  // Released switched off first (platformLimits.ts textPostsEnabled).
+  if (textOnly && !textPostsEnabled()) {
+    return NextResponse.json({ error: "Posts without a photo are not available yet." }, { status: 400 });
+  }
   if (textOnly && FILE_FIELDS.some((field) => body[field] != null)) {
     return NextResponse.json({ error: TEXT_POST_WITH_FILE_MESSAGE }, { status: 400 });
   }
