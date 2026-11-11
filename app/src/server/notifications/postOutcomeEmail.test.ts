@@ -321,26 +321,35 @@ describe("deliverPostOutcomeNotification", () => {
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
-  // Fix round 1: decided per result. After a resume the owner retries some
-  // platforms; that outcome is reported, the paused ones are left out.
-  it("leaves the paused results out and reports the rest", async () => {
+  // Fix round 2: a partial retry after a resume must not read as a full
+  // success while another platform is still unpublished. Every result is
+  // listed as on main, paused ones included; nothing is sent only when every
+  // result is a paused failure.
+  it("lists every result, paused ones included, when anything else is on the job", async () => {
     vi.stubEnv("RESEND_API_KEY", "re_test_key");
     findUniqueUserMock.mockResolvedValue({ email: "user@example.com", notifyOnPostComplete: true });
-    findUniquePostJobMock.mockResolvedValue({
-      status: "completed",
-      results: [
-        { platform: "instagram", status: "failed", errorCode: "WORKSPACE_PAUSED", errorMessage: "Not published: this workspace was paused." },
-        { platform: "linkedin", status: "success", errorCode: null, errorMessage: null },
-      ],
-    });
+    const results = [
+      { platform: "instagram", status: "failed", errorCode: "WORKSPACE_PAUSED", errorMessage: "Not published: this workspace was paused." },
+      { platform: "linkedin", status: "success", errorCode: null, errorMessage: null },
+    ];
+    findUniquePostJobMock.mockResolvedValue({ status: "completed", results });
 
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
 
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
-    const { html } = sendEmailMock.mock.calls[0][0] as { html: string };
-    expect(html).toContain("LinkedIn");
-    expect(html).not.toContain("Instagram");
-    expect(html).not.toContain("paused");
+    const sent = sendEmailMock.mock.calls[0][0] as { subject: string; html: string };
+    // Exactly what main writes for this job.
+    const expected = buildPostOutcomeEmail({
+      results: results as PostOutcomeResultSummary[],
+      status: "completed",
+      appBaseUrl: process.env.NEXTAUTH_URL || null,
+      postJobId: "job-1",
+    });
+    expect(sent.subject).toBe(expected.subject);
+    expect(sent.html).toBe(expected.html);
+    expect(sent.html).toContain("Instagram");
+    expect(sent.html).toContain("Not published: this workspace was paused.");
+    expect(sent.subject).not.toMatch(/published successfully/i);
   });
 
   it("still sends for a failed job with any other error code", async () => {

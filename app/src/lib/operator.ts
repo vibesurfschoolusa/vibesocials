@@ -24,21 +24,31 @@ export function parseAdminEmails(raw: string | undefined): Set<string> {
 }
 
 /**
- * The signed-in operator, or null. Read at request time so a change to
- * ADMIN_EMAILS needs no restart. The email must be verified: registration is
- * open and sign-in does not require verification, so without it anyone could
- * register an operator's address before the operator does.
+ * Whether this user is an operator: their email, trimmed and lower-cased, is in
+ * ADMIN_EMAILS and it is verified. Registration is open and sign-in does not
+ * require verification, so without the second condition anyone could register
+ * an operator's address before the operator does. Pure: no session, no
+ * database, so a caller that already holds the user (GET /api/workspaces) pays
+ * nothing and cannot fail on it.
+ */
+export function isOperatorUser(
+  user: { email: string; emailVerifiedAt: Date | null },
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  if (!user.emailVerifiedAt) return false;
+  return parseAdminEmails(env.ADMIN_EMAILS).has(normalizeEmail(user.email));
+}
+
+/**
+ * The signed-in operator, or null. ADMIN_EMAILS is read at request time, so a
+ * change needs no restart; with it unset or empty the session is never read.
  */
 export async function getOperator(): Promise<Operator | null> {
-  const allowed = parseAdminEmails(process.env.ADMIN_EMAILS);
-  if (allowed.size === 0) return null;
+  if (parseAdminEmails(process.env.ADMIN_EMAILS).size === 0) return null;
 
   const user = await getCurrentUser();
-  if (!user || !user.emailVerifiedAt) return null;
-
-  const email = normalizeEmail(user.email);
-  if (!allowed.has(email)) return null;
-  return { userId: user.id, email };
+  if (!user || !isOperatorUser(user)) return null;
+  return { userId: user.id, email: normalizeEmail(user.email) };
 }
 
 /** What a missing API route answers. Every refusal of a non-operator is exactly this. */

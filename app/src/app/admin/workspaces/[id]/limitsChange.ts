@@ -29,3 +29,13 @@ export function limitsChangeBody(
   if (Object.keys(body).length === 0) return { ok: false, error: "Nothing changed." };
   return { ok: true, body };
 }
+
+/** The inputs for the stored values: empty for "use the default". */
+export function limitInputValues(fields: LimitInput[]): Record<string, string> {
+  return Object.fromEntries(fields.map((f) => [f.field, f.initial === null ? "" : String(f.initial)]));
+}
+
+/** Changes exactly when a stored value changes, e.g. after a refresh following anyone's save. */
+export function storedLimitsKey(fields: LimitInput[]): string {
+  return JSON.stringify(fields.map((f) => [f.field, f.initial]));
+}

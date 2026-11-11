@@ -3,7 +3,8 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
-import { getOperator } from "@/lib/operator";
+import { logger } from "@/lib/logger";
+import { isOperatorUser } from "@/lib/operator";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
 import {
@@ -37,14 +38,20 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const [memberships, operator] = await Promise.all([
-    prisma.workspaceMember.findMany({
-      where: { userId: context.user.id },
-      include: { workspace: true },
-      orderBy: { createdAt: "asc" },
-    }),
-    getOperator(),
-  ]);
+  const memberships = await prisma.workspaceMember.findMany({
+    where: { userId: context.user.id },
+    include: { workspace: true },
+    orderBy: { createdAt: "asc" },
+  });
+
+  // Decided from the user the context already holds: no second session read,
+  // and a failure here only drops the link, never the switcher's list.
+  let operator = false;
+  try {
+    operator = isOperatorUser(context.user);
+  } catch (error) {
+    logger.error("[workspaces] Operator check failed; answering without the link", { error });
+  }
 
   return NextResponse.json({
     workspaces: memberships.map((membership) => ({

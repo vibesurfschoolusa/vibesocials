@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
-import { limitsChangeBody } from "./limitsChange";
+import { limitInputValues, limitsChangeBody, storedLimitsKey, type LimitInput } from "./limitsChange";
 
 /** Field name, label, and the default shown as the placeholder. */
 export type LimitFieldView = { field: string; label: string; value: number | null; defaultLabel: string; max: number };
@@ -31,19 +31,26 @@ async function post(url: string, body: unknown): Promise<{ ok: boolean; error?: 
 /** The four overrides. Empty means "use the default"; zero blocks everything. */
 export function AdminLimitsForm({ workspaceId, fields }: { workspaceId: string; fields: LimitFieldView[] }) {
   const router = useRouter();
-  const [values, setValues] = useState<Record<string, string>>(
-    Object.fromEntries(fields.map((f) => [f.field, f.value === null ? "" : String(f.value)])),
-  );
+  const inputs: LimitInput[] = fields.map((f) => ({ field: f.field, label: f.label, initial: f.value, max: f.max }));
+  const [values, setValues] = useState<Record<string, string>>(() => limitInputValues(inputs));
+  const [storedKey, setStoredKey] = useState(() => storedLimitsKey(inputs));
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+
+  // When a refresh brings different stored values (this save, or another
+  // operator's), reset the inputs to them so a stale value is never resent.
+  // A render-time adjustment rather than a remount, so the "Limits saved."
+  // message stays on screen.
+  const currentKey = storedLimitsKey(inputs);
+  if (currentKey !== storedKey) {
+    setStoredKey(currentKey);
+    setValues(limitInputValues(inputs));
+  }
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     // Only the edited fields: a stale value must not undo another operator's change.
-    const change = limitsChangeBody(
-      fields.map((f) => ({ field: f.field, label: f.label, initial: f.value, max: f.max })),
-      values,
-    );
+    const change = limitsChangeBody(inputs, values);
     if (!change.ok) {
       setMessage(change.error);
       return;

@@ -9,7 +9,7 @@ vi.mock("./rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 
 import { NextResponse } from "next/server";
 
-import { adminNotFoundResponse, getOperator, parseAdminEmails, requireOperator } from "./operator";
+import { adminNotFoundResponse, getOperator, isOperatorUser, parseAdminEmails, requireOperator } from "./operator";
 
 function user(email: string, verified = true) {
   return {
@@ -41,6 +41,38 @@ describe("parseAdminEmails", () => {
   it("is empty for unset or blank", () => {
     expect(parseAdminEmails(undefined).size).toBe(0);
     expect(parseAdminEmails("   ").size).toBe(0);
+  });
+});
+
+describe("isOperatorUser (pure)", () => {
+  const verified = new Date("2026-11-01T00:00:00Z");
+
+  it("is true only for a listed, verified email", () => {
+    const env = { ADMIN_EMAILS: "ops@example.com" };
+    expect(isOperatorUser({ email: "ops@example.com", emailVerifiedAt: verified }, env)).toBe(true);
+    expect(isOperatorUser({ email: "ops@example.com", emailVerifiedAt: null }, env)).toBe(false);
+    expect(isOperatorUser({ email: "someone@example.com", emailVerifiedAt: verified }, env)).toBe(false);
+  });
+
+  it("is false for everyone with the list unset, empty or blank", () => {
+    const user = { email: "ops@example.com", emailVerifiedAt: verified };
+    expect(isOperatorUser(user, {})).toBe(false);
+    expect(isOperatorUser(user, { ADMIN_EMAILS: "" })).toBe(false);
+    expect(isOperatorUser(user, { ADMIN_EMAILS: " , " })).toBe(false);
+  });
+
+  it("ignores case and spaces in the list and the email", () => {
+    expect(
+      isOperatorUser({ email: " Ops@EXAMPLE.com ", emailVerifiedAt: verified }, { ADMIN_EMAILS: " OPS@example.COM ,x@example.com" }),
+    ).toBe(true);
+  });
+
+  it("reads process.env by default, at call time", () => {
+    const user = { email: "ops@example.com", emailVerifiedAt: verified };
+    process.env.ADMIN_EMAILS = "ops@example.com";
+    expect(isOperatorUser(user)).toBe(true);
+    process.env.ADMIN_EMAILS = "other@example.com";
+    expect(isOperatorUser(user)).toBe(false);
   });
 });
 

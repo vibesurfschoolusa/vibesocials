@@ -15,8 +15,12 @@ const {
   cookieSetMock,
   cookiesMock,
   getOperatorMock,
+  isOperatorUserMock,
+  getCurrentUserMock,
 } = vi.hoisted(() => ({
   getOperatorMock: vi.fn(),
+  isOperatorUserMock: vi.fn(),
+  getCurrentUserMock: vi.fn(),
   findManyMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
   countMock: vi.fn(),
@@ -44,7 +48,14 @@ vi.mock("@/lib/rateLimit", () => ({
   checkRateLimit: checkRateLimitMock,
 }));
 
-vi.mock("@/lib/operator", () => ({ getOperator: getOperatorMock }));
+// The real pure check runs (wrapped so a test can make it throw); getOperator
+// and the session must never be touched by this route.
+vi.mock("@/lib/operator", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/operator")>();
+  isOperatorUserMock.mockImplementation(actual.isOperatorUser);
+  return { ...actual, getOperator: getOperatorMock, isOperatorUser: isOperatorUserMock };
+});
+vi.mock("@/lib/auth", () => ({ getCurrentUser: getCurrentUserMock }));
 
 vi.mock("next/headers", () => ({
   cookies: cookiesMock,
@@ -86,7 +97,8 @@ beforeEach(() => {
   cookieSetMock.mockReset();
   cookiesMock.mockReset();
   getOperatorMock.mockReset();
-  getOperatorMock.mockResolvedValue(null);
+  getCurrentUserMock.mockReset();
+  delete process.env.ADMIN_EMAILS;
   // POST reads the caller's owned workspaces for the pause check; none paused.
   findManyMock.mockResolvedValue([]);
 
@@ -208,25 +220,55 @@ describe("POST /api/workspaces while one of the caller's workspaces is paused", 
   });
 });
 
-describe("GET /api/workspaces — the operator's link (fix round 1)", () => {
-  it("carries no link for anyone who is not an operator", async () => {
-    getWorkspaceContextMock.mockResolvedValue(makeContext());
-    findManyMock.mockResolvedValue([makeMembershipRow()]);
+describe("GET /api/workspaces — the operator's link (fix rounds 1 and 2)", () => {
+  function operatorContext(verified: boolean) {
+    const context = makeContext();
+    return {
+      ...context,
+      user: { ...context.user, email: "ops@example.com", emailVerifiedAt: verified ? new Date("2026-11-01T00:00:00Z") : null },
+    };
+  }
 
-    const body = await (await GET()).json();
-
-    expect(getOperatorMock).toHaveBeenCalledTimes(1);
-    expect(Object.keys(body)).toEqual(["workspaces"]);
-  });
-
-  it("carries the link's address and label for an operator", async () => {
-    getWorkspaceContextMock.mockResolvedValue(makeContext());
-    getOperatorMock.mockResolvedValue({ userId: "user-1", email: "ops@example.com" });
+  it("decides from the context's user: no second session read, no getOperator", async () => {
+    process.env.ADMIN_EMAILS = "ops@example.com";
+    getWorkspaceContextMock.mockResolvedValue(operatorContext(true));
     findManyMock.mockResolvedValue([makeMembershipRow()]);
 
     const body = await (await GET()).json();
 
     expect(body.operatorLink).toEqual({ href: "/admin", label: "Admin" });
+    expect(getOperatorMock).not.toHaveBeenCalled();
+    expect(getCurrentUserMock).not.toHaveBeenCalled();
+    expect(findManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["an unverified listed user", true, false],
+    ["a user who is not listed", false, true],
+  ])("carries no link for %s", async (_label, listed, verified) => {
+    process.env.ADMIN_EMAILS = listed ? "ops@example.com" : "other@example.com";
+    getWorkspaceContextMock.mockResolvedValue(operatorContext(verified));
+    findManyMock.mockResolvedValue([makeMembershipRow()]);
+
+    const body = await (await GET()).json();
+
+    expect(Object.keys(body)).toEqual(["workspaces"]);
+  });
+
+  it("answers the list without the link when the check fails", async () => {
+    process.env.ADMIN_EMAILS = "ops@example.com";
+    getWorkspaceContextMock.mockResolvedValue(operatorContext(true));
+    findManyMock.mockResolvedValue([makeMembershipRow()]);
+    isOperatorUserMock.mockImplementationOnce(() => {
+      throw new Error("boom");
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await GET();
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(Object.keys(body)).toEqual(["workspaces"]);
   });
 });
 
