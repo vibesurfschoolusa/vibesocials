@@ -67,13 +67,19 @@ beforeEach(() => {
   ]);
   db.sendEmail.mockResolvedValue(undefined);
   db.connectionUpdate.mockResolvedValue({});
-  vi.useFakeTimers({ toFake: ["Date"] });
+  // The 600 ms pauses between sends run on fake timers, so the test takes no real time.
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout"] });
   vi.setSystemTime(NOW);
 });
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
 });
+
+async function run<T>(promise: Promise<T>): Promise<T> {
+  await vi.runAllTimersAsync();
+  return promise;
+}
 
 const sentTo = () => db.sendEmail.mock.calls.map((call) => (call[0] as { to: string }).to);
 const markedIds = () => db.connectionUpdate.mock.calls.map((call) => (call[0] as { where: { id: string } }).where.id);
@@ -82,7 +88,7 @@ describe("the new-review email by plan", () => {
   it("with billing on, skips Starter (marker still moves) and emails Growth, a trial and an exempt workspace", async () => {
     vi.stubEnv("BILLING_ENABLED", "true");
     const alerts = Object.keys(WORKSPACES).map(alert);
-    const result = await sendReviewAlerts(alerts, NOW, () => 0);
+    const result = await run(sendReviewAlerts(alerts, NOW, () => 0));
 
     expect(sentTo()).toEqual([
       "owner@ws-growth.example.com",
@@ -98,7 +104,7 @@ describe("the new-review email by plan", () => {
 
   it("with billing off, emails every workspace and reads only the name", async () => {
     vi.stubEnv("BILLING_ENABLED", "");
-    await sendReviewAlerts(Object.keys(WORKSPACES).map(alert), NOW, () => 0);
+    await run(sendReviewAlerts(Object.keys(WORKSPACES).map(alert), NOW, () => 0));
     expect(sentTo()).toHaveLength(4);
     expect(db.connectionFindUnique.mock.calls[0][0]).toEqual({
       where: { id: "conn-ws-starter" },
