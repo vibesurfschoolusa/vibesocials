@@ -2,16 +2,17 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 
-import { SiteLinks } from "@/components/legal-page";
+import { PublicFooter, PublicHeader } from "@/components/public-shell";
 import { buttonVariants } from "@/components/ui/button";
 import { offeredPlans, paymentsConfigured, trialDays } from "@/lib/billing";
 import { PRICING_CANCEL } from "@/lib/billingTerms";
 import { WORKSPACE_PLAN_SENTENCE } from "@/lib/planCopy";
 import { PLANS } from "@/lib/plans";
-import { PRODUCT_NAME } from "@/lib/siteInfo";
+import { PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { getPlanOffers } from "@/server/billing/planPrices";
 
 import { planLimitLines } from "./planWords";
+import { PRICING_CONTACT_QUESTION, PRICING_FAQ, PRICING_INCLUDES, PRICING_INCLUDES_HEADING } from "./pricingCopy";
 
 // Prices come from Stripe through 21b's hour-long cache, read per request, and
 // the page must answer the 404 the moment payments are not configured.
@@ -38,23 +39,25 @@ export default async function PricingPage() {
   const pricesMissing = offers.some((offer) => offer.price === null);
 
   return (
-    <div className="flex min-h-screen justify-center bg-background px-4 py-10 text-foreground">
-      <div className="w-full max-w-5xl">
-        <div className="mb-6 flex items-center justify-between gap-4">
-          <h1 className="text-2xl font-semibold text-foreground">Pricing</h1>
-          <Link
-            href="/"
-            className="shrink-0 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-          >
-            Back to {PRODUCT_NAME}
-          </Link>
-        </div>
+    <div className="min-h-screen bg-background text-foreground">
+      <PublicHeader showPricing />
+      <main className="mx-auto w-full max-w-5xl px-4 pb-16 pt-6 md:px-6">
+        <h1 className="text-2xl font-semibold text-foreground">Pricing</h1>
 
-        <p className="text-base text-foreground">{trialDays()}-day free trial. No card needed to start.</p>
+        <p className="mt-4 text-base text-foreground">{trialDays()}-day free trial. No card needed to start.</p>
         <p className="mt-2 text-sm text-muted-foreground">{WORKSPACE_PLAN_SENTENCE}</p>
         {pricesMissing ? (
           <p className="mt-2 text-sm text-muted-foreground">Prices are unavailable right now. Try again in a minute.</p>
         ) : null}
+
+        <div className="mt-6 text-sm text-muted-foreground">
+          <p className="font-medium text-foreground">{PRICING_INCLUDES_HEADING}</p>
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            {PRICING_INCLUDES.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </div>
 
         <ul className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-3">
           {offers.map((offer) => (
@@ -82,8 +85,31 @@ export default async function PricingPage() {
           </p>
         </div>
 
-        <SiteLinks />
-      </div>
+        <section aria-labelledby="faq-heading" className="mt-10">
+          <h2 id="faq-heading" className="text-lg font-semibold text-foreground">
+            Questions
+          </h2>
+          <dl className="mt-4 space-y-4 text-sm">
+            {PRICING_FAQ.map(({ question, answer }) => (
+              <div key={question}>
+                <dt className="font-medium text-foreground">{question}</dt>
+                <dd className="mt-1 text-muted-foreground">{answer}</dd>
+              </div>
+            ))}
+            <div>
+              <dt className="font-medium text-foreground">{PRICING_CONTACT_QUESTION}</dt>
+              <dd className="mt-1 text-muted-foreground">
+                Write to{" "}
+                <a href={`mailto:${SUPPORT_EMAIL}`} className="underline underline-offset-2 hover:text-foreground">
+                  {SUPPORT_EMAIL}
+                </a>
+                .
+              </dd>
+            </div>
+          </dl>
+        </section>
+      </main>
+      <PublicFooter />
     </div>
   );
 }

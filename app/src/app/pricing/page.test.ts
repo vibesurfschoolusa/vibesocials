@@ -157,3 +157,52 @@ describe("/pricing: one plan per workspace (S1 item 3)", () => {
     expect(page.indexOf(sentence)).toBeLessThan(page.indexOf("Starter"));
   });
 });
+
+describe("/pricing sells and explains (S1 item 5)", () => {
+  beforeEach(() => {
+    configurePayments();
+    getPlanOffersMock.mockResolvedValue([{ plan: "starter", name: "Starter", price: "$19 a month" }]);
+  });
+
+  it("sits in the public site's header and footer", async () => {
+    const html = await render();
+    expect(html).toMatch(/<header[^>]*>[\s\S]*Vibe Socials[\s\S]*<\/header>/);
+    expect(html).toMatch(/<nav aria-label="Main"[^>]*>[\s\S]*href="\/about"[\s\S]*href="\/login"[\s\S]*<\/nav>/);
+    expect(html).toMatch(/<footer[^>]*>[\s\S]*operated by[\s\S]*href="\/terms"[\s\S]*<\/footer>/);
+  });
+
+  it("says above the cards what every plan includes", async () => {
+    const page = text(await render());
+    const lines = [
+      "Every plan includes:",
+      "Google Business Profile posts with buttons, offers and events.",
+      "AI drafts of replies to your Google reviews.",
+      "Links your clients use to send photos, approve posts and connect their accounts, without an account of their own.",
+      "A monthly report with the calls, direction requests and website clicks from your Google listing.",
+    ];
+    for (const line of lines) {
+      expect(page).toContain(line);
+      expect(page.indexOf(line)).toBeLessThan(page.indexOf("Starter"));
+    }
+  });
+
+  it("answers the common questions under the cards, true to the code and the Terms", async () => {
+    const page = text(await render());
+    const answers = [
+      "What is a workspace?",
+      "A workspace is one business: its connected accounts, posts, media and team.",
+      "What happens when the trial ends?",
+      "Posting stops until you choose a plan. Nothing is deleted. A scheduled post that comes due fails, and you can retry it from Activity once you have chosen a plan.",
+      "How do I cancel?",
+      "Cancel any time in Settings. You keep access until the end of the period you paid for. After that, the workspace works as after a trial: posting stops and nothing is deleted.",
+      "Do you give refunds?",
+      "We do not refund a period that has already started, except where the law requires it.",
+      "Who do I write to?",
+    ];
+    for (const answer of answers) {
+      expect(page).toContain(answer);
+      expect(page.indexOf(answer)).toBeGreaterThan(page.indexOf("Starter"));
+    }
+    expect(await render()).toMatch(/<a [^>]*href="mailto:[^"]+"/);
+  });
+});

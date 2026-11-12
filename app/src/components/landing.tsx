@@ -13,11 +13,11 @@ import type { LucideIcon } from "lucide-react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
+import { PublicFooter, PublicHeader } from "@/components/public-shell";
 import { TrialPriceLine } from "@/components/trial-offer";
 import { paymentsConfigured, trialDays } from "@/lib/billing";
 import { trialButtonLabel } from "@/lib/trialOffer";
 import { platformLabel } from "@/lib/platforms";
-import { OPERATOR_NAME, PRODUCT_NAME } from "@/lib/siteInfo";
 
 /**
  * Signed-out marketing page for `/`. Purely presentational — no data
@@ -48,42 +48,7 @@ export function Landing({
         className="pointer-events-none absolute -top-24 left-1/2 -z-10 h-72 w-72 -translate-x-1/2 rounded-full bg-primary/10 blur-3xl"
       />
 
-      <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 py-5 md:px-6">
-        <span className="flex items-center gap-2.5">
-          <span
-            aria-hidden
-            className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-indigo-700 text-xs font-bold text-white"
-          >
-            VS
-          </span>
-          <span className="text-sm font-semibold text-foreground">
-            Vibe Socials
-          </span>
-        </span>
-        <nav aria-label="Main" className="flex items-center gap-1">
-          {/* 23: only once /pricing exists; with payments not configured it is a 404. */}
-          {payments ? (
-            <Link
-              href="/pricing"
-              className={buttonVariants({ variant: "ghost", size: "sm" })}
-            >
-              Pricing
-            </Link>
-          ) : null}
-          <Link
-            href="/about"
-            className={buttonVariants({ variant: "ghost", size: "sm" })}
-          >
-            About
-          </Link>
-          <Link
-            href="/login"
-            className={buttonVariants({ variant: "ghost", size: "sm" })}
-          >
-            Log in
-          </Link>
-        </nav>
-      </header>
+      <PublicHeader showPricing={payments} />
 
       <main className="mx-auto w-full max-w-5xl px-4 md:px-6">
         {/* Hero */}
@@ -230,30 +195,7 @@ export function Landing({
         </section>
       </main>
 
-      <footer className="border-t border-border">
-        <div className="mx-auto flex w-full max-w-5xl flex-col items-center justify-between gap-3 px-4 py-6 text-sm text-muted-foreground sm:flex-row md:px-6">
-          <span>
-            © {new Date().getFullYear()} {PRODUCT_NAME} · operated by {OPERATOR_NAME}
-          </span>
-          <nav aria-label="Legal" className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
-            <Link href="/about" className="hover:text-foreground">
-              About
-            </Link>
-            <Link href="/about#contact" className="hover:text-foreground">
-              Contact
-            </Link>
-            <Link href="/privacy" className="hover:text-foreground">
-              Privacy
-            </Link>
-            <Link href="/terms" className="hover:text-foreground">
-              Terms
-            </Link>
-            <Link href="/data-deletion" className="hover:text-foreground">
-              Delete your data
-            </Link>
-          </nav>
-        </div>
-      </footer>
+      <PublicFooter />
     </div>
   );
 }
