@@ -238,7 +238,7 @@ export default async function SettingsPage({
             unavailablePlatforms={advertisedPlatforms().includes("pinterest") ? [] : ["pinterest"]}
           />
           {/* Owners only; key: one link per workspace, so remount on a switch. */}
-          <div className="mt-4">
+          <div id="connect-link" className="mt-4 scroll-mt-20">
             <ConnectLinkSection
               key={`connect-link-${context.workspace.id}`}
               workspaceId={context.workspace.id}

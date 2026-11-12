@@ -142,6 +142,15 @@ describe("SettingsPage — words and jump links", () => {
     }
   });
 
+  // S2 fix round 2: the dashboard's "Send a connect link" goes to
+  // /settings#connect-link. The card renders only after its own fetch, so the
+  // anchor sits on the wrapper this page renders on the server.
+  it("renders the connect-link anchor once, on the server, for an owner", async () => {
+    const html = await render("owner");
+    expect(html.match(/id="connect-link"/g)).toHaveLength(1);
+    expect(html).toContain('<div id="connect-link" class="mt-4 scroll-mt-20">');
+  });
+
   it("lets the links wrap on a narrow screen", async () => {
     const html = await render("member");
     expect(html).toMatch(/<nav aria-label="Settings sections"[^>]*>\s*<ul class="[^"]*flex-wrap/);

@@ -53,7 +53,7 @@ export function ConnectLinkSectionView({
   return (
     <Card>
       <CardHeader>
-        <CardTitle id="connect-link" className="scroll-mt-20 text-base">Client connect link</CardTitle>
+        <CardTitle className="text-base">Client connect link</CardTitle>
         <CardDescription>
           Send this link to a client so they can connect their own accounts to this workspace, without an
           account here and without sharing a password.
