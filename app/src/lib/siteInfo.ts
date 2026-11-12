@@ -12,11 +12,12 @@ export const OPERATOR_NAME = "Vibe Surf School LLC";
 export const OPERATOR_LOCATION = "Florida, United States";
 
 /**
- * Where support, privacy and deletion requests go. info@vibesurfschool.com is
- * a monitored inbox today; vibesocials.wtf has no inbound mail (no MX record)
- * yet. Switch this to support@vibesocials.wtf once that address forwards.
+ * Where support, privacy and deletion requests go. Every address at
+ * vibesocials.wtf forwards to the operator's monitored inbox (ImprovMX; a
+ * test message was delivered on 2026-11-12). Forwarding only receives: replies
+ * go out from the operator's own address.
  */
-export const SUPPORT_EMAIL = "info@vibesurfschool.com";
+export const SUPPORT_EMAIL = "hello@vibesocials.wtf";
 
 /** The date shown on the privacy policy and terms. Update it with any change to either. */
-export const LEGAL_LAST_UPDATED = "November 9, 2026";
+export const LEGAL_LAST_UPDATED = "November 12, 2026";
