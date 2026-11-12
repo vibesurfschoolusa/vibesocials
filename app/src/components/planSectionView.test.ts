@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { planSectionLabel } from "./planSectionView";
+import { planGrowthAddsShown, planSectionLabel } from "./planSectionView";
 
 /** 21a: what Settings → Plan says, and when it is there at all. */
 
@@ -60,5 +60,26 @@ describe("planSectionLabel", () => {
     expect(planSectionLabel("owner", { ...NEW, trialEndsAt: new Date("2026-12-09T00:00:00Z") }, NOW, ON)).toBe(
       "Your free trial has ended",
     );
+  });
+});
+
+// P1: on an active Starter plan, Settings says what Growth adds.
+describe("planGrowthAddsShown", () => {
+  const ON = { BILLING_ENABLED: "true" };
+  const NOW = new Date("2026-12-10T12:00:00Z");
+  const LATER = new Date("2026-12-30T00:00:00Z");
+
+  it("is true for an owner on an active Starter plan with billing on", () => {
+    expect(planGrowthAddsShown("owner", { plan: "starter", planStatus: "active", currentPeriodEnd: LATER }, NOW, ON)).toBe(true);
+  });
+
+  it("is false on Growth, in a trial, exempt, ended, for a member and with billing off", () => {
+    const starter = { plan: "starter", planStatus: "active", currentPeriodEnd: LATER };
+    expect(planGrowthAddsShown("owner", { ...starter, plan: "growth" }, NOW, ON)).toBe(false);
+    expect(planGrowthAddsShown("owner", { trialEndsAt: LATER }, NOW, ON)).toBe(false);
+    expect(planGrowthAddsShown("owner", { ...starter, billingExempt: true }, NOW, ON)).toBe(false);
+    expect(planGrowthAddsShown("owner", { ...starter, planStatus: "canceled", currentPeriodEnd: NOW }, NOW, ON)).toBe(false);
+    expect(planGrowthAddsShown("member", starter, NOW, ON)).toBe(false);
+    expect(planGrowthAddsShown("owner", starter, NOW, {})).toBe(false);
   });
 });

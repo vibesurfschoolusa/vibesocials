@@ -30,6 +30,7 @@ vi.mock("@/server/billing/planPrices", () => ({ getPlanOffers: async () => [] })
 // The plan section shows for an owner with a plan; never for a member.
 vi.mock("@/components/planSectionView", () => ({
   PLAN_PORTAL_ONLY_LABEL: "Plan",
+  planGrowthAddsShown: () => false,
   planReturnNotice: () => null,
   planSectionActions: () => null,
   planSectionLabel: (role: string) => (role === "owner" ? "Studio plan" : null),

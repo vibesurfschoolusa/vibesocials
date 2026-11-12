@@ -14,9 +14,8 @@ export const PRICING_INCLUDES = [
   "Google Business Profile posts with buttons, offers and events.",
   // The Reviews page drafts a reply with AI.
   "AI drafts of replies to your Google reviews.",
-  // The upload (/u), review (/v) and connect (/c) links open without signing in.
-  "Links your clients use to send photos, approve posts and connect their accounts, without an account of their own.",
-  // The monthly report reads the listing's stored daily numbers.
+  // P1: the client links line moved to the Growth card (lib/plans.ts PLAN_INCLUDES).
+  // The monthly report reads the listing's stored daily numbers; Reports is on every plan (P1).
   "A monthly report with the calls, direction requests and website clicks from your Google listing.",
 ] as const;
 

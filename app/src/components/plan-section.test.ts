@@ -20,3 +20,33 @@ describe("PlanSection", () => {
     expect(html).not.toContain("Each plan covers");
   });
 });
+
+// P1: Settings, Plan says what each plan includes, and on Starter what Growth adds.
+describe("PlanSection: what the plans include", () => {
+  it("shows one line per plan it offers", () => {
+    const html = renderToStaticMarkup(
+      createElement(PlanSection, {
+        label: "Free trial",
+        usage: null,
+        offers: [
+          { plan: "starter", name: "Starter", price: "$19 a month" },
+          { plan: "growth", name: "Growth", price: null },
+        ],
+      }),
+    );
+    expect(html).toContain("Starter: All your platforms, AI captions and alt text");
+    expect(html).toContain("Growth: Everything in Starter, plus client upload, review and connect links");
+    expect(html).not.toContain("Pro:");
+  });
+
+  it("shows what Growth adds when asked to", () => {
+    const html = renderToStaticMarkup(createElement(PlanSection, { label: "Starter plan", usage: null, growthAdds: true }));
+    expect(html).toContain("Growth adds client upload, review and connect links");
+  });
+
+  it("shows neither by default, so the section is as before", () => {
+    const html = renderToStaticMarkup(createElement(PlanSection, { label: "Manage", usage: null }));
+    expect(html).not.toContain("Everything in");
+    expect(html).not.toContain("Growth adds");
+  });
+});

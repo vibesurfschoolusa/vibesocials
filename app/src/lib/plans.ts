@@ -31,3 +31,21 @@ export const PLANS: Record<PlanKey, { name: string; limits: PlanLimits }> = {
 export function isPlanKey(value: string | null | undefined): value is PlanKey {
   return typeof value === "string" && (PLAN_KEYS as readonly string[]).includes(value);
 }
+
+/**
+ * What each plan includes, in words (P1, approved 2026-11-12), for the pricing
+ * cards and Settings, Plan. True to lib/planFeatures.ts: Starter has none of
+ * the five features, Growth and Pro all of them. "Priority email support" is
+ * the operator's promise; no code tells Pro's email apart.
+ */
+const GROWTH_FEATURES =
+  "client upload, review and connect links, a monthly report email with your logo, Add many, brand voice and new-review alerts";
+
+export const PLAN_INCLUDES: Record<PlanKey, string> = {
+  starter: "All your platforms, AI captions and alt text, Google posts with buttons, offers and events, AI drafts for Google review replies",
+  growth: `Everything in Starter, plus ${GROWTH_FEATURES}`,
+  pro: "Everything in Growth, with higher limits and priority email support",
+};
+
+/** Settings, Plan, for a workspace on Starter. */
+export const GROWTH_ADDS_LINE = `Growth adds ${GROWTH_FEATURES}.`;

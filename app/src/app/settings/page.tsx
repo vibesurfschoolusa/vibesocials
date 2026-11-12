@@ -17,6 +17,7 @@ import { WorkspaceLogoControl } from "@/components/workspace-logo-control";
 import { PlanSection } from "@/components/plan-section";
 import {
   PLAN_PORTAL_ONLY_LABEL,
+  planGrowthAddsShown,
   planReturnNotice,
   planSectionActions,
   planSectionLabel,
@@ -295,6 +296,7 @@ export default async function SettingsPage({
               offers={planOffers}
               manage={planActions?.manage ?? false}
               workspaceNote={workspacePlanNoteShown(planWorkspace, new Date())}
+              growthAdds={planGrowthAddsShown(context.role, planWorkspace, new Date())}
             />
           </section>
         ) : null}

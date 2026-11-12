@@ -1,6 +1,7 @@
 import { PlanActions, type PlanOfferView } from "@/components/plan-actions";
 import { Card } from "@/components/ui/card";
 import { WORKSPACE_PLAN_SENTENCE } from "@/lib/planCopy";
+import { GROWTH_ADDS_LINE, PLAN_INCLUDES } from "@/lib/plans";
 import { formatStorageGb } from "@/lib/usageLimits";
 import type { WorkspaceUsage } from "@/server/usage/workspaceUsage";
 
@@ -19,6 +20,7 @@ export function PlanSection({
   offers = [],
   manage = false,
   workspaceNote = false,
+  growthAdds = false,
 }: {
   label: string;
   usage: WorkspaceUsage | null;
@@ -30,6 +32,8 @@ export function PlanSection({
   manage?: boolean;
   /** S1: say that the plan covers this one workspace (billing on). */
   workspaceNote?: boolean;
+  /** P1: say what Growth adds (an owner on Starter). */
+  growthAdds?: boolean;
 }) {
   return (
     <Card className="flex flex-col gap-3 p-6">
@@ -58,6 +62,17 @@ export function PlanSection({
       ) : (
         <p className="text-sm text-muted-foreground">The limits are not available right now. Reload the page to try again.</p>
       )}
+      {/* P1: what each offered plan includes, as on the pricing cards. */}
+      {offers.length > 0 ? (
+        <ul className="space-y-1 text-sm text-muted-foreground">
+          {offers.map((offer) => (
+            <li key={offer.plan}>
+              {offer.name}: {PLAN_INCLUDES[offer.plan]}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {growthAdds ? <p className="text-sm text-muted-foreground">{GROWTH_ADDS_LINE}</p> : null}
       {offers.length > 0 || manage ? <PlanActions offers={offers} manage={manage} /> : null}
     </Card>
   );

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isPlanKey, PLAN_KEYS, PLANS } from "./plans";
+import { GROWTH_ADDS_LINE, isPlanKey, PLAN_INCLUDES, PLAN_KEYS, PLANS } from "./plans";
 import { DEFAULT_WORKSPACE_LIMITS } from "./usageLimits";
 
 const MB = 1024 * 1024;
@@ -34,5 +34,23 @@ describe("PLANS", () => {
     expect(isPlanKey("enterprise")).toBe(false);
     expect(isPlanKey(null)).toBe(false);
     expect(isPlanKey("toString")).toBe(false);
+  });
+});
+
+// P1: what each plan includes, in words true to lib/planFeatures.ts.
+describe("PLAN_INCLUDES", () => {
+  it("has one line per plan, as the owner approved them", () => {
+    expect(PLAN_INCLUDES).toEqual({
+      starter: "All your platforms, AI captions and alt text, Google posts with buttons, offers and events, AI drafts for Google review replies",
+      growth:
+        "Everything in Starter, plus client upload, review and connect links, a monthly report email with your logo, Add many, brand voice and new-review alerts",
+      pro: "Everything in Growth, with higher limits and priority email support",
+    });
+  });
+
+  it("says what Growth adds to Starter", () => {
+    expect(GROWTH_ADDS_LINE).toBe(
+      "Growth adds client upload, review and connect links, a monthly report email with your logo, Add many, brand voice and new-review alerts.",
+    );
   });
 });

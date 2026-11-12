@@ -92,7 +92,8 @@ describe("/pricing with payments configured", () => {
     const page = text(await render());
     expect(page).toContain("Starter $99 a month");
     expect(page).toContain("Pro €2,490.50 a year");
-    expect(page).not.toContain("Growth");
+    // P1: no Growth card; the Pro card itself says "Everything in Growth".
+    expect(await render()).not.toMatch(/<h2[^>]*>Growth<\/h2>/);
     expect(page.indexOf("Starter")).toBeLessThan(page.indexOf("Pro "));
     expect(page).not.toContain("Prices are unavailable");
   });
@@ -178,13 +179,14 @@ describe("/pricing sells and explains (S1 item 5)", () => {
       "Every plan includes:",
       "Google Business Profile posts with buttons, offers and events.",
       "AI drafts of replies to your Google reviews.",
-      "Links your clients use to send photos, approve posts and connect their accounts, without an account of their own.",
       "A monthly report with the calls, direction requests and website clicks from your Google listing.",
     ];
     for (const line of lines) {
       expect(page).toContain(line);
       expect(page.indexOf(line)).toBeLessThan(page.indexOf("Starter"));
     }
+    // P1: client links come with Growth and Pro, so they are no longer under every plan.
+    expect(page).not.toContain("Links your clients use");
   });
 
   it("answers the common questions under the cards, true to the code and the Terms", async () => {
@@ -229,5 +231,25 @@ describe("/pricing: a way back into the app (S1 fix round 1)", () => {
     const html = await render();
     const header = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
     expect(header).toMatch(/<a [^>]*href="\/"[^>]*>[\s\S]*VS[\s\S]*Vibe Socials[\s\S]*?<\/a>/);
+  });
+});
+
+describe("/pricing: what each plan includes (P1)", () => {
+  it("lists it first on each card, then the limits", async () => {
+    configurePayments();
+    vi.stubEnv("STRIPE_PRICE_GROWTH", "price_growth");
+    getPlanOffersMock.mockResolvedValue([
+      { plan: "starter", name: "Starter", price: "$19 a month" },
+      { plan: "growth", name: "Growth", price: "$39 a month" },
+      { plan: "pro", name: "Pro", price: "$79 a month" },
+    ]);
+    const page = text(await render());
+    const starter = "All your platforms, AI captions and alt text, Google posts with buttons, offers and events, AI drafts for Google review replies";
+    const growth =
+      "Everything in Starter, plus client upload, review and connect links, a monthly report email with your logo, Add many, brand voice and new-review alerts";
+    const pro = "Everything in Growth, with higher limits and priority email support";
+    expect(page).toContain(`Starter $19 a month ${starter} Up to 3 posts a day`);
+    expect(page).toContain(`Growth $39 a month ${growth} Up to 6 posts a day`);
+    expect(page).toContain(`Pro $79 a month ${pro} Up to 15 posts a day`);
   });
 });

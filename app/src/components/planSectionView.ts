@@ -81,3 +81,17 @@ export function planReturnNotice(billingParam: string | undefined, workspace: Bi
   if (billingParam !== "success") return null;
   return planState(workspace, now) === "active" ? null : PLAN_RETURN_NOTICE;
 }
+
+/**
+ * P1: whether Settings, Plan says what Growth adds: an owner whose workspace
+ * is active on Starter, with billing on. (Starter is the only plan without
+ * the features; lib/planFeatures.ts is what enforces them.)
+ */
+export function planGrowthAddsShown(
+  role: "owner" | "member",
+  workspace: BillingFields,
+  now: Date,
+  env: BillingEnv = process.env,
+): boolean {
+  return role === "owner" && billingEnabled(env) && planState(workspace, now) === "active" && workspace.plan === "starter";
+}
