@@ -1,8 +1,10 @@
 import { RetryAfterError } from "inngest";
 
+import { billingFieldsSelect, type BillingFields } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { defaultReportMonth } from "@/lib/monthlyReport";
+import { planIncludes } from "@/lib/planFeatures";
 import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
 import { buildMonthlyReportEmail } from "@/server/notifications/monthlyReportEmail";
 import { buildMonthlyReport } from "@/server/reports/monthlyReport";
@@ -23,6 +25,10 @@ import { buildMonthlyReport } from "@/server/reports/monthlyReport";
  * sends again on the next attempt; the (workspace, month, owner) idempotency
  * key is what stops the duplicate. The job only reads and emails, so a paused
  * workspace still gets its report.
+ *
+ * P1: a workspace whose plan does not include the email (Starter, with billing
+ * on) is marked for the month without building its report, so the next runs
+ * pass it by. The plan columns come in the page query, only with billing on.
  */
 
 /** A run stops starting workspaces after this long. */
@@ -52,6 +58,8 @@ export interface MonthlyReportRunResult {
   errors: number;
   /** Workspaces not reached in this run's time. */
   left: number;
+  /** P1: of those handled, the ones whose plan does not include the email: marked, no report built. */
+  notIncluded: number;
 }
 
 /** The month a run on `now` reports on: the UTC calendar month before it. */
@@ -86,13 +94,21 @@ export async function runMonthlyReportEmails(
 
   // A plain `not` would leave out the never-handled workspaces (NULL).
   const pending = { OR: [{ monthlyReportSentFor: null }, { monthlyReportSentFor: { not: month } }] };
-  const result: MonthlyReportRunResult = { handled: 0, nothingToReport: 0, emailed: 0, failed: 0, errors: 0, left: 0 };
+  const result: MonthlyReportRunResult = {
+    handled: 0,
+    nothingToReport: 0,
+    emailed: 0,
+    failed: 0,
+    errors: 0,
+    left: 0,
+    notIncluded: 0,
+  };
   let sentAny = false;
   let after: { createdAt: Date; id: string } | null = null;
   let outOfTime = false;
 
   while (!outOfTime) {
-    const page: { id: string; createdAt: Date }[] = await prisma.workspace.findMany({
+    const page: ({ id: string; createdAt: Date } & BillingFields)[] = await prisma.workspace.findMany({
       where: after
         ? {
             ...pending,
@@ -101,7 +117,7 @@ export async function runMonthlyReportEmails(
         : pending,
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       take: PAGE_SIZE,
-      select: { id: true, createdAt: true },
+      select: { id: true, createdAt: true, ...billingFieldsSelect() },
     });
 
     for (const workspace of page) {
@@ -109,8 +125,15 @@ export async function runMonthlyReportEmails(
         outOfTime = true;
         break;
       }
-      after = workspace;
+      after = { createdAt: workspace.createdAt, id: workspace.id };
       const workspaceId = workspace.id;
+
+      if (!planIncludes(workspace, "monthlyReportEmail", process.env, now)) {
+        await prisma.workspace.updateMany({ where: { id: workspaceId }, data: { monthlyReportSentFor: month } });
+        result.notIncluded++;
+        result.handled++;
+        continue;
+      }
 
       let report;
       try {

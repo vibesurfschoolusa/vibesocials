@@ -1,8 +1,10 @@
 import type { Prisma, SocialConnection } from "@prisma/client";
 import { RetryAfterError } from "inngest";
 
+import { billingFieldsSelect, type BillingFields } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { planIncludes } from "@/lib/planFeatures";
 import { utcDayKey } from "@/lib/usageLimits";
 import { fetchReviews, refreshAccessToken, type GoogleReview } from "@/server/googleReviews";
 import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
@@ -377,6 +379,8 @@ async function loadExcerpts(
  * REVIEW_ALERT_MAX_EMAILS_PER_RUN sends: a listing whose owners would go over it
  * is left, marker unchanged, for the next day. A listing whose location changed
  * since the check is skipped: its reviews are not the chosen location's.
+ * P1: a workspace whose plan does not include the email gets none, and its
+ * marker still moves, so choosing Growth later sends no backlog.
  */
 export async function sendReviewAlerts(
   alerts: ReviewAlert[],
@@ -393,12 +397,13 @@ export async function sendReviewAlerts(
 
   for (let index = 0; index < alerts.length; index++) {
     const alert = alerts[index];
-    let connection: (SocialConnection & { workspace: { name: string } }) | null;
+    let connection: (SocialConnection & { workspace: { name: string } & BillingFields }) | null;
     let recipients: Array<{ userId: string; user: { email: string } }>;
     try {
       connection = await prisma.socialConnection.findUnique({
         where: { id: alert.connectionId },
-        include: { workspace: { select: { name: true } } },
+        // P1: the plan columns too, only with billing on.
+        include: { workspace: { select: { name: true, ...billingFieldsSelect() } } },
       });
       if (!connection || nonEmptyString(metadataOf(connection).locationName) !== alert.locationName) {
         logger.warn("[reviews] Listing gone or moved since the check; not emailed", {
@@ -406,11 +411,13 @@ export async function sendReviewAlerts(
         });
         continue;
       }
-      recipients = await prisma.workspaceMember.findMany({
-        where: { workspaceId: alert.workspaceId, role: "owner", user: { notifyNewReviews: true } },
-        select: { userId: true, user: { select: { email: true } } },
-        orderBy: { userId: "asc" },
-      });
+      recipients = planIncludes(connection.workspace, "reviewAlerts", process.env, now)
+        ? await prisma.workspaceMember.findMany({
+            where: { workspaceId: alert.workspaceId, role: "owner", user: { notifyNewReviews: true } },
+            select: { userId: true, user: { select: { email: true } } },
+            orderBy: { userId: "asc" },
+          })
+        : [];
     } catch (error) {
       // Marker unchanged: the same reviews are found again tomorrow.
       logger.error("[reviews] Couldn't read a listing or its owners; carrying on", {
