@@ -145,9 +145,32 @@ describe("GooglePostBox", () => {
   it("an offer or an event opens it by itself", () => {
     for (const metadata of [offer, event]) {
       const html = render(metadata);
-      expect(html).toContain('aria-expanded="true"');
       expect(html).not.toMatch(/id="google-post-box-settings"[^>]*hidden=""/);
     }
+  });
+
+  // Fix round 1, item 4c: no disabled button left under the person's finger.
+  it("held open: the summary is plain text with why, and there is no fold control", () => {
+    for (const metadata of [offer, event]) {
+      const html = render(metadata);
+      expect(html).not.toContain("<button");
+      expect(html).not.toContain("aria-expanded");
+      expect(html).toContain("Open while it has an offer or event");
+      expect(html).toContain(googlePostSummary(metadata));
+    }
+    for (const metadata of [book("http://e.com/book"), book("")]) {
+      const html = render(metadata, true);
+      expect(html).not.toContain("<button");
+      expect(html).toContain("Open until the link is fixed");
+    }
+  });
+
+  it("not held: a fold button, with no reason line", () => {
+    const html = render(book("https://e.com/book"), true);
+    expect(html).toMatch(/<button[^>]*aria-expanded="true"/);
+    expect(html.match(/<button[^>]*>/)?.[0]).not.toContain("disabled");
+    expect(html).not.toContain("Open while");
+    expect(html).not.toContain("Open until");
   });
 
   it("Book with http:// is open, with its alert visible and a warning on the summary", () => {

@@ -41,6 +41,12 @@ function googleBoxNeedsFix(state: { metadata: GoogleBusinessPostMetadata; fields
   return !state.fieldsValid || !parseGooglePostMetadata(state.metadata).ok;
 }
 
+/** What a held-open box says in place of its fold control. */
+export const GOOGLE_BOX_HOLD_REASONS: Record<Exclude<GoogleBoxHold, null>, string> = {
+  "offer-or-event": "Open while it has an offer or event",
+  "fix-link": "Open until the link is fixed",
+};
+
 export function googleBoxShowsOpen(state: { open: boolean; hold: GoogleBoxHold }): boolean {
   return state.open || state.hold !== null;
 }
@@ -93,7 +99,6 @@ export function GooglePostBox({
   const hold = googleBoxHold({ metadata, fieldsValid });
   const needsFix = googleBoxNeedsFix({ metadata, fieldsValid });
   const shown = googleBoxShowsOpen({ open, hold });
-  const heldOpen = hold !== null;
 
   // Read after the change has rendered, so a field that went away (a button
   // changed to Call) no longer counts.
@@ -107,27 +112,36 @@ export function GooglePostBox({
     });
   };
 
+  const summary = (
+    <span className="inline-flex items-center gap-1.5">
+      {needsFix ? (
+        <AlertTriangle data-google-box-warning="" aria-hidden className="h-4 w-4 shrink-0 text-warning" />
+      ) : null}
+      {googlePostSummary(metadata)}
+      {needsFix ? <span className="sr-only"> (needs a fix)</span> : null}
+    </span>
+  );
+
   return (
     <div className="space-y-2">
-      <button
-        type="button"
-        aria-expanded={shown}
-        aria-controls="google-post-box-settings"
-        disabled={heldOpen}
-        onClick={() => onOpenChange(!open)}
-        className="flex w-full items-center justify-between gap-2 rounded-[var(--radius)] border border-input px-3 py-2 text-left text-sm font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:hover:bg-transparent"
-      >
-        <span className="inline-flex items-center gap-1.5">
-          {needsFix ? (
-            <AlertTriangle data-google-box-warning="" aria-hidden className="h-4 w-4 shrink-0 text-warning" />
-          ) : null}
-          {googlePostSummary(metadata)}
-          {needsFix ? <span className="sr-only"> (needs a fix)</span> : null}
-        </span>
-        {heldOpen ? null : (
+      {hold !== null ? (
+        // Held open: nothing to press, so no disabled button under the finger; it says why instead.
+        <div className="rounded-[var(--radius)] border border-input px-3 py-2 text-sm font-medium text-foreground">
+          {summary}
+          <p className="text-xs font-normal text-muted-foreground">{GOOGLE_BOX_HOLD_REASONS[hold]}</p>
+        </div>
+      ) : (
+        <button
+          type="button"
+          aria-expanded={shown}
+          aria-controls="google-post-box-settings"
+          onClick={() => onOpenChange(!open)}
+          className="flex w-full items-center justify-between gap-2 rounded-[var(--radius)] border border-input px-3 py-2 text-left text-sm font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {summary}
           <ChevronDown aria-hidden className={cn("h-4 w-4 shrink-0 transition-transform", shown && "rotate-180")} />
-        )}
-      </button>
+        </button>
+      )}
       <div
         id="google-post-box-settings"
         ref={settingsRef}
