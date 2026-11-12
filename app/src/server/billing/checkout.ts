@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-import { planState, priceIdForPlan, toBillingDate, type BillingEnv } from "@/lib/billing";
+import { planState, priceIdForPlan, toBillingDate, type BillingEnv, type BillingInterval } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import type { PlanKey } from "@/lib/plans";
@@ -27,6 +27,8 @@ import { isLiveSubscriptionStatus } from "./subscriptionSync";
 
 export const CHECKOUT_MESSAGES = {
   notOffered: "This plan is not offered. Choose another plan.",
+  // P1: a yearly checkout for a plan with only a monthly price.
+  noYearly: "This plan has no yearly price. Choose it monthly, or choose another plan.",
   exempt: "This workspace is billed by invoice.",
   subscribed: "Use Manage plan to change it.",
   noCustomer: "This workspace has no plan to manage yet. Choose a plan first.",
@@ -68,12 +70,17 @@ function logStripeFailure(what: string, workspaceId: string, error: unknown) {
  * leaves just that id, which the next attempt reuses.
  */
 export async function startCheckout(
-  input: { workspaceId: string; ownerEmail: string; plan: PlanKey; now: Date; baseUrl: string },
+  // P1: interval is optional and monthly by default, so a request without it is today's.
+  input: { workspaceId: string; ownerEmail: string; plan: PlanKey; interval?: BillingInterval; now: Date; baseUrl: string },
   env: BillingEnv = process.env,
 ): Promise<CheckoutResult> {
   reportDuplicatePriceIds("checkout", env);
-  const priceId = priceIdForPlan(input.plan, env);
-  if (!priceId) return { ok: false, status: 400, error: CHECKOUT_MESSAGES.notOffered };
+  const interval = input.interval ?? "month";
+  const priceId = priceIdForPlan(input.plan, env, interval);
+  if (!priceId) {
+    const yearlyMissing = interval === "year" && priceIdForPlan(input.plan, env) !== null;
+    return { ok: false, status: 400, error: yearlyMissing ? CHECKOUT_MESSAGES.noYearly : CHECKOUT_MESSAGES.notOffered };
+  }
 
   const select = {
     billingExempt: true,
@@ -157,6 +164,8 @@ export async function startCheckout(
       "checkout",
       input.workspaceId,
       input.plan,
+      // P1: a yearly session is its own; a monthly key is exactly today's.
+      ...(interval === "year" ? ["year"] : []),
       `n${listed.length}`,
       crypto.createHash("sha256").update(seen).digest("hex").slice(0, 16),
     ];

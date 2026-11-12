@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { paymentsConfigured } from "@/lib/billing";
+import { BILLING_INTERVALS, paymentsConfigured, type BillingInterval } from "@/lib/billing";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { adminNotFoundResponse, adminOtherMethods } from "@/lib/operator";
 import { isPlanKey } from "@/lib/plans";
@@ -11,7 +11,8 @@ import { startCheckout } from "@/server/billing/checkout";
 export const dynamic = "force-dynamic";
 
 /**
- * POST /api/billing/checkout { plan } (21b). Owner only, for the active
+ * POST /api/billing/checkout { plan, interval? } (21b; interval P1: "month"
+ * or "year", monthly when absent so older pages still work). Owner only, for the active
  * workspace. Answers { url } of a Stripe Checkout page for the plan; the
  * page sends the browser there. Writes no plan column: the webhook does.
  * With payments not configured: the app's JSON 404, before anything is read.
@@ -43,11 +44,17 @@ export async function POST(request: Request) {
   if (typeof body.plan !== "string" || !isPlanKey(body.plan)) {
     return NextResponse.json({ error: "Choose Starter, Growth or Pro." }, { status: 400 });
   }
+  const interval = body.interval ?? "month";
+  if (typeof interval !== "string" || !(BILLING_INTERVALS as readonly string[]).includes(interval)) {
+    return NextResponse.json({ error: "Choose monthly or yearly." }, { status: 400 });
+  }
 
   const result = await startCheckout({
     workspaceId: context.workspace.id,
     ownerEmail: context.user.email,
     plan: body.plan,
+    // Absent: startCheckout's monthly default, so the call is today's.
+    ...(body.interval === undefined ? {} : { interval: interval as BillingInterval }),
     now: new Date(),
     baseUrl: process.env.NEXTAUTH_URL || new URL(request.url).origin,
   });

@@ -405,3 +405,39 @@ describe("openPortal", () => {
     expect(await openPortal({ workspaceId: "ws_1", now: NOW, baseUrl: BASE }, ENV)).toMatchObject({ ok: false, status: 502 });
   });
 });
+
+// P1: a yearly checkout.
+describe("startCheckout with an interval", () => {
+  const YEARLY_ENV = { ...ENV, STRIPE_PRICE_STARTER_YEARLY: "price_test_starter_year" };
+
+  it("uses the yearly price id for interval year, with its own idempotency key", async () => {
+    const result = await startCheckout({ ...input(), interval: "year" }, YEARLY_ENV);
+    expect(result).toEqual({ ok: true, url: "https://checkout.stripe.com/c/pay/cs_1" });
+    const [session, key] = m.createCheckoutSession.mock.calls[0];
+    expect(session.priceId).toBe("price_test_starter_year");
+    expect(key).toMatch(/^vs-checkout-ws_1-starter-year-n0-[0-9a-f]{16}-\d+$/);
+  });
+
+  it("no interval and interval month both use the monthly price, with today's key", async () => {
+    await startCheckout(input(), YEARLY_ENV);
+    await startCheckout({ ...input(), interval: "month" }, YEARLY_ENV);
+    const [first, firstKey] = m.createCheckoutSession.mock.calls[0];
+    const [second, secondKey] = m.createCheckoutSession.mock.calls[1];
+    expect(first.priceId).toBe("price_example_starter");
+    expect(second.priceId).toBe("price_example_starter");
+    expect(firstKey).toMatch(/^vs-checkout-ws_1-starter-n0-/);
+    expect(secondKey).toBe(firstKey);
+  });
+
+  it("refuses a yearly checkout for a plan without a yearly price, in a plain sentence, before reading anything", async () => {
+    const result = await startCheckout({ ...input("growth"), interval: "year" }, YEARLY_ENV);
+    expect(result).toEqual({
+      ok: false,
+      status: 400,
+      error: "This plan has no yearly price. Choose it monthly, or choose another plan.",
+    });
+    expect(CHECKOUT_MESSAGES.noYearly).toBe("This plan has no yearly price. Choose it monthly, or choose another plan.");
+    expect(m.createCustomer).not.toHaveBeenCalled();
+    expect(m.createCheckoutSession).not.toHaveBeenCalled();
+  });
+});
