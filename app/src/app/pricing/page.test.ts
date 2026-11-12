@@ -192,9 +192,9 @@ describe("/pricing sells and explains (S1 item 5)", () => {
       "What is a workspace?",
       "A workspace is one business: its connected accounts, posts, media and team.",
       "What happens when the trial ends?",
-      "Posting stops until you choose a plan. Nothing is deleted. A scheduled post that comes due fails, and you can retry it from Activity once you have chosen a plan.",
+      "Posting stops until you choose a plan. A scheduled post that comes due while there is no plan is marked failed, and you can retry it from Activity once you have chosen a plan. Your posts, schedule, connections and settings stay. As on every workspace, photos and videos of posts already published are removed 30 days after their last use.",
       "How do I cancel?",
-      "Cancel any time in Settings. You keep access until the end of the period you paid for. After that, the workspace works as after a trial: posting stops and nothing is deleted.",
+      "Cancel any time in Settings. You keep access until the end of the period you paid for. After that, the workspace works as after a trial.",
       "Do you give refunds?",
       "We do not refund a period that has already started, except where the law requires it.",
       "Who do I write to?",
@@ -204,5 +204,7 @@ describe("/pricing sells and explains (S1 item 5)", () => {
       expect(page.indexOf(answer)).toBeGreaterThan(page.indexOf("Starter"));
     }
     expect(await render()).toMatch(/<a [^>]*href="mailto:[^"]+"/);
+    // S1 follow-up: the 30-day media sweep runs on every workspace, so no absolute.
+    expect(page).not.toMatch(/nothing is deleted|nothing has been deleted/i);
   });
 });

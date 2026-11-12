@@ -23,8 +23,11 @@ export const PRICING_INCLUDES = [
 /**
  * Under the cards. The trial answer follows workspaceStatus.ts: an ended trial
  * refuses new work, and the publish job fails a due post with PLAN_ENDED,
- * which Activity can retry once a plan is active. Nothing deletes data when a
- * trial or plan ends.
+ * which Activity can retry once a plan is active. Ending a trial or plan
+ * removes nothing itself, but the media retention sweep (server/jobs/
+ * mediaRetention.ts) still removes the files of published posts 30 days after
+ * their last use on every workspace, so the answer says so instead of an
+ * absolute.
  */
 export const PRICING_FAQ: readonly { question: string; answer: string }[] = [
   {
@@ -34,11 +37,11 @@ export const PRICING_FAQ: readonly { question: string; answer: string }[] = [
   {
     question: "What happens when the trial ends?",
     answer:
-      "Posting stops until you choose a plan. Nothing is deleted. A scheduled post that comes due fails, and you can retry it from Activity once you have chosen a plan.",
+      "Posting stops until you choose a plan. A scheduled post that comes due while there is no plan is marked failed, and you can retry it from Activity once you have chosen a plan. Your posts, schedule, connections and settings stay. As on every workspace, photos and videos of posts already published are removed 30 days after their last use.",
   },
   {
     question: "How do I cancel?",
-    answer: `${PRICING_CANCEL} After that, the workspace works as after a trial: posting stops and nothing is deleted.`,
+    answer: `${PRICING_CANCEL} After that, the workspace works as after a trial.`,
   },
   { question: "Do you give refunds?", answer: TERMS_FEES_REFUNDS },
 ];
