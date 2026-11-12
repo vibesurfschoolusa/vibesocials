@@ -220,3 +220,14 @@ describe("/pricing: the cancel answer holds whatever the Stripe portal does (S1 
     expect(text(faq)).not.toContain("You keep access");
   });
 });
+
+describe("/pricing: a way back into the app (S1 fix round 1)", () => {
+  // "/" is the dashboard when signed in and the landing when not, so one link serves both.
+  it("makes the header brand a link to /", async () => {
+    configurePayments();
+    getPlanOffersMock.mockResolvedValue([{ plan: "starter", name: "Starter", price: "$19 a month" }]);
+    const html = await render();
+    const header = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
+    expect(header).toMatch(/<a [^>]*href="\/"[^>]*>[\s\S]*VS[\s\S]*Vibe Socials[\s\S]*?<\/a>/);
+  });
+});

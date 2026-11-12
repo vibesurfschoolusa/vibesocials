@@ -59,3 +59,11 @@ describe("Landing with payments configured", () => {
     expect(html.match(/No card needed to start\./g)).toHaveLength(2);
   });
 });
+
+describe("Landing header brand (S1 fix round 1)", () => {
+  it("stays plain text on the landing; only the pricing page links it", () => {
+    const html = renderToStaticMarkup(createElement(Landing));
+    const header = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
+    expect(header).not.toContain('href="/"');
+  });
+});

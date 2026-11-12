@@ -9,20 +9,40 @@ import { OPERATOR_NAME, PRODUCT_NAME } from "@/lib/siteInfo";
  * with billing off is pinned by publicPagesBillingOff.test.ts.
  */
 
-export function PublicHeader({ showPricing }: { showPricing: boolean }) {
+export function PublicHeader({
+  showPricing,
+  brandHref,
+}: {
+  showPricing: boolean;
+  /**
+   * S1: the pricing page links the brand back to "/" (the dashboard when
+   * signed in). Absent on the landing, whose header stays plain text so its
+   * billing-off HTML is unchanged.
+   */
+  brandHref?: string;
+}) {
+  const brand = (
+    <>
+      <span
+        aria-hidden
+        className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-indigo-700 text-xs font-bold text-white"
+      >
+        VS
+      </span>
+      <span className="text-sm font-semibold text-foreground">
+        Vibe Socials
+      </span>
+    </>
+  );
   return (
     <header className="mx-auto flex w-full max-w-5xl items-center justify-between px-4 py-5 md:px-6">
-      <span className="flex items-center gap-2.5">
-        <span
-          aria-hidden
-          className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-indigo-700 text-xs font-bold text-white"
-        >
-          VS
-        </span>
-        <span className="text-sm font-semibold text-foreground">
-          Vibe Socials
-        </span>
-      </span>
+      {brandHref ? (
+        <Link href={brandHref} className="flex items-center gap-2.5">
+          {brand}
+        </Link>
+      ) : (
+        <span className="flex items-center gap-2.5">{brand}</span>
+      )}
       <nav aria-label="Main" className="flex items-center gap-1">
         {/* 23: only once /pricing exists; with payments not configured it is a 404. */}
         {showPricing ? (
