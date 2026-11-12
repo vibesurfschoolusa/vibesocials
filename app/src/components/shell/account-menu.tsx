@@ -3,10 +3,11 @@
 import { useEffect, useId, useRef, useState } from "react";
 import Link from "next/link";
 import { signOut, useSession } from "next-auth/react";
-import { Check, ChevronDown, CircleHelp, Download, LayoutGrid, LogOut, Plus, Shield } from "lucide-react";
+import { Check, ChevronDown, CircleHelp, Download, LayoutGrid, LogOut, Mail, Plus, Shield } from "lucide-react";
 import type { WorkspaceRole } from "@prisma/client";
 
 import { cn } from "@/lib/cn";
+import { contactUsHref } from "@/lib/contactUs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -29,7 +30,7 @@ interface OperatorLink {
 }
 
 /**
- * Account dropdown: signed-in email, workspace switcher, theme toggle, Help,
+ * Account dropdown: signed-in email, workspace switcher, theme toggle, Help, Contact us,
  * "Install app" (hidden when already installed) and sign-out. Implemented as a labelled popover (not an ARIA menu, since it
  * hosts a control group) with Esc-to-close, outside-click-to-close, and focus
  * returned to the trigger.
@@ -341,6 +342,15 @@ export function AccountMenu() {
             <CircleHelp aria-hidden className="h-4 w-4 text-muted-foreground" />
             Help
           </Link>
+          {/* S1: for everyone signed in; the email names the workspace and carries its id. */}
+          <a
+            href={contactUsHref(activeWorkspace)}
+            onClick={() => setOpen(false)}
+            className="flex w-full items-center gap-2 rounded-[var(--radius)] px-2 py-2 text-left text-sm text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Mail aria-hidden className="h-4 w-4 text-muted-foreground" />
+            Contact us
+          </a>
           {operatorLink ? (
             <Link
               href={operatorLink.href}
