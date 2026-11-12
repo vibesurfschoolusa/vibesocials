@@ -23,6 +23,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { CaptionCounter } from "@/components/caption-counter";
+import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
 import { PlatformCaptionEditor } from "@/components/composer/platform-caption-editor";
 import { useConnections } from "@/hooks/useConnections";
 import { isTextPost, TextPostTile } from "@/components/activity/post-job-card";
@@ -614,6 +615,7 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
   const toast = useToast();
   const [state, setState] = useState<"loading" | "hidden" | "ready" | "changed">("loading");
   const [changedMessage, setChangedMessage] = useState("");
+  const [pausedByPlan, setPausedByPlan] = useState(false);
   const [link, setLink] = useState<ReviewLinkDto | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<"replace" | "off" | null>(null);
@@ -626,7 +628,7 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
           `/api/workspaces/review-link?workspaceId=${encodeURIComponent(workspaceId)}`,
         );
         const data = (await response.json().catch(() => null)) as
-          | { link?: ReviewLinkDto | null; error?: string }
+          | { link?: ReviewLinkDto | null; error?: string; pausedByPlan?: boolean }
           | null;
         if (cancelled) return;
         if (response.status === 409) {
@@ -639,6 +641,7 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
           return;
         }
         setLink(data?.link ?? null);
+        setPausedByPlan(data?.pausedByPlan === true);
         setState("ready");
       } catch {
         if (!cancelled) setState("hidden");
@@ -714,6 +717,60 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
   if (state !== "ready") return null;
 
   return (
+    <ReviewLinkPanelView
+      link={link}
+      busy={busy}
+      onCreate={handleCreate}
+      onCopy={copyUrl}
+      onReplace={() => setConfirm("replace")}
+      onTurnOff={() => setConfirm("off")}
+      pausedByPlan={pausedByPlan}
+      dialog={
+        <ConfirmDialog
+          open={confirm !== null}
+          onOpenChange={(open) => {
+            if (!open) setConfirm(null);
+          }}
+          title={confirm === "replace" ? "Replace the client review link?" : "Turn off the client review link?"}
+          description={
+            confirm === "replace"
+              ? "The old link stops working. Your client will need the new one."
+              : "The old link stops working. Decisions your client already made stay as they are."
+          }
+          confirmText={confirm === "replace" ? "Replace link" : "Turn off"}
+          destructive
+          onConfirm={confirm === "replace" ? makeLink : turnOff}
+        />
+      }
+    />
+  );
+}
+
+export interface ReviewLinkPanelViewProps {
+  link: ReviewLinkDto | null;
+  busy: boolean;
+  onCreate: () => void;
+  onCopy: () => void;
+  onReplace: () => void;
+  onTurnOff: () => void;
+  /** The confirm dialog, rendered inside the card. */
+  dialog?: React.ReactNode;
+  /** P1: the owner GET's pausedByPlan: the plan does not include client links. */
+  pausedByPlan?: boolean;
+}
+
+/** The panel as it renders, from its state (P1 fix round 1: testable without a browser). */
+export function ReviewLinkPanelView({
+  link,
+  busy,
+  onCreate,
+  onCopy,
+  onReplace,
+  onTurnOff,
+  dialog = null,
+  pausedByPlan = false,
+}: ReviewLinkPanelViewProps) {
+  return (
     <Card>
       <CardHeader>
         <CardTitle className="text-base">Client review link</CardTitle>
@@ -725,12 +782,19 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
       </CardHeader>
       <CardContent className="space-y-3">
         {link === null ? (
-          <Button type="button" loading={busy} onClick={handleCreate}>
-            Create link
-          </Button>
+          pausedByPlan ? (
+            <ClientLinkPlanNotice paused={false} />
+          ) : (
+            <Button type="button" loading={busy} onClick={onCreate}>
+              Create link
+            </Button>
+          )
         ) : (
           <>
-            {link.url ? (
+            {/* P1: a paused link's address answers "not active", so it is not offered to copy. */}
+            {pausedByPlan ? (
+              <ClientLinkPlanNotice paused />
+            ) : link.url ? (
               <div className="flex gap-2">
                 <Input
                   readOnly
@@ -738,7 +802,7 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
                   aria-label="Client review link"
                   onFocus={(event) => event.currentTarget.select()}
                 />
-                <Button type="button" variant="outline" onClick={copyUrl}>
+                <Button type="button" variant="outline" onClick={onCopy}>
                   <Copy className="h-4 w-4" aria-hidden />
                   Copy
                 </Button>
@@ -749,31 +813,19 @@ function ReviewLinkPanel({ workspaceId }: { workspaceId: string }) {
               </p>
             )}
             <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => setConfirm("replace")}>
-                Replace link
-              </Button>
-              <Button type="button" variant="ghost" size="sm" onClick={() => setConfirm("off")}>
+              {pausedByPlan ? null : (
+                <Button type="button" variant="outline" size="sm" onClick={onReplace}>
+                  Replace link
+                </Button>
+              )}
+              <Button type="button" variant="ghost" size="sm" onClick={onTurnOff}>
                 Turn off
               </Button>
             </div>
           </>
         )}
       </CardContent>
-      <ConfirmDialog
-        open={confirm !== null}
-        onOpenChange={(open) => {
-          if (!open) setConfirm(null);
-        }}
-        title={confirm === "replace" ? "Replace the client review link?" : "Turn off the client review link?"}
-        description={
-          confirm === "replace"
-            ? "The old link stops working. Your client will need the new one."
-            : "The old link stops working. Decisions your client already made stay as they are."
-        }
-        confirmText={confirm === "replace" ? "Replace link" : "Turn off"}
-        destructive
-        onConfirm={confirm === "replace" ? makeLink : turnOff}
-      />
+      {dialog}
     </Card>
   );
 }

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/components/ui/toast";
+import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
 import { PLATFORM_LABELS } from "@/lib/platforms";
 
 /**
@@ -38,6 +39,8 @@ export interface ConnectLinkViewProps {
   onCreate: () => void;
   onCopy: () => void;
   onRevoke: () => void;
+  /** P1: the owner GET's pausedByPlan: the plan does not include client links. */
+  pausedByPlan?: boolean;
 }
 
 export function ConnectLinkSectionView({
@@ -49,6 +52,7 @@ export function ConnectLinkSectionView({
   onCreate,
   onCopy,
   onRevoke,
+  pausedByPlan = false,
 }: ConnectLinkViewProps) {
   return (
     <Card>
@@ -62,7 +66,10 @@ export function ConnectLinkSectionView({
       <CardContent className="space-y-3">
         {link ? (
           <>
-            {link.url ? (
+            {/* P1: a paused link's address answers "not active", so it is not offered to copy. */}
+            {pausedByPlan ? (
+              <ClientLinkPlanNotice paused />
+            ) : link.url ? (
               <div className="flex gap-2">
                 <Input
                   readOnly
@@ -91,6 +98,8 @@ export function ConnectLinkSectionView({
               Revoke
             </Button>
           </>
+        ) : pausedByPlan ? (
+          <ClientLinkPlanNotice paused={false} />
         ) : available.length === 0 ? (
           <p className="text-sm text-muted-foreground">No platform can be connected on this site yet.</p>
         ) : (
@@ -127,6 +136,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
   const [state, setState] = useState<"loading" | "hidden" | "ready">("loading");
   const [available, setAvailable] = useState<Platform[]>([]);
   const [link, setLink] = useState<ConnectLinkDto | null>(null);
+  const [pausedByPlan, setPausedByPlan] = useState(false);
   const [selected, setSelected] = useState<Platform[]>([]);
   const [busy, setBusy] = useState(false);
 
@@ -136,7 +146,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
       try {
         const response = await fetch(`/api/workspaces/connect-link?workspaceId=${encodeURIComponent(workspaceId)}`);
         const data = (await response.json().catch(() => null)) as
-          | { link?: ConnectLinkDto | null; available?: Platform[] }
+          | { link?: ConnectLinkDto | null; available?: Platform[]; pausedByPlan?: boolean }
           | null;
         if (cancelled) return;
         if (!response.ok || !data) {
@@ -145,6 +155,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
         }
         setAvailable(data.available ?? []);
         setLink(data.link ?? null);
+        setPausedByPlan(data.pausedByPlan === true);
         setState("ready");
       } catch {
         if (!cancelled) setState("hidden");
@@ -227,6 +238,7 @@ function ConnectLinkPanel({ workspaceId }: { workspaceId: string }) {
       onCreate={onCreate}
       onCopy={onCopy}
       onRevoke={onRevoke}
+      pausedByPlan={pausedByPlan}
     />
   );
 }

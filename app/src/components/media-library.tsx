@@ -24,6 +24,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { ClientLinkPlanNotice } from "@/components/client-link-plan-notice";
 import { ConfirmDialog } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
@@ -234,6 +235,7 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
   const toast = useToast();
   const [state, setState] = useState<"loading" | "hidden" | "ready" | "changed">("loading");
   const [changedMessage, setChangedMessage] = useState("");
+  const [pausedByPlan, setPausedByPlan] = useState(false);
   const [link, setLink] = useState<UploadLinkDto | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<"replace" | "off" | null>(null);
@@ -246,7 +248,7 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
           `/api/workspaces/upload-link?workspaceId=${encodeURIComponent(workspaceId)}`,
         );
         const data = (await response.json().catch(() => null)) as
-          | { link?: UploadLinkDto | null; error?: string }
+          | { link?: UploadLinkDto | null; error?: string; pausedByPlan?: boolean }
           | null;
         if (cancelled) return;
         if (response.status === 409) {
@@ -259,6 +261,7 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
           return;
         }
         setLink(data?.link ?? null);
+        setPausedByPlan(data?.pausedByPlan === true);
         setState("ready");
       } catch {
         if (!cancelled) setState("hidden");
@@ -334,6 +337,60 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
   if (state !== "ready") return null;
 
   return (
+    <UploadLinkPanelView
+      link={link}
+      busy={busy}
+      onCreate={handleCreate}
+      onCopy={copyUrl}
+      onReplace={() => setConfirm("replace")}
+      onTurnOff={() => setConfirm("off")}
+      pausedByPlan={pausedByPlan}
+      dialog={
+        <ConfirmDialog
+          open={confirm !== null}
+          onOpenChange={(open) => {
+            if (!open) setConfirm(null);
+          }}
+          title={confirm === "replace" ? "Replace the client upload link?" : "Turn off the client upload link?"}
+          description={
+            confirm === "replace"
+              ? "The old link stops working. Anyone using it will need the new one."
+              : "The old link stops working. Files already sent stay in your library."
+          }
+          confirmText={confirm === "replace" ? "Replace link" : "Turn off"}
+          destructive
+          onConfirm={confirm === "replace" ? makeLink : turnOff}
+        />
+      }
+    />
+  );
+}
+
+export interface UploadLinkPanelViewProps {
+  link: UploadLinkDto | null;
+  busy: boolean;
+  onCreate: () => void;
+  onCopy: () => void;
+  onReplace: () => void;
+  onTurnOff: () => void;
+  /** The confirm dialog, rendered inside the card. */
+  dialog?: React.ReactNode;
+  /** P1: the owner GET's pausedByPlan: the plan does not include client links. */
+  pausedByPlan?: boolean;
+}
+
+/** The panel as it renders, from its state (P1 fix round 1: testable without a browser). */
+export function UploadLinkPanelView({
+  link,
+  busy,
+  onCreate,
+  onCopy,
+  onReplace,
+  onTurnOff,
+  dialog = null,
+  pausedByPlan = false,
+}: UploadLinkPanelViewProps) {
+  return (
     <Card>
       <CardHeader>
         <CardTitle className="text-base">Client upload link</CardTitle>
@@ -344,12 +401,19 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
       </CardHeader>
       <CardContent className="space-y-3">
         {link === null ? (
-          <Button type="button" loading={busy} onClick={handleCreate}>
-            Create link
-          </Button>
+          pausedByPlan ? (
+            <ClientLinkPlanNotice paused={false} />
+          ) : (
+            <Button type="button" loading={busy} onClick={onCreate}>
+              Create link
+            </Button>
+          )
         ) : (
           <>
-            {link.url ? (
+            {/* P1: a paused link's address answers "not active", so it is not offered to copy. */}
+            {pausedByPlan ? (
+              <ClientLinkPlanNotice paused />
+            ) : link.url ? (
               <div className="flex gap-2">
                 <Input
                   readOnly
@@ -357,7 +421,7 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
                   aria-label="Client upload link"
                   onFocus={(event) => event.currentTarget.select()}
                 />
-                <Button type="button" variant="outline" onClick={copyUrl}>
+                <Button type="button" variant="outline" onClick={onCopy}>
                   <Copy className="h-4 w-4" aria-hidden />
                   Copy
                 </Button>
@@ -373,31 +437,19 @@ function UploadLinkPanel({ workspaceId }: { workspaceId: string }) {
                 : `${link.uploadCount} files have come through this link.`}
             </p>
             <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => setConfirm("replace")}>
-                Replace link
-              </Button>
-              <Button type="button" variant="ghost" size="sm" onClick={() => setConfirm("off")}>
+              {pausedByPlan ? null : (
+                <Button type="button" variant="outline" size="sm" onClick={onReplace}>
+                  Replace link
+                </Button>
+              )}
+              <Button type="button" variant="ghost" size="sm" onClick={onTurnOff}>
                 Turn off
               </Button>
             </div>
           </>
         )}
       </CardContent>
-      <ConfirmDialog
-        open={confirm !== null}
-        onOpenChange={(open) => {
-          if (!open) setConfirm(null);
-        }}
-        title={confirm === "replace" ? "Replace the client upload link?" : "Turn off the client upload link?"}
-        description={
-          confirm === "replace"
-            ? "The old link stops working. Anyone using it will need the new one."
-            : "The old link stops working. Files already sent stay in your library."
-        }
-        confirmText={confirm === "replace" ? "Replace link" : "Turn off"}
-        destructive
-        onConfirm={confirm === "replace" ? makeLink : turnOff}
-      />
+      {dialog}
     </Card>
   );
 }
