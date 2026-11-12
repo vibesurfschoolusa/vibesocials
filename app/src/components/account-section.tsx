@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PAID_PLAN_ACCOUNT_DELETE_SENTENCE } from "@/lib/planCopy";
 import type { AccountDeletionPreview } from "@/server/account/accountDeletion";
 
 interface AccountSectionProps {
@@ -23,6 +24,8 @@ interface AccountSectionProps {
   hasPassword: boolean;
   /** Computed on the server: what deleting the account would do right now. */
   deletion: AccountDeletionPreview;
+  /** S1: deleting cancels a paid plan on a workspace it deletes (app/settings/paidPlans.ts). */
+  cancelsPaidPlan?: boolean;
 }
 
 const GOOGLE_ONLY = "You sign in with Google, so this account has no password to change.";
@@ -39,7 +42,7 @@ async function errorFrom(response: Response, fallback: string): Promise<string> 
 }
 
 /** Settings → Account: sign-in email, change password, delete account. */
-export function AccountSection({ email, hasPassword, deletion }: AccountSectionProps) {
+export function AccountSection({ email, hasPassword, deletion, cancelsPaidPlan = false }: AccountSectionProps) {
   return (
     <Card className="flex flex-col gap-8 p-6">
       <div>
@@ -61,7 +64,7 @@ export function AccountSection({ email, hasPassword, deletion }: AccountSectionP
         <p className="text-sm text-muted-foreground">
           Removes your account and the workspaces only you use, right away.
         </p>
-        <DeleteAccount hasPassword={hasPassword} deletion={deletion} />
+        <DeleteAccount hasPassword={hasPassword} deletion={deletion} cancelsPaidPlan={cancelsPaidPlan} />
       </div>
     </Card>
   );
@@ -146,9 +149,11 @@ function ChangePasswordForm() {
 function DeleteAccount({
   hasPassword,
   deletion,
+  cancelsPaidPlan,
 }: {
   hasPassword: boolean;
   deletion: AccountDeletionPreview;
+  cancelsPaidPlan: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [confirmValue, setConfirmValue] = useState("");
@@ -221,6 +226,7 @@ function DeleteAccount({
             Your sign-in and email address are removed. Platform accounts you connected keep any
             access they granted until you remove it on each platform.
           </p>
+          {cancelsPaidPlan ? <p>{PAID_PLAN_ACCOUNT_DELETE_SENTENCE}</p> : null}
 
           {deletion.refusal ? (
             <Alert variant="danger">{deletion.refusal}</Alert>

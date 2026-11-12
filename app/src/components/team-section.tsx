@@ -24,6 +24,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { memberRemovalOutcome } from "@/lib/memberRemoval";
+import { PAID_PLAN_WORKSPACE_DELETE_SENTENCE } from "@/lib/planCopy";
 
 /** GET /api/workspaces/members list item — owner-only route (SEC-1: never fetched for a member). */
 interface Member {
@@ -68,6 +69,8 @@ export interface WorkspaceDeletionInfo {
   scheduledCount: number;
   /** The sentence the server would refuse with, or null when it is allowed. */
   refusal: string | null;
+  /** S1: deleting cancels a paid plan (app/settings/paidPlans.ts). */
+  paidPlan?: boolean;
 }
 
 interface TeamSectionProps {
@@ -761,6 +764,7 @@ function DeleteWorkspace({
             Connected platform accounts keep any access they granted until it is removed on each
             platform.
           </p>
+          {deletion.paidPlan ? <p>{PAID_PLAN_WORKSPACE_DELETE_SENTENCE}</p> : null}
           {deletion.refusal ? (
             <Alert variant="danger">{deletion.refusal}</Alert>
           ) : (

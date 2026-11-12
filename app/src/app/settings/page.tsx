@@ -33,6 +33,8 @@ import { type ConnectionSummary, toConnectionSummary } from "@/lib/connectionSum
 import type { UserSettings } from "@/lib/userSettings";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 
+import { accountDeletionCancelsPaidPlan, workspacesHavePaidPlan } from "./paidPlans";
+
 export default async function SettingsPage({
   searchParams,
 }: {
@@ -129,9 +131,11 @@ export default async function SettingsPage({
   // What the two delete confirmations say, computed with the same functions
   // the delete routes use, so the dialog shows the sentence the route would
   // refuse with.
-  const [accountDeletion, workspaceDeletion] = await Promise.all([
+  // S1: and whether deleting cancels a paid plan; nothing is read without the Stripe key.
+  const [accountDeletion, workspaceDeletion, accountCancelsPaidPlan] = await Promise.all([
     accountDeletionPreview(context.user.id),
     context.role === "owner" ? loadWorkspaceDeletion(context.workspace.id, context.user.id) : null,
+    accountDeletionCancelsPaidPlan(context.user.id),
   ]);
 
   // The jump links under the title: one per section this person sees, in page
@@ -310,6 +314,7 @@ export default async function SettingsPage({
             email={context.user.email}
             hasPassword={context.user.passwordHash !== null}
             deletion={accountDeletion}
+            cancelsPaidPlan={accountCancelsPaidPlan}
           />
         </section>
       </div>
@@ -321,10 +326,12 @@ async function loadWorkspaceDeletion(
   workspaceId: string,
   userId: string,
 ): Promise<WorkspaceDeletionInfo> {
-  const [memberCount, scheduledCount, refusal] = await Promise.all([
+  const [memberCount, scheduledCount, refusal, paidPlan] = await Promise.all([
     getWorkspaceMemberCount(workspaceId),
     prisma.postJob.count({ where: { workspaceId, status: "scheduled" } }),
     workspaceDeletionRefusal(workspaceId, userId),
+    workspacesHavePaidPlan([workspaceId]),
   ]);
-  return { memberCount, scheduledCount, refusal };
+  // Without a paid plan the dialog's props are exactly as before.
+  return { memberCount, scheduledCount, refusal, ...(paidPlan ? { paidPlan } : {}) };
 }
