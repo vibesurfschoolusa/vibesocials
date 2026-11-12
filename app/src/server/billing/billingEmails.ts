@@ -73,7 +73,9 @@ export function buildTrialEndedEmail(
     html: html(
       [
         `<strong>${escapeHtml(params.workspaceName)}</strong>`,
-        "Your free trial has ended. Your scheduled posts are on hold until you choose a plan.",
+        // What the publish job does (inngest-functions.ts, PLAN_ENDED): a due post's
+        // results fail, and Activity can retry them once a plan is active.
+        "Your free trial has ended, so posting has stopped. A scheduled post that comes due while there is no plan is marked failed; once you choose a plan, you can retry it from Activity. Your posts, schedule, connections and settings stay.",
       ],
       appBaseUrl,
     ),

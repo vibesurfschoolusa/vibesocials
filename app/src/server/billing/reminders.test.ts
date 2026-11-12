@@ -129,7 +129,9 @@ describe("runBillingReminders", () => {
     m.rows = [ws("a", { trialEndsAt: new Date(NOW.getTime() - DAY), trialReminderSentAt: new Date(NOW.getTime() - 3 * DAY) })];
     expect(await run()).toEqual({ trialEnding: 0, trialEnded: 1, sent: 1, failed: 0, left: 0 });
     expect(m.sendEmail.mock.calls[0][1]).toEqual({ idempotencyKey: "billing/trial-ended/a/owner-a", throwOnRetryable: true });
-    expect(m.sendEmail.mock.calls[0][0].html).toContain("Your scheduled posts are on hold until you choose a plan.");
+    expect(m.sendEmail.mock.calls[0][0].html).toContain(
+      "Your free trial has ended, so posting has stopped. A scheduled post that comes due while there is no plan is marked failed; once you choose a plan, you can retry it from Activity. Your posts, schedule, connections and settings stay.",
+    );
     expect(m.rows[0].trialEndedEmailSentAt).toEqual(NOW);
     m.sendEmail.mockClear();
     await run();

@@ -18,12 +18,26 @@ describe("billing emails", () => {
     expect(email.subject).toContain("Surf Co");
   });
 
-  it("trial ended says posts are on hold", () => {
+  // S1 follow-up: what the publish job really does with a due post (PLAN_ENDED, retryable).
+  it("trial ended says posting stopped and what happens to scheduled posts", () => {
     const email = buildTrialEndedEmail({ workspaceName: "Surf Co" });
     expect(email.html).toContain(
-      "Your free trial has ended. Your scheduled posts are on hold until you choose a plan.",
+      "Your free trial has ended, so posting has stopped. A scheduled post that comes due while there is no plan is marked failed; once you choose a plan, you can retry it from Activity. Your posts, schedule, connections and settings stay.",
     );
+    expect(email.html).not.toContain("on hold");
+    expect(email.html).not.toMatch(/nothing/i);
     expect(email.subject).toContain("Surf Co");
+  });
+
+  it("the two reminder emails keep their words", () => {
+    expect(
+      buildTrialEndingEmail({ workspaceName: "Surf Co", trialEndsAt: new Date("2026-11-13T09:00:00Z") }, null).html,
+    ).toBe(
+      "<p><strong>Surf Co</strong></p>\n<p>Your free trial ends on 13 November 2026. Choose a plan under Settings, Plan.</p>\n<p>— Vibe Socials</p>",
+    );
+    expect(buildPaymentFailedEmail({ workspaceName: "Surf Co" }, null).html).toBe(
+      "<p>We could not charge your card for Surf Co. Update it under Settings, Plan. Your posts keep going out for 7 days.</p>\n<p>— Vibe Socials</p>",
+    );
   });
 });
 
