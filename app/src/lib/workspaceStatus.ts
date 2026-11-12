@@ -118,6 +118,24 @@ export function trialEndingNotice(
   return `Your free trial ends on ${utcDayMonthLabel(endsAt)}. Choose a plan in Settings.`;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * S1: the quiet line owners see for the rest of a free trial, before the last
+ * 3 days take over with trialEndingNotice. Only with billing on; members never
+ * see it.
+ */
+export function trialDaysLeftNotice(
+  workspace: WorkspaceStatusFields,
+  role: "owner" | "member",
+  now: Date = new Date(),
+): string | null {
+  if (role !== "owner" || !billingEnabled() || planState(workspace, now) !== "trial") return null;
+  const msLeft = new Date(workspace.trialEndsAt as Date | string).getTime() - now.getTime();
+  if (msLeft <= TRIAL_NOTICE_MS) return null;
+  return `Free trial: ${Math.ceil(msLeft / DAY_MS)} days left.`;
+}
+
 /**
  * POST /api/workspaces refuses an owner of any blocked workspace, so a paused
  * customer cannot carry on in a new workspace in one click.

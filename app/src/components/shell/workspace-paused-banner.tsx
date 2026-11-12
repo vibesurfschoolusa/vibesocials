@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
 
@@ -75,18 +76,34 @@ export function WorkspacePausedBanner({
   return <WorkspaceStatusAlert status={workspaceStatus} sending={sending} onResend={handleResend} />;
 }
 
-export type WorkspaceStatus = { message: string | null; notice: string | null; emailUnconfirmed: boolean };
+export type WorkspaceStatus = {
+  message: string | null;
+  notice: string | null;
+  emailUnconfirmed: boolean;
+  /** S1: the quiet line for the rest of a trial (owners, billing on). */
+  daysLeft: string | null;
+  /** S1: an owner's ended trial or plan: the banner links to Settings, Plan. */
+  planLink: boolean;
+};
 
-const NO_STATUS: WorkspaceStatus = { message: null, notice: null, emailUnconfirmed: false };
+const NO_STATUS: WorkspaceStatus = { message: null, notice: null, emailUnconfirmed: false, daysLeft: null, planLink: false };
 
 /** GET /api/workspaces/status's answer, keeping only fields of the right type. */
 export function readWorkspaceStatus(data: unknown): WorkspaceStatus {
-  const body = (data ?? {}) as { blockedMessage?: unknown; trialNotice?: unknown; emailUnconfirmed?: unknown };
+  const body = (data ?? {}) as {
+    blockedMessage?: unknown;
+    trialNotice?: unknown;
+    emailUnconfirmed?: unknown;
+    trialDaysLeft?: unknown;
+    planLink?: unknown;
+  };
   const message = typeof body.blockedMessage === "string" ? body.blockedMessage : null;
   return {
     message,
     notice: typeof body.trialNotice === "string" ? body.trialNotice : null,
     emailUnconfirmed: message !== null && body.emailUnconfirmed === true,
+    daysLeft: typeof body.trialDaysLeft === "string" ? body.trialDaysLeft : null,
+    planLink: message !== null && body.planLink === true,
   };
 }
 
@@ -104,15 +121,23 @@ export function WorkspaceStatusAlert({
   sending: boolean;
   onResend: () => void;
 }) {
-  const { message, notice, emailUnconfirmed } = status;
+  const { message, notice, emailUnconfirmed, daysLeft, planLink } = status;
 
   if (!message && notice) {
     return (
       <div className="px-4 pt-4 md:px-6">
         <Alert variant="info" className="p-3">
-          <span className="text-foreground">{notice}</span>
+          <span className="text-foreground">{notice}</span> <PlanLink />
         </Alert>
       </div>
+    );
+  }
+
+  if (!message && daysLeft) {
+    return (
+      <p className="px-4 pt-3 text-xs text-muted-foreground md:px-6">
+        {daysLeft} <PlanLink />
+      </p>
     );
   }
 
@@ -137,7 +162,21 @@ export function WorkspaceStatusAlert({
     <div className="px-4 pt-4 md:px-6">
       <Alert variant="danger" className="p-3">
         <span className="text-foreground">{message}</span>
+        {planLink ? (
+          <>
+            {" "}
+            <PlanLink />
+          </>
+        ) : null}
       </Alert>
     </div>
+  );
+}
+
+function PlanLink() {
+  return (
+    <Link href="/settings#plan" className="font-medium text-primary underline-offset-4 hover:underline">
+      Choose a plan
+    </Link>
   );
 }

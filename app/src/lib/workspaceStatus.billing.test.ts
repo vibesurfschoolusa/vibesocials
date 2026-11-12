@@ -8,6 +8,7 @@ import {
   PLAN_ENDED_RESULT_FAILURE,
   blockedResultFailure,
   splitWorkspaceStatus,
+  trialDaysLeftNotice,
   trialEndingNotice,
   WORKSPACE_PAUSED_RESULT_FAILURE,
   workspaceBlock,
@@ -128,6 +129,7 @@ describe("with billing off", () => {
 
   it("shows no trial notice", () => {
     expect(trialEndingNotice({ ...ENDED_TRIAL, trialEndsAt: new Date(NOW.getTime() + DAY) }, "owner", NOW)).toBeNull();
+    expect(trialDaysLeftNotice({ ...ENDED_TRIAL, trialEndsAt: new Date(NOW.getTime() + 10 * DAY) }, "owner", NOW)).toBeNull();
   });
 });
 
@@ -197,6 +199,23 @@ describe("with billing on", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // S1 item 7: before the last 3 days, owners see a quiet line with the days left.
+  describe("trialDaysLeftNotice", () => {
+    const inTrial = (msLeft: number) => ({ ...ENDED_TRIAL, trialEndsAt: new Date(NOW.getTime() + msLeft) });
+
+    it("tells owners the days left until the last 3 days", () => {
+      expect(trialDaysLeftNotice(inTrial(14 * DAY), "owner", NOW)).toBe("Free trial: 14 days left.");
+      expect(trialDaysLeftNotice(inTrial(3 * DAY + 1), "owner", NOW)).toBe("Free trial: 4 days left.");
+    });
+
+    it("says nothing in the last 3 days (the louder line does), to members, or outside a trial", () => {
+      expect(trialDaysLeftNotice(inTrial(3 * DAY), "owner", NOW)).toBeNull();
+      expect(trialDaysLeftNotice(inTrial(10 * DAY), "member", NOW)).toBeNull();
+      expect(trialDaysLeftNotice(ENDED_TRIAL, "owner", NOW)).toBeNull();
+      expect(trialDaysLeftNotice({ ...inTrial(10 * DAY), billingExempt: true }, "owner", NOW)).toBeNull();
+    });
   });
 
   describe("trialEndingNotice", () => {

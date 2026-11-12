@@ -24,10 +24,12 @@ describe("readWorkspaceStatus", () => {
       message: SENTENCE,
       notice: null,
       emailUnconfirmed: true,
+      daysLeft: null,
+      planLink: false,
     });
     expect(readWorkspaceStatus({ blockedMessage: null, emailUnconfirmed: true }).emailUnconfirmed).toBe(false);
     expect(readWorkspaceStatus({ blockedMessage: "Paused.", emailUnconfirmed: "yes" }).emailUnconfirmed).toBe(false);
-    expect(readWorkspaceStatus(null)).toEqual({ message: null, notice: null, emailUnconfirmed: false });
+    expect(readWorkspaceStatus(null)).toEqual({ message: null, notice: null, emailUnconfirmed: false, daysLeft: null, planLink: false });
   });
 });
 
@@ -49,5 +51,27 @@ describe("WorkspaceStatusAlert", () => {
     expect(html).toContain("Your free trial ends on 12 December.");
     expect(html).not.toContain("<button");
     expect(render({ blockedMessage: null })).toBe("");
+  });
+});
+
+describe("WorkspaceStatusAlert links to Settings, Plan (S1 item 7)", () => {
+  const PLAN_LINK = /<a [^>]*href="\/settings#plan"[^>]*>Choose a plan<\/a>/;
+
+  it("shows owners a quiet line with the days left and the link for the whole trial", () => {
+    const html = render({ blockedMessage: null, trialDaysLeft: "Free trial: 10 days left." });
+    expect(html).toContain("Free trial: 10 days left.");
+    expect(html).toMatch(PLAN_LINK);
+    expect(html).not.toContain('role="alert"');
+  });
+
+  it("keeps the louder line in the last 3 days, now with the link", () => {
+    const html = render({ blockedMessage: null, trialNotice: "Your free trial ends on 12 December. Choose a plan in Settings." });
+    expect(html).toContain("Your free trial ends on 12 December. Choose a plan in Settings.");
+    expect(html).toMatch(PLAN_LINK);
+  });
+
+  it("links the plan-ended banner for owners only", () => {
+    expect(render({ blockedMessage: "Your free trial has ended.", planLink: true })).toMatch(PLAN_LINK);
+    expect(render({ blockedMessage: "Your free trial has ended." })).not.toContain("<a ");
   });
 });

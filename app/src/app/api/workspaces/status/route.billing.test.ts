@@ -49,13 +49,12 @@ afterEach(() => {
 });
 
 describe("GET /api/workspaces/status with billing on", () => {
-  it("gives the block's sentence for a workspace whose trial ended, to every member", async () => {
-    for (const role of ["owner", "member"] as const) {
-      getWorkspaceContextMock.mockResolvedValue(context(role, { trialEndsAt: new Date(NOW.getTime() - DAY) }));
-      expect(await (await GET()).json()).toEqual({
-        blockedMessage: `Your free trial has ended. Choose a plan in Settings to keep posting, or contact ${SUPPORT_EMAIL}.`,
-      });
-    }
+  it("gives the block's sentence for a workspace whose trial ended, to every member, and owners the plan link", async () => {
+    const blockedMessage = `Your free trial has ended. Choose a plan in Settings to keep posting, or contact ${SUPPORT_EMAIL}.`;
+    getWorkspaceContextMock.mockResolvedValue(context("owner", { trialEndsAt: new Date(NOW.getTime() - DAY) }));
+    expect(await (await GET()).json()).toEqual({ blockedMessage, planLink: true });
+    getWorkspaceContextMock.mockResolvedValue(context("member", { trialEndsAt: new Date(NOW.getTime() - DAY) }));
+    expect(await (await GET()).json()).toEqual({ blockedMessage });
   });
 
   it("gives owners the quieter line in the last 3 days of a trial", async () => {
@@ -66,11 +65,13 @@ describe("GET /api/workspaces/status with billing on", () => {
     });
   });
 
-  it("gives members, and owners earlier in the trial, nothing", async () => {
+  it("gives members nothing, and owners earlier in the trial the days left (S1 item 7)", async () => {
     getWorkspaceContextMock.mockResolvedValue(context("member", { trialEndsAt: new Date(NOW.getTime() + 2 * DAY) }));
     expect(await (await GET()).json()).toEqual({ blockedMessage: null });
-    getWorkspaceContextMock.mockResolvedValue(context("owner", { trialEndsAt: new Date(NOW.getTime() + 10 * DAY) }));
+    getWorkspaceContextMock.mockResolvedValue(context("member", { trialEndsAt: new Date(NOW.getTime() + 10 * DAY) }));
     expect(await (await GET()).json()).toEqual({ blockedMessage: null });
+    getWorkspaceContextMock.mockResolvedValue(context("owner", { trialEndsAt: new Date(NOW.getTime() + 10 * DAY) }));
+    expect(await (await GET()).json()).toEqual({ blockedMessage: null, trialDaysLeft: "Free trial: 10 days left." });
   });
 
   it("gives an unconfirmed address the sentence, and says the link can be sent again", async () => {
