@@ -286,3 +286,32 @@ describe("workspaceSetupFrom and the plan", () => {
     }
   });
 });
+
+// P1 fix round 1: the brand voice step only where the plan includes the brand voice.
+describe("Get started and the brand voice feature", () => {
+  const empty = { companyWebsite: null, defaultHashtags: null, brandVoice: null, brandVoiceExamples: null };
+  const LATER = new Date(Date.now() + 20 * 24 * 60 * 60 * 1000);
+  const STARTER = { plan: "starter", planStatus: "active", currentPeriodEnd: LATER };
+  const stepsFor = (billing: Record<string, unknown>) =>
+    deriveGettingStarted([], [], workspaceSetupFrom({ ...empty, ...billing }, "owner", false)).steps;
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("a trial: four steps", () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    expect(stepsFor({ trialEndsAt: LATER })).toEqual(["connect", "footer", "voice", "post"]);
+  });
+
+  it("Starter, active: three steps, without the brand voice", () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    expect(stepsFor(STARTER)).toEqual(["connect", "footer", "post"]);
+  });
+
+  it("exempt and billing off: four steps, and the setup has no extra key", () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    expect(stepsFor({ ...STARTER, billingExempt: true })).toEqual(["connect", "footer", "voice", "post"]);
+    vi.stubEnv("BILLING_ENABLED", "");
+    expect(stepsFor(STARTER)).toEqual(["connect", "footer", "voice", "post"]);
+    expect(workspaceSetupFrom({ ...empty, ...STARTER }, "owner", false)).not.toHaveProperty("brandVoicePaused");
+  });
+});

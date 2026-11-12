@@ -29,6 +29,8 @@ export interface WorkspaceSetup {
   hasClientLink: boolean;
   /** P1: present (true) only when the plan does not include client links; the clients block then says so. */
   clientLinksPaused?: true;
+  /** P1 fix round 1: present (true) only when the plan does not include the brand voice; its step is left out. */
+  brandVoicePaused?: true;
 }
 
 export interface GettingStartedState {
@@ -72,6 +74,7 @@ export function workspaceSetupFrom(
     brandVoiceSet: isSet(workspace.brandVoice) || isSet(workspace.brandVoiceExamples),
     hasClientLink: role === "owner" && hasClientLink,
     ...(planIncludes(workspace, "clientLinks") ? {} : { clientLinksPaused: true as const }),
+    ...(planIncludes(workspace, "brandVoice") ? {} : { brandVoicePaused: true as const }),
   };
 }
 
@@ -140,7 +143,11 @@ export function deriveGettingStarted(
   const footerDone = setup?.footerSet ?? false;
   const voiceDone = setup?.brandVoiceSet ?? false;
   const postDone = (jobs?.length ?? 0) > 0;
-  const steps: GettingStartedStep[] = isOwner ? ["connect", "footer", "voice", "post"] : ["post"];
+  // P1 fix round 1: the brand voice step only where the AI uses the brand voice.
+  const ownerSteps: GettingStartedStep[] = setup?.brandVoicePaused
+    ? ["connect", "footer", "post"]
+    : ["connect", "footer", "voice", "post"];
+  const steps: GettingStartedStep[] = isOwner ? ownerSteps : ["post"];
   // Fix round 1: only connect and the first post open the block, as before S2.
   // The two settings ride along while it shows, so an owner who has connected
   // and posted never sees it come back because a setting is empty.

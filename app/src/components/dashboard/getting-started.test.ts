@@ -138,3 +138,22 @@ describe("WorkingForClients where the plan pauses client links", () => {
     expect(html).not.toContain("Send a review link");
   });
 });
+
+// P1 fix round 1: without the brand voice feature the list has three steps and the heading says so.
+describe("GettingStarted without the brand voice step", () => {
+  it("lists connect, website and hashtags, first post, and names only step 2 as a setting", () => {
+    const html = render([], [], { ...OWNER, brandVoicePaused: true });
+    expect(html).not.toContain("Tell the AI how you sound");
+    expect(html).toContain("Connect a platform");
+    expect(html).toContain("Set what every post ends with");
+    expect(html).toContain("Create your first post");
+    expect(html).toContain("Get set up. Step 2 is a setting that changes every post.");
+    expect(html).not.toContain("Steps 2 and 3");
+  });
+
+  it("with the feature: four steps and today's heading", () => {
+    const html = render([], [], OWNER);
+    expect(html).toContain("Tell the AI how you sound");
+    expect(html).toContain("Get set up. Steps 2 and 3 are settings that change every post.");
+  });
+});

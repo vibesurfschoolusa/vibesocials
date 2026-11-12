@@ -52,6 +52,16 @@ const PLACES: Record<string, (workspace: Record<string, unknown>, env: Record<st
       else process.env.BILLING_ENABLED = prior;
     }
   },
+  "Get started's brand voice step": (w, env) => {
+    const prior = process.env.BILLING_ENABLED;
+    process.env.BILLING_ENABLED = env.BILLING_ENABLED ?? "";
+    try {
+      return !("brandVoicePaused" in workspaceSetupFrom({ ...SETUP_FIELDS, ...w }, "owner", true));
+    } finally {
+      if (prior === undefined) delete process.env.BILLING_ENABLED;
+      else process.env.BILLING_ENABLED = prior;
+    }
+  },
   "Add many page": (w, env) => planIncludes(w, "bulk", env, NOW),
   "brand voice in the AI prompts": (w, env) =>
     workspaceBrandVoicePrompt({ ...VOICE, ...w }, env, NOW) === brandVoicePrompt(VOICE.brandVoice, VOICE.brandVoiceExamples),
@@ -87,6 +97,7 @@ const GATED_FILES: Array<[string, string]> = [
   ["app/api/workspaces/connect-link/route.ts", "clientLinks"],
   ["app/reports/page.tsx", "clientLinks"],
   ["lib/gettingStarted.ts", "clientLinks"],
+  ["lib/gettingStarted.ts", "brandVoice"],
   ["app/posts/bulk/page.tsx", "bulk"],
   ["lib/brandVoice.ts", "brandVoice"],
   ["app/settings/planNotes.ts", "brandVoice"],

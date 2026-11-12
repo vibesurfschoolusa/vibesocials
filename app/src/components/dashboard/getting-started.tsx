@@ -53,9 +53,11 @@ export function GettingStarted({
       <CardHeader>
         <CardTitle className="text-base">Get started</CardTitle>
         <CardDescription>
-          {state.steps.length > 1
-            ? "Get set up. Steps 2 and 3 are settings that change every post."
-            : "This workspace has a platform connected, so you can create posts."}
+          {state.steps.length === 1
+            ? "This workspace has a platform connected, so you can create posts."
+            : state.steps.includes("voice")
+              ? "Get set up. Steps 2 and 3 are settings that change every post."
+              : "Get set up. Step 2 is a setting that changes every post."}
         </CardDescription>
       </CardHeader>
       <CardContent>
