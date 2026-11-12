@@ -78,3 +78,40 @@ describe("buildLimitReachedEmail", () => {
     expect(html).not.toContain("<b>x</b>");
   });
 });
+
+// S1 fix round 2: "its limit of 1 YouTube uploads a day" read wrong with the plans' small limits.
+describe("buildLimitReachedEmail counts agree with their number", () => {
+  function html(kind: "postsPerDay" | "xPostsPerMonth" | "youtubeUploadsPerDay", limit: number): string {
+    return buildLimitReachedEmail({
+      workspaceName: "Surf Co",
+      kind,
+      limit,
+      day: new Date("2026-11-12T00:00:00Z"),
+      resetsAt: null,
+    }).html;
+  }
+
+  it.each([
+    [1, "post"],
+    [2, "posts"],
+    [10, "posts"],
+  ])("posts per day: %i %s", (n, word) => {
+    expect(html("postsPerDay", n)).toContain(`reached its limit of ${n} ${word} for 12 November.`);
+  });
+
+  it.each([
+    [1, "X post"],
+    [2, "X posts"],
+    [10, "X posts"],
+  ])("X posts: %i %s", (n, words) => {
+    expect(html("xPostsPerMonth", n)).toContain(`has used its ${n} ${words} for this month.`);
+  });
+
+  it.each([
+    [1, "YouTube upload"],
+    [2, "YouTube uploads"],
+    [10, "YouTube uploads"],
+  ])("YouTube uploads: %i %s", (n, words) => {
+    expect(html("youtubeUploadsPerDay", n)).toContain(`has reached its limit of ${n} ${words} a day.`);
+  });
+});

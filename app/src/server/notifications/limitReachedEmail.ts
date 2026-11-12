@@ -1,5 +1,6 @@
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { formatStorageGb, utcDateLabel, utcDayMonthLabel, type UsageLimitKind } from "@/lib/usageLimits";
+import { countWord } from "@/lib/plural";
 
 /**
  * Sent to every OWNER of a workspace the first time it hits one of its usage
@@ -29,17 +30,17 @@ function limitLines(
       // The full day can be a future one (a post scheduled into it), which does
       // not "open again": name the day and say only what is true.
       return [
-        `reached its limit of ${limit} posts for ${day ? utcDayMonthLabel(day) : "that day"}. Posts on other days are not affected.`,
+        `reached its limit of ${limit} ${countWord(limit, "post", "posts")} for ${day ? utcDayMonthLabel(day) : "that day"}. Posts on other days are not affected.`,
       ];
     case "xPostsPerMonth":
       return [
-        `has used its ${limit} X posts for this month.`,
+        `has used its ${limit} ${countWord(limit, "X post", "X posts")} for this month.`,
         "Posts to every other platform still go out.",
         resetsAt ? `X posts start again on ${utcDateLabel(resetsAt)}.` : "X posts start again next month.",
       ];
     case "youtubeUploadsPerDay":
       return [
-        `has reached its limit of ${limit} YouTube uploads a day.`,
+        `has reached its limit of ${limit} ${countWord(limit, "YouTube upload", "YouTube uploads")} a day.`,
         "Posts to every other platform still go out.",
         "YouTube uploads start again at midnight Pacific time.",
       ];
