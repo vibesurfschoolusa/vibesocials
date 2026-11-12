@@ -1,5 +1,7 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { planIncludes } from "@/lib/planFeatures";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { BulkPostsForm } from "./bulk-posts-form";
 
@@ -22,7 +24,19 @@ export default async function BulkPostsPage() {
           coming days.
         </p>
       </div>
-      <BulkPostsForm workspaceId={context.workspace.id} />
+      {/* P1: Add many is a Growth and Pro feature. Its requests are Create's own POST
+          /api/posts calls, so the page is the one place it can be gated. */}
+      {planIncludes(context.workspace, "bulk") ? (
+        <BulkPostsForm workspaceId={context.workspace.id} />
+      ) : (
+        <p className="text-sm text-foreground">
+          Add many is part of the Growth and Pro plans.{" "}
+          <Link href="/settings#plan" className="font-medium text-primary underline-offset-4 hover:underline">
+            Choose a plan in Settings, Plan
+          </Link>
+          .
+        </p>
+      )}
     </div>
   );
 }

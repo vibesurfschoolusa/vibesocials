@@ -123,3 +123,18 @@ describe("WorkingForClients", () => {
     expect(renderClients(null, POSTED, ALL_SET)).toBe("");
   });
 });
+
+// P1: client links are a Growth and Pro feature.
+describe("WorkingForClients where the plan pauses client links", () => {
+  const PAUSED: WorkspaceSetup = { ...OWNER, footerSet: true, brandVoiceSet: true, clientLinksPaused: true };
+
+  it("shows one line linking to Settings, Plan instead of the three links", () => {
+    const html = renderClients(CONNECTED, POSTED, PAUSED);
+    expect(html).toContain("Working for clients?");
+    expect(html).toContain("Client upload, review and connect links come with the Growth and Pro plans.");
+    expect(html).toMatch(/<a [^>]*href="\/settings#plan"[^>]*>Choose a plan in Settings, Plan<\/a>/);
+    expect(html).not.toContain("Send a connect link");
+    expect(html).not.toContain("Send an upload link");
+    expect(html).not.toContain("Send a review link");
+  });
+});

@@ -180,25 +180,35 @@ export function WorkingForClients({
     <Card>
       <CardHeader>
         <CardTitle className="text-base">Working for clients?</CardTitle>
-        <CardDescription>
-          Make each link on the page it opens, then send it yourself. Your client needs no account.
-        </CardDescription>
+        {setup?.clientLinksPaused ? null : (
+          <CardDescription>
+            Make each link on the page it opens, then send it yourself. Your client needs no account.
+          </CardDescription>
+        )}
       </CardHeader>
       <CardContent>
-        <ul className="space-y-2 text-sm text-muted-foreground">
-          <li>
-            <Link href="/settings#connect-link" className={linkClass}>Send a connect link</Link>: your client
-            connects their own accounts, without sharing a password.
-          </li>
-          <li>
-            <Link href="/media" className={linkClass}>Send an upload link</Link>: your client sends photos and
-            videos from their phone.
-          </li>
-          <li>
-            <Link href="/queue" className={linkClass}>Send a review link</Link>: your client approves scheduled
-            posts or asks for a change.
-          </li>
-        </ul>
+        {/* P1: without the plan feature the links are paused, so the block says where they come from. */}
+        {setup?.clientLinksPaused ? (
+          <p className="text-sm text-muted-foreground">
+            Client upload, review and connect links come with the Growth and Pro plans.{" "}
+            <Link href="/settings#plan" className={linkClass}>Choose a plan in Settings, Plan</Link>.
+          </p>
+        ) : (
+          <ul className="space-y-2 text-sm text-muted-foreground">
+            <li>
+              <Link href="/settings#connect-link" className={linkClass}>Send a connect link</Link>: your client
+              connects their own accounts, without sharing a password.
+            </li>
+            <li>
+              <Link href="/media" className={linkClass}>Send an upload link</Link>: your client sends photos and
+              videos from their phone.
+            </li>
+            <li>
+              <Link href="/queue" className={linkClass}>Send a review link</Link>: your client approves scheduled
+              posts or asks for a change.
+            </li>
+          </ul>
+        )}
       </CardContent>
     </Card>
   );

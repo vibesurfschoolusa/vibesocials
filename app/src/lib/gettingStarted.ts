@@ -1,6 +1,8 @@
 import type { Workspace, WorkspaceRole } from "@prisma/client";
 
+import type { BillingFields } from "@/lib/billing";
 import type { ConnectionStatus } from "@/lib/connectionsDto";
+import { planIncludes } from "@/lib/planFeatures";
 import type { PostJobDTO } from "@/lib/postsDto";
 import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 
@@ -25,6 +27,8 @@ export interface WorkspaceSetup {
   brandVoiceSet: boolean;
   /** An active upload, review or connect link (not revoked; a connect link also not expired). Always false for a member. */
   hasClientLink: boolean;
+  /** P1: present (true) only when the plan does not include client links; the clients block then says so. */
+  clientLinksPaused?: true;
 }
 
 export interface GettingStartedState {
@@ -58,7 +62,7 @@ export interface GettingStartedState {
 const isSet = (value: string | null) => Boolean(value?.trim());
 
 export function workspaceSetupFrom(
-  workspace: Pick<Workspace, "companyWebsite" | "defaultHashtags" | "brandVoice" | "brandVoiceExamples">,
+  workspace: Pick<Workspace, "companyWebsite" | "defaultHashtags" | "brandVoice" | "brandVoiceExamples"> & BillingFields,
   role: WorkspaceRole,
   hasClientLink: boolean,
 ): WorkspaceSetup {
@@ -67,6 +71,7 @@ export function workspaceSetupFrom(
     footerSet: isSet(workspace.companyWebsite) || isSet(workspace.defaultHashtags),
     brandVoiceSet: isSet(workspace.brandVoice) || isSet(workspace.brandVoiceExamples),
     hasClientLink: role === "owner" && hasClientLink,
+    ...(planIncludes(workspace, "clientLinks") ? {} : { clientLinksPaused: true as const }),
   };
 }
 

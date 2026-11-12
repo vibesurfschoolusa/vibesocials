@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   COMPOSE_CTA,
@@ -258,5 +258,31 @@ describe("deriveDashboardCta", () => {
     expect(
       deriveDashboardCta([connection({ connected: true, needsReconnect: true })]),
     ).toMatchObject({ kind: "compose" });
+  });
+});
+
+// P1: the clients block learns whether the plan pauses client links; nothing is added otherwise.
+describe("workspaceSetupFrom and the plan", () => {
+  const empty = { companyWebsite: null, defaultHashtags: null, brandVoice: null, brandVoiceExamples: null };
+  const LATER = new Date(Date.now() + 20 * 24 * 60 * 60 * 1000);
+  const STARTER = { plan: "starter", planStatus: "active", currentPeriodEnd: LATER };
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("marks client links paused on Starter with billing on", () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    expect(workspaceSetupFrom({ ...empty, ...STARTER }, "owner", true).clientLinksPaused).toBe(true);
+  });
+
+  it("adds nothing on Growth, in a trial, for an exempt workspace or with billing off", () => {
+    for (const [billing, on] of [
+      [{ ...STARTER, plan: "growth" }, true],
+      [{ trialEndsAt: LATER }, true],
+      [{ ...STARTER, billingExempt: true }, true],
+      [STARTER, false],
+    ] as const) {
+      vi.stubEnv("BILLING_ENABLED", on ? "true" : "");
+      expect(workspaceSetupFrom({ ...empty, ...billing }, "owner", true)).not.toHaveProperty("clientLinksPaused");
+    }
   });
 });
