@@ -145,3 +145,15 @@ describe("/pricing with payments configured", () => {
     expect(await generateMetadata()).toMatchObject({ title: "Pricing | Vibe Socials" });
   });
 });
+
+describe("/pricing: one plan per workspace (S1 item 3)", () => {
+  it("says above the cards that each plan covers one workspace", async () => {
+    configurePayments();
+    getPlanOffersMock.mockResolvedValue([{ plan: "starter", name: "Starter", price: "$19 a month" }]);
+    const page = text(await render());
+    const sentence =
+      "Each plan covers one workspace: one business with its own connected accounts. A second workspace needs its own plan once your trial ends.";
+    expect(page).toContain(sentence);
+    expect(page.indexOf(sentence)).toBeLessThan(page.indexOf("Starter"));
+  });
+});

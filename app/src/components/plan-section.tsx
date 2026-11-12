@@ -1,5 +1,6 @@
 import { PlanActions, type PlanOfferView } from "@/components/plan-actions";
 import { Card } from "@/components/ui/card";
+import { WORKSPACE_PLAN_SENTENCE } from "@/lib/planCopy";
 import { formatStorageGb } from "@/lib/usageLimits";
 import type { WorkspaceUsage } from "@/server/usage/workspaceUsage";
 
@@ -17,6 +18,7 @@ export function PlanSection({
   notice = null,
   offers = [],
   manage = false,
+  workspaceNote = false,
 }: {
   label: string;
   usage: WorkspaceUsage | null;
@@ -26,10 +28,13 @@ export function PlanSection({
   offers?: PlanOfferView[];
   /** 21b: the customer portal button. */
   manage?: boolean;
+  /** S1: say that the plan covers this one workspace (billing on). */
+  workspaceNote?: boolean;
 }) {
   return (
     <Card className="flex flex-col gap-3 p-6">
       <p className="text-sm font-medium text-foreground">{label}</p>
+      {workspaceNote ? <p className="text-sm text-muted-foreground">{WORKSPACE_PLAN_SENTENCE}</p> : null}
       {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
       {usage ? (
         <dl className="grid grid-cols-1 gap-x-4 gap-y-1 text-sm sm:grid-cols-2">

@@ -21,7 +21,7 @@ import {
   planSectionActions,
   planSectionLabel,
 } from "@/components/planSectionView";
-import { paymentsConfigured, stripeReachable } from "@/lib/billing";
+import { billingEnabled, paymentsConfigured, stripeReachable } from "@/lib/billing";
 import { getPlanOffers } from "@/server/billing/planPrices";
 import { getWorkspaceUsageOrNull } from "@/server/usage/workspaceUsage";
 import { Alert } from "@/components/ui/alert";
@@ -283,6 +283,7 @@ export default async function SettingsPage({
               notice={planNotice}
               offers={planOffers}
               manage={planActions?.manage ?? false}
+              workspaceNote={billingEnabled()}
             />
           </section>
         ) : null}

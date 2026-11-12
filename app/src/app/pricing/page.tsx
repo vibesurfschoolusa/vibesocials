@@ -6,6 +6,7 @@ import { SiteLinks } from "@/components/legal-page";
 import { buttonVariants } from "@/components/ui/button";
 import { offeredPlans, paymentsConfigured, trialDays } from "@/lib/billing";
 import { PRICING_CANCEL } from "@/lib/billingTerms";
+import { WORKSPACE_PLAN_SENTENCE } from "@/lib/planCopy";
 import { PLANS } from "@/lib/plans";
 import { PRODUCT_NAME } from "@/lib/siteInfo";
 import { getPlanOffers } from "@/server/billing/planPrices";
@@ -50,6 +51,7 @@ export default async function PricingPage() {
         </div>
 
         <p className="text-base text-foreground">{trialDays()}-day free trial. No card needed to start.</p>
+        <p className="mt-2 text-sm text-muted-foreground">{WORKSPACE_PLAN_SENTENCE}</p>
         {pricesMissing ? (
           <p className="mt-2 text-sm text-muted-foreground">Prices are unavailable right now. Try again in a minute.</p>
         ) : null}

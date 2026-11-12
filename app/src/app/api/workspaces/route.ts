@@ -1,10 +1,11 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
-import { billingFieldsSelect } from "@/lib/billing";
+import { billingEnabled, billingFieldsSelect } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
+import { WORKSPACE_PLAN_SENTENCE } from "@/lib/planCopy";
 import { isOperatorUser } from "@/lib/operator";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
@@ -61,6 +62,8 @@ export async function GET() {
     // Only for the operator (2026-11-10): the account menu renders this link
     // from the data, so no code every customer downloads names the admin page.
     ...(operator ? { operatorLink: { href: "/admin", label: "Admin" } } : {}),
+    // S1: the New workspace form says a plan covers one workspace; billing on only.
+    ...(billingEnabled() ? { newWorkspaceNote: WORKSPACE_PLAN_SENTENCE } : {}),
   });
 }
 

@@ -46,6 +46,8 @@ export function AccountMenu() {
   // The operator's link (2026-11-10): whatever GET /api/workspaces sends, which
   // is nothing for everyone else, so this file names no path or label of its own.
   const [operatorLink, setOperatorLink] = useState<OperatorLink | null>(null);
+  // S1: with billing on, the route sends the sentence that a plan covers one workspace.
+  const [newWorkspaceNote, setNewWorkspaceNote] = useState<string | null>(null);
 
   // Team Workspaces (Task 7) — the switcher's memberships. Fetched fresh every
   // time the popover opens (a cheap, membership-checked route) rather than
@@ -91,7 +93,8 @@ export function AccountMenu() {
       try {
         const response = await fetch("/api/workspaces");
         if (!response.ok) throw new Error("Failed to load workspaces");
-        const data: { workspaces: WorkspaceSummary[]; operatorLink?: OperatorLink } = await response.json();
+        const data: { workspaces: WorkspaceSummary[]; operatorLink?: OperatorLink; newWorkspaceNote?: unknown } =
+          await response.json();
         if (!cancelled) {
           setWorkspaces(data.workspaces);
           setOperatorLink(
@@ -99,6 +102,7 @@ export function AccountMenu() {
               ? data.operatorLink
               : null,
           );
+          setNewWorkspaceNote(typeof data.newWorkspaceNote === "string" ? data.newWorkspaceNote : null);
         }
       } catch {
         // Leave `workspaces` at its previous value (null on first failure) —
@@ -290,6 +294,7 @@ export function AccountMenu() {
                     onChange={(event) => setNewWorkspaceName(event.target.value)}
                     disabled={createBusy}
                   />
+                  {newWorkspaceNote ? <p className="text-xs text-muted-foreground">{newWorkspaceNote}</p> : null}
                   <div className="flex justify-end gap-2">
                     <Button
                       type="button"

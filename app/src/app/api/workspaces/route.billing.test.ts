@@ -162,3 +162,14 @@ describe("POST /api/workspaces with billing on", () => {
     expect((await POST(request())).status).toBe(201);
   });
 });
+
+describe("GET /api/workspaces with billing on (S1 item 3)", () => {
+  it("carries the one-plan-per-workspace sentence for the New workspace form", async () => {
+    const { GET } = await import("./route");
+    h.findMany.mockResolvedValue([]);
+    const body = await (await GET()).json();
+    expect(body.newWorkspaceNote).toBe(
+      "Each plan covers one workspace: one business with its own connected accounts. A second workspace needs its own plan once your trial ends.",
+    );
+  });
+});
