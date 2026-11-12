@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { planFeatureResponse } from "@/lib/planFeatureResponse";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requireOwnerContext, type WorkspaceContext } from "@/lib/workspace";
 import { WORKSPACE_CHANGED_CODE, WORKSPACE_CHANGED_MESSAGE } from "@/lib/workspaceChanged";
@@ -38,12 +39,18 @@ import { LogoRejectedError, logoBlobPath, normalizeLogo, readBodyAtMost } from "
  * review-link owner routes do.
  */
 
-async function gate(request: Request): Promise<WorkspaceContext | NextResponse> {
+async function gate(request: Request, upload = false): Promise<WorkspaceContext | NextResponse> {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) return contextOrError;
   const sent = new URL(request.url).searchParams.get("workspaceId");
   if (sent !== null && sent !== contextOrError.workspace.id) {
     return NextResponse.json({ error: WORKSPACE_CHANGED_MESSAGE, code: WORKSPACE_CHANGED_CODE }, { status: 409 });
+  }
+  // P1: a new logo needs the plan feature, checked before the rate limit counts the attempt.
+  // Removing one is always allowed.
+  if (upload) {
+    const notIncluded = planFeatureResponse(contextOrError.workspace, "monthlyReportEmail");
+    if (notIncluded) return notIncluded;
   }
   const limit = await checkRateLimit({
     userId: contextOrError.user.id,
@@ -93,7 +100,7 @@ async function discardStoredFile(url: string, workspaceId: string) {
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
-  const contextOrError = await gate(request);
+  const contextOrError = await gate(request, true);
   if (contextOrError instanceof NextResponse) return contextOrError;
   const workspaceId = contextOrError.workspace.id;
 

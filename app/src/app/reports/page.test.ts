@@ -107,4 +107,22 @@ describe("the Reports page", () => {
     linkFindFirstMock.mockResolvedValue(null);
     expect(await render()).not.toContain("Your client can open");
   });
+  // P1: on Starter the review link is paused, so the client cannot open it.
+  it("says nothing of the client's link on Starter, and says it on Growth", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    const LATER = new Date(Date.now() + 20 * 24 * 60 * 60 * 1000);
+    const owner = (plan: string) => ({
+      ...context("owner"),
+      workspace: { id: "ws-1", name: "Surf Co", plan, planStatus: "active", currentPeriodEnd: LATER },
+    });
+    linkFindFirstMock.mockResolvedValue({ id: "link-1" });
+    try {
+      getWorkspaceContextMock.mockResolvedValue(owner("starter"));
+      expect(await render()).not.toContain("Your client can open");
+      getWorkspaceContextMock.mockResolvedValue(owner("growth"));
+      expect(await render()).toContain("Your client can open");
+    } finally {
+      vi.stubEnv("BILLING_ENABLED", undefined);
+    }
+  });
 });

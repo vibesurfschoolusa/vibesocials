@@ -1,5 +1,5 @@
 import sharp from "sharp";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const m = vi.hoisted(() => ({
   requireOwnerContext: vi.fn(),
@@ -334,5 +334,46 @@ describe("DELETE /api/workspaces/logo", () => {
     m.checkRateLimit.mockResolvedValue({ allowed: false, retryAfterSeconds: 60 });
     expect((await DELETE(remove())).status).toBe(429);
     expect(m.transaction).not.toHaveBeenCalled();
+  });
+});
+
+// P1: the report logo comes with the Growth and Pro plans.
+describe("POST /api/workspaces/logo by plan", () => {
+  const LATER = new Date(Date.now() + 20 * 24 * 60 * 60 * 1000);
+  const STARTER = { plan: "starter", planStatus: "active", currentPeriodEnd: LATER };
+  const owner = (billing: Record<string, unknown>) => ({ ...OWNER, workspace: { ...OWNER.workspace, ...billing } });
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("refuses an upload on Starter with the code and the sentence, before reading or storing anything", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    m.requireOwnerContext.mockResolvedValue(owner(STARTER));
+    const response = await POST(upload(await picture(40, 20)));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: "The report logo and the monthly report email are part of the Growth and Pro plans. Choose a plan in Settings, Plan.",
+      code: "PLAN_FEATURE",
+    });
+    expect(m.put).not.toHaveBeenCalled();
+    expect(m.checkRateLimit).not.toHaveBeenCalled();
+  });
+
+  it("still removes a saved logo on Starter", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    m.requireOwnerContext.mockResolvedValue(owner(STARTER));
+    expect((await DELETE(remove())).status).toBe(200);
+  });
+
+  it("takes an upload on Growth, in a trial, for an exempt workspace and with billing off", async () => {
+    for (const [billing, on] of [
+      [{ ...STARTER, plan: "growth" }, true],
+      [{ trialEndsAt: LATER }, true],
+      [{ ...STARTER, billingExempt: true }, true],
+      [STARTER, false],
+    ] as const) {
+      vi.stubEnv("BILLING_ENABLED", on ? "true" : "");
+      m.requireOwnerContext.mockResolvedValue(owner(billing));
+      expect((await POST(upload(await picture(40, 20)))).status).toBe(200);
+    }
   });
 });

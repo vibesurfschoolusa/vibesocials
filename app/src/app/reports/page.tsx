@@ -6,6 +6,7 @@ import { PrintReportButton } from "@/components/reports/print-button";
 import { prisma } from "@/lib/db";
 import { parseReportMonth, reportMonths } from "@/lib/monthlyReport";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { planIncludes } from "@/lib/planFeatures";
 import { buildMonthlyReport } from "@/server/reports/monthlyReport";
 
 export const dynamic = "force-dynamic";
@@ -35,8 +36,9 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
 
   const report = parsed.ok ? await buildMonthlyReport(workspaceId, parsed.month, now) : null;
   // Owners only: whether a client link is on. The token is never read here.
+  // P1: a link the plan pauses cannot be opened, so it is not mentioned.
   const hasClientLink =
-    context.role === "owner"
+    context.role === "owner" && planIncludes(context.workspace, "clientLinks")
       ? (await prisma.workspaceReviewLink.findFirst({
           where: { workspaceId, revokedAt: null },
           select: { id: true },

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const m = vi.hoisted(() => ({
   workspaceFindUnique: vi.fn(),
@@ -351,5 +351,42 @@ describe("buildMonthlyReport - a post without a file", () => {
 
     expect(m.postFindMany.mock.calls[0][0].select).toHaveProperty("mediaItemId", true);
     expect(report.posts[0]).toMatchObject({ caption: "Wind is onshore", media: null, mediaCount: 0 });
+  });
+});
+
+// P1: the saved logo shows only where the plan includes it; the report itself is on every plan.
+describe("buildMonthlyReport: the logo by plan", () => {
+  const LOGO = "https://abc.public.blob.vercel-storage.com/logos/ws-1/0123456789abcdef.png";
+  const LATER = new Date(NOW.getTime() + 20 * 24 * 60 * 60 * 1000);
+  const STARTER = { plan: "starter", planStatus: "active", currentPeriodEnd: LATER };
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("leaves a saved logo out on Starter, with billing on, and still builds the report", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    m.workspaceFindUnique.mockResolvedValue({ name: "Surf Co", logoUrl: LOGO, ...STARTER });
+    const report = await buildMonthlyReport(WS, "2026-10", NOW);
+    expect(report.logoUrl).toBeNull();
+    expect(report.postCount).toBe(1);
+    expect(m.workspaceFindUnique.mock.calls[0][0].select).toMatchObject({ name: true, logoUrl: true, plan: true });
+  });
+
+  it("shows it on Growth, in a trial, for an exempt workspace and with billing off", async () => {
+    for (const [billing, on] of [
+      [{ ...STARTER, plan: "growth" }, true],
+      [{ trialEndsAt: LATER }, true],
+      [{ ...STARTER, billingExempt: true }, true],
+      [STARTER, false],
+    ] as const) {
+      vi.stubEnv("BILLING_ENABLED", on ? "true" : "");
+      m.workspaceFindUnique.mockResolvedValue({ name: "Surf Co", logoUrl: LOGO, ...billing });
+      expect((await buildMonthlyReport(WS, "2026-10", NOW)).logoUrl).toBe(LOGO);
+    }
+  });
+
+  it("with billing off reads only today's columns", async () => {
+    vi.stubEnv("BILLING_ENABLED", "");
+    await buildMonthlyReport(WS, "2026-10", NOW);
+    expect(m.workspaceFindUnique.mock.calls[0][0].select).toEqual({ name: true, logoUrl: true });
   });
 });

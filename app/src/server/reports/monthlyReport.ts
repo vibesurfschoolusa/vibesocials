@@ -1,5 +1,6 @@
 import type { Platform } from "@prisma/client";
 
+import { billingFieldsSelect } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import {
   REPORT_NUMBER_KEYS,
@@ -13,6 +14,7 @@ import {
   type ReportNumberKey,
   type ReportPost,
 } from "@/lib/monthlyReport";
+import { planIncludes } from "@/lib/planFeatures";
 import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { platformPostUrl } from "@/lib/platformPostUrl";
 import { METRIC_PLATFORMS } from "@/lib/postsDto";
@@ -51,7 +53,8 @@ export async function buildMonthlyReport(
 
   const workspace = await prisma.workspace.findUnique({
     where: { id: workspaceId },
-    select: { name: true, logoUrl: true },
+    // P1: the plan columns too, only with billing on.
+    select: { name: true, logoUrl: true, ...billingFieldsSelect() },
   });
 
   // Results per platform and failures per platform: one grouped count, served
@@ -201,7 +204,8 @@ export async function buildMonthlyReport(
   return {
     month,
     workspaceName: workspace?.name ?? "",
-    logoUrl: workspace?.logoUrl ?? null,
+    // P1: a saved logo shows (in Reports, the client's report and the email) only where the plan includes it.
+    logoUrl: workspace && planIncludes(workspace, "monthlyReportEmail", process.env, now) ? workspace.logoUrl : null,
     inProgress: now.toISOString().slice(0, 7) === month,
     postCount,
     posts: posts.map((post) => ({
