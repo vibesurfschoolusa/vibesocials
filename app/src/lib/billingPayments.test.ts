@@ -145,3 +145,60 @@ describe("price id lists", () => {
     expect(offeredPlans(LISTS)).toEqual(["starter", "growth", "pro"]);
   });
 });
+
+// P1: yearly prices, next to the monthly ones.
+describe("yearly prices", () => {
+  const YEARLY = {
+    ...FULL,
+    STRIPE_PRICE_STARTER_YEARLY: "price_test_starter_year",
+    STRIPE_PRICE_GROWTH_YEARLY: "price_test_growth_year_new, price_test_growth_year",
+    STRIPE_PRICE_PRO_YEARLY: "",
+  };
+
+  it("parses the six variables: monthly by default, yearly when asked", () => {
+    expect(planPriceIds(YEARLY)).toEqual({
+      starter: ["price_example_starter"],
+      growth: ["price_example_growth"],
+      pro: ["price_example_pro"],
+    });
+    expect(planPriceIds(YEARLY, "year")).toEqual({
+      starter: ["price_test_starter_year"],
+      growth: ["price_test_growth_year_new", "price_test_growth_year"],
+      pro: [],
+    });
+  });
+
+  it("a yearly id maps to its plan, old ones too", () => {
+    expect(planForPriceId("price_test_starter_year", YEARLY)).toBe("starter");
+    expect(planForPriceId("price_test_growth_year", YEARLY)).toBe("growth");
+    expect(planForPriceId("price_test_unknown", YEARLY)).toBeNull();
+  });
+
+  it("checkout uses the first yearly id; a plan without one has no yearly price", () => {
+    expect(priceIdForPlan("growth", YEARLY, "year")).toBe("price_test_growth_year_new");
+    expect(priceIdForPlan("pro", YEARLY, "year")).toBeNull();
+    expect(priceIdForPlan("growth", YEARLY)).toBe("price_example_growth");
+    expect(offeredPlans(YEARLY, "year")).toEqual(["starter", "growth"]);
+    expect(offeredPlans(YEARLY)).toEqual(["starter", "growth", "pro"]);
+  });
+
+  it("reports an id listed both monthly and yearly, or under two plans' yearly lists, and maps it to no plan", () => {
+    const env = {
+      ...YEARLY,
+      STRIPE_PRICE_STARTER_YEARLY: "price_example_starter",
+      STRIPE_PRICE_PRO_YEARLY: "price_test_growth_year",
+    };
+    expect(duplicatePriceIds(env).sort()).toEqual(["price_example_starter", "price_test_growth_year"]);
+    expect(planForPriceId("price_example_starter", env)).toBeNull();
+    expect(planForPriceId("price_test_growth_year", env)).toBeNull();
+    expect(priceIdForPlan("starter", env)).toBeNull();
+    expect(priceIdForPlan("growth", env, "year")).toBe("price_test_growth_year_new");
+  });
+
+  it("with no yearly variable set, everything is as before", () => {
+    expect(planPriceIds(FULL, "year")).toEqual({ starter: [], growth: [], pro: [] });
+    expect(offeredPlans(FULL, "year")).toEqual([]);
+    expect(duplicatePriceIds(FULL)).toEqual([]);
+    expect(paymentsConfigured(FULL)).toBe(true);
+  });
+});

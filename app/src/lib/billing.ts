@@ -115,11 +115,15 @@ export const PLAN_STATE_LABELS: Record<PlanState, string> = {
   ended: "Ended",
 };
 
-/** The environment variable holding each plan's Stripe price id (21b). */
-const PRICE_ENV: Record<PlanKey, string> = {
-  starter: "STRIPE_PRICE_STARTER",
-  growth: "STRIPE_PRICE_GROWTH",
-  pro: "STRIPE_PRICE_PRO",
+/** How often a plan is paid for (P1): each plan has a monthly and, optionally, a yearly price. */
+export const BILLING_INTERVALS = ["month", "year"] as const;
+
+export type BillingInterval = (typeof BILLING_INTERVALS)[number];
+
+/** The environment variable holding each plan's Stripe price ids, per interval (21b; yearly P1). */
+const PRICE_ENV: Record<BillingInterval, Record<PlanKey, string>> = {
+  month: { starter: "STRIPE_PRICE_STARTER", growth: "STRIPE_PRICE_GROWTH", pro: "STRIPE_PRICE_PRO" },
+  year: { starter: "STRIPE_PRICE_STARTER_YEARLY", growth: "STRIPE_PRICE_GROWTH_YEARLY", pro: "STRIPE_PRICE_PRO_YEARLY" },
 };
 
 function envValue(env: BillingEnv, name: string): string | null {
@@ -128,18 +132,21 @@ function envValue(env: BillingEnv, name: string): string | null {
 }
 
 /**
- * Each plan's Stripe price ids (fix round 7). A variable holds one id or
- * several separated by commas; spaces are ignored and empty entries dropped.
- * Every id in a plan's list maps to that plan; the first is the one a new
- * checkout uses and the one Settings shows. So a price change puts the new
- * id first and keeps the old one after it, and subscribers on the old price
- * are still recognised. Everything that reads these variables goes through
- * this function.
+ * Each plan's Stripe price ids for one interval, monthly by default (fix
+ * round 7; yearly P1). A variable holds one id or several separated by
+ * commas; spaces are ignored and empty entries dropped. Every id in a plan's
+ * list maps to that plan; the first is the one a new checkout uses and the
+ * one Settings shows. So a price change puts the new id first and keeps the
+ * old one after it, and subscribers on the old price are still recognised.
+ * Everything that reads these variables goes through this function.
  */
-export function planPriceIds(env: BillingEnv = process.env): Record<PlanKey, string[]> {
+export function planPriceIds(
+  env: BillingEnv = process.env,
+  interval: BillingInterval = "month",
+): Record<PlanKey, string[]> {
   const parse = (plan: PlanKey) => [
     ...new Set(
-      (env[PRICE_ENV[plan]] ?? "")
+      (env[PRICE_ENV[interval][plan]] ?? "")
         .split(",")
         .map((id) => id.trim())
         .filter(Boolean),
@@ -148,34 +155,51 @@ export function planPriceIds(env: BillingEnv = process.env): Record<PlanKey, str
   return { starter: parse("starter"), growth: parse("growth"), pro: parse("pro") };
 }
 
-/** Ids listed under more than one plan: a configuration error; each maps to no plan. */
+/**
+ * Ids listed in more than one of the six lists (three plans, two intervals): a
+ * configuration error; each maps to no plan. A Stripe price has one interval,
+ * so an id under both a monthly and a yearly variable is one too.
+ */
 export function duplicatePriceIds(env: BillingEnv = process.env): string[] {
-  const lists = planPriceIds(env);
   const seen = new Map<string, number>();
-  for (const plan of PLAN_KEYS) for (const id of lists[plan]) seen.set(id, (seen.get(id) ?? 0) + 1);
+  for (const interval of BILLING_INTERVALS) {
+    const lists = planPriceIds(env, interval);
+    for (const plan of PLAN_KEYS) for (const id of lists[plan]) seen.set(id, (seen.get(id) ?? 0) + 1);
+  }
   return [...seen].filter(([, count]) => count > 1).map(([id]) => id);
 }
 
 /**
- * The price id a new checkout uses for the plan (the first in its list that
- * is not also listed under another plan), or null: the plan is not offered.
+ * The price id a new checkout uses for the plan and interval (the first in its
+ * list that is not also listed elsewhere), or null: not offered that way.
  */
-export function priceIdForPlan(plan: PlanKey, env: BillingEnv = process.env): string | null {
+export function priceIdForPlan(
+  plan: PlanKey,
+  env: BillingEnv = process.env,
+  interval: BillingInterval = "month",
+): string | null {
   const duplicates = new Set(duplicatePriceIds(env));
-  return planPriceIds(env)[plan].find((id) => !duplicates.has(id)) ?? null;
+  return planPriceIds(env, interval)[plan].find((id) => !duplicates.has(id)) ?? null;
 }
 
-/** The plans that have a usable price, in plan order. */
-export function offeredPlans(env: BillingEnv = process.env): PlanKey[] {
-  return PLAN_KEYS.filter((plan) => priceIdForPlan(plan, env) !== null);
+/** The plans that have a usable price for the interval (monthly by default), in plan order. */
+export function offeredPlans(env: BillingEnv = process.env, interval: BillingInterval = "month"): PlanKey[] {
+  return PLAN_KEYS.filter((plan) => priceIdForPlan(plan, env, interval) !== null);
 }
 
-/** Which plan a Stripe price id stands for: any id in a plan's list, unless it is in two lists. */
+/**
+ * Which plan a Stripe price id stands for: any id in a plan's monthly or
+ * yearly list, unless it is listed twice. The webhook writes this plan.
+ */
 export function planForPriceId(priceId: string | null | undefined, env: BillingEnv = process.env): PlanKey | null {
   if (!priceId) return null;
   if (duplicatePriceIds(env).includes(priceId)) return null;
-  const lists = planPriceIds(env);
-  return PLAN_KEYS.find((plan) => lists[plan].includes(priceId)) ?? null;
+  for (const interval of BILLING_INTERVALS) {
+    const lists = planPriceIds(env, interval);
+    const plan = PLAN_KEYS.find((key) => lists[key].includes(priceId));
+    if (plan) return plan;
+  }
+  return null;
 }
 
 /**

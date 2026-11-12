@@ -293,3 +293,29 @@ describe("isLiveSubscriptionStatus (checkout and deletion)", () => {
     }
   });
 });
+
+// P1: a yearly price writes its plan; the period and the 7-day grace run from Stripe's yearly dates.
+describe("a yearly subscription", () => {
+  const YEARLY_ENV = { ...ENV, STRIPE_PRICE_GROWTH_YEARLY: "price_test_growth_year" };
+  const YEAR_END = PERIOD_START + 365 * DAY;
+  const yearly = (about: StripeSubscription) => syncFromCustomerList(about, WS, null, [about], YEARLY_ENV, true);
+
+  it("writes its plan and the period end a year out", () => {
+    const s = sub(priced("price_test_growth_year", PERIOD_START, YEAR_END));
+    expect(dataOf(yearly(s))).toMatchObject({ plan: "growth", planStatus: "active", currentPeriodEnd: new Date(YEAR_END * 1000) });
+  });
+
+  it("past_due at renewal: posting stops 7 days after the paid year ended", () => {
+    const s = sub({ status: "past_due", ...priced("price_test_growth_year", YEAR_END, YEAR_END + 365 * DAY) });
+    const result = yearly(s);
+    const data = result.ok ? result.data : null;
+    expect(data?.currentPeriodEnd).toEqual(new Date(YEAR_END * 1000));
+    expect(stateAt(data, YEAR_END + 6 * DAY)).toBe("active");
+    expect(stateAt(data, YEAR_END + 7 * DAY + 60)).toBe("ended");
+  });
+
+  it("an unknown price still changes nothing", () => {
+    const s = sub(priced("price_test_unknown_year"));
+    expect(yearly(s).ok).toBe(false);
+  });
+});

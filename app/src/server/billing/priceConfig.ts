@@ -10,7 +10,7 @@ import { logger } from "@/lib/logger";
 export function reportDuplicatePriceIds(path: string, env: BillingEnv = process.env): void {
   const priceIds = duplicatePriceIds(env);
   if (priceIds.length === 0) return;
-  logger.error("[billing] A Stripe price id is listed under two plans; it maps to no plan until one list drops it", {
+  logger.error("[billing] A Stripe price id is listed under two plans or intervals; it maps to no plan until one list drops it", {
     path,
     priceIds,
   });
