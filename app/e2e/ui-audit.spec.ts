@@ -210,6 +210,17 @@ async function scrollToHeading(page: Page, name: string, level = 2): Promise<voi
   await page.waitForTimeout(300);
 }
 
+/** Like scrollToHeading, for a section that has no heading of its own (a checkbox's words). */
+async function scrollToText(page: Page, text: string): Promise<void> {
+  const target = page.getByText(text, { exact: true });
+  await target.waitFor({ timeout: 15_000 });
+  await target.evaluate((el) => {
+    el.scrollIntoView({ block: "start" });
+    window.scrollBy(0, -80);
+  });
+  await page.waitForTimeout(300);
+}
+
 /**
  * The composer's submit control a person can see: below md it is the publish
  * bar's (button[form=create-post-form]); at md and up the form's own.
@@ -718,6 +729,86 @@ function billingScreens(): Screen[] {
   });
   planSection(42, "trial-ended", "trialEnded");
   page1(43, "unconfirmed-email", "dashboard", "unconfirmed", () => "/");
+
+  // A2: prices from the Stripe stand-in, monthly and yearly.
+  page1(44, "pricing-prices", "monthly", "signedOut", () => "/pricing");
+  page1(44, "pricing-prices", "yearly", "signedOut", () => "/pricing?billing=year");
+  s.push({
+    n: 45,
+    screen: "trial-new-plan",
+    state: "plan-section",
+    who: "trialNew",
+    run: async ({ page, shot }) => {
+      await go(page, "/settings");
+      await scrollToHeading(page, "Plan");
+      await shot("plan-section", {
+        element: page.locator("section", { has: page.getByRole("heading", { level: 2, name: "Plan", exact: true }) }),
+        note: "The whole Plan section: Settings has no Monthly/Yearly switch; each plan has a monthly and a yearly button.",
+      });
+    },
+  });
+
+  // A2: a paying owner on each plan, and their client link pages.
+  const paid = (n: number, screen: string, who: "starter" | "growth") => {
+    const seed = () => need(world.billing, "the billing seed")[who];
+    page1(n, screen, "dashboard", who, () => "/");
+    s.push({
+      n,
+      screen,
+      state: "settings-plan",
+      who,
+      run: async ({ page, step }) => {
+        await go(page, "/settings");
+        await step("settings-plan", () => scrollToHeading(page, "Plan"), { fullPage: false });
+        await step("settings-brand-voice", () => scrollToHeading(page, "Brand voice", 3), { fullPage: false });
+        await step("settings-logo", () => scrollToHeading(page, "Logo", 3), { fullPage: false });
+        await step("settings-review-alerts", () => scrollToText(page, "Email me when a new Google review arrives"), {
+          fullPage: false,
+        });
+        await step("settings-monthly-report", () => scrollToText(page, "Email me the monthly report"), { fullPage: false });
+      },
+    });
+    s.push({
+      n,
+      screen,
+      state: "connect-link",
+      who,
+      run: async ({ page, shot }) => {
+        await go(page, "/settings#connect-link");
+        await scrollToHeading(page, "Client connect link", 3);
+        await shot("connect-link", { fullPage: false });
+      },
+    });
+    s.push({
+      n,
+      screen,
+      state: "media-upload-link",
+      who,
+      run: async ({ page, shot }) => {
+        await go(page, "/media");
+        await scrollToHeading(page, "Client upload link", 3);
+        await shot("media-upload-link", { fullPage: false });
+      },
+    });
+    s.push({
+      n,
+      screen,
+      state: "queue-review-link",
+      who,
+      run: async ({ page, shot }) => {
+        await go(page, "/queue");
+        await scrollToHeading(page, "Client review link", 3);
+        await shot("queue-review-link", { fullPage: false });
+      },
+    });
+    page1(n, screen, "bulk", who, () => "/posts/bulk");
+    page1(n + 1, `${screen}-links`, "upload", "signedOut", () => `/u/${seed().links.upload}`);
+    page1(n + 1, `${screen}-links`, "review", "signedOut", () => `/v/${seed().links.review}`);
+    page1(n + 1, `${screen}-links`, "report", "signedOut", () => `/v/${seed().links.review}/report`);
+    page1(n + 1, `${screen}-links`, "connect", "signedOut", () => `/c/${seed().links.connect}`);
+  };
+  paid(46, "starter", "starter");
+  paid(48, "growth", "growth");
   return s;
 }
 
