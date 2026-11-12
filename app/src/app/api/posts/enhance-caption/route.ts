@@ -10,7 +10,7 @@ import {
   findOverlongAiField,
   isAiTimeoutError,
 } from "@/lib/aiGuards";
-import { brandVoicePrompt } from "@/lib/brandVoice";
+import { workspaceBrandVoicePrompt } from "@/lib/brandVoice";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
@@ -172,10 +172,7 @@ export async function POST(request: Request) {
 
 ${PROMPT_OUTPUT_RULES}`;
     // After the route's own rules, from the caller's own workspace only (brief 15).
-    const systemPrompt = `${basePrompt}${brandVoicePrompt(
-      context.workspace.brandVoice,
-      context.workspace.brandVoiceExamples,
-    )}`;
+    const systemPrompt = `${basePrompt}${workspaceBrandVoicePrompt(context.workspace)}`;
 
     const userPrompt = adaptPlatform
       ? `Rewrite this caption for ${platformLabel(adaptPlatform)}:

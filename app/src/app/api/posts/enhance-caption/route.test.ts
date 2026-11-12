@@ -370,6 +370,21 @@ ${CLOSING}`;
     expect(sentMessages().system).toBe(TODAY_ENHANCE_PROMPT);
   });
 
+  // P1: a saved voice reaches the prompt only where the plan includes it (lib/brandVoice.plan.test.ts).
+  it("leaves a saved voice out on Starter with billing on: today's prompt exactly", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    getWorkspaceContextMock.mockResolvedValue({
+      ...CONTEXT,
+      workspace: { ...CONTEXT.workspace, brandVoice: "Friendly and short.", brandVoiceExamples: "Waves are up", plan: "starter", planStatus: "active", currentPeriodEnd: new Date(Date.now() + 20 * 24 * 60 * 60 * 1000) },
+    });
+    try {
+      await post({ caption: "fresh bread" });
+      expect(sentMessages().system).toBe(TODAY_ENHANCE_PROMPT);
+    } finally {
+      vi.stubEnv("BILLING_ENABLED", undefined);
+    }
+  });
+
   it("sends today's Adapt prompt exactly when nothing is saved", async () => {
     withVoice(null, null);
 

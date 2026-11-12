@@ -297,6 +297,21 @@ Just write the actual reply message that will be posted publicly.`;
     expect(sentMessages().system).not.toContain(REVIEW_LINE);
   });
 
+  // P1: a saved voice reaches the prompt only where the plan includes it (lib/brandVoice.plan.test.ts).
+  it("leaves a saved voice out on Starter with billing on: today's prompt exactly", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    getWorkspaceContextMock.mockResolvedValue({
+      ...CONTEXT,
+      workspace: { ...CONTEXT.workspace, brandVoice: "Friendly and short.", brandVoiceExamples: "Waves are up", plan: "starter", planStatus: "active", currentPeriodEnd: new Date(Date.now() + 20 * 24 * 60 * 60 * 1000) },
+    });
+    try {
+      await post(validBody);
+      expect(sentMessages().system).toBe(TODAY_SYSTEM_PROMPT);
+    } finally {
+      vi.stubEnv("BILLING_ENABLED", undefined);
+    }
+  });
+
   it("appends the voice block after the route's rules, then the review sentence", async () => {
     withVoice("Friendly and short.", "Waves are up, surf fam");
 

@@ -15,7 +15,8 @@ import { generateInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { openSecret, sealSecret } from "@/lib/tokenCrypto";
-import { pausedByPlan, planFeatureResponse } from "@/lib/planFeatures";
+import { planFeatureResponse } from "@/lib/planFeatureResponse";
+import { pausedByPlan } from "@/lib/planFeatures";
 import { isWorkspaceOwner, requireOwnerContext } from "@/lib/workspace";
 import {
   INVALID_WORKSPACE_ID_CODE,

@@ -11,7 +11,8 @@ import {
   reviewLinkUrl,
 } from "@/lib/reviewLink";
 import { openSecret, sealSecret } from "@/lib/tokenCrypto";
-import { pausedByPlan, planFeatureResponse } from "@/lib/planFeatures";
+import { planFeatureResponse } from "@/lib/planFeatureResponse";
+import { pausedByPlan } from "@/lib/planFeatures";
 import { requireOwnerContext } from "@/lib/workspace";
 import {
   INVALID_WORKSPACE_ID_CODE,

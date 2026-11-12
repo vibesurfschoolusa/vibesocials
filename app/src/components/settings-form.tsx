@@ -91,9 +91,11 @@ interface SettingsFormProps {
    * keeps their own notification-preference control.
    */
   role: WorkspaceRole;
+  /** P1: a line under the brand voice and the new-review toggle where the plan leaves them out. */
+  planNotes?: { brandVoice?: string; reviewAlerts?: string };
 }
 
-export function SettingsForm({ settings, role }: SettingsFormProps) {
+export function SettingsForm({ settings, role, planNotes = {} }: SettingsFormProps) {
   const router = useRouter();
   const toast = useToast();
   const isOwner = role === "owner";
@@ -340,6 +342,7 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
             <p className="text-sm text-muted-foreground">
               Put hashtags in Default hashtags above. The AI does not write hashtags.
             </p>
+            {planNotes.brandVoice ? <p className="text-sm text-muted-foreground">{planNotes.brandVoice}</p> : null}
             <Label htmlFor="brandVoiceExamples" className="mt-2">
               Example captions, one per line (up to {BRAND_VOICE_MAX_EXAMPLES})
             </Label>
@@ -512,6 +515,7 @@ export function SettingsForm({ settings, role }: SettingsFormProps) {
           <p className="text-sm text-muted-foreground">
             Sent to workspace owners, once a day, on days when the Google listing gets new reviews.
           </p>
+          {planNotes.reviewAlerts ? <p className="text-sm text-muted-foreground">{planNotes.reviewAlerts}</p> : null}
           <label className="mt-3 flex items-center gap-2">
             <input
               type="checkbox"

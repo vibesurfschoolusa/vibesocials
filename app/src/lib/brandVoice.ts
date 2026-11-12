@@ -7,6 +7,9 @@
  * caller's own workspace context, never from a request body.
  */
 
+import type { BillingEnv, BillingFields } from "./billing";
+import { planIncludes } from "./planFeatures";
+
 export const BRAND_VOICE_MAX_LENGTH = 600;
 export const BRAND_VOICE_EXAMPLE_MAX_LENGTH = 500;
 export const BRAND_VOICE_MAX_EXAMPLES = 5;
@@ -187,4 +190,18 @@ export function brandVoicePrompt(
   block.push(BRAND_VOICE_CLOSING_LINE);
 
   return `\n\n${block.join("\n")}`;
+}
+
+/**
+ * P1: the block for a workspace, as the AI routes add it: brandVoicePrompt
+ * where the plan includes the brand voice, "" where it does not. The saved
+ * notes are kept either way, so choosing Growth brings the voice back.
+ */
+export function workspaceBrandVoicePrompt(
+  workspace: BillingFields & { brandVoice?: string | null; brandVoiceExamples?: string | null },
+  env: BillingEnv = process.env,
+  now: Date = new Date(),
+): string {
+  if (!planIncludes(workspace, "brandVoice", env, now)) return "";
+  return brandVoicePrompt(workspace.brandVoice, workspace.brandVoiceExamples);
 }

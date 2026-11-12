@@ -264,3 +264,31 @@ describe("SettingsForm — Tracking tags", () => {
     expect(html).toContain(FACEBOOK_EXAMPLE);
   });
 });
+
+// P1: one line each where the plan leaves out the brand voice or new-review emails.
+describe("SettingsForm — what the plan leaves out", () => {
+  const VOICE_LINE = "Saved. Captions follow your brand voice on the Growth and Pro plans.";
+  const REVIEWS_LINE =
+    "New-review emails are sent on the Growth and Pro plans. Your choice here is kept for when you choose one.";
+
+  it("shows neither line by default, so the form is exactly as before", () => {
+    const html = render(SETTINGS);
+    expect(html).not.toContain(VOICE_LINE);
+    expect(html).not.toContain(REVIEWS_LINE);
+  });
+
+  it("shows each line when the page passes it, with the fields still there", () => {
+    const html = renderToStaticMarkup(
+      createElement(SettingsForm, {
+        settings: SETTINGS,
+        role: "owner",
+        planNotes: { brandVoice: VOICE_LINE, reviewAlerts: REVIEWS_LINE },
+      }),
+    );
+    expect(html).toContain(VOICE_LINE);
+    expect(html).toContain(REVIEWS_LINE);
+    expect(html).toContain('id="brandVoice"');
+    expect(html).toContain("Email me when a new Google review arrives");
+    expect(html.indexOf(REVIEWS_LINE)).toBeGreaterThan(html.indexOf("Email me when a new Google review arrives"));
+  });
+});

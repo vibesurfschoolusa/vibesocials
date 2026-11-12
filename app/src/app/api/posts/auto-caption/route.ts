@@ -12,7 +12,7 @@ import {
 } from "@/lib/aiGuards";
 import { cleanAltText, fitAltText } from "@/lib/altText";
 import { BLOB_URL_REJECTED_MESSAGE, isAllowedBlobUrl } from "@/lib/blobUrl";
-import { brandVoicePrompt } from "@/lib/brandVoice";
+import { workspaceBrandVoicePrompt } from "@/lib/brandVoice";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -251,10 +251,8 @@ export async function POST(request: Request) {
       ? `Write the caption in this language: ${language}.`
       : "Write the caption in the same language as the example content or English.";
     // The caller's own workspace only, never the request body (brief 15).
-    const voiceBlock = brandVoicePrompt(
-      context.workspace.brandVoice,
-      context.workspace.brandVoiceExamples,
-    );
+    // P1: only where the plan includes the brand voice.
+    const voiceBlock = workspaceBrandVoicePrompt(context.workspace);
     // Neither composer sends a tone, so the generic default would contradict a
     // saved voice on every request.
     const toneText = tone

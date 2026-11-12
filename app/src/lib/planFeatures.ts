@@ -1,11 +1,11 @@
-import { NextResponse } from "next/server";
-
 import { billingEnabled, planState, type BillingEnv, type BillingFields } from "./billing";
 
 /**
  * What each plan includes beyond its limits (P1, approved 2026-11-12). The one
  * rule every gated place calls; nothing else decides whether a workspace has a
- * feature. Pure apart from reading the environment.
+ * feature. Pure apart from reading the environment, and free of server-only
+ * imports so client code (lib/brandVoice.ts) may import it; the 403 for a
+ * route is planFeatureResponse.ts.
  *
  * - Billing off: every feature, as before plans differed.
  * - Exempt (by its flag, or created with billing off): every feature.
@@ -52,17 +52,6 @@ export const PLAN_FEATURE_MESSAGES: Record<PlanFeature, string> = {
   monthlyReportEmail: `The report logo and the monthly report email are ${CHOOSE}`,
   reviewAlerts: `New-review emails are ${CHOOSE}`,
 };
-
-/** For a route: the 403 to return as-is, or null to carry on. */
-export function planFeatureResponse(
-  workspace: BillingFields,
-  feature: PlanFeature,
-  env: BillingEnv = process.env,
-  now: Date = new Date(),
-): NextResponse | null {
-  if (planIncludes(workspace, feature, env, now)) return null;
-  return NextResponse.json({ error: PLAN_FEATURE_MESSAGES[feature], code: PLAN_FEATURE_CODE }, { status: 403 });
-}
 
 /**
  * For an owner route's GET: `{ pausedByPlan: true }` to spread into the answer

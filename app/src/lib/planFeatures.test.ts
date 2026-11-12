@@ -5,10 +5,10 @@ import {
   PLAN_FEATURE_CODE,
   PLAN_FEATURE_MESSAGES,
   PLAN_FEATURES,
-  planFeatureResponse,
   planIncludes,
   type PlanFeature,
 } from "./planFeatures";
+import { planFeatureResponse } from "./planFeatureResponse";
 
 const NOW = new Date("2026-11-12T12:00:00Z");
 const LATER = "2026-12-01T00:00:00Z";

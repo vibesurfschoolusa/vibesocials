@@ -35,6 +35,7 @@ import type { UserSettings } from "@/lib/userSettings";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 
 import { accountDeletionCancelsPaidPlan, workspacesHavePaidPlan } from "./paidPlans";
+import { settingsPlanNotes } from "./planNotes";
 
 export default async function SettingsPage({
   searchParams,
@@ -210,7 +211,12 @@ export default async function SettingsPage({
               account-menu switcher's router.refresh() intentionally preserves
               client state — without the key, workspace A's values would stay
               on screen under workspace B after an in-page switch. */}
-          <SettingsForm key={context.workspace.id} settings={settings} role={context.role} />
+          <SettingsForm
+            key={context.workspace.id}
+            settings={settings}
+            role={context.role}
+            planNotes={settingsPlanNotes(context.workspace)}
+          />
         </section>
 
         <section>

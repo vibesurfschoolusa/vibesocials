@@ -9,7 +9,7 @@ import {
   findOverlongAiField,
   isAiTimeoutError,
 } from "@/lib/aiGuards";
-import { BRAND_VOICE_REVIEW_LINE, brandVoicePrompt } from "@/lib/brandVoice";
+import { BRAND_VOICE_REVIEW_LINE, workspaceBrandVoicePrompt } from "@/lib/brandVoice";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
@@ -127,10 +127,8 @@ export async function POST(request: Request) {
     }
 
     // After the route's own rules, from the caller's own workspace only (brief 15).
-    const voiceBlock = brandVoicePrompt(
-      context.workspace.brandVoice,
-      context.workspace.brandVoiceExamples,
-    );
+    // P1: only where the plan includes the brand voice.
+    const voiceBlock = workspaceBrandVoicePrompt(context.workspace);
     const voiceSection = voiceBlock ? [voiceBlock, BRAND_VOICE_REVIEW_LINE].join("\n") : "";
 
     // Build the prompt
