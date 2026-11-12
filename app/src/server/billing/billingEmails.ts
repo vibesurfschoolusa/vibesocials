@@ -41,7 +41,7 @@ export function buildPaymentFailedEmail(
     subject: `We could not charge your card for ${params.workspaceName}`,
     html: html(
       [
-        `We could not charge your card for ${escapeHtml(params.workspaceName)}. Update it under Settings, Plan. Your posts keep going out for 7 days.`,
+        `We could not charge your card for ${escapeHtml(params.workspaceName)}. Update it under Settings, Plan. Update your card soon, or posting will stop.`,
       ],
       appBaseUrl,
     ),

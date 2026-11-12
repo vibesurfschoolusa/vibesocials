@@ -629,7 +629,7 @@ describe("invoice.payment_failed", () => {
       expect.objectContaining({ to: "one@example.com", subject: "We could not charge your card for Surf A" }),
       { idempotencyKey: "stripe-payment-failed/in_1/u1", throwOnRetryable: true },
     );
-    expect(m.sendEmail.mock.calls[0][0].html).toContain("Your posts keep going out for 7 days.");
+    expect(m.sendEmail.mock.calls[0][0].html).toContain("Update your card soon, or posting will stop.");
   });
 
   it("once per invoice: a second event for the same invoice sends nothing", async () => {

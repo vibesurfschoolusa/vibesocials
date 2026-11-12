@@ -7,7 +7,7 @@ describe("billing emails", () => {
     const email = buildPaymentFailedEmail({ workspaceName: "Surf <Co>" });
     expect(email.subject).toBe("We could not charge your card for Surf <Co>");
     expect(email.html).toContain(
-      "We could not charge your card for Surf &lt;Co&gt;. Update it under Settings, Plan. Your posts keep going out for 7 days.",
+      "We could not charge your card for Surf &lt;Co&gt;. Update it under Settings, Plan. Update your card soon, or posting will stop.",
     );
     expect(email.html).not.toContain("<Co>");
   });
@@ -31,6 +31,14 @@ describe("billing emails", () => {
     expect(email.subject).toContain("Surf Co");
   });
 
+  // S1 fix round 2: the 7 days run from the period end and the email can come
+  // late, so the email names no number of days.
+  it("payment failed names no number of days, and keeps the link", () => {
+    const email = buildPaymentFailedEmail({ workspaceName: "Surf Co" }, "https://app.example.test");
+    expect(email.html).not.toMatch(/\d+ days?/);
+    expect(email.html).toContain('<a href="https://app.example.test/settings#plan">Open Settings, Plan</a>');
+  });
+
   it("the two reminder emails keep their words", () => {
     expect(
       buildTrialEndingEmail({ workspaceName: "Surf Co", trialEndsAt: new Date("2026-11-13T09:00:00Z") }, null).html,
@@ -38,7 +46,7 @@ describe("billing emails", () => {
       "<p><strong>Surf Co</strong></p>\n<p>Your free trial ends on 13 November 2026. Choose a plan under Settings, Plan.</p>\n<p>— Vibe Socials</p>",
     );
     expect(buildPaymentFailedEmail({ workspaceName: "Surf Co" }, null).html).toBe(
-      "<p>We could not charge your card for Surf Co. Update it under Settings, Plan. Your posts keep going out for 7 days.</p>\n<p>— Vibe Socials</p>",
+      "<p>We could not charge your card for Surf Co. Update it under Settings, Plan. Update your card soon, or posting will stop.</p>\n<p>— Vibe Socials</p>",
     );
   });
 });
