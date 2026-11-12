@@ -192,7 +192,7 @@ describe("/pricing sells and explains (S1 item 5)", () => {
       "What is a workspace?",
       "A workspace is one business: its connected accounts, posts, media and team.",
       "What happens when the trial ends?",
-      "Posting stops until you choose a plan. A scheduled post that comes due while there is no plan is marked failed, and you can retry it from Activity once you have chosen a plan. Your posts, schedule, connections and settings stay. As on every workspace, photos and videos of posts already published are removed 30 days after their last use.",
+      "Posting stops until you choose a plan. A scheduled post that comes due while there is no plan is marked failed, and you can retry it from Activity once you have chosen a plan, as long as its photos and videos are still kept. Photos and videos of finished posts (published, failed or cancelled) are removed 30 days after they were last added to a post.",
       "How do I cancel?",
       "Cancel any time in Settings, under Plan. The Terms say what happens to the time you have already paid for. When the plan ends, the workspace works as after a trial.",
       "Do you give refunds?",

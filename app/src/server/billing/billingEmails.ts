@@ -74,8 +74,9 @@ export function buildTrialEndedEmail(
       [
         `<strong>${escapeHtml(params.workspaceName)}</strong>`,
         // What the publish job does (inngest-functions.ts, PLAN_ENDED): a due post's
-        // results fail, and Activity can retry them once a plan is active.
-        "Your free trial has ended, so posting has stopped. A scheduled post that comes due while there is no plan is marked failed; once you choose a plan, you can retry it from Activity. Your posts, schedule, connections and settings stay.",
+        // results fail, and Activity can retry them once a plan is active while the
+        // files are kept (mediaRetention.ts: finished posts' files go after 30 days).
+        "Your free trial has ended, so posting has stopped. A scheduled post that comes due without a plan is marked failed. Once you choose a plan you can retry it from Activity, as long as its photos and videos are still kept: those of finished posts are removed 30 days after they were last added to a post.",
       ],
       appBaseUrl,
     ),

@@ -130,7 +130,7 @@ describe("runBillingReminders", () => {
     expect(await run()).toEqual({ trialEnding: 0, trialEnded: 1, sent: 1, failed: 0, left: 0 });
     expect(m.sendEmail.mock.calls[0][1]).toEqual({ idempotencyKey: "billing/trial-ended/a/owner-a", throwOnRetryable: true });
     expect(m.sendEmail.mock.calls[0][0].html).toContain(
-      "Your free trial has ended, so posting has stopped. A scheduled post that comes due while there is no plan is marked failed; once you choose a plan, you can retry it from Activity. Your posts, schedule, connections and settings stay.",
+      "Your free trial has ended, so posting has stopped. A scheduled post that comes due without a plan is marked failed. Once you choose a plan you can retry it from Activity, as long as its photos and videos are still kept: those of finished posts are removed 30 days after they were last added to a post.",
     );
     expect(m.rows[0].trialEndedEmailSentAt).toEqual(NOW);
     m.sendEmail.mockClear();

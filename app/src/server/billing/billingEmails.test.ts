@@ -22,10 +22,12 @@ describe("billing emails", () => {
   it("trial ended says posting stopped and what happens to scheduled posts", () => {
     const email = buildTrialEndedEmail({ workspaceName: "Surf Co" });
     expect(email.html).toContain(
-      "Your free trial has ended, so posting has stopped. A scheduled post that comes due while there is no plan is marked failed; once you choose a plan, you can retry it from Activity. Your posts, schedule, connections and settings stay.",
+      "Your free trial has ended, so posting has stopped. A scheduled post that comes due without a plan is marked failed. Once you choose a plan you can retry it from Activity, as long as its photos and videos are still kept: those of finished posts are removed 30 days after they were last added to a post.",
     );
     expect(email.html).not.toContain("on hold");
     expect(email.html).not.toMatch(/nothing/i);
+    // Files of finished posts go after 30 days, so no promise that posts "stay".
+    expect(email.html).not.toMatch(/stay/i);
     expect(email.subject).toContain("Surf Co");
   });
 
