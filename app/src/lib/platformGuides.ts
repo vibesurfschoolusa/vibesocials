@@ -131,10 +131,16 @@ export function platformHelpHref(platform: Platform): string {
 /**
  * The dashboard's first step, before its link to the setup guide: which of
  * the offered platforms have no review open, so a newcomer starts with one
- * that works. Null when none does.
+ * that works. Null when none does. Pinterest is never named: its app access
+ * is still on trial and untested against the live API (it stays on the
+ * Connections list where configured).
  */
+const NOT_YET_PROMISED: readonly Platform[] = ["pinterest"];
+
 export function readyToConnectSentence(available: readonly Platform[]): string | null {
-  const ready = PLATFORM_ORDER.filter((platform) => available.includes(platform) && !PLATFORM_GUIDES[platform].status).map(
+  const ready = PLATFORM_ORDER.filter(
+    (platform) => available.includes(platform) && !PLATFORM_GUIDES[platform].status && !NOT_YET_PROMISED.includes(platform),
+  ).map(
     platformLabel,
   );
   if (ready.length === 0) return null;

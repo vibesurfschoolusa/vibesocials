@@ -85,9 +85,11 @@ describe("readyToConnectSentence", () => {
     expect(readyToConnectSentence(["tiktok", "youtube", "instagram", "x", "linkedin", "facebook_page", "google_business_profile"])).toBe(
       "YouTube and X connect right away today; the others are explained in the",
     );
+    // S1 fix round 1: Pinterest's access is still on trial and untested, so it is not promised.
     expect(readyToConnectSentence(["tiktok", "youtube", "x", "pinterest"])).toBe(
-      "YouTube, X and Pinterest connect right away today; the others are explained in the",
+      "YouTube and X connect right away today; the others are explained in the",
     );
+    expect(readyToConnectSentence(["pinterest", "tiktok"])).toBeNull();
   });
 
   it("is null when every offered platform has a review open", () => {

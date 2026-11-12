@@ -17,10 +17,11 @@ describe("GettingStarted", () => {
     expect(html).toMatch(/<a [^>]*href="\/help"[^>]*>setup guide<\/a>\./);
   });
 
-  it("names Pinterest only where this site offers it", () => {
-    const html = renderToStaticMarkup(
-      createElement(GettingStarted, { connections: [], jobs: [], availablePlatforms: [...OFFERED, "pinterest"] }),
-    );
-    expect(html).toContain("YouTube, X and Pinterest connect right away today");
+  it("does not name Pinterest, configured or not (its access is still on trial)", () => {
+    for (const available of [OFFERED, [...OFFERED, "pinterest"] as const]) {
+      const html = renderToStaticMarkup(createElement(GettingStarted, { connections: [], jobs: [], availablePlatforms: available }));
+      expect(html).toContain("YouTube and X connect right away today");
+      expect(html).not.toContain("Pinterest");
+    }
   });
 });
