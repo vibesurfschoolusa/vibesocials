@@ -4,6 +4,8 @@ import {
   COMPOSE_CTA,
   deriveDashboardCta,
   deriveGettingStarted,
+  workspaceSetupFrom,
+  type WorkspaceSetup,
 } from "./gettingStarted";
 import type { ConnectionStatus } from "@/lib/connectionsDto";
 import type { PostJobDTO } from "@/lib/postsDto";
@@ -39,67 +41,139 @@ function job(partial: Partial<PostJobDTO> = {}): PostJobDTO {
   };
 }
 
+const owner: WorkspaceSetup = { role: "owner", footerSet: false, brandVoiceSet: false, hasClientLink: false };
+const member: WorkspaceSetup = { ...owner, role: "member" };
+const ownerAllSet: WorkspaceSetup = { ...owner, footerSet: true, brandVoiceSet: true };
+const connected = [connection({ connected: true })];
+
 describe("deriveGettingStarted", () => {
-  it("is not ready (and hidden) while either source is still null", () => {
-    expect(deriveGettingStarted(null, null)).toMatchObject({
-      ready: false,
-      show: false,
-    });
-    expect(deriveGettingStarted([], null)).toMatchObject({
-      ready: false,
-      show: false,
-    });
-    expect(deriveGettingStarted(null, [])).toMatchObject({
-      ready: false,
-      show: false,
-    });
+  it("is not ready (and hidden) while any source is still null", () => {
+    const cases: Array<[ConnectionStatus[] | null, PostJobDTO[] | null, WorkspaceSetup | null]> = [
+      [null, null, owner],
+      [[], null, owner],
+      [null, [], owner],
+      [[], [], null],
+    ];
+    for (const args of cases) {
+      expect(deriveGettingStarted(args[0], args[1], args[2])).toMatchObject({
+        ready: false,
+        show: false,
+        showClients: false,
+      });
+    }
   });
 
-  it("shows with both steps open for a brand-new user (loaded, nothing done)", () => {
-    expect(deriveGettingStarted([connection()], [])).toEqual({
+  it("shows all four steps open for a brand-new owner", () => {
+    expect(deriveGettingStarted([connection()], [], owner)).toEqual({
       ready: true,
+      steps: ["connect", "footer", "voice", "post"],
       connectDone: false,
+      footerDone: false,
+      voiceDone: false,
       postDone: false,
       complete: false,
       show: true,
+      showClients: false,
     });
   });
 
-  it("marks connect done when at least one platform is connected", () => {
+  it("connected only: the other three stay open", () => {
     const state = deriveGettingStarted(
       [connection(), connection({ platform: "x", connected: true })],
       [],
+      owner,
     );
-    expect(state.connectDone).toBe(true);
-    expect(state.postDone).toBe(false);
-    expect(state.show).toBe(true);
+    expect(state).toMatchObject({ connectDone: true, footerDone: false, voiceDone: false, postDone: false, show: true });
   });
 
   it("a connections list of all-disconnected rows does NOT count as connected", () => {
-    const state = deriveGettingStarted(
-      [connection(), connection({ platform: "x" })],
-      [],
-    );
+    const state = deriveGettingStarted([connection(), connection({ platform: "x" })], [], owner);
     expect(state.connectDone).toBe(false);
   });
 
+  it("connected and a website: the footer step is done", () => {
+    const setup = workspaceSetupFrom({ companyWebsite: "https://example.com", defaultHashtags: null, brandVoice: null, brandVoiceExamples: null }, "owner", false);
+    const state = deriveGettingStarted(connected, [], setup);
+    expect(state).toMatchObject({ connectDone: true, footerDone: true, voiceDone: false, show: true });
+  });
+
+  it("hashtags alone are enough for the footer step", () => {
+    const setup = workspaceSetupFrom({ companyWebsite: null, defaultHashtags: "#surf", brandVoice: null, brandVoiceExamples: null }, "owner", false);
+    expect(deriveGettingStarted([], [], setup)).toMatchObject({ footerDone: true, voiceDone: false });
+  });
+
+  it("example captions alone are enough for the brand voice step", () => {
+    const setup = workspaceSetupFrom({ companyWebsite: null, defaultHashtags: null, brandVoice: null, brandVoiceExamples: "Waves at 7." }, "owner", false);
+    expect(deriveGettingStarted([], [], setup)).toMatchObject({ footerDone: false, voiceDone: true });
+  });
+
+  it("brand voice notes alone are enough for the brand voice step", () => {
+    const setup = workspaceSetupFrom({ companyWebsite: null, defaultHashtags: null, brandVoice: "Friendly, short.", brandVoiceExamples: null }, "owner", false);
+    expect(deriveGettingStarted([], [], setup).voiceDone).toBe(true);
+  });
+
   it("marks post done for any job, including a draft that never published", () => {
-    const state = deriveGettingStarted([connection()], [job({ status: "draft" })]);
+    const state = deriveGettingStarted([connection()], [job({ status: "draft" })], owner);
     expect(state.postDone).toBe(true);
     expect(state.connectDone).toBe(false);
     expect(state.show).toBe(true);
   });
 
-  it("hides once both steps are done (user reached first value)", () => {
-    expect(
-      deriveGettingStarted([connection({ connected: true })], [job()]),
-    ).toEqual({
+  it("a connection and a post with the settings unset keeps the block up", () => {
+    expect(deriveGettingStarted(connected, [job()], owner)).toMatchObject({ complete: false, show: true });
+  });
+
+  it("hides once all four steps are done, and offers the clients block", () => {
+    expect(deriveGettingStarted(connected, [job()], ownerAllSet)).toEqual({
       ready: true,
+      steps: ["connect", "footer", "voice", "post"],
       connectDone: true,
+      footerDone: true,
+      voiceDone: true,
       postDone: true,
       complete: true,
       show: false,
+      showClients: true,
     });
+  });
+
+  it("a member with connections and no posts sees only the post step", () => {
+    expect(deriveGettingStarted(connected, [], member)).toMatchObject({
+      steps: ["post"],
+      complete: false,
+      show: true,
+      showClients: false,
+    });
+  });
+
+  it("a member sees nothing while the owner has connected nothing", () => {
+    expect(deriveGettingStarted([connection()], [], member)).toMatchObject({ show: false, showClients: false });
+  });
+
+  it("a member who has posted sees nothing", () => {
+    expect(deriveGettingStarted(connected, [job()], member)).toMatchObject({ complete: true, show: false });
+  });
+
+  it("the clients block shows an owner with a client link before the steps are done", () => {
+    const state = deriveGettingStarted([], [], { ...owner, hasClientLink: true });
+    expect(state).toMatchObject({ show: true, showClients: true });
+  });
+
+  it("the clients block never shows a member", () => {
+    expect(deriveGettingStarted(connected, [job()], { ...ownerAllSet, role: "member", hasClientLink: true }).showClients).toBe(false);
+  });
+});
+
+describe("workspaceSetupFrom", () => {
+  const empty = { companyWebsite: null, defaultHashtags: null, brandVoice: null, brandVoiceExamples: null };
+
+  it("reads nothing set from empty or blank fields", () => {
+    expect(workspaceSetupFrom(empty, "owner", false)).toEqual(owner);
+    expect(workspaceSetupFrom({ ...empty, companyWebsite: "  ", brandVoice: "" }, "owner", false)).toEqual(owner);
+  });
+
+  it("never says a member has a client link", () => {
+    expect(workspaceSetupFrom(empty, "member", true).hasClientLink).toBe(false);
   });
 });
 

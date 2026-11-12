@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CheckCircle2, Link2, PenSquare } from "lucide-react";
+import { CheckCircle2, Globe, Link2, PenSquare, Sparkles } from "lucide-react";
 
 import {
   Card,
@@ -12,46 +12,57 @@ import {
 } from "@/components/ui/card";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
-import { deriveGettingStarted } from "@/lib/gettingStarted";
+import { deriveGettingStarted, type GettingStartedStep, type WorkspaceSetup } from "@/lib/gettingStarted";
 import type { ConnectionStatus } from "@/lib/connectionsDto";
 import type { PostJobDTO } from "@/lib/postsDto";
 import { readyToConnectSentence } from "@/lib/platformGuides";
 import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 import type { Platform } from "@prisma/client";
 
+const POST_DEFAULTS_HREF = "/settings#post-defaults";
+
 /**
- * First-run "Get started" checklist, shown at the top of the dashboard until
- * the user has connected a platform AND created a post. Purely derived from
- * the dashboard's existing fetches (no dismissed flag): once both steps are
- * provably done — or while either source is still loading/failed — it
- * renders nothing. See lib/gettingStarted.ts.
+ * First-run "Get started" checklist, shown at the top of the dashboard while
+ * a step this person can do is open: for an owner, connect, the footer, the
+ * brand voice and a first post; for a member, only the post, once something
+ * is connected. Purely derived from the dashboard's fetches and the page's
+ * workspace read (no dismissed flag): once the steps are provably done — or
+ * while a source is still loading/failed — it renders nothing. See
+ * lib/gettingStarted.ts.
  */
 export function GettingStarted({
   connections,
   jobs,
+  setup,
   availablePlatforms,
 }: {
   connections: ConnectionStatus[] | null;
   jobs: PostJobDTO[] | null;
+  setup: WorkspaceSetup | null;
   /** The platforms this site offers, so the first step names only those. */
   availablePlatforms: readonly Platform[];
 }) {
-  const state = deriveGettingStarted(connections, jobs);
+  const state = deriveGettingStarted(connections, jobs, setup);
   if (!state.show) return null;
   const readySentence = readyToConnectSentence(availablePlatforms);
+  const number = (step: GettingStartedStep) => state.steps.indexOf(step) + 1;
+  const sees = (step: GettingStartedStep) => state.steps.includes(step);
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-base">Get started</CardTitle>
         <CardDescription>
-          Two quick steps to your first cross-platform post.
+          {state.steps.length > 1
+            ? "Four steps to your first post. Steps 2 and 3 are settings that change every post."
+            : "This workspace has a platform connected, so you can create posts."}
         </CardDescription>
       </CardHeader>
       <CardContent>
         <ol className="space-y-3">
+          {sees("connect") ? (
           <Step
-            index={1}
+            index={number("connect")}
             done={state.connectDone}
             title="Connect a platform"
             description="Link YouTube, X, Instagram, or any of the others in Settings."
@@ -87,8 +98,43 @@ export function GettingStarted({
               </Link>
             }
           />
+          ) : null}
+          {sees("footer") ? (
+            <Step
+              index={number("footer")}
+              done={state.footerDone}
+              title="Set what every post ends with"
+              description="Your website and hashtags are added to the end of every post."
+              action={
+                <Link
+                  href={POST_DEFAULTS_HREF}
+                  className={buttonVariants({ variant: "outline", size: "sm", className: "gap-1.5" })}
+                >
+                  <Globe aria-hidden className="h-3.5 w-3.5" />
+                  Add website
+                </Link>
+              }
+            />
+          ) : null}
+          {sees("voice") ? (
+            <Step
+              index={number("voice")}
+              done={state.voiceDone}
+              title="Tell the AI how you sound"
+              description="Captions the AI writes follow your notes and examples."
+              action={
+                <Link
+                  href={POST_DEFAULTS_HREF}
+                  className={buttonVariants({ variant: "outline", size: "sm", className: "gap-1.5" })}
+                >
+                  <Sparkles aria-hidden className="h-3.5 w-3.5" />
+                  Add brand voice
+                </Link>
+              }
+            />
+          ) : null}
           <Step
-            index={2}
+            index={number("post")}
             done={state.postDone}
             title="Create your first post"
             description="Upload once, pick your platforms, and publish or schedule."
@@ -107,6 +153,52 @@ export function GettingStarted({
             }
           />
         </ol>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * "Working for clients?": the three client links, for owners, below the
+ * dashboard's main content. Not a checklist: it stays once shown, appearing
+ * after the Get started steps are done or as soon as the owner has a client
+ * link on. Never shown to members, who cannot make these links.
+ */
+export function WorkingForClients({
+  connections,
+  jobs,
+  setup,
+}: {
+  connections: ConnectionStatus[] | null;
+  jobs: PostJobDTO[] | null;
+  setup: WorkspaceSetup | null;
+}) {
+  if (!deriveGettingStarted(connections, jobs, setup).showClients) return null;
+  const linkClass = "font-medium text-primary underline-offset-4 hover:underline";
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Working for clients?</CardTitle>
+        <CardDescription>
+          Make each link on the page it opens, then send it yourself. Your client needs no account.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ul className="space-y-2 text-sm text-muted-foreground">
+          <li>
+            <Link href={SETTINGS_CONNECTIONS_HREF} className={linkClass}>Send a connect link</Link>: your client
+            connects their own accounts, without sharing a password.
+          </li>
+          <li>
+            <Link href="/media" className={linkClass}>Send an upload link</Link>: your client sends photos and
+            videos from their phone.
+          </li>
+          <li>
+            <Link href="/queue" className={linkClass}>Send a review link</Link>: your client approves scheduled
+            posts or asks for a change.
+          </li>
+        </ul>
       </CardContent>
     </Card>
   );

@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
 import { RecentActivity } from "@/components/dashboard/recent-activity";
 import { ConnectionHealth } from "@/components/dashboard/connection-health";
-import { GettingStarted } from "@/components/dashboard/getting-started";
+import { GettingStarted, WorkingForClients } from "@/components/dashboard/getting-started";
 import { YouTubeMetricsSummary } from "@/components/dashboard/youtube-metrics-summary";
 import { PublishHealthCard } from "@/components/dashboard/publish-health-card";
 import { ListingMetricsCard } from "@/components/dashboard/listing-metrics-card";
@@ -20,6 +20,7 @@ import {
   COMPOSE_CTA,
   deriveDashboardCta,
   deriveGettingStarted,
+  type WorkspaceSetup,
 } from "@/lib/gettingStarted";
 
 /**
@@ -29,7 +30,13 @@ import {
  * it without the shell, then remounted it inside (a visible jump and a second
  * round of fetches).
  */
-export function DashboardHome({ availablePlatforms }: { availablePlatforms: readonly Platform[] }) {
+type DashboardProps = {
+  availablePlatforms: readonly Platform[];
+  /** The page's server read of the active workspace; null when it failed. */
+  setup: WorkspaceSetup | null;
+};
+
+export function DashboardHome({ availablePlatforms, setup }: DashboardProps) {
   const { status } = useSession();
   if (status !== "authenticated") {
     return (
@@ -38,10 +45,10 @@ export function DashboardHome({ availablePlatforms }: { availablePlatforms: read
       </div>
     );
   }
-  return <Dashboard availablePlatforms={availablePlatforms} />;
+  return <Dashboard availablePlatforms={availablePlatforms} setup={setup} />;
 }
 
-function Dashboard({ availablePlatforms }: { availablePlatforms: readonly Platform[] }) {
+function Dashboard({ availablePlatforms, setup }: DashboardProps) {
   // Task 8 — single fetch/poll owner for the dashboard: both widgets below
   // took this over their own `usePostJobs()` call, so the dashboard makes one
   // `/api/posts` request (and one poll timer) instead of two. Same pattern
@@ -55,6 +62,7 @@ function Dashboard({ availablePlatforms }: { availablePlatforms: readonly Platfo
   const onboarding = deriveGettingStarted(
     connectionsState.connections,
     postJobs.jobs,
+    setup,
   );
 
   // Header state is three-way, not two: "still loading" and "loaded but the
@@ -122,11 +130,12 @@ function Dashboard({ availablePlatforms }: { availablePlatforms: readonly Platfo
 
       <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
-          {/* First-run checklist — renders nothing once the user has a
-              connection and a post (see lib/gettingStarted.ts). */}
+          {/* First-run checklist — renders nothing once this person's steps
+              are done (see lib/gettingStarted.ts). */}
           <GettingStarted
             connections={connectionsState.connections}
             jobs={postJobs.jobs}
+            setup={setup}
             availablePlatforms={availablePlatforms}
           />
           {/* Roadmap Phase 8 — renders only once a YouTube post has fetched metrics. */}
@@ -135,6 +144,8 @@ function Dashboard({ availablePlatforms }: { availablePlatforms: readonly Platfo
               instruction; a second copy of it directly below competes with the
               step the user is actually on. */}
           <RecentActivity {...postJobs} showCreateCta={!onboarding.show} />
+          {/* Owners only, below the main content. */}
+          <WorkingForClients connections={connectionsState.connections} jobs={postJobs.jobs} setup={setup} />
         </div>
         <div className="space-y-6">
           <ConnectionHealth {...connectionsState} />

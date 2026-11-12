@@ -4,10 +4,81 @@ vi.mock("@/lib/auth", () => ({ getCurrentUser: vi.fn(async () => ({ id: "u1" }))
 vi.mock("@/components/dashboard/dashboard-home", () => ({ DashboardHome: () => null }));
 vi.mock("@/components/landing", () => ({ Landing: () => null }));
 
+const m = vi.hoisted(() => ({
+  context: null as null | { role: "owner" | "member"; workspace: Record<string, unknown> },
+  contextError: null as Error | null,
+  findUnique: vi.fn(),
+}));
+vi.mock("@/lib/workspace", () => ({
+  getWorkspaceContext: vi.fn(async () => {
+    if (m.contextError) throw m.contextError;
+    return m.context;
+  }),
+}));
+vi.mock("@/lib/db", () => ({ prisma: { workspace: { findUnique: m.findUnique } } }));
+vi.mock("@/lib/logger", () => ({ logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
+
 import HomePage from "./page";
+
+const WORKSPACE = {
+  id: "ws1",
+  companyWebsite: "https://example.com",
+  defaultHashtags: null,
+  brandVoice: null,
+  brandVoiceExamples: null,
+};
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  m.context = null;
+  m.contextError = null;
+  m.findUnique.mockReset();
+});
+
+type Setup = { role: string; footerSet: boolean; brandVoiceSet: boolean; hasClientLink: boolean } | null;
+const setupOf = async () => ((await HomePage()) as { props: { setup: Setup } }).props.setup;
+
+// S2: the Get started steps read the footer and brand voice of the active
+// workspace here, on the server, as booleans.
+describe("HomePage — the workspace setup the dashboard gets", () => {
+  it("an owner: which settings are set, and whether a client link is on", async () => {
+    m.context = { role: "owner", workspace: WORKSPACE };
+    m.findUnique.mockResolvedValue({ _count: { uploadLinks: 0, reviewLinks: 1, connectLinks: 0 } });
+    expect(await setupOf()).toEqual({ role: "owner", footerSet: true, brandVoiceSet: false, hasClientLink: true });
+    expect(m.findUnique).toHaveBeenCalledWith({
+      where: { id: "ws1" },
+      select: {
+        _count: {
+          select: {
+            uploadLinks: { where: { revokedAt: null } },
+            reviewLinks: { where: { revokedAt: null } },
+            connectLinks: { where: { revokedAt: null } },
+          },
+        },
+      },
+    });
+  });
+
+  it("an owner with no link on", async () => {
+    m.context = { role: "owner", workspace: WORKSPACE };
+    m.findUnique.mockResolvedValue({ _count: { uploadLinks: 0, reviewLinks: 0, connectLinks: 0 } });
+    expect((await setupOf())?.hasClientLink).toBe(false);
+  });
+
+  it("a member: no link query", async () => {
+    m.context = { role: "member", workspace: WORKSPACE };
+    expect(await setupOf()).toEqual({ role: "member", footerSet: true, brandVoiceSet: false, hasClientLink: false });
+    expect(m.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("a failed read leaves the setup unknown, so the block stays hidden", async () => {
+    m.contextError = new Error("db down");
+    expect(await setupOf()).toBeNull();
+    m.contextError = null;
+    m.context = { role: "owner", workspace: WORKSPACE };
+    m.findUnique.mockRejectedValue(new Error("db down"));
+    expect(await setupOf()).toBeNull();
+  });
 });
 
 // Go-live check 2026-11-11: the dashboard gets the platforms this site offers,
