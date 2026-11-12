@@ -27,14 +27,14 @@ describe("GettingStarted", () => {
     const html = renderToStaticMarkup(
       createElement(GettingStarted, { connections: [], jobs: [], setup: OWNER, availablePlatforms: OFFERED }),
     );
-    expect(html).toContain("YouTube and X connect right away today; the others are explained in the");
+    expect(html).toContain("YouTube, X and Google Business Profile connect right away today; the others are explained in the");
     expect(html).toMatch(/<a [^>]*href="\/help"[^>]*>setup guide<\/a>\./);
   });
 
   it("does not name Pinterest, configured or not (its access is still on trial)", () => {
     for (const available of [OFFERED, [...OFFERED, "pinterest"] as const]) {
       const html = renderToStaticMarkup(createElement(GettingStarted, { connections: [], jobs: [], setup: OWNER, availablePlatforms: available }));
-      expect(html).toContain("YouTube and X connect right away today");
+      expect(html).toContain("YouTube, X and Google Business Profile connect right away today");
       expect(html).not.toContain("Pinterest");
     }
   });

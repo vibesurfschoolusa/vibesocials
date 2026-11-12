@@ -52,12 +52,23 @@ describe("PLATFORM_GUIDES", () => {
     }
   });
 
-  it("has no review note for X and Pinterest", () => {
+  it("has no review note for X, Pinterest, YouTube and Google Business Profile", () => {
     expect(PLATFORM_GUIDES.x.status).toBeUndefined();
     expect(PLATFORM_GUIDES.pinterest.status).toBeUndefined();
-    // Google approved the YouTube scopes on 2026-11-11, so its warning screen is gone for YouTube.
+    // Google approved the YouTube scopes on 2026-11-11. On 2026-11-12 its
+    // Verification Center showed branding and data access verified, and the
+    // Business Profile connect asks only for business.manage, a non-sensitive
+    // scope: Google's "has not verified this app" screen is gone for both.
     expect(PLATFORM_GUIDES.youtube.status).toBeUndefined();
-    expect(PLATFORM_GUIDES.google_business_profile.status).toMatch(/has not verified/);
+    expect(PLATFORM_GUIDES.google_business_profile.status).toBeUndefined();
+  });
+
+  it("no longer tells anyone to get past Google's unverified-app screen", () => {
+    for (const platform of ALL_PLATFORMS) {
+      const guide = PLATFORM_GUIDES[platform];
+      const text = [...guide.needs, ...guide.steps, ...guide.tips, guide.status ?? ""].join("\n");
+      expect(text, platform).not.toMatch(/has not verified|Go to vibesocials\.wtf/);
+    }
   });
 });
 
@@ -83,7 +94,7 @@ describe("platformHelpHref", () => {
 describe("readyToConnectSentence", () => {
   it("names the offered platforms with no review open, then points to the guide", () => {
     expect(readyToConnectSentence(["tiktok", "youtube", "instagram", "x", "linkedin", "facebook_page", "google_business_profile"])).toBe(
-      "YouTube and X connect right away today; the others are explained in the",
+      "YouTube, X and Google Business Profile connect right away today; the others are explained in the",
     );
     // S1 fix round 1: Pinterest's access is still on trial and untested, so it is not promised.
     expect(readyToConnectSentence(["tiktok", "youtube", "x", "pinterest"])).toBe(

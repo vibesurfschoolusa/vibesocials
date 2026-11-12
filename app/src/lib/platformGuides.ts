@@ -25,9 +25,6 @@ export interface PlatformGuide {
 
 const META_REVIEW = `Meta is reviewing Vibe Socials. Until the review finishes, connecting Facebook and Instagram is not open to every account yet. Write to ${SUPPORT_EMAIL} and we will help you get set up.`;
 
-const GOOGLE_VERIFICATION =
-  'Google is still verifying Vibe Socials. Until then Google shows a screen saying it has not verified this app. Choose "Advanced", then "Go to vibesocials.wtf", to continue.';
-
 export const PLATFORM_GUIDES: Record<Platform, PlatformGuide> = {
   facebook_page: {
     anchor: "facebook-page",
@@ -81,7 +78,6 @@ export const PLATFORM_GUIDES: Record<Platform, PlatformGuide> = {
       "Posts appear on the Maps listing.",
       "Replies to Google reviews are on the Reviews page.",
     ],
-    status: GOOGLE_VERIFICATION,
   },
   linkedin: {
     anchor: "linkedin",
