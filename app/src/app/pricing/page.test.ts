@@ -194,7 +194,7 @@ describe("/pricing sells and explains (S1 item 5)", () => {
       "What happens when the trial ends?",
       "Posting stops until you choose a plan. A scheduled post that comes due while there is no plan is marked failed, and you can retry it from Activity once you have chosen a plan. Your posts, schedule, connections and settings stay. As on every workspace, photos and videos of posts already published are removed 30 days after their last use.",
       "How do I cancel?",
-      "Cancel any time in Settings. You keep access until the end of the period you paid for. After that, the workspace works as after a trial.",
+      "Cancel any time in Settings, under Plan. The Terms say what happens to the time you have already paid for. When the plan ends, the workspace works as after a trial.",
       "Do you give refunds?",
       "We do not refund a period that has already started, except where the law requires it.",
       "Who do I write to?",
@@ -206,5 +206,16 @@ describe("/pricing sells and explains (S1 item 5)", () => {
     expect(await render()).toMatch(/<a [^>]*href="mailto:[^"]+"/);
     // S1 follow-up: the 30-day media sweep runs on every workspace, so no absolute.
     expect(page).not.toMatch(/nothing is deleted|nothing has been deleted/i);
+  });
+});
+
+describe("/pricing: the cancel answer holds whatever the Stripe portal does (S1 follow-up)", () => {
+  it("links the Terms instead of promising access to the end of the period", async () => {
+    configurePayments();
+    getPlanOffersMock.mockResolvedValue([{ plan: "starter", name: "Starter", price: "$19 a month" }]);
+    const html = await render();
+    const faq = html.slice(html.indexOf("How do I cancel?"), html.indexOf("Do you give refunds?"));
+    expect(faq).toMatch(/The <a [^>]*href="\/terms"[^>]*>Terms<\/a> say what happens/);
+    expect(text(faq)).not.toContain("You keep access");
   });
 });

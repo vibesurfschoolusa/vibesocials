@@ -93,7 +93,19 @@ export default async function PricingPage() {
             {PRICING_FAQ.map(({ question, answer }) => (
               <div key={question}>
                 <dt className="font-medium text-foreground">{question}</dt>
-                <dd className="mt-1 text-muted-foreground">{answer}</dd>
+                <dd className="mt-1 text-muted-foreground">
+                  {typeof answer === "string" ? (
+                    answer
+                  ) : (
+                    <>
+                      {answer.before}
+                      <Link href="/terms" className="underline underline-offset-2 hover:text-foreground">
+                        {answer.terms}
+                      </Link>
+                      {answer.after}
+                    </>
+                  )}
+                </dd>
               </div>
             ))}
             <div>

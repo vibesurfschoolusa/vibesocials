@@ -1,4 +1,4 @@
-import { PRICING_CANCEL, TERMS_FEES_REFUNDS } from "@/lib/billingTerms";
+import { TERMS_FEES_REFUNDS } from "@/lib/billingTerms";
 
 /**
  * The pricing page's words around the cards (S1). Each claim is something the
@@ -29,7 +29,10 @@ export const PRICING_INCLUDES = [
  * their last use on every workspace, so the answer says so instead of an
  * absolute.
  */
-export const PRICING_FAQ: readonly { question: string; answer: string }[] = [
+/** An answer that links the Terms: the text before the link, the link, the text after. */
+export type FaqAnswer = string | { before: string; terms: string; after: string };
+
+export const PRICING_FAQ: readonly { question: string; answer: FaqAnswer }[] = [
   {
     question: "What is a workspace?",
     answer: "A workspace is one business: its connected accounts, posts, media and team.",
@@ -41,7 +44,13 @@ export const PRICING_FAQ: readonly { question: string; answer: string }[] = [
   },
   {
     question: "How do I cancel?",
-    answer: `${PRICING_CANCEL} After that, the workspace works as after a trial.`,
+    // True whatever the Stripe portal is set to (cancel now or at period end):
+    // the Terms, not this page, say what happens to time already paid for.
+    answer: {
+      before: "Cancel any time in Settings, under Plan. The ",
+      terms: "Terms",
+      after: " say what happens to the time you have already paid for. When the plan ends, the workspace works as after a trial.",
+    },
   },
   { question: "Do you give refunds?", answer: TERMS_FEES_REFUNDS },
 ];
