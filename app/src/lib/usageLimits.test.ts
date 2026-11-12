@@ -217,3 +217,39 @@ describe("sentences", () => {
     expect(formatStorageGb(300 * MB)).toBe("0.3 GB");
   });
 });
+
+// S1 fix round 1: "its limit of 1 YouTube uploads" read wrong with the plans' small numbers.
+describe("limit messages agree with their number", () => {
+  it.each([
+    [1, "post"],
+    [2, "posts"],
+    [10, "posts"],
+  ])("daily posts: %i %s", (n, word) => {
+    expect(dailyPostLimitMessage(n, "now")).toBe(
+      `This workspace has reached its limit of ${n} ${word} for today. Schedule this post for another day, or try again tomorrow.`,
+    );
+    expect(dailyPostLimitMessage(n, "schedule")).toBe(
+      `That day already has ${n} ${word}, which is this workspace's daily limit. Pick another day.`,
+    );
+  });
+
+  it.each([
+    [1, "X post"],
+    [2, "X posts"],
+    [10, "X posts"],
+  ])("X posts: %i %s", (n, words) => {
+    expect(xMonthlyLimitMessage(n, new Date("2026-11-10T12:00:00Z"))).toBe(
+      `This workspace has used its ${n} ${words} for November. X posts start again on 1 December.`,
+    );
+  });
+
+  it.each([
+    [1, "YouTube upload"],
+    [2, "YouTube uploads"],
+    [10, "YouTube uploads"],
+  ])("YouTube uploads: %i %s", (n, words) => {
+    expect(youtubeWorkspaceDailyLimitMessage(n)).toBe(
+      `This workspace has reached its limit of ${n} ${words} for today. Retry this upload tomorrow.`,
+    );
+  });
+});

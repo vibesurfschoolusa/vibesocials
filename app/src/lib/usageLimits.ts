@@ -2,6 +2,7 @@ import { currentPacificMidnight, nextPacificMidnight } from "@/server/platforms/
 
 import { billingEnabled, planState, type BillingFields } from "./billing";
 import { isPlanKey, PLANS, type PlanLimits } from "./plans";
+import { countWord } from "./plural";
 
 /**
  * Per-workspace usage limits (2026-11-10). Pure: no database. The numbers, the
@@ -187,17 +188,17 @@ export type DailyPostLimitMode = "now" | "schedule";
 
 export function dailyPostLimitMessage(limit: number, mode: DailyPostLimitMode): string {
   return mode === "now"
-    ? `This workspace has reached its limit of ${limit} posts for today. Schedule this post for another day, or try again tomorrow.`
-    : `That day already has ${limit} posts, which is this workspace's daily limit. Pick another day.`;
+    ? `This workspace has reached its limit of ${limit} ${countWord(limit, "post", "posts")} for today. Schedule this post for another day, or try again tomorrow.`
+    : `That day already has ${limit} ${countWord(limit, "post", "posts")}, which is this workspace's daily limit. Pick another day.`;
 }
 
 export function xMonthlyLimitMessage(limit: number, now: Date): string {
   const next = utcMonthRange(now).end;
-  return `This workspace has used its ${limit} X posts for ${utcMonthName(now)}. X posts start again on 1 ${utcMonthName(next)}.`;
+  return `This workspace has used its ${limit} ${countWord(limit, "X post", "X posts")} for ${utcMonthName(now)}. X posts start again on 1 ${utcMonthName(next)}.`;
 }
 
 export function youtubeWorkspaceDailyLimitMessage(limit: number): string {
-  return `This workspace has reached its limit of ${limit} YouTube uploads for today. Retry this upload tomorrow.`;
+  return `This workspace has reached its limit of ${limit} ${countWord(limit, "YouTube upload", "YouTube uploads")} for today. Retry this upload tomorrow.`;
 }
 
 export function storageFullMessage(limitBytes: number): string {
