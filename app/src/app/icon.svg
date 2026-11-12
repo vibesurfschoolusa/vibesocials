@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Favicon: the app icon (public/VS_logo.png) reduced to a hexagon and a V so it reads at 16 px. -->
+  <defs>
+    <linearGradient id="g0" gradientUnits="userSpaceOnUse" x1="32.00" y1="8.00" x2="52.78" y2="20.00">
+      <stop offset="0" stop-color="#448be5"/>
+      <stop offset="1" stop-color="#06d6e8"/>
+    </linearGradient>
+    <linearGradient id="g1" gradientUnits="userSpaceOnUse" x1="52.78" y1="20.00" x2="52.78" y2="44.00">
+      <stop offset="0" stop-color="#06d6e8"/>
+      <stop offset="1" stop-color="#0bce96"/>
+    </linearGradient>
+    <linearGradient id="g2" gradientUnits="userSpaceOnUse" x1="52.78" y1="44.00" x2="32.00" y2="56.00">
+      <stop offset="0" stop-color="#0bce96"/>
+      <stop offset="1" stop-color="#f46955"/>
+    </linearGradient>
+    <linearGradient id="g3" gradientUnits="userSpaceOnUse" x1="32.00" y1="56.00" x2="11.22" y2="44.00">
+      <stop offset="0" stop-color="#f46955"/>
+      <stop offset="1" stop-color="#f33574"/>
+    </linearGradient>
+    <linearGradient id="g4" gradientUnits="userSpaceOnUse" x1="11.22" y1="44.00" x2="11.22" y2="20.00">
+      <stop offset="0" stop-color="#f33574"/>
+      <stop offset="1" stop-color="#ab42b7"/>
+    </linearGradient>
+    <linearGradient id="g5" gradientUnits="userSpaceOnUse" x1="11.22" y1="20.00" x2="32.00" y2="8.00">
+      <stop offset="0" stop-color="#ab42b7"/>
+      <stop offset="1" stop-color="#448be5"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#111e2b"/>
+  <g fill="none" stroke-width="6.4" stroke-linecap="round">
+  <path d="M32.00 8.00L52.78 20.00" stroke="url(#g0)"/>
+  <path d="M52.78 20.00L52.78 44.00" stroke="url(#g1)"/>
+  <path d="M52.78 44.00L32.00 56.00" stroke="url(#g2)"/>
+  <path d="M32.00 56.00L11.22 44.00" stroke="url(#g3)"/>
+  <path d="M11.22 44.00L11.22 20.00" stroke="url(#g4)"/>
+  <path d="M11.22 20.00L32.00 8.00" stroke="url(#g5)"/>
+  </g>
+  <path d="M20.5 22 32 43.5 43.5 22" fill="none" stroke="#b8cdd7" stroke-width="5.6" stroke-linejoin="miter" stroke-linecap="butt"/>
+</svg>
