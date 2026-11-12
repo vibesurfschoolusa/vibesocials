@@ -68,7 +68,7 @@ export function ConnectLinkSectionView({
           <>
             {/* P1: a paused link's address answers "not active", so it is not offered to copy. */}
             {pausedByPlan ? (
-              <ClientLinkPlanNotice paused />
+              <ClientLinkPlanNotice paused expires />
             ) : link.url ? (
               <div className="flex gap-2">
                 <Input
