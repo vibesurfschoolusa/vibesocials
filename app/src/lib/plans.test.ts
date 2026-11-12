@@ -13,18 +13,20 @@ describe("PLANS", () => {
     expect(PLANS.pro.name).toBe("Pro");
   });
 
-  it("starter is today's defaults, growth twice them, pro five times", () => {
-    const today = {
-      postsPerDay: DEFAULT_WORKSPACE_LIMITS.postsPerDay,
-      xPostsPerMonth: DEFAULT_WORKSPACE_LIMITS.xPostsPerMonth,
-      youtubeUploadsPerDay: DEFAULT_WORKSPACE_LIMITS.youtubeUploadsPerDay,
-      storageMb: DEFAULT_WORKSPACE_LIMITS.storageBytes / MB,
-    };
-    const times = (n: number) =>
-      Object.fromEntries(Object.entries(today).map(([key, value]) => [key, value * n]));
-    expect(PLANS.starter.limits).toEqual(today);
-    expect(PLANS.growth.limits).toEqual(times(2));
-    expect(PLANS.pro.limits).toEqual(times(5));
+  // S1 item 4: the numbers the owner chose with the prices on 2026-11-11.
+  it("has the chosen limits for each plan", () => {
+    expect(PLANS.starter.limits).toEqual({ postsPerDay: 3, xPostsPerMonth: 15, youtubeUploadsPerDay: 1, storageMb: 2048 });
+    expect(PLANS.growth.limits).toEqual({ postsPerDay: 6, xPostsPerMonth: 40, youtubeUploadsPerDay: 3, storageMb: 5120 });
+    expect(PLANS.pro.limits).toEqual({ postsPerDay: 15, xPostsPerMonth: 100, youtubeUploadsPerDay: 5, storageMb: 15360 });
+  });
+
+  it("leaves the defaults for exempt workspaces and billing off as they were", () => {
+    expect(DEFAULT_WORKSPACE_LIMITS).toEqual({
+      postsPerDay: 20,
+      xPostsPerMonth: 30,
+      youtubeUploadsPerDay: 10,
+      storageBytes: 5120 * MB,
+    });
   });
 
   it("knows only its own keys", () => {

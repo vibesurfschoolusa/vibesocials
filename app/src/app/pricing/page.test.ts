@@ -100,12 +100,12 @@ describe("/pricing with payments configured", () => {
   it("says what each plan allows, in words from its limits", async () => {
     const page = text(await render());
     for (const line of [
-      "Up to 20 posts a day",
-      "Up to 30 posts to X a month",
-      "Up to 10 YouTube uploads a day",
-      "5 GB of photos and videos",
-      "Up to 100 posts a day",
-      "25 GB of photos and videos",
+      "Up to 3 posts a day (about 90 a month)",
+      "Up to 15 posts to X a month",
+      "Up to 1 YouTube upload a day",
+      "2 GB of photos and videos",
+      "Up to 15 posts a day (about 450 a month)",
+      "15 GB of photos and videos",
     ]) {
       expect(page).toContain(line);
     }
