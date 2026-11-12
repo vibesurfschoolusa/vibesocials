@@ -127,6 +127,7 @@ function Dashboard({ availablePlatforms }: { availablePlatforms: readonly Platfo
           <GettingStarted
             connections={connectionsState.connections}
             jobs={postJobs.jobs}
+            availablePlatforms={availablePlatforms}
           />
           {/* Roadmap Phase 8 — renders only once a YouTube post has fetched metrics. */}
           <YouTubeMetricsSummary jobs={postJobs.jobs} availablePlatforms={availablePlatforms} />

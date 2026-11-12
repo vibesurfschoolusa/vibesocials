@@ -15,7 +15,9 @@ import { cn } from "@/lib/cn";
 import { deriveGettingStarted } from "@/lib/gettingStarted";
 import type { ConnectionStatus } from "@/lib/connectionsDto";
 import type { PostJobDTO } from "@/lib/postsDto";
+import { readyToConnectSentence } from "@/lib/platformGuides";
 import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
+import type { Platform } from "@prisma/client";
 
 /**
  * First-run "Get started" checklist, shown at the top of the dashboard until
@@ -27,12 +29,16 @@ import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 export function GettingStarted({
   connections,
   jobs,
+  availablePlatforms,
 }: {
   connections: ConnectionStatus[] | null;
   jobs: PostJobDTO[] | null;
+  /** The platforms this site offers, so the first step names only those. */
+  availablePlatforms: readonly Platform[];
 }) {
   const state = deriveGettingStarted(connections, jobs);
   if (!state.show) return null;
+  const readySentence = readyToConnectSentence(availablePlatforms);
 
   return (
     <Card>
@@ -50,12 +56,22 @@ export function GettingStarted({
             title="Connect a platform"
             description="Link YouTube, X, Instagram, or any of the others in Settings."
             note={
-              <>
-                Each platform needs something different.{" "}
-                <Link href="/help" className="font-medium text-primary underline-offset-4 hover:underline">
-                  Read the setup guide.
-                </Link>
-              </>
+              readySentence ? (
+                <>
+                  {readySentence}{" "}
+                  <Link href="/help" className="font-medium text-primary underline-offset-4 hover:underline">
+                    setup guide
+                  </Link>
+                  .
+                </>
+              ) : (
+                <>
+                  Each platform needs something different.{" "}
+                  <Link href="/help" className="font-medium text-primary underline-offset-4 hover:underline">
+                    Read the setup guide.
+                  </Link>
+                </>
+              )
             }
             action={
               <Link

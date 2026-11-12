@@ -18,7 +18,7 @@ import {
   PLATFORM_CONNECT_REQUIREMENTS,
   PLATFORM_MATURITY_NOTES,
 } from "@/lib/platforms";
-import { platformHelpHref } from "@/lib/platformGuides";
+import { PLATFORM_GUIDES, platformHelpHref } from "@/lib/platformGuides";
 import type { Platform } from "@prisma/client";
 import { Badge } from "@/components/ui/badge";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -184,6 +184,13 @@ export function ConnectionsSection({
                     {PLATFORM_MATURITY_NOTES[key] ? (
                       <p className="mt-1 break-words text-xs text-muted-foreground/90">
                         {PLATFORM_MATURITY_NOTES[key]}
+                      </p>
+                    ) : null}
+                    {/* Said before Connect: a platform still reviewing the app
+                        refuses or limits newcomers (lib/platformGuides.ts). */}
+                    {!connection && !readOnly && PLATFORM_GUIDES[key].status ? (
+                      <p className="mt-1 break-words text-xs text-muted-foreground">
+                        {PLATFORM_GUIDES[key].status}
                       </p>
                     ) : null}
                     {!connection && !readOnly ? (

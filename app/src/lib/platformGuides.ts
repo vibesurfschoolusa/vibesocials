@@ -1,5 +1,6 @@
 import type { Platform } from "@prisma/client";
 
+import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 
 /**
@@ -125,4 +126,18 @@ export const PLATFORM_GUIDES: Record<Platform, PlatformGuide> = {
 /** The platform's section of the setup guide. */
 export function platformHelpHref(platform: Platform): string {
   return `/help#${PLATFORM_GUIDES[platform].anchor}`;
+}
+
+/**
+ * The dashboard's first step, before its link to the setup guide: which of
+ * the offered platforms have no review open, so a newcomer starts with one
+ * that works. Null when none does.
+ */
+export function readyToConnectSentence(available: readonly Platform[]): string | null {
+  const ready = PLATFORM_ORDER.filter((platform) => available.includes(platform) && !PLATFORM_GUIDES[platform].status).map(
+    platformLabel,
+  );
+  if (ready.length === 0) return null;
+  const names = ready.length === 1 ? ready[0] : `${ready.slice(0, -1).join(", ")} and ${ready[ready.length - 1]}`;
+  return `${names} ${ready.length === 1 ? "connects" : "connect"} right away today; the others are explained in the`;
 }

@@ -4,7 +4,7 @@ import { PLATFORM_LABELS } from "@/lib/platforms";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import type { Platform } from "@prisma/client";
 
-import { PLATFORM_GUIDES, platformHelpHref } from "./platformGuides";
+import { PLATFORM_GUIDES, platformHelpHref, readyToConnectSentence } from "./platformGuides";
 
 // PLATFORM_LABELS is typed Record<Platform, string>, so its keys are every
 // value of the Platform enum.
@@ -77,5 +77,20 @@ describe("platformHelpHref", () => {
     for (const platform of ALL_PLATFORMS) {
       expect(platformHelpHref(platform)).toBe(`/help#${PLATFORM_GUIDES[platform].anchor}`);
     }
+  });
+});
+
+describe("readyToConnectSentence", () => {
+  it("names the offered platforms with no review open, then points to the guide", () => {
+    expect(readyToConnectSentence(["tiktok", "youtube", "instagram", "x", "linkedin", "facebook_page", "google_business_profile"])).toBe(
+      "YouTube and X connect right away today; the others are explained in the",
+    );
+    expect(readyToConnectSentence(["tiktok", "youtube", "x", "pinterest"])).toBe(
+      "YouTube, X and Pinterest connect right away today; the others are explained in the",
+    );
+  });
+
+  it("is null when every offered platform has a review open", () => {
+    expect(readyToConnectSentence(["tiktok", "instagram"])).toBeNull();
   });
 });
