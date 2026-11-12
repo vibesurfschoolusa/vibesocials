@@ -72,6 +72,24 @@ describe("GettingStarted", () => {
     expect(render([], [], { ...OWNER, role: "member" })).toBe("");
   });
 
+  // Fix round 2: "Four steps to your first post" was wrong for an owner who
+  // had posted with nothing connected. The words must hold in every state shown.
+  it("says something true in every state that shows the block", () => {
+    const ownerLine = "Get set up. Steps 2 and 3 are settings that change every post.";
+    const states: Array<[ConnectionStatus[], PostJobDTO[], WorkspaceSetup, string]> = [
+      [[], [], OWNER, ownerLine],
+      [CONNECTED, [], OWNER, ownerLine],
+      [[], POSTED, OWNER, ownerLine],
+      [[], POSTED, { ...OWNER, footerSet: true, brandVoiceSet: true }, ownerLine],
+      [CONNECTED, [], { ...OWNER, role: "member" }, "This workspace has a platform connected, so you can create posts."],
+    ];
+    for (const [connections, jobs, setup, line] of states) {
+      const html = render(connections, jobs, setup);
+      expect(html).toContain(line);
+      expect(html).not.toContain("first post.");
+    }
+  });
+
   it("fix round 1: an owner who connected and posted sees no block, whatever the settings", () => {
     expect(render(CONNECTED, POSTED, OWNER)).toBe("");
   });
