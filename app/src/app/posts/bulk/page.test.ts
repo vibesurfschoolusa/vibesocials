@@ -20,10 +20,10 @@ import BulkPostsPage from "./page";
 
 const LATER = new Date(Date.now() + 20 * 24 * 60 * 60 * 1000);
 const STARTER = { plan: "starter", planStatus: "active", currentPeriodEnd: LATER };
-const context = (billing: Record<string, unknown>) => ({
+const context = (billing: Record<string, unknown>, role: "owner" | "member" = "owner") => ({
   user: { id: "user-1" },
   workspace: { id: "ws-1", name: "Surf Co", ...billing },
-  role: "owner",
+  role,
 });
 const render = async () => renderToStaticMarkup((await BulkPostsPage()) as ReactElement);
 
@@ -55,5 +55,21 @@ describe("/posts/bulk by plan", () => {
       expect(html).toContain('<form data-workspace="ws-1">');
       expect(html).not.toContain("Growth and Pro");
     }
+  });
+});
+
+// P1 fix round 2: a member cannot see Settings, Plan, so they are not sent there.
+describe("/posts/bulk on Starter for a member", () => {
+  it("says to ask the owner, with no link to Settings, Plan", async () => {
+    h.getWorkspaceContext.mockResolvedValue(context(STARTER, "member"));
+    const html = await render();
+    expect(html).not.toContain("<form");
+    expect(html).toContain("Add many is part of the Growth and Pro plans. Ask the workspace owner about changing the plan.");
+    expect(html).not.toContain("/settings#plan");
+  });
+
+  it("a member on Growth gets the form", async () => {
+    h.getWorkspaceContext.mockResolvedValue(context({ ...STARTER, plan: "growth" }, "member"));
+    expect(await render()).toContain('<form data-workspace="ws-1">');
   });
 });

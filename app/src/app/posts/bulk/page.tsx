@@ -28,6 +28,11 @@ export default async function BulkPostsPage() {
           /api/posts calls, so the page is the one place it can be gated. */}
       {planIncludes(context.workspace, "bulk") ? (
         <BulkPostsForm workspaceId={context.workspace.id} />
+      ) : context.role !== "owner" ? (
+        // P1 fix round 2: a member cannot see Settings, Plan.
+        <p className="text-sm text-foreground">
+          Add many is part of the Growth and Pro plans. Ask the workspace owner about changing the plan.
+        </p>
       ) : (
         <p className="text-sm text-foreground">
           Add many is part of the Growth and Pro plans.{" "}
