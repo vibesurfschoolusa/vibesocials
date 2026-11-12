@@ -111,14 +111,15 @@ describe("/pricing with payments configured", () => {
     }
   });
 
+  // S1 fix round 1: the access-to-period-end line is true only for one portal
+  // setting, so cancelling is said by the FAQ answer (Settings, Plan, the Terms).
   it("states the trial above the cards, and cancelling and the Terms under them", async () => {
     const html = await render();
     const page = text(html);
     expect(page).toContain("21-day free trial. No card needed to start.");
     expect(page.indexOf("21-day free trial")).toBeLessThan(page.indexOf("Starter"));
-    expect(page).toContain(
-      "Cancel any time in Settings. You keep access until the end of the period you paid for.",
-    );
+    expect(page).not.toContain("You keep access");
+    expect(page).toContain("Cancel any time in Settings, under Plan.");
     expect(page.indexOf("Cancel any time")).toBeGreaterThan(page.indexOf("Pro "));
     expect(html).toMatch(/<a [^>]*href="\/terms"[^>]*>/);
   });

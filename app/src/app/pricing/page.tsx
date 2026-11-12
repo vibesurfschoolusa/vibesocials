@@ -5,7 +5,6 @@ import type { Metadata } from "next";
 import { PublicFooter, PublicHeader } from "@/components/public-shell";
 import { buttonVariants } from "@/components/ui/button";
 import { offeredPlans, paymentsConfigured, trialDays } from "@/lib/billing";
-import { PRICING_CANCEL } from "@/lib/billingTerms";
 import { WORKSPACE_PLAN_SENTENCE } from "@/lib/planCopy";
 import { PLANS } from "@/lib/plans";
 import { PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/siteInfo";
@@ -77,7 +76,6 @@ export default async function PricingPage() {
         </ul>
 
         <div className="mt-6 space-y-1 text-sm text-muted-foreground">
-          <p>{PRICING_CANCEL}</p>
           <p>
             <Link href="/terms" className="underline underline-offset-2 hover:text-foreground">
               Read the Terms of Service
