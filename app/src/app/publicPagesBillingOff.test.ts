@@ -26,6 +26,10 @@ const BILLING_VARS = [
   "STRIPE_PRICE_STARTER",
   "STRIPE_PRICE_GROWTH",
   "STRIPE_PRICE_PRO",
+  // P1: the yearly prices, unset too.
+  "STRIPE_PRICE_STARTER_YEARLY",
+  "STRIPE_PRICE_GROWTH_YEARLY",
+  "STRIPE_PRICE_PRO_YEARLY",
 ];
 
 beforeAll(() => {
