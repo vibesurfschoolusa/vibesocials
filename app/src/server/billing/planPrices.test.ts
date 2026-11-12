@@ -8,7 +8,7 @@ vi.mock("./stripeApi", async (importOriginal) => ({
 }));
 
 import { StripeApiError } from "./stripeApi";
-import { formatPriceLabel, getPlanOffers, resetPlanPriceCache } from "./planPrices";
+import { formatPriceLabel, getPlanOffers, getYearlyPlanOffers, resetPlanPriceCache, yearlySavingTrue } from "./planPrices";
 
 const ENV = {
   BILLING_ENABLED: "true",
@@ -97,6 +97,72 @@ describe("getPlanOffers", () => {
 
   it("a plan with no price is not offered", async () => {
     expect(await getPlanOffers(["pro"], ENV, NOW)).toEqual([]);
+    expect(m.retrievePrice).not.toHaveBeenCalled();
+  });
+});
+
+// P1: yearly prices and whether "two months free" is true.
+describe("yearlySavingTrue", () => {
+  const month = (unit_amount: number, currency = "usd") => ({ unit_amount, currency, recurring: { interval: "month", interval_count: 1 } });
+  const year = (unit_amount: number, currency = "usd") => ({ unit_amount, currency, recurring: { interval: "year", interval_count: 1 } });
+
+  it("is true when a year costs at most ten months", () => {
+    expect(yearlySavingTrue(month(1900), year(19000))).toBe(true);
+    expect(yearlySavingTrue(month(1900), year(15000))).toBe(true);
+  });
+
+  it("is false when a year costs more than ten months, or the prices cannot be compared", () => {
+    expect(yearlySavingTrue(month(1900), year(19001))).toBe(false);
+    expect(yearlySavingTrue(month(1900), year(19000, "eur"))).toBe(false);
+    expect(yearlySavingTrue(month(1900), { ...year(19000), recurring: { interval: "month", interval_count: 12 } })).toBe(false);
+    expect(yearlySavingTrue({ ...month(1900), recurring: { interval: "month", interval_count: 3 } }, year(19000))).toBe(false);
+    expect(yearlySavingTrue({ ...month(0), unit_amount: null }, year(19000))).toBe(false);
+    expect(yearlySavingTrue(null, year(19000))).toBe(false);
+  });
+});
+
+describe("getYearlyPlanOffers", () => {
+  const YEARLY_ENV = {
+    ...ENV,
+    STRIPE_PRICE_STARTER_YEARLY: "price_test_starter_year",
+    STRIPE_PRICE_GROWTH_YEARLY: "price_test_growth_year",
+  };
+
+  beforeEach(() => {
+    m.retrievePrice.mockImplementation(async (id: string) => {
+      const amounts: Record<string, [number, string]> = {
+        price_example_starter: [1900, "month"],
+        price_example_growth: [3900, "month"],
+        price_test_starter_year: [19000, "year"],
+        price_test_growth_year: [46800, "year"],
+      };
+      const [unit_amount, interval] = amounts[id];
+      return { id, unit_amount, currency: "usd", recurring: { interval, interval_count: 1 } };
+    });
+  });
+
+  it("gives each plan with a yearly price Stripe's label, and the saving only where it is true", async () => {
+    expect(await getYearlyPlanOffers(["starter", "growth", "pro"], YEARLY_ENV, NOW)).toEqual([
+      { plan: "starter", name: "Starter", price: "$190 a year", twoMonthsFree: true },
+      { plan: "growth", name: "Growth", price: "$468 a year", twoMonthsFree: false },
+    ]);
+  });
+
+  it("reads each price once an hour, monthly ones shared with getPlanOffers", async () => {
+    await getPlanOffers(["starter"], YEARLY_ENV, NOW);
+    await getYearlyPlanOffers(["starter"], YEARLY_ENV, NOW);
+    expect(m.retrievePrice.mock.calls.map((call) => call[0])).toEqual(["price_example_starter", "price_test_starter_year"]);
+  });
+
+  it("when Stripe cannot be reached: no prices and no saving claimed", async () => {
+    m.retrievePrice.mockRejectedValue(new StripeApiError("Stripe could not be reached (TypeError)", 0));
+    expect(await getYearlyPlanOffers(["starter"], YEARLY_ENV, NOW)).toEqual([
+      { plan: "starter", name: "Starter", price: null, twoMonthsFree: false },
+    ]);
+  });
+
+  it("with no yearly price configured: none, and Stripe is not asked", async () => {
+    expect(await getYearlyPlanOffers(["starter", "growth"], ENV, NOW)).toEqual([]);
     expect(m.retrievePrice).not.toHaveBeenCalled();
   });
 });
