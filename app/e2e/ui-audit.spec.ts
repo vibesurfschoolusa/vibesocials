@@ -209,13 +209,41 @@ async function scrollToHeading(page: Page, name: string, level = 2): Promise<voi
   await page.waitForTimeout(300);
 }
 
+/**
+ * The composer's submit control a person can see: below md it is the publish
+ * bar's (button[form=create-post-form]); at md and up the form's own.
+ */
+function visibleSubmit(page: Page) {
+  return page.locator("button[type=submit]:visible").first();
+}
+
+/**
+ * Brings a control to the middle of the screen before acting on it, so the
+ * phone's fixed publish bar never covers it (the browser's own scrolling puts
+ * it at the bottom edge, under the bar).
+ */
+async function centre(locator: ReturnType<Page["locator"]>): Promise<void> {
+  await locator.evaluate((el) => el.scrollIntoView({ block: "center" }));
+}
+
+/** Opens the folded Google post box when it is folded. */
+async function openGoogleBox(page: Page): Promise<void> {
+  const toggle = page.locator("button[aria-controls=google-post-box-settings]");
+  if ((await toggle.count()) > 0 && (await toggle.getAttribute("aria-expanded")) === "false") {
+    await centre(toggle);
+    await toggle.click();
+  }
+}
+
 /** Presses the composer's main button and waits for the server's answer. */
 async function submitAndWait(page: Page): Promise<void> {
   const answer = page.waitForResponse(
     (r) => new URL(r.url()).pathname === "/api/posts" && r.request().method() === "POST",
     { timeout: 30_000 },
   );
-  await page.locator("form button[type=submit]").first().click();
+  const submit = visibleSubmit(page);
+  await centre(submit);
+  await submit.click();
   await answer;
   await waitQuiet(page);
 }
@@ -379,10 +407,11 @@ function mainScreens(): Screen[] {
   composer("story", async (page) => {
     await attach(page, [photo()]);
     await caption(page, COMPOSER_CAPTION);
-    await page
+    const story = page
       .locator("fieldset", { has: page.getByText("Instagram: post to", { exact: true }) })
-      .getByRole("radio", { name: "Story" })
-      .check();
+      .getByRole("radio", { name: "Story" });
+    await centre(story);
+    await story.check();
   });
   composer("schedule-weekly", async (page) => {
     await attach(page, [photo()]);
@@ -394,8 +423,12 @@ function mainScreens(): Screen[] {
   composer("caption-per-platform", async (page) => {
     await attach(page, [photo()]);
     await caption(page, COMPOSER_CAPTION);
-    await page.getByText("Caption per platform", { exact: true }).click();
-    await page.getByRole("switch", { name: "Different caption for Instagram" }).click();
+    const perPlatform = page.getByText("Caption per platform", { exact: true });
+    await centre(perPlatform);
+    await perPlatform.click();
+    const instagramSwitch = page.getByRole("switch", { name: "Different caption for Instagram" });
+    await centre(instagramSwitch);
+    await instagramSwitch.click();
     await page
       .getByRole("textbox", { name: "Caption for Instagram" })
       .fill("Saturday lesson at 8 🌊 a few spots left. Link in bio to book.");
@@ -403,6 +436,7 @@ function mainScreens(): Screen[] {
   composer("google-offer", async (page) => {
     await attach(page, [photo()]);
     await caption(page, "10% off board rental this week.");
+    await openGoogleBox(page);
     await page.locator("#google-post-type").selectOption("offer");
     await page.locator("#google-offer-title").fill("10% off board rental");
     await page.locator("#google-offer-start-date").fill(await localDate(page, 1));
@@ -412,6 +446,7 @@ function mainScreens(): Screen[] {
   composer("google-event", async (page) => {
     await attach(page, [photo()]);
     await caption(page, "Free beach clean-up and surf lesson on Sunday.");
+    await openGoogleBox(page);
     await page.locator("#google-post-type").selectOption("event");
     await page.locator("#google-event-title").fill("Beach clean-up and free lesson");
     await page.locator("#google-event-start-date").fill(await localDate(page, 4));
@@ -428,7 +463,9 @@ function mainScreens(): Screen[] {
       await attach(page, [photo()]);
       await caption(page, COMPOSER_CAPTION);
       await chooseMode(page, "Publish now");
-      await page.locator("form button[type=submit]").first().click();
+      const submit = visibleSubmit(page);
+      await centre(submit);
+      await submit.click();
       const dialog = page.getByRole("dialog");
       await dialog.waitFor({ timeout: 15_000 });
       await shot("confirm-dialog", { fullPage: false });
