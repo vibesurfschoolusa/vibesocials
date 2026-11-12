@@ -12,7 +12,7 @@ import { planIncludes } from "@/lib/planFeatures";
 export const BRAND_VOICE_PLAN_NOTE =
   "On the Growth and Pro plans, the AI follows this when it writes or rewrites a caption and when it drafts a reply to a Google review.";
 export const REVIEW_ALERTS_PLAN_NOTE =
-  "New-review emails are sent on the Growth and Pro plans. Your choice here is kept for when you choose one.";
+  "New-review emails are sent on the Growth and Pro plans. Your choice here is kept for when this workspace moves to one of them.";
 
 // P1 fix round 2: the monthly report email toggle and the logo.
 export const MONTHLY_REPORT_PLAN_NOTE = "The monthly report email is part of the Growth and Pro plans.";

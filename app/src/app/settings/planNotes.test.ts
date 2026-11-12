@@ -13,7 +13,7 @@ describe("settingsPlanNotes (P1)", () => {
       brandVoice:
         "On the Growth and Pro plans, the AI follows this when it writes or rewrites a caption and when it drafts a reply to a Google review.",
       reviewAlerts:
-        "New-review emails are sent on the Growth and Pro plans. Your choice here is kept for when you choose one.",
+        "New-review emails are sent on the Growth and Pro plans. Your choice here is kept for when this workspace moves to one of them.",
       // P1 fix round 2.
       monthlyReport: "The monthly report email is part of the Growth and Pro plans.",
       logo: "Your logo shows on the monthly report on the Growth and Pro plans.",
@@ -23,12 +23,28 @@ describe("settingsPlanNotes (P1)", () => {
   it("is empty on Growth, in a trial, for an exempt workspace and with billing off", () => {
     for (const [workspace, env] of [
       [{ plan: "growth", planStatus: "active", currentPeriodEnd: LATER }, ON],
+      [{ plan: "pro", planStatus: "active", currentPeriodEnd: LATER }, ON],
       [{ trialEndsAt: LATER }, ON],
       [{ billingExempt: true }, ON],
       [{}, ON],
       [{ plan: "starter", planStatus: "active", currentPeriodEnd: LATER }, {}],
     ] as const) {
       expect(settingsPlanNotes(workspace, env, NOW)).toEqual({});
+    }
+  });
+});
+
+// Q1 fix round 1: true for an owner on Starter (who switches) and for an ended plan or trial (who chooses).
+describe("settingsPlanNotes: the review alerts note", () => {
+  const NOTE = "New-review emails are sent on the Growth and Pro plans. Your choice here is kept for when this workspace moves to one of them.";
+
+  it("on Starter, and the same sentence once a plan or a trial has ended", () => {
+    for (const workspace of [
+      { plan: "starter", planStatus: "active", currentPeriodEnd: LATER },
+      { plan: "starter", planStatus: "canceled", currentPeriodEnd: NOW },
+      { trialEndsAt: new Date("2026-12-01T00:00:00Z") },
+    ]) {
+      expect(settingsPlanNotes(workspace, ON, NOW).reviewAlerts).toBe(NOTE);
     }
   });
 });
