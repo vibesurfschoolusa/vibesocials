@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, type KeyboardEvent } from "react";
 import { AlertTriangle } from "lucide-react";
 import type { Platform } from "@prisma/client";
 
@@ -7,11 +8,12 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { MediaCountBadge, mediaCountBadge } from "@/components/media-thumb";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
-import { platformLabel } from "@/lib/platforms";
+import { cn } from "@/lib/cn";
+import { PLATFORM_ORDER, platformLabel } from "@/lib/platforms";
 import { buildPlatformPreview } from "@/lib/platformPreview";
 
 export interface PlatformPreviewListProps {
-  /** Platforms to render a card for — the composer's CONNECTED platforms. */
+  /** Platforms to preview, in order — the composer's SELECTED platforms. */
   platforms: Platform[];
   /** The composer's base caption, before any footer/override is applied. */
   caption: string;
@@ -31,11 +33,32 @@ export interface PlatformPreviewListProps {
 }
 
 /**
+ * The platform whose preview shows: the one chosen while it stays selected,
+ * else the next selected one after it in the app's order (the one before it
+ * when it was the last), else the first. Null when nothing is selected.
+ */
+export function shownPreviewPlatform(platforms: readonly Platform[], chosen: Platform | null): Platform | null {
+  if (platforms.length === 0) return null;
+  if (chosen === null || platforms.includes(chosen)) return chosen ?? platforms[0];
+  const at = PLATFORM_ORDER.indexOf(chosen);
+  const after = platforms.find((platform) => PLATFORM_ORDER.indexOf(platform) > at);
+  return after ?? platforms[platforms.length - 1];
+}
+
+const tabId = (platform: Platform) => `platform-preview-tab-${platform}`;
+const panelId = "platform-preview-panel";
+
+/**
  * Roadmap Phase 7 (spec §7.1) — live, per-platform preview of how a post will
  * actually render: caption with footer, media thumbnail, and character-limit
- * feedback. One card per CONNECTED platform, updating on every render (the
- * caller re-renders this on every keystroke since `caption` is composer
- * state).
+ * feedback, updating on every render (the caller re-renders this on every
+ * keystroke since `caption` is composer state).
+ *
+ * One platform's card at a time behind a row of tabs (M1): seven stacked
+ * cards made a phone scroll past near-identical previews to reach Publish.
+ * A tab is marked when its text is over the platform's limit, so a problem on
+ * a hidden tab is still seen. With one platform there is nothing to choose,
+ * so the card shows alone.
  *
  * All caption math (footer, override precedence, truncation) is done by the
  * pure `buildPlatformPreview` helper (unit-tested in
@@ -51,9 +74,48 @@ export function PlatformPreviewList({
   mediaMimeType,
   mediaCount,
 }: PlatformPreviewListProps) {
-  if (platforms.length === 0) {
+  const [chosen, setChosen] = useState<Platform | null>(null);
+  const shown = shownPreviewPlatform(platforms, chosen);
+  // Kept as the shown one, so a platform deselected and ticked again does not take the view back.
+  if (shown !== null && chosen !== null && shown !== chosen) setChosen(shown);
+
+  if (shown === null) {
     return null;
   }
+
+  const card = (
+    <PlatformPreviewCard
+      key={shown}
+      platform={shown}
+      caption={caption}
+      override={overrides?.[shown] ?? null}
+      user={user}
+      mediaUrl={mediaUrl}
+      mediaMimeType={mediaMimeType}
+      mediaCount={mediaCount}
+    />
+  );
+
+  const choose = (platform: Platform, focus: boolean) => {
+    setChosen(platform);
+    if (focus) document.getElementById(tabId(platform))?.focus();
+  };
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const at = platforms.indexOf(shown);
+    const target =
+      event.key === "ArrowRight"
+        ? platforms[(at + 1) % platforms.length]
+        : event.key === "ArrowLeft"
+          ? platforms[(at - 1 + platforms.length) % platforms.length]
+          : event.key === "Home"
+            ? platforms[0]
+            : event.key === "End"
+              ? platforms[platforms.length - 1]
+              : null;
+    if (!target) return;
+    event.preventDefault();
+    choose(target, true);
+  };
 
   return (
     <div className="space-y-2">
@@ -61,20 +123,53 @@ export function PlatformPreviewList({
       <p className="text-xs text-muted-foreground">
         How this post will look on each connected platform.
       </p>
-      <div className="grid gap-3 sm:grid-cols-2">
-        {platforms.map((platform) => (
-          <PlatformPreviewCard
-            key={platform}
-            platform={platform}
-            caption={caption}
-            override={overrides?.[platform] ?? null}
-            user={user}
-            mediaUrl={mediaUrl}
-            mediaMimeType={mediaMimeType}
-            mediaCount={mediaCount}
-          />
-        ))}
-      </div>
+      {platforms.length === 1 ? (
+        card
+      ) : (
+        <>
+          <div
+            role="tablist"
+            aria-label="Preview for"
+            onKeyDown={onKeyDown}
+            className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1"
+          >
+            {platforms.map((platform) => {
+              const selected = platform === shown;
+              const over = buildPlatformPreview({
+                platform,
+                caption,
+                override: overrides?.[platform] ?? null,
+                user,
+              }).willTruncate;
+              return (
+                <button
+                  key={platform}
+                  type="button"
+                  role="tab"
+                  id={tabId(platform)}
+                  aria-selected={selected}
+                  aria-controls={panelId}
+                  aria-label={over ? `${platformLabel(platform)}, over its limit: the text will be shortened` : undefined}
+                  tabIndex={selected ? 0 : -1}
+                  onClick={() => choose(platform, false)}
+                  className={cn(
+                    "inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius)] border px-3 py-1.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                    selected
+                      ? "border-primary/40 bg-primary/10 text-foreground"
+                      : "border-input text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {platformLabel(platform)}
+                  {over ? <AlertTriangle aria-hidden className="h-3.5 w-3.5 text-warning" /> : null}
+                </button>
+              );
+            })}
+          </div>
+          <div role="tabpanel" id={panelId} aria-labelledby={tabId(shown)}>
+            {card}
+          </div>
+        </>
+      )}
     </div>
   );
 }
