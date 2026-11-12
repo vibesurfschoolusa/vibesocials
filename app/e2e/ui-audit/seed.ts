@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { Prisma, PrismaClient, type Platform } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
+import { generateInviteToken } from "../../src/lib/inviteToken";
 import { sealSecret } from "../../src/lib/tokenCrypto";
 
 /**
@@ -29,6 +30,8 @@ export const BILLING_EMAILS = {
   trialEnding: "trial.ending.harborsurf@example.test",
   trialEnded: "trial.ended.harborsurf@example.test",
   unconfirmed: "unconfirmed.harborsurf@example.test",
+  starter: "owner.startersurf@example.test",
+  growth: "owner.growthsurf@example.test",
 } as const;
 
 export function auditDatabaseUrl(): string {
@@ -614,20 +617,45 @@ export async function seedMain(prisma: PrismaClient, media: SeededMedia): Promis
   };
 }
 
+/** The raw tokens of a paying workspace's three client links, for /u, /v and /c. */
+export interface PaidLinks {
+  upload: string;
+  review: string;
+  connect: string;
+}
+
+export interface PaidSeed {
+  workspaceId: string;
+  links: PaidLinks;
+}
+
 export interface BillingSeed {
   trialNewId: string;
   trialEndingId: string;
   trialEndedId: string;
   unconfirmedId: string;
+  starter: PaidSeed;
+  growth: PaidSeed;
 }
 
-/** The billing pass: four accounts, each with one workspace in a different trial state. */
-export async function seedBilling(prisma: PrismaClient): Promise<BillingSeed> {
+/** Same as CONNECT_LINK_TTL_MS in src/lib/connectLink.ts (not imported: it pulls in "@/" paths). */
+const CONNECT_LINK_TTL_MS = 14 * DAY;
+
+/** The billing pass: four accounts in different trial states, and two paying owners (A2). */
+export async function seedBilling(prisma: PrismaClient, media: { logo: string }): Promise<BillingSeed> {
   await removeEarlierRun(prisma, Object.values(BILLING_EMAILS));
   const now = new Date();
   const passwordHash = await bcrypt.hash(AUDIT_PASSWORD, 10);
 
-  async function trialAccount(email: string, name: string, workspaceName: string, startedDaysAgo: number, endsInDays: number, verified = true) {
+  async function trialAccount(
+    email: string,
+    name: string,
+    workspaceName: string,
+    startedDaysAgo: number,
+    endsInDays: number,
+    verified = true,
+    extra: Partial<Prisma.WorkspaceCreateInput> = {},
+  ) {
     const user = await createUser(prisma, email, name, passwordHash, {
       trialStartedAt: new Date(now.getTime() - startedDaysAgo * DAY),
       ...(verified ? {} : { emailVerifiedAt: null }),
@@ -636,6 +664,7 @@ export async function seedBilling(prisma: PrismaClient): Promise<BillingSeed> {
       trialEndsAt: new Date(now.getTime() + endsInDays * DAY),
       billingExempt: false,
       companyWebsite: "https://harborsurf.example",
+      ...extra,
     });
     await prisma.socialConnection.create({
       data: {
@@ -647,13 +676,122 @@ export async function seedBilling(prisma: PrismaClient): Promise<BillingSeed> {
         metadata: { username: "harborsurfco" },
       },
     });
-    return workspace.id;
+    return { userId: user.id, workspaceId: workspace.id };
+  }
+
+  /**
+   * An owner paying for `plan`: the trial ended 56 days ago and a monthly
+   * subscription is active. The plan columns are what the Stripe webhook
+   * writes for an active subscription (server/billing/subscriptionSync.ts):
+   * plan from the price, Stripe's status, the item's period end, no planned
+   * end, the subscription id, and the customer bound by checkout. Everything a
+   * gated place reads is filled in, so each one shows its plan's state.
+   */
+  async function payingAccount(plan: "starter" | "growth", email: string, name: string, workspaceName: string): Promise<PaidSeed> {
+    const { userId, workspaceId } = await trialAccount(email, name, workspaceName, 70, -56, true, {
+      plan,
+      planStatus: "active",
+      currentPeriodEnd: new Date(now.getTime() + 18 * DAY),
+      planEndsAt: null,
+      stripeSubscriptionId: `sub_dummy_ui_audit_${plan}`,
+      stripeCustomerId: `cus_dummy_ui_audit_${plan}`,
+      // Brand voice: the Settings section and its plan line.
+      brandVoice: "Warm and plain, like a coach on the beach: short sentences, no hype, always say when and where.",
+      brandVoiceExamples: "Small, clean waves this Saturday. Lessons at 8 and 10, boards and wetsuits included.",
+      // The report logo: the Settings row and the client's report.
+      logoUrl: media.logo,
+    });
+    // Review alerts switched on (the default, written out so the picture does not depend on it).
+    await prisma.user.update({ where: { id: userId }, data: { notifyNewReviews: true, notifyMonthlyReport: true } });
+
+    // Posts: published last month (the client's report shows last month by
+    // default) and this week, so the dashboard shows "Working for clients?";
+    // two scheduled, so the review link and the Queue have posts to show.
+    const lastMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 10, 14));
+    const published = [
+      { at: lastMonth, caption: "Kids camp week 2 is a wrap. Twelve new surfers stood up on day one.", likes: 41 },
+      { at: new Date(now.getTime() - 3 * DAY), caption: "Surf report: 2-3 ft and offshore until noon. Lessons at 8 and 10.", likes: 12 },
+    ];
+    for (const [i, p] of published.entries()) {
+      const job = await prisma.postJob.create({
+        data: { userId, workspaceId, mediaItemId: null, status: "completed", baseCaption: p.caption, createdAt: p.at },
+      });
+      const externalPostId = `audit-${plan}-x-${i + 1}`;
+      const result = await prisma.postJobResult.create({
+        data: {
+          postJobId: job.id,
+          platform: "x",
+          status: "success",
+          externalPostId,
+          workspaceId,
+          createdAt: p.at,
+          updatedAt: new Date(p.at.getTime() + 4 * 60 * 1000),
+        },
+      });
+      await prisma.postMetric.create({
+        data: {
+          userId,
+          workspaceId,
+          platform: "x",
+          externalPostId,
+          postJobResultId: result.id,
+          fetchedAt: new Date(now.getTime() - 2 * HOUR),
+          likes: p.likes,
+          comments: 2,
+        },
+      });
+    }
+    for (const [days, caption] of [
+      [2, "Saturday lesson at 8: small, clean waves and a few spots left."],
+      [5, "Board rental by the hour is open again from 7 am."],
+    ] as const) {
+      await prisma.postJob.create({
+        data: {
+          userId,
+          workspaceId,
+          mediaItemId: null,
+          status: "scheduled",
+          baseCaption: caption,
+          scheduledFor: future(now, days, 14),
+          publishMetadata: { targetPlatforms: ["x"] },
+          createdAt: new Date(now.getTime() - DAY),
+        },
+      });
+    }
+
+    // The three client links, as the owner routes write them (token hash, the
+    // sealed token, the owner as creator; the connect link with its platforms
+    // and its 14 days). Written here because the routes refuse Starter, which
+    // is the point: the pictures show what an owner whose links were made
+    // before the plan changed sees.
+    const upload = generateInviteToken();
+    await prisma.workspaceUploadLink.create({
+      data: { workspaceId, tokenHash: upload.hash, tokenSealed: sealSecret(upload.raw), createdById: userId },
+    });
+    const review = generateInviteToken();
+    await prisma.workspaceReviewLink.create({
+      data: { workspaceId, tokenHash: review.hash, tokenSealed: sealSecret(review.raw), createdById: userId },
+    });
+    const connect = generateInviteToken();
+    await prisma.workspaceConnectLink.create({
+      data: {
+        workspaceId,
+        tokenHash: connect.hash,
+        tokenSealed: sealSecret(connect.raw),
+        createdById: userId,
+        platforms: ["instagram", "facebook_page", "x"],
+        expiresAt: new Date(now.getTime() + CONNECT_LINK_TTL_MS),
+      },
+    });
+    return { workspaceId, links: { upload: upload.raw, review: review.raw, connect: connect.raw } };
   }
 
   return {
-    trialNewId: await trialAccount(BILLING_EMAILS.trialNew, "Ana Brooks", "Harbor Surf Co", 0, 14),
-    trialEndingId: await trialAccount(BILLING_EMAILS.trialEnding, "Ben Carter", "Harbor Surf Co", 12, 2),
-    trialEndedId: await trialAccount(BILLING_EMAILS.trialEnded, "Cara Diaz", "Harbor Surf Co", 15, -1),
-    unconfirmedId: await trialAccount(BILLING_EMAILS.unconfirmed, "Dev Patel", "Harbor Surf Co", 0, 14, false),
+    trialNewId: (await trialAccount(BILLING_EMAILS.trialNew, "Ana Brooks", "Harbor Surf Co", 0, 14)).workspaceId,
+    trialEndingId: (await trialAccount(BILLING_EMAILS.trialEnding, "Ben Carter", "Harbor Surf Co", 12, 2)).workspaceId,
+    trialEndedId: (await trialAccount(BILLING_EMAILS.trialEnded, "Cara Diaz", "Harbor Surf Co", 15, -1)).workspaceId,
+    unconfirmedId: (await trialAccount(BILLING_EMAILS.unconfirmed, "Dev Patel", "Harbor Surf Co", 0, 14, false)).workspaceId,
+    starter: await payingAccount("starter", BILLING_EMAILS.starter, "Eli Foster", "Starter Surf Co"),
+    growth: await payingAccount("growth", BILLING_EMAILS.growth, "Gia Hayes", "Growth Surf Co"),
   };
 }

@@ -146,6 +146,15 @@ jobs:
           # else), so the plan screens show prices. Loaded into every Node
           # process of this step, the Next server included, before Next loads.
           NODE_OPTIONS: --import=${{ github.workspace }}/app/e2e/ui-audit/stripe-stub.mjs
+          # A2: the platforms the paying owners' seeded connect links offer, so
+          # /c/<token> lists them. Dummies, as in pass 1.
+          FACEBOOK_APP_ID: "000000000000000"
+          FACEBOOK_APP_SECRET: dummy-facebook-app-secret
+          INSTAGRAM_REDIRECT_URI: http://127.0.0.1:3000/api/auth/instagram/callback
+          FACEBOOK_PAGE_REDIRECT_URI: http://127.0.0.1:3000/api/auth/facebook_page/callback
+          X_CONSUMER_KEY: dummy-x-consumer-key
+          X_CONSUMER_SECRET: dummy-x-consumer-secret
+          X_CALLBACK_URL: http://127.0.0.1:3000/api/auth/x/callback
           # Only so the confirm-your-email banner can show (it needs the app to
           # be able to send the link). No screen in this pass sends an email.
           RESEND_API_KEY: re_dummy_ui_audit_not_a_real_key

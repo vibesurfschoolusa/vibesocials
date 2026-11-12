@@ -868,9 +868,11 @@ async function setupMain(browser: Browser): Promise<void> {
 }
 
 async function setupBilling(browser: Browser): Promise<void> {
+  // A2: the paying owners' saved report logo, in the file store double.
+  const logoUrl = await putIntoStore("logos/audit-billing/0123456789abcdef.png", await makeLogo(browser));
   const prisma = auditPrisma();
   try {
-    world.billing = await seedBilling(prisma);
+    world.billing = await seedBilling(prisma, { logo: logoUrl });
   } finally {
     await prisma.$disconnect();
   }
