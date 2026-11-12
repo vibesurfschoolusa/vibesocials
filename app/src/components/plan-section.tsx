@@ -5,6 +5,8 @@ import { GROWTH_ADDS_LINE, planIncludesLine } from "@/lib/plans";
 import { formatStorageGb } from "@/lib/usageLimits";
 import type { WorkspaceUsage } from "@/server/usage/workspaceUsage";
 
+export const PLAN_SWITCH_LINE = "To switch plans, use Manage plan, card and invoices.";
+
 /**
  * Settings → Plan (21a): the plan state in words and the limits that apply.
  * Rendered on the server, for owners and only with billing on (the page
@@ -76,6 +78,8 @@ export function PlanSection({
         </ul>
       ) : null}
       {growthAdds ? <p className="text-sm text-muted-foreground">{GROWTH_ADDS_LINE}</p> : null}
+      {/* Q1: an owner on a plan switches in the Stripe portal, which lists every price. */}
+      {growthAdds && manage ? <p className="text-sm text-muted-foreground">{PLAN_SWITCH_LINE}</p> : null}
       {offers.length > 0 || yearlyOffers.length > 0 || manage ? (
         <PlanActions offers={offers} manage={manage} yearlyOffers={yearlyOffers} />
       ) : null}

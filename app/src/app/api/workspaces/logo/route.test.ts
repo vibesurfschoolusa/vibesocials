@@ -351,7 +351,7 @@ describe("POST /api/workspaces/logo by plan", () => {
     const response = await POST(upload(await picture(40, 20)));
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({
-      error: "The report logo and the monthly report email are part of the Growth and Pro plans. Choose a plan in Settings, Plan.",
+      error: "The report logo and the monthly report email are part of the Growth and Pro plans. See Settings, Plan.",
       code: "PLAN_FEATURE",
     });
     expect(m.put).not.toHaveBeenCalled();

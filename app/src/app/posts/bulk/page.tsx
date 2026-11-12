@@ -35,9 +35,9 @@ export default async function BulkPostsPage() {
         </p>
       ) : (
         <p className="text-sm text-foreground">
-          Add many is part of the Growth and Pro plans.{" "}
+          Add many is part of the Growth and Pro plans. See{" "}
           <Link href="/settings#plan" className="font-medium text-primary underline-offset-4 hover:underline">
-            Choose a plan in Settings, Plan
+            Settings, Plan
           </Link>
           .
         </p>

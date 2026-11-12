@@ -21,9 +21,11 @@ import { UploadLinkPanelView } from "./media-library";
  */
 
 const PAUSED =
-  "This link is paused: client links are part of the Growth and Pro plans. Your link comes back when you choose one of them.";
+  "This link is paused: client links are part of the Growth and Pro plans. Your link comes back when this workspace moves to one of them.";
 const NOT_INCLUDED = "Client links are part of the Growth and Pro plans.";
-const PLAN_LINK = /<a [^>]*href="\/settings#plan"[^>]*>Choose a plan in Settings, Plan<\/a>/;
+const PLAN_LINK = /<a [^>]*href="\/settings#plan"[^>]*>Settings, Plan<\/a>/;
+// Q1: the sentence then " See Settings, Plan.", true whether the owner chooses or switches.
+const SEE_PLAN = /\. See <a [^>]*href="\/settings#plan"[^>]*>Settings, Plan<\/a>\./;
 const noop = () => {};
 
 const uploadLink = { url: "https://app.example/u/TOKEN", uploadCount: 2, lastUsedAt: null, createdAt: "2026-11-10T10:00:00.000Z" };
@@ -102,6 +104,7 @@ describe.each(PANELS)("the %s link panel", (_name, withLink, withoutLink, paused
     // The last clause differs for the connect link, which expires (fix round 2, below).
     expect(html).toContain("This link is paused: client links are part of the Growth and Pro plans. Your link comes back");
     expect(html).toMatch(PLAN_LINK);
+    expect(html).toMatch(SEE_PLAN);
     expect(html).not.toContain("TOKEN");
     expect(html).not.toContain("Copy");
     expect(html).not.toContain("Replace link");
@@ -114,6 +117,7 @@ describe.each(PANELS)("the %s link panel", (_name, withLink, withoutLink, paused
     expect(html).toContain(NOT_INCLUDED);
     expect(html).not.toContain("Your link comes back");
     expect(html).toMatch(PLAN_LINK);
+    expect(html).toMatch(SEE_PLAN);
     expect(html).not.toContain("Create link");
   });
 });
@@ -121,7 +125,7 @@ describe.each(PANELS)("the %s link panel", (_name, withLink, withoutLink, paused
 // P1 fix round 2: a connect link expires, so it comes back only if a plan is chosen in time.
 describe("the paused sentence by link kind", () => {
   const CONNECT_PAUSED =
-    "This link is paused: client links are part of the Growth and Pro plans. Your link comes back if you choose one of them before it expires.";
+    "This link is paused: client links are part of the Growth and Pro plans. Your link comes back if this workspace moves to one of them before it expires.";
 
   it("the connect panel says the link must not have expired", () => {
     const html = connect(connectLink, true);

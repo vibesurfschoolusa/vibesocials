@@ -68,3 +68,31 @@ describe("PlanSection: lines from the plans offered", () => {
     expect(html).toContain("Pro: Everything in Starter, plus client upload");
   });
 });
+
+// Q1: an owner on a plan switches through the portal, which lists every price.
+describe("PlanSection: how to switch plans", () => {
+  const SWITCH = "To switch plans, use Manage plan, card and invoices.";
+
+  it("after the Growth adds line, where the portal button shows", () => {
+    const html = renderToStaticMarkup(createElement(PlanSection, { label: "Starter plan", usage: null, growthAdds: true, manage: true }));
+    expect(html).toContain(SWITCH);
+    expect(html.indexOf(SWITCH)).toBeGreaterThan(html.indexOf("Growth adds"));
+  });
+
+  it("not without the portal button, and not in the portal-only section with billing off", () => {
+    expect(renderToStaticMarkup(createElement(PlanSection, { label: "Starter plan", usage: null, growthAdds: true }))).not.toContain(SWITCH);
+    expect(renderToStaticMarkup(createElement(PlanSection, { label: "Manage", usage: null, manage: true }))).not.toContain(SWITCH);
+  });
+
+  it("not for an ended plan, which chooses again", () => {
+    const html = renderToStaticMarkup(
+      createElement(PlanSection, {
+        label: "Your plan has ended",
+        usage: null,
+        manage: true,
+        offers: [{ plan: "starter", name: "Starter", price: "$19 a month" }],
+      }),
+    );
+    expect(html).not.toContain(SWITCH);
+  });
+});

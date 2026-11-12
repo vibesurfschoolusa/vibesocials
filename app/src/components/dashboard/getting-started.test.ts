@@ -132,7 +132,10 @@ describe("WorkingForClients where the plan pauses client links", () => {
     const html = renderClients(CONNECTED, POSTED, PAUSED);
     expect(html).toContain("Working for clients?");
     expect(html).toContain("Client upload, review and connect links come with the Growth and Pro plans.");
-    expect(html).toMatch(/<a [^>]*href="\/settings#plan"[^>]*>Choose a plan in Settings, Plan<\/a>/);
+    expect(html).toMatch(/<a [^>]*href="\/settings#plan"[^>]*>Settings, Plan<\/a>/);
+    expect(html.replace(/<[^>]+>/g, "")).toContain(
+      "Client upload, review and connect links come with the Growth and Pro plans. See Settings, Plan.",
+    );
     expect(html).not.toContain("Send a connect link");
     expect(html).not.toContain("Send an upload link");
     expect(html).not.toContain("Send a review link");

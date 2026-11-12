@@ -39,7 +39,9 @@ describe("/posts/bulk by plan", () => {
     const html = await render();
     expect(html).not.toContain("<form");
     expect(html).toContain("Add many is part of the Growth and Pro plans.");
-    expect(html).toMatch(/<a [^>]*href="\/settings#plan"[^>]*>Choose a plan in Settings, Plan<\/a>/);
+    // Q1: true for an owner on Starter (who switches) and one without a plan (who chooses).
+    expect(html).toMatch(/<a [^>]*href="\/settings#plan"[^>]*>Settings, Plan<\/a>/);
+    expect(html.replace(/<[^>]+>/g, "")).toContain("Add many is part of the Growth and Pro plans. See Settings, Plan.");
   });
 
   it("shows the form on Growth, in a trial, for an exempt workspace and with billing off", async () => {

@@ -47,7 +47,7 @@ import * as uploadRoute from "./upload-link/route";
 const NOW = new Date("2026-12-10T12:00:00Z");
 const DAY = 24 * 60 * 60 * 1000;
 const RAW = "R".repeat(43);
-const SENTENCE = "Client links are part of the Growth and Pro plans. Choose a plan in Settings, Plan.";
+const SENTENCE = "Client links are part of the Growth and Pro plans. See Settings, Plan.";
 
 const STARTER = { plan: "starter", planStatus: "active", currentPeriodEnd: new Date(NOW.getTime() + 20 * DAY) };
 const GROWTH = { ...STARTER, plan: "growth" };

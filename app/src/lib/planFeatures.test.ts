@@ -75,7 +75,7 @@ describe("planFeatureResponse", () => {
     const response = planFeatureResponse(WORKSPACES.starter, "clientLinks", ON, NOW);
     expect(response?.status).toBe(403);
     expect(await response?.json()).toEqual({
-      error: "Client links are part of the Growth and Pro plans. Choose a plan in Settings, Plan.",
+      error: "Client links are part of the Growth and Pro plans. See Settings, Plan.",
       code: PLAN_FEATURE_CODE,
     });
     expect(PLAN_FEATURE_CODE).toBe("PLAN_FEATURE");
@@ -83,7 +83,7 @@ describe("planFeatureResponse", () => {
 
   it("has a sentence for every feature that names the plans and where to choose one", () => {
     for (const feature of PLAN_FEATURES as readonly PlanFeature[]) {
-      expect(PLAN_FEATURE_MESSAGES[feature]).toMatch(/part of the Growth and Pro plans\. Choose a plan in Settings, Plan\.$/);
+      expect(PLAN_FEATURE_MESSAGES[feature]).toMatch(/part of the Growth and Pro plans\. See Settings, Plan\.$/);
     }
   });
 });

@@ -42,7 +42,8 @@ export function planIncludes(
 
 export const PLAN_FEATURE_CODE = "PLAN_FEATURE";
 
-const CHOOSE = "part of the Growth and Pro plans. Choose a plan in Settings, Plan.";
+// Q1: "See", not "Choose": true for an owner without a plan (who chooses) and one on Starter (who switches).
+const CHOOSE = "part of the Growth and Pro plans. See Settings, Plan.";
 
 /** What a refused request answers, per feature. */
 export const PLAN_FEATURE_MESSAGES: Record<PlanFeature, string> = {

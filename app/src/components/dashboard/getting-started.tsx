@@ -192,8 +192,8 @@ export function WorkingForClients({
         {/* P1: without the plan feature the links are paused, so the block says where they come from. */}
         {setup?.clientLinksPaused ? (
           <p className="text-sm text-muted-foreground">
-            Client upload, review and connect links come with the Growth and Pro plans.{" "}
-            <Link href="/settings#plan" className={linkClass}>Choose a plan in Settings, Plan</Link>.
+            Client upload, review and connect links come with the Growth and Pro plans. See{" "}
+            <Link href="/settings#plan" className={linkClass}>Settings, Plan</Link>.
           </p>
         ) : (
           <ul className="space-y-2 text-sm text-muted-foreground">
