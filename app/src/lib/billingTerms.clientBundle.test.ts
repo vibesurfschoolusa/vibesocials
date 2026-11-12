@@ -69,7 +69,8 @@ describe("billingTerms.ts and the client bundle", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("finds an import of it where there is one (the pricing page, a server page)", () => {
-    expect(importsOf(join(SRC, "app", "pricing", "page.tsx"))).toContain(TARGET);
+  // S1: the pricing page reads the Terms wording through its copy module now.
+  it("finds an import of it where there is one (the pricing page's copy, server only)", () => {
+    expect(importsOf(join(SRC, "app", "pricing", "pricingCopy.ts"))).toContain(TARGET);
   });
 });
