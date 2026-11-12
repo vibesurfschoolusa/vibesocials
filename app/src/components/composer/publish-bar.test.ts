@@ -14,7 +14,7 @@ import {
 } from "../create-post-form";
 import { TikTokConsentDeclaration } from "../tiktok-post-settings";
 import { ToastProvider } from "../ui/toast";
-import { PUBLISH_BAR_OFFSET_VAR, PublishBar, publishBarOffset } from "./publish-bar";
+import { PUBLISH_BAR_OFFSET_VAR, PUBLISH_BAR_SCROLL_PADDING, PublishBar, publishBarOffset } from "./publish-bar";
 
 const base = {
   loading: false,
@@ -289,5 +289,21 @@ describe("the bar's offset keeps its last real height", () => {
     const bar = readFileSync(path.join(__dirname, "publish-bar.tsx"), "utf8");
     expect(bar).toMatch(/const offset = publishBarOffset\(bar\.offsetHeight\);\s*if \(offset !== null\) root\.setProperty\(PUBLISH_BAR_OFFSET_VAR, offset\);/);
     expect(bar).toContain("root.removeProperty(PUBLISH_BAR_OFFSET_VAR);");
+  });
+});
+
+// A control scrolled into view by the browser (Tab, a field focused by an
+// error, scrollIntoView) could land under the bar (WCAG 2.4.11).
+describe("the page's scroll padding keeps focused controls clear of the bar", () => {
+  const bar = readFileSync(path.join(__dirname, "publish-bar.tsx"), "utf8");
+
+  it("follows the bar's height variable, with no fallback: absent, the padding is auto (desktop unchanged)", () => {
+    expect(PUBLISH_BAR_SCROLL_PADDING).toBe("var(--publish-bar-offset)");
+    expect(PUBLISH_BAR_SCROLL_PADDING).not.toContain(",");
+  });
+
+  it("is set on the root, where the variable is written, and removed on unmount as the variable is", () => {
+    expect(bar).toContain('root.setProperty("scroll-padding-bottom", PUBLISH_BAR_SCROLL_PADDING);');
+    expect(bar).toMatch(/root\.removeProperty\(PUBLISH_BAR_OFFSET_VAR\);\s*root\.removeProperty\("scroll-padding-bottom"\);/);
   });
 });

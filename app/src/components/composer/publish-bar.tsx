@@ -18,6 +18,15 @@ export interface SubmitControlView {
 export const PUBLISH_BAR_OFFSET_VAR = "--publish-bar-offset";
 
 /**
+ * The page's scroll-padding-bottom while the bar is mounted, so a control the
+ * browser scrolls into view (Tab, a field focused by an error, scrollIntoView)
+ * stops above the bar, not under it (WCAG 2.4.11). No fallback: with the
+ * variable absent (md and up, nothing written) the value is invalid and the
+ * padding stays auto, so a desktop is unchanged.
+ */
+export const PUBLISH_BAR_SCROLL_PADDING = `var(${PUBLISH_BAR_OFFSET_VAR})`;
+
+/**
  * The variable's value for the bar's height, or null for a hidden bar (a
  * dialog open, or md and up), which measures 0: writing that would collapse
  * the spacer while a dialog is open, and the browser's scroll would then leave
@@ -63,11 +72,13 @@ export function PublishBar({
       if (offset !== null) root.setProperty(PUBLISH_BAR_OFFSET_VAR, offset);
     };
     measure();
+    root.setProperty("scroll-padding-bottom", PUBLISH_BAR_SCROLL_PADDING);
     const observer = new ResizeObserver(measure);
     observer.observe(bar);
     return () => {
       observer.disconnect();
       root.removeProperty(PUBLISH_BAR_OFFSET_VAR);
+      root.removeProperty("scroll-padding-bottom");
     };
   }, [dialogOpen]);
 
