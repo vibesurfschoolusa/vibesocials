@@ -17,38 +17,65 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function html(lines: string[]): string {
-  return [...lines.map((line) => `<p>${line}</p>`), "<p>— Vibe Socials</p>"].join("\n");
+/**
+ * S1: each email links to Settings, Plan on the app's own address
+ * (NEXTAUTH_URL, as the other emails read it). The callers pass nothing, so
+ * the address is read here when not given; without one the email keeps its
+ * words and has no link.
+ */
+function planLink(appBaseUrl: string | null | undefined): string | null {
+  const base = (appBaseUrl === undefined ? process.env.NEXTAUTH_URL : appBaseUrl)?.trim().replace(/\/+$/, "");
+  return base ? `<a href="${escapeHtml(base)}/settings#plan">Open Settings, Plan</a>` : null;
 }
 
-export function buildPaymentFailedEmail(params: { workspaceName: string }): { subject: string; html: string } {
+function html(lines: string[], appBaseUrl: string | null | undefined): string {
+  const link = planLink(appBaseUrl);
+  return [...lines, ...(link ? [link] : []), "— Vibe Socials"].map((line) => `<p>${line}</p>`).join("\n");
+}
+
+export function buildPaymentFailedEmail(
+  params: { workspaceName: string },
+  appBaseUrl?: string | null,
+): { subject: string; html: string } {
   return {
     subject: `We could not charge your card for ${params.workspaceName}`,
-    html: html([
-      `We could not charge your card for ${escapeHtml(params.workspaceName)}. Update it under Settings, Plan. Your posts keep going out for 7 days.`,
-    ]),
+    html: html(
+      [
+        `We could not charge your card for ${escapeHtml(params.workspaceName)}. Update it under Settings, Plan. Your posts keep going out for 7 days.`,
+      ],
+      appBaseUrl,
+    ),
   };
 }
 
-export function buildTrialEndingEmail(params: { workspaceName: string; trialEndsAt: Date }): {
-  subject: string;
-  html: string;
-} {
+export function buildTrialEndingEmail(
+  params: { workspaceName: string; trialEndsAt: Date },
+  appBaseUrl?: string | null,
+): { subject: string; html: string } {
   return {
     subject: `Your Vibe Socials trial for ${params.workspaceName} ends soon`,
-    html: html([
-      `<strong>${escapeHtml(params.workspaceName)}</strong>`,
-      `Your free trial ends on ${utcDateLabel(params.trialEndsAt)}. Choose a plan under Settings, Plan.`,
-    ]),
+    html: html(
+      [
+        `<strong>${escapeHtml(params.workspaceName)}</strong>`,
+        `Your free trial ends on ${utcDateLabel(params.trialEndsAt)}. Choose a plan under Settings, Plan.`,
+      ],
+      appBaseUrl,
+    ),
   };
 }
 
-export function buildTrialEndedEmail(params: { workspaceName: string }): { subject: string; html: string } {
+export function buildTrialEndedEmail(
+  params: { workspaceName: string },
+  appBaseUrl?: string | null,
+): { subject: string; html: string } {
   return {
     subject: `Your Vibe Socials trial for ${params.workspaceName} has ended`,
-    html: html([
-      `<strong>${escapeHtml(params.workspaceName)}</strong>`,
-      "Your free trial has ended. Your scheduled posts are on hold until you choose a plan.",
-    ]),
+    html: html(
+      [
+        `<strong>${escapeHtml(params.workspaceName)}</strong>`,
+        "Your free trial has ended. Your scheduled posts are on hold until you choose a plan.",
+      ],
+      appBaseUrl,
+    ),
   };
 }
