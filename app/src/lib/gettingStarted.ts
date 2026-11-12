@@ -23,7 +23,7 @@ export interface WorkspaceSetup {
   footerSet: boolean;
   /** Brand voice notes or at least one example caption, read by the AI caption prompts. */
   brandVoiceSet: boolean;
-  /** An upload, review or connect link not turned off. Always false for a member. */
+  /** An active upload, review or connect link (not revoked; a connect link also not expired). Always false for a member. */
   hasClientLink: boolean;
 }
 
@@ -50,7 +50,7 @@ export interface GettingStartedState {
   complete: boolean;
   /** Render the checklist. */
   show: boolean;
-  /** Render "Working for clients?": owners only, once all four steps are done or a client link is active. */
+  /** Render "Working for clients?": owners only, once connected and posted or while a client link is active. */
   showClients: boolean;
 }
 
@@ -136,17 +136,10 @@ export function deriveGettingStarted(
   const voiceDone = setup?.brandVoiceSet ?? false;
   const postDone = (jobs?.length ?? 0) > 0;
   const steps: GettingStartedStep[] = isOwner ? ["connect", "footer", "voice", "post"] : ["post"];
-  const done: Record<GettingStartedStep, boolean> = {
-    connect: connectDone,
-    footer: footerDone,
-    voice: voiceDone,
-    post: postDone,
-  };
   // Fix round 1: only connect and the first post open the block, as before S2.
   // The two settings ride along while it shows, so an owner who has connected
   // and posted never sees it come back because a setting is empty.
   const complete = connectDone && postDone;
-  const allDone = steps.every((step) => done[step]);
   // A member cannot connect, so with nothing connected the post step is a
   // dead end for them: the block waits until the owner has connected something.
   const show = ready && !complete && (isOwner || connectDone);
@@ -159,6 +152,8 @@ export function deriveGettingStarted(
     postDone,
     complete,
     show,
-    showClients: ready && isOwner && (allDone || (setup?.hasClientLink ?? false)),
+    // Fix round 2: on `complete`, not on the settings, so it reaches every
+    // owner who has connected and posted, whatever the two settings say.
+    showClients: ready && isOwner && (complete || (setup?.hasClientLink ?? false)),
   };
 }

@@ -121,14 +121,19 @@ describe("deriveGettingStarted", () => {
 
   // Fix round 1: the block shows only while connect or the first post is open,
   // as before S2, so an established owner never sees it come back.
-  it("connected and posted with no website, hashtags or brand voice: no block", () => {
+  // Fix round 2: an established owner gets the clients block whatever the settings say.
+  it("connected and posted with no website, hashtags or brand voice: no block, the clients block", () => {
     expect(deriveGettingStarted(connected, [job()], owner)).toMatchObject({
       footerDone: false,
       voiceDone: false,
       complete: true,
       show: false,
-      showClients: false,
+      showClients: true,
     });
+  });
+
+  it("an owner with nothing done: Get started, no clients block", () => {
+    expect(deriveGettingStarted([], [], ownerAllSet)).toMatchObject({ show: true, showClients: false });
   });
 
   it("connected only: the block lists all four steps with the settings' real state", () => {

@@ -93,8 +93,14 @@ describe("WorkingForClients", () => {
     expect(renderClients([], [], { ...OWNER, hasClientLink: true })).toContain("Working for clients?");
   });
 
-  it("stays hidden for an owner with open steps and no link, for a member, and while loading", () => {
-    expect(renderClients(CONNECTED, POSTED, OWNER)).toBe("");
+  it("fix round 2: shows an owner who connected and posted, with no settings, and Get started is gone", () => {
+    expect(renderClients(CONNECTED, POSTED, OWNER)).toContain("Working for clients?");
+    expect(render(CONNECTED, POSTED, OWNER)).toBe("");
+  });
+
+  it("stays hidden for an owner with nothing done and no link, for a member, and while loading", () => {
+    expect(renderClients([], [], ALL_SET)).toBe("");
+    expect(renderClients(CONNECTED, [], OWNER)).toBe("");
     expect(renderClients(CONNECTED, POSTED, { ...ALL_SET, role: "member", hasClientLink: true })).toBe("");
     expect(renderClients(null, POSTED, ALL_SET)).toBe("");
   });

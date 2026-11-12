@@ -160,9 +160,9 @@ export function GettingStarted({
 
 /**
  * "Working for clients?": the three client links, for owners, below the
- * dashboard's main content. Not a checklist: it stays once shown, appearing
- * after the Get started steps are done or as soon as the owner has a client
- * link on. Never shown to members, who cannot make these links.
+ * dashboard's main content. Not a checklist: it shows once the workspace
+ * is connected and has a post, or while the owner has an active client
+ * link. Never shown to members, who cannot make these links.
  */
 export function WorkingForClients({
   connections,
