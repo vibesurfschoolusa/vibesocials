@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { workspaceBrandVoicePrompt, brandVoicePrompt } from "./brandVoice";
 import { settingsPlanNotes } from "@/app/settings/planNotes";
@@ -21,6 +21,12 @@ import { planFeatureResponse } from "./planFeatureResponse";
  */
 
 const NOW = new Date("2026-12-10T12:00:00Z");
+// workspaceSetupFrom reads the clock itself; pinned so the fixed dates below never expire.
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
+});
+afterAll(() => vi.useRealTimers());
 const LATER = new Date("2026-12-30T00:00:00Z");
 const STARTER_COLUMNS = { plan: "starter", planStatus: "active", currentPeriodEnd: LATER };
 

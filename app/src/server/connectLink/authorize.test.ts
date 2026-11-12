@@ -82,6 +82,8 @@ function withoutState(raw: string) {
 beforeEach(() => {
   for (const m of Object.values(h)) m.mockReset();
   h.ownerContext.mockResolvedValue({ user: { id: "user-1" }, workspace: { id: "ws-1" }, role: "owner" });
+  // The start route's cleanup chains .catch on this, so it must answer a promise.
+  h.handshakeDeleteMany.mockResolvedValue({ count: 0 });
   for (const [key, value] of Object.entries(ENV)) vi.stubEnv(key, value);
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -128,6 +130,8 @@ describe("x: the request-token call and the handshake row", () => {
     new Response("oauth_token=req-token&oauth_token_secret=req-secret&oauth_callback_confirmed=true");
 
   it("makes the same request-token call and sends the visitor to the same authorize address", async () => {
+    // Above the start route's 1-in-10 cleanup, so both calls take the same path every run.
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     const fetchMock = vi.fn(async () => requestTokenAnswer());
     vi.stubGlobal("fetch", fetchMock);
 
@@ -152,6 +156,18 @@ describe("x: the request-token call and the handshake row", () => {
     expect(String((linkCall[1].headers as Record<string, string>).Authorization)).toContain(
       `oauth_callback="${encodeURIComponent(ENV.X_CALLBACK_URL)}"`,
     );
+  });
+
+  // P1 fix round 1: the start route deletes expired handshakes on about one start in ten
+  // (Math.random() < 0.1). The bare vi.fn() for deleteMany answered undefined, so on those
+  // runs `.catch` threw and the route redirected to x_unexpected_error: this test failed
+  // about one full run in ten. Forced here, and deleteMany now answers a promise.
+  it("compares the same way on a start that also cleans up expired handshakes", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.05);
+    vi.stubGlobal("fetch", vi.fn(async () => requestTokenAnswer()));
+    const res = await xStart(new Request(`${ORIGIN}/api/auth/x/start`));
+    expect(res.headers.get("location")).toBe("https://api.twitter.com/oauth/authorize?oauth_token=req-token");
+    expect(h.handshakeDeleteMany).toHaveBeenCalledTimes(1);
   });
 
   it("writes the handshake row as the creator, with the link id and nonce, for 10 minutes", async () => {
