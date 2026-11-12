@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
   LOGO_HELP_LINE,
+  LOGO_SIZE_LINE,
   LOGO_MAX_BYTES,
   LOGO_REMOVE_FAILED_MESSAGE,
   LOGO_SAVE_FAILED_MESSAGE,
@@ -21,11 +22,14 @@ export function WorkspaceLogoControl({
   logoUrl,
   isOwner,
   workspaceId,
+  planNote,
 }: {
   logoUrl: string | null;
   isOwner: boolean;
   /** The workspace this page was rendered for, so a switch in another tab is refused. */
   workspaceId: string;
+  /** P1 fix round 2: set where the plan does not show the logo on the report. */
+  planNote?: string;
 }) {
   const router = useRouter();
   const input = useRef<HTMLInputElement>(null);
@@ -112,7 +116,10 @@ export function WorkspaceLogoControl({
           </>
         ) : null}
       </div>
-      {isOwner ? <p className="text-sm text-muted-foreground">{LOGO_HELP_LINE}</p> : null}
+      {/* P1 fix round 2: where the plan hides the logo, the size rule and then when it shows. */}
+      {isOwner ? (
+        <p className="text-sm text-muted-foreground">{planNote ? `${LOGO_SIZE_LINE} ${planNote}` : LOGO_HELP_LINE}</p>
+      ) : null}
       {error ? (
         <p role="alert" className="text-sm text-destructive">
           {error}

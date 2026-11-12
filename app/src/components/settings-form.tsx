@@ -92,7 +92,7 @@ interface SettingsFormProps {
    */
   role: WorkspaceRole;
   /** P1: a line under the brand voice and the new-review toggle where the plan leaves them out. */
-  planNotes?: { brandVoice?: string; reviewAlerts?: string };
+  planNotes?: { brandVoice?: string; reviewAlerts?: string; monthlyReport?: string };
 }
 
 export function SettingsForm({ settings, role, planNotes = {} }: SettingsFormProps) {
@@ -529,6 +529,7 @@ export function SettingsForm({ settings, role, planNotes = {} }: SettingsFormPro
             Sent to workspace owners in the first days of each month, when something was published the
             month before.
           </p>
+          {planNotes.monthlyReport ? <p className="text-sm text-muted-foreground">{planNotes.monthlyReport}</p> : null}
         </div>
 
         <div>

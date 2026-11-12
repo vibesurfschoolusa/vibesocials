@@ -12,7 +12,8 @@ export const LOGO_MAX_HEIGHT = 300;
 /** Uploads and removals an owner may make per hour. */
 export const LOGO_CHANGES_PER_HOUR = 10;
 
-export const LOGO_HELP_LINE = "An image up to 1 MB (not SVG). It appears on your monthly report.";
+export const LOGO_SIZE_LINE = "An image up to 1 MB (not SVG).";
+export const LOGO_HELP_LINE = `${LOGO_SIZE_LINE} It appears on your monthly report.`;
 
 export const LOGO_TOO_LARGE_MESSAGE = "That file is over 1 MB. Choose a smaller PNG or JPEG.";
 export const LOGO_EMPTY_MESSAGE = "No file arrived. Choose a PNG or JPEG and try again.";

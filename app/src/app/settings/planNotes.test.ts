@@ -12,6 +12,9 @@ describe("settingsPlanNotes (P1)", () => {
       brandVoice: "Saved. Captions follow your brand voice on the Growth and Pro plans.",
       reviewAlerts:
         "New-review emails are sent on the Growth and Pro plans. Your choice here is kept for when you choose one.",
+      // P1 fix round 2.
+      monthlyReport: "The monthly report email is part of the Growth and Pro plans.",
+      logo: "Your logo shows on the monthly report on the Growth and Pro plans.",
     });
   });
 

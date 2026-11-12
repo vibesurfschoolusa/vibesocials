@@ -40,3 +40,23 @@ describe("WorkspaceLogoControl", () => {
     expect(html).not.toContain('type="file"');
   });
 });
+
+// P1 fix round 2: on Starter the logo does not show on the report, so the help line says when it does.
+describe("WorkspaceLogoControl and the plan", () => {
+  const PLAN_LINE = "Your logo shows on the monthly report on the Growth and Pro plans.";
+
+  it("with a plan note: the size rule, then the plan line, and not 'It appears on your monthly report'", () => {
+    const html = renderToStaticMarkup(
+      createElement(WorkspaceLogoControl, { logoUrl: LOGO, isOwner: true, workspaceId: "ws-1", planNote: PLAN_LINE }),
+    );
+    expect(html).toContain("An image up to 1 MB (not SVG).");
+    expect(html).toContain(PLAN_LINE);
+    expect(html).not.toContain("It appears on your monthly report.");
+  });
+
+  it("without one: today's line exactly", () => {
+    const html = render(LOGO, true);
+    expect(html).toContain(LOGO_HELP_LINE);
+    expect(html).not.toContain(PLAN_LINE);
+  });
+});

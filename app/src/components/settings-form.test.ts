@@ -292,3 +292,23 @@ describe("SettingsForm — what the plan leaves out", () => {
     expect(html.indexOf(REVIEWS_LINE)).toBeGreaterThan(html.indexOf("Email me when a new Google review arrives"));
   });
 });
+
+// P1 fix round 2: the monthly report toggle's line on Starter.
+describe("SettingsForm — the monthly report email and the plan", () => {
+  const LINE = "The monthly report email is part of the Growth and Pro plans.";
+  const TODAY = "Sent to workspace owners in the first days of each month, when something was published the";
+
+  it("adds the line after today's when the page passes it", () => {
+    const html = renderToStaticMarkup(
+      createElement(SettingsForm, { settings: SETTINGS, role: "owner", planNotes: { monthlyReport: LINE } }),
+    );
+    expect(html).toContain(LINE);
+    expect(html.indexOf(LINE)).toBeGreaterThan(html.indexOf(TODAY));
+  });
+
+  it("shows only today's line otherwise", () => {
+    const html = render(SETTINGS);
+    expect(html).toContain(TODAY);
+    expect(html).not.toContain(LINE);
+  });
+});

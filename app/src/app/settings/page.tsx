@@ -275,6 +275,7 @@ export default async function SettingsPage({
             logoUrl={logo?.logoUrl ?? null}
             isOwner={context.role === "owner"}
             workspaceId={context.workspace.id}
+            planNote={settingsPlanNotes(context.workspace).logo}
           />
           <TeamSection
             key={context.workspace.id}
