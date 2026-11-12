@@ -739,6 +739,9 @@ function CreatePostFormInner({
   // undone once sent, so `handleUploadSubmit` opens this instead of posting
   // directly when `publishMode === "now"`; schedule/draft submit right away.
   const [confirmPublishOpen, setConfirmPublishOpen] = useState(false);
+  // Posts saved on this page: the preview list is keyed on it, so the next
+  // post starts on the first selected platform's tab again.
+  const [postsSaved, setPostsSaved] = useState(0);
   // A file that went away by itself (FILE_LOST_MESSAGE): stays until a file is
   // attached or the person dismisses it (nextFileLostNotice).
   const [fileLost, setFileLost] = useState<FileLostNotice>("none");
@@ -1781,6 +1784,7 @@ function CreatePostFormInner({
       setSubmittedMode(publishMode);
       setSubmittedToTikTok(tiktokSelected);
       setShowSuccess(true);
+      setPostsSaved((count) => count + 1);
       setUploadCaption("");
       setUploadLocation("");
       // A new post has not been tried yet (platformListAlert).
@@ -2554,6 +2558,7 @@ function CreatePostFormInner({
             to the chosen subset). Recomputed on every render, so it updates
             as the user types. */}
         <PlatformPreviewList
+          key={postsSaved}
           platforms={selectedPlatforms}
           caption={uploadCaption}
           overrides={previewOverrides}

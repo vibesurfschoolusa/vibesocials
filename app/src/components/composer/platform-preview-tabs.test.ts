@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Platform } from "@prisma/client";
@@ -137,5 +139,22 @@ describe("the tabs follow the page's own rules", () => {
     const html = render(view("text", null).selected, "hi", null);
     const ids = tabs(html).map((tab) => tab.match(/id="platform-preview-tab-([a-z_]+)"/)?.[1]);
     expect(ids).toEqual(["x", "linkedin", "facebook_page"]);
+  });
+});
+
+// Fix round 1, item 4d: after a successful post the next post starts on the first tab.
+describe("the chosen tab after a successful post", () => {
+  it("a fresh list starts on the first selected platform", () => {
+    const [first] = tabs(render(["instagram", "x", "linkedin"]));
+    expect(first).toContain('id="platform-preview-tab-instagram"');
+    expect(first).toContain('aria-selected="true"');
+  });
+
+  it("the form remounts the list after each saved post, so the chosen tab goes back to the first", () => {
+    const form = readFileSync(path.join(__dirname, "..", "create-post-form.tsx"), "utf8");
+    expect(form).toMatch(/<PlatformPreviewList\s+key=\{postsSaved\}/);
+    // Counted in the success branch, beside the rest of the form's reset.
+    const success = form.slice(form.indexOf("setShowSuccess(true);"), form.indexOf("} catch (err: unknown) {", form.indexOf("setShowSuccess(true);")));
+    expect(success).toContain("setPostsSaved((count) => count + 1);");
   });
 });
