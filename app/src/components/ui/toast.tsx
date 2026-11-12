@@ -150,7 +150,7 @@ function Toaster({
     <div
       aria-live="polite"
       aria-atomic="false"
-      className="pointer-events-none fixed bottom-4 left-4 right-4 sm:left-auto sm:w-full sm:max-w-sm z-[60] flex flex-col gap-2"
+      className="pointer-events-none fixed bottom-[calc(1rem+var(--publish-bar-offset,0px))] left-4 right-4 sm:left-auto sm:w-full sm:max-w-sm z-[60] flex flex-col gap-2"
     >
       {toasts.map((toast) => {
         const styles = VARIANT_STYLES[toast.variant];

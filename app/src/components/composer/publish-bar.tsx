@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useRef } from "react";
+
 import { TikTokConsentDeclaration } from "@/components/tiktok-post-settings";
 import { Button } from "@/components/ui/button";
 
@@ -10,6 +12,14 @@ export interface SubmitControlView {
   disabled: boolean;
   /** The one line saying why a press will not send, or null. */
   reason: string | null;
+}
+
+/** The CSS variable the toast container adds to its bottom offset (ui/toast.tsx). */
+export const PUBLISH_BAR_OFFSET_VAR = "--publish-bar-offset";
+
+/** The variable's value for the bar's height; 0 while it is hidden (md and up). */
+export function publishBarOffset(height: number): string {
+  return `${height}px`;
 }
 
 /**
@@ -32,9 +42,29 @@ export function PublishBar({
   /** TikTok is a target: its declaration sits directly above this button (barTikTokDeclaration). */
   tiktokDeclaration: { brandedContent: boolean } | null;
 }) {
+  const barRef = useRef<HTMLDivElement>(null);
+  // Toasts sit above the bar while it shows, not over its button: the bar
+  // puts its height where the toast container reads it. Display none (md and
+  // up) measures 0, so a desktop's toasts stay where they were.
+  useEffect(() => {
+    const bar = barRef.current;
+    if (!bar) return;
+    const root = document.documentElement.style;
+    const measure = () => root.setProperty(PUBLISH_BAR_OFFSET_VAR, publishBarOffset(bar.offsetHeight));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(bar);
+    return () => {
+      observer.disconnect();
+      root.removeProperty(PUBLISH_BAR_OFFSET_VAR);
+    };
+  }, [dialogOpen]);
+
   if (dialogOpen) return null;
   return (
-    <div className="fixed inset-x-0 bottom-0 z-10 border-t border-border bg-background px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:hidden">
+    <div
+      ref={barRef}
+      className="fixed inset-x-0 bottom-0 z-10 border-t border-border bg-background px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:hidden">
       {tiktokDeclaration ? (
         <div className="mb-2">
           <TikTokConsentDeclaration brandedContent={tiktokDeclaration.brandedContent} />

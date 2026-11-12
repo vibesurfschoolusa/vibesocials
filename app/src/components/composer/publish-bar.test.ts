@@ -7,12 +7,14 @@ import { describe, expect, it } from "vitest";
 import {
   barTikTokDeclaration,
   composerPageView,
+  FILE_LOST_PRESS_TOAST,
   submitButtonLabel,
   submitControl,
   UNTOUCHED_SUBMIT_MESSAGE,
 } from "../create-post-form";
 import { TikTokConsentDeclaration } from "../tiktok-post-settings";
-import { PublishBar } from "./publish-bar";
+import { ToastProvider } from "../ui/toast";
+import { PUBLISH_BAR_OFFSET_VAR, PublishBar, publishBarOffset } from "./publish-bar";
 
 const base = {
   loading: false,
@@ -179,5 +181,29 @@ describe("PublishBar: what stays above it", () => {
     expect(source("ui/dialog.tsx")).toContain("fixed inset-0 z-50");
     expect(source("shell/mobile-drawer.tsx")).toContain("fixed inset-0 z-50");
     expect(source("ui/toast.tsx")).toContain("z-[60]");
+  });
+});
+
+// Fix round 1, item 4a: toasts sat over the bar's button for 8 seconds.
+describe("toasts sit above the bar", () => {
+  it("the bar publishes its height as a CSS variable: its own height while shown, 0 when hidden (md and up)", () => {
+    expect(PUBLISH_BAR_OFFSET_VAR).toBe("--publish-bar-offset");
+    expect(publishBarOffset(97)).toBe("97px");
+    expect(publishBarOffset(0)).toBe("0px");
+  });
+
+  it("the toast container's bottom offset adds that variable, and nothing else changed", () => {
+    const html = renderToStaticMarkup(createElement(ToastProvider, null, "page"));
+    const container = html.match(/<div aria-live="polite"[^>]*class="([^"]*)"/)?.[1] ?? "";
+    expect(container).toBe(
+      "pointer-events-none fixed bottom-[calc(1rem+var(--publish-bar-offset,0px))] left-4 right-4 sm:left-auto sm:w-full sm:max-w-sm z-[60] flex flex-col gap-2",
+    );
+  });
+
+  it("the lost-file toast says what to do, true on a phone and a desktop", () => {
+    expect(FILE_LOST_PRESS_TOAST).toBe(
+      "Nothing was sent: the photo or video could not be added. Add it again, or press the button again to post without it.",
+    );
+    expect(FILE_LOST_PRESS_TOAST).not.toContain("above");
   });
 });

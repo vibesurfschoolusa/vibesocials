@@ -480,6 +480,13 @@ export function scheduleWhenText(scheduledForLocal: string): string | null {
   });
 }
 
+/**
+ * The toast of a press stopped by a fresh lost-file notice. It names no place
+ * on the page: on a phone the button is in the bar, far from the notice.
+ */
+export const FILE_LOST_PRESS_TOAST =
+  "Nothing was sent: the photo or video could not be added. Add it again, or press the button again to post without it.";
+
 /** Shown, until a file is attached or dismissed, when a file went away by itself. */
 export const FILE_LOST_MESSAGE = "The photo or video could not be added. Add it again, or continue without one.";
 
@@ -1854,7 +1861,7 @@ function CreatePostFormInner({
     if (fileLostShown) setFileLost((current) => nextFileLostNotice(current, { type: "pressed" }));
     if (first.stop === "file-lost") {
       // The press did nothing else, so say why.
-      toast.error("Nothing was sent. The photo or video could not be added: see the notice above the buttons.");
+      toast.error(FILE_LOST_PRESS_TOAST);
       return;
     }
     setUploadError(null);
