@@ -23,6 +23,7 @@ import {
 } from "./composer/attached-photos";
 import { PlatformCaptionEditor } from "./composer/platform-caption-editor";
 import { PlatformPreviewList } from "./composer/platform-preview";
+import { PublishBar, type SubmitControlView } from "./composer/publish-bar";
 import { LocationAutocomplete } from "./location-autocomplete";
 import { TikTokConsentDeclaration, TikTokPostSettings } from "./tiktok-post-settings";
 import { YouTubePostSettings } from "./youtube-post-settings";
@@ -349,6 +350,39 @@ export function submitButtonLabel(state: { mode: PublishMode; noFile: boolean; l
         : "Publish without a photo";
   }
   return state.mode === "draft" ? "Save draft" : state.mode === "schedule" ? "Schedule post" : "Publish post";
+}
+
+/**
+ * The submit control as the form's button and the phone's publish bar both
+ * show it, so the two never disagree. Disabled for exactly what disabled the
+ * form's button before (M1); the reason is the first sentence the page
+ * already shows for why a press will not send.
+ */
+export function submitControl(input: {
+  /** composerPageView's buttonLabel. */
+  buttonLabel: string;
+  loading: boolean;
+  /** The main caption; over the cap it disables the button (captionCounter). */
+  caption: string;
+  tiktokBlock: string | null;
+  /** fileSubmitBlock, or null. */
+  fileBlock: string | null;
+  untouchedMessage: string | null;
+  platformAlert: string | null;
+}): SubmitControlView {
+  const counter = captionCounter(input.caption);
+  const reason =
+    input.untouchedMessage ??
+    input.platformAlert ??
+    (counter.over ? `Caption is too long: ${counter.label} characters.` : null) ??
+    (input.tiktokBlock ? `TikTok: ${input.tiktokBlock}` : null) ??
+    input.fileBlock;
+  return {
+    label: input.buttonLabel,
+    loading: input.loading,
+    disabled: counter.over || input.tiktokBlock !== null || input.fileBlock !== null,
+    reason,
+  };
 }
 
 /**
@@ -2038,9 +2072,28 @@ function CreatePostFormInner({
           platforms: selectedPlatforms.map(platformLabel),
         });
 
+  // Read by the form's button and the phone's publish bar alike.
+  const control = submitControl({
+    buttonLabel: pageView.buttonLabel,
+    loading: uploadLoading,
+    // The text itself, not captionOver: passing that made the React compiler
+    // skip this component (lint).
+    caption: uploadCaption,
+    tiktokBlock,
+    fileBlock: fileSubmitBlock({
+      preparingFile,
+      sharedFilePending: sharedPendingNow,
+      preparingPhotos,
+      photosNotReady: photoSet.length > 0 && !photoSetReady(photoSet),
+    }),
+    untouchedMessage,
+    platformAlert,
+  });
+
   return (
+    <>
     <Card className="p-6">
-      <form onSubmit={handleUploadSubmit} className="space-y-5">
+      <form id="create-post-form" onSubmit={handleUploadSubmit} className="space-y-5">
         {showSuccess && dispatchFailed && (
           <div ref={successRef}>
             <Alert variant="warning" title="Publishing didn't start">
@@ -2586,23 +2639,12 @@ function CreatePostFormInner({
             {/* No `disabled` for the zero-connection case: the gate above
                 returns early, so the form only renders once at least one
                 platform is connected. The span carries the hover text: a
-                disabled button gets no hover events in every browser. */}
-            <span title={tiktokBlock ?? undefined}>
-            <Button
-              type="submit"
-              loading={uploadLoading}
-              disabled={
-                captionOver ||
-                tiktokBlock !== null ||
-                fileSubmitBlock({
-                  preparingFile,
-                  sharedFilePending: sharedPendingNow,
-                  preparingPhotos,
-                  photosNotReady: photoSet.length > 0 && !photoSetReady(photoSet),
-                }) !== null
-              }
-            >
-              {pageView.buttonLabel}
+                disabled button gets no hover events in every browser.
+                Below md the publish bar takes its place (hidden, not just
+                covered), so a screen reader meets one submit control. */}
+            <span title={tiktokBlock ?? undefined} className="hidden md:inline">
+            <Button type="submit" loading={control.loading} disabled={control.disabled}>
+              {control.label}
             </Button>
             </span>
             {untouchedMessage ? (
@@ -2648,7 +2690,11 @@ function CreatePostFormInner({
         confirmText={confirmCopy.confirmText}
         onConfirm={performSubmit}
       />
+      <PublishBar formId="create-post-form" control={control} dialogOpen={confirmPublishOpen} />
     </Card>
+    {/* Room under the form so the fixed bar never covers its last control. */}
+    <div aria-hidden className="h-[calc(7rem+env(safe-area-inset-bottom))] md:hidden" />
+    </>
   );
 }
 
