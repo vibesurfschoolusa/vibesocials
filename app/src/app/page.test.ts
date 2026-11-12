@@ -52,11 +52,37 @@ describe("HomePage — the workspace setup the dashboard gets", () => {
           select: {
             uploadLinks: { where: { revokedAt: null } },
             reviewLinks: { where: { revokedAt: null } },
-            connectLinks: { where: { revokedAt: null } },
+            connectLinks: { where: { revokedAt: null, expiresAt: { gt: expect.any(Date) } } },
           },
         },
       },
     });
+  });
+
+  // Fix round 1: only active links count, the rule each link's own page uses
+  // (a connect link also expires; upload and review links do not).
+  it("an expired connect link that was never revoked does not count", async () => {
+    const now = new Date("2026-11-12T10:00:00Z");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    try {
+      m.context = { role: "owner", workspace: WORKSPACE };
+      const links = [{ revokedAt: null, expiresAt: new Date(now.getTime() - 60_000) }];
+      type Filter = { where: { revokedAt: null; expiresAt?: { gt: Date } } };
+      m.findUnique.mockImplementation(async (args: { select: { _count: { select: Record<string, Filter> } } }) => {
+        const where = args.select._count.select.connectLinks.where;
+        const active = links.filter(
+          (link) => link.revokedAt === null && (!where.expiresAt || link.expiresAt > where.expiresAt.gt),
+        );
+        return { _count: { uploadLinks: 0, reviewLinks: 0, connectLinks: active.length } };
+      });
+      expect((await setupOf())?.hasClientLink).toBe(false);
+
+      links[0].expiresAt = new Date(now.getTime() + 60_000);
+      expect((await setupOf())?.hasClientLink).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("an owner with no link on", async () => {

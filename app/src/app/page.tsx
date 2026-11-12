@@ -41,10 +41,20 @@ async function loadWorkspaceSetup(): Promise<WorkspaceSetup | null> {
     if (!context) return null;
     let hasClientLink = false;
     if (context.role === "owner") {
+      // Active as each link's own page counts it: not revoked, and a connect
+      // link also not expired (upload and review links do not expire).
       const active = { where: { revokedAt: null } };
       const row = await prisma.workspace.findUnique({
         where: { id: context.workspace.id },
-        select: { _count: { select: { uploadLinks: active, reviewLinks: active, connectLinks: active } } },
+        select: {
+          _count: {
+            select: {
+              uploadLinks: active,
+              reviewLinks: active,
+              connectLinks: { where: { revokedAt: null, expiresAt: { gt: new Date() } } },
+            },
+          },
+        },
       });
       const count = row?._count;
       hasClientLink = Boolean(count && count.uploadLinks + count.reviewLinks + count.connectLinks > 0);
