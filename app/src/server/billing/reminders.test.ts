@@ -8,6 +8,9 @@ type Ws = {
   trialEndsAt: Date | null;
   trialReminderSentAt: Date | null;
   trialEndedEmailSentAt: Date | null;
+  /** How many connected platforms and posts (any status) the workspace has. */
+  connections: number;
+  posts: number;
   owners: Array<{ userId: string; email: string }>;
 };
 
@@ -36,6 +39,16 @@ vi.mock("@/lib/db", () => {
     trialEndsAt: { gt?: Date; lte: Date };
     trialReminderSentAt?: null;
     trialEndedEmailSentAt?: null;
+    OR?: Array<{ connections?: { some: object }; postJobs?: { some: object } }>;
+  };
+  // A relation filter: "has at least one connection or post". Any other shape fails the test.
+  const used = (w: Ws, or: Where["OR"]) => {
+    if (or === undefined) return true;
+    return or.some((clause) => {
+      if (clause.connections && Object.keys(clause.connections.some).length === 0) return w.connections > 0;
+      if (clause.postJobs && Object.keys(clause.postJobs.some).length === 0) return w.posts > 0;
+      throw new Error(`unexpected OR clause ${JSON.stringify(clause)}`);
+    });
   };
   const matches = (w: Ws, where: Where) =>
     w.billingExempt === where.billingExempt &&
@@ -44,7 +57,8 @@ vi.mock("@/lib/db", () => {
     (where.trialEndsAt.gt === undefined || w.trialEndsAt > where.trialEndsAt.gt) &&
     w.trialEndsAt <= where.trialEndsAt.lte &&
     (!("trialReminderSentAt" in where) || w.trialReminderSentAt === null) &&
-    (!("trialEndedEmailSentAt" in where) || w.trialEndedEmailSentAt === null);
+    (!("trialEndedEmailSentAt" in where) || w.trialEndedEmailSentAt === null) &&
+    used(w, where.OR);
   return {
     prisma: {
       workspace: {
@@ -87,6 +101,8 @@ function ws(id: string, overrides: Partial<Ws> = {}): Ws {
     trialEndsAt: new Date(NOW.getTime() + 2 * DAY),
     trialReminderSentAt: null,
     trialEndedEmailSentAt: null,
+    connections: 1,
+    posts: 1,
     owners: [{ userId: `owner-${id}`, email: `${id}@example.com` }],
     ...overrides,
   };
@@ -200,5 +216,63 @@ describe("runBillingReminders", () => {
     m.rows = [ws("a", { owners: [] })];
     expect((await run()).sent).toBe(0);
     expect(m.rows[0].trialReminderSentAt).toEqual(NOW);
+  });
+
+  describe("only a workspace someone uses", () => {
+    const unused = { connections: 0, posts: 0 };
+    const ended = { trialEndsAt: new Date(NOW.getTime() - DAY) };
+
+    it("a used workspace in its last days gets the reminder, as before", async () => {
+      m.rows = [ws("a")];
+      expect((await run()).sent).toBe(1);
+      expect(m.rows[0].trialReminderSentAt).toEqual(NOW);
+    });
+
+    it("an unused workspace in its last days gets no reminder, and its marker stays null", async () => {
+      m.rows = [ws("a", unused)];
+      expect(await run()).toEqual({ trialEnding: 0, trialEnded: 0, sent: 0, failed: 0, left: 0 });
+      expect(m.sendEmail).not.toHaveBeenCalled();
+      expect(m.rows[0].trialReminderSentAt).toBeNull();
+    });
+
+    it("a post alone makes a workspace used", async () => {
+      m.rows = [ws("a", { connections: 0, posts: 1 })];
+      expect((await run()).sent).toBe(1);
+    });
+
+    it("a connection alone makes a workspace used", async () => {
+      m.rows = [ws("a", { connections: 1, posts: 0 })];
+      expect((await run()).sent).toBe(1);
+    });
+
+    it("an unused workspace whose trial ended gets no notice, and its marker stays null", async () => {
+      m.rows = [ws("a", { ...unused, ...ended })];
+      expect(await run()).toEqual({ trialEnding: 0, trialEnded: 0, sent: 0, failed: 0, left: 0 });
+      expect(m.rows[0].trialEndedEmailSentAt).toBeNull();
+    });
+
+    it("a workspace first used after the reminder window still gets the ended notice, once", async () => {
+      m.rows = [ws("a", unused)];
+      await run();
+      expect(m.sendEmail).not.toHaveBeenCalled();
+
+      Object.assign(m.rows[0], { posts: 1, ...ended });
+      expect(await run()).toEqual({ trialEnding: 0, trialEnded: 1, sent: 1, failed: 0, left: 0 });
+      expect(m.sendEmail.mock.calls[0][1].idempotencyKey).toBe("billing/trial-ended/a/owner-a");
+      expect(m.rows[0].trialReminderSentAt).toBeNull();
+      expect(m.rows[0].trialEndedEmailSentAt).toEqual(NOW);
+
+      m.sendEmail.mockClear();
+      await run();
+      expect(m.sendEmail).not.toHaveBeenCalled();
+    });
+
+    it("filters in the query's where, so unused workspaces are never loaded", async () => {
+      await run();
+      expect(m.findManyArgs).toHaveLength(2);
+      for (const args of m.findManyArgs as Array<{ where: Record<string, unknown> }>) {
+        expect(args.where.OR).toEqual([{ connections: { some: {} } }, { postJobs: { some: {} } }]);
+      }
+    });
   });
 });

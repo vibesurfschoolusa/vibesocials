@@ -10,8 +10,8 @@ import { buildTrialEndedEmail, buildTrialEndingEmail } from "./billingEmails";
  * The trial emails (21b), run once a day by the `billing-reminders` cron in
  * one step. Owners of a workspace whose trial ends within 3 days get one
  * reminder (marked by trialReminderSentAt); owners of one whose trial ended
- * get one notice (trialEndedEmailSentAt). Only workspaces with no plan and not
- * exempt by their flag. A marker is set once every owner's send went out, so
+ * get one notice (trialEndedEmailSentAt). Only workspaces with no plan, not
+ * exempt by their flag, and used (a connection or a post). A marker is set once every owner's send went out, so
  * a failed one is tried again the next day; the idempotency key per
  * workspace, owner and kind stops a re-run of the step sending twice.
  *
@@ -63,7 +63,15 @@ export async function runBillingReminders(
 ): Promise<BillingReminderSummary> {
   const sleep = deps.sleep ?? defaultSleep;
   const take = REMINDER_MAX_EMAILS_PER_RUN + 1;
-  const base = { billingExempt: false, plan: null };
+  // Only a workspace someone uses: every registration makes one, so a person who
+  // signed up only to join another workspace by invite would otherwise be told
+  // about a trial they never started using. Filtered in the query, and the
+  // markers stay null, so a workspace used later can still get what applies then.
+  const base = {
+    billingExempt: false,
+    plan: null,
+    OR: [{ connections: { some: {} } }, { postJobs: { some: {} } }],
+  };
 
   const [ending, ended] = await Promise.all([
     prisma.workspace.findMany({
