@@ -246,3 +246,25 @@ describe("PublishBar: hidden while any dialog is open", () => {
     expect(render(submitControl({ ...base, buttonLabel: "Publish post" }), true)).toBe("");
   });
 });
+
+// Fix round 2, item 1: one declaration at every width, right above the one visible submit control.
+describe("the form's own TikTok declaration", () => {
+  const form = readFileSync(path.join(__dirname, "..", "create-post-form.tsx"), "utf8");
+
+  it("is hidden below md exactly as the form's button is, so a phone has only the bar's", () => {
+    expect(form).toMatch(
+      /\{tiktokSelected \? \(\s*<div className="hidden md:block">\s*<TikTokConsentDeclaration brandedContent=\{tiktokMetadata\.brandedContent === true\} \/>\s*<\/div>\s*\) : null\}/,
+    );
+    expect(form).toContain('<span title={tiktokBlock ?? undefined} className="hidden md:inline">');
+  });
+
+  it("phone with TikTok: the bar's line (shown below md); desktop: the bar is gone, the form's line stays", () => {
+    const html = render(submitControl({ ...base, buttonLabel: "Publish post" }), false, { brandedContent: false });
+    expect(html.match(/By posting, you agree to TikTok/g)).toHaveLength(1);
+    expect(html.match(/^<div[^>]*>/)?.[0]).toContain("md:hidden");
+  });
+
+  it("TikTok not selected: none in the bar, and the form's line is behind tiktokSelected", () => {
+    expect(render(submitControl({ ...base, buttonLabel: "Publish post" }), false, null)).not.toContain("By posting");
+  });
+});

@@ -2649,9 +2649,13 @@ function CreatePostFormInner({
             </div>
           )}
 
-          {/* TikTok guideline 4: the declaration sits right before the button. */}
+          {/* TikTok guideline 4: the declaration sits right before the button.
+              Below md the button is the bar's, which carries its own line, so
+              this one hides with the form's button (one line read, not two). */}
           {tiktokSelected ? (
-            <TikTokConsentDeclaration brandedContent={tiktokMetadata.brandedContent === true} />
+            <div className="hidden md:block">
+              <TikTokConsentDeclaration brandedContent={tiktokMetadata.brandedContent === true} />
+            </div>
           ) : null}
 
           {fileLostShown ? (
