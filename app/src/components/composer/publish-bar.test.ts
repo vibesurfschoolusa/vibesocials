@@ -189,7 +189,6 @@ describe("toasts sit above the bar", () => {
   it("the bar publishes its height as a CSS variable: its own height while shown, 0 when hidden (md and up)", () => {
     expect(PUBLISH_BAR_OFFSET_VAR).toBe("--publish-bar-offset");
     expect(publishBarOffset(97)).toBe("97px");
-    expect(publishBarOffset(0)).toBe("0px");
   });
 
   it("the toast container's bottom offset adds that variable, and nothing else changed", () => {
@@ -266,5 +265,29 @@ describe("the form's own TikTok declaration", () => {
 
   it("TikTok not selected: none in the bar, and the form's line is behind tiktokSelected", () => {
     expect(render(submitControl({ ...base, buttonLabel: "Publish post" }), false, null)).not.toContain("By posting");
+  });
+});
+
+// Fix round 2, item 2: a bar hidden by a dialog measured 0, the spacer
+// collapsed, and after the dialog closed the last controls sat under the bar.
+describe("the bar's offset keeps its last real height", () => {
+  it("first render: nothing written yet, so the toast and spacer fallbacks apply", () => {
+    const form = readFileSync(path.join(__dirname, "..", "create-post-form.tsx"), "utf8");
+    expect(form).toContain("h-[var(--publish-bar-offset,7rem)]");
+  });
+
+  it("a bar that grows (TikTok's line) is followed", () => {
+    expect(publishBarOffset(97)).toBe("97px");
+    expect(publishBarOffset(141)).toBe("141px");
+  });
+
+  it("a hidden bar (a dialog open, or md and up) measures 0 and writes nothing, so the offset stays", () => {
+    expect(publishBarOffset(0)).toBeNull();
+  });
+
+  it("only a non-zero height is written, and unmounting still removes the variable", () => {
+    const bar = readFileSync(path.join(__dirname, "publish-bar.tsx"), "utf8");
+    expect(bar).toMatch(/const offset = publishBarOffset\(bar\.offsetHeight\);\s*if \(offset !== null\) root\.setProperty\(PUBLISH_BAR_OFFSET_VAR, offset\);/);
+    expect(bar).toContain("root.removeProperty(PUBLISH_BAR_OFFSET_VAR);");
   });
 });

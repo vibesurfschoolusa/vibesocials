@@ -17,9 +17,14 @@ export interface SubmitControlView {
 /** The CSS variable the toast container adds to its bottom offset (ui/toast.tsx). */
 export const PUBLISH_BAR_OFFSET_VAR = "--publish-bar-offset";
 
-/** The variable's value for the bar's height; 0 while it is hidden (md and up). */
-export function publishBarOffset(height: number): string {
-  return `${height}px`;
+/**
+ * The variable's value for the bar's height, or null for a hidden bar (a
+ * dialog open, or md and up), which measures 0: writing that would collapse
+ * the spacer while a dialog is open, and the browser's scroll would then leave
+ * the end of the form under the bar once it closed. The last real height stays.
+ */
+export function publishBarOffset(height: number): string | null {
+  return height > 0 ? `${height}px` : null;
 }
 
 /**
@@ -46,13 +51,17 @@ export function PublishBar({
 }) {
   const barRef = useRef<HTMLDivElement>(null);
   // Toasts sit above the bar while it shows, not over its button: the bar
-  // puts its height where the toast container reads it. Display none (md and
-  // up) measures 0, so a desktop's toasts stay where they were.
+  // puts its height where the toast container reads it. Display none measures
+  // 0 and writes nothing: a desktop's toasts stay where they were, and a bar
+  // hidden by a dialog keeps its room (publishBarOffset).
   useEffect(() => {
     const bar = barRef.current;
     if (!bar) return;
     const root = document.documentElement.style;
-    const measure = () => root.setProperty(PUBLISH_BAR_OFFSET_VAR, publishBarOffset(bar.offsetHeight));
+    const measure = () => {
+      const offset = publishBarOffset(bar.offsetHeight);
+      if (offset !== null) root.setProperty(PUBLISH_BAR_OFFSET_VAR, offset);
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(bar);
