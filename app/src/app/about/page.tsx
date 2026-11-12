@@ -1,10 +1,13 @@
 import Link from "next/link";
 
 import { LegalPage, LegalSection } from "@/components/legal-page";
+import { TrialPriceLine } from "@/components/trial-offer";
 import { buttonVariants } from "@/components/ui/button";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
+import { paymentsConfigured, trialDays } from "@/lib/billing";
 import { platformLabel } from "@/lib/platforms";
 import { OPERATOR_LOCATION, OPERATOR_NAME, PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/siteInfo";
+import { startingPrice, trialButtonLabel } from "@/lib/trialOffer";
 
 export const metadata = {
   title: "About | Vibe Socials",
@@ -12,7 +15,11 @@ export const metadata = {
     "Vibe Socials helps small businesses and creators publish one photo or video to all their social media accounts at once.",
 };
 
-export default function AboutPage() {
+export default async function AboutPage() {
+  // S1: with payments configured the button offers the trial and its price;
+  // otherwise the released page, unchanged (publicPagesBillingOff.test.ts).
+  const payments = paymentsConfigured();
+  const price = payments ? await startingPrice() : null;
   return (
     <LegalPage
       title={`About ${PRODUCT_NAME}`}
@@ -80,9 +87,10 @@ export default function AboutPage() {
         </div>
       </LegalSection>
 
+      {payments ? <TrialPriceLine price={price} className="pt-2 text-sm text-muted-foreground" /> : null}
       <div className="flex flex-wrap gap-3 pt-2">
         <Link href="/register" className={buttonVariants({ variant: "primary" })}>
-          Create free account
+          {payments ? trialButtonLabel(trialDays()) : "Create free account"}
         </Link>
         <Link href="/login" className={buttonVariants({ variant: "outline" })}>
           Log in

@@ -2,6 +2,7 @@ import { DashboardHome } from "@/components/dashboard/dashboard-home";
 import { Landing } from "@/components/landing";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
 import { getCurrentUser } from "@/lib/auth";
+import { startingPrice } from "@/lib/trialOffer";
 
 export const metadata = {
   title: "Vibe Socials | Upload once, post everywhere",
@@ -17,5 +18,7 @@ export const metadata = {
  */
 export default async function HomePage() {
   const user = await getCurrentUser();
-  return user ? <DashboardHome availablePlatforms={advertisedPlatforms()} /> : <Landing />;
+  if (user) return <DashboardHome availablePlatforms={advertisedPlatforms()} />;
+  // S1: null without a Stripe call while payments are not configured.
+  return <Landing startingPrice={await startingPrice()} />;
 }

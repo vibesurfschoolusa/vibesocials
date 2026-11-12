@@ -13,7 +13,9 @@ import type { LucideIcon } from "lucide-react";
 
 import { buttonVariants } from "@/components/ui/button";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
-import { paymentsConfigured } from "@/lib/billing";
+import { TrialPriceLine } from "@/components/trial-offer";
+import { paymentsConfigured, trialDays } from "@/lib/billing";
+import { trialButtonLabel } from "@/lib/trialOffer";
 import { platformLabel } from "@/lib/platforms";
 import { OPERATOR_NAME, PRODUCT_NAME } from "@/lib/siteInfo";
 
@@ -24,7 +26,17 @@ import { OPERATOR_NAME, PRODUCT_NAME } from "@/lib/siteInfo";
  * client-side spinner (platform app reviewers and search engines read it). One <h1> per the smoke-suite a11y rule;
  * section headings are <h2>. The subtle brand gradient stays landing-only.
  */
-export function Landing() {
+export function Landing({
+  startingPrice = null,
+}: {
+  /** S1: the lowest plan's price from Stripe (lib/trialOffer.ts); used only with payments configured. */
+  startingPrice?: string | null;
+}) {
+  // S1: with payments configured the page offers the trial and its price. Each
+  // switch swaps a whole text or element, so with them not configured the
+  // HTML is exactly the released page (publicPagesBillingOff.test.ts).
+  const payments = paymentsConfigured();
+  const signUpLabel = payments ? trialButtonLabel(trialDays()) : "Create free account";
   return (
     <div className="relative min-h-screen overflow-hidden bg-background">
       <div
@@ -50,7 +62,7 @@ export function Landing() {
         </span>
         <nav aria-label="Main" className="flex items-center gap-1">
           {/* 23: only once /pricing exists; with payments not configured it is a 404. */}
-          {paymentsConfigured() ? (
+          {payments ? (
             <Link
               href="/pricing"
               className={buttonVariants({ variant: "ghost", size: "sm" })}
@@ -93,7 +105,7 @@ export function Landing() {
                 className: "flex-1",
               })}
             >
-              Create free account
+              {signUpLabel}
             </Link>
             <Link
               href="/login"
@@ -106,6 +118,9 @@ export function Landing() {
               Log in
             </Link>
           </div>
+          {payments ? (
+            <TrialPriceLine price={startingPrice} className="mt-3 text-sm text-muted-foreground" />
+          ) : null}
 
           <ul className="mt-10 flex max-w-2xl flex-wrap items-center justify-center gap-2">
             {advertisedPlatforms().map((platform) => (
@@ -197,15 +212,19 @@ export function Landing() {
             <h2 className="text-2xl font-bold tracking-tight text-foreground">
               Ready to post everywhere?
             </h2>
-            <p className="max-w-md text-sm text-muted-foreground">
-              Create a free account — no credit card, your first workspace is
-              set up automatically.
-            </p>
+            {payments ? (
+              <TrialPriceLine price={startingPrice} className="max-w-md text-sm text-muted-foreground" />
+            ) : (
+              <p className="max-w-md text-sm text-muted-foreground">
+                Create a free account — no credit card, your first workspace is
+                set up automatically.
+              </p>
+            )}
             <Link
               href="/register"
               className={buttonVariants({ variant: "primary", size: "lg" })}
             >
-              Create free account
+              {signUpLabel}
             </Link>
           </div>
         </section>
