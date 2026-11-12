@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -162,5 +164,20 @@ describe("PublishBar: TikTok's consent declaration", () => {
   it("the bar, and so its line, is absent at md and up: the form's own line stays the one there", () => {
     const html = render(submitControl({ ...base, buttonLabel: "Publish post" }), false, { brandedContent: false });
     expect(html.match(/^<div[^>]*>/)?.[0]).toContain("md:hidden");
+  });
+});
+
+// Fix round 1, item 3: the bar sat over the account menu (the header's sticky z-20 layer).
+describe("PublishBar: what stays above it", () => {
+  const zOf = (classes: string) => Number(classes.match(/(?:^|\s)z-\[?(\d+)\]?/)?.[1]);
+  const bar = render(submitControl({ ...base, buttonLabel: "Publish post" })).match(/^<div[^>]*class="([^"]*)"/)?.[1] ?? "";
+  const source = (file: string) => readFileSync(path.join(__dirname, "..", file), "utf8");
+
+  it("the bar is on layer 10, under the header (20), dialogs and the mobile drawer (50) and toasts (60)", () => {
+    expect(zOf(bar)).toBe(10);
+    expect(source("shell/top-bar.tsx")).toContain("sticky top-0 z-20");
+    expect(source("ui/dialog.tsx")).toContain("fixed inset-0 z-50");
+    expect(source("shell/mobile-drawer.tsx")).toContain("fixed inset-0 z-50");
+    expect(source("ui/toast.tsx")).toContain("z-[60]");
   });
 });

@@ -34,7 +34,7 @@ export function PublishBar({
 }) {
   if (dialogOpen) return null;
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:hidden">
+    <div className="fixed inset-x-0 bottom-0 z-10 border-t border-border bg-background px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:hidden">
       {tiktokDeclaration ? (
         <div className="mb-2">
           <TikTokConsentDeclaration brandedContent={tiktokDeclaration.brandedContent} />
