@@ -28,7 +28,7 @@ export function WorkspaceLogoControl({
   isOwner: boolean;
   /** The workspace this page was rendered for, so a switch in another tab is refused. */
   workspaceId: string;
-  /** P1 fix round 2: set where the plan does not show the logo on the report. */
+  /** P1 fix round 2: set where the plan does not show the logo on the report. Q1: Upload is then disabled. */
   planNote?: string;
 }) {
   const router = useRouter();
@@ -36,6 +36,9 @@ export function WorkspaceLogoControl({
   const [current, setCurrent] = useState(logoUrl);
   const [busy, setBusy] = useState<"upload" | "remove" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Q1: the note is set exactly where planIncludes(monthlyReportEmail) is false,
+  // which is where the logo route refuses the upload; say so before a file is picked.
+  const uploadRefused = Boolean(planNote);
 
   async function send(method: "POST" | "DELETE", file?: File) {
     setBusy(method === "POST" ? "upload" : "remove");
@@ -89,6 +92,7 @@ export function WorkspaceLogoControl({
               type="file"
               accept="image/png,image/jpeg"
               className="hidden"
+              disabled={uploadRefused || undefined}
               onChange={onFile}
             />
             <Button
@@ -96,7 +100,8 @@ export function WorkspaceLogoControl({
               variant="outline"
               size="sm"
               loading={busy === "upload"}
-              disabled={busy !== null}
+              disabled={busy !== null || uploadRefused}
+              aria-disabled={uploadRefused || undefined}
               onClick={() => input.current?.click()}
             >
               Upload
