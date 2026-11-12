@@ -46,11 +46,11 @@ export interface GettingStartedState {
   voiceDone: boolean;
   /** ≥1 post job of any status (draft/scheduled/published/failed all count). */
   postDone: boolean;
-  /** Every step this person can do is done (a member also needs a connection). */
+  /** Connected and posted: the block is gone for good, whatever the two settings say. */
   complete: boolean;
   /** Render the checklist. */
   show: boolean;
-  /** Render "Working for clients?": owners only, after the steps or once they made a client link. */
+  /** Render "Working for clients?": owners only, once all four steps are done or a client link is active. */
   showClients: boolean;
 }
 
@@ -142,9 +142,13 @@ export function deriveGettingStarted(
     voice: voiceDone,
     post: postDone,
   };
+  // Fix round 1: only connect and the first post open the block, as before S2.
+  // The two settings ride along while it shows, so an owner who has connected
+  // and posted never sees it come back because a setting is empty.
+  const complete = connectDone && postDone;
+  const allDone = steps.every((step) => done[step]);
   // A member cannot connect, so with nothing connected the post step is a
   // dead end for them: the block waits until the owner has connected something.
-  const complete = connectDone && steps.every((step) => done[step]);
   const show = ready && !complete && (isOwner || connectDone);
   return {
     ready,
@@ -155,6 +159,6 @@ export function deriveGettingStarted(
     postDone,
     complete,
     show,
-    showClients: ready && isOwner && (complete || (setup?.hasClientLink ?? false)),
+    showClients: ready && isOwner && (allDone || (setup?.hasClientLink ?? false)),
   };
 }

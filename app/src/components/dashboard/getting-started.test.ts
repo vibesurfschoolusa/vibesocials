@@ -71,6 +71,10 @@ describe("GettingStarted", () => {
     expect(render(CONNECTED, POSTED, { ...OWNER, footerSet: true, brandVoiceSet: true })).toBe("");
     expect(render([], [], { ...OWNER, role: "member" })).toBe("");
   });
+
+  it("fix round 1: an owner who connected and posted sees no block, whatever the settings", () => {
+    expect(render(CONNECTED, POSTED, OWNER)).toBe("");
+  });
 });
 
 describe("WorkingForClients", () => {

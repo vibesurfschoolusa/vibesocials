@@ -22,13 +22,13 @@ import type { Platform } from "@prisma/client";
 const POST_DEFAULTS_HREF = "/settings#post-defaults";
 
 /**
- * First-run "Get started" checklist, shown at the top of the dashboard while
- * a step this person can do is open: for an owner, connect, the footer, the
- * brand voice and a first post; for a member, only the post, once something
- * is connected. Purely derived from the dashboard's fetches and the page's
- * workspace read (no dismissed flag): once the steps are provably done — or
- * while a source is still loading/failed — it renders nothing. See
- * lib/gettingStarted.ts.
+ * First-run "Get started" checklist, shown at the top of the dashboard until
+ * the workspace has a connection and a post. An owner sees four steps
+ * (connect, the footer, the brand voice, a first post) with their done marks;
+ * a member sees only the post, once something is connected. Purely derived
+ * from the dashboard's fetches and the page's workspace read (no dismissed
+ * flag): once connected and posted — or while a source is still
+ * loading/failed — it renders nothing. See lib/gettingStarted.ts.
  */
 export function GettingStarted({
   connections,

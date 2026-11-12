@@ -119,8 +119,31 @@ describe("deriveGettingStarted", () => {
     expect(state.show).toBe(true);
   });
 
-  it("a connection and a post with the settings unset keeps the block up", () => {
-    expect(deriveGettingStarted(connected, [job()], owner)).toMatchObject({ complete: false, show: true });
+  // Fix round 1: the block shows only while connect or the first post is open,
+  // as before S2, so an established owner never sees it come back.
+  it("connected and posted with no website, hashtags or brand voice: no block", () => {
+    expect(deriveGettingStarted(connected, [job()], owner)).toMatchObject({
+      footerDone: false,
+      voiceDone: false,
+      complete: true,
+      show: false,
+      showClients: false,
+    });
+  });
+
+  it("connected only: the block lists all four steps with the settings' real state", () => {
+    const state = deriveGettingStarted(connected, [], { ...owner, brandVoiceSet: true });
+    expect(state).toMatchObject({
+      steps: ["connect", "footer", "voice", "post"],
+      connectDone: true,
+      footerDone: false,
+      voiceDone: true,
+      show: true,
+    });
+  });
+
+  it("posted but nothing connected: the block shows, as before", () => {
+    expect(deriveGettingStarted([], [job()], ownerAllSet)).toMatchObject({ postDone: true, connectDone: false, show: true });
   });
 
   it("hides once all four steps are done, and offers the clients block", () => {
