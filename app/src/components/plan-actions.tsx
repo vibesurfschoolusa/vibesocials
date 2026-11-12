@@ -3,7 +3,7 @@
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { planChoiceButtons } from "@/components/planChoiceButtons";
+import { planChoiceView, type BillingChoice } from "@/components/planChoiceButtons";
 import type { PlanKey } from "@/lib/plans";
 
 /**
@@ -13,7 +13,8 @@ import type { PlanKey } from "@/lib/plans";
  * there. Nothing here changes the plan: Stripe's webhook does that.
  */
 
-export type PlanOfferView = { plan: PlanKey; name: string; price: string | null };
+/** twoMonthsFree: a yearly offer's saving, from getYearlyPlanOffers (the pricing page's rule). */
+export type PlanOfferView = { plan: PlanKey; name: string; price: string | null; twoMonthsFree?: boolean };
 
 async function openStripe(url: string, body?: unknown): Promise<string | null> {
   try {
@@ -40,11 +41,14 @@ export function PlanActions({
 }: {
   offers: PlanOfferView[];
   manage: boolean;
-  /** P1: the plans with a yearly price; a button each, after the monthly ones. */
+  /** P1: the plans with a yearly price; Q1: their buttons show under Yearly. */
   yearlyOffers?: PlanOfferView[];
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Q1: Monthly first, as on the pricing page.
+  const [interval, setBillingInterval] = useState<BillingChoice>("month");
+  const choice = planChoiceView(offers, yearlyOffers, interval);
 
   async function run(key: string, url: string, body?: unknown) {
     setBusy(key);
@@ -59,18 +63,49 @@ export function PlanActions({
 
   return (
     <div className="flex flex-col gap-3">
-      {offers.length > 0 || yearlyOffers.length > 0 ? (
-        <div className="flex flex-wrap gap-2">
-          {planChoiceButtons(offers, yearlyOffers).map((button) => (
+      {choice.showSwitch ? (
+        <div role="group" aria-label="Billing period" className="flex gap-2">
+          {(
+            [
+              { value: "month", label: "Monthly" },
+              { value: "year", label: "Yearly" },
+            ] as const
+          ).map((option) => (
             <Button
-              key={button.key}
-              variant="primary"
+              key={option.value}
+              aria-pressed={choice.interval === option.value}
+              variant={choice.interval === option.value ? "primary" : "outline"}
+              size="sm"
               disabled={busy !== null}
-              onClick={() => run(button.key, "/api/billing/checkout", button.body)}
+              onClick={() => setBillingInterval(option.value)}
             >
-              {button.label}
+              {option.label}
             </Button>
           ))}
+        </div>
+      ) : null}
+      {offers.length > 0 || yearlyOffers.length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {choice.buttons.map((button) => {
+            const choose = (
+              <Button
+                key={button.key}
+                variant="primary"
+                disabled={busy !== null}
+                onClick={() => run(button.key, "/api/billing/checkout", button.body)}
+              >
+                {button.label}
+              </Button>
+            );
+            return button.twoMonthsFree ? (
+              <div key={button.key} className="flex flex-col gap-1">
+                {choose}
+                <p className="text-sm text-muted-foreground">Two months free compared with monthly</p>
+              </div>
+            ) : (
+              choose
+            );
+          })}
         </div>
       ) : null}
       {manage ? (
