@@ -1,7 +1,7 @@
 import { PlanActions, type PlanOfferView } from "@/components/plan-actions";
 import { Card } from "@/components/ui/card";
 import { WORKSPACE_PLAN_SENTENCE } from "@/lib/planCopy";
-import { GROWTH_ADDS_LINE, PLAN_INCLUDES } from "@/lib/plans";
+import { GROWTH_ADDS_LINE, planIncludesLine } from "@/lib/plans";
 import { formatStorageGb } from "@/lib/usageLimits";
 import type { WorkspaceUsage } from "@/server/usage/workspaceUsage";
 
@@ -70,7 +70,7 @@ export function PlanSection({
         <ul className="space-y-1 text-sm text-muted-foreground">
           {offers.map((offer) => (
             <li key={offer.plan}>
-              {offer.name}: {PLAN_INCLUDES[offer.plan]}
+              {offer.name}: {planIncludesLine(offer.plan, offers.map((shown) => shown.plan))}
             </li>
           ))}
         </ul>

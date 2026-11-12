@@ -313,7 +313,8 @@ describe("/pricing: monthly or yearly (P1)", () => {
     expect(tag(html, "Monthly")).not.toContain("aria-current");
     const page = text(html);
     expect(page).toContain(`Starter $190 a year ${SAVING}`);
-    expect(page).toContain("Pro $900 a year Everything in Growth");
+    // Fix round 2: Growth has no yearly price here, so the Pro card lists its features.
+    expect(page).toContain("Pro $900 a year Everything in Starter, plus client upload");
     expect(page.split(SAVING)).toHaveLength(2);
     expect(page).not.toContain("$19 a month");
     expect(getPlanOffersMock).not.toHaveBeenCalled();
@@ -326,5 +327,30 @@ describe("/pricing: monthly or yearly (P1)", () => {
     expect(page).toContain("Prices are unavailable right now. Try again in a minute.");
     expect(page).not.toMatch(/[$€£]\s?\d/);
     expect(page).not.toContain(SAVING);
+  });
+});
+
+describe("/pricing: the Pro card names only plans the page shows (P1 fix round 2)", () => {
+  const G =
+    "client upload, review and connect links, a monthly report email with your logo, Add many, brand voice and new-review alerts";
+
+  it("Growth not offered: Pro lists Growth's features instead of 'Everything in Growth'", async () => {
+    configurePayments();
+    getPlanOffersMock.mockResolvedValue([
+      { plan: "starter", name: "Starter", price: "$19 a month" },
+      { plan: "pro", name: "Pro", price: "$79 a month" },
+    ]);
+    const page = text(await render());
+    expect(page).not.toContain("Everything in Growth");
+    expect(page).toContain(`Pro $79 a month Everything in Starter, plus ${G}, with higher limits and priority email support`);
+  });
+
+  it("only Pro: the card lists everything", async () => {
+    configurePayments();
+    vi.stubEnv("STRIPE_PRICE_STARTER", undefined);
+    getPlanOffersMock.mockResolvedValue([{ plan: "pro", name: "Pro", price: "$79 a month" }]);
+    const page = text(await render());
+    expect(page).not.toContain("Everything in");
+    expect(page).toContain(`Pro $79 a month All your platforms,`);
   });
 });

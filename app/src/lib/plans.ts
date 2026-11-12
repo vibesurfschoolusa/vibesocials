@@ -41,11 +41,29 @@ export function isPlanKey(value: string | null | undefined): value is PlanKey {
 const GROWTH_FEATURES =
   "client upload, review and connect links, a monthly report email with your logo, Add many, brand voice and new-review alerts";
 
+const STARTER_FEATURES =
+  "All your platforms, AI captions and alt text, Google posts with buttons, offers and events, AI drafts for Google review replies";
+
 export const PLAN_INCLUDES: Record<PlanKey, string> = {
-  starter: "All your platforms, AI captions and alt text, Google posts with buttons, offers and events, AI drafts for Google review replies",
+  starter: STARTER_FEATURES,
   growth: `Everything in Starter, plus ${GROWTH_FEATURES}`,
   pro: "Everything in Growth, with higher limits and priority email support",
 };
+
+/**
+ * Fix round 2: a plan's line for a view that shows `shown`. "Everything in
+ * Starter / Growth" only when that plan is shown too; otherwise its features
+ * in full. With only Pro shown, "higher limits" has nothing to be higher than.
+ */
+export function planIncludesLine(plan: PlanKey, shown: readonly PlanKey[]): string {
+  const starterShown = shown.includes("starter");
+  if (plan === "starter") return STARTER_FEATURES;
+  if (plan === "growth") return starterShown ? PLAN_INCLUDES.growth : `${STARTER_FEATURES}, plus ${GROWTH_FEATURES}`;
+  if (shown.includes("growth")) return PLAN_INCLUDES.pro;
+  return starterShown
+    ? `Everything in Starter, plus ${GROWTH_FEATURES}, with higher limits and priority email support`
+    : `${STARTER_FEATURES}, plus ${GROWTH_FEATURES}, and priority email support`;
+}
 
 /** Settings, Plan, for a workspace on Starter. */
 export const GROWTH_ADDS_LINE = `Growth adds ${GROWTH_FEATURES}.`;

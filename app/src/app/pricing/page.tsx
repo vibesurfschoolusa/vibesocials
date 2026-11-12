@@ -6,7 +6,7 @@ import { PublicFooter, PublicHeader } from "@/components/public-shell";
 import { buttonVariants } from "@/components/ui/button";
 import { offeredPlans, paymentsConfigured, trialDays } from "@/lib/billing";
 import { WORKSPACE_PLAN_SENTENCE } from "@/lib/planCopy";
-import { PLAN_INCLUDES, PLANS, type PlanKey } from "@/lib/plans";
+import { planIncludesLine, PLANS, type PlanKey } from "@/lib/plans";
 import { PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { getPlanOffers, getYearlyPlanOffers, type YearlyPlanOffer } from "@/server/billing/planPrices";
 
@@ -98,7 +98,13 @@ export default async function PricingPage({
                 <p className="mt-1 text-sm text-muted-foreground">Two months free compared with monthly</p>
               ) : null}
               <ul className="mt-4 flex-1 space-y-1 text-sm text-muted-foreground">
-                {[PLAN_INCLUDES[offer.plan], ...planLimitLines(PLANS[offer.plan].limits)].map((line) => (
+                {[
+                  planIncludesLine(
+                    offer.plan,
+                    offers.map((shown) => shown.plan),
+                  ),
+                  ...planLimitLines(PLANS[offer.plan].limits),
+                ].map((line) => (
                   <li key={line}>{line}</li>
                 ))}
               </ul>

@@ -50,3 +50,21 @@ describe("PlanSection: what the plans include", () => {
     expect(html).not.toContain("Growth adds");
   });
 });
+
+// P1 fix round 2: Settings writes each line from the plans it offers.
+describe("PlanSection: lines from the plans offered", () => {
+  it("does not say 'Everything in Growth' when Growth is not offered", () => {
+    const html = renderToStaticMarkup(
+      createElement(PlanSection, {
+        label: "Free trial",
+        usage: null,
+        offers: [
+          { plan: "starter", name: "Starter", price: null },
+          { plan: "pro", name: "Pro", price: null },
+        ],
+      }),
+    );
+    expect(html).not.toContain("Everything in Growth");
+    expect(html).toContain("Pro: Everything in Starter, plus client upload");
+  });
+});
