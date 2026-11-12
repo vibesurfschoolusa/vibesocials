@@ -58,6 +58,25 @@ describe("public pages with billing off", () => {
     expect(await render(() => import("./register/page"))).toMatchSnapshot();
   });
 
+  // S1: pinned from the released pages before the self-serve batch changed any of them.
+  it("About renders today's page", async () => {
+    expect(await render(() => import("./about/page"))).toMatchSnapshot();
+  });
+
+  it("Log in renders today's page", async () => {
+    expect(await render(() => import("./login/page"))).toMatchSnapshot();
+  });
+
+  it("Help renders today's page", async () => {
+    expect(await render(() => import("./help/page"))).toMatchSnapshot();
+  });
+
+  it("Pricing is an unknown page", async () => {
+    const { default: PricingPage, generateMetadata } = await import("./pricing/page");
+    await expect(PricingPage()).rejects.toThrow();
+    await expect(generateMetadata()).rejects.toThrow();
+  });
+
   it("the landing page renders today's page", async () => {
     const { Landing } = await import("@/components/landing");
     expect(renderToString(createElement(Landing))).toMatchSnapshot();
