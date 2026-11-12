@@ -386,6 +386,18 @@ export function submitControl(input: {
 }
 
 /**
+ * TikTok's declaration for the phone's publish bar, or null. TikTok's
+ * guideline 4 puts it right before the button pressed, and below md that is
+ * the bar's (fix round 1): a scheduled post with a file has no dialog to carry it.
+ */
+export function barTikTokDeclaration(state: {
+  selected: readonly Platform[];
+  brandedContent: boolean;
+}): { brandedContent: boolean } | null {
+  return state.selected.includes("tiktok") ? { brandedContent: state.brandedContent } : null;
+}
+
+/**
  * The line above the buttons in text mode, built from the actual selection:
  * where the text goes, and which platforms that need a file are skipped (the
  * connected ones the person has not unticked). Null with a file, or when no
@@ -2701,7 +2713,15 @@ function CreatePostFormInner({
         confirmText={confirmCopy.confirmText}
         onConfirm={performSubmit}
       />
-      <PublishBar formId="create-post-form" control={control} dialogOpen={confirmPublishOpen} />
+      <PublishBar
+        formId="create-post-form"
+        control={control}
+        dialogOpen={confirmPublishOpen}
+        tiktokDeclaration={barTikTokDeclaration({
+          selected: selectedPlatforms,
+          brandedContent: tiktokMetadata.brandedContent === true,
+        })}
+      />
     </Card>
     {/* Room under the form so the fixed bar never covers its last control. */}
     <div aria-hidden className="h-[calc(7rem+env(safe-area-inset-bottom))] md:hidden" />

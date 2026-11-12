@@ -1,5 +1,6 @@
 "use client";
 
+import { TikTokConsentDeclaration } from "@/components/tiktok-post-settings";
 import { Button } from "@/components/ui/button";
 
 /** What the Create page's submit control shows; see submitControl in create-post-form.tsx. */
@@ -22,15 +23,23 @@ export function PublishBar({
   formId,
   control,
   dialogOpen,
+  tiktokDeclaration,
 }: {
   formId: string;
   control: SubmitControlView;
   /** A confirm dialog is open: the bar steps out of its way. */
   dialogOpen: boolean;
+  /** TikTok is a target: its declaration sits directly above this button (barTikTokDeclaration). */
+  tiktokDeclaration: { brandedContent: boolean } | null;
 }) {
   if (dialogOpen) return null;
   return (
     <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:hidden">
+      {tiktokDeclaration ? (
+        <div className="mb-2">
+          <TikTokConsentDeclaration brandedContent={tiktokDeclaration.brandedContent} />
+        </div>
+      ) : null}
       <Button
         type="submit"
         form={formId}

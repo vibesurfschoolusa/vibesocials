@@ -2,7 +2,14 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { composerPageView, submitButtonLabel, submitControl, UNTOUCHED_SUBMIT_MESSAGE } from "../create-post-form";
+import {
+  barTikTokDeclaration,
+  composerPageView,
+  submitButtonLabel,
+  submitControl,
+  UNTOUCHED_SUBMIT_MESSAGE,
+} from "../create-post-form";
+import { TikTokConsentDeclaration } from "../tiktok-post-settings";
 import { PublishBar } from "./publish-bar";
 
 const base = {
@@ -14,8 +21,11 @@ const base = {
   platformAlert: null,
 };
 
-const render = (control: ReturnType<typeof submitControl>, dialogOpen = false) =>
-  renderToStaticMarkup(createElement(PublishBar, { formId: "create-post", control, dialogOpen }));
+const render = (
+  control: ReturnType<typeof submitControl>,
+  dialogOpen = false,
+  tiktokDeclaration: { brandedContent: boolean } | null = null,
+) => renderToStaticMarkup(createElement(PublishBar, { formId: "create-post", control, dialogOpen, tiktokDeclaration }));
 
 describe("submitControl: the one source for the form's button and the bar", () => {
   it("every page state and publish mode: the label is the page's own", () => {
@@ -103,5 +113,54 @@ describe("PublishBar", () => {
 
   it("hidden while a confirm dialog is open", () => {
     expect(render(control, true)).toBe("");
+  });
+});
+
+// Fix round 1, item 1: TikTok's declaration must sit right before the button
+// the person presses, and on a phone that is the bar's.
+describe("PublishBar: TikTok's consent declaration", () => {
+  const declaration = (brandedContent: boolean) =>
+    renderToStaticMarkup(createElement(TikTokConsentDeclaration, { brandedContent }));
+  const viewFor = (pageState: "text" | "file", mode: "now" | "schedule" | "draft") =>
+    composerPageView({
+      pageState,
+      connected: ["tiktok", "instagram", "x"],
+      deselected: new Set(),
+      mimeType: pageState === "file" ? "video/mp4" : null,
+      mode,
+      loading: false,
+      triedSend: false,
+    });
+
+  it("TikTok selected with a video: the same declaration, directly above the button, in every publish mode", () => {
+    for (const mode of ["now", "schedule", "draft"] as const) {
+      const view = viewFor("file", mode);
+      expect(view.selected).toContain("tiktok");
+      const control = submitControl({ ...base, buttonLabel: view.buttonLabel });
+      for (const brandedContent of [false, true]) {
+        const html = render(control, false, barTikTokDeclaration({ selected: view.selected, brandedContent }));
+        const text = declaration(brandedContent);
+        expect(html, mode).toContain(text);
+        // Nothing between the declaration and the button but the end of its wrapper.
+        expect(html.slice(html.indexOf(text) + text.length, html.indexOf("<button"))).toBe("</div>");
+      }
+    }
+  });
+
+  it("TikTok not selected: no line", () => {
+    const control = submitControl({ ...base, buttonLabel: "Publish post" });
+    expect(barTikTokDeclaration({ selected: ["instagram", "x"], brandedContent: false })).toBeNull();
+    expect(render(control, false, null)).not.toContain("By posting, you agree to TikTok");
+  });
+
+  it("text only: TikTok cannot be selected, so no line", () => {
+    const view = viewFor("text", "now");
+    expect(view.selected).not.toContain("tiktok");
+    expect(barTikTokDeclaration({ selected: view.selected, brandedContent: false })).toBeNull();
+  });
+
+  it("the bar, and so its line, is absent at md and up: the form's own line stays the one there", () => {
+    const html = render(submitControl({ ...base, buttonLabel: "Publish post" }), false, { brandedContent: false });
+    expect(html.match(/^<div[^>]*>/)?.[0]).toContain("md:hidden");
   });
 });
