@@ -267,7 +267,9 @@ describe("SettingsForm — Tracking tags", () => {
 
 // P1: one line each where the plan leaves out the brand voice or new-review emails.
 describe("SettingsForm — what the plan leaves out", () => {
-  const VOICE_LINE = "Saved. Captions follow your brand voice on the Growth and Pro plans.";
+  // Fix round 2: the brand voice note replaces the section's own sentence (below), so it is one sentence.
+  const VOICE_LINE =
+    "On the Growth and Pro plans, the AI follows this when it writes or rewrites a caption and when it drafts a reply to a Google review.";
   const REVIEWS_LINE =
     "New-review emails are sent on the Growth and Pro plans. Your choice here is kept for when you choose one.";
 
@@ -310,5 +312,30 @@ describe("SettingsForm — the monthly report email and the plan", () => {
     const html = render(SETTINGS);
     expect(html).toContain(TODAY);
     expect(html).not.toContain(LINE);
+  });
+});
+
+// P1 fix round 2: the brand voice heading on a plan without it.
+describe("SettingsForm — the brand voice heading and the plan", () => {
+  const TODAY =
+    "The AI follows this when it writes or rewrites a caption and when it drafts a reply to a Google review.";
+  const ON_PLANS =
+    "On the Growth and Pro plans, the AI follows this when it writes or rewrites a caption and when it drafts a reply to a Google review.";
+  const squash = (html: string) => html.replace(/\s+/g, " ");
+
+  it("with the note: one sentence in place of today's, and no second line", () => {
+    const html = squash(
+      renderToStaticMarkup(createElement(SettingsForm, { settings: SETTINGS, role: "owner", planNotes: { brandVoice: ON_PLANS } })),
+    );
+    expect(html).toContain(ON_PLANS);
+    expect(html).not.toContain(`>${TODAY}<`);
+    expect(html).not.toContain("Saved. Captions follow your brand voice");
+    expect(html.split("Growth and Pro plans")).toHaveLength(2);
+  });
+
+  it("without it: today's sentence exactly", () => {
+    const html = squash(render(SETTINGS));
+    expect(html).toContain(`>${TODAY}<`);
+    expect(html).not.toContain("On the Growth and Pro plans");
   });
 });

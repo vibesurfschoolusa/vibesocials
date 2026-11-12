@@ -8,7 +8,9 @@ import { planIncludes } from "@/lib/planFeatures";
  * the plan includes the feature, billing is off, or the workspace is exempt.
  */
 
-export const BRAND_VOICE_PLAN_NOTE = "Saved. Captions follow your brand voice on the Growth and Pro plans.";
+/** Fix round 2: replaces the brand voice section's own sentence, which is untrue without the feature. */
+export const BRAND_VOICE_PLAN_NOTE =
+  "On the Growth and Pro plans, the AI follows this when it writes or rewrites a caption and when it drafts a reply to a Google review.";
 export const REVIEW_ALERTS_PLAN_NOTE =
   "New-review emails are sent on the Growth and Pro plans. Your choice here is kept for when you choose one.";
 

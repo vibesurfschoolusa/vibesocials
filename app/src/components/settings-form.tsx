@@ -320,10 +320,15 @@ export function SettingsForm({ settings, role, planNotes = {} }: SettingsFormPro
         {isOwner ? (
           <div className="flex flex-col gap-1.5 border-t border-border pt-6">
             <h3 className="text-sm font-medium text-foreground">Brand voice</h3>
-            <p className="text-sm text-muted-foreground">
-              The AI follows this when it writes or rewrites a caption and when it drafts a reply to a
-              Google review.
-            </p>
+            {/* P1 fix round 2: without the feature, the plan's sentence takes this one's place. */}
+            {planNotes.brandVoice ? (
+              <p className="text-sm text-muted-foreground">{planNotes.brandVoice}</p>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                The AI follows this when it writes or rewrites a caption and when it drafts a reply to a
+                Google review.
+              </p>
+            )}
             <Label htmlFor="brandVoice" className="mt-2">
               How you sound
             </Label>
@@ -342,7 +347,6 @@ export function SettingsForm({ settings, role, planNotes = {} }: SettingsFormPro
             <p className="text-sm text-muted-foreground">
               Put hashtags in Default hashtags above. The AI does not write hashtags.
             </p>
-            {planNotes.brandVoice ? <p className="text-sm text-muted-foreground">{planNotes.brandVoice}</p> : null}
             <Label htmlFor="brandVoiceExamples" className="mt-2">
               Example captions, one per line (up to {BRAND_VOICE_MAX_EXAMPLES})
             </Label>

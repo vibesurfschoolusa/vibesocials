@@ -9,7 +9,9 @@ const ON = { BILLING_ENABLED: "true" };
 describe("settingsPlanNotes (P1)", () => {
   it("names what Starter leaves out", () => {
     expect(settingsPlanNotes({ plan: "starter", planStatus: "active", currentPeriodEnd: LATER }, ON, NOW)).toEqual({
-      brandVoice: "Saved. Captions follow your brand voice on the Growth and Pro plans.",
+      // Fix round 2: in place of the brand voice section's own sentence.
+      brandVoice:
+        "On the Growth and Pro plans, the AI follows this when it writes or rewrites a caption and when it drafts a reply to a Google review.",
       reviewAlerts:
         "New-review emails are sent on the Growth and Pro plans. Your choice here is kept for when you choose one.",
       // P1 fix round 2.
