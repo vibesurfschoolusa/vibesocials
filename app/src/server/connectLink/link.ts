@@ -6,6 +6,7 @@ import { connectLinkPlatformConfigured, isConnectLinkTokenShape } from "@/lib/co
 import { prisma } from "@/lib/db";
 import { hashInviteToken } from "@/lib/inviteToken";
 import { isWorkspaceOwner } from "@/lib/workspace";
+import { planIncludes } from "@/lib/planFeatures";
 import { workspaceBlock } from "@/lib/workspaceStatus";
 
 /**
@@ -49,6 +50,8 @@ export async function findActiveConnectLink(token: string): Promise<ActiveConnec
   if (!row || row.revokedAt || row.expiresAt.getTime() <= Date.now() || workspaceBlock(row.workspace)) {
     return null;
   }
+  // P1: without the plan feature the link is paused, answered as inactive; never revoked.
+  if (!planIncludes(row.workspace, "clientLinks")) return null;
   // The flow acts as the creator, so the link dies with their ownership.
   if (!(await isWorkspaceOwner(row.createdById, row.workspaceId))) return null;
   return {

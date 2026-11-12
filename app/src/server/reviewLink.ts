@@ -17,6 +17,7 @@ import {
 } from "@/lib/reviewLink";
 import { STORY_NO_CAPTION, storyListing, storyPlatformsOf } from "@/lib/storyPlacement";
 import { billingFieldsSelect } from "@/lib/billing";
+import { planIncludes } from "@/lib/planFeatures";
 import { workspaceBlock } from "@/lib/workspaceStatus";
 import { resolvePlatformCaptions } from "@/server/jobs/posting";
 import { buildClientChangeRequestEmail } from "@/server/notifications/clientChangeRequestEmail";
@@ -53,6 +54,8 @@ export async function findActiveReviewLink(token: string): Promise<ActiveReviewL
     },
   });
   if (!row || row.revokedAt || workspaceBlock(row.workspace)) return null;
+  // P1: without the plan feature the link is paused, answered as inactive; never revoked.
+  if (!planIncludes(row.workspace, "clientLinks")) return null;
   return { id: row.id, workspaceId: row.workspaceId, workspaceName: row.workspace.name };
 }
 

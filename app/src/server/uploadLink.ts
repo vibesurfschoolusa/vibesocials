@@ -4,6 +4,7 @@ import { logger } from "@/lib/logger";
 import { consumeFixedWindow } from "@/lib/rateLimit";
 import { isUploadLinkTokenShape, uploadLinkHourWindow } from "@/lib/uploadLink";
 import { billingFieldsSelect } from "@/lib/billing";
+import { planIncludes } from "@/lib/planFeatures";
 import { workspaceBlock } from "@/lib/workspaceStatus";
 import { buildClientUploadEmail } from "@/server/notifications/clientUploadEmail";
 import { sendEmail } from "@/server/notifications/email";
@@ -41,6 +42,8 @@ export async function findActiveUploadLink(token: string): Promise<ActiveUploadL
     },
   });
   if (!row || row.revokedAt || workspaceBlock(row.workspace)) return null;
+  // P1: without the plan feature the link is paused, answered as inactive; never revoked.
+  if (!planIncludes(row.workspace, "clientLinks")) return null;
   return {
     id: row.id,
     workspaceId: row.workspaceId,

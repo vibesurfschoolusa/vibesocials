@@ -15,6 +15,7 @@ import { generateInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { openSecret, sealSecret } from "@/lib/tokenCrypto";
+import { pausedByPlan, planFeatureResponse } from "@/lib/planFeatures";
 import { isWorkspaceOwner, requireOwnerContext } from "@/lib/workspace";
 import {
   INVALID_WORKSPACE_ID_CODE,
@@ -69,7 +70,10 @@ function toLinkDto(row: LinkRow, workspaceId: string) {
   };
 }
 
-/** GET → `{ link, available }`: the working link (or null) and the platforms this site can offer. */
+/**
+ * GET → `{ link, available }`: the working link (or null) and the platforms this site can offer;
+ * P1: plus `pausedByPlan: true` when the plan does not include client links.
+ */
 export async function GET(request: Request) {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) return contextOrError;
@@ -87,6 +91,7 @@ export async function GET(request: Request) {
   return NextResponse.json({
     link: link ? toLinkDto(link, workspaceId) : null,
     available: configuredConnectLinkPlatforms(),
+    ...pausedByPlan(contextOrError.workspace, "clientLinks"),
   });
 }
 
@@ -103,6 +108,8 @@ export async function POST(request: Request) {
   const body = (await readJsonObject(request)) ?? {};
   const mismatch = workspaceMismatch(body.workspaceId, workspaceId);
   if (mismatch) return mismatch;
+  const notIncluded = planFeatureResponse(context.workspace, "clientLinks");
+  if (notIncluded) return notIncluded;
 
   const parsed = parseConnectLinkPlatforms(body.platforms);
   if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });

@@ -11,6 +11,7 @@ import {
   reviewLinkUrl,
 } from "@/lib/reviewLink";
 import { openSecret, sealSecret } from "@/lib/tokenCrypto";
+import { pausedByPlan, planFeatureResponse } from "@/lib/planFeatures";
 import { requireOwnerContext } from "@/lib/workspace";
 import {
   INVALID_WORKSPACE_ID_CODE,
@@ -90,7 +91,7 @@ export async function GET(request: Request) {
     where: { workspaceId, revokedAt: null },
     orderBy: { createdAt: "desc" },
   });
-  return NextResponse.json({ link: link ? toLinkDto(link, workspaceId) : null });
+  return NextResponse.json({ link: link ? toLinkDto(link, workspaceId) : null, ...pausedByPlan(contextOrError.workspace, "clientLinks") });
 }
 
 /**
@@ -105,6 +106,8 @@ export async function POST(request: Request) {
   const workspaceId = context.workspace.id;
   const mismatch = workspaceMismatch(await bodyWorkspaceId(request), workspaceId);
   if (mismatch) return mismatch;
+  const notIncluded = planFeatureResponse(context.workspace, "clientLinks");
+  if (notIncluded) return notIncluded;
 
   const rateLimit = await checkRateLimit({
     userId: context.user.id,

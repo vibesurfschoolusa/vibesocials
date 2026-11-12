@@ -63,3 +63,17 @@ export function planFeatureResponse(
   if (planIncludes(workspace, feature, env, now)) return null;
   return NextResponse.json({ error: PLAN_FEATURE_MESSAGES[feature], code: PLAN_FEATURE_CODE }, { status: 403 });
 }
+
+/**
+ * For an owner route's GET: `{ pausedByPlan: true }` to spread into the answer
+ * when the plan does not include the feature, and nothing otherwise, so the
+ * answer with the feature is exactly what it was before plans differed.
+ */
+export function pausedByPlan(
+  workspace: BillingFields,
+  feature: PlanFeature,
+  env: BillingEnv = process.env,
+  now: Date = new Date(),
+): { pausedByPlan?: true } {
+  return planIncludes(workspace, feature, env, now) ? {} : { pausedByPlan: true };
+}

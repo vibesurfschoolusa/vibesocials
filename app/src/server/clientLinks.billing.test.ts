@@ -84,7 +84,8 @@ describe.each(LINKS)("the %s link with billing on", (_name, find, resolve) => {
   it("is active in a trial, on an active plan, and for an exempt workspace", async () => {
     for (const ws of [
       workspace({ trialEndsAt: new Date(NOW.getTime() + DAY) }),
-      workspace({ plan: "starter", planStatus: "active" }),
+      // P1: Growth, since Starter does not include client links (clientLinks.planFeature.test.ts).
+      workspace({ plan: "growth", planStatus: "active" }),
       workspace({ billingExempt: true }),
     ]) {
       find.mockResolvedValue(row(ws));
