@@ -18,6 +18,7 @@ export function PlanSection({
   usage,
   notice = null,
   offers = [],
+  yearlyOffers = [],
   manage = false,
   workspaceNote = false,
   growthAdds = false,
@@ -28,6 +29,8 @@ export function PlanSection({
   notice?: string | null;
   /** 21b: one button per plan (only with payments configured). */
   offers?: PlanOfferView[];
+  /** P1: one more button per plan with a yearly price. */
+  yearlyOffers?: PlanOfferView[];
   /** 21b: the customer portal button. */
   manage?: boolean;
   /** S1: say that the plan covers this one workspace (billing on). */
@@ -73,7 +76,9 @@ export function PlanSection({
         </ul>
       ) : null}
       {growthAdds ? <p className="text-sm text-muted-foreground">{GROWTH_ADDS_LINE}</p> : null}
-      {offers.length > 0 || manage ? <PlanActions offers={offers} manage={manage} /> : null}
+      {offers.length > 0 || yearlyOffers.length > 0 || manage ? (
+        <PlanActions offers={offers} manage={manage} yearlyOffers={yearlyOffers} />
+      ) : null}
     </Card>
   );
 }

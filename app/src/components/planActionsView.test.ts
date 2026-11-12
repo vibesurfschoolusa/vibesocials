@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { planChoiceButtons } from "./planChoiceButtons";
 import { PLAN_RETURN_NOTICE, planReturnNotice, planSectionActions, planSectionLabel } from "./planSectionView";
 
 /** 21b: which buttons Settings → Plan shows, and the line after returning from Stripe. */
@@ -92,5 +93,31 @@ describe("planSectionLabel with planEndsAt (fix round 1)", () => {
 
   it("without planEndsAt it still renews", () => {
     expect(planSectionLabel("owner", { ...ACTIVE, planEndsAt: null }, NOW, ON)).toBe("Starter plan, renews 30 December");
+  });
+});
+
+// P1: the plan buttons offer monthly and, where a yearly price exists, yearly.
+describe("planChoiceButtons", () => {
+  const MONTHLY = [
+    { plan: "starter" as const, name: "Starter", price: "$19 a month" },
+    { plan: "pro" as const, name: "Pro", price: null },
+  ];
+
+  it("with no yearly offers: today's buttons and bodies exactly", () => {
+    expect(planChoiceButtons(MONTHLY, [])).toEqual([
+      { key: "starter", label: "Choose Starter, $19 a month", body: { plan: "starter" } },
+      { key: "pro", label: "Choose Pro", body: { plan: "pro" } },
+    ]);
+  });
+
+  it("adds a yearly button per yearly offer, after the monthly ones", () => {
+    const yearly = [
+      { plan: "starter" as const, name: "Starter", price: "$190 a year", twoMonthsFree: true },
+      { plan: "pro" as const, name: "Pro", price: null, twoMonthsFree: false },
+    ];
+    expect(planChoiceButtons(MONTHLY, yearly).slice(2)).toEqual([
+      { key: "starter-year", label: "Choose Starter, $190 a year", body: { plan: "starter", interval: "year" } },
+      { key: "pro-year", label: "Choose Pro yearly", body: { plan: "pro", interval: "year" } },
+    ]);
   });
 });

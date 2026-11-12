@@ -24,7 +24,7 @@ import {
 } from "@/components/planSectionView";
 import { paymentsConfigured, stripeReachable } from "@/lib/billing";
 import { workspacePlanNoteShown } from "@/lib/planCopy";
-import { getPlanOffers } from "@/server/billing/planPrices";
+import { getPlanOffers, getYearlyPlanOffers } from "@/server/billing/planPrices";
 import { getWorkspaceUsageOrNull } from "@/server/usage/workspaceUsage";
 import { Alert } from "@/components/ui/alert";
 import { describeOAuthResult } from "@/lib/oauthResult";
@@ -129,6 +129,9 @@ export default async function SettingsPage({
   const planLabel =
     planSectionLabel(context.role, planWorkspace, new Date()) ?? (planActions?.manage ? PLAN_PORTAL_ONLY_LABEL : null);
   const planOffers = planActions && planActions.choose.length > 0 ? await getPlanOffers(planActions.choose) : [];
+  // P1: the same plans' yearly prices, where configured; none otherwise, and nothing is read.
+  const yearlyPlanOffers =
+    planActions && planActions.choose.length > 0 ? await getYearlyPlanOffers(planActions.choose) : [];
   const planNotice = paymentsConfigured() ? planReturnNotice(params.billing, planWorkspace, new Date()) : null;
 
   // What the two delete confirmations say, computed with the same functions
@@ -294,6 +297,7 @@ export default async function SettingsPage({
               usage={usage}
               notice={planNotice}
               offers={planOffers}
+              yearlyOffers={yearlyPlanOffers}
               manage={planActions?.manage ?? false}
               workspaceNote={workspacePlanNoteShown(planWorkspace, new Date())}
               growthAdds={planGrowthAddsShown(context.role, planWorkspace, new Date())}

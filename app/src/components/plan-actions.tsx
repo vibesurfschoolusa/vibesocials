@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { planChoiceButtons } from "@/components/planChoiceButtons";
 import type { PlanKey } from "@/lib/plans";
 
 /**
@@ -32,7 +33,16 @@ async function openStripe(url: string, body?: unknown): Promise<string | null> {
   }
 }
 
-export function PlanActions({ offers, manage }: { offers: PlanOfferView[]; manage: boolean }) {
+export function PlanActions({
+  offers,
+  manage,
+  yearlyOffers = [],
+}: {
+  offers: PlanOfferView[];
+  manage: boolean;
+  /** P1: the plans with a yearly price; a button each, after the monthly ones. */
+  yearlyOffers?: PlanOfferView[];
+}) {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -49,16 +59,16 @@ export function PlanActions({ offers, manage }: { offers: PlanOfferView[]; manag
 
   return (
     <div className="flex flex-col gap-3">
-      {offers.length > 0 ? (
+      {offers.length > 0 || yearlyOffers.length > 0 ? (
         <div className="flex flex-wrap gap-2">
-          {offers.map((offer) => (
+          {planChoiceButtons(offers, yearlyOffers).map((button) => (
             <Button
-              key={offer.plan}
+              key={button.key}
               variant="primary"
               disabled={busy !== null}
-              onClick={() => run(offer.plan, "/api/billing/checkout", { plan: offer.plan })}
+              onClick={() => run(button.key, "/api/billing/checkout", button.body)}
             >
-              {offer.price ? `Choose ${offer.name}, ${offer.price}` : `Choose ${offer.name}`}
+              {button.label}
             </Button>
           ))}
         </div>

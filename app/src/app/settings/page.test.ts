@@ -26,7 +26,7 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/server/account/accountDeletion", () => ({ accountDeletionPreview: async () => null }));
 vi.mock("@/server/account/deleteWorkspace", () => ({ workspaceDeletionRefusal: async () => null }));
 vi.mock("@/server/usage/workspaceUsage", () => ({ getWorkspaceUsageOrNull: async () => null }));
-vi.mock("@/server/billing/planPrices", () => ({ getPlanOffers: async () => [] }));
+vi.mock("@/server/billing/planPrices", () => ({ getPlanOffers: async () => [], getYearlyPlanOffers: async () => [] }));
 // The plan section shows for an owner with a plan; never for a member.
 vi.mock("@/components/planSectionView", () => ({
   PLAN_PORTAL_ONLY_LABEL: "Plan",
