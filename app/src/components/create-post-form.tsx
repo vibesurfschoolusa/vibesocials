@@ -22,12 +22,12 @@ import {
   type AttachedPhoto,
 } from "./composer/attached-photos";
 import { PlatformCaptionEditor } from "./composer/platform-caption-editor";
+import { GooglePostBox, googleBoxOpensOnSubmit } from "./composer/google-post-box";
 import { PlatformPreviewList } from "./composer/platform-preview";
 import { PublishBar, type SubmitControlView } from "./composer/publish-bar";
 import { LocationAutocomplete } from "./location-autocomplete";
 import { TikTokConsentDeclaration, TikTokPostSettings } from "./tiktok-post-settings";
 import { YouTubePostSettings } from "./youtube-post-settings";
-import { GooglePostSettings } from "./google-post-settings";
 import { StoryPlacementSettings } from "./story-placement";
 import { CaptionCounter } from "@/components/caption-counter";
 import { Alert } from "@/components/ui/alert";
@@ -808,6 +808,9 @@ function CreatePostFormInner({
   const initialGoogleMetadata = (): GoogleBusinessPostMetadata =>
     googleButtonDefault ? { postType: "update", button: googleButtonDefault } : { postType: "update" };
   const [googleMetadata, setGoogleMetadata] = useState<GoogleBusinessPostMetadata>(initialGoogleMetadata);
+  // The Google box starts collapsed behind its summary (M1); Offer, Event or a
+  // press with a required field missing opens it (composer/google-post-box.tsx).
+  const [googleBoxOpen, setGoogleBoxOpen] = useState(false);
   // 2026-11-10 — Feed or Story, for Instagram and for Facebook separately. Feed is preselected.
   const [instagramPlacement, setInstagramPlacement] = useState<PlacementChoice>(() => initialPlacements().instagram);
   const [facebookPlacement, setFacebookPlacement] = useState<PlacementChoice>(() => initialPlacements().facebook);
@@ -1800,6 +1803,7 @@ function CreatePostFormInner({
       setTiktokCommercialEnabled(false);
       setYoutubeMetadata({ privacyStatus: "unlisted" });
       setGoogleMetadata(initialGoogleMetadata());
+      setGoogleBoxOpen(false);
       // A Story never carries over to the next post: both go back to Feed.
       const startPlacements = initialPlacements();
       setInstagramPlacement(startPlacements.instagram);
@@ -1816,6 +1820,8 @@ function CreatePostFormInner({
 
   async function handleUploadSubmit(event: React.FormEvent) {
     event.preventDefault();
+    // Only opens the box, so its message shows; what the press does next is unchanged.
+    if (googleBoxOpensOnSubmit({ shown: googleOptionsShown, metadata: googleMetadata })) setGoogleBoxOpen(true);
     // The order of these first checks is submitFirstStep's.
     const first = submitFirstStep({
       pageState,
@@ -2436,7 +2442,12 @@ function CreatePostFormInner({
           />
         )}
         {googleOptionsShown && (
-          <GooglePostSettings metadata={googleMetadata} onChange={setGoogleMetadata} />
+          <GooglePostBox
+            metadata={googleMetadata}
+            onChange={setGoogleMetadata}
+            open={googleBoxOpen}
+            onOpenChange={setGoogleBoxOpen}
+          />
         )}
         {selectedPlatforms.includes("instagram") && activeMimeType && (
           <StoryPlacementSettings
