@@ -8,6 +8,8 @@ import type { GoogleBusinessPostMetadata } from "@/server/platforms/types";
 import { GooglePostSettings } from "../google-post-settings";
 import {
   GooglePostBox,
+  allFieldsValid,
+  googleBoxHold,
   googleBoxOpenAfterChange,
   googleBoxOpensOnSubmit,
   googleBoxShowsOpen,
@@ -50,24 +52,62 @@ describe("googlePostSummary", () => {
   });
 });
 
-describe("googleBoxShowsOpen", () => {
-  it("collapsed by default for an update, open once the person opens it", () => {
-    expect(googleBoxShowsOpen({ open: false, postType: "update" })).toBe(false);
-    expect(googleBoxShowsOpen({ open: true, postType: "update" })).toBe(true);
+const book = (url: string): GoogleBusinessPostMetadata => ({ postType: "update", button: { type: "BOOK", url } });
+
+describe("googleBoxHold: when the box may not fold", () => {
+  it("an update whose fields the browser and the app take: nothing holds it", () => {
+    expect(googleBoxHold({ metadata: book("https://e.com/book"), fieldsValid: true })).toBeNull();
+    expect(googleBoxHold({ metadata: { postType: "update" }, fieldsValid: true })).toBeNull();
   });
 
-  it("open by itself for an offer or an event", () => {
-    expect(googleBoxShowsOpen({ open: false, postType: "offer" })).toBe(true);
-    expect(googleBoxShowsOpen({ open: false, postType: "event" })).toBe(true);
+  it("an offer or an event holds it open", () => {
+    expect(googleBoxHold({ metadata: offer, fieldsValid: true })).toBe("offer-or-event");
+    expect(googleBoxHold({ metadata: event, fieldsValid: true })).toBe("offer-or-event");
+  });
+
+  it("a link the browser refuses (www.mysite.com in a url field) holds it open", () => {
+    expect(googleBoxHold({ metadata: book("www.mysite.com"), fieldsValid: false })).toBe("fix-link");
+    // The browser's check alone is enough, whatever the app thinks.
+    expect(googleBoxHold({ metadata: book("https://e.com/book"), fieldsValid: false })).toBe("fix-link");
+  });
+
+  it("a link the app refuses (Book with http://) holds it open", () => {
+    expect(googleBoxHold({ metadata: book("http://e.com/book"), fieldsValid: true })).toBe("fix-link");
+  });
+});
+
+describe("googleBoxShowsOpen", () => {
+  it("collapsed by default for an update, open once the person opens it", () => {
+    expect(googleBoxShowsOpen({ open: false, hold: null })).toBe(false);
+    expect(googleBoxShowsOpen({ open: true, hold: null })).toBe(true);
+  });
+
+  it("open whenever something holds it", () => {
+    expect(googleBoxShowsOpen({ open: false, hold: "offer-or-event" })).toBe(true);
+    expect(googleBoxShowsOpen({ open: false, hold: "fix-link" })).toBe(true);
   });
 });
 
 describe("googleBoxOpenAfterChange", () => {
   it("choosing Offer or Event leaves the box open, so switching back to Update mid-edit does not close it", () => {
-    expect(googleBoxOpenAfterChange(false, "offer")).toBe(true);
-    expect(googleBoxOpenAfterChange(false, "event")).toBe(true);
-    expect(googleBoxOpenAfterChange(true, "update")).toBe(true);
-    expect(googleBoxOpenAfterChange(false, "update")).toBe(false);
+    expect(googleBoxOpenAfterChange(false, { metadata: offer, fieldsValid: true })).toBe(true);
+    expect(googleBoxOpenAfterChange(false, { metadata: event, fieldsValid: true })).toBe(true);
+    expect(googleBoxOpenAfterChange(true, { metadata: { postType: "update" }, fieldsValid: true })).toBe(true);
+    expect(googleBoxOpenAfterChange(false, { metadata: { postType: "update" }, fieldsValid: true })).toBe(false);
+  });
+
+  it("a link being fixed leaves it open, so it does not fold away mid-typing once it is right", () => {
+    expect(googleBoxOpenAfterChange(false, { metadata: book("www.mysite.com"), fieldsValid: false })).toBe(true);
+    expect(googleBoxOpenAfterChange(false, { metadata: book("http://e.com"), fieldsValid: true })).toBe(true);
+  });
+});
+
+describe("allFieldsValid", () => {
+  const field = (valid: boolean) => ({ validity: { valid } });
+  it("reads each field's own validity", () => {
+    expect(allFieldsValid([])).toBe(true);
+    expect(allFieldsValid([field(true), field(true)])).toBe(true);
+    expect(allFieldsValid([field(true), field(false)])).toBe(false);
   });
 });
 
@@ -110,8 +150,27 @@ describe("GooglePostBox", () => {
     }
   });
 
+  it("Book with http:// is open, with its alert visible and a warning on the summary", () => {
+    const html = render(book("http://e.com/book"));
+    expect(html).not.toMatch(/id="google-post-box-settings"[^>]*hidden=""/);
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("The button link must start with https://.");
+    expect(html).toContain('data-google-box-warning=""');
+  });
+
+  it("a valid link folds as before, with no warning", () => {
+    const html = render(book("https://e.com/book"));
+    expect(html).toMatch(/id="google-post-box-settings"[^>]*hidden=""/);
+    expect(html).not.toContain("data-google-box-warning");
+  });
+
+  it("an offer or an event is held open without a warning when its fields are fine", () => {
+    expect(render(offer)).not.toContain("data-google-box-warning");
+    expect(render(event)).not.toContain("data-google-box-warning");
+  });
+
   it("the settings inside are today's, with the same values, open or closed", () => {
-    for (const metadata of [{ postType: "update" as const, button: { type: "BOOK" as const, url: "https://e.com/book" } }, offer, event]) {
+    for (const metadata of [book("https://e.com/book"), book("http://e.com/book"), book("www.mysite.com"), offer, event]) {
       const settings = renderToStaticMarkup(createElement(GooglePostSettings, { metadata, onChange: () => {} }));
       expect(render(metadata)).toContain(settings);
       expect(render(metadata, true)).toContain(settings);
