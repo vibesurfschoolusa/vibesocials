@@ -83,3 +83,18 @@ describe("planGrowthAddsShown", () => {
     expect(planGrowthAddsShown("owner", starter, NOW, {})).toBe(false);
   });
 });
+
+// P1 fix round 2: the line follows planIncludes, not the plan's name.
+describe("planGrowthAddsShown asks the rule", () => {
+  const ON = { BILLING_ENABLED: "true" };
+  const NOW = new Date("2026-12-10T12:00:00Z");
+  const LATER = new Date("2026-12-30T00:00:00Z");
+
+  it("shows the line for any active plan without the Growth features, an unknown one too", () => {
+    expect(planGrowthAddsShown("owner", { plan: "enterprise", planStatus: "active", currentPeriodEnd: LATER }, NOW, ON)).toBe(true);
+  });
+
+  it("not on Pro", () => {
+    expect(planGrowthAddsShown("owner", { plan: "pro", planStatus: "active", currentPeriodEnd: LATER }, NOW, ON)).toBe(false);
+  });
+});

@@ -142,10 +142,11 @@ describe("one rule decides what a plan includes", () => {
     expect(text).not.toMatch(/[^e]brandVoicePrompt\(/);
   });
 
-  it("no other source file names the plans that include the features", () => {
+  // Fix round 2: "starter" too, so no file decides a feature by comparing the plan value itself.
+  it("no other source file names a plan as a string: the rule and the plan definitions only", () => {
     const allowed = new Set(["lib/plans.ts", "lib/planFeatures.ts", "lib/billing.ts"].map((f) => path.join(SRC, f)));
     const offenders = sourceFiles(SRC).filter(
-      (file) => !allowed.has(file) && /["'](growth|pro)["']/.test(readFileSync(file, "utf8")),
+      (file) => !allowed.has(file) && /["'](starter|growth|pro)["']/.test(readFileSync(file, "utf8")),
     );
     expect(offenders).toEqual([]);
   });

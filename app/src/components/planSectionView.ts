@@ -9,6 +9,7 @@ import {
   type BillingEnv,
   type BillingFields,
 } from "@/lib/billing";
+import { PLAN_FEATURES, planIncludes } from "@/lib/planFeatures";
 import { isPlanKey, PLANS, type PlanKey } from "@/lib/plans";
 import { utcDayMonthLabel } from "@/lib/usageLimits";
 
@@ -84,8 +85,8 @@ export function planReturnNotice(billingParam: string | undefined, workspace: Bi
 
 /**
  * P1: whether Settings, Plan says what Growth adds: an owner whose workspace
- * is active on Starter, with billing on. (Starter is the only plan without
- * the features; lib/planFeatures.ts is what enforces them.)
+ * is on an active plan that lacks a Growth feature, with billing on. Fix
+ * round 2: asked of planIncludes, the one rule, not of the plan's name.
  */
 export function planGrowthAddsShown(
   role: "owner" | "member",
@@ -93,5 +94,6 @@ export function planGrowthAddsShown(
   now: Date,
   env: BillingEnv = process.env,
 ): boolean {
-  return role === "owner" && billingEnabled(env) && planState(workspace, now) === "active" && workspace.plan === "starter";
+  if (role !== "owner" || !billingEnabled(env) || planState(workspace, now) !== "active") return false;
+  return PLAN_FEATURES.some((feature) => !planIncludes(workspace, feature, env, now));
 }
