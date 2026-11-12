@@ -6,8 +6,9 @@
 # built and started again with different settings:
 #   1. billing off (as production is today), the seeded owner as operator, and
 #      every platform configured with dummy values;
-#   2. billing on, with a dummy Stripe key that Stripe refuses ("prices
-#      unavailable" is the wanted state).
+#   2. billing on, with a dummy Stripe key that Stripe refuses, and a
+#      stand-in (e2e/ui-audit/stripe-stub.mjs) that answers only the six
+#      price reads, so prices show while checkout and portal stay refused.
 # Every value below is a dummy for this runner only. The pictures and
 # report.json are uploaded as the `ui-audit` artifact, also when a pass fails.
 
@@ -138,6 +139,13 @@ jobs:
           STRIPE_PRICE_STARTER: price_dummy_ui_audit_starter
           STRIPE_PRICE_GROWTH: price_dummy_ui_audit_growth
           STRIPE_PRICE_PRO: price_dummy_ui_audit_pro
+          STRIPE_PRICE_STARTER_YEARLY: price_dummy_ui_audit_starter_yearly
+          STRIPE_PRICE_GROWTH_YEARLY: price_dummy_ui_audit_growth_yearly
+          STRIPE_PRICE_PRO_YEARLY: price_dummy_ui_audit_pro_yearly
+          # A2: answers Stripe's price reads for the six ids above (and nothing
+          # else), so the plan screens show prices. Loaded into every Node
+          # process of this step, the Next server included, before Next loads.
+          NODE_OPTIONS: --import=${{ github.workspace }}/app/e2e/ui-audit/stripe-stub.mjs
           # Only so the confirm-your-email banner can show (it needs the app to
           # be able to send the link). No screen in this pass sends an email.
           RESEND_API_KEY: re_dummy_ui_audit_not_a_real_key

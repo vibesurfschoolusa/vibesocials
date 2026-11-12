@@ -35,7 +35,8 @@ import {
  *
  * Two passes, one per server build: UI_AUDIT_PASS=main (billing off, the
  * operator address set, every platform configured with dummy values) and
- * UI_AUDIT_PASS=billing (billing on with a dummy Stripe key Stripe refuses).
+ * UI_AUDIT_PASS=billing (billing on with a dummy Stripe key Stripe refuses;
+ * e2e/ui-audit/stripe-stub.mjs answers the six price reads, task A2).
  *
  * Every screen and state runs in its own fresh browser context, inside its own
  * try/catch: one that fails is written to report.json with its error and a
