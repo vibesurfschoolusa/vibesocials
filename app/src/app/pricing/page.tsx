@@ -6,9 +6,9 @@ import { PublicFooter, PublicHeader } from "@/components/public-shell";
 import { buttonVariants } from "@/components/ui/button";
 import { offeredPlans, paymentsConfigured, trialDays } from "@/lib/billing";
 import { WORKSPACE_PLAN_SENTENCE } from "@/lib/planCopy";
-import { PLAN_INCLUDES, PLANS } from "@/lib/plans";
+import { PLAN_INCLUDES, PLANS, type PlanKey } from "@/lib/plans";
 import { PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/siteInfo";
-import { getPlanOffers } from "@/server/billing/planPrices";
+import { getPlanOffers, getYearlyPlanOffers, type YearlyPlanOffer } from "@/server/billing/planPrices";
 
 import { planLimitLines } from "./planWords";
 import { PRICING_CONTACT_QUESTION, PRICING_FAQ, PRICING_INCLUDES, PRICING_INCLUDES_HEADING } from "./pricingCopy";
@@ -30,10 +30,23 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-export default async function PricingPage() {
+/**
+ * P1: with at least one yearly price configured, a Monthly / Yearly switch of
+ * two links (`?billing=year`), so it works without JavaScript and the page
+ * stays a server page. Without one, the page is exactly the monthly page and
+ * `?billing=year` changes nothing.
+ */
+export default async function PricingPage({
+  searchParams,
+}: { searchParams?: Promise<{ billing?: string | string[] }> } = {}) {
   if (!paymentsConfigured()) notFound();
 
-  const offers = await getPlanOffers(offeredPlans());
+  const yearlyPlans = offeredPlans(undefined, "year");
+  const showSwitch = yearlyPlans.length > 0;
+  const yearly = showSwitch && (await searchParams)?.billing === "year";
+  const offers: Array<{ plan: PlanKey; name: string; price: string | null } & Partial<YearlyPlanOffer>> = yearly
+    ? await getYearlyPlanOffers(yearlyPlans)
+    : await getPlanOffers(offeredPlans());
   // Never a made-up price: a plan whose price Stripe did not give shows without one.
   const pricesMissing = offers.some((offer) => offer.price === null);
 
@@ -58,11 +71,32 @@ export default async function PricingPage() {
           </ul>
         </div>
 
+        {showSwitch ? (
+          <nav aria-label="Billing period" className="mt-6 flex gap-2 text-sm">
+            {[
+              { href: "/pricing", label: "Monthly", current: !yearly },
+              { href: "/pricing?billing=year", label: "Yearly", current: yearly },
+            ].map((option) => (
+              <Link
+                key={option.label}
+                href={option.href}
+                aria-current={option.current ? "page" : undefined}
+                className={buttonVariants({ variant: option.current ? "primary" : "outline", size: "sm" })}
+              >
+                {option.label}
+              </Link>
+            ))}
+          </nav>
+        ) : null}
+
         <ul className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-3">
           {offers.map((offer) => (
             <li key={offer.plan} className="flex flex-col rounded-xl border border-border bg-card p-5 text-card-foreground">
               <h2 className="text-lg font-semibold text-foreground">{offer.name}</h2>
               {offer.price ? <p className="mt-1 text-2xl font-bold text-foreground">{offer.price}</p> : null}
+              {offer.price && offer.twoMonthsFree ? (
+                <p className="mt-1 text-sm text-muted-foreground">Two months free compared with monthly</p>
+              ) : null}
               <ul className="mt-4 flex-1 space-y-1 text-sm text-muted-foreground">
                 {[PLAN_INCLUDES[offer.plan], ...planLimitLines(PLANS[offer.plan].limits)].map((line) => (
                   <li key={line}>{line}</li>

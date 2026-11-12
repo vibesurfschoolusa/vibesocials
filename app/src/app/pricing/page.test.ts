@@ -2,15 +2,19 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getPlanOffersMock, notFoundMock } = vi.hoisted(() => ({
+const { getPlanOffersMock, getYearlyPlanOffersMock, notFoundMock } = vi.hoisted(() => ({
   getPlanOffersMock: vi.fn(),
+  getYearlyPlanOffersMock: vi.fn(),
   notFoundMock: vi.fn(() => {
     throw new Error("NEXT_NOT_FOUND");
   }),
 }));
 
 // No call to Stripe from a test: the cached price reader is mocked.
-vi.mock("@/server/billing/planPrices", () => ({ getPlanOffers: getPlanOffersMock }));
+vi.mock("@/server/billing/planPrices", () => ({
+  getPlanOffers: getPlanOffersMock,
+  getYearlyPlanOffers: getYearlyPlanOffersMock,
+}));
 vi.mock("next/navigation", () => ({ notFound: notFoundMock }));
 
 import PricingPage, { generateMetadata } from "./page";
@@ -25,8 +29,9 @@ function text(html: string): string {
     .replace(/\s+/g, " ");
 }
 
-async function render(): Promise<string> {
-  return renderToStaticMarkup((await PricingPage()) as ReactElement);
+async function render(billing?: string): Promise<string> {
+  const page = billing === undefined ? PricingPage() : PricingPage({ searchParams: Promise.resolve({ billing }) });
+  return renderToStaticMarkup((await page) as ReactElement);
 }
 
 function configurePayments() {
@@ -41,6 +46,7 @@ function configurePayments() {
 
 beforeEach(() => {
   getPlanOffersMock.mockReset();
+  getYearlyPlanOffersMock.mockReset();
   notFoundMock.mockClear();
   for (const name of [
     "BILLING_ENABLED",
@@ -50,6 +56,9 @@ beforeEach(() => {
     "STRIPE_PRICE_STARTER",
     "STRIPE_PRICE_GROWTH",
     "STRIPE_PRICE_PRO",
+    "STRIPE_PRICE_STARTER_YEARLY",
+    "STRIPE_PRICE_GROWTH_YEARLY",
+    "STRIPE_PRICE_PRO_YEARLY",
   ]) {
     vi.stubEnv(name, undefined);
   }
@@ -251,5 +260,71 @@ describe("/pricing: what each plan includes (P1)", () => {
     expect(page).toContain(`Starter $19 a month ${starter} Up to 3 posts a day`);
     expect(page).toContain(`Growth $39 a month ${growth} Up to 6 posts a day`);
     expect(page).toContain(`Pro $79 a month ${pro} Up to 15 posts a day`);
+  });
+});
+
+describe("/pricing: monthly or yearly (P1)", () => {
+  const MONTHLY = [
+    { plan: "starter", name: "Starter", price: "$19 a month" },
+    { plan: "pro", name: "Pro", price: "$79 a month" },
+  ];
+  const YEARLY = [
+    { plan: "starter", name: "Starter", price: "$190 a year", twoMonthsFree: true },
+    { plan: "pro", name: "Pro", price: "$900 a year", twoMonthsFree: false },
+  ];
+  const SAVING = "Two months free compared with monthly";
+  /** The opening tag of the switch link with this label. */
+  const tag = (html: string, label: string) => html.match(new RegExp(`<a [^>]*>${label}</a>`))?.[0] ?? "";
+
+  beforeEach(() => {
+    configurePayments();
+    getPlanOffersMock.mockResolvedValue(MONTHLY);
+    getYearlyPlanOffersMock.mockResolvedValue(YEARLY);
+  });
+
+  it("with no yearly price configured: no switch, and yearly prices are not read", async () => {
+    const html = await render();
+    expect(html).not.toContain("?billing=year");
+    expect(html).not.toContain("Yearly");
+    expect(getYearlyPlanOffersMock).not.toHaveBeenCalled();
+    // ?billing=year without a yearly price is the monthly page.
+    expect(await render("year")).toBe(html);
+  });
+
+  it("with a yearly price: a switch of two links above the cards, monthly first and current", async () => {
+    vi.stubEnv("STRIPE_PRICE_STARTER_YEARLY", "price_test_starter_year");
+    const html = await render();
+    expect(tag(html, "Monthly")).toContain('href="/pricing"');
+    expect(tag(html, "Monthly")).toContain('aria-current="page"');
+    expect(tag(html, "Yearly")).toContain('href="/pricing?billing=year"');
+    expect(tag(html, "Yearly")).not.toContain("aria-current");
+    expect(html.indexOf("Yearly")).toBeLessThan(html.indexOf("Starter"));
+    const page = text(html);
+    expect(page).toContain("Starter $19 a month");
+    expect(page).not.toContain(SAVING);
+  });
+
+  it("?billing=year shows Stripe's yearly prices, and the saving line only where it is true", async () => {
+    vi.stubEnv("STRIPE_PRICE_STARTER_YEARLY", "price_test_starter_year");
+    vi.stubEnv("STRIPE_PRICE_PRO_YEARLY", "price_test_pro_year");
+    const html = await render("year");
+    expect(getYearlyPlanOffersMock.mock.calls[0][0]).toEqual(["starter", "pro"]);
+    expect(tag(html, "Yearly")).toContain('aria-current="page"');
+    expect(tag(html, "Monthly")).not.toContain("aria-current");
+    const page = text(html);
+    expect(page).toContain(`Starter $190 a year ${SAVING}`);
+    expect(page).toContain("Pro $900 a year Everything in Growth");
+    expect(page.split(SAVING)).toHaveLength(2);
+    expect(page).not.toContain("$19 a month");
+    expect(getPlanOffersMock).not.toHaveBeenCalled();
+  });
+
+  it("?billing=year when Stripe cannot be reached: no prices, no saving, the existing sentence", async () => {
+    vi.stubEnv("STRIPE_PRICE_STARTER_YEARLY", "price_test_starter_year");
+    getYearlyPlanOffersMock.mockResolvedValue([{ plan: "starter", name: "Starter", price: null, twoMonthsFree: false }]);
+    const page = text(await render("year"));
+    expect(page).toContain("Prices are unavailable right now. Try again in a minute.");
+    expect(page).not.toMatch(/[$€£]\s?\d/);
+    expect(page).not.toContain(SAVING);
   });
 });
