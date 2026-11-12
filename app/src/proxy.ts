@@ -71,9 +71,15 @@ export function isPublicPath(pathname: string, env: BillingEnv = process.env): b
   if ((pathname === "/pricing" || pathname.startsWith("/pricing/")) && paymentsConfigured(env)) {
     return true;
   }
-  // The browser fetches these without cookies when installing the app. Exact
-  // matches only: neither has anything under it.
-  if (pathname === "/manifest.webmanifest" || pathname === "/sw.js") {
+  // The browser fetches the first two without cookies when installing the app;
+  // crawlers fetch the last two without signing in. Exact matches only: none
+  // has anything under it.
+  if (
+    pathname === "/manifest.webmanifest" ||
+    pathname === "/sw.js" ||
+    pathname === "/robots.txt" ||
+    pathname === "/sitemap.xml"
+  ) {
     return true;
   }
   const prefixes = [

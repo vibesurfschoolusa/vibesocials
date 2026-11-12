@@ -25,6 +25,17 @@ describe("isPublicPath", () => {
     expect(isPublicPath("/sw.js")).toBe(true);
   });
 
+  it("lets crawlers fetch robots.txt and sitemap.xml signed out, exact matches only", () => {
+    expect(isPublicPath("/robots.txt")).toBe(true);
+    expect(isPublicPath("/sitemap.xml")).toBe(true);
+    expect(signedOut("/robots.txt")).toBe(true);
+    expect(signedOut("/sitemap.xml")).toBe(true);
+    for (const p of ["/robots.txt/x", "/sitemap.xml/x", "/robots", "/sitemap", "/robots.txt.bak"]) {
+      expect(isPublicPath(p), p).toBe(false);
+      expect(signedOut(p), p).toBe(false);
+    }
+  });
+
   it("opens only those two exact files, nothing under or beside them", () => {
     expect(isPublicPath("/sw.js/x")).toBe(false);
     expect(isPublicPath("/manifest.webmanifest/x")).toBe(false);
