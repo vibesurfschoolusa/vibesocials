@@ -75,4 +75,12 @@ describe("the Client connect link group in Settings", () => {
   it("members do not see the group", () => {
     expect(renderToStaticMarkup(createElement(ConnectLinkSection, { workspaceId: "ws-1", isOwner: false }))).toBe("");
   });
+
+  // S2 fix round 1: the dashboard's "Send a connect link" lands on this heading.
+  // The owner's panel renders this view once its link has loaded.
+  it("an owner's group has the connect-link anchor on its heading", () => {
+    const html = view();
+    expect(html).toMatch(/<h3 [^>]*id="connect-link"[^>]*>Client connect link<\/h3>/);
+    expect(html).toMatch(/<h3 [^>]*class="[^"]*scroll-mt-20[^"]*"[^>]*>Client connect link/);
+  });
 });

@@ -187,7 +187,7 @@ export function WorkingForClients({
       <CardContent>
         <ul className="space-y-2 text-sm text-muted-foreground">
           <li>
-            <Link href={SETTINGS_CONNECTIONS_HREF} className={linkClass}>Send a connect link</Link>: your client
+            <Link href="/settings#connect-link" className={linkClass}>Send a connect link</Link>: your client
             connects their own accounts, without sharing a password.
           </li>
           <li>

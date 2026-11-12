@@ -83,7 +83,7 @@ describe("WorkingForClients", () => {
   it("shows an owner the three client links once the steps are done", () => {
     const html = renderClients(CONNECTED, POSTED, ALL_SET);
     expect(html).toContain("Working for clients?");
-    expect(html).toMatch(/<a [^>]*href="\/settings#connections"[^>]*>Send a connect link<\/a>/);
+    expect(html).toMatch(/<a [^>]*href="\/settings#connect-link"[^>]*>Send a connect link<\/a>/);
     expect(html).toMatch(/<a [^>]*href="\/media"[^>]*>Send an upload link<\/a>/);
     expect(html).toMatch(/<a [^>]*href="\/queue"[^>]*>Send a review link<\/a>/);
     expect(html).not.toContain("!");
