@@ -224,3 +224,25 @@ describe("the room left under the form", () => {
     expect(form).toContain('<div aria-hidden className="h-[var(--publish-bar-offset,7rem)] md:hidden" />');
   });
 });
+
+// Fix round 1, item 4e: hidden while any of the page's dialogs is open, not
+// only the publish confirm ("Remove all photos" keeps its open state inside
+// AttachedPhotos, so the bar reads it from the page itself).
+describe("PublishBar: hidden while any dialog is open", () => {
+  it("hides itself whenever the page holds an open modal dialog", () => {
+    const bar = render(submitControl({ ...base, buttonLabel: "Publish post" })).match(/^<div[^>]*class="([^"]*)"/)?.[1] ?? "";
+    expect(bar.replaceAll("&amp;", "&").split(" ")).toContain("[body:has([role=dialog][aria-modal=true])_&]:hidden");
+  });
+
+  it("every dialog on the page is one: the shared Dialog (publish confirm, Remove all photos) is a modal dialog", () => {
+    const dialog = readFileSync(path.join(__dirname, "..", "ui/dialog.tsx"), "utf8");
+    expect(dialog).toMatch(/role="dialog"\s+aria-modal="true"/);
+    const photos = readFileSync(path.join(__dirname, "attached-photos.tsx"), "utf8");
+    expect(photos).toContain("<ConfirmDialog");
+    expect(dialog).toMatch(/export function ConfirmDialog[\s\S]*?<Dialog open=/);
+  });
+
+  it("the publish confirm still removes it outright", () => {
+    expect(render(submitControl({ ...base, buttonLabel: "Publish post" }), true)).toBe("");
+  });
+});

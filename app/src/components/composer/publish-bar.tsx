@@ -27,7 +27,9 @@ export function publishBarOffset(height: number): string {
  * screen (M1): under the previews and the publish options the form's own
  * button sat a long scroll down. It submits the form by id, so a press runs
  * the form's own handler and confirm dialog. Below `md` only; the form hides
- * its own button there, so one submit control is announced, not two.
+ * its own button there, so one submit control is announced, not two. It
+ * steps away while any modal dialog is open (the publish confirm, "Remove all
+ * photos"), read from the page itself so no dialog's state has to reach it.
  */
 export function PublishBar({
   formId,
@@ -64,7 +66,7 @@ export function PublishBar({
   return (
     <div
       ref={barRef}
-      className="fixed inset-x-0 bottom-0 z-10 border-t border-border bg-background px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:hidden">
+      className="fixed inset-x-0 bottom-0 z-10 border-t border-border bg-background px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:hidden [body:has([role=dialog][aria-modal=true])_&]:hidden">
       {tiktokDeclaration ? (
         <div className="mb-2">
           <TikTokConsentDeclaration brandedContent={tiktokDeclaration.brandedContent} />
