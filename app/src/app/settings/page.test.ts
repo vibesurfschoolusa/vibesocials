@@ -2,7 +2,10 @@ import { type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getWorkspaceContextMock } = vi.hoisted(() => ({ getWorkspaceContextMock: vi.fn() }));
+const { getWorkspaceContextMock, planSectionMock } = vi.hoisted(() => ({
+  getWorkspaceContextMock: vi.fn(),
+  planSectionMock: vi.fn<(props: { workspaceNote?: boolean }) => null>(() => null),
+}));
 
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => {
@@ -40,7 +43,7 @@ vi.mock("@/components/team-section", () => ({ TeamSection: () => null }));
 vi.mock("@/components/account-section", () => ({ AccountSection: () => null }));
 vi.mock("@/components/usage-section", () => ({ UsageSection: () => null }));
 vi.mock("@/components/workspace-logo-control", () => ({ WorkspaceLogoControl: () => null }));
-vi.mock("@/components/plan-section", () => ({ PlanSection: () => null }));
+vi.mock("@/components/plan-section", () => ({ PlanSection: planSectionMock }));
 
 import SettingsPage from "./page";
 
@@ -142,5 +145,25 @@ describe("SettingsPage — words and jump links", () => {
   it("lets the links wrap on a narrow screen", async () => {
     const html = await render("member");
     expect(html).toMatch(/<nav aria-label="Settings sections"[^>]*>\s*<ul class="[^"]*flex-wrap/);
+  });
+});
+
+// S1 fix round 1: Settings, Plan says "a plan covers one workspace" only where
+// the workspace is on a trial or plan, never for an exempt one.
+describe("SettingsPage — the one-workspace sentence", () => {
+  async function noteFor(billing: Record<string, unknown>): Promise<boolean | undefined> {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    planSectionMock.mockClear();
+    const base = context("owner");
+    getWorkspaceContextMock.mockResolvedValue({ ...base, workspace: { ...base.workspace, ...billing } });
+    renderToStaticMarkup((await SettingsPage({ searchParams: Promise.resolve({}) })) as ReactElement);
+    vi.unstubAllEnvs();
+    return planSectionMock.mock.calls[0]?.[0].workspaceNote;
+  }
+
+  it("asks for it in a trial, and not in an exempt workspace", async () => {
+    expect(await noteFor({ billingExempt: false, trialEndsAt: new Date(Date.now() + 86_400_000) })).toBe(true);
+    expect(await noteFor({ billingExempt: true })).toBe(false);
+    expect(await noteFor({})).toBe(false);
   });
 });

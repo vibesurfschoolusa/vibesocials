@@ -62,8 +62,10 @@ export async function GET() {
     // Only for the operator (2026-11-10): the account menu renders this link
     // from the data, so no code every customer downloads names the admin page.
     ...(operator ? { operatorLink: { href: "/admin", label: "Admin" } } : {}),
-    // S1: the New workspace form says a plan covers one workspace; billing on only.
-    ...(billingEnabled() ? { newWorkspaceNote: WORKSPACE_PLAN_SENTENCE } : {}),
+    // S1: the New workspace form says a plan covers one workspace; billing on
+    // only, and never to the operator, whose new workspaces are exempt
+    // (newWorkspaceTrial.ts); everyone else's new workspace gets a trial.
+    ...(billingEnabled() && !operator ? { newWorkspaceNote: WORKSPACE_PLAN_SENTENCE } : {}),
   });
 }
 

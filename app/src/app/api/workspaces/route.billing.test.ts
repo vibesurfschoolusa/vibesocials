@@ -164,6 +164,19 @@ describe("POST /api/workspaces with billing on", () => {
 });
 
 describe("GET /api/workspaces with billing on (S1 item 3)", () => {
+  it("never carries it to an operator, whose new workspaces are exempt", async () => {
+    const { GET } = await import("./route");
+    h.getWorkspaceContext.mockResolvedValue({
+      user: { id: "user-1", email: "ops@example.com", emailVerifiedAt: new Date("2026-11-01T00:00:00Z") },
+      workspace: { id: "ws-1", name: "Ops" },
+      role: "owner",
+    });
+    h.findMany.mockResolvedValue([]);
+    const body = await (await GET()).json();
+    expect(body.operatorLink).toBeDefined();
+    expect(body.newWorkspaceNote).toBeUndefined();
+  });
+
   it("carries the one-plan-per-workspace sentence for the New workspace form", async () => {
     const { GET } = await import("./route");
     h.findMany.mockResolvedValue([]);
