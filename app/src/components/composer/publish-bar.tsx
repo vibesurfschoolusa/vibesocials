@@ -10,7 +10,7 @@ export interface SubmitControlView {
   label: string;
   loading: boolean;
   disabled: boolean;
-  /** The one line saying why a press will not send, or null. */
+  /** The line (up to two) saying why a press will not send, or null. */
   reason: string | null;
 }
 
@@ -81,7 +81,7 @@ export function PublishBar({
         {control.label}
       </Button>
       {control.reason ? (
-        <p id="publish-bar-reason" className="mt-1.5 truncate text-xs text-muted-foreground">
+        <p id="publish-bar-reason" className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">
           {control.reason}
         </p>
       ) : null}

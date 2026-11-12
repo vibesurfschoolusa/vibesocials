@@ -207,3 +207,20 @@ describe("toasts sit above the bar", () => {
     expect(FILE_LOST_PRESS_TOAST).not.toContain("above");
   });
 });
+
+// Fix round 1, item 4b: a long reason wraps to two lines instead of being cut at one.
+describe("PublishBar: the reason line", () => {
+  it("may wrap to two lines", () => {
+    const html = render(submitControl({ ...base, buttonLabel: "Publish post", platformAlert: "Select at least one platform." }));
+    const line = html.match(/<p id="publish-bar-reason" class="([^"]*)"/)?.[1] ?? "";
+    expect(line).toContain("line-clamp-2");
+    expect(line).not.toContain("truncate");
+  });
+});
+
+describe("the room left under the form", () => {
+  it("follows the bar's measured height, so a taller bar (TikTok's line, two reason lines) never covers the last control", () => {
+    const form = readFileSync(path.join(__dirname, "..", "create-post-form.tsx"), "utf8");
+    expect(form).toContain('<div aria-hidden className="h-[var(--publish-bar-offset,7rem)] md:hidden" />');
+  });
+});

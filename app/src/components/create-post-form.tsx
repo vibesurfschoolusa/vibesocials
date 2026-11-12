@@ -2731,7 +2731,7 @@ function CreatePostFormInner({
       />
     </Card>
     {/* Room under the form so the fixed bar never covers its last control. */}
-    <div aria-hidden className="h-[calc(7rem+env(safe-area-inset-bottom))] md:hidden" />
+    <div aria-hidden className="h-[var(--publish-bar-offset,7rem)] md:hidden" />
     </>
   );
 }
