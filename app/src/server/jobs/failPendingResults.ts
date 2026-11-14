@@ -138,6 +138,28 @@ export async function stampPostMediaLastUsed(
 }
 
 /**
+ * End a job with a conditional write and stamp its media's last use (review
+ * round 2, item 6). Every path that gives a job its final status outside the
+ * locked recompute goes through here: cancel, the bare no-connection fail of a
+ * deferred dispatch, the stuck-job reconciler and the 6 h stale sweep. So a new
+ * final path that uses it cannot forget the stamp (F1 H2). `where` carries the
+ * caller's own guard (status, age); the stamp runs only when the write matched,
+ * so a job another writer moved first is left as it is. Returns the count.
+ */
+export async function finishPostJob(
+  db: Pick<Prisma.TransactionClient, "postJob" | "mediaItem">,
+  args: {
+    where: Prisma.PostJobWhereInput & { id: string };
+    data: Prisma.PostJobUpdateManyMutationInput;
+    now?: Date;
+  },
+): Promise<number> {
+  const { count } = await db.postJob.updateMany({ where: args.where, data: args.data });
+  if (count === 1) await stampPostMediaLastUsed(db, args.where.id, args.now ?? new Date());
+  return count;
+}
+
+/**
  * Fail every still-`pending` PostJobResult of a job, then recompute the job's
  * status over ALL its results with the same rule the publish pipeline uses
  * (`recomputePostJobStatus`, through {@link recomputeAndStorePostJobStatus}), so a

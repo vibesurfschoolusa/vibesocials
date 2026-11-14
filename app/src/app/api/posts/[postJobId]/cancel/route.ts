@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { cancelData } from "@/lib/approval";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { MUTABLE_POST_JOB_STATUSES } from "@/lib/scheduling";
+import { finishPostJob } from "@/server/jobs/failPendingResults";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -84,7 +85,9 @@ export async function POST(_request: NextRequest, context: PostJobRouteContext) 
     return notCancelable();
   }
 
-  const { count } = await prisma.postJob.updateMany({
+  // finishPostJob also stamps the post's media as used now, so the retention
+  // sweep counts its 30 days from the cancel (review round 2, item 6).
+  const count = await finishPostJob(prisma, {
     where: {
       id: postJobId,
       workspaceId: workspaceContext.workspace.id,

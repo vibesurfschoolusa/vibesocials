@@ -51,8 +51,10 @@ const {
   checkXLimitMock,
   checkYoutubeLimitMock,
   stampMediaSpy,
+  finishSpy,
 } = vi.hoisted(() => ({
   stampMediaSpy: vi.fn(),
+  finishSpy: vi.fn(),
   getPlatformClientMock: vi.fn(),
   failPendingMock: vi.fn(),
   recomputeSpy: vi.fn(),
@@ -156,6 +158,8 @@ vi.mock("@/server/jobs/failPendingResults", async (importOriginal) => {
     recomputeAndStorePostJobStatus: recomputeSpy,
     // Follow-up 3: the stale sweep stamps media through the shared helper.
     stampPostMediaLastUsed: stampMediaSpy,
+    // Review round 2, item 6: the stale sweep ends jobs through finishPostJob.
+    finishPostJob: finishSpy,
   };
 });
 
@@ -3962,7 +3966,8 @@ describe("stalePostJobSweep - deferral exclusion and singleton", () => {
 
   it("does not fail a job that has a pending result deferred to a platform limit", async () => {
     db.postJobFindMany.mockResolvedValue([{ id: "stale-1" }]);
-    db.postJobUpdateMany.mockResolvedValue({ count: 1 });
+    finishSpy.mockReset();
+    finishSpy.mockResolvedValue(1);
 
     await handlerOf(stalePostJobSweep)({ event: { name: "inngest/scheduled.timer", data: {} }, step: fakeStep() });
 
@@ -3974,21 +3979,22 @@ describe("stalePostJobSweep - deferral exclusion and singleton", () => {
       results: { none: { status: "pending", deferredUntil: { gte: cutoff } } },
     };
     expect(db.postJobFindMany).toHaveBeenCalledWith(expect.objectContaining({ where: stale }));
-    expect(db.postJobUpdateMany).toHaveBeenCalledTimes(1);
-    // The write re-checks the rule, so a job that moved since the read is left alone.
-    expect(db.postJobUpdateMany).toHaveBeenCalledWith({
+    expect(finishSpy).toHaveBeenCalledTimes(1);
+    // The write re-checks the rule, so a job that moved since the read is left alone;
+    // finishPostJob stamps the media of a job it did fail.
+    expect(finishSpy).toHaveBeenCalledWith(expect.anything(), {
       where: { id: "stale-1", ...stale },
       data: { status: "failed" },
+      now: new Date(NOW),
     });
   });
 
   // Coordinator follow-up 3 (F1 H2): a job the sweep fails used its media now,
   // stamped by the same helper every other finalize path uses.
-  it("stamps the media last use of each job it fails, and only those", async () => {
+  it("ends each stale job through finishPostJob and counts only the ones it failed", async () => {
     db.postJobFindMany.mockResolvedValue([{ id: "stale-1" }, { id: "moved-on" }]);
-    db.postJobUpdateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
-    stampMediaSpy.mockReset();
-    stampMediaSpy.mockResolvedValue(undefined);
+    finishSpy.mockReset();
+    finishSpy.mockResolvedValueOnce(1).mockResolvedValueOnce(0);
 
     const out = await handlerOf(stalePostJobSweep)({
       event: { name: "inngest/scheduled.timer", data: {} },
@@ -3996,8 +4002,10 @@ describe("stalePostJobSweep - deferral exclusion and singleton", () => {
     });
 
     expect(out).toMatchObject({ swept: 1 });
-    expect(stampMediaSpy).toHaveBeenCalledTimes(1);
-    expect(stampMediaSpy).toHaveBeenCalledWith(expect.anything(), "stale-1", new Date(NOW));
+    expect(finishSpy.mock.calls.map(([, args]) => (args as { where: { id: string } }).where.id)).toEqual([
+      "stale-1",
+      "moved-on",
+    ]);
   });
 
   it("runs one sweep at a time (singleton skip)", () => {
@@ -4048,7 +4056,8 @@ describe("stalePostJobSweep - result workspace heal step", () => {
     try {
       healResultWorkspaceIdsMock.mockRejectedValue(new Error("db down"));
       db.postJobFindMany.mockResolvedValue([{ id: "a" }, { id: "b" }]);
-      db.postJobUpdateMany.mockResolvedValue({ count: 1 });
+      finishSpy.mockReset();
+      finishSpy.mockResolvedValue(1);
       const step = fakeStep();
 
       await expect(run(step)).resolves.toMatchObject({ swept: 2 });

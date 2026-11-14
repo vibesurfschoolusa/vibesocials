@@ -10,6 +10,7 @@ const {
   resultCountMock,
   resultCreateManyMock,
   recomputeMock,
+  finishMock,
 } = vi.hoisted(() => ({
   postJobFindUniqueMock: vi.fn(),
   postJobUpdateMock: vi.fn(),
@@ -17,6 +18,7 @@ const {
   resultCountMock: vi.fn(),
   resultCreateManyMock: vi.fn(),
   recomputeMock: vi.fn(),
+  finishMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -31,6 +33,7 @@ vi.mock("@/lib/db", () => ({
 vi.mock("./failPendingResults", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./failPendingResults")>()),
   recomputeAndStorePostJobStatus: recomputeMock,
+  finishPostJob: finishMock,
 }));
 
 import { prepareDeferredPostJobDispatch } from "./posting";
@@ -55,6 +58,8 @@ beforeEach(() => {
   resultCountMock.mockReset();
   resultCreateManyMock.mockReset();
   recomputeMock.mockReset();
+  finishMock.mockReset();
+  finishMock.mockResolvedValue(1);
 
   postJobUpdateMock.mockResolvedValue({});
   recomputeMock.mockResolvedValue({ status: "failed", successCount: 0 });
@@ -79,10 +84,12 @@ describe("prepareDeferredPostJobDispatch", () => {
     const result = await prepareDeferredPostJobDispatch("job-1");
 
     expect(result).toEqual({ ok: false, reason: "NO_CONNECTIONS" });
-    expect(postJobUpdateMock).toHaveBeenCalledWith({
+    // Review round 2, items 1 and 6: through the finalize helper, which stamps the media.
+    expect(finishMock).toHaveBeenCalledWith(expect.anything(), {
       where: { id: "job-1" },
       data: { status: "failed" },
     });
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
     expect(resultCreateManyMock).not.toHaveBeenCalled();
   });
 

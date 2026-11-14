@@ -34,6 +34,12 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
+/** A client for finishPostJob: its conditional write, then the media stamp. */
+const finishDb = {
+  postJob: { updateMany: vi.fn(), findUnique: vi.fn() },
+  mediaItem: { updateMany: vi.fn() },
+};
+
 import {
   CONNECTION_GONE_FAILURE,
   DISPATCH_FAILURE,
@@ -41,6 +47,7 @@ import {
   RECOMPUTE_TX_MAX_WAIT_MS,
   RECOMPUTE_TX_TIMEOUT_MS,
   failPendingPostJobResults,
+  finishPostJob,
   recomputeAndStorePostJobStatus,
 } from "./failPendingResults";
 import { isMediaSweepEligible, RETENTION_DAYS } from "./mediaRetention";
@@ -616,6 +623,52 @@ describe("recomputeAndStorePostJobStatus - media last use (F1 H2)", () => {
         retentionDays: RETENTION_DAYS,
       }),
     ).toBe(false);
+  });
+});
+
+// Review round 2, item 6: every path that ends a job outside the locked
+// recompute (cancel, the bare no-connection fail, the reconcilers, the stale
+// sweep) writes its final status through finishPostJob, so none can forget the
+// media stamp.
+describe("finishPostJob (review item 6)", () => {
+  const NOW = new Date("2026-11-14T12:00:00.000Z");
+
+  beforeEach(() => {
+    finishDb.postJob.updateMany.mockReset();
+    finishDb.postJob.findUnique.mockReset();
+    finishDb.mediaItem.updateMany.mockReset();
+    finishDb.postJob.findUnique.mockResolvedValue({ mediaItemId: "media-1", media: [] });
+    finishDb.mediaItem.updateMany.mockResolvedValue({ count: 1 });
+  });
+
+  it("writes the final status with the caller's conditions, then stamps the post's media", async () => {
+    finishDb.postJob.updateMany.mockResolvedValue({ count: 1 });
+
+    const count = await finishPostJob(finishDb, {
+      where: { id: "job-1", status: "in_progress" },
+      data: { status: "failed" },
+      now: NOW,
+    });
+
+    expect(count).toBe(1);
+    expect(finishDb.postJob.updateMany).toHaveBeenCalledWith({
+      where: { id: "job-1", status: "in_progress" },
+      data: { status: "failed" },
+    });
+    expect(finishDb.mediaItem.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ["media-1"] }, deletedAt: null },
+      data: { lastUsedAt: NOW },
+    });
+  });
+
+  it("stamps nothing when the write matched no row (another writer moved the job first)", async () => {
+    finishDb.postJob.updateMany.mockResolvedValue({ count: 0 });
+
+    const count = await finishPostJob(finishDb, { where: { id: "job-1" }, data: { status: "cancelled" }, now: NOW });
+
+    expect(count).toBe(0);
+    expect(finishDb.postJob.findUnique).not.toHaveBeenCalled();
+    expect(finishDb.mediaItem.updateMany).not.toHaveBeenCalled();
   });
 });
 

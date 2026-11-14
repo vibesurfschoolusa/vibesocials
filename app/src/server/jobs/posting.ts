@@ -12,7 +12,7 @@ import { coverJobColumns, type PostCover } from "@/lib/videoCover";
 import { postJobStatusForIntent, type PostJobIntent } from "@/lib/scheduling";
 import { platformAcceptsMedia, platformAcceptsTextOnly } from "@/lib/platformLimits";
 import { connectionGoneMessage, reconnectRequiredMessage } from "@/lib/publishFailureText";
-import { recomputeAndStorePostJobStatus } from "@/server/jobs/failPendingResults";
+import { finishPostJob, recomputeAndStorePostJobStatus } from "@/server/jobs/failPendingResults";
 import {
   assertPostTargetsValid,
   assertTextPostTargetsValid,
@@ -1103,11 +1103,8 @@ export async function prepareDeferredPostJobDispatch(
     // (mirrors publishToAllPlatforms' no-connections path). §6.6.
     // The scheduled scanner emits notification.requested for this failure
     // (see inngest-functions.ts) and buildPostOutcomeEmail has a dedicated
-    // empty-results-failed subject.
-    await prisma.postJob.update({
-      where: { id: postJobId },
-      data: { status: "failed" },
-    });
+    // empty-results-failed subject. finishPostJob stamps the media's last use.
+    await finishPostJob(prisma, { where: { id: postJobId }, data: { status: "failed" } });
     return { ok: false, reason: "NO_CONNECTIONS" };
   }
 

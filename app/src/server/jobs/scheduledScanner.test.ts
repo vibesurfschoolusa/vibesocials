@@ -11,6 +11,7 @@ const {
   resultUpdateManyMock,
   prepareDeferredMock,
   stampMediaMock,
+  mediaUpdateManyMock,
 } = vi.hoisted(() => ({
   queryRawMock: vi.fn(),
   findManyMock: vi.fn(),
@@ -20,6 +21,7 @@ const {
   resultUpdateManyMock: vi.fn(),
   prepareDeferredMock: vi.fn(),
   stampMediaMock: vi.fn(),
+  mediaUpdateManyMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -34,6 +36,8 @@ vi.mock("@/lib/db", () => ({
       findMany: resultFindManyMock,
       updateMany: resultUpdateManyMock,
     },
+    // finishPostJob's media stamp (failPendingResults.ts) runs for real.
+    mediaItem: { updateMany: mediaUpdateManyMock },
   },
 }));
 // The deferred-dispatch DB work is stubbed (posting.test.ts covers it); the REAL
@@ -76,6 +80,8 @@ beforeEach(() => {
   prepareDeferredMock.mockReset();
   stampMediaMock.mockReset();
   stampMediaMock.mockResolvedValue(undefined);
+  mediaUpdateManyMock.mockReset();
+  mediaUpdateManyMock.mockResolvedValue({ count: 1 });
   // The reconciler's two unsent-post statements find nothing unless a test says so.
   queryRawMock.mockResolvedValue([]);
 });
@@ -247,6 +253,7 @@ describe("reconcileStuckInProgressJobs", () => {
 
   it("fails pending results then recomputes terminal status", async () => {
     findManyMock.mockResolvedValue([{ id: "stuck-2" }]);
+    findUniqueMock.mockResolvedValue({ mediaItemId: "media-stuck-2", media: [] });
     resultFindManyMock
       .mockResolvedValueOnce([
         { id: "r1", status: "pending", claimRunId: null },
@@ -279,8 +286,31 @@ describe("reconcileStuckInProgressJobs", () => {
       where: { id: "stuck-2", status: "in_progress" },
       data: { status: "completed" },
     });
-    // F1 H2: a job the reconciler finalizes used its media now, like any finalize.
-    expect(stampMediaMock).toHaveBeenCalledWith(expect.anything(), "stuck-2", NOW);
+    // F1 H2: a job the reconciler finalizes used its media now, like any finalize
+    // (finishPostJob reads the job's media, then stamps it).
+    expect(findUniqueMock).toHaveBeenCalledWith({
+      where: { id: "stuck-2" },
+      select: { mediaItemId: true, media: { select: { mediaItemId: true } } },
+    });
+    expect(mediaUpdateManyMock).toHaveBeenCalledWith({
+      where: { id: { in: ["media-stuck-2"] }, deletedAt: null },
+      data: { lastUsedAt: NOW },
+    });
+  });
+
+  // Review round 2, item 6: the zero-result branch ends a job too.
+  it("stamps the media of a stuck job with no results that it fails", async () => {
+    findManyMock.mockResolvedValue([{ id: "stuck-0" }]);
+    resultFindManyMock.mockResolvedValue([]);
+    updateManyMock.mockResolvedValue({ count: 1 });
+    findUniqueMock.mockResolvedValue({ mediaItemId: "media-0", media: [] });
+
+    await reconcileStuckInProgressJobs(NOW);
+
+    expect(mediaUpdateManyMock).toHaveBeenCalledWith({
+      where: { id: { in: ["media-0"] }, deletedAt: null },
+      data: { lastUsedAt: NOW },
+    });
   });
 
   it("stamps no media when another writer moved the job first", async () => {
@@ -293,7 +323,7 @@ describe("reconcileStuckInProgressJobs", () => {
 
     await reconcileStuckInProgressJobs(NOW);
 
-    expect(stampMediaMock).not.toHaveBeenCalled();
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
   });
 
   // 2026-11-01 scale audit (jobs H6): a pending result with a claim had its

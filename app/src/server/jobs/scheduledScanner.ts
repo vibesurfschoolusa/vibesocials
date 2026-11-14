@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
-import { stampPostMediaLastUsed } from "@/server/jobs/failPendingResults";
+import { finishPostJob, stampPostMediaLastUsed } from "@/server/jobs/failPendingResults";
 import { recomputePostJobStatus } from "@/server/jobs/postStatus";
 import {
   buildPublishEvent,
@@ -400,9 +400,10 @@ export async function reconcileStuckInProgressJobs(
     });
 
     if (results.length === 0) {
-      const { count } = await prisma.postJob.updateMany({
+      const count = await finishPostJob(prisma, {
         where: { id: job.id, status: "in_progress" },
         data: { status: "failed" },
+        now,
       });
       if (count === 1) reconciled += 1;
       continue;
@@ -440,15 +441,13 @@ export async function reconcileStuckInProgressJobs(
       select: { status: true },
     });
     const finalStatus = recomputePostJobStatus(finalResults);
-    const { count } = await prisma.postJob.updateMany({
-      where: { id: job.id, status: "in_progress" },
-      data: { status: finalStatus },
-    });
-    if (count === 1) {
-      reconciled += 1;
-      // F1 H2: retention counts the media's age from this last use.
-      if (finalStatus !== "in_progress") await stampPostMediaLastUsed(prisma, job.id, now);
-    }
+    const write = { where: { id: job.id, status: "in_progress" as const }, data: { status: finalStatus } };
+    // F1 H2: a final status stamps the media's last use (finishPostJob).
+    const count =
+      finalStatus === "in_progress"
+        ? (await prisma.postJob.updateMany(write)).count
+        : await finishPostJob(prisma, { ...write, now });
+    if (count === 1) reconciled += 1;
   }
 
   return { reconciled, requeued, gaveUp };

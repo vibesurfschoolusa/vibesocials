@@ -5,17 +5,24 @@ import { makeWorkspaceContext } from "../../../__test-helpers__/workspaceContext
 
 // vitest hoists vi.mock above imports. route.ts imports `@/lib/workspace` and
 // `@/lib/db` at module scope, so both are mocked before the import below.
-const { getWorkspaceContextMock, updateManyMock, findFirstMock } = vi.hoisted(() => ({
-  getWorkspaceContextMock: vi.fn(),
-  updateManyMock: vi.fn(),
-  findFirstMock: vi.fn(),
-}));
+const { getWorkspaceContextMock, updateManyMock, findFirstMock, findUniqueMock, mediaUpdateManyMock } = vi.hoisted(
+  () => ({
+    getWorkspaceContextMock: vi.fn(),
+    updateManyMock: vi.fn(),
+    findFirstMock: vi.fn(),
+    findUniqueMock: vi.fn(),
+    mediaUpdateManyMock: vi.fn(),
+  }),
+);
 
 // Team Workspaces (Task 4): getCurrentUser -> getWorkspaceContext.
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
 vi.mock("@/lib/db", () => ({
   prisma: {
-    postJob: { updateMany: updateManyMock, findFirst: findFirstMock },
+    postJob: { updateMany: updateManyMock, findFirst: findFirstMock, findUnique: findUniqueMock },
+    // Review round 2, item 6: the cancel ends the post through finishPostJob,
+    // which stamps the media's last use (read the post's media, then write).
+    mediaItem: { updateMany: mediaUpdateManyMock },
   },
 }));
 
@@ -30,7 +37,11 @@ beforeEach(() => {
   getWorkspaceContextMock.mockReset();
   updateManyMock.mockReset();
   findFirstMock.mockReset();
+  findUniqueMock.mockReset();
+  mediaUpdateManyMock.mockReset();
   getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
+  findUniqueMock.mockResolvedValue({ mediaItemId: "media-1", media: [] });
+  mediaUpdateManyMock.mockResolvedValue({ count: 1 });
 });
 
 /** The ownership/approval read's row; defaults to a plain scheduled post. */
@@ -44,6 +55,25 @@ describe("POST /api/posts/[postJobId]/cancel", () => {
   beforeEach(() => {
     findFirstMock.mockResolvedValue(jobRow());
     updateManyMock.mockResolvedValue({ count: 1 });
+  });
+
+  it("stamps the post's media as used now when it cancels (retention counts from here)", async () => {
+    const res = await POST(req, ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    expect(mediaUpdateManyMock).toHaveBeenCalledWith({
+      where: { id: { in: ["media-1"] }, deletedAt: null },
+      data: { lastUsedAt: expect.any(Date) },
+    });
+  });
+
+  it("stamps nothing when the cancel loses its race", async () => {
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req, ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
   });
 
   it("401s and never touches the DB when unauthenticated", async () => {

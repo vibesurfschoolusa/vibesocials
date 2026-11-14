@@ -16,8 +16,8 @@ import { drainPendingBlobDeletions } from "@/server/jobs/pendingBlobDeletion";
 import {
   CONNECTION_GONE_FAILURE,
   failPendingPostJobResults,
+  finishPostJob,
   recomputeAndStorePostJobStatus,
-  stampPostMediaLastUsed,
   type PendingResultFailure,
 } from "@/server/jobs/failPendingResults";
 import {
@@ -2129,8 +2129,8 @@ export const stalePostJobSweep = inngest.createFunction(
       // died stays eligible once the wait is over.
       //
       // F1 H2 follow-up: a job failed here used its media now, so each one is
-      // failed by its own conditional write and then stamped by the helper every
-      // other finalize path uses (stampPostMediaLastUsed). Stale jobs are rare;
+      // failed by its own conditional write through finishPostJob, which stamps
+      // it like every other finalize path. Stale jobs are rare;
       // a backlog larger than one batch is taken by the next hourly run.
       const stale = {
         status: { in: [...STALE_ELIGIBLE_STATUSES] },
@@ -2145,14 +2145,7 @@ export const stalePostJobSweep = inngest.createFunction(
       });
       let count = 0;
       for (const { id } of candidates) {
-        const failed = await prisma.postJob.updateMany({
-          where: { id, ...stale },
-          data: { status: "failed" },
-        });
-        if (failed.count === 1) {
-          count += 1;
-          await stampPostMediaLastUsed(prisma, id, now);
-        }
+        count += await finishPostJob(prisma, { where: { id, ...stale }, data: { status: "failed" }, now });
       }
 
       if (count > 0) {
