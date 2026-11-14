@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/cn";
-import { addPickedFiles, fileKind, type PickedFile } from "@/lib/clientPage";
+import { addPickedFiles, fileKind, splitDroppedFiles, type PickedFile } from "@/lib/clientPage";
 import { UPLOAD_LINK_TEXT_MAX } from "@/lib/uploadLink";
 
 import { sendClientFile } from "./send-file";
@@ -39,6 +39,7 @@ export function UploadLinkForm({ token }: { token: string }) {
   const [files, setFiles] = useState<PickedFile[]>([]);
   const [phase, setPhase] = useState<"picking" | "sending" | "done">("picking");
   const [dragging, setDragging] = useState(false);
+  const [dropNote, setDropNote] = useState<string | null>(null);
 
   function update(key: string, change: Partial<PickedFile>) {
     setFiles((prev) => prev.map((item) => (item.key === key ? { ...item, ...change } : item)));
@@ -142,11 +143,9 @@ export function UploadLinkForm({ token }: { token: string }) {
                 event.preventDefault();
                 setDragging(false);
                 if (phase === "sending") return;
-                addFiles(
-                  Array.from(event.dataTransfer.files).filter(
-                    (file) => file.type === "" || file.type.startsWith("image/") || file.type.startsWith("video/"),
-                  ),
-                );
+                const dropped = splitDroppedFiles(Array.from(event.dataTransfer.files));
+                setDropNote(dropped.message);
+                addFiles(dropped.accepted);
               }}
               className={cn(
                 "flex min-h-32 cursor-pointer flex-col items-center justify-center gap-1 rounded-[var(--radius)] border-2 border-dashed border-border bg-muted/40 px-4 py-6 text-center transition-colors focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background hover:bg-muted",
@@ -162,6 +161,8 @@ export function UploadLinkForm({ token }: { token: string }) {
                 disabled={phase === "sending"}
                 className="sr-only"
                 onChange={(event) => {
+                  // A new pick replaces an earlier drop's "left out" note.
+                  setDropNote(null);
                   addFiles(Array.from(event.target.files ?? []));
                   // Emptied after each pick, so choosing the same file again still fires.
                   event.target.value = "";
@@ -174,6 +175,11 @@ export function UploadLinkForm({ token }: { token: string }) {
         </>
       ) : null}
 
+      {dropNote ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          {dropNote}
+        </p>
+      ) : null}
       {files.length > 0 ? (
         <ul className="space-y-2" aria-label="Files">
           {files.map((item) => (

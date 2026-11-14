@@ -59,3 +59,21 @@ export function addPickedFiles(existing: PickedFile[], incoming: File[]): Picked
   }
   return [...existing, ...added];
 }
+
+/**
+ * A drop on the client upload page: photos and videos are kept (and files the
+ * browser gives no type, such as some iPhone photos, which the upload checks);
+ * anything else is left out, with a sentence saying how many, instead of
+ * vanishing without a word.
+ */
+export function splitDroppedFiles(files: File[]): { accepted: File[]; leftOut: number; message: string | null } {
+  const accepted = files.filter(
+    (file) => file.type === "" || file.type.startsWith("image/") || file.type.startsWith("video/"),
+  );
+  const leftOut = files.length - accepted.length;
+  const message =
+    leftOut === 0
+      ? null
+      : `${leftOut} ${leftOut === 1 ? "file was" : "files were"} left out: only photos and videos can be sent.`;
+  return { accepted, leftOut, message };
+}

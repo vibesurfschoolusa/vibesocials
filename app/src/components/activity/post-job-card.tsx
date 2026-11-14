@@ -95,18 +95,17 @@ function orderResults(results: PostJobDTO["results"]): PostJobDTO["results"] {
  * files. A post whose file row is gone still counts one, so it is not one.
  */
 /**
- * The card's time line. While a post waits: "Scheduled for <time>". Once a
- * scheduled post has gone out, the time it was set for (the scanner publishes
- * within 10 minutes of it), not when it was created, which could be hours or
- * days earlier. Otherwise, and for drafts, when it was created.
+ * The card's time line. A post that was scheduled always reads "Scheduled for
+ * <time>", next to whatever its badge says (waiting, completed, failed,
+ * retried or cancelled), never just its creation time, which could be days
+ * earlier. Drafts and posts published straight away show when they were made.
  */
 export function cardTime(job: {
   status: string;
   createdAt: string | null;
   scheduledFor: string | null;
 }): { label: "Scheduled for" | null; iso: string } | null {
-  if (job.scheduledFor && job.status === "scheduled") return { label: "Scheduled for", iso: job.scheduledFor };
-  if (job.scheduledFor && job.status !== "draft") return { label: null, iso: job.scheduledFor };
+  if (job.scheduledFor && job.status !== "draft") return { label: "Scheduled for", iso: job.scheduledFor };
   return job.createdAt ? { label: null, iso: job.createdAt } : null;
 }
 

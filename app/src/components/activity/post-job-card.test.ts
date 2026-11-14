@@ -97,9 +97,11 @@ describe("cardTime", () => {
   it("still says Scheduled for while it waits", () => {
     expect(cardTime({ status: "scheduled", createdAt: created, scheduledFor: scheduled })).toEqual({ label: "Scheduled for", iso: scheduled });
   });
-  it("shows the scheduled time once a scheduled post has gone out, whatever the outcome", () => {
-    for (const status of ["completed", "partial", "failed", "in_progress"]) {
-      expect(cardTime({ status, createdAt: created, scheduledFor: scheduled })).toEqual({ label: null, iso: scheduled });
+  // Review: a cancelled post, or one retried days later, must not read as if it
+  // went out (or will go out) at an unlabelled time, so the label stays.
+  it("keeps Scheduled for once a scheduled post has gone out, was retried or was cancelled", () => {
+    for (const status of ["completed", "partial", "failed", "in_progress", "cancelled"]) {
+      expect(cardTime({ status, createdAt: created, scheduledFor: scheduled })).toEqual({ label: "Scheduled for", iso: scheduled });
     }
   });
   it("shows the creation time for a post published straight away, and for a draft", () => {

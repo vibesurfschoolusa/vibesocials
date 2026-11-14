@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { addPickedFiles, fileKind, formatFileSize, workspaceInitials } from "./clientPage";
+import { addPickedFiles, fileKind, formatFileSize, splitDroppedFiles, workspaceInitials } from "./clientPage";
 
 function file(name: string, size = 10, type = "image/jpeg", lastModified = 1): File {
   return new File([new Uint8Array(size)], name, { type, lastModified });
@@ -50,5 +50,28 @@ describe("addPickedFiles", () => {
     const items = addPickedFiles([], [file("a.jpg", 5), file("a.jpg", 6)]);
     expect(items.every((item) => item.status === "waiting" && item.progress === 0 && item.error === null)).toBe(true);
     expect(new Set(items.map((item) => item.key)).size).toBe(2);
+  });
+});
+
+// Review: a dropped PDF or ZIP vanished without a word on the client upload page.
+describe("splitDroppedFiles", () => {
+  const typed = (name: string, type: string) => ({ name, type, size: 1 }) as File;
+  it("keeps photos and videos (and files the browser gives no type) and counts the rest", () => {
+    const result = splitDroppedFiles([
+      typed("a.jpg", "image/jpeg"),
+      typed("b.mov", "video/quicktime"),
+      typed("c.heic", ""),
+      typed("d.pdf", "application/pdf"),
+      typed("e.zip", "application/zip"),
+    ]);
+    expect(result.accepted.map((f) => f.name)).toEqual(["a.jpg", "b.mov", "c.heic"]);
+    expect(result.leftOut).toBe(2);
+    expect(result.message).toBe("2 files were left out: only photos and videos can be sent.");
+  });
+  it("says it in the singular, and says nothing when nothing was left out", () => {
+    expect(splitDroppedFiles([typed("d.pdf", "application/pdf")]).message).toBe(
+      "1 file was left out: only photos and videos can be sent.",
+    );
+    expect(splitDroppedFiles([typed("a.jpg", "image/jpeg")]).message).toBeNull();
   });
 });
