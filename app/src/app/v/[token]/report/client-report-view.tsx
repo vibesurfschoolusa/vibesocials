@@ -58,5 +58,5 @@ export function ClientReportView({ token, month }: { token: string; month: strin
       </p>
     );
   }
-  return <MonthlyReportView report={report} />;
+  return <MonthlyReportView report={report} logoPrintOnly />;
 }
