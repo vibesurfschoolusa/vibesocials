@@ -515,3 +515,32 @@ describe("sweepExpiredMediaBatch - the later-photo pass (07a)", () => {
     expect(result).toMatchObject({ swept: 1, exhausted: false, next: { pass: "photos", id: "media-0000" } });
   });
 });
+
+// G4 (R2-pages M1): the sweep clears a client's name, note and file name when
+// it marks their file deleted.
+describe("sweepExpiredMediaBatch - a file a client sent", () => {
+  it("clears the sender's name, note and file name with the soft delete", async () => {
+    db.findUnique.mockResolvedValue({
+      storageLocation: BLOB_URL,
+      deletedAt: null,
+      lastUsedAt: STALE,
+      createdAt: STALE,
+      originalFilename: "Maria at the pier.mov",
+      metadata: { source: "upload_link", linkId: "link-1", senderName: "Maria", note: "Thanks" },
+      _count: { postJobs: 1 },
+    });
+
+    const summary = await sweepExpiredMediaBatch({ after: null, now: NOW });
+
+    expect(summary).toMatchObject({ swept: 1 });
+    expect(db.findUnique.mock.calls[0][0].select).toMatchObject({ metadata: true, originalFilename: true });
+    expect(db.update).toHaveBeenCalledWith({
+      where: { id: "media-0000" },
+      data: {
+        deletedAt: NOW,
+        originalFilename: "deleted-file.mov",
+        metadata: { source: "upload_link", linkId: "link-1" },
+      },
+    });
+  });
+});
