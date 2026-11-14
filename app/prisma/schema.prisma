@@ -492,6 +492,14 @@ model PostJob {
   // post had a problem, so Activity's "Had a problem" tab keeps it while the
   // retry runs and after it succeeds.
   retriedAt               DateTime?
+  // F1 H3 follow-up (2026-11-14): when the scheduled-post scanner first picked
+  // this post up for its current slot. A post whose send step threw is put back
+  // and claimed again with the same value, so the 2 h give-up counts from the
+  // pickup, not from scheduledFor (a post picked up late still gets its tries).
+  // A claim after the slot moved (scheduledFor past it) starts it again. Written
+  // only by claimDueScheduledJobs (scheduledScanner.ts); nullable: the previous
+  // deployment neither reads nor writes it.
+  pickedUpAt              DateTime?
   // Repeat (2026-11-10): every post of a series created in one request carries
   // the same generated id; a post created on its own has none. Each one is still
   // an ordinary post: edited, approved, published and cancelled on its own.

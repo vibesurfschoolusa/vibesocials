@@ -138,6 +138,19 @@ describe("claimDueScheduledJobs", () => {
     expect(claimValues()).toContain(DUE_SCAN_BATCH);
   });
 
+  // Follow-up 2 (F1 H3): the claim records when the scanner first picked the
+  // post up for this slot. A requeued post claimed again keeps it; a post whose
+  // slot moved past it (rescheduled) gets a new one.
+  it("stamps pickedUpAt on the first pickup and keeps it on a re-claim of the same slot", async () => {
+    queryRawMock.mockResolvedValue([]);
+
+    await claimDueScheduledJobs(NOW);
+
+    expect(claimSql()).toContain(
+      `"pickedUpAt" = CASE WHEN "pickedUpAt" IS NOT NULL AND "pickedUpAt" >= "scheduledFor" THEN "pickedUpAt" ELSE ($::timestamptz AT TIME ZONE 'UTC') END`,
+    );
+  });
+
   // Task 4 item 8a (controller ruling R6): a row left `scheduled` by the old
   // approval bypass — submitted but never approved — must never be claimed.
   it("never claims a submitted-but-unapproved job", async () => {
@@ -374,7 +387,8 @@ describe("reconcileStuckInProgressJobs - a scheduled post that was never sent (F
     expect(sql).toMatch(/UPDATE "PostJob" SET "status" = 'scheduled'::"PostJobStatus"/);
     expect(sql).toContain(`j."status" = 'in_progress'::"PostJobStatus"`);
     expect(sql).toContain(`j."scheduledFor" IS NOT NULL`);
-    expect(sql).toMatch(/j\."scheduledFor" >= \(\$::timestamptz AT TIME ZONE 'UTC'\)/);
+    // Follow-up 2: the 2 h count from when the scanner picked the post up.
+    expect(sql).toMatch(/GREATEST\(j\."pickedUpAt", j\."scheduledFor"\) >= \(\$::timestamptz AT TIME ZONE 'UTC'\)/);
     expect(sql).toMatch(/j\."updatedAt" < \(\$::timestamptz AT TIME ZONE 'UTC'\)/);
     expect(sql).toContain('NOT EXISTS (SELECT 1 FROM "PostJobResult" r WHERE r."postJobId" = j."id")');
     expect(sql).toContain("FOR UPDATE SKIP LOCKED");
@@ -409,7 +423,7 @@ describe("reconcileStuckInProgressJobs - a scheduled post that was never sent (F
     expect(out).toEqual({ reconciled: 0, requeued: 0, gaveUp: 1 });
     const sql = sqlOf(1);
     expect(sql).toMatch(/UPDATE "PostJob" SET "status" = 'failed'::"PostJobStatus"/);
-    expect(sql).toMatch(/j\."scheduledFor" < \(\$::timestamptz AT TIME ZONE 'UTC'\)/);
+    expect(sql).toMatch(/GREATEST\(j\."pickedUpAt", j\."scheduledFor"\) < \(\$::timestamptz AT TIME ZONE 'UTC'\)/);
     expect(sql).toContain('NOT EXISTS (SELECT 1 FROM "PostJobResult" r WHERE r."postJobId" = j."id")');
     expect(stampMediaMock).toHaveBeenCalledWith(expect.anything(), "job-old", NOW);
   });
@@ -421,6 +435,25 @@ describe("reconcileStuckInProgressJobs - a scheduled post that was never sent (F
 
     expect(queryRawMock).toHaveBeenCalledTimes(2);
     expect(queryRawMock.mock.invocationCallOrder[1]).toBeLessThan(findManyMock.mock.invocationCallOrder[0]);
+  });
+
+  // Coordinator follow-up 2: a post picked up 3 h after its time (the scanner was
+  // down) whose step throws must still get its retries. The clock starts at the
+  // pickup (pickedUpAt, kept by every later claim of the same slot), not at
+  // scheduledFor; a post rescheduled since (scheduledFor moved past the old
+  // pickup) or sent with Post now (scheduledFor = now) starts a fresh clock, and
+  // a row without pickedUpAt (claimed before the column) counts from scheduledFor.
+  it("puts back a post picked up 3 hours late whose step threw, instead of failing it", async () => {
+    queryRawMock.mockResolvedValueOnce([{ id: "late" }]).mockResolvedValueOnce([]);
+    findManyMock.mockResolvedValue([]);
+
+    const out = await reconcileStuckInProgressJobs(NOW);
+
+    expect(out).toEqual({ reconciled: 0, requeued: 1, gaveUp: 0 });
+    // scheduledFor alone (3 h ago) is never compared with the cutoff.
+    expect(sqlOf(0)).not.toMatch(/j\."scheduledFor" >= \(/);
+    expect(sqlOf(1)).not.toMatch(/j\."scheduledFor" < \(/);
+    expect(sqlOf(0)).toContain('GREATEST(j."pickedUpAt", j."scheduledFor")');
   });
 
   it("leaves a job with results to the stuck-job pass, unchanged", async () => {

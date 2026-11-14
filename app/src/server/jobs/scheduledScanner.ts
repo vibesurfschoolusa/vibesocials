@@ -85,9 +85,11 @@ export const STUCK_RECONCILE_BATCH = 50;
 export const REQUEUE_QUIET_MS = 6 * 60 * 1000;
 
 /**
- * F1 H3: a scheduled post that still could not be sent this long after its time
- * fails, with OUR_SIDE_FAILURE_MESSAGE in Activity, instead of being put back
- * again. Post now sends it.
+ * F1 H3: a scheduled post that still could not be sent this long after the
+ * scanner first picked it up fails, with OUR_SIDE_FAILURE_MESSAGE in Activity,
+ * instead of being put back again; Send again sends it. The clock is
+ * `GREATEST(pickedUpAt, scheduledFor)`: the pickup, or the slot when the post was
+ * rescheduled or sent with Post now since (or claimed before `pickedUpAt` existed).
  */
 export const SEND_GIVE_UP_MS = 2 * 60 * 60 * 1000;
 
@@ -115,6 +117,10 @@ export const SEND_GIVE_UP_MS = 2 * 60 * 60 * 1000;
  * converted `AT TIME ZONE 'UTC'` instead of letting Postgres cast via the
  * session TimeZone.
  *
+ * F1 H3 follow-up: `pickedUpAt` records the first pickup for the post's current
+ * slot. A post the reconciler put back keeps it when claimed again (its
+ * scheduledFor did not move); one whose slot moved past it gets a new one.
+ *
  * Returns the claimed ids, oldest `scheduledFor` first. The scanner runs every
  * 10 minutes (to stay inside Inngest's free plan), and ≤10-minute latency is
  * fine for a social scheduler.
@@ -127,7 +133,8 @@ export async function claimDueScheduledJobs(
     WITH claimed AS (
       UPDATE "PostJob"
       SET "status" = 'in_progress'::"PostJobStatus",
-          "updatedAt" = (${now}::timestamptz AT TIME ZONE 'UTC')
+          "updatedAt" = (${now}::timestamptz AT TIME ZONE 'UTC'),
+          "pickedUpAt" = CASE WHEN "pickedUpAt" IS NOT NULL AND "pickedUpAt" >= "scheduledFor" THEN "pickedUpAt" ELSE (${now}::timestamptz AT TIME ZONE 'UTC') END
       WHERE "id" IN (
         SELECT "id" FROM "PostJob"
         WHERE "status" = 'scheduled'::"PostJobStatus"
@@ -451,8 +458,8 @@ export async function reconcileStuckInProgressJobs(
  * F1 H3 (R1 publishing): a claimed scheduled post (`in_progress`, `scheduledFor`
  * set) with no results after {@link REQUEUE_QUIET_MS} was never sent: no
  * platform was tried. It goes back to `scheduled`, and the claim that follows
- * this reconcile in the same step takes it again. Once its time is more than
- * {@link SEND_GIVE_UP_MS} past it fails instead (Activity then shows
+ * this reconcile in the same step takes it again. Once its first pickup is more
+ * than {@link SEND_GIVE_UP_MS} ago it fails instead (Activity then shows
  * OUR_SIDE_FAILURE_MESSAGE and Post now sends it), and its media counts as used
  * now (F1 H2), so Post now still finds it.
  *
@@ -480,7 +487,7 @@ async function requeueUnsentScheduledJobs(
         SELECT j."id" FROM "PostJob" j
         WHERE j."status" = 'in_progress'::"PostJobStatus"
           AND j."scheduledFor" IS NOT NULL
-          AND j."scheduledFor" >= (${giveUpCutoff}::timestamptz AT TIME ZONE 'UTC')
+          AND GREATEST(j."pickedUpAt", j."scheduledFor") >= (${giveUpCutoff}::timestamptz AT TIME ZONE 'UTC')
           AND j."updatedAt" < (${quietCutoff}::timestamptz AT TIME ZONE 'UTC')
           AND NOT EXISTS (SELECT 1 FROM "PostJobResult" r WHERE r."postJobId" = j."id")
         ORDER BY j."scheduledFor" ASC
@@ -500,7 +507,7 @@ async function requeueUnsentScheduledJobs(
         SELECT j."id" FROM "PostJob" j
         WHERE j."status" = 'in_progress'::"PostJobStatus"
           AND j."scheduledFor" IS NOT NULL
-          AND j."scheduledFor" < (${giveUpCutoff}::timestamptz AT TIME ZONE 'UTC')
+          AND GREATEST(j."pickedUpAt", j."scheduledFor") < (${giveUpCutoff}::timestamptz AT TIME ZONE 'UTC')
           AND j."updatedAt" < (${quietCutoff}::timestamptz AT TIME ZONE 'UTC')
           AND NOT EXISTS (SELECT 1 FROM "PostJobResult" r WHERE r."postJobId" = j."id")
         ORDER BY j."scheduledFor" ASC
