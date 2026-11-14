@@ -376,6 +376,7 @@ export interface WaitForInstagramContainerOptions {
  *    `deadline` leaves no room for another wait + check before the
  *    INSTAGRAM_PUBLISH_RESERVE_MS kept for media_publish -> `INSTAGRAM_VIDEO_TIMEOUT`.
  *    Nothing has been published at that point, so a retry is safe.
+ * A status request that does not complete counts as still processing.
  * Each status request is clamped to the time left BEFORE the reserve, so a slow
  * check cannot eat the media_publish window.
  */
@@ -407,11 +408,24 @@ export async function waitForInstagramContainer(
     const checkWindowMs = pollWindowMs();
     if (checkWindowMs < MIN_REQUEST_WINDOW_MS) break;
 
-    const response = await requestContainerStatus({
-      containerId,
-      accessToken,
-      timeoutMs: Math.min(DEFAULT_FETCH_TIMEOUT_MS, checkWindowMs),
-    });
+    // A request that did not complete (a timeout, a dropped connection) says
+    // nothing about the container: keep polling within the budget, as
+    // checkSavedContainer does. Nothing is published before media_publish.
+    let response: Response;
+    try {
+      response = await requestContainerStatus({
+        containerId,
+        accessToken,
+        timeoutMs: Math.min(DEFAULT_FETCH_TIMEOUT_MS, checkWindowMs),
+      });
+    } catch (error) {
+      // Name and code only: a fetch error can quote the request URL, which carries the token.
+      console.error("[Instagram] Status check did not complete; polling on", {
+        name: error instanceof Error ? error.name : typeof error,
+        code: (error as { code?: unknown } | null)?.code,
+      });
+      continue;
+    }
     if ((await readContainerStatus(response, connection)) === "finished") return;
   }
 

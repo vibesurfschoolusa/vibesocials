@@ -2766,7 +2766,7 @@ describe("instagramClient.publishVideo — a single photo checks its container f
     };
   }
 
-  function stubGraph(statusCheck: () => Response) {
+  function stubGraph(statusCheck: () => Response | Promise<Response>) {
     const fetchMock = vi.fn((input: string | URL) => {
       const url = String(input);
       if (url.includes("fields=permalink")) return Promise.resolve(new Response("{}", { status: 404 }));
@@ -2833,6 +2833,40 @@ describe("instagramClient.publishVideo — a single photo checks its container f
       expect(graph.publish()).toHaveLength(0);
     });
   }
+
+  // G1 review: a status request that fails (a timeout, a dropped connection)
+  // says nothing about the photo, so the poll goes on, as for a carousel.
+  const dropped = () => Promise.reject(new TypeError("fetch failed", { cause: { code: "ECONNRESET" } }));
+
+  it("one failed status request, then FINISHED: publishes", async () => {
+    vi.useFakeTimers();
+    let checks = 0;
+    const graph = stubGraph(() => (++checks === 1 ? dropped() : status("FINISHED")));
+
+    const promise = instagramClient.publishVideo(ctx());
+    await vi.advanceTimersByTimeAsync(INSTAGRAM_POLL_INTERVAL_MS);
+
+    await expect(promise).resolves.toEqual({ externalPostId: "media-1" });
+    expect(graph.status()).toHaveLength(2);
+    expect(graph.publish()).toHaveLength(1);
+  });
+
+  it("every status request fails: the processing sentence, nothing published", async () => {
+    vi.useFakeTimers();
+    const graph = stubGraph(dropped);
+
+    const promise = instagramClient.publishVideo(ctx()).then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+    await vi.advanceTimersByTimeAsync(INSTAGRAM_POLL_INTERVAL_MS * (INSTAGRAM_POLL_MAX_ATTEMPTS + 1));
+    const error = await promise;
+
+    expect(error?.code).toBe("INSTAGRAM_PHOTO_TIMEOUT");
+    expect(error?.message).toBe("Instagram was still processing the photo. Try again in a minute.");
+    expect(graph.status()).toHaveLength(INSTAGRAM_POLL_MAX_ATTEMPTS);
+    expect(graph.publish()).toHaveLength(0);
+  });
 
   it("a photo Instagram could not process says photo, not video", async () => {
     stubGraph(() => status("ERROR"));
