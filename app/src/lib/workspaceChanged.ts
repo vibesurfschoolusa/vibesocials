@@ -17,3 +17,41 @@ export const WORKSPACE_CHANGED_MESSAGE =
   "You switched workspace in another tab. Reload this page before posting.";
 
 export const INVALID_WORKSPACE_ID_MESSAGE = "workspaceId must be a string if provided";
+
+/**
+ * F3 (2026-11-14 review, R1 security H1): the owner and member writes outside
+ * Create (Settings, posting times, team, connections, the Google location,
+ * rename and delete) REQUIRE the id; an absent one is this 400, so a write
+ * that forgot to send it fails at once instead of trusting the cookie.
+ */
+export const MISSING_WORKSPACE_ID_CODE = "MISSING_WORKSPACE_ID";
+
+export const MISSING_WORKSPACE_ID_MESSAGE = "This page is out of date. Reload it, then try again.";
+
+/** Create's sentence says "before posting"; these writes save settings. */
+export const WORKSPACE_CHANGED_SAVE_MESSAGE =
+  "You switched workspace in another tab. Reload this page, then try again.";
+
+/**
+ * The refusal for a write whose `sent` workspace id is not the active
+ * workspace, or null when it may go on: 400 when it is absent or not text,
+ * 409 WORKSPACE_CHANGED when it names another workspace. A plain `Response`,
+ * so this file stays importable from client code.
+ */
+export function renderedWorkspaceRefusal(sent: unknown, activeWorkspaceId: string): Response | null {
+  if (sent === undefined || sent === null || sent === "") {
+    return Response.json({ error: MISSING_WORKSPACE_ID_MESSAGE, code: MISSING_WORKSPACE_ID_CODE }, { status: 400 });
+  }
+  if (typeof sent !== "string") {
+    return Response.json({ error: INVALID_WORKSPACE_ID_MESSAGE, code: INVALID_WORKSPACE_ID_CODE }, { status: 400 });
+  }
+  if (sent !== activeWorkspaceId) {
+    return Response.json({ error: WORKSPACE_CHANGED_SAVE_MESSAGE, code: WORKSPACE_CHANGED_CODE }, { status: 409 });
+  }
+  return null;
+}
+
+/** `path` with `workspaceId` added to its query, for the OAuth start links. */
+export function withWorkspaceId(path: string, workspaceId: string): string {
+  return `${path}${path.includes("?") ? "&" : "?"}workspaceId=${encodeURIComponent(workspaceId)}`;
+}

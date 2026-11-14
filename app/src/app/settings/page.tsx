@@ -211,6 +211,7 @@ export default async function SettingsPage({
                 on screen under workspace B after an in-page switch. */}
             <SettingsForm
               key={context.workspace.id}
+              workspaceId={context.workspace.id}
               settings={settings}
               role={context.role}
               planNotes={settingsPlanNotes(context.workspace)}
@@ -225,7 +226,12 @@ export default async function SettingsPage({
               </p>
             </div>
             {/* key: remount on a workspace switch, like SettingsForm. */}
-            <PostingSlotsForm key={context.workspace.id} slots={postingSlots} role={context.role} />
+            <PostingSlotsForm
+              key={context.workspace.id}
+              workspaceId={context.workspace.id}
+              slots={postingSlots}
+              role={context.role}
+            />
           </section>
 
           <section>
@@ -235,7 +241,12 @@ export default async function SettingsPage({
                 Connect your social accounts so Vibe Socials can publish on your behalf.
               </p>
             </div>
+            {/* key: remount on a switch, like SettingsForm; workspaceId: every
+                connect, disconnect and location save carries the workspace
+                this page was rendered for (F3). */}
             <ConnectionsSection
+              key={`connections-${context.workspace.id}`}
+              workspaceId={context.workspace.id}
               connections={connections}
               readOnly={context.role !== "owner"}
               // Pinterest is listed once its app credentials are set (lib/advertisedPlatforms.ts).
@@ -273,6 +284,7 @@ export default async function SettingsPage({
             />
             <TeamSection
               key={context.workspace.id}
+              workspaceId={context.workspace.id}
               role={context.role}
               workspaceName={context.workspace.name}
               deletion={workspaceDeletion}

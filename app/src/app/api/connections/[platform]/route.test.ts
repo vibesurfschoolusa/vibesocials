@@ -1,19 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { requireOwnerContextMock, connectionDeleteManyMock, metricDeleteManyMock, transactionMock } = vi.hoisted(
-  () => ({
-    requireOwnerContextMock: vi.fn(),
-    connectionDeleteManyMock: vi.fn(),
-    metricDeleteManyMock: vi.fn(),
-    transactionMock: vi.fn(),
-  }),
-);
+const {
+  requireOwnerContextMock,
+  connectionDeleteManyMock,
+  metricDeleteManyMock,
+  listingMetricDeleteManyMock,
+  transactionMock,
+} = vi.hoisted(() => ({
+  requireOwnerContextMock: vi.fn(),
+  connectionDeleteManyMock: vi.fn(),
+  metricDeleteManyMock: vi.fn(),
+  listingMetricDeleteManyMock: vi.fn(),
+  transactionMock: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
     socialConnection: { deleteMany: connectionDeleteManyMock },
     postMetric: { deleteMany: metricDeleteManyMock },
+    locationMetricDaily: { deleteMany: listingMetricDeleteManyMock },
     $transaction: transactionMock,
   },
 }));
@@ -30,10 +36,22 @@ const CONTEXT = {
   role: "owner" as const,
 };
 
-function disconnect(platform: string) {
-  return DELETE(new NextRequest(`http://localhost/api/connections/${platform}`, { method: "DELETE" }), {
-    params: Promise.resolve({ platform }),
-  } as never);
+function disconnect(platform: string, body: unknown = { workspaceId: "ws-1" }) {
+  return DELETE(
+    new NextRequest(`http://localhost/api/connections/${platform}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: body === null ? undefined : JSON.stringify(body),
+    }),
+    { params: Promise.resolve({ platform }) } as never,
+  );
+}
+
+function nothingDeleted() {
+  expect(connectionDeleteManyMock).not.toHaveBeenCalled();
+  expect(metricDeleteManyMock).not.toHaveBeenCalled();
+  expect(listingMetricDeleteManyMock).not.toHaveBeenCalled();
+  expect(transactionMock).not.toHaveBeenCalled();
 }
 
 beforeEach(() => {
@@ -43,6 +61,7 @@ beforeEach(() => {
   // The route builds the deletes, then runs them (alone, or in a transaction).
   connectionDeleteManyMock.mockReturnValue(Promise.resolve({ count: 1 }));
   metricDeleteManyMock.mockReturnValue(Promise.resolve({ count: 4 }));
+  listingMetricDeleteManyMock.mockReturnValue(Promise.resolve({ count: 30 }));
   transactionMock.mockImplementation(async (ops: Promise<unknown>[]) => Promise.all(ops));
 });
 
@@ -68,15 +87,57 @@ describe("DELETE /api/connections/[platform]", () => {
     expect(transactionMock).toHaveBeenCalledTimes(1);
   });
 
-  it("disconnecting another platform deletes only its connection", async () => {
-    const response = await disconnect("facebook_page");
+  // F3 (R1 pages H1): disconnecting any platform deletes the numbers read from
+  // it, not only YouTube's. A workspace has one connection per platform, so
+  // its PostMetric rows for that platform are that connection's.
+  it.each(["facebook_page", "instagram", "linkedin", "pinterest", "x", "tiktok"])(
+    "disconnecting %s also deletes the workspace's numbers for that platform, in one transaction",
+    async (platform) => {
+      const response = await disconnect(platform);
+
+      expect(response.status).toBe(200);
+      expect(connectionDeleteManyMock).toHaveBeenCalledWith({ where: { workspaceId: "ws-1", platform } });
+      expect(metricDeleteManyMock).toHaveBeenCalledWith({ where: { workspaceId: "ws-1", platform } });
+      expect(listingMetricDeleteManyMock).not.toHaveBeenCalled();
+      expect(transactionMock).toHaveBeenCalledTimes(1);
+      expect(transactionMock.mock.calls[0][0]).toHaveLength(2);
+    },
+  );
+
+  // The listing's daily numbers (LocationMetricDaily) are only ever read
+  // through the workspace's one Google Business Profile connection.
+  it("disconnecting Google Business Profile also deletes the workspace's listing numbers", async () => {
+    const response = await disconnect("google_business_profile");
 
     expect(response.status).toBe(200);
     expect(connectionDeleteManyMock).toHaveBeenCalledWith({
-      where: { workspaceId: "ws-1", platform: "facebook_page" },
+      where: { workspaceId: "ws-1", platform: "google_business_profile" },
     });
-    expect(metricDeleteManyMock).not.toHaveBeenCalled();
-    expect(transactionMock).not.toHaveBeenCalled();
+    expect(metricDeleteManyMock).toHaveBeenCalledWith({
+      where: { workspaceId: "ws-1", platform: "google_business_profile" },
+    });
+    expect(listingMetricDeleteManyMock).toHaveBeenCalledWith({ where: { workspaceId: "ws-1" } });
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+    expect(transactionMock.mock.calls[0][0]).toHaveLength(3);
+  });
+
+  // F3 (R1 security H1): the active workspace is one cookie for every tab.
+  it("409s a page rendered for another workspace, and deletes nothing", async () => {
+    const response = await disconnect("instagram", { workspaceId: "ws-2" });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED" });
+    nothingDeleted();
+  });
+
+  it.each([
+    ["no body", null],
+    ["a body without the id", {}],
+  ])("400s %s, and deletes nothing", async (_label, body) => {
+    const response = await disconnect("instagram", body);
+
+    expect(response.status).toBe(400);
+    nothingDeleted();
   });
 
   it("400s an unknown platform", async () => {

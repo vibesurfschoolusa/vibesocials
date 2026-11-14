@@ -369,7 +369,9 @@ export async function requireOwnerContext(): Promise<WorkspaceContext | NextResp
  *     convention every route already follows for its OTHER failure
  *     branches).
  *   - Owner: returns the {@link WorkspaceContext} so the route can embed
- *     `workspace.id` in the OAuth state.
+ *     `workspace.id` in the OAuth state, when the request's `?workspaceId=`
+ *     is that workspace; otherwise redirects to
+ *     `/settings?error=<platform>_workspace_changed` (F3).
  *
  * Usage:
  *   const contextOrRedirect = await requireOwnerContextForOAuthStart(request, "facebook_page_not_workspace_owner");
@@ -381,7 +383,20 @@ export async function requireOwnerContextForOAuthStart(
   errorCode: string,
 ): Promise<WorkspaceContext | NextResponse | null> {
   try {
-    return await getWorkspaceContext({ requireRole: "owner" });
+    const context = await getWorkspaceContext({ requireRole: "owner" });
+    // F3 (2026-11-14 review, R1 security H1): the active workspace is one
+    // cookie for every tab, so a Connect clicked in a tab rendered for
+    // another workspace would sign a state for the active one and attach the
+    // account there. The link carries the page's `?workspaceId=`; an absent
+    // or different one is refused here, before any state is signed. The
+    // callbacks keep trusting only the signed state.
+    if (context && new URL(request.url).searchParams.get("workspaceId") !== context.workspace.id) {
+      const url = new URL("/settings", request.url);
+      // "<platform>_not_workspace_owner" -> "<platform>_workspace_changed".
+      url.searchParams.set("error", errorCode.replace(/_not_workspace_owner$/, "_workspace_changed"));
+      return NextResponse.redirect(url);
+    }
+    return context;
   } catch (error) {
     if (error instanceof WorkspaceForbiddenError) {
       const url = new URL("/settings", request.url);

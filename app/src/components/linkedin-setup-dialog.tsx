@@ -16,10 +16,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LINKEDIN_SIGN_OUT_URL } from "@/lib/linkedinAccount";
+import { withWorkspaceId } from "@/lib/workspaceChanged";
 
 const noSubscription = () => () => {};
 
-export function LinkedInSetupDialog() {
+/** `workspaceId`: the workspace this page was rendered for; the start route refuses any other (F3). */
+export function LinkedInSetupDialog({ workspaceId }: { workspaceId: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   // Opens only after hydration, as PendingConnectionDialog does: the server
@@ -71,8 +73,10 @@ export function LinkedInSetupDialog() {
     setIsConnecting(true);
 
     // Redirect to LinkedIn OAuth start with the vanity name/ID as a query param.
-    // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- intentional full-page navigation to an API route that issues the OAuth redirect; router.push does not fit
-    window.location.href = `/api/auth/linkedin/start?vanity_name=${encodeURIComponent(cleanVanityName)}`;
+    window.location.href = withWorkspaceId(
+      `/api/auth/linkedin/start?vanity_name=${encodeURIComponent(cleanVanityName)}`,
+      workspaceId,
+    );
   };
 
   return (

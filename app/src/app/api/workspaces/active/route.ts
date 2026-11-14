@@ -10,6 +10,7 @@ import {
   provisionPersonalWorkspace,
   requireOwnerContext,
 } from "@/lib/workspace";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import {
   DeletionRefusedError,
   WORKSPACE_DELETE_FAILED_MESSAGE,
@@ -34,7 +35,7 @@ const NAME_MIN_LENGTH = 1;
 const NAME_MAX_LENGTH = 60;
 
 /**
- * PATCH /api/workspaces/active { name }
+ * PATCH /api/workspaces/active { name, workspaceId }
  *
  * Owner-only rename of the caller's active workspace (design doc §4). Footer
  * fields (companyWebsite/defaultHashtags) stay on `POST /api/settings` — not
@@ -50,6 +51,11 @@ export async function PATCH(request: Request) {
   const body = await readJsonObject(request);
   if (!body) {
     return invalidJsonBodyResponse();
+  }
+  // F3: the workspace the Team card was rendered for (one cookie for every tab).
+  const refusal = renderedWorkspaceRefusal(body.workspaceId, context.workspace.id);
+  if (refusal) {
+    return refusal;
   }
 
   if (typeof body.name !== "string") {
@@ -74,10 +80,11 @@ export async function PATCH(request: Request) {
 }
 
 /**
- * DELETE /api/workspaces/active { confirmName }
+ * DELETE /api/workspaces/active { confirmName, workspaceId }
  *
- * Owner-only deletion of the caller's ACTIVE workspace; the body names no
- * workspace, so a caller can only ever delete the one they are an owner of.
+ * Owner-only deletion of the caller's ACTIVE workspace; the body's
+ * workspaceId must be that workspace (F3), so a caller can only ever delete
+ * the one they are an owner of, and only from a page rendered for it.
  *
  * One transaction decides and changes everything: under the ws-owners lock it
  * refuses while another owner exists, a post is publishing, or it is the
@@ -111,6 +118,13 @@ export async function DELETE(request: Request) {
   const body = await readJsonObject(request);
   if (!body) {
     return invalidJsonBodyResponse();
+  }
+  // F3 (R1 client journey L9): the typed name alone is not enough, as two
+  // workspaces can share a name and the active one is a cookie every tab
+  // shares; the id the page was rendered for must match too.
+  const refusal = renderedWorkspaceRefusal(body.workspaceId, workspaceId);
+  if (refusal) {
+    return refusal;
   }
   if (body.confirmName !== context.workspace.name) {
     return NextResponse.json(

@@ -3,12 +3,18 @@ import { NextResponse } from "next/server";
 import { requireOwnerContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { Platform, Prisma } from "@prisma/client";
+
+import { listGbpLocations } from "../gbpLocations";
 
 export const runtime = "nodejs";
 
 /** A business name longer than this is cut: it is only a label in Settings. */
 const MAX_LOCATION_TITLE_LENGTH = 200;
+
+const LOCATION_NOT_LISTED_MESSAGE =
+  "That location isn't one this Google account manages. Click Fetch locations from Google and choose it from the list.";
 
 /**
  * POST /api/connections/google_business_profile/location
@@ -27,6 +33,7 @@ export async function POST(request: Request) {
 
   let locationNameRaw: unknown;
   let locationTitleRaw: unknown;
+  let workspaceIdRaw: unknown;
   if (contentType.includes("application/json")) {
     const body = await readJsonObject(request);
     if (!body) {
@@ -34,10 +41,16 @@ export async function POST(request: Request) {
     }
     locationNameRaw = body.locationName;
     locationTitleRaw = body.locationTitle;
+    workspaceIdRaw = body.workspaceId;
   } else {
     const form = await request.formData();
     locationNameRaw = form.get("locationName");
     locationTitleRaw = form.get("locationTitle");
+    workspaceIdRaw = form.get("workspaceId");
+  }
+  const refusal = renderedWorkspaceRefusal(workspaceIdRaw, workspace.id);
+  if (refusal) {
+    return refusal;
   }
   // The location's display name, from Google's list in Settings, so the
   // connection reads "Connected as <business>" (lib/connectionSummary.ts).
@@ -67,6 +80,17 @@ export async function POST(request: Request) {
       { error: "No Google Business Profile connection found" },
       { status: 400 },
     );
+  }
+
+  const listed = await listGbpLocations(connection);
+  if (!listed.ok) {
+    return listed.response;
+  }
+  const isListed = listed.locations.some(
+    (location) => location.resourceName === locationName || location.storeCode === locationName,
+  );
+  if (!isListed) {
+    return NextResponse.json({ error: LOCATION_NOT_LISTED_MESSAGE }, { status: 400 });
   }
 
   const existingMetadata = (connection.metadata as Record<string, unknown> | null) ?? {};

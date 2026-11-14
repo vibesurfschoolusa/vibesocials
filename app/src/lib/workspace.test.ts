@@ -713,17 +713,41 @@ describe("requireOwnerContextForOAuthStart", () => {
     );
   });
 
-  it("returns the workspace context (not a response) for an owner", async () => {
+  it("returns the workspace context (not a response) for an owner whose page was for the active workspace", async () => {
     getCurrentUserMock.mockResolvedValue(makeUser());
     findManyMock.mockResolvedValue([makeMembership({ role: "owner" })]);
 
     const result = await requireOwnerContextForOAuthStart(
-      request,
+      new Request("http://localhost/api/auth/facebook_page/start?workspaceId=workspace-1"),
       "facebook_page_not_workspace_owner",
     );
 
     expect(result).not.toBeInstanceOf(NextResponse);
     expect(result).toMatchObject({ role: "owner", workspace: { id: "workspace-1" } });
+  });
+
+  // F3 (R1 security H1): the active workspace is one cookie for every tab, so
+  // a Connect clicked in a tab rendered for another workspace must not sign a
+  // state for the active one. Refused before any state exists.
+  it.each([
+    ["another workspace's id", "?workspaceId=workspace-2"],
+    ["no id", ""],
+    ["an empty id", "?workspaceId="],
+  ])("redirects to /settings?error=<platform>_workspace_changed for %s", async (_label, query) => {
+    getCurrentUserMock.mockResolvedValue(makeUser());
+    findManyMock.mockResolvedValue([makeMembership({ role: "owner" })]);
+
+    const result = await requireOwnerContextForOAuthStart(
+      new Request(`http://localhost/api/auth/facebook_page/start${query}`),
+      "facebook_page_not_workspace_owner",
+    );
+
+    expect(result).toBeInstanceOf(NextResponse);
+    const response = result as NextResponse;
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe(
+      "http://localhost/settings?error=facebook_page_workspace_changed",
+    );
   });
 
   it("rethrows unexpected errors instead of mapping them to a redirect", async () => {

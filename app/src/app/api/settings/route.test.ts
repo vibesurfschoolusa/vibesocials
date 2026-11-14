@@ -49,11 +49,12 @@ const MEMBER_CONTEXT = {
   memberCount: 2,
 };
 
-function jsonRequest(body: unknown): Request {
+/** The settings forms send the workspace their page was rendered for (F3). */
+function jsonRequest(body: Record<string, unknown>): Request {
   return new Request("http://localhost/api/settings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ workspaceId: "ws-1", ...body }),
   });
 }
 
@@ -613,6 +614,35 @@ describe("POST /api/settings", () => {
     });
     expect(workspaceUpdateMock).not.toHaveBeenCalled();
     expect(userUpdateMock).not.toHaveBeenCalled();
+  });
+
+  // F3 (R1 security H1): the active workspace is one cookie for every tab, so
+  // a form left open on workspace A must not save into workspace B.
+  describe("the workspace the page was rendered for", () => {
+    it.each([
+      ["owner", OWNER_CONTEXT, { brandVoice: "Friendly", postingSlots: [{ day: 1, time: "09:00" }] }],
+      ["member", MEMBER_CONTEXT, { notifyOnPostComplete: false }],
+    ])("409s another workspace's id from an %s, and writes nothing", async (_role, context, body) => {
+      getWorkspaceContextMock.mockResolvedValue(context);
+
+      const response = await POST(jsonRequest({ ...body, workspaceId: "ws-2" }));
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED" });
+      expect(workspaceUpdateMock).not.toHaveBeenCalled();
+      expect(userUpdateMock).not.toHaveBeenCalled();
+    });
+
+    it("400s a request without the id, and writes nothing", async () => {
+      getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
+
+      const response = await POST(rawRequest(JSON.stringify({ postingSlots: [{ day: 1, time: "09:00" }] })));
+
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ code: "MISSING_WORKSPACE_ID" });
+      expect(workspaceUpdateMock).not.toHaveBeenCalled();
+      expect(userUpdateMock).not.toHaveBeenCalled();
+    });
   });
 
   describe("owner", () => {

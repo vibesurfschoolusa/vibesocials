@@ -19,6 +19,7 @@ import {
   PLATFORM_MATURITY_NOTES,
 } from "@/lib/platforms";
 import { PLATFORM_GUIDES, platformHelpHref } from "@/lib/platformGuides";
+import { withWorkspaceId } from "@/lib/workspaceChanged";
 import type { Platform } from "@prisma/client";
 import { Badge } from "@/components/ui/badge";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -108,6 +109,12 @@ const PLATFORMS: PlatformConfig[] = [
 ];
 
 interface ConnectionsSectionProps {
+  /**
+   * The workspace this page was rendered for (F3). Every connect, disconnect,
+   * switch and location save sends it, and the routes refuse any other: the
+   * active workspace is one cookie every tab shares.
+   */
+  workspaceId: string;
   connections: ConnectionSummary[];
   /**
    * Team Workspaces (Task 7, design §7): connections are workspace-owned and
@@ -125,6 +132,7 @@ interface ConnectionsSectionProps {
 }
 
 export function ConnectionsSection({
+  workspaceId,
   connections,
   readOnly = false,
   unavailablePlatforms = [],
@@ -133,7 +141,7 @@ export function ConnectionsSection({
     <>
       {!readOnly ? (
         <Suspense fallback={null}>
-          <LinkedInSetupDialog />
+          <LinkedInSetupDialog workspaceId={workspaceId} />
           {/* ?choose=<id>: a connect found several Pages/accounts to pick from. */}
           <PendingConnectionDialog />
         </Suspense>
@@ -210,6 +218,7 @@ export function ConnectionsSection({
                   {connection ? (
                     <ConnectionActions
                       platform={key}
+                      workspaceId={workspaceId}
                       isConnected
                       needsReconnect={connection.needsReconnect}
                       readOnly={readOnly}
@@ -217,9 +226,9 @@ export function ConnectionsSection({
                   ) : readOnly ? null : key === "linkedin" ? (
                     // LinkedIn reuses whichever account is signed in to
                     // linkedin.com: offer to sign out first (lib/linkedinAccount.ts).
-                    <LinkedInConnectButton />
+                    <LinkedInConnectButton workspaceId={workspaceId} />
                   ) : href ? (
-                    <ButtonLink href={href} variant="outline" size="sm">
+                    <ButtonLink href={withWorkspaceId(href, workspaceId)} variant="outline" size="sm">
                       Connect
                     </ButtonLink>
                   ) : (
@@ -233,6 +242,7 @@ export function ConnectionsSection({
               {isGoogleBusinessProfile && connection && !readOnly ? (
                 <div className="mt-4 border-t border-border pt-4">
                   <GoogleBusinessLocationForm
+                    workspaceId={workspaceId}
                     initialLocationName={locationName}
                     initialLocationTitle={connection.username}
                   />

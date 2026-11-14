@@ -74,6 +74,12 @@ export interface WorkspaceDeletionInfo {
 }
 
 interface TeamSectionProps {
+  /**
+   * The workspace this page was rendered for (F3). Rename, delete and the
+   * invite link send it, and the routes refuse any other: the active
+   * workspace is one cookie every tab shares.
+   */
+  workspaceId: string;
   role: WorkspaceRole;
   workspaceName: string;
   deletion?: WorkspaceDeletionInfo | null;
@@ -83,11 +89,11 @@ interface TeamSectionProps {
  * Settings → Team card (design doc §7). Owners get full management (rename,
  * invite link, member list + removal); members get a read-only summary.
  */
-export function TeamSection({ role, workspaceName, deletion }: TeamSectionProps) {
+export function TeamSection({ workspaceId, role, workspaceName, deletion }: TeamSectionProps) {
   if (role !== "owner") {
     return <MemberView workspaceName={workspaceName} />;
   }
-  return <OwnerView workspaceName={workspaceName} deletion={deletion ?? null} />;
+  return <OwnerView workspaceId={workspaceId} workspaceName={workspaceName} deletion={deletion ?? null} />;
 }
 
 /**
@@ -211,9 +217,11 @@ function MemberView({ workspaceName }: { workspaceName: string }) {
 }
 
 function OwnerView({
+  workspaceId,
   workspaceName,
   deletion,
 }: {
+  workspaceId: string;
   workspaceName: string;
   deletion: WorkspaceDeletionInfo | null;
 }) {
@@ -239,7 +247,7 @@ function OwnerView({
       const response = await fetch("/api/workspaces/active", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: trimmed }),
+        body: JSON.stringify({ name: trimmed, workspaceId }),
       });
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
       if (!response.ok) {
@@ -255,7 +263,7 @@ function OwnerView({
     } finally {
       setSavingName(false);
     }
-  }, [name, savedName, router, toast]);
+  }, [name, savedName, router, toast, workspaceId]);
 
   // --- Invite link (GET/POST/DELETE /api/workspaces/invites) ---
   const [invite, setInvite] = useState<InviteMeta | null>(null);
@@ -290,7 +298,11 @@ function OwnerView({
   const createInvite = useCallback(async () => {
     setInviteBusy(true);
     try {
-      const response = await fetch("/api/workspaces/invites", { method: "POST" });
+      const response = await fetch("/api/workspaces/invites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId }),
+      });
       const data = (await response.json().catch(() => null)) as
         | { url?: string; expiresAt?: string; error?: string }
         | null;
@@ -306,20 +318,26 @@ function OwnerView({
     } finally {
       setInviteBusy(false);
     }
-  }, [toast]);
+  }, [toast, workspaceId]);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure (the
   // error is already surfaced via toast here).
   const revokeInvite = useCallback(async () => {
-    const response = await fetch("/api/workspaces/invites", { method: "DELETE" });
+    const response = await fetch("/api/workspaces/invites", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId }),
+    });
     if (!response.ok) {
-      toast.error("Couldn't revoke the invite link.");
+      // A 409 says another tab switched workspace; show the route's sentence.
+      const data = (await response.json().catch(() => null)) as { error?: string } | null;
+      toast.error(data?.error ?? "Couldn't revoke the invite link.");
       throw new Error("REVOKE_FAILED");
     }
     setInvite(null);
     setFreshUrl(null);
     toast.success("Invite link revoked.");
-  }, [toast]);
+  }, [toast, workspaceId]);
 
   async function copyInviteUrl() {
     if (!freshUrl) return;
@@ -634,7 +652,7 @@ function OwnerView({
         ) : null}
       </div>
 
-      {deletion ? <DeleteWorkspace workspaceName={savedName} deletion={deletion} /> : null}
+      {deletion ? <DeleteWorkspace workspaceId={workspaceId} workspaceName={savedName} deletion={deletion} /> : null}
 
       <ConfirmDialog
         open={revokeOpen}
@@ -704,9 +722,11 @@ function plural(count: number, one: string, many: string): string {
  * the workspace name exactly, as DELETE /api/workspaces/active requires.
  */
 function DeleteWorkspace({
+  workspaceId,
   workspaceName,
   deletion,
 }: {
+  workspaceId: string;
   workspaceName: string;
   deletion: WorkspaceDeletionInfo;
 }) {
@@ -723,7 +743,7 @@ function DeleteWorkspace({
       const response = await fetch("/api/workspaces/active", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirmName }),
+        body: JSON.stringify({ confirmName, workspaceId }),
       });
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;

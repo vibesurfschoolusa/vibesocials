@@ -68,6 +68,15 @@ const unauthorizedResponse = () =>
 const forbiddenResponse = () =>
   NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 });
 
+/** The Team card sends the workspace its page was rendered for (F3). */
+function inviteRequest(method: "POST" | "DELETE", body: unknown = { workspaceId: "ws-1" }): Request {
+  return new Request("http://localhost/api/workspaces/invites", {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: body === null ? undefined : JSON.stringify(body),
+  });
+}
+
 function makeInviteRow(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     id: "invite-1",
@@ -166,7 +175,7 @@ describe("POST /api/workspaces/invites", () => {
   it("returns 401 when unauthenticated", async () => {
     requireOwnerContextMock.mockResolvedValue(unauthorizedResponse());
 
-    const response = await POST();
+    const response = await POST(inviteRequest("POST"));
 
     expect(response.status).toBe(401);
     expect(transactionMock).not.toHaveBeenCalled();
@@ -175,7 +184,7 @@ describe("POST /api/workspaces/invites", () => {
   it("returns 403 for a member", async () => {
     requireOwnerContextMock.mockResolvedValue(forbiddenResponse());
 
-    const response = await POST();
+    const response = await POST(inviteRequest("POST"));
 
     expect(response.status).toBe(403);
     expect(transactionMock).not.toHaveBeenCalled();
@@ -186,7 +195,7 @@ describe("POST /api/workspaces/invites", () => {
       makeInviteRow({ tokenHash: "hashed-token-value", expiresAt: new Date(Date.now() + INVITE_TTL_MS) }),
     );
 
-    await POST();
+    await POST(inviteRequest("POST"));
 
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", revokedAt: null },
@@ -210,7 +219,7 @@ describe("POST /api/workspaces/invites", () => {
   it("takes a per-workspace advisory lock BEFORE revoke-then-create (review fix round 1 — two concurrent POSTs can't both leave an active invite)", async () => {
     createMock.mockResolvedValue(makeInviteRow());
 
-    await POST();
+    await POST(inviteRequest("POST"));
 
     expect(executeRawMock).toHaveBeenCalledTimes(1);
     // $executeRaw is a tagged-template call: (TemplateStringsArray, ...values).
@@ -234,7 +243,7 @@ describe("POST /api/workspaces/invites", () => {
       expiresAt: data.expiresAt,
     }));
 
-    const response = await POST();
+    const response = await POST(inviteRequest("POST"));
     const after = Date.now();
     const body = await response.json();
 
@@ -247,7 +256,7 @@ describe("POST /api/workspaces/invites", () => {
     process.env.NEXTAUTH_URL = "https://vibesocials.example";
     createMock.mockResolvedValue(makeInviteRow({ expiresAt: new Date("2026-07-19T00:00:00Z") }));
 
-    const response = await POST();
+    const response = await POST(inviteRequest("POST"));
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -260,7 +269,7 @@ describe("POST /api/workspaces/invites", () => {
   it("falls back to a relative URL when NEXTAUTH_URL is unset", async () => {
     createMock.mockResolvedValue(makeInviteRow());
 
-    const response = await POST();
+    const response = await POST(inviteRequest("POST"));
     const body = await response.json();
 
     expect(body.url).toBe("/join/RAW_TOKEN_VALUE");
@@ -269,7 +278,7 @@ describe("POST /api/workspaces/invites", () => {
   it("never includes tokenHash in the response", async () => {
     createMock.mockResolvedValue(makeInviteRow());
 
-    const response = await POST();
+    const response = await POST(inviteRequest("POST"));
     const body = await response.json();
 
     expect(JSON.stringify(body)).not.toContain("hash");
@@ -279,7 +288,7 @@ describe("POST /api/workspaces/invites", () => {
     transactionMock.mockRejectedValue(new Error("db down"));
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    const response = await POST();
+    const response = await POST(inviteRequest("POST"));
 
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toEqual({ error: "Failed to create invite" });
@@ -292,7 +301,7 @@ describe("DELETE /api/workspaces/invites", () => {
   it("returns 401 when unauthenticated", async () => {
     requireOwnerContextMock.mockResolvedValue(unauthorizedResponse());
 
-    const response = await DELETE();
+    const response = await DELETE(inviteRequest("DELETE"));
 
     expect(response.status).toBe(401);
     expect(updateManyMock).not.toHaveBeenCalled();
@@ -301,7 +310,7 @@ describe("DELETE /api/workspaces/invites", () => {
   it("returns 403 for a member", async () => {
     requireOwnerContextMock.mockResolvedValue(forbiddenResponse());
 
-    const response = await DELETE();
+    const response = await DELETE(inviteRequest("DELETE"));
 
     expect(response.status).toBe(403);
     expect(updateManyMock).not.toHaveBeenCalled();
@@ -310,7 +319,7 @@ describe("DELETE /api/workspaces/invites", () => {
   it("revokes the active invite scoped to the workspace and returns { ok: true }", async () => {
     updateManyMock.mockResolvedValue({ count: 1 });
 
-    const response = await DELETE();
+    const response = await DELETE(inviteRequest("DELETE"));
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -324,9 +333,38 @@ describe("DELETE /api/workspaces/invites", () => {
   it("is idempotent: still returns 200 { ok: true } when there was nothing to revoke", async () => {
     updateManyMock.mockResolvedValue({ count: 0 });
 
-    const response = await DELETE();
+    const response = await DELETE(inviteRequest("DELETE"));
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true });
+  });
+});
+
+// F3 (R1 security H1): the active workspace is one cookie for every tab, so
+// an invite created from a tab left on workspace A must not invite people
+// into workspace B.
+describe.each(["POST", "DELETE"] as const)("%s /api/workspaces/invites and the rendered workspace", (method) => {
+  const handler = method === "POST" ? POST : DELETE;
+
+  it("409s another workspace's id, and writes nothing", async () => {
+    const response = await handler(inviteRequest(method, { workspaceId: "ws-2" }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED" });
+    expect(transactionMock).not.toHaveBeenCalled();
+    expect(updateManyMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no body", null],
+    ["a body without the id", {}],
+  ])("400s %s, and writes nothing", async (_label, body) => {
+    const response = await handler(inviteRequest(method, body));
+
+    expect(response.status).toBe(400);
+    expect(transactionMock).not.toHaveBeenCalled();
+    expect(updateManyMock).not.toHaveBeenCalled();
+    expect(createMock).not.toHaveBeenCalled();
   });
 });
