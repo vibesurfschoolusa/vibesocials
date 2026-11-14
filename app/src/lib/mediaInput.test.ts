@@ -163,6 +163,9 @@ describe("readStoredMedia", () => {
   it.each([
     [{ size: 10, contentType: "application/pdf" }, "Only photos and videos can be added."],
     [{ size: 10, contentType: "" }, "Only photos and videos can be added."],
+    // Not a type the upload token allows (lib/mediaInput.ts UPLOAD_ALLOWED_CONTENT_TYPES).
+    [{ size: 10, contentType: "image/heic" }, "Only photos and videos can be added."],
+    [{ size: 10, contentType: "video/x-msvideo" }, "Only photos and videos can be added."],
     [{ size: 0, contentType: "image/png" }, "This file is empty. Upload it again."],
     [{ size: MAX_MEDIA_BYTES + 1, contentType: "video/mp4" }, "File is too large (max 512 MB)."],
     [{ size: Number.NaN, contentType: "image/png" }, "This file is empty. Upload it again."],
@@ -175,27 +178,29 @@ describe("readStoredMedia", () => {
 describe("withStoredMediaFacts", () => {
   const URL = "https://store1.public.blob.vercel-storage.com/1731600000000-abc-a.jpg";
 
-  it("replaces the size the request named with the stored one", async () => {
+  it("replaces the size and type the request named with the stored ones", async () => {
     const head = vi.fn().mockResolvedValue({ size: 500 * 1024 * 1024, contentType: "image/jpeg" });
     await expect(
-      withStoredMediaFacts(URL, { filename: "a.jpg", mimeType: "image/jpeg", sizeBytes: 1 }, head),
-    ).resolves.toEqual({ ok: true, value: { filename: "a.jpg", mimeType: "image/jpeg", sizeBytes: 500 * 1024 * 1024 } });
+      withStoredMediaFacts({ blobUrl: URL, filename: "a.jpg", mimeType: "image/jpg", sizeBytes: 1 }, URL, head),
+    ).resolves.toEqual({
+      ok: true,
+      value: { blobUrl: URL, filename: "a.jpg", mimeType: "image/jpeg", sizeBytes: 500 * 1024 * 1024 },
+    });
+    expect(head).toHaveBeenCalledWith(URL);
   });
 
-  it("refuses when storage holds another type than the request named, so the post's type rules hold", async () => {
-    const head = vi.fn().mockResolvedValue({ size: 100, contentType: "video/mp4" });
-    await expect(
-      withStoredMediaFacts(URL, { filename: "a.jpg", mimeType: "image/jpeg", sizeBytes: 100 }, head),
-    ).resolves.toEqual({
-      ok: false,
-      error: "This file is stored as video/mp4, not image/jpeg. Upload it again.",
-    });
+  it("leaves an entry without a usable address alone, for the usual checks to refuse", async () => {
+    const head = vi.fn();
+    const raw = { blobUrl: "https://evil.example/x.jpg", mimeType: "image/jpeg" };
+    await expect(withStoredMediaFacts(raw, null, head)).resolves.toEqual({ ok: true, value: raw });
+    expect(head).not.toHaveBeenCalled();
   });
 
   it("passes a storage refusal through", async () => {
     const head = vi.fn().mockRejectedValue(new Error("down"));
-    await expect(
-      withStoredMediaFacts(URL, { filename: "a.jpg", mimeType: "image/jpeg", sizeBytes: 100 }, head),
-    ).resolves.toEqual({ ok: false, error: STORED_FILE_UNREADABLE_MESSAGE });
+    await expect(withStoredMediaFacts({ blobUrl: URL }, URL, head)).resolves.toEqual({
+      ok: false,
+      error: STORED_FILE_UNREADABLE_MESSAGE,
+    });
   });
 });

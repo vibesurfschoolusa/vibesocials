@@ -115,7 +115,8 @@ export type StoredMediaResult =
 
 /**
  * The stored file's size and type, or one sentence: no such file (or storage
- * could not answer), not a photo or video, empty, or over 512 MB.
+ * could not answer), a type uploads do not allow (UPLOAD_ALLOWED_CONTENT_TYPES),
+ * empty, or over 512 MB.
  */
 export async function readStoredMedia(blobUrl: string, head: StoredFileHead): Promise<StoredMediaResult> {
   let stored: { size: number; contentType: string };
@@ -124,7 +125,7 @@ export async function readStoredMedia(blobUrl: string, head: StoredFileHead): Pr
   } catch {
     return { ok: false, error: STORED_FILE_UNREADABLE_MESSAGE };
   }
-  if (!isImageOrVideoMimeType(stored.contentType)) {
+  if (!UPLOAD_ALLOWED_CONTENT_TYPES.includes(stored.contentType)) {
     return { ok: false, error: "Only photos and videos can be added." };
   }
   if (!Number.isSafeInteger(stored.size) || stored.size <= 0) {
@@ -137,22 +138,19 @@ export async function readStoredMedia(blobUrl: string, head: StoredFileHead): Pr
 }
 
 /**
- * `fields` with the stored size. The type the request named must be the stored
- * one: the post's rules (no video in a carousel, no GIF with photos) were
- * checked against it, so a file stored as something else is refused.
+ * A request's file entry (`blobUrl`, `mimeType`, `sizeBytes`, ...) with the
+ * stored size and type in place of the ones it named. Storage is the truth:
+ * a browser that called a JPEG "image/jpg" is not refused, and the usual checks
+ * then run on the stored type. `url` is the entry's canonical address; without
+ * one the entry is returned as it is, and those checks refuse it.
  */
-export async function withStoredMediaFacts<T extends { mimeType: string; sizeBytes: number }>(
-  blobUrl: string,
-  fields: T,
+export async function withStoredMediaFacts(
+  raw: Record<string, unknown>,
+  url: string | null,
   head: StoredFileHead,
-): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
-  const stored = await readStoredMedia(blobUrl, head);
+): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false; error: string }> {
+  if (!url) return { ok: true, value: raw };
+  const stored = await readStoredMedia(url, head);
   if (!stored.ok) return stored;
-  if (stored.value.mimeType !== fields.mimeType) {
-    return {
-      ok: false,
-      error: `This file is stored as ${stored.value.mimeType.slice(0, 100)}, not ${fields.mimeType.slice(0, 100)}. Upload it again.`,
-    };
-  }
-  return { ok: true, value: { ...fields, sizeBytes: stored.value.sizeBytes } };
+  return { ok: true, value: { ...raw, mimeType: stored.value.mimeType, sizeBytes: stored.value.sizeBytes } };
 }

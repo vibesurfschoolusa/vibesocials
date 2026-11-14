@@ -1253,16 +1253,30 @@ describe("POST /api/posts — blobUrl media field validation (2026-11-01 audit, 
     });
   });
 
+  // F5: storage is the truth for the size and the type. Whatever the request
+  // says about them is replaced by what storage holds (here a 123-byte MP4).
   it.each([
-    ["sizeBytes is negative", { sizeBytes: -1 }, "sizeBytes"],
-    ["sizeBytes is fractional", { sizeBytes: 1.5 }, "sizeBytes"],
-    ["sizeBytes is a string", { sizeBytes: "123" }, "sizeBytes"],
-    ["sizeBytes is not a safe integer", { sizeBytes: 2 ** 53 }, "sizeBytes"],
-    ["sizeBytes is above the 512 MB cap", { sizeBytes: 600 * 1024 * 1024 }, "sizeBytes"],
-    ["mimeType is missing", { mimeType: undefined }, "mimeType"],
-    ["mimeType is empty", { mimeType: "" }, "mimeType"],
-    ["mimeType is not image/* or video/*", { mimeType: "application/pdf" }, "mimeType"],
-    ["mimeType is not a string", { mimeType: 7 }, "mimeType"],
+    ["sizeBytes is negative", { sizeBytes: -1 }],
+    ["sizeBytes is fractional", { sizeBytes: 1.5 }],
+    ["sizeBytes is a string", { sizeBytes: "123" }],
+    ["sizeBytes is not a safe integer", { sizeBytes: 2 ** 53 }],
+    ["sizeBytes is above the 512 MB cap", { sizeBytes: 600 * 1024 * 1024 }],
+    ["mimeType is missing", { mimeType: undefined }],
+    ["mimeType is empty", { mimeType: "" }],
+    ["mimeType is not image/* or video/*", { mimeType: "application/pdf" }],
+    ["mimeType is not a string", { mimeType: 7 }],
+  ])("stores what storage holds when the request's %s", async (_label, overrides) => {
+    const body = jsonRequest(validBody(overrides));
+    headMock.mockReset();
+    headMock.mockResolvedValue({ size: 123, contentType: "video/mp4" });
+
+    const response = await POST(body);
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock.mock.calls[0][0].media).toMatchObject({ mimeType: "video/mp4", sizeBytes: 123 });
+  });
+
+  it.each([
     ["filename is not a string", { filename: 12 }, "filename"],
     ["filename is longer than 255 characters", { filename: "a".repeat(256) }, "filename"],
   ])("returns 400 and creates nothing when %s", async (_label, overrides, field) => {
@@ -2981,17 +2995,67 @@ describe("POST /api/posts — a new file's size and type come from storage (F5)"
     });
   });
 
-  it("refuses a file stored as another type than the request named, and creates nothing", async () => {
-    const body = jsonRequest({ blobUrl: URL_1, mimeType: "image/jpeg", sizeBytes: 10, baseCaption: "hi" });
+  it("takes the stored type as the truth: the browser's image/jpg is stored as image/jpeg", async () => {
+    const url = "https://test.public.blob.vercel-storage.com/1731600000000-abc-a.jpg";
+    const body = jsonRequest({ blobUrl: url, mimeType: "image/jpg", sizeBytes: 10, baseCaption: "hi" });
     headMock.mockReset();
-    headMock.mockResolvedValue({ size: 10, contentType: "video/mp4" });
+    headMock.mockResolvedValue({ size: 10, contentType: "image/jpeg" });
+
+    const response = await POST(body);
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock.mock.calls[0][0].media).toMatchObject({ mimeType: "image/jpeg", sizeBytes: 10 });
+  });
+
+  it("accepts photos the browser called image/jpg in a several-photo post, stored as image/jpeg", async () => {
+    const photo = (n: number) => ({
+      blobUrl: `https://test.public.blob.vercel-storage.com/1731600000000-abc-p${n}.jpg`,
+      mimeType: "image/jpg",
+      sizeBytes: 1,
+    });
+    const body = jsonRequest({ media: [photo(1), photo(2)], baseCaption: "hi" });
+    headMock.mockReset();
+    headMock.mockResolvedValue({ size: 2_000, contentType: "image/jpeg" });
+
+    const response = await POST(body);
+
+    expect(response.status).toBe(200);
+    const args = createPostJobOnlyMock.mock.calls[0][0];
+    expect(args.media).toMatchObject({ mimeType: "image/jpeg" });
+    expect(args.extraMedia).toEqual([expect.objectContaining({ mimeType: "image/jpeg" })]);
+  });
+
+  it("checks the post's rules against the stored types: a video stored among photos is refused", async () => {
+    const photo = (n: number) => ({
+      blobUrl: `https://test.public.blob.vercel-storage.com/1731600000000-abc-p${n}.jpg`,
+      mimeType: "image/jpeg",
+      sizeBytes: 1,
+    });
+    const body = jsonRequest({ media: [photo(1), photo(2)], baseCaption: "hi" });
+    headMock.mockReset();
+    headMock.mockImplementation(async (url: string) => ({
+      size: 2_000,
+      contentType: url.endsWith("p2.jpg") ? "video/mp4" : "image/jpeg",
+    }));
 
     const response = await POST(body);
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
-      error: "This file is stored as video/mp4, not image/jpeg. Upload it again.",
+      error: "A post with several files can only contain photos. Post a video on its own.",
     });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a file stored as a type uploads do not allow, and creates nothing", async () => {
+    const body = jsonRequest({ blobUrl: URL_1, mimeType: "video/mp4", sizeBytes: 10, baseCaption: "hi" });
+    headMock.mockReset();
+    headMock.mockResolvedValue({ size: 10, contentType: "application/pdf" });
+
+    const response = await POST(body);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Only photos and videos can be added." });
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
   });
 

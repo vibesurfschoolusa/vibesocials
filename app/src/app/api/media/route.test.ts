@@ -175,6 +175,30 @@ describe("POST /api/media", () => {
     expect(createMock.mock.calls[0][0].data).toMatchObject({ sizeBytes: 500 * 1024 * 1024, mimeType: "video/mp4" });
   });
 
+  it("takes the stored type as the truth: the browser's image/jpg is stored as image/jpeg", async () => {
+    headMock.mockResolvedValue({ size: 10, contentType: "image/jpeg" });
+    createMock.mockResolvedValue({ id: "media-8", createdAt: new Date("2026-01-01T00:00:00Z") });
+
+    const response = await POST(
+      jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/a.jpg", mimeType: "image/jpg", sizeBytes: 10 }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(createMock.mock.calls[0][0].data).toMatchObject({ mimeType: "image/jpeg" });
+  });
+
+  it("refuses a file stored as a type uploads do not allow", async () => {
+    headMock.mockResolvedValue({ size: 10, contentType: "image/heic" });
+
+    const response = await POST(
+      jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/a.heic", mimeType: "image/heic", sizeBytes: 10 }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "Only photos and videos can be added." });
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
   it("refuses with a plain sentence and stores nothing when storage cannot be read", async () => {
     headMock.mockRejectedValue(new Error("not found"));
 
