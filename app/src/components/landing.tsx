@@ -116,7 +116,7 @@ export function Landing({
             <Feature
               icon={CalendarClock}
               title="Schedule and drafts"
-              description="Publish now, schedule for later, or park it as a draft. Cancel or retry any time from the queue."
+              description="Publish now, schedule for later, or park it as a draft. Cancel a post from the Queue, or retry a failed one from Activity."
             />
             <Feature
               icon={Sparkles}

@@ -211,3 +211,43 @@ describe("SettingsPage — the one-workspace sentence", () => {
     expect(await noteFor({})).toBe(false);
   });
 });
+
+// F7 (R1 L4): with billing on, a higher limit comes with another plan, not an email.
+describe("SettingsPage — Usage words", () => {
+  function usageLine(html: string): string {
+    const start = html.indexOf('id="usage"');
+    return (/<p[^>]*>([\s\S]*?)<\/p>/.exec(html.slice(start))?.[1] ?? "").replace(/<!-- -->/g, "");
+  }
+
+  it("billing on, owner: points to changing the plan under Plan", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    try {
+      const line = usageLine(await render("owner"));
+      expect(line).toContain('For a higher limit, change the plan under <a href="#plan"');
+      expect(line).not.toContain("write to");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("billing on, member: the owner changes the plan", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    try {
+      const line = usageLine(await render("member"));
+      expect(line).toContain("For a higher limit, ask the workspace owner to change the plan.");
+      expect(line).not.toContain("write to");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("billing off: unchanged, write in", async () => {
+    vi.stubEnv("BILLING_ENABLED", undefined);
+    try {
+      const line = usageLine(await render("owner"));
+      expect(line).toContain("What this workspace has used of its limits. For a higher limit, write to ");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});

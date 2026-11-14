@@ -4,7 +4,7 @@ import robots from "./robots";
 
 const SIGNED_IN_PATHS = [
   "/settings", "/posts", "/queue", "/activity", "/reports", "/media",
-  "/reviews", "/workspaces", "/admin", "/connections", "/join",
+  "/reviews", "/workspaces", "/connections", "/join",
 ];
 
 describe("robots()", () => {
@@ -36,5 +36,11 @@ describe("robots()", () => {
 
   it("names the absolute sitemap address", () => {
     expect(robots().sitemap).toBe("https://vibesocials.wtf/sitemap.xml");
+  });
+
+  // F7: robots.txt is public, so listing the operator page there tells anyone where it is.
+  it("does not name the operator page (it stays signed-in and protected)", () => {
+    const disallow = ([] as string[]).concat(rule().disallow ?? []);
+    expect(disallow.some((p) => p.includes("admin"))).toBe(false);
   });
 });

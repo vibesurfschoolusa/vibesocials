@@ -1,0 +1,81 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// F7 (R1-security L5): the reply route sent body.reviewName to Google unchecked.
+const { getWorkspaceContextMock, findFirstMock, replyToReviewMock } = vi.hoisted(() => ({
+  getWorkspaceContextMock: vi.fn(),
+  findFirstMock: vi.fn(),
+  replyToReviewMock: vi.fn(),
+}));
+
+vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
+vi.mock("@/lib/workspaceStatus", () => ({ accessBlockResponse: () => null }));
+vi.mock("@/lib/db", () => ({ prisma: { socialConnection: { findFirst: findFirstMock } } }));
+vi.mock("@/server/googleReviews", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/googleReviews")>()),
+  replyToReview: replyToReviewMock,
+  refreshAccessToken: vi.fn(),
+}));
+
+import { GOOGLE_REFUSED_MESSAGE } from "@/server/googleReviews";
+
+import { POST } from "./route";
+
+function post(body: Record<string, unknown>): Promise<Response> {
+  return POST(
+    new Request("http://localhost/api/reviews/r1/reply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  getWorkspaceContextMock.mockResolvedValue({ workspace: { id: "ws-1" }, role: "member" });
+  findFirstMock.mockResolvedValue({
+    id: "c1",
+    accessToken: "tok",
+    expiresAt: null,
+    metadata: { locationName: "accounts/1/locations/2" },
+  });
+  replyToReviewMock.mockResolvedValue({ comment: "Thanks", updateTime: "2026-11-14T00:00:00Z" });
+});
+
+describe("POST /api/reviews/[reviewId]/reply", () => {
+  it("posts a reply to a review's resource name", async () => {
+    const response = await post({ comment: " Thanks ", reviewName: "accounts/1/locations/2/reviews/r1" });
+
+    expect(response.status).toBe(200);
+    expect(replyToReviewMock).toHaveBeenCalledWith("tok", "accounts/1/locations/2/reviews/r1", "Thanks");
+  });
+
+  it.each([
+    "accounts/1/locations/2/reviews/r1/../../../../v1/other",
+    "accounts/1/locations/2",
+    "https://example.test/x",
+  ])("answers 404 and sends nothing for %j", async (reviewName) => {
+    const response = await post({ comment: "Thanks", reviewName });
+
+    expect(response.status).toBe(404);
+    expect(replyToReviewMock).not.toHaveBeenCalled();
+  });
+
+  it("asks for a reconnect when Google refuses the reply", async () => {
+    replyToReviewMock.mockRejectedValue(Object.assign(new Error("Failed (status 401)"), { status: 401 }));
+
+    const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
+
+    await expect(response.json()).resolves.toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+  });
+
+  it("gives a plain sentence for any other failure", async () => {
+    replyToReviewMock.mockRejectedValue(new TypeError("fetch failed"));
+
+    const response = await post({ comment: "Thanks", reviewName: "accounts/1/locations/2/reviews/r1" });
+
+    await expect(response.json()).resolves.toEqual({ error: "Couldn't post your reply. Try again in a minute." });
+  });
+});

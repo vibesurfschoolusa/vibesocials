@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
-import { refreshAccessToken } from "@/server/googleReviews";
+import { refreshAccessToken, reviewsErrorBody } from "@/server/googleReviews";
 
 export const dynamic = "force-dynamic";
+
+const LOCATIONS_FAILED_MESSAGE = "Couldn't load your Google locations. Try again in a minute.";
 
 /**
  * GET /api/reviews/locations - Fetch all Google Business Profile locations
@@ -72,7 +74,10 @@ export async function GET() {
         statusText: accountsResponse.statusText,
         body: errorText.substring(0, 500),
       });
-      throw new Error("Failed to fetch Google Business Profile accounts");
+      // The status decides what the page says (reviewsErrorBody).
+      throw Object.assign(new Error("Failed to fetch Google Business Profile accounts"), {
+        status: accountsResponse.status,
+      });
     }
 
     const accountsData = await accountsResponse.json();
@@ -144,9 +149,6 @@ export async function GET() {
     });
   } catch (error: unknown) {
     console.error("[GBP Locations] Error:", error);
-    return NextResponse.json(
-      { error: (error as Error).message || "Failed to fetch locations" },
-      { status: 500 }
-    );
+    return NextResponse.json(reviewsErrorBody(error, LOCATIONS_FAILED_MESSAGE), { status: 500 });
   }
 }

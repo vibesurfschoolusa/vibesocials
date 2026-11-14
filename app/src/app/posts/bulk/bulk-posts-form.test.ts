@@ -99,3 +99,21 @@ describe("photo description typing", () => {
     expect(source).toContain("onAltTextChange={(altText) => updateRow(row.id, { altText, altTextError: null })}");
   });
 });
+
+// F7 (R1 M2): the switch sits on the page, on unless this browser turned it off.
+describe("Add many: Write captions with AI", () => {
+  it("renders a labelled switch, on by default", () => {
+    const html = firstRender("America/Chicago", "2026-11-14T10:00:00Z");
+    const input = html.match(/<input[^>]*id="bulk-ai-captions"[^>]*>/)?.[0];
+    expect(input).toBeDefined();
+    expect(input).toContain('type="checkbox"');
+    expect(input).toContain('checked=""');
+    expect(html).toMatch(/<label[^>]*for="bulk-ai-captions"[^>]*>Write captions with AI<\/label>/);
+  });
+
+  it("the caption step sends nothing to the AI while it is off", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(new URL("./bulk-posts-form.tsx", import.meta.url), "utf8");
+    expect(source).toContain("{ ai: aiCaptionsRef.current }");
+  });
+});

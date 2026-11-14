@@ -3,7 +3,7 @@ import Link from "next/link";
 import { LegalPage, LegalSection } from "@/components/legal-page";
 import { billingEnabled } from "@/lib/billing";
 import { PRIVACY_PAYMENTS } from "@/lib/billingTerms";
-import { billingOnLastUpdated } from "@/lib/legalLastUpdated";
+import { privacyLastUpdated } from "@/lib/legalLastUpdated";
 import { OPERATOR_LOCATION, OPERATOR_NAME, PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/siteInfo";
 
 export const metadata = {
@@ -15,7 +15,9 @@ export const metadata = {
 const mail = <a href={`mailto:${SUPPORT_EMAIL}`} className="underline underline-offset-2">{SUPPORT_EMAIL}</a>;
 
 // Billing on adds a paragraph and, as section 10 promises for any change, a new
-// date (src/lib/billingTerms.ts). The billing-off markup is today's, whole.
+// date (src/lib/billingTerms.ts). F7 (2026-11-14): the policy names every number
+// the app reads back, what clients send through links and what goes to the AI
+// provider, so it carries its own date (privacyLastUpdated), billing on or off.
 export default function PrivacyPage() {
   const billing = billingEnabled();
   const intro = (
@@ -29,17 +31,13 @@ export default function PrivacyPage() {
   return (
     <LegalPage
       title="Privacy Policy"
-      // LegalPage prints siteInfo's date; with billing on, the billing text's own, as on the Terms.
-      showUpdated={!billing}
+      // LegalPage prints the shared date; this page prints its own (privacyLastUpdated).
+      showUpdated={false}
       intro={
-        billing ? (
-          <>
-            <p className="mb-4 text-xs text-muted-foreground">Last updated: {billingOnLastUpdated()}</p>
-            {intro}
-          </>
-        ) : (
-          intro
-        )
+        <>
+          <p className="mb-4 text-xs text-muted-foreground">Last updated: {privacyLastUpdated(billing)}</p>
+          {intro}
+        </>
       }
     >
       <LegalSection title="1. Information we collect">
@@ -61,12 +59,31 @@ export default function PrivacyPage() {
           </li>
           <li>
             <strong className="text-foreground">Publishing results:</strong> the post IDs, links,
-            statuses and error messages each platform returns, and (for YouTube) view and engagement
-            counts for posts made through the Service.
+            statuses and error messages each platform returns.
+          </li>
+          <li>
+            <strong className="text-foreground">Post numbers:</strong> for posts made through the
+            Service, the numbers each platform reports for them: views, likes and comments on YouTube;
+            likes and comments on Instagram; reactions, comments and shares on Facebook; views, clicks,
+            likes, comments and shares on LinkedIn; views, saves and clicks on Pinterest. These are
+            totals only: we do not read who reacted, commented or clicked, or what a comment says. We
+            read no numbers from X, TikTok or Google Business Profile posts.
+          </li>
+          <li>
+            <strong className="text-foreground">Google listing numbers:</strong> if you choose a
+            Google Business Profile location, its daily search and Maps views, calls, direction requests
+            and website clicks, as Google reports them.
           </li>
           <li>
             <strong className="text-foreground">Google Business reviews:</strong> if you connect a
-            Google Business Profile, the reviews you open in the Service and the replies you send.
+            Google Business Profile, the reviews you open in the Service and the replies you send. Once
+            a day we also check the listing for new reviews, to email you about them; we keep only when
+            the newest review we saw was written, not the reviews.
+          </li>
+          <li>
+            <strong className="text-foreground">What your clients send through your links:</strong> through
+            an upload link, the photos and videos they send, and the name and note they add; through a
+            review link, whether they approve each post and what they ask to have changed.
           </li>
           <li>
             <strong className="text-foreground">Technical information:</strong> basic request data
@@ -82,9 +99,19 @@ export default function PrivacyPage() {
           <li>to sign you in and run your account and workspace;</li>
           <li>to publish or schedule the posts you create, to the platforms you choose, when you choose;</li>
           <li>to show you where each post went, keep your connections working, and email you when a post finishes (you can turn these emails off in Settings);</li>
-          <li>to suggest captions with AI, automatically when you add a photo or video (you can turn this off on the Create page) or when you ask, and to suggest review replies when you ask;</li>
+          <li>to show you how your posts and your Google listing are doing: the post and listing numbers show in the app, in monthly reports, in emails and on the client review link;</li>
+          <li>to suggest captions with AI, automatically when you add a photo or video or when you ask, to describe photos for screen readers, and to suggest review replies when you ask;</li>
           <li>to suggest places when you add a location to a post.</li>
         </ul>
+        <p className="mt-2">
+          What goes to our AI provider: the photos and still frames of videos it is asked to caption or
+          describe; your captions, when you ask it to improve one, and in Add many the batch&apos;s other
+          captions, so it does not repeat them; your brand voice notes; and, when you ask for a reply
+          suggestion, the review&apos;s text, star rating and the reviewer&apos;s display name. On the
+          Create page, untick &quot;Generate a caption when media is added&quot; and nothing is sent
+          until you ask. Turn off Write captions with AI in Add many and no photo or video is sent:
+          rows start with an empty caption box and photos are not described automatically.
+        </p>
         <p className="mt-2">
           We do not sell your information, use it for advertising, or post anything you did not
           create and confirm.
@@ -133,8 +160,9 @@ export default function PrivacyPage() {
           </li>
           <li>
             <strong className="text-foreground">Google Business Profile:</strong> creating the posts
-            you publish, adding your videos to your profile&apos;s photos and videos, and showing your
-            reviews and posting the replies you write or approve.
+            you publish, adding your videos to your profile&apos;s photos and videos, showing your
+            reviews and posting the replies you write or approve, and reading the listing numbers
+            described in section 1.
           </li>
         </ul>
         <p className="mt-2">
@@ -150,28 +178,31 @@ export default function PrivacyPage() {
           <a href="https://security.google.com/settings/security/permissions" className="underline underline-offset-2">
             Google account permissions
           </a>
-          ; disconnecting in Settings deletes the tokens and YouTube data we hold.
+          ; disconnecting in Settings deletes the tokens we hold and the numbers read from that account.
         </p>
         <p className="mt-2">
           The same approach applies to Facebook Pages and Instagram (Meta), LinkedIn, Pinterest and X: we
-          request only the permissions needed to publish your posts, and use them only for that.
+          request only the permissions needed to publish your posts and to read back the post numbers
+          described in section 1, and use them only for that.
           Each platform&apos;s own terms and privacy policy also apply to what you post there.
         </p>
         <p className="mt-2">
           For LinkedIn, you approve two permissions on LinkedIn&apos;s own screen: posting as your
           company page, and finding the pages you administer so you can choose one. We store the
-          page&apos;s ID and name to show it in Settings and to publish to it. We do not read your
-          LinkedIn profile, your connections, or comments and reactions on your posts.
+          page&apos;s ID and name to show it in Settings and to publish to it. For the posts made
+          through the Service we read their totals of views, clicks, likes, comments and shares, not
+          who reacted or what a comment says. We do not read your LinkedIn profile or your connections.
         </p>
         <p className="mt-2">
           For Pinterest, you approve on Pinterest&apos;s own screen: creating Pins, and reading your
           boards and your username. We read your list of boards when you connect, so you can choose
           the board your Pins go on. We store your username and that board&apos;s ID and name, to show
           them in Settings and to publish to the board, and the ID of each Pin we create, to link to
-          it. We do not read your other Pins, your followers, your messages or your analytics, and we
-          never save other people&apos;s Pins, follow accounts or comment for you. You can remove{" "}
+          it. For those Pins we also read their views, saves and clicks. We do not read your other
+          Pins, your followers or your messages, and we never save other people&apos;s Pins, follow accounts or
+          comment for you. You can remove{" "}
           {PRODUCT_NAME}&apos;s access at any time in your Pinterest settings under Security; disconnecting
-          in Settings deletes the tokens and the Pinterest details we hold.
+          in Settings deletes the tokens, the Pinterest details and the Pins&apos; numbers we hold.
         </p>
       </LegalSection>
 
@@ -202,15 +233,33 @@ export default function PrivacyPage() {
           </li>
           <li>Platform tokens are deleted when you disconnect that platform.</li>
           <li>
-            YouTube view, like and comment counts are refreshed while YouTube is connected. Counts
-            not refreshed for 30 days are deleted, and disconnecting YouTube deletes them all at once.
+            Post numbers are read once a day for posts published in the last 60 days, and kept while
+            that platform stays connected. YouTube numbers are read about every hour instead; YouTube
+            numbers not refreshed for 30 days are deleted.
+          </li>
+          <li>
+            Google listing numbers are read once a day, the first time for the last 90 days, and kept
+            while Google Business Profile stays connected.
+          </li>
+          <li>
+            Disconnecting a platform in Settings deletes the post numbers read from it; disconnecting
+            Google Business Profile also deletes the listing&apos;s numbers.
           </li>
           <li>
             A connected LinkedIn page&apos;s name is read again from LinkedIn every day while the
             connection works. A name not refreshed for eight weeks is deleted; disconnecting LinkedIn
             deletes it at once.
           </li>
+          <li>
+            A client&apos;s name and note stay with the file they sent, in your Media library, until you
+            delete it there. A change request stays with its post until the post is scheduled again or
+            deleted.
+          </li>
           <li>Your account, posts and publishing history are kept until you delete your account.</li>
+          <li>
+            Deleting a workspace deletes everything in it: its posts, media, connections, post and
+            listing numbers, and what clients sent through its links.
+          </li>
           <li>Server logs are kept for a short time, typically days.</li>
         </ul>
       </LegalSection>

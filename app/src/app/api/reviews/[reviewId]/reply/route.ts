@@ -3,8 +3,11 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { prisma } from "@/lib/db";
+import { GOOGLE_REFUSED_MESSAGE, isReviewResourceName, reviewsErrorBody } from "@/server/googleReviews";
 
 export const dynamic = "force-dynamic";
+
+const REPLY_FAILED_MESSAGE = "Couldn't post your reply. Try again in a minute.";
 
 /**
  * POST /api/reviews/[reviewId]/reply - Reply to a Google Business Profile
@@ -43,6 +46,12 @@ export async function POST(request: Request) {
       );
     }
 
+    // R1-security L5: the reply is sent to `<reviewName>/reply`, so only a
+    // review's own resource name is sent on.
+    if (!isReviewResourceName(reviewName)) {
+      return NextResponse.json({ error: "Review not found." }, { status: 404 });
+    }
+
     // Get the workspace's Google Business Profile connection
     const connection = await prisma.socialConnection.findFirst({
       where: {
@@ -69,7 +78,7 @@ export async function POST(request: Request) {
 
     if (!accessToken) {
       return NextResponse.json(
-        { error: "Missing access token" },
+        { error: GOOGLE_REFUSED_MESSAGE, reconnect: true },
         { status: 500 }
       );
     }
@@ -88,9 +97,6 @@ export async function POST(request: Request) {
     });
   } catch (error: unknown) {
     console.error("[Reviews API] Reply error:", error);
-    return NextResponse.json(
-      { error: (error as Error).message || "Failed to post reply" },
-      { status: 500 }
-    );
+    return NextResponse.json(reviewsErrorBody(error, REPLY_FAILED_MESSAGE), { status: 500 });
   }
 }

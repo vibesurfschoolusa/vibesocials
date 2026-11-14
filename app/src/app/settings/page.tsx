@@ -23,7 +23,7 @@ import {
   planSectionActions,
   planSectionLabel,
 } from "@/components/planSectionView";
-import { paymentsConfigured, stripeReachable } from "@/lib/billing";
+import { billingEnabled, paymentsConfigured, stripeReachable } from "@/lib/billing";
 import { workspacePlanNoteShown } from "@/lib/planCopy";
 import { getPlanOffers, getYearlyPlanOffers } from "@/server/billing/planPrices";
 import { getWorkspaceUsageOrNull } from "@/server/usage/workspaceUsage";
@@ -303,8 +303,21 @@ export default async function SettingsPage({
           <section>
             <div className="mb-4">
               <h2 id="usage" className="scroll-mt-32 lg:scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Usage</h2>
+              {/* R1 L4: with billing on, a higher limit is another plan: the owner
+                  changes it under Plan; a member asks the owner. Billing off (or no
+                  Plan section to point at): write in, as before. */}
               <p className="mt-1 text-sm text-muted-foreground">
-                What this workspace has used of its limits. For a higher limit, write to {SUPPORT_EMAIL}.
+                What this workspace has used of its limits.{" "}
+                {billingEnabled() && context.role === "member" ? (
+                  "For a higher limit, ask the workspace owner to change the plan."
+                ) : billingEnabled() && planLabel ? (
+                  <>
+                    For a higher limit, change the plan under{" "}
+                    <a href="#plan" className="underline underline-offset-2 hover:text-foreground">Plan</a>.
+                  </>
+                ) : (
+                  <>For a higher limit, write to {SUPPORT_EMAIL}.</>
+                )}
               </p>
             </div>
             <UsageSection usage={usage} />
