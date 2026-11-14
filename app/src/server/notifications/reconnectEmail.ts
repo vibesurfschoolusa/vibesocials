@@ -1,3 +1,5 @@
+import { workspaceLink } from "@/server/notifications/links";
+
 /**
  * Proactive reconnect notice, sent by the connectionHealthSweep cron to every
  * OWNER of the workspace whose connection just terminally failed a token
@@ -17,17 +19,17 @@ function escapeHtml(value: string): string {
 
 export function buildReconnectEmail(params: {
   platformLabel: string;
+  /** The link opens this workspace's connections through /go (F4). */
+  workspaceId: string;
   workspaceName: string;
   /** `process.env.NEXTAUTH_URL`. Omit/null to render the email with no link. */
   appBaseUrl: string | null;
 }): { subject: string; html: string } {
   const platform = escapeHtml(params.platformLabel);
   const workspace = escapeHtml(params.workspaceName);
-  // Trim a trailing slash so "https://host/" never yields "https://host//settings"
-  // (postOutcomeEmail convention).
-  const base = params.appBaseUrl ? params.appBaseUrl.replace(/\/+$/, "") : null;
+  const base = params.appBaseUrl || null;
   const reconnectLine = base
-    ? `<p><a href="${base}/settings">Reconnect ${platform} in Settings</a> — it takes about a minute.</p>`
+    ? `<p><a href="${escapeHtml(workspaceLink(params.workspaceId, "/settings#connections", base))}">Reconnect ${platform} in Settings</a> — it takes about a minute.</p>`
     : `<p>Reconnect ${platform} in Settings — it takes about a minute.</p>`;
 
   return {

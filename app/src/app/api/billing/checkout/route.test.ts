@@ -9,11 +9,12 @@ vi.mock("@/server/billing/checkout", () => ({ startCheckout: h.startCheckout }))
 
 import { POST } from "./route";
 
-const post = (body: unknown) =>
+/** The Plan buttons send the workspace their page was rendered for (F3). */
+const post = (body: Record<string, unknown>) =>
   new Request("http://localhost/api/billing/checkout", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ workspaceId: "ws-1", ...body }),
   });
 
 beforeEach(() => {
@@ -48,6 +49,29 @@ describe("POST /api/billing/checkout", () => {
     const response = await POST(post({ plan: "starter", interval: "week" }));
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Choose monthly or yearly." });
+    expect(h.startCheckout).not.toHaveBeenCalled();
+  });
+});
+
+// F3 (2026-11-14 review): a plan chosen in a tab left on workspace A must not
+// open a Stripe checkout for workspace B.
+describe("POST /api/billing/checkout and the rendered workspace", () => {
+  it("409s another workspace's id, and asks Stripe for nothing", async () => {
+    const response = await POST(post({ plan: "starter", workspaceId: "ws-2" }));
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED" });
+    expect(h.startCheckout).not.toHaveBeenCalled();
+  });
+
+  it("400s a body without the id, and asks Stripe for nothing", async () => {
+    const response = await POST(
+      new Request("http://localhost/api/billing/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: "starter" }),
+      }),
+    );
+    expect(response.status).toBe(400);
     expect(h.startCheckout).not.toHaveBeenCalled();
   });
 });

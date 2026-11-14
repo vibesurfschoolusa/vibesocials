@@ -59,7 +59,7 @@ import {
   LOGO_TOO_LARGE_MESSAGE,
 } from "@/lib/workspaceLogo";
 
-import { WORKSPACE_CHANGED_CODE, WORKSPACE_CHANGED_MESSAGE } from "@/lib/workspaceChanged";
+import { WORKSPACE_CHANGED_CODE, WORKSPACE_CHANGED_SAVE_MESSAGE } from "@/lib/workspaceChanged";
 
 import { DELETE, POST } from "./route";
 
@@ -268,11 +268,9 @@ describe("POST /api/workspaces/logo", () => {
 // Fix round 1 (18b): the active workspace is a cookie every tab shares, so the
 // control sends the workspace its page was rendered for.
 describe("the workspace the page was rendered for", () => {
-  it("lets an upload and a removal through when it matches, or when none is sent", async () => {
+  it("lets an upload and a removal through when it matches", async () => {
     expect((await POST(upload(await picture(50, 50)))).status).toBe(200);
-    expect((await POST(upload(await picture(50, 50), {}, null))).status).toBe(200);
     expect((await DELETE(remove())).status).toBe(200);
-    expect((await DELETE(remove(null))).status).toBe(200);
   });
 
   it("answers an upload for another workspace 409 before reading the body or storing anything", async () => {
@@ -291,7 +289,7 @@ describe("the workspace the page was rendered for", () => {
     const response = await POST(upload(body, {}, "ws-2"));
 
     expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ error: WORKSPACE_CHANGED_MESSAGE, code: WORKSPACE_CHANGED_CODE });
+    expect(await response.json()).toEqual({ error: WORKSPACE_CHANGED_SAVE_MESSAGE, code: WORKSPACE_CHANGED_CODE });
     expect(state.pulled).toBe(0);
     expect(m.checkRateLimit).not.toHaveBeenCalled();
     expect(m.put).not.toHaveBeenCalled();
@@ -302,7 +300,19 @@ describe("the workspace the page was rendered for", () => {
     const response = await DELETE(remove("ws-2"));
 
     expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({ error: WORKSPACE_CHANGED_MESSAGE, code: WORKSPACE_CHANGED_CODE });
+    expect(await response.json()).toEqual({ error: WORKSPACE_CHANGED_SAVE_MESSAGE, code: WORKSPACE_CHANGED_CODE });
+    expect(m.transaction).not.toHaveBeenCalled();
+  });
+});
+
+// F3 (2026-11-14 review): a change needs the id the page was rendered for.
+describe("the logo without ?workspaceId", () => {
+  it("refuses an upload and a removal (a page from before the id was sent), and changes nothing", async () => {
+    for (const response of [await POST(upload(new Uint8Array(4), {}, null)), await DELETE(remove(null))]) {
+      expect(response.status).toBe(400);
+      expect((await response.json()).code).toBe("MISSING_WORKSPACE_ID");
+    }
+    expect(m.put).not.toHaveBeenCalled();
     expect(m.transaction).not.toHaveBeenCalled();
   });
 });

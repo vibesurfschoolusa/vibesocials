@@ -11,6 +11,7 @@ const BASE = "https://vibesocials.example";
 /** The email for these reviews, all of them new. */
 function emailFor(reviews: NewReviewSummary[], over: { locationTitle?: string; appBaseUrl?: string | null } = {}) {
   return buildNewReviewsEmail({
+    workspaceId: "ws_1",
     locationTitle: over.locationTitle ?? "Surf Co",
     count: reviews.length,
     reviews,
@@ -46,6 +47,7 @@ describe("buildNewReviewsEmail", () => {
 
   it("counts the reviews it was not given excerpts for in and m more", () => {
     const { subject, html } = buildNewReviewsEmail({
+      workspaceId: "ws_1",
       locationTitle: "Surf Co",
       count: 14,
       reviews: Array.from({ length: 10 }, () => review()),
@@ -78,9 +80,11 @@ describe("buildNewReviewsEmail", () => {
 
   it("links to the Reviews page and says where to turn the email off", () => {
     const { html } = emailFor([review()], { appBaseUrl: `${BASE}/` });
-    expect(html).toContain(`href="${BASE}/reviews"`);
-    expect(html.match(/<a /g)).toHaveLength(1);
-    expect(html).toContain("Settings, Notifications");
+    expect(html).toContain(`href="${BASE}/go?w=ws_1&amp;to=%2Freviews"`);
+    expect(html.match(/<a /g)).toHaveLength(2);
+    expect(html).toContain(
+      `turn off &quot;Email me when a new Google review arrives&quot; in <a href="${BASE}/go?w=ws_1&amp;to=%2Fsettings%23post-defaults">Settings, Posts and emails</a>.`,
+    );
   });
 
   it("names a reviewer Google does not name, and a rating Google does not give", () => {
@@ -97,6 +101,7 @@ describe("buildNewReviewsEmail", () => {
   // still goes out, with the count and the link only.
   it("without excerpts says the count and sends the owner to Reviews", () => {
     const { subject, html } = buildNewReviewsEmail({
+      workspaceId: "ws_1",
       locationTitle: "Surf & Co",
       count: 3,
       reviews: null,
@@ -105,12 +110,14 @@ describe("buildNewReviewsEmail", () => {
     expect(subject).toBe("3 new Google reviews for Surf & Co");
     expect(html).toContain("3 new Google reviews for Surf &amp; Co. Open Reviews to read them.");
     expect(html).not.toContain("<li>");
-    expect(html).toContain(`href="${BASE}/reviews"`);
-    expect(html).toContain("Settings, Notifications");
+    expect(html).toContain(`href="${BASE}/go?w=ws_1&amp;to=%2Freviews"`);
+    expect(html).toContain(
+      `turn off &quot;Email me when a new Google review arrives&quot; in <a href="${BASE}/go?w=ws_1&amp;to=%2Fsettings%23post-defaults">Settings, Posts and emails</a>.`,
+    );
   });
 
   it("without excerpts, for one review, says it", () => {
-    const { html } = buildNewReviewsEmail({ locationTitle: "Surf Co", count: 1, reviews: null, appBaseUrl: BASE });
+    const { html } = buildNewReviewsEmail({ workspaceId: "ws_1", locationTitle: "Surf Co", count: 1, reviews: null, appBaseUrl: BASE });
     expect(html).toContain("1 new Google review for Surf Co. Open Reviews to read it.");
   });
 });

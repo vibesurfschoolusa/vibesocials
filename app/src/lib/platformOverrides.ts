@@ -3,7 +3,9 @@ import type { Platform } from "@prisma/client";
 import { buildCaptionWithFooter, type CaptionFooterUser } from "@/lib/captionFooter";
 import { MAX_CAPTION_CHARS } from "@/lib/captionLimits";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
+import { buildPlatformPreview } from "@/lib/platformPreview";
 import { PLATFORM_ORDER } from "@/lib/platforms";
+import { xWeightedLength } from "@/lib/xWeightedLength";
 
 /**
  * A different caption per platform (`perPlatformOverrides`), as the composer
@@ -84,21 +86,23 @@ export function platformOverridesEqual(
   return true;
 }
 
-// The platform clients count extended grapheme clusters (lib/truncate.ts).
+// The platform clients count extended grapheme clusters (lib/truncate.ts),
+// except X, which counts by its own weight (lib/xWeightedLength.ts).
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-function countGraphemes(text: string): number {
+function platformLength(text: string, platform: Platform): number {
+  if (platform === "x") return xWeightedLength(text);
   return [...graphemeSegmenter.segment(text)].length;
 }
 
 /** Length of the footer the app appends to every caption (0 when there is none). */
-function footerLength(footer: CaptionFooterUser | null | undefined): number {
-  return countGraphemes(buildCaptionWithFooter("", footer ?? {}));
+function footerLength(footer: CaptionFooterUser | null | undefined, platform: Platform): number {
+  return platformLength(buildCaptionWithFooter("", footer ?? {}), platform);
 }
 
 /** Room for the caption on this platform once the footer is added, or null when it has no limit. */
 function captionRoom(platform: Platform, footer: CaptionFooterUser | null | undefined): number | null {
   const { charLimit } = PLATFORM_CAPTION_LIMITS[platform];
-  return charLimit === null ? null : charLimit - footerLength(footer);
+  return charLimit === null ? null : charLimit - footerLength(footer, platform);
 }
 
 export interface PlatformCaptionCounter {
@@ -110,16 +114,35 @@ export interface PlatformCaptionCounter {
 }
 
 /**
- * Counter for one platform's caption: against that platform's limit minus the
- * footer, or the app's 10,000-character cap when the platform has no limit.
+ * Counter for one platform's caption. On a platform with a limit it counts the
+ * text that will be posted (buildPlatformPreview: footer parts that publishing
+ * drops are left out, @-mentions too on X, X by its weight) against the limit,
+ * and is over exactly when the preview says the post will be shortened. Without
+ * a limit: the caption against the app's 10,000-character cap.
  */
 export function platformCaptionCounter(
   text: string,
   platform: Platform,
   footer: CaptionFooterUser | null | undefined,
 ): PlatformCaptionCounter {
-  const length = countGraphemes(text);
-  const max = captionRoom(platform, footer) ?? MAX_CAPTION_CHARS;
+  const { charLimit } = PLATFORM_CAPTION_LIMITS[platform];
+  if (charLimit !== null) {
+    const preview = buildPlatformPreview({ platform, caption: text, user: footer });
+    // The count includes whatever part of the footer will be posted; say so,
+    // or "hello" reading 50 looks wrong. No hint once the footer is dropped.
+    const footerPosted =
+      preview.rendered !== buildPlatformPreview({ platform, caption: text, user: null }).rendered;
+    return {
+      length: preview.charCount,
+      max: charLimit,
+      over: preview.willTruncate,
+      label: `${preview.charCount.toLocaleString("en-US")} / ${charLimit.toLocaleString("en-US")}${
+        footerPosted ? " incl. footer" : ""
+      }`,
+    };
+  }
+  const length = platformLength(text, platform);
+  const max = MAX_CAPTION_CHARS;
   return {
     length,
     max,

@@ -3,7 +3,7 @@ import type { SocialConnection } from "@prisma/client";
 import { assertOk } from "@/lib/assertOk";
 import { fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PUBLISH_UNCONFIRMED_CODE } from "@/lib/publishOutcomes";
-import { fitTitle } from "@/lib/truncate";
+import { fitTitle, truncateUnits } from "@/lib/truncate";
 import {
   YOUTUBE_UPLOAD_STATE_KIND,
   type UploadSnapshot,
@@ -190,6 +190,32 @@ export function fitYouTubeTitle(text: string, max: number = YOUTUBE_TITLE_MAX_GR
   return fitTitle(text, max);
 }
 
+/** YouTube's limit on a video description, in UTF-8 bytes. */
+export const YOUTUBE_DESCRIPTION_MAX_BYTES = 5000;
+
+/**
+ * YouTube refuses "<" and ">" in a title or a description (fix round 1, M4), so
+ * they become the single angle quotes, which read the same ("<3" -> "‹3").
+ */
+export function youtubeSafeText(text: string): string {
+  return text.replace(/</g, "‹").replace(/>/g, "›");
+}
+
+const utf8 = new TextEncoder();
+
+/**
+ * The description: the caption with safe angle quotes, cut to YouTube's 5,000
+ * bytes with "…" when it is longer, never inside a character or a link.
+ */
+export function fitYouTubeDescription(caption: string): string {
+  return truncateUnits(
+    youtubeSafeText(caption),
+    YOUTUBE_DESCRIPTION_MAX_BYTES,
+    (unit) => utf8.encode(unit.text).length,
+    "…",
+  );
+}
+
 /**
  * The video title: the POST's own base caption (no footer) — the job's
  * snapshot via `ctx.baseCaption`, the shared MediaItem's only for legacy jobs
@@ -203,7 +229,7 @@ export function computeYouTubeTitle(
   },
 ): string {
   const baseCaption = ctx.baseCaption ?? ctx.mediaItem.baseCaption;
-  return fitYouTubeTitle(baseCaption || ctx.caption);
+  return fitYouTubeTitle(youtubeSafeText(baseCaption || ctx.caption));
 }
 
 /**
@@ -276,15 +302,18 @@ export function buildYouTubeVideoResource(ctx: PublishContext): {
   // YouTube video metadata: the post's base caption for the title (no
   // footer), the full caption for the description (with footer).
   const title = computeYouTubeTitle(ctx);
+  const description = fitYouTubeDescription(caption); // Full caption with footer
   const metadata: YouTubeVideoResource = {
     snippet: {
       title,
-      description: caption, // Full caption with footer
+      description,
       categoryId: "22", // People & Blogs (default category)
       tags: tags.length > 0 ? tags : undefined, // Add extracted hashtags as tags
     },
     status: {
-      privacyStatus: ctx.youtubeMetadata?.privacyStatus ?? "unlisted", // User-selected; defaults to unlisted, never auto-public
+      // User-selected. Without a choice: private, the one rule for scheduled,
+      // immediate and retried posts (fix round 1, L9; inngest-functions.ts retry).
+      privacyStatus: ctx.youtubeMetadata?.privacyStatus ?? "private",
       selfDeclaredMadeForKids: false, // Not made for kids
     },
   };
@@ -304,7 +333,7 @@ export function buildYouTubeVideoResource(ctx: PublishContext): {
 
   console.log("[YouTube] Uploading with metadata", {
     title: metadata.snippet.title,
-    descriptionLength: caption.length,
+    descriptionLength: description.length,
     tags: tags,
     location: locationData ? {
       lat: locationData.latitude,

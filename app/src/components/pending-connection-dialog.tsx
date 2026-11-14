@@ -61,7 +61,8 @@ const noSubscription = () => () => {};
  * connect found several accounts and connected none of them. The user picks
  * one (POST) or cancels (DELETE). Owner-only, like the connect itself.
  */
-export function PendingConnectionDialog() {
+/** `workspaceId`: the workspace this page was rendered for; the route refuses any other (F3). */
+export function PendingConnectionDialog({ workspaceId }: { workspaceId: string }) {
   const searchParams = useSearchParams();
   const pendingId = searchParams.get("choose");
   // False on the server and on the hydrating render, true after. The server
@@ -72,10 +73,10 @@ export function PendingConnectionDialog() {
   if (!pendingId || !hydrated) return null;
 
   // key: a different ?choose= id starts over — fresh fetch, no stale choice.
-  return <PendingConnectionChoice key={pendingId} pendingId={pendingId} />;
+  return <PendingConnectionChoice key={pendingId} pendingId={pendingId} workspaceId={workspaceId} />;
 }
 
-function PendingConnectionChoice({ pendingId }: { pendingId: string }) {
+function PendingConnectionChoice({ pendingId, workspaceId }: { pendingId: string; workspaceId: string }) {
   const router = useRouter();
   const endpoint = `/api/connections/pending/${encodeURIComponent(pendingId)}`;
 
@@ -126,7 +127,7 @@ function PendingConnectionChoice({ pendingId }: { pendingId: string }) {
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ candidateId: selectedId }),
+        body: JSON.stringify({ candidateId: selectedId, workspaceId }),
       });
       const data = (await response.json().catch(() => null)) as
         | { platform?: string; error?: string }
@@ -156,7 +157,11 @@ function PendingConnectionChoice({ pendingId }: { pendingId: string }) {
     if (busy) return;
     setBusy("cancel");
     try {
-      await fetch(endpoint, { method: "DELETE" });
+      await fetch(endpoint, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId }),
+      });
     } catch {
       // Nothing to undo: an uncancelled choice expires on its own.
     }

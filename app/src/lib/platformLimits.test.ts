@@ -37,9 +37,12 @@ describe("PLATFORM_CAPTION_LIMITS", () => {
     expect(PLATFORM_CAPTION_LIMITS.google_business_profile).toEqual({ charLimit: 1500, ellipsis: "..." });
   });
 
-  it("has no client-side caption limit for youtube, linkedin, facebook_page", () => {
+  it("linkedin: 3000 with '...' ellipsis (fix round 1, M6)", () => {
+    expect(PLATFORM_CAPTION_LIMITS.linkedin).toEqual({ charLimit: 3000, ellipsis: "..." });
+  });
+
+  it("has no client-side caption limit for youtube, facebook_page", () => {
     expect(PLATFORM_CAPTION_LIMITS.youtube.charLimit).toBeNull();
-    expect(PLATFORM_CAPTION_LIMITS.linkedin.charLimit).toBeNull();
     expect(PLATFORM_CAPTION_LIMITS.facebook_page.charLimit).toBeNull();
   });
 

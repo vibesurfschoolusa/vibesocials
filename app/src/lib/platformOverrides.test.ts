@@ -1,6 +1,9 @@
 import type { Platform } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 
+import { buildCaptionWithFooter } from "./captionFooter";
+import { buildPlatformPreview } from "./platformPreview";
+
 import {
   adaptMaxLength,
   applyAdaptedCaption,
@@ -93,11 +96,47 @@ describe("platformOverridesEqual", () => {
 });
 
 describe("platformCaptionCounter", () => {
-  it("counts against the platform limit minus the footer the app appends", () => {
-    // footer = "\n\nFor more info visit a.co" = 2 + 20 + 4 = 26 characters
+  // Review fix: the counter counts what will be posted (the preview's text),
+  // so it reserves no room for footer parts that publishing drops.
+  it("counts the text that will be posted, footer included, against the limit", () => {
+    // "hello" + "\n\nFor more info visit a.co" = 5 + 2 + 20 + a link X weighs 23 = 50
     const footer = { companyWebsite: "a.co", defaultHashtags: null };
     const counter = platformCaptionCounter("hello", "x", footer);
-    expect(counter).toEqual({ length: 5, max: 254, over: false, label: "5 / 254" });
+    expect(counter).toEqual({ length: 50, max: 280, over: false, label: "50 / 280 incl. footer" });
+  });
+
+  it("is not red for 201 characters + a long tracked website + five hashtags: the hashtags go", () => {
+    const footer = {
+      companyWebsite: "vibesurfschool.com/lessons/fort-lauderdale/private-surf-lessons",
+      defaultHashtags: "#surf #surflessons #fortlauderdale #miami #beach",
+      trackWebsiteLinks: true,
+    };
+    const caption = "a".repeat(201);
+    const counter = platformCaptionCounter(caption, "x", footer);
+    const preview = buildPlatformPreview({ platform: "x", caption, user: footer });
+    expect(counter.over).toBe(false);
+    expect(counter.length).toBe(preview.charCount);
+    expect(preview.rendered).toBe(buildCaptionWithFooter(caption, footer, "x"));
+    expect(preview.rendered).not.toContain("#surf");
+  });
+
+  it("is red when the caption alone is over, and the preview says it will be shortened", () => {
+    const footer = { companyWebsite: "a.co", defaultHashtags: "#surf" };
+    const caption = "a".repeat(281);
+    expect(platformCaptionCounter(caption, "x", footer).over).toBe(true);
+    expect(buildPlatformPreview({ platform: "x", caption, user: footer }).willTruncate).toBe(true);
+  });
+
+  it("leaves @-mentions out of the X count", () => {
+    const counter = platformCaptionCounter(`@ana_surf ${"a".repeat(280)}`, "x", {});
+    expect(counter).toEqual({ length: 280, max: 280, over: false, label: "280 / 280" });
+  });
+
+  it("counts LinkedIn against 3,000 with the footer dropped first", () => {
+    const footer = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf" };
+    const counter = platformCaptionCounter("a".repeat(2990), "linkedin", footer);
+    expect(counter).toEqual({ length: 2990, max: 3000, over: false, label: "2,990 / 3,000" });
+    expect(platformCaptionCounter("a".repeat(3001), "linkedin", footer).over).toBe(true);
   });
 
   it("is over when the text is longer than the room left", () => {
@@ -106,8 +145,26 @@ describe("platformCaptionCounter", () => {
     expect(counter.label).toBe("281 / 280");
   });
 
+  it("says the footer is included only when some of it is posted", () => {
+    const footer = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf" };
+    expect(platformCaptionCounter("hello", "linkedin", footer).label).toBe("52 / 3,000 incl. footer");
+    // 2,990 characters leave no room: the footer is dropped, so no hint.
+    expect(platformCaptionCounter("a".repeat(2990), "linkedin", footer).label).toBe("2,990 / 3,000");
+    expect(platformCaptionCounter("hello", "linkedin", {}).label).toBe("5 / 3,000");
+  });
+
+  // Fix round 1 (M5, M6): X is counted by its own weight; LinkedIn has 3,000.
+  it("counts X by weight: an emoji 2, a link 23", () => {
+    expect(platformCaptionCounter("\u{1F30A}\u{1F30A}", "x", {}).length).toBe(4);
+    expect(platformCaptionCounter("https://vibesurfschool.com/lessons/fort-lauderdale", "x", {}).length).toBe(23);
+  });
+
+  it("counts LinkedIn against 3,000", () => {
+    expect(platformCaptionCounter("hi", "linkedin", {}).label).toBe("2 / 3,000");
+  });
+
   it("falls back to the 10,000-character cap for a platform with no limit", () => {
-    expect(platformCaptionCounter("hi", "linkedin", {})).toEqual({
+    expect(platformCaptionCounter("hi", "facebook_page", {})).toEqual({
       length: 2,
       max: 10_000,
       over: false,
@@ -124,7 +181,7 @@ describe("adaptMaxLength", () => {
   });
 
   it("is undefined for a platform with no limit", () => {
-    expect(adaptMaxLength("linkedin", {})).toBeUndefined();
+    expect(adaptMaxLength("facebook_page", {})).toBeUndefined();
   });
 
   it("never goes below the 50 the route accepts", () => {
@@ -197,19 +254,26 @@ describe("queueOverridesToSend", () => {
   });
 });
 
-// 20: the room for a caption is counted with the plain footer whatever the
-// tracking-tags setting: the tags are only used when they fit (captionFooter.ts),
-// so switching the setting on never changes a counter.
+// 20: "Adapt" asks for room counted with the plain footer whatever the
+// tracking-tags setting: the tags are only used when they fit (captionFooter.ts).
+// The counter counts the text that will be posted, tags included when used.
 describe("platformCaptionCounter and adaptMaxLength with tracking tags", () => {
   const off = { companyWebsite: "a.co", defaultHashtags: "#surf" };
   const on = { ...off, trackWebsiteLinks: true };
 
-  it("gives every platform the same room with the setting on as off", () => {
+  it("gives every platform the same Adapt room with the setting on as off", () => {
     for (const platform of ["x", "pinterest", "google_business_profile", "instagram", "tiktok", "linkedin"] as const) {
-      expect(platformCaptionCounter("hello", platform, on)).toEqual(platformCaptionCounter("hello", platform, off));
       expect(adaptMaxLength(platform, on)).toBe(adaptMaxLength(platform, off));
     }
-    // "\n\nFor more info visit a.co\n\n#surf" is 33 characters.
-    expect(platformCaptionCounter("hello", "x", on).max).toBe(280 - 33);
+  });
+
+  it("counts the posted text with the tagged link where it is used", () => {
+    for (const platform of ["x", "pinterest", "google_business_profile", "linkedin"] as const) {
+      expect(platformCaptionCounter("hello", platform, on).length).toBe(
+        buildPlatformPreview({ platform, caption: "hello", user: on }).charCount,
+      );
+    }
+    // On X the tagged link weighs 23 like the plain one.
+    expect(platformCaptionCounter("hello", "x", on)).toEqual(platformCaptionCounter("hello", "x", off));
   });
 });

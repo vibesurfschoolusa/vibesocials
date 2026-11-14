@@ -45,6 +45,25 @@ describe("describeOAuthResult", () => {
   // Team Workspaces (Task 6, design §5): OAuth start/callback routes gate on
   // workspace ownership and redirect `?error=<platform>_not_workspace_owner`
   // when the caller is authenticated but not the workspace owner.
+  // F3 (2026-11-14 review): a start from a tab rendered for another workspace
+  // is refused (lib/workspace.ts requireOwnerContextForOAuthStart) and lands
+  // here on a fresh Settings page for the workspace that is active now.
+  describe("_workspace_changed (a start from a stale tab)", () => {
+    const MESSAGE =
+      "That tab was for another workspace, so nothing was connected. This page shows the workspace you are in now: click Connect again to connect it here.";
+
+    it.each(["youtube", "x", "tiktok", "pinterest", "instagram", "facebook_page", "linkedin", "google_business_profile"])(
+      "says what happened for %s, not a generic failure",
+      (platform) => {
+        expect(describeOAuthResult({ error: `${platform}_workspace_changed`, success: null })).toEqual({
+          variant: "danger",
+          message: MESSAGE,
+          platform,
+        });
+      },
+    );
+  });
+
   describe("_not_workspace_owner (Team Workspaces)", () => {
     it("maps a platform-prefixed not_workspace_owner code to a label-aware message", () => {
       const result = describeOAuthResult({

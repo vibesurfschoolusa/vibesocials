@@ -2,8 +2,9 @@ import type { Platform } from "@prisma/client";
 
 import { buildCaptionWithFooter, type CaptionFooterUser } from "@/lib/captionFooter";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
-import { truncateGraphemes } from "@/lib/truncate";
+import { truncateGraphemes, truncateKeepingLinks } from "@/lib/truncate";
 import { removeXMentions } from "@/lib/xMentions";
+import { truncateXWeighted, xWeightedLength } from "@/lib/xWeightedLength";
 
 // A local grapheme counter, intentionally NOT added to lib/truncate.ts: Phase
 // 7's only sanctioned non-UI change is the platformLimits.ts map + the
@@ -46,7 +47,10 @@ export interface PlatformPreviewResult {
    * string, not a re-derived approximation.
    */
   rendered: string;
-  /** Grapheme count of the full caption + footer text, BEFORE truncation. */
+  /**
+   * Length of the full caption + footer text, BEFORE truncation: X's weight on
+   * X (lib/xWeightedLength.ts), graphemes elsewhere.
+   */
   charCount: number;
   /** This platform's client-enforced limit, or null when it doesn't truncate. */
   limit: number | null;
@@ -95,9 +99,17 @@ export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPrevi
   }
 
   const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS[input.platform];
-  const charCount = countGraphemes(fullCaption);
-  const rendered =
-    charLimit === null ? fullCaption : truncateGraphemes(fullCaption, charLimit, { ellipsis });
+  // X is counted and cut by its own weight, as computeTweetText does (fix
+  // round 1, M5); LinkedIn keeps a link whole at the cut, as
+  // computeLinkedInCommentary does; every other platform cuts by graphemes.
+  const isX = input.platform === "x";
+  const charCount = isX ? xWeightedLength(fullCaption) : countGraphemes(fullCaption);
+  let rendered = fullCaption;
+  if (charLimit !== null) {
+    if (isX) rendered = truncateXWeighted(fullCaption, charLimit, ellipsis);
+    else if (input.platform === "linkedin") rendered = truncateKeepingLinks(fullCaption, charLimit, ellipsis);
+    else rendered = truncateGraphemes(fullCaption, charLimit, { ellipsis });
+  }
 
   return {
     rendered,

@@ -154,17 +154,21 @@ function ctx(id = PENDING_ID) {
   return { params: Promise.resolve({ id }) };
 }
 
-function postReq(body: unknown) {
+/** The Settings dialog sends the workspace its page was rendered for (F3). */
+function postReq(body: Record<string, unknown>) {
   return new Request("http://localhost/api/connections/pending/pending-1", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ workspaceId: "ws-1", ...body }),
   });
 }
 
 const getReq = () => new Request("http://localhost/api/connections/pending/pending-1");
-const deleteReq = () =>
-  new Request("http://localhost/api/connections/pending/pending-1", { method: "DELETE" });
+const deleteReq = (body: unknown = { workspaceId: "ws-1" }) =>
+  new Request("http://localhost/api/connections/pending/pending-1", {
+    method: "DELETE",
+    ...(body === null ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+  });
 
 function expectNothingSaved() {
   expect(saveFacebookPageConnectionMock).not.toHaveBeenCalled();
@@ -551,5 +555,49 @@ describe("DELETE /api/connections/pending/[id]", () => {
     await expect(response.json()).resolves.toEqual({ ok: true });
     expect(deleteManyMock).toHaveBeenCalledWith({ where: { id: PENDING_ID } });
     expectNothingSaved();
+  });
+});
+
+// F3 (2026-11-14 review): choosing or cancelling in a tab rendered for another
+// workspace is refused with the reload sentence, before the pending connect
+// is read.
+describe("pending/[id] and the rendered workspace", () => {
+  it("POST 409s another workspace's id, and connects nothing", async () => {
+    findUniqueMock.mockResolvedValue(row(LINKEDIN));
+
+    const response = await POST(postReq({ candidateId: "222", workspaceId: "ws-2" }), ctx());
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED" });
+    expect(findUniqueMock).not.toHaveBeenCalled();
+    expect(deleteManyMock).not.toHaveBeenCalled();
+    expectNothingSaved();
+  });
+
+  it("POST 400s a body without the id, and connects nothing", async () => {
+    const response = await POST(
+      new Request("http://localhost/api/connections/pending/pending-1", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ candidateId: "222" }),
+      }),
+      ctx(),
+    );
+
+    expect(response.status).toBe(400);
+    expect(findUniqueMock).not.toHaveBeenCalled();
+    expectNothingSaved();
+  });
+
+  it.each([
+    ["another workspace's id", { workspaceId: "ws-2" }, 409],
+    ["no body", null, 400],
+  ])("DELETE refuses %s, and cancels nothing", async (_label, body, status) => {
+    findUniqueMock.mockResolvedValue(row(LINKEDIN));
+
+    const response = await DELETE(deleteReq(body), ctx());
+
+    expect(response.status).toBe(status);
+    expect(deleteManyMock).not.toHaveBeenCalled();
   });
 });

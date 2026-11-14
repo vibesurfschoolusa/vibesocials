@@ -680,6 +680,6 @@ describe("sendReviewAlerts", () => {
 
     await sendWithTimers([alert()]);
 
-    expect(sendEmailMock.mock.calls[0][0].html).toContain('href="https://app.example/reviews"');
+    expect(sendEmailMock.mock.calls[0][0].html).toContain(`href="https://app.example/go?w=${alert().workspaceId}&amp;to=%2Freviews"`);
   });
 });

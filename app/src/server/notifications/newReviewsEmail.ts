@@ -1,3 +1,5 @@
+import { emailSettingsLine, workspaceLink } from "@/server/notifications/links";
+
 /**
  * The new Google review email (2026-11-10), sent by the `google-review-alerts`
  * cron to the owners of a workspace whose listing got new reviews. Pure builder
@@ -52,6 +54,8 @@ function reviewLine(review: NewReviewSummary): string {
  * read the reviews again: the count and the link only.
  */
 export function buildNewReviewsEmail(params: {
+  /** The links open this workspace through /go (F4). */
+  workspaceId: string;
   locationTitle: string;
   count: number;
   reviews: NewReviewSummary[] | null;
@@ -66,7 +70,7 @@ export function buildNewReviewsEmail(params: {
   // Trim a trailing slash so "https://host/" never yields "https://host//reviews".
   const base = params.appBaseUrl ? params.appBaseUrl.replace(/\/+$/, "") : null;
   const linkLine = base
-    ? `<p><a href="${base}/reviews">Read and reply on the Reviews page</a></p>`
+    ? `<p><a href="${escapeHtml(workspaceLink(params.workspaceId, "/reviews", base))}">Read and reply on the Reviews page</a></p>`
     : `<p>Open Reviews in Vibe Socials to read and reply.</p>`;
 
   let body: string[];
@@ -87,7 +91,11 @@ export function buildNewReviewsEmail(params: {
     html: [
       ...body,
       linkLine,
-      `<p>To stop these emails, turn off "Email me when a new Google review arrives" in Settings, Notifications.</p>`,
+      emailSettingsLine({
+        action: 'turn off "Email me when a new Google review arrives"',
+        workspaceId: params.workspaceId,
+        appBaseUrl: base,
+      }),
       `<p>— Vibe Socials</p>`,
     ].join("\n"),
   };

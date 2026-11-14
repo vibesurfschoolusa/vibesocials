@@ -1,6 +1,7 @@
 import type { Platform } from "@prisma/client";
 
 import { platformLabel } from "@/lib/platforms";
+import { emailSettingsLine } from "@/server/notifications/links";
 
 /**
  * The daily problems email (2026-11-10), sent by the `daily-problem-digest`
@@ -88,7 +89,17 @@ export function buildProblemDigestEmail(params: {
       `<p>Here is what needs your attention today.</p>`,
       ...blocks,
       linkLine,
-      `<p>To stop this daily email, turn it off in Settings, Notifications.</p>`,
+      // The switch is the person's own, the same in every workspace, so the
+      // first workspace's Settings is as good as any (F4).
+      ...(params.workspaces[0]
+        ? [
+            emailSettingsLine({
+              action: "turn off the daily summary email",
+              workspaceId: params.workspaces[0].workspaceId,
+              appBaseUrl: base,
+            }),
+          ]
+        : []),
       `<p>— Vibe Socials</p>`,
     ].join("\n"),
   };

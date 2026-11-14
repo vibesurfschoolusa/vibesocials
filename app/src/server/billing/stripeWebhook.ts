@@ -248,7 +248,7 @@ async function notifyPaymentFailed(event: StripeEventBody): Promise<200 | 500> {
 
     // Sent before the event is recorded, so a failed send is sent again with
     // Stripe's retry; the per-invoice key stops Resend sending one twice.
-    const email = buildPaymentFailedEmail({ workspaceName: workspace.name });
+    const email = buildPaymentFailedEmail({ workspaceId: workspace.id, workspaceName: workspace.name });
     for (const owner of workspace.members) {
       await sendEmail(
         { to: owner.user.email, ...email },

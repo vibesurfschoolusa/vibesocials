@@ -51,7 +51,7 @@ export async function GET() {
   const now = new Date();
   const isOwner = context.role === "owner";
 
-  const [problemsLast7Days, awaitingYourApproval, clientChangesRequested, next] = await Promise.all([
+  const [problemsLast7Days, awaitingYourApproval, clientChangesRequested, next, google] = await Promise.all([
     prisma.postJob.count({
       where: {
         workspaceId,
@@ -80,7 +80,18 @@ export async function GET() {
       orderBy: { scheduledFor: "asc" },
       select: { scheduledFor: true, publishMetadata: true },
     }),
+    // F4: a Google listing connected without a location (a client's connect
+    // link always does that) fails every Google post until an owner picks one.
+    isOwner
+      ? prisma.socialConnection.findFirst({
+          where: { workspaceId, platform: "google_business_profile" },
+          select: { metadata: true },
+        })
+      : Promise.resolve(null),
   ]);
+  const locationName = (google?.metadata as { locationName?: unknown } | null | undefined)?.locationName;
+  const chooseGoogleLocation =
+    google && !(typeof locationName === "string" && locationName.trim()) ? context.workspace.name : null;
 
   let nextScheduled: DashboardSummary["nextScheduled"] = null;
   if (next?.scheduledFor) {
@@ -98,6 +109,7 @@ export async function GET() {
     awaitingYourApproval,
     clientChangesRequested,
     nextScheduled,
+    chooseGoogleLocation,
   };
   return NextResponse.json(body);
 }

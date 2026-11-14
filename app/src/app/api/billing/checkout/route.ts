@@ -6,6 +6,7 @@ import { adminNotFoundResponse, adminOtherMethods } from "@/lib/operator";
 import { isPlanKey } from "@/lib/plans";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requireOwnerContext } from "@/lib/workspace";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { startCheckout } from "@/server/billing/checkout";
 
 export const dynamic = "force-dynamic";
@@ -41,6 +42,10 @@ export async function POST(request: Request) {
 
   const body = await readJsonObject(request);
   if (!body) return invalidJsonBodyResponse();
+  // F3: the workspace the Plan section was rendered for; the active one is a
+  // cookie every tab shares, so a stale tab must not buy a plan for another.
+  const refusal = renderedWorkspaceRefusal(body.workspaceId, context.workspace.id);
+  if (refusal) return refusal;
   if (typeof body.plan !== "string" || !isPlanKey(body.plan)) {
     return NextResponse.json({ error: "Choose Starter, Growth or Pro." }, { status: 400 });
   }

@@ -39,7 +39,10 @@ describe("ConnectionHealth rows", () => {
 
   it("a connection that needs reconnecting keeps its Reconnect button", () => {
     const row = rowFor(render([{ platform: "linkedin", connected: true, needsReconnect: true }]), "LinkedIn");
-    expect(row).toContain('href="/api/auth/linkedin/start"');
+    // F3: the dashboard is not rendered for one workspace, so its Reconnect
+    // goes to Settings, whose Reconnect carries the workspace id.
+    expect(row).toContain('href="/settings#connections"');
+    expect(row).not.toContain("/api/auth/");
     expect(row).toContain("Reconnect");
     expect(row).not.toContain("sr-only");
   });

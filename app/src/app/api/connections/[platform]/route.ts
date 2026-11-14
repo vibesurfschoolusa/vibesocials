@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { getWorkspaceContext, requireOwnerContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
+import { readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { Platform } from "@prisma/client";
 
 interface PlatformRouteContext {
@@ -70,13 +72,23 @@ export async function GET(_request: NextRequest, context: PlatformRouteContext) 
  * Publish history survives: PostJobResult.socialConnectionId is `onDelete:
  * SetNull` (2026-11-01 audit), so Activity / Publish health keep every past
  * result — they just no longer point at a connection.
+ *
+ * The body carries `{ workspaceId }`, the workspace the Settings page was
+ * rendered for (F3): the active workspace is one cookie for every tab, so a
+ * Disconnect or Switch account in a stale tab must not remove another
+ * workspace's account.
  */
-export async function DELETE(_request: NextRequest, context: PlatformRouteContext) {
+export async function DELETE(request: NextRequest, context: PlatformRouteContext) {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) {
     return contextOrError;
   }
   const { workspace } = contextOrError;
+
+  const refusal = renderedWorkspaceRefusal((await readJsonObject(request))?.workspaceId, workspace.id);
+  if (refusal) {
+    return refusal;
+  }
 
   // In Next.js 15+, params might be a Promise
   const params = await Promise.resolve(context.params);
@@ -100,24 +112,19 @@ export async function DELETE(_request: NextRequest, context: PlatformRouteContex
   const platform = platformParam as Platform;
 
   try {
-    const deleteConnection = prisma.socialConnection.deleteMany({
-      where: {
-        workspaceId: workspace.id,
-        platform,
-      },
-    });
-    // YouTube API Services policy (2026-11-09): disconnecting YouTube deletes
-    // the YouTube data the app keeps for this workspace (its videos' view, like
-    // and comment counts), in the same transaction. server/connections/youtubeData.ts.
-    const [result] =
-      platform === Platform.youtube
-        ? await prisma.$transaction([
-            deleteConnection,
-            prisma.postMetric.deleteMany({
-              where: { workspaceId: workspace.id, platform: Platform.youtube },
-            }),
-          ])
-        : [await deleteConnection];
+    // Disconnecting deletes the numbers read through the connection, in the
+    // same transaction (YouTube API Services policy 2026-11-09, and F3 for
+    // every platform): the workspace's post numbers for the platform (one
+    // connection per platform per workspace, so they are this connection's)
+    // and, for Google Business Profile, the listing's daily numbers, which
+    // are only ever read through the workspace's one GBP connection.
+    const [result] = await prisma.$transaction([
+      prisma.socialConnection.deleteMany({ where: { workspaceId: workspace.id, platform } }),
+      prisma.postMetric.deleteMany({ where: { workspaceId: workspace.id, platform } }),
+      ...(platform === Platform.google_business_profile
+        ? [prisma.locationMetricDaily.deleteMany({ where: { workspaceId: workspace.id } })]
+        : []),
+    ]);
 
     return NextResponse.json(
       { ok: true, deletedCount: result.count },
