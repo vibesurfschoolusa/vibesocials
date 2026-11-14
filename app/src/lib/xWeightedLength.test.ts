@@ -79,6 +79,20 @@ describe("xWeightedLength", () => {
     expect(xWeightedLength("city.gov/beach")).toBe(23);
   });
 
+  // G1 review: real addresses are typed in lower case; a capital after the dot
+  // is a sentence run together ("session.So"), not a link.
+  it("counts a bare domain as a link only when its ending is lower case", () => {
+    expect(xWeightedLength("session.So")).toBe(10);
+    expect(xWeightedLength("beach.It")).toBe(8);
+    expect(xWeightedLength("waves.Now")).toBe(9);
+    expect(xWeightedLength("fiu.edu")).toBe(23);
+    expect(xWeightedLength("surf.miami")).toBe(23);
+    expect(xWeightedLength("vibesurfschool.com")).toBe(23);
+    // A scheme or www. still makes it a link whatever the case.
+    expect(xWeightedLength("https://beach.It")).toBe(23);
+    expect(xWeightedLength("www.beach.It")).toBe(23);
+  });
+
   it("still counts dotted words with an ending no domain has as characters", () => {
     expect(xWeightedLength("Mr.Smith")).toBe(8);
     expect(xWeightedLength("St.Pete")).toBe(7);

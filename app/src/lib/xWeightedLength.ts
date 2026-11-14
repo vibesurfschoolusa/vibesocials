@@ -9,7 +9,7 @@ import { textUnits, truncateUnits, type TextLink, type TextUnit } from "@/lib/tr
  * - An emoji weighs 2, however many code points its sequence has.
  * - A link weighs 23 (X shortens every link to a t.co link), however long:
  *   http(s):// always, a bare domain when it starts with www. or its ending looks like a real one
- *   (two letters, or a broad list of generic endings: see isLinkEnding).
+ *   (lower case, and two letters or a broad list of generic endings: see isLinkEnding).
  */
 
 /** X's limit on a post's weight. */
@@ -84,13 +84,26 @@ function charactersWeight(text: string): number {
   return weight;
 }
 
-function countsAsLink(link: TextLink): boolean {
-  return link.hasScheme || link.hasWww || isLinkEnding(link.tld);
+/**
+ * The host's last label as typed. `TextLink.tld` is lower-cased, but the case
+ * matters here: real addresses are typed in lower case, while "session.So" or
+ * "beach.It" is a sentence run together (G1 review), so a bare domain counts
+ * only with a lower-case ending.
+ */
+function typedEnding(text: string): string {
+  const host = text.replace(/^https?:\/\//i, "").split(/[/?#:]/, 1)[0];
+  return host.slice(host.lastIndexOf(".") + 1);
+}
+
+function countsAsLink(link: TextLink, text: string): boolean {
+  if (link.hasScheme || link.hasWww) return true;
+  const ending = typedEnding(text);
+  return ending === ending.toLowerCase() && isLinkEnding(link.tld);
 }
 
 function unitWeight(unit: TextUnit): number {
   if (unit.link) {
-    return countsAsLink(unit.link) ? X_LINK_WEIGHT : charactersWeight(unit.text);
+    return countsAsLink(unit.link, unit.text) ? X_LINK_WEIGHT : charactersWeight(unit.text);
   }
   return EMOJI.test(unit.text) || KEYCAP.test(unit.text) ? 2 : charactersWeight(unit.text);
 }
