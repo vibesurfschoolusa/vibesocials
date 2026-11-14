@@ -1,14 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/cn";
+import { addPickedFiles, fileKind, splitDroppedFiles, type PickedFile } from "@/lib/clientPage";
 import { UPLOAD_LINK_TEXT_MAX } from "@/lib/uploadLink";
 
 import { sendClientFile } from "./send-file";
+import { UploadFileRow } from "./upload-file-row";
 
 /**
  * The client's side of an upload link (2026-11-10): an optional name and note,
@@ -16,27 +19,18 @@ import { sendClientFile } from "./send-file";
  * time, which suits a phone's connection and keeps the progress readable.
  */
 
-type FileStatus = "waiting" | "sending" | "sent" | "failed";
-
-interface PickedFile {
-  key: string;
-  file: File;
-  status: FileStatus;
-  progress: number;
-  error: string | null;
-}
-
-function statusText(item: PickedFile): string {
-  switch (item.status) {
-    case "waiting":
-      return "Waiting";
-    case "sending":
-      return `${Math.round(item.progress)}%`;
-    case "sent":
-      return "Sent";
-    case "failed":
-      return "Not sent";
-  }
+/** Makes and frees the preview address of a photo; the row shows an icon until it exists. */
+function FileRow({ item, onRemove }: { item: PickedFile; onRemove?: () => void }) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const isPhoto = fileKind(item.file) === "photo";
+  useEffect(() => {
+    if (!isPhoto) return;
+    const url = URL.createObjectURL(item.file);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the address needs the browser, so it cannot be made while rendering
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [item.file, isPhoto]);
+  return <UploadFileRow item={item} previewUrl={previewUrl} onRemove={onRemove} />;
 }
 
 export function UploadLinkForm({ token }: { token: string }) {
@@ -44,7 +38,8 @@ export function UploadLinkForm({ token }: { token: string }) {
   const [note, setNote] = useState("");
   const [files, setFiles] = useState<PickedFile[]>([]);
   const [phase, setPhase] = useState<"picking" | "sending" | "done">("picking");
-  const [inputKey, setInputKey] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [dropNote, setDropNote] = useState<string | null>(null);
 
   function update(key: string, change: Partial<PickedFile>) {
     setFiles((prev) => prev.map((item) => (item.key === key ? { ...item, ...change } : item)));
@@ -79,7 +74,15 @@ export function UploadLinkForm({ token }: { token: string }) {
   function startOver() {
     setFiles([]);
     setPhase("picking");
-    setInputKey((key) => key + 1);
+  }
+
+  function addFiles(incoming: File[]) {
+    if (incoming.length === 0) return;
+    setFiles((prev) => addPickedFiles(prev, incoming));
+  }
+
+  function removeFile(key: string) {
+    setFiles((prev) => prev.filter((item) => item.key !== key));
   }
 
   const sentCount = files.filter((item) => item.status === "sent").length;
@@ -125,61 +128,66 @@ export function UploadLinkForm({ token }: { token: string }) {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="upload-link-files">Photos and videos</Label>
-            <Input
-              key={inputKey}
-              id="upload-link-files"
-              type="file"
-              multiple
-              accept="image/*,video/*"
-              disabled={phase === "sending"}
-              className="cursor-pointer text-base"
-              onChange={(event) => {
-                const picked = Array.from(event.target.files ?? []);
-                setFiles(
-                  picked.map((file, index) => ({
-                    key: `${index}-${file.name}-${file.size}-${file.lastModified}`,
-                    file,
-                    status: "waiting",
-                    progress: 0,
-                    error: null,
-                  })),
-                );
+            <span className="text-sm font-medium leading-none">Photos and videos</span>
+            {/* The input stays a real file input, only hidden from the eye, so a
+                keyboard or a screen reader reaches it; the label is the drop area. */}
+            <label
+              htmlFor="upload-link-files"
+              onDragOver={(event) => {
+                if (phase === "sending") return;
+                event.preventDefault();
+                setDragging(true);
               }}
-            />
+              onDragLeave={() => setDragging(false)}
+              onDrop={(event) => {
+                event.preventDefault();
+                setDragging(false);
+                if (phase === "sending") return;
+                const dropped = splitDroppedFiles(Array.from(event.dataTransfer.files));
+                setDropNote(dropped.message);
+                addFiles(dropped.accepted);
+              }}
+              className={cn(
+                "flex min-h-32 cursor-pointer flex-col items-center justify-center gap-1 rounded-[var(--radius)] border-2 border-dashed border-border bg-muted/40 px-4 py-6 text-center transition-colors focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background hover:bg-muted",
+                dragging && "border-primary bg-muted",
+                phase === "sending" && "pointer-events-none opacity-50",
+              )}
+            >
+              <input
+                id="upload-link-files"
+                type="file"
+                multiple
+                accept="image/*,video/*"
+                disabled={phase === "sending"}
+                className="sr-only"
+                onChange={(event) => {
+                  // A new pick replaces an earlier drop's "left out" note.
+                  setDropNote(null);
+                  addFiles(Array.from(event.target.files ?? []));
+                  // Emptied after each pick, so choosing the same file again still fires.
+                  event.target.value = "";
+                }}
+              />
+              <span className="text-base font-medium">Tap to choose photos and videos</span>
+              <span className="text-sm text-muted-foreground">or drop them here</span>
+            </label>
           </div>
         </>
       ) : null}
 
+      {dropNote ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          {dropNote}
+        </p>
+      ) : null}
       {files.length > 0 ? (
-        <ul className="space-y-3" aria-label="Files">
+        <ul className="space-y-2" aria-label="Files">
           {files.map((item) => (
-            <li key={item.key} className="space-y-1">
-              <div className="flex items-center justify-between gap-3 text-sm">
-                <span className="min-w-0 truncate" title={item.file.name}>
-                  {item.file.name}
-                </span>
-                <span className="flex-shrink-0 text-muted-foreground">{statusText(item)}</span>
-              </div>
-              <div
-                role="progressbar"
-                aria-label={`${item.file.name} progress`}
-                aria-valuenow={Math.round(item.progress)}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                className="h-2 w-full overflow-hidden rounded-full bg-muted"
-              >
-                <div
-                  className={
-                    item.status === "failed"
-                      ? "h-full rounded-full bg-destructive"
-                      : "h-full rounded-full bg-primary transition-all duration-200"
-                  }
-                  style={{ width: `${item.status === "failed" ? 100 : item.progress}%` }}
-                />
-              </div>
-              {item.error ? <p className="text-sm text-destructive">{item.error}</p> : null}
-            </li>
+            <FileRow
+              key={item.key}
+              item={item}
+              onRemove={phase === "picking" ? () => removeFile(item.key) : undefined}
+            />
           ))}
         </ul>
       ) : null}

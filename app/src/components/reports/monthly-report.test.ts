@@ -348,3 +348,24 @@ describe("MonthlyReportView — totals as cards", () => {
     expect(totalCards(html).map((card) => card[0])).toEqual(["Posts published", "Likes"]);
   });
 });
+
+// The client report page shows the logo in its header (hidden in print), so the
+// report's own logo is on paper only there; the workspace's Reports page and the
+// email keep it on screen.
+describe("MonthlyReportView - logoPrintOnly", () => {
+  const logo = "https://example.com/logo.png";
+  it("keeps the logo on screen by default", () => {
+    const html = render(report({ logoUrl: logo }));
+    expect(html).toMatch(/<img data-report-logo="true" src="https:\/\/example\.com\/logo\.png" alt="" class="[^"]*"/);
+    expect(html).not.toContain("hidden print:block");
+  });
+  it("shows it on paper only when asked", () => {
+    const html = renderToStaticMarkup(createElement(MonthlyReportView, { report: report({ logoUrl: logo }), logoPrintOnly: true }));
+    expect(html).toMatch(/<img data-report-logo="true" [^>]*class="[^"]*\bhidden print:block\b/);
+  });
+  it("renders nothing for a report without a logo either way", () => {
+    const html = renderToStaticMarkup(createElement(MonthlyReportView, { report: report(), logoPrintOnly: true }));
+    expect(html).not.toContain("<img data-report-logo");
+  });
+});
+

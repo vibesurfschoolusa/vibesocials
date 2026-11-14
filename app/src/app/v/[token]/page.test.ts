@@ -2,11 +2,13 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { findActiveReviewLinkMock, viewPropsMock } = vi.hoisted(() => ({
+const { findActiveReviewLinkMock, viewPropsMock, findLogoMock } = vi.hoisted(() => ({
+  findLogoMock: vi.fn(),
   findActiveReviewLinkMock: vi.fn(),
   viewPropsMock: vi.fn(),
 }));
 
+vi.mock("@/lib/clientPageLogo", () => ({ findClientPageLogo: findLogoMock }));
 vi.mock("@/server/reviewLink", () => ({ findActiveReviewLink: findActiveReviewLinkMock }));
 // The list is a client component; what the page hands it is what matters here.
 vi.mock("./review-link-view", () => ({
@@ -31,6 +33,8 @@ async function render(token = TOKEN): Promise<string> {
 beforeEach(() => {
   findActiveReviewLinkMock.mockReset();
   viewPropsMock.mockReset();
+  findLogoMock.mockReset();
+  findLogoMock.mockResolvedValue(null);
 });
 
 describe("the review link page", () => {
@@ -57,19 +61,20 @@ describe("the review link page", () => {
     const html = await render();
 
     expect(findActiveReviewLinkMock).toHaveBeenCalledWith(TOKEN);
-    expect(html).toContain("Surf &amp; Co: upcoming posts");
+    expect(html).toContain("Surf &amp; Co");
+    expect(html).toMatch(/<h1[^>]*>Upcoming posts<\/h1>/);
     expect(html).toContain("These go out at the time shown unless you ask for a change.");
     expect(viewPropsMock).toHaveBeenCalledWith({ token: TOKEN });
     expect(html).not.toContain("ws-1");
     expect(html).not.toContain("link-1");
   });
 
-  it("links to the link's monthly reports at the top", async () => {
+  it("links to the link's monthly reports above the list", async () => {
     findActiveReviewLinkMock.mockResolvedValue({ id: "link-1", workspaceId: "ws-1", workspaceName: "Surf Co" });
 
     const html = await render();
 
     expect(html).toMatch(new RegExp(`<a[^>]*href="/v/${TOKEN}/report"[^>]*>Reports</a>`));
-    expect(html.indexOf("Reports")).toBeLessThan(html.indexOf("upcoming posts"));
+    expect(html.indexOf("Reports")).toBeLessThan(html.indexOf("These go out"));
   });
 });

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { ToastProvider } from "@/components/ui/toast";
 import type { PostJobDTO, PostJobResultDTO } from "@/lib/postsDto";
 
-import { PostJobCard } from "./post-job-card";
+import { cardTime, PostJobCard } from "./post-job-card";
 
 // Fix round 1 (Stories, 2026-11-10): Activity labels a Story result "Story" and
 // builds no link from a Facebook Story's id.
@@ -85,5 +85,30 @@ describe("PostJobCard - a post without a photo", () => {
     const html = render(job({ media: { url: "https://blob.example.com/a.jpg", mimeType: "image/jpeg" } }));
     expect(html).not.toContain("Text post, no photo");
     expect(html).toContain("<img");
+  });
+});
+
+// Live check 2026-11-14: a post created at 2:21 and scheduled for 2:40 showed
+// "2:21 AM" once it had gone out. A post that was scheduled shows the time it
+// was set to go out (the scanner publishes it within 10 minutes of that).
+describe("cardTime", () => {
+  const created = "2026-11-14T08:21:00.000Z";
+  const scheduled = "2026-11-14T08:40:00.000Z";
+  it("still says Scheduled for while it waits", () => {
+    expect(cardTime({ status: "scheduled", createdAt: created, scheduledFor: scheduled })).toEqual({ label: "Scheduled for", iso: scheduled });
+  });
+  // Review: a cancelled post, or one retried days later, must not read as if it
+  // went out (or will go out) at an unlabelled time, so the label stays.
+  it("keeps Scheduled for once a scheduled post has gone out, was retried or was cancelled", () => {
+    for (const status of ["completed", "partial", "failed", "in_progress", "cancelled"]) {
+      expect(cardTime({ status, createdAt: created, scheduledFor: scheduled })).toEqual({ label: "Scheduled for", iso: scheduled });
+    }
+  });
+  it("shows the creation time for a post published straight away, and for a draft", () => {
+    expect(cardTime({ status: "completed", createdAt: created, scheduledFor: null })).toEqual({ label: null, iso: created });
+    expect(cardTime({ status: "draft", createdAt: created, scheduledFor: scheduled })).toEqual({ label: null, iso: created });
+  });
+  it("is null with no time at all", () => {
+    expect(cardTime({ status: "completed", createdAt: null, scheduledFor: null })).toBeNull();
   });
 });

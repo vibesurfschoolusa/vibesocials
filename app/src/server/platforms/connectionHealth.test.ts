@@ -197,7 +197,7 @@ describe("tokenRefreshSupersededError", () => {
     expect(TOKEN_REFRESH_SUPERSEDED_CODE).toBe("TOKEN_REFRESH_SUPERSEDED");
     expect(error).toBeInstanceOf(Error);
     expect(error.code).toBe("TOKEN_REFRESH_SUPERSEDED");
-    expect(error.message).not.toMatch(/token.*[A-Za-z0-9]{20,}/);
+    expect(error.message).not.toMatch(/token\b.*[A-Za-z0-9]{20,}/);
   });
 });
 

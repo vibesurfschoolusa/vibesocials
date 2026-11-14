@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { isPublicRoute, NAV_ITEMS, pricingShellProps, PUBLIC_ROUTE_PREFIXES, sectionTitle } from "./nav";
+import { isActiveNav, isPublicRoute, NAV_ITEMS, pricingShellProps, PUBLIC_ROUTE_PREFIXES, sectionTitle } from "./nav";
 
 describe("isPublicRoute", () => {
   it("treats the help page as public", () => {
@@ -161,5 +161,22 @@ describe("sectionTitle — every signed-in route has its own name", () => {
       if (route in NO_OWN_NAME) continue;
       expect(sectionTitle(route), route).not.toBe("Vibe Socials");
     }
+  });
+});
+
+describe("Add many in the sidebar", () => {
+  it("sits right after Create and points at /posts/bulk", () => {
+    const labels = NAV_ITEMS.map((item) => item.label);
+    expect(labels[labels.indexOf("Create") + 1]).toBe("Add many");
+    expect(NAV_ITEMS.find((item) => item.label === "Add many")?.href).toBe("/posts/bulk");
+  });
+
+  it("is the active item on /posts/bulk, and Create is not", () => {
+    expect(isActiveNav("/posts/bulk", "/posts/bulk")).toBe(true);
+    expect(isActiveNav("/posts/bulk", "/posts/new")).toBe(false);
+  });
+
+  it("keeps the top bar title Add many posts there", () => {
+    expect(sectionTitle("/posts/bulk")).toBe("Add many posts");
   });
 });

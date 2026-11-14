@@ -40,7 +40,7 @@ function formatWhen(iso: string | null): string {
 function PostMedia({ post }: { post: ReviewPostDTO }) {
   if (!post.media) return null;
   return (
-    <div className="relative overflow-hidden rounded-[var(--radius)] border border-border bg-muted">
+    <div className="relative overflow-hidden bg-muted">
       {post.media.mimeType.startsWith("video/") ? (
         <video
           src={post.media.url}
@@ -68,7 +68,7 @@ function stateText(post: ReviewPostDTO): string | null {
   return null;
 }
 
-function ReviewPostCard({
+export function ReviewPostCard({
   post,
   token,
   onDecided,
@@ -128,9 +128,9 @@ function ReviewPostCard({
   }
 
   return (
-    <li className="rounded-[var(--radius)] border border-border bg-card p-4 text-card-foreground sm:p-5">
-      <div className="space-y-3">
-        <PostMedia post={post} />
+    <li className="overflow-hidden rounded-[var(--radius)] border border-border bg-card text-card-foreground shadow-sm">
+      <PostMedia post={post} />
+      <div className="space-y-3 p-4 sm:p-5">
         <div>
           <p className="text-sm font-medium">
             {post.scheduledFor ? <time dateTime={post.scheduledFor}>{formatWhen(post.scheduledFor)}</time> : formatWhen(null)}
@@ -151,7 +151,18 @@ function ReviewPostCard({
           </ul>
         ) : null}
 
-        {state ? <p className="text-sm font-medium">{state}</p> : null}
+        {state ? (
+          <p
+            className={
+              post.state === "approved"
+                ? "inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-3 py-1 text-sm font-medium text-emerald-700 dark:text-emerald-400"
+                : "inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-3 py-1 text-sm font-medium text-amber-700 dark:text-amber-400"
+            }
+          >
+            <span aria-hidden>{post.state === "approved" ? "✓" : "✎"}</span>
+            {state}
+          </p>
+        ) : null}
         {post.state === "change_requested" && post.note ? (
           <p className="whitespace-pre-wrap break-words rounded-[var(--radius)] bg-muted/60 p-3 text-sm">
             {post.note}
@@ -181,26 +192,35 @@ function ReviewPostCard({
               <p className={noteTooLong ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
                 {noteLength}/{REVIEW_NOTE_MAX}. This post will not go out until it is scheduled again.
               </p>
-              <div className="flex flex-wrap gap-2">
-                <Button type="submit" loading={busy} disabled={noteTooShort || noteTooLong}>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Button type="submit" size="lg" className="w-full sm:w-auto" loading={busy} disabled={noteTooShort || noteTooLong}>
                   Send
                 </Button>
-                <Button type="button" variant="ghost" disabled={busy} onClick={() => setAsking(false)}>
+                <Button type="button" size="lg" className="w-full sm:w-auto" variant="ghost" disabled={busy} onClick={() => setAsking(false)}>
                   Cancel
                 </Button>
               </div>
             </form>
           ) : (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row">
               <Button
                 type="button"
+                size="lg"
+                className="w-full sm:w-auto"
                 loading={busy}
                 disabled={post.state === "approved"}
                 onClick={() => void decide({ decision: "approve", version: post.version })}
               >
                 Looks good
               </Button>
-              <Button type="button" variant="outline" disabled={busy} onClick={() => setAsking(true)}>
+              <Button
+                type="button"
+                size="lg"
+                className="w-full sm:w-auto"
+                variant="outline"
+                disabled={busy}
+                onClick={() => setAsking(true)}
+              >
                 Ask for a change
               </Button>
             </div>
@@ -266,7 +286,7 @@ export function ReviewLinkView({ token }: { token: string }) {
     return (
       <div className="space-y-3">
         <p className="text-sm">{error || LOAD_FAILED_MESSAGE}</p>
-        <Button type="button" variant="outline" size="sm" onClick={() => void load()}>
+        <Button type="button" variant="outline" size="md" onClick={() => void load()}>
           Try again
         </Button>
       </div>
@@ -285,7 +305,7 @@ export function ReviewLinkView({ token }: { token: string }) {
         // A failed reload while the list is on screen: say so, and how to recover.
         <div role="alert" className="flex flex-wrap items-center gap-2 rounded-[var(--radius)] border border-border bg-muted/60 p-3">
           <p className="text-sm">{error || REFRESH_FAILED_MESSAGE}</p>
-          <Button type="button" variant="outline" size="sm" onClick={() => void load()}>
+          <Button type="button" variant="outline" size="md" onClick={() => void load()}>
             Reload the list
           </Button>
         </div>

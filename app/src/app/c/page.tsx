@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { ClientPageShell } from "@/components/client-page-header";
 import { CONNECT_LINK_REOPEN_MESSAGE } from "@/lib/connectLink";
 
 /**
@@ -15,10 +16,8 @@ export const metadata: Metadata = {
 
 export default function ConnectLinkReopenPage() {
   return (
-    <main className="min-h-screen bg-background px-4 py-10 text-foreground">
-      <div className="mx-auto w-full max-w-md">
-        <p className="text-base">{CONNECT_LINK_REOPEN_MESSAGE}</p>
-      </div>
-    </main>
+    <ClientPageShell workspace={null}>
+      <p className="text-base">{CONNECT_LINK_REOPEN_MESSAGE}</p>
+    </ClientPageShell>
   );
 }

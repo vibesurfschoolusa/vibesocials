@@ -2,7 +2,13 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const h = vi.hoisted(() => ({ findLink: vi.fn(), listConnections: vi.fn(), choiceProps: vi.fn() }));
+const h = vi.hoisted(() => ({
+  findLink: vi.fn(),
+  listConnections: vi.fn(),
+  choiceProps: vi.fn(),
+  findLogo: vi.fn(),
+}));
+vi.mock("@/lib/clientPageLogo", () => ({ findClientPageLogo: h.findLogo }));
 vi.mock("@/server/connectLink/link", () => ({
   findActiveConnectLink: h.findLink,
   listLinkConnections: h.listConnections,
@@ -43,6 +49,7 @@ beforeEach(() => {
   for (const m of Object.values(h)) m.mockReset();
   h.findLink.mockResolvedValue(LINK);
   h.listConnections.mockResolvedValue([]);
+  h.findLogo.mockResolvedValue(null);
   for (const [key, value] of Object.entries({
     TIKTOK_CLIENT_KEY: "k",
     TIKTOK_CLIENT_SECRET: "s",
@@ -75,7 +82,8 @@ describe("the connect link page", () => {
 
   it("names the workspace, says what connecting allows and how to take it back, and links the terms and privacy", async () => {
     const html = await render();
-    expect(html).toContain("Connect your accounts to Surf &amp; Co");
+    expect(html).toMatch(/<h1[^>]*>Connect your accounts<\/h1>/);
+    expect(html).toContain("Surf &amp; Co");
     expect(html).toContain(
       "Surf &amp; Co will be able to publish posts to the accounts you connect here. They cannot see your password.",
     );
@@ -188,5 +196,14 @@ describe("the success sentence is checked against the connection", () => {
 
   it("a waiting choice is unchanged by this", async () => {
     expect(await render({ choose: "pending-1" })).toContain("<section>choice</section>");
+  });
+
+  it("shows the workspace logo when it has one, and the product name on an inactive link", async () => {
+    h.findLogo.mockResolvedValue("https://x.example/logos/ws-1/a.png");
+    expect(await render()).toContain('src="https://x.example/logos/ws-1/a.png"');
+    h.findLink.mockResolvedValue(null);
+    const inactive = await render();
+    expect(inactive).toContain("Vibe Socials");
+    expect(inactive).not.toContain("logos/ws-1");
   });
 });

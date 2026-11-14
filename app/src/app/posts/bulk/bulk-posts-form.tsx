@@ -44,7 +44,9 @@ import {
 } from "@/lib/bulkPosts";
 import { Select } from "@/components/ui/select";
 import type { YouTubePostMetadata } from "@/server/platforms/types";
-import { buildUploadPostBody, type UploadedBlob } from "@/lib/createPostRequest";
+import { buildReusePostBody, buildUploadPostBody, type UploadedBlob } from "@/lib/createPostRequest";
+import { pickFromMedia, skippedMediaMessage } from "@/lib/bulkMedia";
+import type { MediaItemDto } from "@/lib/mediaDto";
 import { extractVideoFrames } from "@/lib/extractVideoFrames";
 import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 import { prepareUploadFile } from "@/lib/prepareUploadFile";
@@ -52,6 +54,7 @@ import { localDateTimeToUtcIso, localTimeZoneLabel } from "@/lib/scheduling";
 import type { PostingSlot } from "@/lib/postingSlots";
 import { explainUploadFailure } from "@/lib/uploadFailure";
 import { BulkPostRow, captionFailedText } from "./bulk-post-row";
+import { MediaPickerDialog } from "./media-picker-dialog";
 
 export interface BulkRow {
   id: string;
@@ -62,6 +65,8 @@ export interface BulkRow {
   progress: number | null;
   uploadError: string | null;
   blob: UploadedBlob | null;
+  /** Set for a row made from a Media item: it is posted by id, never uploaded again. */
+  mediaItemId: string | null;
   caption: string;
   captionStatus: BulkCaptionStatus;
   /** Set by "Write again": the new caption replaces what is in the box. */
@@ -82,7 +87,7 @@ export interface BulkRow {
   thumbnail: string | null;
 }
 
-function newRow(file: File): BulkRow {
+function newRow(file: Pick<File, "name" | "type">): BulkRow {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
     fileName: file.name,
@@ -91,6 +96,7 @@ function newRow(file: File): BulkRow {
     progress: null,
     uploadError: null,
     blob: null,
+    mediaItemId: null,
     caption: "",
     captionStatus: "waiting",
     captionOverwrite: false,
@@ -106,13 +112,39 @@ function newRow(file: File): BulkRow {
   };
 }
 
+function newMediaRow(item: MediaItemDto): BulkRow {
+  return {
+    ...newRow({ name: item.originalFilename, type: item.mimeType }),
+    upload: "done",
+    blob: {
+      url: item.storageLocation,
+      filename: item.originalFilename,
+      mimeType: item.mimeType,
+      sizeBytes: item.sizeBytes,
+    },
+    mediaItemId: item.id,
+    // A photo shows as it is stored; a video's thumbnail comes from the frames read for its caption.
+    thumbnail: item.mimeType.startsWith("image/") ? item.storageLocation : null,
+  };
+}
+
 const noSubscription = () => () => {};
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
+export function BulkPostsForm({
+  workspaceId,
+  initialMedia = [],
+  skippedMedia = 0,
+}: {
+  workspaceId: string;
+  /** Media items to start with (the Media page's "Schedule with Add many"). */
+  initialMedia?: MediaItemDto[];
+  /** How many selected items the page left out. */
+  skippedMedia?: number;
+}) {
   const [rows, setRows] = useState<BulkRow[]>([]);
   // The latest rows, for the async upload/caption/send loops (state read inside
   // them would be the value from when they started).
@@ -121,6 +153,8 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
   const workingRef = useRef(false);
   const [fileInputKey, setFileInputKey] = useState(0);
   const [tooMany, setTooMany] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [duplicateNote, setDuplicateNote] = useState(0);
   const [sendingMode, setSendingMode] = useState<BulkFinishMode | null>(null);
 
   // The first day starts empty and is filled on mount: the server's clock and
@@ -368,6 +402,25 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
     void runWork();
   }
 
+  function addMediaItems(picked: MediaItemDto[]) {
+    const added = new Set(rowsRef.current.flatMap((row) => (row.mediaItemId ? [row.mediaItemId] : [])));
+    const result = pickFromMedia({ rowCount: rowsRef.current.length, addedMediaIds: added, picked });
+    setTooMany(result.tooMany);
+    setDuplicateNote(result.duplicates);
+    if (result.add.length === 0) return;
+    const rowsToAdd = result.add.map(newMediaRow);
+    respread((current) => [...current, ...rowsToAdd]);
+    void runWork();
+  }
+
+  // Items handed over from the Media page become rows once the page is up.
+  const startWithMedia = useEffectEvent(() => addMediaItems(initialMedia));
+  useEffect(() => {
+    if (initialMedia.length === 0) return;
+    const timer = setTimeout(() => startWithMedia(), 0);
+    return () => clearTimeout(timer);
+  }, [initialMedia.length]);
+
   function changeControls(patch: Partial<BulkScheduleControls>) {
     const next = { ...controlsRef.current, ...patch };
     controlsRef.current = next;
@@ -437,8 +490,7 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
           updateRow(id, { sendError: BULK_NO_TIME_MESSAGE });
           continue;
         }
-        const body = buildUploadPostBody({
-          blob: row.blob,
+        const common = {
           baseCaption: row.caption,
           location: "",
           platforms,
@@ -446,7 +498,12 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
           workspaceId,
           // The same field Create sends, for every row that goes to YouTube.
           youtubeMetadata: platforms.includes("youtube") ? { privacyStatus: youtubePrivacy } : undefined,
-        });
+        };
+        // A Media item is posted by id: the server reads it for this workspace only
+        // and marks it used, so no client-sent address is trusted.
+        const body = row.mediaItemId
+          ? buildReusePostBody({ ...common, mediaItemId: row.mediaItemId })
+          : buildUploadPostBody({ ...common, blob: row.blob });
         updateRow(id, { sending: true, sendError: null });
         let response: BulkSendResponse;
         try {
@@ -522,9 +579,25 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
             onChange={(event) => handleFiles(event.target.files)}
             className="h-12"
           />
+          <div>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={rows.length >= BULK_MAX_FILES || sendingMode !== null}
+              onClick={() => setPickerOpen(true)}
+            >
+              Choose from Media
+            </Button>
+          </div>
           <p className="text-sm text-muted-foreground">
             {rows.length} of {BULK_MAX_FILES} added.
           </p>
+          {skippedMediaMessage(skippedMedia) ? <Alert variant="warning">{skippedMediaMessage(skippedMedia)}</Alert> : null}
+          {duplicateNote > 0 ? (
+            <Alert variant="warning">
+              {duplicateNote === 1 ? "1 item was" : `${duplicateNote} items were`} already added and left out.
+            </Alert>
+          ) : null}
           {tooMany ? <Alert variant="warning">{BULK_TOO_MANY_FILES_MESSAGE}</Alert> : null}
           {uploadingIndex >= 0 ? (
             <p className="text-sm text-muted-foreground" aria-live="polite">
@@ -676,6 +749,14 @@ export function BulkPostsForm({ workspaceId }: { workspaceId: string }) {
           </p>
         </fieldset>
       </Card>
+
+      <MediaPickerDialog
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        addedIds={new Set(rows.flatMap((row) => (row.mediaItemId ? [row.mediaItemId] : [])))}
+        room={Math.max(0, BULK_MAX_FILES - rows.length)}
+        onAdd={addMediaItems}
+      />
 
       {rows.length > 0 ? (
         <ol className="flex flex-col gap-4">
