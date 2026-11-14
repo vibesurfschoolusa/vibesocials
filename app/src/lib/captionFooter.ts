@@ -2,7 +2,9 @@ import type { Platform } from "@prisma/client";
 
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { trackedWebsiteLink } from "@/lib/trackingTags";
+import { graphemeCount } from "@/lib/truncate";
 import { removeXMentions } from "@/lib/xMentions";
+import { xWeightedLength } from "@/lib/xWeightedLength";
 
 /**
  * The subset of the posting user that contributes an optional footer to a
@@ -25,17 +27,29 @@ function composeCaption(base: string, website: string | undefined, hashtags: str
 }
 
 /**
- * Whether this text goes out whole on the platform. It is counted the way the
- * platform's client counts it: on X without @-mentions (xClient.ts removes them
- * before the cut). Code points are counted, not graphemes: every grapheme is at
- * least one code point, so text that passes here is cut by no client (Pinterest
- * also cuts on code points, lib/pinterestApi.ts).
+ * Platforms whose text loses its footer parts whole, hashtags first, then the
+ * website line, before the caption itself is cut (fix round 1, M5/M6): a cut
+ * footer is a broken link or a half hashtag, and the post's own words matter more.
  */
+const FOOTER_FIRST_PLATFORMS: readonly Platform[] = ["x", "linkedin"];
+
+/**
+ * This text's length the way the platform's client counts it before its cut:
+ * on X by X's weight without @-mentions (xClient.ts removes them first), on
+ * LinkedIn in graphemes (linkedinClient.ts cuts with truncateGraphemes). Other
+ * platforms count code points: every grapheme is at least one code point, so
+ * text that passes here is cut by no client (Pinterest cuts on code points,
+ * lib/pinterestApi.ts).
+ */
+function platformLength(text: string, platform: Platform): number {
+  if (platform === "x") return xWeightedLength(removeXMentions(text));
+  if (platform === "linkedin") return graphemeCount(text);
+  return [...text].length;
+}
+
 function fitsPlatformLimit(text: string, platform: Platform): boolean {
   const { charLimit } = PLATFORM_CAPTION_LIMITS[platform];
-  if (charLimit === null) return true;
-  const counted = platform === "x" ? removeXMentions(text) : text;
-  return [...counted].length <= charLimit;
+  return charLimit === null || platformLength(text, platform) <= charLimit;
 }
 
 /**
@@ -52,6 +66,9 @@ function fitsPlatformLimit(text: string, platform: Platform): boolean {
  * still fits the platform's limit: the tags must never cost the post its text,
  * so otherwise the plain link is used. Without a platform or with the setting
  * off, the output is exactly what it was before tracking tags existed.
+ *
+ * On X and LinkedIn a text over the limit loses the hashtags, then the website
+ * line, before the client cuts the caption (FOOTER_FIRST_PLATFORMS).
  */
 export function buildCaptionWithFooter(
   baseCaption: string,
@@ -62,8 +79,23 @@ export function buildCaptionWithFooter(
   const website = user.companyWebsite?.trim() || undefined;
   const hashtags = user.defaultHashtags?.trim() || undefined;
   const plain = composeCaption(base, website, hashtags);
-  if (!platform || !user.trackWebsiteLinks || !website) return plain;
+  if (!platform) return plain;
 
-  const tagged = composeCaption(base, trackedWebsiteLink(website, platform), hashtags);
-  return fitsPlatformLimit(tagged, platform) ? tagged : plain;
+  const tagged = user.trackWebsiteLinks && website ? trackedWebsiteLink(website, platform) : undefined;
+  const footerFirst = FOOTER_FIRST_PLATFORMS.includes(platform);
+  // The footers to try, longest first. Each is tried with the tagged link, then
+  // the plain one, so the tags never cost the post its hashtags.
+  const footers: [string | undefined, string | undefined][] = footerFirst
+    ? [[website, hashtags], [website, undefined], [undefined, undefined]]
+    : [[website, hashtags]];
+  for (const [site, tags] of footers) {
+    if (site && tagged) {
+      const withTags = composeCaption(base, tagged, tags);
+      if (fitsPlatformLimit(withTags, platform)) return withTags;
+    }
+    const untagged = composeCaption(base, site, tags);
+    if (fitsPlatformLimit(untagged, platform)) return untagged;
+  }
+  // Still over: the client cuts the caption (footer-first platforms send it alone).
+  return footerFirst ? base : plain;
 }
