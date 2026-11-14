@@ -105,8 +105,9 @@ export default function PrivacyPage() {
         </ul>
         <p className="mt-2">
           What goes to our AI provider: the photos and still frames of videos it is asked to caption or
-          describe; your captions, when you ask it to improve one, and in Add many the batch&apos;s other
-          captions, so it does not repeat them; your brand voice notes; and, when you ask for a reply
+          describe; your captions, when you ask it to improve one; when it writes or improves a caption,
+          in Add many the batch&apos;s other captions and recent captions from this workspace&apos;s posts,
+          so the AI does not repeat them; your brand voice notes; and, when you ask for a reply
           suggestion, the review&apos;s text, star rating and the reviewer&apos;s display name. On the
           Create page, untick &quot;Generate a caption when media is added&quot; and nothing is sent
           until you ask. Turn off Write captions with AI in Add many and no photo or video is sent:
