@@ -5,6 +5,7 @@ import {
   notReachedMessage,
   NOT_SENT_MESSAGE,
   platformDownMessage,
+  renewalRefusedMessage,
   platformRefusedMessage,
   publishErrorMessage,
   reconnectRequiredMessage,
@@ -127,9 +128,19 @@ describe("publishErrorMessage (F1 L7)", () => {
       expect(publishErrorMessage(platform, refresh(401))).toBe(reconnectRequiredMessage(platform));
     });
 
+    // Third review: a 4xx refusal the refresher did not flag may be our side
+    // (invalid_client) or a grant it could not classify (TikTok 403): say both.
     it.each([
-      ["invalid_client (a 400/401 the refresher did not flag: our side)", 400],
+      ["invalid_client (a 400/401 the refresher did not flag)", 400],
       ["invalid_client answered 401", 401],
+      ["a 403 the refresher did not flag", 403],
+    ])("%s reads try later, then reconnect if it keeps happening", (_label, status) => {
+      expect(publishErrorMessage(platform, { ...refresh(status), connectionNeedsReconnect: false })).toBe(
+        renewalRefusedMessage(platform),
+      );
+    });
+
+    it.each([
       ["a 429", 429],
       ["a 5xx", 503],
       ["no answer at all", undefined],
@@ -174,3 +185,12 @@ describe("publishErrorMessage (F1 L7)", () => {
     expect(publishErrorMessage("pinterest", refused)).toBe(platformRefusedMessage("pinterest"));
   });
 });
+
+describe("renewalRefusedMessage", () => {
+  it("says to try later and to reconnect if it keeps happening", () => {
+    expect(renewalRefusedMessage("tiktok")).toBe(
+      "TikTok didn't renew the connection. Try again later; if it keeps happening, reconnect TikTok in Settings.",
+    );
+  });
+});
+

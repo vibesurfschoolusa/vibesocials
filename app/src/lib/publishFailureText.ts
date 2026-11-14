@@ -40,6 +40,16 @@ export function platformDownMessage(platform: Platform): string {
  * No answer from the platform to judge: a network failure, our database, or an
  * error nobody wrote for the user. Not a refusal, so no rules advice.
  */
+/**
+ * A token refresh refused with a 4xx the refresher did not flag: our own app
+ * setup (invalid_client) or a refusal it could not classify (e.g. TikTok 403).
+ * Waiting fixes the first, reconnecting the second, so say both.
+ */
+export function renewalRefusedMessage(platform: Platform): string {
+  const name = platformLabel(platform);
+  return `${name} didn't renew the connection. Try again later; if it keeps happening, reconnect ${name} in Settings.`;
+}
+
 export function notReachedMessage(platform: Platform): string {
   return `The post did not reach ${platformLabel(platform)}. Try again later.`;
 }
@@ -87,7 +97,9 @@ export function publishErrorMessage(
 
   if (REFRESH_FAILED_CODE.test(code)) {
     const refusedForGood = error.connectionNeedsReconnect ?? (status === 400 || status === 401);
-    return refusedForGood ? reconnectRequiredMessage(platform) : platformDownMessage(platform);
+    if (refusedForGood) return reconnectRequiredMessage(platform);
+    if (status !== null && status >= 400 && status < 500 && status !== 429) return renewalRefusedMessage(platform);
+    return platformDownMessage(platform);
   }
   if (RENEW_CODE.test(code) || status === 401) return reconnectRequiredMessage(platform);
   if (code === "CONNECTION_GONE") return connectionGoneMessage(platform);
