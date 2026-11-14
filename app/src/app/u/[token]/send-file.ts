@@ -67,7 +67,7 @@ export async function sendClientFile(
     type: "blob.generate-client-token",
     payload: {
       pathname: prepared.name,
-      clientPayload: JSON.stringify({ contentType: prepared.type }),
+      clientPayload: JSON.stringify({ contentType: prepared.type, size: prepared.size }),
       multipart: false,
     },
   });
