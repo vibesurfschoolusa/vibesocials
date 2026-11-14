@@ -1,6 +1,7 @@
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
 import { formatStorageGb, utcDateLabel, utcDayMonthLabel, type UsageLimitKind } from "@/lib/usageLimits";
 import { countWord } from "@/lib/plural";
+import { workspaceLink } from "@/server/notifications/links";
 
 /**
  * Sent to every OWNER of a workspace the first time it hits one of its usage
@@ -53,7 +54,22 @@ function limitLines(
   }
 }
 
+/** The closing line: where a higher limit comes from. */
+function higherLimitLine(params: { workspaceId: string; planInSettings: boolean; appBaseUrl: string | null }): string {
+  if (!params.planInSettings) {
+    return `<p>If you need a higher limit, write to ${SUPPORT_EMAIL} and we will raise it.</p>`;
+  }
+  // F4: with billing on the owner raises the limit themselves, by changing the plan.
+  const base = params.appBaseUrl || null;
+  const place = base
+    ? `<a href="${escapeHtml(workspaceLink(params.workspaceId, "/settings#plan", base))}">Settings, Plan</a>`
+    : "Settings, Plan";
+  return `<p>For a higher limit, change this workspace's plan in ${place}.</p>`;
+}
+
 export function buildLimitReachedEmail(params: {
+  /** The plan link opens this workspace through /go (F4). */
+  workspaceId: string;
   workspaceName: string;
   kind: UsageLimitKind;
   /** The limit's number: posts or uploads, or bytes for storage. */
@@ -62,6 +78,13 @@ export function buildLimitReachedEmail(params: {
   resetsAt: Date | null;
   /** Posts per day only: the UTC day that is full. */
   day?: Date | null;
+  /**
+   * Billing is on and this workspace has a plan to change (not exempt): the
+   * email points to Settings, Plan instead of to writing in (F4).
+   */
+  planInSettings: boolean;
+  /** `process.env.NEXTAUTH_URL`. Null names Settings, Plan without a link. */
+  appBaseUrl: string | null;
 }): { subject: string; html: string } {
   const workspace = escapeHtml(params.workspaceName);
   const [reached, ...rest] = limitLines(params.kind, params.limit, params.resetsAt, params.day ?? null);
@@ -71,7 +94,7 @@ export function buildLimitReachedEmail(params: {
     html: [
       `<p><strong>${workspace}</strong> ${reached}</p>`,
       ...rest.map((line) => `<p>${line}</p>`),
-      `<p>If you need a higher limit, write to ${SUPPORT_EMAIL} and we will raise it.</p>`,
+      higherLimitLine(params),
       `<p>— Vibe Socials</p>`,
     ].join("\n"),
   };

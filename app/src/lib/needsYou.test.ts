@@ -15,6 +15,7 @@ const QUIET: DashboardSummary = {
   awaitingYourApproval: 0,
   clientChangesRequested: 0,
   nextScheduled: null,
+  chooseGoogleLocation: null,
 };
 
 const formatTime = (iso: string) => `T(${iso})`;
@@ -191,5 +192,32 @@ describe("hasGoogleListing", () => {
 
   it("is false when the connections fetch failed (no Google call)", () => {
     expect(hasGoogleListing(null)).toBe(false);
+  });
+});
+
+// F4 (R1 M4): posts to Google fail until the owner chooses the business location.
+describe("needsYouRows - the Google business location", () => {
+  it("asks the owner to choose it, first, linking to Settings, Connections", () => {
+    const result = rows({ chooseGoogleLocation: "Surf Co", problemsLast7Days: 2 }, 1);
+    expect(result.title).toBe("Needs you");
+    expect(result.rows[0]).toEqual({
+      kind: "google_location",
+      text: "Choose the Google business location for Surf Co",
+      href: "/settings#connections",
+    });
+    expect(result.rows.map((row) => row.kind)).toEqual(["google_location", "reviews", "problems", "add_many"]);
+  });
+
+  it("shows no row for a member, or when no location is missing", () => {
+    expect(rows({ chooseGoogleLocation: "Surf Co" }, 0, "member").rows.map((row) => row.kind)).toEqual(["add_many"]);
+    expect(rows({}, 0).rows.map((row) => row.kind)).toEqual(["add_many"]);
+  });
+
+  it("reads an older answer without the field as no row", () => {
+    const { chooseGoogleLocation: _unused, ...older } = QUIET;
+    void _unused;
+    expect(needsYouRows(older as DashboardSummary, 0, "owner", formatTime).rows.map((row) => row.kind)).toEqual([
+      "add_many",
+    ]);
   });
 });

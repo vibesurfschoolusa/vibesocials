@@ -83,6 +83,7 @@ function makeUser(overrides: Partial<User> = {}): User {
     emailVerifiedAt: null,
     trialStartedAt: null,
     googleLinkedAt: null,
+    timeZone: null,
     notifyOnPostComplete: true,
     notifyDailyDigest: true,
     notifyNewReviews: true,

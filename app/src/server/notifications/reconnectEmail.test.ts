@@ -5,6 +5,7 @@ import { buildReconnectEmail } from "./reconnectEmail";
 describe("buildReconnectEmail", () => {
   const email = buildReconnectEmail({
     platformLabel: "Google Business Profile",
+    workspaceId: "ws_1",
     workspaceName: "Klaus Schroder's workspace",
     appBaseUrl: "https://vibesocials.wtf",
   });
@@ -17,7 +18,7 @@ describe("buildReconnectEmail", () => {
 
   it("says which workspace is affected and links to settings", () => {
     expect(email.html).toContain("Klaus Schroder&#39;s workspace");
-    expect(email.html).toContain("https://vibesocials.wtf/settings");
+    expect(email.html).toContain('href="https://vibesocials.wtf/go?w=ws_1&amp;to=%2Fsettings%23connections"');
   });
 
   it("explains the consequence (posts will fail) in plain language", () => {
@@ -27,16 +28,18 @@ describe("buildReconnectEmail", () => {
   it("trims a trailing slash off appBaseUrl (postOutcomeEmail convention)", () => {
     const trimmed = buildReconnectEmail({
       platformLabel: "X",
+      workspaceId: "ws_1",
       workspaceName: "W",
       appBaseUrl: "https://vibesocials.wtf/",
     });
-    expect(trimmed.html).toContain("https://vibesocials.wtf/settings");
-    expect(trimmed.html).not.toContain("wtf//settings");
+    expect(trimmed.html).toContain("https://vibesocials.wtf/go?w=ws_1");
+    expect(trimmed.html).not.toContain("wtf//go");
   });
 
   it("renders without a link when appBaseUrl is null", () => {
     const noLink = buildReconnectEmail({
       platformLabel: "X",
+      workspaceId: "ws_1",
       workspaceName: "W",
       appBaseUrl: null,
     });
@@ -47,6 +50,7 @@ describe("buildReconnectEmail", () => {
   it("escapes HTML in the workspace name", () => {
     const evil = buildReconnectEmail({
       platformLabel: "X",
+      workspaceId: "ws_1",
       workspaceName: '<img src=x onerror=alert(1)>',
       appBaseUrl: null,
     });

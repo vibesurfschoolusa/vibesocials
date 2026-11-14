@@ -121,6 +121,23 @@ beforeEach(() => {
 });
 
 describe("runBillingReminders", () => {
+  // F4: the Plan link opens this workspace through /go, in both reminders.
+  it.each([
+    ["trial ending", {}],
+    ["trial ended", { trialEndsAt: new Date(NOW.getTime() - DAY), trialReminderSentAt: new Date(NOW.getTime() - 3 * DAY) }],
+  ])("the %s email links to this workspace's Settings, Plan", async (_name, over) => {
+    vi.stubEnv("NEXTAUTH_URL", "https://app.example.test");
+    try {
+      m.rows = [ws("a", over)];
+      await run();
+      expect(m.sendEmail.mock.calls[0][0].html).toContain(
+        'href="https://app.example.test/go?w=a&amp;to=%2Fsettings%23plan"',
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("a trial ending within 3 days gets one reminder, and its marker", async () => {
     m.rows = [ws("a")];
     expect(await run()).toEqual({ trialEnding: 1, trialEnded: 0, sent: 1, failed: 0, left: 0 });

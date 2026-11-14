@@ -157,7 +157,7 @@ export async function runMonthlyReportEmails(
             select: { id: true },
           }),
         ]);
-        const email = buildMonthlyReportEmail({ report, appBaseUrl, hasClientLink: link !== null });
+        const email = buildMonthlyReportEmail({ report, workspaceId, appBaseUrl, hasClientLink: link !== null });
 
         for (const owner of owners) {
           if (sentAny) await sleep(MONTHLY_REPORT_SEND_INTERVAL_MS);

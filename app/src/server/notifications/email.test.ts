@@ -81,7 +81,32 @@ describe("sendEmail", () => {
       to: "user@example.com",
       subject: "Hi",
       html: "<p>hi</p>",
+      text: "hi",
     });
+  });
+
+  it("sends a plain-text part made from the HTML (F4)", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+
+    await sendEmail({
+      to: "user@example.com",
+      subject: "Hi",
+      html: '<p>Your post is out.</p>\n<p><a href="https://app.example.com/go?w=1&amp;to=%2Factivity">View in Activity</a></p>',
+    });
+
+    expect(sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Your post is out.\n\nView in Activity: https://app.example.com/go?w=1&to=%2Factivity",
+      }),
+    );
+  });
+
+  it("sends a given plain-text part as it is", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+
+    await sendEmail({ to: "user@example.com", subject: "Hi", html: "<p>hi</p>", text: "Hello there" });
+
+    expect(sendMock).toHaveBeenCalledWith(expect.objectContaining({ text: "Hello there" }));
   });
 
   it("uses NOTIFICATIONS_FROM as the sender when set", async () => {
@@ -346,6 +371,7 @@ describe("sendEmail - idempotency key", () => {
         to: "user@example.com",
         subject: "Hi",
         html: "<p>hi</p>",
+        text: "hi",
       },
       { idempotencyKey: "k" },
     );

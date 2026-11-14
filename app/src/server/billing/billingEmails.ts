@@ -1,4 +1,5 @@
 import { utcDateLabel } from "@/lib/usageLimits";
+import { workspaceLink } from "@/server/notifications/links";
 
 /**
  * The three billing emails (21b): a failed card payment, a trial about to end
@@ -21,20 +22,23 @@ function escapeHtml(value: string): string {
  * S1: each email links to Settings, Plan on the app's own address
  * (NEXTAUTH_URL, as the other emails read it). The callers pass nothing, so
  * the address is read here when not given; without one the email keeps its
- * words and has no link.
+ * words and has no link. F4: through /go, so an owner of several workspaces
+ * lands on this workspace's Plan whichever one is active.
  */
-function planLink(appBaseUrl: string | null | undefined): string | null {
-  const base = (appBaseUrl === undefined ? process.env.NEXTAUTH_URL : appBaseUrl)?.trim().replace(/\/+$/, "");
-  return base ? `<a href="${escapeHtml(base)}/settings#plan">Open Settings, Plan</a>` : null;
+function planLink(workspaceId: string, appBaseUrl: string | null | undefined): string | null {
+  const base = (appBaseUrl === undefined ? process.env.NEXTAUTH_URL : appBaseUrl)?.trim();
+  return base
+    ? `<a href="${escapeHtml(workspaceLink(workspaceId, "/settings#plan", base))}">Open Settings, Plan</a>`
+    : null;
 }
 
-function html(lines: string[], appBaseUrl: string | null | undefined): string {
-  const link = planLink(appBaseUrl);
+function html(lines: string[], workspaceId: string, appBaseUrl: string | null | undefined): string {
+  const link = planLink(workspaceId, appBaseUrl);
   return [...lines, ...(link ? [link] : []), "— Vibe Socials"].map((line) => `<p>${line}</p>`).join("\n");
 }
 
 export function buildPaymentFailedEmail(
-  params: { workspaceName: string },
+  params: { workspaceId: string; workspaceName: string },
   appBaseUrl?: string | null,
 ): { subject: string; html: string } {
   return {
@@ -43,13 +47,14 @@ export function buildPaymentFailedEmail(
       [
         `We could not charge your card for ${escapeHtml(params.workspaceName)}. Update it under Settings, Plan. Update your card soon, or posting will stop.`,
       ],
+      params.workspaceId,
       appBaseUrl,
     ),
   };
 }
 
 export function buildTrialEndingEmail(
-  params: { workspaceName: string; trialEndsAt: Date },
+  params: { workspaceId: string; workspaceName: string; trialEndsAt: Date },
   appBaseUrl?: string | null,
 ): { subject: string; html: string } {
   return {
@@ -59,13 +64,14 @@ export function buildTrialEndingEmail(
         `<strong>${escapeHtml(params.workspaceName)}</strong>`,
         `Your free trial ends on ${utcDateLabel(params.trialEndsAt)}. Choose a plan under Settings, Plan.`,
       ],
+      params.workspaceId,
       appBaseUrl,
     ),
   };
 }
 
 export function buildTrialEndedEmail(
-  params: { workspaceName: string },
+  params: { workspaceId: string; workspaceName: string },
   appBaseUrl?: string | null,
 ): { subject: string; html: string } {
   return {
@@ -78,6 +84,7 @@ export function buildTrialEndedEmail(
         // files are kept (mediaRetention.ts: finished posts' files go after 30 days).
         "Your free trial has ended, so posting has stopped. A scheduled post that comes due without a plan is marked failed. Once you choose a plan you can retry it from Activity, as long as its photos and videos are still kept: those of finished posts are removed 30 days after they were last added to a post.",
       ],
+      params.workspaceId,
       appBaseUrl,
     ),
   };

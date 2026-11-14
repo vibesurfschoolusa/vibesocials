@@ -8,7 +8,9 @@ import {
 describe("buildApprovalRequestedEmail", () => {
   const email = buildApprovalRequestedEmail({
     submitterName: "Sam",
+    workspaceId: "ws_1",
     workspaceName: "Klaus Schroder's workspace",
+    timeZone: null,
     caption: "Sunset session this Friday",
     appBaseUrl: "https://vibesocials.wtf",
   });
@@ -22,14 +24,16 @@ describe("buildApprovalRequestedEmail", () => {
     expect(email.html).toContain("Sunset session this Friday");
   });
 
-  it("links to the Queue", () => {
-    expect(email.html).toContain("https://vibesocials.wtf/queue");
+  it("links to the Queue through /go, so it opens this workspace (F4)", () => {
+    expect(email.html).toContain('href="https://vibesocials.wtf/go?w=ws_1&amp;to=%2Fqueue"');
   });
 
   it("escapes HTML in the caption and names", () => {
     const evil = buildApprovalRequestedEmail({
       submitterName: "<img src=x onerror=alert(1)>",
+      workspaceId: "ws_1",
       workspaceName: "W",
+      timeZone: null,
       caption: "<script>bad()</script>",
       appBaseUrl: null,
     });
@@ -40,7 +44,9 @@ describe("buildApprovalRequestedEmail", () => {
   it("renders without a link when appBaseUrl is null", () => {
     const noLink = buildApprovalRequestedEmail({
       submitterName: "Sam",
+      workspaceId: "ws_1",
       workspaceName: "W",
+      timeZone: null,
       caption: "hi",
       appBaseUrl: null,
     });
@@ -51,12 +57,14 @@ describe("buildApprovalRequestedEmail", () => {
   it("trims a trailing slash off appBaseUrl", () => {
     const trimmed = buildApprovalRequestedEmail({
       submitterName: "Sam",
+      workspaceId: "ws_1",
       workspaceName: "W",
+      timeZone: null,
       caption: "hi",
       appBaseUrl: "https://vibesocials.wtf/",
     });
-    expect(trimmed.html).toContain("https://vibesocials.wtf/queue");
-    expect(trimmed.html).not.toContain("wtf//queue");
+    expect(trimmed.html).toContain("https://vibesocials.wtf/go?w=ws_1");
+    expect(trimmed.html).not.toContain("wtf//go");
   });
 
   // 2026-11-01 audit (M1): the owner approves what publishes, including the
@@ -64,7 +72,9 @@ describe("buildApprovalRequestedEmail", () => {
   describe("platform-specific captions (2026-11-01 audit, M1)", () => {
     const base = {
       submitterName: "Sam",
+      workspaceId: "ws_1",
       workspaceName: "W",
+      timeZone: null,
       caption: "Happy Friday from the team!",
       appBaseUrl: null,
     };
@@ -115,7 +125,9 @@ describe("buildApprovalDecisionEmail", () => {
   it("tells the member their post was approved and what happens next", () => {
     const approved = buildApprovalDecisionEmail({
       approved: true,
+      workspaceId: "ws_1",
       workspaceName: "Acme",
+      timeZone: null,
       caption: "Friday promo",
       scheduledFor: "2026-07-31T14:30:00.000Z",
       appBaseUrl: "https://vibesocials.wtf",
@@ -123,12 +135,42 @@ describe("buildApprovalDecisionEmail", () => {
     expect(approved.subject).toBe("Your post was approved");
     expect(approved.html).toContain("Friday promo");
     expect(approved.html).toMatch(/scheduled/i);
+    expect(approved.html).toContain("Fri, Jul 31, 2026, 2:30 PM UTC");
+    expect(approved.html).toContain('href="https://vibesocials.wtf/go?w=ws_1&amp;to=%2Factivity"');
+  });
+
+  it("shows the scheduled time in the member's own time zone (F4)", () => {
+    const approved = buildApprovalDecisionEmail({
+      approved: true,
+      workspaceId: "ws_1",
+      workspaceName: "Acme",
+      timeZone: "America/Los_Angeles",
+      caption: "Friday promo",
+      scheduledFor: "2026-07-31T14:30:00.000Z",
+      appBaseUrl: null,
+    });
+    expect(approved.html).toContain("Fri, Jul 31, 2026, 7:30 AM PDT");
+  });
+
+  it("links a rejection to the Queue through /go", () => {
+    const rejected = buildApprovalDecisionEmail({
+      approved: false,
+      workspaceId: "ws_2",
+      workspaceName: "Acme",
+      timeZone: null,
+      caption: "x",
+      scheduledFor: null,
+      appBaseUrl: "https://vibesocials.wtf",
+    });
+    expect(rejected.html).toContain('href="https://vibesocials.wtf/go?w=ws_2&amp;to=%2Fqueue"');
   });
 
   it("says publishing now when an approved post had no scheduled time", () => {
     const approved = buildApprovalDecisionEmail({
       approved: true,
+      workspaceId: "ws_1",
       workspaceName: "Acme",
+      timeZone: null,
       caption: "Now post",
       scheduledFor: null,
       appBaseUrl: null,
@@ -139,7 +181,9 @@ describe("buildApprovalDecisionEmail", () => {
   it("tells the member their post was not approved, without blaming them", () => {
     const rejected = buildApprovalDecisionEmail({
       approved: false,
+      workspaceId: "ws_1",
       workspaceName: "Acme",
+      timeZone: null,
       caption: "Friday promo",
       scheduledFor: null,
       appBaseUrl: null,
@@ -151,7 +195,9 @@ describe("buildApprovalDecisionEmail", () => {
   it("escapes HTML in the caption", () => {
     const evil = buildApprovalDecisionEmail({
       approved: false,
+      workspaceId: "ws_1",
       workspaceName: "W",
+      timeZone: null,
       caption: "<script>bad()</script>",
       scheduledFor: null,
       appBaseUrl: null,
@@ -164,7 +210,9 @@ describe("buildApprovalDecisionEmail", () => {
 describe("buildApprovalRequestedEmail - a series", () => {
   const base = {
     submitterName: "Sam",
+    workspaceId: "ws_1",
     workspaceName: "Acme",
+    timeZone: null,
     caption: "Book your lesson",
     appBaseUrl: null,
   };
@@ -181,6 +229,19 @@ describe("buildApprovalRequestedEmail - a series", () => {
       },
     });
     expect(email.html).toContain(`<p>${LINE}</p>`);
+  });
+
+  it("writes the owner's own days when their zone is known (F4)", () => {
+    const email = buildApprovalRequestedEmail({
+      ...base,
+      timeZone: "Europe/Berlin",
+      series: {
+        count: 2,
+        first: new Date("2026-11-12T23:30:00.000Z"),
+        last: new Date("2026-11-19T23:30:00.000Z"),
+      },
+    });
+    expect(email.html).toContain("from Friday, November 13, 2026 to Friday, November 20, 2026.");
   });
 
   it("writes the UTC date even when the local day differs", () => {
@@ -202,7 +263,7 @@ describe("buildApprovalRequestedEmail - a series", () => {
 
 // Q1 fix 1: a held Feed and Story post makes a second Queue item, so the email says so.
 describe("buildApprovalRequestedEmail - Feed and Story", () => {
-  const base = { submitterName: "Sam", workspaceName: "Acme", caption: "Book your lesson", appBaseUrl: null };
+  const base = { submitterName: "Sam", workspaceId: "ws_1", workspaceName: "Acme", timeZone: null, caption: "Book your lesson", appBaseUrl: null };
   const line = (where: string) =>
     `<p>This post also goes out as a Story on ${where}. The Story is its own item in the Queue and needs its own approval.</p>`;
 
