@@ -13,6 +13,13 @@ import {
 import { cleanAltText, fitAltText } from "@/lib/altText";
 import { BLOB_URL_REJECTED_MESSAGE, isAllowedBlobUrl } from "@/lib/blobUrl";
 import { workspaceBrandVoicePrompt } from "@/lib/brandVoice";
+import {
+  RECENT_CAPTIONS_LIMIT,
+  captionVarietyBlock,
+  cleanAvoidCaptions,
+  cleanRecentCaptions,
+} from "@/lib/captionVariety";
+import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
 import { checkRateLimit } from "@/lib/rateLimit";
@@ -60,6 +67,8 @@ interface AutoCaptionRequestBody {
   bulk?: boolean;
   /** 07d: "altText" asks for the photo's description instead of a caption. Absent: a caption. */
   purpose?: "altText";
+  /** P2: the other captions of an Add many batch, to differ from. Malformed values are dropped. */
+  avoidCaptions?: string[];
 }
 
 export async function POST(request: Request) {
@@ -235,6 +244,27 @@ export async function POST(request: Request) {
       });
     }
 
+    // P2: captions to differ from. Cancelled posts count too: the aim is that
+    // the AI stops repeating its own openings, and a cancelled or rejected
+    // caption was still written in this workspace (often by the AI). This also
+    // keeps the read on the (workspaceId, createdAt, id) index.
+    const recentRows = await prisma.postJob
+      .findMany({
+        where: { workspaceId: context.workspace.id, baseCaption: { not: null } },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: RECENT_CAPTIONS_LIMIT,
+        select: { baseCaption: true },
+      })
+      .catch((error: unknown) => {
+        // Variety is a nicety: a failed read must not cost the person their caption.
+        console.error("[Auto Caption] Could not read recent captions", error);
+        return [];
+      });
+    const varietyBlock = captionVarietyBlock(
+      cleanRecentCaptions(recentRows.map((row) => row.baseCaption)),
+      cleanAvoidCaptions(body.avoidCaptions),
+    );
+
     const mediaKind = isImage ? "photo" : "video";
     // A video with frames is shown to the vision model; one without is captioned
     // by the text model from the prompt alone (the old behaviour).
@@ -284,7 +314,7 @@ IMPORTANT:
 ${platformText}
 ${languageText}
 ${toneText}
-${lengthText}`.trim();
+${lengthText}`.trim() + varietyBlock;
 
     type ChatMessage = {
       role: string;
