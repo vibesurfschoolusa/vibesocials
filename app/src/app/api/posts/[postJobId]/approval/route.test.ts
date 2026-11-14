@@ -18,7 +18,11 @@ const {
   sendEmailMock,
   failPendingMock,
   checkDailyPostLimitMock,
+  stampJobFindUniqueMock,
+  mediaUpdateManyMock,
 } = vi.hoisted(() => ({
+  stampJobFindUniqueMock: vi.fn(),
+  mediaUpdateManyMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   findFirstMock: vi.fn(),
@@ -36,8 +40,11 @@ vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 vi.mock("@/lib/inngest", () => ({ inngest: { send: inngestSendMock } }));
 vi.mock("@/lib/db", () => ({
   prisma: {
-    postJob: { findFirst: findFirstMock, updateMany: updateManyMock },
+    postJob: { findFirst: findFirstMock, updateMany: updateManyMock, findUnique: stampJobFindUniqueMock },
     user: { findUnique: userFindUniqueMock },
+    // Second review, item 1: a reject ends the post through finishPostJob, which
+    // stamps its media (read the post's media, then write lastUsedAt).
+    mediaItem: { updateMany: mediaUpdateManyMock },
   },
 }));
 // Keep the REAL event builder (buildPublishEvent); only the DB-touching dispatch
@@ -124,6 +131,10 @@ beforeEach(() => {
   failPendingMock.mockReset();
   checkDailyPostLimitMock.mockReset();
   checkDailyPostLimitMock.mockResolvedValue(null);
+  stampJobFindUniqueMock.mockReset();
+  mediaUpdateManyMock.mockReset();
+  stampJobFindUniqueMock.mockResolvedValue({ mediaItemId: "m1", media: [] });
+  mediaUpdateManyMock.mockResolvedValue({ count: 1 });
   // Verification is only enforced when email can actually be delivered.
   delete process.env.RESEND_API_KEY;
 
@@ -297,6 +308,40 @@ describe("POST /api/posts/[postJobId]/approval", () => {
 
     expect(res.status).toBe(409);
     expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  // Second review, item 1: a rejected post is cancelled, a final state, so its
+  // media counts as used now (retention counts its 30 days from the reject).
+  it("rejecting stamps the post's media lastUsedAt to now", async () => {
+    findFirstMock.mockResolvedValue(pendingJob());
+    const before = Date.now();
+
+    const res = await POST(req({ decision: "reject" }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    expect(mediaUpdateManyMock).toHaveBeenCalledWith({
+      where: { id: { in: ["m1"] }, deletedAt: null },
+      data: { lastUsedAt: expect.any(Date) },
+    });
+    const { data } = mediaUpdateManyMock.mock.calls[0][0] as { data: { lastUsedAt: Date } };
+    expect(data.lastUsedAt.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it("approving stamps nothing (the post is not finished)", async () => {
+    findFirstMock.mockResolvedValue(pendingJob());
+
+    await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("a reject that loses its race stamps nothing", async () => {
+    findFirstMock.mockResolvedValue(pendingJob());
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    await POST(req({ decision: "reject" }), ctx("job-1"));
+
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
   });
 
   it("rejecting cancels the post, leaves approvedAt null, and publishes nothing", async () => {

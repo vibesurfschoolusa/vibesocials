@@ -16,7 +16,7 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { SCHEDULE_BUFFER_MS } from "@/lib/scheduling";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
-import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
+import { DISPATCH_FAILURE, failPendingPostJobResults, finishPostJob } from "@/server/jobs/failPendingResults";
 import { buildPublishEvent, prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
 import { sendEmail } from "@/server/notifications/email";
 import { buildApprovalDecisionEmail } from "@/server/notifications/approvalEmail";
@@ -205,32 +205,37 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // left submitted-but-unapproved — ruling R10 backstop) at the version just
   // read transitions, so a concurrent decision, publish or cancel can't
   // double-dispatch and a concurrent edit can't be decided unseen.
-  const { count } = await prisma.postJob.updateMany({
-    where: {
-      id: postJobId,
-      workspaceId: workspaceContext.workspace.id,
-      status: { in: [...APPROVAL_DECIDABLE_STATUSES] },
-      submittedForApprovalAt: { not: null },
-      approvedAt: null,
-      updatedAt: job.updatedAt,
-    },
-    data: approving
-      ? {
-          status: nextStatus,
-          approvedAt: now,
-          approvedByUserId: workspaceContext.user.id,
-          // Usage limits (2026-11-10): a post published now counts toward today,
-          // the day the limit was checked for above, not its creation day or a
-          // slot that passed during review.
-          ...(outcome === "publish_now" ? { scheduledFor: now } : {}),
-          // Client review link: every write that schedules a post clears the
-          // client's marks, so the client looks it over as a new post.
-          ...(nextStatus === "scheduled"
-            ? { clientApprovedAt: null, clientChangeRequestedAt: null, clientNote: null }
-            : {}),
-        }
-      : { status: nextStatus },
-  });
+  const claimWhere = {
+    id: postJobId,
+    workspaceId: workspaceContext.workspace.id,
+    status: { in: [...APPROVAL_DECIDABLE_STATUSES] },
+    submittedForApprovalAt: { not: null },
+    approvedAt: null,
+    updatedAt: job.updatedAt,
+  };
+  // A reject cancels the post, a final state, so it goes through finishPostJob,
+  // which also stamps the post's media as used now (second review, item 1).
+  const count = approving
+    ? (
+        await prisma.postJob.updateMany({
+          where: claimWhere,
+          data: {
+            status: nextStatus,
+            approvedAt: now,
+            approvedByUserId: workspaceContext.user.id,
+            // Usage limits (2026-11-10): a post published now counts toward today,
+            // the day the limit was checked for above, not its creation day or a
+            // slot that passed during review.
+            ...(outcome === "publish_now" ? { scheduledFor: now } : {}),
+            // Client review link: every write that schedules a post clears the
+            // client's marks, so the client looks it over as a new post.
+            ...(nextStatus === "scheduled"
+              ? { clientApprovedAt: null, clientChangeRequestedAt: null, clientNote: null }
+              : {}),
+          },
+        })
+      ).count
+    : await finishPostJob(prisma, { where: claimWhere, data: { status: nextStatus } });
 
   if (count === 0) {
     // Lost the write: if the post is still undecided, it was edited mid-request.
