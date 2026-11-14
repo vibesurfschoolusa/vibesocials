@@ -3,9 +3,10 @@ import type { MediaItem, SocialConnection } from "@prisma/client";
 
 import { altTextOf } from "@/lib/altText";
 import { assertOk } from "@/lib/assertOk";
-import { mediaKindOf, unsupportedMediaReason } from "@/lib/platformLimits";
+import { mediaKindOf, PLATFORM_CAPTION_LIMITS, unsupportedMediaReason } from "@/lib/platformLimits";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { LINKEDIN_REST_BASE_URL, linkedinRestHeaders, toLinkedInLittleText } from "@/lib/linkedinApi";
+import { truncateGraphemes } from "@/lib/truncate";
 import type { PostCover } from "@/lib/videoCover";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 import {
@@ -811,6 +812,16 @@ function postBodyForLog(postBody: LinkedInPostBody): LinkedInPostBody {
   return { ...postBody, content: { media } };
 }
 
+/**
+ * The caption cut to LinkedIn's 3,000-character commentary limit (fix round 1,
+ * M6), before the `little` escaping; the footer has already gone first when the
+ * whole text was over (lib/captionFooter.ts). The composer preview cuts the same.
+ */
+export function computeLinkedInCommentary(caption: string): string {
+  const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS.linkedin;
+  return charLimit === null ? caption : truncateGraphemes(caption, charLimit, { ellipsis });
+}
+
 async function createPost(
   accessToken: string,
   authorUrn: string,
@@ -834,7 +845,7 @@ async function createPost(
     author: authorUrn,
     // The Posts API reads `commentary` as `little` text: reserved characters are escaped so the
     // caption shows as written (a bare "(" would otherwise be read as markup).
-    commentary: toLinkedInLittleText(caption),
+    commentary: toLinkedInLittleText(computeLinkedInCommentary(caption)),
     visibility: "PUBLIC",
     distribution: {
       feedDistribution: "MAIN_FEED",

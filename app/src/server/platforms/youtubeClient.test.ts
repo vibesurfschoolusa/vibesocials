@@ -2206,3 +2206,53 @@ describe("youtubeClient.publishVideo — resumable upload (jobs B3)", () => {
     });
   });
 });
+
+// Fix round 1 (M4, L9): YouTube refuses "<" and ">" in the title and the
+// description, and a description over 5,000 bytes; a post without its own
+// privacy choice goes up private, as the retry does.
+describe("buildYouTubeVideoResource — text YouTube accepts", () => {
+  const resourceFor = (overrides: Partial<PublishContext>) =>
+    buildYouTubeVideoResource(ytCtx(overrides)).metadata;
+  const byteLength = (text: string) => new TextEncoder().encode(text).length;
+
+  it("replaces < and > with the single angle quotes in the title and the description", () => {
+    const { snippet } = resourceFor({ caption: "I <3 surfing -> book now", baseCaption: "I <3 surfing -> go" });
+    expect(snippet.description).toBe("I ‹3 surfing -› book now");
+    expect(snippet.title).toBe("I ‹3 surfing -› go");
+  });
+
+  it("leaves a description within 5,000 bytes unchanged", () => {
+    const caption = "a".repeat(5000);
+    expect(resourceFor({ caption }).snippet.description).toBe(caption);
+  });
+
+  it("cuts a 6,000-byte description to 5,000 bytes", () => {
+    const description = resourceFor({ caption: "Surf day. ".repeat(600) }).snippet.description;
+    expect(byteLength(description)).toBeLessThanOrEqual(5000);
+    expect(byteLength(description)).toBeGreaterThan(4990);
+    expect(description.endsWith("…")).toBe(true);
+  });
+
+  it("never splits an emoji at the cut", () => {
+    const caption = "a".repeat(4990) + "\u{1F30A}".repeat(5);
+    const description = resourceFor({ caption }).snippet.description;
+    expect(description).toBe("a".repeat(4990) + "\u{1F30A}" + "…");
+    expect(description.isWellFormed()).toBe(true);
+  });
+
+  it("never cuts inside a link", () => {
+    const caption = "a".repeat(4980) + " https://vibesurfschool.com/lessons";
+    expect(resourceFor({ caption }).snippet.description).toBe("a".repeat(4980) + " …");
+  });
+
+  it("counts the bytes after the angle quotes replace < and >", () => {
+    const description = resourceFor({ caption: "<".repeat(2000) }).snippet.description;
+    expect(byteLength(description)).toBeLessThanOrEqual(5000);
+    expect(description).not.toContain("<");
+  });
+
+  it("goes up private when the post has no YouTube choice", () => {
+    expect(resourceFor({}).status.privacyStatus).toBe("private");
+    expect(resourceFor({ youtubeMetadata: { privacyStatus: "unlisted" } }).status.privacyStatus).toBe("unlisted");
+  });
+});

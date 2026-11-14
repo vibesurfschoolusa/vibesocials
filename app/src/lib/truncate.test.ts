@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { truncateGraphemes } from "./truncate";
+import { textUnits, truncateGraphemes, truncateUnits } from "./truncate";
 
 // Grapheme count via the same primitive the implementation uses, so assertions
 // about "<= max graphemes" are measured the way the helper measures.
@@ -116,5 +116,43 @@ describe("truncateGraphemes", () => {
     const result = truncateGraphemes("hello world", 2, { ellipsis: "..." });
     expect(result).toBe("..");
     expect(countGraphemes(result)).toBeLessThanOrEqual(2);
+  });
+});
+
+// Fix round 1 (M4, M5): links are kept whole when a text is cut.
+describe("textUnits", () => {
+  it("splits text into graphemes and whole links", () => {
+    const units = textUnits("Hi \u{1F30A} https://example.com/a?b=1. ok");
+    expect(units.map((u) => u.text)).toEqual([
+      "H", "i", " ", "\u{1F30A}", " ", "https://example.com/a?b=1", ".", " ", "o", "k",
+    ]);
+    expect(units[5].link).toEqual({ hasScheme: true, hasPath: true, tld: "com" });
+    expect(units[0].link).toBeNull();
+  });
+
+  it("finds bare domains but not email addresses", () => {
+    expect(textUnits("www.example.com").map((u) => u.text)).toEqual(["www.example.com"]);
+    expect(textUnits("a@b.com").every((u) => u.link === null)).toBe(true);
+  });
+
+  it("joins back to the text it came from", () => {
+    const text = "Café \u{1F468}‍\u{1F469}‍\u{1F467} example.com/x (www.a.org) end";
+    expect(textUnits(text).map((u) => u.text).join("")).toBe(text);
+  });
+});
+
+describe("truncateUnits", () => {
+  const bytes = (unit: { text: string }) => new TextEncoder().encode(unit.text).length;
+
+  it("returns text within the limit unchanged", () => {
+    expect(truncateUnits("abc", 3, bytes, "…")).toBe("abc");
+  });
+
+  it("cuts by the given weight with room for the ellipsis", () => {
+    expect(truncateUnits("abcdef", 5, bytes, "…")).toBe("ab…");
+  });
+
+  it("drops a link that does not fit whole", () => {
+    expect(truncateUnits("ab https://example.com/x", 20, bytes, "")).toBe("ab ");
   });
 });
