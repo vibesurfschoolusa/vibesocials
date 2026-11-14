@@ -13,7 +13,15 @@ vi.mock("@/lib/db", () => ({
 
 import { prisma } from "@/lib/db";
 
-import { applyToPair, PAIR_HALF_SELECT, pairLimitArgs, readPairHalf, wantsPair, type PairHalf } from "./pairRule";
+import {
+  applyToPair,
+  PAIR_HALF_SELECT,
+  pairLimitArgs,
+  readPairHalf,
+  takenFeedHalf,
+  wantsPair,
+  type PairHalf,
+} from "./pairRule";
 
 function half(overrides: Partial<PairHalf> = {}): PairHalf {
   return {
@@ -197,5 +205,22 @@ describe("pairLimitArgs", () => {
   it("without a live other half: this post alone, as before", () => {
     expect(pairLimitArgs("feed-1", null)).toEqual({ excludePostJobId: "feed-1" });
     expect(pairLimitArgs("feed-1", half({ status: "completed" }))).toEqual({ excludePostJobId: "feed-1" });
+  });
+});
+
+// R4 lows, item 3: an email about a pair action describes the feed post.
+describe("takenFeedHalf", () => {
+  const feed = half({ id: "feed-1", kind: "feed", storyOfPostJobId: null });
+  const taken = { id: "feed-1", kind: "feed" as const, changed: true, note: "Its feed post was changed too." };
+
+  it("is the other half when it is the feed post and the action took it", () => {
+    expect(takenFeedHalf(feed, taken)).toBe(feed);
+  });
+
+  it("is null when the other half is the Story, was left alone, or there is none", () => {
+    expect(takenFeedHalf(half(), { ...taken, id: "story-1", kind: "story" })).toBeNull();
+    expect(takenFeedHalf(feed, { ...taken, changed: false })).toBeNull();
+    expect(takenFeedHalf(feed, null)).toBeNull();
+    expect(takenFeedHalf(null, null)).toBeNull();
   });
 });

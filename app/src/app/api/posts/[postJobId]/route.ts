@@ -28,6 +28,7 @@ import {
   pairLimitArgs,
   pairStoryPlatforms,
   readPairHalf,
+  takenFeedHalf,
   wantsPair,
   type PairHalf,
 } from "./pairRule";
@@ -289,20 +290,29 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
     });
   const approvalEffect = effectOf(existing);
 
+  // R4 lows, item 2: the other half of a Feed and Story post takes the main
+  // caption and the time (R3-client-journey M1: the Story's caption, which is
+  // not published, stays equal to the feed post's), never this post's
+  // per-platform captions: each half keeps its own.
+  const pairEdits: Prisma.PostJobUpdateInput = { ...data };
+  delete pairEdits.perPlatformOverrides;
+
   /**
-   * The write for one post: this request's edits, plus what they do to that
-   * post's own approval state and client approval. The same for both halves of
-   * a Feed and Story post (R3-client-journey M1), so the Story's caption, which
-   * is not published, stays equal to the feed post's.
+   * The write for one post: these edits, plus what they do to that post's own
+   * approval state and client approval.
    */
-  const dataFor = (row: CaptionFacts & Parameters<typeof editApprovalEffect>[0]["job"]) => {
-    const rowData: Prisma.PostJobUpdateManyMutationInput = { ...data };
+  const dataFor = (
+    row: CaptionFacts & Parameters<typeof editApprovalEffect>[0]["job"],
+    edits: Prisma.PostJobUpdateInput,
+    overrides: typeof perPlatformOverrides,
+  ) => {
+    const rowData: Prisma.PostJobUpdateManyMutationInput = { ...edits };
     // Client review link: the client approved this text at this time. An edit
     // that changes what will publish withdraws that approval in the same write,
     // so the page asks again. Compared as the publisher reads it (own caption or
     // the media item's, overrides narrowed to the targets), so re-saving the same
     // text and time, as the Queue's edit dialog does, leaves it alone.
-    if (changesWhatClientApproved(row, data, perPlatformOverrides)) {
+    if (changesWhatClientApproved(row, edits, overrides)) {
       rowData.clientApprovedAt = null;
     }
     const effect = effectOf(row);
@@ -314,7 +324,10 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
     return rowData;
   };
 
-  const half = await readPairHalf(workspaceId, { id: postJobId, ...existing }, wantsPair(parsedBody));
+  const readHalf = await readPairHalf(workspaceId, { id: postJobId, ...existing }, wantsPair(parsedBody));
+  // An edit with nothing for the other half (only per-platform captions, by an
+  // owner) leaves it out of the write and the answer.
+  const half = readHalf && Object.keys(dataFor(readHalf, pairEdits, undefined)).length > 0 ? readHalf : null;
   // A new time only fits a half that is scheduled too (a draft has none to move).
   const blocker = (other: PairHalf) =>
     data.scheduledFor instanceof Date && other.status !== "scheduled" ? "is a draft" : null;
@@ -353,7 +366,7 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
             workspaceId,
             status: memberUnderApproval ? row.status : { in: [...MUTABLE_POST_JOB_STATUSES] },
           },
-          data: dataFor(row),
+          data: row === half ? dataFor(row, pairEdits, undefined) : dataFor(row, data, perPlatformOverrides),
         })
       ).count === 1,
     blocker,
@@ -373,28 +386,34 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
     // over the row it replaced - so the owners see the per-platform texts that
     // will publish (including ones this very edit just changed or cleared).
     const editedCaption = typeof body.baseCaption === "string" ? body.baseCaption : null;
+    // R4 lows, item 3: an edit sent from a Story that also changed its feed
+    // post describes the feed post (its own per-platform captions, which the
+    // edit left alone) and names this Story.
+    const feedHalf = takenFeedHalf(half, result.pair);
+    const described = feedHalf ?? existing;
+    const editedOverrides = feedHalf ? undefined : perPlatformOverrides;
     await notifyOwnersOfApprovalRequest({
       workspaceId,
       workspaceName: workspaceContext.workspace.name,
       submitter: workspaceContext.user,
-      caption: editedCaption ?? existing.baseCaption ?? "",
+      caption: editedCaption ?? described.baseCaption ?? "",
       // A Story publishes no caption: its platform reads "Story, no caption" (2026-11-10).
       platformCaptions: withStoryCaptions(
         resolvePlatformCaptions(
           {
-            baseCaption: editedCaption ?? existing.baseCaption,
+            baseCaption: editedCaption ?? described.baseCaption,
             perPlatformOverrides:
-              perPlatformOverrides !== undefined
-                ? (perPlatformOverrides as Prisma.JsonValue | null)
-                : existing.perPlatformOverrides,
-            publishMetadata: existing.publishMetadata,
+              editedOverrides !== undefined
+                ? (editedOverrides as Prisma.JsonValue | null)
+                : described.perPlatformOverrides,
+            publishMetadata: described.publishMetadata,
           },
-          existing.mediaItem,
+          described.mediaItem,
         ),
-        storyPlatformsOf(existing.publishMetadata),
+        storyPlatformsOf(described.publishMetadata),
       ),
       // One email for a Feed and Story card whose Story went back for approval too.
-      ...(half && result.pair?.changed && effectOf(half) === "rehold"
+      ...(half && result.pair?.changed && (feedHalf || effectOf(half) === "rehold")
         ? { alsoAsStory: pairStoryPlatforms(existing.publishMetadata, half) }
         : {}),
     });

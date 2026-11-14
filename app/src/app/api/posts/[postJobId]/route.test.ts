@@ -981,6 +981,77 @@ describe("PATCH and DELETE /api/posts/[postJobId] - a Feed and Story card", () =
     expect(notifyOwnersMock).toHaveBeenCalledWith(expect.objectContaining({ alsoAsStory: ["instagram"] }));
   });
 
+  // R4 lows, item 2: a Story publishes no caption, so it keeps its own
+  // per-platform captions; only the main caption and the time go to it.
+  it("the feed post's own LinkedIn caption is saved on the feed post only; the Story keeps its own", async () => {
+    findFirstMock
+      .mockResolvedValueOnce(feedRow({ perPlatformOverrides: { linkedin: "Feed LinkedIn" } }))
+      .mockResolvedValueOnce(storyRow());
+
+    const res = await PATCH(
+      req({ baseCaption: "Sunset session", perPlatformOverrides: { linkedin: "Feed LinkedIn" }, includePair: true }),
+      ctx("job-1"),
+    );
+
+    expect(res.status).toBe(200);
+    expect(updateManyMock.mock.calls[0][0].data).toEqual(
+      expect.objectContaining({ baseCaption: "Sunset session", perPlatformOverrides: { linkedin: "Feed LinkedIn" } }),
+    );
+    expect(updateManyMock.mock.calls[1][0].where.id).toBe("story-1");
+    expect(updateManyMock.mock.calls[1][0].data).toEqual({ baseCaption: "Sunset session", clientApprovedAt: null });
+  });
+
+  it("an edit sent from the Story (an old tab) never puts the Story's captions on the feed post", async () => {
+    findFirstMock
+      .mockResolvedValueOnce(storyRow({ id: undefined }))
+      .mockResolvedValueOnce({ ...feedRow({ perPlatformOverrides: { linkedin: "Feed LinkedIn" } }), updatedAt: new Date(), createdAt: new Date() });
+
+    await PATCH(
+      req({ baseCaption: "Sunset session", perPlatformOverrides: { instagram: "Story text" }, includePair: true }),
+      ctx("story-1"),
+    );
+
+    expect(updateManyMock.mock.calls[1][0].where.id).toBe("job-1");
+    expect(updateManyMock.mock.calls[1][0].data).not.toHaveProperty("perPlatformOverrides");
+    expect(updateManyMock.mock.calls[1][0].data).toEqual(expect.objectContaining({ baseCaption: "Sunset session" }));
+  });
+
+  it("an edit of only the per-platform captions has nothing for the Story: it is not written or named", async () => {
+    findFirstMock.mockResolvedValueOnce(feedRow()).mockResolvedValueOnce(storyRow());
+
+    const res = await PATCH(req({ perPlatformOverrides: { linkedin: "Feed LinkedIn" }, includePair: true }), ctx("job-1"));
+
+    await expect(res.json()).resolves.toEqual({ ok: true });
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+    expect(updateManyMock.mock.calls[0][0].where.id).toBe("job-1");
+  });
+
+  // R4 lows, item 3: the owners' email describes the feed post, whichever half the edit came from.
+  it("a member's re-hold sent from the Story: the owners' email lists the feed post's platforms and texts, with the Story line", async () => {
+    getWorkspaceContextMock.mockResolvedValue(
+      makeWorkspaceContext({ userId: "member-1", email: "sam@example.com", name: "Sam", role: "member", requireApproval: true }),
+    );
+    findFirstMock
+      .mockResolvedValueOnce(storyRow({ id: undefined }))
+      .mockResolvedValueOnce({
+        ...feedRow({ perPlatformOverrides: { facebook_page: "Feed Facebook" } }),
+        updatedAt: new Date(),
+        createdAt: new Date(),
+      });
+
+    const res = await PATCH(req({ baseCaption: "Unreviewed", includePair: true }), ctx("story-1"));
+
+    expect(res.status).toBe(200);
+    expect(notifyOwnersMock).toHaveBeenCalledTimes(1);
+    expect(notifyOwnersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caption: "Unreviewed",
+        platformCaptions: { facebook_page: "Feed Facebook" },
+        alsoAsStory: ["instagram"],
+      }),
+    );
+  });
+
   it("without includePair the edit is exactly as before: one write, no pair read", async () => {
     findFirstMock.mockResolvedValueOnce(feedRow());
 

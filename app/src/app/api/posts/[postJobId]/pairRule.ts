@@ -269,6 +269,15 @@ export function pairStoryPlatforms(mainPublishMetadata: unknown, half: Pick<Pair
 }
 
 /**
+ * R4 lows, item 3: an email about a pair action describes the feed post (its
+ * platforms and texts) and names the Story. That is the other half when it is
+ * the feed post and the action took it too; null when it is this post.
+ */
+export function takenFeedHalf(half: PairHalf | null, pair: PairReport | null): PairHalf | null {
+  return half && half.kind === "feed" && pair?.changed ? half : null;
+}
+
+/**
  * The daily post limit's arguments for an action that commits a post to a day:
  * neither half counts against itself, and a half the action takes too is a
  * second post on that day (as Create counts Feed and Story).
