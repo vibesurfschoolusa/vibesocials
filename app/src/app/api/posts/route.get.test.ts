@@ -1192,6 +1192,7 @@ describe("GET /api/posts - show=problems (N3)", () => {
     workspaceId: string;
     status: string;
     createdAt: Date;
+    retriedAt: Date | null;
     results: { status: string }[];
   };
 
@@ -1219,12 +1220,20 @@ describe("GET /api/posts - show=problems (N3)", () => {
     });
   }
 
-  function row(id: string, status: string, resultStatuses: string[], i: number, workspaceId = "ws-1"): Row {
+  function row(
+    id: string,
+    status: string,
+    resultStatuses: string[],
+    i: number,
+    workspaceId = "ws-1",
+    retriedAt: Date | null = null,
+  ): Row {
     return {
       id,
       workspaceId,
       status,
       createdAt: new Date(Date.UTC(2026, 10, 10) - i * 1000),
+      retriedAt,
       results: resultStatuses.map((s) => ({ status: s })),
     };
   }
@@ -1301,6 +1310,37 @@ describe("GET /api/posts - show=problems (N3)", () => {
     // 53 jobs, all with a failed result (the "completed" ones too): 50 + 3.
     expect(second.jobs.map((j) => j.id)).toEqual(["job-050", "job-051", "job-052"]);
     expect(postJobFindManyMock.mock.calls[1][0].orderBy).toEqual([{ createdAt: "desc" }, { id: "desc" }]);
+  });
+
+  // N3 fix 1: a retry flips the failed results to pending (and later maybe to
+  // success); the post had a problem, so it stays on the tab.
+  describe("a retried post", () => {
+    const retried = new Date("2026-11-12T10:00:00.000Z");
+    const retriedTable: Row[] = [
+      row("retried-now-good", "completed", ["success", "success"], 0, "ws-1", retried),
+      row("retried-running", "in_progress", ["success", "pending"], 1, "ws-1", retried),
+      row("never-retried-good", "completed", ["success"], 2),
+      row("retried-then-cancelled", "cancelled", ["success"], 3, "ws-1", retried),
+    ];
+
+    it("stays on show=problems while it runs and after it succeeds; a cancelled one and a never-retried success do not", async () => {
+      postJobFindManyMock.mockImplementation(fakeFindMany(retriedTable));
+
+      const body = (await (
+        await GET(getRequest("http://localhost/api/posts?show=problems"))
+      ).json()) as PostsResponse;
+
+      expect(body.jobs.map((j) => j.id)).toEqual(["retried-now-good", "retried-running"]);
+    });
+
+    it("without show, every post comes back and the query is unchanged", async () => {
+      postJobFindManyMock.mockImplementation(fakeFindMany(retriedTable));
+
+      const body = (await (await GET(getRequest())).json()) as PostsResponse;
+
+      expect(postJobFindManyMock.mock.calls[0][0].where).toEqual({ workspaceId: "ws-1" });
+      expect(body.jobs).toHaveLength(4);
+    });
   });
 
   it("answers an unknown show value with a 400 and never queries", async () => {

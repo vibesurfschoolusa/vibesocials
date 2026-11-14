@@ -292,7 +292,8 @@ export async function POST(request: NextRequest, context: RetryRouteContext) {
     // Parent job re-enters the running state while the retried platforms publish.
     await prisma.postJob.update({
       where: { id: postJobId },
-      data: { status: "in_progress" },
+      // retriedAt keeps the post on Activity's "Had a problem" tab (N3).
+      data: { status: "in_progress", retriedAt: new Date() },
     });
 
     // Hand off to the background retry function for exactly the claimed platforms.

@@ -39,6 +39,8 @@ let visibility: "visible" | "hidden";
 let listeners: Map<string, Set<() => void>>;
 let payloadJobs: ReturnType<typeof jobFixture>[];
 let latest: UsePostJobsResult;
+// Every committed result, in order (N3 fix 1: catches a one-render flash).
+let history: UsePostJobsResult[] = [];
 let root: Root | null;
 const fetchMock = vi.fn();
 
@@ -72,6 +74,7 @@ type MountOptions = { show?: "problems" } | "filtered-all" | undefined;
 function probe(options: MountOptions) {
   const onResult = (result: UsePostJobsResult) => {
     latest = result;
+    history.push(result);
   };
   if (options === undefined) return createElement(Probe, { onResult });
   return createElement(FilteredProbe, {
@@ -123,6 +126,7 @@ beforeEach(() => {
   visibility = "visible";
   listeners = new Map();
   payloadJobs = [jobFixture()];
+  history = [];
   root = null;
   fetchMock.mockReset();
   fetchMock.mockImplementation(async () => ({
@@ -362,5 +366,104 @@ describe("usePostJobs show filter", () => {
     });
     expect(latest.jobs?.map((j) => j.id)).toEqual(["bad-1"]);
     expect(latest.hasMore).toBe(false);
+  });
+});
+
+// N3 fix round 1.
+describe("usePostJobs show filter - fix round 1", () => {
+  it("on the problems tab, a watched retried post stays in place with the fresh copy, and polling runs until it settles", async () => {
+    payloadJobs = [jobFixture({ id: "a", status: "failed" }), jobFixture({ id: "j1", status: "failed" }), jobFixture({ id: "b", status: "failed" })];
+    await mount({ show: "problems" });
+    const afterMount = fetchMock.mock.calls.length;
+    // Nothing in flight: no poll.
+    await advance(STEP_MS * 3);
+    expect(fetchMock).toHaveBeenCalledTimes(afterMount);
+
+    // The server keeps the retried post on show=problems (retriedAt), now running.
+    payloadJobs = [jobFixture({ id: "a", status: "failed" }), jobFixture({ id: "j1", status: "in_progress" }), jobFixture({ id: "b", status: "failed" })];
+    await act(async () => {
+      latest.watchRetry("j1");
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(latest.jobs?.map((j) => [j.id, j.status])).toEqual([["a", "failed"], ["j1", "in_progress"], ["b", "failed"]]);
+
+    await advance(STEP_MS);
+    expect(fetchMock).toHaveBeenCalledTimes(afterMount + 2);
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toBe("/api/posts?show=problems");
+    expect(latest.jobs?.map((j) => j.id)).toEqual(["a", "j1", "b"]);
+
+    // It settles: polling stops.
+    payloadJobs = [jobFixture({ id: "a", status: "failed" }), jobFixture({ id: "j1", status: "completed" }), jobFixture({ id: "b", status: "failed" })];
+    await advance(STEP_MS);
+    const settled = fetchMock.mock.calls.length;
+    expect(latest.jobs?.map((j) => [j.id, j.status])).toEqual([["a", "failed"], ["j1", "completed"], ["b", "failed"]]);
+    await advance(STEP_MS * 6);
+    expect(fetchMock).toHaveBeenCalledTimes(settled);
+  });
+
+  it("right after a tab switch, before any answer, returns no rows and loading; the old tab's late answer never lands", async () => {
+    let releaseAll: (() => void) | null = null;
+    let releaseProblems: (() => void) | null = null;
+    let allCalls = 0;
+    fetchMock.mockImplementation(async (url: string) => {
+      const problems = url.includes("show=problems");
+      if (!problems) allCalls += 1;
+      // The first all-posts answer is quick; the second (after switching back
+      // and forth) and the problems answer wait.
+      if (problems) {
+        await new Promise<void>((resolve) => {
+          releaseProblems = resolve;
+        });
+      } else if (allCalls > 1) {
+        await new Promise<void>((resolve) => {
+          releaseAll = resolve;
+        });
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          jobs: [jobFixture({ id: problems ? "bad-1" : "all-1", status: problems ? "failed" : "completed" })],
+          nextCursor: problems ? null : "old",
+          workspaceMemberCount: 1,
+        }),
+      };
+    });
+    await mount("filtered-all");
+    expect(latest.jobs?.map((j) => j.id)).toEqual(["all-1"]);
+    expect(latest.loading).toBe(false);
+
+    history = [];
+    await act(async () => {
+      root!.render(probe({ show: "problems" }));
+    });
+    // The very first render for the new tab already hides the other tab's rows.
+    expect(history[0].jobs).toBeNull();
+    expect(history[0].loading).toBe(true);
+    expect(history[0].hasMore).toBe(false);
+    expect(history.every((r) => r.jobs === null && r.loading)).toBe(true);
+
+    // Switch back to all posts and then to problems again while answers wait.
+    await act(async () => {
+      root!.render(probe("filtered-all"));
+    });
+    await act(async () => {
+      root!.render(probe({ show: "problems" }));
+    });
+    history = [];
+    await act(async () => {
+      releaseAll?.();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(history.every((r) => !r.jobs?.some((j) => j.id === "all-1"))).toBe(true);
+    expect(latest.jobs).toBeNull();
+    expect(latest.loading).toBe(true);
+
+    await act(async () => {
+      releaseProblems?.();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(latest.jobs?.map((j) => j.id)).toEqual(["bad-1"]);
+    expect(latest.loading).toBe(false);
   });
 });

@@ -208,13 +208,21 @@ export async function GET(request: Request) {
   if (statusFilter.length > 0) {
     where.status = { in: statusFilter as PostJobStatus[] };
   }
-  // A post that did not fully go out: the job failed, or one platform did. A
-  // cancelled post never went out on purpose, so it is not a problem. Under
-  // AND so it composes with ?status= and leaves `OR` to the cursor below.
+  // A post that did not fully go out: the job failed, or one platform did, or
+  // it was retried (a retry turns its failed results to pending, then maybe
+  // success, and it must not drop off the tab mid-retry). A cancelled post
+  // never went out on purpose, so it is not a problem. Under AND so it
+  // composes with ?status= and leaves `OR` to the cursor below.
   if (showParam === "problems") {
     where.AND = [
       { status: { not: "cancelled" } },
-      { OR: [{ status: "failed" }, { results: { some: { status: "failed" } } }] },
+      {
+        OR: [
+          { status: "failed" },
+          { results: { some: { status: "failed" } } },
+          { retriedAt: { not: null } },
+        ],
+      },
     ];
   }
   // Keyset predicate for the (createdAt desc, id desc) total order: the page

@@ -488,6 +488,10 @@ model PostJob {
   clientApprovedAt        DateTime?
   clientChangeRequestedAt DateTime?
   clientNote              String?
+  // N3 (2026-11-14): when a platform of this post was last retried. A retried
+  // post had a problem, so Activity's "Had a problem" tab keeps it while the
+  // retry runs and after it succeeds.
+  retriedAt               DateTime?
   // Repeat (2026-11-10): every post of a series created in one request carries
   // the same generated id; a post created on its own has none. Each one is still
   // an ordinary post: edited, approved, published and cancelled on its own.

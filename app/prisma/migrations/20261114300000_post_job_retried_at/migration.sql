@@ -1,0 +1,1 @@
+ALTER TABLE "PostJob" ADD COLUMN "retriedAt" TIMESTAMP(3);

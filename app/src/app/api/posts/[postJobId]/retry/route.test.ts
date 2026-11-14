@@ -295,9 +295,12 @@ describe("POST /api/posts/[postJobId]/retry", () => {
         uploadState: Prisma.DbNull,
       },
     });
+    // N3 fix 1: the same update marks the post as retried, so it stays on
+    // Activity's "Had a problem" tab while the retry runs.
+    expect(postJobUpdateMock).toHaveBeenCalledTimes(1);
     expect(postJobUpdateMock).toHaveBeenCalledWith({
       where: { id: "job-1" },
-      data: { status: "in_progress" },
+      data: { status: "in_progress", retriedAt: expect.any(Date) },
     });
     // 2026-11-01 scale audit (jobs H6 + H1): the event id is unique per REQUEST
     // (Inngest keeps an id for 24 h, so a fixed per-job id would swallow a
@@ -624,5 +627,57 @@ describe("POST /api/posts/[postJobId]/retry - a post without a file", () => {
         data: expect.objectContaining({ postJobId: "job-1", platforms: ["x"] }),
       }),
     );
+  });
+});
+
+// N3 fix 1: a retried post keeps its place on Activity's "Had a problem" tab.
+describe("POST /api/posts/[postJobId]/retry - retriedAt (N3)", () => {
+  it("sets retriedAt in the one update that sets in_progress, at the time of the claim", async () => {
+    postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
+    resultUpdateManyMock.mockResolvedValue({ count: 1 });
+    const before = Date.now();
+
+    const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+
+    expect(res.status).toBe(202);
+    expect(postJobUpdateMock).toHaveBeenCalledTimes(1);
+    const [arg] = postJobUpdateMock.mock.calls[0] as [{ where: unknown; data: { status: string; retriedAt: Date } }];
+    expect(arg.where).toEqual({ id: "job-1" });
+    expect(Object.keys(arg.data).sort()).toEqual(["retriedAt", "status"]);
+    expect(arg.data.status).toBe("in_progress");
+    expect(arg.data.retriedAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(arg.data.retriedAt.getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("sets nothing on a 409 NOTHING_TO_RETRY", async () => {
+    postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
+    resultUpdateManyMock.mockResolvedValue({ count: 0 });
+
+    const res = await POST(req({ platform: "tiktok" }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
+  });
+
+  it("the revert path is unchanged: one job update, the same row revert, then the recompute", async () => {
+    postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
+    resultUpdateManyMock.mockResolvedValue({ count: 1 });
+    inngestSendMock.mockRejectedValue(new Error("response timeout"));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await POST(req({ retryAllFailed: true }), ctx("job-1"));
+    consoleError.mockRestore();
+
+    expect(res.status).toBe(500);
+    expect(postJobUpdateMock).toHaveBeenCalledTimes(1);
+    expect(resultUpdateManyMock).toHaveBeenLastCalledWith({
+      where: { postJobId: "job-1", platform: { in: ["tiktok"] }, status: "pending", claimRunId: null },
+      data: {
+        status: "failed",
+        errorCode: "RETRY_ENQUEUE_FAILED",
+        errorMessage: "Couldn't start the retry. Please try again.",
+      },
+    });
+    expect(recomputeStatusMock).toHaveBeenCalledWith("job-1");
   });
 });

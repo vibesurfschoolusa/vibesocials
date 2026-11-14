@@ -114,6 +114,11 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
   // from the other tab ever land.
   const showRef = useRef(show);
   const [jobs, setJobs] = useState<PostJobDTO[] | null>(null);
+  // The filter `jobs` (and `nextCursor`) were loaded for, set together with
+  // them. While it differs from `show` (a tab was just switched) the hook
+  // reports no rows and loading, so another tab's rows can never show under
+  // the new tab, not even for one render.
+  const [jobsShow, setJobsShow] = useState(show);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [workspaceMemberCount, setWorkspaceMemberCount] = useState<number | null>(null);
@@ -180,6 +185,7 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
         // its fresh cursor — a reload deliberately restarts pagination.
         setJobs(data.jobs);
         setNextCursor(data.nextCursor);
+        setJobsShow(show);
       }
       setWorkspaceMemberCount(data.workspaceMemberCount);
       setRetryWatch((prev) => settleRetryWatch(prev, data.jobs));
@@ -315,15 +321,17 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
     return () => document.removeEventListener("visibilitychange", listener);
   }, []);
 
+  const rowsMatchFilter = jobsShow === show;
+
   return {
-    jobs,
-    loading,
+    jobs: rowsMatchFilter ? jobs : null,
+    loading: loading || !rowsMatchFilter,
     error,
     reload: load,
     workspaceMemberCount,
     loadMore,
     loadingMore,
-    hasMore: nextCursor !== null,
+    hasMore: rowsMatchFilter && nextCursor !== null,
     watchRetry,
     // Derived: a stale `stopped` (set in an earlier run, jobs since settled)
     // must not show the hint.
