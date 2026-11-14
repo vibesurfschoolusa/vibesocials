@@ -107,7 +107,20 @@ import { POST } from "./route";
  * here unless they set the key themselves (the Task 8 validation tests do, to
  * exercise missing / invalid values).
  */
-function jsonRequest(body: unknown): Request {
+/**
+ * F6 item 5: the route requires the id of the workspace the page was rendered
+ * for, as the Create page and Add many send it. A body without the key gets the
+ * active workspace's id here ("ws-1"); a test of the missing id sends the key
+ * as undefined, which JSON leaves out.
+ */
+function withRenderedWorkspace(body: unknown): unknown {
+  return typeof body === "object" && body !== null && !Array.isArray(body) && !("workspaceId" in body)
+    ? { ...(body as object), workspaceId: "ws-1" }
+    : body;
+}
+
+function jsonRequest(sent: unknown): Request {
+  const body = withRenderedWorkspace(sent);
   const isBlobBody =
     typeof body === "object" && body !== null && "blobUrl" in body && !("mimeType" in body);
   const withDefaults = isBlobBody ? { mimeType: "video/mp4", ...(body as object) } : body;

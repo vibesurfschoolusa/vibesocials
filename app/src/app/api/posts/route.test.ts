@@ -120,7 +120,20 @@ function remember(file: unknown): void {
   });
 }
 
-function jsonRequest(body: unknown): Request {
+/**
+ * F6 item 5: the route requires the id of the workspace the page was rendered
+ * for, as the Create page and Add many send it. A body without the key gets the
+ * active workspace's id here ("ws-1"); a test of the missing id sends the key
+ * as undefined, which JSON leaves out.
+ */
+function withRenderedWorkspace(body: unknown): unknown {
+  return typeof body === "object" && body !== null && !Array.isArray(body) && !("workspaceId" in body)
+    ? { ...(body as object), workspaceId: "ws-1" }
+    : body;
+}
+
+function jsonRequest(sent: unknown): Request {
+  const body = withRenderedWorkspace(sent);
   const isBlobBody =
     typeof body === "object" && body !== null && "blobUrl" in body && !("mimeType" in body);
   const withDefaults = isBlobBody ? { mimeType: "video/mp4", ...(body as object) } : body;
@@ -296,7 +309,7 @@ describe("POST /api/posts — blobUrl path (preserved behavior)", () => {
     });
 
     const response = await POST(
-      jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi" }),
+      jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", baseCaption: "hi", workspaceId: "ws-shared-9" }),
     );
 
     expect(response.status).toBe(200);
@@ -1619,10 +1632,14 @@ describe("POST /api/posts — workspace changed in another tab (2026-11-01 audit
     expectNothingWritten();
   });
 
-  it("an empty-string workspaceId is a mismatch, not 'absent'", async () => {
+  it("an empty-string workspaceId is refused as missing (F6 item 5)", async () => {
     const response = await POST(jsonRequest(blobBody({ workspaceId: "" })));
 
-    expect(response.status).toBe(409);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "This page is out of date. Reload it, then try again.",
+      code: "MISSING_WORKSPACE_ID",
+    });
     expectNothingWritten();
   });
 
@@ -1645,12 +1662,20 @@ describe("POST /api/posts — workspace changed in another tab (2026-11-01 audit
     );
   });
 
-  it("proceeds exactly as before when workspaceId is absent (API compatibility)", async () => {
-    const response = await POST(jsonRequest(blobBody()));
-
-    expect(response.status).toBe(200);
-    expect(createPostJobOnlyMock).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "ws-1" }));
-    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+  it("refuses a body without workspaceId (F6 item 5): 400, nothing written, on every path", async () => {
+    for (const body of [
+      blobBody({ workspaceId: undefined }),
+      { mediaItemId: "media-9", baseCaption: "hello", workspaceId: undefined },
+      blobBody({ workspaceId: undefined, draft: true }),
+    ]) {
+      const response = await POST(jsonRequest(body));
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: "This page is out of date. Reload it, then try again.",
+        code: "MISSING_WORKSPACE_ID",
+      });
+    }
+    expectNothingWritten();
   });
 
   it.each([

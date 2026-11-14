@@ -39,15 +39,31 @@ vi.mock("@/lib/workspace", () => ({
 import { BLOB_URL_REJECTED_MESSAGE, MAX_BLOB_URL_LENGTH } from "@/lib/blobUrl";
 import { LOGO_ADDRESS_RESERVED_MESSAGE } from "@/lib/workspaceLogo";
 import { decodePostsCursor, encodePostsCursor } from "@/lib/postsDto";
-import { INVALID_WORKSPACE_ID_MESSAGE, WORKSPACE_CHANGED_MESSAGE } from "@/lib/workspaceChanged";
+import {
+  INVALID_WORKSPACE_ID_MESSAGE,
+  MISSING_WORKSPACE_ID_MESSAGE,
+  WORKSPACE_CHANGED_SAVE_MESSAGE,
+} from "@/lib/workspaceChanged";
 
 import { GET, POST } from "./route";
+
+/**
+ * F6 item 5: the route requires the id of the workspace the page was rendered
+ * for, as the Create page and Add many send it. A body without the key gets the
+ * active workspace's id here ("ws-1"); a test of the missing id sends the key
+ * as undefined, which JSON leaves out.
+ */
+function withRenderedWorkspace(body: unknown): unknown {
+  return typeof body === "object" && body !== null && !Array.isArray(body) && !("workspaceId" in body)
+    ? { ...(body as object), workspaceId: "ws-1" }
+    : body;
+}
 
 function jsonRequest(body: unknown): Request {
   return new Request("http://localhost/api/media", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withRenderedWorkspace(body)),
   });
 }
 
@@ -455,8 +471,9 @@ describe("POST /api/media", () => {
       const response = await POST(jsonRequest({ ...base, workspaceId: "ws-other" }));
 
       expect(response.status).toBe(409);
+      // The shared refusal (F6 item 5): "Reload this page, then try again."
       await expect(response.json()).resolves.toEqual({
-        error: WORKSPACE_CHANGED_MESSAGE,
+        error: WORKSPACE_CHANGED_SAVE_MESSAGE,
         code: "WORKSPACE_CHANGED",
       });
       expect(createMock).not.toHaveBeenCalled();
@@ -475,10 +492,10 @@ describe("POST /api/media", () => {
       expect(createMock).not.toHaveBeenCalled();
     });
 
-    it("treats an empty-string workspaceId as a mismatch, not as absent", async () => {
+    it("refuses an empty-string workspaceId as missing (F6 item 5)", async () => {
       const response = await POST(jsonRequest({ ...base, workspaceId: "" }));
 
-      expect(response.status).toBe(409);
+      expect(response.status).toBe(400);
       expect(createMock).not.toHaveBeenCalled();
     });
 
@@ -502,11 +519,15 @@ describe("POST /api/media", () => {
       });
     });
 
-    it("proceeds exactly as before when workspaceId is absent (API compatibility)", async () => {
-      const response = await POST(jsonRequest(base));
+    it("refuses a body without workspaceId (F6 item 5): 400, nothing stored", async () => {
+      const response = await POST(jsonRequest({ ...base, workspaceId: undefined }));
 
-      expect(response.status).toBe(201);
-      expect(createMock).toHaveBeenCalledTimes(1);
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({
+        error: MISSING_WORKSPACE_ID_MESSAGE,
+        code: "MISSING_WORKSPACE_ID",
+      });
+      expect(createMock).not.toHaveBeenCalled();
     });
 
     it("never takes the target workspace from the body: the stored workspaceId is the active one", async () => {
@@ -541,6 +562,7 @@ describe("POST /api/media", () => {
         blobUrl: "https://test.public.blob.vercel-storage.com/x",
         mimeType: "image/png",
         sizeBytes: 10,
+        workspaceId: "ws-team",
       }),
     );
 

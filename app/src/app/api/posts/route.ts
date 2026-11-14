@@ -14,10 +14,9 @@ import { logger } from "@/lib/logger";
 import { parsePostMediaFields, withStoredMediaFacts, type PostMediaFields } from "@/lib/mediaInput";
 import { MAX_POST_MEDIA, readAltTextField, validatePostMediaList, type PostMediaEntry } from "@/lib/postMedia";
 import {
-  INVALID_WORKSPACE_ID_CODE,
-  INVALID_WORKSPACE_ID_MESSAGE,
   WORKSPACE_CHANGED_CODE,
   WORKSPACE_CHANGED_MESSAGE,
+  renderedWorkspaceRefusal,
 } from "@/lib/workspaceChanged";
 import { textPostsEnabled } from "@/lib/platformLimits";
 import {
@@ -642,22 +641,15 @@ export async function POST(request: Request) {
   // workspace. The composer sends the workspace id it was rendered for; refuse
   // on a mismatch. Deliberately the FIRST check after the body is read: nothing
   // below (blob URL canonicalisation, media/job rows, notifications, the
-  // publish event) may run for a request meant for another workspace. An absent
-  // field keeps today's behaviour for API clients; JSON `null` is present, so
-  // it is rejected like any other non-string.
-  if (body.workspaceId !== undefined) {
-    if (typeof body.workspaceId !== "string") {
-      return NextResponse.json(
-        { error: INVALID_WORKSPACE_ID_MESSAGE, code: INVALID_WORKSPACE_ID_CODE },
-        { status: 400 },
-      );
-    }
-    if (body.workspaceId !== context.workspace.id) {
-      return NextResponse.json(
-        { error: WORKSPACE_CHANGED_MESSAGE, code: WORKSPACE_CHANGED_CODE },
-        { status: 409 },
-      );
-    }
+  // publish event) may run for a request meant for another workspace. F6 item
+  // 5: the id is required, as for every other owner/member write (an absent or
+  // empty one is a 400, not the cookie's workspace); Create and Add many send it.
+  // The 409 keeps Create's own sentence ("before posting").
+  const workspaceRefusal = renderedWorkspaceRefusal(body.workspaceId, context.workspace.id);
+  if (workspaceRefusal) {
+    return workspaceRefusal.status === 409
+      ? NextResponse.json({ error: WORKSPACE_CHANGED_MESSAGE, code: WORKSPACE_CHANGED_CODE }, { status: 409 })
+      : workspaceRefusal;
   }
 
   // Posts without a photo (2026-11-10). Only `true` turns it on, so every other
