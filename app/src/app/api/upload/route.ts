@@ -1,7 +1,8 @@
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { NextResponse } from "next/server";
 
-import { coverUploadRefusal } from "@/lib/coverBlobPath";
+import { UPLOAD_PATH_REFUSED_MESSAGE, isSignedInUploadKey } from "@/lib/blobKey";
+import { coverUploadRefusal, isWorkspaceCoverAddress } from "@/lib/coverBlobPath";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { UPLOAD_ALLOWED_CONTENT_TYPES } from "@/lib/mediaInput";
@@ -17,6 +18,16 @@ import { checkStorageLimit } from "@/server/usage/workspaceUsage";
  * and throws a generic error, so Create and the Media page ask here to show the
  * storage sentence instead (lib/uploadFailure.ts).
  */
+/**
+ * R2 M1: the only pathnames a signed-in token is signed for: a generateBlobKey
+ * upload at the root, or a cover in the active workspace's own covers/ folder.
+ * Both are shapes the orphan sweep lists and deletes when nothing refers to
+ * them, so no token can park a file where it would never be counted or swept.
+ */
+function isSignablePathname(pathname: string, workspaceId: string): boolean {
+  return isSignedInUploadKey(pathname) || isWorkspaceCoverAddress(pathname, workspaceId);
+}
+
 export async function GET(): Promise<NextResponse> {
   const context = await getWorkspaceContext();
   if (!context) {
@@ -88,19 +99,19 @@ export async function POST(request: Request): Promise<NextResponse> {
     // logos/ holds the server's own workspace logos (lib/workspaceLogo.ts):
     // no client token may write there.
     const payload = body.payload as { pathname?: unknown } | null | undefined;
-    const logoRefusal =
-      payload && typeof payload.pathname === "string" ? logoAddressRefusal(payload.pathname) : null;
+    const pathname = payload && typeof payload.pathname === "string" ? payload.pathname : "";
+    const logoRefusal = logoAddressRefusal(pathname);
     if (logoRefusal) {
       return NextResponse.json({ error: logoRefusal }, { status: 400 });
     }
     // V1 fix round 1: covers/<workspaceId>/ is that workspace's own; POST
     // /api/posts takes a cover only from the poster's folder.
-    const coverRefusal =
-      payload && typeof payload.pathname === "string"
-        ? coverUploadRefusal(payload.pathname, context.workspace.id)
-        : null;
+    const coverRefusal = coverUploadRefusal(pathname, context.workspace.id);
     if (coverRefusal) {
       return NextResponse.json({ error: coverRefusal }, { status: 400 });
+    }
+    if (!isSignablePathname(pathname, context.workspace.id)) {
+      return NextResponse.json({ error: UPLOAD_PATH_REFUSED_MESSAGE }, { status: 400 });
     }
     const refusal = await checkStorageLimit(context.workspace.id);
     if (refusal) {
@@ -113,6 +124,10 @@ export async function POST(request: Request): Promise<NextResponse> {
       body: body as unknown as HandleUploadBody,
       request,
       onBeforeGenerateToken: async (pathname) => {
+        // Belt and braces: the check above read the same body field.
+        if (!isSignablePathname(pathname, context.workspace.id)) {
+          throw new Error(UPLOAD_PATH_REFUSED_MESSAGE);
+        }
         logger.info("[Upload] Generating token", { pathname, userId: user.id });
 
         return {

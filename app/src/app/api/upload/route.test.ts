@@ -18,6 +18,7 @@ vi.mock("@vercel/blob/client", () => ({ handleUpload: handleUploadMock }));
 vi.mock("@/server/usage/workspaceUsage", () => ({ checkStorageLimit: checkStorageLimitMock }));
 
 import { COVER_ADDRESS_REFUSED_MESSAGE } from "@/lib/coverBlobPath";
+import { UPLOAD_PATH_REFUSED_MESSAGE } from "@/lib/blobKey";
 import { LOGO_ADDRESS_RESERVED_MESSAGE } from "@/lib/workspaceLogo";
 
 import { GET, POST } from "./route";
@@ -31,10 +32,13 @@ function tokenRequest(): Request {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       type: "blob.generate-client-token",
-      payload: { pathname: "a.jpg", clientPayload: null, multipart: false },
+      payload: { pathname: SIGNED_IN_KEY, clientPayload: null, multipart: false },
     }),
   });
 }
+
+/** A key in the shape lib/blobKey.ts makes for Create, Add many and Media. */
+const SIGNED_IN_KEY = "1731600000000-ab12cd34-cat.png";
 
 beforeEach(() => {
   getWorkspaceContextMock.mockReset();
@@ -124,6 +128,61 @@ describe("POST /api/upload — the covers/ folder is the workspace's own", () =>
       await expect(res.json()).resolves.toEqual({ error: COVER_ADDRESS_REFUSED_MESSAGE });
     }
     expect(handleUploadMock).not.toHaveBeenCalled();
+  });
+});
+
+// R2 M1: only the app's own key shapes are signed, so every signed file is one
+// the orphan sweep can find and delete when nothing registers it.
+describe("POST /api/upload — only the app's key shapes", () => {
+  const tokenFor = (payload: unknown) =>
+    POST(
+      new Request("http://localhost/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "blob.generate-client-token", payload }),
+      }),
+    );
+
+  it("signs a signed-in upload key and hands that pathname to the signer", async () => {
+    const res = await tokenFor({ pathname: SIGNED_IN_KEY, clientPayload: null, multipart: false });
+    expect(res.status).toBe(200);
+    expect(handleUploadMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses any other pathname with a plain 400 before a token is signed", async () => {
+    for (const pathname of [
+      "a.jpg",
+      "stash/1731600000000-ab12cd34-cat.png",
+      "ul/link-1/0123456789abcdef-cat.png",
+      "1731600000000-ab12cd34-x/y.png",
+      "",
+    ]) {
+      const res = await tokenFor({ pathname, clientPayload: null, multipart: false });
+      expect(res.status, pathname).toBe(400);
+      await expect(res.json()).resolves.toEqual({ error: UPLOAD_PATH_REFUSED_MESSAGE });
+    }
+    expect(handleUploadMock).not.toHaveBeenCalled();
+    expect(checkStorageLimitMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a token request that names no pathname", async () => {
+    for (const payload of [undefined, null, {}, { pathname: 5 }]) {
+      const res = await tokenFor(payload);
+      expect(res.status).toBe(400);
+    }
+    expect(handleUploadMock).not.toHaveBeenCalled();
+  });
+
+  it("checks the pathname the signer is about to sign as well", async () => {
+    let signerAnswer: Promise<unknown> | undefined;
+    handleUploadMock.mockImplementation(async (options: { onBeforeGenerateToken: (p: string) => Promise<unknown> }) => {
+      signerAnswer = options.onBeforeGenerateToken("elsewhere/a.jpg");
+      await signerAnswer;
+      return { type: "blob.generate-client-token", clientToken: "tok" };
+    });
+    const res = await tokenFor({ pathname: SIGNED_IN_KEY, clientPayload: null, multipart: false });
+    expect(res.status).toBe(400);
+    await expect(signerAnswer).rejects.toThrow();
   });
 });
 

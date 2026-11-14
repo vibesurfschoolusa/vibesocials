@@ -4,3 +4,18 @@ export function generateBlobKey(file: File): string {
   const random = Math.random().toString(36).slice(2, 10);
   return `${Date.now()}-${random}-${safeName}`;
 }
+
+/**
+ * The shape generateBlobKey makes (the random part can come out short). POST
+ * /api/upload signs no other root pathname, so every signed-in upload is a file
+ * the orphan sweep (server/jobs/orphanBlobSweep.ts) recognises and can delete.
+ */
+const SIGNED_IN_UPLOAD_KEY = /^\d{13}-[a-z0-9]{0,8}-[A-Za-z0-9._-]+$/;
+
+export function isSignedInUploadKey(pathname: string): boolean {
+  return typeof pathname === "string" && SIGNED_IN_UPLOAD_KEY.test(pathname);
+}
+
+/** /api/upload's 400 for a pathname the app does not make. */
+export const UPLOAD_PATH_REFUSED_MESSAGE =
+  "This upload was not started by Vibe Socials. Reload the page and upload the file again.";
