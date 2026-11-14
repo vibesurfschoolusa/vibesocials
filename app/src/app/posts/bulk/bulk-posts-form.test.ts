@@ -89,3 +89,13 @@ describe("Add many batch card", () => {
     expect(html.indexOf("Post every row to")).toBeGreaterThan(start);
   });
 });
+
+// P1 second review: typing a description replaces a failed "Write it for me"
+// message instead of leaving it under the new text.
+describe("photo description typing", () => {
+  it("clears the description error when the person types", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(new URL("./bulk-posts-form.tsx", import.meta.url), "utf8");
+    expect(source).toContain("onAltTextChange={(altText) => updateRow(row.id, { altText, altTextError: null })}");
+  });
+});

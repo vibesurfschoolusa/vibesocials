@@ -1083,7 +1083,7 @@ export function BulkPostsForm({
               onConfirmInQueue={() => markInQueue(row.id)}
               onSendAgain={() => sendAgain(row.id)}
               onCaptionChange={(caption) => updateRow(row.id, { caption, sendError: null, improveError: null })}
-              onAltTextChange={(altText) => updateRow(row.id, { altText })}
+              onAltTextChange={(altText) => updateRow(row.id, { altText, altTextError: null })}
               onImprove={() => void improveRow(row.id)}
               onWriteDescription={() => void writeDescription(row.id)}
               onCoverOpenChange={(open) => setCoverOpenId(open ? row.id : null)}
