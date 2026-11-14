@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 
@@ -34,9 +35,16 @@ import { platformLabel } from "@/lib/platforms";
 import { type ConnectionSummary, toConnectionSummary } from "@/lib/connectionSummary";
 import type { UserSettings } from "@/lib/userSettings";
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
+import { APP_PAGE_CLASS } from "@/lib/pageLayout";
+import { SettingsSectionNav } from "@/components/settings-section-nav";
 
 import { accountDeletionCancelsPaidPlan, workspacesHavePaidPlan } from "./paidPlans";
 import { settingsPlanNotes } from "./planNotes";
+import { settingsSections } from "./sections";
+
+export const metadata: Metadata = {
+  title: "Settings | Vibe Socials",
+};
 
 export default async function SettingsPage({
   searchParams,
@@ -144,20 +152,12 @@ export default async function SettingsPage({
     accountDeletionCancelsPaidPlan(context.user.id),
   ]);
 
-  // The jump links under the title: one per section this person sees, in page
-  // order, each to its heading's id (Plan only when it shows, below).
-  const sections = [
-    { id: "post-defaults", label: "Posts and emails" },
-    { id: "posting-times", label: "Posting times" },
-    { id: "connections", label: "Connections" },
-    { id: "team", label: "Team" },
-    ...(planLabel ? [{ id: "plan", label: "Plan" }] : []),
-    { id: "usage", label: "Usage" },
-    { id: "account", label: "Account" },
-  ];
+  // The section links: one per section this person sees, Plan on the same
+  // condition that renders the Plan section below.
+  const sections = settingsSections({ planShown: Boolean(planLabel) });
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8 md:px-6 lg:px-8">
+    <div className={APP_PAGE_CLASS}>
       {oauthResult ? (
         <Alert variant={oauthResult.variant} className="mb-6">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -182,155 +182,150 @@ export default async function SettingsPage({
         </Alert>
       ) : null}
 
-      <header className="mb-8">
+      <header className="mb-6">
         <h1 className="text-2xl font-bold tracking-tight text-foreground">Settings</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Your post defaults and emails, posting times, connections, team, usage and your account.
         </p>
-        <nav aria-label="Settings sections">
-          <ul className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-sm">
-            {sections.map((section) => (
-              <li key={section.id}>
-                <a href={`#${section.id}`} className="font-medium text-primary underline-offset-4 hover:underline">
-                  {section.label}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </nav>
       </header>
 
-      <div className="flex flex-col gap-10">
-        <section>
-          <div className="mb-4">
-            <h2 id="post-defaults" className="scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Posts and emails</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              What every post starts with (the footer, the brand voice the AI writes in, approvals
-              and Google post defaults) and which emails you get.
-            </p>
-          </div>
-          {/* key: force a REMOUNT when the active workspace changes. This
-              client component seeds its local state from props once at mount
-              (footer inputs, preview, member read-only card), and the
-              account-menu switcher's router.refresh() intentionally preserves
-              client state — without the key, workspace A's values would stay
-              on screen under workspace B after an in-page switch. */}
-          <SettingsForm
-            key={context.workspace.id}
-            settings={settings}
-            role={context.role}
-            planNotes={settingsPlanNotes(context.workspace)}
-          />
-        </section>
+      {/* Below lg the links are a sticky row above the sections; from lg a
+          sticky column beside them. */}
+      <div className="lg:grid lg:grid-cols-[11rem_minmax(0,1fr)] lg:gap-8">
+        <SettingsSectionNav sections={sections} />
 
-        <section>
-          <div className="mb-4">
-            <h2 id="posting-times" className="scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Posting times</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              The times you usually post each week. Create and Add many can fill in the next free one.
-            </p>
-          </div>
-          {/* key: remount on a workspace switch, like SettingsForm. */}
-          <PostingSlotsForm key={context.workspace.id} slots={postingSlots} role={context.role} />
-        </section>
-
-        <section>
-          <div className="mb-4">
-            <h2 id="connections" className="scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Connections</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Connect your social accounts so Vibe Socials can publish on your behalf.
-            </p>
-          </div>
-          <ConnectionsSection
-            connections={connections}
-            readOnly={context.role !== "owner"}
-            // Pinterest is listed once its app credentials are set (lib/advertisedPlatforms.ts).
-            unavailablePlatforms={advertisedPlatforms().includes("pinterest") ? [] : ["pinterest"]}
-          />
-          {/* Owners only; key: one link per workspace, so remount on a switch. */}
-          <div id="connect-link" className="mt-4 scroll-mt-20">
-            <ConnectLinkSection
-              key={`connect-link-${context.workspace.id}`}
-              workspaceId={context.workspace.id}
-              isOwner={context.role === "owner"}
-            />
-          </div>
-        </section>
-
-        <section>
-          <div className="mb-4">
-            <h2 id="team" className="scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Team</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {context.role === "owner"
-                ? "Invite teammates and manage who has access to this workspace."
-                : "See who else is in this workspace."}
-            </p>
-          </div>
-          {/* key: same remount-on-switch rule as SettingsForm above — the
-              owner view's invite/member fetch effects run once per mount and
-              its rename state seeds from props, all assuming one workspace
-              per mounted instance. */}
-          <WorkspaceLogoControl
-            key={`logo-${context.workspace.id}`}
-            logoUrl={logo?.logoUrl ?? null}
-            isOwner={context.role === "owner"}
-            workspaceId={context.workspace.id}
-            planNote={settingsPlanNotes(context.workspace).logo}
-          />
-          <TeamSection
-            key={context.workspace.id}
-            role={context.role}
-            workspaceName={context.workspace.name}
-            deletion={workspaceDeletion}
-          />
-        </section>
-
-        {planLabel ? (
+        <div className="flex min-w-0 flex-col gap-10">
           <section>
             <div className="mb-4">
-              <h2 id="plan" className="scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Plan</h2>
+              <h2 id="post-defaults" className="scroll-mt-32 lg:scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Posts and emails</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                This workspace&apos;s plan and the limits that come with it.
+                What every post starts with (the footer, the brand voice the AI writes in, approvals
+                and Google post defaults) and which emails you get.
               </p>
             </div>
-            <PlanSection
-              label={planLabel}
-              usage={usage}
-              notice={planNotice}
-              offers={planOffers}
-              yearlyOffers={yearlyPlanOffers}
-              manage={planActions?.manage ?? false}
-              workspaceNote={workspacePlanNoteShown(planWorkspace, new Date())}
-              growthAdds={planGrowthAddsShown(context.role, planWorkspace, new Date())}
+            {/* key: force a REMOUNT when the active workspace changes. This
+                client component seeds its local state from props once at mount
+                (footer inputs, preview, member read-only card), and the
+                account-menu switcher's router.refresh() intentionally preserves
+                client state — without the key, workspace A's values would stay
+                on screen under workspace B after an in-page switch. */}
+            <SettingsForm
+              key={context.workspace.id}
+              settings={settings}
+              role={context.role}
+              planNotes={settingsPlanNotes(context.workspace)}
             />
           </section>
-        ) : null}
 
-        <section>
-          <div className="mb-4">
-            <h2 id="usage" className="scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Usage</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              What this workspace has used of its limits. For a higher limit, write to {SUPPORT_EMAIL}.
-            </p>
-          </div>
-          <UsageSection usage={usage} />
-        </section>
+          <section>
+            <div className="mb-4">
+              <h2 id="posting-times" className="scroll-mt-32 lg:scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Posting times</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                The times you usually post each week. Create and Add many can fill in the next free one.
+              </p>
+            </div>
+            {/* key: remount on a workspace switch, like SettingsForm. */}
+            <PostingSlotsForm key={context.workspace.id} slots={postingSlots} role={context.role} />
+          </section>
 
-        <section>
-          <div className="mb-4">
-            <h2 id="account" className="scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Account</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Your sign-in, your password, and deleting your account.
-            </p>
-          </div>
-          {/* SEC-1: a boolean, never the hash itself. */}
-          <AccountSection
-            email={context.user.email}
-            hasPassword={context.user.passwordHash !== null}
-            deletion={accountDeletion}
-            cancelsPaidPlan={accountCancelsPaidPlan}
-          />
-        </section>
+          <section>
+            <div className="mb-4">
+              <h2 id="connections" className="scroll-mt-32 lg:scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Connections</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Connect your social accounts so Vibe Socials can publish on your behalf.
+              </p>
+            </div>
+            <ConnectionsSection
+              connections={connections}
+              readOnly={context.role !== "owner"}
+              // Pinterest is listed once its app credentials are set (lib/advertisedPlatforms.ts).
+              unavailablePlatforms={advertisedPlatforms().includes("pinterest") ? [] : ["pinterest"]}
+            />
+            {/* Owners only; key: one link per workspace, so remount on a switch. */}
+            <div id="connect-link" className="mt-4 scroll-mt-32 lg:scroll-mt-20">
+              <ConnectLinkSection
+                key={`connect-link-${context.workspace.id}`}
+                workspaceId={context.workspace.id}
+                isOwner={context.role === "owner"}
+              />
+            </div>
+          </section>
+
+          <section>
+            <div className="mb-4">
+              <h2 id="team" className="scroll-mt-32 lg:scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Team</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {context.role === "owner"
+                  ? "Invite teammates and manage who has access to this workspace."
+                  : "See who else is in this workspace."}
+              </p>
+            </div>
+            {/* key: same remount-on-switch rule as SettingsForm above — the
+                owner view's invite/member fetch effects run once per mount and
+                its rename state seeds from props, all assuming one workspace
+                per mounted instance. */}
+            <WorkspaceLogoControl
+              key={`logo-${context.workspace.id}`}
+              logoUrl={logo?.logoUrl ?? null}
+              isOwner={context.role === "owner"}
+              workspaceId={context.workspace.id}
+              planNote={settingsPlanNotes(context.workspace).logo}
+            />
+            <TeamSection
+              key={context.workspace.id}
+              role={context.role}
+              workspaceName={context.workspace.name}
+              deletion={workspaceDeletion}
+            />
+          </section>
+
+          {planLabel ? (
+            <section>
+              <div className="mb-4">
+                <h2 id="plan" className="scroll-mt-32 lg:scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Plan</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  This workspace&apos;s plan and the limits that come with it.
+                </p>
+              </div>
+              <PlanSection
+                label={planLabel}
+                usage={usage}
+                notice={planNotice}
+                offers={planOffers}
+                yearlyOffers={yearlyPlanOffers}
+                manage={planActions?.manage ?? false}
+                workspaceNote={workspacePlanNoteShown(planWorkspace, new Date())}
+                growthAdds={planGrowthAddsShown(context.role, planWorkspace, new Date())}
+              />
+            </section>
+          ) : null}
+
+          <section>
+            <div className="mb-4">
+              <h2 id="usage" className="scroll-mt-32 lg:scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Usage</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                What this workspace has used of its limits. For a higher limit, write to {SUPPORT_EMAIL}.
+              </p>
+            </div>
+            <UsageSection usage={usage} />
+          </section>
+
+          <section>
+            <div className="mb-4">
+              <h2 id="account" className="scroll-mt-32 lg:scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Account</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Your sign-in, your password, and deleting your account.
+              </p>
+            </div>
+            {/* SEC-1: a boolean, never the hash itself. */}
+            <AccountSection
+              email={context.user.email}
+              hasPassword={context.user.passwordHash !== null}
+              deletion={accountDeletion}
+              cancelsPaidPlan={accountCancelsPaidPlan}
+            />
+          </section>
+        </div>
       </div>
     </div>
   );
