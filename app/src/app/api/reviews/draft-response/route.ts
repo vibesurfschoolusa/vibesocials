@@ -189,8 +189,8 @@ Generate a professional, warm response to this review.`;
       return NextResponse.json({ error: DRAFT_FAILED_MESSAGE }, { status: 500 });
     }
 
+    // R1 M7: never the reviewer's name, a stranger's personal data.
     console.log("[Draft Response] Generated successfully", {
-      reviewerName,
       starRating,
       responseLength: draftResponse.length,
     });

@@ -24,7 +24,8 @@ vi.mock("@/lib/workspace", () => ({
   getWorkspaceContext: getWorkspaceContextMock,
 }));
 
-vi.mock("@/server/googleReviews", () => ({
+vi.mock("@/server/googleReviews", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/googleReviews")>()),
   refreshAccessToken: refreshAccessTokenMock,
 }));
 
@@ -136,5 +137,40 @@ describe("GET /api/reviews/locations", () => {
 
     expect(response.status).toBe(500);
     expect(body.error).toBeTruthy();
+  });
+
+  // F7 (R1 M5): what the page shows is a plain sentence, with a reconnect step
+  // when Google refused.
+  it.each([401, 403])("asks for a reconnect when Google answers %i", async (status) => {
+    findFirstMock.mockResolvedValue(CONNECTION);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status,
+      statusText: "Refused",
+      text: async () => "{}",
+    }) as unknown as typeof fetch;
+
+    const body = await (await GET()).json();
+
+    expect(body).toEqual({
+      error: "Google refused the request. Reconnect Google Business Profile in Settings.",
+      reconnect: true,
+    });
+  });
+
+  it("gives a plain sentence when Google is down", async () => {
+    findFirstMock.mockResolvedValue(CONNECTION);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      statusText: "Service Unavailable",
+      text: async () => "upstream down",
+    }) as unknown as typeof fetch;
+
+    const body = await (await GET()).json();
+
+    expect(body).toEqual({ error: "Couldn't load your Google locations. Try again in a minute." });
   });
 });

@@ -16,14 +16,15 @@ import { GoogleSignInButton } from "@/components/google-sign-in-button";
 import { authPageHref, safeCallbackPath } from "@/lib/safeRedirect";
 
 /**
- * What the page says about billing, as plain strings from the server page;
- * null with billing off, when it says nothing. Strings, not an import of
- * billingTerms.ts, so the draft wording never ships in this client bundle.
+ * What the page says under the button, as plain strings from the server page:
+ * the trial line (null with billing off) and what the person agrees to (F7:
+ * shown billing on or off). Strings, not an import of billingTerms.ts, so the
+ * draft wording never ships in this client bundle.
  */
 export type RegisterBilling = {
-  trialLine: string;
+  trialLine: string | null;
   agreement: { before: string; terms: string; between: string; privacy: string; after: string };
-} | null;
+};
 
 function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
   const router = useRouter();
@@ -173,22 +174,20 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
                 Create account
               </Button>
 
-              {billing ? (
-                <div className="space-y-1 text-center text-xs text-muted-foreground">
-                  <p>{billing.trialLine}</p>
-                  <p>
-                    {billing.agreement.before}
-                    <Link href="/terms" className="underline underline-offset-2 hover:text-foreground">
-                      {billing.agreement.terms}
-                    </Link>
-                    {billing.agreement.between}
-                    <Link href="/privacy" className="underline underline-offset-2 hover:text-foreground">
-                      {billing.agreement.privacy}
-                    </Link>
-                    {billing.agreement.after}
-                  </p>
-                </div>
-              ) : null}
+              <div className="space-y-1 text-center text-xs text-muted-foreground">
+                {billing.trialLine ? <p>{billing.trialLine}</p> : null}
+                <p>
+                  {billing.agreement.before}
+                  <Link href="/terms" className="underline underline-offset-2 hover:text-foreground">
+                    {billing.agreement.terms}
+                  </Link>
+                  {billing.agreement.between}
+                  <Link href="/privacy" className="underline underline-offset-2 hover:text-foreground">
+                    {billing.agreement.privacy}
+                  </Link>
+                  {billing.agreement.after}
+                </p>
+              </div>
             </form>
 
             <GoogleSignInButton callbackUrl={callbackUrl} />

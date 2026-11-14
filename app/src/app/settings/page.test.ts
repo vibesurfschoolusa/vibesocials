@@ -1,9 +1,11 @@
 import { type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getWorkspaceContextMock, planSectionMock, billing, sectionProps } = vi.hoisted(() => ({
+const { getWorkspaceContextMock, planSectionMock, billing, planActionsMock, sectionProps } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
+  // What the Plan section offers (planSectionActions); null: no plan action.
+  planActionsMock: vi.fn<(role: string) => { choose: string[]; manage: boolean } | null>(() => null),
   // The props each section that writes was given, by section name.
   sectionProps: {} as Record<string, Record<string, unknown>>,
   // Stands in for billing on/off: with it off, planSectionLabel shows no plan.
@@ -36,7 +38,7 @@ vi.mock("@/components/planSectionView", () => ({
   PLAN_PORTAL_ONLY_LABEL: "Plan",
   planGrowthAddsShown: () => false,
   planReturnNotice: () => null,
-  planSectionActions: () => null,
+  planSectionActions: (role: string) => planActionsMock(role),
   planSectionLabel: (role: string) => (role === "owner" && billing.on ? "Studio plan" : null),
 }));
 // The sections' own contents are tested beside them; here only the page's frame.
@@ -119,6 +121,8 @@ function headings(html: string): Array<[string | null, string]> {
 beforeEach(() => {
   getWorkspaceContextMock.mockReset();
   billing.on = true;
+  planActionsMock.mockReset();
+  planActionsMock.mockReturnValue(null);
 });
 
 // Go-live check 2026-11-11: Settings is 5,600 pixels long with no way to jump,
@@ -231,6 +235,65 @@ describe("SettingsPage — the one-workspace sentence", () => {
     expect(await noteFor({ billingExempt: false, trialEndsAt: new Date(Date.now() + 86_400_000) })).toBe(true);
     expect(await noteFor({ billingExempt: true })).toBe(false);
     expect(await noteFor({})).toBe(false);
+  });
+});
+
+// F7 (R1 L4): with billing on, a higher limit comes with another plan, not an
+// email, but only where the Plan section offers a way to change it.
+describe("SettingsPage — Usage words", () => {
+  function usageLine(html: string): string {
+    const start = html.indexOf('id="usage"');
+    return (/<p[^>]*>([\s\S]*?)<\/p>/.exec(html.slice(start))?.[1] ?? "").replace(/<!-- -->/g, "");
+  }
+  const SUPPORT = "What this workspace has used of its limits. For a higher limit, write to ";
+
+  beforeEach(() => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("a paying owner the Plan section offers a change to: points to Plan", async () => {
+    planActionsMock.mockReturnValue({ choose: [], manage: true });
+    const line = usageLine(await render("owner"));
+    expect(line).toContain('For a higher limit, change the plan under <a href="#plan"');
+    expect(line).not.toContain("write to");
+  });
+
+  it("an owner on a trial the Plan section offers plans to: points to Plan", async () => {
+    planActionsMock.mockReturnValue({ choose: ["starter"], manage: false });
+    expect(usageLine(await render("owner"))).toContain('change the plan under <a href="#plan"');
+  });
+
+  it("an exempt workspace (no plan action): the support sentence", async () => {
+    planActionsMock.mockReturnValue(null);
+    expect(usageLine(await render("owner"))).toContain(SUPPORT);
+  });
+
+  it("a trial with payments not set up (no plan action): the support sentence", async () => {
+    planActionsMock.mockReturnValue(null);
+    const line = usageLine(await render("owner"));
+    expect(line).toContain(SUPPORT);
+    expect(line).not.toContain("#plan");
+  });
+
+  it("a member where the owner could change the plan: ask the owner", async () => {
+    planActionsMock.mockImplementation(() => ({ choose: [], manage: true }));
+    const line = usageLine(await render("member"));
+    expect(line).toContain("For a higher limit, ask the workspace owner to change the plan.");
+    expect(planActionsMock).toHaveBeenCalledWith("owner");
+  });
+
+  it("a member where there is no plan to change: the support sentence", async () => {
+    planActionsMock.mockReturnValue(null);
+    expect(usageLine(await render("member"))).toContain(SUPPORT);
+  });
+
+  it("billing off: the support sentence, whatever the Plan section offers", async () => {
+    vi.stubEnv("BILLING_ENABLED", undefined);
+    planActionsMock.mockReturnValue({ choose: [], manage: true });
+    expect(usageLine(await render("owner"))).toContain(SUPPORT);
   });
 });
 

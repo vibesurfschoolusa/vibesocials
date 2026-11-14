@@ -47,10 +47,28 @@ describe("Register with billing on", () => {
 });
 
 describe("Register with billing off", () => {
-  it("says nothing about a trial or terms", () => {
+  it("says nothing about a trial", () => {
     vi.stubEnv("BILLING_ENABLED", undefined);
     const html = render();
     expect(html).not.toContain("free trial");
-    expect(html).not.toContain("you agree");
+  });
+
+  // F7 (R1 L5): what the person agrees to shows whether billing is on or off.
+  it("still says what the person agrees to, with links to both", () => {
+    vi.stubEnv("BILLING_ENABLED", undefined);
+    const html = render();
+    expect(html.replace(/<[^>]+>/g, "")).toContain(
+      "By creating an account you agree to the Terms and the Privacy Policy.",
+    );
+    expect(html).toMatch(/<a [^>]*href="\/terms"[^>]*>Terms<\/a>/);
+    expect(html).toMatch(/<a [^>]*href="\/privacy"[^>]*>Privacy Policy<\/a>/);
+  });
+});
+
+// F7 (R1 L6): the browser tab names the page.
+describe("Register metadata", () => {
+  it("names the browser tab", async () => {
+    const { metadata } = await import("./page");
+    expect(metadata.title).toBe("Create an account | Vibe Socials");
   });
 });

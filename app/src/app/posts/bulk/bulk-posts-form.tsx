@@ -83,9 +83,11 @@ import {
   captionThenDescribe,
   describePhotoOnce,
   initialBulkGoogleMetadata,
+  readAiCaptionsChoice,
   readVideoDuration,
   requestImprovedCaption,
   rowStoryRefusal,
+  saveAiCaptionsChoice,
 } from "./bulkExtras";
 
 export interface BulkRow {
@@ -216,6 +218,22 @@ export function BulkPostsForm({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [duplicateNote, setDuplicateNote] = useState(0);
   const [sendingMode, setSendingMode] = useState<BulkFinishMode | null>(null);
+  // F7 (R1 M2): "Write captions with AI". Off, no file goes to the AI and rows
+  // keep an empty caption box. On until this browser turned it off; read after
+  // mount, since the server cannot know (a different first render is React #418).
+  const [aiCaptions, setAiCaptionsState] = useState(true);
+  const aiCaptionsRef = useRef(true);
+  useEffect(() => {
+    const on = readAiCaptionsChoice(() => window.localStorage);
+    aiCaptionsRef.current = on;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reads browser storage once after hydration
+    setAiCaptionsState(on);
+  }, []);
+  function setAiCaptions(on: boolean) {
+    aiCaptionsRef.current = on;
+    setAiCaptionsState(on);
+    saveAiCaptionsChoice(() => window.localStorage, on);
+  }
 
   // The first day starts empty and is filled on mount: the server's clock and
   // zone are not the browser's, and a different first render is React #418.
@@ -386,25 +404,45 @@ export function BulkPostsForm({
     }
   }
 
+  // What the caption step reads from the row's own file, in this browser: a
+  // video's length and still frames. Nothing is sent anywhere.
+  async function readRowMedia(id: string, row: BulkRow, blob: UploadedBlob): Promise<string[]> {
+    // Read once, for the Story length rule and the cover slider.
+    if (blob.mimeType.startsWith("video/") && row.durationSec === undefined) {
+      const durationSec = await readVideoDuration(filesRef.current.get(id) ?? blob.url);
+      updateRow(id, { durationSec });
+    }
+    // For a video, a few still frames let the AI see it, as on Create.
+    const frames = blob.mimeType.startsWith("video/")
+      ? await extractVideoFrames(filesRef.current.get(id) ?? blob.url)
+      : [];
+    // The first of those frames doubles as the video's thumbnail, at no extra cost.
+    if (frames.length > 0) {
+      updateRow(id, (current) => (current.thumbnail ? {} : { thumbnail: frames[0] }));
+    }
+    return frames;
+  }
+
+  // "Write captions with AI" off: the row's own reads, then an empty caption box for the person.
+  async function captionRowWithoutAi(id: string) {
+    const row = rowsRef.current.find((r) => r.id === id);
+    if (!row?.blob) return;
+    updateRow(id, { captionStatus: "writing", captionError: null, improveError: null });
+    try {
+      await readRowMedia(id, row, row.blob);
+    } catch (error: unknown) {
+      console.error("[Add many] Reading the video failed", error);
+    }
+    updateRow(id, { captionStatus: "done", captionOverwrite: false });
+  }
+
   async function captionRow(id: string) {
     const row = rowsRef.current.find((r) => r.id === id);
     if (!row?.blob) return;
     const blob = row.blob;
     updateRow(id, { captionStatus: "writing", captionError: null, improveError: null });
     try {
-      // Read once, for the Story length rule and the cover slider.
-      if (blob.mimeType.startsWith("video/") && row.durationSec === undefined) {
-        const durationSec = await readVideoDuration(filesRef.current.get(id) ?? blob.url);
-        updateRow(id, { durationSec });
-      }
-      // For a video, a few still frames let the AI see it, as on Create.
-      const frames = blob.mimeType.startsWith("video/")
-        ? await extractVideoFrames(filesRef.current.get(id) ?? blob.url)
-        : [];
-      // The first of those frames doubles as the video's thumbnail, at no extra cost.
-      if (frames.length > 0) {
-        updateRow(id, (current) => (current.thumbnail ? {} : { thumbnail: frames[0] }));
-      }
+      const frames = await readRowMedia(id, row, blob);
       // Built from the rows as they are now, after the frames were read, so the
       // other rows' latest captions go with it and this one does not repeat them.
       const response = await fetch("/api/posts/auto-caption", {
@@ -514,6 +552,7 @@ export function BulkPostsForm({
         else {
           await captionThenDescribe(work.id, {
             writeCaption: captionRow,
+            withoutAi: captionRowWithoutAi,
             row: (rowId) => {
               const row = rowsRef.current.find((r) => r.id === rowId);
               return row
@@ -526,7 +565,7 @@ export function BulkPostsForm({
                 : undefined;
             },
             describe: describeRow,
-          });
+          }, { ai: aiCaptionsRef.current });
         }
       }
     } finally {
@@ -817,6 +856,21 @@ export function BulkPostsForm({
               Choose from Media
             </Button>
           </div>
+          <div className="flex items-center gap-2">
+            <input
+              id="bulk-ai-captions"
+              type="checkbox"
+              className="h-4 w-4 rounded border-input accent-[var(--primary)]"
+              checked={aiCaptions}
+              onChange={(event) => setAiCaptions(event.target.checked)}
+            />
+            <label htmlFor="bulk-ai-captions" className="text-sm text-foreground">Write captions with AI</label>
+          </div>
+          {!aiCaptions ? (
+            <p className="text-sm text-muted-foreground">
+              Off: your photos and videos are not sent to the AI. Write each caption yourself.
+            </p>
+          ) : null}
           <p className="text-sm text-muted-foreground">
             {rows.length} of {BULK_MAX_FILES} added.
           </p>
@@ -832,7 +886,7 @@ export function BulkPostsForm({
               Uploading {uploadingIndex + 1} of {rows.length}
             </p>
           ) : null}
-          {captionProgress ? (
+          {captionProgress && aiCaptions ? (
             <p className="text-sm text-muted-foreground" aria-live="polite">
               {captionProgress}
             </p>
@@ -1076,6 +1130,7 @@ export function BulkPostsForm({
               row={row}
               index={index}
               count={rows.length}
+              aiCaptions={aiCaptions}
               skipped={platformsForRow(selectedPlatforms, row.mimeType).skipped}
               locked={sendingMode !== null}
               minWhen={minRowTime(now ?? new Date())}

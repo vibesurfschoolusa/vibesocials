@@ -9,6 +9,8 @@ interface ErrorStateProps {
   title: string;
   message: string;
   onRetry: () => void;
+  /** Google refused the request (F7): the way out is reconnecting in Settings. */
+  settingsLink?: boolean;
 }
 
 /**
@@ -17,8 +19,8 @@ interface ErrorStateProps {
  * like a missing connection, it also surfaces a link to /settings (where
  * connection management now lives).
  */
-export function ErrorState({ title, message, onRetry }: ErrorStateProps) {
-  const showConnectionsLink = message.includes("not configured");
+export function ErrorState({ title, message, onRetry, settingsLink = false }: ErrorStateProps) {
+  const showConnectionsLink = settingsLink || message.includes("not configured");
 
   return (
     <Alert variant="danger" title={title}>

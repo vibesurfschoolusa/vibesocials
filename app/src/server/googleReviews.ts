@@ -51,6 +51,47 @@ export async function refreshAccessToken(
   return refreshConnectionToken(connection, (current) => refreshGoogleToken(current));
 }
 
+type GoogleReviewPayload = Omit<GoogleReview, "reviewId">;
+
+/** One page of a location's reviews: `query` is the list call's query string. */
+async function fetchReviewsPage(
+  accessToken: string,
+  resolvedLocationName: string,
+  query: string,
+  timeoutMs?: number
+): Promise<{ reviews: GoogleReview[]; nextPageToken: string | null }> {
+  // Use Google My Business API v4 to fetch reviews
+  // API: https://developers.google.com/my-business/reference/rest/v4/accounts.locations.reviews/list
+  const response = await fetchWithTimeout(
+    `https://mybusiness.googleapis.com/v4/${resolvedLocationName}/reviews${query}`,
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    },
+    timeoutMs
+  );
+
+  await assertOk(response, {
+    code: "GBP_REVIEWS_FETCH_FAILED",
+    prefix: "Failed to fetch Google Business Profile reviews",
+  });
+
+  const data = (await response.json()) as {
+    reviews?: GoogleReviewPayload[];
+    nextPageToken?: unknown;
+  };
+
+  const reviews = (data.reviews || []).map((review) => ({
+    ...review,
+    // Extract review ID from name (e.g., "accounts/.../locations/.../reviews/ABC123")
+    reviewId: review.name.split("/").pop() || "",
+  }));
+  const nextPageToken =
+    typeof data.nextPageToken === "string" && data.nextPageToken !== "" ? data.nextPageToken : null;
+  return { reviews, nextPageToken };
+}
+
 /**
  * Fetch reviews for a Google Business Profile location (first page only).
  *
@@ -75,56 +116,211 @@ export async function fetchReviews(
     locationName
   );
 
-  // Use Google My Business API v4 to fetch reviews
-  // API: https://developers.google.com/my-business/reference/rest/v4/accounts.locations.reviews/list
   const query = options.newestFirst
     ? `?pageSize=50&orderBy=${encodeURIComponent("updateTime desc")}`
     : "";
-  const response = await fetchWithTimeout(
-    `https://mybusiness.googleapis.com/v4/${resolvedLocationName}/reviews${query}`,
-    {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    },
-    options.timeoutMs
-  );
-
-  await assertOk(response, {
-    code: "GBP_REVIEWS_FETCH_FAILED",
-    prefix: "Failed to fetch Google Business Profile reviews",
-  });
-
-  const data = (await response.json()) as {
-    reviews?: Array<{
-      name: string;
-      reviewer: {
-        profilePhotoUrl?: string;
-        displayName: string;
-        isAnonymous: boolean;
-      };
-      starRating: "ONE" | "TWO" | "THREE" | "FOUR" | "FIVE";
-      comment?: string;
-      createTime: string;
-      updateTime: string;
-      reviewReply?: {
-        comment: string;
-        updateTime: string;
-      };
-    }>;
-  };
-
-  const reviews = (data.reviews || []).map((review) => ({
-    ...review,
-    // Extract review ID from name (e.g., "accounts/.../locations/.../reviews/ABC123")
-    reviewId: review.name.split("/").pop() || "",
-  }));
+  const { reviews } = await fetchReviewsPage(accessToken, resolvedLocationName, query, options.timeoutMs);
 
   console.log("[GBP Reviews] Fetched reviews successfully", {
     count: reviews.length,
   });
 
   return reviews;
+}
+
+/** The most reviews the Reviews page loads: ten of Google's largest pages. */
+export const REVIEWS_SHOWN_MAX = 500;
+const REVIEWS_PAGE_SIZE = 50;
+
+/**
+ * Every review of a location, newest first, for the Reviews page (F7, R1 M4:
+ * the first page alone hid older reviews still waiting for a reply). Follows
+ * `nextPageToken` up to REVIEWS_SHOWN_MAX reviews; `truncated` says Google had
+ * more, so the page can say it shows only the latest ones.
+ */
+export async function fetchAllReviews(
+  accessToken: string,
+  locationName: string
+): Promise<{ reviews: GoogleReview[]; truncated: boolean }> {
+  const resolvedLocationName = await resolveGbpLocationName(accessToken, locationName);
+  const reviews: GoogleReview[] = [];
+  const seenTokens = new Set<string>();
+  let pageToken: string | null = null;
+
+  for (;;) {
+    const params = new URLSearchParams({ pageSize: String(REVIEWS_PAGE_SIZE), orderBy: "updateTime desc" });
+    if (pageToken) params.set("pageToken", pageToken);
+    const page = await fetchReviewsPage(accessToken, resolvedLocationName, `?${params.toString()}`);
+    reviews.push(...page.reviews);
+
+    if (reviews.length > REVIEWS_SHOWN_MAX) {
+      return { reviews: reviews.slice(0, REVIEWS_SHOWN_MAX), truncated: true };
+    }
+    // A token seen before would read the same pages again, for ever.
+    if (!page.nextPageToken || seenTokens.has(page.nextPageToken)) {
+      return { reviews, truncated: false };
+    }
+    if (reviews.length === REVIEWS_SHOWN_MAX) return { reviews, truncated: true };
+    seenTokens.add(page.nextPageToken);
+    pageToken = page.nextPageToken;
+  }
+}
+
+/** What the Reviews page says when Google refused: its token is no longer accepted. */
+export const GOOGLE_REFUSED_MESSAGE =
+  "Google refused the request. Reconnect Google Business Profile in Settings.";
+
+/** What the Reviews page says when our own Google setup, not the person's grant, failed. */
+export const REVIEWS_UNAVAILABLE_MESSAGE = "Google Reviews are not available right now. Try again later.";
+
+const RECONNECT_CODES = new Set(["RECONNECT_REQUIRED", "CONNECTION_GONE", "GOOGLE_NO_REFRESH_TOKEN"]);
+const REFRESH_FAILED_CODE = "GOOGLE_TOKEN_REFRESH_FAILED";
+/** Refresh answers about the app's own OAuth client: reconnecting cannot fix them. */
+const APP_SETUP_OAUTH_ERRORS = new Set(["invalid_client", "unauthorized_client"]);
+
+/**
+ * The error body the reviews routes answer with (F7, R1 M5). A reconnect is
+ * asked for, with `reconnect: true` so the page links to Settings, only when
+ * the person's Google grant is the problem: a 401/403 from a Google API call,
+ * a connection already flagged or gone, no refresh token, or a refresh Google
+ * refused with invalid_grant. A failure of the app's own setup (missing OAuth
+ * credentials, invalid_client, unauthorized_client, or a refresh 401, which is
+ * how Google answers a bad client) says Reviews are not available. Anything
+ * else is the route's plain `fallback`: an error's own text is never shown.
+ *
+ * `oauthError` is the token endpoint's OAuth code when the thrown error carries
+ * it. A refresh 400 without one reads as a refused grant, the common case.
+ */
+export function reviewsErrorBody(
+  error: unknown,
+  fallback: string
+): { error: string; reconnect?: true } {
+  const { status, code, oauthError } = (error ?? {}) as {
+    status?: unknown;
+    code?: unknown;
+    oauthError?: unknown;
+  };
+  const refused = { error: GOOGLE_REFUSED_MESSAGE, reconnect: true as const };
+  const unavailable = { error: REVIEWS_UNAVAILABLE_MESSAGE };
+
+  if (code === "GOOGLE_MISSING_OAUTH_CREDENTIALS") return unavailable;
+  if (code === REFRESH_FAILED_CODE) {
+    if (typeof oauthError === "string") {
+      if (oauthError === "invalid_grant") return refused;
+      if (APP_SETUP_OAUTH_ERRORS.has(oauthError)) return unavailable;
+    }
+    if (status === 401) return unavailable;
+    if (status === 400) return refused;
+    return { error: fallback };
+  }
+  if (status === 401 || status === 403) return refused;
+  if (typeof code === "string" && RECONNECT_CODES.has(code)) return refused;
+  return { error: fallback };
+}
+
+/**
+ * The `accounts/{a}/locations/{l}` of a review's full resource name,
+ * `accounts/{a}/locations/{l}/reviews/{r}` and nothing more, else null. The
+ * reply is sent to `<name>/reply`, so an extra segment, a dot segment, an
+ * escape or a query would point the request somewhere else. The ids
+ * themselves are Google's, so any other character is left to Google to judge.
+ */
+export function reviewLocationName(name: string): string | null {
+  const match = /^(accounts\/([^/?#%\s]+)\/locations\/([^/?#%\s]+))\/reviews\/([^/?#%\s]+)$/.exec(name);
+  if (!match) return null;
+  return match.slice(2).every((segment) => segment !== "." && segment !== "..") ? match[1] : null;
+}
+
+/** A location as GET /api/reviews/locations lists it. */
+export interface GbpListedLocation {
+  /** Full resource name: accounts/.../locations/... */
+  name: string;
+  locationName: string;
+  title: string;
+  storeCode?: string;
+}
+
+const ACCOUNT_MANAGEMENT_BASE = "https://mybusinessaccountmanagement.googleapis.com/v1";
+const BUSINESS_INFO_BASE = "https://mybusinessbusinessinformation.googleapis.com/v1";
+
+/**
+ * Every location the connection's Google account can manage, as the Reviews
+ * page lists them; the reply route checks a review's location against the same
+ * list (F7). Throws, with Google's `status`, when the accounts call fails. An
+ * account whose locations could not be read is logged and left out, and
+ * `complete` is false, so a caller can tell "not listed" from "not read".
+ */
+export async function listGbpLocations(
+  accessToken: string
+): Promise<{ locations: GbpListedLocation[]; complete: boolean }> {
+  const accountsResponse = await fetch(`${ACCOUNT_MANAGEMENT_BASE}/accounts`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!accountsResponse.ok) {
+    const errorText = await accountsResponse.text();
+    console.error("[GBP Locations] Failed to fetch accounts:", {
+      status: accountsResponse.status,
+      statusText: accountsResponse.statusText,
+      body: errorText.substring(0, 500),
+    });
+    // The status decides what the page says (reviewsErrorBody).
+    throw Object.assign(new Error("Failed to fetch Google Business Profile accounts"), {
+      status: accountsResponse.status,
+    });
+  }
+
+  const accountsData = await accountsResponse.json();
+  const accounts: Array<{ name?: string }> = accountsData.accounts || [];
+  const allLocations: GbpListedLocation[] = [];
+  let complete = true;
+
+  for (const account of accounts) {
+    const accountName = account.name;
+    if (!accountName) continue;
+
+    // Use the business information API with readMask to get location details
+    const url = new URL(`${BUSINESS_INFO_BASE}/${accountName}/locations`);
+    url.searchParams.set("readMask", "name,storeCode,title");
+
+    const locationsResponse = await fetch(url.toString(), {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (locationsResponse.ok) {
+      const locationsData = await locationsResponse.json();
+      const locations = locationsData.locations || [];
+
+      for (const location of locations) {
+        // Ensure we have the full resource name (accounts/.../locations/...)
+        // The API might return just "locations/..." so we need to construct the full path
+        let fullName = location.name;
+        if (fullName && fullName.startsWith("locations/") && !fullName.includes("accounts/")) {
+          fullName = `${accountName}/${fullName}`;
+        }
+
+        allLocations.push({
+          name: fullName, // Full resource name: accounts/.../locations/...
+          locationName: location.locationName || location.title || "Unknown Location",
+          title: location.title || location.locationName || "Unknown Location",
+          storeCode: location.storeCode,
+        });
+      }
+    } else {
+      complete = false;
+      console.error("[GBP Locations] Failed to fetch locations for account", {
+        accountName,
+        status: locationsResponse.status,
+      });
+    }
+  }
+
+  console.log("[GBP Locations] Found locations:", allLocations.length);
+  return { locations: allLocations, complete };
 }
 
 /** The location id of `accounts/{a}/locations/{l}` or `locations/{l}`, or null. */

@@ -30,6 +30,8 @@ interface BulkPostRowProps {
   storyRefusal: string | null;
   /** This video row's cover picker is the one open (one at a time: the picker's ids are fixed). */
   coverOpen: boolean;
+  /** "Write captions with AI" is on (F7). Off, no Write again: it would send the file to the AI. */
+  aiCaptions?: boolean;
   onConfirmInQueue(): void;
   onSendAgain(): void;
   onCaptionChange(caption: string): void;
@@ -113,6 +115,7 @@ export function BulkPostRow({
   minWhen,
   storyRefusal,
   coverOpen,
+  aiCaptions = true,
   onConfirmInQueue,
   onSendAgain,
   onCaptionChange,
@@ -198,7 +201,7 @@ export function BulkPostRow({
             disabled={!editable}
             // Improve replaces the text when it answers, so nothing typed meanwhile is lost.
             readOnly={row.improving}
-            placeholder={row.captionStatus === "writing" ? "Writing a caption..." : "Write a caption"}
+            placeholder={aiCaptions && row.captionStatus === "writing" ? "Writing a caption..." : "Write a caption"}
             onChange={(event) => onCaptionChange(event.target.value)}
           />
           {row.captionStatus === "failed" ? (
@@ -209,9 +212,11 @@ export function BulkPostRow({
           {row.improveError ? <p className="text-sm text-muted-foreground">{row.improveError}</p> : null}
           {editable && row.upload === "done" && (row.captionStatus === "done" || row.captionStatus === "failed") ? (
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" size="md" disabled={row.improving} onClick={onWriteAgain}>
-                Write again
-              </Button>
+              {aiCaptions ? (
+                <Button variant="outline" size="md" disabled={row.improving} onClick={onWriteAgain}>
+                  Write again
+                </Button>
+              ) : null}
               {row.caption.trim() ? (
                 <Button variant="outline" size="md" loading={row.improving} aria-busy={row.improving} onClick={onImprove}>
                   {row.improving ? "Improving..." : "Improve"}
@@ -234,8 +239,9 @@ export function BulkPostRow({
               onChange={(event) => onAltTextChange(event.target.value)}
             />
             {/* A Media photo keeps its saved description unless the user writes
-                a new one here: it is never described automatically. */}
-            {row.mediaItemId && editable ? (
+                a new one here: it is never described automatically. With "Write
+                captions with AI" off, nothing goes to the AI, so no button. */}
+            {row.mediaItemId && editable && aiCaptions ? (
               <div>
                 <Button variant="outline" size="md" loading={row.altTextWriting} onClick={onWriteDescription}>
                   Write it for me

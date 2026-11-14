@@ -11,6 +11,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
+import { readApiError, shownError } from "@/components/reviews/api-error";
 import { ErrorState } from "@/components/reviews/error-state";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { initialLocation } from "@/components/reviews/initial-location";
@@ -20,6 +21,7 @@ import {
   focusAfterReply,
   needsReplyEmptyTitle,
   replyButtonId,
+  reviewsCapNote,
   reviewsSubtitle,
   showLocationPicker,
   singleLocationName,
@@ -28,6 +30,12 @@ import type { GoogleReview, Location } from "@/components/reviews/types";
 import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 
 import { ReviewLinkPanel } from "./review-link-panel";
+
+// F7 (R1 M5): plain sentences for a failure the route did not explain.
+const LOCATIONS_FAILED = "Couldn't load your Google locations. Try again in a minute.";
+const REVIEWS_FAILED = "Couldn't load your Google reviews. Try again in a minute.";
+const REPLY_FAILED = "Couldn't post your reply. Try again in a minute.";
+const DRAFT_FAILED = "The AI could not write a reply. Try again, or write one yourself.";
 
 /**
  * Client-rendered reviews view. The parent server component gates access.
@@ -46,8 +54,11 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
   const [selectedLocation, setSelectedLocation] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingLocations, setLoadingLocations] = useState(true);
-  const [locationsError, setLocationsError] = useState<string | null>(null);
-  const [reviewsError, setReviewsError] = useState<string | null>(null);
+  // F7: a sentence and whether it asks for a reconnect (api-error.ts).
+  const [locationsError, setLocationsError] = useState<{ message: string; settingsLink: boolean } | null>(null);
+  const [reviewsError, setReviewsError] = useState<{ message: string; settingsLink: boolean } | null>(null);
+  // Google had more than the page loads: only the latest are shown.
+  const [truncated, setTruncated] = useState(false);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState<string | null>(null);
@@ -66,8 +77,7 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
       const response = await fetch("/api/reviews/locations");
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to fetch locations");
+        throw await readApiError(response, LOCATIONS_FAILED);
       }
 
       const data = await response.json();
@@ -82,7 +92,7 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
       }
     } catch (err: unknown) {
       console.error("Error fetching locations:", err);
-      setLocationsError((err as Error).message || "Failed to load locations");
+      setLocationsError(shownError(err, LOCATIONS_FAILED));
     } finally {
       setLoadingLocations(false);
     }
@@ -100,15 +110,15 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
       );
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to fetch reviews");
+        throw await readApiError(response, REVIEWS_FAILED);
       }
 
       const data = await response.json();
       setReviews(data.reviews || []);
+      setTruncated(data.truncated === true);
     } catch (err: unknown) {
       console.error("Error fetching reviews:", err);
-      setReviewsError((err as Error).message || "Failed to load reviews");
+      setReviewsError(shownError(err, REVIEWS_FAILED));
     } finally {
       setLoading(false);
     }
@@ -173,8 +183,7 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to post reply");
+        throw await readApiError(response, REPLY_FAILED);
       }
 
       // Update the review in the list
@@ -205,7 +214,7 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
       });
     } catch (err: unknown) {
       console.error("Error posting reply:", err);
-      toast.error((err as Error).message || "Failed to post reply");
+      toast.error(shownError(err, REPLY_FAILED).message);
       throw err;
     } finally {
       setSubmitting(null);
@@ -230,8 +239,7 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to generate AI response");
+        throw await readApiError(response, DRAFT_FAILED);
       }
 
       const data = await response.json();
@@ -249,7 +257,7 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
       }
     } catch (err: unknown) {
       console.error("Error generating AI response:", err);
-      toast.error((err as Error).message || "Failed to generate AI response");
+      toast.error(shownError(err, DRAFT_FAILED).message);
     } finally {
       setGeneratingAI(null);
     }
@@ -297,7 +305,8 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
       <div className={APP_PAGE_CLASS}>
         <ErrorState
           title="Couldn't load reviews"
-          message={locationsError}
+          message={locationsError.message}
+          settingsLink={locationsError.settingsLink}
           onRetry={loadLocations}
         />
       </div>
@@ -321,6 +330,9 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
             reviews.length
           )}
         </p>
+        {selectedLocation && !loading && !reviewsError && reviewsCapNote(truncated) && (
+          <p className="mt-1 text-sm text-muted-foreground">{reviewsCapNote(truncated)}</p>
+        )}
         {singleLocationName(locations) && (
           <p className="mt-1 text-sm text-muted-foreground">{singleLocationName(locations)}</p>
         )}
@@ -397,7 +409,8 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
       ) : reviewsError ? (
         <ErrorState
           title="Couldn't load reviews"
-          message={reviewsError}
+          message={reviewsError.message}
+          settingsLink={reviewsError.settingsLink}
           onRetry={loadReviews}
         />
       ) : loading ? (

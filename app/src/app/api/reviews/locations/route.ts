@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
-import { refreshAccessToken } from "@/server/googleReviews";
+import { listGbpLocations, refreshAccessToken, reviewsErrorBody } from "@/server/googleReviews";
 
 export const dynamic = "force-dynamic";
+
+const LOCATIONS_FAILED_MESSAGE = "Couldn't load your Google locations. Try again in a minute.";
 
 /**
  * GET /api/reviews/locations - Fetch all Google Business Profile locations
@@ -52,101 +54,15 @@ export async function GET() {
       accessToken = refreshedConnection.accessToken!;
     }
 
-    // Use the newer Google Business Profile API endpoints
-    const accountManagementBase =
-      "https://mybusinessaccountmanagement.googleapis.com/v1";
-    const businessInfoBase =
-      "https://mybusinessbusinessinformation.googleapis.com/v1";
-
-    // Fetch all accounts
-    const accountsResponse = await fetch(`${accountManagementBase}/accounts`, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
-
-    if (!accountsResponse.ok) {
-      const errorText = await accountsResponse.text();
-      console.error("[GBP Locations] Failed to fetch accounts:", {
-        status: accountsResponse.status,
-        statusText: accountsResponse.statusText,
-        body: errorText.substring(0, 500),
-      });
-      throw new Error("Failed to fetch Google Business Profile accounts");
-    }
-
-    const accountsData = await accountsResponse.json();
-    const accounts = accountsData.accounts || [];
-
-    if (accounts.length === 0) {
-      return NextResponse.json({ locations: [], connected: true });
-    }
-
-    // Fetch locations for all accounts
-    const allLocations: Array<{
-      name: string;
-      locationName: string;
-      title: string;
-      storeCode?: string;
-    }> = [];
-
-    for (const account of accounts) {
-      const accountName = account.name;
-      if (!accountName) continue;
-
-      // Use the business information API with readMask to get location details
-      const url = new URL(`${businessInfoBase}/${accountName}/locations`);
-      url.searchParams.set("readMask", "name,storeCode,title");
-
-      const locationsResponse = await fetch(url.toString(), {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      });
-
-      if (locationsResponse.ok) {
-        const locationsData = await locationsResponse.json();
-        const locations = locationsData.locations || [];
-
-        for (const location of locations) {
-          // Ensure we have the full resource name (accounts/.../locations/...)
-          // The API might return just "locations/..." so we need to construct the full path
-          let fullName = location.name;
-          if (fullName && fullName.startsWith("locations/") && !fullName.includes("accounts/")) {
-            console.log("[GBP Locations] Constructing full path", {
-              original: fullName,
-              accountName,
-              constructed: `${accountName}/${fullName}`,
-            });
-            fullName = `${accountName}/${fullName}`;
-          }
-
-          allLocations.push({
-            name: fullName, // Full resource name: accounts/.../locations/...
-            locationName: location.locationName || location.title || "Unknown Location",
-            title: location.title || location.locationName || "Unknown Location",
-            storeCode: location.storeCode,
-          });
-        }
-      } else {
-        console.error("[GBP Locations] Failed to fetch locations for account", {
-          accountName,
-          status: locationsResponse.status,
-        });
-      }
-    }
-
-    console.log("[GBP Locations] Found locations:", allLocations.length);
+    // The listing the reply route checks a review's location against (googleReviews.ts).
+    const { locations } = await listGbpLocations(accessToken!);
 
     return NextResponse.json({
-      locations: allLocations,
+      locations,
       connected: true,
     });
   } catch (error: unknown) {
     console.error("[GBP Locations] Error:", error);
-    return NextResponse.json(
-      { error: (error as Error).message || "Failed to fetch locations" },
-      { status: 500 }
-    );
+    return NextResponse.json(reviewsErrorBody(error, LOCATIONS_FAILED_MESSAGE), { status: 500 });
   }
 }
