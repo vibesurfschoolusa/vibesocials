@@ -203,11 +203,14 @@ describe("buildPostOutcomeEmail", () => {
 
     expect(email.subject).toBe("Surf Co: your scheduled post couldn't be published");
     expect(email.subject).toContain("couldn't be published");
-    expect(email.html).toContain("no connected platforms");
-    expect(email.html).toContain("Settings");
+    // F1 review: the job records no cause (no connection could take it, or our
+    // side gave up after 2 h), so the email says what is true for both, like the
+    // Activity card, and points at Send again instead of "create it again".
     expect(email.html).toContain(
-      "This post had no connected platforms when it ran, so nothing was published. Connect a platform in Settings, then create the post again.",
+      "This post was not sent. Open it in Activity and use Send again to try once more.",
     );
+    expect(email.html).not.toContain("no connected platforms");
+    expect(email.html).not.toContain("create the post again");
   });
 
   it("keeps the neutral finished-processing subject for a zero-results job that is NOT failed (e.g. completed)", () => {
@@ -300,8 +303,7 @@ describe("deliverPostOutcomeNotification", () => {
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     const arg = sendEmailMock.mock.calls[0][0] as { subject: string; html: string };
     expect(arg.subject).toBe("Surf Co: your scheduled post couldn't be published");
-    expect(arg.html).toContain("no connected platforms");
-    expect(arg.html).toContain("Settings");
+    expect(arg.html).toContain("This post was not sent. Open it in Activity and use Send again to try once more.");
   });
 
   // Pause (2026-11-10): every due post of a paused workspace is failed

@@ -185,7 +185,10 @@ export function buildPostOutcomeEmail({
       "<div>",
       `<h1>${escapeHtml(headline)}</h1>`,
       about,
-      "<p>This post had no connected platforms when it ran, so nothing was published. Connect a platform in Settings, then create the post again.</p>",
+      // F1 review: no platform was tried, because no connection could take the
+      // post or because our side gave up after 2 h. The job records neither
+      // cause, so this says what is true for both, like the Activity card.
+      "<p>This post was not sent. Open it in Activity and use Send again to try once more.</p>",
       link,
       optOut,
       "</div>",
