@@ -3141,3 +3141,92 @@ describe("POST /api/posts — a new file's size and type come from storage (F5)"
     expect(args.extraMedia).toEqual([expect.objectContaining({ sizeBytes: 4_000_000 })]);
   });
 });
+
+// G1 review: a "Post now" whose chosen platforms failed when it was created
+// (connection needs reconnecting, or is gone) says which, so Create can warn.
+describe("POST /api/posts - platforms not sent at creation", () => {
+  const HOST = "https://test.public.blob.vercel-storage.com";
+  const failedRow = (postJobId: string, platform: string, errorCode: string, errorMessage: string) => ({
+    id: `r-${postJobId}-${platform}`,
+    postJobId,
+    platform,
+    status: "failed",
+    errorCode,
+    errorMessage,
+  });
+  const pendingRow = (postJobId: string, platform: string) => ({
+    id: `r-${postJobId}-${platform}`,
+    postJobId,
+    platform,
+    status: "pending",
+    errorCode: null,
+    errorMessage: null,
+  });
+  const post = (extra: Record<string, unknown> = {}) =>
+    POST(jsonRequest({ blobUrl: `${HOST}/p.jpg`, filename: "p.jpg", mimeType: "image/jpeg", sizeBytes: 100, baseCaption: "hi", ...extra }));
+
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["r1"] });
+  });
+
+  it("every platform dead: allFailed with each platform's sentence", async () => {
+    postJobResultFindManyMock.mockResolvedValue([
+      failedRow("job-1", "x", "RECONNECT_REQUIRED", "Reconnect X in Settings, then retry."),
+    ]);
+
+    const body = (await (await post({ platforms: ["x"] })).json()) as Record<string, unknown>;
+
+    expect(body.allFailed).toBe(true);
+    expect(body.notSent).toEqual([
+      { platform: "x", reason: "RECONNECT_REQUIRED", message: "Reconnect X in Settings, then retry." },
+    ]);
+    expect(body.message).toBe("Nothing was sent: Reconnect X in Settings, then use Retry in Activity.");
+  });
+
+  it("one dead, one healthy: names the dead one, not allFailed", async () => {
+    postJobResultFindManyMock.mockResolvedValue([
+      failedRow("job-1", "x", "RECONNECT_REQUIRED", "Reconnect X in Settings, then retry."),
+      pendingRow("job-1", "instagram"),
+    ]);
+
+    const body = (await (await post({ platforms: ["x", "instagram"] })).json()) as Record<string, unknown>;
+
+    expect(body).not.toHaveProperty("allFailed");
+    expect(body.notSent).toEqual([
+      { platform: "x", reason: "RECONNECT_REQUIRED", message: "Reconnect X in Settings, then retry." },
+    ]);
+    expect(body.message).toBe("Publishing in progress. Large videos may take a few minutes.");
+  });
+
+  it("Feed and Story with a dead Instagram: the Story job's rows count too, each platform once", async () => {
+    createPostJobOnlyMock.mockResolvedValue({
+      postJobId: "job-1",
+      storyPostJobId: "job-s",
+      mediaItemId: "media-1",
+      resultIds: ["r1"],
+    });
+    const gone = "Instagram is no longer connected. Connect it in Settings, then retry.";
+    postJobResultFindManyMock.mockImplementation(async (args: { where: { postJobId: string } }) =>
+      args.where.postJobId === "job-s"
+        ? [failedRow("job-s", "instagram", "CONNECTION_GONE", gone)]
+        : [failedRow("job-1", "instagram", "CONNECTION_GONE", gone)],
+    );
+
+    const body = (await (
+      await post({ platforms: ["instagram"], instagramMetadata: { placement: "both" } })
+    ).json()) as Record<string, unknown>;
+
+    expect(postJobResultFindManyMock).toHaveBeenCalledWith({ where: { postJobId: "job-s" } });
+    expect(body.allFailed).toBe(true);
+    expect(body.notSent).toEqual([{ platform: "instagram", reason: "CONNECTION_GONE", message: gone }]);
+  });
+
+  it("healthy: the response is unchanged", async () => {
+    postJobResultFindManyMock.mockResolvedValue([pendingRow("job-1", "x")]);
+
+    const body = (await (await post({ platforms: ["x"] })).json()) as Record<string, unknown>;
+
+    expect(body).not.toHaveProperty("allFailed");
+    expect(body).not.toHaveProperty("notSent");
+  });
+});

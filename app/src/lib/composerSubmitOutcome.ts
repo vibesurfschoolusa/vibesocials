@@ -18,13 +18,26 @@
  * - `error` — nothing was created: keep the form so the user can fix and resend.
  */
 
+import { PLATFORM_ORDER } from "./platforms";
+import { notSentSentence, type NotSentPlatform } from "./publishFailureText";
 import { WORKSPACE_CHANGED_CODE, WORKSPACE_CHANGED_MESSAGE } from "./workspaceChanged";
 
 /** How the composer was asked to publish (mirrors create-post-form.tsx). */
 export type ComposerPublishMode = "now" | "schedule" | "draft";
 
 export type ComposerSubmitOutcome =
-  | { kind: "success"; resetForm: true; heldForApproval: boolean; toast: string }
+  | {
+      kind: "success";
+      resetForm: true;
+      heldForApproval: boolean;
+      toast: string;
+      /**
+       * G1: a "Post now" whose chosen platforms failed up front (reconnect, or
+       * no connection). Absent when every platform was sent. `allFailed`: nothing
+       * went out, so the composer warns instead of confirming.
+       */
+      notSent?: { allFailed: boolean; text: string };
+    }
   | { kind: "dispatch_failed"; resetForm: true; toast: string }
   | { kind: "workspace_changed"; resetForm: false; toast: string }
   | { kind: "error"; resetForm: false; toast: string };
@@ -36,6 +49,18 @@ const FALLBACK_ERROR = "Failed to create post.";
 
 function field(body: unknown, key: string): unknown {
   return typeof body === "object" && body !== null ? (body as Record<string, unknown>)[key] : undefined;
+}
+
+/** The response's `notSent` entries this client can name; anything else is ignored. */
+function readNotSent(value: unknown): NotSentPlatform[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry): NotSentPlatform[] => {
+    const platform = field(entry, "platform");
+    const reason = field(entry, "reason");
+    const known = PLATFORM_ORDER.find((p) => p === platform);
+    if (!known || (reason !== "RECONNECT_REQUIRED" && reason !== "CONNECTION_GONE")) return [];
+    return [{ platform: known, reason }];
+  });
 }
 
 function successToast(mode: ComposerPublishMode, heldForApproval: boolean): string {
@@ -59,7 +84,12 @@ export function composerSubmitOutcome(input: {
     // HELD, not published/scheduled — "Post scheduled" would be a lie (nothing
     // goes out until an owner approves), so the confirmation says so.
     const heldForApproval = field(body, "awaitingApproval") === true;
-    return { kind: "success", resetForm: true, heldForApproval, toast: successToast(mode, heldForApproval) };
+    const created = { kind: "success", resetForm: true, heldForApproval, toast: successToast(mode, heldForApproval) } as const;
+    const notSent = readNotSent(field(body, "notSent"));
+    if (notSent.length === 0) return created;
+    const allFailed = field(body, "allFailed") === true;
+    const text = notSentSentence(notSent, allFailed);
+    return { ...created, ...(allFailed ? { toast: text } : {}), notSent: { allFailed, text } };
   }
 
   if (field(body, "code") === "DISPATCH_FAILED") {

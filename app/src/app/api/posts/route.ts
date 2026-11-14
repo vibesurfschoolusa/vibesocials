@@ -64,6 +64,7 @@ import {
   type StoryPlatform,
 } from "@/lib/storyPlacement";
 import { deferralKindFromErrorCode } from "@/lib/resultDeferral";
+import { notSentAtCreation, notSentSentence } from "@/lib/publishFailureText";
 import type { PostsResponse } from "@/lib/postsDto";
 import {
   isUnconfirmedResult,
@@ -1366,7 +1367,27 @@ export async function POST(request: Request) {
       where: { postJobId },
     });
 
-    const message = series
+    // G1 review: a "Post now" writes a failed row for each chosen platform whose
+    // connection needs reconnecting or is gone (posting.ts). Say which, across
+    // the feed and Story jobs, so Create can warn instead of "Post queued".
+    const storyResults =
+      effectiveIntent === "immediate" && storyPostJobId
+        ? await prisma.postJobResult.findMany({ where: { postJobId: storyPostJobId } })
+        : [];
+    const upFront =
+      effectiveIntent === "immediate"
+        ? notSentAtCreation([...results, ...storyResults])
+        : { allFailed: false, notSent: [] };
+    const notSent = upFront.notSent.map((entry) => ({
+      ...entry,
+      message:
+        [...results, ...storyResults].find((row) => row.platform === entry.platform && row.status === "failed")
+          ?.errorMessage ?? null,
+    }));
+
+    const message = upFront.allFailed
+      ? notSentSentence(upFront.notSent, true)
+      : series
       ? heldForApproval
         ? `Sent for approval: ${series.times.length} posts. An owner will review each one before it publishes.`
         : `${series.times.length} posts scheduled.`
@@ -1398,6 +1419,9 @@ export async function POST(request: Request) {
       ...(series ? { series: { id: series.seriesId, count: series.times.length } } : {}),
       // Q1: Feed and Story made a second job; `postJob` is the feed one.
       ...(storyPostJobId ? { storyPostJobId } : {}),
+      // G1 review: platforms not sent, and whether nothing was sent at all.
+      ...(notSent.length > 0 ? { notSent } : {}),
+      ...(upFront.allFailed ? { allFailed: true } : {}),
     });
   } catch (error: unknown) {
     if (error instanceof Error && error.message === "NO_CONNECTIONS") {

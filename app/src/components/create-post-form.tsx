@@ -473,6 +473,20 @@ export function textPostConfirmCopy(input: {
 }
 
 /** The chosen schedule time as the confirmation says it, or null when none is valid. */
+/**
+ * G1 review: what the confirmation shows about chosen platforms a "Post now"
+ * could not send (lib/composerSubmitOutcome.ts `notSent`). Nothing sent: a
+ * warning in place of the green confirmation. Some sent: one more line in it.
+ */
+export function notSentBanner(
+  notSent: { allFailed: boolean; text: string } | null,
+): { kind: "warning"; title: string; text: string } | { kind: "line"; text: string } | null {
+  if (!notSent) return null;
+  return notSent.allFailed
+    ? { kind: "warning", title: "Nothing was sent", text: notSent.text }
+    : { kind: "line", text: notSent.text };
+}
+
 export function scheduleWhenText(scheduledForLocal: string): string | null {
   const iso = localDateTimeToUtcIso(scheduledForLocal);
   if (!iso) return null;
@@ -740,6 +754,8 @@ function CreatePostFormInner({
   // Final review M3 — the post was saved but its publishing never started
   // (503 DISPATCH_FAILED): the banner points at Activity to retry it.
   const [dispatchFailed, setDispatchFailed] = useState(false);
+  // G1 review: chosen platforms the post could not be sent to (notSentBanner).
+  const [notSent, setNotSent] = useState<{ allFailed: boolean; text: string } | null>(null);
   // Task 7 — publish-now confirmation dialog. Immediate publishes can't be
   // undone once sent, so `handleUploadSubmit` opens this instead of posting
   // directly when `publishMode === "now"`; schedule/draft submit right away.
@@ -1832,11 +1848,13 @@ function CreatePostFormInner({
       // but its publishing never started, so it already sits `failed` in
       // Activity. Either way the form resets: pressing Post again would create
       // a second job, and retrying the first later would publish it twice.
-      if (outcome.kind === "dispatch_failed") {
+      const postNotSent = outcome.kind === "success" ? (outcome.notSent ?? null) : null;
+      if (outcome.kind === "dispatch_failed" || postNotSent?.allFailed) {
         toast.error(outcome.toast);
       } else {
         toast.success(typeof seriesMessage === "string" && seriesMessage ? seriesMessage : outcome.toast);
       }
+      setNotSent(postNotSent);
       setDispatchFailed(outcome.kind === "dispatch_failed");
       setAwaitingApproval(outcome.kind === "success" && outcome.heldForApproval);
       setSubmittedMode(publishMode);
@@ -2083,6 +2101,9 @@ function CreatePostFormInner({
   // preview of the freshly attached file.
   const activeMediaUrl = reuseItem ? reuseItem.storageLocation : previewUrl;
 
+  // G1 review: what the confirmation says about platforms not sent.
+  const banner = notSentBanner(notSent);
+
   // `composerGate` (computed above the hooks that need it). The `loading`
   // branch exists because rendering the full form during the first fetch let
   // the user attach a file (the blob upload even ran) that the
@@ -2197,7 +2218,20 @@ function CreatePostFormInner({
           </div>
         )}
 
-        {showSuccess && !dispatchFailed && (
+        {showSuccess && !dispatchFailed && banner?.kind === "warning" && (
+          <div ref={successRef}>
+            <Alert variant="warning" title={banner.title}>
+              <div className="flex flex-col items-start gap-2">
+                <p>{banner.text}</p>
+                <Link href="/activity" className={buttonVariants({ variant: "outline", size: "sm" })}>
+                  View activity
+                </Link>
+              </div>
+            </Alert>
+          </div>
+        )}
+
+        {showSuccess && !dispatchFailed && banner?.kind !== "warning" && (
           <div ref={successRef}>
             <Alert
               variant="success"
@@ -2221,6 +2255,7 @@ function CreatePostFormInner({
                         ? "We'll publish this at the time you chose. Edit or cancel it from the Queue until then."
                         : "We're publishing to your connected platforms. Per-platform results appear in Activity."}
                 </p>
+                {banner?.kind === "line" ? <p>{banner.text}</p> : null}
                 {submittedToTikTok && submittedMode !== "draft" && !awaitingApproval ? (
                   <p>
                     TikTok: after publishing, it may take a few minutes for your video to process and

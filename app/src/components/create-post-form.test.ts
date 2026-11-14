@@ -24,6 +24,7 @@ import {
   needsSubmitConfirm,
   nextFileLostNotice,
   nextPreparingPick,
+  notSentBanner,
   noFileSubmitError,
   photosFailureLosesFile,
   scheduleWhenText,
@@ -844,5 +845,22 @@ describe("composerPageView: Location and the Repeat caution", () => {
       expect(v.showLocation).toBe(true);
       expect(v.repeatNote).toBe(REPEAT_X_NOTE);
     }
+  });
+});
+
+// G1 review: a "Post now" whose chosen platforms were not sent says so.
+describe("notSentBanner", () => {
+  it("every platform dead: a warning instead of the green confirmation", () => {
+    const text = "Nothing was sent: Reconnect X in Settings, then use Retry in Activity.";
+    expect(notSentBanner({ allFailed: true, text })).toEqual({ kind: "warning", title: "Nothing was sent", text });
+  });
+
+  it("one dead, one healthy: the usual confirmation plus a line naming the dead one", () => {
+    const text = "Not sent to X: Reconnect X in Settings, then use Retry in Activity.";
+    expect(notSentBanner({ allFailed: false, text })).toEqual({ kind: "line", text });
+  });
+
+  it("healthy: nothing changes", () => {
+    expect(notSentBanner(null)).toBeNull();
   });
 });

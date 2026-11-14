@@ -119,3 +119,43 @@ describe("composerSubmitOutcome — daily post limit (usage limits)", () => {
     ).toEqual({ kind: "error", resetForm: false, toast: sentence });
   });
 });
+
+// G1 review: a "Post now" whose chosen platforms failed up front says so
+// instead of the green "Post queued".
+describe("composerSubmitOutcome - platforms not sent", () => {
+  const now = (body: unknown) => composerSubmitOutcome({ ok: true, mode: "now", body });
+
+  it("every platform dead: a warning naming each, not Post queued", () => {
+    const outcome = now({
+      allFailed: true,
+      notSent: [{ platform: "x", reason: "RECONNECT_REQUIRED", message: "Reconnect X in Settings, then retry." }],
+    });
+    expect(outcome).toEqual({
+      kind: "success",
+      resetForm: true,
+      heldForApproval: false,
+      toast: "Nothing was sent: Reconnect X in Settings, then use Retry in Activity.",
+      notSent: { allFailed: true, text: "Nothing was sent: Reconnect X in Settings, then use Retry in Activity." },
+    });
+  });
+
+  it("one dead, one healthy: the usual success plus a line naming the dead one", () => {
+    const outcome = now({ notSent: [{ platform: "x", reason: "RECONNECT_REQUIRED" }] });
+    expect(outcome).toMatchObject({
+      kind: "success",
+      toast: "Post queued — track it in Activity",
+      notSent: { allFailed: false, text: "Not sent to X: Reconnect X in Settings, then use Retry in Activity." },
+    });
+  });
+
+  it("healthy, or entries it cannot read: unchanged", () => {
+    expect(now({ postJob: { id: "j" } })).not.toHaveProperty("notSent");
+    expect(now({ notSent: [] })).not.toHaveProperty("notSent");
+    expect(now({ notSent: [{ platform: 7 }, "x", null], allFailed: true })).toEqual({
+      kind: "success",
+      resetForm: true,
+      heldForApproval: false,
+      toast: "Post queued — track it in Activity",
+    });
+  });
+});

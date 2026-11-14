@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   connectionGoneMessage,
+  notSentAtCreation,
+  notSentSentence,
   notReachedMessage,
   NOT_SENT_MESSAGE,
   platformDownMessage,
@@ -194,3 +196,78 @@ describe("renewalRefusedMessage", () => {
   });
 });
 
+
+// G1 review: "Post now" tells the person at once which platforms were not sent
+// because their connection needs reconnecting or is gone.
+describe("notSentAtCreation", () => {
+  const row = (platform: string, status: string, errorCode: string | null = null) => ({
+    platform: platform as never,
+    status,
+    errorCode,
+  });
+
+  it("lists the platforms failed up front, once each, and says when nothing is left to send", () => {
+    expect(
+      notSentAtCreation([
+        row("x", "failed", "RECONNECT_REQUIRED"),
+        row("instagram", "failed", "CONNECTION_GONE"),
+        // The Story job's row for the same platform.
+        row("instagram", "failed", "CONNECTION_GONE"),
+      ]),
+    ).toEqual({
+      allFailed: true,
+      notSent: [
+        { platform: "x", reason: "RECONNECT_REQUIRED" },
+        { platform: "instagram", reason: "CONNECTION_GONE" },
+      ],
+    });
+  });
+
+  it("one dead, one healthy: the dead one is listed, something is still sent", () => {
+    expect(notSentAtCreation([row("x", "failed", "RECONNECT_REQUIRED"), row("instagram", "pending")])).toEqual({
+      allFailed: false,
+      notSent: [{ platform: "x", reason: "RECONNECT_REQUIRED" }],
+    });
+  });
+
+  it("healthy: nothing listed", () => {
+    expect(notSentAtCreation([row("x", "pending"), row("instagram", "pending")])).toEqual({
+      allFailed: false,
+      notSent: [],
+    });
+  });
+
+  it("no rows (a scheduled post or a draft): nothing listed, not all failed", () => {
+    expect(notSentAtCreation([])).toEqual({ allFailed: false, notSent: [] });
+  });
+});
+
+describe("notSentSentence", () => {
+  it("nothing sent, one platform", () => {
+    expect(notSentSentence([{ platform: "x", reason: "RECONNECT_REQUIRED" }], true)).toBe(
+      "Nothing was sent: Reconnect X in Settings, then use Retry in Activity.",
+    );
+  });
+
+  it("nothing sent, several platforms and both reasons", () => {
+    expect(
+      notSentSentence(
+        [
+          { platform: "x", reason: "RECONNECT_REQUIRED" },
+          { platform: "instagram", reason: "RECONNECT_REQUIRED" },
+          { platform: "facebook_page", reason: "CONNECTION_GONE" },
+        ],
+        true,
+      ),
+    ).toBe("Nothing was sent: Reconnect X and Instagram, and connect Facebook Page, in Settings, then use Retry in Activity.");
+  });
+
+  it("some sent: names the platforms that were not", () => {
+    expect(notSentSentence([{ platform: "x", reason: "RECONNECT_REQUIRED" }], false)).toBe(
+      "Not sent to X: Reconnect X in Settings, then use Retry in Activity.",
+    );
+    expect(notSentSentence([{ platform: "instagram", reason: "CONNECTION_GONE" }], false)).toBe(
+      "Not sent to Instagram: Connect Instagram in Settings, then use Retry in Activity.",
+    );
+  });
+});

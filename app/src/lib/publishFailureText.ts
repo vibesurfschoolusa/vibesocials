@@ -17,6 +17,58 @@ export function connectionGoneMessage(platform: Platform): string {
   return `${platformLabel(platform)} is no longer connected. Connect it in Settings, then retry.`;
 }
 
+/** Why "Post now" could not send to a platform when the post was created (G1). */
+export type NotSentReason = "RECONNECT_REQUIRED" | "CONNECTION_GONE";
+
+export interface NotSentPlatform {
+  platform: Platform;
+  reason: NotSentReason;
+}
+
+/**
+ * The platforms a new "Post now" failed up front (its connection needs
+ * reconnecting, or is gone), once each across the feed and Story jobs, and
+ * whether nothing at all is left to send. No rows (a scheduled post or a
+ * draft) is not "all failed": nothing has been tried yet.
+ */
+export function notSentAtCreation(
+  rows: readonly { platform: Platform; status: string; errorCode: string | null }[],
+): { allFailed: boolean; notSent: NotSentPlatform[] } {
+  const notSent: NotSentPlatform[] = [];
+  for (const row of rows) {
+    if (row.status !== "failed") continue;
+    if (row.errorCode !== "RECONNECT_REQUIRED" && row.errorCode !== "CONNECTION_GONE") continue;
+    if (notSent.some((entry) => entry.platform === row.platform)) continue;
+    notSent.push({ platform: row.platform, reason: row.errorCode });
+  }
+  const allFailed = rows.length > 0 && rows.every((row) => row.status === "failed") && notSent.length > 0;
+  return { allFailed, notSent };
+}
+
+function joinWithAnd(words: readonly string[]): string {
+  return words.length <= 1 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+}
+
+/**
+ * What the composer says about them: "Nothing was sent: Reconnect X in
+ * Settings, then use Retry in Activity." when nothing went out, "Not sent to
+ * X: ..." beside the usual confirmation when the others did.
+ */
+export function notSentSentence(notSent: readonly NotSentPlatform[], allFailed: boolean): string {
+  const labelsFor = (reason: NotSentReason) =>
+    notSent.filter((entry) => entry.reason === reason).map((entry) => platformLabel(entry.platform));
+  const reconnect = labelsFor("RECONNECT_REQUIRED");
+  const connect = labelsFor("CONNECTION_GONE");
+  const steps = [
+    ...(reconnect.length > 0 ? [`reconnect ${joinWithAnd(reconnect)}`] : []),
+    ...(connect.length > 0 ? [`connect ${joinWithAnd(connect)}`] : []),
+  ];
+  const what = steps.length > 1 ? `${steps.join(", and ")}, in Settings` : `${steps[0] ?? ""} in Settings`;
+  const action = `${what.charAt(0).toUpperCase()}${what.slice(1)}, then use Retry in Activity.`;
+  const lead = allFailed ? "Nothing was sent" : `Not sent to ${joinWithAnd(notSent.map((entry) => platformLabel(entry.platform)))}`;
+  return `${lead}: ${action}`;
+}
+
 /**
  * A failed post with no results (H3; review round 2, item 4): no platform was
  * tried, because no connection could take it or because our side gave up after
