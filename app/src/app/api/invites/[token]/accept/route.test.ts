@@ -11,16 +11,18 @@ const {
   checkRateLimitMock,
   findUniqueInviteMock,
   updateManyInviteMock,
-  upsertMemberMock,
+  createMemberMock,
   transactionMock,
   cookieSetMock,
   cookiesMock,
+  notifyJoinedMock,
 } = vi.hoisted(() => ({
+  notifyJoinedMock: vi.fn(),
   getCurrentUserMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   findUniqueInviteMock: vi.fn(),
   updateManyInviteMock: vi.fn(),
-  upsertMemberMock: vi.fn(),
+  createMemberMock: vi.fn(),
   transactionMock: vi.fn(),
   cookieSetMock: vi.fn(),
   cookiesMock: vi.fn(),
@@ -37,7 +39,7 @@ vi.mock("@/lib/rateLimit", () => ({
 vi.mock("@/lib/db", () => ({
   prisma: {
     workspaceInvite: { findUnique: findUniqueInviteMock },
-    workspaceMember: { upsert: upsertMemberMock },
+    workspaceMember: { createMany: createMemberMock },
     $transaction: transactionMock,
   },
 }));
@@ -48,6 +50,10 @@ vi.mock("@/lib/workspace", () => ({
 
 vi.mock("next/headers", () => ({
   cookies: cookiesMock,
+}));
+
+vi.mock("@/server/notifications/memberJoinedEmail", () => ({
+  notifyOwnersOfMemberJoined: notifyJoinedMock,
 }));
 
 import { hashInviteToken } from "@/lib/inviteToken";
@@ -79,10 +85,14 @@ beforeEach(() => {
   checkRateLimitMock.mockReset();
   findUniqueInviteMock.mockReset();
   updateManyInviteMock.mockReset();
-  upsertMemberMock.mockReset();
+  createMemberMock.mockReset();
   transactionMock.mockReset();
   cookieSetMock.mockReset();
   cookiesMock.mockReset();
+  notifyJoinedMock.mockReset();
+  notifyJoinedMock.mockResolvedValue(undefined);
+  // A brand-new member by default: the insert added one row.
+  createMemberMock.mockResolvedValue({ count: 1 });
 
   getCurrentUserMock.mockResolvedValue(USER);
   checkRateLimitMock.mockResolvedValue({ allowed: true });
@@ -93,7 +103,7 @@ beforeEach(() => {
   transactionMock.mockImplementation(async (callback: (tx: unknown) => unknown) =>
     callback({
       workspaceInvite: { updateMany: updateManyInviteMock },
-      workspaceMember: { upsert: upsertMemberMock },
+      workspaceMember: { createMany: createMemberMock },
     }),
   );
 });
@@ -190,14 +200,13 @@ describe("POST /api/invites/[token]/accept", () => {
       where: { id: "invite-42", revokedAt: null, expiresAt: { gt: expect.any(Date) } },
       data: { usedCount: { increment: 1 } },
     });
-    expect(upsertMemberMock).toHaveBeenCalledWith({
-      where: { workspaceId_userId: { workspaceId: "ws-42", userId: "user-1" } },
-      create: { workspaceId: "ws-42", userId: "user-1", role: "member" },
-      update: {},
+    expect(createMemberMock).toHaveBeenCalledWith({
+      data: [{ workspaceId: "ws-42", userId: "user-1", role: "member" }],
+      skipDuplicates: true,
     });
     // The membership upsert happens strictly AFTER the guard matched.
     expect(updateManyInviteMock.mock.invocationCallOrder[0]).toBeLessThan(
-      upsertMemberMock.mock.invocationCallOrder[0],
+      createMemberMock.mock.invocationCallOrder[0],
     );
   });
 
@@ -214,17 +223,49 @@ describe("POST /api/invites/[token]/accept", () => {
     await expect(response.json()).resolves.toEqual({
       error: "This invite link is invalid or has expired.",
     });
-    expect(upsertMemberMock).not.toHaveBeenCalled();
+    expect(createMemberMock).not.toHaveBeenCalled();
     expect(cookieSetMock).not.toHaveBeenCalled();
   });
 
-  it("never downgrades an existing member/owner: the upsert's update branch is a no-op", async () => {
+  it("never downgrades an existing member/owner: an existing row is skipped, never updated", async () => {
     findUniqueInviteMock.mockResolvedValue(makeInviteRow({ workspaceId: "ws-1" }));
 
     await POST(new Request("http://localhost", { method: "POST" }), ctx(RAW_TOKEN));
 
-    const call = upsertMemberMock.mock.calls[0][0] as { update: unknown };
-    expect(call.update).toEqual({});
+    const call = createMemberMock.mock.calls[0][0] as { skipDuplicates: unknown };
+    expect(call.skipDuplicates).toBe(true);
+  });
+
+  // R2-client-journey L3: the owners are told about each new member, once.
+  it("emails the owners about a brand-new member", async () => {
+    findUniqueInviteMock.mockResolvedValue(makeInviteRow({ workspaceId: "ws-1" }));
+
+    await POST(new Request("http://localhost", { method: "POST" }), ctx(RAW_TOKEN));
+
+    expect(notifyJoinedMock).toHaveBeenCalledTimes(1);
+    expect(notifyJoinedMock).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      member: { name: "Invitee", email: "invitee@example.com" },
+    });
+  });
+
+  it("sends no email when the person was already a member", async () => {
+    findUniqueInviteMock.mockResolvedValue(makeInviteRow({ workspaceId: "ws-1" }));
+    createMemberMock.mockResolvedValue({ count: 0 });
+
+    const response = await POST(new Request("http://localhost", { method: "POST" }), ctx(RAW_TOKEN));
+
+    expect(response.status).toBe(200);
+    expect(notifyJoinedMock).not.toHaveBeenCalled();
+  });
+
+  it("sends no email when the invite died in the transaction", async () => {
+    findUniqueInviteMock.mockResolvedValue(makeInviteRow({ workspaceId: "ws-1" }));
+    updateManyInviteMock.mockResolvedValue({ count: 0 });
+
+    await POST(new Request("http://localhost", { method: "POST" }), ctx(RAW_TOKEN));
+
+    expect(notifyJoinedMock).not.toHaveBeenCalled();
   });
 
   it("sets the active-workspace cookie to the invite's workspace", async () => {
@@ -255,10 +296,10 @@ describe("POST /api/invites/[token]/accept", () => {
   });
 
   it("is idempotent for an already-existing member: still 200 { joined: true, workspaceId }, still sets the cookie", async () => {
-    // The upsert's `update: {}` handles idempotency at the DB layer; the
-    // route doesn't need to branch on prior membership at all — same call
-    // shape regardless of whether the row already existed.
+    // skipDuplicates handles idempotency at the DB layer: the existing row is
+    // left alone and the response is the same.
     findUniqueInviteMock.mockResolvedValue(makeInviteRow({ workspaceId: "ws-1" }));
+    createMemberMock.mockResolvedValue({ count: 0 });
 
     const response = await POST(new Request("http://localhost", { method: "POST" }), ctx(RAW_TOKEN));
     const body = await response.json();

@@ -62,12 +62,13 @@ describe("GET /go", () => {
     expect(settings.headers.get("location")).toBe(`${ORIGIN}/settings#post-defaults`);
   });
 
-  it("not a member: the dashboard, and no switch", async () => {
+  // R2-client-journey L2: the dashboard says why, naming no workspace.
+  it("not a member: the dashboard with the other-workspace notice, and no switch", async () => {
     findFirstMock.mockResolvedValue(null);
 
     const response = await go("?w=ws-other&to=%2Fqueue");
 
-    expect(response.headers.get("location")).toBe(`${ORIGIN}/`);
+    expect(response.headers.get("location")).toBe(`${ORIGIN}/?notice=other-workspace`);
     expect(activeCookie(response)).toBeNull();
   });
 

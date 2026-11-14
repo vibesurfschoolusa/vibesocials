@@ -7,6 +7,7 @@ import { hashInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE } from "@/lib/workspace";
+import { notifyOwnersOfMemberJoined } from "@/server/notifications/memberJoinedEmail";
 
 interface AcceptRouteContext {
   params: Promise<{ token: string }>;
@@ -37,13 +38,15 @@ const invalidInviteResponse = () =>
  * Only a matched guard (count 1) proceeds to the membership upsert, and the
  * cookie is set only after the transaction commits.
  *
- * Idempotent for an already-existing member: `workspaceMember.upsert`'s
- * `update: {}` is a no-op when the (workspaceId, userId) row already exists
- * (never downgrades an existing owner/member's role), so the response shape
- * is identical — 200 { joined: true, workspaceId } — whether this call
- * created the membership or found it already there. This also closes the
+ * Idempotent for an already-existing member: `createMany` with
+ * `skipDuplicates` leaves an existing (workspaceId, userId) row alone (never
+ * downgrades an existing owner/member's role), so the response shape is
+ * identical — 200 { joined: true, workspaceId } — whether this call created
+ * the membership or found it already there. This also closes the
  * double-accept TOCTOU race a separate find-then-create would have (mirrors
- * the advisory-locked provisioning core in src/lib/workspace.ts).
+ * the advisory-locked provisioning core in src/lib/workspace.ts). Its count
+ * says whether the row is new: R2-client-journey L3 emails the owners then,
+ * and only then, so two racing accepts send one email.
  */
 export async function POST(_request: Request, { params }: AcceptRouteContext) {
   const user = await getCurrentUser();
@@ -71,6 +74,7 @@ export async function POST(_request: Request, { params }: AcceptRouteContext) {
   }
 
   let joined = false;
+  let added = false;
   try {
     joined = await prisma.$transaction(async (tx) => {
       // Atomic re-validation + use-count bump in one statement (see the
@@ -85,11 +89,11 @@ export async function POST(_request: Request, { params }: AcceptRouteContext) {
         return false;
       }
 
-      await tx.workspaceMember.upsert({
-        where: { workspaceId_userId: { workspaceId: invite.workspaceId, userId: user.id } },
-        create: { workspaceId: invite.workspaceId, userId: user.id, role: "member" },
-        update: {},
+      const created = await tx.workspaceMember.createMany({
+        data: [{ workspaceId: invite.workspaceId, userId: user.id, role: "member" }],
+        skipDuplicates: true,
       });
+      added = created.count > 0;
 
       return true;
     });
@@ -104,6 +108,14 @@ export async function POST(_request: Request, { params }: AcceptRouteContext) {
 
   if (!joined) {
     return invalidInviteResponse();
+  }
+
+  if (added) {
+    // Never throws: the person has joined whatever the email does.
+    await notifyOwnersOfMemberJoined({
+      workspaceId: invite.workspaceId,
+      member: { name: user.name, email: user.email },
+    });
   }
 
   const cookieStore = await cookies();

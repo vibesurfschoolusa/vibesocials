@@ -6,6 +6,8 @@ import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE } from "@/lib/workspace";
 import { goTarget } from "@/server/notifications/links";
 
+import { OTHER_WORKSPACE_NOTICE } from "./notice";
+
 export const dynamic = "force-dynamic";
 
 /**
@@ -19,7 +21,8 @@ export const dynamic = "force-dynamic";
  *
  * - Signed out: sign-in, which comes back here (the proxy does the same for a
  *   page; this covers a request it lets through).
- * - Not a member: the dashboard, nothing switched.
+ * - Not a member: the dashboard with a notice naming the signed-in account,
+ *   nothing switched.
  * - `to` must be a same-site path; anything else opens the dashboard.
  */
 export async function GET(request: Request) {
@@ -53,7 +56,10 @@ export async function GET(request: Request) {
     select: { workspaceId: true },
   });
   if (!membership) {
-    return NextResponse.redirect(new URL("/", request.url));
+    // R2-client-journey L2: the dashboard says the link is for another workspace.
+    const home = new URL("/", request.url);
+    home.searchParams.set("notice", OTHER_WORKSPACE_NOTICE);
+    return NextResponse.redirect(home);
   }
 
   const response = NextResponse.redirect(new URL(target, request.url));
