@@ -24,7 +24,7 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-import { REPORT_POST_MAX } from "@/lib/monthlyReport";
+import { REPORT_POST_MAX, publicMonthlyReport } from "@/lib/monthlyReport";
 
 import { buildMonthlyReport } from "./monthlyReport";
 
@@ -454,6 +454,63 @@ describe("buildMonthlyReport - a Feed and Story pair", () => {
     ]);
   });
 
+  it("tags the joined pair Feed and Story, from the link", async () => {
+    const report = await buildMonthlyReport(WS, "2026-10", NOW);
+    expect(report.posts[0].feedAndStory).toBe(true);
+  });
+
+  it("tags a pair whose Instagram feed failed but whose Instagram Story and Facebook feed went out", async () => {
+    m.postFindMany.mockImplementation(async (args: { where: { storyOfPostJobId?: unknown } }) =>
+      args.where.storyOfPostJobId
+        ? [{ storyOfPostJobId: "feed-1" }]
+        : [
+            storyJob(),
+            job({
+              id: "feed-1",
+              storyOfPostJobId: null,
+              results: [
+                result({ platform: "instagram", status: "failed", externalPostId: null, externalPostUrl: null }),
+                result({ platform: "facebook_page", externalPostId: "fb-feed", externalPostUrl: null }),
+              ],
+            }),
+          ],
+    );
+
+    const report = await buildMonthlyReport(WS, "2026-10", NOW);
+
+    expect(report.postCount).toBe(1);
+    expect(report.posts).toHaveLength(1);
+    expect(report.posts[0].feedAndStory).toBe(true);
+    // No Instagram feed row: it did not go out. The Instagram Story and the Facebook post did.
+    expect(report.posts[0].platforms.map((p) => [p.platform, p.story])).toEqual([
+      ["Instagram", true],
+      ["Facebook Page", false],
+    ]);
+  });
+
+  it("a Story that failed everywhere leaves the feed post alone, untagged", async () => {
+    m.postCount.mockImplementation(async (args: { where: { id?: unknown } }) => (args.where.id ? 0 : 1));
+    m.resultFindMany.mockResolvedValue([{ postJobId: "feed-1" }]);
+    m.postFindMany.mockImplementation(async (args: { where: { storyOfPostJobId?: unknown } }) =>
+      // No Story job published in the month, so none is named.
+      args.where.storyOfPostJobId ? [] : [feedJob()],
+    );
+
+    const report = await buildMonthlyReport(WS, "2026-10", NOW);
+
+    expect(report.postCount).toBe(1);
+    expect(report.posts).toHaveLength(1);
+    expect(report.posts[0]).not.toHaveProperty("feedAndStory");
+    expect(report.posts[0].platforms).toEqual([expect.objectContaining({ platform: "Instagram", story: false })]);
+  });
+
+  it("the client's report shows the same tags as the owner's", async () => {
+    const owner = await buildMonthlyReport(WS, "2026-10", NOW);
+    const client = publicMonthlyReport(owner);
+    expect(client.posts.map((p) => p.feedAndStory ?? false)).toEqual(owner.posts.map((p) => p.feedAndStory ?? false));
+    expect(client.posts.map((p) => p.feedAndStory ?? false)).toEqual([true]);
+  });
+
   it("lists a Story whose feed post is gone, or did not publish this month, on its own", async () => {
     m.postCount.mockImplementation(async (args: { where: { id?: unknown } }) => (args.where.id ? 0 : 1));
     m.resultFindMany.mockResolvedValue([{ postJobId: "story-1" }]);
@@ -466,6 +523,7 @@ describe("buildMonthlyReport - a Feed and Story pair", () => {
     expect(report.postCount).toBe(1);
     expect(report.posts).toHaveLength(1);
     expect(report.posts[0].platforms).toEqual([expect.objectContaining({ platform: "Instagram", story: true })]);
+    expect(report.posts[0]).not.toHaveProperty("feedAndStory");
   });
 
   it("a month without Story jobs asks for no feed count", async () => {

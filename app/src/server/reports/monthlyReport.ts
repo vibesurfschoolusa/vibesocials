@@ -234,6 +234,8 @@ export async function buildMonthlyReport(
     if (!feed || feed === entry) continue;
     feed.platforms = [...feed.platforms, ...entry.platforms].sort((a, b) => order(a) - order(b));
     if (entry.publishedAt > feed.publishedAt) feed.publishedAt = entry.publishedAt;
+    // Tagged from the link: both halves went out this month, whatever platforms they reached.
+    feed.feedAndStory = true;
     joined.add(entry.id);
   }
   const posts = entries
@@ -253,6 +255,7 @@ export async function buildMonthlyReport(
       media: post.media,
       mediaCount: post.mediaCount,
       platforms: post.platforms,
+      ...(post.feedAndStory ? { feedAndStory: true } : {}),
     })),
     totals: { resultsByPlatform: countsOf("success"), numbers: summarizePostNumbers(posts) },
     listing: await readListing(workspaceId, month, now),

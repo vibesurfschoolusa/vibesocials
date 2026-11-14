@@ -299,6 +299,24 @@ describe("publicMonthlyReport", () => {
     expect(copy).not.toHaveProperty("failed");
     expect(text).not.toContain("failed");
   });
+
+  it("carries a Feed and Story post's tag (F6), and gives no other post one", () => {
+    const post = { publishedAt: "2026-10-12T10:00:00.000Z", caption: "x", media: null, mediaCount: 1, platforms: [] };
+    const report = {
+      month: "2026-10",
+      workspaceName: "Surf Co",
+      logoUrl: null,
+      inProgress: false,
+      postCount: 2,
+      posts: [{ ...post, feedAndStory: true }, post],
+      totals: { resultsByPlatform: [], numbers: [] },
+      listing: null,
+      failed: [],
+    };
+    const copy = publicMonthlyReport(report);
+    expect(copy.posts[0].feedAndStory).toBe(true);
+    expect(copy.posts[1]).not.toHaveProperty("feedAndStory");
+  });
 });
 
 // Go-live check 2026-11-11: every number in the report has a thousands separator.

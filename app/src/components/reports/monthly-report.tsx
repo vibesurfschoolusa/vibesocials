@@ -88,16 +88,6 @@ function PostPicture({ post }: { post: ReportPost }) {
   return <MediaThumb media={post.media} />;
 }
 
-/**
- * F6: a Feed and Story post (two jobs, listed as one by the report builder)
- * has a platform that went out both as a post and as a Story. One job never
- * has two results on one platform, so no other post reads as one.
- */
-export function isFeedAndStory(post: Pick<ReportPost, "platforms">): boolean {
-  const feed = new Set(post.platforms.filter((p) => !p.story).map((p) => p.platform));
-  return post.platforms.some((p) => p.story && feed.has(p.platform));
-}
-
 function PostRow({ post }: { post: ReportPost }) {
   return (
     <li data-report-post className="rounded-[var(--radius)] border border-border bg-card p-3 text-card-foreground">
@@ -109,7 +99,8 @@ function PostRow({ post }: { post: ReportPost }) {
             {post.mediaCount > 1 ? (
               <span className="ml-2 font-normal text-muted-foreground">{`${formatNumber(post.mediaCount)} photos`}</span>
             ) : null}
-            {isFeedAndStory(post) ? (
+            {/* F6: the builder sets it from the pair link when both halves went out. */}
+            {post.feedAndStory ? (
               <span className="ml-2 font-normal text-muted-foreground">Feed and Story</span>
             ) : null}
           </p>

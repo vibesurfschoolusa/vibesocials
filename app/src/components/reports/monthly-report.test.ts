@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import type { MonthlyReport } from "@/lib/monthlyReport";
 
-import { MonthlyReportView, ReportMonthPicker, isFeedAndStory } from "./monthly-report";
+import { MonthlyReportView, ReportMonthPicker } from "./monthly-report";
 
 function report(overrides: Partial<MonthlyReport> = {}): MonthlyReport {
   return {
@@ -387,17 +387,33 @@ describe("MonthlyReportView - a Feed and Story post", () => {
     ],
   };
 
-  it("is told apart by a platform that went out both as a post and as a Story", () => {
-    expect(isFeedAndStory(pairPost)).toBe(true);
-    // One post with a Story on one platform and a feed post on another is not a pair.
-    expect(isFeedAndStory(report().posts[0])).toBe(false);
-    expect(isFeedAndStory(report().posts[1])).toBe(false);
-  });
-
   it("shows Feed and Story for it, and both Instagram rows", () => {
-    const html = render(report({ postCount: 1, posts: [pairPost] }));
+    const html = render(report({ postCount: 1, posts: [{ ...pairPost, feedAndStory: true }] }));
     expect(html).toContain("Feed and Story");
     expect(html.match(/<span class="font-medium">Instagram<\/span>/g)).toHaveLength(2);
+  });
+
+  it("follows the pair link, not the platforms: a pair with no Instagram feed row is still tagged", () => {
+    const html = render(
+      report({
+        postCount: 1,
+        posts: [
+          {
+            ...pairPost,
+            feedAndStory: true,
+            platforms: [
+              { platform: "Instagram", story: true, url: null, numbers: {} },
+              { platform: "Facebook Page", story: false, url: null, numbers: {} },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(html).toContain("Feed and Story");
+  });
+
+  it("does not tag a post without the link, whatever its platforms", () => {
+    expect(render(report({ postCount: 1, posts: [pairPost] }))).not.toContain("Feed and Story");
   });
 
   it("shows no such label on any other post", () => {

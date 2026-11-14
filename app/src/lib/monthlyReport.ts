@@ -66,6 +66,12 @@ export interface ReportPost {
   media: { url: string; mimeType: string } | null;
   mediaCount: number;
   platforms: ReportPlatformResult[];
+  /**
+   * F6: a Feed and Story post whose two jobs both published in the month, so
+   * the report lists them as this one entry (set from the jobs' pair link, not
+   * from the platforms). Absent on every other post.
+   */
+  feedAndStory?: boolean;
 }
 
 export interface ReportNumberTotal {
@@ -138,6 +144,7 @@ export function publicMonthlyReport(report: MonthlyReport): PublicMonthlyReport 
       caption: post.caption,
       media: post.media ? { url: post.media.url, mimeType: post.media.mimeType } : null,
       mediaCount: post.mediaCount,
+      ...(post.feedAndStory === true ? { feedAndStory: true } : {}),
       platforms: post.platforms.map((p) => {
         const numbers: Partial<Record<ReportNumberKey, number>> = {};
         for (const key of REPORT_NUMBER_KEYS) {
