@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   COMPOSE_CTA,
+  dashboardHeading,
   deriveDashboardCta,
   deriveGettingStarted,
   workspaceSetupFrom,
@@ -313,5 +314,21 @@ describe("Get started and the brand voice feature", () => {
     vi.stubEnv("BILLING_ENABLED", "");
     expect(stepsFor(STARTER)).toEqual(["connect", "footer", "voice", "post"]);
     expect(workspaceSetupFrom({ ...empty, ...STARTER }, "owner", false)).not.toHaveProperty("brandVoicePaused");
+  });
+});
+
+// 2026-11-14: greet by first name once there is something to come back to.
+describe("dashboardHeading", () => {
+  const state = (ready: boolean, connectDone: boolean, postDone: boolean) => ({ ready, connectDone, postDone });
+  it("welcomes a returning person by first name", () => {
+    expect(dashboardHeading(state(true, true, false), "Klaus")).toBe("Welcome back, Klaus");
+    expect(dashboardHeading(state(true, false, true), "Klaus")).toBe("Welcome back, Klaus");
+  });
+  it("says Welcome back without a name", () => {
+    expect(dashboardHeading(state(true, true, true), null)).toBe("Welcome back");
+  });
+  it("is unchanged for a first visit and when the fetches failed", () => {
+    expect(dashboardHeading(state(true, false, false), "Klaus")).toBe("Welcome to Vibe Socials");
+    expect(dashboardHeading(state(false, false, false), "Klaus")).toBe("Dashboard");
   });
 });

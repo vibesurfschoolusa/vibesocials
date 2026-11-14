@@ -6,7 +6,7 @@ import { signOut, useSession } from "next-auth/react";
 import { Check, ChevronDown, CircleHelp, Download, LayoutGrid, LogOut, Mail, Plus, Shield } from "lucide-react";
 import type { WorkspaceRole } from "@prisma/client";
 
-import { accountInitials, accountLabel } from "@/lib/accountInitials";
+import { accountInitials, accountLabel, accountWorkspaceLine } from "@/lib/accountInitials";
 import { cn } from "@/lib/cn";
 import { contactUsHref } from "@/lib/contactUs";
 import { Button } from "@/components/ui/button";
@@ -123,6 +123,25 @@ export function AccountMenu() {
     };
   }, [open]);
 
+  // The button's second line names the active workspace when there are several,
+  // so it needs the list before the menu is first opened: one read per page
+  // load. Opening the menu still fetches it fresh; a failure only drops the line.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/workspaces")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data: { workspaces?: WorkspaceSummary[] } | null) => {
+        if (!cancelled && Array.isArray(data?.workspaces)) {
+          const loaded = data.workspaces;
+          setWorkspaces((current) => current ?? loaded);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function handleSwitch(workspace: WorkspaceSummary) {
     if (workspace.isActive || switchingId) return;
     setSwitchingId(workspace.id);
@@ -183,6 +202,7 @@ export function AccountMenu() {
 
   const initials = accountInitials(name, email);
   const activeWorkspace = workspaces?.find((workspace) => workspace.isActive) ?? null;
+  const workspaceLine = accountWorkspaceLine(workspaces);
 
   return (
     <div ref={containerRef} className="relative">
@@ -191,7 +211,7 @@ export function AccountMenu() {
         type="button"
         onClick={() => setOpen((value) => !value)}
         // On a phone the label is hidden and the initials are decorative, so this names the button.
-        aria-label={`Account menu for ${accountLabel(name, email)}`}
+        aria-label={`Account menu for ${accountLabel(name, email)}${workspaceLine ? `, workspace ${workspaceLine}` : ""}`}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
@@ -206,8 +226,12 @@ export function AccountMenu() {
             {initials}
           </span>
         </span>
-        <span className="hidden max-w-[11rem] truncate font-medium text-foreground sm:inline">
-          {accountLabel(name, email)}
+        <span className="hidden min-w-0 flex-col items-start text-left leading-tight sm:flex">
+          <span className="max-w-[11rem] truncate font-medium text-foreground">{accountLabel(name, email)}</span>
+          {/* Only with several workspaces (one per client): which one you are posting in. */}
+          {workspaceLine ? (
+            <span className="max-w-[11rem] truncate text-xs text-muted-foreground">{workspaceLine}</span>
+          ) : null}
         </span>
         <ChevronDown
           aria-hidden

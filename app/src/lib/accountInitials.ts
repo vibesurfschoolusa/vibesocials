@@ -26,3 +26,28 @@ export function accountInitials(name: string | null | undefined, email: string):
 export function accountLabel(name: string | null | undefined, email: string): string {
   return name?.trim() || email.trim() || "Account";
 }
+
+const FIRST_NAME_MAX = 24;
+
+/**
+ * The Dashboard greets by first name: the first word with a letter or digit,
+ * without the punctuation around it ("(Klaus)" is "Klaus"), at most 24
+ * characters; null without one, so the greeting falls back to plain words.
+ */
+export function firstName(name: string | null | undefined): string | null {
+  for (const word of (name ?? "").split(/\s+/)) {
+    const trimmed = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+    if (trimmed) return Array.from(trimmed).slice(0, FIRST_NAME_MAX).join("");
+  }
+  return null;
+}
+
+/**
+ * The account button's second line: the active workspace's name, only when the
+ * person belongs to several (one per client), where posting in the wrong one is
+ * the mistake to prevent. With one workspace the line would only repeat itself.
+ */
+export function accountWorkspaceLine(workspaces: Array<{ name: string; isActive: boolean }> | null): string | null {
+  if (!workspaces || workspaces.length < 2) return null;
+  return workspaces.find((workspace) => workspace.isActive)?.name ?? null;
+}

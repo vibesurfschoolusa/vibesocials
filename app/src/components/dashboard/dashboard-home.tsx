@@ -14,11 +14,13 @@ import { GettingStarted, WorkingForClients } from "@/components/dashboard/gettin
 import { YouTubeMetricsSummary } from "@/components/dashboard/youtube-metrics-summary";
 import { PublishHealthCard } from "@/components/dashboard/publish-health-card";
 import { ListingMetricsCard } from "@/components/dashboard/listing-metrics-card";
+import { firstName } from "@/lib/accountInitials";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { useConnections } from "@/hooks/useConnections";
 import { usePostJobs } from "@/hooks/usePostJobs";
 import {
   COMPOSE_CTA,
+  dashboardHeading,
   deriveDashboardCta,
   deriveGettingStarted,
   type WorkspaceSetup,
@@ -57,6 +59,7 @@ function Dashboard({ availablePlatforms, setup }: DashboardProps) {
   // Get started checklist and the ConnectionHealth widget.
   const postJobs = usePostJobs();
   const connectionsState = useConnections();
+  const { data: session } = useSession();
 
   // Both derivations are pure and cheap, so each consumer re-derives from the
   // same two fetches rather than threading state through props.
@@ -90,14 +93,7 @@ function Dashboard({ availablePlatforms, setup }: DashboardProps) {
         ) : (
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-foreground">
-              {/* "Welcome back" is untrue on a first visit, so only greet a
-                  return once the account has something in it — and say neither
-                  when a failed fetch means we don't know. */}
-              {!onboarding.ready
-                ? "Dashboard"
-                : onboarding.connectDone || onboarding.postDone
-                  ? "Welcome back"
-                  : "Welcome to Vibe Socials"}
+              {dashboardHeading(onboarding, firstName(session?.user?.name))}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
               {/* Deliberately not "Signed in as {email}": the account menu in

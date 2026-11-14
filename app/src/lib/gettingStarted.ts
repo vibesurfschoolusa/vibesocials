@@ -169,3 +169,17 @@ export function deriveGettingStarted(
     showClients: ready && isOwner && (complete || (setup?.hasClientLink ?? false)),
   };
 }
+
+/**
+ * The Dashboard's heading. "Welcome back" is untrue on a first visit, so only
+ * a return is greeted, by first name when there is one; and neither is said
+ * when a failed fetch means we don't know.
+ */
+export function dashboardHeading(
+  state: Pick<GettingStartedState, "ready" | "connectDone" | "postDone">,
+  firstName: string | null,
+): string {
+  if (!state.ready) return "Dashboard";
+  if (!state.connectDone && !state.postDone) return "Welcome to Vibe Socials";
+  return firstName ? `Welcome back, ${firstName}` : "Welcome back";
+}
