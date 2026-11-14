@@ -852,7 +852,7 @@ describe("composerPageView: Location and the Repeat caution", () => {
 describe("notSentBanner", () => {
   it("every platform dead: a warning instead of the green confirmation", () => {
     const text = "Nothing was sent: Reconnect X in Settings, then use Retry in Activity.";
-    expect(notSentBanner({ allFailed: true, text })).toEqual({ kind: "warning", title: "Nothing was sent", text });
+    expect(notSentBanner({ allFailed: true, text })).toEqual({ kind: "warning", title: "Not posted", text });
   });
 
   it("one dead, one healthy: the usual confirmation plus a line naming the dead one", () => {

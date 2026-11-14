@@ -472,7 +472,6 @@ export function textPostConfirmCopy(input: {
   };
 }
 
-/** The chosen schedule time as the confirmation says it, or null when none is valid. */
 /**
  * G1 review: what the confirmation shows about chosen platforms a "Post now"
  * could not send (lib/composerSubmitOutcome.ts `notSent`). Nothing sent: a
@@ -483,10 +482,11 @@ export function notSentBanner(
 ): { kind: "warning"; title: string; text: string } | { kind: "line"; text: string } | null {
   if (!notSent) return null;
   return notSent.allFailed
-    ? { kind: "warning", title: "Nothing was sent", text: notSent.text }
+    ? { kind: "warning", title: "Not posted", text: notSent.text }
     : { kind: "line", text: notSent.text };
 }
 
+/** The chosen schedule time as the confirmation says it, or null when none is valid. */
 export function scheduleWhenText(scheduledForLocal: string): string | null {
   const iso = localDateTimeToUtcIso(scheduledForLocal);
   if (!iso) return null;
