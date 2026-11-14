@@ -35,6 +35,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { generateBlobKey } from "@/lib/blobKey";
+import { bulkHandoffHref, toggleMediaSelection } from "@/lib/bulkMedia";
+import { BULK_MAX_FILES } from "@/lib/bulkPosts";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { isHeicFile, prepareUploadFile } from "@/lib/prepareUploadFile";
 import { explainUploadFailure } from "@/lib/uploadFailure";
@@ -234,16 +236,30 @@ interface MediaCardProps {
   item: MediaItemDto;
   onReuse: (item: MediaItemDto) => void;
   onDeleteRequest: (item: MediaItemDto) => void;
+  selected: boolean;
+  /** False once 20 are ticked: an unticked box then waits (Add many takes 20). */
+  canSelect: boolean;
+  onToggleSelect: (item: MediaItemDto) => void;
 }
 
-function MediaCard({ item, onReuse, onDeleteRequest }: MediaCardProps) {
+function MediaCard({ item, onReuse, onDeleteRequest, selected, canSelect, onToggleSelect }: MediaCardProps) {
   // null for a never-posted upload (retention-exempt — see
   // server/jobs/mediaRetention.ts); 0 means "eligible for removal now".
   const retentionDays = daysUntilRemoval(item.lastUsedAt, RETENTION_DAYS, new Date());
 
   return (
-    <Card className="overflow-hidden">
+    <Card className="relative overflow-hidden">
       <MediaThumbnail item={item} />
+      <span className="absolute left-2 top-2 rounded bg-background/90 p-1">
+        <input
+          type="checkbox"
+          className="h-5 w-5"
+          checked={selected}
+          disabled={!selected && !canSelect}
+          onChange={() => onToggleSelect(item)}
+          aria-label={`Select ${item.originalFilename} for Add many`}
+        />
+      </span>
       <div className="space-y-2 p-3">
         <div className="space-y-0.5">
           <p
@@ -572,6 +588,8 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
   // dialog's open/closed flag (open whenever it's non-null) so there's no
   // separate boolean to keep in sync.
   const [deleteTarget, setDeleteTarget] = useState<MediaItemDto | null>(null);
+  // Ticked for "Schedule with Add many".
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   // Does the actual fetch/parse. Deliberately does NOT reset `loading`/`error`
   // at the top: `loading`/`error` already start `true`/`null` from useState,
@@ -770,6 +788,11 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
     // No re-fetch of the list — just remove it client-side. nextCursor stays
     // valid even if `target` was the last loaded row (see handleLoadMore).
     setItems((prev) => removeMediaItem(prev, target.id));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.delete(target.id);
+      return next;
+    });
     toast.success("Media deleted.");
   }, [deleteTarget, toast]);
 
@@ -879,6 +902,21 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
           />
         ) : (
           <>
+            {selected.size > 0 ? (
+              <div className="mb-4 flex flex-wrap items-center gap-3">
+                <Button type="button" onClick={() => router.push(bulkHandoffHref([...selected]))}>
+                  Schedule with Add many ({selected.size})
+                </Button>
+                <Button type="button" variant="ghost" onClick={() => setSelected(new Set())}>
+                  Clear selection
+                </Button>
+                {selected.size >= BULK_MAX_FILES ? (
+                  <p className="text-sm text-muted-foreground">
+                    Add many takes up to {BULK_MAX_FILES} at a time.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
               {items.map((item) => (
                 <MediaCard
@@ -886,6 +924,9 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
                   item={item}
                   onReuse={handleReuse}
                   onDeleteRequest={handleDeleteRequest}
+                  selected={selected.has(item.id)}
+                  canSelect={selected.size < BULK_MAX_FILES}
+                  onToggleSelect={(picked) => setSelected((current) => toggleMediaSelection(current, picked.id))}
                 />
               ))}
             </div>

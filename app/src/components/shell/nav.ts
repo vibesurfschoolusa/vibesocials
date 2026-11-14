@@ -4,6 +4,7 @@ import {
   FileText,
   Images,
   LayoutDashboard,
+  ImagePlus,
   PenSquare,
   Settings,
   Star,
@@ -16,12 +17,15 @@ export interface NavItemDef {
   label: string;
   href: string;
   icon: LucideIcon;
+  /** The top bar title when it differs from the sidebar label. */
+  title?: string;
 }
 
 /** Primary app navigation, shown in the sidebar (desktop) and drawer (mobile). */
 export const NAV_ITEMS: NavItemDef[] = [
   { label: "Dashboard", href: "/", icon: LayoutDashboard },
   { label: "Create", href: "/posts/new", icon: PenSquare },
+  { label: "Add many", href: "/posts/bulk", icon: ImagePlus, title: "Add many posts" },
   { label: "Queue", href: "/queue", icon: CalendarClock },
   { label: "Activity", href: "/activity", icon: Activity },
   { label: "Reports", href: "/reports", icon: FileText },
@@ -33,7 +37,6 @@ export const NAV_ITEMS: NavItemDef[] = [
 /** Pages the top bar titles that are not in the sidebar. */
 const TITLE_ONLY_ITEMS: Pick<NavItemDef, "label" | "href">[] = [
   { label: "Workspaces", href: "/workspaces" },
-  { label: "Add many posts", href: "/posts/bulk" },
   { label: "Join a workspace", href: "/join" },
 ];
 
@@ -95,5 +98,5 @@ export function sectionTitle(pathname: string): string {
   const match = [...NAV_ITEMS, ...TITLE_ONLY_ITEMS]
     .filter((item) => isActiveNav(pathname, item.href))
     .sort((a, b) => b.href.length - a.href.length)[0];
-  return match?.label ?? "Vibe Socials";
+  return (match as NavItemDef | undefined)?.title ?? match?.label ?? "Vibe Socials";
 }
