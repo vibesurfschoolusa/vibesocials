@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PostJobCard } from "@/components/activity/post-job-card";
 import { usePostJobs } from "@/hooks/usePostJobs";
+import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { POLLING_STOPPED_HINT } from "@/lib/postJobPolling";
 
 /** Client-rendered activity list. The parent server component gates access. */
@@ -30,7 +31,7 @@ export function ActivityView() {
   const showAttribution = (workspaceMemberCount ?? 0) > 1;
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-8 md:px-6">
+    <div className={APP_PAGE_CLASS}>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">

@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { cn } from "@/lib/cn";
+import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { MonthlyReportView, ReportMonthPicker } from "@/components/reports/monthly-report";
 import { PrintReportButton } from "@/components/reports/print-button";
 import { prisma } from "@/lib/db";
@@ -8,6 +10,8 @@ import { parseReportMonth, reportMonths } from "@/lib/monthlyReport";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { planIncludes } from "@/lib/planFeatures";
 import { buildMonthlyReport } from "@/server/reports/monthlyReport";
+
+export const metadata = { title: "Reports | Vibe Socials" };
 
 export const dynamic = "force-dynamic";
 
@@ -46,7 +50,13 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
       : false;
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-6 px-4 py-6 md:px-6">
+    <div className={cn(APP_PAGE_CLASS, "space-y-6")}>
+      <div data-report-noprint className="print:hidden">
+        <h1 className="text-2xl font-bold tracking-tight text-foreground">Reports</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          A month of posts and Google listing numbers for this workspace, ready to share or print.
+        </p>
+      </div>
       <div data-report-noprint className="flex flex-wrap items-end justify-between gap-3">
         <ReportMonthPicker months={months} selected={parsed.ok ? parsed.month : months[1]} />
         {report ? <PrintReportButton /> : null}
@@ -61,7 +71,7 @@ export default async function ReportsPage({ searchParams }: ReportsPageProps) {
         </p>
       ) : null}
       {report ? (
-        <MonthlyReportView report={report} activityHref="/activity" />
+        <MonthlyReportView report={report} activityHref="/activity" titleAs="h2" />
       ) : (
         <p className="text-sm">{parsed.ok ? null : parsed.error}</p>
       )}

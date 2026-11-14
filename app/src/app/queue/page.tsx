@@ -5,6 +5,8 @@ import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { QueueView } from "./queue-view";
 
+export const metadata = { title: "Queue | Vibe Socials" };
+
 // Server-side auth gate (matches activity/page.tsx): unauthenticated users are
 // redirected before any client work runs. Authed users get the client view,
 // which fetches and manages their scheduled + draft posts.

@@ -76,6 +76,15 @@ describe("the Reports page", () => {
     expect(html).toContain('href="/activity"');
   });
 
+  it("opens with one Reports heading that is hidden in print, and the report title is not an h1", async () => {
+    const html = await render();
+    expect(html.match(/<h1/g)).toHaveLength(1);
+    expect(html).toMatch(/<h1[^>]*>Reports<\/h1>/);
+    expect(html).toMatch(/<h2[^>]*>Surf Co: October 2026<\/h2>/);
+    expect(html).toMatch(/<div[^>]*data-report-noprint[^>]*class="[^"]*print:hidden/);
+    expect(html.indexOf(">Reports</h1>")).toBeLessThan(html.indexOf('name="month"'));
+  });
+
   it("takes the month from the address and the workspace only from the signed-in context", async () => {
     await render({ month: "2026-11", workspaceId: "ws-2", workspace: "ws-2" });
     expect(buildMonthlyReportMock).toHaveBeenCalledWith("ws-1", "2026-11", expect.any(Date));

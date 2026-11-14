@@ -8,6 +8,8 @@ import { CreatePostForm } from "@/components/create-post-form";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { googleButtonFromWorkspace } from "@/lib/googlePostOptions";
 
+export const metadata = { title: "Create post | Vibe Socials" };
+
 export default async function NewPostPage() {
   const context = await getWorkspaceContext();
 

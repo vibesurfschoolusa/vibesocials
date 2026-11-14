@@ -14,6 +14,7 @@ import { GettingStarted, WorkingForClients } from "@/components/dashboard/gettin
 import { YouTubeMetricsSummary } from "@/components/dashboard/youtube-metrics-summary";
 import { PublishHealthCard } from "@/components/dashboard/publish-health-card";
 import { ListingMetricsCard } from "@/components/dashboard/listing-metrics-card";
+import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { useConnections } from "@/hooks/useConnections";
 import { usePostJobs } from "@/hooks/usePostJobs";
 import {
@@ -74,7 +75,7 @@ function Dashboard({ availablePlatforms, setup }: DashboardProps) {
   const cta = deriveDashboardCta(connectionsState.connections) ?? COMPOSE_CTA;
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-8 md:px-6 lg:px-8">
+    <div className={APP_PAGE_CLASS}>
       {/* The greeting and the CTA read from the same two fetches, so the whole
           header resolves at once. Skeletons until then: a heading that says
           "Welcome back" and then corrects itself to "Welcome to Vibe Socials"

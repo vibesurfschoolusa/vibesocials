@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { planIncludes } from "@/lib/planFeatures";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { BulkPostsForm } from "./bulk-posts-form";
@@ -8,6 +9,8 @@ import { BulkPostsForm } from "./bulk-posts-form";
 // Signed-out visitors go to login before any client work runs (as on Queue and
 // Create). The workspace id is sent with every create request, as on Create, so
 // a workspace switch in another tab is refused instead of posting there.
+export const metadata = { title: "Add many | Vibe Socials" };
+
 export default async function BulkPostsPage() {
   const context = await getWorkspaceContext();
 
@@ -16,7 +19,7 @@ export default async function BulkPostsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-8 md:px-6">
+    <div className={APP_PAGE_CLASS}>
       <div className="mb-6">
         <h1 className="text-2xl font-bold tracking-tight text-foreground">Add many posts</h1>
         <p className="mt-1 text-sm text-muted-foreground">
