@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { AlertTriangle, CheckCircle2 } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -82,10 +81,12 @@ export function ConnectionHealth({
                   {platformLabel(connection.platform)}
                 </span>
                 {connection.connected && !connection.needsReconnect ? (
-                  <Badge variant="success">
-                    <CheckCircle2 aria-hidden className="h-3.5 w-3.5" />
-                    Connected
-                  </Badge>
+                  // One check, not a "Connected" badge beside the green dot: at
+                  // the shared page width the badge made long names wrap.
+                  <span title="Connected" className="inline-flex shrink-0 items-center text-success">
+                    <CheckCircle2 aria-hidden className="h-4 w-4" />
+                    <span className="sr-only">Connected</span>
+                  </span>
                 ) : connection.connected ? (
                   // Roadmap Phase 4: destructive button, links straight to
                   // this platform's OAuth start (a plain anchor —
