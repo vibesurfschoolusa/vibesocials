@@ -115,6 +115,26 @@ describe("youtubeClient - the video's cover (thumbnails.set)", () => {
     );
   });
 
+  const googleError = (status: number, reason: string) =>
+    new Response(JSON.stringify({ error: { code: status, errors: [{ domain: "youtube.thumbnail", reason }] } }), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  it.each([
+    ["403 quotaExceeded", () => googleError(403, "quotaExceeded")],
+    ["403 without a reason", () => new Response("nope", { status: 403 })],
+    ["400 invalidImage", () => googleError(400, "invalidImage")],
+    ["429 uploadRateLimitExceeded", () => googleError(429, "uploadRateLimitExceeded")],
+    ["503", () => new Response("down", { status: 503 })],
+  ])("%s is not the verified-channel case: the plain cover note", async (_label, reply) => {
+    stub(reply);
+    expect(await youtubeClient.publishVideo(ctx({ cover: { imageUrl: COVER_URL } }))).toEqual({
+      externalPostId: "vid-1",
+      note: YOUTUBE_COVER_FAILED_NOTE,
+    });
+  });
+
   it("any other refusal or a dropped connection: the post still succeeds, with a plain note", async () => {
     stub(() => new Response("boom", { status: 500 }));
     expect(await youtubeClient.publishVideo(ctx({ cover: { imageUrl: COVER_URL } }))).toEqual({

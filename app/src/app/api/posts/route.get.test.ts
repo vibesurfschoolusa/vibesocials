@@ -993,6 +993,33 @@ describe("GET /api/posts - mediaCount (07a)", () => {
   });
 });
 
+describe("GET /api/posts - a video's custom cover (V1)", () => {
+  it("selects the cover columns and sends only hasCover, never the cover's address", async () => {
+    postJobFindManyMock.mockResolvedValue([
+      { ...jobWithYouTube(), id: "frame", coverTimeMs: 0, coverImageUrl: null },
+      { ...jobWithYouTube(), id: "image", coverTimeMs: null, coverImageUrl: "https://x.public.blob.vercel-storage.com/c.jpg" },
+      { ...jobWithYouTube(), id: "none", coverTimeMs: null, coverImageUrl: null },
+      // A row from before the columns existed has no cover.
+      { ...jobWithYouTube(), id: "old" },
+    ]);
+
+    const response = await GET(getRequest());
+    const text = await response.clone().text();
+    const body = (await response.json()) as PostsResponse;
+
+    const { select } = postJobFindManyMock.mock.calls[0][0];
+    expect(select.coverTimeMs).toBe(true);
+    expect(select.coverImageUrl).toBe(true);
+    expect(body.jobs.map((job) => [job.id, job.hasCover])).toEqual([
+      ["frame", true],
+      ["image", true],
+      ["none", false],
+      ["old", false],
+    ]);
+    expect(text).not.toContain("c.jpg");
+  });
+});
+
 describe("GET /api/posts - the client's review (client review link)", () => {
   it("selects the three client columns and exposes them as ISO strings and text", async () => {
     postJobFindManyMock.mockResolvedValue([

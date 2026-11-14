@@ -1,4 +1,5 @@
 import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "@/lib/blobUrl";
+import { COVER_ADDRESS_REFUSED_MESSAGE, isWorkspaceCoverAddress } from "@/lib/coverBlobPath";
 
 import { validateCoverFrameTime, validateCoverImageFile, type PostCover } from "./videoCover";
 
@@ -9,9 +10,10 @@ export type CoverFieldResult = { ok: true; value: PostCover | null } | { ok: fal
  * `mimeType` is the post's file type, or null on the reuse path, where it is
  * not known here (the platform clients only apply a cover to a video).
  * The image's type and size are the client's word, as they are for the post's
- * own file; the app's own storage address is checked here.
+ * own file; the app's own storage address is checked here, and (fix round 1)
+ * that it is in this workspace's covers/ folder (lib/coverBlobPath.ts).
  */
-export function parseCoverField(raw: unknown, mimeType: string | null): CoverFieldResult {
+export function parseCoverField(raw: unknown, mimeType: string | null, workspaceId: string): CoverFieldResult {
   if (raw === undefined || raw === null) return { ok: true, value: null };
   if (typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "The cover could not be read." };
   if (mimeType !== null && !mimeType.startsWith("video/")) {
@@ -34,6 +36,7 @@ export function parseCoverField(raw: unknown, mimeType: string | null): CoverFie
     if (imageError) return { ok: false, error: imageError };
     const url = typeof field.imageUrl === "string" ? canonicalBlobUrl(field.imageUrl) : null;
     if (!url) return { ok: false, error: BLOB_URL_REJECTED_MESSAGE };
+    if (!isWorkspaceCoverAddress(url, workspaceId)) return { ok: false, error: COVER_ADDRESS_REFUSED_MESSAGE };
     cover.imageUrl = url;
   }
 

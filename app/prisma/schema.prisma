@@ -536,6 +536,10 @@ model PostJob {
   @@index([userId])
   // Repeat: the Queue's "3 of 8" and cancelling the rest of a series.
   @@index([seriesId])
+  // V1 fix round 1: the hourly cover sweep (coverImageUrl IS NOT NULL) and the
+  // "does another post still use this cover file" lookup (coverImageUrl = ...).
+  // A btree: the stored value is a canonical blob URL of at most 2,048 characters.
+  @@index([coverImageUrl])
 }
 
 // Several photos in one post (2026-11-10). `PostJob.mediaItemId` stays the first

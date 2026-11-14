@@ -17,6 +17,7 @@ vi.mock("@vercel/blob/client", () => ({ handleUpload: handleUploadMock }));
 // Usage limits (2026-11-10): the storage sum has its own suite (workspaceUsage.test.ts).
 vi.mock("@/server/usage/workspaceUsage", () => ({ checkStorageLimit: checkStorageLimitMock }));
 
+import { COVER_ADDRESS_REFUSED_MESSAGE } from "@/lib/coverBlobPath";
 import { LOGO_ADDRESS_RESERVED_MESSAGE } from "@/lib/workspaceLogo";
 
 import { GET, POST } from "./route";
@@ -93,6 +94,34 @@ describe("POST /api/upload — the logos/ prefix is reserved", () => {
       );
       expect(res.status, pathname).toBe(400);
       await expect(res.json()).resolves.toEqual({ error: LOGO_ADDRESS_RESERVED_MESSAGE });
+    }
+    expect(handleUploadMock).not.toHaveBeenCalled();
+  });
+});
+
+// V1 fix round 1: a cover goes under covers/<workspace>/; no token for another's.
+describe("POST /api/upload — the covers/ folder is the workspace's own", () => {
+  const tokenFor = (pathname: string) =>
+    POST(
+      new Request("http://localhost/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "blob.generate-client-token",
+          payload: { pathname, clientPayload: null, multipart: false },
+        }),
+      }),
+    );
+
+  it("signs a token for this workspace's covers/ folder", async () => {
+    expect((await tokenFor("covers/ws-1/1700-abc-cover.jpg")).status).toBe(200);
+  });
+
+  it("refuses another workspace's covers/ folder with a plain 400", async () => {
+    for (const pathname of ["covers/ws-2/a.jpg", "Covers/ws-1/a.jpg", "covers/ws-1/../ws-2/a.jpg"]) {
+      const res = await tokenFor(pathname);
+      expect(res.status, pathname).toBe(400);
+      await expect(res.json()).resolves.toEqual({ error: COVER_ADDRESS_REFUSED_MESSAGE });
     }
     expect(handleUploadMock).not.toHaveBeenCalled();
   });

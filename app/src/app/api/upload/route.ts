@@ -1,6 +1,7 @@
 import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { NextResponse } from "next/server";
 
+import { coverUploadRefusal } from "@/lib/coverBlobPath";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { UPLOAD_ALLOWED_CONTENT_TYPES } from "@/lib/mediaInput";
@@ -91,6 +92,15 @@ export async function POST(request: Request): Promise<NextResponse> {
       payload && typeof payload.pathname === "string" ? logoAddressRefusal(payload.pathname) : null;
     if (logoRefusal) {
       return NextResponse.json({ error: logoRefusal }, { status: 400 });
+    }
+    // V1 fix round 1: covers/<workspaceId>/ is that workspace's own; POST
+    // /api/posts takes a cover only from the poster's folder.
+    const coverRefusal =
+      payload && typeof payload.pathname === "string"
+        ? coverUploadRefusal(payload.pathname, context.workspace.id)
+        : null;
+    if (coverRefusal) {
+      return NextResponse.json({ error: coverRefusal }, { status: 400 });
     }
     const refusal = await checkStorageLimit(context.workspace.id);
     if (refusal) {

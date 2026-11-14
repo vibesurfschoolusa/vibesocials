@@ -43,7 +43,8 @@ vi.mock("@/lib/db", () => {
     // The workspace's report logo, read under a row lock and queued with its files (none here).
     $queryRaw: async () => [],
     workspaceMember: { count: m.memberCount, findMany: m.memberFindMany },
-    postJob: { findFirst: m.postJobFindFirst },
+    // V1 fix round 1: the posts' video covers, queued with the files (none here).
+    postJob: { findFirst: m.postJobFindFirst, findMany: async () => [] },
     mediaItem: { findMany: m.mediaFindMany },
     pendingBlobDeletion: { createManyAndReturn: m.queueCreate, deleteMany: m.queueDeleteMany },
     $transaction: async (cb: (tx: unknown) => unknown) => {

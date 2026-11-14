@@ -16,7 +16,9 @@ const {
   postJobResultFindManyMock,
   notifyOwnersMock,
   checkDailyPostLimitMock,
+  queueCoverMock,
 } = vi.hoisted(() => ({
+  queueCoverMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
   findFirstMock: vi.fn(),
   updateManyMock: vi.fn(),
@@ -45,6 +47,9 @@ vi.mock("@/server/notifications/approvalRequested", () => ({
 vi.mock("@/server/usage/workspaceUsage", () => ({
   checkDailyPostLimit: checkDailyPostLimitMock,
 }));
+
+// V1 fix round 1: the cover file queue has its own suite (coverBlobs.test.ts).
+vi.mock("@/server/jobs/coverBlobs", () => ({ queueCoverBlobIfUnused: queueCoverMock }));
 
 import { PATCH, DELETE, GET } from "./route";
 
@@ -568,6 +573,29 @@ describe("DELETE /api/posts/[postJobId]", () => {
     expect(deleteManyMock).toHaveBeenCalledWith({
       where: { id: "job-1", workspaceId: "ws-1", status: { in: ["draft", "cancelled"] } },
     });
+  });
+
+  it("queues a deleted post's cover file (V1 fix round 1); a post without one queues nothing", async () => {
+    const COVER = "https://x.public.blob.vercel-storage.com/covers/ws-1/1-a-cover.jpg";
+    queueCoverMock.mockReset();
+    findFirstMock.mockResolvedValueOnce({ coverImageUrl: COVER });
+    expect((await DELETE(req(null), ctx("job-1"))).status).toBe(200);
+    expect(findFirstMock).toHaveBeenCalledWith({
+      where: { id: "job-1", workspaceId: "ws-1" },
+      select: { coverImageUrl: true },
+    });
+    expect(queueCoverMock).toHaveBeenCalledWith(COVER);
+
+    queueCoverMock.mockReset();
+    findFirstMock.mockResolvedValueOnce({ coverImageUrl: null });
+    expect((await DELETE(req(null), ctx("job-1"))).status).toBe(200);
+    expect(queueCoverMock).not.toHaveBeenCalled();
+  });
+
+  it("a cover that cannot be queued never fails the delete", async () => {
+    findFirstMock.mockResolvedValueOnce({ coverImageUrl: "https://x.public.blob.vercel-storage.com/covers/ws-1/a.jpg" });
+    queueCoverMock.mockRejectedValueOnce(new Error("db down"));
+    expect((await DELETE(req(null), ctx("job-1"))).status).toBe(200);
   });
 
   it("404s when nothing matched and no such job exists", async () => {

@@ -134,3 +134,50 @@ describe("facebookPageClient - a video's cover (thumb)", () => {
     expect(fetchMock.mock.calls.map((c) => c[0])).not.toContain(COVER_URL);
   });
 });
+
+// Fix round 1: each send gets the time left at that moment, so the cover's
+// download and a refused first send never push the retry past the step budget.
+describe("facebookPageClient - a video with a cover stays inside the step budget", () => {
+  const NOW = Date.parse("2026-11-14T10:00:00Z");
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("works out the timeout again before the send with the cover and before the send without it", async () => {
+    const timeouts: number[] = [];
+    fetchMock.mockImplementation((url: string, init?: RequestInit, timeoutMs?: number) => {
+      if (url === COVER_URL) {
+        vi.setSystemTime(Date.now() + 20_000);
+        return Promise.resolve(new Response(new Uint8Array([7])));
+      }
+      if (url.endsWith("/page-1/videos")) {
+        timeouts.push(timeoutMs as number);
+        vi.setSystemTime(Date.now() + 15_000);
+        return Promise.resolve(
+          init?.body instanceof FormData
+            ? new Response(JSON.stringify({ error: { message: "bad thumb", code: 100 } }), { status: 400 })
+            : new Response(JSON.stringify({ id: "video-1" }), { status: 200 }),
+        );
+      }
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+
+    const result = await facebookPageClient.publishVideo(
+      ctx({ cover: { imageUrl: COVER_URL }, deadline: NOW + 60_000 }),
+    );
+
+    expect(result).toEqual({ externalPostId: "video-1", note: FACEBOOK_COVER_REFUSED_NOTE });
+    // 60 s budget: 40 s left after the 20 s download, 25 s after the first send.
+    expect(timeouts).toEqual([40_000, 25_000]);
+  });
+});

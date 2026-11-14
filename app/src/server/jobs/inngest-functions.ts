@@ -74,6 +74,7 @@ import {
 } from "@/lib/workspaceStatus";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { coverFromJob, type PostCover } from "@/lib/videoCover";
+import { sweepOldCovers } from "@/server/jobs/coverBlobs";
 import {
   claimResult,
   finalizeClaimedResult,
@@ -1383,8 +1384,13 @@ export const mediaRetentionSweep = inngest.createFunction(
       after = batch.next;
     }
 
-    // Logs its own deleted / kept / left counts.
-    await step.run("drain-pending-blob-deletions", () => drainPendingBlobDeletions());
+    // Logs its own deleted / kept / left counts. V1 fix round 1: first, old
+    // finished posts let go of their video covers (coverBlobs.ts), whose files
+    // this same drain then deletes; inside this step, so no execution is added.
+    await step.run("drain-pending-blob-deletions", async () => {
+      await sweepOldCovers();
+      return drainPendingBlobDeletions();
+    });
 
     const summary = { batches, candidates, swept, skipped, errors, exhausted };
     logger.info("[Inngest] Media retention sweep complete", summary);

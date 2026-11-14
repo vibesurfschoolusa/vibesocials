@@ -11,6 +11,9 @@ const m = vi.hoisted(() => ({
   logoQuery: vi.fn(),
   survivingLogos: vi.fn(),
   postJobFindFirst: vi.fn(),
+  /** V1 fix round 1: the workspaces' posts with a video cover. */
+  covers: [] as { id: string; workspaceId: string; coverImageUrl: string }[],
+  coverFindMany: vi.fn(),
   memberCount: vi.fn(),
   workspaceDeleteMany: vi.fn(),
   queueCreate: vi.fn(),
@@ -67,6 +70,7 @@ function fakeFindMany({ where, take }: { where: Where; take?: number }) {
 const tx = {
   $executeRaw: m.executeRaw,
   mediaItem: { findMany: m.mediaFindMany },
+  postJob: { findMany: m.coverFindMany },
   $queryRaw: m.logoQuery,
   workspace: { findMany: m.survivingLogos },
   pendingBlobDeletion: { createManyAndReturn: m.queueCreate },
@@ -79,6 +83,7 @@ const queuedUrls = () =>
 
 beforeEach(() => {
   m.rows.length = 0;
+  m.covers.length = 0;
   for (const mock of Object.values(m)) {
     if (typeof mock === "function") mock.mockReset();
   }
@@ -86,6 +91,13 @@ beforeEach(() => {
   m.log.length = 0;
   m.executeRaw.mockResolvedValue(0);
   m.mediaFindMany.mockImplementation(fakeFindMany);
+  m.coverFindMany.mockImplementation(
+    async ({ where, take }: { where: { workspaceId: { in: string[] }; id?: { gt: string } }; take?: number }) =>
+      m.covers
+        .filter((row) => where.workspaceId.in.includes(row.workspaceId) && (!where.id || row.id > where.id.gt))
+        .sort((a, b) => (a.id < b.id ? -1 : 1))
+        .slice(0, take ?? Infinity),
+  );
   m.logoQuery.mockResolvedValue([]);
   m.survivingLogos.mockResolvedValue([]);
   m.queueCreate.mockImplementation(async ({ data }: { data: { url: string }[] }) =>
@@ -101,6 +113,22 @@ afterEach(() => {
 });
 
 describe("queueWorkspaceFiles", () => {
+  it("queues the video covers of the workspace's posts too, once each (V1 fix round 1)", async () => {
+    const cover = (name: string) => `https://abc123.public.blob.vercel-storage.com/covers/ws-1/${name}.jpg`;
+    m.rows.push({ id: "m1", workspaceId: "ws-1", storageLocation: url("a"), deletedAt: null });
+    m.covers.push(
+      { id: "j1", workspaceId: "ws-1", coverImageUrl: cover("c1") },
+      // Two posts of one series share their cover.
+      { id: "j2", workspaceId: "ws-1", coverImageUrl: cover("c2") },
+      { id: "j3", workspaceId: "ws-1", coverImageUrl: cover("c2") },
+      { id: "j4", workspaceId: "ws-other", coverImageUrl: "https://abc123.public.blob.vercel-storage.com/covers/ws-other/x.jpg" },
+    );
+
+    await queueWorkspaceFiles(tx, ["ws-1"]);
+
+    expect(queuedUrls().sort()).toEqual([url("a"), cover("c1"), cover("c2")].sort());
+  });
+
   it("queues the files of the workspace's live media and returns the queue rows", async () => {
     m.rows.push(
       { id: "m1", workspaceId: "ws-1", storageLocation: url("a"), deletedAt: null },

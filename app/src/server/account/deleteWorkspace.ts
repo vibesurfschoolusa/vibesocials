@@ -142,6 +142,32 @@ export async function queueWorkspaceFiles(
     cursor = page[page.length - 1].id;
   }
 
+  // V1 fix round 1: the posts' video covers (PostJob.coverImageUrl). They have
+  // no media row and live under covers/<workspaceId>/, so they go with the
+  // workspace; the posts of one series share one file, queued once.
+  let coverCursor: string | undefined;
+  for (;;) {
+    const page = await tx.postJob.findMany({
+      where: {
+        workspaceId: { in: workspaceIds },
+        coverImageUrl: { not: null },
+        ...(coverCursor ? { id: { gt: coverCursor } } : {}),
+      },
+      select: { id: true, coverImageUrl: true },
+      orderBy: { id: "asc" },
+      take: BLOB_DELETE_BATCH_SIZE,
+    });
+    for (const row of page) {
+      if (!row.coverImageUrl) continue;
+      const key = guardBlobKey(row.coverImageUrl);
+      const spellings = spellingsByKey.get(key) ?? new Set([key]);
+      spellings.add(row.coverImageUrl);
+      spellingsByKey.set(key, spellings);
+    }
+    if (page.length < BLOB_DELETE_BATCH_SIZE) break;
+    coverCursor = page[page.length - 1].id;
+  }
+
   // The rows are locked as POST/DELETE /api/workspaces/logo lock them (FOR
   // UPDATE), every row and not only those with a logo: an upload waits for
   // this commit and then finds its workspace gone, instead of saving a logo

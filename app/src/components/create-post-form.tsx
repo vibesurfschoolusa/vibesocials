@@ -92,6 +92,7 @@ import {
 } from "@/lib/platforms";
 import { extractVideoFrames } from "@/lib/extractVideoFrames";
 import { captureVideoFrame } from "@/lib/captureVideoFrame";
+import { coverBlobPathname } from "@/lib/coverBlobPath";
 import { coverRequestFields, type CoverChoice, type UploadedCoverImage } from "@/lib/videoCover";
 import {
   deriveComposerPlatforms,
@@ -1362,7 +1363,8 @@ function CreatePostFormInner({
             ? await captureVideoFrame(source, choice.timeMs)
             : null;
       if (!file) return null;
-      const blob = await upload(generateBlobKey(file), file, { access: "public", handleUploadUrl: "/api/upload" });
+      // Under this workspace's covers/ folder: the posts route takes no other.
+      const blob = await upload(coverBlobPathname(workspaceId), file, { access: "public", handleUploadUrl: "/api/upload" });
       return { url: blob.url, mimeType: file.type, sizeBytes: file.size };
     } catch {
       return null;

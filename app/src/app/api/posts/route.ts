@@ -106,6 +106,9 @@ const POSTS_LIST_SELECT = {
   clientNote: true,
   // Repeat (brief 11): the series it was created in, for "Repeats: 3 of 8".
   seriesId: true,
+  // V1: whether the post has a chosen video cover (sent as `hasCover` only).
+  coverTimeMs: true,
+  coverImageUrl: true,
   // Null for a post without a file (2026-11-10): no thumbnail, no files.
   mediaItemId: true,
   mediaItem: {
@@ -368,6 +371,7 @@ export async function GET(request: Request) {
           clientChangeRequestedAt: job.clientChangeRequestedAt?.toISOString() ?? null,
           clientNote: job.clientNote ?? null,
           seriesId: job.seriesId ?? null,
+          hasCover: typeof job.coverTimeMs === "number" || Boolean(job.coverImageUrl),
           ...(placeByJobId.has(job.id)
             ? {
                 seriesPosition: placeByJobId.get(job.id)!.position,
@@ -690,7 +694,11 @@ export async function POST(request: Request) {
   // cover to a video).
   const coverField = textOnly && body.cover != null
     ? ({ ok: false, error: "A cover can only be chosen for a video." } as const)
-    : parseCoverField(body.cover, usingExistingMedia ? null : (mediaFields?.mimeType ?? null));
+    : parseCoverField(
+        body.cover,
+        usingExistingMedia ? null : (mediaFields?.mimeType ?? null),
+        context.workspace.id,
+      );
   if (!coverField.ok) {
     return NextResponse.json({ error: coverField.error }, { status: 400 });
   }

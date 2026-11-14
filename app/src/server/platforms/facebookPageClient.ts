@@ -550,16 +550,17 @@ export const facebookPageClient: PlatformClient = {
           mediaItem,
         );
 
+    // Worked out again before each send (fix round 1): a video with a cover
+    // may be sent after the cover's download and once more without the cover.
     // Checked before the commit call, so a spent step budget sends nothing.
-    const timeoutMs = isVideo
-      ? budgetedTimeout(FACEBOOK_VIDEO_UPLOAD_TIMEOUT_MS, ctx.deadline)
-      : undefined;
+    const timeoutFor = () =>
+      isVideo ? budgetedTimeout(FACEBOOK_VIDEO_UPLOAD_TIMEOUT_MS, ctx.deadline) : undefined;
 
     // 2026-11-01 scale audit (jobs H6, Review Focus 5): POST /{page}/photos (or
     // /videos) is the commit call. A 5xx, a timeout or a dropped connection
     // after it was sent is PUBLISH_UNCONFIRMED (the post may be live) and is
     // never re-run; a 4xx / 429 is returned and handled below as before.
-    const send = (requestBody: URLSearchParams | FormData) =>
+    const send = (requestBody: URLSearchParams | FormData, timeoutMs = timeoutFor()) =>
       commitRequest("facebook_page", () =>
         fetchWithTimeout(
           endpoint.toString(),

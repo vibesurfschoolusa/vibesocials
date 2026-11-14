@@ -113,6 +113,16 @@ export function sortQueue(jobs: PostJobDTO[]): PostJobDTO[] {
   return [...clientChanges, ...pendingApproval, ...scheduled, ...drafts];
 }
 
+/** V1: "Custom cover" for a post with a chosen video cover, else null. */
+export function coverLabel(job: Pick<PostJobDTO, "hasCover">): string | null {
+  return job.hasCover ? "Custom cover" : null;
+}
+
+/** V1: the edit dialog's line for a post with a chosen video cover (editing never changes it). */
+export function coverEditNote(job: Pick<PostJobDTO, "hasCover">): string | null {
+  return job.hasCover ? "Keeps its custom cover." : null;
+}
+
 /** "Repeats: 3 of 8" for a post created as part of a series (brief 11), else null. */
 export function seriesLabel(job: PostJobDTO): string | null {
   if (!job.seriesId || !job.seriesPosition || !job.seriesCount) return null;
@@ -182,6 +192,7 @@ function QueueCard({
   // 2026-11-10: "Offer", "Book button"; null for a plain Google update.
   const googleLabel = googleQueueLabel(job.publish?.googlePostType ?? null, job.publish?.googleButton ?? null);
   const repeats = seriesLabel(job);
+  const cover = coverLabel(job);
 
   return (
     <Card className="p-4 sm:p-5">
@@ -238,6 +249,7 @@ function QueueCard({
             <p className="mt-1 text-xs text-muted-foreground">{listing.storyOnlyNote}</p>
           ) : null}
           {repeats ? <p className="mt-1 text-xs text-muted-foreground">{repeats}</p> : null}
+          {cover ? <p className="mt-1 text-xs text-muted-foreground">{cover}</p> : null}
           {platformCaptions.length > 0 ? (
             <div className="mt-2 rounded-md border border-border bg-muted/40 p-2.5">
               <p className="text-xs font-medium text-foreground">{PLATFORM_CAPTIONS_HEADING}</p>
@@ -584,6 +596,7 @@ function QueueEditDialog({
             Times are in {localTimeZoneLabel()} (your browser&apos;s timezone).
           </p>
         </div>
+        {coverEditNote(job) ? <p className="text-sm text-muted-foreground">{coverEditNote(job)}</p> : null}
         {model.notice ? <p className="text-sm text-muted-foreground">{model.notice}</p> : null}
       </DialogBody>
       <DialogFooter>

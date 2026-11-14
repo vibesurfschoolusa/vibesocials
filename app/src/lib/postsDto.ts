@@ -219,6 +219,12 @@ export interface PostJobDTO {
   seriesId?: string | null;
   seriesPosition?: number;
   seriesCount?: number;
+  /**
+   * V1: the post has a chosen video cover (a frame or an image). A boolean
+   * only; the cover's address stays on the server. Optional so other builders
+   * of this DTO need not set it.
+   */
+  hasCover?: boolean;
 }
 
 /**

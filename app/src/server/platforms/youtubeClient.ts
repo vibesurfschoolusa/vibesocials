@@ -885,6 +885,15 @@ export const YOUTUBE_COVER_FAILED_NOTE =
 export const YOUTUBE_COVER_FRAME_ONLY_NOTE =
   "Cover not set: YouTube needs the cover as an image, and the chosen frame could not be saved as one.";
 
+/** The first `error.errors[].reason` of a Google error answer, or null. */
+async function thumbnailRefusalReason(response: Response): Promise<string | null> {
+  const body = (await response.json().catch(() => null)) as {
+    error?: { errors?: Array<{ reason?: unknown }> };
+  } | null;
+  const reason = body?.error?.errors?.[0]?.reason;
+  return typeof reason === "string" ? reason : null;
+}
+
 /**
  * Set the chosen cover on the video just uploaded (V1): `POST
  * /upload/youtube/v3/thumbnails/set?videoId=` with the image as the body
@@ -919,13 +928,16 @@ async function setYouTubeCover(
       },
       budgetedTimeout(COVER_REQUEST_TIMEOUT_MS, ctx.deadline),
     );
-    void response.body?.cancel().catch(() => {});
     if (response.ok) {
+      void response.body?.cancel().catch(() => {});
       console.log("[YouTube] Cover set", { videoId });
       return undefined;
     }
-    console.warn("[YouTube] Cover refused", { videoId, status: response.status });
-    return response.status === 403 ? YOUTUBE_COVER_UNVERIFIED_NOTE : YOUTUBE_COVER_FAILED_NOTE;
+    const reason = await thumbnailRefusalReason(response);
+    console.warn("[YouTube] Cover refused", { videoId, status: response.status, reason });
+    // Only 403 `forbidden` is the channel that may not set custom thumbnails (an
+    // unverified one); a quota or rate refusal, a bad image or a 5xx is not.
+    return response.status === 403 && reason === "forbidden" ? YOUTUBE_COVER_UNVERIFIED_NOTE : YOUTUBE_COVER_FAILED_NOTE;
   } catch (error) {
     console.warn("[YouTube] Cover not sent", { videoId, code: (error as { code?: unknown } | null)?.code });
     return YOUTUBE_COVER_FAILED_NOTE;

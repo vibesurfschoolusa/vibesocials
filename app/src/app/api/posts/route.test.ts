@@ -2551,7 +2551,7 @@ describe("POST /api/posts — a video's cover", () => {
     sizeBytes: 123,
     baseCaption: "hello",
   };
-  const COVER_URL = "https://test.public.blob.vercel-storage.com/cover.jpg";
+  const COVER_URL = "https://test.public.blob.vercel-storage.com/covers/ws-1/1-a-cover.jpg";
 
   beforeEach(() => {
     createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["r1"] });
@@ -2588,6 +2588,21 @@ describe("POST /api/posts — a video's cover", () => {
       jsonRequest({ ...VIDEO, filename: "p.jpg", mimeType: "image/jpeg", cover: { timeMs: 0 } }),
     );
     expect(photo.status).toBe(400);
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses another workspace's cover image (fix round 1)", async () => {
+    const response = await POST(
+      jsonRequest({
+        ...VIDEO,
+        cover: {
+          imageUrl: "https://test.public.blob.vercel-storage.com/covers/ws-2/1-a-cover.jpg",
+          mimeType: "image/jpeg",
+          sizeBytes: 9,
+        },
+      }),
+    );
+    expect(response.status).toBe(400);
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
   });
 

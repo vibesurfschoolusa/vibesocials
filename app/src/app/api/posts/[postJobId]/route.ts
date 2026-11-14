@@ -9,6 +9,7 @@ import { findOverlongCaption, pickPlatformOverrides } from "@/lib/captionLimits"
 import { captionTooLongResponse, invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { toPostJobDetailDto, toPostJobResultSummaryDto } from "@/lib/postsDto";
+import { queueCoverBlobIfUnused } from "@/server/jobs/coverBlobs";
 import {
   DELETABLE_POST_JOB_STATUSES,
   isValidPerPlatformOverrides,
@@ -390,6 +391,13 @@ export async function DELETE(_request: NextRequest, context: PostJobRouteContext
 
   const { postJobId } = await Promise.resolve(context.params);
 
+  // V1 fix round 1: the post's video cover, read first so its file can be
+  // queued for deletion once the post is gone.
+  const coverRow = await prisma.postJob.findFirst({
+    where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
+    select: { coverImageUrl: true },
+  });
+
   // Team Workspaces (Task 4): any member of the job's workspace, not just its
   // creator (design §1).
   const { count } = await prisma.postJob.deleteMany({
@@ -415,6 +423,16 @@ export async function DELETE(_request: NextRequest, context: PostJobRouteContext
       },
       { status: 409 },
     );
+  }
+
+  // Queued, not deleted here: the hourly drain deletes the file, so a storage
+  // hiccup never fails the delete. A series' other posts keep a shared cover.
+  if (coverRow?.coverImageUrl) {
+    try {
+      await queueCoverBlobIfUnused(coverRow.coverImageUrl);
+    } catch {
+      // It never throws; this keeps the delete's answer safe if that changes.
+    }
   }
 
   return NextResponse.json({ ok: true }, { status: 200 });

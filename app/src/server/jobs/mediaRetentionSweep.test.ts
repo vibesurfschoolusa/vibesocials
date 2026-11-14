@@ -6,7 +6,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // deletion) is covered by mediaRetentionBatch.test.ts, where the shared-blob
 // cases moved. vi.mock is hoisted above the imports: no database, Vercel Blob
 // or Inngest is reached.
-const { batchMock, drainMock } = vi.hoisted(() => ({ batchMock: vi.fn(), drainMock: vi.fn() }));
+const { batchMock, drainMock, coverSweepMock } = vi.hoisted(() => ({
+  batchMock: vi.fn(),
+  drainMock: vi.fn(),
+  coverSweepMock: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => ({ prisma: {} }));
 vi.mock("@/server/platforms", () => ({ getPlatformClient: vi.fn() }));
@@ -18,6 +22,7 @@ vi.mock("@/server/jobs/mediaRetentionBatch", async (importOriginal) => ({
 }));
 
 vi.mock("@/server/jobs/pendingBlobDeletion", () => ({ drainPendingBlobDeletions: drainMock }));
+vi.mock("@/server/jobs/coverBlobs", () => ({ sweepOldCovers: coverSweepMock }));
 
 import { inngestFunctions, mediaRetentionSweep } from "./inngest-functions";
 import {
@@ -83,6 +88,8 @@ beforeEach(() => {
   batchMock.mockReset();
   drainMock.mockReset();
   drainMock.mockResolvedValue({ deleted: 0, kept: 0, left: 0 });
+  coverSweepMock.mockReset();
+  coverSweepMock.mockResolvedValue({ cleared: 0, queued: 0 });
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -253,5 +260,25 @@ describe("mediaRetentionSweep - the pending blob deletion queue", () => {
     expect(step.ids[step.ids.length - 1]).toBe(DRAIN);
     expect(step.ids.filter((id) => id === DRAIN)).toHaveLength(1);
     expect(drainMock).toHaveBeenCalledTimes(1);
+  });
+
+  // V1 fix round 1: old posts' covers are let go in the drain step, before the
+  // drain, so their files go in the same run and no step (execution) is added.
+  it("lets old covers go inside the drain step, before the drain, with no new step", async () => {
+    batchMock.mockResolvedValueOnce({
+      candidates: 0,
+      swept: 0,
+      skipped: 0,
+      errors: 0,
+      next: null,
+      exhausted: true,
+    } satisfies BatchResult);
+    const step = fakeStep();
+
+    await runSweep(step);
+
+    expect(coverSweepMock).toHaveBeenCalledTimes(1);
+    expect(coverSweepMock.mock.invocationCallOrder[0]).toBeLessThan(drainMock.mock.invocationCallOrder[0]);
+    expect(step.ids).toEqual(["sweep-batch-0", DRAIN]);
   });
 });

@@ -2,7 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import type { PostJobDTO } from "@/lib/postsDto";
 
-import { cancelRequest, emptyCaptionMessage, isTextPost, seriesLabel, sortQueue } from "./queue-view";
+import {
+  cancelRequest,
+  coverEditNote,
+  coverLabel,
+  emptyCaptionMessage,
+  isTextPost,
+  seriesLabel,
+  sortQueue,
+} from "./queue-view";
 
 function job(id: string, overrides: Partial<PostJobDTO> = {}): PostJobDTO {
   return {
@@ -50,6 +58,16 @@ describe("seriesLabel", () => {
     expect(seriesLabel(job("a", { seriesId: "s1", seriesPosition: 3, seriesCount: 8 }))).toBe("Repeats: 3 of 8");
     expect(seriesLabel(job("b", { seriesId: null }))).toBeNull();
     expect(seriesLabel(job("c"))).toBeNull();
+  });
+});
+
+// V1 fix round 1: a post with a chosen video cover says so.
+describe("coverLabel and coverEditNote", () => {
+  it("say a post has a custom cover, and nothing for one without", () => {
+    expect(coverLabel(job("a", { hasCover: true }))).toBe("Custom cover");
+    expect(coverEditNote(job("a", { hasCover: true }))).toBe("Keeps its custom cover.");
+    expect(coverLabel(job("b", { hasCover: false }))).toBeNull();
+    expect(coverEditNote(job("c"))).toBeNull();
   });
 });
 
