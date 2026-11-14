@@ -15,7 +15,7 @@ import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/
 import { platformPostUrl } from "@/lib/platformPostUrl";
 import type { PostJobDTO } from "@/lib/postsDto";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
-import { OUR_SIDE_FAILURE_MESSAGE } from "@/lib/publishFailureText";
+import { NOT_SENT_MESSAGE } from "@/lib/publishFailureText";
 import { describeDeferral, selectDeferrals } from "@/lib/resultDeferral";
 import { PlatformResultBadge } from "./platform-result";
 import { DailyMetricStats, PostMetricStats } from "./post-metric-stats";
@@ -423,16 +423,11 @@ export function PostJobCard({
         </ul>
       ) : null}
 
-      {/* F1 H3: a post with chosen platforms gets a result for each when it is
-          sent, even an unconnected one, so none at all means our side never sent it. */}
-      {canSendAgain && job.publish?.targetPlatforms?.length ? (
+      {/* F1 H3: a failed post with no results was never sent; the job does not
+          record why, so one sentence that is true for every cause. */}
+      {canSendAgain ? (
         <p className="mt-3 rounded-[var(--radius)] border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-foreground">
-          {OUR_SIDE_FAILURE_MESSAGE}
-        </p>
-      ) : canSendAgain ? (
-        <p className="mt-3 rounded-[var(--radius)] border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-foreground">
-          This post failed because no platforms were connected when it ran. Connect a
-          platform in <Link href={SETTINGS_CONNECTIONS_HREF} className="font-medium text-primary underline underline-offset-2">Settings</Link>, then use Send again.
+          {NOT_SENT_MESSAGE}
         </p>
       ) : null}
 

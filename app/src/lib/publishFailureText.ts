@@ -18,12 +18,12 @@ export function connectionGoneMessage(platform: Platform): string {
 }
 
 /**
- * A scheduled post that kept failing on our side before any platform was tried
- * (H3). The job then has no results to carry a message, so the Activity card
- * shows this one, next to its Send again button.
+ * A failed post with no results (H3; review round 2, item 4): no platform was
+ * tried, because no connection could take it or because our side gave up after
+ * 2 h. The job records neither cause, so the Activity card shows only this
+ * sentence, true for both and for old jobs, next to its Send again button.
  */
-export const OUR_SIDE_FAILURE_MESSAGE =
-  "This post could not be sent because of a problem on our side. Use Send again to send it.";
+export const NOT_SENT_MESSAGE = "This post was not sent. Use Send again to try once more.";
 
 /** A 4xx refusal of the post whose error text was not written for the user (L7). */
 export function platformRefusedMessage(platform: Platform): string {

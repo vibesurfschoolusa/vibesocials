@@ -7,7 +7,7 @@ import type { PostJobDTO, PostJobResultDTO } from "@/lib/postsDto";
 
 import type { Platform } from "@prisma/client";
 
-import { OUR_SIDE_FAILURE_MESSAGE } from "@/lib/publishFailureText";
+import { NOT_SENT_MESSAGE } from "@/lib/publishFailureText";
 
 import { cardTime, createSendAgain, displayedJobStatus, PostJobCard, SEND_AGAIN_FAILED } from "./post-job-card";
 
@@ -147,18 +147,17 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
     ).replace(/<!-- -->/g, "");
   const publish = (targetPlatforms: Platform[]) => ({ targetPlatforms }) as unknown as PostJobDTO["publish"];
 
-  it("says our side could not send it when it had chosen platforms", () => {
-    const html = render({ status: "failed", results: [], publish: publish(["instagram"]) });
+  // Review round 2, item 4: the job does not record why it was not sent, so the
+  // card says only what is true for every cause, old jobs included.
+  it.each([
+    ["with chosen platforms", ["instagram"] as Platform[]],
+    ["sent to every connection", null],
+  ])("shows the one honest sentence for a post %s", (_label, targets) => {
+    const html = render({ status: "failed", results: [], publish: targets ? publish(targets) : null });
 
-    expect(html).toContain(OUR_SIDE_FAILURE_MESSAGE);
+    expect(html).toContain(NOT_SENT_MESSAGE);
     expect(html).not.toContain("no platforms were connected");
-  });
-
-  it("keeps the no-connections sentence for a post sent to every connection, pointing at Send again", () => {
-    const html = render({ status: "failed", results: [], publish: null });
-
-    expect(html).toContain("no platforms were connected");
-    expect(html).toContain("then use Send again.");
+    expect(html).not.toContain("our side");
   });
 
   // Coordinator follow-up 1: the honest failure gets a Send again button that

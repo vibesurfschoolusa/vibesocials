@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   connectionGoneMessage,
   notReachedMessage,
-  OUR_SIDE_FAILURE_MESSAGE,
+  NOT_SENT_MESSAGE,
   platformDownMessage,
   platformRefusedMessage,
   publishErrorMessage,
@@ -22,11 +22,11 @@ describe("dispatch sentences (F1 H1)", () => {
   });
 });
 
-describe("OUR_SIDE_FAILURE_MESSAGE (F1 H3)", () => {
-  it("is the honest sentence for a post our side could not send", () => {
-    expect(OUR_SIDE_FAILURE_MESSAGE).toBe(
-      "This post could not be sent because of a problem on our side. Use Send again to send it.",
-    );
+// Review round 2, item 4: one sentence true for every cause of a failed post
+// with no results, old or new (no connection could take it, or our side gave up).
+describe("NOT_SENT_MESSAGE (F1 H3)", () => {
+  it("is the honest sentence for a failed post with no results", () => {
+    expect(NOT_SENT_MESSAGE).toBe("This post was not sent. Use Send again to try once more.");
   });
 });
 

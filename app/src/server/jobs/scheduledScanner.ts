@@ -86,7 +86,7 @@ export const REQUEUE_QUIET_MS = 6 * 60 * 1000;
 
 /**
  * F1 H3: a scheduled post that still could not be sent this long after the
- * scanner first picked it up fails, with OUR_SIDE_FAILURE_MESSAGE in Activity,
+ * scanner first picked it up fails, with NOT_SENT_MESSAGE in Activity,
  * instead of being put back again; Send again sends it. The clock is
  * `GREATEST(pickedUpAt, scheduledFor)`: the pickup, or the slot when the post was
  * rescheduled or sent with Post now since (or claimed before `pickedUpAt` existed).
@@ -465,7 +465,7 @@ export async function reconcileStuckInProgressJobs(
  * platform was tried. It goes back to `scheduled`, and the claim that follows
  * this reconcile in the same step takes it again. Once its first pickup is more
  * than {@link SEND_GIVE_UP_MS} ago it fails instead (Activity then shows
- * OUR_SIDE_FAILURE_MESSAGE and its Send again button sends it), and its media
+ * NOT_SENT_MESSAGE and its Send again button sends it), and its media
  * counts as used now (F1 H2), so Send again still finds it.
  *
  * Each is ONE statement: the inner SELECT locks the rows (`SKIP LOCKED`) and the
