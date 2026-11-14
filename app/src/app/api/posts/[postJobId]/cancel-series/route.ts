@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { cancelData } from "@/lib/approval";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { MUTABLE_POST_JOB_STATUSES } from "@/lib/scheduling";
+import { finishPostJob } from "@/server/jobs/failPendingResults";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -93,9 +94,13 @@ export async function POST(_request: NextRequest, context: PostJobRouteContext) 
     select: { id: true, status: true, submittedForApprovalAt: true, approvedAt: true },
   });
 
-  const results = await prisma.$transaction(
-    posts.map((post) =>
-      prisma.postJob.updateMany({
+  // One transaction, each post with its own condition. finishPostJob also
+  // stamps each cancelled post's media as used now, as the single cancel does,
+  // so the retention sweep counts its 30 days from here.
+  const cancelled = await prisma.$transaction(async (tx) => {
+    let count = 0;
+    for (const post of posts) {
+      count += await finishPostJob(tx, {
         where: {
           id: post.id,
           workspaceId,
@@ -104,11 +109,10 @@ export async function POST(_request: NextRequest, context: PostJobRouteContext) 
           approvedAt: post.approvedAt,
         },
         data: cancelData(post),
-      }),
-    ),
-  );
-
-  const cancelled = results.reduce((sum, result) => sum + result.count, 0);
+      });
+    }
+    return count;
+  });
   if (cancelled === 0) {
     return notCancelable();
   }

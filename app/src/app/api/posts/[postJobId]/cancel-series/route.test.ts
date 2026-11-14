@@ -3,25 +3,36 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeWorkspaceContext } from "../../../__test-helpers__/workspaceContextMock";
 
-const { getWorkspaceContextMock, checkRateLimitMock, findFirstMock, findManyMock, updateManyMock } = vi.hoisted(
-  () => ({
-    getWorkspaceContextMock: vi.fn(),
-    checkRateLimitMock: vi.fn(),
-    findFirstMock: vi.fn(),
-    findManyMock: vi.fn(),
-    updateManyMock: vi.fn(),
-  }),
-);
+const {
+  getWorkspaceContextMock,
+  checkRateLimitMock,
+  findFirstMock,
+  findManyMock,
+  updateManyMock,
+  findUniqueMock,
+  mediaUpdateManyMock,
+} = vi.hoisted(() => ({
+  getWorkspaceContextMock: vi.fn(),
+  checkRateLimitMock: vi.fn(),
+  findFirstMock: vi.fn(),
+  findManyMock: vi.fn(),
+  updateManyMock: vi.fn(),
+  findUniqueMock: vi.fn(),
+  mediaUpdateManyMock: vi.fn(),
+}));
 
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
-vi.mock("@/lib/db", () => ({
-  prisma: {
-    postJob: { findFirst: findFirstMock, findMany: findManyMock, updateMany: updateManyMock },
-    // A batch transaction: every update runs, each with its own condition.
-    $transaction: (ops: Promise<unknown>[]) => Promise.all(ops),
-  },
-}));
+vi.mock("@/lib/db", () => {
+  const client = {
+    postJob: { findFirst: findFirstMock, findMany: findManyMock, updateMany: updateManyMock, findUnique: findUniqueMock },
+    // Review round 3: each cancel goes through finishPostJob, which stamps the
+    // post's media (read its media, then write lastUsedAt).
+    mediaItem: { updateMany: mediaUpdateManyMock },
+  };
+  // One transaction: the callback gets the same client, each update with its own condition.
+  return { prisma: { ...client, $transaction: (fn: (tx: typeof client) => unknown) => fn(client) } };
+});
 
 import { POST } from "./route";
 
@@ -48,6 +59,13 @@ beforeEach(() => {
   findFirstMock.mockReset();
   findManyMock.mockReset();
   updateManyMock.mockReset();
+  findUniqueMock.mockReset();
+  mediaUpdateManyMock.mockReset();
+  findUniqueMock.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+    mediaItemId: `media-${where.id}`,
+    media: [],
+  }));
+  mediaUpdateManyMock.mockResolvedValue({ count: 1 });
   getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   findFirstMock.mockResolvedValue(row("job-2"));
@@ -124,6 +142,22 @@ describe("POST /api/posts/[postJobId]/cancel-series", () => {
 
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({ ok: true, cancelled: 1, notCancelled: 1 });
+  });
+
+  // Review round 3: like the single cancel, through finishPostJob, so the
+  // retention sweep counts each post's media from the cancel.
+  it("stamps the media of each post it cancels, and not of one that lost its race", async () => {
+    findManyMock.mockResolvedValue([row("job-2"), row("job-3")]);
+    updateManyMock.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+
+    const res = await POST(req, ctx("job-2"));
+
+    expect(res.status).toBe(200);
+    expect(mediaUpdateManyMock).toHaveBeenCalledTimes(1);
+    expect(mediaUpdateManyMock).toHaveBeenCalledWith({
+      where: { id: { in: ["media-job-2"] }, deletedAt: null },
+      data: { lastUsedAt: expect.any(Date) },
+    });
   });
 
   it("409s when nothing could be cancelled", async () => {
