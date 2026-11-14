@@ -43,7 +43,7 @@ import { createServer } from "node:http";
 
 const PORT = Number(process.env.E2E_BLOB_PORT ?? 9366);
 
-/** pathname -> { body: Buffer, contentType: string } for GET re-serving. */
+/** pathname -> { body: Buffer, contentType: string, uploadedAt: string } for GET re-serving and head(). */
 const blobs = new Map();
 
 /** Permissive CORS: the browser PUTs cross-origin (app is :3000, this is :9366),
@@ -89,7 +89,7 @@ const server = createServer(async (req, res) => {
         req.headers["x-content-type"] ||
         req.headers["content-type"] ||
         "application/octet-stream";
-      blobs.set(pathname, { body, contentType });
+      blobs.set(pathname, { body, contentType, uploadedAt: new Date().toISOString() });
 
       const publicUrl = `http://localhost:${PORT}/${encodeURI(pathname)}`;
       const payload = {
@@ -103,6 +103,44 @@ const server = createServer(async (req, res) => {
       };
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(payload));
+      return;
+    }
+
+    // head(): the SDK's requestApi GETs `${base}?url=<blob url>` and returns the
+    // JSON body as is; head() reads url, downloadUrl, pathname, size,
+    // contentType, contentDisposition, cacheControl, uploadedAt and etag from it
+    // (node_modules/@vercel/blob/dist/index.js `head`). The app reads a new
+    // file's size and type this way (lib/mediaInput.ts readStoredMedia). A
+    // missing file answers the API's `not_found` error, which the SDK turns
+    // into BlobNotFoundError (getBlobError in its chunk file).
+    if (req.method === "GET" && url.pathname === "/" && url.searchParams.has("url")) {
+      let key = "";
+      try {
+        key = decodeURIComponent(new URL(url.searchParams.get("url") ?? "").pathname.replace(/^\/+/, ""));
+      } catch {
+        key = "";
+      }
+      const stored = blobs.get(key);
+      if (!stored) {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { code: "not_found", message: "The requested blob does not exist" } }));
+        return;
+      }
+      const publicUrl = `http://localhost:${PORT}/${encodeURI(key)}`;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          url: publicUrl,
+          downloadUrl: `${publicUrl}?download=1`,
+          pathname: key,
+          size: stored.body.byteLength,
+          contentType: stored.contentType,
+          contentDisposition: `inline; filename="${key}"`,
+          cacheControl: "public, max-age=31536000",
+          uploadedAt: stored.uploadedAt,
+          etag: `"${stored.body.byteLength}-mock"`,
+        }),
+      );
       return;
     }
 
