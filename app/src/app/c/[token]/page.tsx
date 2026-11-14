@@ -76,7 +76,7 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
   const succeeded = PLATFORM_ORDER.find((platform) => success === `${platform}_connected`);
   const working = succeeded ? byPlatform.get(succeeded) : undefined;
   if (success && working && !working.needsReconnect) outcome.set("success", success);
-  const result = describeConnectLinkResult(outcome, link.workspaceName);
+  const result = describeConnectLinkResult(outcome);
   const pendingId = first(query.choose);
   const action = `/api/connect-link/${encodeURIComponent(token)}/start`;
 
@@ -95,8 +95,8 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
         ) : null}
 
         <p className="text-sm text-muted-foreground">
-          {link.workspaceName} will be able to publish posts to the accounts you connect here. They cannot see
-          your password.
+          The person who sent you this link will be able to publish posts to the accounts you connect here. They
+          cannot see your password.
         </p>
         <p className="mt-2 text-sm text-muted-foreground">
           You can remove this access at any time in each platform&apos;s own settings.

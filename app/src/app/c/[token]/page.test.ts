@@ -80,12 +80,14 @@ describe("the connect link page", () => {
     expect(h.listConnections).not.toHaveBeenCalled();
   });
 
-  it("names the workspace, says what connecting allows and how to take it back, and links the terms and privacy", async () => {
+  it("names the business in the header, says what connecting allows and how to take it back, and links the terms and privacy", async () => {
     const html = await render();
     expect(html).toMatch(/<h1[^>]*>Connect your accounts<\/h1>/);
     expect(html).toContain("Surf &amp; Co");
+    // The workspace is the client's own business: never the publisher or the one to ask.
+    expect(html).not.toMatch(/Surf &amp; Co will|Ask Surf|tell Surf/);
     expect(html).toContain(
-      "Surf &amp; Co will be able to publish posts to the accounts you connect here. They cannot see your password.",
+      "The person who sent you this link will be able to publish posts to the accounts you connect here. They cannot see your password.",
     );
     expect(html).toContain("You can remove this access at any time in each platform&#x27;s own settings.");
     expect(html).toMatch(/href="\/terms"/);
@@ -121,11 +123,11 @@ describe("the connect link page", () => {
 
   it.each([
     [{ error: "tiktok_cancelled" }, "You cancelled. Nothing was connected."],
-    [{ error: "youtube_oauth_denied" }, "We couldn&#x27;t connect YouTube. Try again, or tell Surf &amp; Co."],
-    [{ error: "linkedin_auth_failed" }, "We couldn&#x27;t connect LinkedIn. Try again, or tell Surf &amp; Co."],
-    [{ error: "instagram_already_connected" }, "Instagram is already connected. Ask Surf &amp; Co if it should be changed."],
+    [{ error: "youtube_oauth_denied" }, "We couldn&#x27;t connect YouTube. Try again, or tell the person who sent you this link."],
+    [{ error: "linkedin_auth_failed" }, "We couldn&#x27;t connect LinkedIn. Try again, or tell the person who sent you this link."],
+    [{ error: "instagram_already_connected" }, "Instagram is already connected. Ask the person who sent you this link if it should be changed."],
     [{ error: "pinterest_no_boards" }, "Create a board on Pinterest"],
-    [{ error: "tiktok_token_exchange_failed" }, "We couldn&#x27;t connect TikTok. Try again, or tell Surf &amp; Co."],
+    [{ error: "tiktok_token_exchange_failed" }, "We couldn&#x27;t connect TikTok. Try again, or tell the person who sent you this link."],
   ])("after a flow %o: %s, and never the code", async (query, sentence) => {
     const html = await render(query);
     expect(html).toContain(sentence);
@@ -179,7 +181,7 @@ describe("the success sentence is checked against the connection", () => {
       { platform: "google_business_profile", accountIdentifier: "", username: null, locationName: null, needsReconnect: false },
     ]);
     expect(await render({ success: "google_business_profile_connected" })).toContain(
-      "Google Business Profile is connected. Surf &amp; Co will choose the business location.",
+      "Google Business Profile is connected. The person who sent you this link will choose the business location.",
     );
   });
 

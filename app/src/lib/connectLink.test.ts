@@ -81,12 +81,12 @@ describe("the platforms an owner offers", () => {
 
 describe("the sentence the visitor reads after a flow", () => {
   const describe_ = (query: Record<string, string>) =>
-    describeConnectLinkResult(new URLSearchParams(query), "Surf Co");
+    describeConnectLinkResult(new URLSearchParams(query));
 
   it("connected", () => {
     expect(describe_({ success: "instagram_connected" })).toEqual({ variant: "success", message: "Instagram is connected." });
     expect(describe_({ success: "google_business_profile_connected" })?.message).toBe(
-      "Google Business Profile is connected. Surf Co will choose the business location.",
+      "Google Business Profile is connected. The person who sent you this link will choose the business location.",
     );
   });
 
@@ -98,10 +98,10 @@ describe("the sentence the visitor reads after a flow", () => {
 
   it("a callback's own denied or auth_failed code is never read as a cancellation", () => {
     expect(describe_({ error: "youtube_oauth_denied" })?.message).toBe(
-      "We couldn't connect YouTube. Try again, or tell Surf Co.",
+      "We couldn't connect YouTube. Try again, or tell the person who sent you this link.",
     );
     expect(describe_({ error: "linkedin_auth_failed" })?.message).toBe(
-      "We couldn't connect LinkedIn. Try again, or tell Surf Co.",
+      "We couldn't connect LinkedIn. Try again, or tell the person who sent you this link.",
     );
     for (const error of ["access_denied", "x_auth_denied"]) {
       expect(describe_({ error })?.message, error).not.toContain("cancelled");
@@ -110,7 +110,7 @@ describe("the sentence the visitor reads after a flow", () => {
 
   it("a place already taken", () => {
     expect(describe_({ error: "facebook_page_already_connected" })?.message).toBe(
-      "Facebook Page is already connected. Ask Surf Co if it should be changed.",
+      "Facebook Page is already connected. Ask the person who sent you this link if it should be changed.",
     );
   });
 
@@ -132,11 +132,11 @@ describe("the sentence the visitor reads after a flow", () => {
   it("anything else names the platform and the workspace, never the code", () => {
     for (const error of ["tiktok_token_exchange_failed", "x_session_expired", "tiktok_connect_failed"]) {
       const message = describe_({ error })?.message ?? "";
-      expect(message).toMatch(/^We couldn't connect (TikTok|X)\. Try again, or tell Surf Co\.$/);
+      expect(message).toMatch(/^We couldn't connect (TikTok|X)\. Try again, or tell the person who sent you this link\.$/);
       expect(message).not.toContain(error);
     }
     expect(describe_({ error: "oauth_session_mismatch" })?.message).toBe(
-      "We couldn't connect the account. Try again, or tell Surf Co.",
+      "We couldn't connect the account. Try again, or tell the person who sent you this link.",
     );
   });
 

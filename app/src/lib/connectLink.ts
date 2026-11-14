@@ -166,9 +166,11 @@ export type ConnectLinkResult = { variant: "success" | "danger"; message: string
 /**
  * The one sentence at the top of the visitor's page after a flow, from the
  * query the callback (through the wrapper) sent them back with. Never shows a
- * code. A waiting choice (`choose=`) is shown by the page itself.
+ * code. A waiting choice (`choose=`) is shown by the page itself. The one to
+ * ask is "the person who sent you this link": the workspace is named after the
+ * client's own business, so its name would point the visitor at themselves.
  */
-export function describeConnectLinkResult(query: URLSearchParams, workspaceName: string): ConnectLinkResult | null {
+export function describeConnectLinkResult(query: URLSearchParams): ConnectLinkResult | null {
   const error = query.get("error");
   const success = query.get("success");
 
@@ -184,7 +186,7 @@ export function describeConnectLinkResult(query: URLSearchParams, workspaceName:
       return { variant: "danger", message: "You cancelled. Nothing was connected." };
     }
     if (platform && error === alreadyConnectedCode(platform)) {
-      return { variant: "danger", message: `${label} is already connected. Ask ${workspaceName} if it should be changed.` };
+      return { variant: "danger", message: `${label} is already connected. Ask the person who sent you this link if it should be changed.` };
     }
     const cause = VISITOR_CAUSES[error];
     if (cause) {
@@ -193,8 +195,8 @@ export function describeConnectLinkResult(query: URLSearchParams, workspaceName:
     return {
       variant: "danger",
       message: label
-        ? `We couldn't connect ${label}. Try again, or tell ${workspaceName}.`
-        : `We couldn't connect the account. Try again, or tell ${workspaceName}.`,
+        ? `We couldn't connect ${label}. Try again, or tell the person who sent you this link.`
+        : "We couldn't connect the account. Try again, or tell the person who sent you this link.",
     };
   }
 
@@ -206,7 +208,7 @@ export function describeConnectLinkResult(query: URLSearchParams, workspaceName:
       variant: "success",
       message:
         platform === "google_business_profile"
-          ? `${connected} ${workspaceName} will choose the business location.`
+          ? `${connected} The person who sent you this link will choose the business location.`
           : connected,
     };
   }
