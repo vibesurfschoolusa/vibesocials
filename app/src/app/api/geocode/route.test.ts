@@ -1,17 +1,15 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getCurrentUserMock, checkRateLimitMock, consumeFixedWindowMock } = vi.hoisted(() => ({
+const { getCurrentUserMock, checkRateLimitMock, consumeAppDayMock } = vi.hoisted(() => ({
   getCurrentUserMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
-  consumeFixedWindowMock: vi.fn(),
+  consumeAppDayMock: vi.fn(),
 }));
 
 vi.mock("@/lib/auth", () => ({ getCurrentUser: getCurrentUserMock }));
-vi.mock("@/lib/rateLimit", () => ({
-  checkRateLimit: checkRateLimitMock,
-  consumeFixedWindow: consumeFixedWindowMock,
-}));
+vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
+vi.mock("./appDay", () => ({ consumeGeocodeAppDay: consumeAppDayMock }));
 
 import { GET } from "./route";
 
@@ -28,11 +26,11 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   getCurrentUserMock.mockReset();
   checkRateLimitMock.mockReset();
-  consumeFixedWindowMock.mockReset();
+  consumeAppDayMock.mockReset();
   fetchMock.mockReset();
   getCurrentUserMock.mockResolvedValue({ id: "user-1" });
   checkRateLimitMock.mockResolvedValue({ allowed: true });
-  consumeFixedWindowMock.mockResolvedValue({ allowed: true });
+  consumeAppDayMock.mockResolvedValue({ outcome: "allowed" });
   fetchMock.mockResolvedValue(
     new Response(
       JSON.stringify({
@@ -54,32 +52,39 @@ afterEach(() => {
 });
 
 describe("GET /api/geocode limits", () => {
-  it("allows one person 30 lookups in 5 minutes, failing closed", async () => {
+  it("allows one person 30 lookups in 5 minutes (failing open: the app-wide count fails closed)", async () => {
     await GET(lookup());
     expect(checkRateLimitMock).toHaveBeenCalledWith({
       userId: "user-1",
       route: "geocode",
       limit: 30,
       windowMs: 5 * 60 * 1000,
-      failClosed: true,
     });
   });
 
-  it("counts every paid lookup against one app-wide cap of 2,000 a UTC day, failing closed", async () => {
+  it("counts every paid lookup against the app's day", async () => {
     const response = await GET(lookup());
 
     expect(response.status).toBe(200);
-    expect(consumeFixedWindowMock).toHaveBeenCalledWith({
-      key: "geocode:app:2026-11-14",
-      limit: 2000,
-      resetAt: new Date("2026-11-15T00:00:00.000Z"),
-      failClosed: true,
-    });
+    expect(consumeAppDayMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("when the app's count cannot be reached: no paid call, and says suggestions are not available now", async () => {
+    consumeAppDayMock.mockResolvedValue({ outcome: "unavailable" });
+
+    const response = await GET(lookup());
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: "Place suggestions aren't available right now. Type the place.",
+      code: "GEOCODE_UNAVAILABLE",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("over the app's cap: no paid call, and a plain note that typing the place still works", async () => {
-    consumeFixedWindowMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30_600 });
+    consumeAppDayMock.mockResolvedValue({ outcome: "limit", retryAfterSeconds: 30_600 });
 
     const response = await GET(lookup());
 
@@ -100,10 +105,11 @@ describe("GET /api/geocode limits", () => {
 
     expect(response.status).toBe(429);
     await expect(response.json()).resolves.toEqual({
-      error: "Too many place lookups. Type the place in full, or wait a few minutes for suggestions.",
+      error: "Too many place lookups. Wait a minute or type the place.",
+      code: "GEOCODE_USER_LIMIT",
       retryAfterSeconds: 120,
     });
-    expect(consumeFixedWindowMock).not.toHaveBeenCalled();
+    expect(consumeAppDayMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -111,7 +117,7 @@ describe("GET /api/geocode limits", () => {
     const response = await GET(lookup("a"));
 
     await expect(response.json()).resolves.toEqual({ suggestions: [] });
-    expect(consumeFixedWindowMock).not.toHaveBeenCalled();
+    expect(consumeAppDayMock).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

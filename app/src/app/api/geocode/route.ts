@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
-import { checkRateLimit, consumeFixedWindow } from "@/lib/rateLimit";
+import { checkRateLimit } from "@/lib/rateLimit";
 
-import { GEOCODE_DAILY_LIMIT_CODE, GEOCODE_DAILY_LIMIT_MESSAGE } from "./limit";
+import { consumeGeocodeAppDay } from "./appDay";
+import {
+  GEOCODE_DAILY_LIMIT_CODE,
+  GEOCODE_DAILY_LIMIT_MESSAGE,
+  GEOCODE_UNAVAILABLE_CODE,
+  GEOCODE_UNAVAILABLE_MESSAGE,
+  GEOCODE_USER_LIMIT_CODE,
+  GEOCODE_USER_LIMIT_MESSAGE,
+} from "./limit";
 
 // Minimal shape of a Google Geocoding API result (only the fields we read).
 interface GeocodeResult {
@@ -14,14 +22,13 @@ interface GeocodeResult {
 
 /**
  * Each lookup is a paid Google call and registration is open, so besides the
- * per-person limit there is one cap for the whole app per UTC day (F5). Over
- * either, the Create page's location box keeps working as plain text.
+ * per-person limit there is one cap for the whole app per UTC day (F5, see
+ * appDay.ts). The per-person limit fails open because the app-wide count fails
+ * closed. Over either, the location box shows the sentence and keeps working
+ * as plain text.
  */
 const PER_USER_LIMIT = 30;
 const PER_USER_WINDOW_MS = 5 * 60 * 1000;
-const APP_DAILY_LIMIT = 2000;
-
-const USER_LIMIT_MESSAGE = "Too many place lookups. Type the place in full, or wait a few minutes for suggestions.";
 
 function tooMany(error: string, retryAfterSeconds: number | undefined, code?: string): NextResponse {
   return NextResponse.json(
@@ -42,9 +49,10 @@ export async function GET(request: NextRequest) {
     route: "geocode",
     limit: PER_USER_LIMIT,
     windowMs: PER_USER_WINDOW_MS,
-    failClosed: true,
   });
-  if (!rateLimit.allowed) return tooMany(USER_LIMIT_MESSAGE, rateLimit.retryAfterSeconds);
+  if (!rateLimit.allowed) {
+    return tooMany(GEOCODE_USER_LIMIT_MESSAGE, rateLimit.retryAfterSeconds, GEOCODE_USER_LIMIT_CODE);
+  }
 
   const { searchParams } = new URL(request.url);
   const query = searchParams.get("query");
@@ -64,16 +72,15 @@ export async function GET(request: NextRequest) {
   }
 
   // Counted only for a call that is really made.
-  const now = new Date();
-  const dayEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
-  const appLimit = await consumeFixedWindow({
-    key: `geocode:app:${now.toISOString().slice(0, 10)}`,
-    limit: APP_DAILY_LIMIT,
-    resetAt: dayEnd,
-    failClosed: true,
-  });
-  if (!appLimit.allowed) {
-    return tooMany(GEOCODE_DAILY_LIMIT_MESSAGE, appLimit.retryAfterSeconds, GEOCODE_DAILY_LIMIT_CODE);
+  const appDay = await consumeGeocodeAppDay();
+  if (appDay.outcome === "unavailable") {
+    return NextResponse.json(
+      { error: GEOCODE_UNAVAILABLE_MESSAGE, code: GEOCODE_UNAVAILABLE_CODE },
+      { status: 503 },
+    );
+  }
+  if (appDay.outcome === "limit") {
+    return tooMany(GEOCODE_DAILY_LIMIT_MESSAGE, appDay.retryAfterSeconds, GEOCODE_DAILY_LIMIT_CODE);
   }
 
   try {
