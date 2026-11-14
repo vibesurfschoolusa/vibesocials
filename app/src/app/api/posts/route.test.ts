@@ -20,7 +20,9 @@ const {
   notifyOwnersMock,
   failPendingMock,
   checkDailyPostLimitMock,
+  headMock,
 } = vi.hoisted(() => ({
+  headMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   createPostJobOnlyMock: vi.fn(),
@@ -39,6 +41,11 @@ const {
 vi.mock("@/lib/workspace", () => ({
   getWorkspaceContext: getWorkspaceContextMock,
 }));
+
+// F5: a new file's size and type are read from storage. By default storage
+// holds what each request said it sent (see jsonRequest); the F5 tests below
+// make it disagree.
+vi.mock("@vercel/blob", () => ({ head: headMock }));
 
 vi.mock("@/lib/rateLimit", () => ({
   checkRateLimit: checkRateLimitMock,
@@ -88,7 +95,7 @@ vi.mock("@/server/jobs/failPendingResults", async () => {
   return { ...actual, failPendingPostJobResults: failPendingMock };
 });
 
-import { BLOB_URL_REJECTED_MESSAGE, MAX_BLOB_URL_LENGTH } from "@/lib/blobUrl";
+import { BLOB_URL_REJECTED_MESSAGE, MAX_BLOB_URL_LENGTH, canonicalBlobUrl } from "@/lib/blobUrl";
 import { LOGO_ADDRESS_RESERVED_MESSAGE } from "@/lib/workspaceLogo";
 import { PostTargetingError } from "@/lib/postTargets";
 import { MediaItemUnavailableError } from "@/server/jobs/posting";
@@ -100,10 +107,26 @@ import { POST } from "./route";
  * here unless they set the key themselves (the Task 8 validation tests do, to
  * exercise missing / invalid values).
  */
+/** What the default storage double holds: each requested file, as the request described it. */
+let storedFiles = new Map<string, { size: number; contentType: string }>();
+
+function remember(file: unknown): void {
+  if (typeof file !== "object" || file === null) return;
+  const { blobUrl, mimeType, sizeBytes } = file as Record<string, unknown>;
+  if (typeof blobUrl !== "string") return;
+  storedFiles.set(canonicalBlobUrl(blobUrl) ?? blobUrl, {
+    size: typeof sizeBytes === "number" && sizeBytes > 0 ? sizeBytes : 1,
+    contentType: typeof mimeType === "string" ? mimeType : "",
+  });
+}
+
 function jsonRequest(body: unknown): Request {
   const isBlobBody =
     typeof body === "object" && body !== null && "blobUrl" in body && !("mimeType" in body);
   const withDefaults = isBlobBody ? { mimeType: "video/mp4", ...(body as object) } : body;
+  remember(withDefaults);
+  const media = (withDefaults as { media?: unknown } | null)?.media;
+  if (Array.isArray(media)) media.forEach(remember);
   return new Request("http://localhost/api/posts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -112,6 +135,13 @@ function jsonRequest(body: unknown): Request {
 }
 
 beforeEach(() => {
+  storedFiles = new Map();
+  headMock.mockReset();
+  headMock.mockImplementation(async (url: string) => {
+    const stored = storedFiles.get(url);
+    if (!stored) throw new Error("BlobNotFoundError");
+    return stored;
+  });
   // Hermetic: the blob-store pin reads these; tests that want it set them.
   vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
   vi.stubEnv("BLOB_STORE_ID", "");
@@ -1245,7 +1275,7 @@ describe("POST /api/posts — blobUrl media field validation (2026-11-01 audit, 
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
 
-  it("accepts sizeBytes of 0, a 255-character filename and an image type, passing them through unchanged", async () => {
+  it("accepts sizeBytes of 0, a 255-character filename and an image type; the size stored is storage's (F5)", async () => {
     const filename = "a".repeat(255);
     const response = await POST(
       jsonRequest(validBody({ sizeBytes: 0, filename, mimeType: "image/png" })),
@@ -1258,13 +1288,14 @@ describe("POST /api/posts — blobUrl media field validation (2026-11-01 audit, 
           storageLocation: BLOB,
           originalFilename: filename,
           mimeType: "image/png",
-          sizeBytes: 0,
+          // The storage double's size for a file the request called 0 bytes.
+          sizeBytes: 1,
         },
       }),
     );
   });
 
-  it("defaults an absent sizeBytes to 0 and an absent filename to 'upload'", async () => {
+  it("accepts an absent sizeBytes (storage's size is stored) and defaults an absent filename to 'upload'", async () => {
     const response = await POST(
       jsonRequest(validBody({ sizeBytes: undefined, filename: undefined })),
     );
@@ -1272,7 +1303,7 @@ describe("POST /api/posts — blobUrl media field validation (2026-11-01 audit, 
     expect(response.status).toBe(200);
     expect(createPostJobOnlyMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        media: expect.objectContaining({ originalFilename: "upload", sizeBytes: 0 }),
+        media: expect.objectContaining({ originalFilename: "upload", sizeBytes: 1 }),
       }),
     );
   });
@@ -2925,5 +2956,99 @@ describe("POST /api/posts - Feed and Story (both)", () => {
     );
     expect(response.status).toBe(503);
     expect(failPendingMock.mock.calls.map((c) => c[0])).toEqual(["job-1", "job-s"]);
+  });
+});
+
+describe("POST /api/posts — a new file's size and type come from storage (F5)", () => {
+  const URL_1 = "https://test.public.blob.vercel-storage.com/1731600000000-abc-vid.mp4";
+
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["r1"] });
+  });
+
+  it("stores 500 MB for a file the request called 1 byte", async () => {
+    const body = jsonRequest({ blobUrl: URL_1, mimeType: "video/mp4", sizeBytes: 1, baseCaption: "hi" });
+    headMock.mockReset();
+    headMock.mockResolvedValue({ size: 500 * 1024 * 1024, contentType: "video/mp4" });
+
+    const response = await POST(body);
+
+    expect(response.status).toBe(200);
+    expect(headMock).toHaveBeenCalledWith(URL_1);
+    expect(createPostJobOnlyMock.mock.calls[0][0].media).toMatchObject({
+      sizeBytes: 500 * 1024 * 1024,
+      mimeType: "video/mp4",
+    });
+  });
+
+  it("refuses a file stored as another type than the request named, and creates nothing", async () => {
+    const body = jsonRequest({ blobUrl: URL_1, mimeType: "image/jpeg", sizeBytes: 10, baseCaption: "hi" });
+    headMock.mockReset();
+    headMock.mockResolvedValue({ size: 10, contentType: "video/mp4" });
+
+    const response = await POST(body);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "This file is stored as video/mp4, not image/jpeg. Upload it again.",
+    });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses with a plain sentence when storage cannot read the file, and creates nothing", async () => {
+    const body = jsonRequest({ blobUrl: URL_1, mimeType: "video/mp4", sizeBytes: 10, baseCaption: "hi" });
+    headMock.mockReset();
+    headMock.mockRejectedValue(new Error("not found"));
+
+    const response = await POST(body);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Couldn't find this file in storage. Upload it again.",
+    });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("checks every file of a several-photo post, naming the one storage cannot read", async () => {
+    const photo = (n: number) => ({
+      blobUrl: `https://test.public.blob.vercel-storage.com/1731600000000-abc-p${n}.jpg`,
+      mimeType: "image/jpeg",
+      sizeBytes: 1,
+    });
+    const body = jsonRequest({ media: [photo(1), photo(2), photo(3)], baseCaption: "hi" });
+    headMock.mockReset();
+    headMock.mockImplementation(async (url: string) => {
+      if (url.endsWith("p3.jpg")) throw new Error("not found");
+      return { size: 2_000_000, contentType: "image/jpeg" };
+    });
+
+    const response = await POST(body);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "File 3: Couldn't find this file in storage. Upload it again.",
+    });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("stores each photo's stored size in a several-photo post", async () => {
+    const photo = (n: number) => ({
+      blobUrl: `https://test.public.blob.vercel-storage.com/1731600000000-abc-p${n}.jpg`,
+      mimeType: "image/jpeg",
+      sizeBytes: 1,
+    });
+    const body = jsonRequest({ media: [photo(1), photo(2)], baseCaption: "hi" });
+    headMock.mockReset();
+    headMock.mockImplementation(async (url: string) => ({
+      size: url.endsWith("p1.jpg") ? 3_000_000 : 4_000_000,
+      contentType: "image/jpeg",
+    }));
+
+    const response = await POST(body);
+
+    expect(response.status).toBe(200);
+    const args = createPostJobOnlyMock.mock.calls[0][0];
+    expect(args.media).toMatchObject({ sizeBytes: 3_000_000 });
+    expect(args.extraMedia).toEqual([expect.objectContaining({ sizeBytes: 4_000_000 })]);
   });
 });

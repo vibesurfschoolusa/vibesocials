@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { head } from "@vercel/blob";
 import { NextResponse } from "next/server";
 
 import { getWorkspaceContext, getWorkspaceMemberCount } from "@/lib/workspace";
@@ -10,7 +11,7 @@ import { logoAddressRefusal } from "@/lib/workspaceLogo";
 import { findOverlongCaption, pickPlatformOverrides } from "@/lib/captionLimits";
 import { captionTooLongResponse, invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
-import { parsePostMediaFields, type PostMediaFields } from "@/lib/mediaInput";
+import { parsePostMediaFields, withStoredMediaFacts, type PostMediaFields } from "@/lib/mediaInput";
 import { readAltTextField, validatePostMediaList, type PostMediaEntry } from "@/lib/postMedia";
 import {
   INVALID_WORKSPACE_ID_CODE,
@@ -706,6 +707,26 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: mediaValidation.error }, { status: 400 });
     }
     mediaFields = mediaValidation.value;
+  }
+  // F5: a new file's size counts against the workspace's storage limit, so it
+  // is read from storage (head), never taken from the request; the stored type
+  // must be the one the rules above were checked against.
+  if (storedBlobUrl && mediaFields) {
+    const [first, rest] = await Promise.all([
+      withStoredMediaFacts(storedBlobUrl, mediaFields, head),
+      Promise.all((extraMedia ?? []).map((entry) => withStoredMediaFacts(entry.storageLocation, entry, head))),
+    ]);
+    const several = rest.length > 0;
+    if (!first.ok) {
+      return NextResponse.json({ error: several ? `File 1: ${first.error}` : first.error }, { status: 400 });
+    }
+    const refusedAt = rest.findIndex((result) => !result.ok);
+    const refused = rest[refusedAt];
+    if (refused && !refused.ok) {
+      return NextResponse.json({ error: `File ${refusedAt + 2}: ${refused.error}` }, { status: 400 });
+    }
+    mediaFields = first.value;
+    if (several) extraMedia = rest.flatMap((result) => (result.ok ? [result.value] : []));
   }
   if (!hasMediaList && !textOnly) {
     // The reuse path has no mimeType here: the write is limited to photos.

@@ -97,3 +97,62 @@ export function parsePostMediaFields(raw: {
 
   return { ok: true, value: { filename, mimeType: raw.mimeType, sizeBytes } };
 }
+
+// --- What storage itself says about a file (F5) ------------------------------
+// The size counts against the workspace's storage limit, so it is read from the
+// blob store (`head`), never taken from the request. `head` is passed in: this
+// file is also read by browser code (lib/prepareUploadFile.ts), which must not
+// pull in the server storage SDK.
+
+/** The part of `head()`'s answer read here. */
+export type StoredFileHead = (url: string) => Promise<{ size: number; contentType: string }>;
+
+export const STORED_FILE_UNREADABLE_MESSAGE = "Couldn't find this file in storage. Upload it again.";
+
+export type StoredMediaResult =
+  | { ok: true; value: { sizeBytes: number; mimeType: string } }
+  | { ok: false; error: string };
+
+/**
+ * The stored file's size and type, or one sentence: no such file (or storage
+ * could not answer), not a photo or video, empty, or over 512 MB.
+ */
+export async function readStoredMedia(blobUrl: string, head: StoredFileHead): Promise<StoredMediaResult> {
+  let stored: { size: number; contentType: string };
+  try {
+    stored = await head(blobUrl);
+  } catch {
+    return { ok: false, error: STORED_FILE_UNREADABLE_MESSAGE };
+  }
+  if (!isImageOrVideoMimeType(stored.contentType)) {
+    return { ok: false, error: "Only photos and videos can be added." };
+  }
+  if (!Number.isSafeInteger(stored.size) || stored.size <= 0) {
+    return { ok: false, error: "This file is empty. Upload it again." };
+  }
+  if (stored.size > MAX_MEDIA_BYTES) {
+    return { ok: false, error: "File is too large (max 512 MB)." };
+  }
+  return { ok: true, value: { sizeBytes: stored.size, mimeType: stored.contentType } };
+}
+
+/**
+ * `fields` with the stored size. The type the request named must be the stored
+ * one: the post's rules (no video in a carousel, no GIF with photos) were
+ * checked against it, so a file stored as something else is refused.
+ */
+export async function withStoredMediaFacts<T extends { mimeType: string; sizeBytes: number }>(
+  blobUrl: string,
+  fields: T,
+  head: StoredFileHead,
+): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
+  const stored = await readStoredMedia(blobUrl, head);
+  if (!stored.ok) return stored;
+  if (stored.value.mimeType !== fields.mimeType) {
+    return {
+      ok: false,
+      error: `This file is stored as ${stored.value.mimeType.slice(0, 100)}, not ${fields.mimeType.slice(0, 100)}. Upload it again.`,
+    };
+  }
+  return { ok: true, value: { ...fields, sizeBytes: stored.value.sizeBytes } };
+}

@@ -6,12 +6,16 @@ import { makeWorkspaceContext } from "../__test-helpers__/workspaceContextMock";
 // settings/route.test.ts / media/[id]/route.test.ts / posts/route.test.ts).
 // route.ts imports `@/lib/db` and `@/lib/workspace` at module scope, so both
 // must be mocked before route.ts is imported below.
-const { findManyMock, createMock, countMock, getWorkspaceContextMock } = vi.hoisted(() => ({
+const { findManyMock, createMock, countMock, getWorkspaceContextMock, headMock } = vi.hoisted(() => ({
   findManyMock: vi.fn(),
   createMock: vi.fn(),
   countMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
+  headMock: vi.fn(),
 }));
+
+// F5: the size and type are read from storage, never from the request.
+vi.mock("@vercel/blob", () => ({ head: headMock }));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -61,6 +65,8 @@ beforeEach(() => {
   countMock.mockReset();
   getWorkspaceContextMock.mockReset();
   getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
+  headMock.mockReset();
+  headMock.mockResolvedValue({ size: 1234, contentType: "image/png" });
   // Hermetic: the blob-store pin reads these; tests that want it set them.
   vi.stubEnv("BLOB_READ_WRITE_TOKEN", "");
   vi.stubEnv("BLOB_STORE_ID", "");
@@ -120,33 +126,66 @@ describe("POST /api/media", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
-  it("returns 400 when mimeType is neither image/* nor video/*", async () => {
+  it("returns 400 when storage says the file is neither image/* nor video/*", async () => {
+    headMock.mockResolvedValue({ size: 1234, contentType: "application/pdf" });
     const response = await POST(
       jsonRequest({
         blobUrl: "https://test.public.blob.vercel-storage.com/x",
-        mimeType: "application/pdf",
+        mimeType: "image/png",
         sizeBytes: 1234,
       }),
     );
     const body = (await response.json()) as { error?: string };
 
     expect(response.status).toBe(400);
-    expect(body.error).toBe("Only image or video files can be added to the library.");
+    expect(body.error).toBe("Only photos and videos can be added.");
     expect(createMock).not.toHaveBeenCalled();
   });
 
-  it("returns 400 when sizeBytes exceeds the 512MB cap", async () => {
+  it("returns 400 when the stored file exceeds the 512MB cap, whatever the request says", async () => {
+    headMock.mockResolvedValue({ size: 600 * 1024 * 1024, contentType: "image/png" });
     const response = await POST(
       jsonRequest({
         blobUrl: "https://test.public.blob.vercel-storage.com/x",
         mimeType: "image/png",
-        sizeBytes: 600 * 1024 * 1024,
+        sizeBytes: 1,
       }),
     );
     const body = (await response.json()) as { error?: string };
 
     expect(response.status).toBe(400);
     expect(body.error).toBe("File is too large (max 512 MB).");
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("stores the size and type storage has, not what the request says (1 byte for a 500 MB file)", async () => {
+    headMock.mockResolvedValue({ size: 500 * 1024 * 1024, contentType: "video/mp4" });
+    createMock.mockResolvedValue({ id: "media-9", createdAt: new Date("2026-01-01T00:00:00Z") });
+
+    const response = await POST(
+      jsonRequest({
+        blobUrl: "https://test.public.blob.vercel-storage.com/x.mp4",
+        mimeType: "image/png",
+        sizeBytes: 1,
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    expect(headMock).toHaveBeenCalledWith("https://test.public.blob.vercel-storage.com/x.mp4");
+    expect(createMock.mock.calls[0][0].data).toMatchObject({ sizeBytes: 500 * 1024 * 1024, mimeType: "video/mp4" });
+  });
+
+  it("refuses with a plain sentence and stores nothing when storage cannot be read", async () => {
+    headMock.mockRejectedValue(new Error("not found"));
+
+    const response = await POST(
+      jsonRequest({ blobUrl: "https://test.public.blob.vercel-storage.com/x", mimeType: "image/png", sizeBytes: 10 }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Couldn't find this file in storage. Upload it again.",
+    });
     expect(createMock).not.toHaveBeenCalled();
   });
 

@@ -1,3 +1,4 @@
+import { head } from "@vercel/blob";
 import { NextResponse } from "next/server";
 
 import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "@/lib/blobUrl";
@@ -6,7 +7,7 @@ import { prisma } from "@/lib/db";
 import { findOverlongCaption } from "@/lib/captionLimits";
 import { captionTooLongResponse, invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { toMediaItemDto } from "@/lib/mediaDto";
-import { MAX_MEDIA_BYTES, isImageOrVideoMimeType } from "@/lib/mediaInput";
+import { readStoredMedia } from "@/lib/mediaInput";
 import { decodePostsCursor, encodePostsCursor } from "@/lib/postsDto";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
@@ -186,23 +187,6 @@ export async function POST(request: Request) {
   if (logoRefusal) {
     return NextResponse.json({ error: logoRefusal }, { status: 400 });
   }
-  // The image/video rule is shared with POST /api/posts (lib/mediaInput.ts).
-  if (!isImageOrVideoMimeType(body.mimeType)) {
-    return NextResponse.json(
-      { error: "Only image or video files can be added to the library." },
-      { status: 400 },
-    );
-  }
-  const mimeType = body.mimeType;
-  const sizeBytes = typeof body.sizeBytes === "number" && Number.isFinite(body.sizeBytes)
-    ? body.sizeBytes
-    : 0;
-  if (sizeBytes <= 0 || sizeBytes > MAX_MEDIA_BYTES) {
-    return NextResponse.json(
-      { error: "File is too large (max 512 MB)." },
-      { status: 400 },
-    );
-  }
   const filename = typeof body.filename === "string" && body.filename.trim()
     ? body.filename.trim()
     : "upload";
@@ -212,6 +196,15 @@ export async function POST(request: Request) {
   // caption - measured on the trimmed value, which is what is stored.
   const overlongCaption = findOverlongCaption({ baseCaption });
   if (overlongCaption) return captionTooLongResponse(overlongCaption);
+
+  // F5: the size counts against the workspace's storage limit, so it and the
+  // type come from storage itself; the body's mimeType and sizeBytes are
+  // ignored. The image/video rule is shared with POST /api/posts.
+  const stored = await readStoredMedia(blobUrl, head);
+  if (!stored.ok) {
+    return NextResponse.json({ error: stored.error }, { status: 400 });
+  }
+  const { mimeType, sizeBytes } = stored.value;
 
   // Team Workspaces (Task 4): stamps the caller's ACTIVE workspace directly
   // (replaces the Task 2 `resolveWorkspaceForUser` bridge, which always
