@@ -581,11 +581,14 @@ export function BulkPostsForm({
               (visually hidden, still focusable) for keyboard and screen readers. */}
           <div
             onDragOver={(event) => {
-              if (pickerLocked) return;
+              // Always: otherwise a file dropped while full opens in the tab and the form is lost.
               event.preventDefault();
-              setDragging(true);
+              if (!pickerLocked) setDragging(true);
             }}
-            onDragLeave={() => setDragging(false)}
+            onDragLeave={(event) => {
+              // Moving onto the icon or the label is still inside the area.
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false);
+            }}
             onDrop={(event) => {
               event.preventDefault();
               setDragging(false);
