@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
 import { buildPlatformPreview } from "@/lib/platformPreview";
 import { logger } from "@/lib/logger";
+import { platformRefusedMessage } from "@/lib/publishFailureText";
 import { nextPacificMidnight, rateLimitedError } from "@/server/platforms/rateLimited";
 import { instagramClient } from "@/server/platforms/instagramClient";
 import { youtubeClient } from "@/server/platforms/youtubeClient";
@@ -3174,7 +3175,8 @@ describe("chunked uploads - continuation steps (jobs)", () => {
         {
           status: "failed",
           errorCode: "X_VIDEO_APPEND_FAILED",
-          errorMessage: "PUT [url] failed: socket hang up",
+          // F1 L7: "socket hang up" is network detail, so the user reads X's plain sentence.
+          errorMessage: platformRefusedMessage("x"),
           ...CLEARS_STATE,
           ...HEARTBEAT,
         },
@@ -3207,7 +3209,20 @@ describe("chunked uploads - continuation steps (jobs)", () => {
       expect(failedWrites()[0]).toMatchObject({ errorMessage: "a [url] b [url] c [url] done" });
     });
 
-    it("keeps a message without a URL exactly as it was", async () => {
+    it("keeps a sentence the client wrote for the user exactly as it was", async () => {
+      platformCalls({
+        x: () => {
+          throw Object.assign(new Error("X needs a shorter caption. Shorten it and retry."), { code: "X_TWEET_FAILED" });
+        },
+      });
+
+      await publishRun(["x"]);
+
+      expect(failedWrites()[0]).toMatchObject({ errorMessage: "X needs a shorter caption. Shorten it and retry." });
+    });
+
+    // F1 L7: raw error text never reaches Activity; the log keeps it.
+    it("writes X's plain sentence for an HTTP status line, and logs the raw text", async () => {
       platformCalls({
         x: () => {
           throw Object.assign(new Error("Plain failure (status 400)"), { code: "X_TWEET_FAILED" });
@@ -3216,10 +3231,28 @@ describe("chunked uploads - continuation steps (jobs)", () => {
 
       await publishRun(["x"]);
 
-      expect(failedWrites()[0]).toMatchObject({ errorMessage: "Plain failure (status 400)" });
+      expect(failedWrites()[0]).toMatchObject({
+        errorCode: "X_TWEET_FAILED",
+        errorMessage: "X did not accept the post. Try again; if it fails again, check the post meets X's rules.",
+      });
+      const logged = JSON.stringify(vi.mocked(console.error).mock.calls);
+      expect(logged).toContain("Plain failure (status 400)");
     });
 
-    it("still falls back to the generic message for an error with no message", async () => {
+    it("never stores a database error's text", async () => {
+      platformCalls({
+        x: () => {
+          throw new Error("Can't reach database server at `db.internal.example:5432`");
+        },
+      });
+
+      await publishRun(["x"]);
+
+      expect(failedWrites()[0]).toMatchObject({ errorCode: "PUBLISH_FAILED", errorMessage: platformRefusedMessage("x") });
+      expect(JSON.stringify(failedWrites())).not.toContain("db.internal.example");
+    });
+
+    it("falls back to the platform's plain sentence for an error with no message", async () => {
       platformCalls({
         x: () => {
           throw Object.assign(new Error(""), { code: "X_TWEET_FAILED" });
@@ -3228,7 +3261,7 @@ describe("chunked uploads - continuation steps (jobs)", () => {
 
       await publishRun(["x"]);
 
-      expect(failedWrites()[0]).toMatchObject({ errorMessage: "Failed to publish to platform." });
+      expect(failedWrites()[0]).toMatchObject({ errorMessage: platformRefusedMessage("x") });
     });
   });
 

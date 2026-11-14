@@ -73,6 +73,7 @@ import {
   type WorkspaceStatusFields,
 } from "@/lib/workspaceStatus";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
+import { publishErrorMessage } from "@/lib/publishFailureText";
 import { coverFromJob, type PostCover } from "@/lib/videoCover";
 import { sweepOldCovers } from "@/server/jobs/coverBlobs";
 import {
@@ -738,10 +739,12 @@ async function publishToPlatform({
       code: err.code,
       error: scrubbedError(err),
     });
+    // F1 L7: the user reads the client's own sentence, or the platform's plain one;
+    // status lines, database and network text stay in the log above.
     await finalizeClaimedResult(resultRecordId, runId, {
       status: "failed",
       errorCode: err.code ?? "PUBLISH_FAILED",
-      errorMessage: message || "Failed to publish to platform.",
+      errorMessage: publishErrorMessage(connectionRef.platform, { message, code: err.code }),
     });
     return { platform: connectionRef.platform, status: "failed", error: message };
   }
