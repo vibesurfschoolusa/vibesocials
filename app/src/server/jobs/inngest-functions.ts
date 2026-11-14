@@ -17,6 +17,7 @@ import {
   CONNECTION_GONE_FAILURE,
   failPendingPostJobResults,
   recomputeAndStorePostJobStatus,
+  stampPostMediaLastUsed,
   type PendingResultFailure,
 } from "@/server/jobs/failPendingResults";
 import {
@@ -2075,6 +2076,9 @@ export const youtubePostMetricsSync = inngest.createFunction(
   },
 );
 
+/** Stale jobs one sweep run fails; the next hourly run takes the rest. */
+const STALE_SWEEP_BATCH = 500;
+
 /**
  * Hourly sweep that gives dispatched PostJobs a terminal state.
  *
@@ -2108,10 +2112,11 @@ export const stalePostJobSweep = inngest.createFunction(
   { cron: "30 * * * *" },
   async ({ step }) => {
     const summary = await step.run("fail-stale-post-jobs", async () => {
-      const cutoff = staleCutoff(new Date());
+      const now = new Date();
+      const cutoff = staleCutoff(now);
 
       // The eligibility rule is isStalePostJob(); expressed here as the
-      // equivalent WHERE so one statement claims the rows atomically. `updatedAt`
+      // equivalent WHERE, re-checked by each job's conditional write. `updatedAt`
       // (not `createdAt`) is the progress signal — a job still working through
       // its platforms bumps it as each platform finishes (finalizeClaimedResult's
       // heartbeat) and so keeps resetting its clock.
@@ -2122,14 +2127,33 @@ export const stalePostJobSweep = inngest.createFunction(
       // scale audit, platform limits; Review Focus 2). The run's claim at wake-up
       // clears `deferredUntil` and refreshes the heartbeat, so a job whose run
       // died stays eligible once the wait is over.
-      const { count } = await prisma.postJob.updateMany({
-        where: {
-          status: { in: [...STALE_ELIGIBLE_STATUSES] },
-          updatedAt: { lt: cutoff },
-          results: { none: { status: "pending", deferredUntil: { gte: cutoff } } },
-        },
-        data: { status: "failed" },
+      //
+      // F1 H2 follow-up: a job failed here used its media now, so each one is
+      // failed by its own conditional write and then stamped by the helper every
+      // other finalize path uses (stampPostMediaLastUsed). Stale jobs are rare;
+      // a backlog larger than one batch is taken by the next hourly run.
+      const stale = {
+        status: { in: [...STALE_ELIGIBLE_STATUSES] },
+        updatedAt: { lt: cutoff },
+        results: { none: { status: "pending" as const, deferredUntil: { gte: cutoff } } },
+      };
+      const candidates = await prisma.postJob.findMany({
+        where: stale,
+        select: { id: true },
+        orderBy: { updatedAt: "asc" },
+        take: STALE_SWEEP_BATCH,
       });
+      let count = 0;
+      for (const { id } of candidates) {
+        const failed = await prisma.postJob.updateMany({
+          where: { id, ...stale },
+          data: { status: "failed" },
+        });
+        if (failed.count === 1) {
+          count += 1;
+          await stampPostMediaLastUsed(prisma, id, now);
+        }
+      }
 
       if (count > 0) {
         logger.warn("[StaleSweep] failed stale in-flight post jobs", {

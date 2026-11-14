@@ -19,6 +19,7 @@ import type { PublishContext } from "@/server/platforms/types";
 // getPlatformClient returns a stub client whose publishVideo records its ctx.
 const db = vi.hoisted(() => ({
   postJobFindUnique: vi.fn(),
+  postJobFindMany: vi.fn(),
   postJobUpdate: vi.fn(),
   postJobUpdateMany: vi.fn(),
   userFindUnique: vi.fn(),
@@ -49,7 +50,9 @@ const {
   healResultWorkspaceIdsMock,
   checkXLimitMock,
   checkYoutubeLimitMock,
+  stampMediaSpy,
 } = vi.hoisted(() => ({
+  stampMediaSpy: vi.fn(),
   getPlatformClientMock: vi.fn(),
   failPendingMock: vi.fn(),
   recomputeSpy: vi.fn(),
@@ -71,6 +74,7 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     postJob: {
       findUnique: db.postJobFindUnique,
+      findMany: db.postJobFindMany,
       update: db.postJobUpdate,
       updateMany: db.postJobUpdateMany,
     },
@@ -150,6 +154,8 @@ vi.mock("@/server/jobs/failPendingResults", async (importOriginal) => {
     ...actual,
     failPendingPostJobResults: failPendingMock,
     recomputeAndStorePostJobStatus: recomputeSpy,
+    // Follow-up 3: the stale sweep stamps media through the shared helper.
+    stampPostMediaLastUsed: stampMediaSpy,
   };
 });
 
@@ -3944,6 +3950,7 @@ describe("stalePostJobSweep - deferral exclusion and singleton", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
+    db.postJobFindMany.mockResolvedValue([]);
     db.postJobUpdateMany.mockResolvedValue({ count: 0 });
     healResultWorkspaceIdsMock.mockReset();
     healResultWorkspaceIdsMock.mockResolvedValue({ healed: 0 });
@@ -3954,19 +3961,43 @@ describe("stalePostJobSweep - deferral exclusion and singleton", () => {
   });
 
   it("does not fail a job that has a pending result deferred to a platform limit", async () => {
+    db.postJobFindMany.mockResolvedValue([{ id: "stale-1" }]);
+    db.postJobUpdateMany.mockResolvedValue({ count: 1 });
+
     await handlerOf(stalePostJobSweep)({ event: { name: "inngest/scheduled.timer", data: {} }, step: fakeStep() });
 
     const cutoff = new Date(NOW - STALE_AFTER_MS);
+    const stale = {
+      status: { in: ["pending", "in_progress"] },
+      updatedAt: { lt: cutoff },
+      // Review Focus 2: a deferral still in the future, or ended less than 6 h ago.
+      results: { none: { status: "pending", deferredUntil: { gte: cutoff } } },
+    };
+    expect(db.postJobFindMany).toHaveBeenCalledWith(expect.objectContaining({ where: stale }));
     expect(db.postJobUpdateMany).toHaveBeenCalledTimes(1);
+    // The write re-checks the rule, so a job that moved since the read is left alone.
     expect(db.postJobUpdateMany).toHaveBeenCalledWith({
-      where: {
-        status: { in: ["pending", "in_progress"] },
-        updatedAt: { lt: cutoff },
-        // Review Focus 2: a deferral still in the future, or ended less than 6 h ago.
-        results: { none: { status: "pending", deferredUntil: { gte: cutoff } } },
-      },
+      where: { id: "stale-1", ...stale },
       data: { status: "failed" },
     });
+  });
+
+  // Coordinator follow-up 3 (F1 H2): a job the sweep fails used its media now,
+  // stamped by the same helper every other finalize path uses.
+  it("stamps the media last use of each job it fails, and only those", async () => {
+    db.postJobFindMany.mockResolvedValue([{ id: "stale-1" }, { id: "moved-on" }]);
+    db.postJobUpdateMany.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+    stampMediaSpy.mockReset();
+    stampMediaSpy.mockResolvedValue(undefined);
+
+    const out = await handlerOf(stalePostJobSweep)({
+      event: { name: "inngest/scheduled.timer", data: {} },
+      step: fakeStep(),
+    });
+
+    expect(out).toMatchObject({ swept: 1 });
+    expect(stampMediaSpy).toHaveBeenCalledTimes(1);
+    expect(stampMediaSpy).toHaveBeenCalledWith(expect.anything(), "stale-1", new Date(NOW));
   });
 
   it("runs one sweep at a time (singleton skip)", () => {
@@ -3986,6 +4017,7 @@ describe("stalePostJobSweep - result workspace heal step", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
+    db.postJobFindMany.mockResolvedValue([]);
     db.postJobUpdateMany.mockResolvedValue({ count: 0 });
     healResultWorkspaceIdsMock.mockReset();
     healResultWorkspaceIdsMock.mockResolvedValue({ healed: 0 });
@@ -4015,7 +4047,8 @@ describe("stalePostJobSweep - result workspace heal step", () => {
     const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => undefined);
     try {
       healResultWorkspaceIdsMock.mockRejectedValue(new Error("db down"));
-      db.postJobUpdateMany.mockResolvedValue({ count: 2 });
+      db.postJobFindMany.mockResolvedValue([{ id: "a" }, { id: "b" }]);
+      db.postJobUpdateMany.mockResolvedValue({ count: 1 });
       const step = fakeStep();
 
       await expect(run(step)).resolves.toMatchObject({ swept: 2 });
@@ -4030,7 +4063,7 @@ describe("stalePostJobSweep - result workspace heal step", () => {
   });
 
   it("does not reach the heal when the stale-job step itself fails", async () => {
-    db.postJobUpdateMany.mockRejectedValue(new Error("db down"));
+    db.postJobFindMany.mockRejectedValue(new Error("db down"));
     const step = fakeStep();
 
     await expect(run(step)).rejects.toThrow("db down");
