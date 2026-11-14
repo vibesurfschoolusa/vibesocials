@@ -233,6 +233,26 @@ export function computeYouTubeTitle(
 }
 
 /**
+ * G1 (R2 L5): YouTube refuses a video whose tags are over 500 characters in all
+ * (invalidTags). Its count includes the comma between two tags (a tag with a
+ * space would also count its quotes; hashtags have none). The tags are kept in
+ * order while they fit; the rest are dropped.
+ */
+const YOUTUBE_TAGS_MAX_CHARS = 500;
+
+function fitYouTubeTags(tags: readonly string[]): string[] {
+  const kept: string[] = [];
+  let used = 0;
+  for (const tag of tags) {
+    const cost = tag.length + (kept.length > 0 ? 1 : 0);
+    if (used + cost > YOUTUBE_TAGS_MAX_CHARS) break;
+    kept.push(tag);
+    used += cost;
+  }
+  return kept;
+}
+
+/**
  * The `videos.insert` request body for this post, and the `part` parameter that
  * names the resources it writes. The multipart upload and the resumable session
  * start send the same resource.
@@ -248,9 +268,9 @@ export function buildYouTubeVideoResource(ctx: PublishContext): {
 } {
   const { mediaItem, caption } = ctx;
 
-  // Extract hashtags from caption for tags (YouTube supports up to 500 chars of tags)
+  // Hashtags in the caption become tags, as many as fit YouTube's 500 characters.
   const hashtagMatches = caption.match(/#[\w]+/g) || [];
-  const tags = hashtagMatches.map(tag => tag.substring(1)); // Remove # prefix
+  const tags = fitYouTubeTags(hashtagMatches.map((tag) => tag.substring(1))); // Remove # prefix
 
   // Parse location from metadata if available
   // Supports formats: "lat,lng" or "description" or both

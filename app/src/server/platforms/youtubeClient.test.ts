@@ -2251,6 +2251,23 @@ describe("buildYouTubeVideoResource — text YouTube accepts", () => {
     expect(description).not.toContain("<");
   });
 
+  // G1 (R2 L5): YouTube refuses tags over 500 characters in all (invalidTags),
+  // counting the commas between them.
+  it("keeps tags while they fit 500 characters with their commas, and drops the rest", () => {
+    // 60 tags of 11 characters ("surfmiami01".."surfmiami60"): 60 x 11 + 59 commas = 719.
+    const names = Array.from({ length: 60 }, (_, i) => `surfmiami${String(i + 1).padStart(2, "0")}`);
+    const { tags } = resourceFor({ caption: `Waves ${names.map((name) => `#${name}`).join(" ")}` }).snippet;
+
+    // 41 tags: 41 x 11 + 40 = 491; a 42nd would make 503.
+    expect(tags).toEqual(names.slice(0, 41));
+    expect(tags!.join(",").length).toBeLessThanOrEqual(500);
+  });
+
+  it("keeps every tag that fits, as before", () => {
+    expect(resourceFor({ caption: "Holiday #travel #sun" }).snippet.tags).toEqual(["travel", "sun"]);
+    expect(resourceFor({ caption: "No tags" }).snippet.tags).toBeUndefined();
+  });
+
   it("goes up private when the post has no YouTube choice", () => {
     expect(resourceFor({}).status.privacyStatus).toBe("private");
     expect(resourceFor({ youtubeMetadata: { privacyStatus: "unlisted" } }).status.privacyStatus).toBe("unlisted");
