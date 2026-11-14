@@ -5,6 +5,7 @@ import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/cn";
+import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { platformLabel } from "@/lib/platforms";
 import { getWorkspaceContext } from "@/lib/workspace";
 import {
@@ -81,6 +82,8 @@ function WorkspaceRow({ entry, isActive }: { entry: WorkspaceOverviewEntry; isAc
 
 // Server-side auth gate (as queue/page.tsx). getWorkspaceContext is also
 // what tells us which workspace is active now; it is null when signed out.
+export const metadata = { title: "Workspaces | Vibe Socials" };
+
 export default async function WorkspacesPage() {
   const context = await getWorkspaceContext();
 
@@ -93,7 +96,7 @@ export default async function WorkspacesPage() {
   const anyAttention = entries.some((entry) => entry.needsAttention);
 
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8 md:px-6 lg:px-8">
+    <div className={APP_PAGE_CLASS}>
       <header className="mb-6">
         <h1 className="text-2xl font-bold tracking-tight text-foreground">Workspaces</h1>
         <p className="mt-1 text-sm text-muted-foreground">

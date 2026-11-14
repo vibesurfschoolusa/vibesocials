@@ -6,6 +6,8 @@ import { ActivityView } from "./activity-view";
 // Server-side auth gate (matches settings/page.tsx): unauthenticated users are
 // redirected before any client work runs. Authed users get the client view,
 // which fetches and renders their post jobs.
+export const metadata = { title: "Activity | Vibe Socials" };
+
 export default async function ActivityPage() {
   const user = await getCurrentUser();
 

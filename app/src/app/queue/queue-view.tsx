@@ -31,6 +31,7 @@ import { MediaThumb } from "@/components/media-thumb";
 import { QueueCalendar } from "./queue-calendar";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { cn } from "@/lib/cn";
+import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { queueOverridesToSend, type PlatformOverrides } from "@/lib/platformOverrides";
 import {
@@ -1094,7 +1095,7 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
   );
 
   return (
-    <div className="mx-auto max-w-3xl px-4 py-8 md:px-6">
+    <div className={APP_PAGE_CLASS}>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Queue</h1>

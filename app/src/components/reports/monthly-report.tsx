@@ -181,10 +181,13 @@ function ListingSection({ listing }: { listing: ReportListing }) {
 export function MonthlyReportView({
   report,
   activityHref,
+  titleAs: Title = "h1",
 }: {
   report: MonthlyReport;
   /** The workspace's own page links the failures to Activity; the client's page does not. */
   activityHref?: string;
+  /** The workspace page has its own Reports h1 above; the client page has no other, so it keeps h1. */
+  titleAs?: "h1" | "h2";
 }) {
   const showing = showingLine(report.posts.length, report.postCount);
   return (
@@ -197,9 +200,9 @@ export function MonthlyReportView({
             // eslint-disable-next-line @next/next/no-img-element -- the logo's public storage address, as media-thumb.tsx; alt is empty because the name is beside it
             <img data-report-logo src={report.logoUrl} alt="" className="max-h-12 w-auto max-w-[12rem] shrink-0 object-contain" />
           ) : null}
-          <h1 className="min-w-0 break-words text-2xl font-bold tracking-tight">
+          <Title className="min-w-0 break-words text-2xl font-bold tracking-tight">
             {`${report.workspaceName}: ${monthLabel(report.month)}`}
-          </h1>
+          </Title>
         </div>
         <p className="text-sm text-muted-foreground">
           {REPORT_UTC_NOTE}

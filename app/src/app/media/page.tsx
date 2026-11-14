@@ -1,7 +1,10 @@
 import { redirect } from "next/navigation";
 
+import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { MediaLibrary } from "@/components/media-library";
+
+export const metadata = { title: "Media library | Vibe Socials" };
 
 export default async function MediaPage() {
   const context = await getWorkspaceContext();
@@ -11,7 +14,7 @@ export default async function MediaPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8 md:px-6">
+    <div className={APP_PAGE_CLASS}>
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-foreground">
           Media library
