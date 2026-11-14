@@ -6,6 +6,7 @@ import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { Eye, EyeOff } from "lucide-react";
 
+import { BrandMark } from "@/components/brand-mark";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "@/components/ui/card";
@@ -100,12 +101,7 @@ function RegisterPageInner({ billing }: { billing: RegisterBilling }) {
             aria-label="Vibe Socials home"
             className="rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >
-            <span
-              aria-hidden
-              className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-lg font-bold text-white shadow-lg"
-            >
-              VS
-            </span>
+            <BrandMark className="h-14 w-14 rounded-2xl shadow-lg" />
           </Link>
         </div>
 

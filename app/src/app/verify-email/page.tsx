@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 
+import { BrandMark } from "@/components/brand-mark";
 import { VerifyEmailClient } from "./verify-email-client";
 
 export const metadata: Metadata = {
@@ -26,12 +27,7 @@ export default function VerifyEmailPage() {
             aria-label="Vibe Socials home"
             className="rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >
-            <span
-              aria-hidden
-              className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 text-lg font-bold text-white shadow-lg"
-            >
-              VS
-            </span>
+            <BrandMark className="h-14 w-14 rounded-2xl shadow-lg" />
           </Link>
         </div>
 

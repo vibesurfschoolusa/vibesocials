@@ -239,7 +239,7 @@ describe("/pricing: a way back into the app (S1 fix round 1)", () => {
     getPlanOffersMock.mockResolvedValue([{ plan: "starter", name: "Starter", price: "$19 a month" }]);
     const html = await render();
     const header = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
-    expect(header).toMatch(/<a [^>]*href="\/"[^>]*>[\s\S]*VS[\s\S]*Vibe Socials[\s\S]*?<\/a>/);
+    expect(header).toMatch(/<a [^>]*href="\/"[^>]*>[\s\S]*<img [^>]*src="\/icon\.svg"[\s\S]*Vibe Socials[\s\S]*?<\/a>/);
   });
 });
 

@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { BrandMark } from "@/components/brand-mark";
 import { buttonVariants } from "@/components/ui/button";
 import { OPERATOR_NAME, PRODUCT_NAME } from "@/lib/siteInfo";
 
@@ -23,12 +24,7 @@ export function PublicHeader({
 }) {
   const brand = (
     <>
-      <span
-        aria-hidden
-        className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-indigo-700 text-xs font-bold text-white"
-      >
-        VS
-      </span>
+      <BrandMark className="rounded-lg" />
       <span className="text-sm font-semibold text-foreground">
         Vibe Socials
       </span>

@@ -1,10 +1,11 @@
 import Link from "next/link";
 
+import { BrandMark } from "@/components/brand-mark";
 import { cn } from "@/lib/cn";
 
 /**
- * Vibe Socials wordmark + logo mark. The gradient survives here only — a subtle
- * brand accent, never on buttons or headings elsewhere.
+ * Vibe Socials wordmark + logo mark. The mark's gradient is the brand accent
+ * here only, never on buttons or headings elsewhere.
  */
 export function Brand({
   className,
@@ -22,12 +23,7 @@ export function Brand({
         className,
       )}
     >
-      <span
-        aria-hidden
-        className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-indigo-700 text-sm font-bold text-white shadow-sm"
-      >
-        VS
-      </span>
+      <BrandMark className="rounded-lg shadow-sm" />
       <span className="text-base font-semibold tracking-tight text-foreground">
         Vibe Socials
       </span>

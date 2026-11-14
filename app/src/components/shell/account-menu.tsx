@@ -6,6 +6,7 @@ import { signOut, useSession } from "next-auth/react";
 import { Check, ChevronDown, CircleHelp, Download, LayoutGrid, LogOut, Mail, Plus, Shield } from "lucide-react";
 import type { WorkspaceRole } from "@prisma/client";
 
+import { accountInitials, accountLabel } from "@/lib/accountInitials";
 import { cn } from "@/lib/cn";
 import { contactUsHref } from "@/lib/contactUs";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,7 @@ export function AccountMenu() {
   const { data: session } = useSession();
   const toast = useToast();
   const email = session?.user?.email ?? "";
+  const name = session?.user?.name?.trim() ?? "";
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -179,7 +181,7 @@ export function AccountMenu() {
     }
   }
 
-  const initial = (email.trim()[0] ?? "?").toUpperCase();
+  const initials = accountInitials(name, email);
   const activeWorkspace = workspaces?.find((workspace) => workspace.isActive) ?? null;
 
   return (
@@ -193,14 +195,17 @@ export function AccountMenu() {
         aria-controls={open ? panelId : undefined}
         className="flex items-center gap-2 rounded-[var(--radius)] border border-border bg-card px-2 py-1.5 text-sm outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
       >
+        {/* The person's initials in the logo's colours: the brand's gradient as a ring around its navy. */}
         <span
           aria-hidden
-          className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[conic-gradient(from_200deg,#448be5,#06d6e8,#0bce96,#f46955,#f33574,#ab42b7,#448be5)] p-[2px]"
         >
-          {initial}
+          <span className="flex h-full w-full items-center justify-center rounded-full bg-[#111e2b] text-[0.6875rem] font-semibold tracking-wide text-white">
+            {initials}
+          </span>
         </span>
-        <span className="hidden max-w-[11rem] truncate text-muted-foreground sm:inline">
-          {email || "Account"}
+        <span className="hidden max-w-[11rem] truncate font-medium text-foreground sm:inline">
+          {accountLabel(name, email)}
         </span>
         <ChevronDown
           aria-hidden
@@ -221,8 +226,9 @@ export function AccountMenu() {
           <div className="px-2 py-2">
             <p className="text-xs text-muted-foreground">Signed in as</p>
             <p className="truncate text-sm font-medium text-foreground">
-              {email || "Your account"}
+              {name || email || "Your account"}
             </p>
+            {name && email ? <p className="truncate text-xs text-muted-foreground">{email}</p> : null}
           </div>
 
           <div className="my-1 h-px bg-border" />
