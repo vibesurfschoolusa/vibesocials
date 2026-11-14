@@ -1,6 +1,7 @@
 import { DashboardHome } from "@/components/dashboard/dashboard-home";
 import { Landing } from "@/components/landing";
 import { advertisedPlatforms } from "@/lib/advertisedPlatforms";
+import { homeNotice } from "@/app/go/notice";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { workspaceSetupFrom, type WorkspaceSetup } from "@/lib/gettingStarted";
@@ -20,10 +21,21 @@ export const metadata = {
  * reviewer or a search engine gets the page's text in the HTML, instead of a
  * spinner waiting for a client-side session check.
  */
-export default async function HomePage() {
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+} = {}) {
   const user = await getCurrentUser();
   if (user) {
-    return <DashboardHome availablePlatforms={advertisedPlatforms()} setup={await loadWorkspaceSetup()} />;
+    const { notice } = (await searchParams) ?? {};
+    return (
+      <DashboardHome
+        availablePlatforms={advertisedPlatforms()}
+        setup={await loadWorkspaceSetup()}
+        notice={homeNotice(notice, user.email)}
+      />
+    );
   }
   // S1: null without a Stripe call while payments are not configured.
   return <Landing startingPrice={await startingPrice()} />;

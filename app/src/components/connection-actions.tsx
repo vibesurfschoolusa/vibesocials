@@ -41,6 +41,27 @@ interface Props {
 
 const TIKTOK_LOGOUT_URL = "https://www.tiktok.com/logout";
 
+/**
+ * G4 (R2-security L2): disconnecting deletes the post numbers read from the
+ * platform; for Google Business Profile (no post numbers are read) the listing's numbers
+ * (api/connections/[platform] DELETE). X and TikTok have none to delete.
+ */
+function numbersDeletedSentence(platform: string): string {
+  if (platform === "x" || platform === "tiktok") return "";
+  if (platform === "google_business_profile") {
+    return " The Google listing numbers read from it are deleted and cannot be brought back.";
+  }
+  return " The post numbers read from this platform are deleted and cannot be brought back.";
+}
+
+export function disconnectDescription(platform: string): string {
+  return `Future posts, including scheduled ones, will skip this platform. Your past posts stay in Activity, and you can reconnect at any time.${numbersDeletedSentence(platform)}`;
+}
+
+export function switchDescription(platform: string): string {
+  return `This disconnects your current account and sends you to reconnect a different one. Your past posts stay in Activity.${numbersDeletedSentence(platform)}`;
+}
+
 export function ConnectionActions({
   platform,
   workspaceId,
@@ -183,7 +204,7 @@ export function ConnectionActions({
         onOpenChange={setDisconnectOpen}
         destructive
         title="Disconnect this account?"
-        description="Future posts — including scheduled ones — will skip this platform. Your past posts stay in Activity, and you can reconnect at any time."
+        description={disconnectDescription(platform)}
         confirmText="Disconnect"
         onConfirm={handleDisconnect}
       />
@@ -237,7 +258,7 @@ export function ConnectionActions({
           open={switchOpen}
           onOpenChange={setSwitchOpen}
           title="Switch account?"
-          description="This disconnects your current account and sends you to reconnect a different one. Your past posts stay in Activity."
+          description={switchDescription(platform)}
           confirmText="Continue"
           onConfirm={handleStandardSwitch}
         />

@@ -12,10 +12,21 @@ describe("billing emails", () => {
     expect(email.html).not.toContain("<Co>");
   });
 
-  it("trial ending gives the date", () => {
+  // R2-pages L4: the end is a moment; without the recipient's zone it is labelled UTC.
+  it("trial ending gives the date and time, labelled UTC without a zone", () => {
     const email = buildTrialEndingEmail({ workspaceId: "ws_1", workspaceName: "Surf Co", trialEndsAt: new Date("2026-11-13T09:00:00Z") });
-    expect(email.html).toContain("Your free trial ends on 13 November 2026. Choose a plan under Settings, Plan.");
+    expect(email.html).toContain("Your free trial ends on Fri, Nov 13, 2026, 9:00 AM UTC. Choose a plan under Settings, Plan.");
     expect(email.subject).toContain("Surf Co");
+  });
+
+  it("trial ending gives the time in the recipient's zone when it is known", () => {
+    const email = buildTrialEndingEmail({
+      workspaceId: "ws_1",
+      workspaceName: "Surf Co",
+      trialEndsAt: new Date("2026-11-13T03:00:00Z"),
+      timeZone: "America/New_York",
+    });
+    expect(email.html).toContain("Your free trial ends on Thu, Nov 12, 2026, 10:00 PM EST.");
   });
 
   // S1 follow-up: what the publish job really does with a due post (PLAN_ENDED, retryable).
@@ -43,7 +54,7 @@ describe("billing emails", () => {
     expect(
       buildTrialEndingEmail({ workspaceId: "ws_1", workspaceName: "Surf Co", trialEndsAt: new Date("2026-11-13T09:00:00Z") }, null).html,
     ).toBe(
-      "<p><strong>Surf Co</strong></p>\n<p>Your free trial ends on 13 November 2026. Choose a plan under Settings, Plan.</p>\n<p>— Vibe Socials</p>",
+      "<p><strong>Surf Co</strong></p>\n<p>Your free trial ends on Fri, Nov 13, 2026, 9:00 AM UTC. Choose a plan under Settings, Plan.</p>\n<p>— Vibe Socials</p>",
     );
     expect(buildPaymentFailedEmail({ workspaceId: "ws_1", workspaceName: "Surf Co" }, null).html).toBe(
       "<p>We could not charge your card for Surf Co. Update it under Settings, Plan. Update your card soon, or posting will stop.</p>\n<p>— Vibe Socials</p>",

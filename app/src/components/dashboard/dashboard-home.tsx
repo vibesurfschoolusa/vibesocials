@@ -6,6 +6,7 @@ import { useSession } from "next-auth/react";
 import { Link2, PenSquare } from "lucide-react";
 import type { Platform } from "@prisma/client";
 
+import { Alert } from "@/components/ui/alert";
 import { buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
@@ -40,9 +41,11 @@ type DashboardProps = {
   availablePlatforms: readonly Platform[];
   /** The page's server read of the active workspace; null when it failed. */
   setup: WorkspaceSetup | null;
+  /** A sentence the page was opened with (R2-client-journey L2: /go for another workspace); null for none. */
+  notice?: string | null;
 };
 
-export function DashboardHome({ availablePlatforms, setup }: DashboardProps) {
+export function DashboardHome({ availablePlatforms, setup, notice }: DashboardProps) {
   const { status } = useSession();
   if (status !== "authenticated") {
     return (
@@ -51,10 +54,10 @@ export function DashboardHome({ availablePlatforms, setup }: DashboardProps) {
       </div>
     );
   }
-  return <Dashboard availablePlatforms={availablePlatforms} setup={setup} />;
+  return <Dashboard availablePlatforms={availablePlatforms} setup={setup} notice={notice} />;
 }
 
-function Dashboard({ availablePlatforms, setup }: DashboardProps) {
+function Dashboard({ availablePlatforms, setup, notice }: DashboardProps) {
   // Task 8 — single fetch/poll owner for the dashboard: both widgets below
   // took this over their own `usePostJobs()` call, so the dashboard makes one
   // `/api/posts` request (and one poll timer) instead of two. Same pattern
@@ -98,6 +101,11 @@ function Dashboard({ availablePlatforms, setup }: DashboardProps) {
 
   return (
     <div className={APP_PAGE_CLASS}>
+      {notice ? (
+        <Alert variant="warning" className="mb-6">
+          <p>{notice}</p>
+        </Alert>
+      ) : null}
       {/* The greeting and the CTA read from the same two fetches, so the whole
           header resolves at once. Skeletons until then: a heading that says
           "Welcome back" and then corrects itself to "Welcome to Vibe Socials"

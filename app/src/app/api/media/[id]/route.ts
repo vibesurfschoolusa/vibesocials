@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { toMediaItemDto } from "@/lib/mediaDto";
 import { getWorkspaceContext } from "@/lib/workspace";
+import { deletedMediaData } from "@/server/jobs/deletedMediaData";
 import { deleteBlobUnlessShared } from "@/server/jobs/mediaBlob";
 import { TERMINAL_POST_JOB_STATUSES } from "@/server/jobs/mediaRetention";
 
@@ -104,10 +105,11 @@ export async function DELETE(_request: NextRequest, context: MediaItemRouteConte
 
   // `userId` (the uploader) is selected here — not for the workspace scope
   // itself, but so the permission check below can compare it against the
-  // caller without a second query.
+  // caller without a second query. `metadata` and `originalFilename` are what
+  // deletedMediaData clears on a file a client sent (G4).
   const item = await prisma.mediaItem.findFirst({
     where: { id, workspaceId: workspaceContext.workspace.id, deletedAt: null },
-    select: { id: true, userId: true, storageLocation: true },
+    select: { id: true, userId: true, storageLocation: true, metadata: true, originalFilename: true },
   });
 
   if (!item) {
@@ -161,7 +163,7 @@ export async function DELETE(_request: NextRequest, context: MediaItemRouteConte
       // for whoever still uses it.
       await tx.mediaItem.update({
         where: { id },
-        data: { deletedAt: new Date() },
+        data: deletedMediaData(item, new Date()),
       });
       await deleteBlobUnlessShared(tx, item);
 

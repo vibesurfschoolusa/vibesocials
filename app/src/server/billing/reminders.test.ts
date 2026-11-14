@@ -145,7 +145,7 @@ describe("runBillingReminders", () => {
       expect.objectContaining({ to: "a@example.com" }),
       { idempotencyKey: "billing/trial-ending/a/owner-a", throwOnRetryable: true },
     );
-    expect(m.sendEmail.mock.calls[0][0].html).toContain("Your free trial ends on 12 November 2026.");
+    expect(m.sendEmail.mock.calls[0][0].html).toMatch(/Your free trial ends on \w{3}, Nov 12, 2026, [^<]* UTC\./);
     expect(m.rows[0].trialReminderSentAt).toEqual(NOW);
 
     m.sendEmail.mockClear();

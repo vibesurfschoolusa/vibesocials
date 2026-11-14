@@ -41,3 +41,22 @@ describe("Dialog layout", () => {
     expect(classesOf("function DialogFooter").split(/\s+/)).toContain("shrink-0");
   });
 });
+
+/**
+ * R2-client-journey M1 review: the Queue's cancel and delete dialogs keep
+ * Confirm disabled while they look up the other half of a Feed and Story post.
+ * The dialog renders into a portal, so the prop is read from source.
+ */
+describe("ConfirmDialog confirmDisabled", () => {
+  const confirmDialog = source.slice(source.indexOf("export interface ConfirmDialogProps"));
+
+  it("is an optional prop that defaults to false, so other callers are unchanged", () => {
+    expect(confirmDialog).toMatch(/confirmDisabled\?: boolean;/);
+    expect(confirmDialog).toMatch(/confirmDisabled = false,/);
+  });
+
+  it("disables only the confirm button", () => {
+    expect(confirmDialog).toMatch(/<Button variant=\{confirmVariant\} onClick=\{handleConfirm\} loading=\{busy\} disabled=\{confirmDisabled\}>/);
+    expect(confirmDialog).toMatch(/<Button variant="outline" onClick=\{\(\) => onOpenChange\(false\)\} disabled=\{busy\}>/);
+  });
+});

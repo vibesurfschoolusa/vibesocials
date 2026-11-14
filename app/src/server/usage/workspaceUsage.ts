@@ -1,4 +1,5 @@
-import { BILLING_FIELDS_SELECT, billingEnabled, billingFieldsSelect, planState } from "@/lib/billing";
+import { planSectionActions } from "@/components/planSectionView";
+import { BILLING_FIELDS_SELECT, billingEnabled, billingFieldsSelect } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { consumeFixedWindow } from "@/lib/rateLimit";
@@ -148,14 +149,19 @@ type LimitNotice = {
 };
 
 /**
- * F4: with billing on, a workspace with a plan (or a trial) raises its limits by
- * changing plan in Settings, so the email points there; an exempt workspace and
- * billing off keep "write to us". Read only once the email is going out.
+ * F4: with billing on, the email points to Settings, Plan when that section
+ * offers the owner a plan action; otherwise it keeps "write to us". R2-pages
+ * L3: the same rule Settings uses for its usage line (billing on and
+ * planSectionActions for an owner), so the email never sends an owner to a
+ * section with no button. Read only once the email is going out.
  */
 async function planInSettingsFor(workspaceId: string): Promise<boolean> {
   if (!billingEnabled()) return false;
-  const row = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: BILLING_FIELDS_SELECT });
-  return row !== null && planState(row, new Date()) !== "exempt";
+  const row = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { ...BILLING_FIELDS_SELECT, stripeCustomerId: true },
+  });
+  return row !== null && planSectionActions("owner", row, new Date()) !== null;
 }
 
 async function sendLimitReachedEmails(args: LimitNotice): Promise<void> {
@@ -170,21 +176,23 @@ async function sendLimitReachedEmails(args: LimitNotice): Promise<void> {
   const [owners, planInSettings] = await Promise.all([
     prisma.workspaceMember.findMany({
       where: { workspaceId, role: "owner" },
-      select: { user: { select: { id: true, email: true } } },
+      select: { user: { select: { id: true, email: true, timeZone: true } } },
     }),
     planInSettingsFor(workspaceId),
   ]);
-  const email = buildLimitReachedEmail({
-    workspaceId,
-    workspaceName: args.workspaceName,
-    planInSettings,
-    appBaseUrl: process.env.NEXTAUTH_URL || null,
-    kind,
-    limit: args.limit,
-    resetsAt: args.resetsAt,
-    day: args.day ?? null,
-  });
   for (const owner of owners) {
+    // R2-pages L4: built per owner, so each reads the times in their own zone.
+    const email = buildLimitReachedEmail({
+      workspaceId,
+      workspaceName: args.workspaceName,
+      planInSettings,
+      appBaseUrl: process.env.NEXTAUTH_URL || null,
+      kind,
+      limit: args.limit,
+      resetsAt: args.resetsAt,
+      day: args.day ?? null,
+      timeZone: owner.user.timeZone ?? null,
+    });
     await sendEmail(
       { to: owner.user.email, ...email },
       { idempotencyKey: `usage-limit/${workspaceId}/${kind}/${windowKey}/${owner.user.id}` },

@@ -21,6 +21,11 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
+/** A workspace name on one line, safe for a subject header. */
+function subjectText(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").trim();
+}
+
 function normalizeBase(appBaseUrl: string | null): string | null {
   return appBaseUrl ? appBaseUrl.replace(/\/+$/, "") : null;
 }
@@ -143,7 +148,8 @@ export function buildApprovalDecisionEmail(params: {
       ? `<p><a href="${escapeHtml(workspaceLink(params.workspaceId, "/queue", base))}">Open the Queue</a></p>`
       : `<p>Open the Queue to start another post.</p>`;
     return {
-      subject: "Your post wasn't approved",
+      // R2-pages L5: the subject names the workspace, for a member of several.
+      subject: `Your post in ${subjectText(params.workspaceName)} wasn't approved`,
       html: [
         `<p>An owner of <strong>${workspace}</strong> reviewed your post and it will not be published.</p>`,
         captionBlock(params.caption),
@@ -164,7 +170,7 @@ export function buildApprovalDecisionEmail(params: {
     : `<p>Track it in Activity.</p>`;
 
   return {
-    subject: "Your post was approved",
+    subject: `Your post in ${subjectText(params.workspaceName)} was approved`,
     html: [
       `<p>An owner of <strong>${workspace}</strong> approved your post.</p>`,
       captionBlock(params.caption),

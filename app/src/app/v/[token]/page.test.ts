@@ -78,3 +78,25 @@ describe("the review link page", () => {
     expect(html.indexOf("Reports")).toBeLessThan(html.indexOf("These go out"));
   });
 });
+
+// G4 (R2-pages L7): a client reviewing posts can read the Terms and Privacy, as on /u and /c.
+describe("the review link page: Terms and Privacy", () => {
+  it("links to both below the list", async () => {
+    findActiveReviewLinkMock.mockResolvedValue({ id: "link-1", workspaceId: "ws-1", workspaceName: "Surf Co" });
+
+    const html = await render();
+
+    expect(html).toMatch(/<a [^>]*href="\/terms"[^>]*>Terms<\/a>/);
+    expect(html).toMatch(/<a [^>]*href="\/privacy"[^>]*>Privacy Policy<\/a>/);
+    expect(html.indexOf('href="/privacy"')).toBeGreaterThan(html.indexOf("<section"));
+  });
+
+  it("links to both on the inactive-link sentence too", async () => {
+    findActiveReviewLinkMock.mockResolvedValue(null);
+
+    const html = await render("unknown");
+
+    expect(html).toContain('href="/terms"');
+    expect(html).toContain('href="/privacy"');
+  });
+});

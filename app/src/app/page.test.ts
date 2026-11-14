@@ -18,6 +18,8 @@ vi.mock("@/lib/workspace", () => ({
 vi.mock("@/lib/db", () => ({ prisma: { workspace: { findUnique: m.findUnique } } }));
 vi.mock("@/lib/logger", () => ({ logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
 
+import { getCurrentUser } from "@/lib/auth";
+
 import HomePage from "./page";
 
 const WORKSPACE = {
@@ -123,5 +125,26 @@ describe("HomePage — signed in", () => {
     vi.stubEnv("PINTEREST_REDIRECT_URI", "https://example.test/callback");
     const element = (await HomePage()) as { props: { availablePlatforms: string[] } };
     expect(element.props.availablePlatforms).toContain("pinterest");
+  });
+});
+
+// R2-client-journey L2: /go sends a person who is not a member of the link's
+// workspace here with ?notice=other-workspace; the page names the signed-in
+// account (from the session, never from the address) and no workspace.
+describe("HomePage — the other-workspace notice from /go", () => {
+  const noticeOf = async (query: Record<string, string>) =>
+    ((await HomePage({ searchParams: Promise.resolve(query) })) as { props: { notice?: string | null } }).props.notice;
+
+  it("names the signed-in account and says what to do", async () => {
+    vi.mocked(getCurrentUser).mockResolvedValueOnce({ id: "u1", email: "owner@example.com" } as never);
+    expect(await noticeOf({ notice: "other-workspace" })).toBe(
+      "That link is for another workspace. You are signed in as owner@example.com; sign in with the account that belongs to it.",
+    );
+  });
+
+  it("no notice without the parameter or with an unknown one", async () => {
+    vi.mocked(getCurrentUser).mockResolvedValue({ id: "u1", email: "owner@example.com" } as never);
+    expect(await noticeOf({})).toBeNull();
+    expect(await noticeOf({ notice: "something-else" })).toBeNull();
   });
 });

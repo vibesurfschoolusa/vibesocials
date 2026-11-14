@@ -1,6 +1,7 @@
 import { SUPPORT_EMAIL } from "@/lib/siteInfo";
-import { formatStorageGb, utcDateLabel, utcDayMonthLabel, type UsageLimitKind } from "@/lib/usageLimits";
+import { formatStorageGb, utcDayMonthLabel, type UsageLimitKind } from "@/lib/usageLimits";
 import { countWord } from "@/lib/plural";
+import { emailDateTime } from "@/server/notifications/emailTime";
 import { workspaceLink } from "@/server/notifications/links";
 
 /**
@@ -25,19 +26,21 @@ function limitLines(
   limit: number,
   resetsAt: Date | null,
   day: Date | null,
+  timeZone: string | null,
 ): [string, ...string[]] {
   switch (kind) {
     case "postsPerDay":
       // The full day can be a future one (a post scheduled into it), which does
-      // not "open again": name the day and say only what is true.
+      // not "open again": name the day and say only what is true. The limit
+      // counts a UTC day, so the day is named as one (R2-pages L4).
       return [
-        `reached its limit of ${limit} ${countWord(limit, "post", "posts")} for ${day ? utcDayMonthLabel(day) : "that day"}. Posts on other days are not affected.`,
+        `reached its limit of ${limit} ${countWord(limit, "post", "posts")} for ${day ? `${utcDayMonthLabel(day)} (UTC)` : "that day"}. Posts on other days are not affected.`,
       ];
     case "xPostsPerMonth":
       return [
         `has used its ${limit} ${countWord(limit, "X post", "X posts")} for this month.`,
         "Posts to every other platform still go out.",
-        resetsAt ? `X posts start again on ${utcDateLabel(resetsAt)}.` : "X posts start again next month.",
+        resetsAt ? `X posts start again on ${emailDateTime(resetsAt, timeZone)}.` : "X posts start again next month.",
       ];
     case "youtubeUploadsPerDay":
       return [
@@ -85,9 +88,17 @@ export function buildLimitReachedEmail(params: {
   planInSettings: boolean;
   /** `process.env.NEXTAUTH_URL`. Null names Settings, Plan without a link. */
   appBaseUrl: string | null;
+  /** The recipient's User.timeZone (R2-pages L4); null shows times in UTC, labelled. */
+  timeZone?: string | null;
 }): { subject: string; html: string } {
   const workspace = escapeHtml(params.workspaceName);
-  const [reached, ...rest] = limitLines(params.kind, params.limit, params.resetsAt, params.day ?? null);
+  const [reached, ...rest] = limitLines(
+    params.kind,
+    params.limit,
+    params.resetsAt,
+    params.day ?? null,
+    params.timeZone ?? null,
+  );
 
   return {
     subject: `${params.workspaceName} reached a Vibe Socials limit`,

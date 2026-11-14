@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { deletedMediaData } from "@/server/jobs/deletedMediaData";
 import { deleteBlobUnlessShared } from "@/server/jobs/mediaBlob";
 import {
   RETENTION_DAYS,
@@ -182,6 +183,8 @@ export async function sweepExpiredMediaBatch(opts: {
               deletedAt: true,
               lastUsedAt: true,
               createdAt: true,
+              metadata: true,
+              originalFilename: true,
               _count: { select: { postJobs: true, postJobMedia: true } },
             },
           });
@@ -220,7 +223,7 @@ export async function sweepExpiredMediaBatch(opts: {
           // other's media (2026-11-01 audit, Task 8).
           await tx.mediaItem.update({
             where: { id: candidate.id },
-            data: { deletedAt: now },
+            data: deletedMediaData(media, now),
           });
           await deleteBlobUnlessShared(tx, {
             id: candidate.id,

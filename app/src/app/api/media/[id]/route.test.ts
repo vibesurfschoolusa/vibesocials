@@ -208,7 +208,7 @@ describe("DELETE /api/media/[id]", () => {
 
     expect(findFirstMock).toHaveBeenCalledWith({
       where: { id: "media-1", workspaceId: "ws-1", deletedAt: null },
-      select: { id: true, userId: true, storageLocation: true },
+      select: { id: true, userId: true, storageLocation: true, metadata: true, originalFilename: true },
     });
   });
 
@@ -471,5 +471,40 @@ describe("DELETE /api/media/[id] - a photo of a post with several photos (07a)",
     expect(response.status).toBe(200);
     expect(mediaItemUpdateMock).toHaveBeenCalledTimes(1);
     expect(delMock).toHaveBeenCalled();
+  });
+});
+
+// G4 (R2-pages M1): deleting a file a client sent clears their name, note and
+// the file's name with it; any other file is only marked deleted.
+describe("DELETE /api/media/[id] - a file a client sent", () => {
+  it("clears the sender's name, note and file name when it marks the row deleted", async () => {
+    findFirstMock.mockResolvedValue(
+      makeItemRow({
+        originalFilename: "Maria at the pier.jpg",
+        metadata: { source: "upload_link", linkId: "link-1", senderName: "Maria", note: "My number is in here" },
+      }),
+    );
+    postJobCountMock.mockResolvedValue(0);
+
+    const response = await DELETE(dummyRequest, ctx("media-1"));
+
+    expect(response.status).toBe(200);
+    expect(findFirstMock.mock.calls[0][0].select).toMatchObject({ metadata: true, originalFilename: true });
+    const { data } = mediaItemUpdateMock.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(data).toEqual({
+      deletedAt: expect.any(Date),
+      originalFilename: "deleted-file.jpg",
+      metadata: { source: "upload_link", linkId: "link-1" },
+    });
+  });
+
+  it("leaves any other file's name and metadata alone", async () => {
+    findFirstMock.mockResolvedValue(makeItemRow({ metadata: { location: { description: "Pier" } } }));
+    postJobCountMock.mockResolvedValue(0);
+
+    await DELETE(dummyRequest, ctx("media-1"));
+
+    const { data } = mediaItemUpdateMock.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(Object.keys(data)).toEqual(["deletedAt"]);
   });
 });

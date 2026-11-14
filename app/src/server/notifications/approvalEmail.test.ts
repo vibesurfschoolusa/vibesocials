@@ -132,7 +132,7 @@ describe("buildApprovalDecisionEmail", () => {
       scheduledFor: "2026-07-31T14:30:00.000Z",
       appBaseUrl: "https://vibesocials.wtf",
     });
-    expect(approved.subject).toBe("Your post was approved");
+    expect(approved.subject).toBe("Your post in Acme was approved");
     expect(approved.html).toContain("Friday promo");
     expect(approved.html).toMatch(/scheduled/i);
     expect(approved.html).toContain("Fri, Jul 31, 2026, 2:30 PM UTC");
@@ -188,7 +188,7 @@ describe("buildApprovalDecisionEmail", () => {
       scheduledFor: null,
       appBaseUrl: null,
     });
-    expect(rejected.subject).toBe("Your post wasn't approved");
+    expect(rejected.subject).toBe("Your post in Acme wasn't approved");
     expect(rejected.html).toMatch(/will not be published/i);
   });
 

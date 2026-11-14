@@ -2,8 +2,9 @@
  * Usage limits (2026-11-10): `upload()` from @vercel/blob/client throws a
  * generic "Failed to retrieve the client token" when /api/upload refuses a
  * token, and drops the response body that says why. After a failed upload,
- * Create and the Media page ask GET /api/upload whether the workspace's storage
- * is full, so the user reads that sentence instead of the generic failure.
+ * Create and the Media page ask GET /api/upload why (the workspace's storage is
+ * full, or the reason the route remembered for this person's refused token),
+ * so the user reads that sentence instead of the generic failure.
  */
 
 /** An upload refused for a reason the user can act on; `message` is the sentence to show. */
@@ -40,8 +41,10 @@ export async function explainUploadFailure(
   try {
     const response = await fetchImpl("/api/upload", { method: "GET" });
     if (!response.ok) return otherwise;
-    const body = (await response.json()) as { storageFull?: unknown; error?: unknown } | null;
-    if (body?.storageFull === true && typeof body.error === "string" && body.error) {
+    // `refused`: the route remembered why it refused this person's token (an
+    // out-of-date page, the day's 20 GB), app/api/upload/uploadRefusal.ts.
+    const body = (await response.json()) as { storageFull?: unknown; refused?: unknown; error?: unknown } | null;
+    if ((body?.storageFull === true || body?.refused === true) && typeof body.error === "string" && body.error) {
       return new UploadRefusedError(body.error);
     }
   } catch {

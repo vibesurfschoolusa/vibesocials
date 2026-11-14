@@ -9,6 +9,8 @@ import {
   GEOCODE_DAILY_LIMIT_MESSAGE,
   GEOCODE_UNAVAILABLE_CODE,
   GEOCODE_UNAVAILABLE_MESSAGE,
+  GEOCODE_USER_DAY_LIMIT_CODE,
+  GEOCODE_USER_DAY_LIMIT_MESSAGE,
   GEOCODE_USER_LIMIT_CODE,
   GEOCODE_USER_LIMIT_MESSAGE,
 } from "./limit";
@@ -29,6 +31,13 @@ interface GeocodeResult {
  */
 const PER_USER_LIMIT = 30;
 const PER_USER_WINDOW_MS = 5 * 60 * 1000;
+/**
+ * R2 L3: the 5-minute limit alone lets one person make 8,640 lookups a day, so
+ * one account could use up the app's 2,000 for everyone. A day of 200 is far
+ * more than anyone types into the location box.
+ */
+const PER_USER_DAILY_LIMIT = 200;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function tooMany(error: string, retryAfterSeconds: number | undefined, code?: string): NextResponse {
   return NextResponse.json(
@@ -71,7 +80,18 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // Counted only for a call that is really made.
+  // Both days are counted only for a call that is really made; the person's
+  // first, so a person over theirs spends nothing of the app's.
+  const userDay = await checkRateLimit({
+    userId: user.id,
+    route: "geocode/day",
+    limit: PER_USER_DAILY_LIMIT,
+    windowMs: DAY_MS,
+  });
+  if (!userDay.allowed) {
+    return tooMany(GEOCODE_USER_DAY_LIMIT_MESSAGE, userDay.retryAfterSeconds, GEOCODE_USER_DAY_LIMIT_CODE);
+  }
+
   const appDay = await consumeGeocodeAppDay();
   if (appDay.outcome === "unavailable") {
     return NextResponse.json(

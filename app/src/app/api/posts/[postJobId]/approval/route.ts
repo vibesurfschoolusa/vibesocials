@@ -22,6 +22,8 @@ import { sendEmail } from "@/server/notifications/email";
 import { buildApprovalDecisionEmail } from "@/server/notifications/approvalEmail";
 import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 
+import { findPairHalf } from "../cancel/pairHalf";
+
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
 }
@@ -144,6 +146,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       userId: true,
       baseCaption: true,
       updatedAt: true,
+      storyOfPostJobId: true,
     },
   });
 
@@ -291,6 +294,22 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     }
   }
 
+  // R2-client-journey M1: a held Feed and Story post is one submission in two
+  // jobs, so rejecting either half rejects the other while it is still held
+  // (same conditional write as the claim, without this job's version pin).
+  let pairRejected = false;
+  if (!approving) {
+    try {
+      pairRejected = await rejectHeldPairHalf(workspaceContext.workspace.id, postJobId, job);
+    } catch (error) {
+      // The decision on this job is committed; the other half stays for the owner to reject.
+      logger.error("[POST /api/posts/[postJobId]/approval] Couldn't reject the other half of the post", {
+        error,
+        postJobId,
+      });
+    }
+  }
+
   // The time the post is now scheduled for — only when approval kept its slot.
   const scheduledForIso =
     nextStatus === "scheduled" && job.scheduledFor ? job.scheduledFor.toISOString() : null;
@@ -320,7 +339,35 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   }
 
   return NextResponse.json(
-    { ok: true, decision, status: nextStatus, approvalState, scheduledFor: scheduledForIso },
+    {
+      ok: true,
+      decision,
+      status: nextStatus,
+      approvalState,
+      scheduledFor: scheduledForIso,
+      ...(pairRejected ? { pairRejected: true } : {}),
+    },
     { status: 200 },
   );
+}
+
+/** Rejects the other half of a held Feed and Story post; true when it did. */
+async function rejectHeldPairHalf(
+  workspaceId: string,
+  postJobId: string,
+  job: { storyOfPostJobId: string | null },
+): Promise<boolean> {
+  const half = await findPairHalf(prisma, workspaceId, { id: postJobId, storyOfPostJobId: job.storyOfPostJobId });
+  if (!half || !isAwaitingApprovalDecision(half)) return false;
+  const count = await finishPostJob(prisma, {
+    where: {
+      id: half.id,
+      workspaceId,
+      status: { in: [...APPROVAL_DECIDABLE_STATUSES] },
+      submittedForApprovalAt: { not: null },
+      approvedAt: null,
+    },
+    data: { status: "cancelled" },
+  });
+  return count === 1;
 }

@@ -310,6 +310,12 @@ export interface ConfirmDialogProps {
   onConfirm: () => void | Promise<void>;
   /** Style the confirm action as destructive and default its label to "Delete". */
   destructive?: boolean;
+  /**
+   * Keeps the confirm button disabled while the caller is still working out
+   * what it will do (e.g. the Queue looking up the other half of a Feed and
+   * Story post). Off by default.
+   */
+  confirmDisabled?: boolean;
 }
 
 /**
@@ -325,6 +331,7 @@ export function ConfirmDialog({
   cancelText = "Cancel",
   onConfirm,
   destructive = false,
+  confirmDisabled = false,
 }: ConfirmDialogProps) {
   const [busy, setBusy] = useState(false);
 
@@ -355,7 +362,7 @@ export function ConfirmDialog({
         <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
           {cancelText}
         </Button>
-        <Button variant={confirmVariant} onClick={handleConfirm} loading={busy}>
+        <Button variant={confirmVariant} onClick={handleConfirm} loading={busy} disabled={confirmDisabled}>
           {resolvedConfirmText}
         </Button>
       </DialogFooter>

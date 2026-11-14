@@ -29,6 +29,19 @@ import { useConnections } from "@/hooks/useConnections";
 import { isTextPost, TextPostTile } from "@/components/activity/post-job-card";
 import { MediaThumb } from "@/components/media-thumb";
 import { QueueCalendar } from "./queue-calendar";
+import {
+  isPairCard,
+  pairAlreadyDeletedMessage,
+  pairCancelMessage,
+  pairDeleteFailedMessage,
+  pairLookupFailedLine,
+  pairLookupState,
+  pairOption,
+  pairRejectedNote,
+  pairRescheduleNote,
+  type PairInfo,
+  type PairLookup,
+} from "./pairActions";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { cn } from "@/lib/cn";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
@@ -155,8 +168,9 @@ export function coverEditNote(job: Pick<PostJobDTO, "hasCover">): string | null 
 }
 
 /**
- * F6: the line on each half of a Feed and Story post. Only a label: cancel,
- * delete, edit and publish still act on this card's post alone.
+ * F6: the line on each half of a Feed and Story post. Edit and publish act on
+ * this card's post alone; the cancel and delete dialogs offer the other half
+ * too (R2-client-journey M1, pairActions.ts).
  */
 export function pairLabel(job: Pick<PostJobDTO, "storyOf" | "alsoAsStory">): string | null {
   if (job.storyOf) {
@@ -184,12 +198,51 @@ export type CancelScope = "one" | "rest";
 
 /**
  * Which route a cancel uses: this post alone, or (for a post in a series) this
- * post and every later one of the series still scheduled or a draft.
+ * post and every later one of the series still scheduled or a draft. The
+ * single cancel can also take the other half of a Feed and Story post in the
+ * same request (R2-client-journey M1).
  */
-export function cancelRequest(job: PostJobDTO, scope: CancelScope): { url: string; series: boolean } {
-  return scope === "rest" && job.seriesId
-    ? { url: `/api/posts/${job.id}/cancel-series`, series: true }
+export function cancelRequest(
+  job: PostJobDTO,
+  scope: CancelScope,
+  includePair = false,
+): { url: string; series: boolean; body?: { includePair: true } } {
+  if (scope === "rest" && job.seriesId) return { url: `/api/posts/${job.id}/cancel-series`, series: true };
+  return includePair
+    ? { url: `/api/posts/${job.id}/cancel`, series: false, body: { includePair: true } }
     : { url: `/api/posts/${job.id}/cancel`, series: false };
+}
+
+/** The other half's line and checkbox in the cancel and delete dialogs (R2-client-journey M1). */
+export function PairChoice({
+  option,
+  loading,
+  failedLine = null,
+  checked,
+  onChange,
+}: {
+  option: ReturnType<typeof pairOption>;
+  loading: boolean;
+  /** The lookup failed: this line replaces the choice (only this post is changed). */
+  failedLine?: string | null;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  if (loading) return <span className="block">Looking up the other half of this post…</span>;
+  if (failedLine) return <span className="block">{failedLine}</span>;
+  if (!option) return null;
+  return (
+    <span className="block space-y-2">
+      <span className="block">{option.line}</span>
+      {option.label ? (
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+          {option.label}
+        </label>
+      ) : null}
+      {option.label && !checked && option.keptLine ? <span className="block">{option.keptLine}</span> : null}
+    </span>
+  );
 }
 
 interface QueueCardProps {
@@ -641,6 +694,9 @@ function QueueEditDialog({
           <p className="text-xs text-muted-foreground">
             Times are in {localTimeZoneLabel()} (your browser&apos;s timezone).
           </p>
+          {pairRescheduleNote(job) ? (
+            <p className="text-xs text-muted-foreground">{pairRescheduleNote(job)}</p>
+          ) : null}
         </div>
         {coverEditNote(job) ? <p className="text-sm text-muted-foreground">{coverEditNote(job)}</p> : null}
         {model.notice ? <p className="text-sm text-muted-foreground">{model.notice}</p> : null}
@@ -928,6 +984,11 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
   const [cancelScope, setCancelScope] = useState<CancelScope>("one");
   const [publishTarget, setPublishTarget] = useState<PostJobDTO | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<PostJobDTO | null>(null);
+  // R2-client-journey M1: the other half of a Feed and Story post the open
+  // cancel or delete dialog is about (looked up when it opens; `pair` stays
+  // undefined until the answer), and whether to include it (checked by default).
+  const [pairFor, setPairFor] = useState<PairLookup | null>(null);
+  const [includePair, setIncludePair] = useState(true);
   // List stays the default; the calendar is an alternate lens on the SAME
   // fetched jobs. N3: the choice is remembered per browser. It is read after
   // mount, not in the initializer, so the server render and the first client
@@ -1025,6 +1086,33 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
     setJobs((prev) => (prev ? prev.filter((j) => j.id !== id) : prev));
   }, []);
 
+  // Called as a cancel or delete dialog opens. Only a card of a Feed and Story
+  // post asks; a failed lookup leaves the dialog as for a single post.
+  const lookUpPair = useCallback((job: PostJobDTO) => {
+    setIncludePair(true);
+    if (!isPairCard(job)) {
+      setPairFor(null);
+      return;
+    }
+    setPairFor({ jobId: job.id });
+    const settle = (next: PairLookup) =>
+      setPairFor((current) => (current?.jobId === job.id ? next : current));
+    void fetch(`/api/posts/${job.id}/cancel`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error("PAIR_LOOKUP_FAILED");
+        const data = (await response.json()) as { pair?: PairInfo | null };
+        settle({ jobId: job.id, pair: data?.pair ?? null });
+      })
+      // The dialog then says it could not check, and acts on this post alone.
+      .catch(() => settle({ jobId: job.id, failed: true }));
+  }, []);
+
+  /** The open dialog's pair: the other half once looked up, null for none or a failed lookup. */
+  const pairOf = useCallback(
+    (job: PostJobDTO | null): PairInfo | null => (job ? pairLookupState(job, pairFor).pair : null),
+    [pairFor],
+  );
+
   // Update one card in place from a server response (and re-sort: an approved
   // post moves from the pending group to its scheduled slot).
   const patchJob = useCallback((id: string, patch: EditPatch) => {
@@ -1049,7 +1137,7 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
           body: JSON.stringify({ decision, reviewedUpdatedAt: job.updatedAt }),
         });
         const data = (await response.json().catch(() => null)) as
-          | { error?: string }
+          | { error?: string; pairRejected?: boolean }
           | null;
         if (!response.ok) {
           toast.error(
@@ -1066,7 +1154,14 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
         const outcome = decisionOutcome(decision, data);
         if (outcome.kind === "remove") removeJob(job.id);
         else patchJob(job.id, outcome.patch);
-        toast.success(outcome.message);
+        // R2-client-journey M1: rejecting one half of a held pair rejected the
+        // other too; read the Queue again so its card goes as well.
+        if (data?.pairRejected) {
+          void load({ silent: true });
+          toast.success(outcome.message + pairRejectedNote(job));
+        } else {
+          toast.success(outcome.message);
+        }
       } catch {
         toast.error("Couldn't save that decision.");
       } finally {
@@ -1088,12 +1183,17 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
   // failure, per the dialog's contract).
   const confirmCancel = useCallback(async () => {
     if (!cancelTarget) return;
-    const request = cancelRequest(cancelTarget, cancelScope);
+    const pair = cancelScope === "one" ? pairOf(cancelTarget) : null;
+    const withPair = Boolean(pair && pairOption(pair, "cancel")?.label && includePair);
+    const request = cancelRequest(cancelTarget, cancelScope, withPair);
     const response = await fetch(request.url, {
       method: "POST",
+      ...(request.body
+        ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(request.body) }
+        : {}),
     });
     const data = (await response.json().catch(() => null)) as
-      | { error?: string; cancelled?: number; notCancelled?: number }
+      | { error?: string; cancelled?: number; notCancelled?: number; pair?: string }
       | null;
     if (!response.ok) {
       toast.error(data?.error ?? "Couldn't cancel this post.");
@@ -1101,7 +1201,14 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
     }
     if (!request.series) {
       removeJob(cancelTarget.id);
-      toast.success("Scheduled post cancelled.");
+      if (withPair && pair) {
+        if (data?.pair === "cancelled") removeJob(pair.id);
+        toast.success(pairCancelMessage(data?.pair, pair.kind));
+      } else {
+        toast.success("Scheduled post cancelled.");
+      }
+      // The other half's card still says it belongs to this post: read the Queue again.
+      if (isPairCard(cancelTarget) && !(withPair && data?.pair === "cancelled")) void load({ silent: true });
       return;
     }
     // Several cards went; read the Queue again rather than guess which.
@@ -1112,10 +1219,12 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
       `${cancelled} ${cancelled === 1 ? "post" : "posts"} cancelled.` +
         (left > 0 ? ` ${left} had already started publishing, so ${left === 1 ? "it was" : "they were"} not cancelled.` : ""),
     );
-  }, [cancelScope, cancelTarget, load, removeJob, toast]);
+  }, [cancelScope, cancelTarget, includePair, load, pairOf, removeJob, toast]);
 
   const confirmDelete = useCallback(async () => {
     if (!deleteTarget) return;
+    const pair = pairOf(deleteTarget);
+    const withPair = Boolean(pair && pairOption(pair, "delete")?.label && includePair);
     const response = await fetch(`/api/posts/${deleteTarget.id}`, { method: "DELETE" });
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -1123,8 +1232,28 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
       throw new Error("DELETE_FAILED");
     }
     removeJob(deleteTarget.id);
-    toast.success("Draft deleted.");
-  }, [deleteTarget, removeJob, toast]);
+    if (!withPair || !pair) {
+      toast.success("Draft deleted.");
+      if (isPairCard(deleteTarget)) void load({ silent: true });
+      return;
+    }
+    // The delete route takes one post; the other half is its own request, scoped by the server the same way.
+    const pairResponse = await fetch(`/api/posts/${pair.id}`, { method: "DELETE" }).catch(() => null);
+    if (pairResponse?.ok) {
+      removeJob(pair.id);
+      toast.success("Both drafts deleted.");
+      return;
+    }
+    if (pairResponse?.status === 404) {
+      // Someone deleted it first: the result the owner asked for.
+      removeJob(pair.id);
+      toast.success(pairAlreadyDeletedMessage(pair.kind));
+      return;
+    }
+    const pairData = (await pairResponse?.json().catch(() => null)) as { error?: string } | null | undefined;
+    toast.error(pairDeleteFailedMessage(pair.kind, pairData?.error ?? "try again from its own card."));
+    void load({ silent: true });
+  }, [deleteTarget, includePair, load, pairOf, removeJob, toast]);
 
   // "Publish now" - or, for a member under approval, "Submit for approval"
   // (same endpoint; the server decides). publishOutcome reads the answer: a
@@ -1157,6 +1286,11 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
     role: workspaceRole,
     requireApproval: workspaceRequireApproval,
   };
+  // R2-client-journey M1: the other half the open cancel / delete dialog names.
+  const cancelLookup = cancelTarget && cancelScope === "one" ? pairLookupState(cancelTarget, pairFor) : null;
+  const deleteLookup = deleteTarget ? pairLookupState(deleteTarget, pairFor) : null;
+  const cancelPair = cancelLookup?.pair ?? null;
+  const deletePair = deleteLookup?.pair ?? null;
   const publishCopy = publishConfirmCopy(
     publishTarget && getQueueCardActions(publishTarget, viewer).primary?.kind === "submit"
       ? "submit"
@@ -1287,10 +1421,14 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
                     onEdit={setEditTarget}
                     onCancel={(target) => {
                       setCancelScope("one");
+                      lookUpPair(target);
                       setCancelTarget(target);
                     }}
                     onPublish={setPublishTarget}
-                    onDelete={setDeleteTarget}
+                    onDelete={(target) => {
+                      lookUpPair(target);
+                      setDeleteTarget(target);
+                    }}
                     onDecide={handleDecide}
                     deciding={decidingId === job.id}
                   />
@@ -1333,35 +1471,53 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
         }}
         title="Cancel this scheduled post?"
         description={
-          cancelTarget?.seriesId ? (
-            <span className="block space-y-2">
-              <span className="block">This post repeats. Cancelled posts won&apos;t be published.</span>
-              <label className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="cancel-scope"
-                  checked={cancelScope === "one"}
-                  onChange={() => setCancelScope("one")}
-                />
-                Cancel this post
-              </label>
-              <label className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="cancel-scope"
-                  checked={cancelScope === "rest"}
-                  onChange={() => setCancelScope("rest")}
-                />
-                Cancel this and all later posts in the series
-              </label>
-            </span>
-          ) : (
-            "It won't be published. You can recreate it later from the composer."
-          )
+          <span className="block space-y-2">
+            {cancelTarget?.seriesId ? (
+              <>
+                <span className="block">This post repeats. Cancelled posts won&apos;t be published.</span>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="cancel-scope"
+                    checked={cancelScope === "one"}
+                    onChange={() => setCancelScope("one")}
+                  />
+                  Cancel this post
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name="cancel-scope"
+                    checked={cancelScope === "rest"}
+                    onChange={() => setCancelScope("rest")}
+                  />
+                  Cancel this and all later posts in the series
+                </label>
+              </>
+            ) : (
+              <span className="block">It won&apos;t be published. You can recreate it later from the composer.</span>
+            )}
+            {cancelTarget && cancelLookup ? (
+              <PairChoice
+                option={pairOption(cancelPair, "cancel")}
+                loading={cancelLookup.loading}
+                failedLine={cancelLookup.failed ? pairLookupFailedLine(cancelTarget, "cancel") : null}
+                checked={includePair}
+                onChange={setIncludePair}
+              />
+            ) : null}
+          </span>
         }
-        confirmText={cancelScope === "rest" && cancelTarget?.seriesId ? "Cancel posts" : "Cancel post"}
+        confirmText={
+          cancelScope === "rest" && cancelTarget?.seriesId
+            ? "Cancel posts"
+            : cancelPair && pairOption(cancelPair, "cancel")?.label && includePair
+              ? "Cancel both"
+              : "Cancel post"
+        }
         cancelText="Keep it"
         destructive
+        confirmDisabled={cancelLookup?.loading ?? false}
         onConfirm={confirmCancel}
       />
 
@@ -1382,8 +1538,23 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
           if (!open) setDeleteTarget(null);
         }}
         title="Delete this draft?"
-        description="This can't be undone. Your uploaded media stays in your library."
+        description={
+          <span className="block space-y-2">
+            <span className="block">This can&apos;t be undone. Your uploaded media stays in your library.</span>
+            {deleteTarget && deleteLookup ? (
+              <PairChoice
+                option={pairOption(deletePair, "delete")}
+                loading={deleteLookup.loading}
+                failedLine={deleteLookup.failed ? pairLookupFailedLine(deleteTarget, "delete") : null}
+                checked={includePair}
+                onChange={setIncludePair}
+              />
+            ) : null}
+          </span>
+        }
+        confirmText={deletePair && pairOption(deletePair, "delete")?.label && includePair ? "Delete both" : undefined}
         destructive
+        confirmDisabled={deleteLookup?.loading ?? false}
         onConfirm={confirmDelete}
       />
     </div>

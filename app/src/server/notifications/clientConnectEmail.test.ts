@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { workspaceFindUniqueMock, memberFindManyMock, sendEmailMock } = vi.hoisted(() => ({
+const { workspaceFindUniqueMock, memberFindManyMock, sendEmailMock, connectionFindUniqueMock } = vi.hoisted(() => ({
   workspaceFindUniqueMock: vi.fn(),
+  connectionFindUniqueMock: vi.fn(),
   memberFindManyMock: vi.fn(),
   sendEmailMock: vi.fn(),
 }));
@@ -10,6 +11,7 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     workspace: { findUnique: workspaceFindUniqueMock },
     workspaceMember: { findMany: memberFindManyMock },
+    socialConnection: { findUnique: connectionFindUniqueMock },
   },
 }));
 vi.mock("@/server/notifications/email", () => ({ sendEmail: sendEmailMock }));
@@ -36,12 +38,13 @@ describe("buildClientConnectEmail", () => {
     expect(email.html).not.toContain("business location");
   });
 
-  it("for Google Business Profile, says to choose the business location first", () => {
+  it("for Google Business Profile with no location chosen, says to choose the business location first", () => {
     const email = buildClientConnectEmail({
       platform: "google_business_profile",
       workspaceId: "ws_1",
       workspaceName: "Surf Co",
       appBaseUrl: BASE,
+      locationChosen: false,
     });
 
     expect(email.subject).toBe("Surf Co: your client connected Google Business Profile");
@@ -49,6 +52,19 @@ describe("buildClientConnectEmail", () => {
       "<p>Before posts can go to Google, choose the business location: open Settings, Connections and pick it under Google Business Profile. Until then, posts to Google fail.</p>",
     );
     expect(email.html).not.toContain("can go to Google Business Profile now");
+  });
+
+  // R2-pages L6: a reconnect keeps the chosen location, so nothing is left to do.
+  it("for Google Business Profile with a location already chosen, says posts can go out", () => {
+    const email = buildClientConnectEmail({
+      platform: "google_business_profile",
+      workspaceId: "ws_1",
+      workspaceName: "Surf Co",
+      appBaseUrl: BASE,
+      locationChosen: true,
+    });
+    expect(email.html).not.toContain("business location");
+    expect(email.html).toContain("Posts in Surf Co can go to Google Business Profile now.");
   });
 
   it("has no link without a base URL, and escapes the workspace name", () => {
@@ -75,6 +91,8 @@ describe("notifyOwnersOfClientConnect", () => {
       { user: { id: "owner-2", email: "b@example.com" } },
     ]);
     sendEmailMock.mockResolvedValue(undefined);
+    connectionFindUniqueMock.mockReset();
+    connectionFindUniqueMock.mockResolvedValue(null);
     vi.stubEnv("NEXTAUTH_URL", BASE);
   });
   afterEach(() => {
@@ -100,6 +118,27 @@ describe("notifyOwnersOfClientConnect", () => {
 
     workspaceFindUniqueMock.mockRejectedValue(new Error("db down"));
     await expect(notifyOwnersOfClientConnect({ workspaceId: "ws-1", platform: "tiktok" })).resolves.toBeUndefined();
+  });
+
+  it("reads the Google connection's chosen location: none -> the email asks for one", async () => {
+    connectionFindUniqueMock.mockResolvedValue({ metadata: { locationName: null } });
+    await notifyOwnersOfClientConnect({ workspaceId: "ws-1", platform: "google_business_profile" });
+    expect(connectionFindUniqueMock).toHaveBeenCalledWith({
+      where: { workspaceId_platform: { workspaceId: "ws-1", platform: "google_business_profile" } },
+      select: { metadata: true },
+    });
+    expect(sendEmailMock.mock.calls[0][0].html).toContain("choose the business location");
+  });
+
+  it("reads the Google connection's chosen location: kept on a reconnect -> no ask", async () => {
+    connectionFindUniqueMock.mockResolvedValue({ metadata: { locationName: "locations/123" } });
+    await notifyOwnersOfClientConnect({ workspaceId: "ws-1", platform: "google_business_profile" });
+    expect(sendEmailMock.mock.calls[0][0].html).not.toContain("business location");
+  });
+
+  it("does not read the connection for other platforms", async () => {
+    await notifyOwnersOfClientConnect({ workspaceId: "ws-1", platform: "tiktok" });
+    expect(connectionFindUniqueMock).not.toHaveBeenCalled();
   });
 
   it("sends nothing for a workspace that is gone", async () => {

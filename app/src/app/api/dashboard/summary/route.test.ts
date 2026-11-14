@@ -81,8 +81,15 @@ vi.mock("@/lib/db", () => ({
           .sort((a, b) => (a.scheduledFor as Date).getTime() - (b.scheduledFor as Date).getTime());
         return hits[0] ?? null;
       },
-      findMany: async () => {
-        throw new Error("the summary must not load every job");
+      // Only the Story halves a client marked (R2-client-journey L1); never every job.
+      findMany: async ({ where, select }: { where: Row; select: Row }) => {
+        if (!where?.storyOfPostJobId || JSON.stringify(select) !== JSON.stringify({ storyOfPostJobId: true })) {
+          throw new Error("the summary must not load every job");
+        }
+        state.calls.push("postJob.findMany");
+        return state.jobs
+          .filter((job) => matches(job, where))
+          .map((job) => ({ storyOfPostJobId: job.storyOfPostJobId }));
       },
     },
     socialConnection: {
@@ -121,6 +128,7 @@ function job(fields: Row): Row {
     submittedForApprovalAt: null,
     approvedAt: null,
     clientChangeRequestedAt: null,
+    storyOfPostJobId: null,
     publishMetadata: null,
     baseCaption: "secret caption",
     results: [],
@@ -279,6 +287,37 @@ describe("GET /api/dashboard/summary", () => {
         job({ workspaceId: "ws-other", status: "draft", clientChangeRequestedAt: ago(1) }),
       ];
       expect((await summary()).body.clientChangesRequested).toBe(2);
+    });
+
+    // R2-client-journey L1: a client's change request on a Feed and Story post
+    // marks both halves; it is one post to the owner.
+    it("counts a Feed and Story pair the client marked once", async () => {
+      const feed = job({ id: "feed-1", status: "scheduled", scheduledFor: ahead(3), clientChangeRequestedAt: ago(1) });
+      state.jobs = [
+        feed,
+        job({ status: "scheduled", scheduledFor: ahead(3), clientChangeRequestedAt: ago(1), storyOfPostJobId: "feed-1" }),
+        job({ status: "draft", clientChangeRequestedAt: ago(1) }),
+      ];
+      expect((await summary()).body.clientChangesRequested).toBe(2);
+    });
+
+    it("still counts a marked Story whose feed half is not marked, cancelled or gone", async () => {
+      state.jobs = [
+        job({ id: "feed-1", status: "scheduled", scheduledFor: ahead(3) }),
+        job({ status: "scheduled", scheduledFor: ahead(3), clientChangeRequestedAt: ago(1), storyOfPostJobId: "feed-1" }),
+        job({ id: "feed-2", status: "cancelled", clientChangeRequestedAt: ago(1) }),
+        job({ status: "draft", clientChangeRequestedAt: ago(1), storyOfPostJobId: "feed-2" }),
+        job({ status: "draft", clientChangeRequestedAt: ago(1), storyOfPostJobId: "feed-gone" }),
+      ];
+      expect((await summary()).body.clientChangesRequested).toBe(3);
+    });
+
+    it("does not count another workspace's feed job as the pair", async () => {
+      state.jobs = [
+        job({ id: "feed-x", workspaceId: "ws-other", status: "draft", clientChangeRequestedAt: ago(1) }),
+        job({ status: "draft", clientChangeRequestedAt: ago(1), storyOfPostJobId: "feed-x" }),
+      ];
+      expect((await summary()).body.clientChangesRequested).toBe(1);
     });
   });
 
