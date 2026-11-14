@@ -1,19 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { findActiveUploadLinkMock, checkRateLimitMock, handleUploadMock, checkStorageLimitMock, consumeBytesMock } =
+const {
+  findActiveUploadLinkMock,
+  checkRateLimitMock,
+  handleUploadMock,
+  checkStorageLimitMock,
+  consumeBytesMock,
+  releaseMock,
+} =
   vi.hoisted(() => ({
     findActiveUploadLinkMock: vi.fn(),
     checkRateLimitMock: vi.fn(),
     handleUploadMock: vi.fn(),
     checkStorageLimitMock: vi.fn(),
     consumeBytesMock: vi.fn(),
+    releaseMock: vi.fn(),
   }));
 
 vi.mock("@/server/uploadLink", () => ({ findActiveUploadLink: findActiveUploadLinkMock }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 vi.mock("@vercel/blob/client", () => ({ handleUpload: handleUploadMock }));
 vi.mock("@/server/usage/workspaceUsage", () => ({ checkStorageLimit: checkStorageLimitMock }));
-vi.mock("./linkBytes", () => ({ consumeUploadLinkDayBytes: consumeBytesMock }));
+vi.mock("./linkBytes", () => ({
+  consumeUploadLinkDayBytes: consumeBytesMock,
+  releaseUploadLinkReservation: releaseMock,
+}));
 
 import { MAX_MEDIA_BYTES } from "@/lib/mediaInput";
 import {
@@ -74,6 +85,8 @@ beforeEach(() => {
   checkStorageLimitMock.mockReset();
   consumeBytesMock.mockReset();
   consumeBytesMock.mockResolvedValue({ allowed: true });
+  releaseMock.mockReset();
+  releaseMock.mockResolvedValue(undefined);
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -307,5 +320,30 @@ describe("the bytes a link takes in a day", () => {
     expect(response.headers.get("Retry-After")).toBe("5000");
     await expect(response.json()).resolves.toMatchObject({ error: UPLOAD_LINK_BYTES_LIMIT_MESSAGE });
     expect(handleUploadMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("a request refused after it counted", () => {
+  it("gives back the file and the bytes when the workspace's storage is full", async () => {
+    checkStorageLimitMock.mockResolvedValue({ error: "full", code: "WORKSPACE_STORAGE_FULL" });
+    await call(tokenRequest({ size: 9_000 }));
+    expect(releaseMock).toHaveBeenCalledWith("link-1", { file: true, bytes: 9_000 });
+  });
+
+  it("gives back the file and the bytes when storage refuses to sign", async () => {
+    handleUploadMock.mockRejectedValue(new Error("bad"));
+    await call(tokenRequest({ size: 9_000 }));
+    expect(releaseMock).toHaveBeenCalledWith("link-1", { file: true, bytes: 9_000 });
+  });
+
+  it("gives back the file when the bytes are refused (the byte counter gives back its own)", async () => {
+    consumeBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 60 });
+    await call(tokenRequest({ size: 9_000 }));
+    expect(releaseMock).toHaveBeenCalledWith("link-1", { file: true, bytes: 0 });
+  });
+
+  it("gives back nothing for a token it signed", async () => {
+    await call(tokenRequest());
+    expect(releaseMock).not.toHaveBeenCalled();
   });
 });

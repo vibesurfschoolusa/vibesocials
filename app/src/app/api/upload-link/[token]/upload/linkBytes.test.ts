@@ -1,14 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { upsertMock, updateMock } = vi.hoisted(() => ({ upsertMock: vi.fn(), updateMock: vi.fn() }));
+const { upsertMock, updateMock, updateManyMock } = vi.hoisted(() => ({
+  upsertMock: vi.fn(),
+  updateMock: vi.fn(),
+  updateManyMock: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => ({
-  prisma: { rateLimitEntry: { upsert: upsertMock, update: updateMock } },
+  prisma: { rateLimitEntry: { upsert: upsertMock, update: updateMock, updateMany: updateManyMock } },
 }));
 
 import { UPLOAD_LINK_BYTES_PER_DAY } from "@/lib/uploadLink";
 
-import { consumeUploadLinkDayBytes } from "./linkBytes";
+import { consumeUploadLinkDayBytes, releaseUploadLinkReservation } from "./linkBytes";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const NOW = Date.UTC(2026, 10, 14, 15, 0, 0);
@@ -37,6 +41,8 @@ function countingStore() {
 beforeEach(() => {
   upsertMock.mockReset();
   updateMock.mockReset();
+  updateManyMock.mockReset();
+  updateManyMock.mockResolvedValue({ count: 1 });
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -84,5 +90,43 @@ describe("consumeUploadLinkDayBytes", () => {
       allowed: false,
       retryAfterSeconds: 60,
     });
+  });
+});
+
+describe("releaseUploadLinkReservation", () => {
+  it("takes the file off the link's day count (checkRateLimit's key) and the bytes off its byte count", async () => {
+    await releaseUploadLinkReservation("link-1", { file: true, bytes: 5000 }, NOW);
+
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { key: `upload-link:link-1:upload-link/upload-day:${BUCKET}`, count: { gt: 0 } },
+      data: { count: { decrement: 1 } },
+    });
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { key: `upload-link:link-1:upload-link/bytes-day:${BUCKET}`, count: { gte: 5 } },
+      data: { count: { decrement: 5 } },
+    });
+  });
+
+  it("leaves a request's counters as they were: consume then release adds up to nothing", async () => {
+    const rows = countingStore();
+    updateManyMock.mockImplementation(
+      async ({ where, data }: { where: { key: string }; data: { count: { decrement: number } } }) => {
+        if (!rows.has(where.key)) return { count: 0 };
+        rows.set(where.key, rows.get(where.key)! - data.count.decrement);
+        return { count: 1 };
+      },
+    );
+    await consumeUploadLinkDayBytes("link-1", 2048, NOW);
+    await consumeUploadLinkDayBytes("link-1", 4096, NOW);
+    await releaseUploadLinkReservation("link-1", { file: false, bytes: 4096 }, NOW);
+    expect(rows.get(`upload-link:link-1:upload-link/bytes-day:${BUCKET}`)).toBe(2);
+  });
+
+  it("touches only what it is told to, and never throws", async () => {
+    await releaseUploadLinkReservation("link-1", { file: false, bytes: 0 }, NOW);
+    expect(updateManyMock).not.toHaveBeenCalled();
+
+    updateManyMock.mockRejectedValue(new Error("db down"));
+    await expect(releaseUploadLinkReservation("link-1", { file: true, bytes: 10 }, NOW)).resolves.toBeUndefined();
   });
 });

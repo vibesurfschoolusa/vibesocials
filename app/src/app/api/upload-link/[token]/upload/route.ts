@@ -23,7 +23,7 @@ import {
 import { findActiveUploadLink } from "@/server/uploadLink";
 import { checkStorageLimit } from "@/server/usage/workspaceUsage";
 
-import { consumeUploadLinkDayBytes } from "./linkBytes";
+import { consumeUploadLinkDayBytes, releaseUploadLinkReservation } from "./linkBytes";
 
 /**
  * POST /api/upload-link/[token]/upload — a storage upload token for someone who
@@ -120,10 +120,14 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
   if (!dayLimit.allowed) return tooMany(UPLOAD_LINK_DAILY_LIMIT_MESSAGE, dayLimit.retryAfterSeconds);
 
   const bytesLimit = await consumeUploadLinkDayBytes(link.id, size);
-  if (!bytesLimit.allowed) return tooMany(UPLOAD_LINK_BYTES_LIMIT_MESSAGE, bytesLimit.retryAfterSeconds);
+  if (!bytesLimit.allowed) {
+    await releaseUploadLinkReservation(link.id, { file: true, bytes: 0 });
+    return tooMany(UPLOAD_LINK_BYTES_LIMIT_MESSAGE, bytesLimit.retryAfterSeconds);
+  }
 
   const storageFull = await checkStorageLimit(link.workspaceId);
   if (storageFull) {
+    await releaseUploadLinkReservation(link.id, { file: true, bytes: size });
     return NextResponse.json(
       { error: UPLOAD_LINK_STORAGE_FULL_MESSAGE, code: storageFull.code },
       { status: 403 },
@@ -158,6 +162,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     return NextResponse.json({ ...jsonResponse, pathname });
   } catch (error) {
     logger.error("[upload-link] Token error", { error, linkId: link.id });
+    await releaseUploadLinkReservation(link.id, { file: true, bytes: size });
     return NextResponse.json({ error: "Couldn't start the upload. Try again." }, { status: 400 });
   }
 }

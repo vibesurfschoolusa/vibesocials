@@ -37,3 +37,42 @@ export async function consumeUploadLinkDayBytes(
     return { allowed: false, retryAfterSeconds: 60 };
   }
 }
+
+/**
+ * Give back what a token request counted when a later check refuses it (the
+ * storage is full, storage would not sign), so a refused request leaves the
+ * link's day as it was. The file is the one checkRateLimit counted under
+ * `upload-link:<id>` / "upload-link/upload-day" (its key is
+ * `<userId>:<route>:<day bucket>`, lib/rateLimit.ts). Never below zero, never
+ * throws: at worst the link's day is a little shorter.
+ */
+export async function releaseUploadLinkReservation(
+  linkId: string,
+  reserved: { file: boolean; bytes: number },
+  now: number = Date.now(),
+): Promise<void> {
+  const bucket = Math.floor(now / DAY_MS);
+  const releases: Promise<unknown>[] = [];
+  if (reserved.file) {
+    releases.push(
+      prisma.rateLimitEntry.updateMany({
+        where: { key: `upload-link:${linkId}:upload-link/upload-day:${bucket}`, count: { gt: 0 } },
+        data: { count: { decrement: 1 } },
+      }),
+    );
+  }
+  if (reserved.bytes > 0) {
+    const kib = Math.max(1, Math.ceil(reserved.bytes / 1024));
+    releases.push(
+      prisma.rateLimitEntry.updateMany({
+        where: { key: `upload-link:${linkId}:upload-link/bytes-day:${bucket}`, count: { gte: kib } },
+        data: { count: { decrement: kib } },
+      }),
+    );
+  }
+  try {
+    await Promise.all(releases);
+  } catch (error) {
+    console.error("[upload-link] Couldn't give back a refused request's count (ignored)", error);
+  }
+}
