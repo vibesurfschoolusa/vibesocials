@@ -524,6 +524,13 @@ model PostJob {
   // retry keep it. Nullable: the previous deployment neither reads nor writes them.
   coverTimeMs             Int?
   coverImageUrl           String?
+  // F6 (2026-11-14): on the Story job of a "Feed and Story" post, the id of its
+  // feed job, set when both are created (posting.ts). The client review link
+  // and the reports treat the two as one post; owner actions stay per job. No
+  // foreign key: deleting the feed job leaves this pointing at nothing, which
+  // every reader treats as no pair. Nullable: the previous deployment neither
+  // reads nor writes it.
+  storyOfPostJobId        String?
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
 
@@ -568,6 +575,8 @@ model PostJob {
   // F1 second review: the scanner's every-tick notify pass finds the posts given
   // up on (gaveUpAt IS NOT NULL) through it.
   @@index([gaveUpAt])
+  // F6: finding the Story job of a feed job (the review link, the Queue, the reports).
+  @@index([storyOfPostJobId])
 }
 
 // Several photos in one post (2026-11-10). `PostJob.mediaItemId` stays the first

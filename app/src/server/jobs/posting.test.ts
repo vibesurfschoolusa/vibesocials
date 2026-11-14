@@ -1960,7 +1960,10 @@ describe("createPostJobOnly / createPostJobForExistingMedia - a Story job beside
       perPlatformOverrides: { x: "Book now" },
       publishMetadata: { targetPlatforms: ["instagram"], instagram: { placement: "story" } },
       coverTimeMs: 1200,
+      // F6: the Story job names its feed job, so the two act as one for the client.
+      storyOfPostJobId: "job-1",
     });
+    expect(main).not.toHaveProperty("storyOfPostJobId");
     expect(result).toEqual({ postJobId: "job-1", storyPostJobId: "job-2", mediaItemId: "media-1", resultIds: [] });
   });
 
@@ -2040,6 +2043,7 @@ describe("createPostJobOnly / createPostJobForExistingMedia - a Story job beside
       intent: "draft",
     });
     expect(postJobCreateMock).toHaveBeenCalledTimes(1);
+    expect(postJobCreateMock.mock.calls[0][0].data).not.toHaveProperty("storyOfPostJobId");
     expect(result).not.toHaveProperty("storyPostJobId");
   });
 
@@ -2061,7 +2065,9 @@ describe("createPostJobOnly / createPostJobForExistingMedia - a Story job beside
       mediaItemId: "media-1",
       status: "draft",
       publishMetadata: { targetPlatforms: ["facebook_page"], facebook: { placement: "story" } },
+      storyOfPostJobId: "job-1",
     });
+    expect(postJobCreateMock.mock.calls[0][0].data).not.toHaveProperty("storyOfPostJobId");
     expect(result.storyPostJobId).toBe("job-2");
   });
 });

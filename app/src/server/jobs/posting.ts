@@ -483,6 +483,8 @@ export async function createPostJobOnly(
             }),
             workspaceId,
             ...approvalHoldData(params.approvalHold),
+            // F6: the pair's link, so the client review link and reports see one post.
+            storyOfPostJobId: job.id,
           },
         });
         if (intent === "immediate") await createResults(storyJob.id, storyConnections);
@@ -788,6 +790,8 @@ export async function createPostJobForExistingMedia(
           }),
           workspaceId,
           ...approvalHoldData(params.approvalHold),
+          // F6: the pair's link, so the client review link and reports see one post.
+          storyOfPostJobId: job.id,
         },
       });
       if (intent === "immediate") await createResults(storyJob.id, storyConnections);
