@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   isOwner: vi.fn(),
   rateLimit: vi.fn(),
   saveFacebookPage: vi.fn(),
+  notifyConnect: vi.fn(),
 }));
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -27,6 +28,7 @@ vi.mock("@/lib/db", () => ({
 }));
 vi.mock("@/lib/workspace", () => ({ isWorkspaceOwner: h.isOwner }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: h.rateLimit }));
+vi.mock("@/server/notifications/clientConnectEmail", () => ({ notifyOwnersOfClientConnect: h.notifyConnect }));
 vi.mock("@/lib/logger", () => ({ logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("@/server/connections/saveConnection", () => ({
   saveFacebookPageConnection: h.saveFacebookPage,
@@ -205,6 +207,44 @@ describe("POST: the visitor's choice", () => {
     const res = await POST(request("POST", { candidateId: "page-2" }), context());
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: "Failed to connect the account." });
+  });
+});
+
+// F4 (R1 M4): the owner did not make this connect, so they are told, once.
+describe("POST: the owners are told about the connect (F4)", () => {
+  it("one email per successful choice, naming the link's workspace and the platform", async () => {
+    const res = await POST(request("POST", { candidateId: "page-2" }), context());
+
+    expect(res.status).toBe(200);
+    expect(h.notifyConnect).toHaveBeenCalledTimes(1);
+    expect(h.notifyConnect).toHaveBeenCalledWith({ workspaceId: "ws-1", platform: "facebook_page" });
+  });
+
+  it("a second submit of the same choice is a 404 and tells nobody again", async () => {
+    await POST(request("POST", { candidateId: "page-2" }), context());
+    // The first submit deleted the waiting choice.
+    h.pendingFind.mockResolvedValue(null);
+
+    const again = await POST(request("POST", { candidateId: "page-2" }), context());
+
+    expect(again.status).toBe(404);
+    expect(h.notifyConnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("nobody is told when the choice fails", async () => {
+    await POST(request("POST", { candidateId: "page-9" }), context());
+    h.connectionFind.mockResolvedValue({ needsReconnect: false });
+    await POST(request("POST", { candidateId: "page-2" }), context());
+    h.connectionFind.mockResolvedValue(null);
+    h.saveFacebookPage.mockRejectedValue(new Error("db down"));
+    await POST(request("POST", { candidateId: "page-2" }), context());
+
+    expect(h.notifyConnect).not.toHaveBeenCalled();
+  });
+
+  it("nobody is told when the visitor cancels", async () => {
+    await DELETE(request("DELETE"), context());
+    expect(h.notifyConnect).not.toHaveBeenCalled();
   });
 });
 
