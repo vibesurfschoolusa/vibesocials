@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@vercel/blob/client", () => ({ upload: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {}, refresh: () => {} }) }));
 
-import { MediaFilePicker, MEDIA_ACCEPT, pickDroppedFile } from "./media-library";
+import { MediaFilePicker, MEDIA_ACCEPT, pickDroppedFile, takePickedFile } from "./media-library";
 
 const file = (name: string, type: string, size = 2048) => ({ name, type, size }) as File;
 const render = (f: File | null) =>
@@ -53,5 +53,28 @@ describe("pickDroppedFile", () => {
 
   it("ignores an empty drop", () => {
     expect(pickDroppedFile([])).toEqual({});
+  });
+});
+
+// Review finding: pick A, drop B, pick A again. A filled input fires no change for
+// the same file, so B stayed chosen and was uploaded.
+describe("takePickedFile", () => {
+  it("hands on the picked file and empties the input, so the same file can be picked again", () => {
+    const onFile = vi.fn();
+    const a = file("a.jpg", "image/jpeg");
+    const input = { files: [a], value: "C:\fakepath\a.jpg" };
+    takePickedFile(input, onFile);
+    expect(onFile).toHaveBeenCalledWith(a);
+    expect(input.value).toBe("");
+  });
+
+  it("does nothing but empty the input when the picker was cancelled", () => {
+    const onFile = vi.fn();
+    const input = { files: [] as File[], value: "" };
+    takePickedFile(input, onFile);
+    expect(onFile).not.toHaveBeenCalled();
+    expect(input.value).toBe("");
+    takePickedFile({ files: null, value: "" }, onFile);
+    expect(onFile).not.toHaveBeenCalled();
   });
 });

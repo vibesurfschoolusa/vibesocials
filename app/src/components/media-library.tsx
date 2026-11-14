@@ -100,6 +100,19 @@ export function pickDroppedFile(files: ArrayLike<File>): { file?: File; error?: 
 }
 
 /**
+ * Hands the picked file on and empties the input. The upload uses the file
+ * held in state, so the input never needs to keep it, and an empty input means
+ * picking the same file again (after a drag and drop chose another) still
+ * fires a change; otherwise the browser stays silent and the dropped file
+ * would be the one uploaded.
+ */
+export function takePickedFile(input: { files: ArrayLike<File> | null; value: string }, onFile: (file: File) => void): void {
+  const next = input.files?.[0];
+  if (next) onFile(next);
+  input.value = "";
+}
+
+/**
  * Styled picker for "Upload new media". The real file input stays (visually
  * hidden, still focusable) inside its label, so keyboard and screen readers
  * work as before; the bordered area adds drag and drop.
@@ -142,10 +155,7 @@ export function MediaFilePicker({
         type="file"
         accept={MEDIA_ACCEPT}
         className="peer sr-only"
-        onChange={(event) => {
-          const next = event.target.files?.[0];
-          if (next) onFile(next);
-        }}
+        onChange={(event) => takePickedFile(event.target, onFile)}
       />
       <label
         htmlFor="media-file"
