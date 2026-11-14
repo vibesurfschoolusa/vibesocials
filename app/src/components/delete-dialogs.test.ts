@@ -36,6 +36,7 @@ function escaped(text: string): string {
 function team(paidPlan?: boolean): string {
   return renderToStaticMarkup(
     createElement(TeamSection, {
+      workspaceId: "ws-1",
       role: "owner",
       workspaceName: "Surf Co",
       deletion: { memberCount: 1, scheduledCount: 0, refusal: null, ...(paidPlan === undefined ? {} : { paidPlan }) },

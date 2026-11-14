@@ -12,6 +12,7 @@ import {
   monthLabel,
   showingLine,
   type MonthlyReport,
+  type PublicMonthlyReport,
   type ReportListing,
   type ReportPost,
 } from "@/lib/monthlyReport";
@@ -184,8 +185,13 @@ export function MonthlyReportView({
   titleAs: Title = "h1",
   logoPrintOnly = false,
 }: {
-  report: MonthlyReport;
-  /** The workspace's own page links the failures to Activity; the client's page does not. */
+  /** The client's page gets the public report, which has no `failed`. */
+  report: MonthlyReport | PublicMonthlyReport;
+  /**
+   * The workspace's own page: its failures are listed, linked to Activity. The
+   * client's page passes none, and leaves the failures out (they are the
+   * workspace's to fix, not the client's to read).
+   */
   activityHref?: string;
   /** The workspace page has its own Reports h1 above; the client page has no other, so it keeps h1. */
   titleAs?: "h1" | "h2";
@@ -240,19 +246,15 @@ export function MonthlyReportView({
 
       {report.listing ? <ListingSection listing={report.listing} /> : null}
 
-      {report.failed.length > 0 ? (
+      {activityHref && "failed" in report && report.failed.length > 0 ? (
         <section data-report-block className="space-y-1 text-sm">
           <h2 className="text-lg font-semibold">Did not publish</h2>
           <ul>
             {report.failed.map((entry) => (
               <li key={entry.platform}>
-                {activityHref ? (
-                  <Link href={activityHref} className="underline">
-                    {failedLine(entry)}
-                  </Link>
-                ) : (
-                  failedLine(entry)
-                )}
+                <Link href={activityHref} className="underline">
+                  {failedLine(entry)}
+                </Link>
               </li>
             ))}
           </ul>

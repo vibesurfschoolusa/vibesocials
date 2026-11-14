@@ -1,13 +1,18 @@
 import { NextResponse } from "next/server";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
+import { GOOGLE_REFUSED_MESSAGE, reviewsErrorBody } from "@/server/googleReviews";
 
 export const dynamic = "force-dynamic";
+
+const REVIEWS_FAILED_MESSAGE = "Couldn't load your Google reviews. Try again in a minute.";
 
 /**
  * GET /api/reviews?location=... - Fetch Google Business Profile reviews for a
  * specific location. Any member may read (Team Workspaces — design §1:
  * "Reply to Google reviews" is member-level, and reading is a strict subset).
+ * F7: every page Google has, up to REVIEWS_SHOWN_MAX (`truncated` when more);
+ * errors are plain sentences (reviewsErrorBody).
  */
 export async function GET(request: Request) {
   try {
@@ -47,7 +52,7 @@ export async function GET(request: Request) {
 
     if (!accessToken) {
       return NextResponse.json(
-        { error: "Missing access token" },
+        { error: GOOGLE_REFUSED_MESSAGE, reconnect: true },
         { status: 500 }
       );
     }
@@ -67,15 +72,12 @@ export async function GET(request: Request) {
     }
 
     // Fetch reviews from Google Business Profile API
-    const { fetchReviews } = await import("@/server/googleReviews");
-    const reviews = await fetchReviews(accessToken, locationName);
+    const { fetchAllReviews } = await import("@/server/googleReviews");
+    const { reviews, truncated } = await fetchAllReviews(accessToken, locationName);
 
-    return NextResponse.json({ reviews });
+    return NextResponse.json({ reviews, truncated });
   } catch (error: unknown) {
     console.error("[Reviews API] Error:", error);
-    return NextResponse.json(
-      { error: (error as Error).message || "Failed to fetch reviews" },
-      { status: 500 }
-    );
+    return NextResponse.json(reviewsErrorBody(error, REVIEWS_FAILED_MESSAGE), { status: 500 });
   }
 }

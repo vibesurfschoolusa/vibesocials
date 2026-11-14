@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { MonthlyReportView } from "@/components/reports/monthly-report";
 import { Button } from "@/components/ui/button";
-import type { MonthlyReport } from "@/lib/monthlyReport";
+import type { PublicMonthlyReport } from "@/lib/monthlyReport";
 
 const LOAD_FAILED_MESSAGE = "Couldn't load the report. Check your connection and try again.";
 
@@ -14,7 +14,7 @@ const LOAD_FAILED_MESSAGE = "Couldn't load the report. Check your connection and
  * the client has no Activity page.
  */
 export function ClientReportView({ token, month }: { token: string; month: string }) {
-  const [report, setReport] = useState<MonthlyReport | null>(null);
+  const [report, setReport] = useState<PublicMonthlyReport | null>(null);
   // A failed load: the server's sentence, or "" for no answer (network).
   const [error, setError] = useState<string | null>(null);
 
@@ -25,7 +25,7 @@ export function ClientReportView({ token, month }: { token: string; month: strin
         `/api/review-link/${encodeURIComponent(token)}/report?month=${encodeURIComponent(month)}`,
         { cache: "no-store" },
       );
-      const data = (await response.json().catch(() => null)) as (MonthlyReport & { error?: string }) | null;
+      const data = (await response.json().catch(() => null)) as (PublicMonthlyReport & { error?: string }) | null;
       if (!response.ok || !data || typeof data.month !== "string") {
         setError(data?.error ?? "");
         return;

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 
+import { head } from "@vercel/blob";
 import { NextResponse } from "next/server";
 
 import { getWorkspaceContext, getWorkspaceMemberCount } from "@/lib/workspace";
@@ -10,8 +11,8 @@ import { logoAddressRefusal } from "@/lib/workspaceLogo";
 import { findOverlongCaption, pickPlatformOverrides } from "@/lib/captionLimits";
 import { captionTooLongResponse, invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
-import { parsePostMediaFields, type PostMediaFields } from "@/lib/mediaInput";
-import { readAltTextField, validatePostMediaList, type PostMediaEntry } from "@/lib/postMedia";
+import { parsePostMediaFields, withStoredMediaFacts, type PostMediaFields } from "@/lib/mediaInput";
+import { MAX_POST_MEDIA, readAltTextField, validatePostMediaList, type PostMediaEntry } from "@/lib/postMedia";
 import {
   INVALID_WORKSPACE_ID_CODE,
   INVALID_WORKSPACE_ID_MESSAGE,
@@ -679,8 +680,37 @@ export async function POST(request: Request) {
   // video. The files after it carry their own in `extraMedia`. The create
   // helper writes them with the media rows, in the post's transaction.
   let firstAltText: string | undefined;
+  // F5: a new file's size counts against the workspace's storage limit, so its
+  // size and type are read from storage (head) and put in place of the ones the
+  // request named, before the checks below run on them.
+  let fileBody: Record<string, unknown> = body as Record<string, unknown>;
+  const storedFacts = (raw: unknown) =>
+    typeof raw === "object" && raw !== null && !Array.isArray(raw)
+      ? withStoredMediaFacts(
+          raw as Record<string, unknown>,
+          typeof (raw as { blobUrl?: unknown }).blobUrl === "string"
+            ? canonicalBlobUrl((raw as { blobUrl: string }).blobUrl)
+            : null,
+          head,
+        )
+      : Promise.resolve({ ok: true as const, value: raw as Record<string, unknown> });
+  if (hasMediaList && Array.isArray(body.media) && body.media.length <= MAX_POST_MEDIA) {
+    const checked = await Promise.all(body.media.map(storedFacts));
+    const refusedAt = checked.findIndex((result) => !result.ok);
+    const refused = checked[refusedAt];
+    if (refused && !refused.ok) {
+      const error = checked.length > 1 ? `File ${refusedAt + 1}: ${refused.error}` : refused.error;
+      return NextResponse.json({ error }, { status: 400 });
+    }
+    fileBody = { ...body, media: checked.map((result) => (result.ok ? result.value : null)) };
+  } else if (hasBlobUrl) {
+    const checked = await storedFacts(body);
+    if (!checked.ok) return NextResponse.json({ error: checked.error }, { status: 400 });
+    fileBody = checked.value;
+  }
+
   if (hasMediaList) {
-    const listValidation = validatePostMediaList(body.media);
+    const listValidation = validatePostMediaList(fileBody.media);
     if (!listValidation.ok) {
       return NextResponse.json({ error: listValidation.error }, { status: 400 });
     }
@@ -701,7 +731,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: logoRefusal }, { status: 400 });
     }
     storedBlobUrl = canonical;
-    const mediaValidation = parsePostMediaFields(body);
+    const mediaValidation = parsePostMediaFields(fileBody);
     if (!mediaValidation.ok) {
       return NextResponse.json({ error: mediaValidation.error }, { status: 400 });
     }

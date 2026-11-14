@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
+import { readJsonObject } from "@/lib/http";
 import { generateInviteToken, INVITE_TTL_MS } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
 import { requireOwnerContext } from "@/lib/workspace";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
 /**
  * GET /api/workspaces/invites
@@ -64,13 +66,21 @@ export async function GET() {
  *
  * Returns the raw token embedded in the join URL; this is the ONLY time the
  * raw token is ever available (only its hash is persisted).
+ *
+ * POST and DELETE carry `{ workspaceId }`, the workspace the Team card was
+ * rendered for (F3): the active workspace is one cookie for every tab, so a
+ * stale tab must not invite people into, or revoke the link of, another one.
  */
-export async function POST() {
+export async function POST(request: Request) {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) {
     return contextOrError;
   }
   const context = contextOrError;
+  const refusal = renderedWorkspaceRefusal((await readJsonObject(request))?.workspaceId, context.workspace.id);
+  if (refusal) {
+    return refusal;
+  }
 
   const { raw, hash } = generateInviteToken();
   const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
@@ -121,12 +131,16 @@ export async function POST() {
  * there is nothing active still returns 200 { ok: true } (the resulting
  * state — no active invite — is identical either way).
  */
-export async function DELETE() {
+export async function DELETE(request: Request) {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) {
     return contextOrError;
   }
   const context = contextOrError;
+  const refusal = renderedWorkspaceRefusal((await readJsonObject(request))?.workspaceId, context.workspace.id);
+  if (refusal) {
+    return refusal;
+  }
 
   await prisma.workspaceInvite.updateMany({
     where: { workspaceId: context.workspace.id, revokedAt: null },

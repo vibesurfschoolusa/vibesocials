@@ -84,11 +84,12 @@ const OWNER_CONTEXT = {
   memberCount: 1,
 };
 
-function jsonRequest(body: unknown): Request {
+/** The Team card sends the workspace its page was rendered for (F3). */
+function jsonRequest(body: Record<string, unknown>): Request {
   return new Request("http://localhost/api/workspaces/active", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ workspaceId: "ws-1", ...body }),
   });
 }
 
@@ -191,6 +192,31 @@ describe("PATCH /api/workspaces/active", () => {
   });
 });
 
+// F3 (R1 security H1): a rename typed in a tab left on workspace A must not
+// rename workspace B.
+describe("PATCH /api/workspaces/active and the rendered workspace", () => {
+  it("409s another workspace's id, and renames nothing", async () => {
+    const response = await PATCH(jsonRequest({ name: "New name", workspaceId: "ws-2" }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED" });
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("400s a rename without the id, and renames nothing", async () => {
+    const response = await PATCH(
+      new Request("http://localhost/api/workspaces/active", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: "New name" }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("DELETE /api/workspaces/active", () => {
   const FILE = (name: string) => `https://abc123.public.blob.vercel-storage.com/${name}.png`;
 
@@ -204,11 +230,11 @@ describe("DELETE /api/workspaces/active", () => {
   let otherMembers: { user: { id: string; name: string | null; email: string } }[];
   let remainingMemberships: Record<string, number>;
 
-  function deleteRequest(body: unknown): Request {
+  function deleteRequest(body: Record<string, unknown>): Request {
     return new Request("http://localhost/api/workspaces/active", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ workspaceId: "ws-1", ...body }),
     });
   }
 
@@ -514,15 +540,36 @@ describe("DELETE /api/workspaces/active", () => {
     ]);
   });
 
-  it("acts only on the caller's active owned workspace, whatever the body says", async () => {
+  // F3 (R1 client journey L9): the typed name alone is not enough, since two
+  // workspaces can share a name; the id the page was rendered for must match.
+  it("409s the right name with another workspace's id, and deletes nothing", async () => {
+    const response = await DELETE(deleteRequest({ confirmName: "Old name", workspaceId: "ws-victim" }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED" });
+    nothingWritten();
+  });
+
+  it("400s the right name without an id, and deletes nothing", async () => {
+    const response = await DELETE(
+      new Request("http://localhost/api/workspaces/active", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmName: "Old name" }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    nothingWritten();
+  });
+
+  it("acts only on the caller's active owned workspace, whatever else the body says", async () => {
     media = [
       { id: "m1", workspaceId: "ws-1", storageLocation: FILE("mine") },
       { id: "m2", workspaceId: "ws-victim", storageLocation: FILE("theirs") },
     ];
 
-    const response = await DELETE(
-      deleteRequest({ confirmName: "Old name", workspaceId: "ws-victim", id: "ws-victim" }),
-    );
+    const response = await DELETE(deleteRequest({ confirmName: "Old name", id: "ws-victim" }));
 
     expect(response.status).toBe(200);
     expect(m.workspaceDeleteMany).toHaveBeenCalledTimes(1);

@@ -87,7 +87,10 @@ describe("GET /api/review-link/[token]/report", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("no-store");
-    expect(await response.json()).toEqual(report());
+    // Everything but the failures, which are the workspace's to fix (F5).
+    const forClient: Partial<ReturnType<typeof report>> = report();
+    delete forClient.failed;
+    expect(await response.json()).toEqual(forClient);
     expect(findActiveReviewLinkMock).toHaveBeenCalledWith(TOKEN);
     expect(buildMonthlyReportMock).toHaveBeenCalledWith("ws-1", "2026-10", expect.any(Date));
   });
@@ -147,9 +150,7 @@ describe("GET /api/review-link/[token]/report", () => {
         ".listing.totals.directionRequests",
         ".listing.totals.websiteClicks",
         ".listing.previous",
-        ".failed",
-        ".failed[].platform",
-        ".failed[].count",
+        // No ".failed": the client's report leaves the failures out (F5).
       ].sort(),
     );
   });

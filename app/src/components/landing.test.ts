@@ -67,3 +67,12 @@ describe("Landing header brand (S1 fix round 1)", () => {
     expect(header).not.toContain('href="/"');
   });
 });
+
+// F7 (R1 L3): cancelling is in the Queue, retrying a failed post is in Activity.
+describe("Landing: Schedule and drafts", () => {
+  it("says where cancel and retry are", () => {
+    const html = renderToStaticMarkup(createElement(Landing));
+    expect(html).toContain("Cancel a post from the Queue, or retry a failed one from Activity.");
+    expect(html).not.toContain("Cancel or retry any time from the queue.");
+  });
+});

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { BILLING_TERMS_LAST_UPDATED } from "./billingTerms";
-import { billingOnLastUpdated, legalDateValue } from "./legalLastUpdated";
+import { PRIVACY_LAST_UPDATED, billingOnLastUpdated, legalDateValue, privacyLastUpdated } from "./legalLastUpdated";
 import { LEGAL_LAST_UPDATED } from "./siteInfo";
 
 /** The Terms' and Privacy's "Last updated" with billing on: the later of the two texts' dates. */
@@ -49,5 +49,42 @@ describe("billingOnLastUpdated", () => {
         ? BILLING_TERMS_LAST_UPDATED
         : LEGAL_LAST_UPDATED;
     expect(billingOnLastUpdated()).toBe(expected);
+  });
+});
+
+// F7 (R1 H1): the privacy policy changed on its own, so it carries its own date;
+// the Terms keep theirs.
+describe("privacyLastUpdated", () => {
+  it("is a date written the way the legal pages write it, no earlier than the shared one", () => {
+    expect(legalDateValue(PRIVACY_LAST_UPDATED)).not.toBeNaN();
+    expect(legalDateValue(PRIVACY_LAST_UPDATED)).toBeGreaterThanOrEqual(legalDateValue(LEGAL_LAST_UPDATED));
+  });
+
+  it("billing off: the later of the privacy text's date and the shared date", () => {
+    expect(privacyLastUpdated(false, "November 14, 2026", "November 12, 2026")).toBe("November 14, 2026");
+    expect(privacyLastUpdated(false, "November 14, 2026", "December 1, 2026")).toBe("December 1, 2026");
+  });
+
+  it("billing on: the billing text counts too", () => {
+    expect(privacyLastUpdated(true, "November 14, 2026", "November 12, 2026", "December 2, 2026")).toBe(
+      "December 2, 2026",
+    );
+    expect(privacyLastUpdated(true, "November 14, 2026", "November 12, 2026", "November 10, 2026")).toBe(
+      "November 14, 2026",
+    );
+  });
+
+  it("billing off ignores the billing text's date", () => {
+    expect(privacyLastUpdated(false, "November 14, 2026", "November 12, 2026", "December 2, 2026")).toBe(
+      "November 14, 2026",
+    );
+  });
+
+  it("an unreadable date is skipped, so the page still renders a date", () => {
+    expect(privacyLastUpdated(false, "Nov 14", "November 12, 2026")).toBe("November 12, 2026");
+  });
+
+  it("defaults to today's texts", () => {
+    expect(privacyLastUpdated(false)).toBe(PRIVACY_LAST_UPDATED);
   });
 });

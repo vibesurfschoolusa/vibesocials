@@ -6,7 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BILLING_TERMS_LAST_UPDATED } from "@/lib/billingTerms";
-import { billingOnLastUpdated, legalDateValue } from "@/lib/legalLastUpdated";
+import { billingOnLastUpdated, legalDateValue, privacyLastUpdated } from "@/lib/legalLastUpdated";
 import { LEGAL_LAST_UPDATED } from "@/lib/siteInfo";
 
 import PrivacyPage from "./privacy/page";
@@ -80,10 +80,12 @@ describe("Privacy with billing on", () => {
     );
   });
 
-  it("shows the same date as the Terms, once", () => {
+  // F7: the policy changed on its own (what the app reads), so its date can be later than the Terms'.
+  it("shows its own latest date, once, never earlier than the Terms'", () => {
     const page = text(PrivacyPage());
-    expect(page).toContain(`Last updated: ${billingOnLastUpdated()}`);
+    expect(page).toContain(`Last updated: ${privacyLastUpdated(true)}`);
     expect(page.match(/Last updated:/g)).toHaveLength(1);
+    expect(legalDateValue(privacyLastUpdated(true))).toBeGreaterThanOrEqual(legalDateValue(billingOnLastUpdated()));
   });
 });
 

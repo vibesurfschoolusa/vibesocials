@@ -42,7 +42,10 @@ function row(overrides: Partial<BulkRow> = {}): BulkRow {
   };
 }
 
-function render(r: BulkRow, extra: { storyRefusal?: string | null; coverOpen?: boolean; locked?: boolean } = {}) {
+function render(
+  r: BulkRow,
+  extra: { storyRefusal?: string | null; coverOpen?: boolean; locked?: boolean; aiCaptions?: boolean } = {},
+) {
   return renderToStaticMarkup(
     createElement(BulkPostRow, {
       row: r,
@@ -53,6 +56,7 @@ function render(r: BulkRow, extra: { storyRefusal?: string | null; coverOpen?: b
       minWhen: "2026-11-14T10:00",
       storyRefusal: extra.storyRefusal ?? null,
       coverOpen: extra.coverOpen ?? false,
+      ...(extra.aiCaptions === undefined ? {} : { aiCaptions: extra.aiCaptions }),
       onConfirmInQueue: noop,
       onSendAgain: noop,
       onCaptionChange: noop,
@@ -163,5 +167,35 @@ describe("Add many row: a Story it cannot be", () => {
       storyRefusal: "Instagram Stories take videos up to 60 seconds. This one is 75 seconds.",
     });
     expect(html).toContain("Instagram Stories take videos up to 60 seconds. This one is 75 seconds.");
+  });
+});
+
+// F7 (R1 M2): with "Write captions with AI" off, the row starts with an empty
+// box and offers nothing that would send its file to the AI.
+describe("Add many row: Write captions with AI off", () => {
+  it("shows an empty caption box, no Write again", () => {
+    const html = render(row({ caption: "" }), { aiCaptions: false });
+    expect(html).toMatch(/<textarea[^>]*placeholder="Write a caption"[^>]*><\/textarea>/);
+    expect(html).not.toContain(">Write again<");
+  });
+
+  it("still offers Improve once the person has written a caption", () => {
+    expect(render(row({ caption: "Typed" }), { aiCaptions: false })).toContain(">Improve<");
+  });
+
+  it("on (the default) keeps Write again", () => {
+    expect(render(row())).toContain(">Write again<");
+    expect(render(row(), { aiCaptions: true })).toContain(">Write again<");
+  });
+});
+
+// Review point 1: with the switch off, a Media photo offers no "Write it for me" either.
+describe("Add many row: Media photo description with AI off", () => {
+  it("hides Write it for me when the switch is off", () => {
+    expect(render(row({ mediaItemId: "m1" }), { aiCaptions: false })).not.toContain(">Write it for me<");
+  });
+
+  it("shows it when the switch is on", () => {
+    expect(render(row({ mediaItemId: "m1" }))).toContain(">Write it for me<");
   });
 });

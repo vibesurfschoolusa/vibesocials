@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { ClientPageShell } from "@/components/client-page-header";
 import { findClientPageLogo } from "@/lib/clientPageLogo";
@@ -25,6 +26,17 @@ export const metadata: Metadata = {
   referrer: "no-referrer",
 };
 
+/** F7 (R1 L8): someone sending files can read what happens to them. */
+function LegalLinks() {
+  return (
+    <p className="mt-8 text-center text-xs text-muted-foreground">
+      <Link href="/terms" className="underline underline-offset-2 hover:text-foreground">Terms</Link>
+      {" · "}
+      <Link href="/privacy" className="underline underline-offset-2 hover:text-foreground">Privacy Policy</Link>
+    </p>
+  );
+}
+
 export default async function UploadLinkPage({ params }: UploadLinkPageProps) {
   const { token } = await params;
   const link = await findActiveUploadLink(token);
@@ -33,6 +45,7 @@ export default async function UploadLinkPage({ params }: UploadLinkPageProps) {
     return (
       <ClientPageShell workspace={null}>
         <p className="text-base">{UPLOAD_LINK_INACTIVE_MESSAGE}</p>
+        <LegalLinks />
       </ClientPageShell>
     );
   }
@@ -41,6 +54,7 @@ export default async function UploadLinkPage({ params }: UploadLinkPageProps) {
   return (
     <ClientPageShell workspace={{ name: link.workspaceName, logoUrl }} title="Send photos and videos">
       <UploadLinkForm token={token} />
+      <LegalLinks />
     </ClientPageShell>
   );
 }

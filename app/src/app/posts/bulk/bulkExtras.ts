@@ -102,6 +102,10 @@ export function wantsAltText(row: AltTextRowState): boolean {
  * A row's caption step, then its automatic description whatever the caption's
  * outcome (a failed caption still gets one). `describe` marks the row asked,
  * so Write again does not describe it a second time.
+ *
+ * F7 (R1 M2): with "Write captions with AI" off (`ai: false`), nothing goes to
+ * the AI: only `withoutAi` runs, which reads what the row needs from its own
+ * file (a video's length and thumbnail) and leaves the caption box empty.
  */
 export async function captionThenDescribe(
   id: string,
@@ -109,8 +113,14 @@ export async function captionThenDescribe(
     writeCaption(id: string): Promise<void>;
     row(id: string): AltTextRowState | undefined;
     describe(id: string): Promise<void>;
+    withoutAi?(id: string): Promise<void>;
   },
+  { ai }: { ai: boolean } = { ai: true },
 ): Promise<void> {
+  if (!ai) {
+    await steps.withoutAi?.(id);
+    return;
+  }
   try {
     await steps.writeCaption(id);
   } finally {
@@ -325,4 +335,32 @@ export function readVideoDuration(source: File | string, timeoutMs = 10_000): Pr
     const timer = setTimeout(() => finish(null), timeoutMs);
     video.src = objectUrl ?? (source as string);
   });
+}
+
+/** Where this browser keeps Add many's "Write captions with AI" choice (F7). */
+export const AI_CAPTIONS_STORAGE_KEY = "vibe.bulkAiCaptions";
+
+type ChoiceStorage = Partial<Pick<Storage, "getItem" | "setItem">>;
+
+/**
+ * Whether Add many writes captions with AI, as this browser last chose. On
+ * unless it was turned off here; storage that is missing, blocked (reading
+ * `window.localStorage` itself throws in some private windows) or holds
+ * anything else reads as on.
+ */
+export function readAiCaptionsChoice(getStorage: () => ChoiceStorage | null | undefined): boolean {
+  try {
+    return getStorage()?.getItem?.(AI_CAPTIONS_STORAGE_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+/** Remembers the choice; a storage failure only means it is not remembered. */
+export function saveAiCaptionsChoice(getStorage: () => ChoiceStorage | null | undefined, on: boolean): void {
+  try {
+    getStorage()?.setItem?.(AI_CAPTIONS_STORAGE_KEY, on ? "on" : "off");
+  } catch {
+    // Not remembered; the switch still works on this page.
+  }
 }

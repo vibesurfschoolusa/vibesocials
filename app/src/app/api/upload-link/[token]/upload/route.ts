@@ -9,6 +9,7 @@ import { MAX_MEDIA_BYTES, UPLOAD_ALLOWED_CONTENT_TYPES } from "@/lib/mediaInput"
 import { unsupportedTypeMessage } from "@/lib/prepareUploadFile";
 import { checkRateLimit } from "@/lib/rateLimit";
 import {
+  UPLOAD_LINK_BYTES_LIMIT_MESSAGE,
   UPLOAD_LINK_DAILY_LIMIT_MESSAGE,
   UPLOAD_LINK_FILES_PER_DAY,
   UPLOAD_LINK_INACTIVE_MESSAGE,
@@ -21,6 +22,8 @@ import {
 } from "@/lib/uploadLink";
 import { findActiveUploadLink } from "@/server/uploadLink";
 import { checkStorageLimit } from "@/server/usage/workspaceUsage";
+
+import { consumeUploadLinkDayBytes, releaseUploadLinkReservation } from "./linkBytes";
 
 /**
  * POST /api/upload-link/[token]/upload — a storage upload token for someone who
@@ -48,16 +51,16 @@ function tooMany(error: string, retryAfterSeconds: number | undefined): NextResp
   );
 }
 
-/** The content type the page says the file has, sent in the token request's clientPayload. */
-function readContentType(clientPayload: unknown): unknown {
-  if (typeof clientPayload !== "string") return undefined;
+/** What the page says about the file (its type and size), sent in the token request's clientPayload. */
+function readClientPayload(clientPayload: unknown): { contentType?: unknown; size?: unknown } {
+  if (typeof clientPayload !== "string") return {};
   try {
     const parsed: unknown = JSON.parse(clientPayload);
     return typeof parsed === "object" && parsed !== null
-      ? (parsed as { contentType?: unknown }).contentType
-      : undefined;
+      ? (parsed as { contentType?: unknown; size?: unknown })
+      : {};
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -91,12 +94,20 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
   if (!payload || typeof payload.pathname !== "string") {
     return NextResponse.json({ error: "A file name is required." }, { status: 400 });
   }
-  const contentType = readContentType(payload.clientPayload);
+  const claimed = readClientPayload(payload.clientPayload);
+  const contentType = claimed.contentType;
   if (typeof contentType !== "string" || !UPLOAD_ALLOWED_CONTENT_TYPES.includes(contentType)) {
     return NextResponse.json(
       { error: unsupportedTypeMessage(typeof contentType === "string" ? contentType : "unknown") },
       { status: 400 },
     );
+  }
+  // The size asked for is counted against the link's day and signed into the
+  // token as its maximum, so the stored file can be no larger. A page that
+  // names no size is counted as the largest file.
+  const size = claimed.size === undefined ? MAX_MEDIA_BYTES : claimed.size;
+  if (typeof size !== "number" || !Number.isSafeInteger(size) || size <= 0 || size > MAX_MEDIA_BYTES) {
+    return NextResponse.json({ error: "File is too large (max 512 MB)." }, { status: 400 });
   }
 
   const dayLimit = await checkRateLimit({
@@ -108,8 +119,15 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
   });
   if (!dayLimit.allowed) return tooMany(UPLOAD_LINK_DAILY_LIMIT_MESSAGE, dayLimit.retryAfterSeconds);
 
+  const bytesLimit = await consumeUploadLinkDayBytes(link.id, size);
+  if (!bytesLimit.allowed) {
+    await releaseUploadLinkReservation(link.id, { file: true, bytes: 0 });
+    return tooMany(UPLOAD_LINK_BYTES_LIMIT_MESSAGE, bytesLimit.retryAfterSeconds);
+  }
+
   const storageFull = await checkStorageLimit(link.workspaceId);
   if (storageFull) {
+    await releaseUploadLinkReservation(link.id, { file: true, bytes: size });
     return NextResponse.json(
       { error: UPLOAD_LINK_STORAGE_FULL_MESSAGE, code: storageFull.code },
       { status: 403 },
@@ -135,7 +153,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
         logger.info("[upload-link] Generating token", { pathname: signedPathname, linkId: link.id });
         return {
           allowedContentTypes: [contentType],
-          maximumSizeInBytes: MAX_MEDIA_BYTES,
+          maximumSizeInBytes: size,
           addRandomSuffix: false,
           allowOverwrite: false,
         };
@@ -144,6 +162,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
     return NextResponse.json({ ...jsonResponse, pathname });
   } catch (error) {
     logger.error("[upload-link] Token error", { error, linkId: link.id });
+    await releaseUploadLinkReservation(link.id, { file: true, bytes: size });
     return NextResponse.json({ error: "Couldn't start the upload. Try again." }, { status: 400 });
   }
 }

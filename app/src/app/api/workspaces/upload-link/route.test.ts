@@ -43,7 +43,7 @@ import {
   INVALID_WORKSPACE_ID_CODE,
   INVALID_WORKSPACE_ID_MESSAGE,
   WORKSPACE_CHANGED_CODE,
-  WORKSPACE_CHANGED_MESSAGE,
+  WORKSPACE_CHANGED_SAVE_MESSAGE,
 } from "@/lib/workspaceChanged";
 
 import { DELETE, GET, POST } from "./route";
@@ -269,7 +269,7 @@ describe("the page's workspace (another tab may have switched it)", () => {
     ]) {
       expect(response.status).toBe(409);
       await expect(response.json()).resolves.toEqual({
-        error: WORKSPACE_CHANGED_MESSAGE,
+        error: WORKSPACE_CHANGED_SAVE_MESSAGE,
         code: WORKSPACE_CHANGED_CODE,
       });
     }
@@ -294,11 +294,19 @@ describe("the page's workspace (another tab may have switched it)", () => {
     expect(updateManyMock).not.toHaveBeenCalled();
   });
 
-  it("acts as before when the id is absent, as POST /api/media does", async () => {
+  // F3 (2026-11-14 review): a change needs the id; only reading works without it.
+  it("reads as before when the id is absent", async () => {
     findFirstMock.mockResolvedValue(null);
     expect((await GET(getRequest(null))).status).toBe(200);
-    expect((await POST(bodyRequest("POST", undefined))).status).toBe(200);
-    expect((await DELETE(bodyRequest("DELETE", {}))).status).toBe(200);
+  });
+
+  it("refuses a change without the id (a page from before it was sent), and writes nothing", async () => {
+    for (const response of [await POST(bodyRequest("POST", {})), await DELETE(bodyRequest("DELETE", {}))]) {
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ code: "MISSING_WORKSPACE_ID" });
+    }
+    expect(transactionMock).not.toHaveBeenCalled();
+    expect(updateManyMock).not.toHaveBeenCalled();
   });
 
   it("checks the owner first: a member gets 403, not 409", async () => {

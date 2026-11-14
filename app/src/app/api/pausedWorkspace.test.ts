@@ -112,8 +112,8 @@ const ALLOWED: RouteCase[] = [
   { name: "DELETE /api/posts/[id]", load: () => import("./posts/[postJobId]/route"), method: "DELETE", params: { postJobId: "job-1" } },
   { name: "POST /api/posts/[id]/cancel", load: () => import("./posts/[postJobId]/cancel/route"), method: "POST", params: { postJobId: "job-1" } },
   { name: "DELETE /api/media/[id]", load: () => import("./media/[id]/route"), method: "DELETE", params: { id: "media-1" } },
-  { name: "POST /api/settings", load: () => import("./settings/route"), method: "POST", body: { defaultHashtags: "#surf" } },
-  { name: "DELETE /api/connections/[platform] (disconnect)", load: () => import("./connections/[platform]/route"), method: "DELETE", params: { platform: "x" } },
+  { name: "POST /api/settings", load: () => import("./settings/route"), method: "POST", body: { defaultHashtags: "#surf", workspaceId: "ws-1" } },
+  { name: "DELETE /api/connections/[platform] (disconnect)", load: () => import("./connections/[platform]/route"), method: "DELETE", params: { platform: "x" }, body: { workspaceId: "ws-1" } },
   { name: "DELETE /api/auth/account (delete the account)", load: () => import("./auth/account/route"), method: "DELETE", body: { confirm: "DELETE" } },
 ];
 

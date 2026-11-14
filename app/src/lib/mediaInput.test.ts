@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   FILENAME_MAX_LENGTH,
   MAX_MEDIA_BYTES,
+  STORED_FILE_UNREADABLE_MESSAGE,
   isImageOrVideoMimeType,
   parsePostMediaFields,
+  readStoredMedia,
+  withStoredMediaFacts,
 } from "./mediaInput";
 
 describe("isImageOrVideoMimeType", () => {
@@ -136,5 +139,68 @@ describe("parsePostMediaFields", () => {
 
   it("uses the same 512 MB cap POST /api/media enforces", () => {
     expect(MAX_MEDIA_BYTES).toBe(512 * 1024 * 1024);
+  });
+});
+
+describe("readStoredMedia", () => {
+  const URL = "https://store1.public.blob.vercel-storage.com/1731600000000-abc-a.mp4";
+
+  it("takes the size and type from storage", async () => {
+    const head = vi.fn().mockResolvedValue({ size: 500 * 1024 * 1024, contentType: "video/mp4" });
+    await expect(readStoredMedia(URL, head)).resolves.toEqual({
+      ok: true,
+      value: { sizeBytes: 500 * 1024 * 1024, mimeType: "video/mp4" },
+    });
+    expect(head).toHaveBeenCalledWith(URL);
+  });
+
+  it("refuses with a plain sentence when storage cannot be read or has no such file", async () => {
+    const head = vi.fn().mockRejectedValue(new Error("not found"));
+    await expect(readStoredMedia(URL, head)).resolves.toEqual({ ok: false, error: STORED_FILE_UNREADABLE_MESSAGE });
+    expect(STORED_FILE_UNREADABLE_MESSAGE).toBe("Couldn't find this file in storage. Upload it again.");
+  });
+
+  it.each([
+    [{ size: 10, contentType: "application/pdf" }, "Only photos and videos can be added."],
+    [{ size: 10, contentType: "" }, "Only photos and videos can be added."],
+    // Not a type the upload token allows (lib/mediaInput.ts UPLOAD_ALLOWED_CONTENT_TYPES).
+    [{ size: 10, contentType: "image/heic" }, "Only photos and videos can be added."],
+    [{ size: 10, contentType: "video/x-msvideo" }, "Only photos and videos can be added."],
+    [{ size: 0, contentType: "image/png" }, "This file is empty. Upload it again."],
+    [{ size: MAX_MEDIA_BYTES + 1, contentType: "video/mp4" }, "File is too large (max 512 MB)."],
+    [{ size: Number.NaN, contentType: "image/png" }, "This file is empty. Upload it again."],
+  ])("refuses what storage says is not postable: %o", async (stored, error) => {
+    const head = vi.fn().mockResolvedValue(stored);
+    await expect(readStoredMedia(URL, head)).resolves.toEqual({ ok: false, error });
+  });
+});
+
+describe("withStoredMediaFacts", () => {
+  const URL = "https://store1.public.blob.vercel-storage.com/1731600000000-abc-a.jpg";
+
+  it("replaces the size and type the request named with the stored ones", async () => {
+    const head = vi.fn().mockResolvedValue({ size: 500 * 1024 * 1024, contentType: "image/jpeg" });
+    await expect(
+      withStoredMediaFacts({ blobUrl: URL, filename: "a.jpg", mimeType: "image/jpg", sizeBytes: 1 }, URL, head),
+    ).resolves.toEqual({
+      ok: true,
+      value: { blobUrl: URL, filename: "a.jpg", mimeType: "image/jpeg", sizeBytes: 500 * 1024 * 1024 },
+    });
+    expect(head).toHaveBeenCalledWith(URL);
+  });
+
+  it("leaves an entry without a usable address alone, for the usual checks to refuse", async () => {
+    const head = vi.fn();
+    const raw = { blobUrl: "https://evil.example/x.jpg", mimeType: "image/jpeg" };
+    await expect(withStoredMediaFacts(raw, null, head)).resolves.toEqual({ ok: true, value: raw });
+    expect(head).not.toHaveBeenCalled();
+  });
+
+  it("passes a storage refusal through", async () => {
+    const head = vi.fn().mockRejectedValue(new Error("down"));
+    await expect(withStoredMediaFacts({ blobUrl: URL }, URL, head)).resolves.toEqual({
+      ok: false,
+      error: STORED_FILE_UNREADABLE_MESSAGE,
+    });
   });
 });

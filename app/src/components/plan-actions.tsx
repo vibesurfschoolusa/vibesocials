@@ -35,10 +35,13 @@ async function openStripe(url: string, body?: unknown): Promise<string | null> {
 }
 
 export function PlanActions({
+  workspaceId,
   offers,
   manage,
   yearlyOffers = [],
 }: {
+  /** The workspace this page was rendered for; the billing routes refuse any other (F3). */
+  workspaceId: string;
   offers: PlanOfferView[];
   manage: boolean;
   /** P1: the plans with a yearly price; Q1: their buttons show under Yearly. */
@@ -53,7 +56,7 @@ export function PlanActions({
   async function run(key: string, url: string, body?: unknown) {
     setBusy(key);
     setError(null);
-    const message = await openStripe(url, body);
+    const message = await openStripe(url, { ...(body as Record<string, unknown> | undefined), workspaceId });
     // On success the page is leaving; keep the button busy until it does.
     if (message) {
       setError(message);

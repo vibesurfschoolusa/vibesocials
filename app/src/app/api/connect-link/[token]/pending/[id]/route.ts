@@ -116,7 +116,7 @@ export async function POST(request: Request, context: RouteContext) {
     if (await placeTaken(link.workspaceId, pending.platform)) {
       return NextResponse.json(
         {
-          error: `${PLATFORM_LABELS[pending.platform]} is already connected. Ask ${link.workspaceName} if it should be changed.`,
+          error: `${PLATFORM_LABELS[pending.platform]} is already connected. Ask the person who sent you this link if it should be changed.`,
         },
         { status: 409 },
       );

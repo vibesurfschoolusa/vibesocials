@@ -116,11 +116,15 @@ function listingTotals(t: ListingMetricTotals): ListingMetricTotals {
   return { views: t.views, calls: t.calls, directionRequests: t.directionRequests, websiteClicks: t.websiteClicks };
 }
 
+/** The client's report: no failures, which are the workspace's to fix (F5). */
+export type PublicMonthlyReport = Omit<MonthlyReport, "failed">;
+
 /**
  * The report rebuilt field by field, for the signed-out page: whatever else an
  * object carries (a later field, a row's id), only the documented fields leave.
+ * The failures are left out, so a client cannot read them from the network.
  */
-export function publicMonthlyReport(report: MonthlyReport): MonthlyReport {
+export function publicMonthlyReport(report: MonthlyReport): PublicMonthlyReport {
   const counts = (list: { platform: string; count: number }[]) =>
     list.map(({ platform, count }) => ({ platform, count }));
   return {
@@ -155,7 +159,6 @@ export function publicMonthlyReport(report: MonthlyReport): MonthlyReport {
           previous: report.listing.previous ? listingTotals(report.listing.previous) : null,
         }
       : null,
-    failed: counts(report.failed),
   };
 }
 

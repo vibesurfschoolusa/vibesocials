@@ -19,13 +19,22 @@ export const UPLOAD_LINK_DAILY_LIMIT_MESSAGE =
 export const UPLOAD_LINK_IP_LIMIT_MESSAGE =
   "Too many files from this network in the last hour. Try again later.";
 
+export const UPLOAD_LINK_BYTES_LIMIT_MESSAGE =
+  "This link has taken 20 GB of files today, its daily limit. Send the rest tomorrow.";
+
 export const UPLOAD_LINK_CREATE_LIMIT_MESSAGE =
   "Too many new links in the last hour. Try again later.";
 
 /** Files one link takes in a UTC day, counted on the upload token and on the registration. */
 export const UPLOAD_LINK_FILES_PER_DAY = 200;
-/** Upload tokens, and separately registrations, one IP address gets in an hour. */
-export const UPLOAD_LINK_IP_PER_HOUR = 60;
+/**
+ * Upload tokens, and separately registrations, one IP address gets in an hour.
+ * Well above a link's day (a client sends a whole shoot from one network); it
+ * only stops a network hammering many links at once.
+ */
+export const UPLOAD_LINK_IP_PER_HOUR = 300;
+/** Bytes one link takes in a UTC day, counted on the upload token from the size asked for. */
+export const UPLOAD_LINK_BYTES_PER_DAY = 20 * 1024 * 1024 * 1024;
 /** New links (create or replace) one owner makes in an hour. */
 export const UPLOAD_LINK_CREATES_PER_HOUR = 10;
 /** Longest sender name, and longest note. */

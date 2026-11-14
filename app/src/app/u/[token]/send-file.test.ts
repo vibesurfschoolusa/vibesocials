@@ -52,7 +52,8 @@ describe("sendClientFile", () => {
       type: "blob.generate-client-token",
       payload: {
         pathname: "IMG_1.jpg",
-        clientPayload: JSON.stringify({ contentType: "image/jpeg" }),
+        // The prepared (converted) file's real size: the link's day is counted in bytes.
+        clientPayload: JSON.stringify({ contentType: "image/jpeg", size: 3 }),
         multipart: false,
       },
     });

@@ -18,12 +18,7 @@ import { openSecret, sealSecret } from "@/lib/tokenCrypto";
 import { planFeatureResponse } from "@/lib/planFeatureResponse";
 import { pausedByPlan } from "@/lib/planFeatures";
 import { isWorkspaceOwner, requireOwnerContext } from "@/lib/workspace";
-import {
-  INVALID_WORKSPACE_ID_CODE,
-  INVALID_WORKSPACE_ID_MESSAGE,
-  WORKSPACE_CHANGED_CODE,
-  WORKSPACE_CHANGED_MESSAGE,
-} from "@/lib/workspaceChanged";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
 /**
  * The workspace's client connect link (2026-11-11), for its owners only.
@@ -35,15 +30,12 @@ import {
  * Nothing is sent to any platform when a link is created or revoked.
  */
 
-function workspaceMismatch(sent: unknown, activeWorkspaceId: string): NextResponse | null {
-  if (sent === undefined) return null;
-  if (typeof sent !== "string") {
-    return NextResponse.json({ error: INVALID_WORKSPACE_ID_MESSAGE, code: INVALID_WORKSPACE_ID_CODE }, { status: 400 });
-  }
-  if (sent !== activeWorkspaceId) {
-    return NextResponse.json({ error: WORKSPACE_CHANGED_MESSAGE, code: WORKSPACE_CHANGED_CODE }, { status: 409 });
-  }
-  return null;
+/**
+ * GET's check: a read without the id is answered as before. POST and DELETE
+ * require it (F3, lib/workspaceChanged.ts renderedWorkspaceRefusal).
+ */
+function readMismatch(sent: string | null, activeWorkspaceId: string): Response | null {
+  return sent === null ? null : renderedWorkspaceRefusal(sent, activeWorkspaceId);
 }
 
 type LinkRow = {
@@ -79,7 +71,7 @@ export async function GET(request: Request) {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) return contextOrError;
   const workspaceId = contextOrError.workspace.id;
-  const mismatch = workspaceMismatch(new URL(request.url).searchParams.get("workspaceId") ?? undefined, workspaceId);
+  const mismatch = readMismatch(new URL(request.url).searchParams.get("workspaceId"), workspaceId);
   if (mismatch) return mismatch;
 
   const row = await prisma.workspaceConnectLink.findFirst({
@@ -107,7 +99,7 @@ export async function POST(request: Request) {
   const context = contextOrError;
   const workspaceId = context.workspace.id;
   const body = (await readJsonObject(request)) ?? {};
-  const mismatch = workspaceMismatch(body.workspaceId, workspaceId);
+  const mismatch = renderedWorkspaceRefusal(body.workspaceId, workspaceId);
   if (mismatch) return mismatch;
   const notIncluded = planFeatureResponse(context.workspace, "clientLinks");
   if (notIncluded) return notIncluded;
@@ -162,7 +154,7 @@ export async function POST(request: Request) {
 export async function DELETE(request: Request) {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) return contextOrError;
-  const mismatch = workspaceMismatch(((await readJsonObject(request)) ?? {}).workspaceId, contextOrError.workspace.id);
+  const mismatch = renderedWorkspaceRefusal(((await readJsonObject(request)) ?? {}).workspaceId, contextOrError.workspace.id);
   if (mismatch) return mismatch;
 
   await prisma.workspaceConnectLink.updateMany({

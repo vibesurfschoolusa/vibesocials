@@ -97,3 +97,60 @@ export function parsePostMediaFields(raw: {
 
   return { ok: true, value: { filename, mimeType: raw.mimeType, sizeBytes } };
 }
+
+// --- What storage itself says about a file (F5) ------------------------------
+// The size counts against the workspace's storage limit, so it is read from the
+// blob store (`head`), never taken from the request. `head` is passed in: this
+// file is also read by browser code (lib/prepareUploadFile.ts), which must not
+// pull in the server storage SDK.
+
+/** The part of `head()`'s answer read here. */
+export type StoredFileHead = (url: string) => Promise<{ size: number; contentType: string }>;
+
+export const STORED_FILE_UNREADABLE_MESSAGE = "Couldn't find this file in storage. Upload it again.";
+
+export type StoredMediaResult =
+  | { ok: true; value: { sizeBytes: number; mimeType: string } }
+  | { ok: false; error: string };
+
+/**
+ * The stored file's size and type, or one sentence: no such file (or storage
+ * could not answer), a type uploads do not allow (UPLOAD_ALLOWED_CONTENT_TYPES),
+ * empty, or over 512 MB.
+ */
+export async function readStoredMedia(blobUrl: string, head: StoredFileHead): Promise<StoredMediaResult> {
+  let stored: { size: number; contentType: string };
+  try {
+    stored = await head(blobUrl);
+  } catch {
+    return { ok: false, error: STORED_FILE_UNREADABLE_MESSAGE };
+  }
+  if (!UPLOAD_ALLOWED_CONTENT_TYPES.includes(stored.contentType)) {
+    return { ok: false, error: "Only photos and videos can be added." };
+  }
+  if (!Number.isSafeInteger(stored.size) || stored.size <= 0) {
+    return { ok: false, error: "This file is empty. Upload it again." };
+  }
+  if (stored.size > MAX_MEDIA_BYTES) {
+    return { ok: false, error: "File is too large (max 512 MB)." };
+  }
+  return { ok: true, value: { sizeBytes: stored.size, mimeType: stored.contentType } };
+}
+
+/**
+ * A request's file entry (`blobUrl`, `mimeType`, `sizeBytes`, ...) with the
+ * stored size and type in place of the ones it named. Storage is the truth:
+ * a browser that called a JPEG "image/jpg" is not refused, and the usual checks
+ * then run on the stored type. `url` is the entry's canonical address; without
+ * one the entry is returned as it is, and those checks refuse it.
+ */
+export async function withStoredMediaFacts(
+  raw: Record<string, unknown>,
+  url: string | null,
+  head: StoredFileHead,
+): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false; error: string }> {
+  if (!url) return { ok: true, value: raw };
+  const stored = await readStoredMedia(url, head);
+  if (!stored.ok) return stored;
+  return { ok: true, value: { ...raw, mimeType: stored.value.mimeType, sizeBytes: stored.value.sizeBytes } };
+}

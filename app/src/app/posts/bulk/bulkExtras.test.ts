@@ -10,8 +10,11 @@ import {
   bulkGoogleMetadataError,
   bulkRowResultText,
   bulkStoryChoice,
+  AI_CAPTIONS_STORAGE_KEY,
   captionThenDescribe,
   describePhotoOnce,
+  readAiCaptionsChoice,
+  saveAiCaptionsChoice,
   improveFailedText,
   initialBulkGoogleMetadata,
   requestImprovedCaption,
@@ -423,5 +426,82 @@ describe("bulkStoryChoice (the batch control to the row's choice)", () => {
     expect(bulkStoryChoice("feed")).toBe(false);
     expect(bulkStoryChoice("story")).toBe(true);
     expect(bulkStoryChoice("both")).toBe("both");
+  });
+});
+
+// F7 (R1 M2): "Write captions with AI" off sends no file to the AI.
+describe("Add many: Write captions with AI off", () => {
+  it("writes no caption and asks for no description, only reads the file locally", async () => {
+    const writeCaption = vi.fn(async () => {});
+    const describePhoto = vi.fn(async () => {});
+    const withoutAi = vi.fn(async () => {});
+    const row = () => ({ mediaItemId: null, mimeType: "image/jpeg", uploaded: true, altTextAsked: false });
+
+    await captionThenDescribe("r1", { writeCaption, row, describe: describePhoto, withoutAi }, { ai: false });
+
+    expect(writeCaption).not.toHaveBeenCalled();
+    expect(describePhoto).not.toHaveBeenCalled();
+    expect(withoutAi).toHaveBeenCalledWith("r1");
+  });
+
+  it("on (the default) writes the caption, then the description, as before", async () => {
+    const order: string[] = [];
+    const row = () => ({ mediaItemId: null, mimeType: "image/jpeg", uploaded: true, altTextAsked: false });
+    await captionThenDescribe("r1", {
+      writeCaption: async () => void order.push("caption"),
+      row,
+      describe: async () => void order.push("describe"),
+      withoutAi: async () => void order.push("local"),
+    });
+    expect(order).toEqual(["caption", "describe"]);
+  });
+});
+
+describe("Add many: the AI captions choice is remembered in this browser", () => {
+  function memory(initial: Record<string, string> = {}) {
+    const values = { ...initial };
+    return {
+      values,
+      getItem: (key: string) => values[key] ?? null,
+      setItem: (key: string, value: string) => {
+        values[key] = value;
+      },
+    };
+  }
+
+  it("is on when nothing was saved", () => {
+    expect(readAiCaptionsChoice(() => memory())).toBe(true);
+  });
+
+  it("reads back what was saved", () => {
+    const storage = memory();
+    saveAiCaptionsChoice(() => storage, false);
+    expect(storage.values[AI_CAPTIONS_STORAGE_KEY]).toBe("off");
+    expect(readAiCaptionsChoice(() => storage)).toBe(false);
+    saveAiCaptionsChoice(() => storage, true);
+    expect(readAiCaptionsChoice(() => storage)).toBe(true);
+  });
+
+  it("is on when storage is missing, blocked or holds anything else", () => {
+    expect(readAiCaptionsChoice(() => null)).toBe(true);
+    expect(
+      readAiCaptionsChoice(() => {
+        throw new Error("SecurityError");
+      }),
+    ).toBe(true);
+    expect(readAiCaptionsChoice(() => memory({ [AI_CAPTIONS_STORAGE_KEY]: "maybe" }))).toBe(true);
+  });
+
+  it("a storage failure on save is not an error", () => {
+    expect(() =>
+      saveAiCaptionsChoice(
+        () => ({
+          setItem: () => {
+            throw new Error("QuotaExceeded");
+          },
+        }),
+        false,
+      ),
+    ).not.toThrow();
   });
 });

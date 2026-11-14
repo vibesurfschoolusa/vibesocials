@@ -17,8 +17,11 @@ import {
   linkedInAccountDialogCopy,
   type LinkedInAccountDialogMode,
 } from "@/lib/linkedinAccount";
+import { withWorkspaceId } from "@/lib/workspaceChanged";
 
 interface Props {
+  /** The workspace this page was rendered for; the start route refuses any other (F3). */
+  workspaceId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   mode: LinkedInAccountDialogMode;
@@ -34,7 +37,7 @@ interface Props {
  * account to use instead of silently reusing the signed-in one
  * (lib/linkedinAccount.ts).
  */
-export function LinkedInAccountDialog({ open, onOpenChange, mode, beforeContinue }: Props) {
+export function LinkedInAccountDialog({ workspaceId, open, onOpenChange, mode, beforeContinue }: Props) {
   const [busy, setBusy] = useState(false);
   const copy = linkedInAccountDialogCopy(mode);
 
@@ -47,7 +50,7 @@ export function LinkedInAccountDialog({ open, onOpenChange, mode, beforeContinue
       return;
     }
     // Full-page navigation to the API route that issues the OAuth redirect.
-    window.location.href = LINKEDIN_CONNECT_URL;
+    window.location.href = withWorkspaceId(LINKEDIN_CONNECT_URL, workspaceId);
   }
 
   return (
@@ -84,14 +87,14 @@ export function LinkedInAccountDialog({ open, onOpenChange, mode, beforeContinue
 }
 
 /** The Connect button for an unconnected LinkedIn row (connections-section.tsx). */
-export function LinkedInConnectButton() {
+export function LinkedInConnectButton({ workspaceId }: { workspaceId: string }) {
   const [open, setOpen] = useState(false);
   return (
     <>
       <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
         Connect
       </Button>
-      <LinkedInAccountDialog open={open} onOpenChange={setOpen} mode="connect" />
+      <LinkedInAccountDialog workspaceId={workspaceId} open={open} onOpenChange={setOpen} mode="connect" />
     </>
   );
 }

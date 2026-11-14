@@ -40,6 +40,9 @@ vi.mock("@/lib/workspace", () => ({
   getWorkspaceContext: getWorkspaceContextMock,
 }));
 
+// F5: a new file's size and type are read from storage; here it always has the file.
+vi.mock("@vercel/blob", () => ({ head: vi.fn(async () => ({ size: 10, contentType: "video/mp4" })) }));
+
 vi.mock("@/lib/rateLimit", () => ({
   checkRateLimit: checkRateLimitMock,
 }));

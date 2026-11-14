@@ -44,3 +44,35 @@ export function billingOnLastUpdated(
   if (Number.isNaN(billingValue) || Number.isNaN(legalValue)) return billing;
   return legalValue > billingValue ? legal : billing;
 }
+
+/**
+ * The privacy policy's own text date (F7, 2026-11-14: it now names every
+ * number the app reads back, what clients send through links and what goes to
+ * the AI provider). The Terms did not change, so they keep the shared date.
+ */
+export const PRIVACY_LAST_UPDATED = "November 14, 2026";
+
+/**
+ * The privacy policy's "Last updated": the latest of its own date, the shared
+ * legal date and, with billing on, the billing text's date (the page carries
+ * that text then). An unreadable date is skipped, so the page still renders one.
+ */
+export function privacyLastUpdated(
+  billing: boolean,
+  privacy: string = PRIVACY_LAST_UPDATED,
+  legal: string = LEGAL_LAST_UPDATED,
+  billingText: string = BILLING_TERMS_LAST_UPDATED,
+): string {
+  const candidates = billing ? [privacy, legal, billingText] : [privacy, legal];
+  let latest = legal;
+  let latestValue = legalDateValue(legal);
+  for (const label of candidates) {
+    const value = legalDateValue(label);
+    if (Number.isNaN(value)) continue;
+    if (Number.isNaN(latestValue) || value > latestValue) {
+      latest = label;
+      latestValue = value;
+    }
+  }
+  return latest;
+}

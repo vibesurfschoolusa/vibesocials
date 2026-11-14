@@ -283,6 +283,37 @@ describe("refreshGoogleToken — failure classification", () => {
     expect(updateMock).not.toHaveBeenCalled();
   });
 
+  // F7: the OAuth code rides on the thrown error, so the Reviews page can tell
+  // the person's dead grant (reconnect) from our own client's setup (not available).
+  it.each([
+    ["400 invalid_grant", 400, "invalid_grant", "reconnect"],
+    ["400 unauthorized_client", 400, "unauthorized_client", "unavailable"],
+    ["401 invalid_client", 401, "invalid_client", "unavailable"],
+  ] as const)("%s: carries oauthError, and the Reviews page reads it", async (_l, status, oauthError, shown) => {
+    failWith(status, { error: oauthError });
+    const { GOOGLE_REFUSED_MESSAGE, REVIEWS_UNAVAILABLE_MESSAGE, reviewsErrorBody } = await import(
+      "@/server/googleReviews"
+    );
+
+    const error = await refreshError();
+
+    expect(error).toMatchObject({ code: "GOOGLE_TOKEN_REFRESH_FAILED", status, oauthError });
+    expect(reviewsErrorBody(error, "Fallback.")).toEqual(
+      shown === "reconnect"
+        ? { error: GOOGLE_REFUSED_MESSAGE, reconnect: true }
+        : { error: REVIEWS_UNAVAILABLE_MESSAGE },
+    );
+  });
+
+  it("carries no oauthError when the body has no OAuth code, and the message is unchanged", async () => {
+    failWith(401, "Unauthorized");
+
+    const error = await refreshError();
+
+    expect(error).not.toHaveProperty("oauthError");
+    expect(error?.message).toBe("Failed to refresh Google access token (status 401)");
+  });
+
   it.each([
     ["400 invalid_grant", 400, { error: "invalid_grant", error_description: "Token has been expired or revoked." }],
     ["401 with an unparseable body", 401, "Unauthorized"],

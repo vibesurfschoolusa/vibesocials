@@ -47,8 +47,13 @@ const DAY = 24 * 60 * 60 * 1000;
 const OWNER = { user: { id: "user-1" }, workspace: { id: "ws-1", name: "Surf Co" }, role: "owner" as const };
 const BASE = "http://localhost/api/workspaces/connect-link";
 
-function body(method: "POST" | "DELETE", value: unknown): Request {
-  return new Request(BASE, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(value) });
+/** The Settings group sends the workspace its page was rendered for (F3). */
+function body(method: "POST" | "DELETE", value: Record<string, unknown>): Request {
+  return new Request(BASE, {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId: "ws-1", ...value }),
+  });
 }
 
 function linkRow(overrides: Record<string, unknown> = {}) {
@@ -242,5 +247,29 @@ describe("a link whose creator is no longer an owner", () => {
     const res = await DELETE(body("DELETE", {}));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
+  });
+});
+
+// F3 (2026-11-14 review): POST and DELETE now require the id; a page from
+// before it was sent is told to reload.
+describe("connect-link POST and DELETE and the rendered workspace", () => {
+  it.each(["POST", "DELETE"] as const)("%s 409s another workspace's id, and writes nothing", async (method) => {
+    const handler = method === "POST" ? POST : DELETE;
+    const res = await handler(body(method, { platforms: ["tiktok"], workspaceId: "ws-2" }));
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe("WORKSPACE_CHANGED");
+    expect(h.create).not.toHaveBeenCalled();
+    expect(h.updateMany).not.toHaveBeenCalled();
+  });
+
+  it.each(["POST", "DELETE"] as const)("%s 400s a body without the id, and writes nothing", async (method) => {
+    const handler = method === "POST" ? POST : DELETE;
+    const res = await handler(
+      new Request(BASE, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platforms: ["tiktok"] }) }),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe("MISSING_WORKSPACE_ID");
+    expect(h.create).not.toHaveBeenCalled();
+    expect(h.updateMany).not.toHaveBeenCalled();
   });
 });

@@ -13,6 +13,11 @@ const { requireOwnerContextForOAuthStartMock } = vi.hoisted(() => ({
 vi.mock("@/lib/workspace", () => ({
   requireOwnerContextForOAuthStart: requireOwnerContextForOAuthStartMock,
 }));
+// Only X's start writes (its server-side handshake row).
+const { handshakeUpsertMock } = vi.hoisted(() => ({ handshakeUpsertMock: vi.fn() }));
+vi.mock("@/lib/db", () => ({
+  prisma: { oAuthHandshake: { upsert: handshakeUpsertMock, deleteMany: vi.fn(async () => ({ count: 0 })) } },
+}));
 
 import { GET as facebookPageStart } from "./facebook_page/start/route";
 import { GET as gbpStart } from "./google_business_profile/start/route";
@@ -20,7 +25,9 @@ import { GET as instagramStart } from "./instagram/start/route";
 import { GET as linkedinStart } from "./linkedin/start/route";
 import { GET as pinterestStart } from "./pinterest/start/route";
 import { GET as tiktokStart } from "./tiktok/start/route";
+import { GET as xStart } from "./x/start/route";
 import { GET as youtubeStart } from "./youtube/start/route";
+import { NextResponse } from "next/server";
 
 const ORIGIN = "https://app.example.com";
 
@@ -214,5 +221,29 @@ describe("tiktok OAuth start: TikTok's authorization page", () => {
     const loc = new URL(res.headers.get("location") as string);
     expect(loc.searchParams.get("disable_auto_auth")).toBe("1");
     expect(loc.searchParams.get("scope")).toBe("user.info.basic,video.publish");
+  });
+});
+
+// F3 (R1 security H1): every start goes through the owner gate, which also
+// refuses a page rendered for another workspace (lib/workspace.ts). When it
+// refuses, the route answers with its redirect and signs no state, writes no
+// handshake and calls no provider.
+describe("a refused start (stale tab)", () => {
+  const ALL = [...CASES, { platform: "x" as Platform, GET: xStart, env: {}, authorizeHost: "api.twitter.com" }];
+  const REFUSED = `${ORIGIN}/settings?error=workspace_changed_example`;
+
+  it.each(ALL)("$platform passes the request to the gate and returns its redirect", async ({ platform, GET, env }) => {
+    for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value);
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    requireOwnerContextForOAuthStartMock.mockResolvedValue(NextResponse.redirect(REFUSED));
+    const request = new NextRequest(new URL(`/api/auth/${platform}/start?workspaceId=ws-2`, ORIGIN));
+
+    const res = await GET(request);
+
+    expect(requireOwnerContextForOAuthStartMock).toHaveBeenCalledWith(request, `${platform}_not_workspace_owner`);
+    expect(res.headers.get("location")).toBe(REFUSED);
+    expect(handshakeUpsertMock).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
   });
 });

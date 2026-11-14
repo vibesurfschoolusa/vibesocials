@@ -25,7 +25,7 @@ const SETTINGS: UserSettings = {
 };
 
 const render = (settings: UserSettings, role: "owner" | "member" = "owner") =>
-  renderToStaticMarkup(createElement(SettingsForm, { settings, role }));
+  renderToStaticMarkup(createElement(SettingsForm, { workspaceId: "ws-1", settings, role }));
 
 // 2026-11-10: the new Google review email preference.
 describe("SettingsForm — Notifications", () => {
@@ -282,6 +282,7 @@ describe("SettingsForm — what the plan leaves out", () => {
   it("shows each line when the page passes it, with the fields still there", () => {
     const html = renderToStaticMarkup(
       createElement(SettingsForm, {
+        workspaceId: "ws-1",
         settings: SETTINGS,
         role: "owner",
         planNotes: { brandVoice: VOICE_LINE, reviewAlerts: REVIEWS_LINE },
@@ -302,7 +303,7 @@ describe("SettingsForm — the monthly report email and the plan", () => {
 
   it("adds the line after today's when the page passes it", () => {
     const html = renderToStaticMarkup(
-      createElement(SettingsForm, { settings: SETTINGS, role: "owner", planNotes: { monthlyReport: LINE } }),
+      createElement(SettingsForm, { workspaceId: "ws-1", settings: SETTINGS, role: "owner", planNotes: { monthlyReport: LINE } }),
     );
     expect(html).toContain(LINE);
     expect(html.indexOf(LINE)).toBeGreaterThan(html.indexOf(TODAY));
@@ -325,7 +326,7 @@ describe("SettingsForm — the brand voice heading and the plan", () => {
 
   it("with the note: one sentence in place of today's, and no second line", () => {
     const html = squash(
-      renderToStaticMarkup(createElement(SettingsForm, { settings: SETTINGS, role: "owner", planNotes: { brandVoice: ON_PLANS } })),
+      renderToStaticMarkup(createElement(SettingsForm, { workspaceId: "ws-1", settings: SETTINGS, role: "owner", planNotes: { brandVoice: ON_PLANS } })),
     );
     expect(html).toContain(ON_PLANS);
     expect(html).not.toContain(`>${TODAY}<`);

@@ -346,7 +346,15 @@ test.describe(
       // UI (src/components/team-section.tsx) for what this test actually
       // needs to assert: a live invite link, created with the owner's real
       // session.
-      const inviteResponse = await page.request.post("/api/workspaces/invites");
+      // The route requires the workspace the request is meant for (F3); the
+      // Team card sends the one its page was rendered for.
+      const { workspaces } = (await (await page.request.get("/api/workspaces")).json()) as {
+        workspaces: { id: string; isActive: boolean }[];
+      };
+      const activeWorkspaceId = workspaces.find((workspace) => workspace.isActive)?.id;
+      const inviteResponse = await page.request.post("/api/workspaces/invites", {
+        data: { workspaceId: activeWorkspaceId },
+      });
       if (!inviteResponse.ok()) {
         throw new Error(
           `Failed to create invite: ${inviteResponse.status()} ${await inviteResponse.text()}`,

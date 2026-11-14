@@ -78,3 +78,26 @@ describe("the upload link page", () => {
     expect(await render()).toContain("Vibe Socials");
   });
 });
+
+// F7 (R1 L8): a client sending files can read what happens to them.
+describe("the upload link page: Terms and Privacy", () => {
+  it("links to both under the form", async () => {
+    findActiveUploadLinkMock.mockResolvedValue({
+      id: "link-1",
+      workspaceId: "ws-1",
+      createdById: "owner-1",
+      workspaceName: "Surf & Co",
+    });
+    const html = await render();
+    expect(html).toMatch(/<a [^>]*href="\/terms"[^>]*>Terms<\/a>/);
+    expect(html).toMatch(/<a [^>]*href="\/privacy"[^>]*>Privacy Policy<\/a>/);
+    expect(html.indexOf('href="/privacy"')).toBeGreaterThan(html.indexOf("<form"));
+  });
+
+  it("links to both on the inactive-link sentence too", async () => {
+    findActiveUploadLinkMock.mockResolvedValue(null);
+    const html = await render("unknown");
+    expect(html).toContain('href="/terms"');
+    expect(html).toContain('href="/privacy"');
+  });
+});

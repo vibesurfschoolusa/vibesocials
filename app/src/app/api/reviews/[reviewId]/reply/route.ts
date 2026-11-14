@@ -3,8 +3,17 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { prisma } from "@/lib/db";
+import {
+  GOOGLE_REFUSED_MESSAGE,
+  listGbpLocations,
+  reviewLocationName,
+  reviewsErrorBody,
+} from "@/server/googleReviews";
 
 export const dynamic = "force-dynamic";
+
+const REPLY_FAILED_MESSAGE = "Couldn't post your reply. Try again in a minute.";
+const REVIEW_NOT_FOUND = { error: "Review not found." };
 
 /**
  * POST /api/reviews/[reviewId]/reply - Reply to a Google Business Profile
@@ -43,6 +52,14 @@ export async function POST(request: Request) {
       );
     }
 
+    // R1-security L5: the reply is sent to `<reviewName>/reply`, so only a
+    // review's own resource name is sent on, and only on a location this
+    // connection's Google account lists (checked below, once the token is ready).
+    const reviewLocation = reviewLocationName(reviewName);
+    if (!reviewLocation) {
+      return NextResponse.json(REVIEW_NOT_FOUND, { status: 404 });
+    }
+
     // Get the workspace's Google Business Profile connection
     const connection = await prisma.socialConnection.findFirst({
       where: {
@@ -69,9 +86,20 @@ export async function POST(request: Request) {
 
     if (!accessToken) {
       return NextResponse.json(
-        { error: "Missing access token" },
+        { error: GOOGLE_REFUSED_MESSAGE, reconnect: true },
         { status: 500 }
       );
+    }
+
+    // The same listing the Reviews page shows, so any location the person can
+    // open there can be answered (a saved store code plays no part). One extra
+    // Google call per reply. An account that could not be read is a failure to
+    // retry, not a review that does not exist.
+    const { locations, complete } = await listGbpLocations(accessToken);
+    if (!locations.some((location) => location.name === reviewLocation)) {
+      return complete
+        ? NextResponse.json(REVIEW_NOT_FOUND, { status: 404 })
+        : NextResponse.json({ error: REPLY_FAILED_MESSAGE }, { status: 500 });
     }
 
     // Post reply to Google Business Profile API using full review name
@@ -88,9 +116,6 @@ export async function POST(request: Request) {
     });
   } catch (error: unknown) {
     console.error("[Reviews API] Reply error:", error);
-    return NextResponse.json(
-      { error: (error as Error).message || "Failed to post reply" },
-      { status: 500 }
-    );
+    return NextResponse.json(reviewsErrorBody(error, REPLY_FAILED_MESSAGE), { status: 500 });
   }
 }

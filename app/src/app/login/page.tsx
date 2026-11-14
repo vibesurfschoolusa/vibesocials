@@ -16,6 +16,8 @@ import { GoogleSignInButton } from "@/components/google-sign-in-button";
 import { loginOAuthErrorMessage } from "@/lib/loginOAuthError";
 import { authPageHref, safeCallbackPath } from "@/lib/safeRedirect";
 
+import { signInWithPassword } from "./signInWithPassword";
+
 function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -41,17 +43,13 @@ function LoginPageInner() {
     setError(null);
     setLoading(true);
 
-    const result = await signIn("credentials", {
-      redirect: false,
-      email,
-      password,
-    });
+    const result = await signInWithPassword(signIn, email, password);
 
-    if (result?.ok) {
+    if (result.ok) {
       router.push(callbackUrl);
       return;
     }
-    setError("Invalid email or password.");
+    setError(result.error);
     setLoading(false);
   }
 

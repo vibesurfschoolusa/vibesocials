@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requireOwnerContext } from "@/lib/workspace";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
 interface MemberRouteContext {
   params: Promise<{ userId: string }>;
@@ -36,13 +37,22 @@ interface MemberRouteContext {
  * `{ ok: true, invitesRevoked }` so the owner's UI can clear the link it is
  * showing. "Active" means `revokedAt: null`, exactly as the invites route
  * defines it.
+ *
+ * DELETE and PATCH carry `{ workspaceId }`, the workspace the Team card was
+ * rendered for (F3): the active workspace is one cookie every tab shares and a
+ * person can be in both workspaces, so a stale tab must not remove or change
+ * them in the other one.
  */
-export async function DELETE(_request: Request, { params }: MemberRouteContext) {
+export async function DELETE(request: Request, { params }: MemberRouteContext) {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) {
     return contextOrError;
   }
   const context = contextOrError;
+  const refusal = renderedWorkspaceRefusal((await readJsonObject(request))?.workspaceId, context.workspace.id);
+  if (refusal) {
+    return refusal;
+  }
 
   const { userId: targetUserId } = await params;
 
@@ -139,6 +149,10 @@ export async function PATCH(request: Request, { params }: MemberRouteContext) {
   const body = await readJsonObject(request);
   if (!body) {
     return invalidJsonBodyResponse();
+  }
+  const refusal = renderedWorkspaceRefusal(body.workspaceId, context.workspace.id);
+  if (refusal) {
+    return refusal;
   }
   const role = body.role;
   if (role !== "owner" && role !== "member") {

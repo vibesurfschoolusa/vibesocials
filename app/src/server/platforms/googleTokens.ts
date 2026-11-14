@@ -116,9 +116,8 @@ export async function refreshGoogleToken(
   );
 
   // Classify BEFORE assertOk consumes the body (readOAuthErrorCode reads a clone).
-  const terminal =
-    !response.ok &&
-    isTerminalRefreshFailure(response.status, await readOAuthErrorCode(response));
+  const oauthError = response.ok ? undefined : await readOAuthErrorCode(response);
+  const terminal = !response.ok && isTerminalRefreshFailure(response.status, oauthError);
 
   try {
     await assertOk(response, {
@@ -126,6 +125,10 @@ export async function refreshGoogleToken(
       prefix: "Failed to refresh Google access token",
     });
   } catch (error) {
+    // F7: the OAuth code (e.g. "invalid_grant", "unauthorized_client"; never a
+    // token) goes with the error, so the Reviews page can tell a dead grant
+    // (reconnect) from the app's own client setup (googleReviews.ts reviewsErrorBody).
+    if (oauthError) Object.assign(error as object, { oauthError });
     // Health H1: `assertOk` above already `console.error`s the raw upstream
     // status/body server-side (by design — see assertOk.ts), but WITHOUT a
     // connection id attached. That's precisely why an invalid_grant on one

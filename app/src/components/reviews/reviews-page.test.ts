@@ -4,6 +4,7 @@ import {
   focusAfterReply,
   needsReplyEmptyTitle,
   replyButtonId,
+  reviewsCapNote,
   reviewsSubtitle,
   showLocationPicker,
   singleLocationName,
@@ -86,5 +87,16 @@ describe("replyButtonId", () => {
   it("gives each review's Reply button its own id", () => {
     expect(replyButtonId("abc")).toBe("reply-to-abc");
     expect(replyButtonId("abc")).not.toBe(replyButtonId("abd"));
+  });
+});
+
+// F7 (R1 M4): with more reviews than the page loads, it says so.
+describe("reviewsCapNote", () => {
+  it("says only the latest 500 are shown when the list was cut short", () => {
+    expect(reviewsCapNote(true)).toBe("Showing the latest 500 reviews.");
+  });
+
+  it("says nothing otherwise", () => {
+    expect(reviewsCapNote(false)).toBeNull();
   });
 });

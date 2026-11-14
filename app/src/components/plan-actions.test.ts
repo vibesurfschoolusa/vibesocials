@@ -12,7 +12,8 @@ const MONTHLY = [
   { plan: "pro" as const, name: "Pro", price: "$79 a month" },
 ];
 
-const render = (props: Parameters<typeof PlanActions>[0]) => renderToStaticMarkup(createElement(PlanActions, props));
+const render = (props: Omit<Parameters<typeof PlanActions>[0], "workspaceId">) =>
+  renderToStaticMarkup(createElement(PlanActions, { workspaceId: "ws-1", ...props }));
 
 describe("PlanActions with no yearly prices", () => {
   it("is today's markup exactly: three monthly buttons and no switch", () => {

@@ -403,3 +403,18 @@ describe("POST /api/reviews/draft-response - failures a person reads", () => {
     await expect(missing.json()).resolves.toEqual({ error: "Reviewer name and star rating are required" });
   });
 });
+
+// F7 (R1 M7): a reviewer's name is a stranger's personal data; logs never carry it.
+describe("POST /api/reviews/draft-response — logs", () => {
+  it("never logs the reviewer's name", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await post({ ...validBody, reviewerName: "Unique Reviewer Name" });
+    expect(response.status).toBe(200);
+
+    const logged = JSON.stringify([...logSpy.mock.calls, ...errorSpy.mock.calls]);
+    expect(logged).not.toContain("Unique Reviewer Name");
+    expect(logged).not.toContain("reviewerName");
+  });
+});
