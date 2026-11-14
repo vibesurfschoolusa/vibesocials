@@ -1,8 +1,11 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { prisma } from "@/lib/db";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { ReviewsView } from "./reviews-view";
+
+export const metadata: Metadata = { title: "Reviews | Vibe Socials" };
 
 // Server-side auth gate (matches queue/activity): signed-out users are
 // redirected before the client view ever fetches — no more raw

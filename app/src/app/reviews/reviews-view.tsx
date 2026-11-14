@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { ErrorState } from "@/components/reviews/error-state";
+import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { initialLocation } from "@/components/reviews/initial-location";
 import { LocationPicker } from "@/components/reviews/location-picker";
 import { ReviewCard } from "@/components/reviews/review-card";
@@ -251,7 +252,7 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
 
   if (loadingLocations) {
     return (
-      <div className="mx-auto max-w-6xl px-4 py-8 md:px-6 lg:px-8">
+      <div className={APP_PAGE_CLASS}>
         <div className="space-y-4" aria-hidden>
           <Skeleton className="h-40 w-full" />
           <Skeleton className="h-40 w-full" />
@@ -263,7 +264,7 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
 
   if (locationsError) {
     return (
-      <div className="mx-auto max-w-6xl px-4 py-8 md:px-6 lg:px-8">
+      <div className={APP_PAGE_CLASS}>
         <ErrorState
           title="Couldn't load reviews"
           message={locationsError}
@@ -274,7 +275,7 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-4 py-8 md:px-6 lg:px-8">
+    <div className={APP_PAGE_CLASS}>
       {/* Header */}
       <div className="mb-8">
         <h1 className="text-2xl font-bold tracking-tight text-foreground">Google Reviews</h1>
