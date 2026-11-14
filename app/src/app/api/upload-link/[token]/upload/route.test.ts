@@ -1,21 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { findActiveUploadLinkMock, checkRateLimitMock, handleUploadMock, checkStorageLimitMock } = vi.hoisted(
-  () => ({
+const { findActiveUploadLinkMock, checkRateLimitMock, handleUploadMock, checkStorageLimitMock, consumeBytesMock } =
+  vi.hoisted(() => ({
     findActiveUploadLinkMock: vi.fn(),
     checkRateLimitMock: vi.fn(),
     handleUploadMock: vi.fn(),
     checkStorageLimitMock: vi.fn(),
-  }),
-);
+    consumeBytesMock: vi.fn(),
+  }));
 
 vi.mock("@/server/uploadLink", () => ({ findActiveUploadLink: findActiveUploadLinkMock }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 vi.mock("@vercel/blob/client", () => ({ handleUpload: handleUploadMock }));
 vi.mock("@/server/usage/workspaceUsage", () => ({ checkStorageLimit: checkStorageLimitMock }));
+vi.mock("./linkBytes", () => ({ consumeUploadLinkDayBytes: consumeBytesMock }));
 
 import { MAX_MEDIA_BYTES } from "@/lib/mediaInput";
 import {
+  UPLOAD_LINK_BYTES_LIMIT_MESSAGE,
   UPLOAD_LINK_DAILY_LIMIT_MESSAGE,
   UPLOAD_LINK_INACTIVE_MESSAGE,
   UPLOAD_LINK_STORAGE_FULL_MESSAGE,
@@ -27,7 +29,14 @@ const TOKEN = "T".repeat(43);
 const LINK = { id: "link-1", workspaceId: "ws-1", createdById: "owner-1", workspaceName: "Surf Co" };
 
 function tokenRequest(
-  overrides: { pathname?: string; contentType?: unknown; type?: string; ip?: string; body?: unknown } = {},
+  overrides: {
+    pathname?: string;
+    contentType?: unknown;
+    size?: unknown;
+    type?: string;
+    ip?: string;
+    body?: unknown;
+  } = {},
 ): Request {
   const body =
     overrides.body ??
@@ -35,7 +44,10 @@ function tokenRequest(
       type: overrides.type ?? "blob.generate-client-token",
       payload: {
         pathname: overrides.pathname ?? "IMG_1.jpg",
-        clientPayload: JSON.stringify({ contentType: overrides.contentType ?? "image/jpeg" }),
+        clientPayload: JSON.stringify({
+          contentType: overrides.contentType ?? "image/jpeg",
+          size: "size" in overrides ? overrides.size : 4_000_000,
+        }),
         multipart: false,
       },
     };
@@ -60,6 +72,8 @@ beforeEach(() => {
   checkRateLimitMock.mockReset();
   handleUploadMock.mockReset();
   checkStorageLimitMock.mockReset();
+  consumeBytesMock.mockReset();
+  consumeBytesMock.mockResolvedValue({ allowed: true });
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -104,14 +118,14 @@ describe("issuing a token", () => {
     expect(passed).toBe(body.pathname);
   });
 
-  it("allows only the file's own type, from the shared list, and the shared size limit", async () => {
-    await call(tokenRequest({ contentType: "video/quicktime", pathname: "clip.MOV" }));
+  it("allows only the file's own type, from the shared list, and no more than the size it asked for", async () => {
+    await call(tokenRequest({ contentType: "video/quicktime", pathname: "clip.MOV", size: 300_000_000 }));
 
     const { onBeforeGenerateToken } = handleUploadMock.mock.calls[0][0] as { onBeforeGenerateToken: BeforeGenerate };
     const options = await onBeforeGenerateToken("ul/link-1/abc-clip.MOV", null, false);
     expect(options).toMatchObject({
       allowedContentTypes: ["video/quicktime"],
-      maximumSizeInBytes: MAX_MEDIA_BYTES,
+      maximumSizeInBytes: 300_000_000,
       addRandomSuffix: false,
       allowOverwrite: false,
     });
@@ -177,13 +191,13 @@ describe("issuing a token", () => {
 });
 
 describe("limits", () => {
-  it("allows 60 tokens an hour per IP, by the first x-forwarded-for entry, failing closed, before the lookup", async () => {
+  it("allows 300 tokens an hour per IP, by the first x-forwarded-for entry, failing closed, before the lookup", async () => {
     await call(tokenRequest());
 
     expect(checkRateLimitMock).toHaveBeenNthCalledWith(1, {
       userId: "ip:203.0.113.9",
       route: "upload-link/upload",
-      limit: 60,
+      limit: 300,
       windowMs: 60 * 60 * 1000,
       failClosed: true,
     });
@@ -217,6 +231,81 @@ describe("limits", () => {
     const response = await call(tokenRequest());
     expect(response.status).toBe(429);
     await expect(response.json()).resolves.toMatchObject({ error: UPLOAD_LINK_DAILY_LIMIT_MESSAGE });
+    expect(handleUploadMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("a full shoot through one link", () => {
+  /** A limiter that really counts, per key, as the database one does. */
+  function countingLimiter() {
+    const counts = new Map<string, number>();
+    checkRateLimitMock.mockImplementation(
+      async ({ userId, route, limit }: { userId: string; route: string; limit: number }) => {
+        const key = `${userId}:${route}`;
+        const count = (counts.get(key) ?? 0) + 1;
+        counts.set(key, count);
+        return count > limit ? { allowed: false, retryAfterSeconds: 60 } : { allowed: true };
+      },
+    );
+  }
+
+  it("accepts 80 photos in an hour from one network", async () => {
+    countingLimiter();
+    for (let i = 0; i < 80; i += 1) {
+      const response = await call(tokenRequest({ pathname: `IMG_${i}.jpg` }));
+      expect(response.status, `photo ${i + 1}`).toBe(200);
+    }
+  });
+
+  it("refuses the 201st file of the day with the day's sentence, and other links still work", async () => {
+    countingLimiter();
+    for (let i = 0; i < 200; i += 1) {
+      const response = await call(tokenRequest({ ip: `198.51.100.${i % 4}` }));
+      expect(response.status, `file ${i + 1}`).toBe(200);
+    }
+    const refused = await call(tokenRequest({ ip: "198.51.100.9" }));
+    expect(refused.status).toBe(429);
+    await expect(refused.json()).resolves.toMatchObject({ error: UPLOAD_LINK_DAILY_LIMIT_MESSAGE });
+
+    findActiveUploadLinkMock.mockResolvedValue({ ...LINK, id: "link-2" });
+    expect((await call(tokenRequest({ ip: "198.51.100.9" }))).status).toBe(200);
+  });
+});
+
+describe("the bytes a link takes in a day", () => {
+  it("counts the size the browser asked for against the link", async () => {
+    await call(tokenRequest({ size: 7_500_000 }));
+    expect(consumeBytesMock).toHaveBeenCalledWith("link-1", 7_500_000);
+  });
+
+  it("counts the largest file when the browser names no size", async () => {
+    await call(tokenRequest({ size: undefined }));
+    expect(consumeBytesMock).toHaveBeenCalledWith("link-1", MAX_MEDIA_BYTES);
+    const { onBeforeGenerateToken } = handleUploadMock.mock.calls[0][0] as { onBeforeGenerateToken: BeforeGenerate };
+    await expect(onBeforeGenerateToken("ul/link-1/abc-IMG_1.jpg", null, false)).resolves.toMatchObject({
+      maximumSizeInBytes: MAX_MEDIA_BYTES,
+    });
+  });
+
+  it("refuses a size that is not a whole number of bytes from 1 to 512 MB, before counting", async () => {
+    for (const size of [0, -5, 1.5, "100", MAX_MEDIA_BYTES + 1]) {
+      consumeBytesMock.mockClear();
+      handleUploadMock.mockClear();
+      const response = await call(tokenRequest({ size }));
+      expect(response.status, String(size)).toBe(400);
+      expect(consumeBytesMock).not.toHaveBeenCalled();
+      expect(handleUploadMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it("refuses with a plain sentence once the link's day is full, and signs nothing", async () => {
+    consumeBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 5000 });
+
+    const response = await call(tokenRequest());
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("5000");
+    await expect(response.json()).resolves.toMatchObject({ error: UPLOAD_LINK_BYTES_LIMIT_MESSAGE });
     expect(handleUploadMock).not.toHaveBeenCalled();
   });
 });

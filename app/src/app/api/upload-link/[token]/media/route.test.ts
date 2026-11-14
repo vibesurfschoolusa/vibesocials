@@ -504,12 +504,31 @@ describe("registering the same file again", () => {
 });
 
 describe("limits", () => {
-  it("allows 60 registrations an hour per IP, failing closed, before the lookup", async () => {
+  it("accepts 80 photos in an hour from one network", async () => {
+    const counts = new Map<string, number>();
+    checkRateLimitMock.mockImplementation(
+      async ({ userId, route, limit }: { userId: string; route: string; limit: number }) => {
+        const key = `${userId}:${route}`;
+        const count = (counts.get(key) ?? 0) + 1;
+        counts.set(key, count);
+        return count > limit ? { allowed: false, retryAfterSeconds: 60 } : { allowed: true };
+      },
+    );
+    headMock.mockImplementation(async (url: string) =>
+      headResult({ url, pathname: url.slice(HOST.length + 1) }),
+    );
+    for (let i = 0; i < 80; i += 1) {
+      const response = await call(mediaRequest(goodBody({ blobUrl: `${HOST}/ul/link-1/${HEX}-IMG_${i}.jpg` })));
+      expect(response.status, `photo ${i + 1}`).toBe(201);
+    }
+  });
+
+  it("allows 300 registrations an hour per IP, failing closed, before the lookup", async () => {
     await call(mediaRequest(goodBody()));
     expect(checkRateLimitMock).toHaveBeenNthCalledWith(1, {
       userId: "ip:203.0.113.9",
       route: "upload-link/media",
-      limit: 60,
+      limit: 300,
       windowMs: 60 * 60 * 1000,
       failClosed: true,
     });
