@@ -8,6 +8,7 @@ import { cn } from "@/lib/cn";
 import type { GoogleReview } from "./types";
 import { StarRating } from "./star-rating";
 import { ReplyForm } from "./reply-form";
+import { replyButtonId } from "./reviews-page";
 
 function formatDate(dateString: string) {
   const date = new Date(dateString);
@@ -122,7 +123,7 @@ export function ReviewCard({
                 />
               ) : (
                 <div className="flex gap-3">
-                  <Button type="button" onClick={onOpenReply}>
+                  <Button id={replyButtonId(review.reviewId)} type="button" onClick={onOpenReply}>
                     <MessageSquare aria-hidden className="h-4 w-4" />
                     Reply to review
                   </Button>
