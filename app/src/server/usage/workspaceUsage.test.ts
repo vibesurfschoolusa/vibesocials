@@ -459,3 +459,48 @@ describe("getWorkspaceUsageOrNull", () => {
     expect(console.error).toHaveBeenCalled();
   });
 });
+
+// F4: with billing on, a workspace with a plan to change is pointed to Settings, Plan.
+describe("the limit-reached email - where a higher limit comes from (F4)", () => {
+  it("billing off: the support address, and no extra query", async () => {
+    vi.stubEnv("BILLING_ENABLED", "");
+    db.postJobCount.mockResolvedValue(20);
+
+    await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" });
+
+    const html = (sendEmailMock.mock.calls[0][0] as { html: string }).html;
+    expect(html).toContain("If you need a higher limit, write to");
+    expect(db.workspaceFindUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it("billing on, a workspace in its trial or on a plan: Settings, Plan through /go", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    vi.stubEnv("NEXTAUTH_URL", "https://vibesocials.wtf");
+    db.workspaceFindUnique.mockResolvedValue({
+      ...workspaceRow(),
+      billingExempt: false,
+      plan: "starter",
+      planStatus: "active",
+      trialEndsAt: null,
+      currentPeriodEnd: new Date("2026-12-01T00:00:00Z"),
+    });
+    db.postJobCount.mockResolvedValue(1000);
+
+    await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" });
+
+    const html = (sendEmailMock.mock.calls[0][0] as { html: string }).html;
+    expect(html).toContain('href="https://vibesocials.wtf/go?w=ws-1&amp;to=%2Fsettings%23plan"');
+    expect(html).not.toContain("write to");
+  });
+
+  it("billing on, an exempt workspace: the support address", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    db.workspaceFindUnique.mockResolvedValue({ ...workspaceRow(), billingExempt: true });
+    db.postJobCount.mockResolvedValue(1000);
+
+    await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" });
+
+    const html = (sendEmailMock.mock.calls[0][0] as { html: string }).html;
+    expect(html).toContain("If you need a higher limit, write to");
+  });
+});

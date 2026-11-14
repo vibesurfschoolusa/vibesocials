@@ -134,7 +134,7 @@ describe("notifyOwnersOfClientUpload", () => {
       { idempotencyKey: "client-upload/link-1/2026-11-10T17/owner-1" },
     );
     const [params, options] = sendEmailMock.mock.calls[1];
-    expect(params.html).toContain('href="https://app.example/media"');
+    expect(params.html).toContain('href="https://app.example/go?w=ws-1&amp;to=%2Fmedia"');
     // Best-effort: never the retrying mode.
     expect(options).not.toHaveProperty("throwOnRetryable");
   });

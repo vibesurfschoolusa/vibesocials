@@ -440,6 +440,7 @@ export async function sendReviewAlerts(
       const excerpts =
         clock() - startedAt <= REVIEW_ALERT_FETCH_BUDGET_MS ? await loadExcerpts(connection, alert, now) : null;
       const email = buildNewReviewsEmail({
+        workspaceId: alert.workspaceId,
         locationTitle: nonEmptyString(metadataOf(connection).locationTitle) ?? connection.workspace.name,
         count: alert.count,
         reviews: excerpts,

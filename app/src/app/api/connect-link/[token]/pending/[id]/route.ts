@@ -20,6 +20,7 @@ import {
   loadPendingConnection,
   type LoadedPendingConnection,
 } from "@/server/connections/pendingConnection";
+import { notifyOwnersOfClientConnect } from "@/server/notifications/clientConnectEmail";
 
 /**
  * /api/connect-link/[token]/pending/[id] — a connect-link flow that found
@@ -143,6 +144,9 @@ export async function POST(request: Request, context: RouteContext) {
           error: errorKind(error),
         });
       });
+    // F4: the owner did not make this connect, so they are told (never throws).
+    // The choice is deleted above, so a second submit is a 404 and sends nothing.
+    await notifyOwnersOfClientConnect({ workspaceId: link.workspaceId, platform: pending.platform });
 
     const response = NextResponse.json({ ok: true, platform: pending.platform });
     clearConnectCookie(response);

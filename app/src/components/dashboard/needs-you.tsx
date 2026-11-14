@@ -7,6 +7,7 @@ import {
   CalendarClock,
   CalendarPlus,
   ChevronRight,
+  MapPin,
   MessageSquare,
   Star,
   UserCheck,
@@ -24,6 +25,7 @@ import {
 } from "@/lib/needsYou";
 
 const ICONS: Record<NeedsYouRowKind, LucideIcon> = {
+  google_location: MapPin,
   reviews: Star,
   problems: AlertTriangle,
   approvals: UserCheck,

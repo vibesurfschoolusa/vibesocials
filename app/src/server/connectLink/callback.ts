@@ -7,6 +7,7 @@ import { alreadyConnectedCode, cancelledCode, connectFailedCode, type ConnectLin
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { looksLikeConnectLinkState, readConnectLinkState } from "@/lib/oauthState";
+import { notifyOwnersOfClientConnect } from "@/server/notifications/clientConnectEmail";
 
 import { clearConnectCookie, rawConnectCookie, readConnectCookie, type ConnectCookie } from "./cookie";
 import { findActiveConnectLink, linkOffers, placeTaken } from "./link";
@@ -213,6 +214,8 @@ async function toVisitorPage(
       .catch((error: unknown) => {
         logger.error("[connect-link] Couldn't record when the link was used (ignored)", { connectLinkId: flow.id, error });
       });
+    // F4: the owner did not make this connect, so they are told (never throws).
+    await notifyOwnersOfClientConnect({ workspaceId: flow.workspaceId, platform });
   }
   return ending(page, response.status);
 }

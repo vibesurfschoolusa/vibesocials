@@ -34,21 +34,24 @@ export interface PlatformCaptionLimit {
 }
 
 export const PLATFORM_CAPTION_LIMITS: Record<Platform, PlatformCaptionLimit> = {
-  // Matches the truncateGraphemes call in server/platforms/xClient.ts.
+  // X counts by weight, not graphemes (fix round 1, M5): an emoji 2, a link 23
+  // (lib/xWeightedLength.ts). xClient.ts cuts with truncateXWeighted.
   x: { charLimit: 280, ellipsis: "..." },
   // Matches the truncateGraphemes call in server/platforms/tiktokClient.ts.
   tiktok: { charLimit: 2200 },
-  // youtubeClient.ts truncates the auto-derived VIDEO TITLE (a separate field,
-  // capped at 100 chars) but sends the caption/description in full — no
-  // client-side limit on the caption itself today.
+  // youtubeClient.ts fits the VIDEO TITLE (a separate field, 100 chars) and
+  // cuts the description to YouTube's 5,000 BYTES (fitYouTubeDescription): a
+  // byte limit, which this character map cannot express.
   youtube: { charLimit: null },
   // Matches the truncateGraphemes call in server/platforms/instagramClient.ts
   // (computeInstagramCaption). Instagram rejects a caption over 2,200
   // characters, so before the 2026-11-01 audit an over-long caption failed the
   // whole publish; the composer preview now warns and the client truncates.
   instagram: { charLimit: 2200 },
-  // No client-side truncation today (server/platforms/linkedinClient.ts).
-  linkedin: { charLimit: null },
+  // Matches the truncateKeepingLinks call in server/platforms/linkedinClient.ts
+  // (computeLinkedInCommentary): LinkedIn refuses commentary over 3,000
+  // characters (fix round 1, M6). The footer goes first (lib/captionFooter.ts).
+  linkedin: { charLimit: 3000, ellipsis: "..." },
   // No client-side truncation today (server/platforms/facebookPageClient.ts).
   facebook_page: { charLimit: null },
   // Matches computeGbpPostSummary in server/platforms/googleBusinessProfileClient.ts.

@@ -37,7 +37,7 @@ export async function notifyOwnersOfApprovalRequest(params: {
   try {
     const owners = await prisma.workspaceMember.findMany({
       where: { workspaceId: params.workspaceId, role: "owner", userId: { not: params.submitter.id } },
-      select: { user: { select: { email: true } } },
+      select: { user: { select: { email: true, timeZone: true } } },
     });
     if (owners.length === 0) return;
 
@@ -45,17 +45,23 @@ export async function notifyOwnersOfApprovalRequest(params: {
     // email local-part — never the submitter's full address.
     const submitterName =
       params.submitter.name?.trim() || params.submitter.email.split("@")[0];
-    const email = buildApprovalRequestedEmail({
-      submitterName,
-      workspaceName: params.workspaceName,
-      caption: params.caption,
-      platformCaptions: params.platformCaptions,
-      appBaseUrl: process.env.NEXTAUTH_URL ?? null,
-      ...(params.series ? { series: params.series } : {}),
-      ...(params.alsoAsStory ? { alsoAsStory: params.alsoAsStory } : {}),
-    });
+    // One email per owner: a repeating post's days are shown in each owner's own zone (F4).
+    const emailFor = (timeZone: string | null) =>
+      buildApprovalRequestedEmail({
+        submitterName,
+        workspaceId: params.workspaceId,
+        workspaceName: params.workspaceName,
+        caption: params.caption,
+        platformCaptions: params.platformCaptions,
+        timeZone,
+        appBaseUrl: process.env.NEXTAUTH_URL ?? null,
+        ...(params.series ? { series: params.series } : {}),
+        ...(params.alsoAsStory ? { alsoAsStory: params.alsoAsStory } : {}),
+      });
 
-    await Promise.all(owners.map((owner) => sendEmail({ to: owner.user.email, ...email })));
+    await Promise.all(
+      owners.map((owner) => sendEmail({ to: owner.user.email, ...emailFor(owner.user.timeZone ?? null) })),
+    );
   } catch (error) {
     logger.error("[Notifications] Failed to notify owners of an approval request", {
       error,

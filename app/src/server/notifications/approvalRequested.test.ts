@@ -46,7 +46,7 @@ describe("notifyOwnersOfApprovalRequest", () => {
 
     expect(memberFindManyMock).toHaveBeenCalledWith({
       where: { workspaceId: "ws-1", role: "owner", userId: { not: "member-1" } },
-      select: { user: { select: { email: true } } },
+      select: { user: { select: { email: true, timeZone: true } } },
     });
   });
 
@@ -62,7 +62,7 @@ describe("notifyOwnersOfApprovalRequest", () => {
     expect(sent.subject).toBe("A post needs your approval in Acme");
     expect(sent.html).toContain("Sam");
     expect(sent.html).toContain("Sunset session this Friday");
-    expect(sent.html).toContain("https://vibesocials.wtf/queue");
+    expect(sent.html).toContain("https://vibesocials.wtf/go?w=ws-1&amp;to=%2Fqueue");
   });
 
   it("puts the per-platform captions in the email body, HTML-escaped (2026-11-01 audit, M1)", async () => {
@@ -136,6 +136,25 @@ describe("notifyOwnersOfApprovalRequest - a series", () => {
 
     expect(sendEmailMock).toHaveBeenCalledTimes(2);
     expect(sendEmailMock.mock.calls[0][0].html).toContain("This post repeats: 3 posts from");
+  });
+
+  it("writes each owner's days in that owner's own time zone (F4)", async () => {
+    memberFindManyMock.mockResolvedValue([
+      { user: { email: "owner1@example.com", timeZone: "Europe/Berlin" } },
+      { user: { email: "owner2@example.com", timeZone: null } },
+    ]);
+    await notifyOwnersOfApprovalRequest({
+      ...PARAMS,
+      series: {
+        count: 2,
+        first: new Date("2026-11-12T23:30:00.000Z"),
+        last: new Date("2026-11-19T23:30:00.000Z"),
+      },
+    });
+
+    const [berlin, unknown] = sendEmailMock.mock.calls.map((call) => call[0].html as string);
+    expect(berlin).toContain("from Friday, November 13, 2026 to Friday, November 20, 2026.");
+    expect(unknown).toContain("from Thursday, November 12, 2026 (UTC) to Thursday, November 19, 2026 (UTC).");
   });
 });
 

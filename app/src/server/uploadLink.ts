@@ -99,6 +99,7 @@ async function sendClientUploadEmails(args: ClientUploadNotice): Promise<void> {
   });
   const email = buildClientUploadEmail({
     senderName: args.senderName,
+    workspaceId,
     workspaceName: args.workspaceName,
     appUrl: process.env.NEXTAUTH_URL ?? "",
   });

@@ -4,7 +4,7 @@ import { buildPaymentFailedEmail, buildTrialEndedEmail, buildTrialEndingEmail } 
 
 describe("billing emails", () => {
   it("payment failed names the workspace, escaped, and says what happens next", () => {
-    const email = buildPaymentFailedEmail({ workspaceName: "Surf <Co>" });
+    const email = buildPaymentFailedEmail({ workspaceId: "ws_1", workspaceName: "Surf <Co>" });
     expect(email.subject).toBe("We could not charge your card for Surf <Co>");
     expect(email.html).toContain(
       "We could not charge your card for Surf &lt;Co&gt;. Update it under Settings, Plan. Update your card soon, or posting will stop.",
@@ -13,14 +13,14 @@ describe("billing emails", () => {
   });
 
   it("trial ending gives the date", () => {
-    const email = buildTrialEndingEmail({ workspaceName: "Surf Co", trialEndsAt: new Date("2026-11-13T09:00:00Z") });
+    const email = buildTrialEndingEmail({ workspaceId: "ws_1", workspaceName: "Surf Co", trialEndsAt: new Date("2026-11-13T09:00:00Z") });
     expect(email.html).toContain("Your free trial ends on 13 November 2026. Choose a plan under Settings, Plan.");
     expect(email.subject).toContain("Surf Co");
   });
 
   // S1 follow-up: what the publish job really does with a due post (PLAN_ENDED, retryable).
   it("trial ended says posting stopped and what happens to scheduled posts", () => {
-    const email = buildTrialEndedEmail({ workspaceName: "Surf Co" });
+    const email = buildTrialEndedEmail({ workspaceId: "ws_1", workspaceName: "Surf Co" });
     expect(email.html).toContain(
       "Your free trial has ended, so posting has stopped. A scheduled post that comes due without a plan is marked failed. Once you choose a plan you can retry it from Activity, as long as its photos and videos are still kept: those of finished posts are removed 30 days after they were last added to a post.",
     );
@@ -34,18 +34,18 @@ describe("billing emails", () => {
   // S1 fix round 2: the 7 days run from the period end and the email can come
   // late, so the email names no number of days.
   it("payment failed names no number of days, and keeps the link", () => {
-    const email = buildPaymentFailedEmail({ workspaceName: "Surf Co" }, "https://app.example.test");
+    const email = buildPaymentFailedEmail({ workspaceId: "ws_1", workspaceName: "Surf Co" }, "https://app.example.test");
     expect(email.html).not.toMatch(/\d+ days?/);
-    expect(email.html).toContain('<a href="https://app.example.test/settings#plan">Open Settings, Plan</a>');
+    expect(email.html).toContain('<a href="https://app.example.test/go?w=ws_1&amp;to=%2Fsettings%23plan">Open Settings, Plan</a>');
   });
 
   it("the two reminder emails keep their words", () => {
     expect(
-      buildTrialEndingEmail({ workspaceName: "Surf Co", trialEndsAt: new Date("2026-11-13T09:00:00Z") }, null).html,
+      buildTrialEndingEmail({ workspaceId: "ws_1", workspaceName: "Surf Co", trialEndsAt: new Date("2026-11-13T09:00:00Z") }, null).html,
     ).toBe(
       "<p><strong>Surf Co</strong></p>\n<p>Your free trial ends on 13 November 2026. Choose a plan under Settings, Plan.</p>\n<p>— Vibe Socials</p>",
     );
-    expect(buildPaymentFailedEmail({ workspaceName: "Surf Co" }, null).html).toBe(
+    expect(buildPaymentFailedEmail({ workspaceId: "ws_1", workspaceName: "Surf Co" }, null).html).toBe(
       "<p>We could not charge your card for Surf Co. Update it under Settings, Plan. Update your card soon, or posting will stop.</p>\n<p>— Vibe Socials</p>",
     );
   });
@@ -54,22 +54,29 @@ describe("billing emails", () => {
 describe("billing emails link to Settings, Plan (S1 item 6)", () => {
   const BASE = "https://app.example.test/";
 
-  it("each email links to /settings#plan on the app's own address", () => {
-    const emails = [
-      buildPaymentFailedEmail({ workspaceName: "Surf Co" }, BASE),
-      buildTrialEndingEmail({ workspaceName: "Surf Co", trialEndsAt: new Date("2026-11-13T09:00:00Z") }, BASE),
-      buildTrialEndedEmail({ workspaceName: "Surf Co" }, BASE),
-    ];
-    for (const email of emails) {
-      expect(email.html).toContain('<a href="https://app.example.test/settings#plan">Open Settings, Plan</a>');
-    }
+  // F4: through /go, so an owner of several workspaces lands on this workspace's Plan.
+  it.each([
+    ["payment failed", () => buildPaymentFailedEmail({ workspaceId: "ws_7", workspaceName: "Surf Co" }, BASE)],
+    [
+      "trial ending",
+      () =>
+        buildTrialEndingEmail(
+          { workspaceId: "ws_7", workspaceName: "Surf Co", trialEndsAt: new Date("2026-11-13T09:00:00Z") },
+          BASE,
+        ),
+    ],
+    ["trial ended", () => buildTrialEndedEmail({ workspaceId: "ws_7", workspaceName: "Surf Co" }, BASE)],
+  ])("%s links to this workspace's Settings, Plan through /go", (_name, build) => {
+    const { html } = build();
+    expect(html).toContain('<a href="https://app.example.test/go?w=ws_7&amp;to=%2Fsettings%23plan">Open Settings, Plan</a>');
+    expect(html).not.toContain('href="https://app.example.test/settings');
   });
 
   it("reads the address from NEXTAUTH_URL when not given", () => {
     vi.stubEnv("NEXTAUTH_URL", "https://vibe.example.test");
     try {
-      expect(buildTrialEndedEmail({ workspaceName: "Surf Co" }).html).toContain(
-        'href="https://vibe.example.test/settings#plan"',
+      expect(buildTrialEndedEmail({ workspaceId: "ws_1", workspaceName: "Surf Co" }).html).toContain(
+        'href="https://vibe.example.test/go?w=ws_1&amp;to=%2Fsettings%23plan"',
       );
     } finally {
       vi.unstubAllEnvs();
@@ -77,7 +84,7 @@ describe("billing emails link to Settings, Plan (S1 item 6)", () => {
   });
 
   it("without an address, has no link and keeps the words", () => {
-    const email = buildPaymentFailedEmail({ workspaceName: "Surf Co" }, null);
+    const email = buildPaymentFailedEmail({ workspaceId: "ws_1", workspaceName: "Surf Co" }, null);
     expect(email.html).not.toContain("<a ");
     expect(email.html).toContain("Update it under Settings, Plan.");
   });

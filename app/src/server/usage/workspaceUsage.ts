@@ -1,4 +1,4 @@
-import { billingFieldsSelect } from "@/lib/billing";
+import { BILLING_FIELDS_SELECT, billingEnabled, billingFieldsSelect, planState } from "@/lib/billing";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { consumeFixedWindow } from "@/lib/rateLimit";
@@ -147,6 +147,17 @@ type LimitNotice = {
   day?: Date;
 };
 
+/**
+ * F4: with billing on, a workspace with a plan (or a trial) raises its limits by
+ * changing plan in Settings, so the email points there; an exempt workspace and
+ * billing off keep "write to us". Read only once the email is going out.
+ */
+async function planInSettingsFor(workspaceId: string): Promise<boolean> {
+  if (!billingEnabled()) return false;
+  const row = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: BILLING_FIELDS_SELECT });
+  return row !== null && planState(row, new Date()) !== "exempt";
+}
+
 async function sendLimitReachedEmails(args: LimitNotice): Promise<void> {
   const { workspaceId, kind, windowKey } = args;
   const first = await consumeFixedWindow({
@@ -156,12 +167,18 @@ async function sendLimitReachedEmails(args: LimitNotice): Promise<void> {
   });
   if (!first.allowed) return;
 
-  const owners = await prisma.workspaceMember.findMany({
-    where: { workspaceId, role: "owner" },
-    select: { user: { select: { id: true, email: true } } },
-  });
+  const [owners, planInSettings] = await Promise.all([
+    prisma.workspaceMember.findMany({
+      where: { workspaceId, role: "owner" },
+      select: { user: { select: { id: true, email: true } } },
+    }),
+    planInSettingsFor(workspaceId),
+  ]);
   const email = buildLimitReachedEmail({
+    workspaceId,
     workspaceName: args.workspaceName,
+    planInSettings,
+    appBaseUrl: process.env.NEXTAUTH_URL || null,
     kind,
     limit: args.limit,
     resetsAt: args.resetsAt,

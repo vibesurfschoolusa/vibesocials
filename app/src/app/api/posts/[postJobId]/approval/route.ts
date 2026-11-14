@@ -293,14 +293,17 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   try {
     const submitter = await prisma.user.findUnique({
       where: { id: job.userId },
-      select: { email: true },
+      // F4: the scheduled time is shown in the member's own zone.
+      select: { email: true, timeZone: true },
     });
     if (submitter?.email) {
       const email = buildApprovalDecisionEmail({
         approved: approving,
+        workspaceId: workspaceContext.workspace.id,
         workspaceName: workspaceContext.workspace.name,
         caption: job.baseCaption ?? "",
         scheduledFor: scheduledForIso,
+        timeZone: submitter.timeZone ?? null,
         appBaseUrl: process.env.NEXTAUTH_URL || null,
       });
       await sendEmail({ to: submitter.email, ...email });

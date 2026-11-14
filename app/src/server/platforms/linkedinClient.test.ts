@@ -4406,6 +4406,23 @@ describe("linkedinClient.publishText - a post without a photo", () => {
     expect((init.headers as Record<string, string>)["Linkedin-Version"]).toBe(LINKEDIN_API_VERSION);
   });
 
+  // Fix round 1 (M6): LinkedIn refuses commentary over 3,000 characters.
+  it("cuts a caption over 3,000 characters to 3,000, and leaves a shorter one as it is", async () => {
+    const fetchMock = stubPosts();
+    const sent = async (caption: string) => {
+      fetchMock.mockClear();
+      await linkedinClient.publishText!({ ...textCtx(), caption });
+      return JSON.parse(String((fetchMock.mock.calls[0][1] as unknown as RequestInit).body)).commentary as string;
+    };
+
+    expect(await sent("a".repeat(3100))).toBe("a".repeat(2997) + "...");
+    expect(await sent("a".repeat(3000))).toBe("a".repeat(3000));
+    // Review fix: a link at the cut goes whole, never "https:..." (the little
+    // escaping only touches reserved characters, none of them in this link).
+    const url = "https://vibesurfschool.com/lessons/fort-lauderdale/private-surf-lessons";
+    expect(await sent("w".repeat(2990) + " " + url)).toBe("w".repeat(2990) + " ...");
+  });
+
   it.each([
     ["a 503", () => new Response("down", { status: 503 })],
     ["a 201 without an id", () => new Response("not json", { status: 201 })],

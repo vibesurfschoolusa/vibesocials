@@ -7,7 +7,10 @@ import { buildLimitReachedEmail } from "./limitReachedEmail";
 describe("buildLimitReachedEmail", () => {
   it("names the workspace in the subject", () => {
     const email = buildLimitReachedEmail({
+      workspaceId: "ws_1",
       workspaceName: "Surf Co",
+      planInSettings: false,
+      appBaseUrl: null,
       kind: "postsPerDay",
       limit: 20,
       day: new Date("2026-11-12T00:00:00Z"),
@@ -18,7 +21,10 @@ describe("buildLimitReachedEmail", () => {
 
   it("posts per day: names the full day, says only that other days are not affected, and gives the support address", () => {
     const { html } = buildLimitReachedEmail({
+      workspaceId: "ws_1",
       workspaceName: "Surf Co",
+      planInSettings: false,
+      appBaseUrl: null,
       kind: "postsPerDay",
       limit: 20,
       day: new Date("2026-11-12T15:00:00Z"),
@@ -33,7 +39,10 @@ describe("buildLimitReachedEmail", () => {
 
   it("X per month names the first of the next month", () => {
     const { html } = buildLimitReachedEmail({
+      workspaceId: "ws_1",
       workspaceName: "Surf Co",
+      planInSettings: false,
+      appBaseUrl: null,
       kind: "xPostsPerMonth",
       limit: 30,
       resetsAt: new Date("2027-01-01T00:00:00Z"),
@@ -45,7 +54,10 @@ describe("buildLimitReachedEmail", () => {
 
   it("YouTube per day starts again at midnight Pacific time", () => {
     const { html } = buildLimitReachedEmail({
+      workspaceId: "ws_1",
       workspaceName: "Surf Co",
+      planInSettings: false,
+      appBaseUrl: null,
       kind: "youtubeUploadsPerDay",
       limit: 10,
       resetsAt: new Date("2026-11-11T08:00:00Z"),
@@ -57,7 +69,10 @@ describe("buildLimitReachedEmail", () => {
 
   it("storage frees up when media is deleted", () => {
     const { html } = buildLimitReachedEmail({
+      workspaceId: "ws_1",
       workspaceName: "Surf Co",
+      planInSettings: false,
+      appBaseUrl: null,
       kind: "storage",
       limit: 5120 * 1024 * 1024,
       resetsAt: null,
@@ -69,7 +84,10 @@ describe("buildLimitReachedEmail", () => {
 
   it("escapes the workspace name in the body", () => {
     const { html } = buildLimitReachedEmail({
+      workspaceId: "ws_1",
       workspaceName: "<b>x</b>",
+      planInSettings: false,
+      appBaseUrl: null,
       kind: "storage",
       limit: 0,
       resetsAt: null,
@@ -83,7 +101,10 @@ describe("buildLimitReachedEmail", () => {
 describe("buildLimitReachedEmail counts agree with their number", () => {
   function html(kind: "postsPerDay" | "xPostsPerMonth" | "youtubeUploadsPerDay", limit: number): string {
     return buildLimitReachedEmail({
+      workspaceId: "ws_1",
       workspaceName: "Surf Co",
+      planInSettings: false,
+      appBaseUrl: null,
       kind,
       limit,
       day: new Date("2026-11-12T00:00:00Z"),
@@ -113,5 +134,36 @@ describe("buildLimitReachedEmail counts agree with their number", () => {
     [10, "YouTube uploads"],
   ])("YouTube uploads: %i %s", (n, words) => {
     expect(html("youtubeUploadsPerDay", n)).toContain(`has reached its limit of ${n} ${words} a day.`);
+  });
+});
+
+// F4: with billing on, an owner raises the limit by changing the plan, not by writing in.
+describe("buildLimitReachedEmail - where a higher limit comes from", () => {
+  const base = {
+    workspaceId: "ws_1",
+    workspaceName: "Surf Co",
+    kind: "postsPerDay" as const,
+    limit: 20,
+    day: new Date("2026-11-12T00:00:00Z"),
+    resetsAt: null,
+  };
+
+  it("billing on: points to Settings, Plan through /go and not to writing in", () => {
+    const { html } = buildLimitReachedEmail({ ...base, planInSettings: true, appBaseUrl: "https://vibesocials.wtf" });
+    expect(html).toContain(
+      `<p>For a higher limit, change this workspace's plan in <a href="https://vibesocials.wtf/go?w=ws_1&amp;to=%2Fsettings%23plan">Settings, Plan</a>.</p>`,
+    );
+    expect(html).not.toContain(SUPPORT_EMAIL);
+  });
+
+  it("billing on without a base URL names Settings, Plan without a link", () => {
+    const { html } = buildLimitReachedEmail({ ...base, planInSettings: true, appBaseUrl: null });
+    expect(html).toContain("<p>For a higher limit, change this workspace's plan in Settings, Plan.</p>");
+  });
+
+  it("billing off: the support address, exactly as before", () => {
+    const { html } = buildLimitReachedEmail({ ...base, planInSettings: false, appBaseUrl: "https://vibesocials.wtf" });
+    expect(html).toContain(`<p>If you need a higher limit, write to ${SUPPORT_EMAIL} and we will raise it.</p>`);
+    expect(html).not.toContain("/go?");
   });
 });

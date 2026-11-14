@@ -67,14 +67,22 @@ describe("computeTweetText", () => {
     );
   });
 
-  it("matches the pre-refactor inline call byte-for-byte for emoji/ZWJ-heavy content over the limit", () => {
-    // Astral (surrogate-pair) graphemes are exactly where a re-implementation
-    // could diverge from the original `.length > 280` UTF-16 pre-check.
-    const caption = "😀👨‍👩‍👧🇺🇸".repeat(60);
-    expect(caption.length).toBeGreaterThan(280);
-    expect(computeTweetText(caption)).toBe(
-      truncateGraphemes(caption, 280, { ellipsis: "..." }),
-    );
+  // Fix round 1 (M5): X weighs each emoji 2 and each link 23 (lib/xWeightedLength.ts).
+  it("cuts emoji-heavy content by X's weight: 2 per emoji, sequences whole", () => {
+    const caption = "😀👨‍👩‍👧🇺🇸".repeat(60); // 180 graphemes, weight 360
+    expect(computeTweetText(caption)).toBe("😀👨‍👩‍👧🇺🇸".repeat(46) + "...");
+  });
+
+  it("counts a link as 23 and never cuts inside it", () => {
+    const url = "https://vibesurfschool.com/lessons/fort-lauderdale/private-surf-lessons";
+    const fits = "a".repeat(250) + " " + url;
+    expect(computeTweetText(fits)).toBe(fits);
+    const over = "a".repeat(260) + " " + url;
+    expect(computeTweetText(over)).toBe("a".repeat(260) + " ...");
+  });
+
+  it("removes @-mentions before counting", () => {
+    expect(computeTweetText(`@ana_surf ${"a".repeat(280)}`)).toBe("a".repeat(280));
   });
 
   it("empty caption stays empty (no crash, no spurious ellipsis)", () => {

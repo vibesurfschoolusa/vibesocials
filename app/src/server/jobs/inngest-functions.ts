@@ -2391,6 +2391,7 @@ async function notifyOwnersToReconnect(
   ]);
   const email = buildReconnectEmail({
     platformLabel: platformLabel(connection.platform),
+    workspaceId: connection.workspaceId,
     workspaceName: workspace?.name ?? "your workspace",
     appBaseUrl: process.env.NEXTAUTH_URL || null,
   });
