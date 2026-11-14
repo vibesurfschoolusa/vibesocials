@@ -110,6 +110,8 @@ const POSTS_LIST_SELECT = {
   clientNote: true,
   // Repeat (brief 11): the series it was created in, for "Repeats: 3 of 8".
   seriesId: true,
+  // F6: on the Story job of a Feed and Story post, its feed job's id.
+  storyOfPostJobId: true,
   // V1: whether the post has a chosen video cover (sent as `hasCover` only).
   coverTimeMs: true,
   coverImageUrl: true,
@@ -359,6 +361,27 @@ export async function GET(request: Request) {
       : [];
     const placeByJobId = seriesPlaces(seriesRows);
 
+    // F6: each half of a Feed and Story post says so on its Queue card. Only a
+    // page with a Story job on it asks (the two are created together, so they
+    // sit side by side in this order): the feed posts it names, and the Story
+    // jobs naming any post of the page. A cancelled half is no longer part of
+    // the post, and a deleted one is not found, so neither is marked.
+    const storyOfIds = Array.from(
+      new Set(jobs.map((job) => job.storyOfPostJobId).filter((id): id is string => Boolean(id))),
+    );
+    const pairRows = storyOfIds.length
+      ? await prisma.postJob.findMany({
+          where: {
+            workspaceId: context.workspace.id,
+            status: { not: "cancelled" },
+            OR: [{ id: { in: storyOfIds } }, { storyOfPostJobId: { in: jobs.map((job) => job.id) } }],
+          },
+          select: { id: true, storyOfPostJobId: true, scheduledFor: true },
+        })
+      : [];
+    const pairById = new Map(pairRows.map((row) => [row.id, row]));
+    const hasStory = new Set(pairRows.map((row) => row.storyOfPostJobId).filter(Boolean));
+
     const payload: PostsResponse = {
       // 2026-11-01 scale audit (W3): counted here, on demand — it is no longer
       // a field of the workspace context every route pays for.
@@ -400,6 +423,10 @@ export async function GET(request: Request) {
           clientNote: job.clientNote ?? null,
           seriesId: job.seriesId ?? null,
           hasCover: typeof job.coverTimeMs === "number" || Boolean(job.coverImageUrl),
+          ...(job.storyOfPostJobId && pairById.has(job.storyOfPostJobId)
+            ? { storyOf: { scheduledFor: pairById.get(job.storyOfPostJobId)!.scheduledFor?.toISOString() ?? null } }
+            : {}),
+          ...(hasStory.has(job.id) ? { alsoAsStory: true } : {}),
           ...(placeByJobId.has(job.id)
             ? {
                 seriesPosition: placeByJobId.get(job.id)!.position,

@@ -1366,3 +1366,63 @@ describe("GET /api/posts - show=problems (N3)", () => {
     ]);
   });
 });
+
+// F6: each half of a Feed and Story post says so on its Queue card.
+describe("GET /api/posts - a Feed and Story pair", () => {
+  const at = new Date("2026-11-20T15:00:00.000Z");
+
+  it("a page without a Story job makes no extra query and marks nothing", async () => {
+    postJobFindManyMock.mockResolvedValue([{ ...jobWithYouTube(), storyOfPostJobId: null }]);
+
+    const body = (await (await GET(getRequest())).json()) as PostsResponse;
+
+    expect(postJobFindManyMock).toHaveBeenCalledTimes(1);
+    expect(postJobFindManyMock.mock.calls[0][0].select.storyOfPostJobId).toBe(true);
+    expect(body.jobs[0]).not.toHaveProperty("storyOf");
+    expect(body.jobs[0]).not.toHaveProperty("alsoAsStory");
+  });
+
+  it("marks the feed post 'also as a Story' and gives the Story its feed post's time", async () => {
+    postJobFindManyMock
+      .mockResolvedValueOnce([
+        { ...jobWithYouTube(), id: "story-1", storyOfPostJobId: "feed-1", scheduledFor: at },
+        { ...jobWithYouTube(), id: "feed-1", storyOfPostJobId: null, scheduledFor: at },
+        { ...jobWithYouTube(), id: "other", storyOfPostJobId: null },
+      ])
+      .mockResolvedValueOnce([
+        { id: "story-1", storyOfPostJobId: "feed-1", scheduledFor: at },
+        { id: "feed-1", storyOfPostJobId: null, scheduledFor: at },
+      ]);
+
+    const body = (await (await GET(getRequest())).json()) as PostsResponse;
+
+    expect(postJobFindManyMock).toHaveBeenCalledTimes(2);
+    expect(postJobFindManyMock.mock.calls[1][0]).toEqual({
+      where: {
+        workspaceId: "ws-1",
+        status: { not: "cancelled" },
+        OR: [{ id: { in: ["feed-1"] } }, { storyOfPostJobId: { in: ["story-1", "feed-1", "other"] } }],
+      },
+      select: { id: true, storyOfPostJobId: true, scheduledFor: true },
+    });
+    const byId = new Map(body.jobs.map((job) => [job.id, job]));
+    expect(byId.get("story-1")).toMatchObject({ storyOf: { scheduledFor: at.toISOString() } });
+    expect(byId.get("story-1")).not.toHaveProperty("alsoAsStory");
+    expect(byId.get("feed-1")).toMatchObject({ alsoAsStory: true });
+    expect(byId.get("feed-1")).not.toHaveProperty("storyOf");
+    expect(byId.get("other")).not.toHaveProperty("storyOf");
+    expect(byId.get("other")).not.toHaveProperty("alsoAsStory");
+  });
+
+  it("a Story whose feed post was deleted or cancelled is not marked as a pair", async () => {
+    postJobFindManyMock
+      .mockResolvedValueOnce([{ ...jobWithYouTube(), id: "story-1", storyOfPostJobId: "gone", scheduledFor: at }])
+      // The lookup skips cancelled posts and cannot find a deleted one.
+      .mockResolvedValueOnce([{ id: "story-1", storyOfPostJobId: "gone", scheduledFor: at }]);
+
+    const body = (await (await GET(getRequest())).json()) as PostsResponse;
+
+    expect(body.jobs[0]).not.toHaveProperty("storyOf");
+    expect(body.jobs[0]).not.toHaveProperty("alsoAsStory");
+  });
+});

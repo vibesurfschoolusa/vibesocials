@@ -8,6 +8,7 @@ import {
   coverLabel,
   emptyCaptionMessage,
   isTextPost,
+  pairLabel,
   readQueueView,
   saveQueueView,
   seriesLabel,
@@ -154,5 +155,27 @@ describe("readQueueView / saveQueueView", () => {
         throw new Error("SecurityError");
       }, "calendar"),
     ).not.toThrow();
+  });
+});
+
+// F6: each half of a Feed and Story post says it belongs to the other.
+describe("pairLabel", () => {
+  it("says a Story belongs to the post at its time, and a feed post that it also goes as a Story", () => {
+    const at = "2026-11-20T15:00:00.000Z";
+    const formatted = new Date(at).toLocaleString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    expect(pairLabel(job("s", { storyOf: { scheduledFor: at } }))).toBe(`Story of the post on ${formatted}`);
+    expect(pairLabel(job("s", { storyOf: { scheduledFor: null } }))).toBe("Story of a post with no time set");
+    expect(pairLabel(job("f", { alsoAsStory: true }))).toBe("Also as a Story");
+  });
+
+  it("says nothing for a post that is not part of a pair", () => {
+    expect(pairLabel(job("a"))).toBeNull();
   });
 });

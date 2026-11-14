@@ -154,6 +154,19 @@ export function coverEditNote(job: Pick<PostJobDTO, "hasCover">): string | null 
   return job.hasCover ? "Keeps its custom cover." : null;
 }
 
+/**
+ * F6: the line on each half of a Feed and Story post. Only a label: cancel,
+ * delete, edit and publish still act on this card's post alone.
+ */
+export function pairLabel(job: Pick<PostJobDTO, "storyOf" | "alsoAsStory">): string | null {
+  if (job.storyOf) {
+    return job.storyOf.scheduledFor
+      ? `Story of the post on ${formatTimestamp(job.storyOf.scheduledFor)}`
+      : "Story of a post with no time set";
+  }
+  return job.alsoAsStory ? "Also as a Story" : null;
+}
+
 /** "Repeats: 3 of 8" for a post created as part of a series (brief 11), else null. */
 export function seriesLabel(job: PostJobDTO): string | null {
   if (!job.seriesId || !job.seriesPosition || !job.seriesCount) return null;
@@ -224,6 +237,7 @@ function QueueCard({
   const googleLabel = googleQueueLabel(job.publish?.googlePostType ?? null, job.publish?.googleButton ?? null);
   const repeats = seriesLabel(job);
   const cover = coverLabel(job);
+  const pair = pairLabel(job);
 
   return (
     <Card className="p-4 sm:p-5">
@@ -279,6 +293,7 @@ function QueueCard({
           {listing.storyOnlyNote ? (
             <p className="mt-1 text-xs text-muted-foreground">{listing.storyOnlyNote}</p>
           ) : null}
+          {pair ? <p className="mt-1 text-xs text-muted-foreground">{pair}</p> : null}
           {repeats ? <p className="mt-1 text-xs text-muted-foreground">{repeats}</p> : null}
           {cover ? <p className="mt-1 text-xs text-muted-foreground">{cover}</p> : null}
           {platformCaptions.length > 0 ? (
