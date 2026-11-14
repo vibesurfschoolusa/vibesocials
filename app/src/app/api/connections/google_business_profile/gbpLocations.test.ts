@@ -148,20 +148,32 @@ describe("Google failing is not 'not one this account manages'", () => {
     ["a 429", { status: 429 }],
     ["a 503", { status: 503 }],
     ["a network failure", { throws: true }],
-  ])("%s for one account: 503 with the plain sentence, and nothing is saved", async (_label, failure) => {
+  ])("%s for one account, location not found: 503 with the plain sentence, and nothing is saved", async (_label, failure) => {
     google({
       [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }, { name: "accounts/2" }] } },
       [`${INFO}/accounts/1/locations|`]: failure,
       [`${INFO}/accounts/2/locations|`]: { body: { locations: [location(2, 7)] } },
     });
 
-    // A location the failed account may hold, and one the answering account lists.
-    for (const name of ["accounts/1/locations/5", "accounts/2/locations/7"]) {
-      const res = await save(name);
-      expect(res.status).toBe(503);
-      await expect(res.json()).resolves.toEqual({ error: GOOGLE_NO_ANSWER_MESSAGE });
-    }
+    // It may be on the failed account's list, so this is not a refusal.
+    const res = await save("accounts/1/locations/5");
+
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toEqual({ error: GOOGLE_NO_ANSWER_MESSAGE });
     expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it("one account failing, location found in an account that answered: it saves", async () => {
+    google({
+      [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }, { name: "accounts/2" }] } },
+      [`${INFO}/accounts/1/locations|`]: { status: 503 },
+      [`${INFO}/accounts/2/locations|`]: { body: { locations: [location(2, 7)] } },
+    });
+
+    const res = await save("accounts/2/locations/7");
+
+    expect(res.status).toBe(200);
+    expect(h.update.mock.calls[0][0].data.metadata.locationName).toBe("accounts/2/locations/7");
   });
 
   it.each([
@@ -182,7 +194,7 @@ describe("Google failing is not 'not one this account manages'", () => {
     expect(GOOGLE_NO_ANSWER_MESSAGE).toBe("Google didn't answer. Try again in a minute.");
   });
 
-  it("a complete list without the location is still the 400", async () => {
+  it("a complete list without the location is still the 400 (isn't one this account manages)", async () => {
     google({
       [`${ACCOUNTS}|`]: { body: { accounts: [{ name: "accounts/1" }] } },
       [`${INFO}/accounts/1/locations|`]: { body: { locations: [location(1, 1)] } },
@@ -191,6 +203,7 @@ describe("Google failing is not 'not one this account manages'", () => {
     const res = await save("accounts/1/locations/9");
 
     expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/^That location isn't one this Google account manages\./);
     expect(h.update).not.toHaveBeenCalled();
   });
 });

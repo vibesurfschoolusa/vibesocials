@@ -86,16 +86,16 @@ export async function POST(request: Request) {
   if (!listed.ok) {
     return listed.response;
   }
-  // An account's list could not all be read: the location may be on the
-  // part that is missing, so this is Google's failure, not a refusal.
-  if (!listed.complete) {
-    return NextResponse.json({ error: GOOGLE_NO_ANSWER_MESSAGE }, { status: 503 });
-  }
   const isListed = listed.locations.some(
     (location) => location.resourceName === locationName || location.storeCode === locationName,
   );
   if (!isListed) {
-    return NextResponse.json({ error: LOCATION_NOT_LISTED_MESSAGE }, { status: 400 });
+    // Found nowhere, but an account's list could not all be read: the
+    // location may be on the part that is missing, so this is Google's
+    // failure, not a refusal. Found in an account that answered, it saves.
+    return listed.complete
+      ? NextResponse.json({ error: LOCATION_NOT_LISTED_MESSAGE }, { status: 400 })
+      : NextResponse.json({ error: GOOGLE_NO_ANSWER_MESSAGE }, { status: 503 });
   }
 
   const existingMetadata = (connection.metadata as Record<string, unknown> | null) ?? {};
