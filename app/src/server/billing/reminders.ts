@@ -105,8 +105,12 @@ export async function runBillingReminders(
 
     const email =
       kind === "trial-ending"
-        ? buildTrialEndingEmail({ workspaceName: workspace.name, trialEndsAt: workspace.trialEndsAt! })
-        : buildTrialEndedEmail({ workspaceName: workspace.name });
+        ? buildTrialEndingEmail({
+            workspaceId: workspace.id,
+            workspaceName: workspace.name,
+            trialEndsAt: workspace.trialEndsAt!,
+          })
+        : buildTrialEndedEmail({ workspaceId: workspace.id, workspaceName: workspace.name });
 
     let allSent = true;
     for (const owner of workspace.members) {

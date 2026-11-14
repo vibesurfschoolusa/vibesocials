@@ -632,6 +632,18 @@ describe("invoice.payment_failed", () => {
     expect(m.sendEmail.mock.calls[0][0].html).toContain("Update your card soon, or posting will stop.");
   });
 
+  it("links to the customer's own workspace's Settings, Plan through /go (F4)", async () => {
+    vi.stubEnv("NEXTAUTH_URL", "https://app.example.test");
+    try {
+      await handleStripeEvent(failed("evt_1"), ENV);
+      expect(m.sendEmail.mock.calls[0][0].html).toContain(
+        'href="https://app.example.test/go?w=ws_a&amp;to=%2Fsettings%23plan"',
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("once per invoice: a second event for the same invoice sends nothing", async () => {
     await handleStripeEvent(failed("evt_1"), ENV);
     await handleStripeEvent(failed("evt_2"), ENV);
