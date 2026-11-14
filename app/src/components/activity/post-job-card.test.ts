@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ToastProvider } from "@/components/ui/toast";
 import type { PostJobDTO, PostJobResultDTO } from "@/lib/postsDto";
@@ -8,6 +8,7 @@ import type { PostJobDTO, PostJobResultDTO } from "@/lib/postsDto";
 import type { Platform } from "@prisma/client";
 
 import { NOT_SENT_MESSAGE } from "@/lib/publishFailureText";
+import { TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
 
 import { cardTime, createSendAgain, displayedJobStatus, PostJobCard, SEND_AGAIN_FAILED } from "./post-job-card";
 
@@ -163,6 +164,22 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
   // Coordinator follow-up 1: the honest failure gets a Send again button that
   // calls the publish route (which accepts a failed post with no results).
   describe("Send again", () => {
+    // The fixture post was created 2026-11-10: pin "now" so the 7-day rule holds.
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-11-14T12:00:00.000Z"));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("offers no button on a post older than a week, and says why", () => {
+      const html = render({ status: "failed", results: [], createdAt: "2026-01-18T10:00:00.000Z", scheduledFor: null });
+      expect(html).not.toContain("Send again</button>");
+      expect(html).toContain(TOO_OLD_TO_SEND_MESSAGE);
+      expect(html).not.toContain(NOT_SENT_MESSAGE);
+    });
+
     it("shows the button only on a failed post with no results", () => {
       expect(render({ status: "failed", results: [], publish: publish(["instagram"]) })).toContain("Send again</button>");
       expect(render({ status: "failed", results: [], publish: null })).toContain("Send again</button>");

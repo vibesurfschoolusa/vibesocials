@@ -16,6 +16,7 @@ import { platformPostUrl } from "@/lib/platformPostUrl";
 import type { PostJobDTO } from "@/lib/postsDto";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { NOT_SENT_MESSAGE } from "@/lib/publishFailureText";
+import { sendAgainTooOld, TOO_OLD_TO_SEND_MESSAGE } from "@/lib/sendAgain";
 import { describeDeferral, selectDeferrals } from "@/lib/resultDeferral";
 import { PlatformResultBadge } from "./platform-result";
 import { DailyMetricStats, PostMetricStats } from "./post-metric-stats";
@@ -275,7 +276,13 @@ export function PostJobCard({
       !pending.has(result.platform),
   );
 
-  const canSendAgain = job.status === "failed" && results.length === 0 && !sentAgain;
+  const unsent = job.status === "failed" && results.length === 0;
+  // A post from weeks ago is not sent again (lib/sendAgain.ts): it says why.
+  // The time is read once, when the card first appears: a week-old limit does
+  // not need a ticking clock, and render must stay pure.
+  const [openedAt] = useState(() => Date.now());
+  const tooOldToSend = unsent && sendAgainTooOld(job, openedAt);
+  const canSendAgain = unsent && !tooOldToSend && !sentAgain;
 
   const sendAgain = useCallback(async () => {
     setSendingAgain(true);
@@ -425,9 +432,9 @@ export function PostJobCard({
 
       {/* F1 H3: a failed post with no results was never sent; the job does not
           record why, so one sentence that is true for every cause. */}
-      {canSendAgain ? (
+      {canSendAgain || tooOldToSend ? (
         <p className="mt-3 rounded-[var(--radius)] border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-foreground">
-          {NOT_SENT_MESSAGE}
+          {tooOldToSend ? TOO_OLD_TO_SEND_MESSAGE : NOT_SENT_MESSAGE}
         </p>
       ) : null}
 
