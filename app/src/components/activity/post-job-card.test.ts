@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ToastProvider } from "@/components/ui/toast";
 import type { PostJobDTO, PostJobResultDTO } from "@/lib/postsDto";
@@ -9,7 +9,7 @@ import type { Platform } from "@prisma/client";
 
 import { OUR_SIDE_FAILURE_MESSAGE } from "@/lib/publishFailureText";
 
-import { cardTime, PostJobCard } from "./post-job-card";
+import { cardTime, createSendAgain, displayedJobStatus, PostJobCard, SEND_AGAIN_FAILED } from "./post-job-card";
 
 // Fix round 1 (Stories, 2026-11-10): Activity labels a Story result "Story" and
 // builds no link from a Facebook Story's id.
@@ -154,9 +154,72 @@ describe("PostJobCard - a failed post with no results (F1 H3)", () => {
     expect(html).not.toContain("no platforms were connected");
   });
 
-  it("keeps the no-connections sentence for a post sent to every connection", () => {
+  it("keeps the no-connections sentence for a post sent to every connection, pointing at Send again", () => {
     const html = render({ status: "failed", results: [], publish: null });
 
     expect(html).toContain("no platforms were connected");
+    expect(html).toContain("then use Send again.");
+  });
+
+  // Coordinator follow-up 1: the honest failure gets a Send again button that
+  // calls the publish route (which accepts a failed post with no results).
+  describe("Send again", () => {
+    it("shows the button only on a failed post with no results", () => {
+      expect(render({ status: "failed", results: [], publish: publish(["instagram"]) })).toContain("Send again</button>");
+      expect(render({ status: "failed", results: [], publish: null })).toContain("Send again</button>");
+      expect(
+        render({ status: "failed", results: [result({ platform: "x", status: "failed", errorMessage: "No." })] }),
+      ).not.toContain("Send again</button>");
+      expect(render({ status: "completed", results: [result({})] })).not.toContain("Send again</button>");
+      expect(render({ status: "in_progress", results: [] })).not.toContain("Send again</button>");
+    });
+
+    const response = (status: number, body: unknown) =>
+      ({ ok: status >= 200 && status < 300, status, json: async () => body }) as unknown as Response;
+
+    it("calls the publish route once, even when pressed twice", async () => {
+      let release!: (value: Response) => void;
+      const fetcher = vi.fn(() => new Promise<Response>((resolve) => (release = resolve)));
+      const press = createSendAgain("job-9", fetcher);
+
+      const first = press();
+      const second = press();
+      release(response(202, { ok: true, status: "in_progress" }));
+
+      await expect(first).resolves.toEqual({ ok: true });
+      await expect(second).resolves.toBeNull();
+      await expect(press()).resolves.toBeNull();
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(fetcher).toHaveBeenCalledWith("/api/posts/job-9/publish", { method: "POST" });
+    });
+
+    it("shows the post as in progress once the server took it", () => {
+      expect(displayedJobStatus("failed", true)).toBe("in_progress");
+      expect(displayedJobStatus("failed", false)).toBe("failed");
+      expect(displayedJobStatus("completed", true)).toBe("completed");
+    });
+
+    it("turns a refusal into the server's plain sentence, and lets the user press again", async () => {
+      const fetcher = vi
+        .fn()
+        .mockResolvedValueOnce(
+          response(409, { code: "NOT_PUBLISHABLE", error: "This post is no longer available to publish." }),
+        )
+        .mockResolvedValueOnce(response(202, { ok: true }));
+      const press = createSendAgain("job-9", fetcher);
+
+      await expect(press()).resolves.toEqual({ ok: false, error: "This post is no longer available to publish." });
+      await expect(press()).resolves.toEqual({ ok: true });
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    });
+
+    it("says it could not send when the answer has no sentence or the network fails", async () => {
+      const noBody = createSendAgain("job-9", vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => { throw new Error("x"); } }));
+      await expect(noBody()).resolves.toEqual({ ok: false, error: SEND_AGAIN_FAILED });
+
+      const offline = createSendAgain("job-9", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")));
+      await expect(offline()).resolves.toEqual({ ok: false, error: SEND_AGAIN_FAILED });
+      expect(SEND_AGAIN_FAILED).toBe("Couldn't send this post again. Please try again.");
+    });
   });
 });

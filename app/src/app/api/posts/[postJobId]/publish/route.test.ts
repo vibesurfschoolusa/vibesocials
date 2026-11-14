@@ -367,7 +367,7 @@ describe("POST /api/posts/[postJobId]/publish", () => {
   });
 
   // F1 H3: a scheduled post that failed on our side before any platform was
-  // tried has no results, so Retry has nothing to retry. Post now sends it.
+  // tried has no results, so Retry has nothing to retry. Send again (Activity) calls this route.
   describe("a scheduled post that failed before any platform was tried (F1 H3)", () => {
     it("Post now claims it (failed with no results) and sends it", async () => {
       findFirstMock.mockResolvedValue(jobRow({ status: "failed", _count: { results: 0 } }));
@@ -412,7 +412,7 @@ describe("POST /api/posts/[postJobId]/publish", () => {
       expect(res.status).toBe(409);
       await expect(res.json()).resolves.toEqual({
         code: "AWAITING_APPROVAL",
-        error: "An owner needs to approve this post first. Ask an owner to use Post now.",
+        error: "An owner needs to approve this post first. Ask an owner to use Send again.",
       });
       expect(updateManyMock).not.toHaveBeenCalled();
     });

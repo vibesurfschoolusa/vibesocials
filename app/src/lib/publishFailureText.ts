@@ -20,10 +20,10 @@ export function connectionGoneMessage(platform: Platform): string {
 /**
  * A scheduled post that kept failing on our side before any platform was tried
  * (H3). The job then has no results to carry a message, so the Activity card
- * shows this one.
+ * shows this one, next to its Send again button.
  */
 export const OUR_SIDE_FAILURE_MESSAGE =
-  "This post could not be sent because of a problem on our side. Use Post now to send it again.";
+  "This post could not be sent because of a problem on our side. Use Send again to send it.";
 
 /** What a platform's refusal reads when its error text was not written for the user (L7). */
 export function platformRefusedMessage(platform: Platform): string {

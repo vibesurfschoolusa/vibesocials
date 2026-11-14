@@ -23,7 +23,7 @@ describe("dispatch sentences (F1 H1)", () => {
 describe("OUR_SIDE_FAILURE_MESSAGE (F1 H3)", () => {
   it("is the honest sentence for a post our side could not send", () => {
     expect(OUR_SIDE_FAILURE_MESSAGE).toBe(
-      "This post could not be sent because of a problem on our side. Use Post now to send it again.",
+      "This post could not be sent because of a problem on our side. Use Send again to send it.",
     );
   });
 });

@@ -460,8 +460,8 @@ export async function reconcileStuckInProgressJobs(
  * platform was tried. It goes back to `scheduled`, and the claim that follows
  * this reconcile in the same step takes it again. Once its first pickup is more
  * than {@link SEND_GIVE_UP_MS} ago it fails instead (Activity then shows
- * OUR_SIDE_FAILURE_MESSAGE and Post now sends it), and its media counts as used
- * now (F1 H2), so Post now still finds it.
+ * OUR_SIDE_FAILURE_MESSAGE and its Send again button sends it), and its media
+ * counts as used now (F1 H2), so Send again still finds it.
  *
  * Each is ONE statement: the inner SELECT locks the rows (`SKIP LOCKED`) and the
  * UPDATE re-checks `in_progress` with no results, so a post whose results were

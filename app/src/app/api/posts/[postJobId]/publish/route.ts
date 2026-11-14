@@ -67,8 +67,8 @@ interface PublishBody {
  *
  * F1 H3: publish-now also takes a `failed` post with NO results: a scheduled
  * post our side could not send (the reconciler gave up on it), which Retry
- * cannot reach. Activity tells the user to use Post now. A member under
- * approval may send one only if an owner approved it.
+ * cannot reach. Activity's Send again button calls this route for it. A member
+ * under approval may send one only if an owner approved it.
  */
 export async function POST(request: NextRequest, context: PostJobRouteContext) {
   const workspaceContext = await getWorkspaceContext();
@@ -300,7 +300,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     })
   ) {
     return NextResponse.json(
-      { code: "AWAITING_APPROVAL", error: "An owner needs to approve this post first. Ask an owner to use Post now." },
+      { code: "AWAITING_APPROVAL", error: "An owner needs to approve this post first. Ask an owner to use Send again." },
       { status: 409 },
     );
   }

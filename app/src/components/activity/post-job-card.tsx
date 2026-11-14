@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ExternalLink } from "lucide-react";
 import type { Platform, PostJobResultStatus, PostJobStatus } from "@prisma/client";
@@ -110,6 +110,49 @@ export function cardTime(job: {
   return job.createdAt ? { label: null, iso: job.createdAt } : null;
 }
 
+/** What Send again says when the server gave no sentence or could not be reached. */
+export const SEND_AGAIN_FAILED = "Couldn't send this post again. Please try again.";
+
+/** The answer to one press of Send again; `null` when a press is already under way or done. */
+export type SendAgainOutcome = { ok: true } | { ok: false; error: string } | null;
+
+/**
+ * F1 follow-up: Send again on a failed post that no platform was tried for
+ * (no results; the publish route accepts exactly that). A press while one is
+ * in flight, or after the server took the post, does nothing, so a double
+ * press can never send it twice; a refusal lets the user press again.
+ */
+export function createSendAgain(
+  postJobId: string,
+  fetcher: (input: string, init: RequestInit) => Promise<Response> = fetch,
+): () => Promise<SendAgainOutcome> {
+  let locked = false;
+  return async () => {
+    if (locked) return null;
+    locked = true;
+    try {
+      const response = await fetcher(`/api/posts/${postJobId}/publish`, { method: "POST" });
+      if (response.ok) return { ok: true };
+      let body: { error?: unknown } = {};
+      try {
+        body = (await response.json()) as { error?: unknown };
+      } catch {
+        // Not JSON: the generic sentence below.
+      }
+      locked = false;
+      return { ok: false, error: typeof body.error === "string" && body.error ? body.error : SEND_AGAIN_FAILED };
+    } catch {
+      locked = false;
+      return { ok: false, error: SEND_AGAIN_FAILED };
+    }
+  };
+}
+
+/** A failed post the server took again reads In progress until fresh data arrives. */
+export function displayedJobStatus(status: PostJobStatus, sentAgain: boolean): PostJobStatus {
+  return sentAgain && status === "failed" ? "in_progress" : status;
+}
+
 export function isTextPost(job: Pick<PostJobDTO, "media" | "mediaCount">): boolean {
   return job.media === null && job.mediaCount === 0;
 }
@@ -157,13 +200,20 @@ export function PostJobCard({
   // the top of an effect body is the derived-state anti-pattern this repo's
   // lint config blocks (react-hooks/set-state-in-effect; see the analogous
   // note in media-library.tsx's fetchItems).
+  // Send again (F1 follow-up): busy while the request runs; `sentAgain` once the
+  // server took the post, until the refetch it triggers brings the real status.
+  const [sendingAgain, setSendingAgain] = useState(false);
+  const [sentAgain, setSentAgain] = useState(false);
+  const pressSendAgain = useMemo(() => createSendAgain(job.id), [job.id]);
+
   const [prevJob, setPrevJob] = useState(job);
   if (job !== prevJob) {
     setPrevJob(job);
     setPending(new Set());
+    setSentAgain(false);
   }
 
-  const status = JOB_STATUS_META[job.status];
+  const status = JOB_STATUS_META[displayedJobStatus(job.status, sentAgain)];
   const results = orderResults(job.results);
   const time = cardTime(job);
   // 2026-11-10: platforms this post went to as a Story (labelled, and no link built from the id).
@@ -224,6 +274,22 @@ export function PostJobCard({
       !result.unconfirmed &&
       !pending.has(result.platform),
   );
+
+  const canSendAgain = job.status === "failed" && results.length === 0 && !sentAgain;
+
+  const sendAgain = useCallback(async () => {
+    setSendingAgain(true);
+    const outcome = await pressSendAgain();
+    setSendingAgain(false);
+    if (outcome === null) return;
+    if (outcome.ok) {
+      setSentAgain(true);
+      toast.success("Sending this post again…");
+      onRetryAccepted(job.id);
+      return;
+    }
+    toast.error(outcome.error);
+  }, [job.id, onRetryAccepted, pressSendAgain, toast]);
 
   const retry = useCallback(
     async (platform: Platform) => {
@@ -359,15 +425,23 @@ export function PostJobCard({
 
       {/* F1 H3: a post with chosen platforms gets a result for each when it is
           sent, even an unconnected one, so none at all means our side never sent it. */}
-      {job.status === "failed" && results.length === 0 && job.publish?.targetPlatforms?.length ? (
+      {canSendAgain && job.publish?.targetPlatforms?.length ? (
         <p className="mt-3 rounded-[var(--radius)] border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-foreground">
           {OUR_SIDE_FAILURE_MESSAGE}
         </p>
-      ) : job.status === "failed" && results.length === 0 ? (
+      ) : canSendAgain ? (
         <p className="mt-3 rounded-[var(--radius)] border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-foreground">
           This post failed because no platforms were connected when it ran. Connect a
-          platform in <Link href={SETTINGS_CONNECTIONS_HREF} className="font-medium text-primary underline underline-offset-2">Settings</Link> and create it again.
+          platform in <Link href={SETTINGS_CONNECTIONS_HREF} className="font-medium text-primary underline underline-offset-2">Settings</Link>, then use Send again.
         </p>
+      ) : null}
+
+      {canSendAgain ? (
+        <div className="mt-3">
+          <Button size="sm" variant="outline" loading={sendingAgain} onClick={() => void sendAgain()}>
+            Send again
+          </Button>
+        </div>
       ) : null}
 
       {results.some((r) => postUrl(r)) ? (
