@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth";
 import { checkRateLimit, consumeFixedWindow } from "@/lib/rateLimit";
 
+import { GEOCODE_DAILY_LIMIT_CODE, GEOCODE_DAILY_LIMIT_MESSAGE } from "./limit";
+
 // Minimal shape of a Google Geocoding API result (only the fields we read).
 interface GeocodeResult {
   formatted_address: string;
@@ -20,12 +22,10 @@ const PER_USER_WINDOW_MS = 5 * 60 * 1000;
 const APP_DAILY_LIMIT = 2000;
 
 const USER_LIMIT_MESSAGE = "Too many place lookups. Type the place in full, or wait a few minutes for suggestions.";
-const APP_LIMIT_MESSAGE =
-  "Place suggestions are off for the rest of today. Type the place in full; it is saved as you type it.";
 
-function tooMany(error: string, retryAfterSeconds: number | undefined): NextResponse {
+function tooMany(error: string, retryAfterSeconds: number | undefined, code?: string): NextResponse {
   return NextResponse.json(
-    { error, retryAfterSeconds },
+    { error, ...(code ? { code } : {}), retryAfterSeconds },
     { status: 429, headers: { "Retry-After": String(retryAfterSeconds ?? 1) } },
   );
 }
@@ -72,7 +72,9 @@ export async function GET(request: NextRequest) {
     resetAt: dayEnd,
     failClosed: true,
   });
-  if (!appLimit.allowed) return tooMany(APP_LIMIT_MESSAGE, appLimit.retryAfterSeconds);
+  if (!appLimit.allowed) {
+    return tooMany(GEOCODE_DAILY_LIMIT_MESSAGE, appLimit.retryAfterSeconds, GEOCODE_DAILY_LIMIT_CODE);
+  }
 
   try {
     const geocodeUrl = new URL("https://maps.googleapis.com/maps/api/geocode/json");

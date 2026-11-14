@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useId, useRef } from "react";
 
+import { geocodeLimitNote } from "@/app/api/geocode/limit";
 import { cn } from "@/lib/cn";
 import { locationLookupAction } from "@/lib/locationLookup";
 import { fieldBaseClasses } from "@/components/ui/input";
@@ -34,6 +35,8 @@ export function LocationAutocomplete({
   const [isLoading, setIsLoading] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(-1);
+  // The geocode route's sentence once the app's suggestions are used up for the day (F5).
+  const [limitNote, setLimitNote] = useState<string | null>(null);
   const debounceTimer = useRef<NodeJS.Timeout | null>(null);
   // The value a suggestion selection wrote into the field. The lookup effect
   // skips exactly that value, otherwise picking a suggestion triggered a fresh
@@ -95,9 +98,13 @@ export function LocationAutocomplete({
         if (response.ok) {
           const data = await response.json();
           if (superseded) return;
+          setLimitNote(null);
           setSuggestions(data.suggestions || []);
           setSelectedIndex(-1);
           setShowDropdown(true);
+        } else {
+          const note = geocodeLimitNote(response.status, await response.json().catch(() => null));
+          if (!superseded && note) setLimitNote(note);
         }
       } catch (error) {
         console.error("Failed to fetch location suggestions", error);
@@ -144,64 +151,71 @@ export function LocationAutocomplete({
   };
 
   return (
-    <div ref={wrapperRef} className="relative">
-      <input
-        id={inputId}
-        type="text"
-        role="combobox"
-        aria-expanded={isOpen}
-        aria-controls={isOpen ? listboxId : undefined}
-        aria-autocomplete="list"
-        aria-activedescendant={
-          isOpen && selectedIndex >= 0 ? optionId(selectedIndex) : undefined
-        }
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={handleKeyDown}
-        onFocus={() => {
-          if (suggestions.length > 0) setShowDropdown(true);
-        }}
-        className={cn(fieldBaseClasses, "h-10 px-3 py-2", className)}
-        placeholder={placeholder}
-        autoComplete="off"
-      />
+    <>
+      <div ref={wrapperRef} className="relative">
+        <input
+          id={inputId}
+          type="text"
+          role="combobox"
+          aria-expanded={isOpen}
+          aria-controls={isOpen ? listboxId : undefined}
+          aria-autocomplete="list"
+          aria-activedescendant={
+            isOpen && selectedIndex >= 0 ? optionId(selectedIndex) : undefined
+          }
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onFocus={() => {
+            if (suggestions.length > 0) setShowDropdown(true);
+          }}
+          className={cn(fieldBaseClasses, "h-10 px-3 py-2", className)}
+          placeholder={placeholder}
+          autoComplete="off"
+        />
 
-      {isOpen && (
-        <ul
-          id={listboxId}
-          role="listbox"
-          aria-label="Location suggestions"
-          className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-[var(--radius)] border border-input bg-card text-card-foreground shadow-lg"
-        >
-          {suggestions.map((suggestion, index) => (
-            <li key={suggestion.placeId} role="presentation">
-              <button
-                id={optionId(index)}
-                type="button"
-                role="option"
-                aria-selected={index === selectedIndex}
-                onClick={() => handleSelect(suggestion)}
-                onMouseEnter={() => setSelectedIndex(index)}
-                className={cn(
-                  "w-full border-b border-border px-3 py-2 text-left text-sm transition-colors last:border-b-0 hover:bg-accent hover:text-accent-foreground",
-                  index === selectedIndex && "bg-accent text-accent-foreground"
-                )}
-              >
-                <div className="font-medium text-foreground">{suggestion.description}</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">
-                  {suggestion.latitude.toFixed(4)}, {suggestion.longitude.toFixed(4)}
-                </div>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+        {isOpen && (
+          <ul
+            id={listboxId}
+            role="listbox"
+            aria-label="Location suggestions"
+            className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-[var(--radius)] border border-input bg-card text-card-foreground shadow-lg"
+          >
+            {suggestions.map((suggestion, index) => (
+              <li key={suggestion.placeId} role="presentation">
+                <button
+                  id={optionId(index)}
+                  type="button"
+                  role="option"
+                  aria-selected={index === selectedIndex}
+                  onClick={() => handleSelect(suggestion)}
+                  onMouseEnter={() => setSelectedIndex(index)}
+                  className={cn(
+                    "w-full border-b border-border px-3 py-2 text-left text-sm transition-colors last:border-b-0 hover:bg-accent hover:text-accent-foreground",
+                    index === selectedIndex && "bg-accent text-accent-foreground"
+                  )}
+                >
+                  <div className="font-medium text-foreground">{suggestion.description}</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    {suggestion.latitude.toFixed(4)}, {suggestion.longitude.toFixed(4)}
+                  </div>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
 
-      {isLoading && (
-        <div className="absolute right-3 top-1/2 -translate-y-1/2">
-          <Spinner size="sm" className="text-muted-foreground" />
-        </div>
-      )}
-    </div>
+        {isLoading && (
+          <div className="absolute right-3 top-1/2 -translate-y-1/2">
+            <Spinner size="sm" className="text-muted-foreground" />
+          </div>
+        )}
+      </div>
+      {limitNote ? (
+        <p role="status" className="mt-1 text-xs text-muted-foreground">
+          {limitNote}
+        </p>
+      ) : null}
+    </>
   );
 }

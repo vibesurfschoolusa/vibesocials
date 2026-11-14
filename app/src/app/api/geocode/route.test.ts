@@ -87,6 +87,7 @@ describe("GET /api/geocode limits", () => {
     expect(response.headers.get("Retry-After")).toBe("30600");
     await expect(response.json()).resolves.toEqual({
       error: "Place suggestions are off for the rest of today. Type the place in full; it is saved as you type it.",
+      code: "GEOCODE_DAILY_LIMIT",
       retryAfterSeconds: 30_600,
     });
     expect(fetchMock).not.toHaveBeenCalled();
