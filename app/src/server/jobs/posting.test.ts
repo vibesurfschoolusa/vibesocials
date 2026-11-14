@@ -214,10 +214,37 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
     expect(result.resultIds).toEqual(["result-youtube"]);
   });
 
-  it("throws NO_CONNECTIONS when targetPlatforms excludes every connected platform", async () => {
+  // G1 (R2 H1): a chosen platform with no connection gets a failed row, as a
+  // scheduled post does; the 400 is kept for a workspace with nothing connected.
+  it("a chosen platform that is not connected gets a failed CONNECTION_GONE row", async () => {
     findManyConnectionsMock.mockResolvedValue([
       makeConnection({ id: "conn-yt", platform: "youtube" }),
     ]);
+
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media,
+      baseCaption: "hello",
+      targetPlatforms: ["x"],
+    });
+
+    expect(postJobResultCreateMock.mock.calls.map(([arg]) => arg.data)).toEqual([
+      {
+        postJobId: "job-1",
+        workspaceId: "workspace-1",
+        platform: "x",
+        socialConnectionId: null,
+        status: "failed",
+        errorCode: "CONNECTION_GONE",
+        errorMessage: "X is no longer connected. Connect it in Settings, then retry.",
+      },
+    ]);
+    expect(postJobCreateMock.mock.calls[0][0].data.status).toBe("failed");
+  });
+
+  it("throws NO_CONNECTIONS when the workspace has nothing connected at all", async () => {
+    findManyConnectionsMock.mockResolvedValue([]);
 
     await expect(
       createPostJobOnly({
@@ -271,8 +298,9 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
       baseCaption: "hello",
     });
 
+    // G1: dead connections too; their platforms get a failed row.
     expect(findManyConnectionsMock).toHaveBeenCalledWith({
-      where: { workspaceId: "workspace-1", needsReconnect: false },
+      where: { workspaceId: "workspace-1" },
     });
     expect(mediaItemCreateMock).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -524,8 +552,9 @@ describe("createPostJobForExistingMedia", () => {
       resultIds: ["result-x", "result-youtube"],
     });
 
+    // G1: dead connections too; their platforms get a failed row.
     expect(findManyConnectionsMock).toHaveBeenCalledWith({
-      where: { workspaceId: "workspace-1", needsReconnect: false },
+      where: { workspaceId: "workspace-1" },
     });
 
     // Skips MediaItem creation entirely — no `prisma.mediaItem.create` mock
@@ -701,10 +730,27 @@ describe("createPostJobForExistingMedia (Task 7 — per-post platform targeting)
     expect(result.resultIds).toEqual(["result-youtube"]);
   });
 
-  it("throws NO_CONNECTIONS when targetPlatforms excludes every connected platform (reuse path)", async () => {
+  it("a chosen platform that is not connected gets a failed CONNECTION_GONE row (reuse path)", async () => {
     findManyConnectionsMock.mockResolvedValue([
       makeConnection({ id: "conn-yt", platform: "youtube" }),
     ]);
+
+    await createPostJobForExistingMedia({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      mediaItemId: "media-1",
+      baseCaption: "hello",
+      targetPlatforms: ["x"],
+    });
+
+    expect(postJobResultCreateMock.mock.calls.map(([arg]) => arg.data)).toEqual([
+      expect.objectContaining({ platform: "x", socialConnectionId: null, status: "failed", errorCode: "CONNECTION_GONE" }),
+    ]);
+    expect(postJobCreateMock.mock.calls[0][0].data.status).toBe("failed");
+  });
+
+  it("throws NO_CONNECTIONS when the workspace has nothing connected at all (reuse path)", async () => {
+    findManyConnectionsMock.mockResolvedValue([]);
 
     await expect(
       createPostJobForExistingMedia({
@@ -2006,7 +2052,8 @@ describe("createPostJobOnly / createPostJobForExistingMedia - a Story job beside
     expect(result.resultIds).toEqual(["r-1", "r-2", "r-3"]);
   });
 
-  it("immediate: no Story job when none of its platforms can be reached", async () => {
+  // G1 (R2 H1): the Story job is written with a failed row, never skipped.
+  it("immediate: a Story whose platform is not connected gets its job with a CONNECTION_GONE row", async () => {
     findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "c-x", platform: "x" })]);
     const result = await createPostJobOnly({
       userId: "user-1",
@@ -2016,8 +2063,13 @@ describe("createPostJobOnly / createPostJobForExistingMedia - a Story job beside
       story: { targetPlatforms: ["instagram"], instagramMetadata: STORY },
     });
 
-    expect(postJobCreateMock).toHaveBeenCalledTimes(1);
-    expect(result).not.toHaveProperty("storyPostJobId");
+    expect(postJobCreateMock).toHaveBeenCalledTimes(2);
+    expect(postJobCreateMock.mock.calls[1][0].data.status).toBe("failed");
+    expect(postJobResultCreateMock.mock.calls.map(([arg]) => arg.data)).toEqual([
+      expect.objectContaining({ postJobId: "job-1", platform: "x", status: "pending" }),
+      expect.objectContaining({ postJobId: "job-2", platform: "instagram", status: "failed", errorCode: "CONNECTION_GONE" }),
+    ]);
+    expect(result.storyPostJobId).toBe("job-2");
   });
 
   it("a failure writing the Story job fails the whole transaction", async () => {
@@ -2169,5 +2221,151 @@ describe("createPostJobOnly / createPostJobForExistingMedia - an approval hold",
     for (const call of postJobCreateMock.mock.calls) {
       expect(call[0].data).not.toHaveProperty("submittedForApprovalAt");
     }
+  });
+});
+
+// G1 (R2 publishing H1): "Post now" (Create, and reuse from Media) gives every
+// chosen platform a result, as a scheduled post does at run time, so a platform
+// that needs reconnecting is never silently dropped.
+describe("createPostJobOnly / createPostJobForExistingMedia - a chosen platform that needs reconnecting", () => {
+  const photo = {
+    storageLocation: "https://example.public.blob.vercel-storage.com/p1.jpg",
+    originalFilename: "p1.jpg",
+    mimeType: "image/jpeg",
+    sizeBytes: 101,
+  };
+  const STORY = { placement: "story" } as const;
+  const deadX = makeConnection({ id: "c-x", platform: "x", needsReconnect: true });
+  const deadIg = makeConnection({ id: "c-ig", platform: "instagram", needsReconnect: true });
+  const okIg = makeConnection({ id: "c-ig", platform: "instagram" });
+  const okFb = makeConnection({ id: "c-fb", platform: "facebook_page" });
+
+  beforeEach(() => {
+    mediaItemCreateMock.mockReset();
+    mediaItemUpdateMock.mockReset();
+    findUniqueMock.mockReset();
+    findManyConnectionsMock.mockReset();
+    postJobCreateMock.mockReset();
+    postJobResultCreateMock.mockReset();
+    executeRawMock.mockReset();
+
+    mediaItemCreateMock.mockResolvedValue(makeMediaItem({ mimeType: "image/jpeg" }));
+    findUniqueMock.mockResolvedValue(makeMediaItem({ mimeType: "image/jpeg" }));
+    mediaItemUpdateMock.mockResolvedValue(makeMediaItem());
+    let jobs = 0;
+    postJobCreateMock.mockImplementation(() => {
+      jobs += 1;
+      return Promise.resolve({ id: `job-${jobs}` });
+    });
+    postJobResultCreateMock.mockImplementation((args: { data: { postJobId: string; platform: string } }) =>
+      Promise.resolve({ id: `${args.data.postJobId}-${args.data.platform}` }),
+    );
+  });
+
+  const reconnectRow = (postJobId: string, platform: Platform, socialConnectionId: string) => ({
+    postJobId,
+    workspaceId: "workspace-1",
+    platform,
+    socialConnectionId,
+    status: "failed",
+    errorCode: "RECONNECT_REQUIRED",
+    errorMessage: `Reconnect ${platform === "x" ? "X" : "Instagram"} in Settings, then retry.`,
+  });
+  const pendingRow = (postJobId: string, platform: Platform, socialConnectionId: string) => ({
+    postJobId,
+    workspaceId: "workspace-1",
+    platform,
+    socialConnectionId,
+    status: "pending",
+  });
+  const rows = () => postJobResultCreateMock.mock.calls.map(([arg]) => arg.data);
+  const jobStatuses = () => postJobCreateMock.mock.calls.map(([arg]) => arg.data.status);
+
+  const create = (
+    which: "upload" | "reuse",
+    extra: { targetPlatforms: Platform[]; story?: { targetPlatforms: Platform[]; instagramMetadata?: typeof STORY } },
+  ) =>
+    which === "upload"
+      ? createPostJobOnly({ userId: "user-1", workspaceId: "workspace-1", media: photo, baseCaption: "hi", ...extra })
+      : createPostJobForExistingMedia({
+          userId: "user-1",
+          workspaceId: "workspace-1",
+          mediaItemId: "media-1",
+          baseCaption: "hi",
+          ...extra,
+        });
+
+  for (const which of ["upload", "reuse"] as const) {
+    describe(which, () => {
+      it("X dead + Instagram healthy: X gets a failed RECONNECT_REQUIRED row, Instagram a pending one", async () => {
+        findManyConnectionsMock.mockResolvedValue([deadX, okIg]);
+
+        const result = await create(which, { targetPlatforms: ["x", "instagram"] });
+
+        expect(rows()).toEqual([reconnectRow("job-1", "x", "c-x"), pendingRow("job-1", "instagram", "c-ig")]);
+        // Instagram still publishes, so the job runs.
+        expect(jobStatuses()).toEqual(["in_progress"]);
+        expect(result.resultIds).toEqual(["job-1-x", "job-1-instagram"]);
+      });
+
+      it("X dead only: a failed post with the X row, not NO_CONNECTIONS", async () => {
+        findManyConnectionsMock.mockResolvedValue([deadX]);
+
+        const result = await create(which, { targetPlatforms: ["x"] });
+
+        expect(rows()).toEqual([reconnectRow("job-1", "x", "c-x")]);
+        expect(jobStatuses()).toEqual(["failed"]);
+        expect(result.postJobId).toBe("job-1");
+      });
+
+      it("Feed and Story with a dead Instagram: the Story job is written with a failed row", async () => {
+        findManyConnectionsMock.mockResolvedValue([deadIg, okFb]);
+
+        const result = await create(which, {
+          targetPlatforms: ["instagram", "facebook_page"],
+          story: { targetPlatforms: ["instagram"], instagramMetadata: STORY },
+        });
+
+        expect(rows()).toEqual([
+          reconnectRow("job-1", "instagram", "c-ig"),
+          pendingRow("job-1", "facebook_page", "c-fb"),
+          reconnectRow("job-2", "instagram", "c-ig"),
+        ]);
+        expect(jobStatuses()).toEqual(["in_progress", "failed"]);
+        expect(result.storyPostJobId).toBe("job-2");
+        expect(postJobCreateMock.mock.calls[1][0].data.storyOfPostJobId).toBe("job-1");
+      });
+
+      it("healthy connections: every row pending and the job in progress, as before", async () => {
+        findManyConnectionsMock.mockResolvedValue([okIg, okFb]);
+
+        await create(which, {
+          targetPlatforms: ["instagram", "facebook_page"],
+          story: { targetPlatforms: ["instagram"], instagramMetadata: STORY },
+        });
+
+        expect(rows()).toEqual([
+          pendingRow("job-1", "instagram", "c-ig"),
+          pendingRow("job-1", "facebook_page", "c-fb"),
+          pendingRow("job-2", "instagram", "c-ig"),
+        ]);
+        expect(jobStatuses()).toEqual(["in_progress", "in_progress"]);
+      });
+    });
+  }
+
+  it("a post without a file: a dead X gets its failed row too", async () => {
+    findManyConnectionsMock.mockResolvedValue([deadX]);
+
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: null,
+      baseCaption: "hi",
+      targetPlatforms: ["x"],
+    });
+
+    expect(rows()).toEqual([reconnectRow("job-1", "x", "c-x")]);
+    expect(jobStatuses()).toEqual(["failed"]);
   });
 });

@@ -1,4 +1,4 @@
-import { Platform, type MediaItem, type Prisma } from "@prisma/client";
+import { Platform, type MediaItem, type Prisma, type SocialConnection } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import type { SavedFileInfo } from "@/server/storage";
 import type {
@@ -13,6 +13,7 @@ import { postJobStatusForIntent, type PostJobIntent } from "@/lib/scheduling";
 import { platformAcceptsMedia, platformAcceptsTextOnly } from "@/lib/platformLimits";
 import { connectionGoneMessage, reconnectRequiredMessage } from "@/lib/publishFailureText";
 import { finishPostJob, recomputeAndStorePostJobStatus } from "@/server/jobs/failPendingResults";
+import { recomputePostJobStatus } from "@/server/jobs/postStatus";
 import {
   assertPostTargetsValid,
   assertTextPostTargetsValid,
@@ -306,6 +307,102 @@ export function assertMediaItemReusable<T extends Pick<MediaItem, "workspaceId" 
   }
 }
 
+/** A post's result row before its job exists; the caller adds `postJobId`. */
+type FanOutResultRow = Omit<Prisma.PostJobResultCreateManyInput, "postJobId">;
+
+/**
+ * F1 H1 (R1 publishing; G1 for "Post now"): one result row per platform the post
+ * goes to, so none can vanish silently. `eligible` are the connections the post
+ * goes through, dead ones included; `connections` are all of the workspace's.
+ * A healthy connection gets the `pending` row it always had, one that needs
+ * reconnecting a `failed` RECONNECT_REQUIRED row, and a chosen platform with no
+ * connection at all a `failed` CONNECTION_GONE row. Both failed rows say what to
+ * do and can be retried once the platform is connected again. Shared by the
+ * create helpers (immediate) and the deferred dispatch, so the sentences match.
+ */
+function buildFanOutResultRows(args: {
+  workspaceId: string;
+  eligible: ReadonlyArray<Pick<SocialConnection, "id" | "platform" | "needsReconnect">>;
+  connections: ReadonlyArray<Pick<SocialConnection, "platform">>;
+  targetPlatforms: readonly Platform[] | undefined;
+}): FanOutResultRow[] {
+  const { workspaceId } = args;
+  const rows: FanOutResultRow[] = args.eligible.map((c) =>
+    c.needsReconnect
+      ? {
+          workspaceId,
+          platform: c.platform,
+          socialConnectionId: c.id,
+          status: "failed" as const,
+          errorCode: "RECONNECT_REQUIRED",
+          errorMessage: reconnectRequiredMessage(c.platform),
+        }
+      : {
+          // 2026-11-01 scale audit (db M5): the job's workspace, denormalized.
+          workspaceId,
+          platform: c.platform,
+          socialConnectionId: c.id,
+          status: "pending" as const,
+        },
+  );
+  for (const platform of args.targetPlatforms ?? []) {
+    if (args.connections.some((c) => c.platform === platform)) continue;
+    rows.push({
+      workspaceId,
+      platform,
+      socialConnectionId: null,
+      status: "failed",
+      errorCode: "CONNECTION_GONE",
+      errorMessage: connectionGoneMessage(platform),
+    });
+  }
+  return rows;
+}
+
+/**
+ * The rows of an immediate post and of its Story job, before anything is
+ * written. NO_CONNECTIONS only when the workspace has nothing connected at all
+ * (or nothing to post to): a chosen platform that needs reconnecting gets a
+ * failed row instead, so the post shows it with Retry.
+ */
+function immediateFanOut(args: {
+  workspaceId: string;
+  connections: SocialConnection[];
+  targeted: SocialConnection[];
+  targetPlatforms: readonly Platform[] | undefined;
+  story: PostStoryJobParams | undefined;
+}): { rows: FanOutResultRow[]; storyRows: FanOutResultRow[] } {
+  const { workspaceId, connections, targeted } = args;
+  const rows = buildFanOutResultRows({
+    workspaceId,
+    eligible: targeted,
+    connections,
+    targetPlatforms: args.targetPlatforms,
+  });
+  if (connections.length === 0 || rows.length === 0) {
+    throw new Error("NO_CONNECTIONS");
+  }
+  const storyRows = args.story
+    ? buildFanOutResultRows({
+        workspaceId,
+        eligible: storyJobConnections(args.story, targeted),
+        connections,
+        targetPlatforms: args.story.targetPlatforms,
+      })
+    : [];
+  return { rows, storyRows };
+}
+
+/**
+ * An immediate job's status follows its rows: `in_progress` while one is
+ * pending (the publisher settles it), `failed` when every platform failed up
+ * front. Deferred jobs keep their intent's status.
+ */
+function immediateJobStatus(intent: PostJobIntent, rows: readonly FanOutResultRow[]) {
+  if (intent !== "immediate") return {};
+  return { status: recomputePostJobStatus(rows.map((row) => ({ status: row.status ?? "pending" }))) };
+}
+
 export async function createPostJobOnly(
   params: CreatePostJobOnlyParams,
 ): Promise<PostJobCreated> {
@@ -326,11 +423,11 @@ export async function createPostJobOnly(
   // Team Workspaces (Task 5): fan out over the WORKSPACE's connections, not
   // the caller's personal ones — any member's post reaches every platform
   // the shared workspace has connected.
-  // Healthy connections only — needsReconnect would just fail at the provider.
+  // Dead connections too (G1, R2 H1): their platforms get a failed row below.
   const socialConnections =
     intent === "immediate"
       ? await prisma.socialConnection.findMany({
-          where: { workspaceId, needsReconnect: false },
+          where: { workspaceId },
         })
       : [];
 
@@ -349,9 +446,10 @@ export async function createPostJobOnly(
           })
         : narrowConnectionsForTextPost({ connections: socialConnections, targetPlatforms });
 
-  if (intent === "immediate" && targeted.length === 0) {
-    throw new Error("NO_CONNECTIONS");
-  }
+  const fanOut =
+    intent === "immediate"
+      ? immediateFanOut({ workspaceId, connections: socialConnections, targeted, targetPlatforms, story: params.story })
+      : { rows: [], storyRows: [] };
 
   const metadata: { location?: { description: string } } = {};
   if (location) {
@@ -419,6 +517,7 @@ export async function createPostJobOnly(
               targetPlatforms,
               cover: params.cover,
             }),
+            ...immediateJobStatus(intent, fanOut.rows),
             workspaceId,
             ...seriesJobData(params.series, time),
             ...(params.series ? {} : approvalHoldData(params.approvalHold)),
@@ -440,33 +539,18 @@ export async function createPostJobOnly(
       }
       const job = jobs[0];
 
-      const createResults = (postJobId: string, connections: typeof targeted) =>
-        Promise.all(
-          connections.map((connection) =>
-            tx.postJobResult.create({
-              data: {
-                postJobId,
-                // 2026-11-01 scale audit (db M5): the denormalized workspace
-                // publish-health counts by; same value as the job's.
-                workspaceId,
-                platform: connection.platform,
-                socialConnectionId: connection.id,
-                status: "pending",
-              },
-            }),
-          ),
-        );
+      const createResults = (postJobId: string, rows: FanOutResultRow[]) =>
+        Promise.all(rows.map((row) => tx.postJobResult.create({ data: { postJobId, ...row } })));
 
-      // Scheduled/draft jobs get NO results here — the cron/promote create them
-      // at run time from the connections that exist then.
-      const results = intent === "immediate" ? await createResults(job.id, targeted) : [];
+      // Scheduled/draft jobs get NO results here (their rows are empty) — the
+      // cron/promote create them at run time from the connections that exist then.
+      const results = await createResults(job.id, fanOut.rows);
 
       // Feed and Story: the Story job, after the main one. A Story takes one
-      // file, so it needs no PostJobMedia rows. A "Post now" whose Story
-      // platforms cannot be reached makes none, as a feed post skips them.
-      const storyConnections = params.story ? storyJobConnections(params.story, targeted) : [];
+      // file, so it needs no PostJobMedia rows. A "Post now" Story gets a row
+      // for each of its platforms, a failed one where it cannot be reached.
       let storyJob: { id: string } | null = null;
-      if (params.story && (intent !== "immediate" || storyConnections.length > 0)) {
+      if (params.story && (intent !== "immediate" || fanOut.storyRows.length > 0)) {
         storyJob = await tx.postJob.create({
           data: {
             ...buildPostJobCreateData({
@@ -481,13 +565,14 @@ export async function createPostJobOnly(
               targetPlatforms: params.story.targetPlatforms,
               cover: params.cover,
             }),
+            ...immediateJobStatus(intent, fanOut.storyRows),
             workspaceId,
             ...approvalHoldData(params.approvalHold),
             // F6: the pair's link, so the client review link and reports see one post.
             storyOfPostJobId: job.id,
           },
         });
-        if (intent === "immediate") await createResults(storyJob.id, storyConnections);
+        await createResults(storyJob.id, fanOut.storyRows);
       }
 
       return { postJob: job, postJobs: jobs, mediaItem: mediaItemRow, resultRecords: results, storyJob };
@@ -656,11 +741,12 @@ export async function createPostJobForExistingMedia(
 
   // Immediate reuse materializes the fan-out now (and requires a connection);
   // scheduled/draft reuse defers result creation to run time (§6.3). Team
-  // Workspaces (Task 5): the workspace's healthy connections, not the caller's.
+  // Workspaces (Task 5): the workspace's connections, not the caller's; dead
+  // ones too (G1, R2 H1), whose platforms get a failed row.
   const socialConnections =
     intent === "immediate"
       ? await prisma.socialConnection.findMany({
-          where: { workspaceId, needsReconnect: false },
+          where: { workspaceId },
         })
       : [];
 
@@ -677,9 +763,10 @@ export async function createPostJobForExistingMedia(
         })
       : [];
 
-  if (intent === "immediate" && targeted.length === 0) {
-    throw new Error("NO_CONNECTIONS");
-  }
+  const fanOut =
+    intent === "immediate"
+      ? immediateFanOut({ workspaceId, connections: socialConnections, targeted, targetPlatforms, story: params.story })
+      : { rows: [], storyRows: [] };
 
   const now = new Date();
 
@@ -742,6 +829,7 @@ export async function createPostJobForExistingMedia(
               targetPlatforms,
               cover: params.cover,
             }),
+            ...immediateJobStatus(intent, fanOut.rows),
             workspaceId,
             ...seriesJobData(params.series, time),
             ...(params.series ? {} : approvalHoldData(params.approvalHold)),
@@ -751,29 +839,15 @@ export async function createPostJobForExistingMedia(
     }
     const job = jobs[0];
 
-    const createResults = (postJobId: string, connections: typeof targeted) =>
-      Promise.all(
-        connections.map((connection) =>
-          tx.postJobResult.create({
-            data: {
-              postJobId,
-              // 2026-11-01 scale audit (db M5): see createPostJobOnly.
-              workspaceId,
-              platform: connection.platform,
-              socialConnectionId: connection.id,
-              status: "pending",
-            },
-          }),
-        ),
-      );
+    const createResults = (postJobId: string, rows: FanOutResultRow[]) =>
+      Promise.all(rows.map((row) => tx.postJobResult.create({ data: { postJobId, ...row } })));
 
     // Scheduled/draft reuse creates no results here (run-time creation, §6.3).
-    const results = intent === "immediate" ? await createResults(job.id, targeted) : [];
+    const results = await createResults(job.id, fanOut.rows);
 
     // Feed and Story: the Story job, under the same lock (see createPostJobOnly).
-    const storyConnections = params.story ? storyJobConnections(params.story, targeted) : [];
     let storyJob: { id: string } | null = null;
-    if (params.story && (intent !== "immediate" || storyConnections.length > 0)) {
+    if (params.story && (intent !== "immediate" || fanOut.storyRows.length > 0)) {
       storyJob = await tx.postJob.create({
         data: {
           ...buildPostJobCreateData({
@@ -788,13 +862,14 @@ export async function createPostJobForExistingMedia(
             targetPlatforms: params.story.targetPlatforms,
             cover: params.cover,
           }),
+          ...immediateJobStatus(intent, fanOut.storyRows),
           workspaceId,
           ...approvalHoldData(params.approvalHold),
           // F6: the pair's link, so the client review link and reports see one post.
           storyOfPostJobId: job.id,
         },
       });
-      if (intent === "immediate") await createResults(storyJob.id, storyConnections);
+      await createResults(storyJob.id, fanOut.storyRows);
     }
 
     return { postJob: job, postJobs: jobs, resultRecords: results, storyJob };
@@ -1069,38 +1144,12 @@ export async function prepareDeferredPostJobDispatch(
       : connections.filter((c) => platformAcceptsMedia(c.platform, media.mimeType));
 
   // Healthy connections keep exactly the rows they always had; the others say why.
-  const rows: Prisma.PostJobResultCreateManyInput[] = eligible.map((c) =>
-    c.needsReconnect
-      ? {
-          postJobId,
-          workspaceId: job.workspaceId,
-          platform: c.platform,
-          socialConnectionId: c.id,
-          status: "failed" as const,
-          errorCode: "RECONNECT_REQUIRED",
-          errorMessage: reconnectRequiredMessage(c.platform),
-        }
-      : {
-          postJobId,
-          // 2026-11-01 scale audit (db M5): the job's workspace, denormalized.
-          workspaceId: job.workspaceId,
-          platform: c.platform,
-          socialConnectionId: c.id,
-          status: "pending" as const,
-        },
-  );
-  for (const platform of target ?? []) {
-    if (connections.some((c) => c.platform === platform)) continue;
-    rows.push({
-      postJobId,
-      workspaceId: job.workspaceId,
-      platform,
-      socialConnectionId: null,
-      status: "failed",
-      errorCode: "CONNECTION_GONE",
-      errorMessage: connectionGoneMessage(platform),
-    });
-  }
+  const rows: Prisma.PostJobResultCreateManyInput[] = buildFanOutResultRows({
+    workspaceId: job.workspaceId,
+    eligible,
+    connections,
+    targetPlatforms: target,
+  }).map((row) => ({ postJobId, ...row }));
 
   if (rows.length === 0) {
     // No chosen list and no connection that could take the post → fail the job

@@ -157,11 +157,12 @@ export function assertPostTargetsValid(
 }
 
 /**
- * Which healthy connections an IMMEDIATE post fans out to.
+ * Which connections an IMMEDIATE post fans out to (dead ones included: the
+ * create helpers give them a failed RECONNECT_REQUIRED row, G1).
  *
  * - Explicit list: validated by `assertPostTargetsValid`, then the connections
- *   narrowed to it (a listed platform with no healthy connection simply has no
- *   row, as before — the caller's NO_CONNECTIONS covers an empty result).
+ *   narrowed to it (a listed platform with no connection at all gets a failed
+ *   CONNECTION_GONE row from the create helpers).
  * - No list ("every connection", legacy callers): connections whose client
  *   can't publish the media are SKIPPED — no result row, no doomed failure. If
  *   connections exist but none can publish it, `NO_COMPATIBLE_PLATFORMS`. A
@@ -235,7 +236,7 @@ export function assertTextPostTargetsValid(targetPlatforms: readonly Platform[] 
 }
 
 /**
- * Which healthy connections an IMMEDIATE post without a file fans out to: the
+ * Which connections an IMMEDIATE post without a file fans out to: the
  * explicit list (validated), or with none every connection that publishes text
  * alone. TikTok never takes text alone, so its privacy rule cannot apply.
  */
