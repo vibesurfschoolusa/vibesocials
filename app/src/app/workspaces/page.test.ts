@@ -32,6 +32,8 @@ function entry(overrides: Partial<WorkspaceOverviewEntry> = {}): WorkspaceOvervi
     postsThisMonth: 0,
     scheduled: 0,
     waitingForApproval: 0,
+    clientChangesRequested: 0,
+    chooseGoogleLocation: false,
     failedLast7Days: 0,
     failedPlatforms: [],
     needsReconnect: [],
@@ -110,5 +112,25 @@ describe("WorkspacesPage", () => {
     expect(html).toContain("LinkedIn");
     expect(html).toContain("Open Busy Co");
     expect(html.indexOf("Busy Co")).toBeLessThan(html.indexOf("Calm Co"));
+  });
+
+  it("names a client's change requests and a Google listing without a location (R5-client-journey L1)", async () => {
+    getWorkspacesOverviewMock.mockResolvedValue([
+      entry({ clientChangesRequested: 2, chooseGoogleLocation: true, needsAttention: true }),
+    ]);
+
+    const html = await render();
+
+    expect(html).not.toContain("Nothing needs your attention");
+    expect(html).toContain("A client asked for changes on 2 posts. Open the workspace, then the Queue.");
+    expect(html).toContain(
+      "Choose the Google business location: open the workspace, then Settings, Connections.",
+    );
+  });
+
+  it("says one post when a client asked for changes on one", async () => {
+    getWorkspacesOverviewMock.mockResolvedValue([entry({ clientChangesRequested: 1, needsAttention: true })]);
+
+    expect(await render()).toContain("A client asked for changes on 1 post.");
   });
 });

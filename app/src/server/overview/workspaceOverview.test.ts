@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const db = vi.hoisted(() => ({
   memberFindMany: vi.fn(),
   postJobGroupBy: vi.fn(),
+  postJobFindMany: vi.fn(),
   resultGroupBy: vi.fn(),
   connectionFindMany: vi.fn(),
 }));
@@ -10,25 +11,56 @@ const db = vi.hoisted(() => ({
 vi.mock("@/lib/db", () => ({
   prisma: {
     workspaceMember: { findMany: db.memberFindMany },
-    postJob: { groupBy: db.postJobGroupBy },
+    postJob: { groupBy: db.postJobGroupBy, findMany: db.postJobFindMany },
     postJobResult: { groupBy: db.resultGroupBy },
     socialConnection: { findMany: db.connectionFindMany },
   },
 }));
 
-import { getWorkspacesOverview } from "./workspaceOverview";
+import { getWorkspacesOverview, type WorkspaceOverviewEntry } from "./workspaceOverview";
 
 const NOW = new Date("2026-11-10T15:00:00.000Z");
 
 type GroupArgs = { by: string[]; where: Record<string, unknown> };
-type PostJobKind = "scheduled" | "approval";
-type ResultKind = "month" | "failed";
+type PostJobKind = "scheduled" | "approval" | "clientChanges";
+type ResultKind = "month";
 
 /** Which post count a `postJob.groupBy` call is. */
 const postJobKind = (args: GroupArgs): PostJobKind =>
-  args.where.status === "scheduled" ? "scheduled" : "approval";
-/** Which result query a `postJobResult.groupBy` call is. */
-const resultKind = (args: GroupArgs): ResultKind => (args.by.includes("postJobId") ? "month" : "failed");
+  args.where.status === "scheduled"
+    ? "scheduled"
+    : "clientChangeRequestedAt" in args.where
+      ? "clientChanges"
+      : "approval";
+/** The one `postJobResult.groupBy` call: posts this month. */
+const resultKind = (): ResultKind => "month";
+
+type FindArgs = { where: Record<string, unknown> };
+/** Which `postJob.findMany` call it is: the failed posts, the Story jobs, or their feed jobs. */
+const findKind = (args: FindArgs): "failed" | "stories" | "feeds" =>
+  "storyOfPostJobId" in args.where ? "stories" : "updatedAt" in args.where ? "failed" : "feeds";
+
+interface JobRow {
+  id: string;
+  workspaceId: string;
+  storyOfPostJobId: string | null;
+  status?: string;
+  submittedForApprovalAt?: Date | null;
+  approvedAt?: Date | null;
+  clientChangeRequestedAt?: Date | null;
+  results?: { platform: string }[];
+}
+
+/** Serves the failed posts, and the jobs the pair look-ups pick from (filtered by id as the database would). */
+function serveJobs({ failedPosts = [], jobs = [] }: { failedPosts?: JobRow[]; jobs?: JobRow[] }) {
+  db.postJobFindMany.mockImplementation(async (args: FindArgs) => {
+    const kind = findKind(args);
+    if (kind === "failed") return failedPosts;
+    if (kind === "stories") return jobs.filter((job) => job.storyOfPostJobId !== null);
+    const ids = (args.where.id as { in: string[] }).in;
+    return jobs.filter((job) => ids.includes(job.id));
+  });
+}
 
 function servePostJobGroups(rows: Partial<Record<PostJobKind, unknown[]>>) {
   db.postJobGroupBy.mockImplementation(async (args: GroupArgs) => rows[postJobKind(args)] ?? []);
@@ -52,11 +84,6 @@ const count = (workspaceId: string, n: number) => ({ workspaceId, _count: { _all
 /** The month query's rows: one per (workspace, post) with a successful result this month. */
 const posts = (workspaceId: string, n: number) =>
   Array.from({ length: n }, (_, index) => ({ workspaceId, postJobId: `${workspaceId}-p${index}` }));
-const failed = (workspaceId: string, platform: string, n: number) => ({
-  workspaceId,
-  platform,
-  _count: { _all: n },
-});
 
 beforeEach(() => {
   for (const mock of Object.values(db)) mock.mockReset();
@@ -67,6 +94,7 @@ beforeEach(() => {
   servePostJobGroups({});
   serveResultGroups({});
   db.connectionFindMany.mockResolvedValue([]);
+  serveJobs({});
 });
 
 describe("getWorkspacesOverview", () => {
@@ -116,8 +144,10 @@ describe("getWorkspacesOverview", () => {
 
     await getWorkspacesOverview("user-1", NOW);
 
-    expect(db.postJobGroupBy).toHaveBeenCalledTimes(2);
-    expect(db.resultGroupBy).toHaveBeenCalledTimes(2);
+    expect(db.postJobGroupBy).toHaveBeenCalledTimes(3);
+    expect(db.resultGroupBy).toHaveBeenCalledTimes(1);
+    // The failed posts and the Story jobs; no Story matched, so no feed look-up.
+    expect(db.postJobFindMany).toHaveBeenCalledTimes(2);
     expect(db.connectionFindMany).toHaveBeenCalledTimes(1);
     for (const [args] of db.postJobGroupBy.mock.calls) expect(args.by).toEqual(["workspaceId"]);
   });
@@ -133,6 +163,8 @@ describe("getWorkspacesOverview", () => {
       postsThisMonth: 0,
       scheduled: 0,
       waitingForApproval: 0,
+      clientChangesRequested: 0,
+      chooseGoogleLocation: false,
       failedLast7Days: 0,
       failedPlatforms: [],
       needsReconnect: [],
@@ -146,9 +178,19 @@ describe("getWorkspacesOverview", () => {
       scheduled: [count("ws-busy", 4)],
       approval: [count("ws-busy", 2)],
     });
-    serveResultGroups({
-      month: posts("ws-busy", 12),
-      failed: [failed("ws-busy", "x", 2), failed("ws-busy", "instagram", 1)],
+    serveResultGroups({ month: posts("ws-busy", 12) });
+    serveJobs({
+      failedPosts: [
+        { id: "f1", workspaceId: "ws-busy", storyOfPostJobId: null, results: [{ platform: "x" }] },
+        {
+          id: "f2",
+          workspaceId: "ws-busy",
+          storyOfPostJobId: null,
+          results: [{ platform: "x" }, { platform: "instagram" }],
+        },
+        // Failed before any platform took it.
+        { id: "f3", workspaceId: "ws-busy", storyOfPostJobId: null, results: [] },
+      ],
     });
     db.connectionFindMany.mockResolvedValue([
       { workspaceId: "ws-busy", platform: "linkedin", needsReconnect: true },
@@ -165,6 +207,8 @@ describe("getWorkspacesOverview", () => {
       postsThisMonth: 12,
       scheduled: 4,
       waitingForApproval: 2,
+      clientChangesRequested: 0,
+      chooseGoogleLocation: false,
       failedLast7Days: 3,
       failedPlatforms: ["instagram", "x"],
       needsReconnect: ["linkedin"],
@@ -193,14 +237,17 @@ describe("getWorkspacesOverview", () => {
     expect(overview.every((entry) => !entry.needsAttention)).toBe(true);
   });
 
-  it("counts failed results finished in the last 7 days only", async () => {
+  it("counts posts that failed in the last 7 days as Needs you does", async () => {
     await getWorkspacesOverview("user-1", NOW);
 
-    const args = resultCall("failed");
-    expect(args.by).toEqual(["workspaceId", "platform"]);
-    expect(args.where.status).toBe("failed");
-    // A result that finished 7 days and a moment ago is outside this range.
-    expect(args.where.updatedAt).toEqual({ gte: new Date("2026-11-03T15:00:00.000Z") });
+    const call = db.postJobFindMany.mock.calls.find(([args]) => findKind(args) === "failed");
+    expect(call?.[0].where).toEqual({
+      workspaceId: { in: ["ws-calm", "ws-busy"] },
+      // A post that changed 7 days and a moment ago is outside this range.
+      updatedAt: { gte: new Date("2026-11-03T15:00:00.000Z") },
+      status: { not: "cancelled" },
+      OR: [{ status: "failed" }, { results: { some: { status: "failed" } } }],
+    });
   });
 
   it("counts waiting for approval as an undecided draft, as deriveApprovalState does", async () => {
@@ -273,7 +320,9 @@ describe("getWorkspacesOverview", () => {
       { role: "owner", workspace: { id: "ws-c", name: "Charlie" } },
       { role: "owner", workspace: { id: "ws-b", name: "Bravo" } },
     ]);
-    serveResultGroups({ failed: [failed("ws-d", "x", 1)] });
+    serveJobs({
+      failedPosts: [{ id: "f1", workspaceId: "ws-d", storyOfPostJobId: null, results: [{ platform: "x" }] }],
+    });
     db.connectionFindMany.mockResolvedValue([
       { workspaceId: "ws-c", platform: "x", needsReconnect: true },
     ]);
@@ -281,5 +330,118 @@ describe("getWorkspacesOverview", () => {
     const overview = await getWorkspacesOverview("user-1", NOW);
 
     expect(overview.map((entry) => entry.name)).toEqual(["Charlie", "Delta", "alpha", "Bravo"]);
+  });
+
+  describe("a Feed and Story post counts once (R5-client-journey L2)", () => {
+    const feed = { id: "feed-1", workspaceId: "ws-busy", storyOfPostJobId: null };
+    const story = { id: "story-1", workspaceId: "ws-busy", storyOfPostJobId: "feed-1" };
+    const busyOf = (overview: WorkspaceOverviewEntry[]) =>
+      overview.find((entry) => entry.workspaceId === "ws-busy") as WorkspaceOverviewEntry;
+
+    it("in posts this month when both halves went out", async () => {
+      serveResultGroups({
+        month: [
+          { workspaceId: "ws-busy", postJobId: "feed-1" },
+          { workspaceId: "ws-busy", postJobId: "story-1" },
+          { workspaceId: "ws-busy", postJobId: "p3" },
+        ],
+      });
+      serveJobs({ jobs: [feed, story] });
+
+      expect(busyOf(await getWorkspacesOverview("user-1", NOW)).postsThisMonth).toBe(2);
+    });
+
+    it("in scheduled, waiting for approval and client changes", async () => {
+      servePostJobGroups({
+        scheduled: [count("ws-busy", 3)],
+        approval: [count("ws-busy", 2)],
+        clientChanges: [count("ws-busy", 2)],
+      });
+      const held = { status: "draft", submittedForApprovalAt: NOW, approvedAt: null, clientChangeRequestedAt: NOW };
+      serveJobs({
+        jobs: [
+          { ...feed, status: "scheduled" },
+          { ...story, status: "scheduled" },
+          { id: "feed-2", workspaceId: "ws-busy", storyOfPostJobId: null, ...held },
+          { id: "story-2", workspaceId: "ws-busy", storyOfPostJobId: "feed-2", ...held },
+        ],
+      });
+
+      const busy = busyOf(await getWorkspacesOverview("user-1", NOW));
+
+      expect(busy.scheduled).toBe(2);
+      expect(busy.waitingForApproval).toBe(1);
+      expect(busy.clientChangesRequested).toBe(1);
+    });
+
+    it("keeps a Story whose feed job does not match", async () => {
+      servePostJobGroups({ scheduled: [count("ws-busy", 1)] });
+      serveJobs({ jobs: [{ ...feed, status: "published" }, { ...story, status: "scheduled" }] });
+
+      expect(busyOf(await getWorkspacesOverview("user-1", NOW)).scheduled).toBe(1);
+    });
+
+    it("in failed posts, listing every platform either half failed on", async () => {
+      serveJobs({
+        failedPosts: [
+          { ...feed, results: [{ platform: "instagram" }] },
+          { ...story, results: [{ platform: "instagram" }, { platform: "facebook_page" }] },
+        ],
+      });
+
+      const busy = busyOf(await getWorkspacesOverview("user-1", NOW));
+
+      expect(busy.failedLast7Days).toBe(1);
+      expect(busy.failedPlatforms).toEqual(["facebook_page", "instagram"]);
+    });
+  });
+
+  describe("what else needs attention, as Needs you (R5-client-journey L1)", () => {
+    it("a client's change request", async () => {
+      servePostJobGroups({ clientChanges: [count("ws-calm", 1)] });
+
+      const calm = (await getWorkspacesOverview("user-1", NOW)).find((entry) => entry.workspaceId === "ws-calm");
+
+      expect(calm?.clientChangesRequested).toBe(1);
+      expect(calm?.needsAttention).toBe(true);
+      expect(postJobCall("clientChanges").where).toEqual({
+        workspaceId: { in: ["ws-calm", "ws-busy"] },
+        status: { in: ["draft", "scheduled"] },
+        clientChangeRequestedAt: { not: null },
+      });
+    });
+
+    it("a Google listing with no location chosen, for an owner only", async () => {
+      db.connectionFindMany.mockResolvedValue([
+        { workspaceId: "ws-calm", platform: "google_business_profile", needsReconnect: false, metadata: {} },
+        { workspaceId: "ws-busy", platform: "google_business_profile", needsReconnect: false, metadata: null },
+      ]);
+
+      const overview = await getWorkspacesOverview("user-1", NOW);
+      const calm = overview.find((entry) => entry.workspaceId === "ws-calm");
+      const busy = overview.find((entry) => entry.workspaceId === "ws-busy");
+
+      expect(calm?.chooseGoogleLocation).toBe(true);
+      expect(calm?.needsAttention).toBe(true);
+      // ws-busy's user is a member: only an owner can choose it, as Needs you shows it to owners only.
+      expect(busy?.chooseGoogleLocation).toBe(false);
+      expect(busy?.needsAttention).toBe(false);
+    });
+
+    it("not a Google listing whose location is chosen", async () => {
+      db.connectionFindMany.mockResolvedValue([
+        {
+          workspaceId: "ws-calm",
+          platform: "google_business_profile",
+          needsReconnect: false,
+          metadata: { locationName: "locations/123" },
+        },
+      ]);
+
+      const calm = (await getWorkspacesOverview("user-1", NOW)).find((entry) => entry.workspaceId === "ws-calm");
+
+      expect(calm?.chooseGoogleLocation).toBe(false);
+      expect(calm?.needsAttention).toBe(false);
+    });
   });
 });
