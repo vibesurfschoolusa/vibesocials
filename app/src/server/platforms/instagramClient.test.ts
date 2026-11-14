@@ -2890,7 +2890,7 @@ describe("fitInstagramTags", () => {
 
   it("leaves a caption within both limits exactly as it is", () => {
     const caption = `Surf today ${tags(1, 30)} with ${mentions(20)}\n\nFor more info visit example.com`;
-    expect(fitInstagramTags(caption)).toEqual({ caption, plainMentions: [] });
+    expect(fitInstagramTags(caption)).toEqual({ caption, plainMentions: [], droppedHashtags: [] });
   });
 
   it("drops the footer hashtags first: they come last", () => {
@@ -2903,6 +2903,24 @@ describe("fitInstagramTags", () => {
   it("drops the whole footer line when the caption alone has 30, then caption hashtags past the 30th", () => {
     const caption = `Surf ${tags(1, 32)} today\n\n${tags(33, 40)}`;
     expect(fitInstagramTags(caption).caption).toBe(`Surf ${tags(1, 30)} today`);
+  });
+
+  // R3-publishing L2: the dropped hashtags are named for the result's note.
+  it("names the hashtags it dropped, in caption order, each once", () => {
+    const caption = `Surf ${tags(1, 31)} today
+
+${tags(32, 33)} #tag32`;
+    expect(fitInstagramTags(caption).droppedHashtags).toEqual(["#tag31", "#tag32", "#tag33"]);
+    expect(fitInstagramTags(`Surf ${tags(1, 30)}`).droppedHashtags).toEqual([]);
+  });
+
+  // H2 review: a repeat of a tag that is still in the post is not "left out",
+  // and #Surf / #surf are the same tag.
+  it("does not name a dropped repeat of a tag the post still has, ignoring case", () => {
+    const caption = `Surf ${tags(1, 30)}
+
+#TAG5 #tag31 #Tag31`;
+    expect(fitInstagramTags(caption).droppedHashtags).toEqual(["#tag31"]);
   });
 
   it("does not count # inside a word or an HTML entity", () => {
@@ -2919,7 +2937,7 @@ describe("fitInstagramTags", () => {
 
   it("an email address is not a mention", () => {
     const caption = `${mentions(20)} write to hello@example.com`;
-    expect(fitInstagramTags(caption)).toEqual({ caption, plainMentions: [] });
+    expect(fitInstagramTags(caption)).toEqual({ caption, plainMentions: [], droppedHashtags: [] });
   });
 });
 
@@ -2956,6 +2974,35 @@ describe("instagramClient.publishVideo — hashtag and mention limits", () => {
     expect(result).toEqual({
       externalPostId: "media-1",
       note: "Instagram allows 20 @mentions in a post, so these went out as plain text without the @: u21.",
+    });
+  });
+
+  it("says which hashtags were left out past the 30th", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const fetchMock = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.includes("fields=permalink")) return Promise.resolve(new Response("{}", { status: 404 }));
+      if (url.includes("/media_publish")) return Promise.resolve(json({ id: "media-1" }));
+      if (url.includes("/ig-account-1/media")) return Promise.resolve(json({ id: "container-1" }));
+      if (url.includes("fields=status_code")) return Promise.resolve(json({ status_code: "FINISHED" }));
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const caption = `Hi ${Array.from({ length: 32 }, (_, i) => `#t${i + 1}`).join(" ")}`;
+
+    const result = await instagramClient.publishVideo({
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+      get mediaItems() { return [this.mediaItem]; },
+      mediaItem: { mimeType: "image/jpeg", storageLocation: "https://blob.example.com/p.jpg", metadata: null } as unknown as MediaItem,
+      caption,
+    });
+
+    const containerUrl = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(containerUrl.searchParams.get("caption")).toMatch(/#t30$/);
+    expect(result).toEqual({
+      externalPostId: "media-1",
+      note: "Instagram allows 30 hashtags in a post, so these were left out: #t31 #t32.",
     });
   });
 });

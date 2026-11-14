@@ -40,6 +40,44 @@ export const RETENTION_MAX_BATCHES_PER_RUN = 15;
 export const RETENTION_BATCH_BUDGET_MS = 150_000;
 
 /**
+ * R3-pages L3: how far back clearLeftoverClientDetails looks. The rows it is for
+ * were marked deleted by the old code in the minutes between the backfill
+ * migration (20261114500000) and the new code serving; looking back 30 days
+ * keeps the hourly query to a small range of the deletedAt index.
+ */
+export const LEFTOVER_CLIENT_DATA_DAYS = 30;
+
+/**
+ * R3-pages L3: deleted upload link files that still carry the client's name,
+ * note or original file name get the same update a delete writes
+ * (deletedMediaData), keeping their delete time. Selected as the backfill
+ * migration selects them, at most one batch. Returns the rows cleared.
+ */
+async function clearLeftoverClientDetails(now: Date): Promise<number> {
+  const since = new Date(now.getTime() - LEFTOVER_CLIENT_DATA_DAYS * 24 * 60 * 60 * 1000);
+  const rows = await prisma.$queryRaw<
+    Array<{ id: string; originalFilename: string; metadata: Prisma.JsonValue | null; deletedAt: Date }>
+  >`SELECT "id", "originalFilename", "metadata", "deletedAt" FROM "MediaItem"
+    WHERE "deletedAt" > ${since}
+      AND jsonb_typeof("metadata") = 'object'
+      AND "metadata"->>'source' = 'upload_link'
+      AND (("metadata" -> 'senderName') IS NOT NULL
+        OR ("metadata" -> 'note') IS NOT NULL
+        OR "originalFilename" !~ '^deleted-file(\\.[a-z0-9]{1,10})?$')
+    LIMIT ${RETENTION_BATCH_SIZE}`;
+  let cleared = 0;
+  for (const row of rows) {
+    const data = deletedMediaData(row, row.deletedAt);
+    if (data.originalFilename === row.originalFilename && JSON.stringify(data.metadata) === JSON.stringify(row.metadata)) {
+      continue;
+    }
+    const { count } = await prisma.mediaItem.updateMany({ where: { id: row.id, deletedAt: { not: null } }, data });
+    cleared += count;
+  }
+  return cleared;
+}
+
+/**
  * Where the next batch resumes: the (createdAt, id) of the last candidate this
  * run handled. `createdAt` is an ISO string so the cursor survives Inngest's
  * JSON memoization of the step output.
@@ -149,6 +187,17 @@ export async function sweepExpiredMediaBatch(opts: {
   if (after && after.createdAt !== null && after.id !== null) {
     const cursorAt = new Date(after.createdAt);
     where.OR = [{ createdAt: { gt: cursorAt } }, { createdAt: cursorAt, id: { gt: after.id } }];
+  }
+
+  // R3-pages L3: once a run, in its first batch (no new step or execution).
+  // A failure here is logged and the sweep goes on; the next run tries again.
+  let leftoverCleared = 0;
+  if (after === null) {
+    try {
+      leftoverCleared = await clearLeftoverClientDetails(now);
+    } catch (error) {
+      logger.error("[Inngest] Couldn't clear a deleted client file's details; trying again next run", { error });
+    }
   }
 
   const candidates = await prisma.mediaItem.findMany({
@@ -277,6 +326,6 @@ export async function sweepExpiredMediaBatch(opts: {
     next,
     exhausted,
   };
-  console.log("[Inngest] Media retention batch complete", result);
+  console.log("[Inngest] Media retention batch complete", leftoverCleared > 0 ? { ...result, leftoverCleared } : result);
   return result;
 }

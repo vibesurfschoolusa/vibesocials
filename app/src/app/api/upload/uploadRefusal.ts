@@ -1,5 +1,6 @@
 import { UPLOAD_PATH_REFUSED_MESSAGE } from "@/lib/blobKey";
 import { prisma } from "@/lib/db";
+import { COVER_IMAGE_RULE } from "@/lib/videoCover";
 
 /**
  * Why a person's last upload token was refused, kept for 10 minutes.
@@ -10,20 +11,22 @@ import { prisma } from "@/lib/db";
  *
  * One RateLimitEntry row per person (no schema change): `count` holds the
  * reason's number and `expiresAt` the end of the 10 minutes, so the expired-row
- * clean-up in lib/rateLimit.ts removes it. A signed token clears it.
+ * clean-up in lib/rateLimit.ts removes it. Each token request clears it
+ * first (R3-security L1), so it only ever explains the latest refusal.
  */
 export const UPLOAD_REFUSAL_MEMORY_MS = 10 * 60 * 1000;
 
 export const UPLOAD_PAGE_OUT_OF_DATE_MESSAGE = UPLOAD_PATH_REFUSED_MESSAGE;
 export const UPLOAD_DAY_LIMIT_MESSAGE = "You've uploaded 20 GB today. Uploads start again at midnight UTC.";
 
-export type UploadRefusalReason = "out-of-date" | "day-limit" | "empty" | "too-large";
+export type UploadRefusalReason = "out-of-date" | "day-limit" | "empty" | "too-large" | "cover-too-large";
 
 const REASONS: Record<UploadRefusalReason, { number: number; error: string; code: string }> = {
   "out-of-date": { number: 1, error: UPLOAD_PAGE_OUT_OF_DATE_MESSAGE, code: "UPLOAD_PAGE_OUT_OF_DATE" },
   "day-limit": { number: 2, error: UPLOAD_DAY_LIMIT_MESSAGE, code: "UPLOAD_DAY_LIMIT" },
   empty: { number: 3, error: "This file is empty.", code: "UPLOAD_FILE_EMPTY" },
   "too-large": { number: 4, error: "File is too large (max 512 MB).", code: "UPLOAD_FILE_TOO_LARGE" },
+  "cover-too-large": { number: 5, error: COVER_IMAGE_RULE, code: "UPLOAD_COVER_TOO_LARGE" },
 };
 
 function refusalKey(userId: string): string {
@@ -66,7 +69,7 @@ export async function readUploadRefusal(
   }
 }
 
-/** Forget it once a token is signed, so a later failure is not blamed on it. Never throws. */
+/** Forget it at the start of each token request, so a later failure is not blamed on it. Never throws. */
 export async function clearUploadRefusal(userId: string): Promise<void> {
   try {
     await prisma.rateLimitEntry.deleteMany({ where: { key: refusalKey(userId) } });

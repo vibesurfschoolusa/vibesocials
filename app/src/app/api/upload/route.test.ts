@@ -52,6 +52,8 @@ vi.mock("./uploadBudget", async (importOriginal) => ({
 import { COVER_ADDRESS_REFUSED_MESSAGE } from "@/lib/coverBlobPath";
 import { UPLOAD_PATH_REFUSED_MESSAGE } from "@/lib/blobKey";
 import { LOGO_ADDRESS_RESERVED_MESSAGE } from "@/lib/workspaceLogo";
+import { UPLOAD_ALLOWED_CONTENT_TYPES } from "@/lib/mediaInput";
+import { COVER_IMAGE_MAX_BYTES, COVER_IMAGE_RULE, COVER_IMAGE_TYPES } from "@/lib/videoCover";
 
 import { explainUploadFailure } from "@/lib/uploadFailure";
 
@@ -276,6 +278,39 @@ describe("POST /api/upload — declared size and the day's bytes", () => {
     expect(captured.options?.maximumSizeInBytes).toBe(300_000);
   });
 
+  // R3-security M1: a cover token takes only the cover image types and sizes.
+  it("signs a cover token for JPEG images only, at most the declared size", async () => {
+    const captured = captureTokenOptions();
+    const res = await tokenWith(JSON.stringify({ size: 300_000 }), "covers/ws-1/1731600000000-ab12cd34-cover.jpg");
+
+    expect(res.status).toBe(200);
+    expect(captured.options?.allowedContentTypes).toEqual([...COVER_IMAGE_TYPES]);
+    expect(captured.options?.maximumSizeInBytes).toBe(300_000);
+  });
+
+  it("refuses a cover token declared larger than a cover image may be (a video), counting and signing nothing", async () => {
+    for (const size of [COVER_IMAGE_MAX_BYTES + 1, 400 * MB]) {
+      const res = await tokenWith(JSON.stringify({ size }), "covers/ws-1/1731600000000-ab12cd34-cover.jpg");
+      expect(res.status, String(size)).toBe(400);
+      await expect(res.json()).resolves.toEqual({ error: COVER_IMAGE_RULE });
+    }
+    expect(consumeDayBytesMock).not.toHaveBeenCalled();
+    expect(handleUploadMock).not.toHaveBeenCalled();
+  });
+
+  it("signs a cover of exactly the cover limit", async () => {
+    const captured = captureTokenOptions();
+    const res = await tokenWith(JSON.stringify({ size: COVER_IMAGE_MAX_BYTES }), "covers/ws-1/1731600000000-ab12cd34-cover.jpg");
+    expect(res.status).toBe(200);
+    expect(captured.options?.maximumSizeInBytes).toBe(COVER_IMAGE_MAX_BYTES);
+  });
+
+  it("a media token still takes every upload type", async () => {
+    const captured = captureTokenOptions();
+    await tokenWith(JSON.stringify({ size: 2 * MB }));
+    expect(captured.options?.allowedContentTypes).toEqual([...UPLOAD_ALLOWED_CONTENT_TYPES]);
+  });
+
   it("refuses a token request with no size, before anything is counted or signed", async () => {
     for (const clientPayload of [null, "{}", "not json", JSON.stringify({ size: "big" })]) {
       const res = await tokenWith(clientPayload);
@@ -399,6 +434,29 @@ describe("a refused upload's sentence reaches the person", () => {
   it("a later upload that is signed clears the reason, so a new failure is not blamed on the old one", async () => {
     await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: null, multipart: false });
     expect((await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false })).status).toBe(200);
+    await expect(GET().then((r) => r.json())).resolves.toEqual({ storageFull: false });
+  });
+
+  it("a too-large cover is told the cover rule", async () => {
+    await tokenWith({ pathname: "covers/ws-1/1731600000000-ab12cd34-cover.jpg", clientPayload: JSON.stringify({ size: 40 * MB }), multipart: false });
+    await expect(shown()).resolves.toBe(COVER_IMAGE_RULE);
+  });
+
+  // R3-security L1: each token request forgets the last reason first, so a
+  // later refusal that is not remembered is not explained by an older one.
+  it("a later refusal that is not remembered does not show an older reason", async () => {
+    await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: null, multipart: false });
+    checkStorageLimitMock.mockResolvedValue({ error: FULL, code: "WORKSPACE_STORAGE_FULL" });
+    expect((await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false })).status).toBe(403);
+    await expect(shown()).resolves.toBe(FULL);
+  });
+
+  it("a token request refused by the token rate limit forgets the older reason too", async () => {
+    consumeDayBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 32_400 });
+    await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false });
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
+    expect((await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false })).status).toBe(429);
+    checkRateLimitMock.mockResolvedValue({ allowed: true });
     await expect(GET().then((r) => r.json())).resolves.toEqual({ storageFull: false });
   });
 

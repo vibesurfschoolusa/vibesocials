@@ -6,7 +6,7 @@ import { NextResponse } from "next/server";
 import { getWorkspaceContext, getWorkspaceMemberCount } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "@/lib/blobUrl";
-import { parseCoverField } from "@/lib/videoCoverField";
+import { parseCoverField, withStoredCoverFacts } from "@/lib/videoCoverField";
 import { logoAddressRefusal } from "@/lib/workspaceLogo";
 import { findOverlongCaption, pickPlatformOverrides } from "@/lib/captionLimits";
 import { captionTooLongResponse, invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
@@ -776,11 +776,16 @@ export async function POST(request: Request) {
 
   // V1: the video's cover. A post without a file has no video to cover; the
   // reuse path does not know the file's type here (the clients only apply a
-  // cover to a video).
+  // cover to a video). R3-security M1: the cover image's type and size are
+  // read from storage, as the post's own file's are.
+  const storedCover = textOnly ? null : await withStoredCoverFacts(body.cover, context.workspace.id, head);
+  if (storedCover && !storedCover.ok) {
+    return NextResponse.json({ error: storedCover.error }, { status: 400 });
+  }
   const coverField = textOnly && body.cover != null
     ? ({ ok: false, error: "A cover can only be chosen for a video." } as const)
     : parseCoverField(
-        body.cover,
+        storedCover ? storedCover.value : body.cover,
         usingExistingMedia ? null : (mediaFields?.mimeType ?? null),
         context.workspace.id,
       );

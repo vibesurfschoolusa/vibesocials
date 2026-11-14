@@ -15,20 +15,24 @@ const db = vi.hoisted(() => ({
   postJobMediaCount: vi.fn(),
   postJobMediaFindFirst: vi.fn(),
   executeRaw: vi.fn(),
+  queryRaw: vi.fn(),
+  updateMany: vi.fn(),
   transaction: vi.fn(),
 }));
 const { delMock } = vi.hoisted(() => ({ delMock: vi.fn() }));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
-    mediaItem: { findMany: db.findMany },
+    mediaItem: { findMany: db.findMany, updateMany: db.updateMany },
     postJobMedia: { findFirst: db.postJobMediaFindFirst },
     $transaction: db.transaction,
+    $queryRaw: db.queryRaw,
   },
 }));
 vi.mock("@vercel/blob", () => ({ del: delMock }));
 
 import {
+  LEFTOVER_CLIENT_DATA_DAYS,
   RETENTION_BATCH_BUDGET_MS,
   RETENTION_BATCH_SIZE,
   RETENTION_MAX_BATCHES_PER_RUN,
@@ -77,6 +81,9 @@ beforeEach(() => {
   // 07a: by default no post has several photos, so the photo pass never runs.
   db.postJobMediaFindFirst.mockResolvedValue(null);
   db.count.mockResolvedValue(0);
+  // R3-pages L3: by default no deleted client file still carries its details.
+  db.queryRaw.mockResolvedValue([]);
+  db.updateMany.mockResolvedValue({ count: 1 });
   db.transaction.mockImplementation(async (callback: (tx: unknown) => unknown) =>
     callback({
       $executeRaw: db.executeRaw,
@@ -542,5 +549,72 @@ describe("sweepExpiredMediaBatch - a file a client sent", () => {
         metadata: { source: "upload_link", linkId: "link-1" },
       },
     });
+  });
+});
+
+// R3-pages L3: a client file marked deleted by the code that ran before the
+// helper existed, after the backfill migration ran, still holds the client's
+// name, note and file name. The run's first batch clears them with the same
+// helper, so that gap closes itself.
+describe("sweepExpiredMediaBatch - clearing a deleted client file's leftover details", () => {
+  const DELETED_AT = new Date(NOW.getTime() - 60 * 60 * 1000);
+  const leftover = {
+    id: "media-left",
+    originalFilename: "Maria Lopez pier.JPG",
+    metadata: { source: "upload_link", linkId: "link-1", senderName: "Maria", note: "Call me" },
+    deletedAt: DELETED_AT,
+  };
+
+  it("the run's first batch clears them with the delete helper, keeping the row's delete time", async () => {
+    db.queryRaw.mockResolvedValue([leftover]);
+
+    await sweepExpiredMediaBatch({ after: null, now: NOW });
+
+    expect(db.queryRaw).toHaveBeenCalledTimes(1);
+    expect(db.updateMany).toHaveBeenCalledWith({
+      where: { id: "media-left", deletedAt: { not: null } },
+      data: {
+        deletedAt: DELETED_AT,
+        originalFilename: "deleted-file.jpg",
+        metadata: { source: "upload_link", linkId: "link-1" },
+      },
+    });
+  });
+
+  it("asks only for recently deleted upload link rows that still differ, at most one batch", async () => {
+    await sweepExpiredMediaBatch({ after: null, now: NOW });
+
+    const [strings, ...values] = db.queryRaw.mock.calls[0] as [TemplateStringsArray, ...unknown[]];
+    const sql = strings.join("?").replace(/\s+/g, " ");
+    expect(sql).toContain(`"deletedAt" > ?`);
+    expect(sql).toContain(`"metadata"->>'source' = 'upload_link'`);
+    expect(sql).toContain(`("metadata" -> 'senderName') IS NOT NULL`);
+    expect(sql).toContain(`("metadata" -> 'note') IS NOT NULL`);
+    expect(sql).toMatch(/LIMIT \?$/);
+    // The name the helper writes: "deleted-file" and an optional lower-case extension.
+    expect(sql).toContain(String.raw`"originalFilename" !~ '^deleted-file(\.[a-z0-9]{1,10})?$'`);
+    expect(values).toEqual([new Date(NOW.getTime() - LEFTOVER_CLIENT_DATA_DAYS * 24 * 60 * 60 * 1000), RETENTION_BATCH_SIZE]);
+  });
+
+  it("later batches and the photo pass do not ask again", async () => {
+    await sweepExpiredMediaBatch({ after: { createdAt: STALE.toISOString(), id: "media-0000" }, now: NOW });
+    await sweepExpiredMediaBatch({ after: { pass: "photos", createdAt: null, id: null }, now: NOW });
+    expect(db.queryRaw).not.toHaveBeenCalled();
+  });
+
+  it("a failure there is logged and the sweep goes on", async () => {
+    db.queryRaw.mockRejectedValue(new Error("db down"));
+
+    const summary = await sweepExpiredMediaBatch({ after: null, now: NOW });
+
+    expect(summary).toMatchObject({ swept: 1 });
+  });
+
+  it("an already-cleared row that the query returns is not written", async () => {
+    db.queryRaw.mockResolvedValue([
+      { id: "media-done", originalFilename: "deleted-file.jpg", metadata: { source: "upload_link", linkId: "l" }, deletedAt: DELETED_AT },
+    ]);
+    await sweepExpiredMediaBatch({ after: null, now: NOW });
+    expect(db.updateMany).not.toHaveBeenCalled();
   });
 });

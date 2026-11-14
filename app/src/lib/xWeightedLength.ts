@@ -10,6 +10,7 @@ import { textUnits, truncateUnits, type TextLink, type TextUnit } from "@/lib/tr
  * - A link weighs 23 (X shortens every link to a t.co link), however long:
  *   http(s):// always, a bare domain when it starts with www. or its ending looks like a real one
  *   (lower case, and two letters or a broad list of generic endings: see isLinkEnding).
+ * - Any other bare domain with a lower-case ending weighs at least 23 (R3-publishing L1).
  */
 
 /** X's limit on a post's weight. */
@@ -101,9 +102,21 @@ function countsAsLink(link: TextLink, text: string): boolean {
   return ending === ending.toLowerCase() && isLinkEnding(link.tld);
 }
 
+/**
+ * R3-publishing L1: no list holds every ending X accepts, so a bare domain with
+ * a lower-case ending that is not on the list may be a link (23) or plain text
+ * (its characters). The higher of the two: counting high only cuts a little
+ * early, counting low gets the post refused.
+ */
+function mayBeLink(text: string): boolean {
+  return /^[a-z]{2,}$/.test(typedEnding(text));
+}
+
 function unitWeight(unit: TextUnit): number {
   if (unit.link) {
-    return countsAsLink(unit.link, unit.text) ? X_LINK_WEIGHT : charactersWeight(unit.text);
+    if (countsAsLink(unit.link, unit.text)) return X_LINK_WEIGHT;
+    const characters = charactersWeight(unit.text);
+    return mayBeLink(unit.text) ? Math.max(X_LINK_WEIGHT, characters) : characters;
   }
   return EMOJI.test(unit.text) || KEYCAP.test(unit.text) ? 2 : charactersWeight(unit.text);
 }
