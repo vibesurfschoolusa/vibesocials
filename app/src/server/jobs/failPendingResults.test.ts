@@ -9,14 +9,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // writes, while the result read, the status write and the row lock live on the
 // `tx` the transaction hands out - so a read or write that bypassed the
 // transaction would throw here instead of passing.
-const { resultUpdateManyMock, resultFindManyMock, postJobUpdateMock, executeRawMock, transactionMock } =
-  vi.hoisted(() => ({
-    resultUpdateManyMock: vi.fn(),
-    resultFindManyMock: vi.fn(),
-    postJobUpdateMock: vi.fn(),
-    executeRawMock: vi.fn(),
-    transactionMock: vi.fn(),
-  }));
+const {
+  resultUpdateManyMock,
+  resultFindManyMock,
+  postJobUpdateMock,
+  postJobFindUniqueMock,
+  mediaUpdateManyMock,
+  executeRawMock,
+  transactionMock,
+} = vi.hoisted(() => ({
+  resultUpdateManyMock: vi.fn(),
+  resultFindManyMock: vi.fn(),
+  postJobUpdateMock: vi.fn(),
+  postJobFindUniqueMock: vi.fn(),
+  mediaUpdateManyMock: vi.fn(),
+  executeRawMock: vi.fn(),
+  transactionMock: vi.fn(),
+}));
 
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -34,13 +43,15 @@ import {
   failPendingPostJobResults,
   recomputeAndStorePostJobStatus,
 } from "./failPendingResults";
+import { isMediaSweepEligible, RETENTION_DAYS } from "./mediaRetention";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 
 /** The transaction client `$transaction` hands to its callback. */
 const tx = {
   $executeRaw: executeRawMock,
   postJobResult: { findMany: resultFindManyMock },
-  postJob: { update: postJobUpdateMock },
+  postJob: { update: postJobUpdateMock, findUnique: postJobFindUniqueMock },
+  mediaItem: { updateMany: mediaUpdateManyMock },
 };
 
 beforeEach(() => {
@@ -49,11 +60,15 @@ beforeEach(() => {
   postJobUpdateMock.mockReset();
   executeRawMock.mockReset();
   transactionMock.mockReset();
+  postJobFindUniqueMock.mockReset();
+  mediaUpdateManyMock.mockReset();
 
   resultUpdateManyMock.mockResolvedValue({ count: 2 });
   resultFindManyMock.mockResolvedValue([{ status: "failed" }, { status: "failed" }]);
   postJobUpdateMock.mockResolvedValue({});
   executeRawMock.mockResolvedValue(1);
+  postJobFindUniqueMock.mockResolvedValue({ mediaItemId: "media-1", media: [] });
+  mediaUpdateManyMock.mockResolvedValue({ count: 1 });
   transactionMock.mockImplementation((callback: (client: typeof tx) => unknown) => callback(tx));
 });
 
@@ -436,7 +451,9 @@ describe("recomputeAndStorePostJobStatus", () => {
               stored.push(data.status);
               return {};
             },
+            findUnique: async () => ({ mediaItemId: "media-1", media: [] }),
           },
+          mediaItem: { updateMany: async () => ({ count: 1 }) },
         };
         try {
           return await callback(client);
@@ -467,6 +484,138 @@ describe("recomputeAndStorePostJobStatus", () => {
       expect(b).toEqual({ status: "completed", successCount: 3 });
       expect(lockAcquiredBy).toEqual([1, 2]);
     });
+  });
+});
+
+// F1 H2: retention counts a media item's age from its LAST use. The create path
+// stamps lastUsedAt when a post is made, so a post scheduled (or a draft kept)
+// for weeks, or a repeat series, finished with media the sweep already saw as
+// old. Finalizing a job stamps it again, on every item the post used.
+describe("recomputeAndStorePostJobStatus - media last use (F1 H2)", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  function stampedAt(): Date {
+    const { data } = mediaUpdateManyMock.mock.calls.at(-1)![0] as { data: { lastUsedAt: Date } };
+    return data.lastUsedAt;
+  }
+
+  it.each([
+    ["completed", [{ status: "success" }, { status: "failed" }]],
+    ["failed", [{ status: "failed" }]],
+  ] as const)("stamps lastUsedAt on the post's media when the job ends %s", async (_status, results) => {
+    resultFindManyMock.mockResolvedValue([...results]);
+    const before = Date.now();
+
+    await recomputeAndStorePostJobStatus("job-1");
+
+    expect(postJobFindUniqueMock).toHaveBeenCalledWith({
+      where: { id: "job-1" },
+      select: { mediaItemId: true, media: { select: { mediaItemId: true } } },
+    });
+    expect(mediaUpdateManyMock).toHaveBeenCalledWith({
+      where: { id: { in: ["media-1"] }, deletedAt: null },
+      data: { lastUsedAt: expect.any(Date) },
+    });
+    expect(stampedAt().getTime()).toBeGreaterThanOrEqual(before);
+    // Inside the transaction, after the status write.
+    expect(postJobUpdateMock.mock.invocationCallOrder[0]).toBeLessThan(
+      mediaUpdateManyMock.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("stamps every photo of a post with several", async () => {
+    resultFindManyMock.mockResolvedValue([{ status: "success" }]);
+    postJobFindUniqueMock.mockResolvedValue({
+      mediaItemId: "photo-1",
+      media: [{ mediaItemId: "photo-1" }, { mediaItemId: "photo-2" }, { mediaItemId: "photo-3" }],
+    });
+
+    await recomputeAndStorePostJobStatus("job-1");
+
+    expect(mediaUpdateManyMock).toHaveBeenCalledWith({
+      where: { id: { in: ["photo-1", "photo-2", "photo-3"] }, deletedAt: null },
+      data: { lastUsedAt: expect.any(Date) },
+    });
+  });
+
+  it("stamps nothing while the job is still running", async () => {
+    resultFindManyMock.mockResolvedValue([{ status: "success" }, { status: "pending" }]);
+
+    await recomputeAndStorePostJobStatus("job-1");
+
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("stamps nothing for a post without a file", async () => {
+    resultFindManyMock.mockResolvedValue([{ status: "success" }]);
+    postJobFindUniqueMock.mockResolvedValue({ mediaItemId: null, media: [] });
+
+    await recomputeAndStorePostJobStatus("job-1");
+
+    expect(mediaUpdateManyMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps media attached 40 days ago, whose post completes today, for another 30 days", async () => {
+    resultFindManyMock.mockResolvedValue([{ status: "success" }]);
+    await recomputeAndStorePostJobStatus("job-1");
+    const today = stampedAt();
+    const createdAt = new Date(today.getTime() - 40 * DAY);
+    const at = (days: number) =>
+      isMediaSweepEligible({
+        deletedAt: null,
+        hasNonTerminalJob: false,
+        hasAnyJob: true,
+        lastUsedAt: today,
+        createdAt,
+        now: new Date(today.getTime() + days * DAY),
+        retentionDays: RETENTION_DAYS,
+      });
+
+    expect(at(0)).toBe(false);
+    expect(at(29)).toBe(false);
+    expect(at(31)).toBe(true);
+  });
+
+  it("keeps the media of a series of 6 weekly posts until 30 days after the last one", async () => {
+    vi.useFakeTimers();
+    try {
+      const start = new Date("2026-01-05T09:00:00.000Z");
+      resultFindManyMock.mockResolvedValue([{ status: "success" }]);
+      for (let week = 0; week < 6; week += 1) {
+        vi.setSystemTime(new Date(start.getTime() + week * 7 * DAY));
+        await recomputeAndStorePostJobStatus(`job-${week}`);
+      }
+      const last = stampedAt();
+      expect(last).toEqual(new Date(start.getTime() + 5 * 7 * DAY));
+      const at = (days: number) =>
+        isMediaSweepEligible({
+          deletedAt: null,
+          hasNonTerminalJob: false,
+          hasAnyJob: true,
+          lastUsedAt: last,
+          createdAt: start,
+          now: new Date(last.getTime() + days * DAY),
+          retentionDays: RETENTION_DAYS,
+        });
+      expect(at(29)).toBe(false);
+      expect(at(31)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves the rule for a never-posted upload as it was: never swept", () => {
+    expect(
+      isMediaSweepEligible({
+        deletedAt: null,
+        hasNonTerminalJob: false,
+        hasAnyJob: false,
+        lastUsedAt: null,
+        createdAt: new Date("2025-01-01T00:00:00.000Z"),
+        now: new Date("2026-11-14T00:00:00.000Z"),
+        retentionDays: RETENTION_DAYS,
+      }),
+    ).toBe(false);
   });
 });
 

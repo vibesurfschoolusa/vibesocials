@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
+import { stampPostMediaLastUsed } from "@/server/jobs/failPendingResults";
 import { recomputePostJobStatus } from "@/server/jobs/postStatus";
 import {
   buildPublishEvent,
@@ -414,7 +415,11 @@ export async function reconcileStuckInProgressJobs(
       where: { id: job.id, status: "in_progress" },
       data: { status: finalStatus },
     });
-    if (count === 1) reconciled += 1;
+    if (count === 1) {
+      reconciled += 1;
+      // F1 H2: retention counts the media's age from this last use.
+      if (finalStatus !== "in_progress") await stampPostMediaLastUsed(prisma, job.id, now);
+    }
   }
 
   return { reconciled };

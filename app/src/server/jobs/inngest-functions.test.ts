@@ -32,6 +32,9 @@ const db = vi.hoisted(() => ({
   resultUpdateMany: vi.fn(),
   /** The `SELECT ... FOR UPDATE` row lock of the finalize recompute. */
   executeRaw: vi.fn(),
+  /** F1 H2: the finalize's media last-use stamp (no job row by default: nothing stamped). */
+  stampJobFindUnique: vi.fn(),
+  mediaItemUpdateMany: vi.fn(),
 }));
 const {
   getPlatformClientMock,
@@ -87,7 +90,8 @@ vi.mock("@/lib/db", () => ({
       callback({
         $executeRaw: db.executeRaw,
         postJobResult: { findMany: db.resultFindMany },
-        postJob: { update: db.postJobUpdate },
+        postJob: { update: db.postJobUpdate, findUnique: db.stampJobFindUnique },
+        mediaItem: { updateMany: db.mediaItemUpdateMany },
       }),
   },
 }));

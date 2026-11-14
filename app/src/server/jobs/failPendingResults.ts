@@ -1,4 +1,4 @@
-import type { Platform, PostJobStatus } from "@prisma/client";
+import type { Platform, PostJobStatus, Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
@@ -96,6 +96,10 @@ export async function recomputeAndStorePostJobStatus(
         data: { status },
       });
 
+      if (status === "completed" || status === "failed") {
+        await stampPostMediaLastUsed(tx, postJobId, new Date());
+      }
+
       return {
         status,
         successCount: results.filter((result) => result.status === "success").length,
@@ -103,6 +107,34 @@ export async function recomputeAndStorePostJobStatus(
     },
     { maxWait: RECOMPUTE_TX_MAX_WAIT_MS, timeout: RECOMPUTE_TX_TIMEOUT_MS },
   );
+}
+
+/**
+ * F1 H2: a post that reached a final state used its media just now. Retention
+ * counts a media item's age from `lastUsedAt`, which the create path stamps when
+ * the post is made, so a post scheduled weeks ahead, an old draft or a repeat
+ * series finished with media the sweep already took for 30 days unused. Stamping
+ * it here, where every finalizer passes, makes the age count from the last use.
+ * A post with several photos stamps each of them (PostJobMedia); a post without
+ * a file stamps nothing; a swept item stays swept.
+ */
+export async function stampPostMediaLastUsed(
+  db: Pick<Prisma.TransactionClient, "postJob" | "mediaItem">,
+  postJobId: string,
+  now: Date,
+): Promise<void> {
+  const job = await db.postJob.findUnique({
+    where: { id: postJobId },
+    select: { mediaItemId: true, media: { select: { mediaItemId: true } } },
+  });
+  if (!job) return;
+  const ids = new Set<string>(job.media.map((row) => row.mediaItemId));
+  if (job.mediaItemId) ids.add(job.mediaItemId);
+  if (ids.size === 0) return;
+  await db.mediaItem.updateMany({
+    where: { id: { in: [...ids] }, deletedAt: null },
+    data: { lastUsedAt: now },
+  });
 }
 
 /**

@@ -10,6 +10,7 @@ const {
   resultFindManyMock,
   resultUpdateManyMock,
   prepareDeferredMock,
+  stampMediaMock,
 } = vi.hoisted(() => ({
   queryRawMock: vi.fn(),
   findManyMock: vi.fn(),
@@ -18,6 +19,7 @@ const {
   resultFindManyMock: vi.fn(),
   resultUpdateManyMock: vi.fn(),
   prepareDeferredMock: vi.fn(),
+  stampMediaMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -39,6 +41,11 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/server/jobs/posting", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/jobs/posting")>()),
   prepareDeferredPostJobDispatch: prepareDeferredMock,
+}));
+
+vi.mock("@/server/jobs/failPendingResults", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/jobs/failPendingResults")>()),
+  stampPostMediaLastUsed: stampMediaMock,
 }));
 
 import {
@@ -65,6 +72,8 @@ beforeEach(() => {
   resultFindManyMock.mockReset();
   resultUpdateManyMock.mockReset();
   prepareDeferredMock.mockReset();
+  stampMediaMock.mockReset();
+  stampMediaMock.mockResolvedValue(undefined);
 });
 
 // 2026-11-01 scale audit (jobs H6): a 500-post burst used to take minutes to
@@ -253,6 +262,21 @@ describe("reconcileStuckInProgressJobs", () => {
       where: { id: "stuck-2", status: "in_progress" },
       data: { status: "completed" },
     });
+    // F1 H2: a job the reconciler finalizes used its media now, like any finalize.
+    expect(stampMediaMock).toHaveBeenCalledWith(expect.anything(), "stuck-2", NOW);
+  });
+
+  it("stamps no media when another writer moved the job first", async () => {
+    findManyMock.mockResolvedValue([{ id: "stuck-5" }]);
+    resultFindManyMock
+      .mockResolvedValueOnce([{ id: "r1", status: "pending", claimRunId: null }])
+      .mockResolvedValueOnce([{ status: "failed" }]);
+    resultUpdateManyMock.mockResolvedValue({ count: 1 });
+    updateManyMock.mockResolvedValue({ count: 0 });
+
+    await reconcileStuckInProgressJobs(NOW);
+
+    expect(stampMediaMock).not.toHaveBeenCalled();
   });
 
   // 2026-11-01 scale audit (jobs H6): a pending result with a claim had its
