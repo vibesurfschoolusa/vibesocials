@@ -34,7 +34,7 @@ describe("ReviewsView layout", () => {
   });
 
   it("has an empty Needs reply state that points to the panel below", () => {
-    expect(source).toContain("Every review has a reply.");
+    expect(source).toContain("needsReplyEmptyTitle(reviews.length)");
     expect(source).toContain("Get more reviews below");
     expect(source).not.toContain("All caught up!");
   });

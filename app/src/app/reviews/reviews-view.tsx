@@ -18,6 +18,7 @@ import { LocationPicker } from "@/components/reviews/location-picker";
 import { ReviewCard } from "@/components/reviews/review-card";
 import {
   focusAfterReply,
+  needsReplyEmptyTitle,
   replyButtonId,
   reviewsSubtitle,
   showLocationPicker,
@@ -316,7 +317,8 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
           {reviewsSubtitle(
-            selectedLocation && !loading && !reviewsError ? needsReplyReviews.length : null
+            selectedLocation && !loading && !reviewsError ? needsReplyReviews.length : null,
+            reviews.length
           )}
         </p>
         {singleLocationName(locations) && (
@@ -414,7 +416,9 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
               <CheckCircle2 className="h-6 w-6" />
             </div>
             <div className="flex flex-col gap-1">
-              <h3 className="text-base font-semibold text-foreground">Every review has a reply.</h3>
+              <h3 className="text-base font-semibold text-foreground">
+                {needsReplyEmptyTitle(reviews.length)}
+              </h3>
               <p className="mx-auto max-w-sm text-sm text-muted-foreground">
                 To get more, send customers your review link from Get more reviews below.
               </p>

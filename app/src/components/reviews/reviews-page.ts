@@ -1,11 +1,20 @@
 import { locationLabels } from "./location-labels";
 import type { Location } from "./types";
 
-/** The heading's subtitle: how many reviews wait, or the general line while they load. */
-export function reviewsSubtitle(waiting: number | null): string {
+/**
+ * The heading's subtitle: how many reviews wait, or the general line while
+ * they load. A listing with no reviews at all has nothing "with a reply".
+ */
+export function reviewsSubtitle(waiting: number | null, total: number): string {
   if (waiting === null) return "Manage and reply to your Google Business Profile reviews";
+  if (total === 0) return "No reviews yet";
   if (waiting === 0) return "Every review has a reply";
   return waiting === 1 ? "1 review needs a reply" : `${waiting} reviews need a reply`;
+}
+
+/** The Needs reply tab's empty title: nothing waits, or nothing has arrived yet. */
+export function needsReplyEmptyTitle(total: number): string {
+  return total === 0 ? "No reviews yet." : "Every review has a reply.";
 }
 
 /**

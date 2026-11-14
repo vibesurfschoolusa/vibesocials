@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { focusAfterReply, replyButtonId, reviewsSubtitle, showLocationPicker, singleLocationName } from "./reviews-page";
+import {
+  focusAfterReply,
+  needsReplyEmptyTitle,
+  replyButtonId,
+  reviewsSubtitle,
+  showLocationPicker,
+  singleLocationName,
+} from "./reviews-page";
 import type { Location } from "./types";
 
 const loc = (name: string, title: string): Location => ({ name, locationName: name, title });
@@ -8,19 +15,30 @@ const loc = (name: string, title: string): Location => ({ name, locationName: na
 // N2: the heading's subtitle carries the count instead of a separate box.
 describe("reviewsSubtitle", () => {
   it("keeps the current subtitle while the reviews load", () => {
-    expect(reviewsSubtitle(null)).toBe("Manage and reply to your Google Business Profile reviews");
+    expect(reviewsSubtitle(null, 0)).toBe("Manage and reply to your Google Business Profile reviews");
   });
 
   it("says every review has a reply when none wait", () => {
-    expect(reviewsSubtitle(0)).toBe("Every review has a reply");
+    expect(reviewsSubtitle(0, 41)).toBe("Every review has a reply");
+  });
+
+  it("says no reviews yet for a listing with none at all", () => {
+    expect(reviewsSubtitle(0, 0)).toBe("No reviews yet");
   });
 
   it("uses the singular for one", () => {
-    expect(reviewsSubtitle(1)).toBe("1 review needs a reply");
+    expect(reviewsSubtitle(1, 5)).toBe("1 review needs a reply");
   });
 
   it("uses the plural for many", () => {
-    expect(reviewsSubtitle(9)).toBe("9 reviews need a reply");
+    expect(reviewsSubtitle(9, 50)).toBe("9 reviews need a reply");
+  });
+});
+
+describe("needsReplyEmptyTitle", () => {
+  it("tells a new listing apart from one where every review has a reply", () => {
+    expect(needsReplyEmptyTitle(0)).toBe("No reviews yet.");
+    expect(needsReplyEmptyTitle(3)).toBe("Every review has a reply.");
   });
 });
 
