@@ -748,7 +748,36 @@ describe("GET /api/posts — result deferral", () => {
       errorMessage: true,
       deferredUntil: true,
       errorCode: true,
+      // Video cover (V1): the note a platform's refused cover leaves.
+      note: true,
     });
+  });
+
+  it("passes a result's note through, and null when there is none", async () => {
+    const [youtube, instagram] = await resultsOf([
+      {
+        platform: "youtube",
+        status: "success",
+        externalPostId: "abc",
+        externalPostUrl: null,
+        errorMessage: null,
+        deferredUntil: null,
+        errorCode: null,
+        note: "Cover not set: YouTube only allows custom covers on verified channels.",
+      },
+      {
+        platform: "instagram",
+        status: "success",
+        externalPostId: "123",
+        externalPostUrl: null,
+        errorMessage: null,
+        deferredUntil: null,
+        errorCode: null,
+        note: null,
+      },
+    ]);
+    expect(youtube.note).toBe("Cover not set: YouTube only allows custom covers on verified channels.");
+    expect(instagram.note).toBeNull();
   });
 
   it("maps a pending result with deferredUntil and DAILY_LIMIT to a daily_limit deferral", async () => {

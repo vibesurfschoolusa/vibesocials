@@ -82,6 +82,11 @@ export interface PostJobResultDTO {
    */
   unconfirmed: boolean;
   /**
+   * A plain note when the platform took the post but not something with it,
+   * e.g. a video's chosen cover (PostJobResult.note); null or absent otherwise.
+   */
+  note?: string | null;
+  /**
    * Latest engagement snapshot for this result, or null when none has been
    * fetched yet (YouTube-only in v1). Joined by (platform, externalPostId) — the
    * metric's durable identity — so it survives a connection delete.

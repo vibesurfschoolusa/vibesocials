@@ -136,6 +136,8 @@ const POSTS_LIST_SELECT = {
       // from a rate limit; it never reaches the DTO (SEC-1).
       deferredUntil: true,
       errorCode: true,
+      // Video cover (V1): a platform that refused the cover still published.
+      note: true,
     },
     orderBy: { platform: "asc" },
   },
@@ -428,6 +430,7 @@ export async function GET(request: Request) {
               // (PUBLISH_UNCONFIRMED, or TikTok's TIKTOK_PUBLISH_PENDING; final
               // review F4); errorCode itself stays server-side (SEC-1).
               unconfirmed: isUnconfirmedResult(result),
+              note: result.note ?? null,
               metric: metricRow
                 ? {
                     views: metricRow.views,

@@ -112,3 +112,24 @@ describe("cardTime", () => {
     expect(cardTime({ status: "completed", createdAt: null, scheduledFor: null })).toBeNull();
   });
 });
+
+// Video cover (V1): a platform that refused the chosen cover still published
+// the video; the result carries a plain note, shown under the platforms.
+describe("PostJobCard - result notes", () => {
+  it("shows each result's note with its platform", () => {
+    const html = render(
+      job({
+        results: [
+          result({ platform: "youtube", externalPostId: "abc", note: "Cover not set: YouTube only allows custom covers on verified channels." }),
+          result({ platform: "instagram", externalPostId: "123" }),
+        ],
+      }),
+    );
+    expect(html).toContain("YouTube: Cover not set: YouTube only allows custom covers on verified channels.");
+  });
+  it("shows nothing extra without a note", () => {
+    const html = render(job({ results: [result({ platform: "instagram", externalPostId: "123", note: null })] }));
+    expect(html).not.toContain("Cover not set");
+  });
+});
+

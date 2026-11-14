@@ -328,6 +328,19 @@ export function PostJobCard({
         </div>
       ) : null}
 
+      {/* A platform that took the post but not something with it (a video's cover) says so here. */}
+      {results.some((result) => result.note) ? (
+        <ul className="mt-2 space-y-0.5">
+          {results.map((result) =>
+            result.note ? (
+              <li key={result.platform} className="text-xs text-muted-foreground">
+                {platformLabel(result.platform)}: {result.note}
+              </li>
+            ) : null,
+          )}
+        </ul>
+      ) : null}
+
       {deferrals.length > 0 ? (
         <ul className="mt-2 space-y-0.5">
           {deferrals.map((result) => (
