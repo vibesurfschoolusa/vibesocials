@@ -24,6 +24,13 @@ interface PostJobRouteContext {
 const MUTATE_RATE_LIMIT = { route: "posts/mutate", limit: 60, windowMs: 5 * 60 * 1000 } as const;
 
 /**
+ * The dialogs' look-up of a post's other half (GET below) only reads, and runs
+ * each time a cancel or delete dialog opens, so it has its own, looser bucket
+ * and never spends the cancel / edit / delete allowance above.
+ */
+const PAIR_LOOKUP_RATE_LIMIT = { route: "posts/pair-lookup", limit: 300, windowMs: 5 * 60 * 1000 } as const;
+
+/**
  * POST /api/posts/[postJobId]/cancel — Roadmap Phase 5 (§6.2).
  *
  * Cancel a scheduled or draft post. A plain DB update — there is no Inngest run
@@ -59,7 +66,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const limited = await mutateRateLimited(workspaceContext.user.id);
+  const limited = await rateLimited(workspaceContext.user.id, MUTATE_RATE_LIMIT);
   if (limited) return limited;
 
   const { postJobId } = await Promise.resolve(context.params);
@@ -143,9 +150,12 @@ async function cancelPairHalf(workspaceId: string, half: PairHalf): Promise<"can
   return count === 1 ? "cancelled" : "not_cancelable";
 }
 
-/** The 429 answer when the caller is over the mutate throttle, else null. */
-async function mutateRateLimited(userId: string): Promise<NextResponse | null> {
-  const rateLimit = await checkRateLimit({ userId, ...MUTATE_RATE_LIMIT });
+/** The 429 answer when the caller is over the given throttle, else null. */
+async function rateLimited(
+  userId: string,
+  bucket: typeof MUTATE_RATE_LIMIT | typeof PAIR_LOOKUP_RATE_LIMIT,
+): Promise<NextResponse | null> {
+  const rateLimit = await checkRateLimit({ userId, ...bucket });
   if (rateLimit.allowed) return null;
   return NextResponse.json(
     { error: "Too many requests. Please slow down.", retryAfterSeconds: rateLimit.retryAfterSeconds },
@@ -165,7 +175,7 @@ export async function GET(_request: NextRequest, context: PostJobRouteContext) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const limited = await mutateRateLimited(workspaceContext.user.id);
+  const limited = await rateLimited(workspaceContext.user.id, PAIR_LOOKUP_RATE_LIMIT);
   if (limited) return limited;
 
   const { postJobId } = await Promise.resolve(context.params);

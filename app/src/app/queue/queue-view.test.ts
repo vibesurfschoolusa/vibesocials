@@ -226,6 +226,12 @@ describe("PairChoice", () => {
     expect(render({ option: null })).toBe("");
   });
 
+  it("a failed lookup: says only this post is changed, no checkbox", () => {
+    const html = render({ option: null, failedLine: "Couldn't check whether this post has a Story half. Only this post will be cancelled." });
+    expect(html).toContain("Couldn&#x27;t check whether this post has a Story half. Only this post will be cancelled.");
+    expect(html).not.toContain("checkbox");
+  });
+
   it("an other half that cannot be included: the line only, no checkbox", () => {
     const html = render({ option: { line: "It has already started publishing.", label: null, keptLine: null } });
     expect(html).toContain("It has already started publishing.");

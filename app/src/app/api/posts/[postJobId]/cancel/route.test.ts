@@ -5,8 +5,9 @@ import { makeWorkspaceContext } from "../../../__test-helpers__/workspaceContext
 
 // vitest hoists vi.mock above imports. route.ts imports `@/lib/workspace` and
 // `@/lib/db` at module scope, so both are mocked before the import below.
-const { getWorkspaceContextMock, updateManyMock, findFirstMock, findUniqueMock, mediaUpdateManyMock } = vi.hoisted(
+const { getWorkspaceContextMock, updateManyMock, findFirstMock, findUniqueMock, mediaUpdateManyMock, checkRateLimitMock } = vi.hoisted(
   () => ({
+    checkRateLimitMock: vi.fn(),
     getWorkspaceContextMock: vi.fn(),
     updateManyMock: vi.fn(),
     findFirstMock: vi.fn(),
@@ -17,6 +18,7 @@ const { getWorkspaceContextMock, updateManyMock, findFirstMock, findUniqueMock, 
 
 // Team Workspaces (Task 4): getCurrentUser -> getWorkspaceContext.
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
+vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 vi.mock("@/lib/db", () => ({
   prisma: {
     postJob: { updateMany: updateManyMock, findFirst: findFirstMock, findUnique: findUniqueMock },
@@ -39,6 +41,8 @@ beforeEach(() => {
   findFirstMock.mockReset();
   findUniqueMock.mockReset();
   mediaUpdateManyMock.mockReset();
+  checkRateLimitMock.mockReset();
+  checkRateLimitMock.mockResolvedValue({ allowed: true });
   getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext());
   findUniqueMock.mockResolvedValue({ mediaItemId: "media-1", media: [] });
   mediaUpdateManyMock.mockResolvedValue({ count: 1 });
@@ -305,6 +309,41 @@ describe("GET /api/posts/[postJobId]/cancel - the other half, for the dialog", (
       pair: { id: "story-1", kind: "story", status: "scheduled", scheduledFor: LATER.toISOString() },
     });
     expect(findFirstMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ where: { id: "job-1", workspaceId: "ws-1" } }));
+  });
+
+  // Coordinator review point 2: the lookup only reads, so it has its own, looser
+  // bucket and never spends the cancel / edit / delete allowance.
+  it("uses its own read bucket, not the mutate one", async () => {
+    findFirstMock.mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow() }).mockResolvedValueOnce(null);
+
+    await GET(req, ctx("job-1"));
+
+    expect(checkRateLimitMock).toHaveBeenCalledTimes(1);
+    expect(checkRateLimitMock).toHaveBeenCalledWith({
+      userId: "user-1",
+      route: "posts/pair-lookup",
+      limit: 300,
+      windowMs: 5 * 60 * 1000,
+    });
+  });
+
+  it("the cancel itself still uses the mutate bucket", async () => {
+    findFirstMock.mockResolvedValue(jobRow());
+    updateManyMock.mockResolvedValue({ count: 1 });
+
+    await POST(req, ctx("job-1"));
+
+    expect(checkRateLimitMock).toHaveBeenCalledWith(expect.objectContaining({ route: "posts/mutate", limit: 60 }));
+  });
+
+  it("429 with Retry-After when the read bucket is spent", async () => {
+    checkRateLimitMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 9 });
+
+    const res = await GET(req, ctx("job-1"));
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe("9");
+    expect(findFirstMock).not.toHaveBeenCalled();
   });
 
   it("null when there is no live other half", async () => {

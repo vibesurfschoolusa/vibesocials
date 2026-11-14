@@ -48,49 +48,96 @@ function capitalized(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-/** "This post also goes out as a Story, set for <time>." or the Story's version. */
-function pairLine(pair: PairInfo): string {
-  const time = pair.scheduledFor ? formatTimestamp(pair.scheduledFor) : null;
-  if (pair.kind === "story") {
-    return time ? `This post also goes out as a Story, set for ${time}.` : "This post also goes out as a Story, with no time set.";
+/** What happened to an other half that can no longer be changed; null while it is still a draft or scheduled. */
+function finishedPhrase(status: PostJobStatus): string | null {
+  switch (status) {
+    case "pending":
+    case "in_progress":
+      return "has already started publishing";
+    case "completed":
+      return "was already published";
+    case "failed":
+      return "did not go out";
+    default:
+      return null;
   }
-  return time ? `This is the Story of a feed post set for ${time}.` : "This is the Story of a feed post with no time set.";
+}
+
+/** The line naming a draft or scheduled other half and its time (a passed time reads as past). */
+function pairLine(pair: PairInfo, now: number): string {
+  const time = pair.scheduledFor ? formatTimestamp(pair.scheduledFor) : null;
+  const passed = pair.scheduledFor ? new Date(pair.scheduledFor).getTime() <= now : false;
+  if (pair.kind === "story") {
+    if (!time) return "This post also goes out as a Story, with no time set.";
+    return passed
+      ? `This post also has a Story, which was set for ${time}.`
+      : `This post also goes out as a Story, set for ${time}.`;
+  }
+  if (!time) return "This is the Story of a feed post with no time set.";
+  return passed ? `This is the Story of a feed post that was set for ${time}.` : `This is the Story of a feed post set for ${time}.`;
 }
 
 /**
  * What the dialog says about the other half: always the line naming it; the
  * checkbox label only when it can be included (cancel: scheduled or draft;
  * delete: a draft), and the line shown when the box is cleared. Null with no
- * live other half.
+ * live other half (a cancelled one is none: the lookup leaves it out).
  */
 export function pairOption(
   pair: PairInfo | null,
   action: "cancel" | "delete",
+  now: number = Date.now(),
 ): { line: string; label: string | null; keptLine: string | null } | null {
-  if (!pair) return null;
+  if (!pair || pair.status === "cancelled") return null;
+  const finished = finishedPhrase(pair.status);
+  if (finished) {
+    const line =
+      pair.kind === "story"
+        ? `This post's Story ${finished}, so it is not changed.`
+        : `This is the Story of a feed post that ${finished}, so it is not changed.`;
+    return { line, label: null, keptLine: null };
+  }
   const name = halfName(pair.kind);
-  const kept = `${capitalized(name)} is kept and keeps its time.`;
   if (action === "cancel") {
-    if (pair.status === "scheduled" || pair.status === "draft") {
-      return { line: pairLine(pair), label: `Also cancel ${name}`, keptLine: kept };
-    }
-    return {
-      line: `${pairLine(pair)} It has already started publishing, so it is not changed.`,
-      label: null,
-      keptLine: null,
-    };
+    return { line: pairLine(pair, now), label: `Also cancel ${name}`, keptLine: `${capitalized(name)} is kept and keeps its time.` };
   }
   if (pair.status === "draft") {
-    return { line: pairLine(pair), label: `Also delete ${name}`, keptLine: `${capitalized(name)} is kept.` };
+    return { line: pairLine(pair, now), label: `Also delete ${name}`, keptLine: `${capitalized(name)} is kept.` };
   }
-  if (pair.status === "scheduled") {
-    return {
-      line: `${pairLine(pair)} It is scheduled, so it is not deleted; cancel it on its own card first.`,
-      label: null,
-      keptLine: null,
-    };
-  }
-  return { line: `${pairLine(pair)} It is not changed.`, label: null, keptLine: null };
+  return {
+    line: `${pairLine(pair, now)} It is scheduled, so it is not deleted; cancel it on its own card first.`,
+    label: null,
+    keptLine: null,
+  };
+}
+
+/** The open dialog's lookup of the other half, as the Queue keeps it. */
+export type PairLookup = { jobId: string; pair?: PairInfo | null; failed?: boolean };
+
+/**
+ * Where the dialog's lookup stands for this card: loading keeps Confirm
+ * disabled (so nobody cancels one half before seeing the other); a failed
+ * lookup lets Confirm act on this post alone and says so.
+ */
+export function pairLookupState(
+  job: { id: string },
+  lookup: PairLookup | null,
+): { loading: boolean; failed: boolean; pair: PairInfo | null } {
+  if (!lookup || lookup.jobId !== job.id) return { loading: false, failed: false, pair: null };
+  if (lookup.failed) return { loading: false, failed: true, pair: null };
+  if (lookup.pair === undefined) return { loading: true, failed: false, pair: null };
+  return { loading: false, failed: false, pair: lookup.pair };
+}
+
+/** The dialog's line when the lookup failed. */
+export function pairLookupFailedLine(job: PairCard, action: "cancel" | "delete"): string {
+  const half = job.storyOf ? "a feed post half" : "a Story half";
+  return `Couldn't check whether this post has ${half}. Only this post will be ${action === "cancel" ? "cancelled" : "deleted"}.`;
+}
+
+/** The toast when the other half's delete found it already gone. */
+export function pairAlreadyDeletedMessage(kind: PairInfo["kind"]): string {
+  return `The draft was deleted. Its ${kind === "story" ? "Story" : "feed post"} had already been deleted.`;
 }
 
 /** The toast after a cancel that asked to include the other half, from the answer's `pair`. */
