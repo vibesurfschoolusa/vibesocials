@@ -251,6 +251,24 @@ describe("GET /api/dashboard/summary", () => {
       ];
       expect((await summary()).body.problemsLast7Days).toBe(0);
     });
+
+    // R3-client-journey L1: a Feed and Story post is one post to the owner.
+    it("counts a Feed and Story pair that failed once", async () => {
+      state.jobs = [
+        job({ id: "feed-1", status: "failed" }),
+        job({ status: "failed", storyOfPostJobId: "feed-1" }),
+        job({ status: "failed" }),
+      ];
+      expect((await summary()).body.problemsLast7Days).toBe(2);
+    });
+
+    it("counts a failed Story whose feed post went out as the one problem it is", async () => {
+      state.jobs = [
+        job({ id: "feed-1", status: "completed", results: [{ status: "success" }] }),
+        job({ status: "failed", storyOfPostJobId: "feed-1" }),
+      ];
+      expect((await summary()).body.problemsLast7Days).toBe(1);
+    });
   });
 
   describe("awaitingYourApproval", () => {
@@ -267,6 +285,15 @@ describe("GET /api/dashboard/summary", () => {
         job({ workspaceId: "ws-other", status: "draft", ...pending }),
       ];
       expect((await summary()).body.awaitingYourApproval).toBe(2);
+    });
+
+    // R3-client-journey M1: the Queue shows a held pair as one card, so it is one post here too.
+    it("counts a held Feed and Story pair once", async () => {
+      state.jobs = [
+        job({ id: "feed-1", status: "draft", ...pending }),
+        job({ status: "draft", storyOfPostJobId: "feed-1", ...pending }),
+      ];
+      expect((await summary()).body.awaitingYourApproval).toBe(1);
     });
 
     it("is null for a member", async () => {

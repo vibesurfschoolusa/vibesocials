@@ -23,6 +23,15 @@ import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRe
 import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 import { utcDayKey } from "@/lib/usageLimits";
 
+import {
+  applyToPair,
+  pairLimitArgs,
+  pairStoryPlatforms,
+  readPairHalf,
+  wantsPair,
+  type PairHalf,
+} from "./pairRule";
+
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
 }
@@ -216,8 +225,9 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
   // scheduledFor-on-draft rule needs the current status). Team Workspaces
   // (Task 4): any member of the job's workspace may edit it (design §1) — a
   // job in a different workspace 404s here exactly like "doesn't exist".
+  const workspaceId = workspaceContext.workspace.id;
   const existing = await prisma.postJob.findFirst({
-    where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
+    where: { id: postJobId, workspaceId },
     select: {
       status: true,
       // Usage limits: whether a reschedule moves the post to another UTC day.
@@ -230,6 +240,7 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
       perPlatformOverrides: true,
       publishMetadata: true,
       mediaItem: { select: { baseCaption: true, perPlatformOverrides: true } },
+      storyOfPostJobId: true,
     },
   });
 
@@ -268,28 +279,45 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
     );
   }
 
-  // Client review link: the client approved this text at this time. An edit
-  // that changes what will publish withdraws that approval in the same write,
-  // so the page asks again. Compared as the publisher reads it (own caption or
-  // the media item's, overrides narrowed to the targets), so re-saving the same
-  // text and time, as the Queue's edit dialog does, leaves it alone.
-  if (changesWhatClientApproved(existing, data, perPlatformOverrides)) {
-    data.clientApprovedAt = null;
-  }
-
   const memberUnderApproval =
     workspaceContext.workspace.requireApproval && workspaceContext.role === "member";
-  const approvalEffect = editApprovalEffect({
-    requireApproval: workspaceContext.workspace.requireApproval,
-    role: workspaceContext.role,
-    job: existing,
-  });
+  const effectOf = (row: Parameters<typeof editApprovalEffect>[0]["job"]) =>
+    editApprovalEffect({
+      requireApproval: workspaceContext.workspace.requireApproval,
+      role: workspaceContext.role,
+      job: row,
+    });
+  const approvalEffect = effectOf(existing);
 
-  if (approvalEffect === "rehold") {
-    Object.assign(data, holdForApprovalData(new Date()));
-  } else if (approvalEffect === "restamp") {
-    data.submittedForApprovalAt = new Date();
-  }
+  /**
+   * The write for one post: this request's edits, plus what they do to that
+   * post's own approval state and client approval. The same for both halves of
+   * a Feed and Story post (R3-client-journey M1), so the Story's caption, which
+   * is not published, stays equal to the feed post's.
+   */
+  const dataFor = (row: CaptionFacts & Parameters<typeof editApprovalEffect>[0]["job"]) => {
+    const rowData: Prisma.PostJobUpdateManyMutationInput = { ...data };
+    // Client review link: the client approved this text at this time. An edit
+    // that changes what will publish withdraws that approval in the same write,
+    // so the page asks again. Compared as the publisher reads it (own caption or
+    // the media item's, overrides narrowed to the targets), so re-saving the same
+    // text and time, as the Queue's edit dialog does, leaves it alone.
+    if (changesWhatClientApproved(row, data, perPlatformOverrides)) {
+      rowData.clientApprovedAt = null;
+    }
+    const effect = effectOf(row);
+    if (effect === "rehold") {
+      Object.assign(rowData, holdForApprovalData(new Date()));
+    } else if (effect === "restamp") {
+      rowData.submittedForApprovalAt = new Date();
+    }
+    return rowData;
+  };
+
+  const half = await readPairHalf(workspaceId, { id: postJobId, ...existing }, wantsPair(parsedBody));
+  // A new time only fits a half that is scheduled too (a draft has none to move).
+  const blocker = (other: PairHalf) =>
+    data.scheduledFor instanceof Date && other.status !== "scheduled" ? "is a draft" : null;
 
   // Usage limits (2026-11-10): a scheduled post moved to another UTC day counts
   // toward that day. Not itself, and not when the edit re-holds it as a draft.
@@ -300,10 +328,11 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
     (!existing.scheduledFor || utcDayKey(existing.scheduledFor) !== utcDayKey(newScheduledFor))
   ) {
     const refusal = await checkDailyPostLimit({
-      workspaceId: workspaceContext.workspace.id,
+      workspaceId,
       day: newScheduledFor,
       mode: "schedule",
-      excludePostJobId: postJobId,
+      // A Feed and Story card moves both halves: two posts on that day.
+      ...pairLimitArgs(postJobId, half && !blocker(half) ? half : null),
     });
     if (refusal) {
       return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });
@@ -313,23 +342,31 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
   // Atomic write: still mutable at write time (guards the cron-claim race).
   // A member under approval is pinned to the status the effect was decided
   // on, so e.g. a draft an owner just scheduled can't take an unreviewed edit.
-  const { count } = await prisma.postJob.updateMany({
-    where: {
-      id: postJobId,
-      workspaceId: workspaceContext.workspace.id,
-      status: memberUnderApproval
-        ? existing.status
-        : { in: [...MUTABLE_POST_JOB_STATUSES] },
-    },
-    data,
+  const result = await applyToPair({
+    main: { id: postJobId, ...existing },
+    half,
+    write: async (db, row) =>
+      (
+        await db.postJob.updateMany({
+          where: {
+            id: row.id,
+            workspaceId,
+            status: memberUnderApproval ? row.status : { in: [...MUTABLE_POST_JOB_STATUSES] },
+          },
+          data: dataFor(row),
+        })
+      ).count === 1,
+    blocker,
+    wording: { done: "was changed too", verb: "changed" },
   });
 
-  if (count === 0) {
+  if (!result.ok) {
     return NextResponse.json(
       { error: "This post can no longer be edited.", code: "NOT_EDITABLE" },
       { status: 409 },
     );
   }
+  const pairAnswer = result.pair ? { pair: result.pair } : {};
 
   if (approvalEffect === "rehold") {
     // 2026-11-01 audit (M1): the post as it is NOW - this request's edits laid
@@ -337,7 +374,7 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
     // will publish (including ones this very edit just changed or cleared).
     const editedCaption = typeof body.baseCaption === "string" ? body.baseCaption : null;
     await notifyOwnersOfApprovalRequest({
-      workspaceId: workspaceContext.workspace.id,
+      workspaceId,
       workspaceName: workspaceContext.workspace.name,
       submitter: workspaceContext.user,
       caption: editedCaption ?? existing.baseCaption ?? "",
@@ -356,17 +393,21 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
         ),
         storyPlatformsOf(existing.publishMetadata),
       ),
+      // One email for a Feed and Story card whose Story went back for approval too.
+      ...(half && result.pair?.changed && effectOf(half) === "rehold"
+        ? { alsoAsStory: pairStoryPlatforms(existing.publishMetadata, half) }
+        : {}),
     });
   }
 
   if (approvalEffect !== "none") {
     return NextResponse.json(
-      { ok: true, status: "draft", approvalState: "pending" },
+      { ok: true, status: "draft", approvalState: "pending", ...pairAnswer },
       { status: 200 },
     );
   }
 
-  return NextResponse.json({ ok: true }, { status: 200 });
+  return NextResponse.json({ ok: true, ...pairAnswer }, { status: 200 });
 }
 
 /**
@@ -378,8 +419,11 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
  * ownership scoped. A `scheduled` job must be cancelled first (so it can't race
  * the cron mid-claim); running/terminal jobs are history and 409. Atomic
  * conditional delete on the deletable status set.
+ *
+ * R3-client-journey M1: the optional body `{ includePair: true }` (a Feed and
+ * Story card) deletes the other half too, in one transaction (pairRule.ts).
  */
-export async function DELETE(_request: NextRequest, context: PostJobRouteContext) {
+export async function DELETE(request: NextRequest, context: PostJobRouteContext) {
   const workspaceContext = await getWorkspaceContext();
 
   if (!workspaceContext) {
@@ -390,27 +434,42 @@ export async function DELETE(_request: NextRequest, context: PostJobRouteContext
   if (limited) return limited;
 
   const { postJobId } = await Promise.resolve(context.params);
+  const workspaceId = workspaceContext.workspace.id;
 
   // V1 fix round 1: the post's video cover, read first so its file can be
   // queued for deletion once the post is gone.
   const coverRow = await prisma.postJob.findFirst({
-    where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
-    select: { coverImageUrl: true },
+    where: { id: postJobId, workspaceId },
+    select: { coverImageUrl: true, storyOfPostJobId: true },
   });
+
+  const half = coverRow
+    ? await readPairHalf(
+        workspaceId,
+        { id: postJobId, storyOfPostJobId: coverRow.storyOfPostJobId ?? null },
+        wantsPair(await readJsonObject(request)),
+      )
+    : null;
 
   // Team Workspaces (Task 4): any member of the job's workspace, not just its
   // creator (design §1).
-  const { count } = await prisma.postJob.deleteMany({
-    where: {
-      id: postJobId,
-      workspaceId: workspaceContext.workspace.id,
-      status: { in: [...DELETABLE_POST_JOB_STATUSES] },
-    },
+  const result = await applyToPair({
+    main: { id: postJobId },
+    half,
+    write: async (db, row) =>
+      (
+        await db.postJob.deleteMany({
+          where: { id: row.id, workspaceId, status: { in: [...DELETABLE_POST_JOB_STATUSES] } },
+        })
+      ).count === 1,
+    // A scheduled half must be cancelled first, like this post.
+    blocker: (other) => (other.status === "scheduled" ? "is scheduled" : null),
+    wording: { done: "was deleted too", verb: "deleted" },
   });
 
-  if (count === 0) {
+  if (!result.ok) {
     const existing = await prisma.postJob.findFirst({
-      where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
+      where: { id: postJobId, workspaceId },
       select: { id: true },
     });
     if (!existing) {
@@ -427,13 +486,15 @@ export async function DELETE(_request: NextRequest, context: PostJobRouteContext
 
   // Queued, not deleted here: the hourly drain deletes the file, so a storage
   // hiccup never fails the delete. A series' other posts keep a shared cover.
-  if (coverRow?.coverImageUrl) {
+  const covers = [coverRow?.coverImageUrl, result.pair?.changed ? half?.coverImageUrl : null];
+  for (const cover of covers) {
+    if (!cover) continue;
     try {
-      await queueCoverBlobIfUnused(coverRow.coverImageUrl);
+      await queueCoverBlobIfUnused(cover);
     } catch {
       // It never throws; this keeps the delete's answer safe if that changes.
     }
   }
 
-  return NextResponse.json({ ok: true }, { status: 200 });
+  return NextResponse.json({ ok: true, ...(result.pair ? { pair: result.pair } : {}) }, { status: 200 });
 }

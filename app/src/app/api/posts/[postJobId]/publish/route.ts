@@ -12,20 +12,25 @@ import {
   submissionScheduledFor,
 } from "@/lib/approval";
 import { readJsonObject } from "@/lib/http";
-import { inngest } from "@/lib/inngest";
-import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
-import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
-import {
-  buildPublishEvent,
-  prepareDeferredPostJobDispatch,
-  resolvePlatformCaptions,
-} from "@/server/jobs/posting";
+import { DISPATCH_FAILURE } from "@/server/jobs/failPendingResults";
+import { resolvePlatformCaptions } from "@/server/jobs/posting";
 import { isPostMediaComplete } from "@/server/jobs/postMedia";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
 import { storyPlatformsOf, withStoryCaptions } from "@/lib/storyPlacement";
 import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 import { MUTABLE_POST_JOB_STATUSES, validateScheduledFor } from "@/lib/scheduling";
+
+import {
+  applyToPair,
+  dispatchNow,
+  notSentNote,
+  pairLimitArgs,
+  pairStoryPlatforms,
+  readPairHalf,
+  wantsPair,
+  type PairHalf,
+} from "../pairRule";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -71,6 +76,12 @@ interface PublishBody {
  * post our side could not send (the reconciler gave up on it), which Retry
  * cannot reach. Activity's Send again button calls this route for it. A member
  * under approval may send one only if an owner approved it.
+ *
+ * R3-client-journey M1: with `includePair: true` (a Feed and Story card) every
+ * path takes the other half too, with the same checks, in one transaction
+ * (pairRule.ts): Publish now claims both and sends both events, Submit holds
+ * both and the owners' one email says the post also goes out as a Story, and
+ * scheduling a draft schedules both at the same time.
  */
 export async function POST(request: NextRequest, context: PostJobRouteContext) {
   const workspaceContext = await getWorkspaceContext();
@@ -107,14 +118,16 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
 
   // A body is optional (publish-now sends none): an empty, invalid or
   // non-object one (null / array / primitive) is treated as "no body".
-  const body = ((await readJsonObject(request)) ?? {}) as PublishBody;
+  const parsedBody = await readJsonObject(request);
+  const body = (parsedBody ?? {}) as PublishBody;
 
   const wantsSchedule = body.scheduledFor != null;
 
   // Ownership + current status in one read; 404 if not in the caller's
   // workspace. Team Workspaces (Task 4): any member may publish (design §1).
+  const workspaceId = workspaceContext.workspace.id;
   const job = await prisma.postJob.findFirst({
-    where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
+    where: { id: postJobId, workspaceId },
     select: {
       status: true,
       scheduledFor: true,
@@ -136,6 +149,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         orderBy: { position: "asc" },
         select: { position: true, mediaItem: { select: { id: true, deletedAt: true } } },
       },
+      // R3-client-journey M1: where a Feed and Story card finds its other half.
+      storyOfPostJobId: true,
     },
   });
 
@@ -143,11 +158,13 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const approvalAction = publishApprovalAction({
-    requireApproval: workspaceContext.workspace.requireApproval,
-    role: workspaceContext.role,
-    job,
-  });
+  const approvalActionOf = (row: Parameters<typeof publishApprovalAction>[0]["job"]) =>
+    publishApprovalAction({
+      requireApproval: workspaceContext.workspace.requireApproval,
+      role: workspaceContext.role,
+      job: row,
+    });
+  const approvalAction = approvalActionOf(job);
 
   if (approvalAction === "awaiting_approval") {
     return NextResponse.json(
@@ -166,6 +183,22 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     );
   }
 
+  // R3-client-journey M1: a Feed and Story card asks for both halves. The other
+  // half takes the same path as this post only when the same approval rule
+  // gives it the same answer; otherwise it is left alone and the answer says why.
+  const half = await readPairHalf(
+    workspaceId,
+    { id: postJobId, storyOfPostJobId: job.storyOfPostJobId ?? null },
+    wantsPair(parsedBody),
+  );
+  const main = { ...job, id: postJobId };
+  const approvalBlocker = (other: PairHalf): string | null => {
+    const action = approvalActionOf(other);
+    if (action === approvalAction) return null;
+    if (action === "awaiting_approval" || action === "approve_instead") return "is already waiting for approval";
+    return action === "submit" ? "is not approved yet" : "is already approved";
+  };
+
   // Submit for approval instead of publishing/scheduling. Needs no connection
   // yet: nothing goes out until an owner approves, and the approval route
   // re-checks it.
@@ -179,22 +212,27 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       requested = validation.date;
     }
 
+    // One time for the post; a pair's Story keeps the same one.
     const scheduledFor = submissionScheduledFor(job, requested);
 
     // One conditional write pinned to the version just read (status AND
     // updatedAt): a cron claim, a concurrent submit or an edit in between
     // makes this a no-op instead of a double submission.
-    const { count } = await prisma.postJob.updateMany({
-      where: {
-        id: postJobId,
-        workspaceId: workspaceContext.workspace.id,
-        status: job.status,
-        updatedAt: job.updatedAt,
-      },
-      data: { ...holdForApprovalData(new Date()), scheduledFor },
+    const result = await applyToPair({
+      main,
+      half,
+      write: async (db, row) =>
+        (
+          await db.postJob.updateMany({
+            where: { id: row.id, workspaceId, status: row.status, updatedAt: row.updatedAt },
+            data: { ...holdForApprovalData(new Date()), scheduledFor },
+          })
+        ).count === 1,
+      blocker: approvalBlocker,
+      wording: { done: "was sent for approval too", verb: "sent for approval" },
     });
 
-    if (count === 0) {
+    if (!result.ok) {
       return NextResponse.json(
         { error: "This post changed in the meantime. Refresh and try again.", code: "NOT_PUBLISHABLE" },
         { status: 409 },
@@ -202,7 +240,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     }
 
     await notifyOwnersOfApprovalRequest({
-      workspaceId: workspaceContext.workspace.id,
+      workspaceId,
       workspaceName: workspaceContext.workspace.name,
       submitter: workspaceContext.user,
       caption: job.baseCaption ?? "",
@@ -211,6 +249,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         resolvePlatformCaptions(job, job.mediaItem),
         storyPlatformsOf(job.publishMetadata),
       ),
+      // One email for the pair: it says the post also goes out as a Story.
+      ...(half && result.pair?.changed ? { alsoAsStory: pairStoryPlatforms(job.publishMetadata, half) } : {}),
     });
 
     return NextResponse.json(
@@ -219,15 +259,11 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         status: "draft",
         approvalState: "pending",
         scheduledFor: scheduledFor ? scheduledFor.toISOString() : null,
+        ...(result.pair ? { pair: result.pair } : {}),
       },
       { status: 202 },
     );
   }
-
-  // A post still pending approval that is allowed through here (approval was
-  // turned off since it was submitted) stops being "awaiting approval" in the
-  // same write as its claim (ruling R10); {} for everything else.
-  const releaseHold = releaseApprovalHoldData(job);
 
   // Path 1 — schedule a draft for later (a scheduled job reschedules via PATCH).
   if (wantsSchedule) {
@@ -243,12 +279,15 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
     }
 
+    const blocker = (other: PairHalf) =>
+      other.status !== "draft" ? "is already scheduled" : approvalBlocker(other);
+
     // Usage limits (2026-11-10): the draft is committed to this UTC day.
     const refusal = await checkDailyPostLimit({
-      workspaceId: workspaceContext.workspace.id,
+      workspaceId,
       day: validation.date,
       mode: "schedule",
-      excludePostJobId: postJobId,
+      ...pairLimitArgs(postJobId, half && !blocker(half) ? half : null),
     });
     if (refusal) {
       return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });
@@ -258,26 +297,33 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     // depends on that version's approval columns, so a member submitting the
     // draft in between must make it miss (409) — not leave it scheduled
     // + submitted + unapproved, which the cron never claims.
-    const { count } = await prisma.postJob.updateMany({
-      where: {
-        id: postJobId,
-        workspaceId: workspaceContext.workspace.id,
-        status: "draft",
-        updatedAt: job.updatedAt,
-      },
-      // Client review link: every write that schedules a post clears the
-      // client's marks, so the client looks it over as a new post.
-      data: {
-        status: "scheduled",
-        scheduledFor: validation.date,
-        clientApprovedAt: null,
-        clientChangeRequestedAt: null,
-        clientNote: null,
-        ...releaseHold,
-      },
+    const result = await applyToPair({
+      main,
+      half,
+      write: async (db, row) =>
+        (
+          await db.postJob.updateMany({
+            where: { id: row.id, workspaceId, status: "draft", updatedAt: row.updatedAt },
+            // Client review link: every write that schedules a post clears the
+            // client's marks, so the client looks it over as a new post. A post
+            // still pending approval that is allowed through here (approval was
+            // turned off since it was submitted) stops being "awaiting approval"
+            // in the same write (ruling R10).
+            data: {
+              status: "scheduled",
+              scheduledFor: validation.date,
+              clientApprovedAt: null,
+              clientChangeRequestedAt: null,
+              clientNote: null,
+              ...releaseApprovalHoldData(row),
+            },
+          })
+        ).count === 1,
+      blocker,
+      wording: { done: "was scheduled too", verb: "scheduled" },
     });
 
-    if (count === 0) {
+    if (!result.ok) {
       return NextResponse.json(
         { error: "This draft is no longer available to schedule.", code: "NOT_A_DRAFT" },
         { status: 409 },
@@ -285,7 +331,12 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     }
 
     return NextResponse.json(
-      { ok: true, status: "scheduled", scheduledFor: validation.date.toISOString() },
+      {
+        ok: true,
+        status: "scheduled",
+        scheduledFor: validation.date.toISOString(),
+        ...(result.pair ? { pair: result.pair } : {}),
+      },
       { status: 200 },
     );
   }
@@ -333,6 +384,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       { status: 409 },
     );
   }
+  const blocker = (other: PairHalf) =>
+    other.mediaItem?.deletedAt != null ? "has lost its media" : approvalBlocker(other);
 
   // Require ≥1 connection up front and leave the job intact if there are none
   // (don't consume it on a fixable error). Team Workspaces (Task 4): scoped
@@ -340,7 +393,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // `SocialConnection.workspaceId`, unique per `[workspaceId, platform]`), so
   // a member who didn't personally connect anything must still see them.
   const connectionCount = await prisma.socialConnection.count({
-    where: { workspaceId: workspaceContext.workspace.id },
+    where: { workspaceId },
   });
   if (connectionCount === 0) {
     return NextResponse.json(
@@ -359,10 +412,10 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // scheduled for later toward that later day), like a post the scanner found due.
   const publishedAt = new Date();
   const refusal = await checkDailyPostLimit({
-    workspaceId: workspaceContext.workspace.id,
+    workspaceId,
     day: publishedAt,
     mode: "now",
-    excludePostJobId: postJobId,
+    ...pairLimitArgs(postJobId, half && !blocker(half) ? half : null),
   });
   if (refusal) {
     return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });
@@ -376,66 +429,74 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // in the meantime makes the claim match nothing (409 below) instead of
   // publishing unreviewed content; likewise a submission landing in between
   // can't be published past, or left set on a released hold (ruling R10).
-  // An unsent failed post is claimed only while it still has no results.
-  const { count } = await prisma.postJob.updateMany({
-    where: unsent
-      ? {
-          id: postJobId,
-          workspaceId: workspaceContext.workspace.id,
-          status: "failed",
-          results: { none: {} },
-          updatedAt: job.updatedAt,
-        }
-      : {
-          id: postJobId,
-          workspaceId: workspaceContext.workspace.id,
-          status: { in: [...MUTABLE_POST_JOB_STATUSES] },
-          updatedAt: job.updatedAt,
+  // An unsent failed post is claimed only while it still has no results (the
+  // other half of a pair is never a failed one: that one is left alone).
+  const result = await applyToPair({
+    main,
+    half,
+    write: async (db, row) => {
+      const rowUnsent = row.status === "failed";
+      const { count } = await db.postJob.updateMany({
+        where: rowUnsent
+          ? { id: row.id, workspaceId, status: "failed", results: { none: {} }, updatedAt: row.updatedAt }
+          : { id: row.id, workspaceId, status: { in: [...MUTABLE_POST_JOB_STATUSES] }, updatedAt: row.updatedAt },
+        // A post still pending approval that is allowed through here (approval
+        // was turned off since it was submitted) stops being "awaiting approval"
+        // in the same write as its claim (ruling R10). Send again sets
+        // retriedAt like Retry, so Activity keeps the post on "Had a problem"
+        // (review round 2, item 5).
+        data: {
+          status: "in_progress",
+          scheduledFor: publishedAt,
+          ...releaseApprovalHoldData(row),
+          ...(rowUnsent ? { retriedAt: publishedAt } : {}),
         },
-    // Send again sets retriedAt like Retry, so Activity keeps the post on "Had a
-    // problem" (review round 2, item 5).
-    data: { status: "in_progress", scheduledFor: publishedAt, ...releaseHold, ...(unsent ? { retriedAt: publishedAt } : {}) },
+      });
+      return count === 1;
+    },
+    blocker,
+    wording: { done: "is publishing too", verb: "published" },
   });
 
-  if (count === 0) {
+  if (!result.ok) {
     return NextResponse.json(
       { error: "This post is no longer available to publish.", code: "NOT_PUBLISHABLE" },
       { status: 409 },
     );
   }
 
-  // Materialize results from current connections + build the publish payload.
-  const prep = await prepareDeferredPostJobDispatch(postJobId);
-  if (!prep.ok) {
+  // Materialize results from current connections + hand the publish events
+  // (one per claimed half) to Inngest in one send.
+  let pair = result.pair;
+  const dispatch = await dispatchNow([postJobId, ...(half && pair?.changed ? [half.id] : [])], {
+    route: "POST /api/posts/[postJobId]/publish",
+  });
+  if (pair && dispatch.notSent.has(pair.id)) pair = { ...pair, note: notSentNote(pair.kind) };
+  const pairAnswer = pair ? { pair } : {};
+
+  if (dispatch.notSent.has(postJobId)) {
     // No chosen platform is connected (F1 H1): prepare gave each one a failed
     // result with its own sentence and marked the job `failed`, so it never
     // hangs in_progress and Activity shows what to reconnect.
     return NextResponse.json(
       {
         error: "Nothing was posted: none of this post's platforms is connected. Activity shows what to reconnect.",
-        code: prep.reason,
+        code: dispatch.reasons.get(postJobId),
+        ...pairAnswer,
       },
       { status: 409 },
     );
   }
 
   // The job is already committed `in_progress` with pending results: if the
-  // event can't be handed to Inngest, fail those results now (job → failed)
-  // so it can't hang "publishing", and tell the caller to try again.
-  try {
-    // Stable event id + "Post now" priority (2026-11-01 scale audit, jobs H6 + H1).
-    await inngest.send(buildPublishEvent(prep.event, { immediate: true }));
-  } catch (error) {
-    logger.error("[POST /api/posts/[postJobId]/publish] Couldn't dispatch the publish event", {
-      error,
-      postJobId,
-    });
-    await failPendingPostJobResults(postJobId, DISPATCH_FAILURE);
+  // event can't be handed to Inngest, those results were failed (job → failed)
+  // so it can't hang "publishing"; tell the caller to try again.
+  if (dispatch.sendFailed) {
     return NextResponse.json(
       { code: DISPATCH_FAILURE.errorCode, error: DISPATCH_FAILURE.errorMessage },
       { status: 503 },
     );
   }
 
-  return NextResponse.json({ ok: true, status: "in_progress" }, { status: 202 });
+  return NextResponse.json({ ok: true, status: "in_progress", ...pairAnswer }, { status: 202 });
 }

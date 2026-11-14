@@ -1,3 +1,5 @@
+import type { Prisma } from "@prisma/client";
+
 import { planSectionActions } from "@/components/planSectionView";
 import { BILLING_FIELDS_SELECT, billingEnabled, billingFieldsSelect } from "@/lib/billing";
 import { prisma } from "@/lib/db";
@@ -80,14 +82,31 @@ export async function getWorkspaceLimits(workspaceId: string): Promise<Workspace
   return (await loadWorkspace(workspaceId)).limits;
 }
 
+/**
+ * R3-publishing L3: a post that failed before anything was sent (a Post now
+ * with nothing it could send: every platform needed reconnecting or was gone,
+ * or none could take it) used no slot. Every result of such a post carries one
+ * of these codes, and one with no results at all was never tried.
+ */
+const FAILED_UNSENT: Prisma.PostJobWhereInput = {
+  status: "failed",
+  results: { every: { errorCode: { in: ["RECONNECT_REQUIRED", "CONNECTION_GONE"] } } },
+};
+
 /** Posts counting toward the UTC day of `day`: by scheduledFor, else by createdAt. */
-function countPostsOnUtcDay(workspaceId: string, day: Date, excludePostJobId?: string): Promise<number> {
+function countPostsOnUtcDay(
+  workspaceId: string,
+  day: Date,
+  excludePostJobId?: string | readonly string[],
+): Promise<number> {
   const { start, end } = utcDayRange(day);
   return prisma.postJob.count({
     where: {
       workspaceId,
       status: { notIn: ["draft", "cancelled"] },
-      ...(excludePostJobId ? { id: { not: excludePostJobId } } : {}),
+      NOT: FAILED_UNSENT,
+      ...(typeof excludePostJobId === "string" ? { id: { not: excludePostJobId } } : {}),
+      ...(Array.isArray(excludePostJobId) ? { id: { notIn: [...excludePostJobId] } } : {}),
       OR: [
         { scheduledFor: { gte: start, lt: end } },
         { scheduledFor: null, createdAt: { gte: start, lt: end } },
@@ -246,7 +265,8 @@ export async function checkDailyPostLimit(args: {
   workspaceId: string;
   day: Date;
   mode: DailyPostLimitMode;
-  excludePostJobId?: string;
+  /** The post being moved, or both halves of a Feed and Story post: neither counts against itself. */
+  excludePostJobId?: string | readonly string[];
   /**
    * Posts of the same request already counted for this UTC day but not stored
    * yet: the earlier posts of a repeating post that fall on the same day.

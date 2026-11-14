@@ -18,25 +18,27 @@ const CLIENT_CHANGE_REQUESTED: Prisma.PostJobWhereInput = {
 };
 
 /**
- * R2-client-journey L1: posts a client asked to change, a Feed and Story pair
- * counted once. The review link marks both halves of a pair, so every marked
- * Story job whose feed job is also marked (and live, in this workspace) is
- * taken off the count. Only marked Story jobs are read, a handful at most.
+ * Posts matching `where`, a Feed and Story pair counted once: it is one post to
+ * the owner, as the Queue's one card shows it. Every matching Story job whose
+ * feed job matches too (in this workspace) is taken off the count. Only the
+ * matching Story jobs are read, a handful at most. R2-client-journey L1 (client
+ * changes), R3-client-journey L1 (posts that did not fully go out) and M1 (held
+ * posts) all count this way.
  */
-async function countClientChangesRequested(workspaceId: string): Promise<number> {
-  const [marked, stories] = await Promise.all([
-    prisma.postJob.count({ where: { workspaceId, ...CLIENT_CHANGE_REQUESTED } }),
+async function countPostsOnce(workspaceId: string, where: Prisma.PostJobWhereInput): Promise<number> {
+  const [matching, stories] = await Promise.all([
+    prisma.postJob.count({ where: { workspaceId, ...where } }),
     prisma.postJob.findMany({
-      where: { workspaceId, ...CLIENT_CHANGE_REQUESTED, storyOfPostJobId: { not: null } },
+      where: { workspaceId, ...where, storyOfPostJobId: { not: null } },
       select: { storyOfPostJobId: true },
     }),
   ]);
   const feedIds = [...new Set(stories.map((story) => story.storyOfPostJobId).filter((id): id is string => id !== null))];
-  if (feedIds.length === 0) return marked;
-  const markedFeeds = await prisma.postJob.count({
-    where: { workspaceId, ...CLIENT_CHANGE_REQUESTED, id: { in: feedIds } },
+  if (feedIds.length === 0) return matching;
+  const matchingFeeds = await prisma.postJob.count({
+    where: { workspaceId, ...where, id: { in: feedIds } },
   });
-  return marked - markedFeeds;
+  return matching - matchingFeeds;
 }
 
 /**
@@ -80,18 +82,15 @@ export async function GET() {
   const isOwner = context.role === "owner";
 
   const [problemsLast7Days, awaitingYourApproval, clientChangesRequested, next, google] = await Promise.all([
-    prisma.postJob.count({
-      where: {
-        workspaceId,
-        // updatedAt, not createdAt: a post scheduled weeks ago that failed this
-        // week is a problem of this week.
-        updatedAt: { gte: new Date(now.getTime() - WEEK_MS) },
-        status: { not: "cancelled" },
-        OR: [{ status: "failed" }, { results: { some: { status: "failed" } } }],
-      },
+    countPostsOnce(workspaceId, {
+      // updatedAt, not createdAt: a post scheduled weeks ago that failed this
+      // week is a problem of this week.
+      updatedAt: { gte: new Date(now.getTime() - WEEK_MS) },
+      status: { not: "cancelled" },
+      OR: [{ status: "failed" }, { results: { some: { status: "failed" } } }],
     }),
-    isOwner ? prisma.postJob.count({ where: { workspaceId, ...AWAITING_APPROVAL } }) : Promise.resolve(null),
-    countClientChangesRequested(workspaceId),
+    isOwner ? countPostsOnce(workspaceId, AWAITING_APPROVAL) : Promise.resolve(null),
+    countPostsOnce(workspaceId, CLIENT_CHANGE_REQUESTED),
     prisma.postJob.findFirst({
       where: {
         workspaceId,

@@ -5,8 +5,9 @@ import { makeWorkspaceContext } from "../../../__test-helpers__/workspaceContext
 
 // vitest hoists vi.mock above imports. route.ts imports `@/lib/workspace` and
 // `@/lib/db` at module scope, so both are mocked before the import below.
-const { getWorkspaceContextMock, updateManyMock, findFirstMock, findUniqueMock, mediaUpdateManyMock, checkRateLimitMock } = vi.hoisted(
+const { getWorkspaceContextMock, updateManyMock, findFirstMock, findUniqueMock, mediaUpdateManyMock, checkRateLimitMock, transactionMock } = vi.hoisted(
   () => ({
+    transactionMock: vi.fn(),
     checkRateLimitMock: vi.fn(),
     getWorkspaceContextMock: vi.fn(),
     updateManyMock: vi.fn(),
@@ -25,10 +26,13 @@ vi.mock("@/lib/db", () => ({
     // Review round 2, item 6: the cancel ends the post through finishPostJob,
     // which stamps the media's last use (read the post's media, then write).
     mediaItem: { updateMany: mediaUpdateManyMock },
+    $transaction: transactionMock,
   },
 }));
 
-import { GET, POST } from "./route";
+import { prisma } from "@/lib/db";
+
+import { POST } from "./route";
 
 function ctx(postJobId: string) {
   return { params: Promise.resolve({ postJobId }) };
@@ -182,7 +186,8 @@ describe("POST /api/posts/[postJobId]/cancel", () => {
   });
 });
 
-// R2-client-journey M1: a Feed and Story post is two jobs; the dialog can cancel both in one request.
+/// R3-client-journey M1: a Feed and Story post is one Queue card; with includePair
+// the cancel takes both halves in one transaction (pairRule.ts).
 const LATER = new Date("2026-11-20T15:00:00Z");
 
 function pairRow(overrides: Record<string, unknown> = {}) {
@@ -201,12 +206,14 @@ function bodyReq(body: unknown): NextRequest {
   return { json: async () => body } as unknown as NextRequest;
 }
 
-describe("POST /api/posts/[postJobId]/cancel - with the other half of a Feed and Story post", () => {
+describe("POST /api/posts/[postJobId]/cancel - a Feed and Story card", () => {
   beforeEach(() => {
     updateManyMock.mockResolvedValue({ count: 1 });
+    transactionMock.mockReset();
+    transactionMock.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prisma));
   });
 
-  it("cancels both halves when includePair is sent, each scoped and pinned like the single cancel", async () => {
+  it("cancels both halves once each, in one transaction, each scoped and pinned like the single cancel", async () => {
     findFirstMock
       .mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow() })
       .mockResolvedValueOnce(pairRow({ status: "draft", submittedForApprovalAt: SUBMITTED }));
@@ -214,7 +221,12 @@ describe("POST /api/posts/[postJobId]/cancel - with the other half of a Feed and
     const res = await POST(bodyReq({ includePair: true }), ctx("job-1"));
 
     expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({ ok: true, status: "cancelled", pair: "cancelled" });
+    await expect(res.json()).resolves.toEqual({
+      ok: true,
+      status: "cancelled",
+      pair: { id: "story-1", kind: "story", changed: true, note: "Its Story was cancelled too." },
+    });
+    expect(transactionMock).toHaveBeenCalledTimes(1);
     expect(findFirstMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ where: { storyOfPostJobId: "job-1", workspaceId: "ws-1" } }),
     );
@@ -238,14 +250,19 @@ describe("POST /api/posts/[postJobId]/cancel - with the other half of a Feed and
 
     const res = await POST(bodyReq({ includePair: true }), ctx("job-1"));
 
-    await expect(res.json()).resolves.toEqual({ ok: true, status: "cancelled", pair: "cancelled" });
+    expect((await res.json()).pair).toEqual({
+      id: "feed-1",
+      kind: "feed",
+      changed: true,
+      note: "Its feed post was cancelled too.",
+    });
     expect(findFirstMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ where: { id: "feed-1", workspaceId: "ws-1" } }),
     );
     expect(updateManyMock).toHaveBeenLastCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: "feed-1" }) }));
   });
 
-  it("without includePair only this post is cancelled and the pair is not read", async () => {
+  it("without includePair only this post is cancelled, the pair is not read and the answer is as before", async () => {
     findFirstMock.mockResolvedValue({ id: "job-1", storyOfPostJobId: null, ...jobRow() });
 
     const res = await POST(bodyReq({}), ctx("job-1"));
@@ -253,39 +270,54 @@ describe("POST /api/posts/[postJobId]/cancel - with the other half of a Feed and
     await expect(res.json()).resolves.toEqual({ ok: true, status: "cancelled" });
     expect(findFirstMock).toHaveBeenCalledTimes(1);
     expect(updateManyMock).toHaveBeenCalledTimes(1);
+    expect(transactionMock).not.toHaveBeenCalled();
   });
 
-  it("the other half already cancelled: this post is cancelled and the answer says there was none", async () => {
+  it.each([
+    ["cancelled", "Its Story was already cancelled, so it was not cancelled."],
+    ["in_progress", "Its Story has already started publishing, so it was not cancelled."],
+    ["completed", "Its Story was already published, so it was not cancelled."],
+  ])("the other half %s: this post is cancelled and the answer names the half left alone", async (status, note) => {
     findFirstMock
       .mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow() })
-      .mockResolvedValueOnce(pairRow({ status: "cancelled" }));
+      .mockResolvedValueOnce(pairRow({ status }));
 
     const res = await POST(bodyReq({ includePair: true }), ctx("job-1"));
 
-    await expect(res.json()).resolves.toEqual({ ok: true, status: "cancelled", pair: "none" });
+    await expect(res.json()).resolves.toEqual({
+      ok: true,
+      status: "cancelled",
+      pair: { id: "story-1", kind: "story", changed: false, note },
+    });
     expect(updateManyMock).toHaveBeenCalledTimes(1);
   });
 
-  it("the other half already publishing: this post is cancelled and the answer says the other was not", async () => {
+  it("the other half changed in the meantime (its pinned write misses): this post is cancelled, the answer says so", async () => {
     findFirstMock
       .mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow() })
-      .mockResolvedValueOnce(pairRow({ status: "in_progress" }));
+      .mockResolvedValueOnce(pairRow());
+    updateManyMock.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
 
     const res = await POST(bodyReq({ includePair: true }), ctx("job-1"));
 
-    await expect(res.json()).resolves.toEqual({ ok: true, status: "cancelled", pair: "not_cancelable" });
-    expect(updateManyMock).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+    expect((await res.json()).pair).toEqual({
+      id: "story-1",
+      kind: "story",
+      changed: false,
+      note: "Its Story changed in the meantime, so it was not cancelled.",
+    });
   });
 
-  it("a post with no other half: the answer says none", async () => {
+  it("a post with no other half: no pair in the answer", async () => {
     findFirstMock.mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow() }).mockResolvedValueOnce(null);
 
     const res = await POST(bodyReq({ includePair: true }), ctx("job-1"));
 
-    await expect(res.json()).resolves.toEqual({ ok: true, status: "cancelled", pair: "none" });
+    await expect(res.json()).resolves.toEqual({ ok: true, status: "cancelled" });
   });
 
-  it("when this post cannot be cancelled, the other half is left alone", async () => {
+  it("when this post cannot be cancelled, the other half is neither read nor written", async () => {
     findFirstMock.mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow({ status: "in_progress" }) });
 
     const res = await POST(bodyReq({ includePair: true }), ctx("job-1"));
@@ -294,71 +326,33 @@ describe("POST /api/posts/[postJobId]/cancel - with the other half of a Feed and
     expect(updateManyMock).not.toHaveBeenCalled();
     expect(findFirstMock).toHaveBeenCalledTimes(1);
   });
-});
 
-describe("GET /api/posts/[postJobId]/cancel - the other half, for the dialog", () => {
-  it("names the other half's kind, state and time", async () => {
+  it("when this post's cancel loses its race, the other half is not written either", async () => {
     findFirstMock
       .mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow() })
       .mockResolvedValueOnce(pairRow());
+    updateManyMock.mockResolvedValue({ count: 0 });
 
-    const res = await GET(req, ctx("job-1"));
+    const res = await POST(bodyReq({ includePair: true }), ctx("job-1"));
 
-    expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({
-      pair: { id: "story-1", kind: "story", status: "scheduled", scheduledFor: LATER.toISOString() },
-    });
-    expect(findFirstMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ where: { id: "job-1", workspaceId: "ws-1" } }));
+    expect(res.status).toBe(409);
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
   });
 
-  // Coordinator review point 2: the lookup only reads, so it has its own, looser
-  // bucket and never spends the cancel / edit / delete allowance.
-  it("uses its own read bucket, not the mutate one", async () => {
-    findFirstMock.mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow() }).mockResolvedValueOnce(null);
-
-    await GET(req, ctx("job-1"));
-
-    expect(checkRateLimitMock).toHaveBeenCalledTimes(1);
-    expect(checkRateLimitMock).toHaveBeenCalledWith({
-      userId: "user-1",
-      route: "posts/pair-lookup",
-      limit: 300,
-      windowMs: 5 * 60 * 1000,
-    });
-  });
-
-  it("the cancel itself still uses the mutate bucket", async () => {
+  it("the cancel uses the mutate bucket", async () => {
     findFirstMock.mockResolvedValue(jobRow());
-    updateManyMock.mockResolvedValue({ count: 1 });
 
     await POST(req, ctx("job-1"));
 
     expect(checkRateLimitMock).toHaveBeenCalledWith(expect.objectContaining({ route: "posts/mutate", limit: 60 }));
   });
+});
 
-  it("429 with Retry-After when the read bucket is spent", async () => {
-    checkRateLimitMock.mockResolvedValueOnce({ allowed: false, retryAfterSeconds: 9 });
-
-    const res = await GET(req, ctx("job-1"));
-
-    expect(res.status).toBe(429);
-    expect(res.headers.get("Retry-After")).toBe("9");
-    expect(findFirstMock).not.toHaveBeenCalled();
-  });
-
-  it("null when there is no live other half", async () => {
-    findFirstMock.mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow() }).mockResolvedValueOnce(null);
-
-    const res = await GET(req, ctx("job-1"));
-
-    await expect(res.json()).resolves.toEqual({ pair: null });
-  });
-
-  it("401 signed out, 404 for a post in another workspace", async () => {
-    getWorkspaceContextMock.mockResolvedValueOnce(null);
-    expect((await GET(req, ctx("job-1"))).status).toBe(401);
-
-    findFirstMock.mockResolvedValueOnce(null);
-    expect((await GET(req, ctx("foreign"))).status).toBe(404);
+// The Queue no longer looks the other half up before a cancel or delete: the
+// card is the pair, so there is nothing to ask.
+describe("GET /api/posts/[postJobId]/cancel", () => {
+  it("is gone with the per-half dialogs", async () => {
+    const route: Record<string, unknown> = await import("./route");
+    expect(route.GET).toBeUndefined();
   });
 });

@@ -17,7 +17,9 @@ const {
   notifyOwnersMock,
   checkDailyPostLimitMock,
   queueCoverMock,
+  transactionMock,
 } = vi.hoisted(() => ({
+  transactionMock: vi.fn(),
   queueCoverMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
   findFirstMock: vi.fn(),
@@ -38,6 +40,7 @@ vi.mock("@/lib/db", () => ({
       deleteMany: deleteManyMock,
     },
     postJobResult: { findMany: postJobResultFindManyMock },
+    $transaction: transactionMock,
   },
 }));
 vi.mock("@/server/notifications/approvalRequested", () => ({
@@ -50,6 +53,8 @@ vi.mock("@/server/usage/workspaceUsage", () => ({
 
 // V1 fix round 1: the cover file queue has its own suite (coverBlobs.test.ts).
 vi.mock("@/server/jobs/coverBlobs", () => ({ queueCoverBlobIfUnused: queueCoverMock }));
+
+import { prisma } from "@/lib/db";
 
 import { PATCH, DELETE, GET } from "./route";
 
@@ -323,6 +328,8 @@ describe("PATCH /api/posts/[postJobId]", () => {
         perPlatformOverrides: true,
         publishMetadata: true,
         mediaItem: { select: { baseCaption: true, perPlatformOverrides: true } },
+        // R3-client-journey M1: where a Feed and Story card finds its other half.
+        storyOfPostJobId: true,
       },
     });
   });
@@ -582,7 +589,7 @@ describe("DELETE /api/posts/[postJobId]", () => {
     expect((await DELETE(req(null), ctx("job-1"))).status).toBe(200);
     expect(findFirstMock).toHaveBeenCalledWith({
       where: { id: "job-1", workspaceId: "ws-1" },
-      select: { coverImageUrl: true },
+      select: { coverImageUrl: true, storyOfPostJobId: true },
     });
     expect(queueCoverMock).toHaveBeenCalledWith(COVER);
 
@@ -840,5 +847,193 @@ describe("PATCH /api/posts/[postJobId] — the client's approval (client review 
     findFirstMock.mockResolvedValue(approvedScheduled({ baseCaption: null, perPlatformOverrides: null }));
     await PATCH(req({ baseCaption: "typed for this post" }), ctx("job-1"));
     expect(written().clientApprovedAt).toBeNull();
+  });
+});
+
+// R3-client-journey M1: a Feed and Story post is one Queue card. With
+// includePair the edit and the delete reach both halves in one transaction.
+describe("PATCH and DELETE /api/posts/[postJobId] - a Feed and Story card", () => {
+  const AT = new Date(FUTURE);
+  const MOVED = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+
+  function feedRow(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "job-1",
+      storyOfPostJobId: null,
+      status: "scheduled",
+      scheduledFor: AT,
+      submittedForApprovalAt: null,
+      approvedAt: null,
+      baseCaption: "Dawn patrol",
+      perPlatformOverrides: null,
+      publishMetadata: { targetPlatforms: ["instagram", "facebook_page"] },
+      mediaItem: { baseCaption: "media caption", perPlatformOverrides: null },
+      coverImageUrl: null,
+      ...overrides,
+    };
+  }
+  function storyRow(overrides: Record<string, unknown> = {}) {
+    return feedRow({
+      id: "story-1",
+      storyOfPostJobId: "job-1",
+      publishMetadata: { targetPlatforms: ["instagram"], instagram: { placement: "story" } },
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    transactionMock.mockReset();
+    transactionMock.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prisma));
+  });
+
+  it("a caption edit and a new time go to both halves, once each, in one transaction", async () => {
+    findFirstMock.mockResolvedValueOnce(feedRow()).mockResolvedValueOnce(storyRow());
+
+    const res = await PATCH(
+      req({ baseCaption: "Sunset session", scheduledFor: MOVED.toISOString(), includePair: true }),
+      ctx("job-1"),
+    );
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({
+      ok: true,
+      pair: { id: "story-1", kind: "story", changed: true, note: "Its Story was changed too." },
+    });
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+    expect(updateManyMock.mock.calls).toEqual([
+      [
+        {
+          where: { id: "job-1", workspaceId: "ws-1", status: { in: ["scheduled", "draft"] } },
+          data: { baseCaption: "Sunset session", scheduledFor: MOVED, clientApprovedAt: null },
+        },
+      ],
+      [
+        {
+          where: { id: "story-1", workspaceId: "ws-1", status: { in: ["scheduled", "draft"] } },
+          data: { baseCaption: "Sunset session", scheduledFor: MOVED, clientApprovedAt: null },
+        },
+      ],
+    ]);
+  });
+
+  it("a reschedule to another day counts the pair as two posts there, neither against itself", async () => {
+    findFirstMock.mockResolvedValueOnce(feedRow()).mockResolvedValueOnce(storyRow());
+
+    await PATCH(req({ scheduledFor: MOVED.toISOString(), includePair: true }), ctx("job-1"));
+
+    expect(checkDailyPostLimitMock).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      day: MOVED,
+      mode: "schedule",
+      excludePostJobId: ["job-1", "story-1"],
+      alsoOnDay: 1,
+    });
+  });
+
+  it("a Story already published is left alone and named; the feed post is still edited", async () => {
+    findFirstMock.mockResolvedValueOnce(feedRow()).mockResolvedValueOnce(storyRow({ status: "completed" }));
+
+    const res = await PATCH(req({ baseCaption: "Sunset session", includePair: true }), ctx("job-1"));
+
+    expect((await res.json()).pair).toEqual({
+      id: "story-1",
+      kind: "story",
+      changed: false,
+      note: "Its Story was already published, so it was not changed.",
+    });
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a new time cannot go to a half that is a draft: it is left alone and named", async () => {
+    findFirstMock.mockResolvedValueOnce(feedRow()).mockResolvedValueOnce(storyRow({ status: "draft" }));
+
+    const res = await PATCH(req({ scheduledFor: MOVED.toISOString(), includePair: true }), ctx("job-1"));
+
+    expect((await res.json()).pair).toEqual({
+      id: "story-1",
+      kind: "story",
+      changed: false,
+      note: "Its Story is a draft, so it was not changed.",
+    });
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a member under approval re-holds both halves and the owners get ONE email that names the Story", async () => {
+    getWorkspaceContextMock.mockResolvedValue(
+      makeWorkspaceContext({ userId: "member-1", email: "sam@example.com", name: "Sam", role: "member", requireApproval: true }),
+    );
+    findFirstMock.mockResolvedValueOnce(feedRow()).mockResolvedValueOnce(storyRow());
+
+    const res = await PATCH(req({ baseCaption: "Unreviewed", includePair: true }), ctx("job-1"));
+
+    await expect(res.json()).resolves.toEqual({
+      ok: true,
+      status: "draft",
+      approvalState: "pending",
+      pair: { id: "story-1", kind: "story", changed: true, note: "Its Story was changed too." },
+    });
+    expect(updateManyMock).toHaveBeenCalledTimes(2);
+    expect(updateManyMock.mock.calls[1][0]).toEqual({
+      where: { id: "story-1", workspaceId: "ws-1", status: "scheduled" },
+      data: expect.objectContaining({ baseCaption: "Unreviewed", status: "draft", submittedForApprovalAt: expect.any(Date) }),
+    });
+    expect(notifyOwnersMock).toHaveBeenCalledTimes(1);
+    expect(notifyOwnersMock).toHaveBeenCalledWith(expect.objectContaining({ alsoAsStory: ["instagram"] }));
+  });
+
+  it("without includePair the edit is exactly as before: one write, no pair read", async () => {
+    findFirstMock.mockResolvedValueOnce(feedRow());
+
+    const res = await PATCH(req({ baseCaption: "Sunset session" }), ctx("job-1"));
+
+    await expect(res.json()).resolves.toEqual({ ok: true });
+    expect(findFirstMock).toHaveBeenCalledTimes(1);
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+    expect(transactionMock).not.toHaveBeenCalled();
+  });
+
+  it("deletes both drafts once each, in one transaction, and queues each one's cover", async () => {
+    const COVER = "https://x.public.blob.vercel-storage.com/covers/ws-1/1-a-cover.jpg";
+    queueCoverMock.mockReset();
+    findFirstMock
+      .mockResolvedValueOnce({ coverImageUrl: COVER, storyOfPostJobId: null })
+      .mockResolvedValueOnce(storyRow({ status: "draft", coverImageUrl: COVER }));
+
+    const res = await DELETE(req({ includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({
+      ok: true,
+      pair: { id: "story-1", kind: "story", changed: true, note: "Its Story was deleted too." },
+    });
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+    expect(deleteManyMock.mock.calls).toEqual([
+      [{ where: { id: "job-1", workspaceId: "ws-1", status: { in: ["draft", "cancelled"] } } }],
+      [{ where: { id: "story-1", workspaceId: "ws-1", status: { in: ["draft", "cancelled"] } } }],
+    ]);
+    expect(queueCoverMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a scheduled other half is not deleted, and the answer says so", async () => {
+    findFirstMock.mockResolvedValueOnce({ coverImageUrl: null, storyOfPostJobId: null }).mockResolvedValueOnce(storyRow());
+
+    const res = await DELETE(req({ includePair: true }), ctx("job-1"));
+
+    expect((await res.json()).pair).toEqual({
+      id: "story-1",
+      kind: "story",
+      changed: false,
+      note: "Its Story is scheduled, so it was not deleted.",
+    });
+    expect(deleteManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("an other half someone already deleted: the draft is deleted and nothing else is said", async () => {
+    findFirstMock.mockResolvedValueOnce({ coverImageUrl: null, storyOfPostJobId: null }).mockResolvedValueOnce(null);
+
+    const res = await DELETE(req({ includePair: true }), ctx("job-1"));
+
+    await expect(res.json()).resolves.toEqual({ ok: true });
+    expect(deleteManyMock).toHaveBeenCalledTimes(1);
   });
 });

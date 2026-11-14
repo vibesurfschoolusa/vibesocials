@@ -17,7 +17,9 @@ const {
   notifyOwnersMock,
   failPendingMock,
   checkDailyPostLimitMock,
+  transactionMock,
 } = vi.hoisted(() => ({
+  transactionMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   findFirstMock: vi.fn(),
@@ -38,6 +40,7 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     postJob: { findFirst: findFirstMock, updateMany: updateManyMock },
     socialConnection: { count: connectionCountMock },
+    $transaction: transactionMock,
   },
 }));
 // Keep the REAL caption helpers (resolvePlatformCaptions, used for the owners'
@@ -62,6 +65,8 @@ vi.mock("@/server/jobs/failPendingResults", async () => {
   );
   return { ...actual, failPendingPostJobResults: failPendingMock };
 });
+
+import { prisma } from "@/lib/db";
 
 import { POST } from "./route";
 
@@ -191,6 +196,8 @@ describe("POST /api/posts/[postJobId]/publish", () => {
           orderBy: { position: "asc" },
           select: { position: true, mediaItem: { select: { id: true, deletedAt: true } } },
         },
+        // R3-client-journey M1: where a Feed and Story card finds its other half.
+        storyOfPostJobId: true,
       },
     });
   });
@@ -1117,5 +1124,215 @@ describe("POST /api/posts/[postJobId]/publish - a post without a file", () => {
         immediate: true,
       },
     });
+  });
+});
+
+// R3-client-journey M1: a Feed and Story post is one Queue card. With
+// includePair, Publish now, Submit for approval and scheduling a draft take
+// both halves in one transaction (pairRule.ts).
+describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
+  const STORY_UPDATED = new Date("2026-11-01T09:31:00Z");
+  function storyRow(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "story-1",
+      storyOfPostJobId: "job-1",
+      status: "draft",
+      scheduledFor: null,
+      createdAt: new Date(),
+      updatedAt: STORY_UPDATED,
+      submittedForApprovalAt: null,
+      approvedAt: null,
+      baseCaption: "Member's caption",
+      perPlatformOverrides: null,
+      publishMetadata: { targetPlatforms: ["instagram"], instagram: { placement: "story" } },
+      coverImageUrl: null,
+      mediaItem: null,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    transactionMock.mockReset();
+    transactionMock.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prisma));
+    prepareDispatchMock.mockImplementation(async (id: string) => ({
+      ok: true,
+      event: { postJobId: id, userId: "user-1", workspaceId: "ws-1", mediaItemId: "m1", baseCaption: "c", perPlatformOverrides: null },
+    }));
+  });
+
+  it("publish now claims both halves once each, in one transaction, and sends both events in one send", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+
+    const res = await POST(req({ includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(202);
+    await expect(res.json()).resolves.toEqual({
+      ok: true,
+      status: "in_progress",
+      pair: { id: "story-1", kind: "story", changed: true, note: "Its Story is publishing too." },
+    });
+    expect(transactionMock).toHaveBeenCalledTimes(1);
+    expect(updateManyMock.mock.calls).toEqual([
+      [
+        {
+          where: { id: "job-1", workspaceId: "ws-1", status: { in: ["scheduled", "draft"] }, updatedAt: UPDATED },
+          data: { status: "in_progress", scheduledFor: expect.any(Date) },
+        },
+      ],
+      [
+        {
+          where: { id: "story-1", workspaceId: "ws-1", status: { in: ["scheduled", "draft"] }, updatedAt: STORY_UPDATED },
+          data: { status: "in_progress", scheduledFor: expect.any(Date) },
+        },
+      ],
+    ]);
+    expect(prepareDispatchMock.mock.calls).toEqual([["job-1"], ["story-1"]]);
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    expect(inngestSendMock).toHaveBeenCalledWith([
+      expect.objectContaining({ id: "publish-job-1" }),
+      expect.objectContaining({ id: "publish-story-1" }),
+    ]);
+  });
+
+  it("publish now counts the pair as two posts today, neither against itself", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+
+    await POST(req({ includePair: true }), ctx("job-1"));
+
+    expect(checkDailyPostLimitMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "now", excludePostJobId: ["job-1", "story-1"], alsoOnDay: 1 }),
+    );
+  });
+
+  it("a Story already publishing is left alone and named; only the feed post is claimed and sent", async () => {
+    findFirstMock
+      .mockResolvedValueOnce(jobRow({ storyOfPostJobId: null }))
+      .mockResolvedValueOnce(storyRow({ status: "in_progress" }));
+
+    const res = await POST(req({ includePair: true }), ctx("job-1"));
+
+    expect((await res.json()).pair).toEqual({
+      id: "story-1",
+      kind: "story",
+      changed: false,
+      note: "Its Story has already started publishing, so it was not published.",
+    });
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+    expect(inngestSendMock).toHaveBeenCalledWith(expect.objectContaining({ id: "publish-job-1" }));
+  });
+
+  it("an event send that fails fails both halves' pending results", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+    inngestSendMock.mockRejectedValue(new Error("inngest down"));
+
+    const res = await POST(req({ includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(503);
+    expect(failPendingMock.mock.calls.map((call) => call[0])).toEqual(["job-1", "story-1"]);
+  });
+
+  it("member submit holds both halves and the owners get ONE email with the Story line", async () => {
+    getWorkspaceContextMock.mockResolvedValue(memberInApprovalWorkspace());
+    findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+
+    const res = await POST(req({ includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(202);
+    expect((await res.json()).pair).toEqual({
+      id: "story-1",
+      kind: "story",
+      changed: true,
+      note: "Its Story was sent for approval too.",
+    });
+    expect(updateManyMock.mock.calls).toEqual([
+      [
+        {
+          where: { id: "job-1", workspaceId: "ws-1", status: "draft", updatedAt: UPDATED },
+          data: expect.objectContaining({ status: "draft", submittedForApprovalAt: expect.any(Date), scheduledFor: null }),
+        },
+      ],
+      [
+        {
+          where: { id: "story-1", workspaceId: "ws-1", status: "draft", updatedAt: STORY_UPDATED },
+          data: expect.objectContaining({ status: "draft", submittedForApprovalAt: expect.any(Date), scheduledFor: null }),
+        },
+      ],
+    ]);
+    expect(notifyOwnersMock).toHaveBeenCalledTimes(1);
+    expect(notifyOwnersMock).toHaveBeenCalledWith(expect.objectContaining({ alsoAsStory: ["instagram"] }));
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("member submit with a time gives both halves that time", async () => {
+    getWorkspaceContextMock.mockResolvedValue(memberInApprovalWorkspace());
+    findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+
+    await POST(req({ scheduledFor: FUTURE, includePair: true }), ctx("job-1"));
+
+    expect(updateManyMock.mock.calls.map((call) => call[0].data.scheduledFor)).toEqual([
+      new Date(FUTURE),
+      new Date(FUTURE),
+    ]);
+  });
+
+  it("a Story already waiting for approval is left alone and the email does not name it", async () => {
+    getWorkspaceContextMock.mockResolvedValue(memberInApprovalWorkspace());
+    findFirstMock
+      .mockResolvedValueOnce(jobRow({ storyOfPostJobId: null }))
+      .mockResolvedValueOnce(storyRow({ submittedForApprovalAt: SUBMITTED }));
+
+    const res = await POST(req({ includePair: true }), ctx("job-1"));
+
+    expect((await res.json()).pair).toEqual({
+      id: "story-1",
+      kind: "story",
+      changed: false,
+      note: "Its Story is already waiting for approval, so it was not sent for approval.",
+    });
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+    expect(notifyOwnersMock.mock.calls[0][0].alsoAsStory).toBeUndefined();
+  });
+
+  it("scheduling a draft schedules both halves at that time", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+
+    const res = await POST(req({ scheduledFor: FUTURE, includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).pair).toEqual({
+      id: "story-1",
+      kind: "story",
+      changed: true,
+      note: "Its Story was scheduled too.",
+    });
+    expect(updateManyMock.mock.calls).toEqual([
+      [
+        {
+          where: { id: "job-1", workspaceId: "ws-1", status: "draft", updatedAt: UPDATED },
+          data: { status: "scheduled", scheduledFor: new Date(FUTURE), ...CLEAR_CLIENT_CHANGE },
+        },
+      ],
+      [
+        {
+          where: { id: "story-1", workspaceId: "ws-1", status: "draft", updatedAt: STORY_UPDATED },
+          data: { status: "scheduled", scheduledFor: new Date(FUTURE), ...CLEAR_CLIENT_CHANGE },
+        },
+      ],
+    ]);
+    expect(checkDailyPostLimitMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "schedule", excludePostJobId: ["job-1", "story-1"], alsoOnDay: 1 }),
+    );
+  });
+
+  it("without includePair publish now is exactly as before: one claim, one event, no pair read", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null }));
+
+    const res = await POST(req({}), ctx("job-1"));
+
+    await expect(res.json()).resolves.toEqual({ ok: true, status: "in_progress" });
+    expect(findFirstMock).toHaveBeenCalledTimes(1);
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+    expect(transactionMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).toHaveBeenCalledWith(expect.objectContaining({ id: "publish-job-1" }));
   });
 });

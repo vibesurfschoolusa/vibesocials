@@ -112,6 +112,11 @@ describe("checkDailyPostLimit", () => {
       where: {
         workspaceId: "ws-1",
         status: { notIn: ["draft", "cancelled"] },
+        // R3-publishing L3: a post that failed before anything was sent uses no slot.
+        NOT: {
+          status: "failed",
+          results: { every: { errorCode: { in: ["RECONNECT_REQUIRED", "CONNECTION_GONE"] } } },
+        },
         OR: [
           { scheduledFor: { gte: start, lt: end } },
           { scheduledFor: null, createdAt: { gte: start, lt: end } },
@@ -129,6 +134,18 @@ describe("checkDailyPostLimit", () => {
     });
 
     expect(db.postJobCount.mock.calls[0][0].where.id).toEqual({ not: "job-9" });
+  });
+
+  // R3-client-journey M1: a Feed and Story card commits both halves at once.
+  it("leaves out both halves of a pair being moved", async () => {
+    await checkDailyPostLimit({
+      workspaceId: "ws-1",
+      day: NOW,
+      mode: "schedule",
+      excludePostJobId: ["feed-1", "story-1"],
+    });
+
+    expect(db.postJobCount.mock.calls[0][0].where.id).toEqual({ notIn: ["feed-1", "story-1"] });
   });
 
   it("refuses at the limit with the publish-now sentence and code", async () => {

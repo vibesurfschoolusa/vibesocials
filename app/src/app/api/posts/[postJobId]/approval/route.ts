@@ -10,19 +10,25 @@ import {
 } from "@/lib/approval";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
-import { inngest } from "@/lib/inngest";
-import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { SCHEDULE_BUFFER_MS } from "@/lib/scheduling";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
-import { DISPATCH_FAILURE, failPendingPostJobResults, finishPostJob } from "@/server/jobs/failPendingResults";
-import { buildPublishEvent, prepareDeferredPostJobDispatch } from "@/server/jobs/posting";
+import { DISPATCH_FAILURE, finishPostJob } from "@/server/jobs/failPendingResults";
 import { sendEmail } from "@/server/notifications/email";
 import { buildApprovalDecisionEmail } from "@/server/notifications/approvalEmail";
 import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
 
-import { findPairHalf } from "../cancel/pairHalf";
+import {
+  applyToPair,
+  dispatchNow,
+  notSentNote,
+  pairLimitArgs,
+  pairStoryPlatforms,
+  readPairHalf,
+  wantsPair,
+  type PairHalf,
+} from "../pairRule";
 
 interface PostJobRouteContext {
   params: Promise<{ postJobId: string }> | { postJobId: string };
@@ -136,8 +142,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     );
   }
 
+  const workspaceId = workspaceContext.workspace.id;
   const job = await prisma.postJob.findFirst({
-    where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
+    where: { id: postJobId, workspaceId },
     select: {
       status: true,
       scheduledFor: true,
@@ -147,6 +154,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       baseCaption: true,
       updatedAt: true,
       storyOfPostJobId: true,
+      // R3-client-journey M1: the member's email names the Story of a pair.
+      publishMetadata: true,
     },
   });
 
@@ -190,14 +199,23 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     bufferMs: SCHEDULE_BUFFER_MS,
   });
 
+  // R3-client-journey M1: a held Feed and Story card is one submission, so the
+  // decision takes both halves; only a half still awaiting a decision.
+  const half = await readPairHalf(
+    workspaceId,
+    { id: postJobId, storyOfPostJobId: job.storyOfPostJobId ?? null },
+    wantsPair(parsedBody),
+  );
+  const blocker = (other: PairHalf) => (isAwaitingApprovalDecision(other) ? null : "is not waiting for approval");
+
   // Usage limits (2026-11-10): approving commits the post to a UTC day, its kept
   // slot or today. At the limit nothing is decided, so the owner can retry later.
   if (outcome !== null) {
     const refusal = await checkDailyPostLimit({
-      workspaceId: workspaceContext.workspace.id,
+      workspaceId,
       day: outcome === "schedule" && job.scheduledFor ? job.scheduledFor : now,
       mode: outcome === "schedule" ? "schedule" : "now",
-      excludePostJobId: postJobId,
+      ...pairLimitArgs(postJobId, half && !blocker(half) ? half : null),
     });
     if (refusal) {
       return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });
@@ -207,43 +225,49 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // Atomic claim: only a still-undecided submission (draft, or a scheduled row
   // left submitted-but-unapproved — ruling R10 backstop) at the version just
   // read transitions, so a concurrent decision, publish or cancel can't
-  // double-dispatch and a concurrent edit can't be decided unseen.
-  const claimWhere = {
-    id: postJobId,
-    workspaceId: workspaceContext.workspace.id,
+  // double-dispatch and a concurrent edit can't be decided unseen. The other
+  // half of a pair is pinned to the version of it read just now.
+  const claimWhere = (row: { id: string; updatedAt: Date }) => ({
+    id: row.id,
+    workspaceId,
     status: { in: [...APPROVAL_DECIDABLE_STATUSES] },
     submittedForApprovalAt: { not: null },
     approvedAt: null,
-    updatedAt: job.updatedAt,
+    updatedAt: row.updatedAt,
+  });
+  const approveData = {
+    status: nextStatus,
+    approvedAt: now,
+    approvedByUserId: workspaceContext.user.id,
+    // Usage limits (2026-11-10): a post published now counts toward today,
+    // the day the limit was checked for above, not its creation day or a
+    // slot that passed during review.
+    ...(outcome === "publish_now" ? { scheduledFor: now } : {}),
+    // Client review link: every write that schedules a post clears the
+    // client's marks, so the client looks it over as a new post.
+    ...(nextStatus === "scheduled"
+      ? { clientApprovedAt: null, clientChangeRequestedAt: null, clientNote: null }
+      : {}),
   };
-  // A reject cancels the post, a final state, so it goes through finishPostJob,
-  // which also stamps the post's media as used now (second review, item 1).
-  const count = approving
-    ? (
-        await prisma.postJob.updateMany({
-          where: claimWhere,
-          data: {
-            status: nextStatus,
-            approvedAt: now,
-            approvedByUserId: workspaceContext.user.id,
-            // Usage limits (2026-11-10): a post published now counts toward today,
-            // the day the limit was checked for above, not its creation day or a
-            // slot that passed during review.
-            ...(outcome === "publish_now" ? { scheduledFor: now } : {}),
-            // Client review link: every write that schedules a post clears the
-            // client's marks, so the client looks it over as a new post.
-            ...(nextStatus === "scheduled"
-              ? { clientApprovedAt: null, clientChangeRequestedAt: null, clientNote: null }
-              : {}),
-          },
-        })
-      ).count
-    : await finishPostJob(prisma, { where: claimWhere, data: { status: nextStatus } });
+  const result = await applyToPair({
+    main: { ...job, id: postJobId },
+    half,
+    // A reject cancels the post, a final state, so it goes through finishPostJob,
+    // which also stamps the post's media as used now (second review, item 1).
+    write: async (db, row) =>
+      approving
+        ? (await db.postJob.updateMany({ where: claimWhere(row), data: approveData })).count === 1
+        : (await finishPostJob(db, { where: claimWhere(row), data: { status: nextStatus } })) === 1,
+    blocker,
+    wording: approving
+      ? { done: "was approved too", verb: "approved" }
+      : { done: "was rejected too", verb: "rejected" },
+  });
 
-  if (count === 0) {
+  if (!result.ok) {
     // Lost the write: if the post is still undecided, it was edited mid-request.
     const current = await prisma.postJob.findFirst({
-      where: { id: postJobId, workspaceId: workspaceContext.workspace.id },
+      where: { id: postJobId, workspaceId },
       select: { status: true, submittedForApprovalAt: true, approvedAt: true },
     });
     if (current && isAwaitingApprovalDecision(current)) {
@@ -257,12 +281,17 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       { status: 409 },
     );
   }
+  let pair = result.pair;
+  const pairDecided = Boolean(half && pair?.changed);
 
   // Publish-now path: materialize results from current connections and fire the
-  // one publish event, exactly like the publish route.
+  // publish events (one per half of a pair), exactly like the publish route.
   if (outcome === "publish_now") {
-    const prep = await prepareDeferredPostJobDispatch(postJobId);
-    if (!prep.ok) {
+    const dispatch = await dispatchNow([postJobId, ...(half && pairDecided ? [half.id] : [])], {
+      route: "POST /api/posts/[postJobId]/approval",
+    });
+    if (pair && dispatch.notSent.has(pair.id)) pair = { ...pair, note: notSentNote(pair.kind) };
+    if (dispatch.notSent.has(postJobId)) {
       // No chosen platform is connected (F1 H1): `prepare` gave each one a
       // failed result with its sentence and marked the job failed, so it never
       // hangs in_progress. The approval itself stands (recorded above).
@@ -270,23 +299,16 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         {
           error:
             "Approved, but nothing was posted: none of this post's platforms is connected. Activity shows what to reconnect.",
-          code: prep.reason,
+          code: dispatch.reasons.get(postJobId),
+          ...(pair ? { pair } : {}),
         },
         { status: 409 },
       );
     }
-    // Same contract as the publish route: if the event can't be handed to
-    // Inngest, fail the pending results (job → failed) rather than leave it
+    // Same contract as the publish route: if the events can't be handed to
+    // Inngest, the pending results are failed (job → failed) rather than left
     // "publishing" forever. The approval itself stands.
-    try {
-      // Stable event id + "Post now" priority (2026-11-01 scale audit, jobs H6 + H1).
-      await inngest.send(buildPublishEvent(prep.event, { immediate: true }));
-    } catch (error) {
-      logger.error("[POST /api/posts/[postJobId]/approval] Couldn't dispatch the publish event", {
-        error,
-        postJobId,
-      });
-      await failPendingPostJobResults(postJobId, DISPATCH_FAILURE);
+    if (dispatch.sendFailed) {
       return NextResponse.json(
         { code: DISPATCH_FAILURE.errorCode, error: DISPATCH_FAILURE.errorMessage },
         { status: 503 },
@@ -294,28 +316,13 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     }
   }
 
-  // R2-client-journey M1: a held Feed and Story post is one submission in two
-  // jobs, so rejecting either half rejects the other while it is still held
-  // (same conditional write as the claim, without this job's version pin).
-  let pairRejected = false;
-  if (!approving) {
-    try {
-      pairRejected = await rejectHeldPairHalf(workspaceContext.workspace.id, postJobId, job);
-    } catch (error) {
-      // The decision on this job is committed; the other half stays for the owner to reject.
-      logger.error("[POST /api/posts/[postJobId]/approval] Couldn't reject the other half of the post", {
-        error,
-        postJobId,
-      });
-    }
-  }
-
   // The time the post is now scheduled for — only when approval kept its slot.
   const scheduledForIso =
     nextStatus === "scheduled" && job.scheduledFor ? job.scheduledFor.toISOString() : null;
 
-  // Tell the member. Fire-and-forget: sendEmail never throws, and the extra
-  // try/catch documents that a mail failure must not fail the decision.
+  // Tell the member, once, naming the Story when the decision took it too.
+  // Fire-and-forget: sendEmail never throws, and the extra try/catch documents
+  // that a mail failure must not fail the decision.
   try {
     const submitter = await prisma.user.findUnique({
       where: { id: job.userId },
@@ -325,12 +332,13 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     if (submitter?.email) {
       const email = buildApprovalDecisionEmail({
         approved: approving,
-        workspaceId: workspaceContext.workspace.id,
+        workspaceId,
         workspaceName: workspaceContext.workspace.name,
         caption: job.baseCaption ?? "",
         scheduledFor: scheduledForIso,
         timeZone: submitter.timeZone ?? null,
         appBaseUrl: process.env.NEXTAUTH_URL || null,
+        ...(half && pairDecided ? { alsoAsStory: pairStoryPlatforms(job.publishMetadata, half) } : {}),
       });
       await sendEmail({ to: submitter.email, ...email });
     }
@@ -345,29 +353,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       status: nextStatus,
       approvalState,
       scheduledFor: scheduledForIso,
-      ...(pairRejected ? { pairRejected: true } : {}),
+      ...(pair ? { pair } : {}),
     },
     { status: 200 },
   );
-}
-
-/** Rejects the other half of a held Feed and Story post; true when it did. */
-async function rejectHeldPairHalf(
-  workspaceId: string,
-  postJobId: string,
-  job: { storyOfPostJobId: string | null },
-): Promise<boolean> {
-  const half = await findPairHalf(prisma, workspaceId, { id: postJobId, storyOfPostJobId: job.storyOfPostJobId });
-  if (!half || !isAwaitingApprovalDecision(half)) return false;
-  const count = await finishPostJob(prisma, {
-    where: {
-      id: half.id,
-      workspaceId,
-      status: { in: [...APPROVAL_DECIDABLE_STATUSES] },
-      submittedForApprovalAt: { not: null },
-      approvedAt: null,
-    },
-    data: { status: "cancelled" },
-  });
-  return count === 1;
 }

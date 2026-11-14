@@ -20,7 +20,9 @@ const {
   checkDailyPostLimitMock,
   stampJobFindUniqueMock,
   mediaUpdateManyMock,
+  transactionMock,
 } = vi.hoisted(() => ({
+  transactionMock: vi.fn(),
   stampJobFindUniqueMock: vi.fn(),
   mediaUpdateManyMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
@@ -45,6 +47,7 @@ vi.mock("@/lib/db", () => ({
     // Second review, item 1: a reject ends the post through finishPostJob, which
     // stamps its media (read the post's media, then write lastUsedAt).
     mediaItem: { updateMany: mediaUpdateManyMock },
+    $transaction: transactionMock,
   },
 }));
 // Keep the REAL event builder (buildPublishEvent); only the DB-touching dispatch
@@ -67,6 +70,8 @@ vi.mock("@/server/jobs/failPendingResults", async () => {
   );
   return { ...actual, failPendingPostJobResults: failPendingMock };
 });
+
+import { prisma } from "@/lib/db";
 
 import { POST } from "./route";
 
@@ -793,23 +798,40 @@ describe("POST /api/posts/[postJobId]/approval — approving to publish now coun
 });
 
 // R2-client-journey M1: a held Feed and Story post is two jobs; rejecting one rejects both.
-describe("POST /api/posts/[postJobId]/approval - rejecting a held Feed and Story post", () => {
+// R3-client-journey M1: a held Feed and Story post is one Queue card. With
+// includePair a decision takes both halves in one transaction (pairRule.ts),
+// and the member gets one email that names the Story.
+describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
+  const STORY_REVIEWED = new Date("2026-07-26T09:31:00Z");
   function storyRow(overrides: Record<string, unknown> = {}) {
     return {
       id: "story-1",
       storyOfPostJobId: "job-1",
       status: "draft",
       scheduledFor: null,
+      createdAt: SUBMITTED,
+      updatedAt: STORY_REVIEWED,
       submittedForApprovalAt: SUBMITTED,
       approvedAt: null,
+      baseCaption: "Member's post",
+      perPlatformOverrides: null,
+      publishMetadata: { targetPlatforms: ["instagram"], instagram: { placement: "story" } },
+      coverImageUrl: null,
+      mediaItem: null,
       ...overrides,
     };
   }
+  const STORY_CLAIM_WHERE = { ...CLAIM_WHERE, id: "story-1", updatedAt: STORY_REVIEWED };
 
-  it("rejects the held Story too, scoped to the workspace and still undecided", async () => {
+  beforeEach(() => {
+    transactionMock.mockReset();
+    transactionMock.mockImplementation(async (fn: (tx: unknown) => unknown) => fn(prisma));
+  });
+
+  it("rejecting rejects both halves once each, in one transaction, each pinned to its own version", async () => {
     findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
 
-    const res = await POST(req({ decision: "reject" }), ctx("job-1"));
+    const res = await POST(req({ decision: "reject", includePair: true }), ctx("job-1"));
 
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({
@@ -818,22 +840,84 @@ describe("POST /api/posts/[postJobId]/approval - rejecting a held Feed and Story
       status: "cancelled",
       approvalState: "rejected",
       scheduledFor: null,
-      pairRejected: true,
+      pair: { id: "story-1", kind: "story", changed: true, note: "Its Story was rejected too." },
     });
+    expect(transactionMock).toHaveBeenCalledTimes(1);
     expect(findFirstMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ where: { storyOfPostJobId: "job-1", workspaceId: "ws-1" } }),
     );
-    expect(updateManyMock).toHaveBeenCalledTimes(2);
-    expect(updateManyMock).toHaveBeenLastCalledWith({
-      where: {
-        id: "story-1",
-        workspaceId: "ws-1",
-        status: { in: ["draft", "scheduled"] },
-        submittedForApprovalAt: { not: null },
-        approvedAt: null,
-      },
-      data: { status: "cancelled" },
+    expect(updateManyMock.mock.calls).toEqual([
+      [{ where: CLAIM_WHERE, data: { status: "cancelled" } }],
+      [{ where: STORY_CLAIM_WHERE, data: { status: "cancelled" } }],
+    ]);
+  });
+
+  it("rejecting: the member gets ONE email, which says the Story will not be published either", async () => {
+    findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+
+    await POST(req({ decision: "reject", includePair: true }), ctx("job-1"));
+
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(sendEmailMock.mock.calls[0][0].html).toContain("Its Story on Instagram will not be published either.");
+  });
+
+  it("approving a kept slot approves both halves and the member gets ONE email naming the Story", async () => {
+    findFirstMock
+      .mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null, scheduledFor: FUTURE }))
+      .mockResolvedValueOnce(storyRow({ scheduledFor: FUTURE }));
+
+    const res = await POST(req({ decision: "approve", includePair: true }), ctx("job-1"));
+
+    expect((await res.json()).pair).toEqual({
+      id: "story-1",
+      kind: "story",
+      changed: true,
+      note: "Its Story was approved too.",
     });
+    const approved = {
+      status: "scheduled",
+      approvedAt: expect.any(Date),
+      approvedByUserId: "user-1",
+      clientApprovedAt: null,
+      clientChangeRequestedAt: null,
+      clientNote: null,
+    };
+    expect(updateManyMock.mock.calls).toEqual([
+      [{ where: CLAIM_WHERE, data: approved }],
+      [{ where: STORY_CLAIM_WHERE, data: approved }],
+    ]);
+    expect(inngestSendMock).not.toHaveBeenCalled();
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(sendEmailMock.mock.calls[0][0].html).toContain("Its Story on Instagram was approved too.");
+  });
+
+  it("approving to publish now sends both publish events in one send, each post claimed once", async () => {
+    findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+    prepareDispatchMock.mockImplementation(async (id: string) => ({
+      ok: true,
+      event: { postJobId: id, userId: "member-1", workspaceId: "ws-1", mediaItemId: "m1", baseCaption: "c", perPlatformOverrides: null },
+    }));
+
+    const res = await POST(req({ decision: "approve", includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    expect(updateManyMock).toHaveBeenCalledTimes(2);
+    expect(prepareDispatchMock.mock.calls).toEqual([["job-1"], ["story-1"]]);
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    expect(inngestSendMock).toHaveBeenCalledWith([
+      expect.objectContaining({ id: "publish-job-1" }),
+      expect.objectContaining({ id: "publish-story-1" }),
+    ]);
+  });
+
+  it("a pair approved to publish now counts as two posts today, neither against itself", async () => {
+    findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+
+    await POST(req({ decision: "approve", includePair: true }), ctx("job-1"));
+
+    expect(checkDailyPostLimitMock).toHaveBeenCalledWith(
+      expect.objectContaining({ excludePostJobId: ["job-1", "story-1"], alsoOnDay: 1 }),
+    );
   });
 
   it("rejecting the Story rejects its held feed post", async () => {
@@ -841,30 +925,45 @@ describe("POST /api/posts/[postJobId]/approval - rejecting a held Feed and Story
       .mockResolvedValueOnce(pendingJob({ storyOfPostJobId: "feed-1" }))
       .mockResolvedValueOnce(storyRow({ id: "feed-1", storyOfPostJobId: null }));
 
-    const res = await POST(req({ decision: "reject" }), ctx("job-1"));
+    const res = await POST(req({ decision: "reject", includePair: true }), ctx("job-1"));
 
-    expect((await res.json()).pairRejected).toBe(true);
+    expect((await res.json()).pair).toEqual({
+      id: "feed-1",
+      kind: "feed",
+      changed: true,
+      note: "Its feed post was rejected too.",
+    });
     expect(findFirstMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ where: { id: "feed-1", workspaceId: "ws-1" } }),
     );
   });
 
-  it("an other half that is not held (already decided) is left alone", async () => {
+  it("an other half that is not held (already decided) is left alone and named", async () => {
     findFirstMock
       .mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null }))
       .mockResolvedValueOnce(storyRow({ status: "scheduled", approvedAt: SUBMITTED }));
 
-    const res = await POST(req({ decision: "reject" }), ctx("job-1"));
+    const res = await POST(req({ decision: "reject", includePair: true }), ctx("job-1"));
 
-    expect((await res.json()).pairRejected).toBeUndefined();
+    expect((await res.json()).pair).toEqual({
+      id: "story-1",
+      kind: "story",
+      changed: false,
+      note: "Its Story is not waiting for approval, so it was not rejected.",
+    });
     expect(updateManyMock).toHaveBeenCalledTimes(1);
+    // Nothing happened to the Story, so the email does not name it.
+    expect(sendEmailMock.mock.calls[0][0].html).not.toContain("Its Story");
   });
 
-  it("approving never touches the other half", async () => {
-    findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null, scheduledFor: FUTURE })).mockResolvedValueOnce(storyRow());
+  it("without includePair a decision takes this post alone, exactly as for any post", async () => {
+    findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null }));
 
-    await POST(req({ decision: "approve" }), ctx("job-1"));
+    const res = await POST(req({ decision: "reject" }), ctx("job-1"));
 
+    expect(Object.keys(await res.json())).not.toContain("pair");
+    expect(findFirstMock).toHaveBeenCalledTimes(1);
     expect(updateManyMock).toHaveBeenCalledTimes(1);
+    expect(transactionMock).not.toHaveBeenCalled();
   });
 });

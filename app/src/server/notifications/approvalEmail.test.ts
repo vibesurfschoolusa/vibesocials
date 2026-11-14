@@ -261,11 +261,12 @@ describe("buildApprovalRequestedEmail - a series", () => {
   });
 });
 
-// Q1 fix 1: a held Feed and Story post makes a second Queue item, so the email says so.
+// Q1 fix 1: a held Feed and Story post says so. R3-client-journey M1: the Queue
+// shows the pair as one card, and one decision takes both halves.
 describe("buildApprovalRequestedEmail - Feed and Story", () => {
   const base = { submitterName: "Sam", workspaceId: "ws_1", workspaceName: "Acme", timeZone: null, caption: "Book your lesson", appBaseUrl: null };
   const line = (where: string) =>
-    `<p>This post also goes out as a Story on ${where}. The Story is its own item in the Queue and needs its own approval.</p>`;
+    `<p>This post also goes out as a Story on ${where}. Approving or rejecting the post decides the Story too.</p>`;
 
   it("Instagram", () => {
     expect(buildApprovalRequestedEmail({ ...base, alsoAsStory: ["instagram"] }).html).toContain(line("Instagram"));
@@ -287,5 +288,38 @@ describe("buildApprovalRequestedEmail - Feed and Story", () => {
     const before = buildApprovalRequestedEmail(base);
     expect(buildApprovalRequestedEmail({ ...base, alsoAsStory: [] })).toEqual(before);
     expect(before.html).not.toContain("as a Story");
+  });
+});
+
+// R3-client-journey M1: one decision on a Feed and Story card decides both
+// halves, so the member gets one email, and it names the Story.
+describe("buildApprovalDecisionEmail - Feed and Story", () => {
+  const base = {
+    workspaceId: "ws_1",
+    workspaceName: "Acme",
+    caption: "Book your lesson",
+    scheduledFor: null,
+    timeZone: null,
+    appBaseUrl: null,
+  };
+
+  it("approved: says the Story was approved too", () => {
+    expect(buildApprovalDecisionEmail({ ...base, approved: true, alsoAsStory: ["instagram"] }).html).toContain(
+      "<p>Its Story on Instagram was approved too.</p>",
+    );
+  });
+
+  it("rejected: says the Story will not be published either", () => {
+    expect(
+      buildApprovalDecisionEmail({ ...base, approved: false, alsoAsStory: ["instagram", "facebook_page"] }).html,
+    ).toContain("<p>Its Story on Instagram and Facebook Page will not be published either.</p>");
+  });
+
+  it("no Story: the email is unchanged", () => {
+    for (const approved of [true, false]) {
+      const before = buildApprovalDecisionEmail({ ...base, approved });
+      expect(buildApprovalDecisionEmail({ ...base, approved, alsoAsStory: [] })).toEqual(before);
+      expect(before.html).not.toContain("Story");
+    }
   });
 });
