@@ -545,6 +545,60 @@ describe("a Feed and Story pair", () => {
     expect(notifyOwnersOfClientChangeMock.mock.calls[0][0]).not.toHaveProperty("withStory");
   });
 
+  it("the owner moved the Story after the client opened /v: approving the feed card approves the feed only", async () => {
+    // Two rows in a tiny table; updateMany applies the route's where to them.
+    type Row = {
+      id: string;
+      workspaceId: string;
+      status: string;
+      scheduledFor: Date;
+      storyOfPostJobId: string | null;
+      updatedAt: Date;
+      clientApprovedAt: Date | null;
+    };
+    const rows: Row[] = [
+      { id: "post-1", workspaceId: "ws-1", status: "scheduled", scheduledFor: slot, storyOfPostJobId: null, updatedAt: new Date(VERSION), clientApprovedAt: null },
+      // Rescheduled by the owner an hour later, after the page loaded.
+      { id: "story-1", workspaceId: "ws-1", status: "scheduled", scheduledFor: new Date(slot.getTime() + HOUR), storyOfPostJobId: "post-1", updatedAt: new Date("2026-11-10T10:30:00.000Z"), clientApprovedAt: null },
+    ];
+    type Where = Record<string, unknown>;
+    const matches = (row: Row, where: Where): boolean =>
+      Object.entries(where).every(([key, want]) => {
+        if (key === "OR") return (want as Where[]).some((part) => matches(row, part));
+        const value = row[key as keyof Row];
+        if (want instanceof Date) return value instanceof Date && value.getTime() === want.getTime();
+        if (want && typeof want === "object") {
+          const cond = want as { not?: unknown; lte?: Date };
+          if ("not" in cond) return value !== cond.not;
+          if (cond.lte) return value instanceof Date && value <= cond.lte;
+        }
+        return value === want;
+      });
+    postFindManyMock.mockImplementation(async () =>
+      rows.map(({ id, storyOfPostJobId, scheduledFor }) => ({ id, storyOfPostJobId, scheduledFor })),
+    );
+    postUpdateManyMock.mockImplementation(async ({ where, data }: { where: Where; data: Partial<Row> }) => {
+      const hit = rows.filter((row) => matches(row, where));
+      for (const row of hit) Object.assign(row, data);
+      return { count: hit.length };
+    });
+
+    const response = await call({ decision: "approve", version: VERSION });
+
+    expect(response.status).toBe(200);
+    expect(rows[0].clientApprovedAt).toBeInstanceOf(Date);
+    // The moved Story is left exactly as the owner left it.
+    expect(rows[1]).toMatchObject({
+      status: "scheduled",
+      clientApprovedAt: null,
+      updatedAt: new Date("2026-11-10T10:30:00.000Z"),
+      scheduledFor: new Date(slot.getTime() + HOUR),
+    });
+    // The answer is the feed card's own; it names no Story.
+    const body = await response.json();
+    expect(body).toEqual({ ok: true, state: "approved", version: expect.any(String) });
+  });
+
   it("writes nothing for the pair when the post itself could not be decided on", async () => {
     postFindManyMock.mockResolvedValue(pairRows("feed"));
     postUpdateManyMock.mockResolvedValue({ count: 0 });
