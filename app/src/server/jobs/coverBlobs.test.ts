@@ -1,8 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // An in-memory PostJob table (the cover columns only) and the deletion queue.
+// F1 L8: `failedResults` counts the post's failed results and `mediaSwept` says
+// whether the retention sweep removed its video (both default to none / no).
+type Job = {
+  id: string;
+  status: string;
+  updatedAt: Date;
+  coverImageUrl: string | null;
+  failedResults?: number;
+  mediaSwept?: boolean;
+};
 const m = vi.hoisted(() => ({
-  jobs: [] as { id: string; status: string; updatedAt: Date; coverImageUrl: string | null }[],
+  jobs: [] as Job[],
   queued: [] as string[],
   failQueue: false,
   // Runs after the sweep's read and before its UPDATE, to stage a race.
@@ -15,12 +25,23 @@ vi.mock("@/lib/db", () => {
     coverImageUrl?: string | { not: null };
     status?: { in: string[] };
     updatedAt?: { lt: Date };
+    OR?: Array<{ results?: { none: { status: "failed" } }; mediaItem?: { deletedAt: { not: null } } }>;
   };
+  // Nothing left to retry: no failed result, or the video itself is gone.
+  const nothingToRetry = (job: (typeof m.jobs)[number]) => !job.failedResults || job.mediaSwept === true;
   const matches = (job: (typeof m.jobs)[number], where: Where) => {
     if (typeof where.coverImageUrl === "string" && job.coverImageUrl !== where.coverImageUrl) return false;
     if (where.coverImageUrl && typeof where.coverImageUrl === "object" && job.coverImageUrl === null) return false;
     if (where.status && !where.status.in.includes(job.status)) return false;
     if (where.updatedAt && !(job.updatedAt < where.updatedAt.lt)) return false;
+    if (where.OR) {
+      const anyHolds = where.OR.some(
+        (branch) =>
+          (branch.results !== undefined && !job.failedResults) ||
+          (branch.mediaItem !== undefined && job.mediaSwept === true),
+      );
+      if (!anyHolds) return false;
+    }
     return true;
   };
   const db = {
@@ -46,12 +67,14 @@ vi.mock("@/lib/db", () => {
       const sql = strings.join("?");
       const checksStatus = sql.includes('"status"');
       const checksAge = sql.includes('"updatedAt" <');
+      const checksRetry = sql.includes('"PostJobResult"') && sql.includes('"MediaItem"');
       const job = m.jobs.find(
         (row) =>
           row.id === id &&
           row.coverImageUrl === url &&
           (!checksStatus || ["completed", "cancelled"].includes(row.status)) &&
-          (!checksAge || (cutoff !== undefined && row.updatedAt < cutoff)),
+          (!checksAge || (cutoff !== undefined && row.updatedAt < cutoff)) &&
+          (!checksRetry || nothingToRetry(row)),
       );
       if (!job) return 0;
       job.coverImageUrl = null;
@@ -121,6 +144,53 @@ describe("sweepOldCovers (media retention sweep)", () => {
     m.jobs.push({ id: "old", status: "completed", updatedAt: new Date(NOW - 40 * DAY), coverImageUrl: cover("a") });
     m.failQueue = true;
     await expect(sweepOldCovers({ now: () => NOW })).resolves.toMatchObject({ queued: 0 });
+  });
+});
+
+// F1 L8: a completed post with a failed platform can still be retried, and the
+// retry must publish with the cover the user chose.
+describe("sweepOldCovers - a post with a platform still to retry", () => {
+  it("keeps the cover while the post has a failed result", async () => {
+    m.jobs.push({
+      id: "partly-failed",
+      status: "completed",
+      updatedAt: new Date(NOW - 40 * DAY),
+      coverImageUrl: cover("p"),
+      failedResults: 1,
+    });
+
+    const result = await sweepOldCovers({ now: () => NOW });
+
+    expect(result).toEqual({ cleared: 0, queued: 0 });
+    expect(m.jobs[0].coverImageUrl).toBe(cover("p"));
+  });
+
+  it("lets the cover go once the post's video was swept (nothing can be retried)", async () => {
+    m.jobs.push({
+      id: "partly-failed-swept",
+      status: "completed",
+      updatedAt: new Date(NOW - 40 * DAY),
+      coverImageUrl: cover("q"),
+      failedResults: 1,
+      mediaSwept: true,
+    });
+
+    const result = await sweepOldCovers({ now: () => NOW });
+
+    expect(result).toEqual({ cleared: 1, queued: 1 });
+    expect(m.queued).toEqual([cover("q")]);
+  });
+
+  it("keeps the cover when a retry fails after the sweep read the post", async () => {
+    m.jobs.push({ id: "late-fail", status: "completed", updatedAt: new Date(NOW - 40 * DAY), coverImageUrl: cover("l") });
+    m.afterRead = () => {
+      m.jobs[0].failedResults = 1;
+    };
+
+    const result = await sweepOldCovers({ now: () => NOW });
+
+    expect(result).toEqual({ cleared: 0, queued: 0 });
+    expect(m.jobs[0].coverImageUrl).toBe(cover("l"));
   });
 });
 

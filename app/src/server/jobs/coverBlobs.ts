@@ -42,8 +42,10 @@ export async function queueCoverBlobIfUnused(url: string): Promise<boolean> {
  * Part of the hourly media retention sweep: a completed or cancelled post last
  * changed more than RETENTION_DAYS ago lets go of its cover image, and the file
  * is queued once no post uses it. A failed post keeps its cover: it can still
- * be retried, and its media may be in use much later. The column is cleared
- * with a raw UPDATE (so `updatedAt` does not move) that checks status and age
+ * be retried, and its media may be in use much later. So does a completed post
+ * with a failed platform (F1 L8), until its video is swept: a late Retry must
+ * publish with the chosen cover. The column is cleared with a raw UPDATE (so
+ * `updatedAt` does not move) that checks status, age and the failed results
  * again, so a post retried or edited after the read keeps its cover. A
  * scheduled, draft or recent post keeps it too. Never throws.
  */
@@ -62,6 +64,7 @@ export async function sweepOldCovers(
         coverImageUrl: { not: null },
         status: { in: [...SWEPT_COVER_STATUSES] },
         updatedAt: { lt: cutoff },
+        OR: [{ results: { none: { status: "failed" } } }, { mediaItem: { deletedAt: { not: null } } }],
       },
       select: { id: true, coverImageUrl: true },
       orderBy: { id: "asc" },
@@ -74,7 +77,7 @@ export async function sweepOldCovers(
         const done = await prisma.$transaction(async (tx) => {
           // DateTime columns hold UTC wall-clock time and Prisma binds a Date as
           // timestamptz, so the cutoff is converted as in scheduledScanner.ts.
-          const changed = await tx.$executeRaw`UPDATE "PostJob" SET "coverImageUrl" = NULL WHERE "id" = ${row.id} AND "coverImageUrl" = ${url} AND "updatedAt" < (${cutoff}::timestamptz AT TIME ZONE 'UTC') AND "status"::text IN ('completed', 'cancelled')`;
+          const changed = await tx.$executeRaw`UPDATE "PostJob" SET "coverImageUrl" = NULL WHERE "id" = ${row.id} AND "coverImageUrl" = ${url} AND "updatedAt" < (${cutoff}::timestamptz AT TIME ZONE 'UTC') AND "status"::text IN ('completed', 'cancelled') AND (NOT EXISTS (SELECT 1 FROM "PostJobResult" r WHERE r."postJobId" = "PostJob"."id" AND r."status"::text = 'failed') OR EXISTS (SELECT 1 FROM "MediaItem" mi WHERE mi."id" = "PostJob"."mediaItemId" AND mi."deletedAt" IS NOT NULL))`;
           if (changed === 0) return { cleared: 0, queued: 0 };
           return { cleared: 1, queued: (await queueIfUnused(tx, url)) ? 1 : 0 };
         });
