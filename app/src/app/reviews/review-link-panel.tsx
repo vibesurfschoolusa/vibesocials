@@ -67,7 +67,7 @@ export function ReviewLinkPanelView({ state }: { state: ReviewLinkState }) {
   };
 
   return (
-    <Card className="mb-8 p-6">
+    <Card className="mt-8 p-6">
       <h2 className="text-base font-semibold text-foreground">Get more reviews</h2>
       {state.status === "loading" ? (
         <div className="mt-4" aria-hidden>

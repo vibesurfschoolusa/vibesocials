@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { CheckCircle2, MessageSquare } from "lucide-react";
 
@@ -16,6 +16,14 @@ import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { initialLocation } from "@/components/reviews/initial-location";
 import { LocationPicker } from "@/components/reviews/location-picker";
 import { ReviewCard } from "@/components/reviews/review-card";
+import {
+  focusAfterReply,
+  needsReplyEmptyTitle,
+  replyButtonId,
+  reviewsSubtitle,
+  showLocationPicker,
+  singleLocationName,
+} from "@/components/reviews/reviews-page";
 import type { GoogleReview, Location } from "@/components/reviews/types";
 import { SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
 
@@ -46,6 +54,10 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
   const [generatingAI, setGeneratingAI] = useState<string | null>(null);
   const [tab, setTab] = useState<"needs_reply" | "replied">("needs_reply");
   const [confirmTarget, setConfirmTarget] = useState<GoogleReview | null>(null);
+  // After a reply posts: where keyboard focus goes (a review id, or null for
+  // the heading). The success toast already announces the reply.
+  const [pendingFocus, setPendingFocus] = useState<{ reviewId: string | null } | null>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
 
   const loadLocations = useCallback(async () => {
     try {
@@ -112,6 +124,18 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
     loadReviews();
   }, [loadReviews]);
 
+  // Runs once the confirm dialog has closed: its own focus restore points at the
+  // Post reply button, which left with the answered review.
+  useEffect(() => {
+    if (!pendingFocus || confirmTarget) return;
+    const target = pendingFocus.reviewId
+      ? document.getElementById(replyButtonId(pendingFocus.reviewId))
+      : null;
+    (target ?? headingRef.current)?.focus();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot focus request, cleared once used
+    setPendingFocus(null);
+  }, [pendingFocus, confirmTarget]);
+
   // Validate, then ask for confirmation before posting a public reply.
   const requestReply = (review: GoogleReview) => {
     const comment = replyText[review.reviewId]?.trim();
@@ -173,6 +197,12 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
       setReplyingTo(null);
 
       toast.success("Reply posted successfully!");
+      setPendingFocus({
+        reviewId: focusAfterReply(
+          needsReplyReviews.map((r) => r.reviewId),
+          review.reviewId
+        ),
+      });
     } catch (err: unknown) {
       console.error("Error posting reply:", err);
       toast.error((err as Error).message || "Failed to post reply");
@@ -278,37 +308,31 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
     <div className={APP_PAGE_CLASS}>
       {/* Header */}
       <div className="mb-8">
-        <h1 className="text-2xl font-bold tracking-tight text-foreground">Google Reviews</h1>
+        <h1
+          ref={headingRef}
+          tabIndex={-1}
+          className="text-2xl font-bold tracking-tight text-foreground outline-none"
+        >
+          Google Reviews
+        </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Manage and reply to your Google Business Profile reviews
+          {reviewsSubtitle(
+            selectedLocation && !loading && !reviewsError ? needsReplyReviews.length : null,
+            reviews.length
+          )}
         </p>
+        {singleLocationName(locations) && (
+          <p className="mt-1 text-sm text-muted-foreground">{singleLocationName(locations)}</p>
+        )}
       </div>
 
-      {/* 2026-11-10: the review link, QR code, print card and message. Only once
-          Google is connected: before that the page offers the connect step. */}
-      {gbpConnected && <ReviewLinkPanel />}
-
       {/* Location Selector */}
-      {locations.length > 1 && (
+      {showLocationPicker(locations) && (
         <LocationPicker
           locations={locations}
           selectedLocation={selectedLocation}
           onChange={setSelectedLocation}
         />
-      )}
-
-      {/* Summary Card - Only Needs Reply */}
-      {selectedLocation && !reviewsError && (
-        <div className="mb-8">
-          <Card className="max-w-sm p-6">
-            <div className="text-sm font-medium text-muted-foreground">
-              Reviews needing reply
-            </div>
-            <div className="mt-2 text-4xl font-bold text-warning">
-              {needsReplyReviews.length}
-            </div>
-          </Card>
-        </div>
       )}
 
       {/* Tabs */}
@@ -392,9 +416,11 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
               <CheckCircle2 className="h-6 w-6" />
             </div>
             <div className="flex flex-col gap-1">
-              <h3 className="text-base font-semibold text-foreground">All caught up!</h3>
+              <h3 className="text-base font-semibold text-foreground">
+                {needsReplyEmptyTitle(reviews.length)}
+              </h3>
               <p className="mx-auto max-w-sm text-sm text-muted-foreground">
-                No reviews need replies at this location. Great job!
+                To get more, send customers your review link from Get more reviews below.
               </p>
             </div>
           </Card>
@@ -414,6 +440,11 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
           {repliedReviews.map((review) => renderReviewCard(review, false))}
         </div>
       )}
+
+      {/* 2026-11-10: the review link, QR code, print card and message. Only once
+          Google is connected: before that the page offers the connect step.
+          N2: below the list, since people come here to answer reviews. */}
+      {gbpConnected && <ReviewLinkPanel />}
 
       <ConfirmDialog
         open={confirmTarget !== null}
