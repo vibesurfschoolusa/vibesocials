@@ -113,6 +113,39 @@ describe("GET /api/geocode limits", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  // R2 L3: one person's day stays well under the app's 2,000, so one account
+  // cannot use up everyone's suggestions.
+  it("caps one person at 200 lookups a UTC day, counted only for a lookup really made", async () => {
+    await GET(lookup());
+    expect(checkRateLimitMock).toHaveBeenCalledWith({
+      userId: "user-1",
+      route: "geocode/day",
+      limit: 200,
+      windowMs: 24 * 60 * 60 * 1000,
+    });
+    checkRateLimitMock.mockClear();
+    await GET(lookup("a"));
+    expect(checkRateLimitMock).not.toHaveBeenCalledWith(expect.objectContaining({ route: "geocode/day" }));
+  });
+
+  it("over the person's day: no paid call, nothing counted app-wide, and a note that typing still works", async () => {
+    checkRateLimitMock.mockImplementation(async ({ route }: { route: string }) =>
+      route === "geocode/day" ? { allowed: false, retryAfterSeconds: 30_600 } : { allowed: true },
+    );
+
+    const response = await GET(lookup());
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("30600");
+    await expect(response.json()).resolves.toEqual({
+      error: "You have used today's place suggestions. Type the place in full; it is saved as you type it.",
+      code: "GEOCODE_USER_DAY_LIMIT",
+      retryAfterSeconds: 30_600,
+    });
+    expect(consumeAppDayMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("does not spend the app's cap on a query too short to look up", async () => {
     const response = await GET(lookup("a"));
 

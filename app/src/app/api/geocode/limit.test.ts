@@ -4,6 +4,8 @@ import {
   GEOCODE_DAILY_LIMIT_CODE,
   GEOCODE_DAILY_LIMIT_MESSAGE,
   GEOCODE_UNAVAILABLE_CODE,
+  GEOCODE_USER_DAY_LIMIT_CODE,
+  GEOCODE_USER_DAY_LIMIT_MESSAGE,
   GEOCODE_USER_LIMIT_CODE,
   geocodeLimitNote,
 } from "./limit";
@@ -17,6 +19,9 @@ describe("geocodeLimitNote", () => {
       "Too many place lookups.",
     );
     expect(geocodeLimitNote(503, { error: "Not now.", code: GEOCODE_UNAVAILABLE_CODE })).toBe("Not now.");
+    expect(
+      geocodeLimitNote(429, { error: GEOCODE_USER_DAY_LIMIT_MESSAGE, code: GEOCODE_USER_DAY_LIMIT_CODE }),
+    ).toBe("You have used today's place suggestions. Type the place in full; it is saved as you type it.");
   });
 
   it("is null for anything else: an answer, a refusal without our code, a body that is not ours", () => {
