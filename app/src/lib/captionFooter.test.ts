@@ -155,7 +155,7 @@ describe("buildCaptionWithFooter tracking tags only when they fit", () => {
     `${caption}\n\nFor more info visit vibesurfschool.com/?utm_source=${source}&utm_medium=social&utm_campaign=vibesocials\n\n#surf`;
 
   it.each([
-    ["x", "x", 280],
+    ["linkedin", "linkedin", 3000],
     ["pinterest", "pinterest", 800],
     ["google_business_profile", "google", 1500],
   ] as const)("on %s: tagged up to the limit, plain one character over", (platform, source, limit) => {
@@ -165,11 +165,19 @@ describe("buildCaptionWithFooter tracking tags only when they fit", () => {
     expect(buildCaptionWithFooter("a".repeat(room + 1), on, platform)).toBe(plain("a".repeat(room + 1)));
   });
 
+  it("on X counts the tagged link as 23, as X does, so it costs no more than the plain one", () => {
+    // "For more info visit " (20) + link (23) + "#surf" (5) + two blank lines (4).
+    const room = 280 - 52;
+    expect(buildCaptionWithFooter("a".repeat(room), on, "x")).toBe(tagged("a".repeat(room), "x"));
+    // One over: the hashtags go; the tagged link stays, as it costs no more.
+    expect(buildCaptionWithFooter("a".repeat(room + 1), on, "x")).toBe(
+      tagged("a".repeat(room + 1), "x").replace("\n\n#surf", ""),
+    );
+  });
+
   it("on X counts the text without @-mentions, as the X client does", () => {
-    const room = 280 - tagged("", "x").length;
-    const caption = `@ana_surf ${"a".repeat(room)}`;
+    const caption = `@ana_surf ${"a".repeat(280 - 52)}`;
     expect(buildCaptionWithFooter(caption, on, "x")).toBe(tagged(caption, "x"));
-    expect(buildCaptionWithFooter(`${caption}a`, on, "x")).toBe(plain(`${caption}a`));
   });
 
   it("counts code points, so an emoji caption never gets the tags into a cut", () => {
@@ -183,6 +191,54 @@ describe("buildCaptionWithFooter tracking tags only when they fit", () => {
 
   it("always tags on a platform without a limit", () => {
     const caption = "a".repeat(20_000);
-    expect(buildCaptionWithFooter(caption, on, "linkedin")).toBe(tagged(caption, "linkedin"));
+    expect(buildCaptionWithFooter(caption, on, "facebook_page")).toBe(tagged(caption, "facebook"));
+  });
+});
+
+// Fix round 1 (M5, M6): on X and LinkedIn a text over the limit loses its footer
+// parts whole, hashtags first, then the website line, before the caption is cut.
+describe("buildCaptionWithFooter drops the footer before the caption is cut", () => {
+  const footer = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf #miami" };
+  const website = "For more info visit vibesurfschool.com";
+  // On X: website line 20 + 23 = 43, hashtags 11, each after a blank line (2).
+
+  it("on X keeps the whole footer when it fits: 200 plain characters", () => {
+    const caption = "a".repeat(200);
+    expect(buildCaptionWithFooter(caption, footer, "x")).toBe(`${caption}\n\n${website}\n\n#surf #miami`);
+  });
+
+  it("on X drops the hashtags first", () => {
+    const caption = "a".repeat(230); // 230 + 45 + 13 = 288; without hashtags 275
+    expect(buildCaptionWithFooter(caption, footer, "x")).toBe(`${caption}\n\n${website}`);
+  });
+
+  it("on X then drops the website line", () => {
+    const caption = "a".repeat(240); // 240 + 45 = 285
+    expect(buildCaptionWithFooter(caption, footer, "x")).toBe(caption);
+  });
+
+  it("on X weighs emoji as 2 when deciding", () => {
+    const caption = "\u{1F30A}".repeat(115); // 230 by weight, 115 characters
+    expect(buildCaptionWithFooter(caption, footer, "x")).toBe(`${caption}\n\n${website}`);
+  });
+
+  it("on X counts without @-mentions", () => {
+    const caption = `@ana_surf ${"a".repeat(220)}`; // 220 + 45 + 13 = 278 once the mention is gone
+    expect(buildCaptionWithFooter(caption, footer, "x")).toBe(`${caption}\n\n${website}\n\n#surf #miami`);
+  });
+
+  it("on LinkedIn drops the footer from a 3,100-character post", () => {
+    const caption = "a".repeat(3100);
+    expect(buildCaptionWithFooter(caption, footer, "linkedin")).toBe(caption);
+  });
+
+  it("on LinkedIn keeps the footer under the limit", () => {
+    const caption = "a".repeat(2900);
+    expect(buildCaptionWithFooter(caption, footer, "linkedin")).toBe(`${caption}\n\n${website}\n\n#surf #miami`);
+  });
+
+  it("keeps the footer on other platforms (their clients cut as before)", () => {
+    const caption = "a".repeat(2200);
+    expect(buildCaptionWithFooter(caption, footer, "instagram")).toBe(`${caption}\n\n${website}\n\n#surf #miami`);
   });
 });
