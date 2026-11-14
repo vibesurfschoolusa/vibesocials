@@ -190,6 +190,8 @@ export function AccountMenu() {
         ref={buttonRef}
         type="button"
         onClick={() => setOpen((value) => !value)}
+        // On a phone the label is hidden and the initials are decorative, so this names the button.
+        aria-label={`Account menu for ${accountLabel(name, email)}`}
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
