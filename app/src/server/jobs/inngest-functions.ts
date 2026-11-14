@@ -75,6 +75,7 @@ import {
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import { coverFromJob, type PostCover } from "@/lib/videoCover";
 import { sweepOldCovers } from "@/server/jobs/coverBlobs";
+import { orphanBlobSweep } from "@/server/jobs/orphanBlobSweep";
 import {
   claimResult,
   finalizeClaimedResult,
@@ -2653,4 +2654,5 @@ export const inngestFunctions = [
   socialPostMetricsSync,
   monthlyReportEmail,
   billingReminders,
+  orphanBlobSweep,
 ];
