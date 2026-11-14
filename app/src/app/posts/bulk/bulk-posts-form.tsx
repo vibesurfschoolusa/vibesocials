@@ -15,7 +15,6 @@ import { useConnections } from "@/hooks/useConnections";
 import { generateBlobKey } from "@/lib/blobKey";
 import {
   BULK_DRAFTS_NOTE,
-  BULK_GOOGLE_BUTTON_NOTE,
   BULK_MAX_FILES,
   BULK_NO_TIME_MESSAGE,
   BULK_TIKTOK_NOTE,
@@ -45,7 +44,20 @@ import {
 } from "@/lib/bulkPosts";
 import { Select } from "@/components/ui/select";
 import type { YouTubePostMetadata } from "@/server/platforms/types";
-import { buildReusePostBody, buildUploadPostBody, type UploadedBlob } from "@/lib/createPostRequest";
+import type { UploadedBlob } from "@/lib/createPostRequest";
+import { LocationAutocomplete } from "@/components/location-autocomplete";
+import { StoryPlacementSettings } from "@/components/story-placement";
+import { captureVideoFrame } from "@/lib/captureVideoFrame";
+import { coverBlobPathname } from "@/lib/coverBlobPath";
+import {
+  GOOGLE_BUTTON_LABELS,
+  GOOGLE_BUTTON_TYPES,
+  type GoogleButton,
+  type GoogleButtonType,
+} from "@/lib/googlePostOptions";
+import { initialPlacements, type PlacementChoice } from "@/lib/storyPlacement";
+import { coverRequestFields, type CoverChoice, type UploadedCoverImage } from "@/lib/videoCover";
+import type { GoogleBusinessPostMetadata } from "@/server/platforms/types";
 import { pickFromMedia, skippedMediaMessage } from "@/lib/bulkMedia";
 import { splitDroppedFiles } from "@/lib/clientPage";
 import { cn } from "@/lib/cn";
@@ -58,6 +70,19 @@ import type { PostingSlot } from "@/lib/postingSlots";
 import { explainUploadFailure } from "@/lib/uploadFailure";
 import { BulkPostRow, captionFailedText } from "./bulk-post-row";
 import { MediaPickerDialog } from "./media-picker-dialog";
+import {
+  BULK_COVER_FAILED_TEXT,
+  autoCaptionRequestBody,
+  buildBulkRowBody,
+  bulkExtrasBlock,
+  bulkGoogleMetadataError,
+  describePhotoOnce,
+  initialBulkGoogleMetadata,
+  readVideoDuration,
+  requestImprovedCaption,
+  rowStoryRefusal,
+  wantsAltText,
+} from "./bulkExtras";
 
 export interface BulkRow {
   id: string;
@@ -76,6 +101,19 @@ export interface BulkRow {
   captionOverwrite: boolean;
   /** The sentence the row shows when no caption came back (captionFailedText). */
   captionError: string | null;
+  /** "Improve" is waiting for its answer; the caption box is read-only meanwhile. */
+  improving: boolean;
+  /** The line under the box when Improve got no new caption (the caption is kept). */
+  improveError: string | null;
+  /** A photo's description (alt text), as the AI wrote it or the user typed it. */
+  altText: string;
+  /** The AI was asked for the description already: once per photo per batch. */
+  altTextAsked: boolean;
+  altTextWriting: boolean;
+  /** A video's length in seconds; undefined until read, null when it could not be. */
+  durationSec: number | null | undefined;
+  /** A video's cover, as Create's picker sets it. */
+  cover: CoverChoice;
   /** datetime-local value. */
   when: string;
   whenSetByHand: boolean;
@@ -104,6 +142,13 @@ function newRow(file: Pick<File, "name" | "type">): BulkRow {
     captionStatus: "waiting",
     captionOverwrite: false,
     captionError: null,
+    improving: false,
+    improveError: null,
+    altText: "",
+    altTextAsked: false,
+    altTextWriting: false,
+    durationSec: undefined,
+    cover: { kind: "default" },
     when: "",
     whenSetByHand: false,
     postId: null,
@@ -141,8 +186,11 @@ export function BulkPostsForm({
   workspaceId,
   initialMedia = [],
   skippedMedia = 0,
+  googleButtonDefault = null,
 }: {
   workspaceId: string;
+  /** The workspace's default Google button, which the batch's Google options start from (as on Create). */
+  googleButtonDefault?: GoogleButton | null;
   /** Media items to start with (the Media page's "Schedule with Add many"). */
   initialMedia?: MediaItemDto[];
   /** How many selected items the page left out. */
@@ -188,6 +236,15 @@ export function BulkPostsForm({
   const zone = useSyncExternalStore(noSubscription, localTimeZoneLabel, () => null);
   const [youtubePrivacy, setYoutubePrivacy] =
     useState<YouTubePostMetadata["privacyStatus"]>(BULK_YOUTUBE_PRIVACY_DEFAULT);
+  // Batch settings Create has per post, applied to every row.
+  const [location, setLocation] = useState("");
+  const [googleMetadata, setGoogleMetadata] = useState<GoogleBusinessPostMetadata>(() =>
+    initialBulkGoogleMetadata(googleButtonDefault),
+  );
+  const [instagramPlacement, setInstagramPlacement] = useState<PlacementChoice>(() => initialPlacements().instagram);
+  const [facebookPlacement, setFacebookPlacement] = useState<PlacementChoice>(() => initialPlacements().facebook);
+  // One cover picker open at a time: its field ids and radio name are fixed.
+  const [coverOpenId, setCoverOpenId] = useState<string | null>(null);
   // Object URLs made for photo thumbnails, revoked on removal and on unmount.
   const objectUrlsRef = useRef(new Map<string, string>());
   // Set on unmount: a photo still being prepared then gets no object URL, since
@@ -326,8 +383,13 @@ export function BulkPostsForm({
     const row = rowsRef.current.find((r) => r.id === id);
     if (!row?.blob) return;
     const blob = row.blob;
-    updateRow(id, { captionStatus: "writing", captionError: null });
+    updateRow(id, { captionStatus: "writing", captionError: null, improveError: null });
     try {
+      // Read once, for the Story length rule and the cover slider.
+      if (blob.mimeType.startsWith("video/") && row.durationSec === undefined) {
+        const durationSec = await readVideoDuration(filesRef.current.get(id) ?? blob.url);
+        updateRow(id, { durationSec });
+      }
       // For a video, a few still frames let the AI see it, as on Create.
       const frames = blob.mimeType.startsWith("video/")
         ? await extractVideoFrames(filesRef.current.get(id) ?? blob.url)
@@ -336,15 +398,12 @@ export function BulkPostsForm({
       if (frames.length > 0) {
         updateRow(id, (current) => (current.thumbnail ? {} : { thumbnail: frames[0] }));
       }
+      // Built from the rows as they are now, after the frames were read, so the
+      // other rows' latest captions go with it and this one does not repeat them.
       const response = await fetch("/api/posts/auto-caption", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          blobUrl: blob.url,
-          mimeType: blob.mimeType,
-          bulk: true,
-          ...(frames.length > 0 ? { frames } : {}),
-        }),
+        body: JSON.stringify(autoCaptionRequestBody(rowsRef.current, id, blob, frames)),
       });
       const data = (await response.json().catch(() => null)) as
         | { caption?: unknown; error?: unknown; code?: unknown }
@@ -373,6 +432,52 @@ export function BulkPostsForm({
         // No answer at all (the network, or reading the file's frames): plain sentence.
         captionError: captionFailedText(null, undefined),
       });
+    }
+    await describeRow(id);
+  }
+
+  // A photo's description, right after its first caption: one AI call per photo
+  // per batch (Write again does not ask again). Optional, so a failure leaves
+  // the field empty and says nothing.
+  async function describeRow(id: string) {
+    const row = rowsRef.current.find((r) => r.id === id);
+    if (!row?.blob || !wantsAltText({ mimeType: row.blob.mimeType, uploaded: true, altTextAsked: row.altTextAsked })) {
+      return;
+    }
+    updateRow(id, { altTextAsked: true, altTextWriting: true });
+    const text = await describePhotoOnce(row.blob);
+    // Never replace what the user typed meanwhile.
+    updateRow(id, (current) => ({ altTextWriting: false, altText: current.altText.trim() ? current.altText : text }));
+  }
+
+  async function improveRow(id: string) {
+    const row = rowsRef.current.find((r) => r.id === id);
+    if (!row || row.improving || !row.caption.trim()) return;
+    updateRow(id, { improving: true, improveError: null, sendError: null });
+    const result = await requestImprovedCaption(row.caption);
+    updateRow(
+      id,
+      result.ok ? { improving: false, caption: result.caption } : { improving: false, improveError: result.error },
+    );
+  }
+
+  // The cover's image, uploaded as Create does: the chosen file, or the chosen
+  // frame captured in the browser, under this workspace's covers/ folder (the
+  // posts route takes no other). Null when it could not be had.
+  async function uploadCoverImage(choice: CoverChoice, source: File | string): Promise<UploadedCoverImage | null> {
+    try {
+      const file =
+        choice.kind === "upload"
+          ? choice.file
+          : choice.kind === "frame"
+            ? await captureVideoFrame(source, choice.timeMs)
+            : null;
+      if (!file) return null;
+      const blob = await upload(coverBlobPathname(workspaceId), file, { access: "public", handleUploadUrl: "/api/upload" });
+      return { url: blob.url, mimeType: file.type, sizeBytes: file.size };
+    } catch (error: unknown) {
+      console.error("[Add many] Cover upload failed", error);
+      return null;
     }
   }
 
@@ -446,7 +551,7 @@ export function BulkPostsForm({
   }
 
   function writeAgain(id: string) {
-    updateRow(id, { captionStatus: "waiting", captionOverwrite: true, captionError: null });
+    updateRow(id, { captionStatus: "waiting", captionOverwrite: true, captionError: null, improveError: null });
     void runWork();
   }
 
@@ -457,6 +562,15 @@ export function BulkPostsForm({
   function sendAgain(id: string) {
     updateRow(id, { uncertain: false });
   }
+
+  // Feed or Story for the batch. Every row is one file, so the one-file rule
+  // always holds; a video too long for a Story says so on its row.
+  const stories = {
+    instagram: selectedPlatforms.includes("instagram") && instagramPlacement.placement === "story",
+    facebook: selectedPlatforms.includes("facebook_page") && facebookPlacement.placement === "story",
+  };
+  const googleShown = selectedPlatforms.includes("google_business_profile");
+  const googleError = googleShown ? bulkGoogleMetadataError(googleMetadata) : null;
 
   async function finish(mode: BulkFinishMode) {
     if (sendingMode) return;
@@ -480,7 +594,14 @@ export function BulkPostsForm({
           },
           mode,
           pressedAt,
-        );
+        ) ??
+          bulkExtrasBlock({
+            mimeType: row.mimeType,
+            durationSec: row.durationSec,
+            platforms: platformsOf(row),
+            stories,
+            googleError,
+          });
         if (block) updateRow(row.id, { sendError: block });
         else ready.push(row.id);
       }
@@ -495,21 +616,31 @@ export function BulkPostsForm({
           updateRow(id, { sendError: BULK_NO_TIME_MESSAGE });
           continue;
         }
-        const common = {
-          baseCaption: row.caption,
-          location: "",
+        updateRow(id, { sending: true, sendError: null });
+        // As on Create: a frame whose image could not be had still goes as its
+        // time (Instagram uses it); an uploaded cover that failed stops this row.
+        let coverFields: ReturnType<typeof coverRequestFields> = {};
+        if (row.mimeType.startsWith("video/") && row.cover.kind !== "default") {
+          const image = await uploadCoverImage(row.cover, filesRef.current.get(id) ?? row.blob.url);
+          if (row.cover.kind === "upload" && !image) {
+            updateRow(id, { sending: false, sendError: BULK_COVER_FAILED_TEXT });
+            continue;
+          }
+          coverFields = coverRequestFields(row.cover, image);
+        }
+        // A Media item is posted by id: the server reads it for this workspace only
+        // and marks it used, so no client-sent address is trusted.
+        const body = buildBulkRowBody({
+          row: { ...row, blob: row.blob },
           platforms,
           deferred: scheduledFor ? { scheduledFor } : { draft: true },
           workspaceId,
-          // The same field Create sends, for every row that goes to YouTube.
-          youtubeMetadata: platforms.includes("youtube") ? { privacyStatus: youtubePrivacy } : undefined,
-        };
-        // A Media item is posted by id: the server reads it for this workspace only
-        // and marks it used, so no client-sent address is trusted.
-        const body = row.mediaItemId
-          ? buildReusePostBody({ ...common, mediaItemId: row.mediaItemId })
-          : buildUploadPostBody({ ...common, blob: row.blob });
-        updateRow(id, { sending: true, sendError: null });
+          youtubePrivacy,
+          location,
+          googleMetadata,
+          stories,
+          coverFields,
+        });
         let response: BulkSendResponse;
         try {
           const answer = await fetch("/api/posts", {
@@ -565,7 +696,9 @@ export function BulkPostsForm({
   const workState = rows.map((r) => ({ id: r.id, upload: r.upload, caption: r.captionStatus }));
   const captionProgress = captionProgressText(workState);
   const uploadsPending = rows.some((r) => r.upload === "queued" || r.upload === "working");
-  const busy = uploadsPending || captionProgress !== null;
+  // An Improve or a photo description still to come is part of the caption work.
+  const busy =
+    uploadsPending || captionProgress !== null || rows.some((r) => r.improving || r.altTextWriting);
   const done = allRowsCreated(rows);
   const uploadingIndex = rows.findIndex((r) => r.upload === "working");
 
@@ -729,6 +862,86 @@ export function BulkPostsForm({
               </Select>
             </div>
           ) : null}
+          {selectedPlatforms.includes("instagram") ? (
+            <StoryPlacementSettings
+              platform="instagram"
+              choice={instagramPlacement}
+              fileCount={1}
+              videoDurationSec={null}
+              onChange={setInstagramPlacement}
+            />
+          ) : null}
+          {selectedPlatforms.includes("facebook_page") ? (
+            <StoryPlacementSettings
+              platform="facebook_page"
+              choice={facebookPlacement}
+              fileCount={1}
+              videoDurationSec={null}
+              onChange={setFacebookPlacement}
+            />
+          ) : null}
+          {googleShown ? (
+            <div className="flex flex-col gap-2 sm:max-w-md">
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="bulk-google-button">Google button</Label>
+                <Select
+                  id="bulk-google-button"
+                  className="h-11"
+                  value={googleMetadata.button?.type ?? ""}
+                  disabled={sendingMode !== null}
+                  onChange={(event) => {
+                    const value = event.target.value as GoogleButtonType | "";
+                    setGoogleMetadata(
+                      !value
+                        ? { postType: "update" }
+                        : {
+                            postType: "update",
+                            button: value === "CALL" ? { type: value } : { type: value, url: googleMetadata.button?.url ?? "" },
+                          },
+                    );
+                  }}
+                >
+                  <option value="">No button</option>
+                  {GOOGLE_BUTTON_TYPES.map((type) => (
+                    <option key={type} value={type}>
+                      {GOOGLE_BUTTON_LABELS[type]}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              {googleMetadata.button && googleMetadata.button.type !== "CALL" ? (
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="bulk-google-link">Button link</Label>
+                  <Input
+                    id="bulk-google-link"
+                    type="url"
+                    className="h-11"
+                    placeholder="https://"
+                    value={googleMetadata.button.url ?? ""}
+                    disabled={sendingMode !== null}
+                    onChange={(event) =>
+                      setGoogleMetadata((current) =>
+                        current.button ? { ...current, button: { ...current.button, url: event.target.value } } : current,
+                      )
+                    }
+                  />
+                </div>
+              ) : null}
+              {googleError ? <p className="text-sm text-destructive">{googleError}</p> : null}
+              <p className="text-sm text-muted-foreground">
+                Google photo posts go out as updates with this button. A video goes to your Google photos.
+              </p>
+            </div>
+          ) : null}
+          <div className="flex flex-col gap-1 sm:max-w-md">
+            <Label htmlFor="bulk-location">Location (optional)</Label>
+            <LocationAutocomplete
+              id="bulk-location"
+              value={location}
+              onChange={setLocation}
+              placeholder="Start typing a location..."
+            />
+          </div>
         </fieldset>
 
         <fieldset className="flex flex-col gap-2">
@@ -823,9 +1036,20 @@ export function BulkPostsForm({
               skipped={platformsForRow(selectedPlatforms, row.mimeType).skipped}
               locked={sendingMode !== null}
               minWhen={minRowTime(now ?? new Date())}
+              storyRefusal={rowStoryRefusal({
+                mimeType: row.mimeType,
+                durationSec: row.durationSec,
+                platforms: platformsForRow(selectedPlatforms, row.mimeType).platforms,
+                stories,
+              })}
+              coverOpen={coverOpenId === row.id}
               onConfirmInQueue={() => markInQueue(row.id)}
               onSendAgain={() => sendAgain(row.id)}
-              onCaptionChange={(caption) => updateRow(row.id, { caption, sendError: null })}
+              onCaptionChange={(caption) => updateRow(row.id, { caption, sendError: null, improveError: null })}
+              onAltTextChange={(altText) => updateRow(row.id, { altText })}
+              onImprove={() => void improveRow(row.id)}
+              onCoverOpenChange={(open) => setCoverOpenId(open ? row.id : null)}
+              onCoverChange={(cover) => updateRow(row.id, { cover, sendError: null })}
               onWhenChange={(when) => updateRow(row.id, { when, whenSetByHand: true, sendError: null })}
               onMove={(delta) => respread((current) => moveRow(current, row.id, delta))}
               onRemove={() => removeRow(row.id)}
@@ -867,7 +1091,6 @@ export function BulkPostsForm({
       {rows.length > 0 && !done ? (
         <div className="-mt-3 flex flex-col gap-1 text-sm text-muted-foreground">
           <p>{BULK_DRAFTS_NOTE}</p>
-          {selectedPlatforms.includes("google_business_profile") ? <p>{BULK_GOOGLE_BUTTON_NOTE}</p> : null}
         </div>
       ) : null}
 

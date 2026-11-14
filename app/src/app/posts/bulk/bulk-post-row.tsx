@@ -9,8 +9,11 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { VideoCoverPicker } from "@/components/video-cover-picker";
+import { ALT_TEXT_MAX } from "@/lib/altText";
 import { BULK_MAYBE_CREATED_MESSAGE } from "@/lib/bulkPosts";
 import { platformLabel } from "@/lib/platforms";
+import { formatCoverTime, type CoverChoice } from "@/lib/videoCover";
 import type { BulkRow } from "./bulk-posts-form";
 
 interface BulkPostRowProps {
@@ -23,14 +26,28 @@ interface BulkPostRowProps {
   locked: boolean;
   /** Earliest schedulable time, as a datetime-local `min`. */
   minWhen: string;
+  /** Why this row cannot be the Story chosen for the batch (rowStoryRefusal), or null. */
+  storyRefusal: string | null;
+  /** This video row's cover picker is the one open (one at a time: the picker's ids are fixed). */
+  coverOpen: boolean;
   onConfirmInQueue(): void;
   onSendAgain(): void;
   onCaptionChange(caption: string): void;
+  onAltTextChange(altText: string): void;
   onWhenChange(when: string): void;
   onMove(delta: -1 | 1): void;
   onRemove(): void;
   onRetry(): void;
   onWriteAgain(): void;
+  onImprove(): void;
+  onCoverOpenChange(open: boolean): void;
+  onCoverChange(cover: CoverChoice): void;
+}
+
+function coverSummary(cover: CoverChoice): string {
+  if (cover.kind === "frame") return `Cover: frame at ${formatCoverTime(cover.timeMs)}`;
+  if (cover.kind === "upload") return "Cover: your image";
+  return "Cover: Platform default";
 }
 
 function Thumbnail({ row }: { row: BulkRow }) {
@@ -92,19 +109,28 @@ export function BulkPostRow({
   skipped,
   locked,
   minWhen,
+  storyRefusal,
+  coverOpen,
   onConfirmInQueue,
   onSendAgain,
   onCaptionChange,
+  onAltTextChange,
   onWhenChange,
   onMove,
   onRemove,
   onRetry,
   onWriteAgain,
+  onImprove,
+  onCoverOpenChange,
+  onCoverChange,
 }: BulkPostRowProps) {
   const created = row.postId !== null;
   const editable = !created && !locked && !row.sending;
   const captionId = `bulk-caption-${row.id}`;
   const whenId = `bulk-when-${row.id}`;
+  const altId = `bulk-alt-${row.id}`;
+  const isPhoto = row.mimeType.startsWith("image/");
+  const isVideo = row.mimeType.startsWith("video/");
   const status = uploadText(row);
 
   return (
@@ -167,6 +193,8 @@ export function BulkPostRow({
             rows={3}
             value={row.caption}
             disabled={!editable}
+            // Improve replaces the text when it answers, so nothing typed meanwhile is lost.
+            readOnly={row.improving}
             placeholder={row.captionStatus === "writing" ? "Writing a caption..." : "Write a caption"}
             onChange={(event) => onCaptionChange(event.target.value)}
           />
@@ -175,14 +203,56 @@ export function BulkPostRow({
               {row.captionError ?? captionFailedText(null, undefined)}
             </p>
           ) : null}
+          {row.improveError ? <p className="text-sm text-muted-foreground">{row.improveError}</p> : null}
           {editable && row.upload === "done" && (row.captionStatus === "done" || row.captionStatus === "failed") ? (
-            <div>
-              <Button variant="outline" size="md" onClick={onWriteAgain}>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="md" disabled={row.improving} onClick={onWriteAgain}>
                 Write again
               </Button>
+              {row.caption.trim() ? (
+                <Button variant="outline" size="md" loading={row.improving} aria-busy={row.improving} onClick={onImprove}>
+                  {row.improving ? "Improving..." : "Improve"}
+                </Button>
+              ) : null}
             </div>
           ) : null}
         </div>
+
+        {isPhoto ? (
+          <div className="flex flex-col gap-1">
+            <Label htmlFor={altId}>Photo description (alt text)</Label>
+            <Input
+              id={altId}
+              className="h-11"
+              maxLength={ALT_TEXT_MAX}
+              value={row.altText}
+              disabled={!editable}
+              placeholder={row.altTextWriting ? "Writing a description..." : "What the photo shows, for screen readers"}
+              onChange={(event) => onAltTextChange(event.target.value)}
+            />
+          </div>
+        ) : null}
+
+        {isVideo && row.blob && !created ? (
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm text-foreground">{coverSummary(row.cover)}</p>
+              {editable ? (
+                <Button variant="outline" size="md" onClick={() => onCoverOpenChange(!coverOpen)}>
+                  {coverOpen ? "Done" : "Change cover"}
+                </Button>
+              ) : null}
+            </div>
+            {coverOpen && editable ? (
+              <VideoCoverPicker
+                videoUrl={row.blob.url}
+                durationSec={row.durationSec ?? null}
+                value={row.cover}
+                onChange={onCoverChange}
+              />
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="flex flex-col gap-1">
           <Label htmlFor={whenId}>Date and time</Label>
@@ -202,6 +272,12 @@ export function BulkPostRow({
         {skipped.length > 0 && !created ? (
           <p className="text-sm text-muted-foreground">
             Skips {skipped.map(platformLabel).join(", ")}: they do not take this kind of file.
+          </p>
+        ) : null}
+
+        {storyRefusal && !created ? (
+          <p className="text-sm text-destructive" role="alert">
+            {storyRefusal}
           </p>
         ) : null}
 

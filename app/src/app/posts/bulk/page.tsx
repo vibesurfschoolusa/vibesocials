@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { googleButtonFromWorkspace } from "@/lib/googlePostOptions";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { planIncludes } from "@/lib/planFeatures";
 import { getWorkspaceContext } from "@/lib/workspace";
@@ -47,6 +48,7 @@ export default async function BulkPostsPage({
           workspaceId={context.workspace.id}
           initialMedia={handoff.items}
           skippedMedia={handoff.skipped}
+          googleButtonDefault={googleButtonFromWorkspace(context.workspace)}
         />
       ) : context.role !== "owner" ? (
         // P1 fix round 2: a member cannot see Settings, Plan.
