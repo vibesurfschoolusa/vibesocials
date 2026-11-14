@@ -8,6 +8,7 @@ import type {
   TikTokPostMetadata,
   YouTubePostMetadata,
 } from "@/server/platforms/types";
+import { coverJobColumns, type PostCover } from "@/lib/videoCover";
 import { postJobStatusForIntent, type PostJobIntent } from "@/lib/scheduling";
 import { platformAcceptsMedia, platformAcceptsTextOnly } from "@/lib/platformLimits";
 import {
@@ -54,6 +55,12 @@ export interface PostJobSchedulingParams {
    * single job, written exactly as before.
    */
   series?: PostSeriesParams;
+  /**
+   * The video's chosen cover (V1, lib/videoCover.ts), stored on every job of
+   * the post for every intent; the publish and retry runs read it from the row.
+   * Absent = the platforms pick their own, as before.
+   */
+  cover?: PostCover;
 }
 
 /**
@@ -362,6 +369,7 @@ export async function createPostJobOnly(
               instagramMetadata: params.instagramMetadata,
               facebookMetadata: params.facebookMetadata,
               targetPlatforms,
+              cover: params.cover,
             }),
             workspaceId,
             ...seriesJobData(params.series, time),
@@ -442,6 +450,8 @@ export function buildPostJobCreateData(args: {
   /** Task 7 — chosen platform subset, persisted for deferred jobs so
    *  {@link prepareDeferredPostJobDispatch} can replay it at run time. */
   targetPlatforms?: Platform[];
+  /** V1: the video's cover; no columns are written without one. */
+  cover?: PostCover;
   // This pure builder deliberately does NOT take/stamp workspaceId — both
   // callers below merge it in directly (from their own required
   // `workspaceId` param) right at their `prisma.postJob.create` call, so this
@@ -470,6 +480,7 @@ export function buildPostJobCreateData(args: {
     publishMetadata: publishMetadata
       ? (publishMetadata as unknown as Prisma.InputJsonValue)
       : undefined,
+    ...coverJobColumns(args.cover),
   };
 }
 
@@ -643,6 +654,7 @@ export async function createPostJobForExistingMedia(
               instagramMetadata: params.instagramMetadata,
               facebookMetadata: params.facebookMetadata,
               targetPlatforms,
+              cover: params.cover,
             }),
             workspaceId,
             ...seriesJobData(params.series, time),

@@ -29,6 +29,7 @@ import { LocationAutocomplete } from "./location-autocomplete";
 import { TikTokConsentDeclaration, TikTokPostSettings } from "./tiktok-post-settings";
 import { YouTubePostSettings } from "./youtube-post-settings";
 import { StoryPlacementSettings } from "./story-placement";
+import { VideoCoverPicker } from "./video-cover-picker";
 import { CaptionCounter } from "@/components/caption-counter";
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -90,6 +91,8 @@ import {
   TIKTOK_PRIVACY_LABELS,
 } from "@/lib/platforms";
 import { extractVideoFrames } from "@/lib/extractVideoFrames";
+import { captureVideoFrame } from "@/lib/captureVideoFrame";
+import { coverRequestFields, type CoverChoice, type UploadedCoverImage } from "@/lib/videoCover";
 import {
   deriveComposerPlatforms,
   isTikTokPrivacyMissing,
@@ -822,6 +825,9 @@ function CreatePostFormInner({
   // panel), and the chosen video's length once the browser has read it.
   const [tiktokBlockingReason, setTiktokBlockingReason] = useState<string | null>(null);
   const [videoDurationSec, setVideoDurationSec] = useState<number | null>(null);
+  // V1: the video's cover, kept with the video it was chosen for, so another
+  // file (or a sent post) is back to the platform default without a reset.
+  const [coverState, setCoverState] = useState<{ videoUrl: string; choice: CoverChoice } | null>(null);
 
   const [youtubeMetadata, setYoutubeMetadata] = useState<YouTubePostMetadata>({
     privacyStatus: "unlisted",
@@ -968,6 +974,24 @@ function CreatePostFormInner({
   const repeatDates = repeatOn
     ? repeatSchedule(new Date(scheduledForLocal), repeat as RepeatInterval, repeatCount)
     : [];
+  // V1: the video the Cover control is for, and the source its frame is captured from.
+  const coverVideo: { url: string; source: File | string } | null =
+    reuseItem && reuseItem.mimeType.startsWith("video/")
+      ? { url: reuseItem.storageLocation, source: reuseItem.storageLocation }
+      : !reuseItem && photoSet.length === 0 && uploadFile?.type.startsWith("video/") && previewUrl
+        ? { url: previewUrl, source: uploadFile }
+        : null;
+  const coverChoice: CoverChoice =
+    coverVideo && coverState?.videoUrl === coverVideo.url ? coverState.choice : { kind: "default" };
+  const coverPicker = coverVideo ? (
+    <VideoCoverPicker
+      key={coverVideo.url}
+      videoUrl={coverVideo.url}
+      durationSec={videoDurationSec}
+      value={coverChoice}
+      onChange={(choice) => setCoverState({ videoUrl: coverVideo.url, choice })}
+    />
+  ) : null;
   // Sent only for a selected platform with Story chosen: a feed post's request stays as it was.
   const storyRequestFields = {
     ...(instagramStory ? { instagramMetadata: { placement: "story" as const } } : {}),
@@ -1324,6 +1348,24 @@ function CreatePostFormInner({
       if (selection === fileSelectionRef.current) {
         setAutoCaptionLoading(false);
       }
+    }
+  }
+
+  // V1: the cover's image, uploaded like a photo: the chosen file, or the
+  // chosen frame captured in the browser. Null when it could not be had.
+  async function uploadCoverImage(choice: CoverChoice, source: File | string): Promise<UploadedCoverImage | null> {
+    try {
+      const file =
+        choice.kind === "upload"
+          ? choice.file
+          : choice.kind === "frame"
+            ? await captureVideoFrame(source, choice.timeMs)
+            : null;
+      if (!file) return null;
+      const blob = await upload(generateBlobKey(file), file, { access: "public", handleUploadUrl: "/api/upload" });
+      return { url: blob.url, mimeType: file.type, sizeBytes: file.size };
+    } catch {
+      return null;
     }
   }
 
@@ -1726,12 +1768,25 @@ function CreatePostFormInner({
           ? { repeatAt: repeatDates.slice(1).map((date) => date.toISOString()) }
           : {};
 
+      // V1: a frame whose image could not be had still goes as its time
+      // (Instagram uses it); an uploaded cover that failed stops here.
+      let coverFields: ReturnType<typeof coverRequestFields> = {};
+      if (coverVideo && coverChoice.kind !== "default") {
+        const image = await uploadCoverImage(coverChoice, coverVideo.source);
+        if (coverChoice.kind === "upload" && !image) {
+          toast.error("The cover image could not be uploaded. Try again, or choose Platform default.");
+          setUploadLoading(false);
+          return;
+        }
+        coverFields = coverRequestFields(coverChoice, image);
+      }
+
       const response = await fetch("/api/posts", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ ...postData, ...storyRequestFields, ...repeatFields }),
+        body: JSON.stringify({ ...postData, ...storyRequestFields, ...repeatFields, ...coverFields }),
       });
 
       const data: unknown = await response.json().catch(() => null);
@@ -2216,6 +2271,7 @@ function CreatePostFormInner({
                   className="max-h-64 w-full rounded-[var(--radius)] border border-border"
                 />
               ) : null}
+              {coverPicker}
               <p className="text-xs text-muted-foreground">
                 {reuseItem.originalFilename} &middot; {formatBytes(reuseItem.sizeBytes)}
               </p>
@@ -2306,6 +2362,7 @@ function CreatePostFormInner({
                       className="max-h-64 w-full rounded-[var(--radius)] border border-border"
                     />
                   ) : null}
+                  {coverPicker}
                   <p className="text-xs text-muted-foreground">
                     {uploadFile.name} &middot; {formatBytes(uploadFile.size)}
                   </p>

@@ -492,6 +492,13 @@ model PostJob {
   // the same generated id; a post created on its own has none. Each one is still
   // an ordinary post: edited, approved, published and cancelled on its own.
   seriesId                String?
+  // Video cover (V1, 2026-11-14), lib/videoCover.ts: the chosen frame (ms into
+  // the video) and/or the cover image (the frame captured in the browser, or an
+  // uploaded JPEG). Both null = each platform picks its own cover, as before.
+  // Read by the publish and retry runs from this row, so a scheduled post and a
+  // retry keep it. Nullable: the previous deployment neither reads nor writes them.
+  coverTimeMs             Int?
+  coverImageUrl           String?
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
 
@@ -632,6 +639,10 @@ model PostJobResult {
   // by then expired) state until a retry clears it. The previous deployment
   // ignores the column: it neither reads nor writes it.
   uploadState        Json?
+  // Video cover (V1, 2026-11-14): a plain sentence about a published post, such
+  // as "Cover not set: ..." when the platform refused the chosen cover. The post
+  // itself succeeded. Null for every other result.
+  note               String?
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 

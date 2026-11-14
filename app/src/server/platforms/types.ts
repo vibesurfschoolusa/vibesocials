@@ -1,5 +1,6 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
 
+import type { PostCover } from "@/lib/videoCover";
 import type { UploadStateStore } from "@/server/jobs/uploadState";
 
 export interface TikTokPostMetadata {
@@ -116,6 +117,12 @@ export interface PublishContext {
   instagramMetadata?: InstagramPostMetadata;
   /** Facebook Page feed or Story. Absent: feed. */
   facebookMetadata?: FacebookPostMetadata;
+  /**
+   * The video's chosen cover (V1, lib/videoCover.ts). Set only for YouTube,
+   * Instagram, Facebook Page and LinkedIn. Absent: the platform picks its own.
+   * A client never fails or repeats a post over its cover.
+   */
+  cover?: PostCover;
 }
 
 /**
@@ -143,6 +150,11 @@ export interface PublishResult {
    * after it finish inside one step.
    */
   continuation?: { resumeAt: number | null };
+  /**
+   * A plain sentence about the published post, saved as PostJobResult.note:
+   * today only "Cover not set: ..." when the platform refused the chosen cover.
+   */
+  note?: string;
 }
 
 export interface PlatformClient {

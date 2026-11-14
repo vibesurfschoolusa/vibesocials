@@ -6,6 +6,7 @@ import { assertOk } from "@/lib/assertOk";
 import { mediaKindOf, unsupportedMediaReason } from "@/lib/platformLimits";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { LINKEDIN_REST_BASE_URL, linkedinRestHeaders, toLinkedInLittleText } from "@/lib/linkedinApi";
+import type { PostCover } from "@/lib/videoCover";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 import {
   connectionTokenChangedError,
@@ -16,6 +17,7 @@ import {
   type TokenSnapshot,
 } from "./connectionHealth";
 import { refreshConnectionToken } from "./connectionRefresh";
+import { COVER_REQUEST_TIMEOUT_MS, fetchCoverImage } from "./coverImage";
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import {
   blobInterruptionDetails,
@@ -513,16 +515,61 @@ async function uploadImage(
   return imageUrn;
 }
 
-/** The body of `POST /rest/videos?action=initializeUpload`: the page owns the video; no captions, no thumbnail. */
-function videoInitializeRequest(ownerUrn: string, fileSizeBytes: number) {
+/**
+ * The body of `POST /rest/videos?action=initializeUpload`: the page owns the video; no captions.
+ * A thumbnail only for a whole-file upload with a cover (V1).
+ */
+function videoInitializeRequest(ownerUrn: string, fileSizeBytes: number, uploadThumbnail = false) {
   return {
     initializeUploadRequest: {
       owner: ownerUrn,
       fileSizeBytes,
       uploadCaptions: false,
-      uploadThumbnail: false,
+      uploadThumbnail,
     },
   };
+}
+
+export const LINKEDIN_COVER_REFUSED_NOTE =
+  "Cover not set: LinkedIn did not accept the chosen cover, so the video uses its own.";
+export const LINKEDIN_COVER_FRAME_ONLY_NOTE =
+  "Cover not set: LinkedIn needs the cover as an image, and the chosen frame could not be saved as one.";
+export const LINKEDIN_COVER_UNREADABLE_NOTE =
+  "Cover not set: the cover image could not be read from storage, so the video uses its own.";
+
+/**
+ * V1: PUT the cover to the `thumbnailUploadUrl` initializeUpload answered when it was asked for
+ * one, with `media-type-family: STILLIMAGE` and `Content-Type: application/octet-stream`, between
+ * the video's parts and finalizeUpload, as the Videos API page orders it
+ * (https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/videos-api,
+ * read 2026-11-14; w_organization_social, which the app has). The page: "A feed video can serve
+ * even with failed" thumbnail processing, so a failure here is a note, never a failed post. The
+ * URL is a capability and is never logged.
+ */
+async function uploadVideoThumbnail(registerData: unknown, thumb: Buffer, deadline?: number): Promise<string | undefined> {
+  const url = asRecord(asRecord(registerData)?.value)?.thumbnailUploadUrl;
+  if (!isHttpsUrl(url)) {
+    console.warn("[LinkedIn] No thumbnail upload address in the answer; the cover is skipped");
+    return LINKEDIN_COVER_REFUSED_NOTE;
+  }
+  try {
+    const response = await fetchWithTimeout(
+      url,
+      {
+        method: "PUT",
+        headers: { "media-type-family": "STILLIMAGE", "Content-Type": "application/octet-stream" },
+        body: new Uint8Array(thumb),
+      },
+      budgetedTimeout(COVER_REQUEST_TIMEOUT_MS, deadline),
+    );
+    void response.body?.cancel().catch(() => {});
+    if (response.ok) return undefined;
+    console.warn("[LinkedIn] The cover was refused", { status: response.status });
+    return LINKEDIN_COVER_REFUSED_NOTE;
+  } catch (error) {
+    console.warn("[LinkedIn] The cover was not sent", { code: (error as { code?: unknown } | null)?.code });
+    return LINKEDIN_COVER_REFUSED_NOTE;
+  }
 }
 
 /** The body of `POST /rest/videos?action=finalizeUpload`: the part ids in the order of the upload instructions. */
@@ -555,8 +602,20 @@ async function uploadVideo(
   filename: string,
   connection: TokenSnapshot,
   deadline?: number,
-): Promise<string> {
+  cover?: PostCover,
+): Promise<{ video: string; coverNote?: string }> {
   console.log("[LinkedIn] Starting video upload", { videoUrl, filename });
+
+  // V1: the cover image first, so the upload asks for a thumbnail only when there is one to send.
+  let coverNote: string | undefined;
+  let thumb: Buffer | null = null;
+  if (cover) {
+    if (!cover.imageUrl) coverNote = LINKEDIN_COVER_FRAME_ONLY_NOTE;
+    else {
+      thumb = await fetchCoverImage(cover.imageUrl, deadline);
+      if (!thumb) coverNote = LINKEDIN_COVER_UNREADABLE_NOTE;
+    }
+  }
 
   // Step 1: Download video from blob storage.
   // fetchWithTimeout's own timeoutMs only bounds the connection + response
@@ -589,7 +648,7 @@ async function uploadVideo(
     {
       method: "POST",
       headers: linkedinRestHeaders(accessToken, { "Content-Type": "application/json" }),
-      body: JSON.stringify(videoInitializeRequest(ownerUrn, videoSize)),
+      body: JSON.stringify(videoInitializeRequest(ownerUrn, videoSize, thumb !== null)),
     },
     budgetedTimeout(DEFAULT_FETCH_TIMEOUT_MS, deadline),
   );
@@ -665,6 +724,8 @@ async function uploadVideo(
     partIds.push(partId);
   }
 
+  if (thumb) coverNote = await uploadVideoThumbnail(registerData, thumb, deadline);
+
   // Step 4: Finalize the upload with the parts' ETags.
   const finalizeResponse = await fetchWithTimeout(
     `${LINKEDIN_VIDEOS_URL}?action=finalizeUpload`,
@@ -689,7 +750,7 @@ async function uploadVideo(
   }
 
   console.log("[LinkedIn] Video uploaded successfully", { videoUrn: upload.video });
-  return upload.video;
+  return coverNote ? { video: upload.video, coverNote } : { video: upload.video };
 }
 
 /**
@@ -1934,19 +1995,23 @@ export const linkedinClient: PlatformClient = {
 
     try {
       let mediaUrn: string | undefined;
+      let coverNote: string | undefined;
 
       // Upload media if present
       if (isVideo) {
         // The whole file in one step: Videos API initializeUpload, its parts, finalizeUpload,
         // then a short wait for LinkedIn to process it before the post refers to it.
-        mediaUrn = await uploadVideo(
+        const uploaded = await uploadVideo(
           accessToken,
           authorUrn,
           mediaUrl,
           mediaItem.originalFilename,
           socialConnection,
           deadline,
+          ctx.cover,
         );
+        mediaUrn = uploaded.video;
+        coverNote = uploaded.coverNote;
         await waitForVideoReady({ accessToken, video: mediaUrn, connection: socialConnection, deadline });
       } else if (mediaItem.mimeType.startsWith("image/")) {
         mediaUrn = await uploadImage(accessToken, authorUrn, mediaUrl, socialConnection, deadline);
@@ -1973,9 +2038,7 @@ export const linkedinClient: PlatformClient = {
 
       console.log("[LinkedIn] Publish successful", { postId });
 
-      return {
-        externalPostId: postId,
-      };
+      return coverNote ? { externalPostId: postId, note: coverNote } : { externalPostId: postId };
     } catch (error) {
       console.error("[LinkedIn] Publish error", { error });
       throw error;

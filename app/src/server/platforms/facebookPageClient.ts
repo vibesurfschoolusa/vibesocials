@@ -8,6 +8,7 @@ import { connectionTokenChangedError, flagRejectedToken } from "./connectionHeal
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
 import { META_GRAPH_BASE_URL, META_GRAPH_VIDEO_BASE_URL } from "@/lib/metaGraph";
 import { mediaKindOf } from "@/lib/platformLimits";
+import { fetchCoverImage } from "./coverImage";
 import { budgetedTimeout } from "./publishBudget";
 import { classifyRateLimit } from "./rateLimited";
 
@@ -132,6 +133,34 @@ function withAltText(body: URLSearchParams, item: PublishContext["mediaItem"]): 
  */
 async function refusedForDescription(body: URLSearchParams, response: Response): Promise<boolean> {
   if (!body.has("alt_text_custom")) return false;
+  if (response.status < 400 || response.status >= 500 || response.status === 401) return false;
+  const text = await response.clone().text().catch(() => "");
+  return !isFacebookAuthErrorBody(text);
+}
+
+export const FACEBOOK_COVER_REFUSED_NOTE =
+  "Cover not set: Facebook did not accept the chosen cover, so the video uses its own.";
+export const FACEBOOK_COVER_FRAME_ONLY_NOTE =
+  "Cover not set: Facebook needs the cover as an image, and the chosen frame could not be saved as one.";
+export const FACEBOOK_COVER_UNREADABLE_NOTE =
+  "Cover not set: the cover image could not be read from storage, so the video uses its own.";
+
+/**
+ * V1: the video's fields as multipart with the cover image as `thumb`, "the
+ * video thumbnail raw data to be uploaded and associated with a video"
+ * (https://developers.facebook.com/docs/graph-api/reference/page/videos/, read
+ * 2026-11-14). Raw data has to be a file part, so the body is multipart; the
+ * page lists no `thumb_offset` for this endpoint.
+ */
+function withThumb(body: URLSearchParams, thumb: Buffer): FormData {
+  const form = new FormData();
+  for (const [key, value] of body) form.append(key, value);
+  form.append("thumb", new Blob([new Uint8Array(thumb)], { type: "image/jpeg" }), "cover.jpg");
+  return form;
+}
+
+/** A 4xx that is not the token's: nothing was published, so the video can go once more without its thumb. */
+async function refusedForThumb(response: Response): Promise<boolean> {
   if (response.status < 400 || response.status >= 500 || response.status === 401) return false;
   const text = await response.clone().text().catch(() => "");
   return !isFacebookAuthErrorBody(text);
@@ -530,27 +559,55 @@ export const facebookPageClient: PlatformClient = {
     // /videos) is the commit call. A 5xx, a timeout or a dropped connection
     // after it was sent is PUBLISH_UNCONFIRMED (the post may be live) and is
     // never re-run; a 4xx / 429 is returned and handled below as before.
-    const send = (requestBody: URLSearchParams) =>
+    const send = (requestBody: URLSearchParams | FormData) =>
       commitRequest("facebook_page", () =>
         fetchWithTimeout(
           endpoint.toString(),
           {
             method: "POST",
-            headers: {
-              "Content-Type": "application/x-www-form-urlencoded",
-            },
+            // FormData sets its own multipart Content-Type with the boundary.
+            ...(requestBody instanceof FormData
+              ? {}
+              : { headers: { "Content-Type": "application/x-www-form-urlencoded" } }),
             body: requestBody,
           },
           timeoutMs,
         ),
       );
-    let response = await send(body);
+
+    // V1: the video's chosen cover, as an image. A cover never fails the post:
+    // with no image to send, the video goes without one and the result says so.
+    let coverNote: string | undefined;
+    let thumb: Buffer | null = null;
+    if (isVideo && ctx.cover) {
+      if (!ctx.cover.imageUrl) coverNote = FACEBOOK_COVER_FRAME_ONLY_NOTE;
+      else {
+        thumb = await fetchCoverImage(ctx.cover.imageUrl, ctx.deadline);
+        if (!thumb) coverNote = FACEBOOK_COVER_UNREADABLE_NOTE;
+      }
+    }
+
+    let response = await send(thumb ? withThumb(body, thumb) : body);
 
     // 2026-11-01 scale audit (platform limits): a Meta throttle (code 4, 17, 32,
     // 613, 80001 or HTTP 429) is RATE_LIMITED, with the wait from the
     // X-Business-Use-Case-Usage header, not FACEBOOK_PAGE_PUBLISH_FAILED.
     let limited = await classifyRateLimit("facebook_page", response);
     if (limited) throw limited;
+
+    // V1: a video refused with its thumb is sent once more without it. The 4xx
+    // means nothing was published; a 5xx or a lost answer never gets here
+    // (commitRequest: PUBLISH_UNCONFIRMED), so a video is never posted twice.
+    if (thumb && (await refusedForThumb(response))) {
+      console.warn("[FacebookPage] The video was refused with its cover; sending it without one", {
+        status: response.status,
+      });
+      void response.body?.cancel().catch(() => {});
+      coverNote = FACEBOOK_COVER_REFUSED_NOTE;
+      response = await send(body);
+      limited = await classifyRateLimit("facebook_page", response);
+      if (limited) throw limited;
+    }
 
     // 07d: a photo refused with its description is sent once more without it. The
     // first send was answered with a 4xx, so nothing was published; a 5xx, a timeout
@@ -589,9 +646,7 @@ export const facebookPageClient: PlatformClient = {
       externalPostId,
     });
 
-    return {
-      externalPostId,
-    };
+    return coverNote ? { externalPostId, note: coverNote } : { externalPostId };
   },
 
   /**

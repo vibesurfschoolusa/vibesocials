@@ -2541,3 +2541,61 @@ describe("POST /api/posts - repeat, posts of one request on the same day", () =>
     expect(checkDailyPostLimitMock.mock.calls[0][0]).not.toHaveProperty("alsoOnDay");
   });
 });
+
+// V1 (2026-11-14): a video's cover rides the create call onto the job.
+describe("POST /api/posts — a video's cover", () => {
+  const VIDEO = {
+    blobUrl: "https://test.public.blob.vercel-storage.com/vid.mp4",
+    filename: "vid.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 123,
+    baseCaption: "hello",
+  };
+  const COVER_URL = "https://test.public.blob.vercel-storage.com/cover.jpg";
+
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["r1"] });
+    createPostJobForExistingMediaMock.mockResolvedValue({ postJobId: "job-2", mediaItemId: "media-9", resultIds: ["r1"] });
+  });
+
+  it("passes a frame and its captured image to the create helper", async () => {
+    const response = await POST(
+      jsonRequest({ ...VIDEO, cover: { timeMs: 1500, imageUrl: COVER_URL, mimeType: "image/jpeg", sizeBytes: 900 } }),
+    );
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock.mock.calls[0][0].cover).toEqual({ timeMs: 1500, imageUrl: COVER_URL });
+  });
+
+  it("passes a cover on the reuse path", async () => {
+    const response = await POST(jsonRequest({ mediaItemId: "media-9", baseCaption: "hi", cover: { timeMs: 40 } }));
+    expect(response.status).toBe(200);
+    expect(createPostJobForExistingMediaMock.mock.calls[0][0].cover).toEqual({ timeMs: 40 });
+  });
+
+  it("no cover: the helper gets no cover field", async () => {
+    await POST(jsonRequest(VIDEO));
+    expect(createPostJobOnlyMock.mock.calls[0][0]).not.toHaveProperty("cover");
+  });
+
+  it("refuses a PNG cover, and a cover on a photo, before anything is written", async () => {
+    const png = await POST(
+      jsonRequest({ ...VIDEO, cover: { imageUrl: COVER_URL, mimeType: "image/png", sizeBytes: 900 } }),
+    );
+    expect(png.status).toBe(400);
+    expect(await png.json()).toEqual({ error: "The cover must be a JPEG image of 8 MB or less." });
+
+    const photo = await POST(
+      jsonRequest({ ...VIDEO, filename: "p.jpg", mimeType: "image/jpeg", cover: { timeMs: 0 } }),
+    );
+    expect(photo.status).toBe(400);
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a cover image that is not in the app's storage", async () => {
+    const response = await POST(
+      jsonRequest({ ...VIDEO, cover: { imageUrl: "https://evil.example.com/c.jpg", mimeType: "image/jpeg", sizeBytes: 9 } }),
+    );
+    expect(response.status).toBe(400);
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+});

@@ -308,6 +308,19 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
     });
   });
 
+  it("stores the video's cover on the job (V1)", async () => {
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: { ...media, mimeType: "video/mp4" },
+      baseCaption: "hello",
+      intent: "draft",
+      cover: { imageUrl: "https://blob.example.com/cover.jpg" },
+    });
+
+    expect(postJobCreateMock.mock.calls[0][0].data.coverImageUrl).toBe("https://blob.example.com/cover.jpg");
+  });
+
   it("snapshots a Story placement on the job (2026-11-10)", async () => {
     await createPostJobOnly({
       userId: "user-1",
@@ -398,6 +411,22 @@ describe("createPostJobForExistingMedia", () => {
     expect(postJobCreateMock.mock.calls[0][0].data.publishMetadata).toEqual({
       googleBusinessProfile: googleMetadata,
     });
+  });
+
+  it("stores the video's cover on the reuse job (V1)", async () => {
+    findUniqueMock.mockResolvedValue(makeMediaItem({ workspaceId: "workspace-1", mimeType: "video/mp4" }));
+
+    await createPostJobForExistingMedia({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      mediaItemId: "media-1",
+      baseCaption: "hello",
+      intent: "scheduled",
+      scheduledFor: new Date("2030-01-01T00:00:00Z"),
+      cover: { timeMs: 700 },
+    });
+
+    expect(postJobCreateMock.mock.calls[0][0].data.coverTimeMs).toBe(700);
   });
 
   it("snapshots a Story placement on the reuse job (2026-11-10)", async () => {
@@ -763,6 +792,30 @@ describe("buildPostJobCreateData (review B1 — persist deferred privacy)", () =
     });
     expect(data.status).toBe("in_progress");
     expect(data.publishMetadata).toEqual({ youtube: yt });
+  });
+});
+
+// V1 (2026-11-14): a video's cover is stored on the job for every intent, so a
+// scheduled post and a retry read it back from the row.
+describe("buildPostJobCreateData - the video's cover", () => {
+  const COVER_URL = "https://blob.example.com/cover.jpg";
+
+  it.each(["immediate", "scheduled", "draft"] as const)("stores the cover on a %s job", (intent) => {
+    const data = buildPostJobCreateData({
+      userId: "u", mediaItemId: "m", intent,
+      scheduledFor: new Date("2030-01-01T00:00:00Z"), baseCaption: "hi",
+      cover: { timeMs: 1500, imageUrl: COVER_URL },
+    });
+    expect(data.coverTimeMs).toBe(1500);
+    expect(data.coverImageUrl).toBe(COVER_URL);
+  });
+
+  it("a post without a cover writes neither column (today's row)", () => {
+    const data = buildPostJobCreateData({
+      userId: "u", mediaItemId: "m", intent: "immediate", scheduledFor: null, baseCaption: "hi",
+    });
+    expect(data).not.toHaveProperty("coverTimeMs");
+    expect(data).not.toHaveProperty("coverImageUrl");
   });
 });
 

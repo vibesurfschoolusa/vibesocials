@@ -22,6 +22,7 @@ import {
 import { budgetedTimeout, MIN_REQUEST_WINDOW_MS, remainingMs } from "./publishBudget";
 import { META_GRAPH_BASE_URL } from "@/lib/metaGraph";
 import { MULTI_PHOTO_MIME_TYPES } from "@/lib/postMedia";
+import type { PostCover } from "@/lib/videoCover";
 import { instagramImageUrl } from "./instagramPhoto";
 import { classifyRateLimit } from "./rateLimited";
 
@@ -353,6 +354,8 @@ interface InstagramContainerState {
   createdAt: string;
   /** Status checks made so far (0 right after creation). */
   checks: number;
+  /** V1: the chosen cover was refused, so the container was made without it. */
+  coverRefused?: boolean;
 }
 
 /**
@@ -365,7 +368,13 @@ function readContainerState(data: unknown): InstagramContainerState | null {
   const { containerId, createdAt, checks } = data as Record<string, unknown>;
   if (typeof containerId !== "string" || containerId.length === 0) return null;
   if (typeof checks !== "number" || !Number.isInteger(checks) || checks < 0) return null;
-  return { containerId, createdAt: typeof createdAt === "string" ? createdAt : "", checks };
+  const coverRefused = (data as Record<string, unknown>).coverRefused === true;
+  return {
+    containerId,
+    createdAt: typeof createdAt === "string" ? createdAt : "",
+    checks,
+    ...(coverRefused ? { coverRefused } : {}),
+  };
 }
 
 /**
@@ -471,8 +480,10 @@ async function createInstagramContainer(args: {
   story: boolean;
   /** 07d: the photo's description; sent for a feed photo only. */
   altText?: string;
+  /** V1: a Reel's chosen cover; ignored for a photo and a Story. */
+  cover?: PostCover;
 }): Promise<string> {
-  const { igAccountId, accessToken, connection, caption, mediaUrl, isVideo, locationId, deadline, story, altText } =
+  const { igAccountId, accessToken, connection, caption, mediaUrl, isVideo, locationId, deadline, story, altText, cover } =
     args;
 
   if (story) {
@@ -504,6 +515,12 @@ async function createInstagramContainer(args: {
     // Instagram now requires REELS for video posts (VIDEO is deprecated)
     containerParams.media_type = "REELS";
     containerParams.video_url = mediaUrl;
+    // IG User Media reference (read 2026-11-14): `thumb_offset` is the frame in
+    // milliseconds; `cover_url` is a public JPEG of 8 MB at most, and wins over
+    // thumb_offset when both are sent. So a frame sends only its time (the
+    // video's own frame, at full size) and an uploaded image only its URL.
+    if (cover?.timeMs !== undefined) containerParams.thumb_offset = String(cover.timeMs);
+    else if (cover?.imageUrl) containerParams.cover_url = cover.imageUrl;
   } else {
     // A JPEG copy cropped into Instagram's 4:5..1.91:1 range (instagramPhoto.ts);
     // the stored URL only when the app has no public address (local dev).
@@ -521,6 +538,31 @@ async function createInstagramContainer(args: {
   });
 
   return postInstagramContainer({ igAccountId, params: containerParams, connection, deadline });
+}
+
+export const INSTAGRAM_COVER_REFUSED_NOTE =
+  "Cover not set: Instagram did not accept the chosen cover, so the Reel uses its own.";
+
+/**
+ * A Reel's container with its cover (V1). Nothing is published before
+ * media_publish, so a container refused with the cover is created once more
+ * without it: a cover never fails the post. A throttle or a dead token is not
+ * the cover's fault and is thrown as before.
+ */
+async function createContainerWithCover(
+  args: Parameters<typeof createInstagramContainer>[0],
+): Promise<{ containerId: string; coverRefused: boolean }> {
+  const coverApplies = args.isVideo && !args.story && args.cover !== undefined;
+  if (!coverApplies) {
+    return { containerId: await createInstagramContainer({ ...args, cover: undefined }), coverRefused: false };
+  }
+  try {
+    return { containerId: await createInstagramContainer(args), coverRefused: false };
+  } catch (error) {
+    if ((error as { code?: unknown } | null)?.code !== "INSTAGRAM_CONTAINER_FAILED") throw error;
+    console.warn("[Instagram] The container was refused with the cover; creating it without one");
+    return { containerId: await createInstagramContainer({ ...args, cover: undefined }), coverRefused: true };
+  }
 }
 
 /**
@@ -991,6 +1033,7 @@ export const instagramClient: PlatformClient = {
       }
 
       let containerId: string;
+      let coverRefused = false;
       if (store && saved) {
         // A later step: the container exists. One status check; unless it is
         // FINISHED this step ends here with the claim released and nothing published.
@@ -1003,8 +1046,9 @@ export const instagramClient: PlatformClient = {
         });
         if (pending) return pending;
         containerId = saved.containerId;
+        coverRefused = saved.coverRefused === true;
       } else {
-        containerId = await createInstagramContainer({
+        ({ containerId, coverRefused } = await createContainerWithCover({
           igAccountId,
           accessToken,
           connection: socialConnection,
@@ -1015,14 +1059,20 @@ export const instagramClient: PlatformClient = {
           deadline,
           story,
           altText: altTextOf(mediaItem, INSTAGRAM_ALT_TEXT_LIMIT),
-        });
+          cover: ctx.cover,
+        }));
 
         if (store) {
           // Step 1 of a REELS publish: keep the container for the next step. The
           // state is the only thing that crosses the step boundary, and it holds
           // no capability: the token is never stored.
           await store.save<InstagramContainerState>(INSTAGRAM_CONTAINER_STATE_KIND, {
-            data: { containerId, createdAt: new Date().toISOString(), checks: 0 },
+            data: {
+              containerId,
+              createdAt: new Date().toISOString(),
+              checks: 0,
+              ...(coverRefused ? { coverRefused } : {}),
+            },
           });
           return continueInAMinute();
         }
@@ -1047,7 +1097,7 @@ export const instagramClient: PlatformClient = {
         }
       }
 
-      return await publishInstagramContainer({
+      const published = await publishInstagramContainer({
         igAccountId,
         containerId,
         accessToken,
@@ -1056,6 +1106,7 @@ export const instagramClient: PlatformClient = {
         username: metadata.username,
         store,
       });
+      return coverRefused ? { ...published, note: INSTAGRAM_COVER_REFUSED_NOTE } : published;
     } catch (error: unknown) {
       console.error("[Instagram] Publish error", error);
       throw error;

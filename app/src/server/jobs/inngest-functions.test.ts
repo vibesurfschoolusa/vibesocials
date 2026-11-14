@@ -1955,6 +1955,75 @@ describe("publish functions - finalize through the locked recompute, notify with
     expect(byPlatform.facebook_page.facebookMetadata).toEqual(STORY);
     expect(byPlatform.instagram).not.toHaveProperty("facebookMetadata");
   });
+
+  // V1 (2026-11-14): the video's cover is read from the job row by the publish
+  // run (immediate, scheduled and promoted posts alike) and by a retry, and
+  // reaches only the clients that can set one.
+  const COVER_JOB = {
+    id: "job-1", workspaceId: WORKSPACE.id, mediaItemId: "media-1",
+    baseCaption: "c", perPlatformOverrides: null, publishMetadata: null,
+    coverTimeMs: 2500, coverImageUrl: "https://blob.example.com/cover.jpg",
+  };
+  const COVER = { timeMs: 2500, imageUrl: "https://blob.example.com/cover.jpg" };
+  const ALL: Platform[] = ["youtube", "instagram", "facebook_page", "linkedin", "x", "tiktok"];
+
+  function expectCoverOnlyWhereItApplies() {
+    const byPlatform = Object.fromEntries(publishCtxs.map((c) => [c.socialConnection.platform, c]));
+    for (const platform of ["youtube", "instagram", "facebook_page", "linkedin"] as const) {
+      expect(byPlatform[platform].cover).toEqual(COVER);
+    }
+    expect(byPlatform.x).not.toHaveProperty("cover");
+    expect(byPlatform.tiktok).not.toHaveProperty("cover");
+  }
+
+  it("a publish run hands the job's cover to YouTube, Instagram, Facebook and LinkedIn only", async () => {
+    db.postJobFindUnique.mockResolvedValue(COVER_JOB);
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null, mimeType: "video/mp4" });
+    db.connectionFindMany.mockResolvedValue(ALL.map((p) => ({ id: `conn-${p}`, platform: p })));
+    stubResults(ALL);
+
+    await handlerOf(publishToAllPlatforms)({ event: publishEvent, step: fakeStep() });
+
+    expectCoverOnlyWhereItApplies();
+  });
+
+  it("a retry keeps the job's cover", async () => {
+    db.postJobFindUnique.mockResolvedValue(COVER_JOB);
+    db.mediaItemFindUnique.mockResolvedValue({ id: "media-1", baseCaption: "c", deletedAt: null, mimeType: "video/mp4" });
+    db.connectionFindMany.mockResolvedValue(ALL.map((p) => ({ id: `conn-${p}`, platform: p })));
+    stubResults(ALL);
+
+    await handlerOf(retryPlatforms)({
+      event: { name: "post/retry.requested", data: { postJobId: "job-1", userId: "user-1", platforms: ALL } },
+      step: fakeStep(),
+    });
+
+    expectCoverOnlyWhereItApplies();
+  });
+
+  it("a job without a cover hands none to any client", async () => {
+    await publishRun(["youtube", "instagram"]);
+    for (const ctx of publishCtxs) expect(ctx).not.toHaveProperty("cover");
+  });
+
+  it("a client's note is saved on its successful result; a result without one writes no note", async () => {
+    getPlatformClientMock.mockImplementation((platform: Platform) => ({
+      publishVideo: vi.fn(async (ctx: PublishContext) => {
+        publishCtxs.push(ctx);
+        return platform === "youtube"
+          ? { externalPostId: "vid-1", note: "Cover not set: YouTube only allows custom covers on verified channels." }
+          : { externalPostId: `ext-${platform}` };
+      }),
+    }));
+
+    await publishRun(["youtube", "x"]);
+
+    const writes = db.resultUpdate.mock.calls.map((c) => c[0] as { where: { id: string }; data: Record<string, unknown> });
+    const youtube = writes.find((w) => w.where.id === "result-youtube" && w.data.status === "success");
+    const x = writes.find((w) => w.where.id === "result-x" && w.data.status === "success");
+    expect(youtube?.data.note).toBe("Cover not set: YouTube only allows custom covers on verified channels.");
+    expect(x?.data).not.toHaveProperty("note");
+  });
 });
 
 // 2026-11-01 scale audit (platform limits): a platform that answers with a rate

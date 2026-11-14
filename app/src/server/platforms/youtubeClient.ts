@@ -28,6 +28,7 @@ import {
   usesLargeUploadPath,
   type BlobChunkStream,
 } from "./largeUpload";
+import { COVER_REQUEST_TIMEOUT_MS, fetchCoverImage } from "./coverImage";
 import { budgetedTimeout, PUBLISH_BUDGET_EXCEEDED_CODE, remainingMs } from "./publishBudget";
 import { classifyRateLimit, isRateLimitedError } from "./rateLimited";
 import { isNeverConnectedFetchError } from "./transientRetry";
@@ -876,161 +877,69 @@ async function publishResumable(args: {
   });
 }
 
+const YOUTUBE_THUMBNAILS_SET_URL = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set";
+
+export const YOUTUBE_COVER_UNVERIFIED_NOTE = "Cover not set: YouTube only allows custom covers on verified channels.";
+export const YOUTUBE_COVER_FAILED_NOTE =
+  "Cover not set: YouTube did not accept the cover image. You can set it in YouTube Studio.";
+export const YOUTUBE_COVER_FRAME_ONLY_NOTE =
+  "Cover not set: YouTube needs the cover as an image, and the chosen frame could not be saved as one.";
+
+/**
+ * Set the chosen cover on the video just uploaded (V1): `POST
+ * /upload/youtube/v3/thumbnails/set?videoId=` with the image as the body
+ * (https://developers.google.com/youtube/v3/docs/thumbnails/set, read
+ * 2026-11-14: JPEG or PNG, 50 MB, youtube.upload scope accepted, about 50 quota
+ * units). The video is live by now, so this never throws and is sent once: any
+ * refusal (403 forbidden is a channel that may not use custom thumbnails, i.e.
+ * one that is not verified) becomes a note on the published result.
+ */
+async function setYouTubeCover(
+  ctx: PublishContext,
+  videoId: string,
+  accessToken: string,
+): Promise<string | undefined> {
+  const cover = ctx.cover;
+  if (!cover) return undefined;
+  if (!cover.imageUrl) return YOUTUBE_COVER_FRAME_ONLY_NOTE;
+
+  const image = await fetchCoverImage(cover.imageUrl, ctx.deadline);
+  if (!image) return YOUTUBE_COVER_FAILED_NOTE;
+  try {
+    const response = await fetchWithTimeout(
+      `${YOUTUBE_THUMBNAILS_SET_URL}?videoId=${encodeURIComponent(videoId)}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "image/jpeg",
+          "Content-Length": image.length.toString(),
+        },
+        body: new Uint8Array(image),
+      },
+      budgetedTimeout(COVER_REQUEST_TIMEOUT_MS, ctx.deadline),
+    );
+    void response.body?.cancel().catch(() => {});
+    if (response.ok) {
+      console.log("[YouTube] Cover set", { videoId });
+      return undefined;
+    }
+    console.warn("[YouTube] Cover refused", { videoId, status: response.status });
+    return response.status === 403 ? YOUTUBE_COVER_UNVERIFIED_NOTE : YOUTUBE_COVER_FAILED_NOTE;
+  } catch (error) {
+    console.warn("[YouTube] Cover not sent", { videoId, code: (error as { code?: unknown } | null)?.code });
+    return YOUTUBE_COVER_FAILED_NOTE;
+  }
+}
+
 export const youtubeClient: PlatformClient = {
   async publishVideo(ctx: PublishContext): Promise<PublishResult> {
-    let { socialConnection } = ctx;
-    const { mediaItem, deadline } = ctx;
-
-    // 2026-11-02 scale audit (jobs B3): a video above 50 MiB on a platform enabled in
-    // LARGE_UPLOAD_PLATFORMS - or any upload that already has saved state - takes the
-    // resumable path; everything else keeps the multipart upload below, unchanged.
-    // The saved state alone decides, so it is read before anything else.
-    const store = ctx.uploadState;
-    const saved = store
-      ? await store.load<SavedYouTubeData, YouTubeResumableSecret>(YOUTUBE_UPLOAD_STATE_KIND)
-      : null;
-    const resumable =
-      store !== undefined &&
-      usesLargeUploadPath({
-        platform: "youtube",
-        mimeType: mediaItem.mimeType || "video/mp4",
-        sizeBytes: mediaItem.sizeBytes,
-        hasState: saved !== null,
-        hasStore: true,
-      });
-
-    // Check if token needs refresh. 2026-11-01 scale audit (jobs, token refresh):
-    // under the per-connection lock, so a concurrent publish, the health sweep
-    // or the metrics sync never refreshes the same connection at once.
-    // A resumable step sends a request with the token for as long as its budget
-    // lasts, so a token that expires before the deadline is refreshed first: one that
-    // died mid-step would fail the upload with a 401 on a chunk.
-    const tokenMustLastUntil = resumable && deadline !== undefined ? Math.max(deadline, Date.now()) : Date.now();
-    if (socialConnection.expiresAt && socialConnection.expiresAt < new Date(tokenMustLastUntil)) {
-      console.log("[YouTube] Access token expired, refreshing...");
-      socialConnection = await refreshConnectionToken(
-        socialConnection,
-        (current) => refreshGoogleToken(current, { deadline }),
-        { deadline },
-      );
-    }
-
-    const accessToken = socialConnection.accessToken;
-    if (!accessToken) {
-      const error = new Error("Missing access token for YouTube") as Error & { code: string };
-      error.code = "YOUTUBE_NO_ACCESS_TOKEN";
-      throw error;
-    }
-
-    // YouTube only supports videos
-    if (mediaItem.mimeType && !mediaItem.mimeType.startsWith("video/")) {
-      console.warn("[YouTube] Attempting to upload non-video media", {
-        mimeType: mediaItem.mimeType,
-        originalFilename: mediaItem.originalFilename,
-      });
-      const error = new Error("YouTube only supports video uploads") as Error & { code: string };
-      error.code = "YOUTUBE_MEDIA_NOT_VIDEO";
-      throw error;
-    }
-
-    console.log("[YouTube] Starting video upload", {
-      mimeType: mediaItem.mimeType,
-      sizeBytes: mediaItem.sizeBytes,
-      originalFilename: mediaItem.originalFilename,
-    });
-
-    if (store !== undefined && resumable) {
-      return publishResumable({ ctx, accessToken, store, saved });
-    }
-
-    // Fetch the video from Vercel Blob.
-    // fetchWithTimeout's own timeoutMs only bounds the connection + response
-    // headers; pass AbortSignal.timeout as init.signal to also bound the
-    // arrayBuffer() body transfer (see the fetchWithTimeout docstring). Both are
-    // the same value, clamped to the remaining step budget; a spent budget throws
-    // PUBLISH_TIME_BUDGET_EXCEEDED before the request (nothing is sent).
-    const mediaUrl = mediaItem.storageLocation;
-    const downloadTimeoutMs = budgetedTimeout(YOUTUBE_DOWNLOAD_TIMEOUT_MS, deadline);
-    const mediaResponse = await fetchWithTimeout(
-      mediaUrl,
-      { signal: AbortSignal.timeout(downloadTimeoutMs) },
-      downloadTimeoutMs,
-    );
-    await assertOk(mediaResponse, {
-      code: "YOUTUBE_FETCH_MEDIA_FAILED",
-      prefix: "Failed to fetch media from storage",
-    });
-
-    const videoBytes = Buffer.from(await mediaResponse.arrayBuffer());
-
-    const { metadata, apiParts, locationData } = buildYouTubeVideoResource(ctx);
-
-    // Create multipart upload
-    const boundary = "----VibeSocialsYouTubeBoundary";
-    const metadataBody = JSON.stringify(metadata);
-
-    console.log("[YouTube] Full metadata being sent to API:", metadataBody);
-
-    const parts = [
-      `--${boundary}\r\n`,
-      `Content-Type: application/json; charset=UTF-8\r\n\r\n`,
-      `${metadataBody}\r\n`,
-      `--${boundary}\r\n`,
-      `Content-Type: ${mediaItem.mimeType || "video/mp4"}\r\n\r\n`,
-    ];
-
-    const partBuffers = parts.map((p) => Buffer.from(p, "utf-8"));
-    const endBoundary = Buffer.from(`\r\n--${boundary}--\r\n`, "utf-8");
-
-    const body = Buffer.concat([...partBuffers, videoBytes, endBoundary]);
-
-    // 2026-11-01 scale audit (jobs H6, Review Focus 5): videos.insert is the
-    // commit call. A 5xx, a timeout or a dropped connection after it was sent
-    // is PUBLISH_UNCONFIRMED (the video may exist) and is never re-run; a 4xx or
-    // 429 is returned and classified below as before. The timeout is clamped to
-    // the step's remaining budget, and a spent budget throws
-    // PUBLISH_TIME_BUDGET_EXCEEDED BEFORE the request is sent (safe to retry).
-    const uploadResponse = await commitRequest("youtube", () =>
-      fetchWithTimeout(
-        `https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=${apiParts}`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": `multipart/related; boundary=${boundary}`,
-            "Content-Length": body.length.toString(),
-          },
-          body,
-        },
-        budgetedTimeout(YOUTUBE_UPLOAD_TIMEOUT_MS, deadline),
-      ),
-    );
-
-    // 2026-11-01 scale audit (platform limits): quotaExceeded / uploadLimitExceeded
-    // / rate limits become RATE_LIMITED (with the Pacific-midnight reset), not
-    // YOUTUBE_UPLOAD_FAILED.
-    const limited = await classifyRateLimit("youtube", uploadResponse);
-    if (limited) throw limited;
-
-    await assertOk(uploadResponse, {
-      code: "YOUTUBE_UPLOAD_FAILED",
-      prefix: "YouTube upload failed",
-    });
-
-    // The insert answered 2xx, so the video may exist (see completedUpload).
-    const published = await completedUpload(uploadResponse);
-
-    // Note: YouTube API does not support setting recordingDetails (location) via API
-    // Location can only be set manually via YouTube Studio or mobile apps
-    // We keep the location in our database for other platforms (Instagram, TikTok, X)
-    if (locationData?.latitude && locationData?.longitude) {
-      console.log("[YouTube] Location data available but cannot be set via API", {
-        location: locationData,
-        note: "YouTube requires manual location setting via Studio or mobile app",
-      });
-    }
-
-    return published;
+    const used: { accessToken?: string } = {};
+    const result = await uploadYouTubeVideo(ctx, used);
+    // Only once the video exists: a continuation or a failure has no video yet.
+    if (!ctx.cover || typeof result.externalPostId !== "string" || !used.accessToken) return result;
+    const note = await setYouTubeCover(ctx, result.externalPostId, used.accessToken);
+    return note ? { ...result, note } : result;
   },
 
   async refreshToken(
@@ -1040,3 +949,161 @@ export const youtubeClient: PlatformClient = {
     return refreshGoogleToken(connection, opts);
   },
 };
+
+/** The upload itself; `used.accessToken` is the token it sent, for the cover call after it. */
+async function uploadYouTubeVideo(ctx: PublishContext, used: { accessToken?: string }): Promise<PublishResult> {
+  let { socialConnection } = ctx;
+  const { mediaItem, deadline } = ctx;
+
+  // 2026-11-02 scale audit (jobs B3): a video above 50 MiB on a platform enabled in
+  // LARGE_UPLOAD_PLATFORMS - or any upload that already has saved state - takes the
+  // resumable path; everything else keeps the multipart upload below, unchanged.
+  // The saved state alone decides, so it is read before anything else.
+  const store = ctx.uploadState;
+  const saved = store
+    ? await store.load<SavedYouTubeData, YouTubeResumableSecret>(YOUTUBE_UPLOAD_STATE_KIND)
+    : null;
+  const resumable =
+    store !== undefined &&
+    usesLargeUploadPath({
+      platform: "youtube",
+      mimeType: mediaItem.mimeType || "video/mp4",
+      sizeBytes: mediaItem.sizeBytes,
+      hasState: saved !== null,
+      hasStore: true,
+    });
+
+  // Check if token needs refresh. 2026-11-01 scale audit (jobs, token refresh):
+  // under the per-connection lock, so a concurrent publish, the health sweep
+  // or the metrics sync never refreshes the same connection at once.
+  // A resumable step sends a request with the token for as long as its budget
+  // lasts, so a token that expires before the deadline is refreshed first: one that
+  // died mid-step would fail the upload with a 401 on a chunk.
+  const tokenMustLastUntil = resumable && deadline !== undefined ? Math.max(deadline, Date.now()) : Date.now();
+  if (socialConnection.expiresAt && socialConnection.expiresAt < new Date(tokenMustLastUntil)) {
+    console.log("[YouTube] Access token expired, refreshing...");
+    socialConnection = await refreshConnectionToken(
+      socialConnection,
+      (current) => refreshGoogleToken(current, { deadline }),
+      { deadline },
+    );
+  }
+
+  const accessToken = socialConnection.accessToken;
+  if (!accessToken) {
+    const error = new Error("Missing access token for YouTube") as Error & { code: string };
+    error.code = "YOUTUBE_NO_ACCESS_TOKEN";
+    throw error;
+  }
+  used.accessToken = accessToken;
+
+  // YouTube only supports videos
+  if (mediaItem.mimeType && !mediaItem.mimeType.startsWith("video/")) {
+    console.warn("[YouTube] Attempting to upload non-video media", {
+      mimeType: mediaItem.mimeType,
+      originalFilename: mediaItem.originalFilename,
+    });
+    const error = new Error("YouTube only supports video uploads") as Error & { code: string };
+    error.code = "YOUTUBE_MEDIA_NOT_VIDEO";
+    throw error;
+  }
+
+  console.log("[YouTube] Starting video upload", {
+    mimeType: mediaItem.mimeType,
+    sizeBytes: mediaItem.sizeBytes,
+    originalFilename: mediaItem.originalFilename,
+  });
+
+  if (store !== undefined && resumable) {
+    return publishResumable({ ctx, accessToken, store, saved });
+  }
+
+  // Fetch the video from Vercel Blob.
+  // fetchWithTimeout's own timeoutMs only bounds the connection + response
+  // headers; pass AbortSignal.timeout as init.signal to also bound the
+  // arrayBuffer() body transfer (see the fetchWithTimeout docstring). Both are
+  // the same value, clamped to the remaining step budget; a spent budget throws
+  // PUBLISH_TIME_BUDGET_EXCEEDED before the request (nothing is sent).
+  const mediaUrl = mediaItem.storageLocation;
+  const downloadTimeoutMs = budgetedTimeout(YOUTUBE_DOWNLOAD_TIMEOUT_MS, deadline);
+  const mediaResponse = await fetchWithTimeout(
+    mediaUrl,
+    { signal: AbortSignal.timeout(downloadTimeoutMs) },
+    downloadTimeoutMs,
+  );
+  await assertOk(mediaResponse, {
+    code: "YOUTUBE_FETCH_MEDIA_FAILED",
+    prefix: "Failed to fetch media from storage",
+  });
+
+  const videoBytes = Buffer.from(await mediaResponse.arrayBuffer());
+
+  const { metadata, apiParts, locationData } = buildYouTubeVideoResource(ctx);
+
+  // Create multipart upload
+  const boundary = "----VibeSocialsYouTubeBoundary";
+  const metadataBody = JSON.stringify(metadata);
+
+  console.log("[YouTube] Full metadata being sent to API:", metadataBody);
+
+  const parts = [
+    `--${boundary}\r\n`,
+    `Content-Type: application/json; charset=UTF-8\r\n\r\n`,
+    `${metadataBody}\r\n`,
+    `--${boundary}\r\n`,
+    `Content-Type: ${mediaItem.mimeType || "video/mp4"}\r\n\r\n`,
+  ];
+
+  const partBuffers = parts.map((p) => Buffer.from(p, "utf-8"));
+  const endBoundary = Buffer.from(`\r\n--${boundary}--\r\n`, "utf-8");
+
+  const body = Buffer.concat([...partBuffers, videoBytes, endBoundary]);
+
+  // 2026-11-01 scale audit (jobs H6, Review Focus 5): videos.insert is the
+  // commit call. A 5xx, a timeout or a dropped connection after it was sent
+  // is PUBLISH_UNCONFIRMED (the video may exist) and is never re-run; a 4xx or
+  // 429 is returned and classified below as before. The timeout is clamped to
+  // the step's remaining budget, and a spent budget throws
+  // PUBLISH_TIME_BUDGET_EXCEEDED BEFORE the request is sent (safe to retry).
+  const uploadResponse = await commitRequest("youtube", () =>
+    fetchWithTimeout(
+      `https://www.googleapis.com/upload/youtube/v3/videos?uploadType=multipart&part=${apiParts}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": `multipart/related; boundary=${boundary}`,
+          "Content-Length": body.length.toString(),
+        },
+        body,
+      },
+      budgetedTimeout(YOUTUBE_UPLOAD_TIMEOUT_MS, deadline),
+    ),
+  );
+
+  // 2026-11-01 scale audit (platform limits): quotaExceeded / uploadLimitExceeded
+  // / rate limits become RATE_LIMITED (with the Pacific-midnight reset), not
+  // YOUTUBE_UPLOAD_FAILED.
+  const limited = await classifyRateLimit("youtube", uploadResponse);
+  if (limited) throw limited;
+
+  await assertOk(uploadResponse, {
+    code: "YOUTUBE_UPLOAD_FAILED",
+    prefix: "YouTube upload failed",
+  });
+
+  // The insert answered 2xx, so the video may exist (see completedUpload).
+  const published = await completedUpload(uploadResponse);
+
+  // Note: YouTube API does not support setting recordingDetails (location) via API
+  // Location can only be set manually via YouTube Studio or mobile apps
+  // We keep the location in our database for other platforms (Instagram, TikTok, X)
+  if (locationData?.latitude && locationData?.longitude) {
+    console.log("[YouTube] Location data available but cannot be set via API", {
+      location: locationData,
+      note: "YouTube requires manual location setting via Studio or mobile app",
+    });
+  }
+
+  return published;
+}

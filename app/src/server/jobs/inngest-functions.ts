@@ -73,6 +73,7 @@ import {
   type WorkspaceStatusFields,
 } from "@/lib/workspaceStatus";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
+import { coverFromJob, type PostCover } from "@/lib/videoCover";
 import {
   claimResult,
   finalizeClaimedResult,
@@ -184,7 +185,15 @@ interface PublishToPlatformArgs {
   googleMetadata?: GoogleBusinessPostMetadata;
   instagramMetadata?: InstagramPostMetadata;
   facebookMetadata?: FacebookPostMetadata;
+  /** The video's cover from the job row (V1); absent for none. */
+  cover?: PostCover;
 }
+
+/**
+ * The platforms whose client sets a video's chosen cover (V1). X has no cover
+ * API and TikTok's is out of scope, so they never see one.
+ */
+const COVER_PLATFORMS: ReadonlySet<Platform> = new Set(["youtube", "instagram", "facebook_page", "linkedin"]);
 
 /**
  * Point a still-`pending` result at the connection that will publish it.
@@ -502,6 +511,7 @@ async function publishToPlatform({
   googleMetadata,
   instagramMetadata,
   facebookMetadata,
+  cover,
 }: PublishToPlatformArgs): Promise<PlatformStepOutcome> {
   // ONE deadline for this step, stamped before anything else and shared by
   // every in-step retry: the platform work must end inside Vercel's 300s
@@ -645,6 +655,9 @@ async function publishToPlatform({
     if (connection.platform === "facebook_page" && facebookMetadata) {
       publishContext.facebookMetadata = facebookMetadata;
     }
+    if (cover && COVER_PLATFORMS.has(connection.platform)) {
+      publishContext.cover = cover;
+    }
 
     // YouTube's `videos.insert` has its own daily budget (100 a day by default,
     // resetting at midnight Pacific; youtubeQuota.ts). Spend ONE slot per upload
@@ -771,8 +784,16 @@ async function publishToPlatform({
     // Written only when the client returned a link (Instagram), so every other
     // success writes exactly what it did before.
     ...(publishResult.externalPostUrl ? { externalPostUrl: publishResult.externalPostUrl } : {}),
+    // V1: only a client that has something to say (a refused cover) writes one.
+    ...(publishResult.note ? { note: publishResult.note } : {}),
   });
   return { platform: connectionRef.platform, status: "success" };
+}
+
+/** `{ cover }` for a job row that has one, else nothing (so the step output stays as it was). */
+function withCover(job: { coverTimeMs?: number | null; coverImageUrl?: string | null }): { cover?: PostCover } {
+  const cover = coverFromJob(job);
+  return cover ? { cover } : {};
 }
 
 /** A post's publish context without the file fields, for `publishText`. */
@@ -1061,6 +1082,8 @@ export const publishToAllPlatforms = inngest.createFunction(
         mediaItems: mediaItemsForStepOutput(mediaItems),
         socialConnections: socialConnections as ConnectionRef[],
         resultRecords,
+        // V1: only when the post has a cover, so a post without one memoizes what it did before.
+        ...withCover(postJob),
       };
     });
 
@@ -1176,6 +1199,7 @@ export const publishToAllPlatforms = inngest.createFunction(
             googleMetadata,
             instagramMetadata,
             facebookMetadata,
+            cover: setupData.cover,
           });
         },
       });
@@ -1532,6 +1556,8 @@ export const retryPlatforms = inngest.createFunction(
         connections: connections as ConnectionRef[],
         resultRecords,
         publishMetadata,
+        // V1: only when the post has a cover, as in fetch-data.
+        ...withCover(postJob),
         // Job-first caption (the text typed for THIS post), media fallback.
         // A text post's caption is its own snapshot; it has no media fallback.
         captionSource:
@@ -1696,6 +1722,7 @@ export const retryPlatforms = inngest.createFunction(
             googleMetadata: publishMetadata?.googleBusinessProfile,
             instagramMetadata: publishMetadata?.instagram,
             facebookMetadata: publishMetadata?.facebook,
+            cover: setupData.cover,
           });
         },
       });

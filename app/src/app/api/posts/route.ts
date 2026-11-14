@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { getWorkspaceContext, getWorkspaceMemberCount } from "@/lib/workspace";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { BLOB_URL_REJECTED_MESSAGE, canonicalBlobUrl } from "@/lib/blobUrl";
+import { parseCoverField } from "@/lib/videoCoverField";
 import { logoAddressRefusal } from "@/lib/workspaceLogo";
 import { findOverlongCaption, pickPlatformOverrides } from "@/lib/captionLimits";
 import { captionTooLongResponse, invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
@@ -479,6 +480,8 @@ interface CreatePostBody {
   // 07d: the photo's description, beside `blobUrl` or `mediaItemId` (and in
   // each `media` entry). Ignored for a video; absent keeps a reused photo's own.
   altText?: unknown;
+  // V1: `{ timeMs?, imageUrl?, mimeType?, sizeBytes? }`, a video's cover (lib/videoCoverField.ts).
+  cover?: unknown;
   baseCaption?: unknown;
   location?: unknown;
   perPlatformOverrides?: unknown;
@@ -678,6 +681,17 @@ export async function POST(request: Request) {
     }
     firstAltText = altText.value;
   }
+
+  // V1: the video's cover. A post without a file has no video to cover; the
+  // reuse path does not know the file's type here (the clients only apply a
+  // cover to a video).
+  const coverField = textOnly && body.cover != null
+    ? ({ ok: false, error: "A cover can only be chosen for a video." } as const)
+    : parseCoverField(body.cover, usingExistingMedia ? null : (mediaFields?.mimeType ?? null));
+  if (!coverField.ok) {
+    return NextResponse.json({ error: coverField.error }, { status: 400 });
+  }
+  const coverArgs = coverField.value ? { cover: coverField.value } : {};
 
   const baseCaptionRaw = body?.baseCaption;
   const locationRaw = body?.location;
@@ -1035,6 +1049,7 @@ export async function POST(request: Request) {
         // Task 7 — chosen platform subset; undefined = every connection.
         targetPlatforms,
         ...(series ? { series } : {}),
+        ...coverArgs,
       });
       postJobId = created.postJobId;
       mediaItemId = created.mediaItemId;
@@ -1076,6 +1091,7 @@ export async function POST(request: Request) {
         // Task 7 — chosen platform subset; undefined = every connection.
         targetPlatforms,
         ...(series ? { series } : {}),
+        ...coverArgs,
       });
       postJobId = created.postJobId;
       mediaItemId = created.mediaItemId;
