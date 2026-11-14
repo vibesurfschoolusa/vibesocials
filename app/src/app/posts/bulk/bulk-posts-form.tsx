@@ -4,6 +4,7 @@ import { useEffect, useEffectEvent, useMemo, useRef, useState, useSyncExternalSt
 import Link from "next/link";
 import { upload } from "@vercel/blob/client";
 import type { Platform } from "@prisma/client";
+import { UploadCloud } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -46,6 +47,8 @@ import { Select } from "@/components/ui/select";
 import type { YouTubePostMetadata } from "@/server/platforms/types";
 import { buildReusePostBody, buildUploadPostBody, type UploadedBlob } from "@/lib/createPostRequest";
 import { pickFromMedia, skippedMediaMessage } from "@/lib/bulkMedia";
+import { splitDroppedFiles } from "@/lib/clientPage";
+import { cn } from "@/lib/cn";
 import type { MediaItemDto } from "@/lib/mediaDto";
 import { extractVideoFrames } from "@/lib/extractVideoFrames";
 import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/platforms";
@@ -152,6 +155,8 @@ export function BulkPostsForm({
   const filesRef = useRef(new Map<string, File>());
   const workingRef = useRef(false);
   const [fileInputKey, setFileInputKey] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [dropNote, setDropNote] = useState<string | null>(null);
   const [tooMany, setTooMany] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [duplicateNote, setDuplicateNote] = useState(0);
@@ -387,7 +392,7 @@ export function BulkPostsForm({
     }
   }
 
-  function handleFiles(list: FileList | null) {
+  function handleFiles(list: FileList | File[] | null) {
     const picked = Array.from(list ?? []);
     setFileInputKey((key) => key + 1);
     if (picked.length === 0) return;
@@ -564,26 +569,72 @@ export function BulkPostsForm({
   const done = allRowsCreated(rows);
   const uploadingIndex = rows.findIndex((r) => r.upload === "working");
 
+  // Full, or posts being created: no more files.
+  const pickerLocked = rows.length >= BULK_MAX_FILES || sendingMode !== null;
+
   return (
     <div className="flex flex-col gap-6">
       <Card className="flex flex-col gap-4 p-4 md:p-6">
         <div className="flex flex-col gap-2">
           <Label htmlFor="bulk-files">Photos and videos</Label>
-          <Input
-            key={fileInputKey}
-            id="bulk-files"
-            type="file"
-            multiple
-            accept="video/*,image/*"
-            disabled={rows.length >= BULK_MAX_FILES || sendingMode !== null}
-            onChange={(event) => handleFiles(event.target.files)}
-            className="h-12"
-          />
+          {/* A drop area like Media's: a real file input stays inside its label
+              (visually hidden, still focusable) for keyboard and screen readers. */}
+          <div
+            onDragOver={(event) => {
+              if (pickerLocked) return;
+              event.preventDefault();
+              setDragging(true);
+            }}
+            onDragLeave={() => setDragging(false)}
+            onDrop={(event) => {
+              event.preventDefault();
+              setDragging(false);
+              if (pickerLocked) return;
+              const dropped = splitDroppedFiles(Array.from(event.dataTransfer.files), "added");
+              setDropNote(dropped.message);
+              handleFiles(dropped.accepted);
+            }}
+            className={cn(
+              "relative flex flex-col items-center gap-2 rounded-lg border-2 border-dashed px-4 py-6 text-center transition-colors focus-within:ring-2 focus-within:ring-ring",
+              dragging ? "border-primary bg-primary/5" : "border-border",
+              pickerLocked && "opacity-60",
+            )}
+          >
+            <UploadCloud className="h-8 w-8 text-muted-foreground" aria-hidden="true" />
+            <input
+              key={fileInputKey}
+              id="bulk-files"
+              type="file"
+              multiple
+              accept="video/*,image/*"
+              disabled={pickerLocked}
+              className="peer sr-only"
+              onChange={(event) => {
+                setDropNote(null);
+                handleFiles(event.target.files);
+              }}
+            />
+            <label
+              htmlFor="bulk-files"
+              className={cn(
+                "inline-flex items-center rounded-md border border-border bg-background px-3 py-1.5 text-sm font-medium peer-focus-visible:ring-2 peer-focus-visible:ring-ring",
+                pickerLocked ? "cursor-not-allowed" : "cursor-pointer hover:bg-muted",
+              )}
+            >
+              Choose photos and videos
+            </label>
+            <p className="text-xs text-muted-foreground">or drag them here</p>
+          </div>
+          {dropNote ? (
+            <p role="status" className="text-sm text-muted-foreground">
+              {dropNote}
+            </p>
+          ) : null}
           <div>
             <Button
               type="button"
               variant="outline"
-              disabled={rows.length >= BULK_MAX_FILES || sendingMode !== null}
+              disabled={pickerLocked}
               onClick={() => setPickerOpen(true)}
             >
               Choose from Media

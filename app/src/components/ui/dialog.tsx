@@ -204,7 +204,7 @@ export function Dialog({ open, onOpenChange, children, label, className }: Dialo
           aria-describedby={hasDescription ? descriptionId : undefined}
           tabIndex={-1}
           className={cn(
-            "relative z-10 w-full max-w-lg rounded-[calc(var(--radius)+0.125rem)] border border-border bg-card text-card-foreground shadow-lg outline-none",
+            "relative z-10 flex max-h-[calc(100dvh-2rem)] w-full max-w-lg flex-col overflow-y-auto rounded-[calc(var(--radius)+0.125rem)] border border-border bg-card text-card-foreground shadow-lg outline-none",
             className
           )}
         >
@@ -221,7 +221,7 @@ export const DialogHeader = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<
     return (
       <div
         ref={ref}
-        className={cn("flex flex-col gap-1.5 p-6 pb-0", className)}
+        className={cn("flex shrink-0 flex-col gap-1.5 p-6 pb-0", className)}
         {...props}
       />
     );
@@ -262,7 +262,7 @@ export const DialogDescription = forwardRef<
 export const DialogBody = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<"div">>(
   function DialogBody({ className, ...props }, ref) {
     return (
-      <div ref={ref} className={cn("p-6 text-sm text-foreground", className)} {...props} />
+      <div ref={ref} className={cn("min-h-0 overflow-y-auto p-6 text-sm text-foreground", className)} {...props} />
     );
   }
 );
@@ -273,7 +273,7 @@ export const DialogFooter = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<
       <div
         ref={ref}
         className={cn(
-          "flex flex-col-reverse gap-2 p-6 pt-0 sm:flex-row sm:justify-end",
+          "flex shrink-0 flex-col-reverse gap-2 p-6 pt-0 sm:flex-row sm:justify-end",
           className
         )}
         {...props}

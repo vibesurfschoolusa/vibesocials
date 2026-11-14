@@ -59,3 +59,19 @@ describe("BulkPostsForm — first render is the same on the server and in the br
     );
   });
 });
+
+// 2026-11-14: a drop area like Media's instead of the browser's bare file control.
+describe("Add many file picker", () => {
+  it("keeps a real, visually hidden multi-file input inside a labelled drop area", () => {
+    const html = firstRender("America/Chicago", "2026-11-14T10:00:00Z");
+    expect(html).toMatch(/<input[^>]*id="bulk-files"[^>]*>/);
+    const input = html.match(/<input[^>]*id="bulk-files"[^>]*>/)![0];
+    expect(input).toContain('type="file"');
+    expect(input).toContain('multiple=""');
+    expect(input).toContain('accept="video/*,image/*"');
+    expect(input).toMatch(/class="[^"]*\bsr-only\b/);
+    expect(html).toMatch(/<label[^>]*for="bulk-files"[^>]*>Choose photos and videos<\/label>/);
+    expect(html).toContain("or drag them here");
+  });
+});
+

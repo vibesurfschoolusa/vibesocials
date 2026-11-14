@@ -66,7 +66,10 @@ export function addPickedFiles(existing: PickedFile[], incoming: File[]): Picked
  * anything else is left out, with a sentence saying how many, instead of
  * vanishing without a word.
  */
-export function splitDroppedFiles(files: File[]): { accepted: File[]; leftOut: number; message: string | null } {
+export function splitDroppedFiles(
+  files: File[],
+  verb: "sent" | "added" = "sent",
+): { accepted: File[]; leftOut: number; message: string | null } {
   const accepted = files.filter(
     (file) => file.type === "" || file.type.startsWith("image/") || file.type.startsWith("video/"),
   );
@@ -74,6 +77,6 @@ export function splitDroppedFiles(files: File[]): { accepted: File[]; leftOut: n
   const message =
     leftOut === 0
       ? null
-      : `${leftOut} ${leftOut === 1 ? "file was" : "files were"} left out: only photos and videos can be sent.`;
+      : `${leftOut} ${leftOut === 1 ? "file was" : "files were"} left out: only photos and videos can be ${verb}.`;
   return { accepted, leftOut, message };
 }
