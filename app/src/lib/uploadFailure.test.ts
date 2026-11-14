@@ -22,6 +22,16 @@ describe("explainUploadFailure", () => {
     expect(explained.message).toBe(FULL);
   });
 
+  it("shows the sentence the route remembered for a refused token (an out-of-date page, the day's bytes)", async () => {
+    const sentence = "This page is out of date. Reload it, then try again.";
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ refused: true, error: sentence, code: "UPLOAD_PAGE_OUT_OF_DATE" }));
+
+    const explained = await explainUploadFailure(new Error("Vercel Blob: Failed to  retrieve the client token"), fetchMock);
+
+    expect(explained).toBeInstanceOf(UploadRefusedError);
+    expect(explained.message).toBe(sentence);
+  });
+
   it("keeps the original error when storage is not full", async () => {
     const original = new Error("network down");
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ storageFull: false }));

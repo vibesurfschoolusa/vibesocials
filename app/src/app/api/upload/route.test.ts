@@ -18,6 +18,25 @@ const {
   releaseDayBytesMock: vi.fn(),
 }));
 
+/**
+ * The RateLimitEntry rows the refusal memory keeps (uploadRefusal.ts runs for
+ * real on them), so a refusal, the page's question and a later upload meet.
+ */
+const refusalRows = vi.hoisted(() => new Map<string, { key: string; count: number; expiresAt: Date }>());
+vi.mock("@/lib/db", () => ({
+  prisma: {
+    rateLimitEntry: {
+      upsert: async ({ where, create, update }: { where: { key: string }; create: { key: string; count: number; expiresAt: Date }; update: { count: number; expiresAt: Date } }) => {
+        const row = refusalRows.has(where.key) ? { ...refusalRows.get(where.key)!, ...update } : create;
+        refusalRows.set(where.key, row);
+        return row;
+      },
+      findUnique: async ({ where }: { where: { key: string } }) => refusalRows.get(where.key) ?? null,
+      deleteMany: async ({ where }: { where: { key: string } }) => ({ count: refusalRows.delete(where.key) ? 1 : 0 }),
+    },
+  },
+}));
+
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 vi.mock("@vercel/blob/client", () => ({ handleUpload: handleUploadMock }));
@@ -34,8 +53,11 @@ import { COVER_ADDRESS_REFUSED_MESSAGE } from "@/lib/coverBlobPath";
 import { UPLOAD_PATH_REFUSED_MESSAGE } from "@/lib/blobKey";
 import { LOGO_ADDRESS_RESERVED_MESSAGE } from "@/lib/workspaceLogo";
 
+import { explainUploadFailure } from "@/lib/uploadFailure";
+
 import { GET, POST } from "./route";
 import { UPLOAD_BYTES_LIMIT_MESSAGE, UPLOAD_SIZE_MISSING_MESSAGE } from "./uploadBudget";
+import { UPLOAD_DAY_LIMIT_MESSAGE, UPLOAD_PAGE_OUT_OF_DATE_MESSAGE } from "./uploadRefusal";
 
 const FULL =
   "This workspace's media storage is full (5.0 GB). Delete media you no longer need on the Media page, then upload again.";
@@ -73,6 +95,7 @@ beforeEach(() => {
   consumeDayBytesMock.mockReset();
   releaseDayBytesMock.mockReset();
   consumeDayBytesMock.mockResolvedValue({ allowed: true });
+  refusalRows.clear();
   releaseDayBytesMock.mockResolvedValue(undefined);
 });
 
@@ -311,6 +334,91 @@ describe("POST /api/upload — declared size and the day's bytes", () => {
 
     expect(res.status).toBe(200);
     expect(consumeDayBytesMock).not.toHaveBeenCalled();
+  });
+});
+
+// upload() drops a refused token's body, so the page asks GET /api/upload why
+// (lib/uploadFailure.ts). The route remembers the reason for 10 minutes.
+describe("a refused upload's sentence reaches the person", () => {
+  const BLOB_CLIENT_ERROR = new Error("Vercel Blob: Failed to  retrieve the client token");
+  const tokenWith = (payload: unknown) =>
+    POST(
+      new Request("http://localhost/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "blob.generate-client-token", payload }),
+      }),
+    );
+  /** What the page shows: explainUploadFailure asking this route's GET. */
+  const shown = async () =>
+    (await explainUploadFailure(BLOB_CLIENT_ERROR, (async () => GET()) as unknown as typeof fetch)).message;
+
+  it("a tab opened before sizes were sent (no clientPayload) is told to reload", async () => {
+    expect((await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: null, multipart: false })).status).toBe(400);
+    await expect(shown()).resolves.toBe(UPLOAD_PAGE_OUT_OF_DATE_MESSAGE);
+    expect(UPLOAD_SIZE_MISSING_MESSAGE).toBe(UPLOAD_PAGE_OUT_OF_DATE_MESSAGE);
+  });
+
+  it("a file name the app does not make is told to reload", async () => {
+    for (const pathname of ["a.jpg", "covers/ws-2/a.jpg", "logos/x.png"]) {
+      refusalRows.clear();
+      expect((await tokenWith({ pathname, clientPayload: SIZE_PAYLOAD, multipart: false })).status, pathname).toBe(400);
+      await expect(shown(), pathname).resolves.toBe(UPLOAD_PAGE_OUT_OF_DATE_MESSAGE);
+    }
+    expect(UPLOAD_PATH_REFUSED_MESSAGE).toBe(UPLOAD_PAGE_OUT_OF_DATE_MESSAGE);
+  });
+
+  it("the day's 20 GB is told when uploads start again", async () => {
+    consumeDayBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 32_400 });
+    expect((await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false })).status).toBe(429);
+    await expect(shown()).resolves.toBe(UPLOAD_DAY_LIMIT_MESSAGE);
+    expect(UPLOAD_BYTES_LIMIT_MESSAGE).toBe(UPLOAD_DAY_LIMIT_MESSAGE);
+  });
+
+  it("an empty file and one over 512 MB get their own sentences", async () => {
+    await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: JSON.stringify({ size: 0 }), multipart: false });
+    await expect(shown()).resolves.toBe("This file is empty.");
+    await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: JSON.stringify({ size: 600 * MB }), multipart: false });
+    await expect(shown()).resolves.toBe("File is too large (max 512 MB).");
+  });
+
+  it("a full workspace keeps its storage sentence", async () => {
+    checkStorageLimitMock.mockResolvedValue({ error: FULL, code: "WORKSPACE_STORAGE_FULL" });
+    expect((await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false })).status).toBe(403);
+    await expect(shown()).resolves.toBe(FULL);
+  });
+
+  it("a byte counter that cannot be reached says to try again shortly, not that the day is used up", async () => {
+    consumeDayBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 60, unavailable: true });
+    const res = await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false });
+    expect(res.status).toBe(503);
+    await expect(res.json()).resolves.toEqual({ error: "Uploads aren't available right now. Try again in a minute." });
+    await expect(shown()).resolves.not.toBe(UPLOAD_DAY_LIMIT_MESSAGE);
+  });
+
+  it("a later upload that is signed clears the reason, so a new failure is not blamed on the old one", async () => {
+    await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: null, multipart: false });
+    expect((await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false })).status).toBe(200);
+    await expect(GET().then((r) => r.json())).resolves.toEqual({ storageFull: false });
+  });
+
+  it("is answered even when the storage question is rate limited, without summing storage", async () => {
+    await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: null, multipart: false });
+    checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 30 });
+
+    await expect(GET().then((r) => r.json())).resolves.toEqual({
+      storageFull: true,
+      refused: true,
+      error: UPLOAD_PAGE_OUT_OF_DATE_MESSAGE,
+      code: "UPLOAD_PAGE_OUT_OF_DATE",
+    });
+    expect(checkStorageLimitMock).not.toHaveBeenCalled();
+  });
+
+  it("one person's refusal is not shown to another", async () => {
+    await tokenWith({ pathname: SIGNED_IN_KEY, clientPayload: null, multipart: false });
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ userId: "user-2" }));
+    await expect(GET().then((r) => r.json())).resolves.toEqual({ storageFull: false });
   });
 });
 

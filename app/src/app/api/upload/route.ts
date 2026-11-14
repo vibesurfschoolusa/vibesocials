@@ -14,17 +14,13 @@ import { checkStorageLimit } from "@/server/usage/workspaceUsage";
 
 import {
   UPLOAD_BYTES_LIMIT_MESSAGE,
+  UPLOAD_COUNTER_UNAVAILABLE_MESSAGE,
   consumeUploadDayBytes,
   declaredUploadSize,
   releaseUploadDayBytes,
 } from "./uploadBudget";
+import { clearUploadRefusal, readUploadRefusal, recordUploadRefusal } from "./uploadRefusal";
 
-/**
- * GET /api/upload — why the active workspace cannot upload, if it cannot.
- * `upload()` from @vercel/blob/client drops the body of a refused token request
- * and throws a generic error, so Create and the Media page ask here to show the
- * storage sentence instead (lib/uploadFailure.ts).
- */
 /**
  * R2 M1: the only pathnames a signed-in token is signed for: a generateBlobKey
  * upload at the root, or a cover in the active workspace's own covers/ folder.
@@ -35,10 +31,24 @@ function isSignablePathname(pathname: string, workspaceId: string): boolean {
   return isSignedInUploadKey(pathname) || isWorkspaceCoverAddress(pathname, workspaceId);
 }
 
+/**
+ * GET /api/upload — why the active workspace cannot upload, if it cannot.
+ * `upload()` from @vercel/blob/client drops the body of a refused token request
+ * and throws a generic error, so Create and the Media page ask here to show the
+ * storage sentence instead (lib/uploadFailure.ts).
+ */
 export async function GET(): Promise<NextResponse> {
   const context = await getWorkspaceContext();
   if (!context) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  // Why this person's last token was refused (uploadRefusal.ts): one row read,
+  // so it is answered before the throttle below. `storageFull: true` too,
+  // because a tab opened before this release shows `error` only with it, and
+  // such a tab is exactly the one told to reload.
+  const remembered = await readUploadRefusal(context.user.id);
+  if (remembered) {
+    return NextResponse.json({ storageFull: true, refused: true, ...remembered });
   }
   // Each call sums the workspace's storage, so it is throttled. Over the limit it
   // answers "not full": the caller then shows the upload's own error.
@@ -111,21 +121,29 @@ export async function POST(request: Request): Promise<NextResponse> {
     // no client token may write there.
     const payload = body.payload as { pathname?: unknown; clientPayload?: unknown } | null | undefined;
     const pathname = payload && typeof payload.pathname === "string" ? payload.pathname : "";
+    // Each refusal below is remembered (uploadRefusal.ts) so the page can show
+    // its sentence; a file name the app does not make, like a missing size,
+    // means a page opened before a release, which a reload fixes. A full
+    // workspace is not remembered: GET sums storage and says so itself.
     const logoRefusal = logoAddressRefusal(pathname);
     if (logoRefusal) {
+      await recordUploadRefusal(user.id, "out-of-date");
       return NextResponse.json({ error: logoRefusal }, { status: 400 });
     }
     // V1 fix round 1: covers/<workspaceId>/ is that workspace's own; POST
     // /api/posts takes a cover only from the poster's folder.
     const coverRefusal = coverUploadRefusal(pathname, context.workspace.id);
     if (coverRefusal) {
+      await recordUploadRefusal(user.id, "out-of-date");
       return NextResponse.json({ error: coverRefusal }, { status: 400 });
     }
     if (!isSignablePathname(pathname, context.workspace.id)) {
+      await recordUploadRefusal(user.id, "out-of-date");
       return NextResponse.json({ error: UPLOAD_PATH_REFUSED_MESSAGE }, { status: 400 });
     }
     const declared = declaredUploadSize(payload?.clientPayload);
     if (!declared.ok) {
+      await recordUploadRefusal(user.id, declared.reason);
       return NextResponse.json({ error: declared.error }, { status: 400 });
     }
     const refusal = await checkStorageLimit(context.workspace.id);
@@ -133,7 +151,13 @@ export async function POST(request: Request): Promise<NextResponse> {
       return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 403 });
     }
     const day = await consumeUploadDayBytes(user.id, declared.size);
+    if (!day.allowed && day.unavailable) {
+      // The counter blinked; nothing is used up, and the page's "wait a few
+      // minutes" fallback is right, so nothing is remembered.
+      return NextResponse.json({ error: UPLOAD_COUNTER_UNAVAILABLE_MESSAGE }, { status: 503 });
+    }
     if (!day.allowed) {
+      await recordUploadRefusal(user.id, "day-limit");
       return NextResponse.json(
         { error: UPLOAD_BYTES_LIMIT_MESSAGE, retryAfterSeconds: day.retryAfterSeconds },
         { status: 429, headers: { "Retry-After": String(day.retryAfterSeconds ?? 60) } },
@@ -173,6 +197,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       },
     });
 
+    // Signed: an earlier refusal no longer explains a later failure.
+    if (countedBytes > 0) await clearUploadRefusal(user.id);
     return NextResponse.json(jsonResponse);
   } catch (error) {
     logger.error("[Upload] Error", { error });

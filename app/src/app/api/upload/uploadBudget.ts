@@ -2,6 +2,8 @@ import { prisma } from "@/lib/db";
 import { MAX_MEDIA_BYTES } from "@/lib/mediaInput";
 import type { RateLimitResult } from "@/lib/rateLimit";
 
+import { UPLOAD_DAY_LIMIT_MESSAGE, UPLOAD_PAGE_OUT_OF_DATE_MESSAGE, type UploadRefusalReason } from "./uploadRefusal";
+
 /**
  * R2 M1: the bytes one signed-in person may ask upload tokens for in a UTC day.
  * The 120-tokens-per-15-minutes limit alone lets one account write about
@@ -11,12 +13,13 @@ import type { RateLimitResult } from "@/lib/rateLimit";
  */
 export const UPLOAD_BYTES_PER_DAY = 20 * 1024 * 1024 * 1024;
 
-export const UPLOAD_SIZE_MISSING_MESSAGE =
-  "The upload did not say how big the file is. Reload the page and upload the file again.";
+/** A page that sends no size was opened before sizes were sent: it needs a reload. */
+export const UPLOAD_SIZE_MISSING_MESSAGE = UPLOAD_PAGE_OUT_OF_DATE_MESSAGE;
 export const UPLOAD_EMPTY_MESSAGE = "This file is empty.";
 export const UPLOAD_TOO_LARGE_MESSAGE = "File is too large (max 512 MB).";
-export const UPLOAD_BYTES_LIMIT_MESSAGE =
-  "You have uploaded 20 GB today, the most for one day. Upload more after midnight UTC, or use files already on the Media page.";
+export const UPLOAD_BYTES_LIMIT_MESSAGE = UPLOAD_DAY_LIMIT_MESSAGE;
+/** The byte counter could not be reached; nothing is used up. */
+export const UPLOAD_COUNTER_UNAVAILABLE_MESSAGE = "Uploads aren't available right now. Try again in a minute.";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** The row's count is a 32-bit Int, so bytes are counted in KiB (20 GB fits easily). */
@@ -32,7 +35,9 @@ function toKib(bytes: number): number {
 }
 
 /** The file size the page sent as the token request's clientPayload (lib/blobKey.ts uploadSizePayload). */
-export function declaredUploadSize(clientPayload: unknown): { ok: true; size: number } | { ok: false; error: string } {
+export function declaredUploadSize(
+  clientPayload: unknown,
+): { ok: true; size: number } | { ok: false; error: string; reason: UploadRefusalReason } {
   let size: unknown;
   try {
     const parsed: unknown = typeof clientPayload === "string" ? JSON.parse(clientPayload) : null;
@@ -41,10 +46,10 @@ export function declaredUploadSize(clientPayload: unknown): { ok: true; size: nu
     size = undefined;
   }
   if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) {
-    return { ok: false, error: UPLOAD_SIZE_MISSING_MESSAGE };
+    return { ok: false, error: UPLOAD_SIZE_MISSING_MESSAGE, reason: "out-of-date" };
   }
-  if (size === 0) return { ok: false, error: UPLOAD_EMPTY_MESSAGE };
-  if (size > MAX_MEDIA_BYTES) return { ok: false, error: UPLOAD_TOO_LARGE_MESSAGE };
+  if (size === 0) return { ok: false, error: UPLOAD_EMPTY_MESSAGE, reason: "empty" };
+  if (size > MAX_MEDIA_BYTES) return { ok: false, error: UPLOAD_TOO_LARGE_MESSAGE, reason: "too-large" };
   return { ok: true, size };
 }
 
@@ -57,7 +62,7 @@ export async function consumeUploadDayBytes(
   userId: string,
   bytes: number,
   now: number = Date.now(),
-): Promise<RateLimitResult> {
+): Promise<RateLimitResult & { unavailable?: true }> {
   const { key, resetAt } = dayKey(userId, now);
   const kib = toKib(bytes);
   try {
@@ -73,7 +78,7 @@ export async function consumeUploadDayBytes(
     return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((resetAt.getTime() - now) / 1000)) };
   } catch (error) {
     console.error("[upload] Byte counter store error, failing closed", error);
-    return { allowed: false, retryAfterSeconds: 60 };
+    return { allowed: false, retryAfterSeconds: 60, unavailable: true };
   }
 }
 

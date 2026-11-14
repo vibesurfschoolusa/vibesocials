@@ -16,9 +16,8 @@ export function isSignedInUploadKey(pathname: string): boolean {
   return typeof pathname === "string" && SIGNED_IN_UPLOAD_KEY.test(pathname);
 }
 
-/** /api/upload's 400 for a pathname the app does not make. */
-export const UPLOAD_PATH_REFUSED_MESSAGE =
-  "This upload was not started by Vibe Socials. Reload the page and upload the file again.";
+/** /api/upload's 400 for a pathname the app does not make: most likely a page open since before a release. */
+export const UPLOAD_PATH_REFUSED_MESSAGE = "This page is out of date. Reload it, then try again.";
 
 /**
  * The token request's clientPayload for every signed-in upload: /api/upload

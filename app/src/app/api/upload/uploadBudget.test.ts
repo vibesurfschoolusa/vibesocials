@@ -62,13 +62,13 @@ describe("declaredUploadSize", () => {
 
   it("refuses a missing or unreadable size with a plain sentence", () => {
     for (const payload of [null, undefined, "", "not json", "{}", JSON.stringify({ size: "2" }), JSON.stringify({ size: 1.5 }), JSON.stringify({ size: -4 }), "5"]) {
-      expect(declaredUploadSize(payload), String(payload)).toEqual({ ok: false, error: UPLOAD_SIZE_MISSING_MESSAGE });
+      expect(declaredUploadSize(payload), String(payload)).toEqual({ ok: false, error: UPLOAD_SIZE_MISSING_MESSAGE, reason: "out-of-date" });
     }
   });
 
   it("refuses an empty file and one over 512 MB", () => {
-    expect(declaredUploadSize(JSON.stringify({ size: 0 }))).toEqual({ ok: false, error: UPLOAD_EMPTY_MESSAGE });
-    expect(declaredUploadSize(JSON.stringify({ size: 512 * MB + 1 }))).toEqual({ ok: false, error: UPLOAD_TOO_LARGE_MESSAGE });
+    expect(declaredUploadSize(JSON.stringify({ size: 0 }))).toEqual({ ok: false, error: UPLOAD_EMPTY_MESSAGE, reason: "empty" });
+    expect(declaredUploadSize(JSON.stringify({ size: 512 * MB + 1 }))).toEqual({ ok: false, error: UPLOAD_TOO_LARGE_MESSAGE, reason: "too-large" });
   });
 });
 
@@ -99,9 +99,13 @@ describe("consumeUploadDayBytes", () => {
     await expect(consumeUploadDayBytes("user-1", MB, NOW)).resolves.toEqual({ allowed: true });
   });
 
-  it("fails closed when the counter cannot be reached", async () => {
+  it("fails closed when the counter cannot be reached, saying so apart from a used-up day", async () => {
     upsertMock.mockRejectedValue(new Error("db down"));
-    await expect(consumeUploadDayBytes("user-1", MB, NOW)).resolves.toEqual({ allowed: false, retryAfterSeconds: 60 });
+    await expect(consumeUploadDayBytes("user-1", MB, NOW)).resolves.toEqual({
+      allowed: false,
+      retryAfterSeconds: 60,
+      unavailable: true,
+    });
   });
 });
 
