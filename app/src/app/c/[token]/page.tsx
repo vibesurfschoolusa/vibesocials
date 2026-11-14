@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { ClientPageShell } from "@/components/client-page-header";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -7,6 +8,7 @@ import {
   connectLinkPlatformConfigured,
   describeConnectLinkResult,
 } from "@/lib/connectLink";
+import { findClientPageLogo } from "@/lib/clientPageLogo";
 import { PLATFORM_LABELS, PLATFORM_ORDER } from "@/lib/platforms";
 import { findActiveConnectLink, listLinkConnections } from "@/server/connectLink/link";
 
@@ -48,15 +50,16 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
 
   if (!link) {
     return (
-      <main className="min-h-screen bg-background px-4 py-10 text-foreground">
-        <div className="mx-auto w-full max-w-md">
-          <p className="text-base">{CONNECT_LINK_INACTIVE_MESSAGE}</p>
-        </div>
-      </main>
+      <ClientPageShell workspace={null}>
+        <p className="text-base">{CONNECT_LINK_INACTIVE_MESSAGE}</p>
+      </ClientPageShell>
     );
   }
 
-  const connections = await listLinkConnections(link.workspaceId);
+  const [connections, logoUrl] = await Promise.all([
+    listLinkConnections(link.workspaceId),
+    findClientPageLogo(link.workspaceId),
+  ]);
   const byPlatform = new Map(connections.map((connection) => [connection.platform, connection]));
   const platforms = PLATFORM_ORDER.filter(
     (platform) => link.platforms.includes(platform) && connectLinkPlatformConfigured(platform),
@@ -78,8 +81,8 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
   const action = `/api/connect-link/${encodeURIComponent(token)}/start`;
 
   return (
-    <main className="min-h-screen bg-background px-4 py-8 text-foreground sm:py-10">
-      <div className="mx-auto w-full max-w-md">
+    <ClientPageShell workspace={{ name: link.workspaceName, logoUrl }} title="Connect your accounts">
+      <div>
         {result ? (
           <Alert variant={result.variant} className="mb-6">
             <p>{result.message}</p>
@@ -91,10 +94,7 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
           </div>
         ) : null}
 
-        <h1 className="break-words text-2xl font-bold tracking-tight">
-          Connect your accounts to {link.workspaceName}
-        </h1>
-        <p className="mt-2 text-sm text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           {link.workspaceName} will be able to publish posts to the accounts you connect here. They cannot see
           your password.
         </p>
@@ -117,7 +117,7 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
             const working = connection && !connection.needsReconnect;
             const name = connection?.username || connection?.accountIdentifier || null;
             return (
-              <li key={platform} className="flex items-center justify-between gap-3 px-4 py-3">
+              <li key={platform} className="flex min-h-14 items-center justify-between gap-3 px-4 py-3">
                 <span className="font-medium">{PLATFORM_LABELS[platform]}</span>
                 {working ? (
                   <span className="text-right text-sm text-muted-foreground">
@@ -126,7 +126,7 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
                 ) : (
                   <form action={action} method="post">
                     <input type="hidden" name="platform" value={platform} />
-                    <Button type="submit" size="sm">
+                    <Button type="submit" size="md">
                       {connection ? "Reconnect" : "Connect"}
                     </Button>
                   </form>
@@ -136,6 +136,6 @@ export default async function ConnectLinkPage({ params, searchParams }: ConnectL
           })}
         </ul>
       </div>
-    </main>
+    </ClientPageShell>
   );
 }

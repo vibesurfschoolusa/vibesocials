@@ -2,11 +2,13 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { findActiveUploadLinkMock, formPropsMock } = vi.hoisted(() => ({
+const { findActiveUploadLinkMock, formPropsMock, findLogoMock } = vi.hoisted(() => ({
+  findLogoMock: vi.fn(),
   findActiveUploadLinkMock: vi.fn(),
   formPropsMock: vi.fn(),
 }));
 
+vi.mock("@/lib/clientPageLogo", () => ({ findClientPageLogo: findLogoMock }));
 vi.mock("@/server/uploadLink", () => ({ findActiveUploadLink: findActiveUploadLinkMock }));
 // The form is a client component; what the page hands it is what matters here.
 vi.mock("./upload-link-form", () => ({
@@ -31,6 +33,8 @@ async function render(token = TOKEN): Promise<string> {
 beforeEach(() => {
   findActiveUploadLinkMock.mockReset();
   formPropsMock.mockReset();
+  findLogoMock.mockReset();
+  findLogoMock.mockResolvedValue(null);
 });
 
 describe("the upload link page", () => {
@@ -57,10 +61,20 @@ describe("the upload link page", () => {
     const html = await render();
 
     expect(findActiveUploadLinkMock).toHaveBeenCalledWith(TOKEN);
-    expect(html).toContain("Send photos and videos to Surf &amp; Co");
+    expect(html).toContain("Surf &amp; Co");
+    expect(html).toMatch(/<h1[^>]*>Send photos and videos<\/h1>/);
+    expect(findLogoMock).toHaveBeenCalledWith("ws-1");
     expect(formPropsMock).toHaveBeenCalledWith({ token: TOKEN });
     expect(html).not.toContain("ws-1");
     expect(html).not.toContain("link-1");
     expect(html).not.toContain("owner-1");
+  });
+
+  it("shows the workspace logo, and the product name on an inactive link", async () => {
+    findLogoMock.mockResolvedValue("https://x.example/logos/ws-1/a.png");
+    findActiveUploadLinkMock.mockResolvedValue({ id: "l", workspaceId: "ws-1", createdById: "o", workspaceName: "Surf" });
+    expect(await render()).toContain('src="https://x.example/logos/ws-1/a.png"');
+    findActiveUploadLinkMock.mockResolvedValue(null);
+    expect(await render()).toContain("Vibe Socials");
   });
 });
