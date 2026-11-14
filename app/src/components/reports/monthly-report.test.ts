@@ -151,14 +151,16 @@ describe("MonthlyReportView", () => {
     expect(html).toContain("This month is not over yet");
   });
 
-  it("links the failures to Activity on the workspace's page and not on the client's", () => {
+  it("shows the failures, linked to Activity, on the workspace's page only: the client's page leaves them out", () => {
     const failed = [{ platform: "Instagram", count: 2 }];
     const own = render(report({ failed }), "/activity");
+    expect(own).toContain("Did not publish");
     expect(own).toContain("2 posts did not publish on Instagram");
     expect(own).toContain('href="/activity"');
 
     const client = render(report({ failed }));
-    expect(client).toContain("2 posts did not publish on Instagram");
+    expect(client).not.toContain("Did not publish");
+    expect(client).not.toContain("did not publish");
     expect(client).not.toContain("/activity");
   });
 
@@ -278,6 +280,8 @@ describe("MonthlyReportView — thousands separators", () => {
         },
         failed: [{ platform: "X", count: 1000 }],
       }),
+      // The workspace's own page: only it lists the failures.
+      "/activity",
     );
     expect(totalCards(html)).toContainEqual(["Posts published", "1,388"]);
     expect(html).toContain("Instagram: 1,388");
