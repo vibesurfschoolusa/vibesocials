@@ -6,10 +6,12 @@ const {
   checkRateLimitMock,
   postUpdateManyMock,
   postFindFirstMock,
+  postFindManyMock,
   linkUpdateMock,
   afterMock,
 } = vi.hoisted(() => ({
   postFindFirstMock: vi.fn(),
+  postFindManyMock: vi.fn(),
   findActiveReviewLinkMock: vi.fn(),
   notifyOwnersOfClientChangeMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
@@ -18,18 +20,23 @@ const {
   afterMock: vi.fn(),
 }));
 
-vi.mock("@/server/reviewLink", () => ({
+vi.mock("@/server/reviewLink", async (importOriginal) => ({
+  // The pair rule (storyPairWhere) is the real one.
+  ...(await importOriginal<typeof import("@/server/reviewLink")>()),
   findActiveReviewLink: findActiveReviewLinkMock,
   notifyOwnersOfClientChange: notifyOwnersOfClientChangeMock,
 }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 // Only these calls exist: any other prisma call would throw here.
-vi.mock("@/lib/db", () => ({
-  prisma: {
-    postJob: { updateMany: postUpdateManyMock, findFirst: postFindFirstMock },
+vi.mock("@/lib/db", () => {
+  const prisma = {
+    postJob: { updateMany: postUpdateManyMock, findFirst: postFindFirstMock, findMany: postFindManyMock },
     workspaceReviewLink: { update: linkUpdateMock },
-  },
-}));
+    // F6: the decision and its pair's write run in one transaction.
+    $transaction: (work: (tx: unknown) => Promise<unknown>) => work(prisma),
+  };
+  return { prisma };
+});
 vi.mock("next/server", async (importOriginal) => ({
   ...(await importOriginal<typeof import("next/server")>()),
   after: afterMock,
@@ -59,6 +66,8 @@ const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 /** The post's updatedAt as the page received it. */
 const VERSION = "2026-11-10T10:00:00.123Z";
+/** The post's scheduled time. */
+const SLOT = "2026-11-20T15:00:00.000Z";
 
 function call(body: unknown, { token = TOKEN, postJobId = "post-1", raw = false } = {}) {
   return POST(
@@ -78,6 +87,7 @@ beforeEach(() => {
     checkRateLimitMock,
     postUpdateManyMock,
     postFindFirstMock,
+    postFindManyMock,
     linkUpdateMock,
     afterMock,
   ]) {
@@ -90,6 +100,8 @@ beforeEach(() => {
   findActiveReviewLinkMock.mockResolvedValue(LINK);
   postUpdateManyMock.mockResolvedValue({ count: 1 });
   postFindFirstMock.mockResolvedValue(null);
+  // No Story beside the post: a post without a pair, as before F6.
+  postFindManyMock.mockResolvedValue([{ id: "post-1", storyOfPostJobId: null, scheduledFor: new Date(SLOT) }]);
   linkUpdateMock.mockResolvedValue({});
   notifyOwnersOfClientChangeMock.mockResolvedValue(undefined);
 });
@@ -431,5 +443,115 @@ describe("limits", () => {
       failClosed: true,
     });
     expect(postUpdateManyMock).not.toHaveBeenCalled();
+  });
+});
+
+// F6: a Feed and Story post is two jobs; the client's decision takes both.
+describe("a Feed and Story pair", () => {
+  const slot = new Date(SLOT);
+
+  function pairRows(target: "feed" | "story") {
+    return target === "feed"
+      ? [
+          { id: "post-1", storyOfPostJobId: null, scheduledFor: slot },
+          { id: "story-1", storyOfPostJobId: "post-1", scheduledFor: slot },
+        ]
+      : [{ id: "post-1", storyOfPostJobId: "feed-1", scheduledFor: slot }];
+  }
+
+  it("reads the post and the Story pointing at it, in the link's workspace", async () => {
+    await call({ decision: "approve", version: VERSION });
+    expect(postFindManyMock).toHaveBeenCalledWith({
+      where: { workspaceId: "ws-1", OR: [{ id: "post-1" }, { storyOfPostJobId: "post-1" }] },
+      select: { id: true, storyOfPostJobId: true, scheduledFor: true },
+    });
+  });
+
+  it("approving the feed card approves the Story too, in the same transaction", async () => {
+    postFindManyMock.mockResolvedValue(pairRows("feed"));
+
+    const response = await call({ decision: "approve", version: VERSION });
+
+    expect(response.status).toBe(200);
+    expect(postUpdateManyMock).toHaveBeenCalledTimes(2);
+    const [first, second] = postUpdateManyMock.mock.calls.map((c) => c[0]);
+    // The Story: still scheduled, same time, same workspace; not pinned to the feed's version.
+    expect(second.where).toEqual({
+      workspaceId: "ws-1",
+      status: "scheduled",
+      scheduledFor: slot,
+      id: { not: "post-1" },
+      OR: [{ storyOfPostJobId: "post-1" }],
+    });
+    expect(second.data).toEqual(first.data);
+    const body = await response.json();
+    expect(body).toEqual({ ok: true, state: "approved", version: first.data.updatedAt.toISOString() });
+  });
+
+  it("asking for a change drafts both with the client's note, and one email names both", async () => {
+    postFindManyMock.mockResolvedValue(pairRows("feed"));
+    postUpdateManyMock.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 1 });
+
+    const response = await call({ decision: "change", note: "Use the other photo" });
+
+    expect(response.status).toBe(200);
+    expect(postUpdateManyMock).toHaveBeenCalledTimes(2);
+    const [first, second] = postUpdateManyMock.mock.calls.map((c) => c[0]);
+    expect(second.data).toEqual(first.data);
+    expect(second.data).toMatchObject({ status: "draft", clientNote: "Use the other photo" });
+
+    expect(afterMock).toHaveBeenCalledTimes(1);
+    await afterMock.mock.calls[0][0]();
+    expect(notifyOwnersOfClientChangeMock).toHaveBeenCalledTimes(1);
+    expect(notifyOwnersOfClientChangeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ postJobId: "post-1", withStory: true }),
+    );
+  });
+
+  it("a Story the owner already cancelled is left alone: the change acts on the feed only", async () => {
+    postFindManyMock.mockResolvedValue(pairRows("feed"));
+    // The Story is cancelled, so its status-guarded update matches nothing.
+    postUpdateManyMock.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+
+    const response = await call({ decision: "change", note: "x" });
+
+    expect(response.status).toBe(200);
+    expect(postUpdateManyMock.mock.calls[1][0].where.status).toBe("scheduled");
+    await afterMock.mock.calls[0][0]();
+    const notice = notifyOwnersOfClientChangeMock.mock.calls[0][0];
+    expect(notice).not.toHaveProperty("withStory");
+  });
+
+  it("a decision on a Story whose feed post is gone acts on the Story alone, without a crash", async () => {
+    // storyOfPostJobId names a deleted job: the pair update matches nothing.
+    postFindManyMock.mockResolvedValue(pairRows("story"));
+    postUpdateManyMock.mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
+
+    const response = await call({ decision: "change", note: "x" });
+
+    expect(response.status).toBe(200);
+    expect(postUpdateManyMock.mock.calls[1][0].where.OR).toEqual([
+      { storyOfPostJobId: "post-1" },
+      { id: "feed-1" },
+    ]);
+    await afterMock.mock.calls[0][0]();
+    expect(notifyOwnersOfClientChangeMock.mock.calls[0][0]).not.toHaveProperty("withStory");
+  });
+
+  it("a post without a pair writes one row and emails as before", async () => {
+    await call({ decision: "change", note: "x" });
+    expect(postUpdateManyMock).toHaveBeenCalledTimes(1);
+    await afterMock.mock.calls[0][0]();
+    expect(notifyOwnersOfClientChangeMock.mock.calls[0][0]).not.toHaveProperty("withStory");
+  });
+
+  it("writes nothing for the pair when the post itself could not be decided on", async () => {
+    postFindManyMock.mockResolvedValue(pairRows("feed"));
+    postUpdateManyMock.mockResolvedValue({ count: 0 });
+
+    const response = await call({ decision: "change", note: "x" });
+
+    expect(response.status).toBe(409);
+    expect(postUpdateManyMock).toHaveBeenCalledTimes(1);
   });
 });

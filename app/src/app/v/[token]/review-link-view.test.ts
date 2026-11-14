@@ -2,9 +2,11 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import type { ReviewPostDTO } from "@/lib/reviewLink";
+import type { ReviewCardDTO } from "@/server/reviewLink";
 
-import { ReviewPostCard } from "./review-link-view";
+import { ReviewPostCard, changeNoteHint } from "./review-link-view";
+
+type ReviewPostDTO = ReviewCardDTO;
 
 function post(over: Partial<ReviewPostDTO> = {}): ReviewPostDTO {
   return {
@@ -58,5 +60,24 @@ describe("ReviewPostCard", () => {
 
   it("says when no time is set", () => {
     expect(render(post({ scheduledFor: null }))).toContain("No time set");
+  });
+});
+
+// F6: a Feed and Story post is one card.
+describe("ReviewPostCard - a Feed and Story pair", () => {
+  it("shows the line naming the Story under the platforms", () => {
+    const html = render(post({ alsoStory: "Also as a Story on Instagram" }));
+    expect(html).toContain("Also as a Story on Instagram");
+  });
+
+  it("shows no such line on a post without a Story", () => {
+    expect(render(post())).not.toContain("Also as a Story");
+  });
+
+  it("says a change holds back the post and its Story together", () => {
+    expect(changeNoteHint(post({ alsoStory: "Also as a Story on Instagram" }))).toBe(
+      "This post and its Story will not go out until they are scheduled again.",
+    );
+    expect(changeNoteHint(post())).toBe("This post will not go out until it is scheduled again.");
   });
 });

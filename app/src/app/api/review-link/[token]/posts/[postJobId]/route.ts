@@ -18,7 +18,7 @@ import {
   reviewWindowEnd,
 } from "@/lib/reviewLink";
 import { requestIp } from "@/lib/uploadLink";
-import { findActiveReviewLink, notifyOwnersOfClientChange } from "@/server/reviewLink";
+import { findActiveReviewLink, notifyOwnersOfClientChange, storyPairWhere } from "@/server/reviewLink";
 
 /**
  * POST /api/review-link/[token]/posts/[postJobId] — the client's decision on
@@ -43,6 +43,13 @@ import { findActiveReviewLink, notifyOwnersOfClientChange } from "@/server/revie
  * approvedAt, approvedByUserId; lib/approval.ts): an owner approved the post
  * as it was, and a draft still marked approved would let a member edit and
  * schedule it unreviewed. As a plain draft it goes through approval again.
+ *
+ * F6: a Feed and Story post is two jobs, and the page shows them as one card.
+ * In the same transaction as the decision, the same write goes to the other
+ * half (storyPairWhere: still scheduled, same time, this workspace). A half the
+ * owner cancelled, published, deleted or moved is left alone, so the decision
+ * acts on what is left; the owners' email names the Story only when it was
+ * pulled back too.
  *
  * Order: the body is checked first (no counting for a refused body), then the
  * per-IP limit (shared with the list route), the lookup, the per-link day
@@ -116,8 +123,23 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
         };
 
   let count: number;
+  let withStory = false;
   try {
-    ({ count } = await prisma.postJob.updateMany(update));
+    ({ count, withStory } = await prisma.$transaction(async (tx) => {
+      const decided = await tx.postJob.updateMany(update);
+      if (decided.count === 0) return { count: 0, withStory: false };
+      // The post and any Story naming it: is there another half to take?
+      const rows = await tx.postJob.findMany({
+        where: { workspaceId: link.workspaceId, OR: [{ id: postJobId }, { storyOfPostJobId: postJobId }] },
+        select: { id: true, storyOfPostJobId: true, scheduledFor: true },
+      });
+      const job = rows.find((row) => row.id === postJobId);
+      if (!job || (job.storyOfPostJobId === null && rows.length === 1)) {
+        return { count: decided.count, withStory: false };
+      }
+      const pair = await tx.postJob.updateMany({ where: storyPairWhere(link.workspaceId, job), data: update.data });
+      return { count: decided.count, withStory: pair.count > 0 };
+    }));
   } catch (error) {
     logger.error("[review-link] Couldn't save a decision", { error, linkId: link.id });
     return NextResponse.json({ error: "Couldn't save that. Try again." }, { status: 500 });
@@ -178,6 +200,7 @@ export async function POST(request: Request, context: RouteContext): Promise<Nex
         workspaceName: link.workspaceName,
         note,
         requestedAt: now,
+        ...(withStory ? { withStory: true } : {}),
       });
     } catch (error) {
       logger.error("[review-link] Owner email failed (ignored)", { error, linkId: link.id });

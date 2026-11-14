@@ -8,8 +8,9 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   REVIEW_NOTE_MAX,
   reviewDecisionOutcome,
-  type ReviewPostDTO,
 } from "@/lib/reviewLink";
+// Types only (erased): the card a Feed and Story post folds into (F6).
+import type { ReviewCardDTO as ReviewPostDTO } from "@/server/reviewLink";
 
 /** Shown over a list on screen when reloading it failed. */
 const REFRESH_FAILED_MESSAGE = "Couldn't refresh the list. Check your connection and reload the page.";
@@ -60,6 +61,13 @@ function PostMedia({ post }: { post: ReviewPostDTO }) {
       ) : null}
     </div>
   );
+}
+
+/** Under the note box: what a change request holds back (F6: a pair's Story too). */
+export function changeNoteHint(post: ReviewPostDTO): string {
+  return post.alsoStory
+    ? "This post and its Story will not go out until they are scheduled again."
+    : "This post will not go out until it is scheduled again.";
 }
 
 function stateText(post: ReviewPostDTO): string | null {
@@ -138,6 +146,7 @@ export function ReviewPostCard({
           {post.platforms.length > 0 ? (
             <p className="mt-0.5 text-sm text-muted-foreground">{post.platforms.join(", ")}</p>
           ) : null}
+          {post.alsoStory ? <p className="mt-0.5 text-sm text-muted-foreground">{post.alsoStory}</p> : null}
         </div>
         <p className="whitespace-pre-wrap break-words text-sm">{post.caption}</p>
         {post.platformCaptions.length > 0 ? (
@@ -190,7 +199,7 @@ export function ReviewPostCard({
                 disabled={busy}
               />
               <p className={noteTooLong ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
-                {noteLength}/{REVIEW_NOTE_MAX}. This post will not go out until it is scheduled again.
+                {noteLength}/{REVIEW_NOTE_MAX}. {changeNoteHint(post)}
               </p>
               <div className="flex flex-col gap-2 sm:flex-row">
                 <Button type="submit" size="lg" className="w-full sm:w-auto" loading={busy} disabled={noteTooShort || noteTooLong}>

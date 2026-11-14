@@ -52,6 +52,20 @@ describe("buildClientChangeRequestEmail", () => {
     expect(html).toContain("&lt;img src=x onerror=alert(1)&gt; &amp; &#39;quotes&#39;");
   });
 
+  it("for a post without a Story, says it will not go out (as before)", () => {
+    const { html } = buildClientChangeRequestEmail(base);
+    expect(html).toContain("a change to a post in <strong>Surf Co</strong>. It is out of the schedule and will not go out until you schedule it again.");
+    expect(html).not.toContain("Story");
+  });
+
+  it("for a Feed and Story post, speaks of the post and its Story together (F6)", () => {
+    const { subject, html } = buildClientChangeRequestEmail({ ...base, withStory: true });
+    expect(subject).toBe("Surf Co: your client asked for a change");
+    expect(html).toContain(
+      "a change to a post and its Story in <strong>Surf Co</strong>. Both are out of the schedule and will not go out until you schedule them again.",
+    );
+  });
+
   it("says so when the post has no time", () => {
     const { html } = buildClientChangeRequestEmail({ ...base, scheduledFor: null });
     expect(html).toContain("No time set");

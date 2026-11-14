@@ -6,7 +6,7 @@ import { hashInviteToken } from "@/lib/inviteToken";
 import { logger } from "@/lib/logger";
 import { buildPlatformPreview } from "@/lib/platformPreview";
 import { platformAcceptsTextOnly } from "@/lib/platformLimits";
-import { PLATFORM_ORDER, platformCaptionEntries } from "@/lib/platforms";
+import { PLATFORM_ORDER, platformCaptionEntries, platformLabel } from "@/lib/platforms";
 import {
   DAY_MS,
   REVIEW_CHANGE_SHOWN_DAYS,
@@ -76,6 +76,8 @@ const REVIEW_POST_SELECT = {
   clientApprovedAt: true,
   clientChangeRequestedAt: true,
   clientNote: true,
+  // F6: set on the Story job of a Feed and Story post.
+  storyOfPostJobId: true,
   // Null for a post without a file (2026-11-10).
   mediaItemId: true,
   mediaItem: {
@@ -99,6 +101,66 @@ function chosenPlatforms(publishMetadata: Prisma.JsonValue | null): Platform[] |
 }
 
 /**
+ * F6: one card of the page. A Feed and Story post is two jobs; the page shows
+ * the feed one with `alsoStory`, the line that names its Story, and no card of
+ * its own for the Story. Absent on every other card.
+ */
+export type ReviewCardDTO = ReviewPostDTO & { alsoStory?: string };
+
+type PairFacts = { id: string; storyOfPostJobId: string | null; scheduledFor: Date | null };
+
+/**
+ * F6: the other half of a Feed and Story post that a client decision on `job`
+ * also takes: the Story of a feed post, or the feed post of a Story, while it
+ * is in the link's workspace, still scheduled and at the same time. A half the
+ * owner cancelled, published, deleted or moved is not taken, so the decision
+ * acts on what is left. The page folds a Story into its feed card by the same
+ * rule (foldStoryPairs), so a decision takes exactly what the card showed.
+ */
+export function storyPairWhere(workspaceId: string, job: PairFacts): Prisma.PostJobWhereInput {
+  return {
+    workspaceId,
+    status: "scheduled",
+    scheduledFor: job.scheduledFor,
+    id: { not: job.id },
+    OR: [{ storyOfPostJobId: job.id }, ...(job.storyOfPostJobId ? [{ id: job.storyOfPostJobId }] : [])],
+  };
+}
+
+function sameTime(a: Date | null, b: Date | null): boolean {
+  return (a?.getTime() ?? null) === (b?.getTime() ?? null);
+}
+
+/** "Instagram and Facebook Page". */
+function joinLabels(labels: string[]): string {
+  return labels.length <= 1 ? (labels[0] ?? "") : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+}
+
+/**
+ * F6: each Story whose feed post is listed with the same status and time,
+ * keyed by that feed post's id. Any other Story (its feed post gone, ended,
+ * moved, or in another state) stays a card of its own, as before.
+ */
+function foldStoryPairs(rows: ReviewPostRow[]): Map<string, ReviewPostRow> {
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const storyOf = new Map<string, ReviewPostRow>();
+  for (const row of rows) {
+    const feed = row.storyOfPostJobId ? byId.get(row.storyOfPostJobId) : undefined;
+    if (feed && feed.status === row.status && sameTime(feed.scheduledFor, row.scheduledFor)) {
+      storyOf.set(feed.id, row);
+    }
+  }
+  return storyOf;
+}
+
+/** The line on a feed card for its Story: the Story's own platforms. */
+function alsoStoryLine(story: ReviewPostRow): string {
+  const targets = chosenPlatforms(story.publishMetadata);
+  const stories = storyPlatformsOf(story.publishMetadata).filter((p) => !targets || targets.includes(p));
+  return stories.length ? `Also as a Story on ${joinLabels(stories.map(platformLabel))}` : "Also as a Story";
+}
+
+/**
  * What the public page lists for a workspace: its scheduled posts in the next
  * 60 days (at most 100, earliest first) and the drafts its client asked to
  * change in the last 30 days, merged in time order. Only drafts and scheduled
@@ -106,7 +168,7 @@ function chosenPlatforms(publishMetadata: Prisma.JsonValue | null): Platform[] |
  * appear. A change request is cleared when the post is scheduled again, so a
  * draft that still carries one was not.
  */
-export async function listReviewPosts(workspaceId: string, now: Date): Promise<ReviewPostDTO[]> {
+export async function listReviewPosts(workspaceId: string, now: Date): Promise<ReviewCardDTO[]> {
   const scheduled = await prisma.postJob.findMany({
     where: {
       workspaceId,
@@ -127,8 +189,12 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
     take: REVIEW_LIST_MAX,
     select: REVIEW_POST_SELECT,
   });
-  const rows: ReviewPostRow[] = [...scheduled, ...changed];
-  if (rows.length === 0) return [];
+  const listed: ReviewPostRow[] = [...scheduled, ...changed];
+  if (listed.length === 0) return [];
+  // F6: a Story folded into its feed post's card has no card of its own.
+  const storyOf = foldStoryPairs(listed);
+  const folded = new Set(Array.from(storyOf.values(), (row) => row.id));
+  const rows = listed.filter((row) => !folded.has(row.id));
 
   // As GET /api/posts: one grouped count for the posts with several photos.
   const photoCounts = await prisma.postJobMedia.groupBy({
@@ -159,7 +225,7 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
       select: { companyWebsite: true, defaultHashtags: true, trackWebsiteLinks: true },
     })) ?? {};
 
-  const posts = rows.map((row): ReviewPostDTO => {
+  const posts = rows.map((row): ReviewCardDTO => {
     // Only a draft is on hold. A scheduled post always gets its buttons, whatever
     // its client columns say (every write that schedules a post clears them).
     const changeRequested = row.status === "draft" && row.clientChangeRequestedAt !== null;
@@ -172,6 +238,9 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
     // Only a platform the post goes to: a Story choice for any other adds nothing.
     const stories: Platform[] = storyPlatformsOf(row.publishMetadata).filter((p) => targets.includes(p));
     const listing = storyListing(targets, resolvePlatformCaptions(row, row.mediaItem), stories);
+    const story = storyOf.get(row.id);
+    // A pair reads as approved only when the client's approval is on both halves.
+    const approved = row.clientApprovedAt !== null && (!story || story.clientApprovedAt !== null);
     return {
       id: row.id,
       scheduledFor: row.scheduledFor?.toISOString() ?? null,
@@ -191,9 +260,10 @@ export async function listReviewPosts(workspaceId: string, now: Date): Promise<R
         ? { url: row.mediaItem.storageLocation, mimeType: row.mediaItem.mimeType }
         : null,
       mediaCount: textPost ? 0 : (photoCountById.get(row.id) ?? 1),
-      state: changeRequested ? "change_requested" : row.clientApprovedAt ? "approved" : "none",
+      state: changeRequested ? "change_requested" : approved ? "approved" : "none",
       note: changeRequested ? row.clientNote : null,
       version: row.updatedAt.toISOString(),
+      ...(story ? { alsoStory: alsoStoryLine(story) } : {}),
     };
   });
 
@@ -212,6 +282,8 @@ type ClientChangeNotice = {
   workspaceName: string;
   note: string;
   requestedAt: Date;
+  /** F6: the request also pulled back the post's Story; the email names both. */
+  withStory?: boolean;
 };
 
 async function sendClientChangeEmails(args: ClientChangeNotice): Promise<void> {
@@ -236,6 +308,7 @@ async function sendClientChangeEmails(args: ClientChangeNotice): Promise<void> {
       caption: post.baseCaption ?? post.mediaItem?.baseCaption ?? "",
       note: args.note,
       appUrl: process.env.NEXTAUTH_URL ?? "",
+      ...(args.withStory ? { withStory: true } : {}),
     });
   const requestKey = args.requestedAt.toISOString();
   for (const owner of owners) {

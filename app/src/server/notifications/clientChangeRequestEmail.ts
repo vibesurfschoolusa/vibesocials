@@ -39,6 +39,11 @@ export function buildClientChangeRequestEmail(params: {
   note: string;
   /** NEXTAUTH_URL; empty gives a relative link. */
   appUrl: string;
+  /**
+   * F6: the request also pulled back the post's Story (a Feed and Story post
+   * is two jobs), so the email speaks of both. Absent: one post, as before.
+   */
+  withStory?: boolean;
 }): { subject: string; html: string } {
   const queueUrl = workspaceLink(params.workspaceId, "/queue", params.appUrl);
   const caption = Array.from(params.caption).slice(0, CAPTION_PREVIEW_CHARS).join("");
@@ -46,7 +51,9 @@ export function buildClientChangeRequestEmail(params: {
   return {
     subject: `${params.workspaceName}: your client asked for a change`,
     html: [
-      `<p>Your client asked for a change to a post in <strong>${escapeHtml(params.workspaceName)}</strong>. It is out of the schedule and will not go out until you schedule it again.</p>`,
+      params.withStory
+        ? `<p>Your client asked for a change to a post and its Story in <strong>${escapeHtml(params.workspaceName)}</strong>. Both are out of the schedule and will not go out until you schedule them again.</p>`
+        : `<p>Your client asked for a change to a post in <strong>${escapeHtml(params.workspaceName)}</strong>. It is out of the schedule and will not go out until you schedule it again.</p>`,
       `<p><strong>When:</strong> ${escapeHtml(formatWhen(params.scheduledFor, params.timeZone))}</p>`,
       `<p><strong>Caption:</strong> ${escapeHtml(caption)}</p>`,
       `<p><strong>Your client wrote:</strong></p>`,

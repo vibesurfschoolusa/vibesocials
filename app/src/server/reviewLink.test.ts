@@ -34,7 +34,7 @@ vi.mock("@/server/notifications/email", () => ({ sendEmail: sendEmailMock }));
 
 import { generateInviteToken, hashInviteToken } from "@/lib/inviteToken";
 
-import { findActiveReviewLink, listReviewPosts, notifyOwnersOfClientChange } from "./reviewLink";
+import { findActiveReviewLink, listReviewPosts, notifyOwnersOfClientChange, storyPairWhere } from "./reviewLink";
 
 const NOW = new Date("2026-11-10T12:00:00Z");
 const DAY = 24 * 60 * 60 * 1000;
@@ -591,5 +591,157 @@ describe("listReviewPosts - a post without a file", () => {
       mediaCount: 0,
       platforms: ["X", "LinkedIn"],
     });
+  });
+});
+
+// F6: a Feed and Story post is two jobs; the client sees and decides on one card.
+describe("listReviewPosts - a Feed and Story pair", () => {
+  const feed = (overrides: Record<string, unknown> = {}) =>
+    postRow({ id: "feed-1", storyOfPostJobId: null, ...overrides });
+  const storyJob = (overrides: Record<string, unknown> = {}) =>
+    postRow({
+      id: "story-1",
+      storyOfPostJobId: "feed-1",
+      publishMetadata: {
+        targetPlatforms: ["instagram", "facebook_page"],
+        instagram: { placement: "story" },
+        facebook: { placement: "story" },
+      },
+      ...overrides,
+    });
+
+  it("selects the pair's link", async () => {
+    await listReviewPosts("ws-1", NOW);
+    for (const [query] of postFindManyMock.mock.calls) {
+      expect(query.select).toHaveProperty("storyOfPostJobId", true);
+    }
+  });
+
+  it("shows the feed card with one line for its Story and no Story card", async () => {
+    postFindManyMock.mockResolvedValueOnce([feed(), storyJob()]).mockResolvedValueOnce([]);
+
+    const posts = await listReviewPosts("ws-1", NOW);
+
+    expect(posts.map((p) => p.id)).toEqual(["feed-1"]);
+    expect(posts[0]).toMatchObject({
+      platforms: ["Instagram", "Facebook Page"],
+      caption: "Dawn patrol tomorrow",
+      alsoStory: "Also as a Story on Instagram and Facebook Page",
+    });
+  });
+
+  it("names only the Story's own platforms", async () => {
+    postFindManyMock
+      .mockResolvedValueOnce([
+        feed(),
+        storyJob({ publishMetadata: { targetPlatforms: ["instagram"], instagram: { placement: "story" } } }),
+      ])
+      .mockResolvedValueOnce([]);
+    const [post] = await listReviewPosts("ws-1", NOW);
+    expect(post.alsoStory).toBe("Also as a Story on Instagram");
+  });
+
+  it("shows the pair as approved only when both halves are", async () => {
+    const approved = new Date("2026-11-10T10:00:00Z");
+    postFindManyMock
+      .mockResolvedValueOnce([feed({ clientApprovedAt: approved }), storyJob()])
+      .mockResolvedValueOnce([]);
+    expect((await listReviewPosts("ws-1", NOW))[0].state).toBe("none");
+
+    postFindManyMock
+      .mockResolvedValueOnce([feed({ clientApprovedAt: approved }), storyJob({ clientApprovedAt: approved })])
+      .mockResolvedValueOnce([]);
+    expect((await listReviewPosts("ws-1", NOW))[0].state).toBe("approved");
+  });
+
+  it("shows a pair the client asked to change as one card with the note", async () => {
+    const asked = new Date("2026-11-10T08:00:00Z");
+    const changed = { status: "draft", clientChangeRequestedAt: asked, clientNote: "Other photo" };
+    postFindManyMock.mockResolvedValueOnce([]).mockResolvedValueOnce([feed(changed), storyJob(changed)]);
+
+    const posts = await listReviewPosts("ws-1", NOW);
+
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatchObject({ id: "feed-1", state: "change_requested", note: "Other photo" });
+    expect(posts[0].alsoStory).toBe("Also as a Story on Instagram and Facebook Page");
+  });
+
+  it("shows the Story on its own when its feed post is not listed (cancelled, published or deleted)", async () => {
+    postFindManyMock.mockResolvedValueOnce([storyJob()]).mockResolvedValueOnce([]);
+
+    const posts = await listReviewPosts("ws-1", NOW);
+
+    expect(posts.map((p) => p.id)).toEqual(["story-1"]);
+    expect(posts[0].caption).toBe("This goes out as a Story, with no caption.");
+    expect(posts[0]).not.toHaveProperty("alsoStory");
+  });
+
+  it("keeps two cards when the owner moved one half to another time", async () => {
+    postFindManyMock
+      .mockResolvedValueOnce([feed(), storyJob({ scheduledFor: new Date("2026-11-13T15:00:00Z") })])
+      .mockResolvedValueOnce([]);
+
+    const posts = await listReviewPosts("ws-1", NOW);
+
+    expect(posts.map((p) => p.id)).toEqual(["feed-1", "story-1"]);
+    expect(posts[0]).not.toHaveProperty("alsoStory");
+  });
+
+  it("keeps two cards when only one half was pulled back by a change request", async () => {
+    postFindManyMock
+      .mockResolvedValueOnce([feed()])
+      .mockResolvedValueOnce([
+        storyJob({ status: "draft", clientChangeRequestedAt: new Date("2026-11-10T08:00:00Z"), clientNote: "x" }),
+      ]);
+
+    const posts = await listReviewPosts("ws-1", NOW);
+
+    expect(posts.map((p) => p.id).sort()).toEqual(["feed-1", "story-1"]);
+    expect(posts.find((p) => p.id === "feed-1")).not.toHaveProperty("alsoStory");
+  });
+});
+
+describe("storyPairWhere", () => {
+  const scheduledFor = new Date("2026-11-12T15:00:00Z");
+
+  it("finds the Story of a feed post: same workspace, still scheduled, same time", () => {
+    expect(storyPairWhere("ws-1", { id: "feed-1", storyOfPostJobId: null, scheduledFor })).toEqual({
+      workspaceId: "ws-1",
+      status: "scheduled",
+      scheduledFor,
+      id: { not: "feed-1" },
+      OR: [{ storyOfPostJobId: "feed-1" }],
+    });
+  });
+
+  it("finds the feed post of a Story too", () => {
+    expect(storyPairWhere("ws-1", { id: "story-1", storyOfPostJobId: "feed-1", scheduledFor }).OR).toEqual([
+      { storyOfPostJobId: "story-1" },
+      { id: "feed-1" },
+    ]);
+  });
+});
+
+describe("notifyOwnersOfClientChange - a Feed and Story pair", () => {
+  it("speaks of the post and its Story in one email per owner", async () => {
+    postFindFirstMock.mockResolvedValue({
+      scheduledFor: new Date("2026-11-12T15:00:00Z"),
+      baseCaption: "Dawn patrol tomorrow",
+      mediaItem: null,
+    });
+
+    await notifyOwnersOfClientChange({
+      postJobId: "feed-1",
+      workspaceId: "ws-1",
+      workspaceName: "Surf Co",
+      note: "Other photo",
+      requestedAt: new Date("2026-11-10T17:42:00Z"),
+      withStory: true,
+    });
+
+    expect(sendEmailMock).toHaveBeenCalledTimes(2);
+    const html = sendEmailMock.mock.calls[0][0].html as string;
+    expect(html).toContain("a post and its Story");
+    expect(html).toContain("Both are out of the schedule");
   });
 });
