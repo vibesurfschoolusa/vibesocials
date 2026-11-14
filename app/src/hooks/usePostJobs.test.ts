@@ -466,4 +466,27 @@ describe("usePostJobs show filter - fix round 1", () => {
     expect(latest.jobs?.map((j) => j.id)).toEqual(["bad-1"]);
     expect(latest.loading).toBe(false);
   });
+
+  it("a failed first load for the new tab shows the error, not a skeleton forever", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes("show=problems")) return { ok: false, status: 500, json: async () => ({}) };
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ jobs: [jobFixture({ id: "all-1", status: "completed" })], nextCursor: null, workspaceMemberCount: 1 }),
+      };
+    });
+    await mount("filtered-all");
+    expect(latest.jobs?.map((j) => j.id)).toEqual(["all-1"]);
+
+    await act(async () => {
+      root!.render(probe({ show: "problems" }));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(latest.loading).toBe(false);
+    expect(latest.error).not.toBeNull();
+    expect(latest.jobs).toBeNull();
+  });
 });

@@ -200,6 +200,9 @@ export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
         setPollCycle((cycle) => cycle + 1);
       } else if (show === showRef.current) {
         setLoading(false);
+        // A failed load also settles the tab, so its error (and Retry) shows
+        // instead of a skeleton that never ends.
+        setJobsShow(show);
       }
     }
   }, [show]);
