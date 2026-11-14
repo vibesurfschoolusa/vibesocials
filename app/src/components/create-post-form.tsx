@@ -43,7 +43,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { useConnections } from "@/hooks/useConnections";
-import { generateBlobKey } from "@/lib/blobKey";
+import { generateBlobKey, uploadSizePayload } from "@/lib/blobKey";
 import type { CaptionFooterUser } from "@/lib/captionFooter";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
 import { cn } from "@/lib/cn";
@@ -1135,6 +1135,7 @@ function CreatePostFormInner({
     const promise = upload(uploadKey, file, {
       access: "public",
       handleUploadUrl: "/api/upload",
+      clientPayload: uploadSizePayload(file),
       // Progress feedback only; does not change upload semantics. Guarded so a
       // stale in-flight upload for a swapped-out file never moves the bar.
       onUploadProgress: (event) => {
@@ -1365,7 +1366,11 @@ function CreatePostFormInner({
             : null;
       if (!file) return null;
       // Under this workspace's covers/ folder: the posts route takes no other.
-      const blob = await upload(coverBlobPathname(workspaceId), file, { access: "public", handleUploadUrl: "/api/upload" });
+      const blob = await upload(coverBlobPathname(workspaceId), file, {
+        access: "public",
+        handleUploadUrl: "/api/upload",
+        clientPayload: uploadSizePayload(file),
+      });
       return { url: blob.url, mimeType: file.type, sizeBytes: file.size };
     } catch {
       return null;
@@ -1381,6 +1386,7 @@ function CreatePostFormInner({
       const newBlob = await upload(generateBlobKey(file), file, {
         access: "public",
         handleUploadUrl: "/api/upload",
+        clientPayload: uploadSizePayload(file),
         onUploadProgress: (event) => {
           if (!settled) onProgress(event.percentage);
         },

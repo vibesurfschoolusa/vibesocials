@@ -33,6 +33,16 @@ interface Props {
 }
 
 /**
+ * G4 (R2-security L2): Switch account disconnects the current page first, which
+ * deletes the post numbers read from it (api/connections/[platform] DELETE).
+ */
+export function linkedInSwitchNumbersNote(mode: LinkedInAccountDialogMode): string | null {
+  return mode === "switch"
+    ? "The post numbers read from this platform are deleted and cannot be brought back."
+    : null;
+}
+
+/**
  * Lets the user sign out of LinkedIn before connecting, so LinkedIn asks which
  * account to use instead of silently reusing the signed-in one
  * (lib/linkedinAccount.ts).
@@ -40,6 +50,7 @@ interface Props {
 export function LinkedInAccountDialog({ workspaceId, open, onOpenChange, mode, beforeContinue }: Props) {
   const [busy, setBusy] = useState(false);
   const copy = linkedInAccountDialogCopy(mode);
+  const numbersNote = linkedInSwitchNumbersNote(mode);
 
   async function handleContinue() {
     setBusy(true);
@@ -66,6 +77,7 @@ export function LinkedInAccountDialog({ workspaceId, open, onOpenChange, mode, b
           ))}
         </ol>
         <p className="mt-3 text-sm text-muted-foreground">{copy.shortcut}</p>
+        {numbersNote ? <p className="mt-3 text-sm text-muted-foreground">{numbersNote}</p> : null}
       </DialogBody>
       <DialogFooter>
         <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
