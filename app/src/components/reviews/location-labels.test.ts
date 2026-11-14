@@ -49,4 +49,13 @@ describe("locationLabels", () => {
     expect(labels.get("a")).toBe("Vibe (location 1)");
     expect(labels.get("b")).toBe("Vibe (location 2)");
   });
+
+  // Lead fix: a blank option is unreadable and unselectable by name.
+  it("names a location with no title, and numbers several of them", () => {
+    expect(locationLabels([loc("a", "  ")]).get("a")).toBe("Unnamed location");
+    const labels = locationLabels([loc("a", ""), loc("b", "Vibe"), loc("c", " ")]);
+    expect(labels.get("a")).toBe("Unnamed location (location 1)");
+    expect(labels.get("b")).toBe("Vibe");
+    expect(labels.get("c")).toBe("Unnamed location (location 2)");
+  });
 });

@@ -4,11 +4,15 @@ import type { Location } from "./types";
  * What each option in the location picker reads, keyed by the location's id.
  * The id (and store code) never appear: people only need the name. Two or more
  * locations with the same name get their address, or "location 1", "location 2"
- * in list order when there is no address (or two share one).
+ * in list order when there is no address (or two share one). A location with
+ * no name reads "Unnamed location", never a blank option.
  */
+const UNNAMED = "Unnamed location";
+
 export function locationLabels(locations: Location[]): Map<string, string> {
   const byTitle = new Map<string, Location[]>();
-  for (const loc of locations) {
+  for (const original of locations) {
+    const loc = { ...original, title: original.title?.trim() || UNNAMED };
     byTitle.set(loc.title, [...(byTitle.get(loc.title) ?? []), loc]);
   }
   const labels = new Map<string, string>();
