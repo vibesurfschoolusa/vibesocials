@@ -350,6 +350,13 @@ describe("buildPlatformPreview on LinkedIn", () => {
     expect(result.rendered).toBe(computeLinkedInCommentary(buildCaptionWithFooter(caption, user, "linkedin")));
   });
 
+  it("keeps a link whole at the cut, as the client does", () => {
+    const caption = "w".repeat(2990) + " https://vibesurfschool.com/lessons/fort-lauderdale/private-surf-lessons";
+    const result = buildPlatformPreview({ platform: "linkedin", caption });
+    expect(result.rendered).toBe("w".repeat(2990) + " ...");
+    expect(result.rendered).toBe(computeLinkedInCommentary(caption));
+  });
+
   it("leaves a post under the limit unchanged", () => {
     const result = buildPlatformPreview({ platform: "linkedin", caption: "Waves", user });
     expect(result.rendered).toBe("Waves\n\nFor more info visit vibesurfschool.com\n\n#surf");

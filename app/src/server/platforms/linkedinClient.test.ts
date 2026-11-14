@@ -4417,6 +4417,10 @@ describe("linkedinClient.publishText - a post without a photo", () => {
 
     expect(await sent("a".repeat(3100))).toBe("a".repeat(2997) + "...");
     expect(await sent("a".repeat(3000))).toBe("a".repeat(3000));
+    // Review fix: a link at the cut goes whole, never "https:..." (the little
+    // escaping only touches reserved characters, none of them in this link).
+    const url = "https://vibesurfschool.com/lessons/fort-lauderdale/private-surf-lessons";
+    expect(await sent("w".repeat(2990) + " " + url)).toBe("w".repeat(2990) + " ...");
   });
 
   it.each([

@@ -3,6 +3,7 @@ import type { Platform } from "@prisma/client";
 import { buildCaptionWithFooter, type CaptionFooterUser } from "@/lib/captionFooter";
 import { MAX_CAPTION_CHARS } from "@/lib/captionLimits";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
+import { buildPlatformPreview } from "@/lib/platformPreview";
 import { PLATFORM_ORDER } from "@/lib/platforms";
 import { xWeightedLength } from "@/lib/xWeightedLength";
 
@@ -113,16 +114,29 @@ export interface PlatformCaptionCounter {
 }
 
 /**
- * Counter for one platform's caption: against that platform's limit minus the
- * footer, or the app's 10,000-character cap when the platform has no limit.
+ * Counter for one platform's caption. On a platform with a limit it counts the
+ * text that will be posted (buildPlatformPreview: footer parts that publishing
+ * drops are left out, @-mentions too on X, X by its weight) against the limit,
+ * and is over exactly when the preview says the post will be shortened. Without
+ * a limit: the caption against the app's 10,000-character cap.
  */
 export function platformCaptionCounter(
   text: string,
   platform: Platform,
   footer: CaptionFooterUser | null | undefined,
 ): PlatformCaptionCounter {
+  const { charLimit } = PLATFORM_CAPTION_LIMITS[platform];
+  if (charLimit !== null) {
+    const preview = buildPlatformPreview({ platform, caption: text, user: footer });
+    return {
+      length: preview.charCount,
+      max: charLimit,
+      over: preview.willTruncate,
+      label: `${preview.charCount.toLocaleString("en-US")} / ${charLimit.toLocaleString("en-US")}`,
+    };
+  }
   const length = platformLength(text, platform);
-  const max = captionRoom(platform, footer) ?? MAX_CAPTION_CHARS;
+  const max = MAX_CAPTION_CHARS;
   return {
     length,
     max,

@@ -48,7 +48,7 @@ export const PLATFORM_CAPTION_LIMITS: Record<Platform, PlatformCaptionLimit> = {
   // characters, so before the 2026-11-01 audit an over-long caption failed the
   // whole publish; the composer preview now warns and the client truncates.
   instagram: { charLimit: 2200 },
-  // Matches the truncateGraphemes call in server/platforms/linkedinClient.ts
+  // Matches the truncateKeepingLinks call in server/platforms/linkedinClient.ts
   // (computeLinkedInCommentary): LinkedIn refuses commentary over 3,000
   // characters (fix round 1, M6). The footer goes first (lib/captionFooter.ts).
   linkedin: { charLimit: 3000, ellipsis: "..." },

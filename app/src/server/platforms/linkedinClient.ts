@@ -6,7 +6,7 @@ import { assertOk } from "@/lib/assertOk";
 import { mediaKindOf, PLATFORM_CAPTION_LIMITS, unsupportedMediaReason } from "@/lib/platformLimits";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { LINKEDIN_REST_BASE_URL, linkedinRestHeaders, toLinkedInLittleText } from "@/lib/linkedinApi";
-import { truncateGraphemes } from "@/lib/truncate";
+import { truncateKeepingLinks } from "@/lib/truncate";
 import type { PostCover } from "@/lib/videoCover";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 import {
@@ -815,11 +815,12 @@ function postBodyForLog(postBody: LinkedInPostBody): LinkedInPostBody {
 /**
  * The caption cut to LinkedIn's 3,000-character commentary limit (fix round 1,
  * M6), before the `little` escaping; the footer has already gone first when the
- * whole text was over (lib/captionFooter.ts). The composer preview cuts the same.
+ * whole text was over (lib/captionFooter.ts). A link at the cut goes whole. The
+ * composer preview cuts the same (lib/platformPreview.ts).
  */
 export function computeLinkedInCommentary(caption: string): string {
   const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS.linkedin;
-  return charLimit === null ? caption : truncateGraphemes(caption, charLimit, { ellipsis });
+  return charLimit === null ? caption : truncateKeepingLinks(caption, charLimit, ellipsis);
 }
 
 async function createPost(

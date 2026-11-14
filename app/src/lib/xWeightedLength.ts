@@ -24,6 +24,9 @@ const LIGHT_RANGES: readonly (readonly [number, number])[] = [
 ];
 
 const EMOJI = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u;
+// A keycap (digit, # or * + U+FE0F + U+20E3) is one emoji with no
+// Extended_Pictographic code point (review fix).
+const KEYCAP = /^[0-9#*]\uFE0F\u20E3$/u;
 
 // Endings a bare domain (no http(s)://, no www.) must have to count as a link
 // (lead's rule, fix round 1). Other dotted words ("Mr.Smith", "notes.txt") are
@@ -51,7 +54,7 @@ function unitWeight(unit: TextUnit): number {
   if (unit.link) {
     return countsAsLink(unit.link) ? X_LINK_WEIGHT : charactersWeight(unit.text);
   }
-  return EMOJI.test(unit.text) ? 2 : charactersWeight(unit.text);
+  return EMOJI.test(unit.text) || KEYCAP.test(unit.text) ? 2 : charactersWeight(unit.text);
 }
 
 /** The weight X gives `text`. */

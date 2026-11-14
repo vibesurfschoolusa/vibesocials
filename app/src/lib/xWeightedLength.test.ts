@@ -25,6 +25,19 @@ describe("xWeightedLength", () => {
     expect(xWeightedLength("\u{1F3C4}‍♂️")).toBe(2);
   });
 
+  // Review fix: a keycap has no Extended_Pictographic code point but is one emoji.
+  it("counts a keycap sequence as one emoji (2)", () => {
+    expect(xWeightedLength("1️⃣")).toBe(2);
+    expect(xWeightedLength("#️⃣")).toBe(2);
+    expect(xWeightedLength("*️⃣")).toBe(2);
+    expect(xWeightedLength("1️⃣2️⃣3️⃣ ".repeat(40))).toBe(7 * 40);
+  });
+
+  it("cuts keycaps whole", () => {
+    const cut = truncateXWeighted("1️⃣".repeat(150), 280, "...");
+    expect(cut).toBe("1️⃣".repeat(138) + "...");
+  });
+
   it("counts a link longer than 23 characters as 23", () => {
     const url = "https://vibesurfschool.com/lessons/fort-lauderdale?utm_source=x&utm_medium=social";
     expect(url.length).toBeGreaterThan(23);

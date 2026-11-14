@@ -211,3 +211,11 @@ export function truncateUnits(
   }
   return measure(result) <= max ? result : "";
 }
+
+/**
+ * `truncateGraphemes` that never cuts inside a link: a link that does not fit
+ * goes whole (review fix, LinkedIn). Text that fits comes back unchanged.
+ */
+export function truncateKeepingLinks(text: string, maxGraphemes: number, ellipsis = ""): string {
+  return truncateUnits(text, maxGraphemes, (unit) => (unit.link ? graphemeCount(unit.text) : 1), ellipsis);
+}

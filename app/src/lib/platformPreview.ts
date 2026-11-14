@@ -2,7 +2,7 @@ import type { Platform } from "@prisma/client";
 
 import { buildCaptionWithFooter, type CaptionFooterUser } from "@/lib/captionFooter";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
-import { truncateGraphemes } from "@/lib/truncate";
+import { truncateGraphemes, truncateKeepingLinks } from "@/lib/truncate";
 import { removeXMentions } from "@/lib/xMentions";
 import { truncateXWeighted, xWeightedLength } from "@/lib/xWeightedLength";
 
@@ -100,15 +100,16 @@ export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPrevi
 
   const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS[input.platform];
   // X is counted and cut by its own weight, as computeTweetText does (fix
-  // round 1, M5); every other platform by graphemes.
+  // round 1, M5); LinkedIn keeps a link whole at the cut, as
+  // computeLinkedInCommentary does; every other platform cuts by graphemes.
   const isX = input.platform === "x";
   const charCount = isX ? xWeightedLength(fullCaption) : countGraphemes(fullCaption);
-  const rendered =
-    charLimit === null
-      ? fullCaption
-      : isX
-        ? truncateXWeighted(fullCaption, charLimit, ellipsis)
-        : truncateGraphemes(fullCaption, charLimit, { ellipsis });
+  let rendered = fullCaption;
+  if (charLimit !== null) {
+    if (isX) rendered = truncateXWeighted(fullCaption, charLimit, ellipsis);
+    else if (input.platform === "linkedin") rendered = truncateKeepingLinks(fullCaption, charLimit, ellipsis);
+    else rendered = truncateGraphemes(fullCaption, charLimit, { ellipsis });
+  }
 
   return {
     rendered,
