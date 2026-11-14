@@ -412,7 +412,7 @@ describe("reconcileStuckInProgressJobs - a scheduled post that was never sent (F
 
     const out = await reconcileStuckInProgressJobs(NOW);
 
-    expect(out).toEqual({ reconciled: 0, requeued: 1, gaveUp: 0 });
+    expect(out).toEqual({ reconciled: 0, requeued: 1, gaveUp: 0, unsent: [] });
     const sql = sqlOf(0);
     expect(sql).toMatch(/UPDATE "PostJob" SET "status" = 'scheduled'::"PostJobStatus"/);
     expect(sql).toContain(`j."status" = 'in_progress'::"PostJobStatus"`);
@@ -445,13 +445,15 @@ describe("reconcileStuckInProgressJobs - a scheduled post that was never sent (F
   });
 
   it("after 2 hours fails it instead, stamps its media, and leaves Post now to send it", async () => {
-    queryRawMock.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: "job-old" }]);
+    queryRawMock.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: "job-old", userId: "user-9" }]);
     findManyMock.mockResolvedValue([]);
 
     const out = await reconcileStuckInProgressJobs(NOW);
 
-    expect(out).toEqual({ reconciled: 0, requeued: 0, gaveUp: 1 });
+    // Review round 2, item 2: the owner to tell, for the scanner's notification.
+    expect(out).toEqual({ reconciled: 0, requeued: 0, gaveUp: 1, unsent: [{ postJobId: "job-old", userId: "user-9" }] });
     const sql = sqlOf(1);
+    expect(sql).toContain('RETURNING "id", "userId"');
     expect(sql).toMatch(/UPDATE "PostJob" SET "status" = 'failed'::"PostJobStatus"/);
     expect(sql).toMatch(/GREATEST\(j\."pickedUpAt", j\."scheduledFor"\) < \(\$::timestamptz AT TIME ZONE 'UTC'\)/);
     expect(sql).toContain('NOT EXISTS (SELECT 1 FROM "PostJobResult" r WHERE r."postJobId" = j."id")');
@@ -479,7 +481,7 @@ describe("reconcileStuckInProgressJobs - a scheduled post that was never sent (F
 
     const out = await reconcileStuckInProgressJobs(NOW);
 
-    expect(out).toEqual({ reconciled: 0, requeued: 1, gaveUp: 0 });
+    expect(out).toEqual({ reconciled: 0, requeued: 1, gaveUp: 0, unsent: [] });
     // scheduledFor alone (3 h ago) is never compared with the cutoff.
     expect(sqlOf(0)).not.toMatch(/j\."scheduledFor" >= \(/);
     expect(sqlOf(1)).not.toMatch(/j\."scheduledFor" < \(/);
@@ -495,7 +497,7 @@ describe("reconcileStuckInProgressJobs - a scheduled post that was never sent (F
 
     const out = await reconcileStuckInProgressJobs(NOW);
 
-    expect(out).toEqual({ reconciled: 1, requeued: 0, gaveUp: 0 });
+    expect(out).toEqual({ reconciled: 1, requeued: 0, gaveUp: 0, unsent: [] });
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { id: "stuck-r", status: "in_progress" },
       data: { status: "completed" },

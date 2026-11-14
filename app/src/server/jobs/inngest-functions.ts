@@ -1861,6 +1861,24 @@ export const scheduledPostScanner = inngest.createFunction(
         if (reconciled.reconciled > 0) {
           logger.info("[Inngest] Reconciled stuck in_progress jobs", reconciled);
         }
+        // Review round 2, item 2: a scheduled post the reconciler gave up on tells
+        // its owner with the event the no-connections path sends. Sent here, in
+        // this step, because the step's output must stay the claimed ids; the id
+        // is stable per post, so a re-run of the step sends nothing twice
+        // (Inngest keeps an event id for 24 h). A failed send is only logged.
+        if (reconciled.unsent.length > 0) {
+          try {
+            await inngest.send(
+              reconciled.unsent.map(({ postJobId, userId }) => ({
+                id: `notify-unsent-${postJobId}`,
+                name: "notification.requested" as const,
+                data: { userId, postJobId },
+              })),
+            );
+          } catch (error) {
+            logger.error("[Inngest] Unsent scheduled post notification failed", { posts: reconciled.unsent.length, error });
+          }
+        }
       } catch (error) {
         logger.error("[Inngest] Reconciling stuck in_progress jobs failed (claiming anyway)", { error });
       }

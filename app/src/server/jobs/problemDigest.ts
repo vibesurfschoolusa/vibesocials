@@ -79,7 +79,7 @@ function emptyProblems(workspaceId: string): Omit<ProblemDigestWorkspace, "name"
 export async function collectProblemDigests(now: Date): Promise<ProblemDigest[]> {
   const since = new Date(now.getTime() - FAILURE_WINDOW_MS);
 
-  const [failedResults, reconnects, approvals] = await Promise.all([
+  const [failedResults, unsentPosts, reconnects, approvals] = await Promise.all([
     // Scans PostJobResult once a day; needs an index on (status, updatedAt) if the table grows large.
     prisma.postJobResult.findMany({
       where: {
@@ -88,6 +88,12 @@ export async function collectProblemDigests(now: Date): Promise<ProblemDigest[]>
         workspaceId: { not: null },
       },
       select: { workspaceId: true, postJobId: true, platform: true },
+    }),
+    // A post that failed with no result at all was never sent (F1 H3: the 2 h
+    // give-up, or no connection could take it): a failed post with no platform.
+    prisma.postJob.findMany({
+      where: { status: "failed", updatedAt: { gte: since, lte: now }, results: { none: {} } },
+      select: { id: true, workspaceId: true },
     }),
     prisma.socialConnection.findMany({
       where: { needsReconnect: true },
@@ -121,6 +127,11 @@ export async function collectProblemDigests(now: Date): Promise<ProblemDigest[]>
     failure.posts.add(result.postJobId);
     failure.platforms.add(result.platform);
     failures.set(result.workspaceId, failure);
+  }
+  for (const post of unsentPosts) {
+    const failure = failures.get(post.workspaceId) ?? { posts: new Set(), platforms: new Set() };
+    failure.posts.add(post.id);
+    failures.set(post.workspaceId, failure);
   }
   for (const [workspaceId, failure] of failures) {
     const entry = problemsOf(workspaceId);

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const db = vi.hoisted(() => ({
   resultFindMany: vi.fn(),
+  postJobFindMany: vi.fn(),
   connectionFindMany: vi.fn(),
   postJobGroupBy: vi.fn(),
   memberFindMany: vi.fn(),
@@ -16,7 +17,7 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     postJobResult: { findMany: db.resultFindMany },
     socialConnection: { findMany: db.connectionFindMany },
-    postJob: { groupBy: db.postJobGroupBy },
+    postJob: { groupBy: db.postJobGroupBy, findMany: db.postJobFindMany },
     workspaceMember: { findMany: db.memberFindMany },
     user: { findMany: db.userFindMany },
   },
@@ -55,6 +56,7 @@ beforeEach(() => {
   sendEmailMock.mockReset();
   for (const mock of Object.values(loggerMock)) mock.mockReset();
   db.resultFindMany.mockResolvedValue([]);
+  db.postJobFindMany.mockResolvedValue([]);
   db.connectionFindMany.mockResolvedValue([]);
   db.postJobGroupBy.mockResolvedValue([]);
   db.memberFindMany.mockResolvedValue([]);
@@ -81,6 +83,33 @@ describe("collectProblemDigests", () => {
     expect(where.status).toBe("failed");
     expect(where.updatedAt).toEqual({ gte: DAY_AGO, lte: NOW });
     expect(where.workspaceId).toEqual({ not: null });
+  });
+
+  // Review round 2, item 2: a post that failed with no results at all (never
+  // sent: the 2 h give-up, or no connection could take it) is a failed post too.
+  it("counts a post that failed in the window with no results as a failed post", async () => {
+    db.resultFindMany.mockResolvedValue([{ workspaceId: "ws-a", postJobId: "job-1", platform: "x" }]);
+    db.postJobFindMany.mockResolvedValue([
+      { id: "job-2", workspaceId: "ws-a" },
+      { id: "job-3", workspaceId: "ws-b" },
+    ]);
+    db.memberFindMany.mockResolvedValue([owner("u1", "ws-a", "Alpha"), owner("u1", "ws-b", "Beta")]);
+
+    const digests = await collectProblemDigests(NOW);
+
+    expect(db.postJobFindMany).toHaveBeenCalledWith({
+      where: { status: "failed", updatedAt: { gte: DAY_AGO, lte: NOW }, results: { none: {} } },
+      select: { id: true, workspaceId: true },
+    });
+    expect(digests).toEqual([
+      {
+        userId: "u1",
+        workspaces: [
+          { workspaceId: "ws-a", name: "Alpha", failedPosts: 2, failedPlatforms: ["x"], needsReconnect: [], waitingForApproval: 0 },
+          { workspaceId: "ws-b", name: "Beta", failedPosts: 1, failedPlatforms: [], needsReconnect: [], waitingForApproval: 0 },
+        ],
+      },
+    ]);
   });
 
   it("matches a post waiting for approval the way deriveApprovalState does, for drafts", async () => {

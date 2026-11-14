@@ -378,8 +378,14 @@ export async function reconcileStuckInProgressJobs(
   now: Date,
   take: number = STUCK_RECONCILE_BATCH,
   maxAgeMs: number = STUCK_IN_PROGRESS_MS,
-): Promise<{ reconciled: number; requeued: number; gaveUp: number }> {
-  const { requeued, gaveUp } = await requeueUnsentScheduledJobs(now, take);
+): Promise<{
+  reconciled: number;
+  requeued: number;
+  gaveUp: number;
+  /** Posts given up on, with the owner to notify (the scanner sends the event). */
+  unsent: Array<{ postJobId: string; userId: string }>;
+}> {
+  const { requeued, gaveUp, unsent } = await requeueUnsentScheduledJobs(now, take);
   const cutoff = new Date(now.getTime() - maxAgeMs);
   const candidates = await prisma.postJob.findMany({
     where: {
@@ -450,7 +456,7 @@ export async function reconcileStuckInProgressJobs(
     if (count === 1) reconciled += 1;
   }
 
-  return { reconciled, requeued, gaveUp };
+  return { reconciled, requeued, gaveUp, unsent };
 }
 
 /**
@@ -473,7 +479,7 @@ export async function reconcileStuckInProgressJobs(
 async function requeueUnsentScheduledJobs(
   now: Date,
   take: number,
-): Promise<{ requeued: number; gaveUp: number }> {
+): Promise<{ requeued: number; gaveUp: number; unsent: Array<{ postJobId: string; userId: string }> }> {
   const quietCutoff = new Date(now.getTime() - REQUEUE_QUIET_MS);
   const giveUpCutoff = new Date(now.getTime() - SEND_GIVE_UP_MS);
 
@@ -497,7 +503,7 @@ async function requeueUnsentScheduledJobs(
     )
     SELECT "id" FROM requeued`;
 
-  const gaveUp = await prisma.$queryRaw<{ id: string }[]>`
+  const gaveUp = await prisma.$queryRaw<{ id: string; userId: string }[]>`
     WITH gave_up AS (
       UPDATE "PostJob"
       SET "status" = 'failed'::"PostJobStatus",
@@ -513,9 +519,9 @@ async function requeueUnsentScheduledJobs(
         LIMIT ${take}
         FOR UPDATE SKIP LOCKED
       ) AND "status" = 'in_progress'::"PostJobStatus" AND NOT EXISTS (SELECT 1 FROM "PostJobResult" r WHERE r."postJobId" = "PostJob"."id")
-      RETURNING "id"
+      RETURNING "id", "userId"
     )
-    SELECT "id" FROM gave_up`;
+    SELECT "id", "userId" FROM gave_up`;
 
   for (const { id } of gaveUp) {
     await stampPostMediaLastUsed(prisma, id, now);
@@ -526,5 +532,9 @@ async function requeueUnsentScheduledJobs(
       gaveUp: gaveUp.map((row) => row.id),
     });
   }
-  return { requeued: requeued.length, gaveUp: gaveUp.length };
+  return {
+    requeued: requeued.length,
+    gaveUp: gaveUp.length,
+    unsent: gaveUp.map((row) => ({ postJobId: row.id, userId: row.userId })),
+  };
 }

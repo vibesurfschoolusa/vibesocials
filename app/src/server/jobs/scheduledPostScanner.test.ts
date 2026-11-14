@@ -110,13 +110,59 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(inngest, "send").mockImplementation(sendMock as unknown as typeof inngest.send);
 
-  reconcileMock.mockResolvedValue({ reconciled: 0 });
+  reconcileMock.mockResolvedValue({ reconciled: 0, requeued: 0, gaveUp: 0, unsent: [] });
   prepareDeferredMock.mockImplementation(async (id: string) => okFor(id));
   sendMock.mockResolvedValue({ ids: [] });
 });
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+// Review round 2, item 2: a scheduled post the reconciler gave up on tells its
+// owner, with the same notification.requested event the NO_CONNECTIONS path
+// sends (deduped by a stable id per post).
+describe("scheduledPostScanner - a post the reconciler gave up on", () => {
+  it("sends the owner the outcome notification, once per post", async () => {
+    claimDueMock.mockResolvedValue([]);
+    reconcileMock.mockResolvedValue({
+      reconciled: 0,
+      requeued: 0,
+      gaveUp: 1,
+      unsent: [{ postJobId: "job-old", userId: "user-9" }],
+    });
+
+    await runScanner(fakeStep());
+
+    expect(dispatches()).toEqual([
+      [{ id: "notify-unsent-job-old", name: "notification.requested", data: { userId: "user-9", postJobId: "job-old" } }],
+    ]);
+  });
+
+  it("sends nothing when no post was given up on", async () => {
+    claimDueMock.mockResolvedValue([]);
+    reconcileMock.mockResolvedValue({ reconciled: 0, requeued: 0, gaveUp: 0, unsent: [] });
+
+    await runScanner(fakeStep());
+
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("still claims due posts when the notification cannot be sent", async () => {
+    claimDueMock.mockResolvedValue(["job-1"]);
+    reconcileMock.mockResolvedValue({
+      reconciled: 0,
+      requeued: 0,
+      gaveUp: 1,
+      unsent: [{ postJobId: "job-old", userId: "user-9" }],
+    });
+    sendMock.mockRejectedValueOnce(new Error("inngest down")).mockResolvedValue({ ids: [] });
+
+    const out = await runScanner(fakeStep());
+
+    expect(claimDueMock).toHaveBeenCalledTimes(1);
+    expect(out.dispatched).toBe(1);
+  });
 });
 
 describe("scheduledPostScanner - options", () => {
