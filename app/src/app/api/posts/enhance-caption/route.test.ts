@@ -4,13 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // per-workspace daily quota (so it now resolves a workspace context instead of
 // a bare user), bounds the provider call and asks reasoning models for low
 // effort. `fetch` is stubbed - no provider is ever contacted.
-const { getWorkspaceContextMock, checkRateLimitMock } = vi.hoisted(() => ({
+const { getWorkspaceContextMock, checkRateLimitMock, postJobFindManyMock } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
+  postJobFindManyMock: vi.fn(),
 }));
 
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
+vi.mock("@/lib/db", () => ({ prisma: { postJob: { findMany: postJobFindManyMock } } }));
 
 import { POST } from "./route";
 
@@ -50,6 +52,7 @@ beforeEach(() => {
   vi.stubEnv("OPENAI_TEXT_MODEL", "");
   getWorkspaceContextMock.mockResolvedValue(CONTEXT);
   checkRateLimitMock.mockResolvedValue({ allowed: true });
+  postJobFindManyMock.mockResolvedValue([]);
   fetchMock = vi.fn().mockImplementation(async () => providerOk());
   global.fetch = fetchMock as unknown as typeof fetch;
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -492,3 +495,67 @@ describe("POST /api/posts/enhance-caption - failures a person reads", () => {
     await expect(tooLong.json()).resolves.toMatchObject({ error: "caption is too long (max 2200 characters)." });
   });
 });
+
+// P3: Improve stops bringing back the openings the AI keeps reusing ("Catch
+// the wave..."): the plain Enhance request lists the workspace's recent
+// captions to differ from, as auto-caption does (lib/captionVariety.ts).
+describe("POST /api/posts/enhance-caption - variety", () => {
+  function userMessage(): string {
+    const body = sentBody() as { messages: { role: string; content: string }[] };
+    return body.messages.find((m) => m.role === "user")!.content;
+  }
+
+  it("lists the workspace's recent captions to differ from on a plain Improve", async () => {
+    postJobFindManyMock.mockResolvedValue([
+      { baseCaption: "Catch the wave of excitement with us!" },
+      { baseCaption: "Catch the perfect wave at sunrise." },
+    ]);
+    const response = await post({ caption: "surf lesson today" });
+    expect(response.status).toBe(200);
+    expect(postJobFindManyMock).toHaveBeenCalledTimes(1);
+    const query = postJobFindManyMock.mock.calls[0][0];
+    expect(query.where.workspaceId).toBe("ws-1");
+    expect(query.take).toBe(8);
+    expect(query.select).toEqual({ baseCaption: true });
+    const message = userMessage();
+    expect(message).toContain('- "Catch the wave of excitement with us!"');
+    expect(message).toContain('- "Catch the perfect wave at sunrise."');
+    expect(message).toContain("must not open with the same first three words");
+  });
+
+  it("leaves out a recent caption that is the one being improved", async () => {
+    postJobFindManyMock.mockResolvedValue([
+      { baseCaption: "Surf lesson today!" },
+      { baseCaption: "Catch the wave with us." },
+    ]);
+    await post({ caption: "  Surf lesson   today! " });
+    const message = userMessage();
+    expect(message).not.toContain('- "Surf lesson today!"');
+    expect(message).toContain('- "Catch the wave with us."');
+  });
+
+  it("sends today's prompt exactly when there are no recent captions", async () => {
+    postJobFindManyMock.mockResolvedValue([]);
+    await post({ caption: "surf lesson today" });
+    expect(userMessage()).toBe(`Enhance this basic caption into a short, engaging, SEO-optimized social media post:
+
+"surf lesson today"
+
+Create an enhanced version that's perfect for social media.`);
+  });
+
+  it("still improves the caption when the recent captions can't be read", async () => {
+    postJobFindManyMock.mockRejectedValue(new Error("db down"));
+    const response = await post({ caption: "surf lesson today" });
+    expect(response.status).toBe(200);
+    expect(userMessage()).not.toContain("Captions to differ from");
+  });
+
+  it("never reads or lists captions when adapting for a platform", async () => {
+    postJobFindManyMock.mockResolvedValue([{ baseCaption: "Catch the wave with us." }]);
+    await post({ caption: "surf lesson today", platform: "x", maxLength: 254 });
+    expect(postJobFindManyMock).not.toHaveBeenCalled();
+    expect(userMessage()).not.toContain("Captions to differ from");
+  });
+});
+
