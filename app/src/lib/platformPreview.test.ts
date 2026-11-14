@@ -4,6 +4,7 @@ import { buildCaptionWithFooter } from "./captionFooter";
 import { buildPlatformPreview } from "./platformPreview";
 import { truncateGraphemes } from "./truncate";
 import { computeGbpPostSummary } from "@/server/platforms/googleBusinessProfileClient";
+import { computeLinkedInCommentary } from "@/server/platforms/linkedinClient";
 import { computeTweetText } from "@/server/platforms/xClient";
 import { fitPinterestDescription } from "./pinterestApi";
 import { PLATFORM_CAPTION_LIMITS } from "./platformLimits";
@@ -11,7 +12,7 @@ import { trackedWebsiteLink } from "./trackingTags";
 
 describe("buildPlatformPreview", () => {
   it("renders the plain caption for a null-limit platform with no footer/override", () => {
-    const result = buildPlatformPreview({ platform: "linkedin", caption: "Hello world" });
+    const result = buildPlatformPreview({ platform: "facebook_page", caption: "Hello world" });
     expect(result).toEqual({
       rendered: "Hello world",
       charCount: 11,
@@ -23,7 +24,7 @@ describe("buildPlatformPreview", () => {
 
   it("never shows a truncation warning for a null-limit platform, however long the caption", () => {
     const caption = "a".repeat(5000);
-    for (const platform of ["youtube", "linkedin", "facebook_page"] as const) {
+    for (const platform of ["youtube", "facebook_page"] as const) {
       const result = buildPlatformPreview({ platform, caption });
       expect(result.rendered).toBe(caption); // full caption, unmodified
       expect(result.limit).toBeNull();
@@ -140,17 +141,32 @@ describe("buildPlatformPreview", () => {
       expect(result.willTruncate).toBe(true);
     });
 
-    it("truncates the caption+footer COMBINED length, not the base caption alone", () => {
-      // A base caption that alone fits, but overflows once the footer is
-      // appended, must still be truncated — this is what actually happens
-      // server-side (footer is appended BEFORE the client ever sees the text).
+    // Fix round 1 (M5): the footer goes before the caption is cut, as at publish.
+    it("drops the footer, not the caption, when caption + footer is over", () => {
       const caption = "a".repeat(250);
       const user = { defaultHashtags: "#".repeat(60) };
       const result = buildPlatformPreview({ platform: "x", caption, user });
-      const fullCaption = buildCaptionWithFooter(caption, user);
-      expect(fullCaption.length).toBeGreaterThan(280);
-      expect(result.rendered).toBe(truncateGraphemes(fullCaption, 280, { ellipsis: "..." }));
+      expect(buildCaptionWithFooter(caption, user).length).toBeGreaterThan(280);
+      expect(result.rendered).toBe(caption);
+      expect(result.rendered).toBe(computeTweetText(buildCaptionWithFooter(caption, user, "x")));
+      expect(result.willTruncate).toBe(false);
+    });
+
+    it("counts and cuts by X's weight: an emoji 2", () => {
+      const caption = "\u{1F30A}".repeat(200);
+      const result = buildPlatformPreview({ platform: "x", caption });
+      expect(result.charCount).toBe(400);
       expect(result.willTruncate).toBe(true);
+      expect(result.rendered).toBe(computeTweetText(caption));
+      expect(result.rendered).toBe("\u{1F30A}".repeat(138) + "...");
+    });
+
+    it("counts a long link as 23 and does not cut it", () => {
+      const caption = "a".repeat(250) + " https://vibesurfschool.com/lessons/fort-lauderdale/private-surf-lessons";
+      const result = buildPlatformPreview({ platform: "x", caption });
+      expect(result.charCount).toBe(274);
+      expect(result.rendered).toBe(caption);
+      expect(result.willTruncate).toBe(false);
     });
   });
 
@@ -197,7 +213,7 @@ describe("buildPlatformPreview", () => {
   it("keeps emoji/ZWJ sequences whole when truncating (delegates to truncateGraphemes, never slices mid-grapheme)", () => {
     const caption = "😀👨‍👩‍👧🇺🇸".repeat(60);
     const result = buildPlatformPreview({ platform: "x", caption });
-    expect(result.rendered).toBe(truncateGraphemes(caption, 280, { ellipsis: "..." }));
+    expect(result.rendered).toBe(computeTweetText(caption));
   });
 });
 
@@ -219,8 +235,22 @@ describe("buildPlatformPreview with tracking tags", () => {
     expect(result.rendered).toBe(computeTweetText(buildCaptionWithFooter("Waves", on, "x")));
   });
 
+  it("on x: tagged at the limit; one over drops the hashtags and keeps the tagged link", () => {
+    // On X the tagged link weighs 23, the same as the plain one.
+    const room = 280 - 52; // "For more info visit " 20 + link 23 + "#surf" 5 + two blank lines 4
+    for (const [length, footer] of [
+      [room, taggedFooter("x")],
+      [room + 1, taggedFooter("x").replace("\n\n#surf", "")],
+    ] as const) {
+      const caption = "a".repeat(length);
+      const preview = buildPlatformPreview({ platform: "x", caption, user: on });
+      expect(preview.rendered).toBe(`${caption}${footer}`);
+      expect(preview.rendered).toBe(computeTweetText(buildCaptionWithFooter(caption, on, "x")));
+      expect(preview.willTruncate).toBe(false);
+    }
+  });
+
   it.each([
-    ["x", (text: string) => computeTweetText(text)],
     ["google_business_profile", (text: string) => computeGbpPostSummary(text)],
     ["pinterest", (text: string) => fitPinterestDescription(text)],
   ] as const)("on %s: tagged one under and exactly at the limit, plain one over", (platform, send) => {
@@ -304,5 +334,25 @@ describe("buildPlatformPreview — empty caption", () => {
 
   it("with no footer and no caption, stays empty", () => {
     expect(buildPlatformPreview({ platform: "linkedin", caption: "", user: {} }).rendered).toBe("");
+  });
+});
+
+// Fix round 1 (M6): LinkedIn's 3,000 limit, footer first, as the client cuts it.
+describe("buildPlatformPreview on LinkedIn", () => {
+  const user = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf" };
+
+  it("shows a 3,100-character post cut at 3,000 with the footer dropped first", () => {
+    const caption = "a".repeat(3100);
+    const result = buildPlatformPreview({ platform: "linkedin", caption, user });
+    expect(result.limit).toBe(3000);
+    expect(result.willTruncate).toBe(true);
+    expect(result.rendered).toBe("a".repeat(2997) + "...");
+    expect(result.rendered).toBe(computeLinkedInCommentary(buildCaptionWithFooter(caption, user, "linkedin")));
+  });
+
+  it("leaves a post under the limit unchanged", () => {
+    const result = buildPlatformPreview({ platform: "linkedin", caption: "Waves", user });
+    expect(result.rendered).toBe("Waves\n\nFor more info visit vibesurfschool.com\n\n#surf");
+    expect(result.willTruncate).toBe(false);
   });
 });

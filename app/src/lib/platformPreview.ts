@@ -4,6 +4,7 @@ import { buildCaptionWithFooter, type CaptionFooterUser } from "@/lib/captionFoo
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { truncateGraphemes } from "@/lib/truncate";
 import { removeXMentions } from "@/lib/xMentions";
+import { truncateXWeighted, xWeightedLength } from "@/lib/xWeightedLength";
 
 // A local grapheme counter, intentionally NOT added to lib/truncate.ts: Phase
 // 7's only sanctioned non-UI change is the platformLimits.ts map + the
@@ -46,7 +47,10 @@ export interface PlatformPreviewResult {
    * string, not a re-derived approximation.
    */
   rendered: string;
-  /** Grapheme count of the full caption + footer text, BEFORE truncation. */
+  /**
+   * Length of the full caption + footer text, BEFORE truncation: X's weight on
+   * X (lib/xWeightedLength.ts), graphemes elsewhere.
+   */
   charCount: number;
   /** This platform's client-enforced limit, or null when it doesn't truncate. */
   limit: number | null;
@@ -95,9 +99,16 @@ export function buildPlatformPreview(input: PlatformPreviewInput): PlatformPrevi
   }
 
   const { charLimit, ellipsis } = PLATFORM_CAPTION_LIMITS[input.platform];
-  const charCount = countGraphemes(fullCaption);
+  // X is counted and cut by its own weight, as computeTweetText does (fix
+  // round 1, M5); every other platform by graphemes.
+  const isX = input.platform === "x";
+  const charCount = isX ? xWeightedLength(fullCaption) : countGraphemes(fullCaption);
   const rendered =
-    charLimit === null ? fullCaption : truncateGraphemes(fullCaption, charLimit, { ellipsis });
+    charLimit === null
+      ? fullCaption
+      : isX
+        ? truncateXWeighted(fullCaption, charLimit, ellipsis)
+        : truncateGraphemes(fullCaption, charLimit, { ellipsis });
 
   return {
     rendered,

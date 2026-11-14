@@ -94,10 +94,10 @@ describe("platformOverridesEqual", () => {
 
 describe("platformCaptionCounter", () => {
   it("counts against the platform limit minus the footer the app appends", () => {
-    // footer = "\n\nFor more info visit a.co" = 2 + 20 + 4 = 26 characters
+    // footer = "\n\nFor more info visit a.co" = 2 + 20 + a link X weighs 23 = 45
     const footer = { companyWebsite: "a.co", defaultHashtags: null };
     const counter = platformCaptionCounter("hello", "x", footer);
-    expect(counter).toEqual({ length: 5, max: 254, over: false, label: "5 / 254" });
+    expect(counter).toEqual({ length: 5, max: 235, over: false, label: "5 / 235" });
   });
 
   it("is over when the text is longer than the room left", () => {
@@ -106,8 +106,18 @@ describe("platformCaptionCounter", () => {
     expect(counter.label).toBe("281 / 280");
   });
 
+  // Fix round 1 (M5, M6): X is counted by its own weight; LinkedIn has 3,000.
+  it("counts X by weight: an emoji 2, a link 23", () => {
+    expect(platformCaptionCounter("\u{1F30A}\u{1F30A}", "x", {}).length).toBe(4);
+    expect(platformCaptionCounter("https://vibesurfschool.com/lessons/fort-lauderdale", "x", {}).length).toBe(23);
+  });
+
+  it("counts LinkedIn against 3,000", () => {
+    expect(platformCaptionCounter("hi", "linkedin", {}).label).toBe("2 / 3,000");
+  });
+
   it("falls back to the 10,000-character cap for a platform with no limit", () => {
-    expect(platformCaptionCounter("hi", "linkedin", {})).toEqual({
+    expect(platformCaptionCounter("hi", "facebook_page", {})).toEqual({
       length: 2,
       max: 10_000,
       over: false,
@@ -124,7 +134,7 @@ describe("adaptMaxLength", () => {
   });
 
   it("is undefined for a platform with no limit", () => {
-    expect(adaptMaxLength("linkedin", {})).toBeUndefined();
+    expect(adaptMaxLength("facebook_page", {})).toBeUndefined();
   });
 
   it("never goes below the 50 the route accepts", () => {
@@ -209,7 +219,7 @@ describe("platformCaptionCounter and adaptMaxLength with tracking tags", () => {
       expect(platformCaptionCounter("hello", platform, on)).toEqual(platformCaptionCounter("hello", platform, off));
       expect(adaptMaxLength(platform, on)).toBe(adaptMaxLength(platform, off));
     }
-    // "\n\nFor more info visit a.co\n\n#surf" is 33 characters.
-    expect(platformCaptionCounter("hello", "x", on).max).toBe(280 - 33);
+    // "\n\nFor more info visit a.co\n\n#surf" weighs 52 on X: the link counts 23.
+    expect(platformCaptionCounter("hello", "x", on).max).toBe(280 - 52);
   });
 });

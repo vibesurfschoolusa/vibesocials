@@ -44,6 +44,15 @@ describe("xWeightedLength", () => {
     expect(xWeightedLength("(example.com)")).toBe(1 + 23 + 1);
   });
 
+  it("counts a bare domain as a link only with a listed ending or www.", () => {
+    expect(xWeightedLength("vibesocials.wtf")).toBe(23);
+    expect(xWeightedLength("surf.io/book")).toBe(23);
+    expect(xWeightedLength("www.example.surf")).toBe(23);
+    expect(xWeightedLength("Mr.Smith")).toBe(8);
+    expect(xWeightedLength("notes.txt")).toBe(9);
+    expect(xWeightedLength("https://example.surf")).toBe(23);
+  });
+
   it("does not read an email address or an abbreviation as a link", () => {
     expect(xWeightedLength("info@example.com")).toBe(16);
     expect(xWeightedLength("e.g. 3.50")).toBe(9);

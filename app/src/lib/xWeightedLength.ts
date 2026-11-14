@@ -7,7 +7,8 @@ import { textUnits, truncateUnits, type TextLink, type TextUnit } from "@/lib/tr
  *
  * - A code point in X's light ranges weighs 1, any other weighs 2.
  * - An emoji weighs 2, however many code points its sequence has.
- * - A link weighs 23 (X shortens every link to a t.co link), however long.
+ * - A link weighs 23 (X shortens every link to a t.co link), however long:
+ *   http(s):// always, a bare domain when it starts with www. or has a listed ending.
  */
 
 /** X's limit on a post's weight. */
@@ -24,12 +25,12 @@ const LIGHT_RANGES: readonly (readonly [number, number])[] = [
 
 const EMOJI = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u;
 
-// Endings X links without a scheme or a path. For any other ending X may or may
-// not make a link, so such a link is weighed at the larger of the two counts and
-// a post is never sent heavier than this count says.
-const GENERIC_TLDS = new Set([
-  "com", "net", "org", "info", "biz", "edu", "gov", "app", "dev", "shop", "store",
-  "online", "site", "blog", "xyz", "club", "surf", "co", "tv",
+// Endings a bare domain (no http(s)://, no www.) must have to count as a link
+// (lead's rule, fix round 1). Other dotted words ("Mr.Smith", "notes.txt") are
+// counted as characters.
+const LINK_TLDS = new Set([
+  "com", "net", "org", "io", "co", "us", "uk", "de", "fr", "es", "it", "nl", "ca", "au", "za",
+  "info", "biz", "app", "dev", "me", "ly", "tv", "wtf", "shop", "store", "online", "site", "xyz", "ai",
 ]);
 
 function codePointWeight(codePoint: number): number {
@@ -42,13 +43,13 @@ function charactersWeight(text: string): number {
   return weight;
 }
 
-function surelyLinked(link: TextLink): boolean {
-  return GENERIC_TLDS.has(link.tld) || (link.tld.length === 2 && (link.hasScheme || link.hasPath));
+function countsAsLink(link: TextLink): boolean {
+  return link.hasScheme || link.hasWww || LINK_TLDS.has(link.tld);
 }
 
 function unitWeight(unit: TextUnit): number {
   if (unit.link) {
-    return surelyLinked(unit.link) ? X_LINK_WEIGHT : Math.max(X_LINK_WEIGHT, charactersWeight(unit.text));
+    return countsAsLink(unit.link) ? X_LINK_WEIGHT : charactersWeight(unit.text);
   }
   return EMOJI.test(unit.text) ? 2 : charactersWeight(unit.text);
 }

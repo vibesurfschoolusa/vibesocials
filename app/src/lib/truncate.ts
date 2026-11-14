@@ -119,6 +119,8 @@ export function fitTitle(text: string, max: number): string {
 export interface TextLink {
   /** Starts with http:// or https://. */
   hasScheme: boolean;
+  /** The host starts with "www.". */
+  hasWww: boolean;
   /** Has a path, query or fragment after the host. */
   hasPath: boolean;
   /** The host's last label, lower case ("com"). */
@@ -146,6 +148,7 @@ function linkOf(text: string): TextLink {
   const host = rest.split(/[/?#:]/, 1)[0];
   return {
     hasScheme,
+    hasWww: /^www\./i.test(host),
     hasPath: rest.length > host.length,
     tld: host.slice(host.lastIndexOf(".") + 1).toLowerCase(),
   };

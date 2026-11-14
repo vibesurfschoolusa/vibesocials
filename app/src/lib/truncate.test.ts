@@ -126,7 +126,7 @@ describe("textUnits", () => {
     expect(units.map((u) => u.text)).toEqual([
       "H", "i", " ", "\u{1F30A}", " ", "https://example.com/a?b=1", ".", " ", "o", "k",
     ]);
-    expect(units[5].link).toEqual({ hasScheme: true, hasPath: true, tld: "com" });
+    expect(units[5].link).toEqual({ hasScheme: true, hasWww: false, hasPath: true, tld: "com" });
     expect(units[0].link).toBeNull();
   });
 
