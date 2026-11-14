@@ -75,3 +75,13 @@ describe("splitDroppedFiles", () => {
     expect(splitDroppedFiles([typed("a.jpg", "image/jpeg")]).message).toBeNull();
   });
 });
+
+describe("splitDroppedFiles - wording per page", () => {
+  const typed = (name: string, type: string) => ({ name, type, size: 1 }) as File;
+  it("says added on Add many", () => {
+    expect(splitDroppedFiles([typed("d.pdf", "application/pdf")], "added").message).toBe(
+      "1 file was left out: only photos and videos can be added.",
+    );
+  });
+});
+
