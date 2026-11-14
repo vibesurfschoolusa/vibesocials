@@ -95,6 +95,37 @@ function hasClientChangeRequest(job: PostJobDTO): boolean {
  * else's work: oldest submission on top), then scheduled posts soonest-first
  * (next up), then drafts newest-first.
  */
+export type QueueViewMode = "list" | "calendar";
+
+const QUEUE_VIEW_KEY = "vibe.queueView";
+
+type ViewStorage = Partial<Pick<Storage, "getItem" | "setItem">>;
+
+/**
+ * N3: the Queue view this browser last used. Storage can be missing, blocked
+ * (reading `window.localStorage` itself throws in some private windows) or
+ * hold anything, so every failure reads as List.
+ */
+export function readQueueView(getStorage: () => ViewStorage | null | undefined): QueueViewMode {
+  try {
+    return getStorage()?.getItem?.(QUEUE_VIEW_KEY) === "calendar" ? "calendar" : "list";
+  } catch {
+    return "list";
+  }
+}
+
+/** Remembers the Queue view; a storage failure only means it is not remembered. */
+export function saveQueueView(
+  getStorage: () => ViewStorage | null | undefined,
+  mode: QueueViewMode,
+): void {
+  try {
+    getStorage()?.setItem?.(QUEUE_VIEW_KEY, mode);
+  } catch {
+    // Not remembered; the view still switches.
+  }
+}
+
 export function sortQueue(jobs: PostJobDTO[]): PostJobDTO[] {
   const clientChanges = jobs
     .filter(hasClientChangeRequest)
@@ -883,8 +914,18 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
   const [publishTarget, setPublishTarget] = useState<PostJobDTO | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<PostJobDTO | null>(null);
   // List stays the default; the calendar is an alternate lens on the SAME
-  // fetched jobs. Deliberately not persisted (YAGNI).
-  const [view, setView] = useState<"list" | "calendar">("list");
+  // fetched jobs. N3: the choice is remembered per browser. It is read after
+  // mount, not in the initializer, so the server render and the first client
+  // render agree.
+  const [view, setViewState] = useState<QueueViewMode>("list");
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reads browser storage once after hydration
+    setViewState(readQueueView(() => window.localStorage));
+  }, []);
+  const setView = useCallback((mode: QueueViewMode) => {
+    setViewState(mode);
+    saveQueueView(() => window.localStorage, mode);
+  }, []);
 
   // `silent` is the background re-sync after a stale-card error (409/503/404):
   // a failed silent refresh keeps the list on screen instead of replacing it
@@ -1180,19 +1221,35 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
               </Button>
             </div>
           </Alert>
-        ) : !jobs || jobs.length === 0 ? (
+        ) : (!jobs || jobs.length === 0) && view === "list" ? (
           <EmptyState
             icon={<CalendarClock />}
             title="Nothing queued"
             description="Schedule a post or save a draft from the composer and it'll show up here."
             action={
-              <Link
-                href="/posts/new"
-                className={buttonVariants({ variant: "primary" })}
-              >
-                Create a post
-              </Link>
+              <div className="flex flex-wrap justify-center gap-2">
+                <Link
+                  href="/posts/new"
+                  className={buttonVariants({ variant: "primary" })}
+                >
+                  Create a post
+                </Link>
+                <Link
+                  href="/posts/bulk"
+                  className={buttonVariants({ variant: "outline" })}
+                >
+                  Add many
+                </Link>
+              </div>
             }
+          />
+        ) : !jobs || jobs.length === 0 ? (
+          // N3: an empty Queue's calendar still shows the month to plan in.
+          <QueueCalendar
+            jobs={[]}
+            onShowList={() => setView("list")}
+            onEdit={setEditTarget}
+            onRescheduled={applyReschedule}
           />
         ) : (
           <>

@@ -8,6 +8,8 @@ import {
   coverLabel,
   emptyCaptionMessage,
   isTextPost,
+  readQueueView,
+  saveQueueView,
   seriesLabel,
   sortQueue,
 } from "./queue-view";
@@ -97,5 +99,60 @@ describe("a post without a file in the Queue", () => {
   it("refuses emptying a text post's caption with its own sentence", () => {
     expect(emptyCaptionMessage(job("t", { media: null, mediaCount: 0 }))).toBe("A post without a photo needs text.");
     expect(emptyCaptionMessage(job("f"))).toBe("Caption can't be empty.");
+  });
+});
+
+// N3: the Queue remembers List or Calendar per browser.
+describe("readQueueView / saveQueueView", () => {
+  function memoryStorage(initial: Record<string, string> = {}) {
+    const data = new Map(Object.entries(initial));
+    return {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => void data.set(key, value),
+      data,
+    };
+  }
+
+  it("reads back a saved view", () => {
+    const storage = memoryStorage();
+    saveQueueView(() => storage, "calendar");
+    expect(readQueueView(() => storage)).toBe("calendar");
+    saveQueueView(() => storage, "list");
+    expect(readQueueView(() => storage)).toBe("list");
+  });
+
+  it("falls back to List for nothing saved, junk, or storage that throws", () => {
+    expect(readQueueView(() => memoryStorage())).toBe("list");
+    expect(readQueueView(() => memoryStorage({ "vibe.queueView": "grid" }))).toBe("list");
+    expect(
+      readQueueView(() => {
+        throw new Error("SecurityError");
+      }),
+    ).toBe("list");
+    expect(
+      readQueueView(() => ({
+        getItem: () => {
+          throw new Error("blocked");
+        },
+      })),
+    ).toBe("list");
+  });
+
+  it("never throws when saving fails", () => {
+    expect(() =>
+      saveQueueView(
+        () => ({
+          setItem: () => {
+            throw new Error("QuotaExceededError");
+          },
+        }),
+        "calendar",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      saveQueueView(() => {
+        throw new Error("SecurityError");
+      }, "calendar"),
+    ).not.toThrow();
   });
 });

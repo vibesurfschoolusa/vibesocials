@@ -1,6 +1,10 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { clientChangeLine, offCalendarSummary } from "./queue-calendar";
+import { ToastProvider } from "@/components/ui/toast";
+
+import { QueueCalendar, clientChangeLine, offCalendarSummary } from "./queue-calendar";
 
 function job(status: string, approvalState: string, scheduledFor: string | null) {
   return { status, approvalState, scheduledFor };
@@ -39,5 +43,54 @@ describe("clientChangeLine", () => {
   it("says nothing when there are none, or only scheduled posts with old marks", () => {
     expect(clientChangeLine([])).toBeNull();
     expect(clientChangeLine([{ ...changed, status: "scheduled" }])).toBeNull();
+  });
+});
+
+// N3: an empty Queue still shows the month, so the weeks ahead are visible.
+describe("QueueCalendar with no posts", () => {
+  function render(jobs: Parameters<typeof QueueCalendar>[0]["jobs"]) {
+    return renderToStaticMarkup(
+      createElement(
+        ToastProvider,
+        null,
+        createElement(QueueCalendar, {
+          jobs,
+          onShowList: () => {},
+          onEdit: () => {},
+          onRescheduled: () => {},
+        }),
+      ),
+    );
+  }
+
+  it("renders the month grid, its navigation and the empty line", () => {
+    const html = render([]);
+    expect(html).toContain("Nothing scheduled this month.");
+    expect(html).toContain("Previous month");
+    expect(html).toContain("Next month");
+    for (const day of ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]) expect(html).toContain(`>${day}<`);
+    // Every month spans at least 28 day cells (4 weeks of 7).
+    expect((html.match(/min-h-24/g) ?? []).length).toBeGreaterThanOrEqual(28);
+  });
+
+  it("does not show the empty line when there are posts", () => {
+    const html = render([
+      {
+        id: "j1",
+        status: "scheduled",
+        createdAt: "2026-11-01T00:00:00.000Z",
+        updatedAt: "2026-11-01T00:00:00.000Z",
+        scheduledFor: "2030-01-01T10:00:00.000Z",
+        caption: "hi",
+        platformCaptions: null,
+        results: [],
+        media: null,
+        mediaCount: 1,
+        publish: null,
+        createdBy: null,
+        approvalState: "none",
+      },
+    ]);
+    expect(html).not.toContain("Nothing scheduled this month.");
   });
 });

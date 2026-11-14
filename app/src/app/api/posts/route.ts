@@ -194,12 +194,28 @@ export async function GET(request: Request) {
     }
   }
 
+  // N3: Activity's "Had a problem" tab. Like the cursor, a value we do not
+  // know is a 400 rather than silently showing every post.
+  const showParam = url.searchParams.get("show");
+  if (showParam && showParam !== "problems") {
+    return NextResponse.json({ error: "Invalid show filter." }, { status: 400 });
+  }
+
   // Team Workspaces (Task 4) — any member sees every job in the active
   // workspace, not just their own (design doc §4/§7); `createdBy` (below)
   // is what lets the UI attribute each one to its creator.
   const where: Prisma.PostJobWhereInput = { workspaceId: context.workspace.id };
   if (statusFilter.length > 0) {
     where.status = { in: statusFilter as PostJobStatus[] };
+  }
+  // A post that did not fully go out: the job failed, or one platform did. A
+  // cancelled post never went out on purpose, so it is not a problem. Under
+  // AND so it composes with ?status= and leaves `OR` to the cursor below.
+  if (showParam === "problems") {
+    where.AND = [
+      { status: { not: "cancelled" } },
+      { OR: [{ status: "failed" }, { results: { some: { status: "failed" } } }] },
+    ];
   }
   // Keyset predicate for the (createdAt desc, id desc) total order: the page
   // AFTER the cursor (C, I) is every row strictly older in that order —

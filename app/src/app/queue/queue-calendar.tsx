@@ -190,6 +190,11 @@ export function QueueCalendar({ jobs, onEdit, onRescheduled, onShowList }: Queue
         </div>
       </div>
 
+      {/* N3: an empty Queue still shows the month, with this line above it. */}
+      {jobs.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Nothing scheduled this month.</p>
+      ) : null}
+
       {offCalendar.awaitingApproval > 0 || offCalendar.drafts > 0 ? (
         <p className="text-xs text-muted-foreground">
           {[

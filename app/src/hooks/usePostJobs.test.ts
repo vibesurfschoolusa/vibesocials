@@ -52,7 +52,35 @@ function Probe({ onResult }: { onResult: (result: UsePostJobsResult) => void }) 
   return null;
 }
 
-async function mount() {
+// N3: the Activity page's call, with a filter that can change between renders.
+function FilteredProbe({
+  onResult,
+  options,
+}: {
+  onResult: (result: UsePostJobsResult) => void;
+  options?: { show?: "problems" };
+}) {
+  const result = usePostJobs(options);
+  useEffect(() => {
+    onResult(result);
+  });
+  return null;
+}
+
+type MountOptions = { show?: "problems" } | "filtered-all" | undefined;
+
+function probe(options: MountOptions) {
+  const onResult = (result: UsePostJobsResult) => {
+    latest = result;
+  };
+  if (options === undefined) return createElement(Probe, { onResult });
+  return createElement(FilteredProbe, {
+    onResult,
+    options: options === "filtered-all" ? undefined : options,
+  });
+}
+
+async function mount(options?: MountOptions) {
   // nodeType 9 makes React treat the stub as its own ownerDocument, so no real
   // DOM is needed; Probe renders null.
   const container = {
@@ -62,13 +90,7 @@ async function mount() {
   } as unknown as HTMLElement;
   root = createRoot(container);
   await act(async () => {
-    root!.render(
-      createElement(Probe, {
-        onResult: (result) => {
-          latest = result;
-        },
-      }),
-    );
+    root!.render(probe(options));
   });
 }
 
@@ -266,5 +288,79 @@ describe("usePostJobs polling", () => {
 
     await advance(STEP_MS);
     expect(fetchMock).toHaveBeenCalledTimes(before + 2);
+  });
+});
+
+// N3: Activity's "Had a problem" tab.
+describe("usePostJobs show filter", () => {
+  const urls = () => fetchMock.mock.calls.map((call) => String(call[0]));
+
+  it("sends no show param when called with no argument", async () => {
+    await mount();
+    await advance(STEP_MS);
+    expect(urls().length).toBeGreaterThanOrEqual(2);
+    expect(urls().every((url) => !url.includes("show="))).toBe(true);
+  });
+
+  it("puts the filter on the first load, the poll, a watched retry and Load more", async () => {
+    fetchMock.mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ jobs: payloadJobs, nextCursor: "c1", workspaceMemberCount: 1 }),
+    }));
+    await mount({ show: "problems" });
+    expect(urls()[0]).toBe("/api/posts?show=problems");
+
+    await advance(STEP_MS);
+    expect(urls()[1]).toBe("/api/posts?show=problems");
+
+    await act(async () => {
+      latest.watchRetry("j1");
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(urls()[2]).toBe("/api/posts?show=problems");
+
+    await act(async () => {
+      latest.loadMore();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(urls()[3]).toBe("/api/posts?show=problems&cursor=c1");
+  });
+
+  it("restarts the list when the filter changes, and a late answer for the old filter is dropped", async () => {
+    let releaseOld: (() => void) | null = null;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (!url.includes("show=")) {
+        // The all-posts answer arrives only after the switch.
+        await new Promise<void>((resolve) => {
+          releaseOld = resolve;
+        });
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ jobs: [jobFixture({ id: "all-1", status: "completed" })], nextCursor: "old", workspaceMemberCount: 1 }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ jobs: [jobFixture({ id: "bad-1", status: "failed" })], nextCursor: null, workspaceMemberCount: 1 }),
+      };
+    });
+    await mount("filtered-all");
+    expect(latest.loading).toBe(true);
+
+    await act(async () => {
+      root!.render(probe({ show: "problems" }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(latest.jobs?.map((j) => j.id)).toEqual(["bad-1"]);
+
+    await act(async () => {
+      releaseOld?.();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(latest.jobs?.map((j) => j.id)).toEqual(["bad-1"]);
+    expect(latest.hasMore).toBe(false);
   });
 });

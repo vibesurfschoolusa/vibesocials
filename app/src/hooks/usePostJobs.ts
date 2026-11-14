@@ -60,6 +60,21 @@ export interface UsePostJobsResult {
   pollingStopped: boolean;
 }
 
+/** N3: the filters `GET /api/posts?show=` accepts. */
+export interface UsePostJobsOptions {
+  /** "problems": only posts that did not fully go out (Activity's "Had a problem" tab). */
+  show?: "problems";
+}
+
+/** The list URL for a filter and an optional Load more cursor. */
+export function postJobsUrl(show: UsePostJobsOptions["show"], cursor?: string): string {
+  const params = new URLSearchParams();
+  if (show) params.set("show", show);
+  if (cursor) params.set("cursor", cursor);
+  const query = params.toString();
+  return query ? `/api/posts?${query}` : "/api/posts";
+}
+
 /** True while the tab is in the background (minimized or another tab is shown). */
 function isTabHidden(): boolean {
   return document.visibilityState === "hidden";
@@ -91,7 +106,13 @@ function isTabHidden(): boolean {
  * dependency to re-arm on after every completed background attempt, success
  * or failure.
  */
-export function usePostJobs(): UsePostJobsResult {
+export function usePostJobs(options?: UsePostJobsOptions): UsePostJobsResult {
+  // A primitive, so callers can pass a fresh `{ show }` object every render.
+  const show = options?.show;
+  // The filter the list on screen belongs to. A response for another filter
+  // (one that started before the switch) is dropped, so no rows or cursor
+  // from the other tab ever land.
+  const showRef = useRef(show);
   const [jobs, setJobs] = useState<PostJobDTO[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -131,7 +152,7 @@ export function usePostJobs(): UsePostJobsResult {
       setError(null);
     }
     try {
-      const response = await fetch("/api/posts");
+      const response = await fetch(postJobsUrl(show));
       if (!response.ok) {
         throw new Error(
           response.status === 401
@@ -140,6 +161,7 @@ export function usePostJobs(): UsePostJobsResult {
         );
       }
       const data: PostsResponse = await response.json();
+      if (show !== showRef.current) return;
       if (background && epoch !== retryEpochRef.current) {
         // Stale relative to a retry accepted while this request was in flight;
         // the refetch `watchRetry` started will deliver the current view.
@@ -164,17 +186,17 @@ export function usePostJobs(): UsePostJobsResult {
     } catch (err: unknown) {
       // Background failures keep the stale list on screen silently — only a
       // foreground (initial or manual-reload) failure surfaces the error UI.
-      if (!background) {
+      if (!background && show === showRef.current) {
         setError(err instanceof Error ? err.message : "Failed to load posts.");
       }
     } finally {
       if (background) {
         setPollCycle((cycle) => cycle + 1);
-      } else {
+      } else if (show === showRef.current) {
         setLoading(false);
       }
     }
-  }, []);
+  }, [show]);
 
   const loadMore = useCallback(async () => {
     // Guard: nothing older to fetch, or a page is already in flight. Reading
@@ -183,7 +205,7 @@ export function usePostJobs(): UsePostJobsResult {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
     try {
-      const response = await fetch(`/api/posts?cursor=${encodeURIComponent(nextCursor)}`);
+      const response = await fetch(postJobsUrl(show, nextCursor));
       if (!response.ok) {
         // Silent: the full-width error state is owned by the initial load /
         // reload only (Finding 1). Leave the list AND nextCursor intact so the
@@ -191,6 +213,7 @@ export function usePostJobs(): UsePostJobsResult {
         return;
       }
       const data: PostsResponse = await response.json();
+      if (show !== showRef.current) return;
       // APPEND the older page, de-duped by id — a poll may have prepended a row
       // this page also carries; appendJobsPage keeps the on-screen copy so the
       // rendered list never has a duplicate key.
@@ -201,7 +224,7 @@ export function usePostJobs(): UsePostJobsResult {
     } finally {
       setLoadingMore(false);
     }
-  }, [nextCursor, loadingMore]);
+  }, [nextCursor, loadingMore, show]);
 
   const watchRetry = useCallback(
     (jobId: string) => {
@@ -212,10 +235,18 @@ export function usePostJobs(): UsePostJobsResult {
     [load],
   );
 
+  // Runs on mount and again whenever the filter changes (`load` follows
+  // `show`): the list restarts from page 1 of the new filter.
   useEffect(() => {
+    if (showRef.current !== show) {
+      showRef.current = show;
+      setJobs(null);
+      setNextCursor(null);
+      setLoadingMore(false);
+    }
     // eslint-disable-next-line react-hooks/set-state-in-effect -- load-on-mount effect; pre-existing pattern newly flagged by react-hooks 7.1 (required by eslint-config-next 16.4)
     load();
-  }, [load]);
+  }, [load, show]);
 
   // 2026-11-01 scale audit (W5): restart the backoff schedule whenever a job
   // newly enters the in-flight set (a new publish, a retry, a watch added by

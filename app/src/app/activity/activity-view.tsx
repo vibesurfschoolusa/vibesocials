@@ -1,6 +1,8 @@
 "use client";
 
+import { Suspense } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Inbox, PlusCircle } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
@@ -9,11 +11,37 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PostJobCard } from "@/components/activity/post-job-card";
 import { usePostJobs } from "@/hooks/usePostJobs";
+import { cn } from "@/lib/cn";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { POLLING_STOPPED_HINT } from "@/lib/postJobPolling";
 
+import {
+  activityEmptyState,
+  activityFilterFromSearch,
+  activityFilterHref,
+  type ActivityFilter,
+} from "./activity-filter";
+
+const FILTER_TABS: readonly (readonly [ActivityFilter, string])[] = [
+  ["all", "All posts"],
+  ["problems", "Had a problem"],
+];
+
 /** Client-rendered activity list. The parent server component gates access. */
 export function ActivityView() {
+  // useSearchParams needs a Suspense boundary above it (same as register-form).
+  return (
+    <Suspense fallback={null}>
+      <ActivityViewInner />
+    </Suspense>
+  );
+}
+
+function ActivityViewInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const filter = activityFilterFromSearch(searchParams);
+  const empty = activityEmptyState(filter);
   const {
     jobs,
     loading,
@@ -25,7 +53,7 @@ export function ActivityView() {
     hasMore,
     watchRetry,
     pollingStopped,
-  } = usePostJobs();
+  } = usePostJobs(filter === "problems" ? { show: "problems" } : undefined);
   // Team Workspaces (Task 7, design §7) — attribution only in a shared
   // (>1-member) workspace, so a solo workspace's activity feed is unchanged.
   const showAttribution = (workspaceMemberCount ?? 0) > 1;
@@ -51,7 +79,32 @@ export function ActivityView() {
         </Link>
       </div>
 
-      <div className="mt-8">
+      {/* Same segmented-toggle pattern as the Queue's List/Calendar switch. The
+          URL is replaced, not pushed, so Back leaves the page. */}
+      <div
+        role="group"
+        aria-label="Which posts"
+        className="mt-6 inline-flex gap-0.5 rounded-[var(--radius)] border border-input p-0.5"
+      >
+        {FILTER_TABS.map(([mode, label]) => (
+          <button
+            key={mode}
+            type="button"
+            aria-pressed={filter === mode}
+            onClick={() => router.replace(activityFilterHref(mode), { scroll: false })}
+            className={cn(
+              "rounded-[calc(var(--radius)-0.125rem)] px-3 py-1.5 text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+              filter === mode
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-6">
         {loading ? (
           <>
             <p role="status" className="sr-only">Loading activity…</p>
@@ -73,15 +126,17 @@ export function ActivityView() {
         ) : !jobs || jobs.length === 0 ? (
           <EmptyState
             icon={<Inbox />}
-            title="No posts yet"
-            description="When you publish a post, it'll appear here with a per-platform breakdown of what succeeded and what failed."
+            title={empty.title}
+            description={empty.description ?? undefined}
             action={
-              <Link
-                href="/posts/new"
-                className={buttonVariants({ variant: "primary" })}
-              >
-                Create your first post
-              </Link>
+              empty.showCreate ? (
+                <Link
+                  href="/posts/new"
+                  className={buttonVariants({ variant: "primary" })}
+                >
+                  Create your first post
+                </Link>
+              ) : undefined
             }
           />
         ) : (

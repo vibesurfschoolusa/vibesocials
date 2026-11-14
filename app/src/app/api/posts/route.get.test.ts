@@ -1182,3 +1182,147 @@ describe("GET /api/posts - a post without a file", () => {
     expect(body.jobs.find((job) => job.id === "job-file")?.mediaCount).toBe(1);
   });
 });
+
+// N3: Activity's "Had a problem" tab. The route only builds a Prisma `where`;
+// this tiny evaluator applies the operators the route uses to in-memory rows,
+// so the tests check which jobs the filter keeps, not just the clause's shape.
+describe("GET /api/posts - show=problems (N3)", () => {
+  type Row = {
+    id: string;
+    workspaceId: string;
+    status: string;
+    createdAt: Date;
+    results: { status: string }[];
+  };
+
+  function matches(row: Record<string, unknown>, where: Record<string, unknown>): boolean {
+    return Object.entries(where).every(([key, cond]) => {
+      if (key === "AND") return (cond as Record<string, unknown>[]).every((w) => matches(row, w));
+      if (key === "OR") return (cond as Record<string, unknown>[]).some((w) => matches(row, w));
+      const value = row[key];
+      if (cond !== null && typeof cond === "object" && !(cond instanceof Date)) {
+        const ops = cond as Record<string, unknown>;
+        return Object.entries(ops).every(([op, arg]) => {
+          if (op === "in") return (arg as unknown[]).includes(value);
+          if (op === "not") return value !== arg;
+          if (op === "lt") return (value as Date | string) < (arg as Date | string);
+          if (op === "some") {
+            return (value as Record<string, unknown>[]).some((r) =>
+              matches(r, arg as Record<string, unknown>),
+            );
+          }
+          throw new Error(`test evaluator: unsupported operator ${op}`);
+        });
+      }
+      if (cond instanceof Date) return value instanceof Date && value.getTime() === cond.getTime();
+      return value === cond;
+    });
+  }
+
+  function row(id: string, status: string, resultStatuses: string[], i: number, workspaceId = "ws-1"): Row {
+    return {
+      id,
+      workspaceId,
+      status,
+      createdAt: new Date(Date.UTC(2026, 10, 10) - i * 1000),
+      results: resultStatuses.map((s) => ({ status: s })),
+    };
+  }
+
+  const table: Row[] = [
+    row("failed-job", "failed", ["failed"], 0),
+    row("partly-failed", "completed", ["success", "failed"], 1),
+    row("all-good", "completed", ["success", "success"], 2),
+    row("scheduled", "scheduled", [], 3),
+    row("cancelled-with-failure", "cancelled", ["failed"], 4),
+    row("other-workspace-failed", "failed", ["failed"], 5, "ws-other"),
+  ];
+
+  function toFull(r: Row) {
+    return {
+      id: r.id,
+      status: r.status,
+      createdAt: r.createdAt,
+      updatedAt: r.createdAt,
+      scheduledFor: null,
+      baseCaption: r.id,
+      mediaItem: null,
+      publishMetadata: null,
+      user: null,
+      results: r.results.map((res, idx) => ({
+        platform: idx === 0 ? "instagram" : "facebook",
+        status: res.status,
+        externalPostId: null,
+        errorMessage: res.status === "failed" ? "boom" : null,
+      })),
+    };
+  }
+
+  // Applies the route's where/order/take to the table, like the database would.
+  function fakeFindMany(rows: Row[]) {
+    return async (args: { where: Record<string, unknown>; take?: number }) => {
+      const hits = rows
+        .filter((r) => matches(r, args.where))
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : -1));
+      return (args.take ? hits.slice(0, args.take) : hits).map(toFull);
+    };
+  }
+
+  it("keeps failed jobs and jobs with a failed result; leaves out all-success, scheduled, cancelled and other workspaces", async () => {
+    postJobFindManyMock.mockImplementation(fakeFindMany(table));
+
+    const res = await GET(getRequest("http://localhost/api/posts?show=problems"));
+    const body = (await res.json()) as PostsResponse;
+
+    expect(res.status).toBe(200);
+    expect(body.jobs.map((j) => j.id)).toEqual(["failed-job", "partly-failed"]);
+    expect(body.nextCursor).toBeNull();
+    expect(postJobFindManyMock.mock.calls[0][0].where.workspaceId).toBe("ws-1");
+  });
+
+  it("paginates with a cursor under the filter, in the same (createdAt, id) order", async () => {
+    // 51 failed jobs: one more than a page, mixed with rows the filter drops.
+    const many: Row[] = [];
+    for (let i = 0; i < 53; i += 1) {
+      many.push(row(`job-${String(i).padStart(3, "0")}`, i % 20 === 7 ? "completed" : "failed", ["failed"], i));
+      many.push(row(`ok-${String(i).padStart(3, "0")}`, "completed", ["success"], i));
+    }
+    postJobFindManyMock.mockImplementation(fakeFindMany(many));
+
+    const first = (await (await GET(getRequest("http://localhost/api/posts?show=problems"))).json()) as PostsResponse;
+    expect(first.jobs).toHaveLength(50);
+    expect(first.jobs.every((j) => j.id.startsWith("job-"))).toBe(true);
+    expect(first.nextCursor).not.toBeNull();
+
+    const second = (await (
+      await GET(getRequest(`http://localhost/api/posts?show=problems&cursor=${first.nextCursor}`))
+    ).json()) as PostsResponse;
+    expect(second.nextCursor).toBeNull();
+    // 53 jobs, all with a failed result (the "completed" ones too): 50 + 3.
+    expect(second.jobs.map((j) => j.id)).toEqual(["job-050", "job-051", "job-052"]);
+    expect(postJobFindManyMock.mock.calls[1][0].orderBy).toEqual([{ createdAt: "desc" }, { id: "desc" }]);
+  });
+
+  it("answers an unknown show value with a 400 and never queries", async () => {
+    const res = await GET(getRequest("http://localhost/api/posts?show=everything"));
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: "Invalid show filter." });
+    expect(postJobFindManyMock).not.toHaveBeenCalled();
+  });
+
+  it("without the param, the query is unchanged", async () => {
+    postJobFindManyMock.mockImplementation(fakeFindMany(table));
+
+    const res = await GET(getRequest());
+    const body = (await res.json()) as PostsResponse;
+
+    expect(postJobFindManyMock.mock.calls[0][0].where).toEqual({ workspaceId: "ws-1" });
+    expect(body.jobs.map((j) => j.id)).toEqual([
+      "failed-job",
+      "partly-failed",
+      "all-good",
+      "scheduled",
+      "cancelled-with-failure",
+    ]);
+  });
+});
