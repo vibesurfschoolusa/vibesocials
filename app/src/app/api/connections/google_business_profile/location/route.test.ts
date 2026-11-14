@@ -42,7 +42,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   requireOwnerContextMock.mockResolvedValue(CONTEXT);
   findFirstMock.mockResolvedValue({ id: "conn-1", metadata: { locationName: null, other: "kept" } });
-  listMock.mockResolvedValue({ ok: true, locations: LISTED });
+  listMock.mockResolvedValue({ ok: true, locations: LISTED, complete: true });
   updateMock.mockImplementation(async (args: { data: { metadata: unknown } }) => ({ id: "conn-1", metadata: args.data.metadata }));
 });
 

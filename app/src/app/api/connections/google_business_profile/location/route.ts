@@ -6,7 +6,7 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { Platform, Prisma } from "@prisma/client";
 
-import { listGbpLocations } from "../gbpLocations";
+import { GOOGLE_NO_ANSWER_MESSAGE, listGbpLocations } from "../gbpLocations";
 
 export const runtime = "nodejs";
 
@@ -85,6 +85,11 @@ export async function POST(request: Request) {
   const listed = await listGbpLocations(connection);
   if (!listed.ok) {
     return listed.response;
+  }
+  // An account's list could not all be read: the location may be on the
+  // part that is missing, so this is Google's failure, not a refusal.
+  if (!listed.complete) {
+    return NextResponse.json({ error: GOOGLE_NO_ANSWER_MESSAGE }, { status: 503 });
   }
   const isListed = listed.locations.some(
     (location) => location.resourceName === locationName || location.storeCode === locationName,
