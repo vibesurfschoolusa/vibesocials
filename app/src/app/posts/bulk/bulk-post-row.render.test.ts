@@ -27,6 +27,7 @@ function row(overrides: Partial<BulkRow> = {}): BulkRow {
     altText: "",
     altTextAsked: false,
     altTextWriting: false,
+    altTextError: null,
     durationSec: undefined,
     cover: { kind: "default" },
     when: "",
@@ -62,6 +63,7 @@ function render(r: BulkRow, extra: { storyRefusal?: string | null; coverOpen?: b
       onRetry: noop,
       onWriteAgain: noop,
       onImprove: noop,
+      onWriteDescription: noop,
       onCoverOpenChange: noop,
       onCoverChange: noop,
     }),
@@ -103,6 +105,24 @@ describe("Add many row: photo description", () => {
     const html = render(row({ altText: "A surfer on a wave" }));
     expect(html).toContain("Photo description (alt text)");
     expect(html).toContain('value="A surfer on a wave"');
+  });
+
+  // P1 fix 1: a Media photo is described only when the user asks.
+  it("a Media photo: an empty field and a Write it for me button", () => {
+    const html = render(row({ mediaItemId: "media_1" }));
+    expect(html).toContain("Photo description (alt text)");
+    expect(html).toMatch(/<input[^>]*id="bulk-alt-r1"[^>]*value=""/);
+    expect(html).toContain("Write it for me");
+  });
+
+  it("a photo from the computer is described automatically: no button", () => {
+    expect(render(row())).not.toContain("Write it for me");
+  });
+
+  it("a failed Write it for me says why under the field", () => {
+    const html = render(row({ mediaItemId: "media_1", altTextError: "The AI couldn't describe this photo." }));
+    // React escapes the apostrophe.
+    expect(html).toContain("The AI couldn&#x27;t describe this photo.");
   });
 
   it("a video row has none", () => {

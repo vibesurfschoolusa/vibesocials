@@ -45,6 +45,7 @@ import {
 import { Select } from "@/components/ui/select";
 import type { YouTubePostMetadata } from "@/server/platforms/types";
 import type { UploadedBlob } from "@/lib/createPostRequest";
+import { requestPhotoDescription } from "@/components/composer/attached-photos";
 import { LocationAutocomplete } from "@/components/location-autocomplete";
 import { StoryPlacementSettings } from "@/components/story-placement";
 import { captureVideoFrame } from "@/lib/captureVideoFrame";
@@ -70,18 +71,19 @@ import type { PostingSlot } from "@/lib/postingSlots";
 import { explainUploadFailure } from "@/lib/uploadFailure";
 import { BulkPostRow, captionFailedText } from "./bulk-post-row";
 import { MediaPickerDialog } from "./media-picker-dialog";
+import { BatchSettingsFieldset } from "./batch-settings";
 import {
   BULK_COVER_FAILED_TEXT,
   autoCaptionRequestBody,
   buildBulkRowBody,
   bulkExtrasBlock,
   bulkGoogleMetadataError,
+  captionThenDescribe,
   describePhotoOnce,
   initialBulkGoogleMetadata,
   readVideoDuration,
   requestImprovedCaption,
   rowStoryRefusal,
-  wantsAltText,
 } from "./bulkExtras";
 
 export interface BulkRow {
@@ -110,6 +112,8 @@ export interface BulkRow {
   /** The AI was asked for the description already: once per photo per batch. */
   altTextAsked: boolean;
   altTextWriting: boolean;
+  /** Why "Write it for me" got no description (Media photos only). */
+  altTextError: string | null;
   /** A video's length in seconds; undefined until read, null when it could not be. */
   durationSec: number | null | undefined;
   /** A video's cover, as Create's picker sets it. */
@@ -147,6 +151,7 @@ function newRow(file: Pick<File, "name" | "type">): BulkRow {
     altText: "",
     altTextAsked: false,
     altTextWriting: false,
+    altTextError: null,
     durationSec: undefined,
     cover: { kind: "default" },
     when: "",
@@ -433,21 +438,35 @@ export function BulkPostsForm({
         captionError: captionFailedText(null, undefined),
       });
     }
-    await describeRow(id);
   }
 
-  // A photo's description, right after its first caption: one AI call per photo
-  // per batch (Write again does not ask again). Optional, so a failure leaves
-  // the field empty and says nothing.
+  // A photo's description, right after its first caption whatever came of it:
+  // one AI call per photo from the computer per batch (Write again does not ask
+  // again). Optional, so a failure leaves the field empty and says nothing.
   async function describeRow(id: string) {
     const row = rowsRef.current.find((r) => r.id === id);
-    if (!row?.blob || !wantsAltText({ mimeType: row.blob.mimeType, uploaded: true, altTextAsked: row.altTextAsked })) {
-      return;
-    }
+    if (!row?.blob) return;
     updateRow(id, { altTextAsked: true, altTextWriting: true });
     const text = await describePhotoOnce(row.blob);
     // Never replace what the user typed meanwhile.
     updateRow(id, (current) => ({ altTextWriting: false, altText: current.altText.trim() ? current.altText : text }));
+  }
+
+  // A Media photo's "Write it for me": one AI call per press, as on Create, and
+  // its sentence under the field when it fails.
+  async function writeDescription(id: string) {
+    const row = rowsRef.current.find((r) => r.id === id);
+    if (!row?.blob || row.altTextWriting) return;
+    updateRow(id, { altTextWriting: true, altTextError: null });
+    try {
+      const text = await requestPhotoDescription(row.blob);
+      updateRow(id, { altTextWriting: false, altText: text });
+    } catch (error: unknown) {
+      updateRow(id, {
+        altTextWriting: false,
+        altTextError: error instanceof Error && error.message ? error.message : "The AI couldn't describe this photo.",
+      });
+    }
   }
 
   async function improveRow(id: string) {
@@ -490,7 +509,23 @@ export function BulkPostsForm({
         const work = nextWork(rowsRef.current.map((r) => ({ id: r.id, upload: r.upload, caption: r.captionStatus })));
         if (!work) break;
         if (work.step === "upload") await uploadRow(work.id);
-        else await captionRow(work.id);
+        else {
+          await captionThenDescribe(work.id, {
+            writeCaption: captionRow,
+            row: (rowId) => {
+              const row = rowsRef.current.find((r) => r.id === rowId);
+              return row
+                ? {
+                    mimeType: row.mimeType,
+                    uploaded: row.blob !== null,
+                    mediaItemId: row.mediaItemId,
+                    altTextAsked: row.altTextAsked,
+                  }
+                : undefined;
+            },
+            describe: describeRow,
+          });
+        }
       }
     } finally {
       workingRef.current = false;
@@ -798,6 +833,7 @@ export function BulkPostsForm({
           ) : null}
         </div>
 
+        <BatchSettingsFieldset locked={sendingMode !== null}>
         <fieldset className="flex flex-col gap-2">
           <legend className="mb-2 text-sm font-medium text-foreground">Post every row to</legend>
           {connectionsLoading && !connections ? (
@@ -1015,6 +1051,7 @@ export function BulkPostsForm({
             Times are in {zone ?? "your local time"}. A date you change by hand on a row stays as you set it.
           </p>
         </fieldset>
+        </BatchSettingsFieldset>
       </Card>
 
       <MediaPickerDialog
@@ -1048,6 +1085,7 @@ export function BulkPostsForm({
               onCaptionChange={(caption) => updateRow(row.id, { caption, sendError: null, improveError: null })}
               onAltTextChange={(altText) => updateRow(row.id, { altText })}
               onImprove={() => void improveRow(row.id)}
+              onWriteDescription={() => void writeDescription(row.id)}
               onCoverOpenChange={(open) => setCoverOpenId(open ? row.id : null)}
               onCoverChange={(cover) => updateRow(row.id, { cover, sendError: null })}
               onWhenChange={(when) => updateRow(row.id, { when, whenSetByHand: true, sendError: null })}

@@ -8,7 +8,9 @@ import {
   buildBulkRowBody,
   bulkExtrasBlock,
   bulkGoogleMetadataError,
+  captionThenDescribe,
   describePhotoOnce,
+  improveFailedText,
   initialBulkGoogleMetadata,
   requestImprovedCaption,
   rowStoryRefusal,
@@ -145,10 +147,24 @@ describe("Add many: Improve", () => {
 
 describe("Add many: alt text auto-fill", () => {
   it("is wanted once for a photo with an uploaded file, never for a video", () => {
-    expect(wantsAltText({ mimeType: "image/jpeg", uploaded: true, altTextAsked: false })).toBe(true);
-    expect(wantsAltText({ mimeType: "image/jpeg", uploaded: true, altTextAsked: true })).toBe(false);
-    expect(wantsAltText({ mimeType: "image/jpeg", uploaded: false, altTextAsked: false })).toBe(false);
-    expect(wantsAltText({ mimeType: "video/mp4", uploaded: true, altTextAsked: false })).toBe(false);
+    const computer = { mediaItemId: null };
+    expect(wantsAltText({ ...computer, mimeType: "image/jpeg", uploaded: true, altTextAsked: false })).toBe(true);
+    expect(wantsAltText({ ...computer, mimeType: "image/jpeg", uploaded: true, altTextAsked: true })).toBe(false);
+    expect(wantsAltText({ ...computer, mimeType: "image/jpeg", uploaded: false, altTextAsked: false })).toBe(false);
+    expect(wantsAltText({ ...computer, mimeType: "video/mp4", uploaded: true, altTextAsked: false })).toBe(false);
+  });
+
+  // P1 fix 1: the Media DTO carries no description, and the reuse path writes
+  // altText over the stored one, so a Media photo is never described unseen.
+  it("never for a Media photo: its saved description must not be overwritten unseen", () => {
+    expect(wantsAltText({ mediaItemId: "media_1", mimeType: "image/jpeg", uploaded: true, altTextAsked: false })).toBe(false);
+  });
+
+  it("a Media photo with an empty field sends no altText, so the server keeps the stored one", () => {
+    const body = buildBulkRowBody({ ...BASE, row: photoRow({ mediaItemId: "media_1", altText: "  " }), platforms: ["instagram"] });
+    expect("altText" in body).toBe(false);
+    const typed = buildBulkRowBody({ ...BASE, row: photoRow({ mediaItemId: "media_1", altText: "Typed by hand" }), platforms: ["instagram"] });
+    expect(typed.altText).toBe("Typed by hand");
   });
 
   it("asks the AI the way Create's Write it for me does and fills an empty field", async () => {
@@ -261,5 +277,100 @@ describe("Add many: avoidCaptions in the caption request", () => {
   it("the first row, with nothing written yet, sends today's body", () => {
     const body = autoCaptionRequestBody([{ id: "r1", caption: "" }, { id: "r2", caption: "" }], "r1", BLOB, []);
     expect(body).toEqual({ blobUrl: BLOB.url, mimeType: BLOB.mimeType, bulk: true });
+  });
+});
+
+// P1 fix 1: the line tells the truth about why Improve failed.
+describe("Add many: why Improve failed", () => {
+  const answer = (status: number, body: unknown) =>
+    vi.fn(async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
+
+  it("maps each status to its own sentence", () => {
+    expect(improveFailedText(429, "AI_WORKSPACE_DAILY_LIMIT")).toBe(
+      "The caption was not improved: your workspace has reached today's AI limit. Try again tomorrow, or edit it yourself.",
+    );
+    expect(improveFailedText(429, undefined)).toBe(
+      "The caption was not improved: too many requests. Wait a few minutes, then try again.",
+    );
+    expect(improveFailedText(403, "WORKSPACE_PAUSED")).toBe(
+      "The caption was not improved: this workspace can't use AI right now. See the notice at the top of the page.",
+    );
+    const tooLong = "The caption was not improved: it is too long to improve. Shorten it, or edit it yourself.";
+    expect(improveFailedText(413, undefined)).toBe(tooLong);
+    expect(improveFailedText(400, "AI_INPUT_TOO_LONG")).toBe(tooLong);
+    expect(improveFailedText(500, undefined)).toBe(BULK_IMPROVE_FAILED_TEXT);
+    expect(improveFailedText(504, undefined)).toBe(BULK_IMPROVE_FAILED_TEXT);
+    expect(improveFailedText(null, undefined)).toBe(BULK_IMPROVE_FAILED_TEXT);
+  });
+
+  it("requestImprovedCaption returns the mapped sentence and never a caption on failure", async () => {
+    for (const [status, body, expected] of [
+      [429, { error: "x", code: "AI_WORKSPACE_DAILY_LIMIT" }, improveFailedText(429, "AI_WORKSPACE_DAILY_LIMIT")],
+      [429, { error: "Too many requests, slow down." }, improveFailedText(429, undefined)],
+      [403, { error: "Paused", code: "WORKSPACE_PAUSED" }, improveFailedText(403, "WORKSPACE_PAUSED")],
+      [413, { error: "big" }, improveFailedText(413, undefined)],
+      [400, { error: "too long", code: "AI_INPUT_TOO_LONG" }, improveFailedText(400, "AI_INPUT_TOO_LONG")],
+      [500, { error: "Server text" }, BULK_IMPROVE_FAILED_TEXT],
+    ] as const) {
+      const result = await requestImprovedCaption("Keep me", answer(status, body));
+      // Not ok: the form keeps the caption it has (it only replaces on ok).
+      expect(result).toEqual({ ok: false, error: expected });
+    }
+  });
+
+  it("no sentence has brackets", () => {
+    for (const [status, code] of [[429, "AI_WORKSPACE_DAILY_LIMIT"], [429, undefined], [403, undefined], [413, undefined], [400, undefined], [null, undefined]] as const) {
+      expect(improveFailedText(status, code)).not.toMatch(/[()]/);
+    }
+  });
+});
+
+// P1 fix 1: the description does not depend on how the caption went.
+describe("Add many: caption, then description", () => {
+  function fakeRow(overrides: Partial<{ mediaItemId: string | null; mimeType: string }> = {}) {
+    const state = { mediaItemId: null as string | null, mimeType: "image/jpeg", uploaded: true, altTextAsked: false, ...overrides };
+    const describe = vi.fn(async () => {
+      state.altTextAsked = true;
+    });
+    return { state, describe, row: () => state };
+  }
+
+  it("caption ok: described once", async () => {
+    const fake = fakeRow();
+    await captionThenDescribe("r1", { writeCaption: async () => {}, row: fake.row, describe: fake.describe });
+    expect(fake.describe).toHaveBeenCalledTimes(1);
+  });
+
+  it("caption failed (it returned early, or threw): still described once", async () => {
+    const fake = fakeRow();
+    await captionThenDescribe("r1", { writeCaption: async () => {}, row: fake.row, describe: fake.describe });
+    const thrower = fakeRow();
+    await expect(
+      captionThenDescribe("r1", {
+        writeCaption: async () => {
+          throw new Error("504");
+        },
+        row: thrower.row,
+        describe: thrower.describe,
+      }),
+    ).rejects.toThrow("504");
+    expect(fake.describe).toHaveBeenCalledTimes(1);
+    expect(thrower.describe).toHaveBeenCalledTimes(1);
+  });
+
+  it("Write again after either: no second description", async () => {
+    const fake = fakeRow();
+    const steps = { writeCaption: async () => {}, row: fake.row, describe: fake.describe };
+    await captionThenDescribe("r1", steps);
+    await captionThenDescribe("r1", steps);
+    expect(fake.describe).toHaveBeenCalledTimes(1);
+  });
+
+  it("a Media photo and a video: never described automatically", async () => {
+    for (const overrides of [{ mediaItemId: "media_1" }, { mimeType: "video/mp4" }]) {
+      const fake = fakeRow(overrides);
+      await captionThenDescribe("r1", { writeCaption: async () => {}, row: fake.row, describe: fake.describe });
+      expect(fake.describe).not.toHaveBeenCalled();
+    }
   });
 });

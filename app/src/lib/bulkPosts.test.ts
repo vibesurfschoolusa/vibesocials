@@ -10,7 +10,6 @@ import {
   BULK_PAST_TIME_MESSAGE,
   BULK_MAYBE_CREATED_MESSAGE,
   BULK_DRAFTS_NOTE,
-  BULK_GOOGLE_BUTTON_NOTE,
   BULK_YOUTUBE_PRIVACY_DEFAULT,
   UNREADABLE_BODY,
   type BulkScheduleControls,
@@ -506,9 +505,6 @@ describe("YouTube privacy", () => {
 describe("notes under the buttons", () => {
   it("says what the buttons do", () => {
     expect(BULK_DRAFTS_NOTE).toBe("Drafts are saved without a time. Set each one's time in the Queue.");
-    expect(BULK_GOOGLE_BUTTON_NOTE).toBe(
-      "Google posts get your workspace's default button, if one is set in Settings.",
-    );
   });
 });
 

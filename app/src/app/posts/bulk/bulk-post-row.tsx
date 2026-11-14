@@ -40,6 +40,8 @@ interface BulkPostRowProps {
   onRetry(): void;
   onWriteAgain(): void;
   onImprove(): void;
+  /** A Media photo's "Write it for me". */
+  onWriteDescription(): void;
   onCoverOpenChange(open: boolean): void;
   onCoverChange(cover: CoverChoice): void;
 }
@@ -121,6 +123,7 @@ export function BulkPostRow({
   onRetry,
   onWriteAgain,
   onImprove,
+  onWriteDescription,
   onCoverOpenChange,
   onCoverChange,
 }: BulkPostRowProps) {
@@ -230,6 +233,20 @@ export function BulkPostRow({
               placeholder={row.altTextWriting ? "Writing a description..." : "What the photo shows, for screen readers"}
               onChange={(event) => onAltTextChange(event.target.value)}
             />
+            {/* A Media photo keeps its saved description unless the user writes
+                a new one here: it is never described automatically. */}
+            {row.mediaItemId && editable ? (
+              <div>
+                <Button variant="outline" size="md" loading={row.altTextWriting} onClick={onWriteDescription}>
+                  Write it for me
+                </Button>
+              </div>
+            ) : null}
+            {row.altTextError ? (
+              <p className="text-sm text-muted-foreground" role="alert">
+                {row.altTextError}
+              </p>
+            ) : null}
           </div>
         ) : null}
 

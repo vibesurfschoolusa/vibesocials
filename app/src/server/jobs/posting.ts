@@ -617,9 +617,16 @@ export async function createPostJobForExistingMedia(
     // item between the initial check above and our acquiring the lock.
     const locked = await tx.mediaItem.findUnique({
       where: { id: mediaItemId },
-      select: { workspaceId: true, deletedAt: true },
+      // metadata too: a new location is merged into it below, under this lock.
+      select: { workspaceId: true, deletedAt: true, metadata: true },
     });
     assertMediaItemReusable(locked, workspaceId);
+    // Merged, not replaced: the metadata also holds a client upload's sender
+    // name and note (lib/mediaDto.ts), which a location must not drop.
+    const currentMetadata =
+      locked?.metadata && typeof locked.metadata === "object" && !Array.isArray(locked.metadata)
+        ? (locked.metadata as Prisma.JsonObject)
+        : {};
 
     await tx.mediaItem.update({
       where: { id: mediaItemId },
@@ -629,7 +636,7 @@ export async function createPostJobForExistingMedia(
         // Only touch metadata when a new location was actually supplied, so a
         // reuse call that omits `location` doesn't clobber the item's existing
         // one (platform clients read it fresh from this row at publish time).
-        ...(location ? { metadata: { location: { description: location } } } : {}),
+        ...(location ? { metadata: { ...currentMetadata, location: { description: location } } } : {}),
         // 07d: the item was checked to be in this workspace under the lock above.
         ...(params.altText && mediaItem.mimeType.startsWith("image/") ? { altText: params.altText } : {}),
       },

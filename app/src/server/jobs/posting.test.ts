@@ -500,7 +500,8 @@ describe("createPostJobForExistingMedia", () => {
     const lockedCall = findUniqueMock.mock.calls[1][0] as {
       select: Record<string, boolean>;
     };
-    expect(lockedCall.select).toEqual({ workspaceId: true, deletedAt: true });
+    // P1 fix 1: metadata too, read under the lock so a new location merges into it.
+    expect(lockedCall.select).toEqual({ workspaceId: true, deletedAt: true, metadata: true });
   });
 
   it("creates a PostJob + one PostJobResult per connection, referencing the existing mediaItemId", async () => {
@@ -587,6 +588,48 @@ describe("createPostJobForExistingMedia", () => {
       data: { metadata?: { location?: { description: string } } };
     };
     expect(call.data.metadata).toEqual({ location: { description: "Miami Beach, FL" } });
+  });
+
+  // P1 fix 1: a location sent with a reuse used to replace the whole metadata,
+  // dropping a client upload's sender name and note (lib/mediaDto.ts reads them there).
+  describe("a location merges into the item's metadata", () => {
+    async function reuseWith(metadata: unknown, location?: string) {
+      findUniqueMock.mockResolvedValue(makeMediaItem({ metadata: metadata as MediaItem["metadata"] }));
+      findManyConnectionsMock.mockResolvedValue([makeConnection()]);
+      await createPostJobForExistingMedia({
+        userId: "user-1",
+        workspaceId: "workspace-1",
+        mediaItemId: "media-1",
+        baseCaption: "hello",
+        ...(location !== undefined ? { location } : {}),
+      });
+      return (mediaItemUpdateMock.mock.calls[0][0] as { data: { metadata?: unknown } }).data;
+    }
+
+    it("keeps the sender name and note beside the new location", async () => {
+      const data = await reuseWith({ senderName: "Sam", note: "From the beach day" }, "Dania Beach, FL");
+      expect(data.metadata).toEqual({
+        senderName: "Sam",
+        note: "From the beach day",
+        location: { description: "Dania Beach, FL" },
+      });
+    });
+
+    it("replaces an old location", async () => {
+      const data = await reuseWith({ location: { description: "Old place" }, note: "n" }, "New place");
+      expect(data.metadata).toEqual({ location: { description: "New place" }, note: "n" });
+    });
+
+    it("no location sent: metadata untouched", async () => {
+      const data = await reuseWith({ senderName: "Sam" });
+      expect(data).not.toHaveProperty("metadata");
+    });
+
+    it("null or non-object metadata: just the location", async () => {
+      expect((await reuseWith(null, "Here")).metadata).toEqual({ location: { description: "Here" } });
+      mediaItemUpdateMock.mockClear();
+      expect((await reuseWith(["odd"], "Here")).metadata).toEqual({ location: { description: "Here" } });
+    });
   });
 
   it("passes the mediaItemId (not a new id) through as both the lookup key and the returned mediaItemId", async () => {

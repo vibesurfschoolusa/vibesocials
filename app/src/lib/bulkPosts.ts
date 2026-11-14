@@ -29,8 +29,6 @@ export const BULK_PAST_TIME_MESSAGE = "Pick a time in the future.";
 export const BULK_MAYBE_CREATED_MESSAGE =
   "This post may have been created. Check the Queue before sending it again.";
 export const BULK_DRAFTS_NOTE = "Drafts are saved without a time. Set each one's time in the Queue.";
-export const BULK_GOOGLE_BUTTON_NOTE =
-  "Google posts get your workspace's default button, if one is set in Settings.";
 
 /** How many of `picked` files fit in a batch that already has `current` rows. */
 export function filesThatFit(current: number, picked: number): { take: number; tooMany: boolean } {

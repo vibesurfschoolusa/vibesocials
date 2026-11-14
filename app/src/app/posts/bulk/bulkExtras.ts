@@ -29,6 +29,28 @@ export const BULK_IMPROVE_FAILED_TEXT =
 export const BULK_COVER_FAILED_TEXT =
   "The cover image could not be uploaded. Try again, or choose Platform default.";
 
+/**
+ * Why Improve got no new caption, by the answer's status, the way
+ * captionFailedText says it for a caption (`status` null: no answer at all).
+ * The server's own text stays in the console.
+ */
+export function improveFailedText(status: number | null, code: unknown): string {
+  if (status === 429 && code === "AI_WORKSPACE_DAILY_LIMIT") {
+    return "The caption was not improved: your workspace has reached today's AI limit. Try again tomorrow, or edit it yourself.";
+  }
+  if (status === 429) {
+    return "The caption was not improved: too many requests. Wait a few minutes, then try again.";
+  }
+  if (status === 403) {
+    return "The caption was not improved: this workspace can't use AI right now. See the notice at the top of the page.";
+  }
+  // Improve is offered only for a caption with text, so a 400 is the length cap.
+  if (status === 413 || status === 400) {
+    return "The caption was not improved: it is too long to improve. Shorten it, or edit it yourself.";
+  }
+  return BULK_IMPROVE_FAILED_TEXT;
+}
+
 export type BulkImproveResult = { ok: true; caption: string } | { ok: false; error: string };
 
 /** "Improve": the caption sent to POST /api/posts/enhance-caption exactly as Create sends it. */
@@ -42,11 +64,13 @@ export async function requestImprovedCaption(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ caption }),
     });
-    const data = (await response.json().catch(() => null)) as { enhancedCaption?: unknown; error?: unknown } | null;
+    const data = (await response.json().catch(() => null)) as
+      | { enhancedCaption?: unknown; error?: unknown; code?: unknown }
+      | null;
     if (!response.ok || typeof data?.enhancedCaption !== "string" || !data.enhancedCaption.trim()) {
       // The server's own text stays in the console, as for a failed caption.
-      console.error("[Add many] Improve failed", { status: response.status, error: data?.error });
-      return { ok: false, error: BULK_IMPROVE_FAILED_TEXT };
+      console.error("[Add many] Improve failed", { status: response.status, code: data?.code, error: data?.error });
+      return { ok: false, error: improveFailedText(response.ok ? null : response.status, data?.code) };
     }
     return { ok: true, caption: data.enhancedCaption };
   } catch (error: unknown) {
@@ -55,9 +79,44 @@ export async function requestImprovedCaption(
   }
 }
 
-/** One description per photo per batch: asked once its file is stored, never for a video, never again. */
-export function wantsAltText(row: { mimeType: string; uploaded: boolean; altTextAsked: boolean }): boolean {
-  return row.mimeType.startsWith("image/") && row.uploaded && !row.altTextAsked;
+/** What deciding on an automatic description needs to know about a row. */
+export interface AltTextRowState {
+  mimeType: string;
+  uploaded: boolean;
+  /** Set for a Media item: never described automatically. */
+  mediaItemId: string | null;
+  altTextAsked: boolean;
+}
+
+/**
+ * One automatic description per photo from the computer per batch: asked once
+ * its file is stored, never for a video, never again. Never for a Media photo:
+ * its saved description is not in the Media list, and a sent altText replaces
+ * it, so it is described only when the user asks.
+ */
+export function wantsAltText(row: AltTextRowState): boolean {
+  return row.mimeType.startsWith("image/") && row.uploaded && row.mediaItemId === null && !row.altTextAsked;
+}
+
+/**
+ * A row's caption step, then its automatic description whatever the caption's
+ * outcome (a failed caption still gets one). `describe` marks the row asked,
+ * so Write again does not describe it a second time.
+ */
+export async function captionThenDescribe(
+  id: string,
+  steps: {
+    writeCaption(id: string): Promise<void>;
+    row(id: string): AltTextRowState | undefined;
+    describe(id: string): Promise<void>;
+  },
+): Promise<void> {
+  try {
+    await steps.writeCaption(id);
+  } finally {
+    const row = steps.row(id);
+    if (row && wantsAltText(row)) await steps.describe(id);
+  }
 }
 
 /**

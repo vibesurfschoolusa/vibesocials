@@ -75,3 +75,17 @@ describe("Add many file picker", () => {
   });
 });
 
+
+// P1 fix 1: every batch control sits inside the one fieldset that sending disables.
+describe("Add many batch card", () => {
+  it("platforms, location and when are inside the batch fieldset; the file picker is not", () => {
+    const html = firstRender("America/Chicago", "2026-11-14T10:00:00Z");
+    const start = html.indexOf("data-bulk-batch-settings");
+    expect(start).toBeGreaterThan(-1);
+    expect(html.indexOf('id="bulk-files"')).toBeLessThan(start);
+    for (const id of ["bulk-location", "bulk-first-day", "bulk-time", "bulk-every"]) {
+      expect(html.indexOf(`id="${id}"`)).toBeGreaterThan(start);
+    }
+    expect(html.indexOf("Post every row to")).toBeGreaterThan(start);
+  });
+});
