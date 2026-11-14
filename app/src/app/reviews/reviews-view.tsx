@@ -54,9 +54,8 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
   const [tab, setTab] = useState<"needs_reply" | "replied">("needs_reply");
   const [confirmTarget, setConfirmTarget] = useState<GoogleReview | null>(null);
   // After a reply posts: where keyboard focus goes (a review id, or null for
-  // the heading) and what the polite status line says.
+  // the heading). The success toast already announces the reply.
   const [pendingFocus, setPendingFocus] = useState<{ reviewId: string | null } | null>(null);
-  const [announcement, setAnnouncement] = useState("");
   const headingRef = useRef<HTMLHeadingElement>(null);
 
   const loadLocations = useCallback(async () => {
@@ -160,7 +159,6 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
 
     try {
       setSubmitting(review.reviewId);
-      setAnnouncement("");
 
       const response = await fetch(`/api/reviews/${review.reviewId}/reply`, {
         method: "POST",
@@ -198,7 +196,6 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
       setReplyingTo(null);
 
       toast.success("Reply posted successfully!");
-      setAnnouncement("Reply posted");
       setPendingFocus({
         reviewId: focusAfterReply(
           needsReplyReviews.map((r) => r.reviewId),
@@ -325,9 +322,6 @@ export function ReviewsView({ savedLocation }: { savedLocation: string | null })
         {singleLocationName(locations) && (
           <p className="mt-1 text-sm text-muted-foreground">{singleLocationName(locations)}</p>
         )}
-        <p role="status" className="sr-only">
-          {announcement}
-        </p>
       </div>
 
       {/* Location Selector */}

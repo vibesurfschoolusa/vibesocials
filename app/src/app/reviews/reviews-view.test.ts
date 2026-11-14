@@ -39,9 +39,8 @@ describe("ReviewsView layout", () => {
     expect(source).not.toContain("All caught up!");
   });
 
-  it("announces a posted reply politely and moves focus on", () => {
-    expect(source).toContain('role="status"');
-    expect(source).toContain('"Reply posted"');
+  it("moves focus on after a reply, with the toast as the only announcement", () => {
     expect(source).toContain("focusAfterReply(");
+    expect(source).not.toContain('"Reply posted"');
   });
 });
