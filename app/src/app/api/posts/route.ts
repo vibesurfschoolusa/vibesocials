@@ -360,20 +360,23 @@ export async function GET(request: Request) {
       : [];
     const placeByJobId = seriesPlaces(seriesRows);
 
-    // F6: each half of a Feed and Story post says so on its Queue card. Only a
-    // page with a Story job on it asks (the two are created together, so they
-    // sit side by side in this order): the feed posts it names, and the Story
-    // jobs naming any post of the page. A cancelled half is no longer part of
-    // the post, and a deleted one is not found, so neither is marked.
+    // F6: each half of a Feed and Story post says so on its Queue card. Every
+    // non-empty page asks, since a feed post's Story may sit on another page:
+    // the Story jobs naming any post of the page (storyOfPostJobId index), and
+    // the feed posts the page's Story jobs name. A cancelled half is no longer
+    // part of the post, and a deleted one is not found, so neither is marked.
     const storyOfIds = Array.from(
       new Set(jobs.map((job) => job.storyOfPostJobId).filter((id): id is string => Boolean(id))),
     );
-    const pairRows = storyOfIds.length
+    const pairRows = jobs.length
       ? await prisma.postJob.findMany({
           where: {
             workspaceId: context.workspace.id,
             status: { not: "cancelled" },
-            OR: [{ id: { in: storyOfIds } }, { storyOfPostJobId: { in: jobs.map((job) => job.id) } }],
+            OR: [
+              { storyOfPostJobId: { in: jobs.map((job) => job.id) } },
+              ...(storyOfIds.length ? [{ id: { in: storyOfIds } }] : []),
+            ],
           },
           select: { id: true, storyOfPostJobId: true, scheduledFor: true },
         })

@@ -44,6 +44,21 @@ vi.mock("@/lib/db", () => ({
 
 import { GET } from "./route";
 
+/** F6: the pair lookup every non-empty page makes (Feed and Story labels). */
+function isPairLookup(arg: { where?: { status?: unknown }; select?: Record<string, unknown> } | undefined): boolean {
+  const select = arg?.select ?? {};
+  return (
+    JSON.stringify(arg?.where?.status) === JSON.stringify({ not: "cancelled" }) &&
+    select.storyOfPostJobId === true &&
+    Object.keys(select).length === 3
+  );
+}
+
+/** The postJob.findMany calls other than the F6 pair lookup. */
+function listCalls() {
+  return postJobFindManyMock.mock.calls.filter(([arg]) => !isPairLookup(arg));
+}
+
 function getRequest(url = "http://localhost/api/posts"): Request {
   return new Request(url, { method: "GET" });
 }
@@ -414,7 +429,7 @@ describe("GET /api/posts — workspace scoping (Team Workspaces, Task 4)", () =>
 
     await GET(getRequest());
 
-    expect(postJobFindManyMock).toHaveBeenCalledTimes(1);
+    expect(listCalls()).toHaveLength(1);
     const arg = postJobFindManyMock.mock.calls[0][0];
     expect(arg.where).toEqual({ workspaceId: "ws-active" });
     expect(arg.select.user).toEqual({ select: { name: true, email: true } });
@@ -632,7 +647,7 @@ describe("GET /api/posts — keyset cursor pagination (activity pagination)", ()
 
     await GET(getRequest());
 
-    expect(postJobFindManyMock).toHaveBeenCalledTimes(1);
+    expect(listCalls()).toHaveLength(1);
     const arg = postJobFindManyMock.mock.calls[0][0];
     expect(arg.where).toEqual({ workspaceId: "ws-1" });
     expect(arg.where).not.toHaveProperty("OR");
@@ -1083,8 +1098,8 @@ describe("GET /api/posts - client change requests on the Queue's first page (cli
 
     const body = (await (await GET(getRequest(QUEUE_URL))).json()) as PostsResponse;
 
-    expect(postJobFindManyMock).toHaveBeenCalledTimes(2);
-    const pinned = postJobFindManyMock.mock.calls[1][0];
+    expect(listCalls()).toHaveLength(2);
+    const pinned = listCalls()[1][0];
     expect(pinned.where).toEqual({
       workspaceId: "ws-1",
       status: "draft",
@@ -1145,8 +1160,8 @@ describe("GET /api/posts - series", () => {
 
     const body = (await (await GET(getRequest())).json()) as PostsResponse;
 
-    expect(postJobFindManyMock).toHaveBeenCalledTimes(2);
-    expect(postJobFindManyMock.mock.calls[1][0]).toEqual({
+    expect(listCalls()).toHaveLength(2);
+    expect(listCalls()[1][0]).toEqual({
       where: { workspaceId: "ws-1", seriesId: { in: ["s1"] } },
       select: { id: true, seriesId: true, scheduledFor: true, status: true },
     });
@@ -1160,7 +1175,7 @@ describe("GET /api/posts - series", () => {
 
     const body = (await (await GET(getRequest())).json()) as PostsResponse;
 
-    expect(postJobFindManyMock).toHaveBeenCalledTimes(1);
+    expect(listCalls()).toHaveLength(1);
     expect(postJobFindManyMock.mock.calls[0][0].select.seriesId).toBe(true);
     expect(body.jobs[0].seriesId).toBeNull();
   });
@@ -1309,7 +1324,7 @@ describe("GET /api/posts - show=problems (N3)", () => {
     expect(second.nextCursor).toBeNull();
     // 53 jobs, all with a failed result (the "completed" ones too): 50 + 3.
     expect(second.jobs.map((j) => j.id)).toEqual(["job-050", "job-051", "job-052"]);
-    expect(postJobFindManyMock.mock.calls[1][0].orderBy).toEqual([{ createdAt: "desc" }, { id: "desc" }]);
+    expect(listCalls()[1][0].orderBy).toEqual([{ createdAt: "desc" }, { id: "desc" }]);
   });
 
   // N3 fix 1: a retry flips the failed results to pending (and later maybe to
@@ -1371,15 +1386,44 @@ describe("GET /api/posts - show=problems (N3)", () => {
 describe("GET /api/posts - a Feed and Story pair", () => {
   const at = new Date("2026-11-20T15:00:00.000Z");
 
-  it("a page without a Story job makes no extra query and marks nothing", async () => {
-    postJobFindManyMock.mockResolvedValue([{ ...jobWithYouTube(), storyOfPostJobId: null }]);
+  it("marks a feed post whose Story sits on another page (the pair split across pages)", async () => {
+    postJobFindManyMock
+      // This page has only the feed post; its Story was created after it and is on the previous page.
+      .mockResolvedValueOnce([{ ...jobWithYouTube(), id: "feed-1", storyOfPostJobId: null, scheduledFor: at }])
+      .mockResolvedValueOnce([{ id: "story-1", storyOfPostJobId: "feed-1", scheduledFor: at }]);
 
     const body = (await (await GET(getRequest())).json()) as PostsResponse;
 
-    expect(postJobFindManyMock).toHaveBeenCalledTimes(1);
+    expect(postJobFindManyMock).toHaveBeenCalledTimes(2);
     expect(postJobFindManyMock.mock.calls[0][0].select.storyOfPostJobId).toBe(true);
+    // The page's ids are always asked about; there is no Story on the page to name a feed post.
+    expect(postJobFindManyMock.mock.calls[1][0]).toEqual({
+      where: {
+        workspaceId: "ws-1",
+        status: { not: "cancelled" },
+        OR: [{ storyOfPostJobId: { in: ["feed-1"] } }],
+      },
+      select: { id: true, storyOfPostJobId: true, scheduledFor: true },
+    });
+    expect(body.jobs[0]).toMatchObject({ alsoAsStory: true });
+    expect(body.jobs[0]).not.toHaveProperty("storyOf");
+  });
+
+  it("a page without a pair marks nothing", async () => {
+    postJobFindManyMock
+      .mockResolvedValueOnce([{ ...jobWithYouTube(), storyOfPostJobId: null }])
+      .mockResolvedValueOnce([]);
+
+    const body = (await (await GET(getRequest())).json()) as PostsResponse;
+
     expect(body.jobs[0]).not.toHaveProperty("storyOf");
     expect(body.jobs[0]).not.toHaveProperty("alsoAsStory");
+  });
+
+  it("an empty page makes no pair query", async () => {
+    postJobFindManyMock.mockResolvedValue([]);
+    await GET(getRequest());
+    expect(postJobFindManyMock).toHaveBeenCalledTimes(1);
   });
 
   it("marks the feed post 'also as a Story' and gives the Story its feed post's time", async () => {
@@ -1401,7 +1445,7 @@ describe("GET /api/posts - a Feed and Story pair", () => {
       where: {
         workspaceId: "ws-1",
         status: { not: "cancelled" },
-        OR: [{ id: { in: ["feed-1"] } }, { storyOfPostJobId: { in: ["story-1", "feed-1", "other"] } }],
+        OR: [{ storyOfPostJobId: { in: ["story-1", "feed-1", "other"] } }, { id: { in: ["feed-1"] } }],
       },
       select: { id: true, storyOfPostJobId: true, scheduledFor: true },
     });
