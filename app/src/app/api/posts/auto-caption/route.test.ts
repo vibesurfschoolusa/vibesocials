@@ -4,13 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // per-workspace daily quota, bounds the provider call and asks reasoning models
 // for low effort. `fetch` is stubbed - no provider is ever contacted - and
 // `@/lib/workspace` / `@/lib/rateLimit` are mocked so Prisma never loads.
-const { getWorkspaceContextMock, checkRateLimitMock } = vi.hoisted(() => ({
+const { getWorkspaceContextMock, checkRateLimitMock, postJobFindManyMock } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
+  postJobFindManyMock: vi.fn(),
 }));
 
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
+// P2: the caption mode reads the workspace's recent captions.
+vi.mock("@/lib/db", () => ({ prisma: { postJob: { findMany: postJobFindManyMock } } }));
 
 import { POST } from "./route";
 
@@ -63,6 +66,7 @@ beforeEach(() => {
   vi.stubEnv("BLOB_STORE_ID", "");
   getWorkspaceContextMock.mockResolvedValue(CONTEXT);
   checkRateLimitMock.mockResolvedValue({ allowed: true });
+  postJobFindManyMock.mockResolvedValue([]);
   fetchMock = vi.fn().mockImplementation(async () => providerOk());
   global.fetch = fetchMock as unknown as typeof fetch;
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -880,5 +884,118 @@ describe("POST /api/posts/auto-caption - failures a person reads", () => {
     const tooLong = await post({ ...validBody, blobUrl: `${BLOB_URL}?${"a".repeat(2300)}` });
     expect(tooLong.status).toBe(400);
     await expect(tooLong.json()).resolves.toMatchObject({ error: "blobUrl is too long (max 2200 characters)." });
+  });
+});
+
+// P2: each new caption differs from the workspace's recent ones and from the
+// other captions of the same Add many batch.
+describe("POST /api/posts/auto-caption - caption variety (P2)", () => {
+  const TODAY_USER_TEXT = `Create a social media caption for a photo for this business.
+
+Write the caption in the same language as the example content or English.
+Tone: friendly, energetic, and on-brand for a local business.
+Keep the caption short (1-2 sentences, max ~150 characters).`;
+
+  function userText(): string {
+    const user = (sentBody().messages as Array<{ role: string; content: unknown }>)[1];
+    const content = user.content as Array<{ type: string; text?: string }>;
+    return content[0].text ?? "";
+  }
+
+  function systemText(): string {
+    return (sentBody().messages as Array<{ role: string; content: string }>)[0].content;
+  }
+
+  it("reads at most 8 recent captions of the active workspace only, newest first, selecting only the caption", async () => {
+    await post(validBody);
+
+    expect(postJobFindManyMock).toHaveBeenCalledTimes(1);
+    const args = postJobFindManyMock.mock.calls[0][0];
+    expect(args.where.workspaceId).toBe("ws-1");
+    expect(args.take).toBe(8);
+    expect(args.select).toEqual({ baseCaption: true });
+    expect(args.orderBy).toEqual([{ createdAt: "desc" }, { id: "desc" }]);
+  });
+
+  it("puts the recent captions and avoidCaptions in the user message, not the system prompt", async () => {
+    postJobFindManyMock.mockResolvedValue([
+      { baseCaption: "Catch the wave of excitement at Dania Beach!" },
+      { baseCaption: "   " },
+      { baseCaption: null },
+    ]);
+
+    const response = await post({ ...validBody, avoidCaptions: ["Catch the perfect wave with us."] });
+
+    expect(response.status).toBe(200);
+    const text = userText();
+    expect(text.startsWith(TODAY_USER_TEXT)).toBe(true);
+    expect(text).toContain("Catch the wave of excitement at Dania Beach!");
+    expect(text).toContain("Catch the perfect wave with us.");
+    expect(text).toMatch(/first three words/i);
+    expect(systemText()).not.toContain("Catch the");
+  });
+
+  it("sends exactly today's messages when there are no recent captions and no avoidCaptions", async () => {
+    await post(validBody);
+
+    expect(sentBody().messages).toEqual([
+      expect.objectContaining({ role: "system" }),
+      {
+        role: "user",
+        content: [
+          { type: "text", text: TODAY_USER_TEXT },
+          { type: "image_url", image_url: { url: BLOB_URL } },
+        ],
+      },
+    ]);
+  });
+
+  it.each([
+    ["a string", "Catch the wave"],
+    ["numbers", [1, 2, 3]],
+    ["50 items", Array.from({ length: 50 }, (_, i) => `Batch caption ${i}`)],
+    ["an object", { a: "b" }],
+    ["null", null],
+  ])("still gives a caption when avoidCaptions is %s", async (_label, avoidCaptions) => {
+    const response = await post({ ...validBody, avoidCaptions });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ caption: "Fresh bread, warm smiles." });
+  });
+
+  it("lists at most 10 avoidCaptions from the body", async () => {
+    await post({ ...validBody, avoidCaptions: Array.from({ length: 50 }, (_, i) => `Batch caption ${i}.`) });
+
+    const text = userText();
+    expect(text).toContain("Batch caption 9.");
+    expect(text).not.toContain("Batch caption 10.");
+  });
+
+  it("adds the block to a text-only video prompt too", async () => {
+    postJobFindManyMock.mockResolvedValue([{ baseCaption: "Catch the waves with us." }]);
+
+    await post({ ...validBody, mimeType: "video/mp4" });
+
+    const user = (sentBody().messages as Array<{ role: string; content: unknown }>)[1];
+    expect(user.content as string).toContain("Catch the waves with us.");
+  });
+
+  it("still writes a caption, without the block, when the recent-captions read fails", async () => {
+    postJobFindManyMock.mockRejectedValue(new Error("db down"));
+
+    const response = await post({ ...validBody });
+
+    expect(response.status).toBe(200);
+    expect(userText()).toBe(TODAY_USER_TEXT);
+  });
+
+  it("alt-text mode never reads or sends captions", async () => {
+    postJobFindManyMock.mockResolvedValue([{ baseCaption: "Catch the wave of excitement!" }]);
+
+    const response = await post({ ...validBody, purpose: "altText", avoidCaptions: ["Catch the perfect wave."] });
+
+    expect(response.status).toBe(200);
+    expect(postJobFindManyMock).not.toHaveBeenCalled();
+    expect(sentPrompt()).not.toContain("Catch the");
   });
 });
