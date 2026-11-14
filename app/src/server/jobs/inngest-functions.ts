@@ -749,6 +749,7 @@ async function publishToPlatform({
         message,
         code: err.code,
         status: (err as { status?: unknown }).status,
+        connectionNeedsReconnect: await refreshRefusedForGood(err.code, connectionRef.id),
       }),
     });
     return { platform: connectionRef.platform, status: "failed", error: message };
@@ -797,6 +798,25 @@ async function publishToPlatform({
     ...(publishResult.note ? { note: publishResult.note } : {}),
   });
   return { platform: connectionRef.platform, status: "success" };
+}
+
+/**
+ * Second review, item 2: for a token refresh failure, whether the refresher
+ * flagged the connection needsReconnect, which it does only for a refusal for
+ * good (connectionHealth.ts isTerminalRefreshFailure). Undefined for any other
+ * error, or when the read fails (publishErrorMessage then judges by status).
+ */
+async function refreshRefusedForGood(code: string | undefined, connectionId: string): Promise<boolean | undefined> {
+  if (!code?.endsWith("_TOKEN_REFRESH_FAILED")) return undefined;
+  try {
+    const row = await prisma.socialConnection.findUnique({
+      where: { id: connectionId },
+      select: { needsReconnect: true },
+    });
+    return row ? row.needsReconnect : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** `{ cover }` for a job row that has one, else nothing (so the step output stays as it was). */

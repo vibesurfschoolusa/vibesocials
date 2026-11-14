@@ -3278,6 +3278,36 @@ describe("chunked uploads - continuation steps (jobs)", () => {
       expect(failedWrites()[0]).toMatchObject({ errorMessage: notReachedMessage("x") });
     });
 
+    // Second review, item 2: for a token refresh failure the step reads whether
+    // the refresher flagged the connection, which decides "reconnect" versus
+    // "try again later".
+    it("reads the reconnect sentence for a refresh failure that flagged the connection", async () => {
+      platformCalls({
+        x: () => {
+          throw Object.assign(new Error("Token refresh failed (status 400)"), { code: "X_TOKEN_REFRESH_FAILED", status: 400 });
+        },
+      });
+      db.connectionFindUnique
+        .mockImplementationOnce(() => Promise.resolve(connectionRow("x")))
+        .mockImplementationOnce(() => Promise.resolve({ needsReconnect: true }));
+
+      await publishRun(["x"]);
+
+      expect(failedWrites()[0]).toMatchObject({ errorMessage: "Reconnect X in Settings, then retry." });
+    });
+
+    it("reads try again later for a refresh failure that left the connection healthy (invalid_client)", async () => {
+      platformCalls({
+        x: () => {
+          throw Object.assign(new Error("Token refresh failed (status 401)"), { code: "X_TOKEN_REFRESH_FAILED", status: 401 });
+        },
+      });
+
+      await publishRun(["x"]);
+
+      expect(failedWrites()[0]).toMatchObject({ errorMessage: "X had a problem on its side. Try again later." });
+    });
+
     // Review round 2, item 3: the error's HTTP status reaches the mapping.
     it("tells the user to reconnect when X answered 401", async () => {
       platformCalls({

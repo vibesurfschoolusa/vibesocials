@@ -87,10 +87,6 @@ describe("publishErrorMessage (F1 L7)", () => {
   });
 
   it.each([
-    "GOOGLE_TOKEN_REFRESH_FAILED",
-    "LINKEDIN_TOKEN_REFRESH_FAILED",
-    "PINTEREST_TOKEN_REFRESH_FAILED",
-    "TIKTOK_TOKEN_REFRESH_FAILED",
     "GOOGLE_NO_REFRESH_TOKEN",
     "LINKEDIN_NO_REFRESH_TOKEN",
     "FACEBOOK_PAGE_NO_ACCESS_TOKEN",
@@ -101,6 +97,53 @@ describe("publishErrorMessage (F1 L7)", () => {
     expect(publishErrorMessage("google_business_profile", error)).toBe(
       reconnectRequiredMessage("google_business_profile"),
     );
+  });
+
+  // Second review, item 2: a token refresh failure means "reconnect" only when
+  // the refresh was refused for good: the refresher flagged the connection
+  // needsReconnect (it does so for a terminal 400/401, never for 429, 5xx or our
+  // own invalid_client), or, when the caller cannot tell, a 400/401. Anything
+  // else is the platform's (or our) passing problem: try again later.
+  describe.each([
+    ["GOOGLE_TOKEN_REFRESH_FAILED", "google_business_profile"],
+    ["LINKEDIN_TOKEN_REFRESH_FAILED", "linkedin"],
+    ["PINTEREST_TOKEN_REFRESH_FAILED", "pinterest"],
+    ["TIKTOK_TOKEN_REFRESH_FAILED", "tiktok"],
+  ] as const)("a %s", (code, platform) => {
+    const refresh = (status?: number) =>
+      Object.assign(new Error(`Token refresh failed${status ? ` (status ${status})` : ""}`), {
+        code,
+        ...(status ? { status } : {}),
+      });
+
+    it("refused for good (the connection was flagged) reads the reconnect sentence", () => {
+      expect(publishErrorMessage(platform, { ...refresh(400), connectionNeedsReconnect: true })).toBe(
+        reconnectRequiredMessage(platform),
+      );
+    });
+
+    it("refused with 400/401 when the caller cannot tell reads the reconnect sentence", () => {
+      expect(publishErrorMessage(platform, refresh(400))).toBe(reconnectRequiredMessage(platform));
+      expect(publishErrorMessage(platform, refresh(401))).toBe(reconnectRequiredMessage(platform));
+    });
+
+    it.each([
+      ["invalid_client (a 400/401 the refresher did not flag: our side)", 400],
+      ["invalid_client answered 401", 401],
+      ["a 429", 429],
+      ["a 5xx", 503],
+      ["no answer at all", undefined],
+    ])("%s reads try again later", (_label, status) => {
+      expect(publishErrorMessage(platform, { ...refresh(status), connectionNeedsReconnect: false })).toBe(
+        platformDownMessage(platform),
+      );
+    });
+
+    it("a 429, 5xx or no answer reads try again later even when the caller cannot tell", () => {
+      expect(publishErrorMessage(platform, refresh(429))).toBe(platformDownMessage(platform));
+      expect(publishErrorMessage(platform, refresh(500))).toBe(platformDownMessage(platform));
+      expect(publishErrorMessage(platform, refresh())).toBe(platformDownMessage(platform));
+    });
   });
 
   it("tells the user to reconnect when the platform answered 401", () => {

@@ -52,17 +52,24 @@ const OWN_CODE = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/;
 const FOREIGN_CODE = /^(?:ERR_|UND_ERR)/;
 // assertOk and the clients' HTTP helpers end a message with the status.
 const HTTP_STATUS_LINE = /\(status (\d{3})\)\s*$/;
-// The connection must be renewed: a token refresh the platform refused, no
-// refresh or access token stored, or a client's own reconnect code.
-const RENEW_CODE = /(?:_TOKEN_REFRESH_FAILED|_NO_REFRESH_TOKEN|_NO_ACCESS_TOKEN|RECONNECT_REQUIRED)$/;
+// The connection must be renewed: no refresh or access token stored, or a
+// client's own reconnect code.
+const RENEW_CODE = /(?:_NO_REFRESH_TOKEN|_NO_ACCESS_TOKEN|RECONNECT_REQUIRED)$/;
+// A token refresh failed: renewal only if it was refused for good (below).
+const REFRESH_FAILED_CODE = /_TOKEN_REFRESH_FAILED$/;
 // Database, network and host details that must never reach the user.
 const INTERNALS =
   /prisma|database|can't reach|ECONN|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|getaddrinfo|socket|fetch failed|localhost|\b\d{1,3}(?:\.\d{1,3}){3}\b|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+:\d{2,5}\b/i;
 
 /**
  * The errorMessage stored for a platform error (L7; review round 2, item 3). In
- * order: a connection that must be renewed (its code, or a 401) reads the
- * reconnect sentence, a removed one the connection-gone sentence; a 5xx (the
+ * order: a token refresh failure reads the reconnect sentence only when it was
+ * refused for good, that is when the refresher flagged the connection
+ * (`connectionNeedsReconnect`; it never flags a 429, a 5xx or our own
+ * invalid_client), or, when the caller cannot tell, on a 400/401; otherwise
+ * "try again later" (second review, item 2). Then a connection that must be
+ * renewed (its code, or a 401) reads the reconnect sentence, a removed one the
+ * connection-gone sentence; a 5xx (the
  * in-step retries are over by now) is the platform's own problem; then the
  * client's own sentence, when it wrote one for the user; a 4xx is a refusal of
  * the post (the rules sentence); anything else did not reach the platform. The
@@ -70,7 +77,7 @@ const INTERNALS =
  */
 export function publishErrorMessage(
   platform: Platform,
-  error: { message?: unknown; code?: unknown; status?: unknown },
+  error: { message?: unknown; code?: unknown; status?: unknown; connectionNeedsReconnect?: boolean },
 ): string {
   const message = typeof error.message === "string" ? error.message.trim() : "";
   const code = typeof error.code === "string" ? error.code : "";
@@ -78,6 +85,10 @@ export function publishErrorMessage(
   const status =
     typeof error.status === "number" ? error.status : statusLine ? Number(statusLine[1]) : null;
 
+  if (REFRESH_FAILED_CODE.test(code)) {
+    const refusedForGood = error.connectionNeedsReconnect ?? (status === 400 || status === 401);
+    return refusedForGood ? reconnectRequiredMessage(platform) : platformDownMessage(platform);
+  }
   if (RENEW_CODE.test(code) || status === 401) return reconnectRequiredMessage(platform);
   if (code === "CONNECTION_GONE") return connectionGoneMessage(platform);
   if (status !== null && status >= 500) return platformDownMessage(platform);
