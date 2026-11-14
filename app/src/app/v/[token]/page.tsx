@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 
+import { ClientPageShell } from "@/components/client-page-header";
+import { findClientPageLogo } from "@/lib/clientPageLogo";
 import { REVIEW_LINK_INACTIVE_MESSAGE } from "@/lib/reviewLink";
 import { findActiveReviewLink } from "@/server/reviewLink";
 
@@ -28,28 +30,26 @@ export default async function ReviewLinkPage({ params }: ReviewLinkPageProps) {
   const { token } = await params;
   const link = await findActiveReviewLink(token);
 
+  if (!link) {
+    return (
+      <ClientPageShell workspace={null} width="2xl">
+        <p className="text-base">{REVIEW_LINK_INACTIVE_MESSAGE}</p>
+      </ClientPageShell>
+    );
+  }
+
+  const logoUrl = await findClientPageLogo(link.workspaceId);
   return (
-    <main className="min-h-screen bg-background px-4 py-8 text-foreground sm:py-10">
-      <div className="mx-auto w-full max-w-2xl">
-        {link ? (
-          <>
-            <a href={`/v/${token}/report`} className="mb-4 inline-block text-sm underline">
-              Reports
-            </a>
-            <h1 className="break-words text-2xl font-bold tracking-tight">
-              {link.workspaceName}: upcoming posts
-            </h1>
-            <p className="mt-2 text-sm text-muted-foreground">
-              These go out at the time shown unless you ask for a change.
-            </p>
-            <div className="mt-6">
-              <ReviewLinkView token={token} />
-            </div>
-          </>
-        ) : (
-          <p className="text-base">{REVIEW_LINK_INACTIVE_MESSAGE}</p>
-        )}
+    <ClientPageShell workspace={{ name: link.workspaceName, logoUrl }} title="Upcoming posts" width="2xl">
+      <a href={`/v/${token}/report`} className="mb-3 inline-flex min-h-10 items-center text-sm underline">
+        Reports
+      </a>
+      <p className="text-sm text-muted-foreground">
+        These go out at the time shown unless you ask for a change.
+      </p>
+      <div className="mt-6">
+        <ReviewLinkView token={token} />
       </div>
-    </main>
+    </ClientPageShell>
   );
 }

@@ -2,12 +2,14 @@ import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { findActiveReviewLinkMock, viewPropsMock, buildMonthlyReportMock } = vi.hoisted(() => ({
+const { findActiveReviewLinkMock, viewPropsMock, buildMonthlyReportMock, findLogoMock } = vi.hoisted(() => ({
+  findLogoMock: vi.fn(),
   findActiveReviewLinkMock: vi.fn(),
   viewPropsMock: vi.fn(),
   buildMonthlyReportMock: vi.fn(),
 }));
 
+vi.mock("@/lib/clientPageLogo", () => ({ findClientPageLogo: findLogoMock }));
 vi.mock("@/server/reviewLink", () => ({ findActiveReviewLink: findActiveReviewLinkMock }));
 // The page must never build the report itself: it reaches the client only
 // through the limited route.
@@ -43,6 +45,8 @@ beforeEach(() => {
   findActiveReviewLinkMock.mockReset();
   viewPropsMock.mockReset();
   findActiveReviewLinkMock.mockResolvedValue(LINK);
+  findLogoMock.mockReset();
+  findLogoMock.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -74,6 +78,7 @@ describe("the client's report page", () => {
     expect(viewPropsMock).toHaveBeenCalledWith({ token: TOKEN, month: "2026-09" });
     expect(html).toContain('name="month"');
     expect(html).toContain("Print or save as PDF");
+    expect(html).toContain("Sent with Vibe Socials");
     expect(html).toContain(`href="/v/${TOKEN}"`);
     expect(html).not.toContain("ws-1");
     expect(html).not.toContain("link-1");

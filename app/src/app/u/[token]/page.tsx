@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 
+import { ClientPageShell } from "@/components/client-page-header";
+import { findClientPageLogo } from "@/lib/clientPageLogo";
 import { UPLOAD_LINK_INACTIVE_MESSAGE } from "@/lib/uploadLink";
 import { findActiveUploadLink } from "@/server/uploadLink";
 
@@ -27,22 +29,18 @@ export default async function UploadLinkPage({ params }: UploadLinkPageProps) {
   const { token } = await params;
   const link = await findActiveUploadLink(token);
 
+  if (!link) {
+    return (
+      <ClientPageShell workspace={null}>
+        <p className="text-base">{UPLOAD_LINK_INACTIVE_MESSAGE}</p>
+      </ClientPageShell>
+    );
+  }
+
+  const logoUrl = await findClientPageLogo(link.workspaceId);
   return (
-    <main className="min-h-screen bg-background px-4 py-10 text-foreground">
-      <div className="mx-auto w-full max-w-md">
-        {link ? (
-          <>
-            <h1 className="text-2xl font-bold tracking-tight">
-              Send photos and videos to {link.workspaceName}
-            </h1>
-            <div className="mt-6">
-              <UploadLinkForm token={token} />
-            </div>
-          </>
-        ) : (
-          <p className="text-base">{UPLOAD_LINK_INACTIVE_MESSAGE}</p>
-        )}
-      </div>
-    </main>
+    <ClientPageShell workspace={{ name: link.workspaceName, logoUrl }} title="Send photos and videos">
+      <UploadLinkForm token={token} />
+    </ClientPageShell>
   );
 }
