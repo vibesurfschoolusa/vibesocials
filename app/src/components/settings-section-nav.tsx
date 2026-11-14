@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/cn";
 
@@ -28,8 +28,41 @@ export function sectionInView(headings: Array<{ id: string; top: number }>, atBo
   return current;
 }
 
+/**
+ * Where to scroll the link row (below lg it scrolls sideways) so the item
+ * [itemLeft, itemLeft + itemWidth] is fully visible with a small margin; null
+ * when it already is. Only the row moves, never the page.
+ */
+export function rowScrollToShow(
+  item: { left: number; width: number },
+  view: { scrollLeft: number; width: number },
+  margin = 8,
+): number | null {
+  if (item.left - margin < view.scrollLeft) return Math.max(0, item.left - margin);
+  if (item.left + item.width + margin > view.scrollLeft + view.width) {
+    return item.left + item.width + margin - view.width;
+  }
+  return null;
+}
+
 export function SettingsSectionNav({ sections }: { sections: Section[] }) {
   const [currentId, setCurrentId] = useState<string | null>(sections[0]?.id ?? null);
+  const listRef = useRef<HTMLUListElement>(null);
+
+  // On a phone the row scrolls sideways; keep the marked link on screen.
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || !currentId || list.scrollWidth <= list.clientWidth) return;
+    const item = Array.from(list.children).find(
+      (child) => child.querySelector("a")?.getAttribute("href") === `#${currentId}`,
+    ) as HTMLElement | undefined;
+    if (!item) return;
+    const next = rowScrollToShow(
+      { left: item.offsetLeft - list.offsetLeft, width: item.offsetWidth },
+      { scrollLeft: list.scrollLeft, width: list.clientWidth },
+    );
+    if (next !== null) list.scrollTo({ left: next, behavior: "smooth" });
+  }, [currentId]);
 
   useEffect(() => {
     let frame = 0;
@@ -62,7 +95,7 @@ export function SettingsSectionNav({ sections }: { sections: Section[] }) {
       aria-label="Settings sections"
       className="sticky top-16 z-10 -mx-4 mb-6 border-b border-border bg-background/95 px-4 backdrop-blur md:-mx-6 md:px-6 lg:top-20 lg:mx-0 lg:mb-0 lg:self-start lg:border-b-0 lg:bg-transparent lg:px-0 lg:backdrop-blur-none"
     >
-      <ul className="flex gap-1 overflow-x-auto py-2 text-sm lg:flex-col lg:overflow-visible lg:py-0">
+      <ul ref={listRef} className="flex gap-1 overflow-x-auto py-2 text-sm lg:flex-col lg:overflow-visible lg:py-0">
         {sections.map((section) => {
           const current = section.id === currentId;
           return (

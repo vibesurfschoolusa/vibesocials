@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { SECTION_LINE_PX, SettingsSectionNav, sectionInView } from "./settings-section-nav";
+import { SECTION_LINE_PX, SettingsSectionNav, rowScrollToShow, sectionInView } from "./settings-section-nav";
 
 const ids = ["post-defaults", "posting-times", "connections", "usage", "account"];
 
@@ -58,5 +58,21 @@ describe("SettingsSectionNav", () => {
     const html = renderToStaticMarkup(createElement(SettingsSectionNav, { sections }));
     expect(html).toMatch(/<nav aria-label="Settings sections" class="[^"]*\bsticky\b[^"]*\btop-16\b/);
     expect(html).toMatch(/<ul class="[^"]*\boverflow-x-auto\b[^"]*\blg:flex-col\b/);
+  });
+});
+
+// Lead fix: below lg the row scrolls sideways, and the marked link could sit off its edge.
+describe("rowScrollToShow", () => {
+  const view = { scrollLeft: 100, width: 300 };
+  it("leaves the row alone when the item is fully visible", () => {
+    expect(rowScrollToShow({ left: 150, width: 80 }, view)).toBeNull();
+    expect(rowScrollToShow({ left: 108, width: 284 }, view)).toBeNull();
+  });
+  it("scrolls left to an item cut off at the start, never below 0", () => {
+    expect(rowScrollToShow({ left: 60, width: 80 }, view)).toBe(52);
+    expect(rowScrollToShow({ left: 4, width: 80 }, view)).toBe(0);
+  });
+  it("scrolls right to an item cut off at the end", () => {
+    expect(rowScrollToShow({ left: 380, width: 80 }, view)).toBe(168);
   });
 });
