@@ -94,6 +94,22 @@ function orderResults(results: PostJobDTO["results"]): PostJobDTO["results"] {
  * A post without a file (2026-11-10): the list says so with no media and no
  * files. A post whose file row is gone still counts one, so it is not one.
  */
+/**
+ * The card's time line. While a post waits: "Scheduled for <time>". Once a
+ * scheduled post has gone out, the time it was set for (the scanner publishes
+ * within 10 minutes of it), not when it was created, which could be hours or
+ * days earlier. Otherwise, and for drafts, when it was created.
+ */
+export function cardTime(job: {
+  status: string;
+  createdAt: string | null;
+  scheduledFor: string | null;
+}): { label: "Scheduled for" | null; iso: string } | null {
+  if (job.scheduledFor && job.status === "scheduled") return { label: "Scheduled for", iso: job.scheduledFor };
+  if (job.scheduledFor && job.status !== "draft") return { label: null, iso: job.scheduledFor };
+  return job.createdAt ? { label: null, iso: job.createdAt } : null;
+}
+
 export function isTextPost(job: Pick<PostJobDTO, "media" | "mediaCount">): boolean {
   return job.media === null && job.mediaCount === 0;
 }
@@ -149,6 +165,7 @@ export function PostJobCard({
 
   const status = JOB_STATUS_META[job.status];
   const results = orderResults(job.results);
+  const time = cardTime(job);
   // 2026-11-10: platforms this post went to as a Story (labelled, and no link built from the id).
   const isStory = (platform: Platform) => job.storyPlatforms?.includes(platform) ?? false;
   const postUrl = (result: PostJobDTO["results"][number]) =>
@@ -282,17 +299,10 @@ export function PostJobCard({
           <p className="truncate text-sm font-medium text-foreground">
             {job.caption?.trim() || "Untitled post"}
           </p>
-          {job.status === "scheduled" && job.scheduledFor ? (
+          {time ? (
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Scheduled for{" "}
-              <time dateTime={job.scheduledFor}>
-                {formatTimestamp(job.scheduledFor)}
-              </time>
-              {showAttribution && job.createdBy ? <> · by {job.createdBy.name}</> : null}
-            </p>
-          ) : job.createdAt ? (
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              <time dateTime={job.createdAt}>{formatTimestamp(job.createdAt)}</time>
+              {time.label ? <>{time.label} </> : null}
+              <time dateTime={time.iso}>{formatTimestamp(time.iso)}</time>
               {showAttribution && job.createdBy ? <> · by {job.createdBy.name}</> : null}
             </p>
           ) : null}
