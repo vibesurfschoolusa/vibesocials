@@ -1,7 +1,7 @@
 import { guardBlobKey } from "@/lib/blobUrl";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { RETENTION_DAYS, TERMINAL_POST_JOB_STATUSES } from "@/server/jobs/mediaRetention";
+import { RETENTION_DAYS } from "@/server/jobs/mediaRetention";
 
 /**
  * A video cover's stored image (V1 fix round 1). It has no MediaItem row: it
@@ -39,12 +39,16 @@ export async function queueCoverBlobIfUnused(url: string): Promise<boolean> {
 }
 
 /**
- * Part of the hourly media retention sweep: a finished post (completed, failed
- * or cancelled) last changed more than RETENTION_DAYS ago lets go of its cover
- * image, as its media does, and the file is queued once no post uses it. The
- * column is cleared with a raw UPDATE so `updatedAt` is not moved. A scheduled
- * or draft post, or a recent one, keeps its cover. Never throws.
+ * Part of the hourly media retention sweep: a completed or cancelled post last
+ * changed more than RETENTION_DAYS ago lets go of its cover image, and the file
+ * is queued once no post uses it. A failed post keeps its cover: it can still
+ * be retried, and its media may be in use much later. The column is cleared
+ * with a raw UPDATE (so `updatedAt` does not move) that checks status and age
+ * again, so a post retried or edited after the read keeps its cover. A
+ * scheduled, draft or recent post keeps it too. Never throws.
  */
+const SWEPT_COVER_STATUSES = ["completed", "cancelled"] as const;
+
 export async function sweepOldCovers(
   opts: { now?: () => number } = {},
 ): Promise<{ cleared: number; queued: number }> {
@@ -52,11 +56,12 @@ export async function sweepOldCovers(
   let cleared = 0;
   let queued = 0;
   try {
+    const cutoff = new Date(now() - RETENTION_DAYS * MS_PER_DAY);
     const rows = await prisma.postJob.findMany({
       where: {
         coverImageUrl: { not: null },
-        status: { in: [...TERMINAL_POST_JOB_STATUSES] },
-        updatedAt: { lt: new Date(now() - RETENTION_DAYS * MS_PER_DAY) },
+        status: { in: [...SWEPT_COVER_STATUSES] },
+        updatedAt: { lt: cutoff },
       },
       select: { id: true, coverImageUrl: true },
       orderBy: { id: "asc" },
@@ -67,7 +72,9 @@ export async function sweepOldCovers(
       if (!url) continue;
       try {
         const done = await prisma.$transaction(async (tx) => {
-          const changed = await tx.$executeRaw`UPDATE "PostJob" SET "coverImageUrl" = NULL WHERE "id" = ${row.id} AND "coverImageUrl" = ${url}`;
+          // DateTime columns hold UTC wall-clock time and Prisma binds a Date as
+          // timestamptz, so the cutoff is converted as in scheduledScanner.ts.
+          const changed = await tx.$executeRaw`UPDATE "PostJob" SET "coverImageUrl" = NULL WHERE "id" = ${row.id} AND "coverImageUrl" = ${url} AND "updatedAt" < (${cutoff}::timestamptz AT TIME ZONE 'UTC') AND "status"::text IN ('completed', 'cancelled')`;
           if (changed === 0) return { cleared: 0, queued: 0 };
           return { cleared: 1, queued: (await queueIfUnused(tx, url)) ? 1 : 0 };
         });

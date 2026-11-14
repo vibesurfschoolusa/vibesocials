@@ -885,13 +885,30 @@ export const YOUTUBE_COVER_FAILED_NOTE =
 export const YOUTUBE_COVER_FRAME_ONLY_NOTE =
   "Cover not set: YouTube needs the cover as an image, and the chosen frame could not be saved as one.";
 
-/** The first `error.errors[].reason` of a Google error answer, or null. */
-async function thumbnailRefusalReason(response: Response): Promise<string | null> {
-  const body = (await response.json().catch(() => null)) as {
-    error?: { errors?: Array<{ reason?: unknown }> };
-  } | null;
-  const reason = body?.error?.errors?.[0]?.reason;
-  return typeof reason === "string" ? reason : null;
+const REFUSAL_BODY_TIMEOUT_MS = 5_000;
+
+/**
+ * The first `error.errors[].reason` of a Google error answer, or null. The
+ * request's timer stops once the headers arrive, so the body read has its own
+ * limit: the video is already live, and a stalled body must not hang the step.
+ */
+export async function thumbnailRefusalReason(
+  response: Response,
+  timeoutMs: number = REFUSAL_BODY_TIMEOUT_MS,
+): Promise<string | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const gaveUp = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), timeoutMs);
+  });
+  try {
+    const body = (await Promise.race([response.json().catch(() => null), gaveUp])) as {
+      error?: { errors?: Array<{ reason?: unknown }> };
+    } | null;
+    const reason = body?.error?.errors?.[0]?.reason;
+    return typeof reason === "string" ? reason : null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**

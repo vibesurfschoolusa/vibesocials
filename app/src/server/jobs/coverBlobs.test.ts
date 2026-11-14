@@ -5,6 +5,8 @@ const m = vi.hoisted(() => ({
   jobs: [] as { id: string; status: string; updatedAt: Date; coverImageUrl: string | null }[],
   queued: [] as string[],
   failQueue: false,
+  // Runs after the sweep's read and before its UPDATE, to stage a race.
+  afterRead: null as null | (() => void),
 }));
 
 vi.mock("@/lib/logger", () => ({ logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
@@ -23,9 +25,11 @@ vi.mock("@/lib/db", () => {
   };
   const db = {
     postJob: {
-      findMany: vi.fn(async ({ where, take }: { where: Where; take?: number }) =>
-        m.jobs.filter((job) => matches(job, where)).slice(0, take ?? Infinity),
-      ),
+      findMany: vi.fn(async ({ where, take }: { where: Where; take?: number }) => {
+        const rows = m.jobs.filter((job) => matches(job, where)).slice(0, take ?? Infinity).map((job) => ({ ...job }));
+        m.afterRead?.();
+        return rows;
+      }),
       count: vi.fn(async ({ where }: { where: Where }) => m.jobs.filter((job) => matches(job, where)).length),
     },
     pendingBlobDeletion: {
@@ -36,8 +40,19 @@ vi.mock("@/lib/db", () => {
       }),
     },
     // UPDATE "PostJob" SET "coverImageUrl" = NULL WHERE id = $1 AND "coverImageUrl" = $2
-    $executeRaw: vi.fn(async (_strings: TemplateStringsArray, id: string, url: string) => {
-      const job = m.jobs.find((row) => row.id === id && row.coverImageUrl === url);
+    //   AND status IN ('completed','cancelled') AND "updatedAt" < $3
+    // The conditions apply only when the SQL actually states them.
+    $executeRaw: vi.fn(async (strings: TemplateStringsArray, id: string, url: string, cutoff?: Date) => {
+      const sql = strings.join("?");
+      const checksStatus = sql.includes('"status"');
+      const checksAge = sql.includes('"updatedAt" <');
+      const job = m.jobs.find(
+        (row) =>
+          row.id === id &&
+          row.coverImageUrl === url &&
+          (!checksStatus || ["completed", "cancelled"].includes(row.status)) &&
+          (!checksAge || (cutoff !== undefined && row.updatedAt < cutoff)),
+      );
       if (!job) return 0;
       job.coverImageUrl = null;
       return 1;
@@ -56,13 +71,17 @@ beforeEach(() => {
   m.jobs.length = 0;
   m.queued.length = 0;
   m.failQueue = false;
+  m.afterRead = null;
 });
 
 describe("sweepOldCovers (media retention sweep)", () => {
-  it("deletes an old finished post's cover and keeps a scheduled, a draft or a recent one's", async () => {
+  // Second review: a failed post can still be retried (its media may be in use
+  // much later), so only completed and cancelled posts let go of their cover.
+  it("deletes an old completed or cancelled post's cover and keeps a failed, scheduled, draft or recent one's", async () => {
     m.jobs.push(
       { id: "old-done", status: "completed", updatedAt: new Date(NOW - 40 * DAY), coverImageUrl: cover("a") },
-      { id: "old-failed", status: "failed", updatedAt: new Date(NOW - 31 * DAY), coverImageUrl: cover("b") },
+      { id: "old-cancelled", status: "cancelled", updatedAt: new Date(NOW - 31 * DAY), coverImageUrl: cover("b") },
+      { id: "old-failed", status: "failed", updatedAt: new Date(NOW - 90 * DAY), coverImageUrl: cover("f") },
       { id: "old-scheduled", status: "scheduled", updatedAt: new Date(NOW - 60 * DAY), coverImageUrl: cover("c") },
       { id: "old-draft", status: "draft", updatedAt: new Date(NOW - 60 * DAY), coverImageUrl: cover("d") },
       { id: "recent", status: "completed", updatedAt: new Date(NOW - 2 * DAY), coverImageUrl: cover("e") },
@@ -74,6 +93,7 @@ describe("sweepOldCovers (media retention sweep)", () => {
     expect(result).toEqual({ cleared: 2, queued: 2 });
     expect(m.jobs.find((j) => j.id === "old-done")?.coverImageUrl).toBeNull();
     expect(m.jobs.find((j) => j.id === "old-scheduled")?.coverImageUrl).toBe(cover("c"));
+    expect(m.jobs.find((j) => j.id === "old-failed")?.coverImageUrl).toBe(cover("f"));
     expect(m.jobs.find((j) => j.id === "recent")?.coverImageUrl).toBe(cover("e"));
   });
 
@@ -119,3 +139,27 @@ describe("queueCoverBlobIfUnused (deleting a post)", () => {
     await expect(queueCoverBlobIfUnused(cover("mine"))).resolves.toBe(false);
   });
 });
+
+describe("sweepOldCovers - a post that changes after the read", () => {
+  // Second review: Retry moved a post to in_progress between the sweep's read
+  // and its UPDATE; the UPDATE re-checks status and age, so the cover stays.
+  it("keeps the cover of a post retried or edited after the sweep read it", async () => {
+    m.jobs.push(
+      { id: "retried", status: "completed", updatedAt: new Date(NOW - 40 * DAY), coverImageUrl: cover("r") },
+      { id: "touched", status: "completed", updatedAt: new Date(NOW - 40 * DAY), coverImageUrl: cover("t") },
+    );
+    m.afterRead = () => {
+      const retried = m.jobs.find((j) => j.id === "retried")!;
+      retried.status = "in_progress";
+      const touched = m.jobs.find((j) => j.id === "touched")!;
+      touched.updatedAt = new Date(NOW);
+    };
+
+    const result = await sweepOldCovers({ now: () => NOW });
+
+    expect(result).toEqual({ cleared: 0, queued: 0 });
+    expect(m.queued).toEqual([]);
+    expect(m.jobs.map((j) => j.coverImageUrl)).toEqual([cover("r"), cover("t")]);
+  });
+});
+

@@ -1,4 +1,5 @@
 import type { MediaItem, SocialConnection, User } from "@prisma/client";
+import * as youtubeModule from "./youtubeClient";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PublishContext } from "./types";
@@ -155,3 +156,19 @@ describe("youtubeClient - the video's cover (thumbnails.set)", () => {
     expect(thumbnailCalls(fetchMock)).toHaveLength(1);
   });
 });
+
+// Second review: the refusal's body was read with no time limit after the
+// headers arrived, so a stalled body could hang the step after the video was live.
+describe("thumbnailRefusalReason - body read time limit", () => {
+  it("gives up on a body that never arrives", async () => {
+    const stalled = { json: () => new Promise<never>(() => {}), body: null } as unknown as Response;
+    const started = Date.now();
+    await expect(youtubeModule.thumbnailRefusalReason(stalled, 20)).resolves.toBeNull();
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+  it("still reads a body that arrives in time", async () => {
+    const response = new Response(JSON.stringify({ error: { errors: [{ reason: "forbidden" }] } }), { status: 403 });
+    await expect(youtubeModule.thumbnailRefusalReason(response, 1000)).resolves.toBe("forbidden");
+  });
+});
+
