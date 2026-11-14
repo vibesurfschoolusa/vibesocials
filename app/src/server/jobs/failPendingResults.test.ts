@@ -644,7 +644,7 @@ describe("finishPostJob (review item 6)", () => {
   it("writes the final status with the caller's conditions, then stamps the post's media", async () => {
     finishDb.postJob.updateMany.mockResolvedValue({ count: 1 });
 
-    const count = await finishPostJob(finishDb, {
+    const count = await finishPostJob(finishDb as unknown as Parameters<typeof finishPostJob>[0], {
       where: { id: "job-1", status: "in_progress" },
       data: { status: "failed" },
       now: NOW,
@@ -664,7 +664,7 @@ describe("finishPostJob (review item 6)", () => {
   it("stamps nothing when the write matched no row (another writer moved the job first)", async () => {
     finishDb.postJob.updateMany.mockResolvedValue({ count: 0 });
 
-    const count = await finishPostJob(finishDb, { where: { id: "job-1" }, data: { status: "cancelled" }, now: NOW });
+    const count = await finishPostJob(finishDb as unknown as Parameters<typeof finishPostJob>[0], { where: { id: "job-1" }, data: { status: "cancelled" }, now: NOW });
 
     expect(count).toBe(0);
     expect(finishDb.postJob.findUnique).not.toHaveBeenCalled();
