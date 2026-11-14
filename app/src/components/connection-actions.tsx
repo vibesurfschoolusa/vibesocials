@@ -15,11 +15,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/toast";
+import { withWorkspaceId } from "@/lib/workspaceChanged";
 
 import { LinkedInAccountDialog } from "./linkedin-account-dialog";
 
 interface Props {
   platform: string;
+  /** The workspace this page was rendered for; the routes refuse any other (F3). */
+  workspaceId: string;
   isConnected: boolean;
   /**
    * Roadmap Phase 4: true when this connection needs reconnecting (see
@@ -40,6 +43,7 @@ const TIKTOK_LOGOUT_URL = "https://www.tiktok.com/logout";
 
 export function ConnectionActions({
   platform,
+  workspaceId,
   isConnected,
   needsReconnect = false,
   readOnly = false,
@@ -53,12 +57,16 @@ export function ConnectionActions({
 
   const isTikTok = platform === "tiktok";
   const isLinkedIn = platform === "linkedin";
-  const authUrl = `/api/auth/${platform}/start`;
+  const authUrl = withWorkspaceId(`/api/auth/${platform}/start`, workspaceId);
 
   // Shared disconnect call. Throws on failure so callers can decide whether to
   // keep a dialog open (ConfirmDialog) or reset local state (TikTok flow).
   async function disconnect() {
-    const response = await fetch(`/api/connections/${platform}`, { method: "DELETE" });
+    const response = await fetch(`/api/connections/${platform}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId }),
+    });
     const data = (await response.json().catch(() => null)) as { error?: string } | null;
     if (!response.ok) {
       throw new Error(data?.error ?? "Failed to disconnect.");
@@ -107,7 +115,6 @@ export function ConnectionActions({
       toast.error(err instanceof Error ? err.message : "Failed to disconnect current account.");
       throw err;
     }
-    // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- intentional full-page navigation to an API route that issues the OAuth redirect; router.push does not fit
     window.location.href = authUrl;
   }
 
@@ -223,6 +230,7 @@ export function ConnectionActions({
           onOpenChange={setSwitchOpen}
           mode="switch"
           beforeContinue={disconnectForLinkedInSwitch}
+          workspaceId={workspaceId}
         />
       ) : (
         <ConfirmDialog

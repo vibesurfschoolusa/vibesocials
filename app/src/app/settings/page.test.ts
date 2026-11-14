@@ -2,11 +2,13 @@ import { type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getWorkspaceContextMock, planSectionMock, billing } = vi.hoisted(() => ({
+const { getWorkspaceContextMock, planSectionMock, billing, sectionProps } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
+  // The props each section that writes was given, by section name.
+  sectionProps: {} as Record<string, Record<string, unknown>>,
   // Stands in for billing on/off: with it off, planSectionLabel shows no plan.
   billing: { on: true },
-  planSectionMock: vi.fn<(props: { workspaceNote?: boolean }) => null>(() => null),
+  planSectionMock: vi.fn<(props: { workspaceNote?: boolean; workspaceId?: string }) => null>(() => null),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -38,11 +40,31 @@ vi.mock("@/components/planSectionView", () => ({
   planSectionLabel: (role: string) => (role === "owner" && billing.on ? "Studio plan" : null),
 }));
 // The sections' own contents are tested beside them; here only the page's frame.
-vi.mock("@/components/settings-form", () => ({ SettingsForm: () => null }));
-vi.mock("@/components/posting-slots-form", () => ({ PostingSlotsForm: () => null }));
-vi.mock("@/components/connections-section", () => ({ ConnectionsSection: () => null }));
+vi.mock("@/components/settings-form", () => ({
+  SettingsForm: (props: Record<string, unknown>) => {
+    sectionProps.SettingsForm = props;
+    return null;
+  },
+}));
+vi.mock("@/components/posting-slots-form", () => ({
+  PostingSlotsForm: (props: Record<string, unknown>) => {
+    sectionProps.PostingSlotsForm = props;
+    return null;
+  },
+}));
+vi.mock("@/components/connections-section", () => ({
+  ConnectionsSection: (props: Record<string, unknown>) => {
+    sectionProps.ConnectionsSection = props;
+    return null;
+  },
+}));
 vi.mock("@/components/connect-link-section", () => ({ ConnectLinkSection: () => null }));
-vi.mock("@/components/team-section", () => ({ TeamSection: () => null }));
+vi.mock("@/components/team-section", () => ({
+  TeamSection: (props: Record<string, unknown>) => {
+    sectionProps.TeamSection = props;
+    return null;
+  },
+}));
 vi.mock("@/components/account-section", () => ({ AccountSection: () => null }));
 vi.mock("@/components/usage-section", () => ({ UsageSection: () => null }));
 vi.mock("@/components/workspace-logo-control", () => ({ WorkspaceLogoControl: () => null }));
@@ -209,5 +231,23 @@ describe("SettingsPage — the one-workspace sentence", () => {
     expect(await noteFor({ billingExempt: false, trialEndsAt: new Date(Date.now() + 86_400_000) })).toBe(true);
     expect(await noteFor({ billingExempt: true })).toBe(false);
     expect(await noteFor({})).toBe(false);
+  });
+});
+
+// F3 (R1 security H1): every section that saves sends the workspace its page
+// was rendered for, so a tab left open on one workspace cannot change another.
+describe("SettingsPage — the rendered workspace", () => {
+  it.each(["owner", "member"] as const)("gives each section that saves the page's workspace id, for an %s", async (role) => {
+    for (const key of Object.keys(sectionProps)) delete sectionProps[key];
+    await render(role);
+    for (const name of ["SettingsForm", "PostingSlotsForm", "ConnectionsSection", "TeamSection"]) {
+      expect(sectionProps[name]?.workspaceId, name).toBe("ws-1");
+    }
+  });
+
+  it("gives the Plan section the page's workspace id, for its Stripe buttons", async () => {
+    planSectionMock.mockClear();
+    await render("owner");
+    expect(planSectionMock.mock.calls.at(-1)?.[0]).toMatchObject({ workspaceId: "ws-1" });
   });
 });

@@ -24,7 +24,7 @@ function connected(platform: Platform): ConnectionSummary {
 }
 
 function render(props: { connections?: ConnectionSummary[]; readOnly?: boolean; unavailablePlatforms?: Platform[] }): string {
-  return renderToStaticMarkup(createElement(ConnectionsSection, { connections: [], ...props }));
+  return renderToStaticMarkup(createElement(ConnectionsSection, { connections: [], workspaceId: "ws-1", ...props }));
 }
 
 function escaped(text: string): string {
@@ -72,5 +72,17 @@ describe("ConnectionsSection review notes", () => {
   it("still leaves Pinterest out when it is not configured", () => {
     const html = render({ unavailablePlatforms: ["pinterest"] });
     expect(html).not.toContain("Pinterest");
+  });
+});
+
+// F3 (R1 security H1): a Connect in a tab rendered for one workspace must not
+// connect the account to another; the start route checks this id.
+describe("ConnectionsSection Connect links", () => {
+  it("carry the workspace the page was rendered for", () => {
+    const html = render({});
+    const starts = [...html.matchAll(/href="(\/api\/auth\/[^"]+)"/g)].map((m) => m[1].replace(/&amp;/g, "&"));
+    // LinkedIn's Connect is a button that opens a dialog (mocked here).
+    expect(starts).toHaveLength(ALL.length - 1);
+    for (const href of starts) expect(href).toMatch(/^\/api\/auth\/[a-z_]+\/start\?workspaceId=ws-1$/);
   });
 });

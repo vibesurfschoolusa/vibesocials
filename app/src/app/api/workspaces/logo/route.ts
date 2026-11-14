@@ -7,7 +7,7 @@ import { logger } from "@/lib/logger";
 import { planFeatureResponse } from "@/lib/planFeatureResponse";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requireOwnerContext, type WorkspaceContext } from "@/lib/workspace";
-import { WORKSPACE_CHANGED_CODE, WORKSPACE_CHANGED_MESSAGE } from "@/lib/workspaceChanged";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import {
   LOGO_CHANGES_PER_HOUR,
   LOGO_EMPTY_MESSAGE,
@@ -35,17 +35,19 @@ import { LogoRejectedError, logoBlobPath, normalizeLogo, readBodyAtMost } from "
  * The active workspace is a cookie every tab shares, so the Settings control
  * sends the workspace its page was rendered for as `?workspaceId=` (the body
  * is the picture). A mismatch is a 409 with the library's sentence, checked
- * before the body is read; an absent id keeps the plain behaviour, as the
- * review-link owner routes do.
+ * before the body is read; an absent id is refused too (F3), so a page that
+ * does not send it is told to reload.
  */
 
-async function gate(request: Request, upload = false): Promise<WorkspaceContext | NextResponse> {
+async function gate(request: Request, upload = false): Promise<WorkspaceContext | Response> {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) return contextOrError;
-  const sent = new URL(request.url).searchParams.get("workspaceId");
-  if (sent !== null && sent !== contextOrError.workspace.id) {
-    return NextResponse.json({ error: WORKSPACE_CHANGED_MESSAGE, code: WORKSPACE_CHANGED_CODE }, { status: 409 });
-  }
+  // F3: required, so a page that does not send it is told to reload.
+  const refusal = renderedWorkspaceRefusal(
+    new URL(request.url).searchParams.get("workspaceId") ?? undefined,
+    contextOrError.workspace.id,
+  );
+  if (refusal) return refusal;
   // P1: a new logo needs the plan feature, checked before the rate limit counts the attempt.
   // Removing one is always allowed.
   if (upload) {
@@ -99,9 +101,9 @@ async function discardStoredFile(url: string, workspaceId: string) {
   }
 }
 
-export async function POST(request: Request): Promise<NextResponse> {
+export async function POST(request: Request): Promise<Response> {
   const contextOrError = await gate(request, true);
-  if (contextOrError instanceof NextResponse) return contextOrError;
+  if (contextOrError instanceof Response) return contextOrError;
   const workspaceId = contextOrError.workspace.id;
 
   const body = await readBodyAtMost(request, LOGO_MAX_BYTES);
@@ -142,9 +144,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   return NextResponse.json({ logoUrl: url });
 }
 
-export async function DELETE(request: Request): Promise<NextResponse> {
+export async function DELETE(request: Request): Promise<Response> {
   const contextOrError = await gate(request);
-  if (contextOrError instanceof NextResponse) return contextOrError;
+  if (contextOrError instanceof Response) return contextOrError;
   const workspaceId = contextOrError.workspace.id;
 
   try {

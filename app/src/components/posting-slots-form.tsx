@@ -26,7 +26,16 @@ interface Row extends PostingSlot {
  * "Next free slot" and the add-many page's "Use my posting times" read them.
  * Owners edit; members see them read-only.
  */
-export function PostingSlotsForm({ slots, role }: { slots: PostingSlot[]; role: WorkspaceRole }) {
+export function PostingSlotsForm({
+  workspaceId,
+  slots,
+  role,
+}: {
+  /** The workspace this page was rendered for; the save is refused for any other (F3). */
+  workspaceId: string;
+  slots: PostingSlot[];
+  role: WorkspaceRole;
+}) {
   const router = useRouter();
   const toast = useToast();
   const isOwner = role === "owner";
@@ -75,7 +84,7 @@ export function PostingSlotsForm({ slots, role }: { slots: PostingSlot[]; role: 
       const response = await fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ postingSlots: checked.slots }),
+        body: JSON.stringify({ postingSlots: checked.slots, workspaceId }),
       });
       const body = (await response.json().catch(() => ({}))) as {
         error?: string;

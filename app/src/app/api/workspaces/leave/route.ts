@@ -2,8 +2,10 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/db";
+import { readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 
 /**
  * POST /api/workspaces/leave
@@ -28,12 +30,21 @@ import { ACTIVE_WORKSPACE_COOKIE, getWorkspaceContext } from "@/lib/workspace";
  * demote path takes, so a concurrent demote and owner-leave on one workspace
  * cannot race it to zero owners — re-reads the OTHER-owner count INSIDE the
  * lock, then deletes the caller's own row by id.
+ *
+ * The body carries `{ workspaceId }`, the workspace the Team card was rendered
+ * for (F3): the active workspace is one cookie every tab shares, so a Leave
+ * clicked in a stale tab must not leave the other workspace.
  */
-export async function POST() {
+export async function POST(request: Request) {
   const context = await getWorkspaceContext();
 
   if (!context) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const refusal = renderedWorkspaceRefusal((await readJsonObject(request))?.workspaceId, context.workspace.id);
+  if (refusal) {
+    return refusal;
   }
 
   // Post-release review (Task D): this mutation was unguarded — per-user

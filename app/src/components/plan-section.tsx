@@ -16,6 +16,7 @@ export const PLAN_SWITCH_LINE = "To switch plans, use Manage plan, card and invo
  * null when they could not be read.
  */
 export function PlanSection({
+  workspaceId,
   label,
   usage,
   notice = null,
@@ -25,6 +26,8 @@ export function PlanSection({
   workspaceNote = false,
   growthAdds = false,
 }: {
+  /** The workspace this page was rendered for; the plan buttons send it (F3). */
+  workspaceId: string;
   label: string;
   usage: WorkspaceUsage | null;
   /** 21b: the line after returning from Stripe; null otherwise. */
@@ -81,7 +84,7 @@ export function PlanSection({
       {/* Q1: an owner on a plan switches in the Stripe portal, which lists every price. */}
       {growthAdds && manage ? <p className="text-sm text-muted-foreground">{PLAN_SWITCH_LINE}</p> : null}
       {offers.length > 0 || yearlyOffers.length > 0 || manage ? (
-        <PlanActions offers={offers} manage={manage} yearlyOffers={yearlyOffers} />
+        <PlanActions workspaceId={workspaceId} offers={offers} manage={manage} yearlyOffers={yearlyOffers} />
       ) : null}
     </Card>
   );

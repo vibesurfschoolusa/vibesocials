@@ -3,6 +3,7 @@ import { getWorkspaceContext } from "@/lib/workspace";
 import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { parseGoogleButton } from "@/lib/googlePostOptions";
 import { cleanBrandVoice, cleanBrandVoiceExamples } from "@/lib/brandVoice";
 import { normalizePostingSlots, type PostingSlot } from "@/lib/postingSlots";
@@ -317,6 +318,15 @@ export async function POST(request: Request) {
   const body = await readJsonObject(request);
   if (!body) {
     return invalidJsonBodyResponse();
+  }
+
+  // F3 (2026-11-14 review, R1 security H1): the active workspace is one
+  // cookie for every tab, so the forms send the workspace their page was
+  // rendered for; a form left open on another workspace saves nothing, not
+  // even the caller's own email choices sent with it.
+  const refusal = renderedWorkspaceRefusal(body.workspaceId, context.workspace.id);
+  if (refusal) {
+    return refusal;
   }
 
   const validation = parseSettingsInput(body);

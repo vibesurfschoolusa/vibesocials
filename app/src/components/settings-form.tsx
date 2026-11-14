@@ -81,6 +81,11 @@ function TrackingTagsField({
 }
 
 interface SettingsFormProps {
+  /**
+   * The workspace this page was rendered for. POST /api/settings refuses a
+   * save for any other (F3): the active workspace is one cookie every tab shares.
+   */
+  workspaceId: string;
   settings: UserSettings;
   /**
    * Team Workspaces (Task 7, design §7): the caption footer
@@ -95,7 +100,7 @@ interface SettingsFormProps {
   planNotes?: { brandVoice?: string; reviewAlerts?: string; monthlyReport?: string };
 }
 
-export function SettingsForm({ settings, role, planNotes = {} }: SettingsFormProps) {
+export function SettingsForm({ workspaceId, settings, role, planNotes = {} }: SettingsFormProps) {
   const router = useRouter();
   const toast = useToast();
   const isOwner = role === "owner";
@@ -211,11 +216,14 @@ export function SettingsForm({ settings, role, planNotes = {} }: SettingsFormPro
       const response = await fetch("/api/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, workspaceId }),
       });
 
       if (!response.ok) {
-        throw new Error("Failed to update settings");
+        // A 409 says another tab switched workspace; show the route's sentence.
+        const refused = (await response.json().catch(() => null)) as { error?: string } | null;
+        toast.error(refused?.error ?? "Failed to save settings. Please try again.");
+        return;
       }
 
       // Show what the server stored: it cuts over-long text and removes hashtags.

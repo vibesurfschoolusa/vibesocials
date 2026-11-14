@@ -19,7 +19,7 @@ function firstRender(query: string, inBrowser: boolean): string {
     vi.stubGlobal("document", { body: {}, activeElement: null });
   }
   try {
-    return renderToString(createElement(PendingConnectionDialog));
+    return renderToString(createElement(PendingConnectionDialog, { workspaceId: "ws-1" }));
   } finally {
     vi.unstubAllGlobals();
   }

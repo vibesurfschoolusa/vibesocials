@@ -88,11 +88,13 @@ export function ConnectionHealth({
                     <span className="sr-only">Connected</span>
                   </span>
                 ) : connection.connected ? (
-                  // Roadmap Phase 4: destructive button, links straight to
-                  // this platform's OAuth start (a plain anchor —
-                  // /api/auth/* is a redirect handler, not a Next.js route).
-                  <a
-                    href={`/api/auth/${connection.platform}/start`}
+                  // Roadmap Phase 4: destructive button. F3: it goes to
+                  // Settings, not straight to the OAuth start. The start
+                  // needs the workspace a page was rendered for, and this
+                  // widget's list is fetched, not rendered for one; Settings'
+                  // own Reconnect carries it.
+                  <Link
+                    href={SETTINGS_CONNECTIONS_HREF}
                     className={buttonVariants({
                       variant: "destructive",
                       size: "sm",
@@ -101,7 +103,7 @@ export function ConnectionHealth({
                   >
                     <AlertTriangle aria-hidden className="h-3.5 w-3.5" />
                     Reconnect
-                  </a>
+                  </Link>
                 ) : (
                   <Link
                     href={SETTINGS_CONNECTIONS_HREF}

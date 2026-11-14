@@ -57,7 +57,7 @@ import { DELETE } from "./route";
 const request = () =>
   new Request("https://app.example/api/workspaces/active", {
     method: "DELETE",
-    body: JSON.stringify({ confirmName: "Surf Co" }),
+    body: JSON.stringify({ confirmName: "Surf Co", workspaceId: "ws_1" }),
   });
 
 beforeEach(() => {

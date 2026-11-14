@@ -63,6 +63,14 @@ vi.mock("next/headers", () => ({
 
 import { POST } from "./route";
 
+/** The Team card sends the workspace its page was rendered for (F3). */
+function leaveReq(body: unknown = { workspaceId: "ws-1" }) {
+  return new Request("http://localhost/api/workspaces/leave", {
+    method: "POST",
+    ...(body === null ? {} : { body: JSON.stringify(body), headers: { "content-type": "application/json" } }),
+  });
+}
+
 const MEMBER_CONTEXT = {
   user: { id: "user-2", email: "member@example.com", name: "Member" },
   workspace: { id: "ws-1", name: "Acme", companyWebsite: null, defaultHashtags: null },
@@ -104,7 +112,7 @@ describe("POST /api/workspaces/leave", () => {
   it("returns 401 and never deletes when unauthenticated", async () => {
     getWorkspaceContextMock.mockResolvedValue(null);
 
-    const response = await POST();
+    const response = await POST(leaveReq());
 
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({ error: "Unauthorized" });
@@ -115,7 +123,7 @@ describe("POST /api/workspaces/leave", () => {
   it("429s with Retry-After when the leave rate limit blocks", async () => {
     checkRateLimitMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 120 });
 
-    const response = await POST();
+    const response = await POST(leaveReq());
 
     expect(response.status).toBe(429);
     expect(response.headers.get("Retry-After")).toBe("120");
@@ -126,7 +134,7 @@ describe("POST /api/workspaces/leave", () => {
   it("checks the per-user leave rate limit with the shared envelope", async () => {
     checkRateLimitMock.mockResolvedValue({ allowed: true });
 
-    await POST();
+    await POST(leaveReq());
 
     expect(checkRateLimitMock).toHaveBeenCalledWith({
       userId: "user-2",
@@ -140,7 +148,7 @@ describe("POST /api/workspaces/leave", () => {
     getWorkspaceContextMock.mockResolvedValue(OWNER_CONTEXT);
     countMock.mockResolvedValue(0); // zero OTHER owners
 
-    const response = await POST();
+    const response = await POST(leaveReq());
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
@@ -159,7 +167,7 @@ describe("POST /api/workspaces/leave", () => {
     countMock.mockResolvedValue(1); // one OTHER owner remains
     findFirstMock.mockResolvedValue({ id: "member-row-1" });
 
-    const response = await POST();
+    const response = await POST(leaveReq());
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -202,7 +210,7 @@ describe("POST /api/workspaces/leave", () => {
     countMock.mockResolvedValue(1);
     findFirstMock.mockResolvedValue(null); // own row already gone
 
-    const response = await POST();
+    const response = await POST(leaveReq());
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: "Not found" });
@@ -211,7 +219,7 @@ describe("POST /api/workspaces/leave", () => {
   });
 
   it("deletes the caller's own membership (role-guarded, scoped to the active workspace) and clears the active-workspace cookie on success", async () => {
-    const response = await POST();
+    const response = await POST(leaveReq());
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -239,10 +247,38 @@ describe("POST /api/workspaces/leave", () => {
   it("returns 404 and never touches the cookie when the delete matches nothing (membership raced away)", async () => {
     deleteManyMock.mockResolvedValue({ count: 0 });
 
-    const response = await POST();
+    const response = await POST(leaveReq());
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: "Not found" });
+    expect(cookieSetMock).not.toHaveBeenCalled();
+  });
+});
+
+// F3 (2026-11-14 review): Leave acts on the active workspace, a cookie every
+// tab shares, so it must name the workspace its page was rendered for.
+describe("POST /api/workspaces/leave and the rendered workspace", () => {
+  it("409s another workspace's id, and leaves nothing", async () => {
+    getWorkspaceContextMock.mockResolvedValue(MEMBER_CONTEXT);
+
+    const response = await POST(leaveReq({ workspaceId: "ws-2" }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED" });
+    expect(deleteManyMock).not.toHaveBeenCalled();
+    expect(cookieSetMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no body", null],
+    ["a body without the id", {}],
+  ])("400s %s, and leaves nothing", async (_label, body) => {
+    getWorkspaceContextMock.mockResolvedValue(MEMBER_CONTEXT);
+
+    const response = await POST(leaveReq(body));
+
+    expect(response.status).toBe(400);
+    expect(deleteManyMock).not.toHaveBeenCalled();
     expect(cookieSetMock).not.toHaveBeenCalled();
   });
 });

@@ -10,6 +10,8 @@ import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 
 interface Props {
+  /** The workspace this page was rendered for; the route refuses any other (F3). */
+  workspaceId: string;
   initialLocationName?: string | null;
   /** The saved location's name, from Google's list (null for a pasted store code). */
   initialLocationTitle?: string | null;
@@ -23,7 +25,7 @@ interface RemoteLocation {
   accountName: string | null;
 }
 
-export function GoogleBusinessLocationForm({ initialLocationName, initialLocationTitle }: Props) {
+export function GoogleBusinessLocationForm({ workspaceId, initialLocationName, initialLocationTitle }: Props) {
   const toast = useToast();
   const router = useRouter();
   const [locationName, setLocationName] = useState(initialLocationName ?? "");
@@ -45,7 +47,7 @@ export function GoogleBusinessLocationForm({ initialLocationName, initialLocatio
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ locationName: name, locationTitle: title }),
+        body: JSON.stringify({ locationName: name, locationTitle: title, workspaceId }),
       });
 
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
