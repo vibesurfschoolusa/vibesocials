@@ -234,7 +234,7 @@ describe("the limit-reached email", () => {
     );
     const html = (sendEmailMock.mock.calls[0][0] as { html: string }).html;
     expect(html).toContain(
-      "<strong>Surf Co</strong> reached its limit of 20 posts for 12 November. Posts on other days are not affected.",
+      "<strong>Surf Co</strong> reached its limit of 20 posts for 12 November (UTC). Posts on other days are not affected.",
     );
     expect(html).not.toContain("possible again");
   });
@@ -475,6 +475,7 @@ describe("the limit-reached email - where a higher limit comes from (F4)", () =>
 
   it("billing on, a workspace in its trial or on a plan: Settings, Plan through /go", async () => {
     vi.stubEnv("BILLING_ENABLED", "true");
+    vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_example");
     vi.stubEnv("NEXTAUTH_URL", "https://vibesocials.wtf");
     db.workspaceFindUnique.mockResolvedValue({
       ...workspaceRow(),
@@ -502,5 +503,99 @@ describe("the limit-reached email - where a higher limit comes from (F4)", () =>
 
     const html = (sendEmailMock.mock.calls[0][0] as { html: string }).html;
     expect(html).toContain("If you need a higher limit, write to");
+  });
+
+  // R2-pages L3: the email points to a plan change exactly where Settings does
+  // (planSectionActions), so it never sends an owner to a section with no button.
+  it("billing on, a plan but no Stripe key (Settings shows no plan action): the support address", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    vi.stubEnv("STRIPE_SECRET_KEY", "");
+    db.workspaceFindUnique.mockResolvedValue({
+      ...workspaceRow(),
+      billingExempt: false,
+      plan: "starter",
+      planStatus: "active",
+      trialEndsAt: null,
+      currentPeriodEnd: new Date("2026-12-01T00:00:00Z"),
+      stripeCustomerId: "cus_example",
+    });
+    db.postJobCount.mockResolvedValue(1000);
+
+    await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" });
+
+    const html = (sendEmailMock.mock.calls[0][0] as { html: string }).html;
+    expect(html).toContain("If you need a higher limit, write to");
+  });
+
+  it("billing on, a trial with no plan offered (no prices set): the support address", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_example");
+    vi.stubEnv("STRIPE_WEBHOOK_SECRET", "whsec_example");
+    vi.stubEnv("STRIPE_PRICE_STARTER", "");
+    vi.stubEnv("STRIPE_PRICE_PRO", "");
+    vi.stubEnv("STRIPE_PRICE_GROWTH", "");
+    db.workspaceFindUnique.mockResolvedValue({
+      ...workspaceRow(),
+      billingExempt: false,
+      plan: null,
+      planStatus: null,
+      trialEndsAt: new Date("2026-11-20T00:00:00Z"),
+      currentPeriodEnd: null,
+      stripeCustomerId: null,
+    });
+    db.postJobCount.mockResolvedValue(1000);
+
+    await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" });
+
+    const html = (sendEmailMock.mock.calls[0][0] as { html: string }).html;
+    expect(html).toContain("If you need a higher limit, write to");
+  });
+
+  it("billing on, a trial with a plan to choose: Settings, Plan, and the Stripe customer column is read", async () => {
+    vi.stubEnv("BILLING_ENABLED", "true");
+    vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_example");
+    vi.stubEnv("STRIPE_WEBHOOK_SECRET", "whsec_example");
+    vi.stubEnv("STRIPE_PRICE_STARTER", "price_example_starter");
+    db.workspaceFindUnique.mockResolvedValue({
+      ...workspaceRow(),
+      billingExempt: false,
+      plan: null,
+      planStatus: null,
+      trialEndsAt: new Date("2026-11-20T00:00:00Z"),
+      currentPeriodEnd: null,
+      stripeCustomerId: null,
+    });
+    db.postJobCount.mockResolvedValue(1000);
+
+    await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" });
+
+    const html = (sendEmailMock.mock.calls[0][0] as { html: string }).html;
+    expect(html).toContain("change this workspace's plan");
+    const selects = db.workspaceFindUnique.mock.calls.map((call) => (call[0] as { select: Record<string, boolean> }).select);
+    expect(selects.some((select) => select.stripeCustomerId === true)).toBe(true);
+  });
+});
+
+// R2-pages L4: each owner reads the dates in their own zone.
+describe("the limit-reached email - dates in each owner's zone", () => {
+  it("builds the email per owner with that owner's User.timeZone", async () => {
+    db.workspaceFindUnique.mockResolvedValue(workspaceRow({ limitXPostsPerMonth: 30 }));
+    db.memberFindMany.mockResolvedValue([
+      { user: { id: "owner-1", email: "one@example.com", timeZone: "America/New_York" } },
+      { user: { id: "owner-2", email: "two@example.com", timeZone: null } },
+    ]);
+    db.resultCount.mockResolvedValue(30);
+
+    const refusal = await checkXMonthlyLimit("ws-1", NOW);
+    await refusal?.notifyOwners();
+
+    expect(db.memberFindMany).toHaveBeenCalledWith({
+      where: { workspaceId: "ws-1", role: "owner" },
+      select: { user: { select: { id: true, email: true, timeZone: true } } },
+    });
+    const [first, second] = sendEmailMock.mock.calls.map((call) => call[0] as { to: string; html: string });
+    expect(first.to).toBe("one@example.com");
+    expect(first.html).toContain("X posts start again on Mon, Nov 30, 2026, 7:00 PM EST.");
+    expect(second.html).toContain("X posts start again on Tue, Dec 1, 2026, 12:00 AM UTC.");
   });
 });

@@ -17,6 +17,11 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
+/** A workspace name on one line, safe for a subject header. */
+function subjectText(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").trim();
+}
+
 export function buildReconnectEmail(params: {
   platformLabel: string;
   /** The link opens this workspace's connections through /go (F4). */
@@ -33,7 +38,8 @@ export function buildReconnectEmail(params: {
     : `<p>Reconnect ${platform} in Settings — it takes about a minute.</p>`;
 
   return {
-    subject: `Action needed: reconnect ${params.platformLabel} on Vibe Socials`,
+    // R2-pages L5: an owner of several workspaces sees which one is affected.
+    subject: `Action needed: reconnect ${params.platformLabel} in ${subjectText(params.workspaceName)}`,
     html: [
       `<p>The ${platform} connection in <strong>${workspace}</strong> has stopped working — the platform rejected our renewal, which usually means the authorization was revoked or expired.</p>`,
       `<p>Until it is reconnected, new and scheduled posts to ${platform} will fail.</p>`,

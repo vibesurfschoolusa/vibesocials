@@ -10,9 +10,10 @@ import { workspaceLink } from "@/server/notifications/links";
  * Fix round 1, F4 (R1 M4): a client who connects an account through the
  * workspace's connect link (/c/<token>) is not the owner, so the owner would
  * not know. Every owner gets one email per successful connect, sent by the
- * connect-link callback wrapper (server/connectLink/callback.ts). A Google
- * Business Profile connect starts without a business location, and posts to
- * Google fail until one is chosen, so that email says so.
+ * connect-link callback wrapper (server/connectLink/callback.ts). A first
+ * Google Business Profile connect starts without a business location, and
+ * posts to Google fail until one is chosen, so that email says so; a
+ * reconnect keeps the chosen location (R2-pages L6), so its email does not.
  */
 
 /** Minimal HTML-entity escaper (same table as the other email builders). */
@@ -31,17 +32,19 @@ export function buildClientConnectEmail(params: {
   workspaceName: string;
   /** `process.env.NEXTAUTH_URL`. Null renders the email with no link. */
   appBaseUrl: string | null;
+  /** Google Business Profile only: the connection already has its business location. */
+  locationChosen?: boolean;
 }): { subject: string; html: string } {
   const label = platformLabel(params.platform);
   const platform = escapeHtml(label);
   const workspace = escapeHtml(params.workspaceName);
-  const isGoogle = params.platform === "google_business_profile";
+  const needsLocation = params.platform === "google_business_profile" && !params.locationChosen;
   const base = params.appBaseUrl || null;
 
-  const what = isGoogle
+  const what = needsLocation
     ? `<p>Your client connected <strong>${platform}</strong> to <strong>${workspace}</strong> through your connect link.</p>`
     : `<p>Your client connected <strong>${platform}</strong> to <strong>${workspace}</strong> through your connect link. Posts in ${workspace} can go to ${platform} now.</p>`;
-  const location = isGoogle
+  const location = needsLocation
     ? "<p>Before posts can go to Google, choose the business location: open Settings, Connections and pick it under Google Business Profile. Until then, posts to Google fail.</p>"
     : "";
   const link = base
@@ -52,6 +55,18 @@ export function buildClientConnectEmail(params: {
     subject: `${params.workspaceName.replace(/[\r\n]+/g, " ").trim()}: your client connected ${label}`,
     html: [what, location, link, "<p>— Vibe Socials</p>"].filter((part) => part !== "").join("\n"),
   };
+}
+
+/** Whether the workspace's Google connection has a business location (metadata.locationName). */
+async function googleLocationChosen(workspaceId: string): Promise<boolean> {
+  const connection = await prisma.socialConnection.findUnique({
+    where: { workspaceId_platform: { workspaceId, platform: "google_business_profile" } },
+    select: { metadata: true },
+  });
+  const metadata = connection?.metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return false;
+  const name = (metadata as Record<string, unknown>).locationName;
+  return typeof name === "string" && name.trim() !== "";
 }
 
 /** Email every owner of the workspace. Never throws: the connect already succeeded. */
@@ -71,6 +86,7 @@ export async function notifyOwnersOfClientConnect(params: { workspaceId: string;
       workspaceId: params.workspaceId,
       workspaceName: workspace.name,
       appBaseUrl: process.env.NEXTAUTH_URL || null,
+      locationChosen: params.platform === "google_business_profile" && (await googleLocationChosen(params.workspaceId)),
     });
     for (const owner of owners) {
       await sendEmail({ to: owner.user.email, ...email });

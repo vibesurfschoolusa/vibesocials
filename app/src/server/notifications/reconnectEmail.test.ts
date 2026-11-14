@@ -10,10 +10,21 @@ describe("buildReconnectEmail", () => {
     appBaseUrl: "https://vibesocials.wtf",
   });
 
-  it("names the platform in the subject", () => {
+  // R2-pages L5: an owner of several workspaces sees which one from the subject.
+  it("names the platform and the workspace in the subject", () => {
     expect(email.subject).toBe(
-      "Action needed: reconnect Google Business Profile on Vibe Socials",
+      "Action needed: reconnect Google Business Profile in Klaus Schroder's workspace",
     );
+  });
+
+  it("keeps a line break in the workspace name out of the subject", () => {
+    const broken = buildReconnectEmail({
+      platformLabel: "X",
+      workspaceId: "ws_1",
+      workspaceName: "Surf\r\nCo",
+      appBaseUrl: null,
+    });
+    expect(broken.subject).toBe("Action needed: reconnect X in Surf Co");
   });
 
   it("says which workspace is affected and links to settings", () => {

@@ -1,4 +1,4 @@
-import { utcDateLabel } from "@/lib/usageLimits";
+import { emailDateTime } from "@/server/notifications/emailTime";
 import { workspaceLink } from "@/server/notifications/links";
 
 /**
@@ -54,7 +54,13 @@ export function buildPaymentFailedEmail(
 }
 
 export function buildTrialEndingEmail(
-  params: { workspaceId: string; workspaceName: string; trialEndsAt: Date },
+  params: {
+    workspaceId: string;
+    workspaceName: string;
+    trialEndsAt: Date;
+    /** The recipient's User.timeZone (R2-pages L4); without one the time is shown in UTC, labelled. */
+    timeZone?: string | null;
+  },
   appBaseUrl?: string | null,
 ): { subject: string; html: string } {
   return {
@@ -62,7 +68,7 @@ export function buildTrialEndingEmail(
     html: html(
       [
         `<strong>${escapeHtml(params.workspaceName)}</strong>`,
-        `Your free trial ends on ${utcDateLabel(params.trialEndsAt)}. Choose a plan under Settings, Plan.`,
+        `Your free trial ends on ${emailDateTime(params.trialEndsAt, params.timeZone)}. Choose a plan under Settings, Plan.`,
       ],
       params.workspaceId,
       appBaseUrl,

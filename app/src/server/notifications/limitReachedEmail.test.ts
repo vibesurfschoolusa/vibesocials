@@ -31,7 +31,7 @@ describe("buildLimitReachedEmail", () => {
       resetsAt: null,
     });
     expect(html).toContain(
-      "<p><strong>Surf Co</strong> reached its limit of 20 posts for 12 November. Posts on other days are not affected.</p>",
+      "<p><strong>Surf Co</strong> reached its limit of 20 posts for 12 November (UTC). Posts on other days are not affected.</p>",
     );
     expect(html).not.toContain("possible again");
     expect(html).toContain(`write to ${SUPPORT_EMAIL}`);
@@ -49,7 +49,22 @@ describe("buildLimitReachedEmail", () => {
     });
     expect(html).toContain("has used its 30 X posts for this month.");
     expect(html).toContain("Posts to every other platform still go out.");
-    expect(html).toContain("X posts start again on 1 January 2027.");
+    expect(html).toContain("X posts start again on Fri, Jan 1, 2027, 12:00 AM UTC.");
+  });
+
+  // R2-pages L4: the moment X starts again, in the recipient's own zone when known.
+  it("X per month names the restart in the recipient's zone", () => {
+    const { html } = buildLimitReachedEmail({
+      workspaceId: "ws_1",
+      workspaceName: "Surf Co",
+      planInSettings: false,
+      appBaseUrl: null,
+      kind: "xPostsPerMonth",
+      limit: 30,
+      resetsAt: new Date("2027-01-01T00:00:00Z"),
+      timeZone: "America/New_York",
+    });
+    expect(html).toContain("X posts start again on Thu, Dec 31, 2026, 7:00 PM EST.");
   });
 
   it("YouTube per day starts again at midnight Pacific time", () => {
@@ -117,7 +132,7 @@ describe("buildLimitReachedEmail counts agree with their number", () => {
     [2, "posts"],
     [10, "posts"],
   ])("posts per day: %i %s", (n, word) => {
-    expect(html("postsPerDay", n)).toContain(`reached its limit of ${n} ${word} for 12 November.`);
+    expect(html("postsPerDay", n)).toContain(`reached its limit of ${n} ${word} for 12 November (UTC).`);
   });
 
   it.each([
