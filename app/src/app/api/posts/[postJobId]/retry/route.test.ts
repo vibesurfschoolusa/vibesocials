@@ -312,6 +312,46 @@ describe("POST /api/posts/[postJobId]/retry", () => {
     });
   });
 
+  // F1 H1: the deferred dispatch writes a failed RECONNECT_REQUIRED or
+  // CONNECTION_GONE result (the latter with no connection) for a chosen platform
+  // that was not connected. Until it is connected again the retry says so; once
+  // it is, the row is claimed like any failed one, and the retry run publishes
+  // through the workspace's current connection (inngest-functions.test.ts,
+  // "when the workspace has reconnected the platform").
+  describe("a platform the dispatch could not reach (F1 H1)", () => {
+    it("asks for a reconnect while the platform is still not connected, and claims nothing", async () => {
+      postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "instagram", status: "failed" }]));
+      connectionFindUniqueMock.mockResolvedValue(null);
+
+      const res = await POST(req({ platform: "instagram" }), ctx("job-1"));
+
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { code?: string }).code).toBe("RECONNECT_REQUIRED");
+      expect(resultUpdateManyMock).not.toHaveBeenCalled();
+    });
+
+    it("claims the row and starts the retry once the platform is connected again", async () => {
+      postJobFindFirstMock.mockResolvedValue(
+        makeJob([
+          { platform: "x", status: "success" },
+          { platform: "instagram", status: "failed" },
+        ]),
+      );
+      connectionFindUniqueMock.mockResolvedValue({ needsReconnect: false });
+      resultUpdateManyMock.mockResolvedValue({ count: 1 });
+
+      const res = await POST(req({ platform: "instagram" }), ctx("job-1"));
+
+      expect(res.status).toBe(202);
+      expect(resultUpdateManyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { postJobId: "job-1", platform: "instagram", status: "failed" } }),
+      );
+      expect(inngestSendMock).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ platforms: ["instagram"] }) }),
+      );
+    });
+  });
+
   it("gives every retry request its own event id, so a second retry of one job is not deduplicated", async () => {
     postJobFindFirstMock.mockResolvedValue(makeJob([{ platform: "tiktok", status: "failed" }]));
     resultUpdateManyMock.mockResolvedValue({ count: 1 });

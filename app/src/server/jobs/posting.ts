@@ -11,6 +11,8 @@ import type {
 import { coverJobColumns, type PostCover } from "@/lib/videoCover";
 import { postJobStatusForIntent, type PostJobIntent } from "@/lib/scheduling";
 import { platformAcceptsMedia, platformAcceptsTextOnly } from "@/lib/platformLimits";
+import { connectionGoneMessage, reconnectRequiredMessage } from "@/lib/publishFailureText";
+import { recomputeAndStorePostJobStatus } from "@/server/jobs/failPendingResults";
 import {
   assertPostTargetsValid,
   assertTextPostTargetsValid,
@@ -1005,7 +1007,18 @@ export type DeferredDispatchResult =
  * (`PostJob.baseCaption` / `perPlatformOverrides`, as a unit — see
  * resolvePostCaptionSource), the media item only for legacy jobs without one —
  * so a scheduled reuse uses the caption the user typed for THIS post, not the
- * shared item's caption, and overrides cleared by PATCH stay cleared. Per-post TikTok/YouTube publishing metadata is
+ * shared item's caption, and overrides cleared by PATCH stay cleared.
+ *
+ * F1 H1 (R1 publishing): every chosen platform gets a result, so none can
+ * vanish silently. One whose connection needs reconnecting gets a `failed`
+ * RECONNECT_REQUIRED result, one with no connection at all a `failed`
+ * CONNECTION_GONE result (no connection to point at); both say what to do and
+ * can be retried once the platform is connected again. With no chosen list, the
+ * same goes for every connection that could take the post. When nothing is left
+ * to publish, the job's status is computed from those rows (`failed`) and the
+ * caller gets NO_CONNECTIONS; only a job with no row at all is failed bare.
+ *
+ * Per-post TikTok/YouTube publishing metadata is
  * replayed from the job's `publishMetadata` snapshot (review B1) so the deferred
  * publish honors the privacy the user chose at compose time (a scheduled YouTube
  * "private" stays private, not silently escalated to the client-default unlisted).
@@ -1024,9 +1037,9 @@ export async function prepareDeferredPostJobDispatch(
     return { ok: false, reason: "NOT_FOUND" };
   }
 
-  // Skip dead connections — same filter as immediate create paths.
+  // Dead connections too (F1 H1): their platforms get a failed result below.
   const connections = await prisma.socialConnection.findMany({
-    where: { workspaceId: job.workspaceId, needsReconnect: false },
+    where: { workspaceId: job.workspaceId },
   });
 
   // Replay the per-post privacy AND platform targeting the user chose at
@@ -1051,11 +1064,43 @@ export async function prepareDeferredPostJobDispatch(
       ? connections.filter((c) => platformAcceptsTextOnly(c.platform))
       : connections.filter((c) => platformAcceptsMedia(c.platform, media.mimeType));
 
-  if (eligible.length === 0) {
-    // No eligible connections at run time → fail the job (mirrors
-    // publishToAllPlatforms' no-connections path). §6.6. Covers both "no
-    // connections at all" and "connections exist but none match the chosen
-    // targetPlatforms" (Task 7).
+  // Healthy connections keep exactly the rows they always had; the others say why.
+  const rows: Prisma.PostJobResultCreateManyInput[] = eligible.map((c) =>
+    c.needsReconnect
+      ? {
+          postJobId,
+          workspaceId: job.workspaceId,
+          platform: c.platform,
+          socialConnectionId: c.id,
+          status: "failed" as const,
+          errorCode: "RECONNECT_REQUIRED",
+          errorMessage: reconnectRequiredMessage(c.platform),
+        }
+      : {
+          postJobId,
+          // 2026-11-01 scale audit (db M5): the job's workspace, denormalized.
+          workspaceId: job.workspaceId,
+          platform: c.platform,
+          socialConnectionId: c.id,
+          status: "pending" as const,
+        },
+  );
+  for (const platform of target ?? []) {
+    if (connections.some((c) => c.platform === platform)) continue;
+    rows.push({
+      postJobId,
+      workspaceId: job.workspaceId,
+      platform,
+      socialConnectionId: null,
+      status: "failed",
+      errorCode: "CONNECTION_GONE",
+      errorMessage: connectionGoneMessage(platform),
+    });
+  }
+
+  if (rows.length === 0) {
+    // No chosen list and no connection that could take the post → fail the job
+    // (mirrors publishToAllPlatforms' no-connections path). §6.6.
     // The scheduled scanner emits notification.requested for this failure
     // (see inngest-functions.ts) and buildPostOutcomeEmail has a dedicated
     // empty-results-failed subject.
@@ -1070,16 +1115,14 @@ export async function prepareDeferredPostJobDispatch(
   // retried caller step never duplicates result rows.
   const existingResults = await prisma.postJobResult.count({ where: { postJobId } });
   if (existingResults === 0) {
-    await prisma.postJobResult.createMany({
-      data: eligible.map((c) => ({
-        postJobId,
-        // 2026-11-01 scale audit (db M5): the job's workspace, denormalized.
-        workspaceId: job.workspaceId,
-        platform: c.platform,
-        socialConnectionId: c.id,
-        status: "pending" as const,
-      })),
-    });
+    await prisma.postJobResult.createMany({ data: rows });
+  }
+
+  if (!rows.some((row) => row.status === "pending")) {
+    // Nothing to publish: the job reads `failed` from its rows, and Activity
+    // shows each platform's sentence and Retry. The scanner tells the owner.
+    await recomputeAndStorePostJobStatus(postJobId);
+    return { ok: false, reason: "NO_CONNECTIONS" };
   }
 
   const captionSource = resolvePostCaptionSource(job, job.mediaItem);

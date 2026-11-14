@@ -255,11 +255,13 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   if (outcome === "publish_now") {
     const prep = await prepareDeferredPostJobDispatch(postJobId);
     if (!prep.ok) {
-      // No usable connections — `prepare` already marked the job failed so it
-      // never hangs in_progress. The approval itself stands (recorded above).
+      // No chosen platform is connected (F1 H1): `prepare` gave each one a
+      // failed result with its sentence and marked the job failed, so it never
+      // hangs in_progress. The approval itself stands (recorded above).
       return NextResponse.json(
         {
-          error: "Approved, but couldn't publish — no connected platforms are available.",
+          error:
+            "Approved, but nothing was posted: none of this post's platforms is connected. Activity shows what to reconnect.",
           code: prep.reason,
         },
         { status: 409 },

@@ -350,6 +350,20 @@ describe("POST /api/posts/[postJobId]/publish", () => {
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
 
+  // F1 H1: every chosen platform needed reconnecting (or was removed). Each has
+  // a failed result with its sentence, so the answer says where to look.
+  it("answers a post none of whose platforms is connected with a plain sentence pointing at Activity", async () => {
+    findFirstMock.mockResolvedValue({ status: "draft" });
+    prepareDispatchMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
+
+    const res = await POST(req({}), ctx("job-1"));
+
+    await expect(res.json()).resolves.toEqual({
+      code: "NO_CONNECTIONS",
+      error: "Nothing was posted: none of this post's platforms is connected. Activity shows what to reconnect.",
+    });
+  });
+
   // --- dispatch failure (2026-11-01 audit) ---
   it("503s DISPATCH_FAILED and fails the job's pending results when inngest.send throws after the claim", async () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});

@@ -344,11 +344,12 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // Materialize results from current connections + build the publish payload.
   const prep = await prepareDeferredPostJobDispatch(postJobId);
   if (!prep.ok) {
-    // A connection was removed in the tiny window since the count above; the
-    // job was marked `failed` inside prepare so it never hangs in_progress.
+    // No chosen platform is connected (F1 H1): prepare gave each one a failed
+    // result with its own sentence and marked the job `failed`, so it never
+    // hangs in_progress and Activity shows what to reconnect.
     return NextResponse.json(
       {
-        error: "Couldn't publish — no connected platforms are available.",
+        error: "Nothing was posted: none of this post's platforms is connected. Activity shows what to reconnect.",
         code: prep.reason,
       },
       { status: 409 },

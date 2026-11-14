@@ -262,6 +262,22 @@ describe("POST /api/posts/[postJobId]/approval", () => {
     });
   });
 
+  // F1 H1: the approval stands; nothing went out because no chosen platform is connected.
+  it("approving to publish now with no connected platform answers a plain sentence pointing at Activity", async () => {
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: null }));
+    prepareDispatchMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    await expect(res.json()).resolves.toEqual({
+      code: "NO_CONNECTIONS",
+      error:
+        "Approved, but nothing was posted: none of this post's platforms is connected. Activity shows what to reconnect.",
+    });
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
   it("publishes now when the chosen time passed while awaiting approval", async () => {
     findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: PAST }));
 

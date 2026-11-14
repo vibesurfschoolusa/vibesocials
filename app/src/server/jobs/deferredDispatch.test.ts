@@ -9,12 +9,14 @@ const {
   connectionFindManyMock,
   resultCountMock,
   resultCreateManyMock,
+  recomputeMock,
 } = vi.hoisted(() => ({
   postJobFindUniqueMock: vi.fn(),
   postJobUpdateMock: vi.fn(),
   connectionFindManyMock: vi.fn(),
   resultCountMock: vi.fn(),
   resultCreateManyMock: vi.fn(),
+  recomputeMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -23,6 +25,12 @@ vi.mock("@/lib/db", () => ({
     socialConnection: { findMany: connectionFindManyMock },
     postJobResult: { count: resultCountMock, createMany: resultCreateManyMock },
   },
+}));
+
+// The row-locked status recompute has its own suite (failPendingResults.test.ts).
+vi.mock("./failPendingResults", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./failPendingResults")>()),
+  recomputeAndStorePostJobStatus: recomputeMock,
 }));
 
 import { prepareDeferredPostJobDispatch } from "./posting";
@@ -46,8 +54,10 @@ beforeEach(() => {
   connectionFindManyMock.mockReset();
   resultCountMock.mockReset();
   resultCreateManyMock.mockReset();
+  recomputeMock.mockReset();
 
   postJobUpdateMock.mockResolvedValue({});
+  recomputeMock.mockResolvedValue({ status: "failed", successCount: 0 });
   resultCountMock.mockResolvedValue(0);
   resultCreateManyMock.mockResolvedValue({ count: 0 });
 });
@@ -88,8 +98,10 @@ describe("prepareDeferredPostJobDispatch", () => {
 
     await prepareDeferredPostJobDispatch("job-1");
 
+    // F1 H1: every connection, dead ones too, so a chosen platform that needs
+    // reconnecting gets a failed result instead of silently none.
     expect(connectionFindManyMock).toHaveBeenCalledWith({
-      where: { workspaceId: "workspace-42", needsReconnect: false },
+      where: { workspaceId: "workspace-42" },
     });
   });
 
@@ -275,7 +287,9 @@ describe("prepareDeferredPostJobDispatch", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("marks the job failed when targetPlatforms excludes every connection that exists at run time", async () => {
+  // F1 H1: a chosen platform whose connection was removed gets a failed result
+  // that says so (no connection to point at), never silently nothing.
+  it("gives a chosen platform with no connection a CONNECTION_GONE result and fails the job", async () => {
     postJobFindUniqueMock.mockResolvedValue(
       makeJob({ publishMetadata: { targetPlatforms: ["tiktok"] } }),
     );
@@ -283,12 +297,22 @@ describe("prepareDeferredPostJobDispatch", () => {
 
     const result = await prepareDeferredPostJobDispatch("job-1");
 
-    expect(result).toEqual({ ok: false, reason: "NO_CONNECTIONS" });
-    expect(postJobUpdateMock).toHaveBeenCalledWith({
-      where: { id: "job-1" },
-      data: { status: "failed" },
+    expect(resultCreateManyMock).toHaveBeenCalledWith({
+      data: [
+        {
+          postJobId: "job-1",
+          workspaceId: "workspace-1",
+          platform: "tiktok",
+          socialConnectionId: null,
+          status: "failed",
+          errorCode: "CONNECTION_GONE",
+          errorMessage: "TikTok is no longer connected. Connect it in Settings, then retry.",
+        },
+      ],
     });
-    expect(resultCreateManyMock).not.toHaveBeenCalled();
+    expect(recomputeMock).toHaveBeenCalledWith("job-1");
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, reason: "NO_CONNECTIONS" });
   });
 
   // 2026-11-01 audit (Task 9) - with no explicit platform list, the run-time
@@ -338,6 +362,129 @@ describe("prepareDeferredPostJobDispatch", () => {
     expect(resultCreateManyMock).toHaveBeenCalledWith({
       data: [{ postJobId: "job-1", workspaceId: "workspace-1", platform: "youtube", socialConnectionId: "c-youtube", status: "pending" }],
     });
+  });
+});
+
+// F1 H1 (R1 publishing): the run-time fan-out used to read only healthy
+// connections, so a chosen platform whose connection needed reconnecting got no
+// result at all: the post read "completed" without it, or, when every platform
+// was dead, "failed" with no results ("no platforms were connected") and nothing
+// to retry. Every chosen platform now gets a row.
+describe("prepareDeferredPostJobDispatch - dead or removed connections (F1 H1)", () => {
+  const RECONNECT_IG = {
+    postJobId: "job-1",
+    workspaceId: "workspace-1",
+    platform: "instagram",
+    socialConnectionId: "c-ig",
+    status: "failed",
+    errorCode: "RECONNECT_REQUIRED",
+    errorMessage: "Reconnect Instagram in Settings, then retry.",
+  };
+
+  it("one dead of two: a pending result for the healthy one, a RECONNECT_REQUIRED one for the dead one", async () => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({ publishMetadata: { targetPlatforms: ["x", "instagram"] } }),
+    );
+    connectionFindManyMock.mockResolvedValue([
+      { id: "c-x", platform: "x", needsReconnect: false },
+      { id: "c-ig", platform: "instagram", needsReconnect: true },
+    ]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(resultCreateManyMock).toHaveBeenCalledWith({
+      data: [
+        { postJobId: "job-1", workspaceId: "workspace-1", platform: "x", socialConnectionId: "c-x", status: "pending" },
+        RECONNECT_IG,
+      ],
+    });
+    // The healthy platform publishes; the run's finalize computes the job from both rows.
+    expect(result.ok).toBe(true);
+    expect(recomputeMock).not.toHaveBeenCalled();
+  });
+
+  it("all dead: every chosen platform gets a failed result with its sentence, and the job is computed from them", async () => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({ publishMetadata: { targetPlatforms: ["instagram", "linkedin"] } }),
+    );
+    connectionFindManyMock.mockResolvedValue([{ id: "c-ig", platform: "instagram", needsReconnect: true }]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(resultCreateManyMock).toHaveBeenCalledWith({
+      data: [
+        RECONNECT_IG,
+        {
+          postJobId: "job-1",
+          workspaceId: "workspace-1",
+          platform: "linkedin",
+          socialConnectionId: null,
+          status: "failed",
+          errorCode: "CONNECTION_GONE",
+          errorMessage: "LinkedIn is no longer connected. Connect it in Settings, then retry.",
+        },
+      ],
+    });
+    expect(recomputeMock).toHaveBeenCalledWith("job-1");
+    // Never the bare "no results" failure.
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, reason: "NO_CONNECTIONS" });
+  });
+
+  it("with no chosen list, a dead connection that could take the media gets a RECONNECT_REQUIRED result", async () => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({ mediaItem: { baseCaption: "Media caption", perPlatformOverrides: null, mimeType: "image/png" } }),
+    );
+    connectionFindManyMock.mockResolvedValue([
+      { id: "c-x", platform: "x", needsReconnect: false },
+      { id: "c-ig", platform: "instagram", needsReconnect: true },
+      // YouTube cannot take a photo: no row, as before.
+      { id: "c-yt", platform: "youtube", needsReconnect: true },
+    ]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(resultCreateManyMock).toHaveBeenCalledWith({
+      data: [
+        { postJobId: "job-1", workspaceId: "workspace-1", platform: "x", socialConnectionId: "c-x", status: "pending" },
+        RECONNECT_IG,
+      ],
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("a re-run that finds the rows already made creates nothing and decides the same", async () => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({ publishMetadata: { targetPlatforms: ["instagram"] } }),
+    );
+    connectionFindManyMock.mockResolvedValue([{ id: "c-ig", platform: "instagram", needsReconnect: true }]);
+    resultCountMock.mockResolvedValue(1);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(resultCreateManyMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, reason: "NO_CONNECTIONS" });
+  });
+
+  it("healthy connections: the same rows as before (pending, no error fields)", async () => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({ publishMetadata: { targetPlatforms: ["x", "instagram"] } }),
+    );
+    connectionFindManyMock.mockResolvedValue([
+      { id: "c-x", platform: "x", needsReconnect: false },
+      { id: "c-ig", platform: "instagram", needsReconnect: false },
+    ]);
+
+    const result = await prepareDeferredPostJobDispatch("job-1");
+
+    expect(resultCreateManyMock).toHaveBeenCalledWith({
+      data: [
+        { postJobId: "job-1", workspaceId: "workspace-1", platform: "x", socialConnectionId: "c-x", status: "pending" },
+        { postJobId: "job-1", workspaceId: "workspace-1", platform: "instagram", socialConnectionId: "c-ig", status: "pending" },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    expect(recomputeMock).not.toHaveBeenCalled();
   });
 });
 
