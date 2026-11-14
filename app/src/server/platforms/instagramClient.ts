@@ -199,6 +199,69 @@ export function computeInstagramCaption(caption: string): string {
   return charLimit === null ? caption : truncateGraphemes(caption, charLimit, { ellipsis });
 }
 
+/**
+ * G1 (R2 L3): Instagram refuses a caption with more than 30 hashtags or more
+ * than 20 @mentions (content-publishing limitations,
+ * https://developers.facebook.com/docs/instagram-platform/content-publishing).
+ */
+export const INSTAGRAM_MAX_HASHTAGS = 30;
+export const INSTAGRAM_MAX_MENTIONS = 20;
+
+// A tag starts the text or follows a character that cannot be part of a word,
+// so "C#", "issue#4", "&#39;" and "hello@example.com" are not tags. A username
+// never ends with a period, so "@sam." at the end of a sentence is "@sam".
+const HASHTAG_PATTERN = /(?<![\p{L}\p{N}_&#])#[\p{L}\p{N}_]+/gu;
+const MENTION_PATTERN = /(?<![\p{L}\p{N}_.@])@([A-Za-z0-9_](?:[A-Za-z0-9._]*[A-Za-z0-9_])?)/gu;
+
+/**
+ * Fit a feed caption to those limits, keeping the text in order. Hashtags past
+ * the 30th are dropped: the workspace footer's hashtags come last
+ * (captionFooter.ts), so they go first, then the caption's own trailing ones.
+ * Mentions past the 20th stay as plain words without the "@"; `plainMentions`
+ * names them for the result's note. A caption within both is returned as is.
+ */
+export function fitInstagramTags(caption: string): { caption: string; plainMentions: string[] } {
+  let text = caption;
+
+  const extraTags = [...text.matchAll(HASHTAG_PATTERN)].slice(INSTAGRAM_MAX_HASHTAGS);
+  if (extraTags.length > 0) {
+    // From the end, so earlier indices stay valid. Each tag goes with the spaces
+    // before it, so no double space or trailing blank is left behind.
+    for (const match of extraTags.reverse()) {
+      const end = match.index + match[0].length;
+      let start = match.index;
+      while (start > 0 && (text[start - 1] === " " || text[start - 1] === "\t")) start -= 1;
+      text = text.slice(0, start) + text.slice(end);
+    }
+    // A footer line of hashtags only can now be empty.
+    text = text.replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, "\n\n").trimEnd();
+  }
+
+  const plainMentions: string[] = [];
+  let mentions = 0;
+  text = text.replace(MENTION_PATTERN, (whole, name: string) => {
+    mentions += 1;
+    if (mentions <= INSTAGRAM_MAX_MENTIONS) return whole;
+    if (!plainMentions.includes(name)) plainMentions.push(name);
+    return name;
+  });
+
+  return { caption: text, plainMentions };
+}
+
+/** The result's note for mentions sent as plain text, or undefined when there were none. */
+function plainMentionsNote(names: readonly string[]): string | undefined {
+  if (names.length === 0) return undefined;
+  return `Instagram allows ${INSTAGRAM_MAX_MENTIONS} @mentions in a post, so these went out as plain text without the @: ${names.join(", ")}.`;
+}
+
+/** A published result with the notes added; a continuation carries none (it is not a post yet). */
+function withNotes(result: PublishResult, ...notes: (string | undefined)[]): PublishResult {
+  if (result.continuation) return result;
+  const note = [result.note, ...notes].filter(Boolean).join(" ");
+  return note ? { ...result, note } : result;
+}
+
 function instagramCodedError(code: string, message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code });
 }
@@ -293,6 +356,11 @@ export interface WaitForInstagramContainerOptions {
   connection: TokenSnapshot;
   /** The step deadline (epoch ms): polling stops with INSTAGRAM_PUBLISH_RESERVE_MS still left before it. */
   deadline?: number;
+  /**
+   * Check once before the first wait. For a photo, which Instagram has usually
+   * processed by the time the container answers (as the carousel path finds).
+   */
+  checkFirst?: boolean;
   /** Test seam: defaults to a real timer. */
   sleep?: (ms: number) => Promise<void>;
   /** Clock seam for tests. */
@@ -319,6 +387,7 @@ export async function waitForInstagramContainer(
     accessToken,
     connection,
     deadline,
+    checkFirst = false,
     sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
     now = Date.now,
   } = options;
@@ -328,10 +397,12 @@ export async function waitForInstagramContainer(
   const pollWindowMs = () => remainingMs(deadline, now()) - INSTAGRAM_PUBLISH_RESERVE_MS;
 
   for (let attempt = 0; attempt < INSTAGRAM_POLL_MAX_ATTEMPTS; attempt++) {
-    // Only wait + check when both fit before the reserve (the check needs a
-    // usable request window).
-    if (pollWindowMs() < INSTAGRAM_POLL_INTERVAL_MS + MIN_REQUEST_WINDOW_MS) break;
-    await sleep(INSTAGRAM_POLL_INTERVAL_MS);
+    if (attempt > 0 || !checkFirst) {
+      // Only wait + check when both fit before the reserve (the check needs a
+      // usable request window).
+      if (pollWindowMs() < INSTAGRAM_POLL_INTERVAL_MS + MIN_REQUEST_WINDOW_MS) break;
+      await sleep(INSTAGRAM_POLL_INTERVAL_MS);
+    }
     // A wait that overran leaves no usable window for the check.
     const checkWindowMs = pollWindowMs();
     if (checkWindowMs < MIN_REQUEST_WINDOW_MS) break;
@@ -815,10 +886,30 @@ const CAROUSEL_ERRORS: Record<string, { code: string; message: string }> = {
   },
 };
 
-function asCarouselError(error: unknown): unknown {
+/** G1 (R2 L2): a single photo's container is checked too; its messages speak of the photo. */
+const PHOTO_ERRORS: Record<string, { code: string; message: string }> = {
+  INSTAGRAM_VIDEO_TIMEOUT: {
+    code: "INSTAGRAM_PHOTO_TIMEOUT",
+    message: "Instagram was still processing the photo. Try again in a minute.",
+  },
+  INSTAGRAM_VIDEO_PROCESSING_ERROR: {
+    code: "INSTAGRAM_PHOTO_PROCESSING_ERROR",
+    message: "Instagram could not process the photo, so nothing was posted.",
+  },
+  INSTAGRAM_CONTAINER_EXPIRED: {
+    code: "INSTAGRAM_CONTAINER_EXPIRED",
+    message: "Instagram discarded the photo before it was posted. Please retry.",
+  },
+};
+
+function withMediaWording(error: unknown, errors: Record<string, { code: string; message: string }>): unknown {
   const code = (error as { code?: unknown } | null)?.code;
-  const mapped = typeof code === "string" ? CAROUSEL_ERRORS[code] : undefined;
+  const mapped = typeof code === "string" ? errors[code] : undefined;
   return mapped ? Object.assign(instagramCodedError(mapped.code, mapped.message), { cause: error }) : error;
+}
+
+function asCarouselError(error: unknown): unknown {
+  return withMediaWording(error, CAROUSEL_ERRORS);
 }
 
 /**
@@ -1004,6 +1095,10 @@ export const instagramClient: PlatformClient = {
     }
 
     const story = ctx.instagramMetadata?.placement === "story";
+    // G1 (R2 L3): within Instagram's hashtag and mention limits. A Story sends
+    // no caption, so it has nothing to fit.
+    const fitted = story ? { caption, plainMentions: [] } : fitInstagramTags(caption);
+    const mentionsNote = plainMentionsNote(fitted.plainMentions);
 
     if (ctx.mediaItems.length > 1) {
       // The posts route refuses this; a Story is never quietly turned into a carousel.
@@ -1013,13 +1108,14 @@ export const instagramClient: PlatformClient = {
           "A Story takes one photo or video. Choose Feed for Instagram, or remove the extra photos.",
         );
       }
-      return publishInstagramCarousel({
-        ctx,
+      const carousel = await publishInstagramCarousel({
+        ctx: { ...ctx, caption: fitted.caption },
         igAccountId,
         accessToken,
         connection: socialConnection,
         username: metadata.username,
       });
+      return withNotes(carousel, mentionsNote);
     }
 
     console.log("[Instagram] Starting media upload", {
@@ -1073,7 +1169,7 @@ export const instagramClient: PlatformClient = {
         igAccountId,
         accessToken,
         connection: socialConnection,
-        caption,
+        caption: fitted.caption,
         mediaUrl,
         isVideo,
         locationId,
@@ -1133,9 +1229,19 @@ export const instagramClient: PlatformClient = {
 
           console.log("[Instagram] Video processing complete");
         } else {
-          // For images, wait a brief moment for Instagram to process
-          console.log("[Instagram] Waiting for image processing...");
-          await new Promise((resolve) => setTimeout(resolve, 3000)); // Wait 3 seconds
+          // G1 (R2 L2): a photo, feed or Story, is published only once Instagram
+          // says it is ready (it used to wait a fixed 3 s and publish blind). One
+          // check at once, then the in-step poll's budget; not ready in time is
+          // INSTAGRAM_PHOTO_TIMEOUT, with nothing published.
+          await waitForInstagramContainer({
+            containerId,
+            accessToken,
+            connection: socialConnection,
+            deadline,
+            checkFirst: true,
+          }).catch((error: unknown) => {
+            throw withMediaWording(error, PHOTO_ERRORS);
+          });
         }
       }
 
@@ -1148,7 +1254,7 @@ export const instagramClient: PlatformClient = {
         username: metadata.username,
         store,
       });
-      return coverRefused ? { ...published, note: INSTAGRAM_COVER_REFUSED_NOTE } : published;
+      return withNotes(published, coverRefused ? INSTAGRAM_COVER_REFUSED_NOTE : undefined, mentionsNote);
     } catch (error: unknown) {
       console.error("[Instagram] Publish error", error);
       throw error;

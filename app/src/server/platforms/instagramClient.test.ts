@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
 import {
   computeInstagramCaption,
+  fitInstagramTags,
   ensureFreshInstagramToken,
   INSTAGRAM_CONTAINER_MAX_AGE_MS,
   INSTAGRAM_POLL_INTERVAL_MS,
@@ -64,6 +65,9 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+/** A container status check that says the media is ready (G1: photos are checked too). */
+const finishedStatus = () => new Response(JSON.stringify({ status_code: "FINISHED" }), { status: 200 });
 
 function makeConnection(
   overrides: Partial<SocialConnection> = {},
@@ -237,7 +241,8 @@ describe("instagramClient.publishVideo — Graph OAuthException 190", () => {
         if (url.includes("fields=permalink") && routes.permalink) return Promise.resolve(routes.permalink());
         if (url.includes("/media_publish")) return Promise.resolve(routes.publish!());
         if (url.includes("/ig-account-1/media")) return Promise.resolve(routes.container());
-        if (url.includes("fields=status_code")) return Promise.resolve(routes.status!());
+        // G1: a photo checks its container too; unless a test says otherwise it is ready.
+        if (url.includes("fields=status_code")) return Promise.resolve(routes.status ? routes.status() : finishedStatus());
         throw new Error(`Unexpected fetch in test: ${url}`);
       }),
     );
@@ -619,7 +624,8 @@ describe("instagramClient.publishVideo — rate limits (RATE_LIMITED)", () => {
         const url = String(input);
         if (url.includes("/media_publish")) return Promise.resolve(routes.publish!());
         if (url.includes("/ig-account-1/media")) return Promise.resolve(routes.container());
-        if (url.includes("fields=status_code")) return Promise.resolve(routes.status!());
+        // G1: a photo checks its container too; unless a test says otherwise it is ready.
+        if (url.includes("fields=status_code")) return Promise.resolve(routes.status ? routes.status() : finishedStatus());
         throw new Error(`Unexpected fetch in test: ${url}`);
       }),
     );
@@ -677,12 +683,11 @@ describe("instagramClient.publishVideo — rate limits (RATE_LIMITED)", () => {
       publish: () => graphError(9, 2207042),
     });
 
-    const promise = failure(instagramClient.publishVideo(ctx("image/jpeg")));
-    await vi.advanceTimersByTimeAsync(3_000);
-    const error = await promise;
+    // The photo's container is ready at once (G1), so media_publish is refused at 12:00:00.
+    const error = await failure(instagramClient.publishVideo(ctx("image/jpeg")));
 
     expect(error).toMatchObject({ code: "RATE_LIMITED", kind: "daily_limit" });
-    expect(error?.retryAt).toBe(Date.parse("2026-11-01T12:00:03Z") + 24 * 60 * 60_000);
+    expect(error?.retryAt).toBe(Date.parse("2026-11-01T12:00:00Z") + 24 * 60 * 60_000);
   });
 
   it("a rate limit during the video status poll stops polling with RATE_LIMITED", async () => {
@@ -714,7 +719,7 @@ describe("instagramClient.publishVideo — rate limits (RATE_LIMITED)", () => {
   describe("commit call (media_publish)", () => {
     const containerOk = () => new Response(JSON.stringify({ id: "container-1" }), { status: 200 });
 
-    /** Run an image publish to completion, stepping past the 3 s image-processing wait. */
+    /** Run an image publish to completion (its container check answers at once). */
     async function publishFailure(ctxValue = ctx("image/jpeg")) {
       vi.useFakeTimers();
       const promise = failure(instagramClient.publishVideo(ctxValue));
@@ -757,6 +762,7 @@ describe("instagramClient.publishVideo — rate limits (RATE_LIMITED)", () => {
           if (String(input).includes("/media_publish")) {
             return Promise.reject(new TypeError("fetch failed", { cause: { code: "ECONNRESET" } }));
           }
+          if (String(input).includes("fields=status_code")) return Promise.resolve(finishedStatus());
           return Promise.resolve(containerOk());
         }),
       );
@@ -771,7 +777,7 @@ describe("instagramClient.publishVideo — rate limits (RATE_LIMITED)", () => {
         vi.fn((input: string | URL) =>
           String(input).includes("/media_publish")
             ? Promise.reject(neverConnected)
-            : Promise.resolve(containerOk()),
+            : Promise.resolve(String(input).includes("fields=status_code") ? finishedStatus() : containerOk()),
         ),
       );
 
@@ -1684,17 +1690,17 @@ describe("instagramClient.publishVideo — container polling across steps", () =
       expect(graph.publish).toHaveBeenCalledTimes(1);
     });
 
-    it("an image waits 3 s in the step and publishes; it never reads or writes the state", async () => {
+    it("an image checks its container in the step and publishes; it never reads or writes the state", async () => {
       vi.useFakeTimers();
       vi.setSystemTime(NOW);
       const { store, mocks } = makeStore();
-      const graph = stubGraph({});
+      const graph = stubGraph({ status: () => status("FINISHED") });
 
       const promise = instagramClient.publishVideo(ctx(store, { mimeType: "image/jpeg" }));
-      await vi.advanceTimersByTimeAsync(3_000);
 
       await expect(promise).resolves.toEqual({ externalPostId: "media-1" });
-      expect(graph.status).not.toHaveBeenCalled();
+      // G1 (R2 L2): one check, made at once (it used to wait 3 s and not check).
+      expect(graph.status).toHaveBeenCalledTimes(1);
       expect(graph.publish).toHaveBeenCalledTimes(1);
       expect(mocks.load).not.toHaveBeenCalled();
       expect(mocks.save).not.toHaveBeenCalled();
@@ -1785,36 +1791,37 @@ describe("instagramClient.publishVideo — step deadline", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("clamps the container call and media_publish to the time left (12 s -> 12 s, then 3 s later 9 s)", async () => {
+  it("clamps the container call, the photo's status check and media_publish to the time left", async () => {
     vi.useFakeTimers();
     const start = Date.now();
     const fetchMock = stubRoutes({});
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
-    const promise = instagramClient.publishVideo(ctx("image/jpeg", start + 12_000));
-    await vi.advanceTimersByTimeAsync(3_000);
+    const promise = instagramClient.publishVideo(ctx("image/jpeg", start + 40_000));
 
     await expect(promise).resolves.toEqual({ externalPostId: "media-1" });
-    // container, media_publish, then the best-effort permalink lookup (2026-11-08;
-    // unanswered here, so no link)
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(String(fetchMock.mock.calls[2][0])).toContain("fields=permalink");
-    // container timeout, the 3 s image wait, the media_publish timeout, then the
-    // permalink lookup's own 5 s cap (9 s were left)
-    expect(setTimeoutSpy.mock.calls.map((c) => c[1])).toEqual([12_000, 3_000, 9_000, 5_000]);
+    // container, the status check (G1, R2 L2), media_publish, then the
+    // best-effort permalink lookup (2026-11-08; unanswered here, so no link)
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(String(fetchMock.mock.calls[1][0])).toContain("fields=status_code");
+    expect(String(fetchMock.mock.calls[3][0])).toContain("fields=permalink");
+    // container timeout (30 s default), the check clamped to the time before
+    // the publish reserve (40 s - 20 s), the media_publish timeout, then the
+    // permalink lookup's own 5 s cap
+    expect(setTimeoutSpy.mock.calls.map((c) => c[1])).toEqual([30_000, 20_000, 30_000, 5_000]);
   });
 
-  it("an image media_publish that would start with under 5 s left is refused (retry-safe), never reported unconfirmed", async () => {
+  it("a photo with no room left for its check before the publish reserve publishes nothing (retry-safe)", async () => {
     vi.useFakeTimers();
     const start = Date.now();
-    // 3 s image wait leaves 4.999 s of the 7.999 s: below the 5 s request window.
     const fetchMock = stubRoutes({});
 
-    const promise = failure(instagramClient.publishVideo(ctx("image/jpeg", start + 3_000 + MIN_REQUEST_WINDOW_MS - 1)));
-    await vi.advanceTimersByTimeAsync(3_000);
-    const error = await promise;
+    const error = await failure(
+      instagramClient.publishVideo(ctx("image/jpeg", start + INSTAGRAM_PUBLISH_RESERVE_MS + MIN_REQUEST_WINDOW_MS - 1)),
+    );
 
-    expect(error?.code).toBe(PUBLISH_BUDGET_EXCEEDED_CODE);
+    expect(error?.code).toBe("INSTAGRAM_PHOTO_TIMEOUT");
+    expect(callsTo(fetchMock, "fields=status_code")).toHaveLength(0);
     expect(callsTo(fetchMock, "/media_publish")).toHaveLength(0);
   });
 
@@ -2734,5 +2741,187 @@ describe("instagramClient.publishVideo — alt text (07d)", () => {
     expect(Object.keys(requests[1]).sort()).toEqual(["access_token", "image_url", "is_carousel_item"]);
     expect(requests[3].media_type).toBe("CAROUSEL");
     expect(requests[3].alt_text).toBeUndefined();
+  });
+});
+
+// G1 (R2 publishing L2): a single photo, feed or Story, checks its container
+// before media_publish (it used to wait a fixed 3 s and publish blind).
+describe("instagramClient.publishVideo — a single photo checks its container first", () => {
+  type CodedError = Error & { code?: string };
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+  const status = (code: string) => json({ status_code: code });
+
+  function ctx(story = false) {
+    return {
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+      get mediaItems(): MediaItem[] { return [this.mediaItem]; },
+      mediaItem: {
+        mimeType: "image/jpeg",
+        storageLocation: "https://blob.example.com/p.jpg",
+        metadata: null,
+      } as unknown as MediaItem,
+      caption: "hello",
+      ...(story ? { instagramMetadata: { placement: "story" as const } } : {}),
+    };
+  }
+
+  function stubGraph(statusCheck: () => Response) {
+    const fetchMock = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.includes("fields=permalink")) return Promise.resolve(new Response("{}", { status: 404 }));
+      if (url.includes("/media_publish")) return Promise.resolve(json({ id: "media-1" }));
+      if (url.includes("/ig-account-1/media")) return Promise.resolve(json({ id: "container-1" }));
+      if (url.includes("fields=status_code")) return Promise.resolve(statusCheck());
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const calls = (fragment: string) => fetchMock.mock.calls.filter((c) => String(c[0]).includes(fragment));
+    return { status: () => calls("fields=status_code"), publish: () => calls("/media_publish") };
+  }
+
+  beforeEach(() => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  for (const story of [false, true]) {
+    const label = story ? "Story" : "feed";
+
+    it(`${label}: ready on the first check publishes at once, with no wait`, async () => {
+      vi.useFakeTimers();
+      const graph = stubGraph(() => status("FINISHED"));
+
+      // No timer is advanced: the first check is made right after the container.
+      await expect(instagramClient.publishVideo(ctx(story))).resolves.toEqual({ externalPostId: "media-1" });
+      expect(graph.status()).toHaveLength(1);
+      expect(graph.publish()).toHaveLength(1);
+    });
+
+    it(`${label}: ready on the second check publishes after one poll interval`, async () => {
+      vi.useFakeTimers();
+      const answers = ["IN_PROGRESS", "FINISHED"];
+      const graph = stubGraph(() => status(answers.shift() ?? "FINISHED"));
+
+      const promise = instagramClient.publishVideo(ctx(story));
+      await vi.advanceTimersByTimeAsync(INSTAGRAM_POLL_INTERVAL_MS);
+
+      await expect(promise).resolves.toEqual({ externalPostId: "media-1" });
+      expect(graph.status()).toHaveLength(2);
+      expect(graph.publish()).toHaveLength(1);
+    });
+
+    it(`${label}: never ready fails with a plain sentence and publishes nothing`, async () => {
+      vi.useFakeTimers();
+      const graph = stubGraph(() => status("IN_PROGRESS"));
+
+      const promise = instagramClient.publishVideo(ctx(story)).then(
+        () => null,
+        (e: unknown) => e as CodedError,
+      );
+      await vi.advanceTimersByTimeAsync(INSTAGRAM_POLL_INTERVAL_MS * (INSTAGRAM_POLL_MAX_ATTEMPTS + 1));
+      const error = await promise;
+
+      expect(error?.code).toBe("INSTAGRAM_PHOTO_TIMEOUT");
+      expect(error?.message).toBe("Instagram was still processing the photo. Try again in a minute.");
+      expect(graph.status()).toHaveLength(INSTAGRAM_POLL_MAX_ATTEMPTS);
+      expect(graph.publish()).toHaveLength(0);
+    });
+  }
+
+  it("a photo Instagram could not process says photo, not video", async () => {
+    stubGraph(() => status("ERROR"));
+
+    const error = await instagramClient.publishVideo(ctx()).then(
+      () => null,
+      (e: unknown) => e as CodedError,
+    );
+
+    expect(error?.code).toBe("INSTAGRAM_PHOTO_PROCESSING_ERROR");
+    expect(error?.message).not.toMatch(/video/i);
+  });
+});
+
+// G1 (R2 publishing L3): Instagram refuses a caption with more than 30 hashtags
+// or 20 @mentions.
+describe("fitInstagramTags", () => {
+  const tags = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => `#tag${from + i}`).join(" ");
+  const mentions = (count: number) => Array.from({ length: count }, (_, i) => `@user${i + 1}`).join(" ");
+
+  it("leaves a caption within both limits exactly as it is", () => {
+    const caption = `Surf today ${tags(1, 30)} with ${mentions(20)}\n\nFor more info visit example.com`;
+    expect(fitInstagramTags(caption)).toEqual({ caption, plainMentions: [] });
+  });
+
+  it("drops the footer hashtags first: they come last", () => {
+    const caption = `Surf today ${tags(1, 25)}\n\nFor more info visit example.com\n\n${tags(26, 35)}`;
+    expect(fitInstagramTags(caption).caption).toBe(
+      `Surf today ${tags(1, 25)}\n\nFor more info visit example.com\n\n${tags(26, 30)}`,
+    );
+  });
+
+  it("drops the whole footer line when the caption alone has 30, then caption hashtags past the 30th", () => {
+    const caption = `Surf ${tags(1, 32)} today\n\n${tags(33, 40)}`;
+    expect(fitInstagramTags(caption).caption).toBe(`Surf ${tags(1, 30)} today`);
+  });
+
+  it("does not count # inside a word or an HTML entity", () => {
+    const caption = `${tags(1, 30)} C# and issue#4 and &#39;`;
+    expect(fitInstagramTags(caption).caption).toBe(caption);
+  });
+
+  it("keeps the first 20 @mentions and posts the rest without the @, naming them", () => {
+    const caption = `Thanks ${mentions(22)}!`;
+    const fitted = fitInstagramTags(caption);
+    expect(fitted.caption).toBe(`Thanks ${mentions(20)} user21 user22!`);
+    expect(fitted.plainMentions).toEqual(["user21", "user22"]);
+  });
+
+  it("an email address is not a mention", () => {
+    const caption = `${mentions(20)} write to hello@example.com`;
+    expect(fitInstagramTags(caption)).toEqual({ caption, plainMentions: [] });
+  });
+});
+
+describe("instagramClient.publishVideo — hashtag and mention limits", () => {
+  const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("sends the fitted caption and says which mentions went out as plain text", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const fetchMock = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.includes("fields=permalink")) return Promise.resolve(new Response("{}", { status: 404 }));
+      if (url.includes("/media_publish")) return Promise.resolve(json({ id: "media-1" }));
+      if (url.includes("/ig-account-1/media")) return Promise.resolve(json({ id: "container-1" }));
+      if (url.includes("fields=status_code")) return Promise.resolve(json({ status_code: "FINISHED" }));
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const caption = `Hi ${Array.from({ length: 21 }, (_, i) => `@u${i + 1}`).join(" ")}`;
+
+    const result = await instagramClient.publishVideo({
+      user: { id: "user-1" } as unknown as User,
+      socialConnection: makeConnection({ id: "conn-ig", expiresAt: null }),
+      get mediaItems() { return [this.mediaItem]; },
+      mediaItem: { mimeType: "image/jpeg", storageLocation: "https://blob.example.com/p.jpg", metadata: null } as unknown as MediaItem,
+      caption,
+    });
+
+    const containerUrl = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(containerUrl.searchParams.get("caption")).toMatch(/@u20 u21$/);
+    expect(result).toEqual({
+      externalPostId: "media-1",
+      note: "Instagram allows 20 @mentions in a post, so these went out as plain text without the @: u21.",
+    });
   });
 });
