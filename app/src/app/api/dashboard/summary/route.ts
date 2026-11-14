@@ -11,6 +11,34 @@ export const dynamic = "force-dynamic";
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** A draft or scheduled post a client asked to change (the review link sets the time). */
+const CLIENT_CHANGE_REQUESTED: Prisma.PostJobWhereInput = {
+  status: { in: ["draft", "scheduled"] },
+  clientChangeRequestedAt: { not: null },
+};
+
+/**
+ * R2-client-journey L1: posts a client asked to change, a Feed and Story pair
+ * counted once. The review link marks both halves of a pair, so every marked
+ * Story job whose feed job is also marked (and live, in this workspace) is
+ * taken off the count. Only marked Story jobs are read, a handful at most.
+ */
+async function countClientChangesRequested(workspaceId: string): Promise<number> {
+  const [marked, stories] = await Promise.all([
+    prisma.postJob.count({ where: { workspaceId, ...CLIENT_CHANGE_REQUESTED } }),
+    prisma.postJob.findMany({
+      where: { workspaceId, ...CLIENT_CHANGE_REQUESTED, storyOfPostJobId: { not: null } },
+      select: { storyOfPostJobId: true },
+    }),
+  ]);
+  const feedIds = [...new Set(stories.map((story) => story.storyOfPostJobId).filter((id): id is string => id !== null))];
+  if (feedIds.length === 0) return marked;
+  const markedFeeds = await prisma.postJob.count({
+    where: { workspaceId, ...CLIENT_CHANGE_REQUESTED, id: { in: feedIds } },
+  });
+  return marked - markedFeeds;
+}
+
 /**
  * `lib/approval.ts` isAwaitingApprovalDecision as a query: a draft or scheduled
  * row submitted for approval and never approved (cancelled ones are excluded by
@@ -63,13 +91,7 @@ export async function GET() {
       },
     }),
     isOwner ? prisma.postJob.count({ where: { workspaceId, ...AWAITING_APPROVAL } }) : Promise.resolve(null),
-    prisma.postJob.count({
-      where: {
-        workspaceId,
-        status: { in: ["draft", "scheduled"] },
-        clientChangeRequestedAt: { not: null },
-      },
-    }),
+    countClientChangesRequested(workspaceId),
     prisma.postJob.findFirst({
       where: {
         workspaceId,
