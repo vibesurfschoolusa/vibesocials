@@ -4,12 +4,20 @@ vi.mock("@/lib/db", () => ({ prisma: {} }));
 vi.mock("@vercel/blob", () => ({ del: vi.fn(), list: vi.fn(), head: vi.fn() }));
 
 import { inngestFunctions } from "./inngest-functions";
-import { ORPHAN_MIN_AGE_MS, orphanBlobSweep, sweepOrphanBlobs } from "./orphanBlobSweep";
+import {
+  LINK_UPLOAD_MIN_AGE_MS,
+  SIGNED_IN_UPLOAD_MIN_AGE_MS,
+  orphanBlobSweep,
+  sweepOrphanBlobs,
+} from "./orphanBlobSweep";
 
 const HOST = "https://store1.public.blob.vercel-storage.com";
 const NOW = Date.UTC(2026, 10, 15, 6, 25, 0);
-const OLD = new Date(NOW - ORPHAN_MIN_AGE_MS - 60_000);
-const YOUNG = new Date(NOW - ORPHAN_MIN_AGE_MS + 60_000);
+const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
+/** Old enough for either place. */
+const OLD = new Date(NOW - 8 * DAY);
+const YOUNG = new Date(NOW - 23 * HOUR);
 
 type Blob = { url: string; pathname: string; uploadedAt: Date };
 
@@ -69,7 +77,14 @@ function fakeList(sources: { ul?: Blob[][]; root?: Blob[][] }) {
   });
 }
 
-function run(deps: { list: ReturnType<typeof fakeList>; db: ReturnType<typeof fakeDb>; del?: ReturnType<typeof vi.fn>; now?: () => number; budgetMs?: number }) {
+function run(deps: {
+  list: ReturnType<typeof fakeList> | ReturnType<typeof vi.fn>;
+  db: ReturnType<typeof fakeDb>;
+  del?: ReturnType<typeof vi.fn>;
+  now?: () => number;
+  budgetMs?: number;
+  listTimeoutMs?: number;
+}) {
   const del = deps.del ?? vi.fn(async () => undefined);
   return {
     del,
@@ -79,6 +94,7 @@ function run(deps: { list: ReturnType<typeof fakeList>; db: ReturnType<typeof fa
       db: deps.db as never,
       now: deps.now ?? (() => NOW),
       budgetMs: deps.budgetMs,
+      listTimeoutMs: deps.listTimeoutMs,
     }),
   };
 }
@@ -105,6 +121,36 @@ describe("sweepOrphanBlobs", () => {
     await expect(result).resolves.toMatchObject({ deleted: 2, kept: 0, failed: 0, finished: true });
     expect(del).toHaveBeenCalledWith(`${HOST}/${LINK_FILE}`, expect.anything());
     expect(del).toHaveBeenCalledWith(`${HOST}/${SIGNED_IN_FILE}`, expect.anything());
+  });
+
+  it("waits 24 hours for a client link file but 7 days for a signed-in upload, which a draft may still be about to post", async () => {
+    expect(LINK_UPLOAD_MIN_AGE_MS).toBe(DAY);
+    expect(SIGNED_IN_UPLOAD_MIN_AGE_MS).toBe(7 * DAY);
+    const list = fakeList({
+      ul: [[blob(LINK_FILE, new Date(NOW - 25 * HOUR))]],
+      root: [[blob("1731600000000-aa-two-days.jpg", new Date(NOW - 2 * DAY)), blob("1731600000000-bb-eight-days.jpg", new Date(NOW - 8 * DAY))]],
+    });
+    const { del, result } = run({ list, db: fakeDb() });
+
+    await expect(result).resolves.toMatchObject({ deleted: 2 });
+    expect(del).toHaveBeenCalledWith(`${HOST}/${LINK_FILE}`, expect.anything());
+    expect(del).toHaveBeenCalledWith(`${HOST}/1731600000000-bb-eight-days.jpg`, expect.anything());
+    expect(del).not.toHaveBeenCalledWith(`${HOST}/1731600000000-aa-two-days.jpg`, expect.anything());
+  });
+
+  it("ends the run cleanly when a listing call hangs", async () => {
+    const list = vi.fn(
+      (options: { abortSignal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          options.abortSignal?.addEventListener("abort", () => reject(new Error("aborted")));
+        }),
+    );
+    const { del, result } = run({ list, db: fakeDb(), listTimeoutMs: 10 });
+
+    await expect(result).resolves.toMatchObject({ deleted: 0, finished: false });
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(list.mock.calls[0][0].abortSignal).toBeInstanceOf(AbortSignal);
+    expect(del).not.toHaveBeenCalled();
   });
 
   it("keeps an unreferenced upload younger than 24 hours", async () => {

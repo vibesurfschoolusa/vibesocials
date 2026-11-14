@@ -11,8 +11,7 @@ import { BLOB_DELETE_TIMEOUT_MS } from "@/server/jobs/mediaBlob";
  * writes the file, then registers it as a MediaItem; when the last step never
  * happens (the tab closed, the link's day was full) the file stays in storage,
  * uncounted and never deleted. Once a day this lists the two upload places and
- * deletes files older than ORPHAN_MIN_AGE_MS that no MediaItem, video cover or
- * report logo refers to.
+ * deletes the old files that no MediaItem, video cover or report logo refers to.
  *
  * The places: client upload links write `ul/<link id>/<16 hex>-<name>`
  * (lib/uploadLink.ts); signed-in uploads write `<ms>-<random>-<name>` at the
@@ -23,12 +22,21 @@ import { BLOB_DELETE_TIMEOUT_MS } from "@/server/jobs/mediaBlob";
  * Never deletes a referenced file: a page's files are first matched exactly in
  * one query per table, and a file that matched nothing is checked again by its
  * path (so another spelling of the address, or a soft-deleted row, also keeps
- * it) under the advisory lock the registration routes and deleteBlobUnlessShared
- * take, right before its delete.
+ * it) right before its delete, holding the file's advisory lock
+ * (pg_advisory_xact_lock on guardBlobKey). Only the client link registration
+ * (POST /api/upload-link/[token]/media) and the deletes
+ * (deleteBlobUnlessShared in server/jobs/mediaBlob.ts, workspace deletion in
+ * server/account/deleteWorkspace.ts) take that lock. The signed-in registrations (POST
+ * /api/media, POST /api/posts) take none, and a person may upload on Create and
+ * post later, so their files wait a week instead of a day.
  */
 
-/** A file younger than this may still be on its way to being registered. */
-export const ORPHAN_MIN_AGE_MS = 24 * 60 * 60 * 1000;
+/** A client link file is registered by the page right after its upload. */
+export const LINK_UPLOAD_MIN_AGE_MS = 24 * 60 * 60 * 1000;
+/** A signed-in upload may sit in an open Create page before it is posted. */
+export const SIGNED_IN_UPLOAD_MIN_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+/** One listing call; a hung call ends the run, and tomorrow's starts again. */
+export const ORPHAN_LIST_TIMEOUT_MS = 20_000;
 /** How long one run may spend, well inside an Inngest step's limit. */
 export const ORPHAN_SWEEP_BUDGET_MS = 120_000;
 
@@ -36,8 +44,8 @@ const LINK_FILE = /^ul\/[A-Za-z0-9_-]+\/[0-9a-f]{16}-[A-Za-z0-9._-]+$/;
 const SIGNED_IN_FILE = /^\d{13}-[a-z0-9]*-[^/]+$/;
 
 const SOURCES = [
-  { prefix: "ul/", mode: "expanded" as const, shape: LINK_FILE },
-  { prefix: undefined, mode: "folded" as const, shape: SIGNED_IN_FILE },
+  { prefix: "ul/", mode: "expanded" as const, shape: LINK_FILE, minAgeMs: LINK_UPLOAD_MIN_AGE_MS },
+  { prefix: undefined, mode: "folded" as const, shape: SIGNED_IN_FILE, minAgeMs: SIGNED_IN_UPLOAD_MIN_AGE_MS },
 ];
 
 type ListedBlob = { url: string; pathname: string; uploadedAt: Date };
@@ -97,11 +105,18 @@ async function deleteUnlessReferenced(
 
 export async function sweepOrphanBlobs(
   opts: {
-    list?: (options: { prefix?: string; mode: "expanded" | "folded"; cursor?: string; limit: number }) => Promise<ListPage>;
+    list?: (options: {
+      prefix?: string;
+      mode: "expanded" | "folded";
+      cursor?: string;
+      limit: number;
+      abortSignal: AbortSignal;
+    }) => Promise<ListPage>;
     del?: (url: string, options: { abortSignal: AbortSignal }) => Promise<void>;
     db?: SweepDb;
     now?: () => number;
     budgetMs?: number;
+    listTimeoutMs?: number;
   } = {},
 ): Promise<OrphanSweepResult> {
   const list = opts.list ?? (blobList as unknown as NonNullable<typeof opts.list>);
@@ -115,11 +130,28 @@ export async function sweepOrphanBlobs(
     let cursor: string | undefined;
     do {
       if (now() >= deadline) return result;
-      const page = await list({ prefix: source.prefix, mode: source.mode, cursor, limit: 1000 });
+      let page: ListPage;
+      // A reason-less abort, as in mediaBlob.ts: the SDK fails fast on it.
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), opts.listTimeoutMs ?? ORPHAN_LIST_TIMEOUT_MS);
+      try {
+        page = await list({
+          prefix: source.prefix,
+          mode: source.mode,
+          cursor,
+          limit: 1000,
+          abortSignal: controller.signal,
+        });
+      } catch (error) {
+        logger.warn("[orphanBlobSweep] Listing storage failed; the run stops here", { error });
+        return result;
+      } finally {
+        clearTimeout(timer);
+      }
       cursor = page.hasMore ? page.cursor : undefined;
       result.listed += page.blobs.length;
 
-      const cutoff = now() - ORPHAN_MIN_AGE_MS;
+      const cutoff = now() - source.minAgeMs;
       const candidates = page.blobs.filter(
         (blob) => source.shape.test(blob.pathname) && new Date(blob.uploadedAt).getTime() < cutoff,
       );
