@@ -14,6 +14,7 @@ import { GettingStarted, WorkingForClients } from "@/components/dashboard/gettin
 import { YouTubeMetricsSummary } from "@/components/dashboard/youtube-metrics-summary";
 import { PublishHealthCard } from "@/components/dashboard/publish-health-card";
 import { ListingMetricsCard } from "@/components/dashboard/listing-metrics-card";
+import { NeedsYou } from "@/components/dashboard/needs-you";
 import { firstName } from "@/lib/accountInitials";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { useConnections } from "@/hooks/useConnections";
@@ -127,6 +128,19 @@ function Dashboard({ availablePlatforms, setup }: DashboardProps) {
 
       <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
+          {/* N1: what wants the owner today. Waits for `ready` so a new user
+              never meets it while the Get started checklist (its own to-do
+              list) is about to appear, and so the connections it reads are
+              known on its one mount. */}
+          {onboarding.ready && !onboarding.show ? (
+            <NeedsYou
+              hasGoogleListing={Boolean(
+                connectionsState.connections?.some(
+                  (connection) => connection.platform === "google_business_profile" && connection.connected,
+                ),
+              )}
+            />
+          ) : null}
           {/* First-run checklist — renders nothing once this person's steps
               are done (see lib/gettingStarted.ts). */}
           <GettingStarted
