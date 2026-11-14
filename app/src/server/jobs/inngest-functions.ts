@@ -745,7 +745,11 @@ async function publishToPlatform({
     await finalizeClaimedResult(resultRecordId, runId, {
       status: "failed",
       errorCode: err.code ?? "PUBLISH_FAILED",
-      errorMessage: publishErrorMessage(connectionRef.platform, { message, code: err.code }),
+      errorMessage: publishErrorMessage(connectionRef.platform, {
+        message,
+        code: err.code,
+        status: (err as { status?: unknown }).status,
+      }),
     });
     return { platform: connectionRef.platform, status: "failed", error: message };
   }

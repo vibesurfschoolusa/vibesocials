@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCaptionWithFooter } from "@/lib/captionFooter";
 import { buildPlatformPreview } from "@/lib/platformPreview";
 import { logger } from "@/lib/logger";
-import { platformRefusedMessage } from "@/lib/publishFailureText";
+import { notReachedMessage } from "@/lib/publishFailureText";
 import { nextPacificMidnight, rateLimitedError } from "@/server/platforms/rateLimited";
 import { instagramClient } from "@/server/platforms/instagramClient";
 import { youtubeClient } from "@/server/platforms/youtubeClient";
@@ -3190,7 +3190,7 @@ describe("chunked uploads - continuation steps (jobs)", () => {
           status: "failed",
           errorCode: "X_VIDEO_APPEND_FAILED",
           // F1 L7: "socket hang up" is network detail, so the user reads X's plain sentence.
-          errorMessage: platformRefusedMessage("x"),
+          errorMessage: notReachedMessage("x"),
           ...CLEARS_STATE,
           ...HEARTBEAT,
         },
@@ -3262,11 +3262,11 @@ describe("chunked uploads - continuation steps (jobs)", () => {
 
       await publishRun(["x"]);
 
-      expect(failedWrites()[0]).toMatchObject({ errorCode: "PUBLISH_FAILED", errorMessage: platformRefusedMessage("x") });
+      expect(failedWrites()[0]).toMatchObject({ errorCode: "PUBLISH_FAILED", errorMessage: notReachedMessage("x") });
       expect(JSON.stringify(failedWrites())).not.toContain("db.internal.example");
     });
 
-    it("falls back to the platform's plain sentence for an error with no message", async () => {
+    it("falls back to the plain not-reached sentence for an error with no message", async () => {
       platformCalls({
         x: () => {
           throw Object.assign(new Error(""), { code: "X_TWEET_FAILED" });
@@ -3275,7 +3275,20 @@ describe("chunked uploads - continuation steps (jobs)", () => {
 
       await publishRun(["x"]);
 
-      expect(failedWrites()[0]).toMatchObject({ errorMessage: platformRefusedMessage("x") });
+      expect(failedWrites()[0]).toMatchObject({ errorMessage: notReachedMessage("x") });
+    });
+
+    // Review round 2, item 3: the error's HTTP status reaches the mapping.
+    it("tells the user to reconnect when X answered 401", async () => {
+      platformCalls({
+        x: () => {
+          throw Object.assign(new Error("X tweet failed (status 401)"), { code: "X_TWEET_FAILED", status: 401 });
+        },
+      });
+
+      await publishRun(["x"]);
+
+      expect(failedWrites()[0]).toMatchObject({ errorMessage: "Reconnect X in Settings, then retry." });
     });
   });
 
