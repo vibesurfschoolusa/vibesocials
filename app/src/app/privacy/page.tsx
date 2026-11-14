@@ -2,7 +2,8 @@ import Link from "next/link";
 
 import { LegalPage, LegalSection } from "@/components/legal-page";
 import { billingEnabled } from "@/lib/billing";
-import { BILLING_TERMS_LAST_UPDATED, PRIVACY_PAYMENTS } from "@/lib/billingTerms";
+import { PRIVACY_PAYMENTS } from "@/lib/billingTerms";
+import { billingOnLastUpdated } from "@/lib/legalLastUpdated";
 import { OPERATOR_LOCATION, OPERATOR_NAME, PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/siteInfo";
 
 export const metadata = {
@@ -33,7 +34,7 @@ export default function PrivacyPage() {
       intro={
         billing ? (
           <>
-            <p className="mb-4 text-xs text-muted-foreground">Last updated: {BILLING_TERMS_LAST_UPDATED}</p>
+            <p className="mb-4 text-xs text-muted-foreground">Last updated: {billingOnLastUpdated()}</p>
             {intro}
           </>
         ) : (

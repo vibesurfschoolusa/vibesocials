@@ -3,7 +3,6 @@ import Link from "next/link";
 import { LegalPage, LegalSection } from "@/components/legal-page";
 import { billingEnabled, trialDays } from "@/lib/billing";
 import {
-  BILLING_TERMS_LAST_UPDATED,
   TERMS_FEES_CANCEL,
   TERMS_FEES_FAILED_PAYMENT,
   TERMS_FEES_PRICE_CHANGES,
@@ -14,6 +13,7 @@ import {
   TERMS_LIABILITY,
   termsFeesTrial,
 } from "@/lib/billingTerms";
+import { billingOnLastUpdated } from "@/lib/legalLastUpdated";
 import { OPERATOR_LOCATION, OPERATOR_NAME, PRODUCT_NAME, SUPPORT_EMAIL } from "@/lib/siteInfo";
 
 export const metadata = {
@@ -49,7 +49,7 @@ export default function TermsPage() {
       intro={
         billing ? (
           <>
-            <p className="mb-4 text-xs text-muted-foreground">Last updated: {BILLING_TERMS_LAST_UPDATED}</p>
+            <p className="mb-4 text-xs text-muted-foreground">Last updated: {billingOnLastUpdated()}</p>
             {intro}
           </>
         ) : (

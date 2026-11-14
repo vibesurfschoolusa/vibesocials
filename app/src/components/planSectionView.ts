@@ -47,7 +47,11 @@ export function planSectionLabel(
   }
   const endsAt = toBillingDate(workspace.planEndsAt);
   if (endsAt) return `${name}, ends on ${utcDayMonthLabel(endsAt)}`;
-  return periodEnd ? `${name}, renews ${utcDayMonthLabel(periodEnd)}` : name;
+  if (!periodEnd) return name;
+  // A plan chosen during the free trial is "trialing" at Stripe until the trial
+  // ends: nothing has been charged, so its period end is the first payment.
+  if (workspace.planStatus === "trialing") return `${name}, first payment on ${utcDayMonthLabel(periodEnd)}`;
+  return `${name}, renews ${utcDayMonthLabel(periodEnd)}`;
 }
 
 /** 21b fix round 1: the Plan section's line with billing off, when only the portal button shows. */

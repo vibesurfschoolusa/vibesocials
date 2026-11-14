@@ -135,10 +135,12 @@ describe("scheduledPostScanner - options", () => {
   // Inngest counts one execution per run plus one per step, and the free plan
   // stops ALL runs for the rest of the month at 50,000. Every minute with two
   // steps cost 3 x 1,440 = 4,320 a day, about 134,000 a month with nobody
-  // posting (27,502 used by 2026-11-07). Every 5 minutes with one step is
-  // 2 x 288 = 576 a day, about 17,900 in a 31-day month.
-  it("runs every 5 minutes, so an idle month stays far under the free plan's 50,000 executions", () => {
-    expect(optsOf().triggers).toEqual([{ cron: "*/5 * * * *" }]);
+  // posting (27,502 used by 2026-11-07). Every 5 minutes with one step was
+  // 2 x 288 = 576 of the ~820 a day the app used (2026-11-13), which put the
+  // month near 47,700. Every 10 minutes is 2 x 144 = 288 a day, about 8,900 in
+  // a 31-day month; the owner accepted posts going out up to 10 minutes late.
+  it("runs every 10 minutes, so an idle month stays far under the free plan's 50,000 executions", () => {
+    expect(optsOf().triggers).toEqual([{ cron: "*/10 * * * *" }]);
   });
 
   it("claims up to 1000 due posts per tick and materializes 50 per step", () => {

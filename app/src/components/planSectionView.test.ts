@@ -36,9 +36,24 @@ describe("planSectionLabel", () => {
   it("an active plan, with and without a renewal date", () => {
     const growth = { ...NEW, plan: "growth", planStatus: "active", currentPeriodEnd: new Date("2027-01-03T00:00:00Z") };
     expect(planSectionLabel("owner", growth, NOW, ON)).toBe("Growth plan, renews 3 January");
-    expect(planSectionLabel("owner", { ...growth, planStatus: "trialing" }, NOW, ON)).toBe("Growth plan, renews 3 January");
     expect(planSectionLabel("owner", { ...growth, currentPeriodEnd: null }, NOW, ON)).toBe("Growth plan");
     expect(planSectionLabel("owner", { ...growth, plan: "custom" }, NOW, ON)).toBe("Your plan, renews 3 January");
+  });
+
+  // Live billing test 2026-11-13: a plan chosen during the free trial is "trialing"
+  // at Stripe until the trial ends, and nothing has been charged yet, so its
+  // period end is the first payment, not a renewal.
+  it("a plan still in Stripe's trial: the period end is the first payment", () => {
+    const trialing = { ...NEW, plan: "starter", planStatus: "trialing", currentPeriodEnd: new Date("2026-12-24T04:00:00Z") };
+    expect(planSectionLabel("owner", trialing, NOW, ON)).toBe("Starter plan, first payment on 24 December");
+    expect(planSectionLabel("owner", { ...trialing, plan: "custom" }, NOW, ON)).toBe("Your plan, first payment on 24 December");
+    // Cancelled during the trial: it ends then and is never charged.
+    expect(planSectionLabel("owner", { ...trialing, planEndsAt: new Date("2026-12-24T04:00:00Z") }, NOW, ON)).toBe(
+      "Starter plan, ends on 24 December",
+    );
+    expect(planSectionLabel("owner", { ...trialing, currentPeriodEnd: null }, NOW, ON)).toBe("Starter plan");
+    // Once Stripe has charged it, the same plan renews as before.
+    expect(planSectionLabel("owner", { ...trialing, planStatus: "active" }, NOW, ON)).toBe("Starter plan, renews 24 December");
   });
 
   it("a plan whose payment failed, still in its week", () => {

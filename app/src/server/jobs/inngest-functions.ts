@@ -1744,12 +1744,14 @@ export const retryPlatforms = inngest.createFunction(
 /**
  * Roadmap Phase 5 — cron due-scanner for scheduled posts (§6.2).
  *
- * Runs every 5 minutes, so a scheduled post goes out up to 5 minutes after its
- * time. Inngest counts one execution per run plus one per step, and its free
+ * Runs every 10 minutes, so a scheduled post goes out up to 10 minutes after
+ * its time. Inngest counts one execution per run plus one per step, and its free
  * plan stops every run for the rest of the month at 50,000. Every minute with
  * two steps used 4,320 a day (~134,000 a month) with nobody posting, which would
  * have stopped all publishing mid-month (2026-11-07). Every 5 minutes with one
- * step is 576 a day. Do not go back to every minute without a paid plan.
+ * step was 576 of ~820 a day and put November near 47,700 (2026-11-13); every
+ * 10 minutes is 288 a day, the owner's choice. Do not run it more often without
+ * a paid plan.
  *
  * Atomically claims scheduled jobs whose `scheduledFor` has
  * arrived (`claimDueScheduledJobs`, scheduled → in_progress, up to
@@ -1796,7 +1798,7 @@ export const scheduledPostScanner = inngest.createFunction(
     name: "Scheduled Post Scanner",
     singleton: { mode: "skip" },
   },
-  { cron: "*/5 * * * *" },
+  { cron: "*/10 * * * *" },
   async ({ step }) => {
     // One step, so an idle tick costs 2 executions (the run and this step). The
     // step id and its string[] result are unchanged from the two-step version, so

@@ -98,8 +98,8 @@ export const STUCK_RECONCILE_BATCH = 50;
  * session TimeZone.
  *
  * Returns the claimed ids, oldest `scheduledFor` first. The scanner runs every
- * 5 minutes (to stay inside Inngest's free plan), and ≤5-minute latency is fine
- * for a social scheduler.
+ * 10 minutes (to stay inside Inngest's free plan), and ≤10-minute latency is
+ * fine for a social scheduler.
  */
 export async function claimDueScheduledJobs(
   now: Date,

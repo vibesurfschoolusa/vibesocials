@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BILLING_TERMS_LAST_UPDATED } from "@/lib/billingTerms";
+import { billingOnLastUpdated, legalDateValue } from "@/lib/legalLastUpdated";
 import { LEGAL_LAST_UPDATED } from "@/lib/siteInfo";
 
 import PrivacyPage from "./privacy/page";
@@ -58,11 +59,16 @@ describe("Terms with billing on", () => {
     expect(page).not.toContain("(currently zero)");
   });
 
-  it("shows the billing terms' date, not today's", () => {
+  // Live billing test 2026-11-13: the page said November 10 while the same page
+  // with billing off said November 12. The page carries both texts, so it shows
+  // the later date.
+  it("shows the later of the billing text's date and the rest of the page's, once", () => {
     const page = text(TermsPage());
-    expect(page).toContain(`Last updated: ${BILLING_TERMS_LAST_UPDATED}`);
-    expect(page).not.toContain(LEGAL_LAST_UPDATED);
+    expect(page).toContain(`Last updated: ${billingOnLastUpdated()}`);
     expect(page.match(/Last updated:/g)).toHaveLength(1);
+    const shown = legalDateValue(billingOnLastUpdated());
+    expect(shown).toBeGreaterThanOrEqual(legalDateValue(LEGAL_LAST_UPDATED));
+    expect(shown).toBeGreaterThanOrEqual(legalDateValue(BILLING_TERMS_LAST_UPDATED));
   });
 });
 
@@ -74,10 +80,9 @@ describe("Privacy with billing on", () => {
     );
   });
 
-  it("shows the billing terms' date, the same as the Terms, once", () => {
+  it("shows the same date as the Terms, once", () => {
     const page = text(PrivacyPage());
-    expect(page).toContain(`Last updated: ${BILLING_TERMS_LAST_UPDATED}`);
-    expect(page).not.toContain(LEGAL_LAST_UPDATED);
+    expect(page).toContain(`Last updated: ${billingOnLastUpdated()}`);
     expect(page.match(/Last updated:/g)).toHaveLength(1);
   });
 });
