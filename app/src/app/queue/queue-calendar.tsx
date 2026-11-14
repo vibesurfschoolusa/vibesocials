@@ -18,6 +18,7 @@ import {
   summarizeOffCalendar,
 } from "@/lib/queueCalendar";
 import { SCHEDULE_BUFFER_MS, localTimeZoneLabel } from "@/lib/scheduling";
+import { pairRescheduleNote } from "./pairActions";
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -140,10 +141,11 @@ export function QueueCalendar({ jobs, onEdit, onRescheduled, onShowList }: Queue
       }
       const outcome = editOutcome(await response.json().catch(() => null));
       onRescheduled(job.id, { scheduledFor: nextIso, ...outcome.patch });
+      // R2-client-journey M1: the other half of a Feed and Story post does not move with it.
+      const pairNote = pairRescheduleNote(job);
       toast.success(
-        outcome.patch.approvalState === "pending"
-          ? "Rescheduled — sent back for approval."
-          : "Post rescheduled.",
+        (outcome.patch.approvalState === "pending" ? "Rescheduled — sent back for approval." : "Post rescheduled.") +
+          (pairNote ? ` ${pairNote}` : ""),
       );
     } catch {
       toast.error("Couldn't reschedule this post.");
