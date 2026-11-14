@@ -228,18 +228,19 @@ export interface PostJobDTO {
   /**
    * F6: a Feed and Story post is two jobs. `storyOf` is on the Story job while
    * its feed job exists and is not cancelled (that post's id and time);
-   * `alsoAsStory` is on the feed job while its Story job does. R3-client-journey
-   * M1: the Queue folds the two into one card by `storyOf.id`, and every action
-   * on that card asks for both halves. Absent on every other job.
+   * `alsoAsStory` is on the feed job while its Story job does. The Queue shows
+   * them as a label on a half that has a card of its own; it folds a pair by
+   * `pairHalf` below. Absent on every other job.
    */
   storyOf?: { id: string; scheduledFor: string | null };
   alsoAsStory?: boolean;
   /**
    * Review of R3: this half's partner while it is a draft or scheduled (the
    * Story of a feed post, or the feed post of a Story): its state, time and
-   * platforms (a feed post with no chosen platforms: null). Sent whether or not
-   * the partner is on the same page, so a Queue card always names the half an
-   * action also takes. Absent with no live partner.
+   * platforms (a feed post with no chosen platforms: null). Absent with no
+   * live partner. R4 lows, item 1: the Queue folds a pair into one card by it
+   * alone, and the Queue's list (?status=draft,scheduled) always carries the
+   * partner on the same page.
    */
   pairHalf?: {
     id: string;

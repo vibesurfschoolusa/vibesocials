@@ -158,6 +158,133 @@ const POSTS_LIST_SELECT = {
  */
 const CLIENT_CHANGES_FIRST_MAX = 20;
 
+/** A half of a Feed and Story post that can still take a Queue action. */
+const LIVE_HALF_STATUSES: PostJobStatus[] = ["draft", "scheduled"];
+
+/** The list's total order; the cursor is a position in it. */
+const POSTS_ORDER = [{ createdAt: "desc" }, { id: "desc" }] satisfies Prisma.PostJobOrderByWithRelationInput[];
+
+/** How many batches one Queue page reads at most while it passes over posts an earlier page carried. */
+const MAX_PAGE_BATCHES = 4;
+
+type PostsListRow = Prisma.PostJobGetPayload<{ select: typeof POSTS_LIST_SELECT }>;
+type SortKey = { createdAt: Date; id: string };
+
+/** Every row after `key` in POSTS_ORDER. */
+function olderThan(key: SortKey): Prisma.PostJobWhereInput[] {
+  return [{ createdAt: { lt: key.createdAt } }, { createdAt: key.createdAt, id: { lt: key.id } }];
+}
+
+/**
+ * Whether `a` sorts at or before `b` in POSTS_ORDER. The id only decides
+ * between rows created in the same instant, which in practice are the two
+ * halves of one post, so it is compared here only with that same row.
+ */
+function sortsAtOrBefore(a: SortKey, b: SortKey): boolean {
+  const diff = a.createdAt.getTime() - b.createdAt.getTime();
+  return diff > 0 || (diff === 0 && a.id >= b.id);
+}
+
+/** The ids of Story jobs' feed posts, for a lookup of the other half. */
+function feedIdsOf(rows: readonly { storyOfPostJobId: string | null }[]): string[] {
+  return Array.from(new Set(rows.map((row) => row.storyOfPostJobId).filter((id): id is string => Boolean(id))));
+}
+
+/** Each row's live other half (draft or scheduled, this workspace), by row id. */
+async function livePartnerKeys(
+  rows: readonly { id: string; storyOfPostJobId: string | null }[],
+  workspaceId: string,
+): Promise<Map<string, SortKey>> {
+  const byRow = new Map<string, SortKey>();
+  if (rows.length === 0) return byRow;
+  const feedIds = feedIdsOf(rows);
+  const partners = await prisma.postJob.findMany({
+    where: {
+      workspaceId,
+      status: { in: LIVE_HALF_STATUSES },
+      OR: [{ storyOfPostJobId: { in: rows.map((row) => row.id) } }, ...(feedIds.length ? [{ id: { in: feedIds } }] : [])],
+    },
+    select: { id: true, storyOfPostJobId: true, createdAt: true },
+  });
+  for (const partner of partners) {
+    if (partner.storyOfPostJobId) byRow.set(partner.storyOfPostJobId, partner);
+  }
+  for (const row of rows) {
+    const feed = row.storyOfPostJobId ? partners.find((partner) => partner.id === row.storyOfPostJobId) : undefined;
+    if (feed) byRow.set(row.id, feed);
+  }
+  return byRow;
+}
+
+/**
+ * One page in POSTS_ORDER after `cursor`, and the row the next page starts
+ * after (null on the last page). One row past the page is read to tell whether
+ * a next page exists.
+ *
+ * R4 lows, item 1 (`pairsTogether`, the Queue): a page carries the live other
+ * half of each post on it (readMissingPartners), even one that sorts onto a
+ * later page. That page then leaves it out: a row whose live other half sorts
+ * at or before the cursor was carried by the page that half is on. The row
+ * past the page is judged the same way against the page's last row, so a page
+ * whose only follower is a half it carries is the last page. Rows left out
+ * are read past in a further batch; they are few (a pair split by a page end).
+ */
+async function readPostsPage(args: {
+  where: Prisma.PostJobWhereInput;
+  cursor: SortKey | null;
+  workspaceId: string;
+  pairsTogether: boolean;
+}): Promise<{ pageJobs: PostsListRow[]; cursorJob: SortKey | null }> {
+  const { where, cursor, workspaceId, pairsTogether } = args;
+  const pageJobs: PostsListRow[] = [];
+  let scanFrom = cursor;
+  let lastRead: SortKey | null = null;
+  for (let batch = 0; batch < MAX_PAGE_BATCHES; batch++) {
+    // Keyset predicate for the total order, ANDed with the workspace + status filters.
+    const rows = await prisma.postJob.findMany({
+      where: scanFrom ? { ...where, OR: olderThan(scanFrom) } : where,
+      orderBy: POSTS_ORDER,
+      take: POSTS_PAGE_SIZE + 1,
+      select: POSTS_LIST_SELECT,
+    });
+    const partnerOf = pairsTogether ? await livePartnerKeys(rows, workspaceId) : new Map<string, SortKey>();
+    for (const row of rows) {
+      const full = pageJobs.length === POSTS_PAGE_SIZE;
+      const carriedUpTo = full ? pageJobs[pageJobs.length - 1] : cursor;
+      const partner = partnerOf.get(row.id);
+      lastRead = row;
+      if (partner && carriedUpTo && sortsAtOrBefore(partner, carriedUpTo)) continue;
+      if (full) return { pageJobs, cursorJob: pageJobs[pageJobs.length - 1] };
+      pageJobs.push(row);
+    }
+    if (rows.length <= POSTS_PAGE_SIZE) return { pageJobs, cursorJob: null };
+    scanFrom = rows[rows.length - 1];
+  }
+  // Every row read is on this page or was carried by one, so the next page
+  // starts after the last one read.
+  return { pageJobs, cursorJob: lastRead };
+}
+
+/**
+ * R4 lows, item 1: the live other half of each listed post that is not listed
+ * itself (in this workspace), so the Queue shows the pair as one card.
+ */
+async function readMissingPartners(listed: readonly PostsListRow[], workspaceId: string): Promise<PostsListRow[]> {
+  if (listed.length === 0) return [];
+  const listedIds = listed.map((job) => job.id);
+  const feedIds = feedIdsOf(listed).filter((id) => !listedIds.includes(id));
+  return prisma.postJob.findMany({
+    where: {
+      workspaceId,
+      status: { in: LIVE_HALF_STATUSES },
+      id: { notIn: listedIds },
+      OR: [{ storyOfPostJobId: { in: listedIds } }, ...(feedIds.length ? [{ id: { in: feedIds } }] : [])],
+    },
+    orderBy: POSTS_ORDER,
+    select: POSTS_LIST_SELECT,
+  });
+}
+
 /**
  * GET /api/posts
  *
@@ -231,36 +358,22 @@ export async function GET(request: Request) {
       },
     ];
   }
-  // Keyset predicate for the (createdAt desc, id desc) total order: the page
-  // AFTER the cursor (C, I) is every row strictly older in that order —
-  // createdAt < C, or the same createdAt with a smaller id. ANDed with the
-  // workspace + status filters above.
-  if (cursor) {
-    where.OR = [
-      { createdAt: { lt: cursor.createdAt } },
-      { createdAt: cursor.createdAt, id: { lt: cursor.id } },
-    ];
-  }
+  // R4 lows, item 1: the Queue (exactly ?status=draft,scheduled) lists both
+  // live halves of a Feed and Story post on the same page, so it can always
+  // show them as one card. See readPostsPage.
+  const queueListing =
+    new Set(statusFilter).size === 2 &&
+    statusFilter.every((status) => LIVE_HALF_STATUSES.includes(status as PostJobStatus)) &&
+    showParam !== "problems";
 
   try {
-    const rows = await prisma.postJob.findMany({
+    const { pageJobs, cursorJob } = await readPostsPage({
       where,
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: POSTS_PAGE_SIZE + 1,
-      select: POSTS_LIST_SELECT,
+      cursor,
+      workspaceId: context.workspace.id,
+      pairsTogether: queueListing,
     });
-
-    // Keyset windowing (activity pagination): we over-fetch one row beyond the
-    // page (take: POSTS_PAGE_SIZE + 1) to tell whether an older page exists
-    // without a second COUNT query. If the probe row came back, drop it and
-    // hand the client a cursor pointing at the last row we DO return; otherwise
-    // this is the final page (nextCursor: null). Everything below — the metric
-    // join and the DTO mapping — operates on the sliced `jobs`, unchanged.
-    const hasMore = rows.length > POSTS_PAGE_SIZE;
-    const pageJobs = hasMore ? rows.slice(0, POSTS_PAGE_SIZE) : rows;
-    const lastJob = pageJobs[pageJobs.length - 1];
-    const nextCursor =
-      hasMore && lastJob ? encodePostsCursor(lastJob.createdAt, lastJob.id) : null;
+    const nextCursor = cursorJob ? encodePostsCursor(cursorJob.createdAt, cursorJob.id) : null;
 
     // Client review link: the Queue (opt-in `?clientChangesFirst=1`, first page
     // only, when drafts are asked for) also gets up to 20 drafts the client
@@ -284,7 +397,8 @@ export async function GET(request: Request) {
         })
       : [];
     const clientChangeIds = new Set(clientChanges.map((job) => job.id));
-    const jobs = [...clientChanges, ...pageJobs.filter((job) => !clientChangeIds.has(job.id))];
+    const listed = [...clientChanges, ...pageJobs.filter((job) => !clientChangeIds.has(job.id))];
+    const jobs = queueListing ? [...listed, ...(await readMissingPartners(listed, context.workspace.id))] : listed;
 
     // Roadmap Phase 8 (analytics): join the latest engagement snapshot per
     // result. Team Workspaces (Task 4): scoped to the active WORKSPACE, not

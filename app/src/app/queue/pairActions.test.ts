@@ -10,6 +10,7 @@ import {
   pairAwareFetch,
   pairDialogLine,
   pairEditNote,
+  otherHalfPatch,
   pairNeedsReload,
   takesOtherHalf,
   withPairNote,
@@ -37,10 +38,22 @@ function job(id: string, overrides: Partial<PostJobDTO> = {}): PostJobDTO {
   };
 }
 
-/** A Feed and Story post as GET /api/posts lists it: the feed job and its Story job. */
+/**
+ * A Feed and Story post as GET /api/posts lists it for the Queue: the feed job
+ * and its Story job, each naming the other as its live half (pairHalf).
+ */
 function pair(feedOverrides: Partial<PostJobDTO> = {}, storyOverrides: Partial<PostJobDTO> = {}) {
+  const feedFields = { status: "scheduled" as const, scheduledFor: AT, ...feedOverrides };
+  const storyFields = { status: "scheduled" as const, scheduledFor: AT, ...storyOverrides };
   const feed = job("feed-1", {
     alsoAsStory: true,
+    pairHalf: {
+      id: "story-1",
+      kind: "story",
+      status: storyFields.status,
+      scheduledFor: storyFields.scheduledFor ?? null,
+      platforms: ["instagram"],
+    },
     publish: {
       targetPlatforms: ["instagram", "facebook_page"],
       youtubePrivacy: null,
@@ -51,7 +64,14 @@ function pair(feedOverrides: Partial<PostJobDTO> = {}, storyOverrides: Partial<P
     ...feedOverrides,
   });
   const story = job("story-1", {
-    storyOf: { id: "feed-1", scheduledFor: feedOverrides.scheduledFor ?? AT },
+    storyOf: { id: "feed-1", scheduledFor: feedFields.scheduledFor ?? null },
+    pairHalf: {
+      id: "feed-1",
+      kind: "feed",
+      status: feedFields.status,
+      scheduledFor: feedFields.scheduledFor ?? null,
+      platforms: ["instagram", "facebook_page"],
+    },
     storyPlatforms: ["instagram"],
     publish: {
       targetPlatforms: ["instagram"],
@@ -100,10 +120,27 @@ describe("foldQueuePairs", () => {
     expect(cards.every((card) => card.includePair === undefined && card.story === undefined)).toBe(true);
   });
 
-  it("a half whose partner is not in the list (moved on, or on a later page) still asks for both halves", () => {
+  // R4 lows, item 1: pair-ness comes from pairHalf (a draft or scheduled
+  // partner) only, and the Queue's list always holds both live halves.
+  it("a Story whose feed post already went out (or the reverse) is a normal card: no includePair", () => {
+    const story = job("story-1", { storyOf: { id: "feed-1", scheduledFor: AT }, storyPlatforms: ["instagram"] });
+    const feed = job("feed-2", { alsoAsStory: true });
+    const cards = foldQueuePairs([story, feed]);
+    expect(cards.map((card) => card.id)).toEqual(["story-1", "feed-2"]);
+    expect(cards.every((card) => card.includePair === undefined && card.story === undefined)).toBe(true);
+  });
+
+  it("a live half whose partner is not listed is a normal card too (the list always carries both)", () => {
     const { feed, story } = pair();
-    expect(foldQueuePairs([feed])[0].includePair).toBe(true);
-    expect(foldQueuePairs([story])[0].includePair).toBe(true);
+    expect(foldQueuePairs([feed])[0].includePair).toBeUndefined();
+    expect(foldQueuePairs([story])[0].includePair).toBeUndefined();
+  });
+
+  it("folds a pair whose feed post came after its Story in the list (the page carried it at the end)", () => {
+    const { feed, story } = pair();
+    const cards = foldQueuePairs([job("a"), story, feed]);
+    expect(cards.map((card) => card.id)).toEqual(["a", "feed-1"]);
+    expect(cards[1].story?.id).toBe("story-1");
   });
 
   it("halves that no longer agree (status, approval or time) stay two cards, each acting alone", () => {
@@ -250,51 +287,34 @@ describe("the dialogs of a Feed and Story card", () => {
     expect(pairDialogLine(card, "submit")).toBe(
       `The Story on Instagram, set for ${WHEN}, is sent for approval with it.`,
     );
-    expect(pairEditNote(card)).toBe(`Changes also go to the Story on Instagram, set for ${WHEN}.`);
-    expect(takesOtherHalf(card, "cancel")).toBe(true);
+    expect(pairEditNote(card)).toBe(`Changes to the caption and time also go to the Story on Instagram, set for ${WHEN}.`);
+    expect(takesOtherHalf(card)).toBe(true);
   });
 
   it("say nothing for another card", () => {
     expect(pairDialogLine(job("a"), "cancel")).toBeNull();
     expect(pairEditNote(job("a"))).toBeNull();
-    expect(takesOtherHalf(job("a"), "cancel")).toBe(false);
+    expect(takesOtherHalf(job("a"))).toBe(false);
   });
 
-  // Review of R3: the pair split across pages. The Story is on page 1, its feed
-  // post on page 2, so the Story's card is its own; it still names the feed post.
-  it("a Story card whose feed post is not loaded names the feed post and its time", () => {
-    const lone = job("story-1", {
-      storyOf: { id: "feed-1", scheduledFor: AT },
-      pairHalf: { id: "feed-1", kind: "feed", status: "scheduled", scheduledFor: AT, platforms: ["instagram", "facebook_page"] },
-    });
-    const [only] = foldQueuePairs([lone]);
-
-    expect(only.includePair).toBe(true);
-    expect(pairDialogLine(only, "cancel")).toBe(
-      `The feed post on Instagram and Facebook Page, set for ${WHEN}, is cancelled too.`,
-    );
-    expect(takesOtherHalf(only, "cancel")).toBe(true);
+  it("a card without a folded Story names no other half", () => {
+    const { story } = pair();
+    const [lone] = foldQueuePairs([story]);
+    expect(pairDialogLine(lone, "cancel")).toBeNull();
+    expect(pairEditNote(lone)).toBeNull();
+    expect(takesOtherHalf(lone)).toBe(false);
   });
+});
 
-  it("a feed post going to every connected platform, with no time: says so", () => {
-    const lone = job("story-1", {
-      storyOf: { id: "feed-1", scheduledFor: null },
-      pairHalf: { id: "feed-1", kind: "feed", status: "draft", scheduledFor: null, platforms: null },
+// R4 lows, item 2: an edit gives the Story the caption and time, not the feed
+// post's own per-platform captions.
+describe("otherHalfPatch", () => {
+  it("drops the per-platform captions and keeps the rest", () => {
+    expect(otherHalfPatch({ caption: "New", scheduledFor: AT, platformCaptions: { linkedin: "Own" } })).toEqual({
+      caption: "New",
+      scheduledFor: AT,
     });
-    expect(pairDialogLine(foldQueuePairs([lone])[0], "delete")).toBe("The feed post, with no time set, is deleted too.");
-  });
-
-  it("a delete never promises to delete a scheduled other half", () => {
-    const lone = job("feed-1", {
-      status: "draft",
-      alsoAsStory: true,
-      pairHalf: { id: "story-1", kind: "story", status: "scheduled", scheduledFor: AT, platforms: ["instagram"] },
-    });
-    const [only] = foldQueuePairs([lone]);
-    expect(pairDialogLine(only, "delete")).toBe(
-      `The Story on Instagram, set for ${WHEN}, is scheduled, so it is not deleted. Cancel it on its own card first.`,
-    );
-    expect(takesOtherHalf(only, "delete")).toBe(false);
+    expect(otherHalfPatch({ caption: "New" })).toEqual({ caption: "New" });
   });
 });
 

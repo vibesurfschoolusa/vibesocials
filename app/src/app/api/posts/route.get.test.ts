@@ -1088,18 +1088,30 @@ describe("GET /api/posts - client change requests on the Queue's first page (cli
   const QUEUE_URL = "http://localhost/api/posts?status=scheduled,draft&clientChangesFirst=1";
   const row = (id: string, extra: Record<string, unknown> = {}) => ({ ...jobWithYouTube(), id, ...extra });
 
+  /**
+   * The Queue's queries by what they ask: the page, the client's change
+   * requests, and (R4 lows, item 1) the lookups of each post's other half,
+   * which find none here.
+   */
+  function answer(pageRows: unknown[], changed: unknown[]) {
+    postJobFindManyMock.mockImplementation(async (arg: { where?: Record<string, unknown> }) => {
+      if (arg.where?.clientChangeRequestedAt) return changed;
+      if (JSON.stringify(arg.where?.status) === JSON.stringify({ in: ["draft", "scheduled"] })) return [];
+      return isPairLookup(arg) ? [] : pageRows;
+    });
+  }
+  const pinnedCalls = () => listCalls().filter(([arg]) => arg.where?.clientChangeRequestedAt);
+
   it("adds up to 20 drafts with a client change request, oldest request first, to the first page", async () => {
-    postJobFindManyMock
-      .mockResolvedValueOnce([row("new-1"), row("changed-b", { status: "draft" })])
-      .mockResolvedValueOnce([
-        row("changed-a", { status: "draft" }),
-        row("changed-b", { status: "draft" }),
-      ]);
+    answer(
+      [row("new-1"), row("changed-b", { status: "draft" })],
+      [row("changed-a", { status: "draft" }), row("changed-b", { status: "draft" })],
+    );
 
     const body = (await (await GET(getRequest(QUEUE_URL))).json()) as PostsResponse;
 
-    expect(listCalls()).toHaveLength(2);
-    const pinned = listCalls()[1][0];
+    expect(pinnedCalls()).toHaveLength(1);
+    const pinned = pinnedCalls()[0][0];
     expect(pinned.where).toEqual({
       workspaceId: "ws-1",
       status: "draft",
@@ -1118,7 +1130,7 @@ describe("GET /api/posts - client change requests on the Queue's first page (cli
     const page = Array.from({ length: 51 }, (_, i) => row(`job-${i}`, {
       createdAt: new Date(Date.UTC(2026, 6, 10, 0, 0, 51 - i)),
     }));
-    postJobFindManyMock.mockResolvedValueOnce(page).mockResolvedValueOnce([row("changed-old", { status: "draft" })]);
+    answer(page, [row("changed-old", { status: "draft" })]);
 
     const body = (await (await GET(getRequest(QUEUE_URL))).json()) as PostsResponse;
 

@@ -34,6 +34,7 @@ import {
   changedJobIds,
   foldedPairLine,
   foldQueuePairs,
+  otherHalfPatch,
   pairAwareFetch,
   pairDialogLine,
   pairEditNote,
@@ -169,7 +170,7 @@ export function coverEditNote(job: Pick<PostJobDTO, "hasCover">): string | null 
 
 /**
  * F6: the line on a half of a Feed and Story post that has a card of its own
- * (its partner is not listed, or the two no longer agree). A pair that agrees
+ * (its other half already went out, or the two no longer agree). A pair that agrees
  * is one card with its own line (R3-client-journey M1, pairActions.ts).
  */
 export function pairLabel(job: Pick<PostJobDTO, "storyOf" | "alsoAsStory">): string | null {
@@ -1066,9 +1067,13 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
   // Queue is read again so it shows as it is.
   const applyAnswer = useCallback(
     (card: QueueCardPost, data: unknown, change: { kind: "remove" } | { kind: "update"; patch: EditPatch }) => {
-      const ids = changedJobIds(card, data);
-      if (change.kind === "remove") removeJobs(ids);
-      else patchJobs(ids, change.patch);
+      const [own, ...others] = changedJobIds(card, data);
+      if (change.kind === "remove") removeJobs([own, ...others]);
+      else {
+        patchJobs([own], change.patch);
+        // R4 lows, item 2: the Story keeps its own per-platform captions.
+        if (others.length > 0) patchJobs(others, otherHalfPatch(change.patch));
+      }
       if (pairNeedsReload(card, data)) void load({ silent: true });
     },
     [load, patchJobs, removeJobs],
@@ -1397,7 +1402,7 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
         confirmText={
           cancelScope === "rest" && cancelTarget?.seriesId
             ? "Cancel posts"
-            : cancelTarget && takesOtherHalf(cancelTarget, "cancel")
+            : cancelTarget && takesOtherHalf(cancelTarget)
               ? "Cancel both"
               : "Cancel post"
         }
@@ -1431,7 +1436,7 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
             ) : null}
           </span>
         }
-        confirmText={deleteTarget && takesOtherHalf(deleteTarget, "delete") ? "Delete both" : undefined}
+        confirmText={deleteTarget && takesOtherHalf(deleteTarget) ? "Delete both" : undefined}
         destructive
         onConfirm={confirmDelete}
       />

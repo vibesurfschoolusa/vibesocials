@@ -35,25 +35,22 @@ function sameCard(feed: PostJobDTO, story: PostJobDTO): boolean {
 }
 
 /**
- * The Queue's cards from its posts, in their order. A Story whose feed post is
- * listed in the same state, approval and time is folded into that post's card
- * (which takes the feed post's place). A half whose partner is not listed
- * (it moved on, or sits on a page not loaded yet) is its own card and still
- * asks for both halves: the server leaves a partner that moved on alone and
- * says so. Halves that no longer agree stay two cards, each acting alone, and
- * a post with no live partner (no pair marks) is a normal card.
+ * The Queue's cards from its posts, in their order. A post is a pair only
+ * while its other half is live (`pairHalf`: a draft or scheduled post), and
+ * the Queue's list always carries both live halves (R4 lows, item 1: GET
+ * /api/posts adds a half that would sort onto another page). A Story whose
+ * feed post is listed in the same state, approval and time is folded into
+ * that post's card (which takes the feed post's place), and only that card
+ * asks for both halves. Every other card acts on its own post: a half whose
+ * other half already went out, and halves that no longer agree.
  */
 export function foldQueuePairs(jobs: readonly PostJobDTO[]): QueueCard[] {
   const byId = new Map(jobs.map((job) => [job.id, job]));
   const storyOfFeed = new Map<string, PostJobDTO>();
-  const listedStoryOf = new Set<string>();
   for (const job of jobs) {
-    const feedId = job.storyOf?.id;
-    if (!feedId) continue;
-    const feed = byId.get(feedId);
-    if (!feed) continue;
-    listedStoryOf.add(feedId);
-    if (sameCard(feed, job)) storyOfFeed.set(feedId, job);
+    if (job.pairHalf?.kind !== "feed") continue;
+    const feed = byId.get(job.pairHalf.id);
+    if (feed?.pairHalf?.id === job.id && sameCard(feed, job)) storyOfFeed.set(feed.id, job);
   }
   const folded = new Set(Array.from(storyOfFeed.values(), (story) => story.id));
 
@@ -61,13 +58,7 @@ export function foldQueuePairs(jobs: readonly PostJobDTO[]): QueueCard[] {
   for (const job of jobs) {
     if (folded.has(job.id)) continue;
     const story = storyOfFeed.get(job.id);
-    if (story) {
-      cards.push({ ...job, story, includePair: true });
-      continue;
-    }
-    const partnerListed = job.storyOf ? byId.has(job.storyOf.id) : listedStoryOf.has(job.id);
-    const isHalf = Boolean(job.storyOf || job.alsoAsStory);
-    cards.push(isHalf && !partnerListed ? { ...job, includePair: true } : job);
+    cards.push(story ? { ...job, story, includePair: true } : job);
   }
   return cards;
 }
@@ -174,17 +165,14 @@ export function withPairNote(message: string, data: unknown): string {
   return pair ? `${message} ${pair.note}` : message;
 }
 
-/** The other half a card's action also takes: the folded Story, or the listed partner of a lone half. */
-type OtherHalf = { kind: "story" | "feed"; status: string; scheduledFor: string | null; platforms: readonly Platform[] | null };
+/** The other half a card's action also takes: its folded Story. */
+type OtherHalf = { scheduledFor: string | null; platforms: readonly Platform[] };
 
 function otherHalfOf(card: QueueCard): OtherHalf | null {
-  if (card.story) {
-    const targets = card.story.publish?.targetPlatforms ?? null;
-    const stories = (card.story.storyPlatforms ?? []).filter((p) => !targets || targets.includes(p));
-    return { kind: "story", status: card.story.status, scheduledFor: card.story.scheduledFor, platforms: stories };
-  }
-  if (card.includePair && card.pairHalf) return card.pairHalf;
-  return null;
+  if (!card.story) return null;
+  const targets = card.story.publish?.targetPlatforms ?? null;
+  const stories = (card.story.storyPlatforms ?? []).filter((p) => !targets || targets.includes(p));
+  return { scheduledFor: card.story.scheduledFor, platforms: stories };
 }
 
 function formatTimestamp(iso: string): string {
@@ -202,33 +190,30 @@ function formatTimestamp(iso: string): string {
 
 /** "the Story on Instagram, set for Fri, Nov 20, 2026, 3:00 PM" */
 function describeHalf(half: OtherHalf): string {
-  const platforms = half.platforms?.length
-    ? ` on ${joinLabels(half.platforms.map(platformLabel))}`
-    : "";
+  const platforms = half.platforms.length ? ` on ${joinLabels(half.platforms.map(platformLabel))}` : "";
   const time = half.scheduledFor ? `set for ${formatTimestamp(half.scheduledFor)}` : "with no time set";
-  return `the ${half.kind === "story" ? "Story" : "feed post"}${platforms}, ${time}`;
+  return `the Story${platforms}, ${time}`;
 }
 
 type DialogAction = "cancel" | "delete" | "publish" | "submit";
 
-/** Whether the action also takes the other half (a delete never takes a scheduled one). */
-export function takesOtherHalf(card: QueueCard, action: DialogAction): boolean {
-  const half = otherHalfOf(card);
-  return half !== null && !(action === "delete" && half.status === "scheduled");
+/**
+ * Whether the card's actions also take another half: a folded pair. Its two
+ * halves agree on state, approval and time, so an action that fits one fits
+ * the other (a draft card's delete deletes both; a scheduled one offers Cancel).
+ */
+export function takesOtherHalf(card: QueueCard): boolean {
+  return otherHalfOf(card) !== null;
 }
 
 /**
- * The confirm dialog's line: the other half the action also takes, with its
- * platforms and time, so nothing goes unnamed even when that half is on a
- * page not loaded yet. Null for a card that is not a pair.
+ * The confirm dialog's line: the Story the action also takes, with its
+ * platforms and time. Null for a card that is not a pair.
  */
 export function pairDialogLine(card: QueueCard, action: DialogAction): string | null {
   const half = otherHalfOf(card);
   if (!half) return null;
   const named = capitalized(describeHalf(half));
-  if (!takesOtherHalf(card, action)) {
-    return `${named}, is scheduled, so it is not deleted. Cancel it on its own card first.`;
-  }
   switch (action) {
     case "cancel":
       return `${named}, is cancelled too.`;
@@ -241,10 +226,22 @@ export function pairDialogLine(card: QueueCard, action: DialogAction): string | 
   }
 }
 
-/** The Edit dialog's line on a pair card. */
+/**
+ * The Edit dialog's line on a pair card, whose Story a save changes too. R4
+ * lows, item 2: the Story takes the caption and time; its per-platform
+ * captions stay its own (a Story publishes no caption).
+ */
 export function pairEditNote(card: QueueCard): string | null {
   const half = otherHalfOf(card);
-  return half ? `Changes also go to ${describeHalf(half)}.` : null;
+  return half ? `Changes to the caption and time also go to ${describeHalf(half)}.` : null;
+}
+
+/** What a saved edit changes on the other half's card: all but the per-platform captions. */
+export function otherHalfPatch<P extends object>(patch: P): Omit<P, "platformCaptions"> {
+  return Object.fromEntries(Object.entries(patch).filter(([key]) => key !== "platformCaptions")) as Omit<
+    P,
+    "platformCaptions"
+  >;
 }
 
 function capitalized(text: string): string {
