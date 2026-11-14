@@ -65,7 +65,7 @@ import {
 } from "@/lib/storyPlacement";
 import { deferralKindFromErrorCode } from "@/lib/resultDeferral";
 import { notSentAtCreation, notSentSentence } from "@/lib/publishFailureText";
-import type { PostsResponse } from "@/lib/postsDto";
+import type { PostJobDTO, PostsResponse } from "@/lib/postsDto";
 import {
   isUnconfirmedResult,
   seriesPlaces,
@@ -379,11 +379,28 @@ export async function GET(request: Request) {
               ...(storyOfIds.length ? [{ id: { in: storyOfIds } }] : []),
             ],
           },
-          select: { id: true, storyOfPostJobId: true, scheduledFor: true },
+          select: { id: true, storyOfPostJobId: true, scheduledFor: true, status: true, publishMetadata: true },
         })
       : [];
     const pairById = new Map(pairRows.map((row) => [row.id, row]));
     const hasStory = new Set(pairRows.map((row) => row.storyOfPostJobId).filter(Boolean));
+    // Review of R3: each half's live partner (a draft or scheduled post), so a
+    // card whose partner is on another page still names it and its time.
+    const livePartnerOf = (job: { id: string; storyOfPostJobId: string | null }): PostJobDTO["pairHalf"] => {
+      const row = job.storyOfPostJobId
+        ? pairById.get(job.storyOfPostJobId)
+        : pairRows.find((candidate) => candidate.storyOfPostJobId === job.id);
+      if (!row || (row.status !== "draft" && row.status !== "scheduled")) return undefined;
+      const kind = job.storyOfPostJobId ? "feed" : "story";
+      const targets = (row.publishMetadata as { targetPlatforms?: Platform[] } | null)?.targetPlatforms ?? null;
+      return {
+        id: row.id,
+        kind,
+        status: row.status,
+        scheduledFor: row.scheduledFor?.toISOString() ?? null,
+        platforms: kind === "story" ? storyPlatformsOf(row.publishMetadata) : targets,
+      };
+    };
 
     const payload: PostsResponse = {
       // 2026-11-01 scale audit (W3): counted here, on demand — it is no longer
@@ -435,6 +452,7 @@ export async function GET(request: Request) {
               }
             : {}),
           ...(hasStory.has(job.id) ? { alsoAsStory: true } : {}),
+          ...(livePartnerOf(job) ? { pairHalf: livePartnerOf(job) } : {}),
           ...(placeByJobId.has(job.id)
             ? {
                 seriesPosition: placeByJobId.get(job.id)!.position,

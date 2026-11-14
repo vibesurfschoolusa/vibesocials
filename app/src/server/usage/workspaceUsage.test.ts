@@ -108,15 +108,12 @@ describe("checkDailyPostLimit", () => {
 
     const start = new Date("2026-11-12T00:00:00.000Z");
     const end = new Date("2026-11-13T00:00:00.000Z");
+    // Review of R3: a post that failed at creation still counts (R3-publishing L3
+    // is accepted as a low), so Retry can never send past the day's limit.
     expect(db.postJobCount).toHaveBeenCalledWith({
       where: {
         workspaceId: "ws-1",
         status: { notIn: ["draft", "cancelled"] },
-        // R3-publishing L3: a post that failed before anything was sent uses no slot.
-        NOT: {
-          status: "failed",
-          results: { every: { errorCode: { in: ["RECONNECT_REQUIRED", "CONNECTION_GONE"] } } },
-        },
         OR: [
           { scheduledFor: { gte: start, lt: end } },
           { scheduledFor: null, createdAt: { gte: start, lt: end } },

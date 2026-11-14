@@ -26,6 +26,7 @@ import {
   dispatchNow,
   notSentNote,
   pairLimitArgs,
+  partialSendMessage,
   pairStoryPlatforms,
   readPairHalf,
   wantsPair,
@@ -259,7 +260,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         status: "draft",
         approvalState: "pending",
         scheduledFor: scheduledFor ? scheduledFor.toISOString() : null,
-        ...(result.pair ? { pair: result.pair } : {}),
+        ...(result.pair ? { otherHalf: result.pair } : {}),
       },
       { status: 202 },
     );
@@ -335,7 +336,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         ok: true,
         status: "scheduled",
         scheduledFor: validation.date.toISOString(),
-        ...(result.pair ? { pair: result.pair } : {}),
+        ...(result.pair ? { otherHalf: result.pair } : {}),
       },
       { status: 200 },
     );
@@ -472,9 +473,11 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     route: "POST /api/posts/[postJobId]/publish",
   });
   if (pair && dispatch.notSent.has(pair.id)) pair = { ...pair, note: notSentNote(pair.kind) };
-  const pairAnswer = pair ? { pair } : {};
+  const pairAnswer = pair ? { otherHalf: pair } : {};
+  // One half went out and the other had nothing to send: a success that says both.
+  const partial = partialSendMessage(postJobId, half, dispatch);
 
-  if (dispatch.notSent.has(postJobId)) {
+  if (dispatch.notSent.has(postJobId) && !partial) {
     // No chosen platform is connected (F1 H1): prepare gave each one a failed
     // result with its own sentence and marked the job `failed`, so it never
     // hangs in_progress and Activity shows what to reconnect.
@@ -498,5 +501,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     );
   }
 
-  return NextResponse.json({ ok: true, status: "in_progress", ...pairAnswer }, { status: 202 });
+  return NextResponse.json(
+    { ok: true, status: "in_progress", ...(partial ? { message: partial } : {}), ...pairAnswer },
+    { status: 202 },
+  );
 }

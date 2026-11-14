@@ -897,7 +897,7 @@ describe("PATCH and DELETE /api/posts/[postJobId] - a Feed and Story card", () =
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({
       ok: true,
-      pair: { id: "story-1", kind: "story", changed: true, note: "Its Story was changed too." },
+      otherHalf: { id: "story-1", kind: "story", changed: true, note: "Its Story was changed too." },
     });
     expect(transactionMock).toHaveBeenCalledTimes(1);
     expect(updateManyMock.mock.calls).toEqual([
@@ -935,7 +935,7 @@ describe("PATCH and DELETE /api/posts/[postJobId] - a Feed and Story card", () =
 
     const res = await PATCH(req({ baseCaption: "Sunset session", includePair: true }), ctx("job-1"));
 
-    expect((await res.json()).pair).toEqual({
+    expect((await res.json()).otherHalf).toEqual({
       id: "story-1",
       kind: "story",
       changed: false,
@@ -949,7 +949,7 @@ describe("PATCH and DELETE /api/posts/[postJobId] - a Feed and Story card", () =
 
     const res = await PATCH(req({ scheduledFor: MOVED.toISOString(), includePair: true }), ctx("job-1"));
 
-    expect((await res.json()).pair).toEqual({
+    expect((await res.json()).otherHalf).toEqual({
       id: "story-1",
       kind: "story",
       changed: false,
@@ -970,7 +970,7 @@ describe("PATCH and DELETE /api/posts/[postJobId] - a Feed and Story card", () =
       ok: true,
       status: "draft",
       approvalState: "pending",
-      pair: { id: "story-1", kind: "story", changed: true, note: "Its Story was changed too." },
+      otherHalf: { id: "story-1", kind: "story", changed: true, note: "Its Story was changed too." },
     });
     expect(updateManyMock).toHaveBeenCalledTimes(2);
     expect(updateManyMock.mock.calls[1][0]).toEqual({
@@ -1004,7 +1004,7 @@ describe("PATCH and DELETE /api/posts/[postJobId] - a Feed and Story card", () =
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({
       ok: true,
-      pair: { id: "story-1", kind: "story", changed: true, note: "Its Story was deleted too." },
+      otherHalf: { id: "story-1", kind: "story", changed: true, note: "Its Story was deleted too." },
     });
     expect(transactionMock).toHaveBeenCalledTimes(1);
     expect(deleteManyMock.mock.calls).toEqual([
@@ -1019,7 +1019,7 @@ describe("PATCH and DELETE /api/posts/[postJobId] - a Feed and Story card", () =
 
     const res = await DELETE(req({ includePair: true }), ctx("job-1"));
 
-    expect((await res.json()).pair).toEqual({
+    expect((await res.json()).otherHalf).toEqual({
       id: "story-1",
       kind: "story",
       changed: false,

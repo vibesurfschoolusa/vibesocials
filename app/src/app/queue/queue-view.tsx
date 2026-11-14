@@ -38,6 +38,7 @@ import {
   pairDialogLine,
   pairEditNote,
   pairNeedsReload,
+  takesOtherHalf,
   withPairNote,
   type QueueCard as QueueCardPost,
 } from "./pairActions";
@@ -1396,7 +1397,7 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
         confirmText={
           cancelScope === "rest" && cancelTarget?.seriesId
             ? "Cancel posts"
-            : cancelTarget?.story
+            : cancelTarget && takesOtherHalf(cancelTarget, "cancel")
               ? "Cancel both"
               : "Cancel post"
         }
@@ -1430,7 +1431,7 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
             ) : null}
           </span>
         }
-        confirmText={deleteTarget?.story ? "Delete both" : undefined}
+        confirmText={deleteTarget && takesOtherHalf(deleteTarget, "delete") ? "Delete both" : undefined}
         destructive
         onConfirm={confirmDelete}
       />

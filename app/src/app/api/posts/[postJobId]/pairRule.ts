@@ -162,21 +162,38 @@ export function notSentNote(kind: PairHalf["kind"]): string {
   return `Its ${halfName(kind)} was not sent: none of its platforms is connected. Activity shows what to reconnect.`;
 }
 
+/** What `dispatchNow` did with each claimed post. */
+export type DispatchResult = {
+  /** Handed to Inngest. */
+  sent: Set<string>;
+  /** No connected platform to go to (prepare marked them failed). */
+  notSent: Set<string>;
+  /** prepare's reason code for each post in `notSent`. */
+  reasons: Map<string, string>;
+  /** Only when some went out and some did not: why each one in `notSent` did not, in a sentence. */
+  whyNotSent: Map<string, string>;
+  sendFailed: boolean;
+};
+
+const NO_PLATFORM_CONNECTED = "none of its platforms is connected. Activity shows what to reconnect.";
+
 /**
  * Publish now for posts this request just claimed (status in_progress): this
  * post and, for a pair, the other half. Each one's results are made from the
  * connections that exist now; the events go to Inngest in ONE send, so both
- * halves go out or neither is left "publishing". `notSent` holds the posts
- * with no connected platform (prepare already marked them failed, with a
- * sentence per platform); if the send fails, every prepared post's pending
- * results are failed so none hangs.
+ * halves go out or neither is left "publishing". A post with no connected
+ * platform is in `notSent` (prepare already marked it failed, with a sentence
+ * per platform); if the send fails, every prepared post's pending results are
+ * failed so none hangs.
  */
-export async function dispatchNow(
-  postJobIds: readonly string[],
-  log: { route: string },
-): Promise<{ notSent: Set<string>; reasons: Map<string, string>; sendFailed: boolean }> {
-  const notSent = new Set<string>();
-  const reasons = new Map<string, string>();
+export async function dispatchNow(postJobIds: readonly string[], log: { route: string }): Promise<DispatchResult> {
+  const result: DispatchResult = {
+    sent: new Set(),
+    notSent: new Set(),
+    reasons: new Map(),
+    whyNotSent: new Map(),
+    sendFailed: false,
+  };
   const prepared: string[] = [];
   const events: ReturnType<typeof buildPublishEvent>[] = [];
   for (const id of postJobIds) {
@@ -186,19 +203,61 @@ export async function dispatchNow(
       // Stable event id + "Post now" priority (2026-11-01 scale audit, jobs H6 + H1).
       events.push(buildPublishEvent(prep.event, { immediate: true }));
     } else {
-      notSent.add(id);
-      reasons.set(id, prep.reason);
+      result.notSent.add(id);
+      result.reasons.set(id, prep.reason);
     }
   }
-  if (events.length === 0) return { notSent, reasons, sendFailed: false };
+  if (events.length === 0) return result;
   try {
     await inngest.send(events.length === 1 ? events[0] : events);
   } catch (error) {
     logger.error(`[${log.route}] Couldn't dispatch the publish event`, { error, postJobId: prepared[0] });
     for (const id of prepared) await failPendingPostJobResults(id, DISPATCH_FAILURE);
-    return { notSent, reasons, sendFailed: true };
+    result.sendFailed = true;
+    return result;
   }
-  return { notSent, reasons, sendFailed: false };
+  for (const id of prepared) result.sent.add(id);
+  // Review of R3: one half went out and the other did not, so the answer says
+  // why, with the first platform's own sentence (e.g. "Reconnect Facebook Page
+  // in Settings, then retry.").
+  for (const id of result.notSent) {
+    let why = NO_PLATFORM_CONNECTED;
+    try {
+      const failed = await prisma.postJobResult.findFirst({
+        where: { postJobId: id, status: "failed" },
+        orderBy: { createdAt: "asc" },
+        select: { errorMessage: true },
+      });
+      if (failed?.errorMessage) why = failed.errorMessage;
+    } catch (error) {
+      logger.error(`[${log.route}] Couldn't read why a post was not sent`, { error, postJobId: id });
+    }
+    result.whyNotSent.set(id, why);
+  }
+  return result;
+}
+
+function capitalized(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * Review of R3: the answer's sentence when one half of a pair went out and the
+ * other had nothing it could send, e.g. "The Story is being sent. The feed post
+ * was not: Reconnect Facebook Page in Settings." Null otherwise (both went,
+ * neither went, not a pair, or the send failed).
+ */
+export function partialSendMessage(postJobId: string, half: PairHalf | null, dispatch: DispatchResult): string | null {
+  if (!half || dispatch.sendFailed) return null;
+  const mainKind: PairHalf["kind"] = half.kind === "story" ? "feed" : "story";
+  const [sentKind, notKind, notId] = dispatch.sent.has(postJobId) && dispatch.notSent.has(half.id)
+    ? [mainKind, half.kind, half.id]
+    : dispatch.sent.has(half.id) && dispatch.notSent.has(postJobId)
+      ? [half.kind, mainKind, postJobId]
+      : [null, null, null];
+  if (!sentKind || !notKind || !notId) return null;
+  const why = dispatch.whyNotSent.get(notId) ?? NO_PLATFORM_CONNECTED;
+  return `The ${halfName(sentKind)} is being sent. ${capitalized(`the ${halfName(notKind)}`)} was not: ${why}`;
 }
 
 /**

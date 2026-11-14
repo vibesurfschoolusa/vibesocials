@@ -11,6 +11,7 @@ import {
   pairDialogLine,
   pairEditNote,
   pairNeedsReload,
+  takesOtherHalf,
   withPairNote,
   type QueueCard,
 } from "./pairActions";
@@ -165,7 +166,7 @@ describe("pairAwareFetch (the Edit dialog's two-step save)", () => {
       return {
         ok: true,
         status: 200,
-        json: async () => ({ ok: true, pair: { id: "story-1", kind: "story", changed: true, note: "Its Story was scheduled too." } }),
+        json: async () => ({ ok: true, otherHalf: { id: "story-1", kind: "story", changed: true, note: "Its Story was scheduled too." } }),
       };
     });
     const wrapped = pairAwareFetch({ ...job("feed-1"), includePair: true }, base);
@@ -178,7 +179,7 @@ describe("pairAwareFetch (the Edit dialog's two-step save)", () => {
     await response.json();
 
     expect(calls).toEqual([{ url: "/api/posts/feed-1/publish", body: { scheduledFor: AT, includePair: true } }]);
-    expect(wrapped.lastAnswer()).toEqual({ ok: true, pair: expect.objectContaining({ changed: true }) });
+    expect(wrapped.lastAnswer()).toEqual({ ok: true, otherHalf: expect.objectContaining({ changed: true }) });
   });
 
   it("leaves another card's requests alone", async () => {
@@ -194,9 +195,9 @@ describe("pairAwareFetch (the Edit dialog's two-step save)", () => {
 
 describe("what an answer does to the cards", () => {
   const card: QueueCard = { ...job("feed-1"), includePair: true };
-  const changed = { pair: { id: "story-1", kind: "story", changed: true, note: "Its Story was cancelled too." } };
+  const changed = { otherHalf: { id: "story-1", kind: "story", changed: true, note: "Its Story was cancelled too." } };
   const leftAlone = {
-    pair: { id: "story-1", kind: "story", changed: false, note: "Its Story was already published, so it was not cancelled." },
+    otherHalf: { id: "story-1", kind: "story", changed: false, note: "Its Story was already published, so it was not cancelled." },
   };
 
   it("changes both halves' cards once the answer says the other half changed too", () => {
@@ -223,24 +224,87 @@ describe("what an answer does to the cards", () => {
       "Scheduled post cancelled. Its Story was already published, so it was not cancelled.",
     );
     expect(withPairNote("Draft deleted.", { ok: true })).toBe("Draft deleted.");
-    expect(withPairNote("Draft deleted.", { pair: { note: 42 } })).toBe("Draft deleted.");
+    expect(withPairNote("Draft deleted.", { otherHalf: { note: 42 } })).toBe("Draft deleted.");
   });
+});
+
+const WHEN = new Date(AT).toLocaleString(undefined, {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
 });
 
 describe("the dialogs of a Feed and Story card", () => {
   const { feed, story } = pair();
   const [card] = foldQueuePairs([feed, story]);
 
-  it("say the Story is part of what the action does", () => {
-    expect(pairDialogLine(card, "cancel")).toBe("Its Story is cancelled too.");
-    expect(pairDialogLine(card, "delete")).toBe("Its Story is deleted too.");
-    expect(pairDialogLine(card, "publish")).toBe("Its Story goes out now too.");
-    expect(pairDialogLine(card, "submit")).toBe("Its Story is sent for approval with it.");
-    expect(pairEditNote(card)).toBe("Changes go to the post and its Story.");
+  it("name the Story, its platforms and its time as part of what the action does", () => {
+    expect(pairDialogLine(card, "cancel")).toBe(`The Story on Instagram, set for ${WHEN}, is cancelled too.`);
+    // A scheduled card offers Cancel, not Delete; a draft pair deletes both.
+    const [draftCard] = foldQueuePairs(Object.values(pair({ status: "draft" }, { status: "draft" })));
+    expect(pairDialogLine(draftCard, "delete")).toBe(`The Story on Instagram, set for ${WHEN}, is deleted too.`);
+    expect(pairDialogLine(card, "publish")).toBe(`The Story on Instagram, set for ${WHEN}, goes out now too.`);
+    expect(pairDialogLine(card, "submit")).toBe(
+      `The Story on Instagram, set for ${WHEN}, is sent for approval with it.`,
+    );
+    expect(pairEditNote(card)).toBe(`Changes also go to the Story on Instagram, set for ${WHEN}.`);
+    expect(takesOtherHalf(card, "cancel")).toBe(true);
   });
 
   it("say nothing for another card", () => {
     expect(pairDialogLine(job("a"), "cancel")).toBeNull();
     expect(pairEditNote(job("a"))).toBeNull();
+    expect(takesOtherHalf(job("a"), "cancel")).toBe(false);
+  });
+
+  // Review of R3: the pair split across pages. The Story is on page 1, its feed
+  // post on page 2, so the Story's card is its own; it still names the feed post.
+  it("a Story card whose feed post is not loaded names the feed post and its time", () => {
+    const lone = job("story-1", {
+      storyOf: { id: "feed-1", scheduledFor: AT },
+      pairHalf: { id: "feed-1", kind: "feed", status: "scheduled", scheduledFor: AT, platforms: ["instagram", "facebook_page"] },
+    });
+    const [only] = foldQueuePairs([lone]);
+
+    expect(only.includePair).toBe(true);
+    expect(pairDialogLine(only, "cancel")).toBe(
+      `The feed post on Instagram and Facebook Page, set for ${WHEN}, is cancelled too.`,
+    );
+    expect(takesOtherHalf(only, "cancel")).toBe(true);
+  });
+
+  it("a feed post going to every connected platform, with no time: says so", () => {
+    const lone = job("story-1", {
+      storyOf: { id: "feed-1", scheduledFor: null },
+      pairHalf: { id: "feed-1", kind: "feed", status: "draft", scheduledFor: null, platforms: null },
+    });
+    expect(pairDialogLine(foldQueuePairs([lone])[0], "delete")).toBe("The feed post, with no time set, is deleted too.");
+  });
+
+  it("a delete never promises to delete a scheduled other half", () => {
+    const lone = job("feed-1", {
+      status: "draft",
+      alsoAsStory: true,
+      pairHalf: { id: "story-1", kind: "story", status: "scheduled", scheduledFor: AT, platforms: ["instagram"] },
+    });
+    const [only] = foldQueuePairs([lone]);
+    expect(pairDialogLine(only, "delete")).toBe(
+      `The Story on Instagram, set for ${WHEN}, is scheduled, so it is not deleted. Cancel it on its own card first.`,
+    );
+    expect(takesOtherHalf(only, "delete")).toBe(false);
+  });
+});
+
+describe("withPairNote and a partly sent pair", () => {
+  it("shows the answer's own message when one half went out and the other did not", () => {
+    expect(
+      withPairNote("Publishing now — track it in Activity.", {
+        message: "The Story is being sent. The feed post was not: Reconnect Facebook Page in Settings.",
+        otherHalf: { id: "story-1", kind: "story", changed: true, note: "Its Story is publishing too." },
+      }),
+    ).toBe("The Story is being sent. The feed post was not: Reconnect Facebook Page in Settings.");
   });
 });

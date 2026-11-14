@@ -50,7 +50,7 @@ function isPairLookup(arg: { where?: { status?: unknown }; select?: Record<strin
   return (
     JSON.stringify(arg?.where?.status) === JSON.stringify({ not: "cancelled" }) &&
     select.storyOfPostJobId === true &&
-    Object.keys(select).length === 3
+    Object.keys(select).length === 5
   );
 }
 
@@ -1386,6 +1386,66 @@ describe("GET /api/posts - show=problems (N3)", () => {
 describe("GET /api/posts - a Feed and Story pair", () => {
   const at = new Date("2026-11-20T15:00:00.000Z");
 
+  // Review of R3: a card whose other half is not loaded (the pair split across
+  // pages) still names that half and its time before acting.
+  it("gives each half its live partner's id, kind, status, time and platforms, in both directions", async () => {
+    postJobFindManyMock
+      .mockResolvedValueOnce([
+        { ...jobWithYouTube(), id: "story-1", storyOfPostJobId: "feed-1", scheduledFor: at },
+        { ...jobWithYouTube(), id: "feed-2", storyOfPostJobId: null, scheduledFor: at },
+      ])
+      .mockResolvedValueOnce([
+        { id: "story-1", storyOfPostJobId: "feed-1", scheduledFor: at, status: "scheduled", publishMetadata: null },
+        {
+          id: "feed-1",
+          storyOfPostJobId: null,
+          scheduledFor: at,
+          status: "scheduled",
+          publishMetadata: { targetPlatforms: ["instagram", "facebook_page"] },
+        },
+        {
+          id: "story-2",
+          storyOfPostJobId: "feed-2",
+          scheduledFor: at,
+          status: "draft",
+          publishMetadata: { targetPlatforms: ["instagram"], instagram: { placement: "story" } },
+        },
+      ]);
+
+    const body = (await (await GET(getRequest())).json()) as PostsResponse;
+    const byId = new Map(body.jobs.map((job) => [job.id, job]));
+
+    expect(byId.get("story-1")?.pairHalf).toEqual({
+      id: "feed-1",
+      kind: "feed",
+      status: "scheduled",
+      scheduledFor: at.toISOString(),
+      platforms: ["instagram", "facebook_page"],
+    });
+    expect(byId.get("feed-2")?.pairHalf).toEqual({
+      id: "story-2",
+      kind: "story",
+      status: "draft",
+      scheduledFor: at.toISOString(),
+      platforms: ["instagram"],
+    });
+  });
+
+  it("names no partner that has moved on (published, publishing, failed)", async () => {
+    postJobFindManyMock
+      .mockResolvedValueOnce([{ ...jobWithYouTube(), id: "story-1", storyOfPostJobId: "feed-1", scheduledFor: at }])
+      .mockResolvedValueOnce([
+        { id: "story-1", storyOfPostJobId: "feed-1", scheduledFor: at, status: "scheduled", publishMetadata: null },
+        { id: "feed-1", storyOfPostJobId: null, scheduledFor: at, status: "completed", publishMetadata: null },
+      ]);
+
+    const body = (await (await GET(getRequest())).json()) as PostsResponse;
+
+    expect(body.jobs[0]).not.toHaveProperty("pairHalf");
+    // The label still says it is a Story of that post.
+    expect(body.jobs[0]).toHaveProperty("storyOf");
+  });
+
   it("marks a feed post whose Story sits on another page (the pair split across pages)", async () => {
     postJobFindManyMock
       // This page has only the feed post; its Story was created after it and is on the previous page.
@@ -1403,7 +1463,7 @@ describe("GET /api/posts - a Feed and Story pair", () => {
         status: { not: "cancelled" },
         OR: [{ storyOfPostJobId: { in: ["feed-1"] } }],
       },
-      select: { id: true, storyOfPostJobId: true, scheduledFor: true },
+      select: { id: true, storyOfPostJobId: true, scheduledFor: true, status: true, publishMetadata: true },
     });
     expect(body.jobs[0]).toMatchObject({ alsoAsStory: true });
     expect(body.jobs[0]).not.toHaveProperty("storyOf");
@@ -1447,7 +1507,7 @@ describe("GET /api/posts - a Feed and Story pair", () => {
         status: { not: "cancelled" },
         OR: [{ storyOfPostJobId: { in: ["story-1", "feed-1", "other"] } }, { id: { in: ["feed-1"] } }],
       },
-      select: { id: true, storyOfPostJobId: true, scheduledFor: true },
+      select: { id: true, storyOfPostJobId: true, scheduledFor: true, status: true, publishMetadata: true },
     });
     const byId = new Map(body.jobs.map((job) => [job.id, job]));
     // R3-client-journey M1: the feed post's id too, so the Queue folds the pair into one card.

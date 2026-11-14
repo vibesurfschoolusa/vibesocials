@@ -1,3 +1,5 @@
+import type { Platform } from "@prisma/client";
+
 import { platformLabel } from "@/lib/platforms";
 import type { PostJobDTO } from "@/lib/postsDto";
 
@@ -139,8 +141,9 @@ export function pairAwareFetch(
 
 type PairAnswer = { id: string; changed: boolean; note: string };
 
+/** The answer's `otherHalf` (its `pair` is R2's string, kept for old tabs). */
 function pairOf(data: unknown): PairAnswer | null {
-  const pair = (data as { pair?: unknown } | null)?.pair as Partial<PairAnswer> | undefined;
+  const pair = (data as { otherHalf?: unknown } | null)?.otherHalf as Partial<PairAnswer> | undefined;
   if (!pair || typeof pair.id !== "string" || typeof pair.note !== "string") return null;
   return { id: pair.id, changed: pair.changed === true, note: pair.note };
 }
@@ -159,31 +162,91 @@ export function pairNeedsReload(card: PairFlag, data: unknown): boolean {
   return Boolean(card.includePair) && !pairOf(data)?.changed;
 }
 
-/** The toast: the action's own message, then the answer's sentence about the other half. */
+/**
+ * The toast: the action's own message, then the answer's sentence about the
+ * other half. When one half went out and the other did not, the answer's own
+ * `message` says both, and is shown instead.
+ */
 export function withPairNote(message: string, data: unknown): string {
+  const own = (data as { message?: unknown } | null)?.message;
+  if (typeof own === "string" && own) return own;
   const pair = pairOf(data);
   return pair ? `${message} ${pair.note}` : message;
 }
 
-/** The confirm dialog's line on a folded card: the Story is part of what the action does. */
-export function pairDialogLine(
-  card: QueueCard,
-  action: "cancel" | "delete" | "publish" | "submit",
-): string | null {
-  if (!card.story) return null;
+/** The other half a card's action also takes: the folded Story, or the listed partner of a lone half. */
+type OtherHalf = { kind: "story" | "feed"; status: string; scheduledFor: string | null; platforms: readonly Platform[] | null };
+
+function otherHalfOf(card: QueueCard): OtherHalf | null {
+  if (card.story) {
+    const targets = card.story.publish?.targetPlatforms ?? null;
+    const stories = (card.story.storyPlatforms ?? []).filter((p) => !targets || targets.includes(p));
+    return { kind: "story", status: card.story.status, scheduledFor: card.story.scheduledFor, platforms: stories };
+  }
+  if (card.includePair && card.pairHalf) return card.pairHalf;
+  return null;
+}
+
+function formatTimestamp(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/** "the Story on Instagram, set for Fri, Nov 20, 2026, 3:00 PM" */
+function describeHalf(half: OtherHalf): string {
+  const platforms = half.platforms?.length
+    ? ` on ${joinLabels(half.platforms.map(platformLabel))}`
+    : "";
+  const time = half.scheduledFor ? `set for ${formatTimestamp(half.scheduledFor)}` : "with no time set";
+  return `the ${half.kind === "story" ? "Story" : "feed post"}${platforms}, ${time}`;
+}
+
+type DialogAction = "cancel" | "delete" | "publish" | "submit";
+
+/** Whether the action also takes the other half (a delete never takes a scheduled one). */
+export function takesOtherHalf(card: QueueCard, action: DialogAction): boolean {
+  const half = otherHalfOf(card);
+  return half !== null && !(action === "delete" && half.status === "scheduled");
+}
+
+/**
+ * The confirm dialog's line: the other half the action also takes, with its
+ * platforms and time, so nothing goes unnamed even when that half is on a
+ * page not loaded yet. Null for a card that is not a pair.
+ */
+export function pairDialogLine(card: QueueCard, action: DialogAction): string | null {
+  const half = otherHalfOf(card);
+  if (!half) return null;
+  const named = capitalized(describeHalf(half));
+  if (!takesOtherHalf(card, action)) {
+    return `${named}, is scheduled, so it is not deleted. Cancel it on its own card first.`;
+  }
   switch (action) {
     case "cancel":
-      return "Its Story is cancelled too.";
+      return `${named}, is cancelled too.`;
     case "delete":
-      return "Its Story is deleted too.";
+      return `${named}, is deleted too.`;
     case "publish":
-      return "Its Story goes out now too.";
+      return `${named}, goes out now too.`;
     case "submit":
-      return "Its Story is sent for approval with it.";
+      return `${named}, is sent for approval with it.`;
   }
 }
 
-/** The Edit dialog's line on a folded card. */
+/** The Edit dialog's line on a pair card. */
 export function pairEditNote(card: QueueCard): string | null {
-  return card.story ? "Changes go to the post and its Story." : null;
+  const half = otherHalfOf(card);
+  return half ? `Changes also go to ${describeHalf(half)}.` : null;
+}
+
+function capitalized(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }

@@ -234,6 +234,20 @@ export interface PostJobDTO {
    */
   storyOf?: { id: string; scheduledFor: string | null };
   alsoAsStory?: boolean;
+  /**
+   * Review of R3: this half's partner while it is a draft or scheduled (the
+   * Story of a feed post, or the feed post of a Story): its state, time and
+   * platforms (a feed post with no chosen platforms: null). Sent whether or not
+   * the partner is on the same page, so a Queue card always names the half an
+   * action also takes. Absent with no live partner.
+   */
+  pairHalf?: {
+    id: string;
+    kind: "story" | "feed";
+    status: PostJobStatus;
+    scheduledFor: string | null;
+    platforms: Platform[] | null;
+  };
 }
 
 /**

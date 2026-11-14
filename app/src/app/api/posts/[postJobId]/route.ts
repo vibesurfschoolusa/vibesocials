@@ -366,7 +366,7 @@ export async function PATCH(request: NextRequest, context: PostJobRouteContext) 
       { status: 409 },
     );
   }
-  const pairAnswer = result.pair ? { pair: result.pair } : {};
+  const pairAnswer = result.pair ? { otherHalf: result.pair } : {};
 
   if (approvalEffect === "rehold") {
     // 2026-11-01 audit (M1): the post as it is NOW - this request's edits laid
@@ -496,5 +496,5 @@ export async function DELETE(request: NextRequest, context: PostJobRouteContext)
     }
   }
 
-  return NextResponse.json({ ok: true, ...(result.pair ? { pair: result.pair } : {}) }, { status: 200 });
+  return NextResponse.json({ ok: true, ...(result.pair ? { otherHalf: result.pair } : {}) }, { status: 200 });
 }

@@ -18,8 +18,10 @@ const {
   failPendingMock,
   checkDailyPostLimitMock,
   transactionMock,
+  resultFindFirstMock,
 } = vi.hoisted(() => ({
   transactionMock: vi.fn(),
+  resultFindFirstMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   findFirstMock: vi.fn(),
@@ -40,6 +42,7 @@ vi.mock("@/lib/db", () => ({
   prisma: {
     postJob: { findFirst: findFirstMock, updateMany: updateManyMock },
     socialConnection: { count: connectionCountMock },
+    postJobResult: { findFirst: resultFindFirstMock },
     $transaction: transactionMock,
   },
 }));
@@ -1169,7 +1172,7 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
     await expect(res.json()).resolves.toEqual({
       ok: true,
       status: "in_progress",
-      pair: { id: "story-1", kind: "story", changed: true, note: "Its Story is publishing too." },
+      otherHalf: { id: "story-1", kind: "story", changed: true, note: "Its Story is publishing too." },
     });
     expect(transactionMock).toHaveBeenCalledTimes(1);
     expect(updateManyMock.mock.calls).toEqual([
@@ -1211,7 +1214,7 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
 
     const res = await POST(req({ includePair: true }), ctx("job-1"));
 
-    expect((await res.json()).pair).toEqual({
+    expect((await res.json()).otherHalf).toEqual({
       id: "story-1",
       kind: "story",
       changed: false,
@@ -1231,6 +1234,59 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
     expect(failPendingMock.mock.calls.map((call) => call[0])).toEqual(["job-1", "story-1"]);
   });
 
+  // Review of R3: one half had nothing it could send but the other went out.
+  it("the feed post has nothing sendable but its Story is sent: success, saying what went out and what did not", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+    prepareDispatchMock.mockImplementation(async (id: string) =>
+      id === "job-1"
+        ? { ok: false, reason: "NO_CONNECTIONS" }
+        : { ok: true, event: { postJobId: id, userId: "user-1", workspaceId: "ws-1", mediaItemId: "m1", baseCaption: "c", perPlatformOverrides: null } },
+    );
+    resultFindFirstMock.mockResolvedValue({ errorMessage: "Reconnect Facebook Page in Settings." });
+
+    const res = await POST(req({ includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(202);
+    const body = await res.json();
+    expect(body.status).toBe("in_progress");
+    expect(body.message).toBe("The Story is being sent. The feed post was not: Reconnect Facebook Page in Settings.");
+    expect(body.otherHalf).toEqual(expect.objectContaining({ id: "story-1", changed: true }));
+    expect(resultFindFirstMock).toHaveBeenCalledWith({
+      where: { postJobId: "job-1", status: "failed" },
+      orderBy: { createdAt: "asc" },
+      select: { errorMessage: true },
+    });
+    expect(inngestSendMock).toHaveBeenCalledWith(expect.objectContaining({ id: "publish-story-1" }));
+  });
+
+  it("the Story has nothing sendable but the feed post is sent: success, saying so", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+    prepareDispatchMock.mockImplementation(async (id: string) =>
+      id === "story-1"
+        ? { ok: false, reason: "NO_CONNECTIONS" }
+        : { ok: true, event: { postJobId: id, userId: "user-1", workspaceId: "ws-1", mediaItemId: "m1", baseCaption: "c", perPlatformOverrides: null } },
+    );
+    resultFindFirstMock.mockResolvedValue(null);
+
+    const res = await POST(req({ includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(202);
+    expect((await res.json()).message).toBe(
+      "The feed post is being sent. The Story was not: none of its platforms is connected. Activity shows what to reconnect.",
+    );
+  });
+
+  it("neither half has anything sendable: Nothing was posted, as before", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+    prepareDispatchMock.mockResolvedValue({ ok: false, reason: "NO_CONNECTIONS" });
+
+    const res = await POST(req({ includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/^Nothing was posted/);
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
   it("member submit holds both halves and the owners get ONE email with the Story line", async () => {
     getWorkspaceContextMock.mockResolvedValue(memberInApprovalWorkspace());
     findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
@@ -1238,7 +1294,7 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
     const res = await POST(req({ includePair: true }), ctx("job-1"));
 
     expect(res.status).toBe(202);
-    expect((await res.json()).pair).toEqual({
+    expect((await res.json()).otherHalf).toEqual({
       id: "story-1",
       kind: "story",
       changed: true,
@@ -1283,7 +1339,7 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
 
     const res = await POST(req({ includePair: true }), ctx("job-1"));
 
-    expect((await res.json()).pair).toEqual({
+    expect((await res.json()).otherHalf).toEqual({
       id: "story-1",
       kind: "story",
       changed: false,
@@ -1299,7 +1355,7 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
     const res = await POST(req({ scheduledFor: FUTURE, includePair: true }), ctx("job-1"));
 
     expect(res.status).toBe(200);
-    expect((await res.json()).pair).toEqual({
+    expect((await res.json()).otherHalf).toEqual({
       id: "story-1",
       kind: "story",
       changed: true,

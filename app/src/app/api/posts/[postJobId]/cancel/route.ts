@@ -45,7 +45,8 @@ const MUTATE_RATE_LIMIT = { route: "posts/mutate", limit: 60, windowMs: 5 * 60 *
  *
  * R3-client-journey M1: with `{ includePair: true }` (a Feed and Story card)
  * the same write also cancels the other half, in one transaction, and the
- * answer's `pair` says what happened to it (pairRule.ts).
+ * answer's `otherHalf` says what happened to it (pairRule.ts). The answer
+ * keeps R2's `pair` string too, for a tab still running the old Queue.
  */
 export async function POST(request: NextRequest, context: PostJobRouteContext) {
   const workspaceContext = await getWorkspaceContext();
@@ -117,7 +118,26 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   }
 
   return NextResponse.json(
-    { ok: true, status: "cancelled", ...(result.pair ? { pair: result.pair } : {}) },
+    {
+      ok: true,
+      status: "cancelled",
+      ...(includePair ? { pair: oldPairAnswer(half, result.pair) } : {}),
+      ...(result.pair ? { otherHalf: result.pair } : {}),
+    },
     { status: 200 },
   );
+}
+
+/**
+ * The answer's `pair` string as R2's Queue reads it, for a tab still running
+ * that code: "cancelled", "not_cancelable" (it had moved on or changed), or
+ * "none" (no other half, or one already cancelled). The new Queue reads
+ * `otherHalf`.
+ */
+function oldPairAnswer(
+  half: { status: string } | null,
+  report: { changed: boolean } | null,
+): "cancelled" | "not_cancelable" | "none" {
+  if (!half || half.status === "cancelled") return "none";
+  return report?.changed ? "cancelled" : "not_cancelable";
 }

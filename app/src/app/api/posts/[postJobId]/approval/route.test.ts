@@ -21,8 +21,10 @@ const {
   stampJobFindUniqueMock,
   mediaUpdateManyMock,
   transactionMock,
+  resultFindFirstMock,
 } = vi.hoisted(() => ({
   transactionMock: vi.fn(),
+  resultFindFirstMock: vi.fn(),
   stampJobFindUniqueMock: vi.fn(),
   mediaUpdateManyMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
@@ -47,6 +49,7 @@ vi.mock("@/lib/db", () => ({
     // Second review, item 1: a reject ends the post through finishPostJob, which
     // stamps its media (read the post's media, then write lastUsedAt).
     mediaItem: { updateMany: mediaUpdateManyMock },
+    postJobResult: { findFirst: resultFindFirstMock },
     $transaction: transactionMock,
   },
 }));
@@ -840,7 +843,9 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
       status: "cancelled",
       approvalState: "rejected",
       scheduledFor: null,
-      pair: { id: "story-1", kind: "story", changed: true, note: "Its Story was rejected too." },
+      // Old tabs (R2) read this flag; the Queue reads otherHalf.
+      pairRejected: true,
+      otherHalf: { id: "story-1", kind: "story", changed: true, note: "Its Story was rejected too." },
     });
     expect(transactionMock).toHaveBeenCalledTimes(1);
     expect(findFirstMock).toHaveBeenLastCalledWith(
@@ -868,7 +873,7 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
 
     const res = await POST(req({ decision: "approve", includePair: true }), ctx("job-1"));
 
-    expect((await res.json()).pair).toEqual({
+    expect((await res.json()).otherHalf).toEqual({
       id: "story-1",
       kind: "story",
       changed: true,
@@ -910,6 +915,25 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
     ]);
   });
 
+  // Review of R3: one half had nothing it could send but the other went out.
+  it("approved to publish now, the feed post has nothing sendable but its Story is sent: success, saying so", async () => {
+    findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+    prepareDispatchMock.mockImplementation(async (id: string) =>
+      id === "job-1"
+        ? { ok: false, reason: "NO_CONNECTIONS" }
+        : { ok: true, event: { postJobId: id, userId: "member-1", workspaceId: "ws-1", mediaItemId: "m1", baseCaption: "c", perPlatformOverrides: null } },
+    );
+    resultFindFirstMock.mockResolvedValue({ errorMessage: "Reconnect Facebook Page in Settings." });
+
+    const res = await POST(req({ decision: "approve", includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).message).toBe(
+      "Approved. The Story is being sent. The feed post was not: Reconnect Facebook Page in Settings.",
+    );
+    expect(inngestSendMock).toHaveBeenCalledWith(expect.objectContaining({ id: "publish-story-1" }));
+  });
+
   it("a pair approved to publish now counts as two posts today, neither against itself", async () => {
     findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
 
@@ -927,7 +951,7 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
 
     const res = await POST(req({ decision: "reject", includePair: true }), ctx("job-1"));
 
-    expect((await res.json()).pair).toEqual({
+    expect((await res.json()).otherHalf).toEqual({
       id: "feed-1",
       kind: "feed",
       changed: true,
@@ -945,7 +969,7 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
 
     const res = await POST(req({ decision: "reject", includePair: true }), ctx("job-1"));
 
-    expect((await res.json()).pair).toEqual({
+    expect((await res.json()).otherHalf).toEqual({
       id: "story-1",
       kind: "story",
       changed: false,
@@ -956,13 +980,40 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
     expect(sendEmailMock.mock.calls[0][0].html).not.toContain("Its Story");
   });
 
-  it("without includePair a decision takes this post alone, exactly as for any post", async () => {
-    findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null }));
+  it("without includePair an approval takes this post alone, exactly as for any post", async () => {
+    findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null, scheduledFor: FUTURE }));
+
+    const res = await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    expect(Object.keys(await res.json())).not.toContain("otherHalf");
+    expect(findFirstMock).toHaveBeenCalledTimes(1);
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+    expect(transactionMock).not.toHaveBeenCalled();
+  });
+
+  // Review of R3: a tab still running the old Queue sends no includePair. Its
+  // reject keeps R2's behaviour: the held other half is rejected too.
+  it("a reject without includePair (an old tab) rejects both held halves, as before", async () => {
+    findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
 
     const res = await POST(req({ decision: "reject" }), ctx("job-1"));
 
-    expect(Object.keys(await res.json())).not.toContain("pair");
-    expect(findFirstMock).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+    expect((await res.json()).pairRejected).toBe(true);
+    expect(updateManyMock.mock.calls).toEqual([
+      [{ where: CLAIM_WHERE, data: { status: "cancelled" } }],
+      [{ where: STORY_CLAIM_WHERE, data: { status: "cancelled" } }],
+    ]);
+  });
+
+  it("a reject without includePair of a post that is not a pair: one write, no pairRejected", async () => {
+    findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null })).mockResolvedValueOnce(null);
+
+    const res = await POST(req({ decision: "reject" }), ctx("job-1"));
+
+    const body = await res.json();
+    expect(body.pairRejected).toBeUndefined();
+    expect(body.otherHalf).toBeUndefined();
     expect(updateManyMock).toHaveBeenCalledTimes(1);
     expect(transactionMock).not.toHaveBeenCalled();
   });

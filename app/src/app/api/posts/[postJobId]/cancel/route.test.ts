@@ -224,7 +224,9 @@ describe("POST /api/posts/[postJobId]/cancel - a Feed and Story card", () => {
     await expect(res.json()).resolves.toEqual({
       ok: true,
       status: "cancelled",
-      pair: { id: "story-1", kind: "story", changed: true, note: "Its Story was cancelled too." },
+      // Old tabs (R2) read this string; the Queue reads otherHalf.
+      pair: "cancelled",
+      otherHalf: { id: "story-1", kind: "story", changed: true, note: "Its Story was cancelled too." },
     });
     expect(transactionMock).toHaveBeenCalledTimes(1);
     expect(findFirstMock).toHaveBeenLastCalledWith(
@@ -250,7 +252,7 @@ describe("POST /api/posts/[postJobId]/cancel - a Feed and Story card", () => {
 
     const res = await POST(bodyReq({ includePair: true }), ctx("job-1"));
 
-    expect((await res.json()).pair).toEqual({
+    expect((await res.json()).otherHalf).toEqual({
       id: "feed-1",
       kind: "feed",
       changed: true,
@@ -274,10 +276,10 @@ describe("POST /api/posts/[postJobId]/cancel - a Feed and Story card", () => {
   });
 
   it.each([
-    ["cancelled", "Its Story was already cancelled, so it was not cancelled."],
-    ["in_progress", "Its Story has already started publishing, so it was not cancelled."],
-    ["completed", "Its Story was already published, so it was not cancelled."],
-  ])("the other half %s: this post is cancelled and the answer names the half left alone", async (status, note) => {
+    ["cancelled", "Its Story was already cancelled, so it was not cancelled.", "none"],
+    ["in_progress", "Its Story has already started publishing, so it was not cancelled.", "not_cancelable"],
+    ["completed", "Its Story was already published, so it was not cancelled.", "not_cancelable"],
+  ])("the other half %s: this post is cancelled and the answer names the half left alone", async (status, note, old) => {
     findFirstMock
       .mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow() })
       .mockResolvedValueOnce(pairRow({ status }));
@@ -287,7 +289,8 @@ describe("POST /api/posts/[postJobId]/cancel - a Feed and Story card", () => {
     await expect(res.json()).resolves.toEqual({
       ok: true,
       status: "cancelled",
-      pair: { id: "story-1", kind: "story", changed: false, note },
+      pair: old,
+      otherHalf: { id: "story-1", kind: "story", changed: false, note },
     });
     expect(updateManyMock).toHaveBeenCalledTimes(1);
   });
@@ -301,7 +304,9 @@ describe("POST /api/posts/[postJobId]/cancel - a Feed and Story card", () => {
     const res = await POST(bodyReq({ includePair: true }), ctx("job-1"));
 
     expect(res.status).toBe(200);
-    expect((await res.json()).pair).toEqual({
+    const body = await res.json();
+    expect(body.pair).toBe("not_cancelable");
+    expect(body.otherHalf).toEqual({
       id: "story-1",
       kind: "story",
       changed: false,
@@ -309,12 +314,12 @@ describe("POST /api/posts/[postJobId]/cancel - a Feed and Story card", () => {
     });
   });
 
-  it("a post with no other half: no pair in the answer", async () => {
+  it("a post with no other half: the old answer's none, and no otherHalf", async () => {
     findFirstMock.mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow() }).mockResolvedValueOnce(null);
 
     const res = await POST(bodyReq({ includePair: true }), ctx("job-1"));
 
-    await expect(res.json()).resolves.toEqual({ ok: true, status: "cancelled" });
+    await expect(res.json()).resolves.toEqual({ ok: true, status: "cancelled", pair: "none" });
   });
 
   it("when this post cannot be cancelled, the other half is neither read nor written", async () => {

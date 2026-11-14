@@ -24,6 +24,7 @@ import {
   dispatchNow,
   notSentNote,
   pairLimitArgs,
+  partialSendMessage,
   pairStoryPlatforms,
   readPairHalf,
   wantsPair,
@@ -200,11 +201,13 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   });
 
   // R3-client-journey M1: a held Feed and Story card is one submission, so the
-  // decision takes both halves; only a half still awaiting a decision.
+  // decision takes both halves; only a half still awaiting a decision. A reject
+  // takes it even without includePair, as R2 did, so a tab still running the
+  // old Queue never rejects one half alone.
   const half = await readPairHalf(
     workspaceId,
     { id: postJobId, storyOfPostJobId: job.storyOfPostJobId ?? null },
-    wantsPair(parsedBody),
+    wantsPair(parsedBody) || !approving,
   );
   const blocker = (other: PairHalf) => (isAwaitingApprovalDecision(other) ? null : "is not waiting for approval");
 
@@ -283,6 +286,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   }
   let pair = result.pair;
   const pairDecided = Boolean(half && pair?.changed);
+  // One half went out and the other had nothing to send: a success that says both.
+  let partial: string | null = null;
 
   // Publish-now path: materialize results from current connections and fire the
   // publish events (one per half of a pair), exactly like the publish route.
@@ -291,7 +296,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       route: "POST /api/posts/[postJobId]/approval",
     });
     if (pair && dispatch.notSent.has(pair.id)) pair = { ...pair, note: notSentNote(pair.kind) };
-    if (dispatch.notSent.has(postJobId)) {
+    partial = partialSendMessage(postJobId, half, dispatch);
+    if (dispatch.notSent.has(postJobId) && !partial) {
       // No chosen platform is connected (F1 H1): `prepare` gave each one a
       // failed result with its sentence and marked the job failed, so it never
       // hangs in_progress. The approval itself stands (recorded above).
@@ -300,7 +306,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
           error:
             "Approved, but nothing was posted: none of this post's platforms is connected. Activity shows what to reconnect.",
           code: dispatch.reasons.get(postJobId),
-          ...(pair ? { pair } : {}),
+          ...(pair ? { otherHalf: pair } : {}),
         },
         { status: 409 },
       );
@@ -353,7 +359,10 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       status: nextStatus,
       approvalState,
       scheduledFor: scheduledForIso,
-      ...(pair ? { pair } : {}),
+      ...(partial ? { message: `Approved. ${partial}` } : {}),
+      // R2's answer, still read by a tab running the old Queue.
+      ...(!approving && pairDecided ? { pairRejected: true } : {}),
+      ...(pair ? { otherHalf: pair } : {}),
     },
     { status: 200 },
   );

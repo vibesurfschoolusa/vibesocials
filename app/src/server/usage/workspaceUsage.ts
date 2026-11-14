@@ -1,5 +1,3 @@
-import type { Prisma } from "@prisma/client";
-
 import { planSectionActions } from "@/components/planSectionView";
 import { BILLING_FIELDS_SELECT, billingEnabled, billingFieldsSelect } from "@/lib/billing";
 import { prisma } from "@/lib/db";
@@ -82,17 +80,6 @@ export async function getWorkspaceLimits(workspaceId: string): Promise<Workspace
   return (await loadWorkspace(workspaceId)).limits;
 }
 
-/**
- * R3-publishing L3: a post that failed before anything was sent (a Post now
- * with nothing it could send: every platform needed reconnecting or was gone,
- * or none could take it) used no slot. Every result of such a post carries one
- * of these codes, and one with no results at all was never tried.
- */
-const FAILED_UNSENT: Prisma.PostJobWhereInput = {
-  status: "failed",
-  results: { every: { errorCode: { in: ["RECONNECT_REQUIRED", "CONNECTION_GONE"] } } },
-};
-
 /** Posts counting toward the UTC day of `day`: by scheduledFor, else by createdAt. */
 function countPostsOnUtcDay(
   workspaceId: string,
@@ -104,7 +91,6 @@ function countPostsOnUtcDay(
     where: {
       workspaceId,
       status: { notIn: ["draft", "cancelled"] },
-      NOT: FAILED_UNSENT,
       ...(typeof excludePostJobId === "string" ? { id: { not: excludePostJobId } } : {}),
       ...(Array.isArray(excludePostJobId) ? { id: { notIn: [...excludePostJobId] } } : {}),
       OR: [
