@@ -57,6 +57,8 @@ import {
   materializeAndDispatchChunk,
   materializeClaimedJobs,
   reconcileStuckInProgressJobs,
+  REQUEUE_QUIET_MS,
+  SEND_GIVE_UP_MS,
   splitEventsBySize,
   STUCK_IN_PROGRESS_MS,
 } from "./scheduledScanner";
@@ -74,6 +76,8 @@ beforeEach(() => {
   prepareDeferredMock.mockReset();
   stampMediaMock.mockReset();
   stampMediaMock.mockResolvedValue(undefined);
+  // The reconciler's two unsent-post statements find nothing unless a test says so.
+  queryRawMock.mockResolvedValue([]);
 });
 
 // 2026-11-01 scale audit (jobs H6): a 500-post burst used to take minutes to
@@ -338,6 +342,101 @@ describe("reconcileStuckInProgressJobs", () => {
         where: { id: { in: ["r-claimed"] }, status: "pending", claimRunId: { not: null } },
       }),
     );
+  });
+});
+
+// F1 H3 (R1 publishing): a scheduled post whose materialize step threw stayed
+// in_progress with no results; 2 h later the reconciler failed it, Activity said
+// "no platforms were connected", and neither Retry nor Post now could send it.
+// It now goes back to `scheduled`, so the claim right after the reconcile (same
+// step, next tick) sends it again; after 2 h it fails with an honest sentence.
+describe("reconcileStuckInProgressJobs - a scheduled post that was never sent (F1 H3)", () => {
+  /** The SQL text of the n-th $queryRaw call, whitespace-collapsed. */
+  function sqlOf(call: number): string {
+    const [strings] = queryRawMock.mock.calls[call] as [TemplateStringsArray, ...unknown[]];
+    return strings.join("$").replace(/\s+/g, " ");
+  }
+  const valuesOf = (call: number) => (queryRawMock.mock.calls[call] as unknown[]).slice(1);
+
+  it("waits 6 minutes of quiet and gives up after 2 hours", () => {
+    expect(REQUEUE_QUIET_MS).toBe(6 * 60 * 1000);
+    expect(SEND_GIVE_UP_MS).toBe(2 * 60 * 60 * 1000);
+  });
+
+  it("puts an in_progress post with scheduledFor and no results back to scheduled", async () => {
+    queryRawMock.mockResolvedValueOnce([{ id: "job-a" }]).mockResolvedValueOnce([]);
+    findManyMock.mockResolvedValue([]);
+
+    const out = await reconcileStuckInProgressJobs(NOW);
+
+    expect(out).toEqual({ reconciled: 0, requeued: 1, gaveUp: 0 });
+    const sql = sqlOf(0);
+    expect(sql).toMatch(/UPDATE "PostJob" SET "status" = 'scheduled'::"PostJobStatus"/);
+    expect(sql).toContain(`j."status" = 'in_progress'::"PostJobStatus"`);
+    expect(sql).toContain(`j."scheduledFor" IS NOT NULL`);
+    expect(sql).toMatch(/j\."scheduledFor" >= \(\$::timestamptz AT TIME ZONE 'UTC'\)/);
+    expect(sql).toMatch(/j\."updatedAt" < \(\$::timestamptz AT TIME ZONE 'UTC'\)/);
+    expect(sql).toContain('NOT EXISTS (SELECT 1 FROM "PostJobResult" r WHERE r."postJobId" = j."id")');
+    expect(sql).toContain("FOR UPDATE SKIP LOCKED");
+    expect(valuesOf(0)).toEqual(
+      expect.arrayContaining([
+        NOW,
+        new Date(NOW.getTime() - SEND_GIVE_UP_MS),
+        new Date(NOW.getTime() - REQUEUE_QUIET_MS),
+      ]),
+    );
+  });
+
+  // Never twice: the UPDATE itself re-checks that the post is still in_progress
+  // with no results, so a post whose results were made meanwhile (it is being
+  // sent) is left alone; the claim only takes `scheduled` rows, and the
+  // materialize creates results only when there are none.
+  it("re-checks in the UPDATE itself that the post is still in_progress with no results", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await reconcileStuckInProgressJobs(NOW);
+
+    const sql = sqlOf(0);
+    expect(sql).toMatch(/\) AND "status" = 'in_progress'::"PostJobStatus" AND NOT EXISTS \(SELECT 1 FROM "PostJobResult" r WHERE r\."postJobId" = "PostJob"\."id"\)/);
+  });
+
+  it("after 2 hours fails it instead, stamps its media, and leaves Post now to send it", async () => {
+    queryRawMock.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: "job-old" }]);
+    findManyMock.mockResolvedValue([]);
+
+    const out = await reconcileStuckInProgressJobs(NOW);
+
+    expect(out).toEqual({ reconciled: 0, requeued: 0, gaveUp: 1 });
+    const sql = sqlOf(1);
+    expect(sql).toMatch(/UPDATE "PostJob" SET "status" = 'failed'::"PostJobStatus"/);
+    expect(sql).toMatch(/j\."scheduledFor" < \(\$::timestamptz AT TIME ZONE 'UTC'\)/);
+    expect(sql).toContain('NOT EXISTS (SELECT 1 FROM "PostJobResult" r WHERE r."postJobId" = j."id")');
+    expect(stampMediaMock).toHaveBeenCalledWith(expect.anything(), "job-old", NOW);
+  });
+
+  it("runs before the stuck-job pass, so a post put back is not also failed", async () => {
+    findManyMock.mockResolvedValue([]);
+
+    await reconcileStuckInProgressJobs(NOW);
+
+    expect(queryRawMock).toHaveBeenCalledTimes(2);
+    expect(queryRawMock.mock.invocationCallOrder[1]).toBeLessThan(findManyMock.mock.invocationCallOrder[0]);
+  });
+
+  it("leaves a job with results to the stuck-job pass, unchanged", async () => {
+    findManyMock.mockResolvedValue([{ id: "stuck-r" }]);
+    resultFindManyMock
+      .mockResolvedValueOnce([{ id: "r1", status: "success", claimRunId: "run-1" }])
+      .mockResolvedValueOnce([{ status: "success" }]);
+    updateManyMock.mockResolvedValue({ count: 1 });
+
+    const out = await reconcileStuckInProgressJobs(NOW);
+
+    expect(out).toEqual({ reconciled: 1, requeued: 0, gaveUp: 0 });
+    expect(updateManyMock).toHaveBeenCalledWith({
+      where: { id: "stuck-r", status: "in_progress" },
+      data: { status: "completed" },
+    });
   });
 });
 

@@ -15,6 +15,7 @@ import { PLATFORM_ORDER, platformLabel, SETTINGS_CONNECTIONS_HREF } from "@/lib/
 import { platformPostUrl } from "@/lib/platformPostUrl";
 import type { PostJobDTO } from "@/lib/postsDto";
 import { PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
+import { OUR_SIDE_FAILURE_MESSAGE } from "@/lib/publishFailureText";
 import { describeDeferral, selectDeferrals } from "@/lib/resultDeferral";
 import { PlatformResultBadge } from "./platform-result";
 import { DailyMetricStats, PostMetricStats } from "./post-metric-stats";
@@ -356,7 +357,13 @@ export function PostJobCard({
         </ul>
       ) : null}
 
-      {job.status === "failed" && results.length === 0 ? (
+      {/* F1 H3: a post with chosen platforms gets a result for each when it is
+          sent, even an unconnected one, so none at all means our side never sent it. */}
+      {job.status === "failed" && results.length === 0 && job.publish?.targetPlatforms?.length ? (
+        <p className="mt-3 rounded-[var(--radius)] border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-foreground">
+          {OUR_SIDE_FAILURE_MESSAGE}
+        </p>
+      ) : job.status === "failed" && results.length === 0 ? (
         <p className="mt-3 rounded-[var(--radius)] border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-foreground">
           This post failed because no platforms were connected when it ran. Connect a
           platform in <Link href={SETTINGS_CONNECTIONS_HREF} className="font-medium text-primary underline underline-offset-2">Settings</Link> and create it again.

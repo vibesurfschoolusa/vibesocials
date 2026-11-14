@@ -75,6 +75,23 @@ export const STUCK_IN_PROGRESS_MS = 2 * 60 * 60 * 1000;
 export const STUCK_RECONCILE_BATCH = 50;
 
 /**
+ * F1 H3: how long a claimed scheduled post must sit with no results before the
+ * reconciler takes it as unsent and puts it back. Longer than a route's 300 s,
+ * so a Post now whose materialize is still running is never touched; shorter
+ * than the scanner's 10-minute tick, so the next tick sends it again. The
+ * scanner's own chunk steps cannot be mid-run then: `singleton: skip` runs the
+ * reconciler only when no earlier scan is still going.
+ */
+export const REQUEUE_QUIET_MS = 6 * 60 * 1000;
+
+/**
+ * F1 H3: a scheduled post that still could not be sent this long after its time
+ * fails, with OUR_SIDE_FAILURE_MESSAGE in Activity, instead of being put back
+ * again. Post now sends it.
+ */
+export const SEND_GIVE_UP_MS = 2 * 60 * 60 * 1000;
+
+/**
  * Atomically claim scheduled jobs whose `scheduledFor` has arrived.
  *
  * ONE statement (2026-11-01 audit): the inner SELECT locks the due rows with
@@ -345,12 +362,17 @@ export async function materializeAndDispatchChunk(
  * died instead, the job becomes a candidate `maxAgeMs` after the wait ended.
  *
  * Conditional `updateMany` keeps concurrent reconcilers safe.
+ *
+ * F1 H3: first, a scheduled post that was claimed but never got its results
+ * (its materialize threw, or its step died) is handled by
+ * {@link requeueUnsentScheduledJobs}, so it is sent again instead of failed.
  */
 export async function reconcileStuckInProgressJobs(
   now: Date,
   take: number = STUCK_RECONCILE_BATCH,
   maxAgeMs: number = STUCK_IN_PROGRESS_MS,
-): Promise<{ reconciled: number }> {
+): Promise<{ reconciled: number; requeued: number; gaveUp: number }> {
+  const { requeued, gaveUp } = await requeueUnsentScheduledJobs(now, take);
   const cutoff = new Date(now.getTime() - maxAgeMs);
   const candidates = await prisma.postJob.findMany({
     where: {
@@ -422,5 +444,81 @@ export async function reconcileStuckInProgressJobs(
     }
   }
 
-  return { reconciled };
+  return { reconciled, requeued, gaveUp };
+}
+
+/**
+ * F1 H3 (R1 publishing): a claimed scheduled post (`in_progress`, `scheduledFor`
+ * set) with no results after {@link REQUEUE_QUIET_MS} was never sent: no
+ * platform was tried. It goes back to `scheduled`, and the claim that follows
+ * this reconcile in the same step takes it again. Once its time is more than
+ * {@link SEND_GIVE_UP_MS} past it fails instead (Activity then shows
+ * OUR_SIDE_FAILURE_MESSAGE and Post now sends it), and its media counts as used
+ * now (F1 H2), so Post now still finds it.
+ *
+ * Each is ONE statement: the inner SELECT locks the rows (`SKIP LOCKED`) and the
+ * UPDATE re-checks `in_progress` with no results, so a post whose results were
+ * made meanwhile is left to its run. It is never sent twice: the claim takes only
+ * `scheduled` rows, the materialize creates results only when there are none,
+ * and the publish event id is stable per job. A post with results is the
+ * stuck-job pass's, unchanged. DateTime columns hold UTC wall-clock time, as in
+ * {@link claimDueScheduledJobs}.
+ */
+async function requeueUnsentScheduledJobs(
+  now: Date,
+  take: number,
+): Promise<{ requeued: number; gaveUp: number }> {
+  const quietCutoff = new Date(now.getTime() - REQUEUE_QUIET_MS);
+  const giveUpCutoff = new Date(now.getTime() - SEND_GIVE_UP_MS);
+
+  const requeued = await prisma.$queryRaw<{ id: string }[]>`
+    WITH requeued AS (
+      UPDATE "PostJob"
+      SET "status" = 'scheduled'::"PostJobStatus",
+          "updatedAt" = (${now}::timestamptz AT TIME ZONE 'UTC')
+      WHERE "id" IN (
+        SELECT j."id" FROM "PostJob" j
+        WHERE j."status" = 'in_progress'::"PostJobStatus"
+          AND j."scheduledFor" IS NOT NULL
+          AND j."scheduledFor" >= (${giveUpCutoff}::timestamptz AT TIME ZONE 'UTC')
+          AND j."updatedAt" < (${quietCutoff}::timestamptz AT TIME ZONE 'UTC')
+          AND NOT EXISTS (SELECT 1 FROM "PostJobResult" r WHERE r."postJobId" = j."id")
+        ORDER BY j."scheduledFor" ASC
+        LIMIT ${take}
+        FOR UPDATE SKIP LOCKED
+      ) AND "status" = 'in_progress'::"PostJobStatus" AND NOT EXISTS (SELECT 1 FROM "PostJobResult" r WHERE r."postJobId" = "PostJob"."id")
+      RETURNING "id"
+    )
+    SELECT "id" FROM requeued`;
+
+  const gaveUp = await prisma.$queryRaw<{ id: string }[]>`
+    WITH gave_up AS (
+      UPDATE "PostJob"
+      SET "status" = 'failed'::"PostJobStatus",
+          "updatedAt" = (${now}::timestamptz AT TIME ZONE 'UTC')
+      WHERE "id" IN (
+        SELECT j."id" FROM "PostJob" j
+        WHERE j."status" = 'in_progress'::"PostJobStatus"
+          AND j."scheduledFor" IS NOT NULL
+          AND j."scheduledFor" < (${giveUpCutoff}::timestamptz AT TIME ZONE 'UTC')
+          AND j."updatedAt" < (${quietCutoff}::timestamptz AT TIME ZONE 'UTC')
+          AND NOT EXISTS (SELECT 1 FROM "PostJobResult" r WHERE r."postJobId" = j."id")
+        ORDER BY j."scheduledFor" ASC
+        LIMIT ${take}
+        FOR UPDATE SKIP LOCKED
+      ) AND "status" = 'in_progress'::"PostJobStatus" AND NOT EXISTS (SELECT 1 FROM "PostJobResult" r WHERE r."postJobId" = "PostJob"."id")
+      RETURNING "id"
+    )
+    SELECT "id" FROM gave_up`;
+
+  for (const { id } of gaveUp) {
+    await stampPostMediaLastUsed(prisma, id, now);
+  }
+  if (requeued.length > 0 || gaveUp.length > 0) {
+    logger.warn("[Inngest] Scheduled posts that were never sent", {
+      requeued: requeued.map((row) => row.id),
+      gaveUp: gaveUp.map((row) => row.id),
+    });
+  }
+  return { requeued: requeued.length, gaveUp: gaveUp.length };
 }

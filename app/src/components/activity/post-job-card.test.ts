@@ -5,6 +5,10 @@ import { describe, expect, it } from "vitest";
 import { ToastProvider } from "@/components/ui/toast";
 import type { PostJobDTO, PostJobResultDTO } from "@/lib/postsDto";
 
+import type { Platform } from "@prisma/client";
+
+import { OUR_SIDE_FAILURE_MESSAGE } from "@/lib/publishFailureText";
+
 import { cardTime, PostJobCard } from "./post-job-card";
 
 // Fix round 1 (Stories, 2026-11-10): Activity labels a Story result "Story" and
@@ -133,3 +137,26 @@ describe("PostJobCard - result notes", () => {
   });
 });
 
+
+// F1 H3: a post with chosen platforms that failed with no results was never
+// sent (a problem on our side): every chosen platform gets a result otherwise.
+describe("PostJobCard - a failed post with no results (F1 H3)", () => {
+  const render = (overrides: Partial<PostJobDTO>) =>
+    renderToStaticMarkup(
+      createElement(ToastProvider, null, createElement(PostJobCard, { job: job(overrides), onRetryAccepted: () => {} })),
+    ).replace(/<!-- -->/g, "");
+  const publish = (targetPlatforms: Platform[]) => ({ targetPlatforms }) as unknown as PostJobDTO["publish"];
+
+  it("says our side could not send it when it had chosen platforms", () => {
+    const html = render({ status: "failed", results: [], publish: publish(["instagram"]) });
+
+    expect(html).toContain(OUR_SIDE_FAILURE_MESSAGE);
+    expect(html).not.toContain("no platforms were connected");
+  });
+
+  it("keeps the no-connections sentence for a post sent to every connection", () => {
+    const html = render({ status: "failed", results: [], publish: null });
+
+    expect(html).toContain("no platforms were connected");
+  });
+});

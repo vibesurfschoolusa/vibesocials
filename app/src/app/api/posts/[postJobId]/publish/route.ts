@@ -5,6 +5,7 @@ import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { prisma } from "@/lib/db";
 import {
   holdForApprovalData,
+  needsApproval,
   publishApprovalAction,
   releaseApprovalHoldData,
   submissionScheduledFor,
@@ -63,6 +64,11 @@ interface PublishBody {
  * made a scheduled + submitted + unapproved row the cron never claims and the
  * approval route couldn't decide. Both claims are pinned to the version read
  * (`updatedAt`), since what they write depends on its approval columns.
+ *
+ * F1 H3: publish-now also takes a `failed` post with NO results: a scheduled
+ * post our side could not send (the reconciler gave up on it), which Retry
+ * cannot reach. Activity tells the user to use Post now. A member under
+ * approval may send one only if an owner approved it.
  */
 export async function POST(request: NextRequest, context: PostJobRouteContext) {
   const workspaceContext = await getWorkspaceContext();
@@ -119,6 +125,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       publishMetadata: true,
       mediaItem: { select: { baseCaption: true, perPlatformOverrides: true } },
       updatedAt: true,
+      // F1 H3: a failed post with no results was never sent; Post now may send it.
+      _count: { select: { results: true } },
     },
   });
 
@@ -273,11 +281,26 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     );
   }
 
-  // Path 2 — publish now. Accept a draft or a scheduled job; a running/terminal
-  // one can't be published again.
-  if (!MUTABLE_POST_JOB_STATUSES.includes(job.status)) {
+  // Path 2 — publish now. Accept a draft or a scheduled job, or a failed one no
+  // platform was ever tried for (F1 H3); a running or finished one can't be
+  // published again (a failed one with results is retried instead).
+  const unsent = job.status === "failed" && job._count?.results === 0;
+  if (!MUTABLE_POST_JOB_STATUSES.includes(job.status) && !unsent) {
     return NextResponse.json(
       { error: "Only a draft or scheduled post can be published.", code: "NOT_PUBLISHABLE" },
+      { status: 409 },
+    );
+  }
+  if (
+    unsent &&
+    needsApproval({
+      requireApproval: workspaceContext.workspace.requireApproval,
+      role: workspaceContext.role,
+      approvedAt: job.approvedAt,
+    })
+  ) {
+    return NextResponse.json(
+      { code: "AWAITING_APPROVAL", error: "An owner needs to approve this post first. Ask an owner to use Post now." },
       { status: 409 },
     );
   }
@@ -324,13 +347,22 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // in the meantime makes the claim match nothing (409 below) instead of
   // publishing unreviewed content; likewise a submission landing in between
   // can't be published past, or left set on a released hold (ruling R10).
+  // An unsent failed post is claimed only while it still has no results.
   const { count } = await prisma.postJob.updateMany({
-    where: {
-      id: postJobId,
-      workspaceId: workspaceContext.workspace.id,
-      status: { in: [...MUTABLE_POST_JOB_STATUSES] },
-      updatedAt: job.updatedAt,
-    },
+    where: unsent
+      ? {
+          id: postJobId,
+          workspaceId: workspaceContext.workspace.id,
+          status: "failed",
+          results: { none: {} },
+          updatedAt: job.updatedAt,
+        }
+      : {
+          id: postJobId,
+          workspaceId: workspaceContext.workspace.id,
+          status: { in: [...MUTABLE_POST_JOB_STATUSES] },
+          updatedAt: job.updatedAt,
+        },
     data: { status: "in_progress", scheduledFor: publishedAt, ...releaseHold },
   });
 

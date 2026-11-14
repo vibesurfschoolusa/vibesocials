@@ -181,6 +181,8 @@ describe("POST /api/posts/[postJobId]/publish", () => {
         publishMetadata: true,
         mediaItem: { select: { baseCaption: true, perPlatformOverrides: true } },
         updatedAt: true,
+        // F1 H3: a failed post with no results was never sent; Post now may send it.
+        _count: { select: { results: true } },
       },
     });
   });
@@ -361,6 +363,69 @@ describe("POST /api/posts/[postJobId]/publish", () => {
     await expect(res.json()).resolves.toEqual({
       code: "NO_CONNECTIONS",
       error: "Nothing was posted: none of this post's platforms is connected. Activity shows what to reconnect.",
+    });
+  });
+
+  // F1 H3: a scheduled post that failed on our side before any platform was
+  // tried has no results, so Retry has nothing to retry. Post now sends it.
+  describe("a scheduled post that failed before any platform was tried (F1 H3)", () => {
+    it("Post now claims it (failed with no results) and sends it", async () => {
+      findFirstMock.mockResolvedValue(jobRow({ status: "failed", _count: { results: 0 } }));
+
+      const res = await POST(req({}), ctx("job-1"));
+
+      expect(res.status).toBe(202);
+      expect(updateManyMock).toHaveBeenCalledWith({
+        where: { id: "job-1", workspaceId: "ws-1", status: "failed", results: { none: {} }, updatedAt: UPDATED },
+        data: { status: "in_progress", scheduledFor: expect.any(Date) },
+      });
+      expect(prepareDispatchMock).toHaveBeenCalledWith("job-1");
+      expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("still refuses a failed post that has results: Retry is for that", async () => {
+      findFirstMock.mockResolvedValue(jobRow({ status: "failed", _count: { results: 2 } }));
+
+      const res = await POST(req({}), ctx("job-1"));
+
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { code?: string }).code).toBe("NOT_PUBLISHABLE");
+      expect(updateManyMock).not.toHaveBeenCalled();
+    });
+
+    it("409s when the post changed since it was read (the claim misses)", async () => {
+      findFirstMock.mockResolvedValue(jobRow({ status: "failed", _count: { results: 0 } }));
+      updateManyMock.mockResolvedValue({ count: 0 });
+
+      const res = await POST(req({}), ctx("job-1"));
+
+      expect(res.status).toBe(409);
+      expect(inngestSendMock).not.toHaveBeenCalled();
+    });
+
+    it("does not let a member send one nobody approved while approval is on", async () => {
+      getWorkspaceContextMock.mockResolvedValue(memberInApprovalWorkspace());
+      findFirstMock.mockResolvedValue(jobRow({ status: "failed", _count: { results: 0 } }));
+
+      const res = await POST(req({}), ctx("job-1"));
+
+      expect(res.status).toBe(409);
+      await expect(res.json()).resolves.toEqual({
+        code: "AWAITING_APPROVAL",
+        error: "An owner needs to approve this post first. Ask an owner to use Post now.",
+      });
+      expect(updateManyMock).not.toHaveBeenCalled();
+    });
+
+    it("lets a member send one an owner approved", async () => {
+      getWorkspaceContextMock.mockResolvedValue(memberInApprovalWorkspace());
+      findFirstMock.mockResolvedValue(
+        jobRow({ status: "failed", approvedAt: SUBMITTED, submittedForApprovalAt: SUBMITTED, _count: { results: 0 } }),
+      );
+
+      const res = await POST(req({}), ctx("job-1"));
+
+      expect(res.status).toBe(202);
     });
   });
 
