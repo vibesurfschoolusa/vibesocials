@@ -102,7 +102,7 @@ describe("platformCaptionCounter", () => {
     // "hello" + "\n\nFor more info visit a.co" = 5 + 2 + 20 + a link X weighs 23 = 50
     const footer = { companyWebsite: "a.co", defaultHashtags: null };
     const counter = platformCaptionCounter("hello", "x", footer);
-    expect(counter).toEqual({ length: 50, max: 280, over: false, label: "50 / 280" });
+    expect(counter).toEqual({ length: 50, max: 280, over: false, label: "50 / 280 incl. footer" });
   });
 
   it("is not red for 201 characters + a long tracked website + five hashtags: the hashtags go", () => {
@@ -143,6 +143,14 @@ describe("platformCaptionCounter", () => {
     const counter = platformCaptionCounter("y".repeat(281), "x", {});
     expect(counter.over).toBe(true);
     expect(counter.label).toBe("281 / 280");
+  });
+
+  it("says the footer is included only when some of it is posted", () => {
+    const footer = { companyWebsite: "vibesurfschool.com", defaultHashtags: "#surf" };
+    expect(platformCaptionCounter("hello", "linkedin", footer).label).toBe("52 / 3,000 incl. footer");
+    // 2,990 characters leave no room: the footer is dropped, so no hint.
+    expect(platformCaptionCounter("a".repeat(2990), "linkedin", footer).label).toBe("2,990 / 3,000");
+    expect(platformCaptionCounter("hello", "linkedin", {}).label).toBe("5 / 3,000");
   });
 
   // Fix round 1 (M5, M6): X is counted by its own weight; LinkedIn has 3,000.

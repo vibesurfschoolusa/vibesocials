@@ -128,11 +128,17 @@ export function platformCaptionCounter(
   const { charLimit } = PLATFORM_CAPTION_LIMITS[platform];
   if (charLimit !== null) {
     const preview = buildPlatformPreview({ platform, caption: text, user: footer });
+    // The count includes whatever part of the footer will be posted; say so,
+    // or "hello" reading 50 looks wrong. No hint once the footer is dropped.
+    const footerPosted =
+      preview.rendered !== buildPlatformPreview({ platform, caption: text, user: null }).rendered;
     return {
       length: preview.charCount,
       max: charLimit,
       over: preview.willTruncate,
-      label: `${preview.charCount.toLocaleString("en-US")} / ${charLimit.toLocaleString("en-US")}`,
+      label: `${preview.charCount.toLocaleString("en-US")} / ${charLimit.toLocaleString("en-US")}${
+        footerPosted ? " incl. footer" : ""
+      }`,
     };
   }
   const length = platformLength(text, platform);
