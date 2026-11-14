@@ -76,6 +76,7 @@ function jobRow(overrides: Record<string, unknown> = {}) {
   return {
     status: "draft",
     scheduledFor: null,
+    createdAt: new Date(),
     submittedForApprovalAt: null,
     approvedAt: null,
     baseCaption: "Member's caption",
@@ -173,6 +174,7 @@ describe("POST /api/posts/[postJobId]/publish", () => {
       select: {
         status: true,
         scheduledFor: true,
+        createdAt: true,
         submittedForApprovalAt: true,
         approvedAt: true,
         baseCaption: true,
@@ -387,6 +389,22 @@ describe("POST /api/posts/[postJobId]/publish", () => {
       });
       expect(prepareDispatchMock).toHaveBeenCalledWith("job-1");
       expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    });
+
+    // Live check: a post from months ago is not sent again; nothing is claimed.
+    it("refuses Send again for a post older than a week", async () => {
+      findFirstMock.mockResolvedValue(
+        jobRow({ status: "failed", _count: { results: 0 }, scheduledFor: new Date(Date.now() - 8 * 86_400_000) }),
+      );
+
+      const res = await POST(req({}), ctx("job-1"));
+
+      expect(res.status).toBe(409);
+      await expect(res.json()).resolves.toEqual({
+        error: "This post is too old to send again. Create it again.",
+        code: "TOO_OLD",
+      });
+      expect(updateManyMock).not.toHaveBeenCalled();
     });
 
     // Review round 2, item 1: the same answer Retry gives, before anything is claimed.

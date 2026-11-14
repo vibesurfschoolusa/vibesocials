@@ -1,3 +1,4 @@
+import { sendAgainTooOld, TOO_OLD_TO_SEND_ERROR } from "@/lib/sendAgain";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { getWorkspaceContext } from "@/lib/workspace";
@@ -117,6 +118,7 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     select: {
       status: true,
       scheduledFor: true,
+      createdAt: true,
       submittedForApprovalAt: true,
       approvedAt: true,
       baseCaption: true,
@@ -297,6 +299,10 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       { error: "Only a draft or scheduled post can be published.", code: "NOT_PUBLISHABLE" },
       { status: 409 },
     );
+  }
+  // A post from weeks ago would publish stale content today (lib/sendAgain.ts).
+  if (unsent && sendAgainTooOld(job, Date.now())) {
+    return NextResponse.json({ error: TOO_OLD_TO_SEND_ERROR, code: "TOO_OLD" }, { status: 409 });
   }
   if (
     unsent &&
