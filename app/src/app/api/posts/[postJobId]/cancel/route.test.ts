@@ -26,7 +26,7 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-import { POST } from "./route";
+import { GET, POST } from "./route";
 
 function ctx(postJobId: string) {
   return { params: Promise.resolve({ postJobId }) };
@@ -173,7 +173,153 @@ describe("POST /api/posts/[postJobId]/cancel", () => {
     await expect(res.json()).resolves.toEqual({ error: "Not found" });
     expect(findFirstMock).toHaveBeenCalledWith({
       where: { id: "foreign-job", workspaceId: "ws-1" },
-      select: { status: true, submittedForApprovalAt: true, approvedAt: true },
+      select: { id: true, status: true, submittedForApprovalAt: true, approvedAt: true, storyOfPostJobId: true },
     });
+  });
+});
+
+// R2-client-journey M1: a Feed and Story post is two jobs; the dialog can cancel both in one request.
+const LATER = new Date("2026-11-20T15:00:00Z");
+
+function pairRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "story-1",
+    storyOfPostJobId: "job-1",
+    status: "scheduled",
+    scheduledFor: LATER,
+    submittedForApprovalAt: null,
+    approvedAt: null,
+    ...overrides,
+  };
+}
+
+function bodyReq(body: unknown): NextRequest {
+  return { json: async () => body } as unknown as NextRequest;
+}
+
+describe("POST /api/posts/[postJobId]/cancel - with the other half of a Feed and Story post", () => {
+  beforeEach(() => {
+    updateManyMock.mockResolvedValue({ count: 1 });
+  });
+
+  it("cancels both halves when includePair is sent, each scoped and pinned like the single cancel", async () => {
+    findFirstMock
+      .mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow() })
+      .mockResolvedValueOnce(pairRow({ status: "draft", submittedForApprovalAt: SUBMITTED }));
+
+    const res = await POST(bodyReq({ includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({ ok: true, status: "cancelled", pair: "cancelled" });
+    expect(findFirstMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ where: { storyOfPostJobId: "job-1", workspaceId: "ws-1" } }),
+    );
+    expect(updateManyMock).toHaveBeenCalledTimes(2);
+    expect(updateManyMock).toHaveBeenLastCalledWith({
+      where: {
+        id: "story-1",
+        workspaceId: "ws-1",
+        status: { in: ["scheduled", "draft"] },
+        submittedForApprovalAt: SUBMITTED,
+        approvedAt: null,
+      },
+      data: { status: "cancelled", submittedForApprovalAt: null },
+    });
+  });
+
+  it("a Story card cancels its feed post too", async () => {
+    findFirstMock
+      .mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: "feed-1", ...jobRow() })
+      .mockResolvedValueOnce(pairRow({ id: "feed-1", storyOfPostJobId: null }));
+
+    const res = await POST(bodyReq({ includePair: true }), ctx("job-1"));
+
+    await expect(res.json()).resolves.toEqual({ ok: true, status: "cancelled", pair: "cancelled" });
+    expect(findFirstMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ where: { id: "feed-1", workspaceId: "ws-1" } }),
+    );
+    expect(updateManyMock).toHaveBeenLastCalledWith(expect.objectContaining({ where: expect.objectContaining({ id: "feed-1" }) }));
+  });
+
+  it("without includePair only this post is cancelled and the pair is not read", async () => {
+    findFirstMock.mockResolvedValue({ id: "job-1", storyOfPostJobId: null, ...jobRow() });
+
+    const res = await POST(bodyReq({}), ctx("job-1"));
+
+    await expect(res.json()).resolves.toEqual({ ok: true, status: "cancelled" });
+    expect(findFirstMock).toHaveBeenCalledTimes(1);
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("the other half already cancelled: this post is cancelled and the answer says there was none", async () => {
+    findFirstMock
+      .mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow() })
+      .mockResolvedValueOnce(pairRow({ status: "cancelled" }));
+
+    const res = await POST(bodyReq({ includePair: true }), ctx("job-1"));
+
+    await expect(res.json()).resolves.toEqual({ ok: true, status: "cancelled", pair: "none" });
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("the other half already publishing: this post is cancelled and the answer says the other was not", async () => {
+    findFirstMock
+      .mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow() })
+      .mockResolvedValueOnce(pairRow({ status: "in_progress" }));
+
+    const res = await POST(bodyReq({ includePair: true }), ctx("job-1"));
+
+    await expect(res.json()).resolves.toEqual({ ok: true, status: "cancelled", pair: "not_cancelable" });
+    expect(updateManyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a post with no other half: the answer says none", async () => {
+    findFirstMock.mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow() }).mockResolvedValueOnce(null);
+
+    const res = await POST(bodyReq({ includePair: true }), ctx("job-1"));
+
+    await expect(res.json()).resolves.toEqual({ ok: true, status: "cancelled", pair: "none" });
+  });
+
+  it("when this post cannot be cancelled, the other half is left alone", async () => {
+    findFirstMock.mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow({ status: "in_progress" }) });
+
+    const res = await POST(bodyReq({ includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(409);
+    expect(updateManyMock).not.toHaveBeenCalled();
+    expect(findFirstMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("GET /api/posts/[postJobId]/cancel - the other half, for the dialog", () => {
+  it("names the other half's kind, state and time", async () => {
+    findFirstMock
+      .mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow() })
+      .mockResolvedValueOnce(pairRow());
+
+    const res = await GET(req, ctx("job-1"));
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toEqual({
+      pair: { id: "story-1", kind: "story", status: "scheduled", scheduledFor: LATER.toISOString() },
+    });
+    expect(findFirstMock).toHaveBeenNthCalledWith(1, expect.objectContaining({ where: { id: "job-1", workspaceId: "ws-1" } }));
+  });
+
+  it("null when there is no live other half", async () => {
+    findFirstMock.mockResolvedValueOnce({ id: "job-1", storyOfPostJobId: null, ...jobRow() }).mockResolvedValueOnce(null);
+
+    const res = await GET(req, ctx("job-1"));
+
+    await expect(res.json()).resolves.toEqual({ pair: null });
+  });
+
+  it("401 signed out, 404 for a post in another workspace", async () => {
+    getWorkspaceContextMock.mockResolvedValueOnce(null);
+    expect((await GET(req, ctx("job-1"))).status).toBe(401);
+
+    findFirstMock.mockResolvedValueOnce(null);
+    expect((await GET(req, ctx("foreign"))).status).toBe(404);
   });
 });
