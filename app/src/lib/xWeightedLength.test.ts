@@ -66,6 +66,25 @@ describe("xWeightedLength", () => {
     expect(xWeightedLength("https://example.surf")).toBe(23);
   });
 
+  // G1 (R2 L4): X counts a bare domain with ANY valid ending as a link, so one
+  // with an ending the old short list missed weighed less than X counts and X
+  // refused the post. Rule: a letters-only ending that is two letters (a
+  // country code's shape) or in a broad list of generic endings.
+  it("counts a bare domain with any common ending as 23", () => {
+    expect(xWeightedLength("fiu.edu")).toBe(23);
+    expect(xWeightedLength("surf.miami")).toBe(23);
+    expect(xWeightedLength("vibe.club")).toBe(23);
+    expect(xWeightedLength("Book at vibe.club today")).toBe(8 + 23 + 6);
+    expect(xWeightedLength("surf.mx")).toBe(23);
+    expect(xWeightedLength("city.gov/beach")).toBe(23);
+  });
+
+  it("still counts dotted words with an ending no domain has as characters", () => {
+    expect(xWeightedLength("Mr.Smith")).toBe(8);
+    expect(xWeightedLength("St.Pete")).toBe(7);
+    expect(xWeightedLength("notes.txt")).toBe(9);
+  });
+
   it("does not read an email address or an abbreviation as a link", () => {
     expect(xWeightedLength("info@example.com")).toBe(16);
     expect(xWeightedLength("e.g. 3.50")).toBe(9);

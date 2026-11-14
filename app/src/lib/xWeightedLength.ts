@@ -8,7 +8,8 @@ import { textUnits, truncateUnits, type TextLink, type TextUnit } from "@/lib/tr
  * - A code point in X's light ranges weighs 1, any other weighs 2.
  * - An emoji weighs 2, however many code points its sequence has.
  * - A link weighs 23 (X shortens every link to a t.co link), however long:
- *   http(s):// always, a bare domain when it starts with www. or has a listed ending.
+ *   http(s):// always, a bare domain when it starts with www. or its ending looks like a real one
+ *   (two letters, or a broad list of generic endings: see isLinkEnding).
  */
 
 /** X's limit on a post's weight. */
@@ -28,13 +29,50 @@ const EMOJI = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u;
 // Extended_Pictographic code point (review fix).
 const KEYCAP = /^[0-9#*]\uFE0F\u20E3$/u;
 
-// Endings a bare domain (no http(s)://, no www.) must have to count as a link
-// (lead's rule, fix round 1). Other dotted words ("Mr.Smith", "notes.txt") are
-// counted as characters.
-const LINK_TLDS = new Set([
-  "com", "net", "org", "io", "co", "us", "uk", "de", "fr", "es", "it", "nl", "ca", "au", "za",
-  "info", "biz", "app", "dev", "me", "ly", "tv", "wtf", "shop", "store", "online", "site", "xyz", "ai",
+// A bare domain (no http(s)://, no www.) counts as a link when its ending looks
+// like one X accepts (G1, R2 L4: X counts every valid ending, and one the old
+// short list missed, like "fiu.edu", weighed less than X counts, so X refused
+// the post). The rule: a letters-only ending that is either two letters (the
+// shape of every country code) or in this broad list of generic endings. Other
+// dotted words ("Mr.Smith", "notes.txt") are counted as characters. Counting a
+// rare non-link as 23 only cuts a little early; missing a link gets the post
+// refused, so the list leans wide.
+const GENERIC_TLDS = new Set([
+  // The original generic endings.
+  "com", "net", "org", "edu", "gov", "mil", "int", "info", "biz", "name", "aero", "coop",
+  "museum", "mobi", "asia", "tel", "travel", "jobs", "cat", "post",
+  // Common newer ones.
+  "app", "dev", "wtf", "shop", "store", "online", "site", "xyz", "club", "live", "life", "world",
+  "today", "news", "media", "agency", "studio", "design", "art", "photo", "photos", "photography",
+  "pics", "gallery", "video", "music", "radio", "events", "email", "link", "click", "space",
+  "website", "page", "fun", "top", "vip", "one", "icu", "buzz", "lol", "cool", "rocks", "ninja",
+  "guru", "expert", "team", "group", "company", "business", "services", "solutions", "consulting",
+  "digital", "network", "systems", "cloud", "host", "hosting", "software", "tools", "zone",
+  "center", "city", "town", "place", "land", "house", "homes", "estate", "realty", "properties",
+  "rentals", "tours", "holiday", "vacations", "beach", "surf", "yoga", "fitness", "health",
+  "care", "clinic", "dental", "doctor", "fit", "golf", "boats", "fish", "fishing", "camp",
+  "school", "academy", "college", "university", "education", "training", "courses", "institute",
+  "eco", "green", "bio", "organic", "farm", "garden", "kitchen", "recipes", "restaurant", "cafe",
+  "bar", "pub", "pizza", "wine", "beer", "coffee", "menu", "food", "delivery", "market", "sale",
+  "deals", "discount", "coupons", "gift", "gifts", "shopping", "fashion", "style", "clothing",
+  "shoes", "jewelry", "beauty", "hair", "salon", "spa", "tattoo", "pet", "pets", "dog", "vet",
+  "love", "dating", "wedding", "family", "kids", "baby", "church", "charity", "foundation", "ngo",
+  "community", "social", "chat", "forum", "wiki", "help", "support", "guide", "tips", "how",
+  "reviews", "press", "report", "capital", "finance", "money", "bank", "insurance", "loans",
+  "credit", "tax", "law", "legal", "attorney", "lawyer", "work", "works", "careers", "sport",
+  "sports", "football", "soccer", "tennis", "bike", "games", "game", "casino", "bet", "poker",
+  "win", "pink", "red", "blue", "black", "gold", "plus", "best", "new", "now", "watch", "stream",
+  "film", "movie", "show", "theater", "tickets", "party", "fans", "global", "earth", "africa",
+  "tech", "blog", "boutique", "ltd", "inc", "llc", "llp", "gmbh",
+  // Cities and regions.
+  "miami", "nyc", "london", "paris", "berlin", "tokyo", "vegas", "boston", "austin", "capetown",
+  "durban", "joburg", "florida", "amsterdam", "barcelona", "madrid", "quebec", "sydney",
+  "melbourne",
 ]);
+
+function isLinkEnding(tld: string): boolean {
+  return /^[a-z]+$/.test(tld) && (tld.length === 2 || GENERIC_TLDS.has(tld));
+}
 
 function codePointWeight(codePoint: number): number {
   return LIGHT_RANGES.some(([from, to]) => codePoint >= from && codePoint <= to) ? 1 : 2;
@@ -47,7 +85,7 @@ function charactersWeight(text: string): number {
 }
 
 function countsAsLink(link: TextLink): boolean {
-  return link.hasScheme || link.hasWww || LINK_TLDS.has(link.tld);
+  return link.hasScheme || link.hasWww || isLinkEnding(link.tld);
 }
 
 function unitWeight(unit: TextUnit): number {
