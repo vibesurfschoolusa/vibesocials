@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -236,5 +239,20 @@ describe("PairChoice", () => {
     const html = render({ option: { line: "It has already started publishing.", label: null, keptLine: null } });
     expect(html).toContain("It has already started publishing.");
     expect(html).not.toContain("checkbox");
+  });
+});
+
+// R2-client-journey M1 review: the cancel and delete dialogs are the shared
+// ConfirmDialog with Confirm disabled while the other half is looked up.
+describe("the cancel and delete dialogs", () => {
+  const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
+
+  it("use the shared ConfirmDialog, not a local copy", () => {
+    expect(queueSource).not.toContain("QueueConfirmDialog");
+  });
+
+  it("keep Confirm disabled while the lookup runs", () => {
+    expect(queueSource).toContain("confirmDisabled={cancelLookup?.loading ?? false}");
+    expect(queueSource).toContain("confirmDisabled={deleteLookup?.loading ?? false}");
   });
 });

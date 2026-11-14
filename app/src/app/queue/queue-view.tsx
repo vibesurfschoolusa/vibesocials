@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { CalendarClock, Copy, PlusCircle } from "lucide-react";
 
@@ -12,7 +12,6 @@ import {
   ConfirmDialog,
   Dialog,
   DialogBody,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -212,62 +211,6 @@ export function cancelRequest(
   return includePair
     ? { url: `/api/posts/${job.id}/cancel`, series: false, body: { includePair: true } }
     : { url: `/api/posts/${job.id}/cancel`, series: false };
-}
-
-/**
- * The cancel and delete dialogs: ConfirmDialog's behaviour (awaits onConfirm,
- * stays open when it throws) plus a Confirm that stays disabled while the
- * other half of a Feed and Story post is still being looked up, so nobody
- * cancels one half before the dialog has named the other.
- */
-function QueueConfirmDialog({
-  open,
-  onOpenChange,
-  title,
-  description,
-  confirmText,
-  cancelText = "Cancel",
-  confirmDisabled = false,
-  onConfirm,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  title: string;
-  description: ReactNode;
-  confirmText?: string;
-  cancelText?: string;
-  confirmDisabled?: boolean;
-  onConfirm: () => Promise<void>;
-}) {
-  const [busy, setBusy] = useState(false);
-  const handleConfirm = useCallback(async () => {
-    setBusy(true);
-    try {
-      await onConfirm();
-      onOpenChange(false);
-    } catch {
-      // onConfirm has shown the error; the dialog stays open for a retry.
-    } finally {
-      setBusy(false);
-    }
-  }, [onConfirm, onOpenChange]);
-
-  return (
-    <Dialog open={open} onOpenChange={busy ? () => undefined : onOpenChange} className="max-w-md">
-      <DialogHeader>
-        <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>{description}</DialogDescription>
-      </DialogHeader>
-      <DialogFooter className="pt-6">
-        <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
-          {cancelText}
-        </Button>
-        <Button variant="destructive" onClick={handleConfirm} loading={busy} disabled={confirmDisabled}>
-          {confirmText ?? "Delete"}
-        </Button>
-      </DialogFooter>
-    </Dialog>
-  );
 }
 
 /** The other half's line and checkbox in the cancel and delete dialogs (R2-client-journey M1). */
@@ -1521,7 +1464,7 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
         />
       ) : null}
 
-      <QueueConfirmDialog
+      <ConfirmDialog
         open={cancelTarget !== null}
         onOpenChange={(open) => {
           if (!open) setCancelTarget(null);
@@ -1573,6 +1516,7 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
               : "Cancel post"
         }
         cancelText="Keep it"
+        destructive
         confirmDisabled={cancelLookup?.loading ?? false}
         onConfirm={confirmCancel}
       />
@@ -1588,7 +1532,7 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
         onConfirm={confirmPublish}
       />
 
-      <QueueConfirmDialog
+      <ConfirmDialog
         open={deleteTarget !== null}
         onOpenChange={(open) => {
           if (!open) setDeleteTarget(null);
@@ -1609,6 +1553,7 @@ export function QueueView({ footerSettings }: { footerSettings?: CaptionFooterUs
           </span>
         }
         confirmText={deletePair && pairOption(deletePair, "delete")?.label && includePair ? "Delete both" : undefined}
+        destructive
         confirmDisabled={deleteLookup?.loading ?? false}
         onConfirm={confirmDelete}
       />
