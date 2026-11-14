@@ -100,8 +100,9 @@ describe("Privacy: what goes to the AI provider", () => {
   // G4 (R2-pages M2): auto-caption and Improve also send recent captions.
   it("says recent captions from the workspace's posts go with auto-caption and Improve", () => {
     expect(text()).toContain(
-      "and recent captions from this workspace's posts, so the AI does not repeat them",
+      "whenever it writes or improves a caption (on Create and in Add many), recent captions from this workspace's posts",
     );
+    expect(text()).toContain("so the AI does not repeat them");
   });
 
   it("no longer says the AI can only be turned off on Create", () => {

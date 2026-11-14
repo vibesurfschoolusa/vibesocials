@@ -43,13 +43,13 @@ const TIKTOK_LOGOUT_URL = "https://www.tiktok.com/logout";
 
 /**
  * G4 (R2-security L2): disconnecting deletes the post numbers read from the
- * platform, and for Google Business Profile the listing's numbers too
+ * platform; for Google Business Profile (no post numbers are read) the listing's numbers
  * (api/connections/[platform] DELETE). X and TikTok have none to delete.
  */
 function numbersDeletedSentence(platform: string): string {
   if (platform === "x" || platform === "tiktok") return "";
   if (platform === "google_business_profile") {
-    return " The post numbers and the Google listing numbers read from it are deleted and cannot be brought back.";
+    return " The Google listing numbers read from it are deleted and cannot be brought back.";
   }
   return " The post numbers read from this platform are deleted and cannot be brought back.";
 }

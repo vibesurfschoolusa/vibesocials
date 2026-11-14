@@ -10,7 +10,7 @@ import { disconnectDescription, switchDescription } from "./connection-actions";
 
 const GONE = "The post numbers read from this platform are deleted and cannot be brought back.";
 const GBP_GONE =
-  "The post numbers and the Google listing numbers read from it are deleted and cannot be brought back.";
+  "The Google listing numbers read from it are deleted and cannot be brought back.";
 
 describe("Disconnect dialog", () => {
   it.each(["youtube", "instagram", "facebook_page", "linkedin", "pinterest"])(

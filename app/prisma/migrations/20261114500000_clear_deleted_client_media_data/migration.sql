@@ -15,8 +15,8 @@ WHERE "deletedAt" IS NOT NULL
   AND jsonb_typeof("metadata") = 'object'
   AND "metadata"->>'source' = 'upload_link'
   AND (
-    "metadata" ? 'senderName'
-    OR "metadata" ? 'note'
+    ("metadata" -> 'senderName') IS NOT NULL
+    OR ("metadata" -> 'note') IS NOT NULL
     OR "originalFilename" IS DISTINCT FROM CASE
       WHEN "originalFilename" ~ '\.([A-Za-z0-9]{1,10})$'
         THEN 'deleted-file.' || lower(substring("originalFilename" from '\.([A-Za-z0-9]{1,10})$'))
