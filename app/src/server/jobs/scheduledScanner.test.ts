@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // vitest hoists vi.mock above imports. scheduledScanner.ts imports `@/lib/db` at
 // module scope, so mock it before the import below (mirrors the route tests).
 const {
+  executeRawMock,
   queryRawMock,
   findManyMock,
   findUniqueMock,
@@ -13,6 +14,7 @@ const {
   stampMediaMock,
   mediaUpdateManyMock,
 } = vi.hoisted(() => ({
+  executeRawMock: vi.fn(),
   queryRawMock: vi.fn(),
   findManyMock: vi.fn(),
   findUniqueMock: vi.fn(),
@@ -27,6 +29,7 @@ const {
 vi.mock("@/lib/db", () => ({
   prisma: {
     $queryRaw: queryRawMock,
+    $executeRaw: executeRawMock,
     postJob: {
       findMany: findManyMock,
       findUnique: findUniqueMock,
@@ -60,6 +63,7 @@ import {
   MAX_DISPATCH_BYTES,
   materializeAndDispatchChunk,
   materializeClaimedJobs,
+  notifyGivenUpPosts,
   reconcileStuckInProgressJobs,
   REQUEUE_QUIET_MS,
   SEND_GIVE_UP_MS,
@@ -84,6 +88,8 @@ beforeEach(() => {
   mediaUpdateManyMock.mockResolvedValue({ count: 1 });
   // The reconciler's two unsent-post statements find nothing unless a test says so.
   queryRawMock.mockResolvedValue([]);
+  executeRawMock.mockReset();
+  executeRawMock.mockResolvedValue(0);
 });
 
 // 2026-11-01 scale audit (jobs H6): a 500-post burst used to take minutes to
@@ -412,7 +418,7 @@ describe("reconcileStuckInProgressJobs - a scheduled post that was never sent (F
 
     const out = await reconcileStuckInProgressJobs(NOW);
 
-    expect(out).toEqual({ reconciled: 0, requeued: 1, gaveUp: 0, unsent: [] });
+    expect(out).toEqual({ reconciled: 0, requeued: 1, gaveUp: 0 });
     const sql = sqlOf(0);
     expect(sql).toMatch(/UPDATE "PostJob" SET "status" = 'scheduled'::"PostJobStatus"/);
     expect(sql).toContain(`j."status" = 'in_progress'::"PostJobStatus"`);
@@ -445,15 +451,16 @@ describe("reconcileStuckInProgressJobs - a scheduled post that was never sent (F
   });
 
   it("after 2 hours fails it instead, stamps its media, and leaves Post now to send it", async () => {
-    queryRawMock.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: "job-old", userId: "user-9" }]);
+    queryRawMock.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: "job-old" }]);
     findManyMock.mockResolvedValue([]);
 
     const out = await reconcileStuckInProgressJobs(NOW);
 
-    // Review round 2, item 2: the owner to tell, for the scanner's notification.
-    expect(out).toEqual({ reconciled: 0, requeued: 0, gaveUp: 1, unsent: [{ postJobId: "job-old", userId: "user-9" }] });
+    expect(out).toEqual({ reconciled: 0, requeued: 0, gaveUp: 1 });
     const sql = sqlOf(1);
-    expect(sql).toContain('RETURNING "id", "userId"');
+    // Second review, item 3: the give-up records its moment in the same UPDATE,
+    // so the owner's notification (notifyGivenUpPosts) cannot be lost.
+    expect(sql).toMatch(/"gaveUpAt" = \(\$::timestamptz AT TIME ZONE 'UTC'\)/);
     expect(sql).toMatch(/UPDATE "PostJob" SET "status" = 'failed'::"PostJobStatus"/);
     expect(sql).toMatch(/GREATEST\(j\."pickedUpAt", j\."scheduledFor"\) < \(\$::timestamptz AT TIME ZONE 'UTC'\)/);
     expect(sql).toContain('NOT EXISTS (SELECT 1 FROM "PostJobResult" r WHERE r."postJobId" = j."id")');
@@ -481,7 +488,7 @@ describe("reconcileStuckInProgressJobs - a scheduled post that was never sent (F
 
     const out = await reconcileStuckInProgressJobs(NOW);
 
-    expect(out).toEqual({ reconciled: 0, requeued: 1, gaveUp: 0, unsent: [] });
+    expect(out).toEqual({ reconciled: 0, requeued: 1, gaveUp: 0 });
     // scheduledFor alone (3 h ago) is never compared with the cutoff.
     expect(sqlOf(0)).not.toMatch(/j\."scheduledFor" >= \(/);
     expect(sqlOf(1)).not.toMatch(/j\."scheduledFor" < \(/);
@@ -497,11 +504,83 @@ describe("reconcileStuckInProgressJobs - a scheduled post that was never sent (F
 
     const out = await reconcileStuckInProgressJobs(NOW);
 
-    expect(out).toEqual({ reconciled: 1, requeued: 0, gaveUp: 0, unsent: [] });
+    expect(out).toEqual({ reconciled: 1, requeued: 0, gaveUp: 0 });
     expect(updateManyMock).toHaveBeenCalledWith({
       where: { id: "stuck-r", status: "in_progress" },
       data: { status: "completed" },
     });
+  });
+});
+
+// Second review, items 3 and 4: the owner of a post the reconciler gave up on is
+// told by a pass that reads the give-up from the post row (gaveUpAt, written in
+// the give-up UPDATE itself) and marks it told (gaveUpNotifiedAt) only after the
+// send. A failed send, a crash or a failed reconcile loses nothing: the next tick
+// finds the row again, and the event id (post + give-up moment) dedupes a resend.
+describe("notifyGivenUpPosts (second review, items 3 and 4)", () => {
+  const GAVE_UP = new Date("2026-07-10T11:50:00.000Z");
+  const sqlText = (mock: typeof queryRawMock, call = 0) =>
+    (mock.mock.calls[call][0] as TemplateStringsArray).join("$").replace(/\s+/g, " ");
+
+  it("reads failed posts with no results given up on and not yet told", async () => {
+    await notifyGivenUpPosts({ send: vi.fn() });
+
+    const sql = sqlText(queryRawMock);
+    expect(sql).toContain(`"status" = 'failed'::"PostJobStatus"`);
+    expect(sql).toContain(`"gaveUpAt" IS NOT NULL`);
+    expect(sql).toContain(`("gaveUpNotifiedAt" IS NULL OR "gaveUpNotifiedAt" < "gaveUpAt")`);
+    expect(sql).toContain('NOT EXISTS (SELECT 1 FROM "PostJobResult" r WHERE r."postJobId" = "PostJob"."id")');
+  });
+
+  it("sends one notification per give-up, its id carrying the give-up moment, then marks them told", async () => {
+    queryRawMock.mockResolvedValueOnce([{ id: "job-old", userId: "user-9", gaveUpAt: GAVE_UP }]);
+    const send = vi.fn().mockResolvedValue(undefined);
+
+    const told = await notifyGivenUpPosts({ send });
+
+    expect(told).toBe(1);
+    expect(send).toHaveBeenCalledWith([
+      {
+        id: `notify-unsent-job-old-${GAVE_UP.getTime()}`,
+        name: "notification.requested",
+        data: { userId: "user-9", postJobId: "job-old" },
+      },
+    ]);
+    const markSql = (executeRawMock.mock.calls[0][0] as TemplateStringsArray).join("$").replace(/\s+/g, " ");
+    expect(markSql).toContain('UPDATE "PostJob" SET "gaveUpNotifiedAt" = "gaveUpAt"');
+    expect(send.mock.invocationCallOrder[0]).toBeLessThan(executeRawMock.mock.invocationCallOrder[0]);
+  });
+
+  it("marks nothing when the send fails, so the next tick sends it again", async () => {
+    queryRawMock.mockResolvedValueOnce([{ id: "job-old", userId: "user-9", gaveUpAt: GAVE_UP }]);
+    const send = vi.fn().mockRejectedValue(new Error("inngest down"));
+
+    await expect(notifyGivenUpPosts({ send })).rejects.toThrow("inngest down");
+
+    expect(executeRawMock).not.toHaveBeenCalled();
+  });
+
+  it("a second give-up of the same post (after Send again) gets a new id, so it emails again", async () => {
+    const later = new Date(GAVE_UP.getTime() + 3 * 60 * 60 * 1000);
+    queryRawMock
+      .mockResolvedValueOnce([{ id: "job-old", userId: "user-9", gaveUpAt: GAVE_UP }])
+      .mockResolvedValueOnce([{ id: "job-old", userId: "user-9", gaveUpAt: later }]);
+    const send = vi.fn().mockResolvedValue(undefined);
+
+    await notifyGivenUpPosts({ send });
+    await notifyGivenUpPosts({ send });
+
+    const ids = send.mock.calls.map(([events]) => (events as Array<{ id: string }>)[0].id);
+    expect(ids).toEqual([`notify-unsent-job-old-${GAVE_UP.getTime()}`, `notify-unsent-job-old-${later.getTime()}`]);
+  });
+
+  it("does nothing without a post to tell", async () => {
+    const send = vi.fn();
+
+    await expect(notifyGivenUpPosts({ send })).resolves.toBe(0);
+
+    expect(send).not.toHaveBeenCalled();
+    expect(executeRawMock).not.toHaveBeenCalled();
   });
 });
 

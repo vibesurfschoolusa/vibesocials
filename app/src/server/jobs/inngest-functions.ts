@@ -24,6 +24,7 @@ import {
   claimDueScheduledJobs,
   MATERIALIZE_CHUNK_SIZE,
   materializeAndDispatchChunk,
+  notifyGivenUpPosts,
   reconcileStuckInProgressJobs,
   type ChunkDispatchResult,
 } from "@/server/jobs/scheduledScanner";
@@ -1885,26 +1886,20 @@ export const scheduledPostScanner = inngest.createFunction(
         if (reconciled.reconciled > 0) {
           logger.info("[Inngest] Reconciled stuck in_progress jobs", reconciled);
         }
-        // Review round 2, item 2: a scheduled post the reconciler gave up on tells
-        // its owner with the event the no-connections path sends. Sent here, in
-        // this step, because the step's output must stay the claimed ids; the id
-        // is stable per post, so a re-run of the step sends nothing twice
-        // (Inngest keeps an event id for 24 h). A failed send is only logged.
-        if (reconciled.unsent.length > 0) {
-          try {
-            await inngest.send(
-              reconciled.unsent.map(({ postJobId, userId }) => ({
-                id: `notify-unsent-${postJobId}`,
-                name: "notification.requested" as const,
-                data: { userId, postJobId },
-              })),
-            );
-          } catch (error) {
-            logger.error("[Inngest] Unsent scheduled post notification failed", { posts: reconciled.unsent.length, error });
-          }
-        }
       } catch (error) {
         logger.error("[Inngest] Reconciling stuck in_progress jobs failed (claiming anyway)", { error });
+      }
+
+      // F1 second review: tell the owners of scheduled posts the reconciler gave
+      // up on. Its own pass, read from the post rows, so it does not depend on
+      // the reconcile above succeeding, and a failed send is retried next tick
+      // (event ids dedupe a resend). Inside this step, whose output must stay the
+      // claimed ids, and costing no extra step. A failure is only logged.
+      try {
+        const told = await notifyGivenUpPosts({ send: (events) => inngest.send(events) });
+        if (told > 0) logger.info("[Inngest] Told owners about scheduled posts that were not sent", { told });
+      } catch (error) {
+        logger.error("[Inngest] Telling owners about unsent scheduled posts failed (next tick retries)", { error });
       }
 
       return claimDueScheduledJobs(new Date());

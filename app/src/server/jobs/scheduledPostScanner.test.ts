@@ -9,10 +9,11 @@ import { inngest } from "@/lib/inngest";
 // event builder stay REAL, so the chunking, step ids, byte-bounded sends and event
 // shapes are asserted for real. Events are sent with `inngest.send` (spied below);
 // only the no-connections notifications go through `step.sendEvent`.
-const { claimDueMock, reconcileMock, prepareDeferredMock, ownerFindUniqueMock, sendMock } =
+const { claimDueMock, reconcileMock, notifyGivenUpMock, prepareDeferredMock, ownerFindUniqueMock, sendMock } =
   vi.hoisted(() => ({
     claimDueMock: vi.fn(),
     reconcileMock: vi.fn(),
+    notifyGivenUpMock: vi.fn(),
     prepareDeferredMock: vi.fn(),
     ownerFindUniqueMock: vi.fn(),
     sendMock: vi.fn(),
@@ -31,6 +32,7 @@ vi.mock("@/server/jobs/scheduledScanner", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/jobs/scheduledScanner")>()),
   claimDueScheduledJobs: claimDueMock,
   reconcileStuckInProgressJobs: reconcileMock,
+  notifyGivenUpPosts: notifyGivenUpMock,
 }));
 vi.mock("@/server/jobs/posting", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/jobs/posting")>()),
@@ -101,6 +103,8 @@ const dispatches = () => sendMock.mock.calls.map(([events]) => events as SentPay
 beforeEach(() => {
   claimDueMock.mockReset();
   reconcileMock.mockReset();
+  notifyGivenUpMock.mockReset();
+  notifyGivenUpMock.mockResolvedValue(0);
   prepareDeferredMock.mockReset();
   ownerFindUniqueMock.mockReset();
   sendMock.mockReset();
@@ -110,7 +114,7 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(inngest, "send").mockImplementation(sendMock as unknown as typeof inngest.send);
 
-  reconcileMock.mockResolvedValue({ reconciled: 0, requeued: 0, gaveUp: 0, unsent: [] });
+  reconcileMock.mockResolvedValue({ reconciled: 0, requeued: 0, gaveUp: 0 });
   prepareDeferredMock.mockImplementation(async (id: string) => okFor(id));
   sendMock.mockResolvedValue({ ids: [] });
 });
@@ -119,44 +123,34 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-// Review round 2, item 2: a scheduled post the reconciler gave up on tells its
-// owner, with the same notification.requested event the NO_CONNECTIONS path
-// sends (deduped by a stable id per post).
-describe("scheduledPostScanner - a post the reconciler gave up on", () => {
-  it("sends the owner the outcome notification, once per post", async () => {
+// Second review, item 3: the give-up notification is sent by its own pass in the
+// claim step, from the post rows, so it does not depend on the reconcile.
+describe("scheduledPostScanner - telling owners about posts given up on", () => {
+  it("runs the notify pass with inngest.send, after the reconcile and before the claim", async () => {
     claimDueMock.mockResolvedValue([]);
-    reconcileMock.mockResolvedValue({
-      reconciled: 0,
-      requeued: 0,
-      gaveUp: 1,
-      unsent: [{ postJobId: "job-old", userId: "user-9" }],
-    });
 
     await runScanner(fakeStep());
 
-    expect(dispatches()).toEqual([
-      [{ id: "notify-unsent-job-old", name: "notification.requested", data: { userId: "user-9", postJobId: "job-old" } }],
-    ]);
+    expect(notifyGivenUpMock).toHaveBeenCalledTimes(1);
+    expect(reconcileMock.mock.invocationCallOrder[0]).toBeLessThan(notifyGivenUpMock.mock.invocationCallOrder[0]);
+    expect(notifyGivenUpMock.mock.invocationCallOrder[0]).toBeLessThan(claimDueMock.mock.invocationCallOrder[0]);
+    const { send } = notifyGivenUpMock.mock.calls[0][0] as { send: (events: unknown[]) => Promise<unknown> };
+    await send([{ id: "notify-unsent-job-old-1", name: "notification.requested", data: {} }]);
+    expect(dispatches()).toEqual([[{ id: "notify-unsent-job-old-1", name: "notification.requested", data: {} }]]);
   });
 
-  it("sends nothing when no post was given up on", async () => {
+  it("still tells owners when the reconcile throws", async () => {
     claimDueMock.mockResolvedValue([]);
-    reconcileMock.mockResolvedValue({ reconciled: 0, requeued: 0, gaveUp: 0, unsent: [] });
+    reconcileMock.mockRejectedValue(new Error("db blip"));
 
     await runScanner(fakeStep());
 
-    expect(sendMock).not.toHaveBeenCalled();
+    expect(notifyGivenUpMock).toHaveBeenCalledTimes(1);
   });
 
-  it("still claims due posts when the notification cannot be sent", async () => {
+  it("still claims due posts when the notify pass throws", async () => {
     claimDueMock.mockResolvedValue(["job-1"]);
-    reconcileMock.mockResolvedValue({
-      reconciled: 0,
-      requeued: 0,
-      gaveUp: 1,
-      unsent: [{ postJobId: "job-old", userId: "user-9" }],
-    });
-    sendMock.mockRejectedValueOnce(new Error("inngest down")).mockResolvedValue({ ids: [] });
+    notifyGivenUpMock.mockRejectedValue(new Error("inngest down"));
 
     const out = await runScanner(fakeStep());
 

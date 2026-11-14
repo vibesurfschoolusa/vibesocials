@@ -504,6 +504,15 @@ model PostJob {
   // only by claimDueScheduledJobs (scheduledScanner.ts); nullable: the previous
   // deployment neither reads nor writes it.
   pickedUpAt              DateTime?
+  // F1 second review (2026-11-14): when the stuck-job reconciler last gave up on
+  // this scheduled post (failed, no platform tried), written in the give-up
+  // UPDATE itself, and when its owner was told about that give-up
+  // (notifyGivenUpPosts, scheduledScanner.ts). A post with gaveUpNotifiedAt null
+  // or older than gaveUpAt still has a notification to send, so a failed send
+  // or a crash loses none. Nullable: the previous deployment neither reads nor
+  // writes them.
+  gaveUpAt                DateTime?
+  gaveUpNotifiedAt        DateTime?
   // Repeat (2026-11-10): every post of a series created in one request carries
   // the same generated id; a post created on its own has none. Each one is still
   // an ordinary post: edited, approved, published and cancelled on its own.
@@ -556,6 +565,9 @@ model PostJob {
   // "does another post still use this cover file" lookup (coverImageUrl = ...).
   // A btree: the stored value is a canonical blob URL of at most 2,048 characters.
   @@index([coverImageUrl])
+  // F1 second review: the scanner's every-tick notify pass finds the posts given
+  // up on (gaveUpAt IS NOT NULL) through it.
+  @@index([gaveUpAt])
 }
 
 // Several photos in one post (2026-11-10). `PostJob.mediaItemId` stays the first

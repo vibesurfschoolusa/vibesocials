@@ -1,3 +1,5 @@
+import { Prisma } from "@prisma/client";
+
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { PUBLISH_UNCONFIRMED_CODE, PUBLISH_UNCONFIRMED_MESSAGE } from "@/lib/publishOutcomes";
@@ -378,14 +380,8 @@ export async function reconcileStuckInProgressJobs(
   now: Date,
   take: number = STUCK_RECONCILE_BATCH,
   maxAgeMs: number = STUCK_IN_PROGRESS_MS,
-): Promise<{
-  reconciled: number;
-  requeued: number;
-  gaveUp: number;
-  /** Posts given up on, with the owner to notify (the scanner sends the event). */
-  unsent: Array<{ postJobId: string; userId: string }>;
-}> {
-  const { requeued, gaveUp, unsent } = await requeueUnsentScheduledJobs(now, take);
+): Promise<{ reconciled: number; requeued: number; gaveUp: number }> {
+  const { requeued, gaveUp } = await requeueUnsentScheduledJobs(now, take);
   const cutoff = new Date(now.getTime() - maxAgeMs);
   const candidates = await prisma.postJob.findMany({
     where: {
@@ -456,7 +452,7 @@ export async function reconcileStuckInProgressJobs(
     if (count === 1) reconciled += 1;
   }
 
-  return { reconciled, requeued, gaveUp, unsent };
+  return { reconciled, requeued, gaveUp };
 }
 
 /**
@@ -479,7 +475,7 @@ export async function reconcileStuckInProgressJobs(
 async function requeueUnsentScheduledJobs(
   now: Date,
   take: number,
-): Promise<{ requeued: number; gaveUp: number; unsent: Array<{ postJobId: string; userId: string }> }> {
+): Promise<{ requeued: number; gaveUp: number }> {
   const quietCutoff = new Date(now.getTime() - REQUEUE_QUIET_MS);
   const giveUpCutoff = new Date(now.getTime() - SEND_GIVE_UP_MS);
 
@@ -503,11 +499,14 @@ async function requeueUnsentScheduledJobs(
     )
     SELECT "id" FROM requeued`;
 
-  const gaveUp = await prisma.$queryRaw<{ id: string; userId: string }[]>`
+  // `gaveUpAt` in the same UPDATE: the owner's notification is read from it
+  // (notifyGivenUpPosts), so nothing after this commit can lose it.
+  const gaveUp = await prisma.$queryRaw<{ id: string }[]>`
     WITH gave_up AS (
       UPDATE "PostJob"
       SET "status" = 'failed'::"PostJobStatus",
-          "updatedAt" = (${now}::timestamptz AT TIME ZONE 'UTC')
+          "updatedAt" = (${now}::timestamptz AT TIME ZONE 'UTC'),
+          "gaveUpAt" = (${now}::timestamptz AT TIME ZONE 'UTC')
       WHERE "id" IN (
         SELECT j."id" FROM "PostJob" j
         WHERE j."status" = 'in_progress'::"PostJobStatus"
@@ -519,9 +518,9 @@ async function requeueUnsentScheduledJobs(
         LIMIT ${take}
         FOR UPDATE SKIP LOCKED
       ) AND "status" = 'in_progress'::"PostJobStatus" AND NOT EXISTS (SELECT 1 FROM "PostJobResult" r WHERE r."postJobId" = "PostJob"."id")
-      RETURNING "id", "userId"
+      RETURNING "id"
     )
-    SELECT "id", "userId" FROM gave_up`;
+    SELECT "id" FROM gave_up`;
 
   for (const { id } of gaveUp) {
     await stampPostMediaLastUsed(prisma, id, now);
@@ -532,9 +531,48 @@ async function requeueUnsentScheduledJobs(
       gaveUp: gaveUp.map((row) => row.id),
     });
   }
-  return {
-    requeued: requeued.length,
-    gaveUp: gaveUp.length,
-    unsent: gaveUp.map((row) => ({ postJobId: row.id, userId: row.userId })),
-  };
+  return { requeued: requeued.length, gaveUp: gaveUp.length };
+}
+
+/** Posts told per scanner tick; the next tick takes the rest. */
+export const NOTIFY_GIVEN_UP_BATCH = 100;
+
+/**
+ * F1 second review, items 3 and 4: tell the owner of each scheduled post the
+ * reconciler gave up on, with the `notification.requested` event the
+ * no-connections path sends. Read from the post row (`gaveUpAt`, written by the
+ * give-up UPDATE itself, newer than `gaveUpNotifiedAt`), and marked told only
+ * after the send, so a failed reconcile, a failed send or a crash between the
+ * two loses nothing: the next tick finds the row again. The event id carries the
+ * give-up moment, so a resend of one give-up is deduped by Inngest (24 h) and a
+ * second give-up of the same post (after Send again) emails again. A post that
+ * is no longer failed with no results (Send again took it) is not told. The
+ * mark is a raw UPDATE, so `updatedAt` does not move. Throws on a failed send or
+ * read; the caller logs it.
+ */
+export async function notifyGivenUpPosts(deps: {
+  send: (events: Array<{ id: string; name: "notification.requested"; data: { userId: string; postJobId: string } }>) => Promise<unknown>;
+  take?: number;
+}): Promise<number> {
+  const rows = await prisma.$queryRaw<{ id: string; userId: string; gaveUpAt: Date }[]>`
+    SELECT "id", "userId", "gaveUpAt" FROM "PostJob"
+    WHERE "status" = 'failed'::"PostJobStatus"
+      AND "gaveUpAt" IS NOT NULL
+      AND ("gaveUpNotifiedAt" IS NULL OR "gaveUpNotifiedAt" < "gaveUpAt")
+      AND NOT EXISTS (SELECT 1 FROM "PostJobResult" r WHERE r."postJobId" = "PostJob"."id")
+    ORDER BY "gaveUpAt" ASC
+    LIMIT ${deps.take ?? NOTIFY_GIVEN_UP_BATCH}`;
+  if (rows.length === 0) return 0;
+
+  await deps.send(
+    rows.map((row) => ({
+      id: `notify-unsent-${row.id}-${new Date(row.gaveUpAt).getTime()}`,
+      name: "notification.requested" as const,
+      data: { userId: row.userId, postJobId: row.id },
+    })),
+  );
+  await prisma.$executeRaw`
+    UPDATE "PostJob" SET "gaveUpNotifiedAt" = "gaveUpAt"
+    WHERE "id" IN (${Prisma.join(rows.map((row) => row.id))}) AND "gaveUpAt" IS NOT NULL`;
+  return rows.length;
 }
