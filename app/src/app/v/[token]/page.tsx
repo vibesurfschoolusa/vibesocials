@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { ClientPageShell } from "@/components/client-page-header";
 import { findClientPageLogo } from "@/lib/clientPageLogo";
@@ -26,6 +27,17 @@ export const metadata: Metadata = {
   referrer: "no-referrer",
 };
 
+/** G4 (R2-pages L7): a client reviewing posts can read the Terms and Privacy, as on /u and /c. */
+function LegalLinks() {
+  return (
+    <p className="mt-8 text-center text-xs text-muted-foreground">
+      <Link href="/terms" className="underline underline-offset-2 hover:text-foreground">Terms</Link>
+      {" · "}
+      <Link href="/privacy" className="underline underline-offset-2 hover:text-foreground">Privacy Policy</Link>
+    </p>
+  );
+}
+
 export default async function ReviewLinkPage({ params }: ReviewLinkPageProps) {
   const { token } = await params;
   const link = await findActiveReviewLink(token);
@@ -34,6 +46,7 @@ export default async function ReviewLinkPage({ params }: ReviewLinkPageProps) {
     return (
       <ClientPageShell workspace={null} width="2xl">
         <p className="text-base">{REVIEW_LINK_INACTIVE_MESSAGE}</p>
+        <LegalLinks />
       </ClientPageShell>
     );
   }
@@ -50,6 +63,7 @@ export default async function ReviewLinkPage({ params }: ReviewLinkPageProps) {
       <div className="mt-6">
         <ReviewLinkView token={token} />
       </div>
+      <LegalLinks />
     </ClientPageShell>
   );
 }

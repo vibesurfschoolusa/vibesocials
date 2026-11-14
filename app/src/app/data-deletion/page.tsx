@@ -45,7 +45,9 @@ export default function DataDeletionPage() {
             <p>
               Sign in, open <strong>Settings</strong>, and choose <strong>Disconnect</strong> next
               to the platform you want to remove. This immediately deletes the stored access and
-              refresh tokens for that platform. Your past posts and their per-platform results
+              refresh tokens for that platform. It also deletes the post numbers read from that
+              platform; disconnecting Google Business Profile also deletes the listing&apos;s numbers.
+              They cannot be brought back. Your past posts and their per-platform results
               stay in your Activity history, no longer linked to the removed connection; they are
               deleted when you delete the workspace or your account (step 2). Posts already
               published on the platform itself are not affected — remove those from the platform
@@ -81,7 +83,12 @@ export default function DataDeletionPage() {
               </li>
               <li>Their uploaded media, along with the underlying stored files.</li>
               <li>Their posts, scheduled posts, drafts, and their per-platform results.</li>
-              <li>Any performance metrics collected for those posts.</li>
+              <li>The post numbers read from the platforms for those posts.</li>
+              <li>The Google listing numbers read for their Google Business Profile location.</li>
+              <li>
+                What clients sent through their links: the photos and videos, the names and notes
+                added, and the change requests.
+              </li>
             </ul>
             <p className="mt-2">
               In a workspace other people still use, what you added stays for them and passes to
