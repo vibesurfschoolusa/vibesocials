@@ -136,6 +136,12 @@ export default async function SettingsPage({
   // off, the section still shows when the portal does.
   const planLabel =
     planSectionLabel(context.role, planWorkspace, new Date()) ?? (planActions?.manage ? PLAN_PORTAL_ONLY_LABEL : null);
+  // Usage (F7): point to a plan change only where the Plan section offers one.
+  // A member's planActions is always null, so ask what the owner would be offered;
+  // the Stripe columns are read for owners only, so a member's answer rests on the plan.
+  const usagePlanChange =
+    billingEnabled() &&
+    (context.role === "owner" ? planActions : planSectionActions("owner", planWorkspace, new Date())) !== null;
   const planOffers = planActions && planActions.choose.length > 0 ? await getPlanOffers(planActions.choose) : [];
   // P1: the same plans' yearly prices, where configured; none otherwise, and nothing is read.
   const yearlyPlanOffers =
@@ -303,14 +309,15 @@ export default async function SettingsPage({
           <section>
             <div className="mb-4">
               <h2 id="usage" className="scroll-mt-32 lg:scroll-mt-20 text-lg font-semibold tracking-tight text-foreground">Usage</h2>
-              {/* R1 L4: with billing on, a higher limit is another plan: the owner
-                  changes it under Plan; a member asks the owner. Billing off (or no
-                  Plan section to point at): write in, as before. */}
+              {/* R1 L4: with billing on and a plan action on offer, a higher limit
+                  is another plan: the owner changes it under Plan; a member asks
+                  the owner. Otherwise (billing off, an exempt workspace, payments
+                  not set up): write in, as before. */}
               <p className="mt-1 text-sm text-muted-foreground">
                 What this workspace has used of its limits.{" "}
-                {billingEnabled() && context.role === "member" ? (
+                {usagePlanChange && context.role === "member" ? (
                   "For a higher limit, ask the workspace owner to change the plan."
-                ) : billingEnabled() && planLabel ? (
+                ) : usagePlanChange && planLabel ? (
                   <>
                     For a higher limit, change the plan under{" "}
                     <a href="#plan" className="underline underline-offset-2 hover:text-foreground">Plan</a>.

@@ -13,6 +13,7 @@ vi.mock("./platforms/googleTokens", () => ({ refreshGoogleToken: vi.fn() }));
 import {
   GOOGLE_REFUSED_MESSAGE,
   REVIEWS_SHOWN_MAX,
+  REVIEWS_UNAVAILABLE_MESSAGE,
   fetchAllReviews,
   fetchNewReviewUri,
   fetchReviews,
@@ -295,5 +296,43 @@ describe("listGbpLocations", () => {
     global.fetch = vi.fn(async () => json({}, 403)) as unknown as typeof fetch;
 
     await expect(listGbpLocations("tok")).rejects.toMatchObject({ status: 403 });
+  });
+});
+
+// Review point 3: a reconnect only when the person's Google grant is the
+// problem; a refresh our own app setup broke cannot be fixed by reconnecting.
+describe("reviewsErrorBody: token refresh failures", () => {
+  const refresh = (status: number, oauthError?: string) =>
+    Object.assign(new Error(`Failed to refresh Google access token (status ${status})`), {
+      status,
+      code: "GOOGLE_TOKEN_REFRESH_FAILED",
+      ...(oauthError ? { oauthError } : {}),
+    });
+
+  it("asks for a reconnect when Google refused the grant (invalid_grant)", () => {
+    expect(reviewsErrorBody(refresh(400, "invalid_grant"), "Fallback.")).toEqual({
+      error: GOOGLE_REFUSED_MESSAGE,
+      reconnect: true,
+    });
+  });
+
+  it("asks for a reconnect when there is no refresh token to use", () => {
+    const error = Object.assign(new Error("No refresh token"), { code: "GOOGLE_NO_REFRESH_TOKEN" });
+    expect(reviewsErrorBody(error, "Fallback.")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
+  });
+
+  it.each([
+    ["invalid_client (401)", refresh(401, "invalid_client")],
+    ["invalid_client (400)", refresh(400, "invalid_client")],
+    ["unauthorized_client", refresh(400, "unauthorized_client")],
+    ["a 401 with no OAuth code", refresh(401)],
+    ["missing OAuth credentials", Object.assign(new Error("Missing"), { code: "GOOGLE_MISSING_OAUTH_CREDENTIALS" })],
+  ])("gives the not-available sentence for %s, never a reconnect", (_label, error) => {
+    expect(reviewsErrorBody(error, "Fallback.")).toEqual({ error: REVIEWS_UNAVAILABLE_MESSAGE });
+    expect(REVIEWS_UNAVAILABLE_MESSAGE).toBe("Google Reviews are not available right now. Try again later.");
+  });
+
+  it("a 400 whose OAuth code was not passed on still reads as a refused grant (the common case)", () => {
+    expect(reviewsErrorBody(refresh(400), "Fallback.")).toEqual({ error: GOOGLE_REFUSED_MESSAGE, reconnect: true });
   });
 });

@@ -188,3 +188,14 @@ describe("Add many row: Write captions with AI off", () => {
     expect(render(row(), { aiCaptions: true })).toContain(">Write again<");
   });
 });
+
+// Review point 1: with the switch off, a Media photo offers no "Write it for me" either.
+describe("Add many row: Media photo description with AI off", () => {
+  it("hides Write it for me when the switch is off", () => {
+    expect(render(row({ mediaItemId: "m1" }), { aiCaptions: false })).not.toContain(">Write it for me<");
+  });
+
+  it("shows it when the switch is on", () => {
+    expect(render(row({ mediaItemId: "m1" }))).toContain(">Write it for me<");
+  });
+});

@@ -170,27 +170,52 @@ export async function fetchAllReviews(
 export const GOOGLE_REFUSED_MESSAGE =
   "Google refused the request. Reconnect Google Business Profile in Settings.";
 
-const RECONNECT_CODES = new Set(["RECONNECT_REQUIRED", "CONNECTION_GONE"]);
+/** What the Reviews page says when our own Google setup, not the person's grant, failed. */
+export const REVIEWS_UNAVAILABLE_MESSAGE = "Google Reviews are not available right now. Try again later.";
+
+const RECONNECT_CODES = new Set(["RECONNECT_REQUIRED", "CONNECTION_GONE", "GOOGLE_NO_REFRESH_TOKEN"]);
+const REFRESH_FAILED_CODE = "GOOGLE_TOKEN_REFRESH_FAILED";
+/** Refresh answers about the app's own OAuth client: reconnecting cannot fix them. */
+const APP_SETUP_OAUTH_ERRORS = new Set(["invalid_client", "unauthorized_client"]);
 
 /**
- * The error body the reviews routes answer with (F7, R1 M5). Google's 401/403,
- * a connection already flagged for reconnecting or gone, and a token refresh
- * Google refused (400/401: a dead grant) all ask for a reconnect, with
- * `reconnect: true` so the page links to Settings. Anything else is the route's
- * plain `fallback`: an error's own text (a status code, a JSON parse error) is
- * never shown.
+ * The error body the reviews routes answer with (F7, R1 M5). A reconnect is
+ * asked for, with `reconnect: true` so the page links to Settings, only when
+ * the person's Google grant is the problem: a 401/403 from a Google API call,
+ * a connection already flagged or gone, no refresh token, or a refresh Google
+ * refused with invalid_grant. A failure of the app's own setup (missing OAuth
+ * credentials, invalid_client, unauthorized_client, or a refresh 401, which is
+ * how Google answers a bad client) says Reviews are not available. Anything
+ * else is the route's plain `fallback`: an error's own text is never shown.
+ *
+ * `oauthError` is the token endpoint's OAuth code when the thrown error carries
+ * it. A refresh 400 without one reads as a refused grant, the common case.
  */
 export function reviewsErrorBody(
   error: unknown,
   fallback: string
 ): { error: string; reconnect?: true } {
-  const { status, code } = (error ?? {}) as { status?: unknown; code?: unknown };
-  const refused =
-    status === 401 ||
-    status === 403 ||
-    (typeof code === "string" && RECONNECT_CODES.has(code)) ||
-    (code === "GOOGLE_TOKEN_REFRESH_FAILED" && status === 400);
-  return refused ? { error: GOOGLE_REFUSED_MESSAGE, reconnect: true } : { error: fallback };
+  const { status, code, oauthError } = (error ?? {}) as {
+    status?: unknown;
+    code?: unknown;
+    oauthError?: unknown;
+  };
+  const refused = { error: GOOGLE_REFUSED_MESSAGE, reconnect: true as const };
+  const unavailable = { error: REVIEWS_UNAVAILABLE_MESSAGE };
+
+  if (code === "GOOGLE_MISSING_OAUTH_CREDENTIALS") return unavailable;
+  if (code === REFRESH_FAILED_CODE) {
+    if (typeof oauthError === "string") {
+      if (oauthError === "invalid_grant") return refused;
+      if (APP_SETUP_OAUTH_ERRORS.has(oauthError)) return unavailable;
+    }
+    if (status === 401) return unavailable;
+    if (status === 400) return refused;
+    return { error: fallback };
+  }
+  if (status === 401 || status === 403) return refused;
+  if (typeof code === "string" && RECONNECT_CODES.has(code)) return refused;
+  return { error: fallback };
 }
 
 /**

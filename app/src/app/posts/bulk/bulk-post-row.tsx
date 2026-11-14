@@ -239,8 +239,9 @@ export function BulkPostRow({
               onChange={(event) => onAltTextChange(event.target.value)}
             />
             {/* A Media photo keeps its saved description unless the user writes
-                a new one here: it is never described automatically. */}
-            {row.mediaItemId && editable ? (
+                a new one here: it is never described automatically. With "Write
+                captions with AI" off, nothing goes to the AI, so no button. */}
+            {row.mediaItemId && editable && aiCaptions ? (
               <div>
                 <Button variant="outline" size="md" loading={row.altTextWriting} onClick={onWriteDescription}>
                   Write it for me
