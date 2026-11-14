@@ -30,7 +30,7 @@ function report(overrides: Partial<MonthlyReport> = {}): MonthlyReport {
 
 const BASE = "https://app.example.com";
 const build = (r: MonthlyReport, extra: Partial<{ appBaseUrl: string | null; hasClientLink: boolean }> = {}) =>
-  buildMonthlyReportEmail({ report: r, appBaseUrl: BASE, hasClientLink: false, ...extra });
+  buildMonthlyReportEmail({ report: r, workspaceId: "ws_1", appBaseUrl: BASE, hasClientLink: false, ...extra });
 
 describe("buildMonthlyReportEmail", () => {
   it("names the workspace and the month in the subject", () => {
@@ -74,8 +74,9 @@ describe("buildMonthlyReportEmail", () => {
   });
 
   it("links to the month's report from NEXTAUTH_URL, without a doubled slash", () => {
-    expect(build(report()).html).toContain(`href="${BASE}/reports?month=2026-10"`);
-    expect(build(report(), { appBaseUrl: `${BASE}/` }).html).toContain(`href="${BASE}/reports?month=2026-10"`);
+    const href = `href="${BASE}/go?w=ws_1&amp;to=%2Freports%3Fmonth%3D2026-10"`;
+    expect(build(report()).html).toContain(href);
+    expect(build(report(), { appBaseUrl: `${BASE}/` }).html).toContain(href);
     const plain = build(report(), { appBaseUrl: null }).html;
     expect(plain).not.toContain("href=");
     expect(plain).toContain("Open Reports in Vibe Socials");
@@ -96,7 +97,12 @@ describe("buildMonthlyReportEmail", () => {
   });
 
   it("says how to switch it off", () => {
-    expect(build(report()).html).toContain("To stop this monthly email, turn it off in Settings, Notifications.");
+    expect(build(report()).html).toContain(
+      `<p>To stop these emails, turn off &quot;Email me the monthly report&quot; in <a href="${BASE}/go?w=ws_1&amp;to=%2Fsettings%23post-defaults">Settings, Posts and emails</a>.</p>`,
+    );
+    expect(build(report(), { appBaseUrl: null }).html).toContain(
+      "<p>To stop these emails, turn off &quot;Email me the monthly report&quot; in Settings, Posts and emails.</p>",
+    );
   });
 
   it("escapes every value", () => {
@@ -198,8 +204,8 @@ describe("buildMonthlyReportEmail — counted words and thousands separators", (
       html: [
         "<p>Here is the report for <strong>Surf Co</strong> for October 2026.</p>",
         "<p>Posts published: 0</p>",
-        '<p><a href="https://app.example.com/reports?month=2026-10" style="display:inline-block;padding:10px 16px;background:#111827;color:#ffffff;text-decoration:none;border-radius:6px">Open the report</a></p>',
-        "<p>To stop this monthly email, turn it off in Settings, Notifications.</p>",
+        '<p><a href="https://app.example.com/go?w=ws_1&amp;to=%2Freports%3Fmonth%3D2026-10" style="display:inline-block;padding:10px 16px;background:#111827;color:#ffffff;text-decoration:none;border-radius:6px">Open the report</a></p>',
+        '<p>To stop these emails, turn off &quot;Email me the monthly report&quot; in <a href="https://app.example.com/go?w=ws_1&amp;to=%2Fsettings%23post-defaults">Settings, Posts and emails</a>.</p>',
         "<p>— Vibe Socials</p>",
       ].join("\n"),
     });

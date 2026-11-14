@@ -150,6 +150,10 @@ model User {
   // 2026-11-10: the monthly report email to owners (server/jobs/monthlyReportEmail.ts).
   // Defaults to true, like the fields above.
   notifyMonthlyReport  Boolean   @default(true)
+  // F4 (2026-11-14): the person's IANA time zone ("America/New_York"), sent by
+  // their browser when it differs (POST /api/me/time-zone). Emails show times
+  // in it; null until the browser has sent it, and emails then show UTC.
+  timeZone             String?
   // Bumped on password reset so outstanding next-auth JWTs (which embed the
   // prior version) fail getCurrentUser until the user signs in again.
   sessionVersion       Int       @default(0)

@@ -10,9 +10,16 @@ export interface DashboardSummary {
   awaitingYourApproval: number | null;
   clientChangesRequested: number;
   nextScheduled: { scheduledFor: string; platformCount: number } | null;
+  /**
+   * F4: the workspace's name when its Google connection has no business
+   * location yet (owners only; null otherwise). Optional: an older server's
+   * answer has no such field.
+   */
+  chooseGoogleLocation?: string | null;
 }
 
 export type NeedsYouRowKind =
+  | "google_location"
   | "reviews"
   | "problems"
   | "approvals"
@@ -66,6 +73,14 @@ export function needsYouRows(
   formatTime: (iso: string) => string = formatNextPostTime,
 ): NeedsYouCard {
   const rows: NeedsYouRow[] = [];
+  // First: until it is done, every post to Google fails.
+  if (role === "owner" && summary.chooseGoogleLocation) {
+    rows.push({
+      kind: "google_location",
+      text: `Choose the Google business location for ${summary.chooseGoogleLocation}`,
+      href: "/settings#connections",
+    });
+  }
   const reviews = reviewsNeedingReplyCount ?? 0;
   if (reviews > 0) {
     rows.push({

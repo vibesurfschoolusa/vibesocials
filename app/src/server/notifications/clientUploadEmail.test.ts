@@ -6,24 +6,26 @@ describe("buildClientUploadEmail", () => {
   it("names the sender and the workspace, says the files are in Media and links there", () => {
     const email = buildClientUploadEmail({
       senderName: "Ana",
+      workspaceId: "ws_1",
       workspaceName: "Surf Co",
       appUrl: "https://vibesocials.wtf",
     });
 
     expect(email.subject).toBe("Ana sent files to Surf Co");
     expect(email.html).toContain("They are in Media.");
-    expect(email.html).toContain('href="https://vibesocials.wtf/media"');
+    expect(email.html).toContain('href="https://vibesocials.wtf/go?w=ws_1&amp;to=%2Fmedia"');
   });
 
   it("says 'Your client' when no name was given", () => {
-    const email = buildClientUploadEmail({ senderName: null, workspaceName: "Surf Co", appUrl: "" });
+    const email = buildClientUploadEmail({ senderName: null, workspaceId: "ws_1", workspaceName: "Surf Co", appUrl: "" });
     expect(email.subject).toBe("Your client sent files to Surf Co");
-    expect(email.html).toContain('href="/media"');
+    expect(email.html).toContain('href="/go?w=ws_1&amp;to=%2Fmedia"');
   });
 
   it("escapes the sender's name and the workspace name in the HTML", () => {
     const email = buildClientUploadEmail({
       senderName: '<img src=x onerror="alert(1)">',
+      workspaceId: "ws_1",
       workspaceName: "Tom & Jerry's <b>",
       appUrl: "https://vibesocials.wtf",
     });

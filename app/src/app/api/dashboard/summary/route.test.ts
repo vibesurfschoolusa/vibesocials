@@ -90,6 +90,11 @@ vi.mock("@/lib/db", () => ({
         state.calls.push("socialConnection.count");
         return state.connections.filter((c) => matches(c, where)).length;
       },
+      findFirst: async ({ where, select }: { where: Row; select: Row }) => {
+        state.calls.push("socialConnection.findFirst");
+        expect(select).toEqual({ metadata: true });
+        return state.connections.find((c) => matches(c, where)) ?? null;
+      },
     },
   },
 }));
@@ -167,6 +172,45 @@ describe("GET /api/dashboard/summary", () => {
       awaitingYourApproval: 0,
       clientChangesRequested: 0,
       nextScheduled: null,
+      chooseGoogleLocation: null,
+    });
+  });
+
+  // F4 (R1 M4): a Google listing connected without a location fails every Google post.
+  describe("chooseGoogleLocation", () => {
+    const google = (metadata: unknown, workspaceId = "ws-1") => ({
+      workspaceId,
+      platform: "google_business_profile",
+      metadata,
+    });
+
+    it("names the workspace when its Google connection has no location chosen", async () => {
+      state.connections = [google({ locationName: null })];
+      expect((await summary()).body.chooseGoogleLocation).toBe("Acme");
+    });
+
+    it("also for a connection with no metadata at all, or an empty location", async () => {
+      state.connections = [google(null)];
+      expect((await summary()).body.chooseGoogleLocation).toBe("Acme");
+      state.connections = [google({ locationName: "  " })];
+      expect((await summary()).body.chooseGoogleLocation).toBe("Acme");
+    });
+
+    it("is null once a location is chosen", async () => {
+      state.connections = [google({ locationName: "locations/123", locationTitle: "Surf Co" })];
+      expect((await summary()).body.chooseGoogleLocation).toBeNull();
+    });
+
+    it("is null without a Google connection, or for another workspace's", async () => {
+      state.connections = [{ workspaceId: "ws-1", platform: "x", metadata: null }, google(null, "ws-2")];
+      expect((await summary()).body.chooseGoogleLocation).toBeNull();
+    });
+
+    it("is null for a member, and nothing is read: only an owner chooses the location", async () => {
+      getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member" }));
+      state.connections = [google(null)];
+      expect((await summary()).body.chooseGoogleLocation).toBeNull();
+      expect(state.calls).not.toContain("socialConnection.findFirst");
     });
   });
 

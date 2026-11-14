@@ -8,8 +8,8 @@ import { assertOk } from "@/lib/assertOk";
 import { DEFAULT_FETCH_TIMEOUT_MS, fetchWithTimeout } from "@/lib/fetchWithTimeout";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
 import { X_MAX_PHOTOS } from "@/lib/postMedia";
-import { truncateGraphemes } from "@/lib/truncate";
 import { removeXMentions } from "@/lib/xMentions";
+import { truncateXWeighted } from "@/lib/xWeightedLength";
 import type { UploadSnapshot, UploadStateStore } from "@/server/jobs/uploadState";
 
 import { commitRequest, readCommitBody, requireCommitId } from "./commitCall";
@@ -154,16 +154,11 @@ export const X_UPLOAD_STATE_KIND = "x_chunked";
 // signal is added, which the signature does not cover.
 
 /**
- * Apply X's client-enforced caption truncation the same way `publishVideo`
- * does, reading the limit/ellipsis from the shared `platformLimits.ts` map
- * instead of inline literals. Extracted as a pure, exported function so this
- * behavior can be asserted directly in tests without mocking the OAuth/media-
- * upload network calls the rest of `publishVideo` makes — see xClient.test.ts.
- *
- * Behavior is intentionally unchanged from before the platformLimits.ts
- * refactor: the `.length > charLimit` pre-check is a fast-path (grapheme
- * count can never exceed UTF-16 length, so it never changes the outcome,
- * only skips the Intl.Segmenter call when definitely under the limit).
+ * The text X gets: the caption without @-mentions, cut to X's 280 by X's own
+ * weight (fix round 1, M5: an emoji counts 2, a link 23, lib/xWeightedLength.ts)
+ * with the shared ellipsis, never inside an emoji or a link. The footer has
+ * already gone first when the whole text was over (lib/captionFooter.ts).
+ * Pure, so xClient.test.ts asserts it without the network calls.
  */
 export function computeTweetText(caption: string): string {
   // X refuses API posts that @-mention users (self-serve tiers, since
@@ -176,13 +171,9 @@ export function computeTweetText(caption: string): string {
     return withoutMentions;
   }
 
-  let tweetText = withoutMentions;
-  if (tweetText.length > charLimit) {
-    const truncated = truncateGraphemes(tweetText, charLimit, { ellipsis });
-    if (truncated !== tweetText) {
-      console.log("[X OAuth 1.0a] Caption truncated to fit X's 280-character limit");
-      tweetText = truncated;
-    }
+  const tweetText = truncateXWeighted(withoutMentions, charLimit, ellipsis);
+  if (tweetText !== withoutMentions) {
+    console.log("[X OAuth 1.0a] Caption truncated to fit X's 280 weighted-character limit");
   }
   return tweetText;
 }

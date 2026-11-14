@@ -25,6 +25,11 @@ function toGraphemes(text: string): string[] {
   return Array.from(graphemeSegmenter.segment(text), (segment) => segment.segment);
 }
 
+/** The number of extended grapheme clusters in `text`. */
+export function graphemeCount(text: string): number {
+  return toGraphemes(text).length;
+}
+
 export interface TruncateOptions {
   /**
    * Suffix appended when (and only when) truncation actually occurs — e.g.
@@ -108,4 +113,109 @@ export function fitTitle(text: string, max: number): string {
   const cut = truncateGraphemes(oneLine, max, { ellipsis: "…" }).slice(0, -1);
   const lastSpace = cut.lastIndexOf(" ");
   return (lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trimEnd() + "…";
+}
+
+/** What a cut needs to know about a link it keeps whole. */
+export interface TextLink {
+  /** Starts with http:// or https://. */
+  hasScheme: boolean;
+  /** The host starts with "www.". */
+  hasWww: boolean;
+  /** Has a path, query or fragment after the host. */
+  hasPath: boolean;
+  /** The host's last label, lower case ("com"). */
+  tld: string;
+}
+
+/** One piece a cut may not split: a grapheme, or a whole link. */
+export interface TextUnit {
+  text: string;
+  link: TextLink | null;
+}
+
+// A link: an optional http(s) scheme, a host of dotted labels ending in letters,
+// then an optional path. Narrow on purpose: only ASCII, no brackets or quotes,
+// so a cut never takes more than a platform would read as the link. It may not
+// follow a word character, "@" (an email address), ".", "-" or "/".
+const LINK =
+  /(?<![\w@.\-/])(?:https?:\/\/)?(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?::\d+)?(?:[/?#][A-Za-z0-9\-._~:/?#@!$&*+,;=%]*)?/gi;
+// Punctuation that ends a sentence is not part of the link before it.
+const LINK_TRAILING = /[^A-Za-z0-9=_#/\-+&]+$/;
+
+function linkOf(text: string): TextLink {
+  const hasScheme = /^https?:\/\//i.test(text);
+  const rest = hasScheme ? text.replace(/^https?:\/\//i, "") : text;
+  const host = rest.split(/[/?#:]/, 1)[0];
+  return {
+    hasScheme,
+    hasWww: /^www\./i.test(host),
+    hasPath: rest.length > host.length,
+    tld: host.slice(host.lastIndexOf(".") + 1).toLowerCase(),
+  };
+}
+
+/**
+ * Split `text` into the pieces a cut may not split (fix round 1, M4/M5):
+ * extended grapheme clusters, and links (`https://…`, `www.example.com`,
+ * `example.com/path`) as one piece each. Joined back, the pieces are `text`.
+ */
+export function textUnits(text: string): TextUnit[] {
+  const units: TextUnit[] = [];
+  let at = 0;
+  const pushGraphemes = (part: string) => {
+    for (const grapheme of toGraphemes(part)) units.push({ text: grapheme, link: null });
+  };
+  for (const match of text.matchAll(LINK)) {
+    const link = match[0].replace(LINK_TRAILING, "");
+    // A match trimmed down to a bare "a.b" with no letters left is not a link.
+    if (!/\.[A-Za-z]{2,}/.test(link)) continue;
+    pushGraphemes(text.slice(at, match.index));
+    units.push({ text: link, link: linkOf(link) });
+    at = match.index + link.length;
+  }
+  pushGraphemes(text.slice(at));
+  return units;
+}
+
+/**
+ * Cut `text` to at most `max` by a platform's own measure (`weigh`, per piece),
+ * never splitting a grapheme or a link: the pieces are kept in order while they
+ * fit with `ellipsis`, and a piece that does not fit ends the text. Text that
+ * already fits comes back unchanged.
+ */
+export function truncateUnits(
+  text: string,
+  max: number,
+  weigh: (unit: TextUnit) => number,
+  ellipsis = "",
+): string {
+  const measure = (value: string) => textUnits(value).reduce((sum, unit) => sum + weigh(unit), 0);
+  const units = textUnits(text);
+  if (units.reduce((sum, unit) => sum + weigh(unit), 0) <= max) return text;
+
+  const kept: TextUnit[] = [];
+  let used = 0;
+  const budget = max - measure(ellipsis);
+  for (const unit of units) {
+    const weight = weigh(unit);
+    if (used + weight > budget) break;
+    kept.push(unit);
+    used += weight;
+  }
+  // The ellipsis can join the piece before it (a link that grows), so the
+  // joined result is measured again and shortened until it fits.
+  let result = kept.map((unit) => unit.text).join("") + ellipsis;
+  while (kept.length > 0 && measure(result) > max) {
+    kept.pop();
+    result = kept.map((unit) => unit.text).join("") + ellipsis;
+  }
+  return measure(result) <= max ? result : "";
+}
+
+/**
+ * `truncateGraphemes` that never cuts inside a link: a link that does not fit
+ * goes whole (review fix, LinkedIn). Text that fits comes back unchanged.
+ */
+export function truncateKeepingLinks(text: string, maxGraphemes: number, ellipsis = ""): string {
+  return truncateUnits(text, maxGraphemes, (unit) => (unit.link ? graphemeCount(unit.text) : 1), ellipsis);
 }

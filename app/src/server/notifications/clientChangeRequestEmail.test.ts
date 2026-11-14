@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import { buildClientChangeRequestEmail } from "./clientChangeRequestEmail";
 
 const base = {
+  workspaceId: "ws_1",
   workspaceName: "Surf Co",
+  timeZone: null,
   scheduledFor: new Date("2026-11-12T15:00:00Z"),
   caption: "Dawn patrol tomorrow",
   note: "Use the other photo",
@@ -15,11 +17,16 @@ describe("buildClientChangeRequestEmail", () => {
     const email = buildClientChangeRequestEmail(base);
 
     expect(email.subject).toBe("Surf Co: your client asked for a change");
-    expect(email.html).toContain("Nov 12, 2026");
-    expect(email.html).toContain("UTC");
+    expect(email.html).toContain("Thu, Nov 12, 2026, 3:00 PM UTC");
     expect(email.html).toContain("Dawn patrol tomorrow");
     expect(email.html).toContain("Use the other photo");
-    expect(email.html).toContain('href="https://app.example/queue"');
+    expect(email.html).toContain('href="https://app.example/go?w=ws_1&amp;to=%2Fqueue"');
+  });
+
+  it("shows the time in the owner's own time zone when it is known (F4)", () => {
+    const email = buildClientChangeRequestEmail({ ...base, timeZone: "America/New_York" });
+    expect(email.html).toContain("Thu, Nov 12, 2026, 10:00 AM EST");
+    expect(email.html).not.toContain("UTC");
   });
 
   it("shows only the first 100 characters of the caption", () => {

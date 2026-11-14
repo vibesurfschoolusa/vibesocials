@@ -1,3 +1,5 @@
+import { workspaceLink } from "@/server/notifications/links";
+
 /**
  * Sent to every OWNER of a workspace the first time files arrive through its
  * client upload link in a UTC hour (src/server/uploadLink.ts). Pure builder
@@ -20,12 +22,14 @@ function escapeHtml(value: string): string {
 
 export function buildClientUploadEmail(params: {
   senderName: string | null;
+  /** The link opens this workspace through /go (F4). */
+  workspaceId: string;
   workspaceName: string;
   /** NEXTAUTH_URL; empty gives a relative link. */
   appUrl: string;
 }): { subject: string; html: string } {
   const sender = params.senderName ?? "Your client";
-  const mediaUrl = `${params.appUrl}/media`;
+  const mediaUrl = workspaceLink(params.workspaceId, "/media", params.appUrl);
 
   return {
     subject: `${sender} sent files to ${params.workspaceName}`,

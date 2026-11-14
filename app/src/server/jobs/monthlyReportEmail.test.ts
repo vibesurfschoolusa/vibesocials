@@ -203,7 +203,7 @@ describe("runMonthlyReportEmails", () => {
     for (const call of m.sendEmail.mock.calls) expect(call[1].throwOnRetryable).toBe(true);
     expect(m.log).toEqual(["send owner0@ws-1.example.com", "send owner1@ws-1.example.com", "mark ws-1 2026-10"]);
     expect(m.sendEmail.mock.calls[0][0].subject).toBe("Name of ws-1: your report for October 2026");
-    expect(m.sendEmail.mock.calls[0][0].html).toContain("https://app.example.com/reports?month=2026-10");
+    expect(m.sendEmail.mock.calls[0][0].html).toContain("https://app.example.com/go?w=ws-1&amp;to=%2Freports%3Fmonth%3D2026-10");
     expect(result).toMatchObject({ handled: 1, emailed: 2, failed: 0 });
   });
 

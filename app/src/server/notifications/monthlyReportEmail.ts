@@ -1,6 +1,7 @@
 import { formatNumber } from "@/lib/formatNumber";
 import { monthLabel, numberLine, type MonthlyReport } from "@/lib/monthlyReport";
 import { countWord } from "@/lib/plural";
+import { emailSettingsLine, workspaceLink } from "@/server/notifications/links";
 
 /**
  * The monthly report email (18b), sent by the `monthly-report-email` cron to a
@@ -29,6 +30,8 @@ const LISTING_LINES = [
 
 export function buildMonthlyReportEmail(params: {
   report: MonthlyReport;
+  /** The links open this workspace through /go (F4). */
+  workspaceId: string;
   /** `process.env.NEXTAUTH_URL`. Null renders the email with no link. */
   appBaseUrl: string | null;
   /** The workspace has an active client review link. */
@@ -76,7 +79,9 @@ export function buildMonthlyReportEmail(params: {
   // Trim a trailing slash so "https://host/" never yields "https://host//reports".
   const base = params.appBaseUrl ? params.appBaseUrl.replace(/\/+$/, "") : null;
   if (base) {
-    const href = escapeHtml(`${base}/reports?month=${encodeURIComponent(report.month)}`);
+    const href = escapeHtml(
+      workspaceLink(params.workspaceId, `/reports?month=${encodeURIComponent(report.month)}`, base),
+    );
     lines.push(
       `<p><a href="${href}" style="display:inline-block;padding:10px 16px;background:#111827;color:#ffffff;text-decoration:none;border-radius:6px">Open the report</a></p>`,
     );
@@ -87,7 +92,13 @@ export function buildMonthlyReportEmail(params: {
     lines.push(`<p>Your client can open the same report from their review link.</p>`);
   }
 
-  lines.push(`<p>To stop this monthly email, turn it off in Settings, Notifications.</p>`);
+  lines.push(
+    emailSettingsLine({
+      action: 'turn off "Email me the monthly report"',
+      workspaceId: params.workspaceId,
+      appBaseUrl: base,
+    }),
+  );
   lines.push(`<p>— Vibe Socials</p>`);
 
   return { subject: `${report.workspaceName}: your report for ${month}`, html: lines.join("\n") };

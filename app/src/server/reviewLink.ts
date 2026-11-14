@@ -224,19 +224,23 @@ async function sendClientChangeEmails(args: ClientChangeNotice): Promise<void> {
 
   const owners = await prisma.workspaceMember.findMany({
     where: { workspaceId, role: "owner" },
-    select: { user: { select: { id: true, email: true } } },
+    select: { user: { select: { id: true, email: true, timeZone: true } } },
   });
-  const email = buildClientChangeRequestEmail({
-    workspaceName: args.workspaceName,
-    scheduledFor: post.scheduledFor,
-    caption: post.baseCaption ?? post.mediaItem?.baseCaption ?? "",
-    note: args.note,
-    appUrl: process.env.NEXTAUTH_URL ?? "",
-  });
+  // One email per owner: the post's time is shown in each owner's own zone (F4).
+  const emailFor = (timeZone: string | null) =>
+    buildClientChangeRequestEmail({
+      workspaceId,
+      workspaceName: args.workspaceName,
+      timeZone,
+      scheduledFor: post.scheduledFor,
+      caption: post.baseCaption ?? post.mediaItem?.baseCaption ?? "",
+      note: args.note,
+      appUrl: process.env.NEXTAUTH_URL ?? "",
+    });
   const requestKey = args.requestedAt.toISOString();
   for (const owner of owners) {
     await sendEmail(
-      { to: owner.user.email, ...email },
+      { to: owner.user.email, ...emailFor(owner.user.timeZone ?? null) },
       { idempotencyKey: `client-change/${postJobId}/${requestKey}/${owner.user.id}` },
     );
   }

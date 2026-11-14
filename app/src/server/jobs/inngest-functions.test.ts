@@ -4815,12 +4815,14 @@ describe("publish functions - tracking tags on the website link (20)", () => {
         expect(ctxFor("x").caption).toBe(`Waves\n\n${tagged("x")}\n\n#surf`);
       });
 
-      // Fix round 1: the tags never cost the post its text. The X text is tagged
-      // only when the whole text fits 280; the preview shows the same.
-      it("on X, tags up to the limit and sends the plain link one character over", async () => {
+      // Fix round 1: the tags never cost the post its text. X weighs the tagged
+      // link 23, like the plain one (lib/xWeightedLength.ts); one over the limit
+      // drops the hashtags first and keeps the tagged link. The preview agrees.
+      it("on X, tags up to the limit and drops the hashtags one character over", async () => {
         db.workspaceFindUnique.mockResolvedValue(TRACKED);
-        const room = 280 - `\n\n${tagged("x")}\n\n#surf`.length;
-        for (const [length, expectTagged] of [
+        // "\n\nFor more info visit " 22 + link 23 + "\n\n#surf" 7.
+        const room = 280 - 52;
+        for (const [length, expectHashtags] of [
           [room - 1, true],
           [room, true],
           [room + 1, false],
@@ -4830,9 +4832,7 @@ describe("publish functions - tracking tags on the website link (20)", () => {
           await run({ x: text });
           const sent = ctxFor("x").caption;
           expect(sent).toBe(
-            expectTagged
-              ? `${text}\n\n${tagged("x")}\n\n#surf`
-              : `${text}\n\nFor more info visit vibesurfschool.com\n\n#surf`,
+            expectHashtags ? `${text}\n\n${tagged("x")}\n\n#surf` : `${text}\n\n${tagged("x")}`,
           );
           expect(computeTweetText(sent)).toBe(
             buildPlatformPreview({ platform: "x", caption: "Waves", override: text, user: TRACKED }).rendered,

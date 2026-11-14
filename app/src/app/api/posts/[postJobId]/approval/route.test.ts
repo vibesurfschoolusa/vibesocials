@@ -109,6 +109,7 @@ const ORIGINAL_RESEND_API_KEY = process.env.RESEND_API_KEY;
 afterEach(() => {
   if (ORIGINAL_RESEND_API_KEY === undefined) delete process.env.RESEND_API_KEY;
   else process.env.RESEND_API_KEY = ORIGINAL_RESEND_API_KEY;
+  vi.unstubAllEnvs();
 });
 
 beforeEach(() => {
@@ -314,16 +315,37 @@ describe("POST /api/posts/[postJobId]/approval", () => {
   });
 
   it("emails the submitting member about the decision", async () => {
+    vi.stubEnv("NEXTAUTH_URL", "https://vibesocials.wtf");
     findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
 
     await POST(req({ decision: "approve" }), ctx("job-1"));
 
     expect(userFindUniqueMock).toHaveBeenCalledWith({
       where: { id: "member-1" },
-      select: { email: true },
+      select: { email: true, timeZone: true },
     });
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     expect(sendEmailMock.mock.calls[0][0]).toMatchObject({ to: "member@example.com" });
+    expect(sendEmailMock.mock.calls[0][0].html).toContain("/go?w=ws-1&amp;to=%2Factivity");
+  });
+
+  it("shows the scheduled time in the member's own zone (F4)", async () => {
+    userFindUniqueMock.mockResolvedValue({ email: "member@example.com", timeZone: "Asia/Tokyo" });
+    findFirstMock.mockResolvedValue(pendingJob({ scheduledFor: FUTURE }));
+
+    await POST(req({ decision: "approve" }), ctx("job-1"));
+
+    const expected = FUTURE.toLocaleString("en-US", {
+      timeZone: "Asia/Tokyo",
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+    expect(sendEmailMock.mock.calls[0][0].html).toContain(expected);
   });
 
   it("still succeeds when the decision email fails", async () => {

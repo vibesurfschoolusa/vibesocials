@@ -456,9 +456,25 @@ describe("notifyOwnersOfClientChange", () => {
     const [params, options] = sendEmailMock.mock.calls[1];
     expect(params.html).toContain("Use the other photo");
     expect(params.html).toContain("Dawn patrol tomorrow");
-    expect(params.html).toContain('href="https://app.example/queue"');
+    expect(params.html).toContain('href="https://app.example/go?w=ws-1&amp;to=%2Fqueue"');
     // Best-effort: never the retrying mode.
     expect(options).not.toHaveProperty("throwOnRetryable");
+  });
+
+  it("shows the post's time in each owner's own zone, UTC when unknown (F4)", async () => {
+    memberFindManyMock.mockResolvedValue([
+      { user: { id: "owner-1", email: "a@example.com", timeZone: "America/New_York" } },
+      { user: { id: "owner-2", email: "b@example.com", timeZone: null } },
+    ]);
+
+    await notifyOwnersOfClientChange(args);
+
+    expect(memberFindManyMock).toHaveBeenCalledWith(
+      expect.objectContaining({ select: { user: { select: { id: true, email: true, timeZone: true } } } }),
+    );
+    const [newYork, unknown] = sendEmailMock.mock.calls.map((call) => call[0].html as string);
+    expect(newYork).toContain("Thu, Nov 12, 2026, 10:00 AM EST");
+    expect(unknown).toContain("Thu, Nov 12, 2026, 3:00 PM UTC");
   });
 
   it("never throws when the lookup or the send fails", async () => {
