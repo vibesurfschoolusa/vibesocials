@@ -12,6 +12,7 @@ import {
   monthLabel,
   showingLine,
   type MonthlyReport,
+  type PublicMonthlyReport,
   type ReportListing,
   type ReportPost,
 } from "@/lib/monthlyReport";
@@ -184,7 +185,8 @@ export function MonthlyReportView({
   titleAs: Title = "h1",
   logoPrintOnly = false,
 }: {
-  report: MonthlyReport;
+  /** The client's page gets the public report, which has no `failed`. */
+  report: MonthlyReport | PublicMonthlyReport;
   /**
    * The workspace's own page: its failures are listed, linked to Activity. The
    * client's page passes none, and leaves the failures out (they are the
@@ -244,7 +246,7 @@ export function MonthlyReportView({
 
       {report.listing ? <ListingSection listing={report.listing} /> : null}
 
-      {activityHref && report.failed.length > 0 ? (
+      {activityHref && "failed" in report && report.failed.length > 0 ? (
         <section data-report-block className="space-y-1 text-sm">
           <h2 className="text-lg font-semibold">Did not publish</h2>
           <ul>

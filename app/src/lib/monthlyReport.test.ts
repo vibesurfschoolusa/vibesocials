@@ -294,8 +294,10 @@ describe("publicMonthlyReport", () => {
         totals: { views: 1, calls: 1, directionRequests: 1, websiteClicks: 1 },
         previous: null,
       },
-      failed: [{ platform: "X", count: 1 }],
     });
+    // The failures are the workspace's to fix: the client's report never carries them.
+    expect(copy).not.toHaveProperty("failed");
+    expect(text).not.toContain("failed");
   });
 });
 
