@@ -179,10 +179,16 @@ describe("POST /api/posts/[postJobId]/publish", () => {
         // 2026-11-01 audit (M1): everything resolvePlatformCaptions reads.
         perPlatformOverrides: true,
         publishMetadata: true,
-        mediaItem: { select: { baseCaption: true, perPlatformOverrides: true } },
+        mediaItem: { select: { baseCaption: true, perPlatformOverrides: true, deletedAt: true } },
         updatedAt: true,
         // F1 H3: a failed post with no results was never sent; Post now may send it.
         _count: { select: { results: true } },
+        // Review round 2, item 1: a post whose media is gone is refused like Retry refuses it.
+        mediaItemId: true,
+        media: {
+          orderBy: { position: "asc" },
+          select: { position: true, mediaItem: { select: { id: true, deletedAt: true } } },
+        },
       },
     });
   });
@@ -377,10 +383,67 @@ describe("POST /api/posts/[postJobId]/publish", () => {
       expect(res.status).toBe(202);
       expect(updateManyMock).toHaveBeenCalledWith({
         where: { id: "job-1", workspaceId: "ws-1", status: "failed", results: { none: {} }, updatedAt: UPDATED },
-        data: { status: "in_progress", scheduledFor: expect.any(Date) },
+        data: { status: "in_progress", scheduledFor: expect.any(Date), retriedAt: expect.any(Date) },
       });
       expect(prepareDispatchMock).toHaveBeenCalledWith("job-1");
       expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    });
+
+    // Review round 2, item 1: the same answer Retry gives, before anything is claimed.
+    it("refuses Send again for a post whose media was swept, with Retry's MEDIA_UNAVAILABLE answer", async () => {
+      findFirstMock.mockResolvedValue(
+        jobRow({
+          status: "failed",
+          _count: { results: 0 },
+          mediaItemId: "m1",
+          mediaItem: { baseCaption: "c", perPlatformOverrides: null, deletedAt: new Date("2026-11-01T00:00:00Z") },
+          media: [],
+        }),
+      );
+
+      const res = await POST(req({}), ctx("job-1"));
+
+      expect(res.status).toBe(409);
+      await expect(res.json()).resolves.toEqual({
+        error: "This post's media is no longer available — recreate the post.",
+        code: "MEDIA_UNAVAILABLE",
+      });
+      expect(updateManyMock).not.toHaveBeenCalled();
+      expect(inngestSendMock).not.toHaveBeenCalled();
+    });
+
+    it("refuses one whose second photo was swept the same way", async () => {
+      findFirstMock.mockResolvedValue(
+        jobRow({
+          status: "failed",
+          _count: { results: 0 },
+          mediaItemId: "m1",
+          mediaItem: { baseCaption: "c", perPlatformOverrides: null, deletedAt: null },
+          media: [
+            { position: 0, mediaItem: { id: "m1", deletedAt: null } },
+            { position: 1, mediaItem: { id: "m2", deletedAt: new Date("2026-11-01T00:00:00Z") } },
+          ],
+        }),
+      );
+
+      const res = await POST(req({}), ctx("job-1"));
+
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { code?: string }).code).toBe("MEDIA_UNAVAILABLE");
+      expect(updateManyMock).not.toHaveBeenCalled();
+    });
+
+    // Review round 2, item 5: like Retry, so Activity keeps it on "Had a problem".
+    it("sets retriedAt in the Send again claim", async () => {
+      findFirstMock.mockResolvedValue(jobRow({ status: "failed", _count: { results: 0 } }));
+
+      await POST(req({}), ctx("job-1"));
+
+      expect(updateManyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: { status: "in_progress", scheduledFor: expect.any(Date), retriedAt: expect.any(Date) },
+        }),
+      );
     });
 
     it("still refuses a failed post that has results: Retry is for that", async () => {

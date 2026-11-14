@@ -4637,6 +4637,23 @@ describe("publish functions - a post's photos (07a)", () => {
     expect(publishCtxs).toHaveLength(0);
   });
 
+  // Review round 2, item 1: Send again (or any publish) of a post whose single
+  // file the retention sweep removed ends early with the plain sentence, instead
+  // of every platform failing on a missing file.
+  it("a post whose media was swept fails its results with the media-gone sentence and publishes nothing", async () => {
+    stubJob(null);
+    db.mediaItemFindUnique.mockResolvedValue(photo("m1", "2026-11-01T00:00:00.000Z"));
+
+    const error = await publish().catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(NonRetriableError);
+    expect(failPendingMock).toHaveBeenCalledWith("job-1", {
+      errorCode: "MEDIA_UNAVAILABLE",
+      errorMessage: "The media for this post is no longer available. Recreate the post.",
+    });
+    expect(publishCtxs).toHaveLength(0);
+  });
+
   it("a photo whose row is gone fails the post's results the same way", async () => {
     stubJob([photo("m1"), photo("m3")], [0, 2]);
 

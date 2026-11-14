@@ -1046,6 +1046,15 @@ export const publishToAllPlatforms = inngest.createFunction(
         throw new NonRetriableError("Missing required data");
       }
 
+      // Review round 2, item 1: the retention sweep removed this post's file (an
+      // old failed post sent again). Fail the results with the plain sentence and
+      // end the run, as for a gone photo below, instead of letting every
+      // platform fail on a missing file.
+      if (mediaItem && mediaItem.deletedAt !== null) {
+        await failPendingPostJobResults(postJobId, MEDIA_UNAVAILABLE);
+        throw new NonRetriableError(MEDIA_UNAVAILABLE.errorMessage);
+      }
+
       // Pause (2026-11-10): the pause columns are read here but never memoized,
       // so a workspace that is not paused returns exactly the output it did
       // before. A paused one returns only that, and the run ends below.

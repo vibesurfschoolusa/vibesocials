@@ -20,6 +20,7 @@ import {
   prepareDeferredPostJobDispatch,
   resolvePlatformCaptions,
 } from "@/server/jobs/posting";
+import { isPostMediaComplete } from "@/server/jobs/postMedia";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
 import { storyPlatformsOf, withStoryCaptions } from "@/lib/storyPlacement";
 import { checkDailyPostLimit } from "@/server/usage/workspaceUsage";
@@ -123,10 +124,16 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       // submission email shows the owners the per-platform texts too.
       perPlatformOverrides: true,
       publishMetadata: true,
-      mediaItem: { select: { baseCaption: true, perPlatformOverrides: true } },
+      mediaItem: { select: { baseCaption: true, perPlatformOverrides: true, deletedAt: true } },
       updatedAt: true,
       // F1 H3: a failed post with no results was never sent; Post now may send it.
       _count: { select: { results: true } },
+      // Review round 2, item 1: a post whose media is gone is refused like Retry refuses it.
+      mediaItemId: true,
+      media: {
+        orderBy: { position: "asc" },
+        select: { position: true, mediaItem: { select: { id: true, deletedAt: true } } },
+      },
     },
   });
 
@@ -305,6 +312,22 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     );
   }
 
+  // Review round 2, item 1: the file must still exist (the retention sweep may
+  // have removed it from an old failed post). Same check and answer as Retry,
+  // before anything is claimed. A post with several photos needs every photo; a
+  // post without a file has none to lose.
+  const photos = job.media ?? [];
+  const photoGone =
+    photos.length > 0 &&
+    (!isPostMediaComplete(job.mediaItemId ?? null, photos) || photos.some((row) => row.mediaItem.deletedAt !== null));
+  const mediaGone = job.mediaItem != null && job.mediaItem.deletedAt != null;
+  if (mediaGone || photoGone) {
+    return NextResponse.json(
+      { error: "This post's media is no longer available — recreate the post.", code: "MEDIA_UNAVAILABLE" },
+      { status: 409 },
+    );
+  }
+
   // Require ≥1 connection up front and leave the job intact if there are none
   // (don't consume it on a fixable error). Team Workspaces (Task 4): scoped
   // to the WORKSPACE — connections are shared by every member (schema §2:
@@ -363,7 +386,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
           status: { in: [...MUTABLE_POST_JOB_STATUSES] },
           updatedAt: job.updatedAt,
         },
-    data: { status: "in_progress", scheduledFor: publishedAt, ...releaseHold },
+    // Send again sets retriedAt like Retry, so Activity keeps the post on "Had a
+    // problem" (review round 2, item 5).
+    data: { status: "in_progress", scheduledFor: publishedAt, ...releaseHold, ...(unsent ? { retriedAt: publishedAt } : {}) },
   });
 
   if (count === 0) {
