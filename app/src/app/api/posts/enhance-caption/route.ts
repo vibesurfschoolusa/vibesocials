@@ -11,6 +11,13 @@ import {
   isAiTimeoutError,
 } from "@/lib/aiGuards";
 import { workspaceBrandVoicePrompt } from "@/lib/brandVoice";
+import {
+  RECENT_CAPTIONS_LIMIT,
+  captionVarietyBlock,
+  cleanAvoidCaptions,
+  cleanRecentCaptions,
+} from "@/lib/captionVariety";
+import { prisma } from "@/lib/db";
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { LLM_NOT_CONFIGURED_MESSAGE, reasoningParams, resolveLlmConfig } from "@/lib/llm";
 import { PLATFORM_CAPTION_LIMITS } from "@/lib/platformLimits";
@@ -174,6 +181,11 @@ ${PROMPT_OUTPUT_RULES}`;
     // After the route's own rules, from the caller's own workspace only (brief 15).
     const systemPrompt = `${basePrompt}${workspaceBrandVoicePrompt(context.workspace)}`;
 
+    // P3: a plain Improve also steers away from the openings of the
+    // workspace's recent captions, as auto-caption does. Adapting keeps one
+    // caption's meaning for one platform, so it lists nothing.
+    const varietyBlock = adaptPlatform ? "" : await recentCaptionsBlock(context.workspace.id, caption);
+
     const userPrompt = adaptPlatform
       ? `Rewrite this caption for ${platformLabel(adaptPlatform)}:
 
@@ -182,7 +194,7 @@ ${PROMPT_OUTPUT_RULES}`;
 
 "${caption.trim()}"
 
-Create an enhanced version that's perfect for social media.`;
+Create an enhanced version that's perfect for social media.${varietyBlock}`;
 
     const llmResponse = await fetch(`${llm.baseUrl}/chat/completions`, {
       method: "POST",
@@ -239,3 +251,29 @@ Create an enhanced version that's perfect for social media.`;
     return NextResponse.json({ error: failedMessage }, { status: 500 });
   }
 }
+
+/**
+ * The workspace's recent captions as a "differ from" block, leaving out the
+ * caption being improved (it may already be a saved post). A failed read
+ * gives "": variety must never cost the person their improved caption.
+ */
+async function recentCaptionsBlock(workspaceId: string, caption: string): Promise<string> {
+  const rows = await prisma.postJob
+    .findMany({
+      where: { workspaceId, baseCaption: { not: null } },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: RECENT_CAPTIONS_LIMIT,
+      select: { baseCaption: true },
+    })
+    .catch((error: unknown) => {
+      console.error("[Enhance Caption] Could not read recent captions", error);
+      return [];
+    });
+  const [own] = cleanAvoidCaptions([caption]);
+  const ownKey = own?.toLowerCase();
+  const recent = cleanRecentCaptions(rows.map((row) => row.baseCaption)).filter(
+    (recentCaption) => recentCaption.toLowerCase() !== ownKey,
+  );
+  return captionVarietyBlock(recent, []);
+}
+
