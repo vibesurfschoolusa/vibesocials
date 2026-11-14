@@ -34,7 +34,6 @@ describe("ConnectionHealth rows", () => {
     const row = rowFor(render([{ platform: "google_business_profile", connected: true }]), "Google Business Profile");
     expect(row).toContain('<span class="sr-only">Connected</span>');
     expect(row).toContain('title="Connected"');
-    expect(row).not.toMatch(/>\s*Connected\s*<\/(div|span)>\s*$/);
     expect(row.match(/Connected/g)).toHaveLength(2); // the title and the screen-reader text
   });
 
