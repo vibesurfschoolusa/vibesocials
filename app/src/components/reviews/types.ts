@@ -21,6 +21,8 @@ export interface Location {
   locationName: string;
   title: string;
   storeCode?: string;
+  /** One-line address, when the API returns one; used only to tell same-named locations apart. */
+  address?: string;
 }
 
 export const STAR_RATINGS = {

@@ -1,5 +1,6 @@
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { locationLabels } from "./location-labels";
 import type { Location } from "./types";
 
 interface LocationPickerProps {
@@ -16,6 +17,7 @@ export function LocationPicker({
   selectedLocation,
   onChange,
 }: LocationPickerProps) {
+  const labels = locationLabels(locations);
   return (
     <div className="mb-8">
       <Label htmlFor="location-picker" className="mb-2 block">
@@ -30,8 +32,7 @@ export function LocationPicker({
           <option value="">Choose a location...</option>
           {locations.map((loc) => (
             <option key={loc.name} value={loc.name}>
-              {loc.title}
-              {loc.storeCode && ` (${loc.storeCode})`}
+              {labels.get(loc.name)}
             </option>
           ))}
         </Select>

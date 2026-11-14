@@ -69,3 +69,10 @@ describe("ReviewsPage — keyed by workspace", () => {
     expect(findFirstMock.mock.calls[0][0].where.workspaceId).toBe("ws-2");
   });
 });
+
+describe("ReviewsPage metadata", () => {
+  it("has the page title", async () => {
+    const { metadata } = await import("./page");
+    expect(metadata.title).toBe("Reviews | Vibe Socials");
+  });
+});

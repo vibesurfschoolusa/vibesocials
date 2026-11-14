@@ -3,12 +3,14 @@
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import type { DragEvent } from "react";
 import { upload } from "@vercel/blob/client";
 import {
   Copy,
   File as FileIcon,
   ImageOff,
   Images,
+  UploadCloud,
   PlayCircle,
   Repeat,
   Trash2,
@@ -82,6 +84,83 @@ function formatBytes(bytes: number): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   const value = bytes / Math.pow(k, i);
   return `${value.toFixed(1)} ${sizes[i]}`;
+}
+
+/** Same list the file input is given; dropped files are held to it too. */
+export const MEDIA_ACCEPT = "video/*,image/*";
+
+/** The first dropped file, or the plain error the upload itself gives for a type it would refuse. */
+export function pickDroppedFile(files: ArrayLike<File>): { file?: File; error?: string } {
+  const file = files[0];
+  if (!file) return {};
+  if (!isHeicFile(file) && !file.type.startsWith("image/") && !file.type.startsWith("video/")) {
+    return { error: "Only image or video files can be added to the library." };
+  }
+  return { file };
+}
+
+/**
+ * Styled picker for "Upload new media". The real file input stays (visually
+ * hidden, still focusable) inside its label, so keyboard and screen readers
+ * work as before; the bordered area adds drag and drop.
+ */
+export function MediaFilePicker({
+  file,
+  inputKey,
+  onFile,
+  onReject,
+}: {
+  file: File | null;
+  inputKey: number;
+  onFile: (file: File) => void;
+  onReject: (message: string) => void;
+}) {
+  const [dragging, setDragging] = useState(false);
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDragging(false);
+    const picked = pickDroppedFile(event.dataTransfer.files);
+    if (picked.error) onReject(picked.error);
+    else if (picked.file) onFile(picked.file);
+  }
+  return (
+    <div
+      onDragOver={(event) => {
+        event.preventDefault();
+        setDragging(true);
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={handleDrop}
+      className={`relative flex flex-col items-center gap-2 rounded-lg border-2 border-dashed px-4 py-6 text-center transition-colors focus-within:ring-2 focus-within:ring-ring ${
+        dragging ? "border-primary bg-primary/5" : "border-border"
+      }`}
+    >
+      <UploadCloud className="h-8 w-8 text-muted-foreground" aria-hidden="true" />
+      <input
+        key={inputKey}
+        id="media-file"
+        type="file"
+        accept={MEDIA_ACCEPT}
+        className="peer sr-only"
+        onChange={(event) => {
+          const next = event.target.files?.[0];
+          if (next) onFile(next);
+        }}
+      />
+      <label
+        htmlFor="media-file"
+        className="inline-flex cursor-pointer items-center rounded-md border border-border bg-background px-3 py-1.5 text-sm font-medium hover:bg-muted peer-focus-visible:ring-2 peer-focus-visible:ring-ring"
+      >
+        Choose a photo or video
+      </label>
+      <p className="text-xs text-muted-foreground">or drag it here</p>
+      {file && (
+        <p className="text-sm font-medium break-all">
+          {file.name} <span className="font-normal text-muted-foreground">&middot; {formatBytes(file.size)}</span>
+        </p>
+      )}
+    </div>
+  );
 }
 
 /** Thumbnail for a single item: image preview, video frame + play affordance,
@@ -701,16 +780,11 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="media-file">File</Label>
-              <Input
-                key={fileInputKey}
-                id="media-file"
-                type="file"
-                accept="video/*,image/*"
-                className="cursor-pointer"
-                onChange={(event) => {
-                  const nextFile = event.target.files?.[0] ?? null;
-                  setFile(nextFile);
-                }}
+              <MediaFilePicker
+                file={file}
+                inputKey={fileInputKey}
+                onFile={setFile}
+                onReject={(message) => toast.error(message)}
               />
               {uploadProgress !== null && (
                 <div className="mt-2 space-y-1">
