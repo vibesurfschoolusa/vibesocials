@@ -1883,3 +1883,185 @@ describe("createPostJobOnly - a post without a file (text only)", () => {
     });
   });
 });
+
+// Q1 (2026-11-14): "Feed and Story" asks the helper for a second job, a Story,
+// written in the same transaction as the main job.
+describe("createPostJobOnly / createPostJobForExistingMedia - a Story job beside the post (Feed and Story)", () => {
+  const photo = {
+    storageLocation: "https://example.public.blob.vercel-storage.com/p1.jpg",
+    originalFilename: "p1.jpg",
+    mimeType: "image/jpeg",
+    sizeBytes: 101,
+    altText: "A wave.",
+  };
+  const cover = { timeMs: 1200 } as const;
+  const STORY = { placement: "story" } as const;
+
+  beforeEach(() => {
+    mediaItemCreateMock.mockReset();
+    mediaItemUpdateMock.mockReset();
+    findUniqueMock.mockReset();
+    findManyConnectionsMock.mockReset();
+    postJobCreateMock.mockReset();
+    postJobResultCreateMock.mockReset();
+    postJobMediaCreateManyMock.mockReset();
+    executeRawMock.mockReset();
+
+    mediaItemCreateMock.mockImplementation((args: { data: object }) =>
+      Promise.resolve(makeMediaItem({ id: "media-1", mimeType: "image/jpeg", ...args.data })),
+    );
+    let jobs = 0;
+    postJobCreateMock.mockImplementation(() => {
+      jobs += 1;
+      return Promise.resolve({ id: `job-${jobs}` });
+    });
+    let results = 0;
+    postJobResultCreateMock.mockImplementation((args: { data: { postJobId: string; platform: string } }) => {
+      results += 1;
+      return Promise.resolve({ id: `r-${results}`, ...args.data });
+    });
+    mediaItemUpdateMock.mockResolvedValue(makeMediaItem());
+  });
+
+  it("scheduled upload: one file, a feed job for every platform and a Story job for the chosen one", async () => {
+    const when = new Date("2026-12-01T10:00:00.000Z");
+    const result = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: photo,
+      baseCaption: "Book your lesson",
+      perPlatformOverrides: { x: "Book now" },
+      location: "Miami Beach",
+      intent: "scheduled",
+      scheduledFor: when,
+      targetPlatforms: ["instagram", "x"],
+      cover,
+      story: { targetPlatforms: ["instagram"], instagramMetadata: STORY },
+    });
+
+    // The file is written once; both jobs point at it.
+    expect(mediaItemCreateMock).toHaveBeenCalledTimes(1);
+    expect(postJobCreateMock).toHaveBeenCalledTimes(2);
+    const [main, story] = postJobCreateMock.mock.calls.map((c) => c[0].data);
+    expect(main).toMatchObject({
+      mediaItemId: "media-1",
+      status: "scheduled",
+      scheduledFor: when,
+      publishMetadata: { targetPlatforms: ["instagram", "x"] },
+    });
+    expect(main.publishMetadata).not.toHaveProperty("instagram");
+    expect(story).toMatchObject({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      mediaItemId: "media-1",
+      status: "scheduled",
+      scheduledFor: when,
+      baseCaption: "Book your lesson",
+      perPlatformOverrides: { x: "Book now" },
+      publishMetadata: { targetPlatforms: ["instagram"], instagram: { placement: "story" } },
+      coverTimeMs: 1200,
+    });
+    expect(result).toEqual({ postJobId: "job-1", storyPostJobId: "job-2", mediaItemId: "media-1", resultIds: [] });
+  });
+
+  it("immediate upload: the Story job gets results only for its own platforms", async () => {
+    findManyConnectionsMock.mockResolvedValue([
+      makeConnection({ id: "c-ig", platform: "instagram" }),
+      makeConnection({ id: "c-fb", platform: "facebook_page" }),
+      makeConnection({ id: "c-x", platform: "x" }),
+    ]);
+    const result = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: photo,
+      baseCaption: "hi",
+      targetPlatforms: ["instagram", "facebook_page", "x"],
+      story: {
+        targetPlatforms: ["instagram", "facebook_page"],
+        instagramMetadata: STORY,
+        facebookMetadata: STORY,
+      },
+    });
+
+    const results = postJobResultCreateMock.mock.calls.map((c) => [c[0].data.postJobId, c[0].data.socialConnectionId]);
+    expect(results).toEqual([
+      ["job-1", "c-ig"],
+      ["job-1", "c-fb"],
+      ["job-1", "c-x"],
+      ["job-2", "c-ig"],
+      ["job-2", "c-fb"],
+    ]);
+    expect(postJobCreateMock.mock.calls[1][0].data).toMatchObject({
+      status: "in_progress",
+      publishMetadata: {
+        targetPlatforms: ["instagram", "facebook_page"],
+        instagram: { placement: "story" },
+        facebook: { placement: "story" },
+      },
+    });
+    expect(result.storyPostJobId).toBe("job-2");
+    expect(result.resultIds).toEqual(["r-1", "r-2", "r-3"]);
+  });
+
+  it("immediate: no Story job when none of its platforms can be reached", async () => {
+    findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "c-x", platform: "x" })]);
+    const result = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: photo,
+      baseCaption: "hi",
+      story: { targetPlatforms: ["instagram"], instagramMetadata: STORY },
+    });
+
+    expect(postJobCreateMock).toHaveBeenCalledTimes(1);
+    expect(result).not.toHaveProperty("storyPostJobId");
+  });
+
+  it("a failure writing the Story job fails the whole transaction", async () => {
+    postJobCreateMock.mockResolvedValueOnce({ id: "job-1" }).mockRejectedValueOnce(new Error("db down"));
+    await expect(
+      createPostJobOnly({
+        userId: "user-1",
+        workspaceId: "workspace-1",
+        media: photo,
+        baseCaption: "hi",
+        intent: "draft",
+        story: { targetPlatforms: ["instagram"], instagramMetadata: STORY },
+      }),
+    ).rejects.toThrow("db down");
+  });
+
+  it("without a Story job, writes exactly one job and returns no storyPostJobId", async () => {
+    const result = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: photo,
+      baseCaption: "hi",
+      intent: "draft",
+    });
+    expect(postJobCreateMock).toHaveBeenCalledTimes(1);
+    expect(result).not.toHaveProperty("storyPostJobId");
+  });
+
+  it("reuse: the Story job is written under the same lock, pointing at the reused item", async () => {
+    findUniqueMock.mockResolvedValue(makeMediaItem({ workspaceId: "workspace-1", mimeType: "image/jpeg" }));
+    const result = await createPostJobForExistingMedia({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      mediaItemId: "media-1",
+      baseCaption: "hi",
+      intent: "draft",
+      targetPlatforms: ["facebook_page", "instagram"],
+      story: { targetPlatforms: ["facebook_page"], facebookMetadata: STORY },
+    });
+
+    expect(executeRawMock).toHaveBeenCalledTimes(1);
+    expect(postJobCreateMock).toHaveBeenCalledTimes(2);
+    expect(postJobCreateMock.mock.calls[1][0].data).toMatchObject({
+      mediaItemId: "media-1",
+      status: "draft",
+      publishMetadata: { targetPlatforms: ["facebook_page"], facebook: { placement: "story" } },
+    });
+    expect(result.storyPostJobId).toBe("job-2");
+  });
+});

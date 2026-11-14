@@ -2614,3 +2614,232 @@ describe("POST /api/posts — a video's cover", () => {
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
   });
 });
+
+// Q1 (2026-11-14): "Feed and Story" makes the main post plus a Story job, in
+// the one create-helper call (so in its one transaction).
+describe("POST /api/posts - Feed and Story (both)", () => {
+  const HOST = "https://test.public.blob.vercel-storage.com";
+  const photo = (n: number) => ({
+    blobUrl: `${HOST}/p${n}.jpg`,
+    filename: `p${n}.jpg`,
+    mimeType: "image/jpeg",
+    sizeBytes: 100 + n,
+  });
+  const BOTH = { placement: "both" };
+  const STORY = { placement: "story" };
+  const LATER = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+
+  beforeEach(() => {
+    createPostJobOnlyMock.mockResolvedValue({
+      postJobId: "job-1",
+      storyPostJobId: "job-s",
+      mediaItemId: "media-1",
+      resultIds: ["r1"],
+    });
+    createPostJobForExistingMediaMock.mockResolvedValue({
+      postJobId: "job-1",
+      storyPostJobId: "job-s",
+      mediaItemId: "media-9",
+      resultIds: [],
+    });
+  });
+
+  it("Instagram both (upload, now): a feed main job for every platform and a Story job for Instagram, one call", async () => {
+    const response = await POST(
+      jsonRequest({ ...photo(1), baseCaption: "hi", location: "Miami", platforms: ["instagram", "x"], instagramMetadata: BOTH }),
+    );
+    const body = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock).toHaveBeenCalledTimes(1);
+    const args = createPostJobOnlyMock.mock.calls[0][0];
+    expect(args).not.toHaveProperty("instagramMetadata");
+    expect(args).not.toHaveProperty("facebookMetadata");
+    expect(args).toMatchObject({
+      targetPlatforms: ["instagram", "x"],
+      intent: "immediate",
+      story: { targetPlatforms: ["instagram"], instagramMetadata: STORY },
+    });
+    expect(args.story).not.toHaveProperty("facebookMetadata");
+    // Both events in one send, so either both start or neither does.
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    const [main, story] = inngestSendMock.mock.calls[0][0] as { id: string; data: Record<string, unknown> }[];
+    expect(main.data).toMatchObject({ postJobId: "job-1", location: "Miami" });
+    expect(main.data).not.toHaveProperty("instagramMetadata");
+    expect(story.id).toBe("publish-job-s");
+    expect(story.data).toMatchObject({
+      postJobId: "job-s",
+      mediaItemId: "media-1",
+      baseCaption: "hi",
+      location: "Miami",
+      instagramMetadata: STORY,
+      immediate: true,
+    });
+    expect(body.storyPostJobId).toBe("job-s");
+    expect(body.postJob).toBeDefined();
+    expect(body.message).toBeDefined();
+  });
+
+  it("Facebook both (Media reuse, draft): a Story job for Facebook, both drafts", async () => {
+    const response = await POST(
+      jsonRequest({ mediaItemId: "media-9", baseCaption: "hi", draft: true, platforms: ["facebook_page"], facebookMetadata: BOTH }),
+    );
+
+    expect(response.status).toBe(200);
+    const args = createPostJobForExistingMediaMock.mock.calls[0][0];
+    expect(args).toMatchObject({
+      intent: "draft",
+      story: { targetPlatforms: ["facebook_page"], facebookMetadata: STORY },
+    });
+    expect(args).not.toHaveProperty("facebookMetadata");
+    expect(inngestSendMock).not.toHaveBeenCalled();
+    expect(((await response.json()) as { storyPostJobId?: string }).storyPostJobId).toBe("job-s");
+  });
+
+  it("both on both platforms: one Story job with both", async () => {
+    await POST(
+      jsonRequest({
+        ...photo(1),
+        baseCaption: "hi",
+        scheduledFor: LATER,
+        platforms: ["instagram", "facebook_page"],
+        instagramMetadata: BOTH,
+        facebookMetadata: BOTH,
+      }),
+    );
+
+    const args = createPostJobOnlyMock.mock.calls[0][0];
+    expect(args.story).toEqual({
+      targetPlatforms: ["instagram", "facebook_page"],
+      instagramMetadata: STORY,
+      facebookMetadata: STORY,
+    });
+    expect(args).not.toHaveProperty("instagramMetadata");
+    expect(args).not.toHaveProperty("facebookMetadata");
+  });
+
+  it("Instagram both + Facebook Story: main has the Facebook Story, the Story job Instagram only", async () => {
+    await POST(
+      jsonRequest({
+        ...photo(1),
+        baseCaption: "hi",
+        platforms: ["instagram", "facebook_page"],
+        instagramMetadata: BOTH,
+        facebookMetadata: STORY,
+      }),
+    );
+
+    const args = createPostJobOnlyMock.mock.calls[0][0];
+    expect(args.facebookMetadata).toEqual(STORY);
+    expect(args).not.toHaveProperty("instagramMetadata");
+    expect(args.story).toEqual({ targetPlatforms: ["instagram"], instagramMetadata: STORY });
+    const [main, story] = inngestSendMock.mock.calls[0][0] as { data: Record<string, unknown> }[];
+    expect(main.data.facebookMetadata).toEqual(STORY);
+    expect(story.data).toMatchObject({ instagramMetadata: STORY });
+    expect(story.data).not.toHaveProperty("facebookMetadata");
+  });
+
+  it("ignores both for a platform the post does not target", async () => {
+    const response = await POST(
+      jsonRequest({ ...photo(1), baseCaption: "hi", platforms: ["x"], instagramMetadata: BOTH }),
+    );
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock.mock.calls[0][0]).not.toHaveProperty("story");
+  });
+
+  it("refuses both with two photos, with the Story sentence, and creates nothing", async () => {
+    const response = await POST(
+      jsonRequest({ media: [photo(1), photo(2)], baseCaption: "hi", platforms: ["instagram"], instagramMetadata: BOTH }),
+    );
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toBe(
+      "A Story takes one photo or video. Choose Feed for Instagram, or remove the extra photos.",
+    );
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses both that repeats, with the Story sentence, and creates nothing", async () => {
+    const first = new Date(Date.now() + 2 * 60 * 60 * 1000);
+    const response = await POST(
+      jsonRequest({
+        ...photo(1),
+        baseCaption: "hi",
+        platforms: ["facebook_page"],
+        facebookMetadata: BOTH,
+        scheduledFor: first.toISOString(),
+        repeatAt: [new Date(first.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString()],
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toBe("A Story cannot repeat.");
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("a member's both: each job is held for approval, one email, nothing published", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: true }));
+    const response = await POST(
+      jsonRequest({ ...photo(1), baseCaption: "hi", scheduledFor: LATER, platforms: ["instagram"], instagramMetadata: BOTH }),
+    );
+    const body = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(createPostJobOnlyMock.mock.calls[0][0]).toMatchObject({ intent: "draft" });
+    expect(postJobUpdateMock).toHaveBeenCalledTimes(2);
+    const updated = postJobUpdateMock.mock.calls.map((c) => c[0] as { where: { id: string }; data: Record<string, unknown> });
+    expect(updated.map((u) => u.where.id)).toEqual(["job-1", "job-s"]);
+    for (const u of updated) {
+      expect(u.data).toEqual({ submittedForApprovalAt: expect.any(Date), scheduledFor: new Date(LATER) });
+    }
+    expect(notifyOwnersMock).toHaveBeenCalledTimes(1);
+    expect(inngestSendMock).not.toHaveBeenCalled();
+    expect(body).toMatchObject({ awaitingApproval: true, storyPostJobId: "job-s" });
+  });
+
+  it("the daily limit counts the Story job as a post", async () => {
+    await POST(jsonRequest({ ...photo(1), baseCaption: "hi", platforms: ["instagram"], instagramMetadata: BOTH }));
+    expect(checkDailyPostLimitMock).toHaveBeenCalledWith(expect.objectContaining({ mode: "now", alsoOnDay: 1 }));
+  });
+
+  it("a full day refuses both with a 429 and creates nothing", async () => {
+    checkDailyPostLimitMock.mockResolvedValue({ error: "Full today.", code: "DAILY_POST_LIMIT" });
+    const response = await POST(
+      jsonRequest({ ...photo(1), baseCaption: "hi", scheduledFor: LATER, platforms: ["instagram"], instagramMetadata: BOTH }),
+    );
+    expect(response.status).toBe(429);
+    expect(checkDailyPostLimitMock).toHaveBeenCalledWith(expect.objectContaining({ mode: "schedule", alsoOnDay: 1 }));
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("no both anywhere: today's single job, limit check and response", async () => {
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["r1"] });
+    const response = await POST(
+      jsonRequest({ ...photo(1), baseCaption: "hi", platforms: ["instagram"], instagramMetadata: STORY }),
+    );
+    const body = (await response.json()) as Record<string, unknown>;
+
+    expect(createPostJobOnlyMock.mock.calls[0][0]).not.toHaveProperty("story");
+    expect(checkDailyPostLimitMock.mock.calls[0][0]).not.toHaveProperty("alsoOnDay");
+    // One event object, not a list, as before.
+    expect(Array.isArray(inngestSendMock.mock.calls[0][0])).toBe(false);
+    expect(body).not.toHaveProperty("storyPostJobId");
+  });
+
+  it("a Post now with no reachable Story platform: the helper made no Story job, so none is sent or named", async () => {
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["r1"] });
+    const response = await POST(
+      jsonRequest({ ...photo(1), baseCaption: "hi", platforms: ["instagram", "x"], instagramMetadata: BOTH }),
+    );
+    expect(Array.isArray(inngestSendMock.mock.calls[0][0])).toBe(false);
+    expect((await response.json()) as Record<string, unknown>).not.toHaveProperty("storyPostJobId");
+  });
+
+  it("when the events cannot be sent, both jobs' results are failed", async () => {
+    inngestSendMock.mockRejectedValue(new Error("inngest down"));
+    const response = await POST(
+      jsonRequest({ ...photo(1), baseCaption: "hi", platforms: ["instagram"], instagramMetadata: BOTH }),
+    );
+    expect(response.status).toBe(503);
+    expect(failPendingMock.mock.calls.map((c) => c[0])).toEqual(["job-1", "job-s"]);
+  });
+});

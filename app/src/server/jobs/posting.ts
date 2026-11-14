@@ -61,6 +61,28 @@ export interface PostJobSchedulingParams {
    * Absent = the platforms pick their own, as before.
    */
   cover?: PostCover;
+  /**
+   * Feed and Story (Q1, 2026-11-14): also write a Story job, in this helper's
+   * one transaction, beside the main job: the same file, caption, intent and
+   * time, sent as a Story to `story.targetPlatforms` only. Never with a series
+   * (the route refuses a Story that repeats). Absent = one job, as before.
+   */
+  story?: PostStoryJobParams;
+}
+
+/**
+ * The Story job of a Feed and Story post: its platforms (a subset of the
+ * post's) and each one's `{ placement: "story" }`, stored like any Story post.
+ */
+export interface PostStoryJobParams {
+  targetPlatforms: Platform[];
+  instagramMetadata?: InstagramPostMetadata;
+  facebookMetadata?: FacebookPostMetadata;
+}
+
+/** The main job's connections narrowed to the Story job's platforms. */
+function storyJobConnections<T extends { platform: Platform }>(story: PostStoryJobParams, targeted: T[]): T[] {
+  return targeted.filter((connection) => story.targetPlatforms.includes(connection.platform));
 }
 
 /**
@@ -198,6 +220,8 @@ export function buildPublishMetadataSnapshot(
 
 export interface PostJobCreated {
   postJobId: string;
+  /** Feed and Story only: the Story job written beside `postJobId`. */
+  storyPostJobId?: string;
   /** A series only: every job created, in time order; `postJobId` is the first. */
   postJobIds?: string[];
   /** Null for a post that is only text (createPostJobOnly with `media: null`). */
@@ -341,7 +365,7 @@ export async function createPostJobOnly(
 
   // Atomic media + job + results so a mid-path failure never leaves orphans
   // (mirrors createPostJobForExistingMedia).
-  const { postJob, postJobs, mediaItem, resultRecords } = await prisma.$transaction(
+  const { postJob, postJobs, mediaItem, resultRecords, storyJob } = await prisma.$transaction(
     async (tx) => {
       const mediaItemRow = media ? await createMediaItem(tx, media) : null;
       // One after another, so the rows are created in the post's order.
@@ -391,33 +415,60 @@ export async function createPostJobOnly(
       }
       const job = jobs[0];
 
+      const createResults = (postJobId: string, connections: typeof targeted) =>
+        Promise.all(
+          connections.map((connection) =>
+            tx.postJobResult.create({
+              data: {
+                postJobId,
+                // 2026-11-01 scale audit (db M5): the denormalized workspace
+                // publish-health counts by; same value as the job's.
+                workspaceId,
+                platform: connection.platform,
+                socialConnectionId: connection.id,
+                status: "pending",
+              },
+            }),
+          ),
+        );
+
       // Scheduled/draft jobs get NO results here — the cron/promote create them
       // at run time from the connections that exist then.
-      const results =
-        intent === "immediate"
-          ? await Promise.all(
-              targeted.map((connection) =>
-                tx.postJobResult.create({
-                  data: {
-                    postJobId: job.id,
-                    // 2026-11-01 scale audit (db M5): the denormalized workspace
-                    // publish-health counts by; same value as the job's.
-                    workspaceId,
-                    platform: connection.platform,
-                    socialConnectionId: connection.id,
-                    status: "pending",
-                  },
-                }),
-              ),
-            )
-          : [];
+      const results = intent === "immediate" ? await createResults(job.id, targeted) : [];
 
-      return { postJob: job, postJobs: jobs, mediaItem: mediaItemRow, resultRecords: results };
+      // Feed and Story: the Story job, after the main one. A Story takes one
+      // file, so it needs no PostJobMedia rows. A "Post now" whose Story
+      // platforms cannot be reached makes none, as a feed post skips them.
+      const storyConnections = params.story ? storyJobConnections(params.story, targeted) : [];
+      let storyJob: { id: string } | null = null;
+      if (params.story && (intent !== "immediate" || storyConnections.length > 0)) {
+        storyJob = await tx.postJob.create({
+          data: {
+            ...buildPostJobCreateData({
+              userId,
+              mediaItemId: mediaItemRow?.id ?? null,
+              intent,
+              scheduledFor: params.scheduledFor ?? null,
+              baseCaption,
+              perPlatformOverrides,
+              instagramMetadata: params.story.instagramMetadata,
+              facebookMetadata: params.story.facebookMetadata,
+              targetPlatforms: params.story.targetPlatforms,
+              cover: params.cover,
+            }),
+            workspaceId,
+          },
+        });
+        if (intent === "immediate") await createResults(storyJob.id, storyConnections);
+      }
+
+      return { postJob: job, postJobs: jobs, mediaItem: mediaItemRow, resultRecords: results, storyJob };
     },
   );
 
   return {
     postJobId: postJob.id,
+    ...(storyJob ? { storyPostJobId: storyJob.id } : {}),
     ...(params.series ? { postJobIds: postJobs.map((j) => j.id) } : {}),
     mediaItemId: mediaItem?.id ?? null,
     resultIds: resultRecords.map((r) => r.id),
@@ -610,7 +661,7 @@ export async function createPostJobForExistingMedia(
   // blob first, our post-lock re-check sees `deletedAt` and aborts; if we create
   // the job first, the sweep sees the new non-terminal job and skips. Closes the
   // check-then-act reuse race the Phase-1 review flagged.
-  const { postJob, postJobs, resultRecords } = await prisma.$transaction(async (tx) => {
+  const { postJob, postJobs, resultRecords, storyJob } = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT id FROM "MediaItem" WHERE id = ${mediaItemId} FOR UPDATE`;
 
     // Re-assert under the row lock — a concurrent sweep may have soft-deleted the
@@ -671,30 +722,55 @@ export async function createPostJobForExistingMedia(
     }
     const job = jobs[0];
 
-    // Scheduled/draft reuse creates no results here (run-time creation, §6.3).
-    const results =
-      intent === "immediate"
-        ? await Promise.all(
-            targeted.map((connection) =>
-              tx.postJobResult.create({
-                data: {
-                  postJobId: job.id,
-                  // 2026-11-01 scale audit (db M5): see createPostJobOnly.
-                  workspaceId,
-                  platform: connection.platform,
-                  socialConnectionId: connection.id,
-                  status: "pending",
-                },
-              }),
-            ),
-          )
-        : [];
+    const createResults = (postJobId: string, connections: typeof targeted) =>
+      Promise.all(
+        connections.map((connection) =>
+          tx.postJobResult.create({
+            data: {
+              postJobId,
+              // 2026-11-01 scale audit (db M5): see createPostJobOnly.
+              workspaceId,
+              platform: connection.platform,
+              socialConnectionId: connection.id,
+              status: "pending",
+            },
+          }),
+        ),
+      );
 
-    return { postJob: job, postJobs: jobs, resultRecords: results };
+    // Scheduled/draft reuse creates no results here (run-time creation, §6.3).
+    const results = intent === "immediate" ? await createResults(job.id, targeted) : [];
+
+    // Feed and Story: the Story job, under the same lock (see createPostJobOnly).
+    const storyConnections = params.story ? storyJobConnections(params.story, targeted) : [];
+    let storyJob: { id: string } | null = null;
+    if (params.story && (intent !== "immediate" || storyConnections.length > 0)) {
+      storyJob = await tx.postJob.create({
+        data: {
+          ...buildPostJobCreateData({
+            userId,
+            mediaItemId,
+            intent,
+            scheduledFor: params.scheduledFor ?? null,
+            baseCaption,
+            perPlatformOverrides,
+            instagramMetadata: params.story.instagramMetadata,
+            facebookMetadata: params.story.facebookMetadata,
+            targetPlatforms: params.story.targetPlatforms,
+            cover: params.cover,
+          }),
+          workspaceId,
+        },
+      });
+      if (intent === "immediate") await createResults(storyJob.id, storyConnections);
+    }
+
+    return { postJob: job, postJobs: jobs, resultRecords: results, storyJob };
   });
 
   return {
     postJobId: postJob.id,
+    ...(storyJob ? { storyPostJobId: storyJob.id } : {}),
     ...(params.series ? { postJobIds: postJobs.map((j) => j.id) } : {}),
     mediaItemId,
     resultIds: resultRecords.map(r => r.id),

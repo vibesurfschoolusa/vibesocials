@@ -9,6 +9,14 @@ import { platformLabel } from "@/lib/platforms";
 
 export type StoryPlacement = "feed" | "story";
 
+/**
+ * What a person can choose (Q1, 2026-11-14): Feed, Story, or "both", Feed and
+ * Story. "both" lives only in the request and on the page: the posts route
+ * splits it into a feed job and a Story job (splitPlacement), so stored
+ * metadata is only ever "feed" or "story".
+ */
+export type PlacementChoiceValue = StoryPlacement | "both";
+
 /** The platforms that can take a Story. */
 export type StoryPlatform = "instagram" | "facebook_page";
 
@@ -29,22 +37,49 @@ export const STORY_VIDEO_LIMIT_SEC: Record<StoryPlatform, number> = {
 export const STORY_VIDEO_MIN_SEC = 3;
 
 export type ParsedPlacement =
-  | { ok: true; value: { placement: StoryPlacement } | undefined }
+  | { ok: true; value: { placement: PlacementChoiceValue } | undefined }
   | { ok: false; error: string };
 
 /**
  * Read `instagramMetadata` / `facebookMetadata` from a request. Absent (or
- * null) is no choice, which means feed. Only `{ placement: "feed" | "story" }`
- * is accepted: any other shape or key is refused, naming the field.
+ * null) is no choice, which means feed. Only `{ placement: "feed" | "story" |
+ * "both" }` is accepted: any other shape or key is refused, naming the field.
  */
 export function parsePlacementMetadata(value: unknown, field: StoryPlacementField): ParsedPlacement {
   if (value === undefined || value === null) return { ok: true, value: undefined };
-  const error = `${field} must be { "placement": "feed" } or { "placement": "story" }.`;
+  const error = `${field} must be { "placement": "feed" }, { "placement": "story" } or { "placement": "both" }.`;
   if (typeof value !== "object" || Array.isArray(value)) return { ok: false, error };
   const keys = Object.keys(value);
   const placement = (value as { placement?: unknown }).placement;
-  if (keys.length !== 1 || (placement !== "feed" && placement !== "story")) return { ok: false, error };
+  if (keys.length !== 1 || (placement !== "feed" && placement !== "story" && placement !== "both")) {
+    return { ok: false, error };
+  }
   return { ok: true, value: { placement } };
+}
+
+/** True for a choice that publishes a Story (Story, or Feed and Story): the Story rules apply to it. */
+export function hasStoryPart(placement: PlacementChoiceValue): boolean {
+  return placement === "story" || placement === "both";
+}
+
+/**
+ * A parsed choice as stored jobs take it: `main` is the main job's metadata
+ * (only a Story is kept, as before), and `storyJob` asks for a second job that
+ * is a Story on this platform. "both" is a feed main job plus that Story job.
+ */
+export function splitPlacement(value: { placement: PlacementChoiceValue } | undefined): {
+  main: { placement: "story" } | undefined;
+  storyJob: boolean;
+} {
+  if (value?.placement === "story") return { main: { placement: "story" }, storyJob: false };
+  return { main: undefined, storyJob: value?.placement === "both" };
+}
+
+/** The `instagramMetadata` / `facebookMetadata` Create sends for a choice; nothing for Feed. */
+export function placementRequestField(
+  placement: PlacementChoiceValue,
+): { placement: "story" | "both" } | undefined {
+  return placement === "feed" ? undefined : { placement };
 }
 
 /** Why a Story cannot carry this many files, or null when it can. */
@@ -105,12 +140,53 @@ export function withStoryCaptions(
 }
 
 /**
+ * The Create page's two placement choices as the request and its checks use
+ * them. Only a selected platform with a file counts. `storyRules` are the
+ * platforms the Story rules (length, no Repeat) apply to: Story and Feed and
+ * Story. `storyOnly` are the Story-only ones, whose caption is not published.
+ */
+export function composerPlacements(input: {
+  noFile: boolean;
+  selected: readonly Platform[];
+  instagram: PlacementChoiceValue;
+  facebook: PlacementChoiceValue;
+}): {
+  requestFields: {
+    instagramMetadata?: { placement: "story" | "both" };
+    facebookMetadata?: { placement: "story" | "both" };
+  };
+  storyRules: StoryPlatform[];
+  storyOnly: StoryPlatform[];
+} {
+  const pick = (platform: StoryPlatform, placement: PlacementChoiceValue): PlacementChoiceValue =>
+    !input.noFile && input.selected.includes(platform) ? placement : "feed";
+  const instagram = pick("instagram", input.instagram);
+  const facebook = pick("facebook_page", input.facebook);
+  const instagramField = placementRequestField(instagram);
+  const facebookField = placementRequestField(facebook);
+  return {
+    requestFields: {
+      ...(instagramField ? { instagramMetadata: instagramField } : {}),
+      ...(facebookField ? { facebookMetadata: facebookField } : {}),
+    },
+    storyRules: [
+      ...(hasStoryPart(instagram) ? (["instagram"] as const) : []),
+      ...(hasStoryPart(facebook) ? (["facebook_page"] as const) : []),
+    ],
+    storyOnly: [
+      ...(instagram === "story" ? (["instagram"] as const) : []),
+      ...(facebook === "story" ? (["facebook_page"] as const) : []),
+    ],
+  };
+}
+
+/**
  * What the Create page holds for one platform. `returnedToFeed` is set when a
  * chosen Story went back to Feed because a second photo was attached, so the
  * page can say why.
  */
 export interface PlacementChoice {
-  placement: StoryPlacement;
+  placement: PlacementChoiceValue;
   returnedToFeed: boolean;
 }
 
@@ -124,13 +200,13 @@ export function initialPlacements(): { instagram: PlacementChoice; facebook: Pla
   return { instagram: FEED_CHOICE, facebook: FEED_CHOICE };
 }
 
-/** The person picks Feed or Story. Story is refused while two or more photos are attached. */
+/** The person picks a placement. Story and Feed and Story are refused while two or more photos are attached. */
 export function choosePlacement(
   current: PlacementChoice,
-  next: StoryPlacement,
+  next: PlacementChoiceValue,
   fileCount: number,
 ): PlacementChoice {
-  if (next === "story" && fileCount > 1) return current;
+  if (hasStoryPart(next) && fileCount > 1) return current;
   return { placement: next, returnedToFeed: false };
 }
 
@@ -140,7 +216,7 @@ export function choosePlacement(
  * Returns the same object when nothing changes.
  */
 export function reconcilePlacement(current: PlacementChoice, fileCount: number): PlacementChoice {
-  if (current.placement === "story" && fileCount > 1) return { placement: "feed", returnedToFeed: true };
+  if (hasStoryPart(current.placement) && fileCount > 1) return { placement: "feed", returnedToFeed: true };
   return current;
 }
 
@@ -153,6 +229,9 @@ export function placementNote(platform: StoryPlatform, choice: PlacementChoice, 
   }
   if (choice.placement === "story") {
     return `Stories show for 24 hours and have no caption. Your caption is not used on ${platformLabel(platform)}.`;
+  }
+  if (choice.placement === "both") {
+    return `Posts to the ${platformLabel(platform)} feed with your caption, and as a Story with no caption. Stories show for 24 hours.`;
   }
   return null;
 }

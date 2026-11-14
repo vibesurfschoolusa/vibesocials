@@ -5,10 +5,11 @@ import { cn } from "@/lib/cn";
 import { platformLabel } from "@/lib/platforms";
 import {
   choosePlacement,
+  hasStoryPart,
   placementNote,
   storyVideoLengthRefusal,
   type PlacementChoice,
-  type StoryPlacement,
+  type PlacementChoiceValue,
   type StoryPlatform,
 } from "@/lib/storyPlacement";
 
@@ -22,12 +23,13 @@ interface StoryPlacementSettingsProps {
   onChange: (choice: PlacementChoice) => void;
 }
 
-const OPTIONS: { value: StoryPlacement; label: string }[] = [
+const OPTIONS: { value: PlacementChoiceValue; label: string }[] = [
   { value: "feed", label: "Feed" },
   { value: "story", label: "Story" },
+  { value: "both", label: "Feed and Story" },
 ];
 
-/** Feed or Story for Instagram or a Facebook Page (2026-11-10). */
+/** Feed, Story, or Feed and Story (Q1) for Instagram or a Facebook Page (2026-11-10). */
 export function StoryPlacementSettings({
   platform,
   choice,
@@ -37,7 +39,7 @@ export function StoryPlacementSettings({
 }: StoryPlacementSettingsProps) {
   const label = platformLabel(platform);
   const note = placementNote(platform, choice, fileCount);
-  const lengthRefusal = choice.placement === "story" ? storyVideoLengthRefusal(platform, videoDurationSec) : null;
+  const lengthRefusal = hasStoryPart(choice.placement) ? storyVideoLengthRefusal(platform, videoDurationSec) : null;
   const storyBlocked = fileCount > 1;
 
   return (
@@ -46,7 +48,7 @@ export function StoryPlacementSettings({
         <legend className="text-sm font-semibold text-foreground">{label}: post to</legend>
         <div className="flex flex-wrap gap-2">
           {OPTIONS.map(({ value, label: optionLabel }) => {
-            const disabled = value === "story" && storyBlocked;
+            const disabled = hasStoryPart(value) && storyBlocked;
             const checked = choice.placement === value;
             return (
               <label

@@ -33,6 +33,7 @@ import {
   createPostJobOnly,
   MediaItemUnavailableError,
   resolvePlatformCaptions,
+  type PostStoryJobParams,
 } from "@/server/jobs/posting";
 import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
 import { notifyOwnersOfApprovalRequest } from "@/server/notifications/approvalRequested";
@@ -53,7 +54,9 @@ import type {
 } from "@/server/platforms/types";
 import { parseGooglePostMetadata } from "@/lib/googlePostOptions";
 import {
+  hasStoryPart,
   parsePlacementMetadata,
+  splitPlacement,
   storyMediaRefusal,
   storyPlatformsOf,
   withStoryCaptions,
@@ -868,22 +871,27 @@ export async function POST(request: Request) {
   // 2026-11-10: feed or Story. Read only for a platform the post targets (with
   // no list, every connection is a target). Only a Story is kept: feed is the
   // same as no field, so a feed post creates exactly the job and event it did.
+  // Q1: "both" (Feed and Story) passes every Story rule, then is a feed choice
+  // for the main job plus this platform in a second, Story job.
   const readPlacement = (
     platform: StoryPlatform,
     field: StoryPlacementField,
-  ): { ok: true; value: { placement: "story" } | undefined } | { ok: false; response: Response } => {
-    if (targetPlatforms && !targetPlatforms.includes(platform)) return { ok: true, value: undefined };
+  ):
+    | { ok: true; value: { placement: "story" } | undefined; storyJob: boolean }
+    | { ok: false; response: Response } => {
+    if (targetPlatforms && !targetPlatforms.includes(platform)) return { ok: true, value: undefined, storyJob: false };
     const parsed = parsePlacementMetadata(body[field], field);
     if (!parsed.ok) {
       return { ok: false, response: NextResponse.json({ error: parsed.error }, { status: 400 }) };
     }
-    if (parsed.value?.placement !== "story") return { ok: true, value: undefined };
+    if (!parsed.value || !hasStoryPart(parsed.value.placement)) return { ok: true, value: undefined, storyJob: false };
     if (textOnly) {
       return { ok: false, response: NextResponse.json({ error: TEXT_POST_STORY_MESSAGE }, { status: 400 }) };
     }
     const refusal = storyMediaRefusal(platform, 1 + (extraMedia?.length ?? 0));
     if (refusal) return { ok: false, response: NextResponse.json({ error: refusal }, { status: 400 }) };
-    return { ok: true, value: { placement: "story" } };
+    const split = splitPlacement(parsed.value);
+    return { ok: true, value: split.main, storyJob: split.storyJob };
   };
   const instagramPlacement = readPlacement("instagram", "instagramMetadata");
   if (!instagramPlacement.ok) return instagramPlacement.response;
@@ -895,6 +903,20 @@ export async function POST(request: Request) {
     ...(instagramMetadata ? { instagramMetadata } : {}),
     ...(facebookMetadata ? { facebookMetadata } : {}),
   };
+  // Q1: the Story job of a Feed and Story post, or undefined for none. Its
+  // stored metadata is a plain Story, so everything that reads jobs is unchanged.
+  const storyJob: PostStoryJobParams | undefined =
+    instagramPlacement.storyJob || facebookPlacement.storyJob
+      ? {
+          targetPlatforms: [
+            ...(instagramPlacement.storyJob ? (["instagram"] as const) : []),
+            ...(facebookPlacement.storyJob ? (["facebook_page"] as const) : []),
+          ],
+          ...(instagramPlacement.storyJob ? { instagramMetadata: { placement: "story" as const } } : {}),
+          ...(facebookPlacement.storyJob ? { facebookMetadata: { placement: "story" as const } } : {}),
+        }
+      : undefined;
+  const storyArgs = storyJob ? { story: storyJob } : {};
 
   // 2026-11-01 audit (Task 9): an EXPLICIT platform list is checked before any
   // row is written — every requested platform must be able to publish this
@@ -939,7 +961,7 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     }
-    if (instagramMetadata || facebookMetadata) {
+    if (instagramMetadata || facebookMetadata || storyJob) {
       return NextResponse.json({ error: REPEAT_STORY_MESSAGE }, { status: 400 });
     }
     const repeats = validateRepeatAt(body.repeatAt, scheduledForDate, new Date());
@@ -968,6 +990,9 @@ export async function POST(request: Request) {
       workspaceId: context.workspace.id,
       day: scheduledForDate ?? new Date(),
       mode: effectiveIntent === "scheduled" ? "schedule" : "now",
+      // Q1: the Story job is a second post on the same day, so Feed and Story
+      // is refused wherever two separate posts would be.
+      ...(storyJob ? { alsoOnDay: 1 } : {}),
     });
     if (refusal) {
       return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 429 });
@@ -1038,6 +1063,8 @@ export async function POST(request: Request) {
     // a shared (non-personal) workspace lands the job there — visible in the
     // shared workspace's activity feed — not in their own personal workspace.
     let postJobId: string;
+    // Q1: the Story job of a Feed and Story post, when the helper made one.
+    let storyPostJobId: string | undefined;
     // Null for a post without a photo.
     let mediaItemId: string | null;
 
@@ -1085,8 +1112,10 @@ export async function POST(request: Request) {
         targetPlatforms,
         ...(series ? { series } : {}),
         ...coverArgs,
+        ...storyArgs,
       });
       postJobId = created.postJobId;
+      storyPostJobId = created.storyPostJobId;
       mediaItemId = created.mediaItemId;
     } else {
       // Redundant with the `hasBlobUrl` check above at runtime (this branch
@@ -1127,8 +1156,10 @@ export async function POST(request: Request) {
         targetPlatforms,
         ...(series ? { series } : {}),
         ...coverArgs,
+        ...storyArgs,
       });
       postJobId = created.postJobId;
+      storyPostJobId = created.storyPostJobId;
       mediaItemId = created.mediaItemId;
     }
 
@@ -1146,13 +1177,16 @@ export async function POST(request: Request) {
     if (heldForApproval) {
       // A series was held in its own transaction (above).
       if (!series) {
-        await prisma.postJob.update({
-          where: { id: postJobId },
-          data: {
-            submittedForApprovalAt: new Date(),
-            ...(scheduledForDate ? { scheduledFor: scheduledForDate } : {}),
-          },
-        });
+        // Q1: a Feed and Story post's Story job is held the same way.
+        for (const id of storyPostJobId ? [postJobId, storyPostJobId] : [postJobId]) {
+          await prisma.postJob.update({
+            where: { id },
+            data: {
+              submittedForApprovalAt: new Date(),
+              ...(scheduledForDate ? { scheduledFor: scheduledForDate } : {}),
+            },
+          });
+        }
       }
 
       // 2026-11-01 audit: tell the owners something is waiting. Never throws.
@@ -1201,32 +1235,55 @@ export async function POST(request: Request) {
         // 2026-11-01 scale audit (jobs H6 + H1): a stable event id (a duplicate
         // send of this job is dropped), the ACTIVE workspace for the shared
         // concurrency key, and `immediate` for the "Post now" priority.
+        const mainEvent = buildPublishEvent(
+          {
+            postJobId,
+            userId: context.user.id,
+            workspaceId: context.workspace.id,
+            mediaItemId,
+            baseCaption: baseCaptionRaw,
+            location,
+            perPlatformOverrides: perPlatformOverrides ?? null,
+            tiktokMetadata,
+            youtubeMetadata,
+            googleMetadata,
+            ...placementArgs,
+          },
+          { immediate: true },
+        );
+        // Q1: the Story job's event goes in the same send, so both start or
+        // neither does. It carries only the Story platforms' options.
         await inngest.send(
-          buildPublishEvent(
-            {
-              postJobId,
-              userId: context.user.id,
-              workspaceId: context.workspace.id,
-              mediaItemId,
-              baseCaption: baseCaptionRaw,
-              location,
-              perPlatformOverrides: perPlatformOverrides ?? null,
-              tiktokMetadata,
-              youtubeMetadata,
-              googleMetadata,
-              ...placementArgs,
-            },
-            { immediate: true },
-          ),
+          storyPostJobId && storyJob
+            ? [
+                mainEvent,
+                buildPublishEvent(
+                  {
+                    postJobId: storyPostJobId,
+                    userId: context.user.id,
+                    workspaceId: context.workspace.id,
+                    mediaItemId,
+                    baseCaption: baseCaptionRaw,
+                    location,
+                    perPlatformOverrides: perPlatformOverrides ?? null,
+                    ...(storyJob.instagramMetadata ? { instagramMetadata: storyJob.instagramMetadata } : {}),
+                    ...(storyJob.facebookMetadata ? { facebookMetadata: storyJob.facebookMetadata } : {}),
+                  },
+                  { immediate: true },
+                ),
+              ]
+            : mainEvent,
         );
       } catch (dispatchError: unknown) {
         logger.error("[POST /api/posts] Couldn't dispatch the publish event", {
           error: dispatchError,
           postJobId,
+          ...(storyPostJobId ? { storyPostJobId } : {}),
           userId: context.user.id,
           workspaceId: context.workspace.id,
         });
         await failPendingPostJobResults(postJobId, DISPATCH_FAILURE);
+        if (storyPostJobId) await failPendingPostJobResults(storyPostJobId, DISPATCH_FAILURE);
         return NextResponse.json(
           {
             code: DISPATCH_FAILURE.errorCode,
@@ -1276,6 +1333,8 @@ export async function POST(request: Request) {
       ...(heldForApproval ? { awaitingApproval: true } : {}),
       // Repeat: `postJob` is the first post of the series.
       ...(series ? { series: { id: series.seriesId, count: series.times.length } } : {}),
+      // Q1: Feed and Story made a second job; `postJob` is the feed one.
+      ...(storyPostJobId ? { storyPostJobId } : {}),
     });
   } catch (error: unknown) {
     if (error instanceof Error && error.message === "NO_CONNECTIONS") {

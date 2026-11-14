@@ -218,6 +218,15 @@ describe("POST /api/posts - textOnly (a post without a photo)", () => {
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
   });
 
+  it("refuses Feed and Story like a Story (Q1)", async () => {
+    const response = await POST(
+      textRequest({ platforms: ["facebook_page"], facebookMetadata: { placement: "both" } }),
+    );
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: "A Story needs a photo or video." });
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
   it("creates a job with no file and sends a publish event with a null mediaItemId", async () => {
     const googleMetadata = { postType: "update", button: { type: "CALL" } };
     const response = await POST(

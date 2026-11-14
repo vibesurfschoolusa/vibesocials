@@ -78,6 +78,7 @@ import { platformAcceptsTextOnly, textPostsEnabled } from "@/lib/platformLimits"
 import { shouldTakeSharedFile, takeSharedFile } from "@/lib/sharedFile";
 import { TIKTOK_DISCLOSURE_INCOMPLETE_TEXT, tiktokPublishBlock } from "@/lib/tiktokPostRules";
 import {
+  composerPlacements,
   initialPlacements,
   reconcilePlacement,
   storyOnlyCaptionNote,
@@ -954,21 +955,23 @@ function CreatePostFormInner({
   const facebookChoice = reconcilePlacement(facebookPlacement, attachedFileCount);
   if (facebookChoice !== facebookPlacement) setFacebookPlacement(facebookChoice);
   // A Story needs a file: with none, a Story chosen earlier is not sent (it
-  // comes back when a file is attached again).
-  const instagramStory =
-    !noFile && selectedPlatforms.includes("instagram") && instagramChoice.placement === "story";
-  const facebookStory =
-    !noFile && selectedPlatforms.includes("facebook_page") && facebookChoice.placement === "story";
+  // comes back when a file is attached again). Q1: Feed and Story follows
+  // every Story rule, but its feed post still publishes the caption.
+  const placements = composerPlacements({
+    noFile,
+    selected: selectedPlatforms,
+    instagram: instagramChoice.placement,
+    facebook: facebookChoice.placement,
+  });
+  const instagramStory = placements.storyRules.includes("instagram");
+  const facebookStory = placements.storyRules.includes("facebook_page");
   const activeVideoDurationSec = activeMimeType?.startsWith("video/") ? videoDurationSec : null;
   // Why a chosen Story cannot take this video, or null.
   const storyLengthRefusal =
     (instagramStory ? storyVideoLengthRefusal("instagram", activeVideoDurationSec) : null) ??
     (facebookStory ? storyVideoLengthRefusal("facebook_page", activeVideoDurationSec) : null);
   // Shown under the caption box while every selected platform is a Story.
-  const captionStoryNote = storyOnlyCaptionNote(selectedPlatforms, [
-    ...(instagramStory ? (["instagram"] as const) : []),
-    ...(facebookStory ? (["facebook_page"] as const) : []),
-  ]);
+  const captionStoryNote = storyOnlyCaptionNote(selectedPlatforms, placements.storyOnly);
   // A Story repeated for weeks is rarely meant, so Repeat is off for one.
   const storyChosen = instagramStory || facebookStory;
   const repeatOn = publishMode === "schedule" && repeat !== "none" && !storyChosen;
@@ -993,11 +996,9 @@ function CreatePostFormInner({
       onChange={(choice) => setCoverState({ videoUrl: coverVideo.url, choice })}
     />
   ) : null;
-  // Sent only for a selected platform with Story chosen: a feed post's request stays as it was.
-  const storyRequestFields = {
-    ...(instagramStory ? { instagramMetadata: { placement: "story" as const } } : {}),
-    ...(facebookStory ? { facebookMetadata: { placement: "story" as const } } : {}),
-  };
+  // Sent only for a selected platform with Story or Feed and Story chosen: a
+  // feed post's request stays as it was.
+  const storyRequestFields = placements.requestFields;
   // What the preview shows: what would really change the post (selected, not
   // blank, not the main caption). The request builders clean the same way.
   const previewOverrides = cleanPlatformOverrides(

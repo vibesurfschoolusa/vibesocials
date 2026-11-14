@@ -17,6 +17,10 @@ import {
   withStoryCaptions,
   parsePlacementMetadata,
   placementNote,
+  placementRequestField,
+  hasStoryPart,
+  splitPlacement,
+  composerPlacements,
   reconcilePlacement,
   STORY_VIDEO_LIMIT_SEC,
   storyMediaRefusal,
@@ -293,5 +297,86 @@ describe("storyChoiceSuffix (a post with no chosen platforms)", () => {
     expect(storyChoiceSuffix(["instagram", "facebook_page"])).toBe(
       " (Instagram as a Story, Facebook Page as a Story)",
     );
+  });
+});
+
+// Q1 (2026-11-14): "Feed and Story", one choice that makes a feed post and a Story.
+describe("Feed and Story (both)", () => {
+  const BOTH = { placement: "both" as const, returnedToFeed: false };
+
+  it("parses for each field", () => {
+    expect(parsePlacementMetadata({ placement: "both" }, "instagramMetadata")).toEqual({
+      ok: true,
+      value: { placement: "both" },
+    });
+    expect(parsePlacementMetadata({ placement: "both" }, "facebookMetadata")).toEqual({
+      ok: true,
+      value: { placement: "both" },
+    });
+    expect(parsePlacementMetadata({ placement: "both", x: 1 }, "facebookMetadata").ok).toBe(false);
+  });
+
+  it("never reaches stored metadata: it splits into a feed job plus a Story job", () => {
+    expect(splitPlacement({ placement: "both" })).toEqual({ main: undefined, storyJob: true });
+    expect(splitPlacement({ placement: "story" })).toEqual({ main: { placement: "story" }, storyJob: false });
+    expect(splitPlacement({ placement: "feed" })).toEqual({ main: undefined, storyJob: false });
+    expect(splitPlacement(undefined)).toEqual({ main: undefined, storyJob: false });
+  });
+
+  it("has a Story part like Story does; Feed does not", () => {
+    expect(hasStoryPart("both")).toBe(true);
+    expect(hasStoryPart("story")).toBe(true);
+    expect(hasStoryPart("feed")).toBe(false);
+  });
+
+  it("is what Create sends for the choice; Feed sends nothing", () => {
+    expect(placementRequestField("both")).toEqual({ placement: "both" });
+    expect(placementRequestField("story")).toEqual({ placement: "story" });
+    expect(placementRequestField("feed")).toBeUndefined();
+  });
+
+  it("is chosen with one file and refused with two or more, like Story", () => {
+    expect(choosePlacement(FEED_CHOICE, "both", 1)).toEqual(BOTH);
+    expect(choosePlacement(FEED_CHOICE, "both", 2)).toBe(FEED_CHOICE);
+  });
+
+  it("goes back to Feed when a second photo is attached, and says so", () => {
+    const back = reconcilePlacement(BOTH, 2);
+    expect(back).toEqual({ placement: "feed", returnedToFeed: true });
+    expect(reconcilePlacement(BOTH, 1)).toBe(BOTH);
+  });
+
+  it("says what happens: the feed keeps the caption, the Story has none", () => {
+    expect(placementNote("instagram", BOTH, 1)).toBe(
+      "Posts to the Instagram feed with your caption, and as a Story with no caption. Stories show for 24 hours.",
+    );
+    expect(placementNote("instagram", BOTH, 2)).toBe("A Story takes one photo or video.");
+  });
+});
+
+describe("composerPlacements (what Create sends and checks)", () => {
+  const base = { noFile: false, selected: ["instagram", "facebook_page", "x"] as const };
+
+  it("sends both for Feed and Story, story for Story, nothing for Feed", () => {
+    const state = composerPlacements({ ...base, instagram: "both", facebook: "story" });
+    expect(state.requestFields).toEqual({
+      instagramMetadata: { placement: "both" },
+      facebookMetadata: { placement: "story" },
+    });
+    expect(composerPlacements({ ...base, instagram: "feed", facebook: "feed" }).requestFields).toEqual({});
+  });
+
+  it("applies the Story rules to both, but only Story leaves the caption unpublished", () => {
+    const state = composerPlacements({ ...base, instagram: "both", facebook: "story" });
+    expect(state.storyRules).toEqual(["instagram", "facebook_page"]);
+    expect(state.storyOnly).toEqual(["facebook_page"]);
+  });
+
+  it("sends nothing for a platform not selected, or without a file", () => {
+    expect(
+      composerPlacements({ noFile: false, selected: ["x"], instagram: "both", facebook: "both" }).requestFields,
+    ).toEqual({});
+    const none = composerPlacements({ ...base, noFile: true, instagram: "both", facebook: "story" });
+    expect(none).toEqual({ requestFields: {}, storyRules: [], storyOnly: [] });
   });
 });

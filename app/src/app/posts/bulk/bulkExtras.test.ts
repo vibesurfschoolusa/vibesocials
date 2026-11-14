@@ -8,6 +8,8 @@ import {
   buildBulkRowBody,
   bulkExtrasBlock,
   bulkGoogleMetadataError,
+  bulkRowResultText,
+  bulkStoryChoice,
   captionThenDescribe,
   describePhotoOnce,
   improveFailedText,
@@ -372,5 +374,54 @@ describe("Add many: caption, then description", () => {
       await captionThenDescribe("r1", { writeCaption: async () => {}, row: fake.row, describe: fake.describe });
       expect(fake.describe).not.toHaveBeenCalled();
     }
+  });
+});
+
+// Q1 (2026-11-14): the batch's "Feed and Story" choice.
+describe("Add many: Feed and Story", () => {
+  it("sends both in each row body that goes there, upload and Media reuse", () => {
+    for (const mediaItemId of [null, "media_1"]) {
+      const body = buildBulkRowBody({
+        ...BASE,
+        row: photoRow({ mediaItemId }),
+        platforms: ["instagram", "facebook_page"],
+        stories: { instagram: "both", facebook: true },
+      });
+      expect(body.instagramMetadata).toEqual({ placement: "both" });
+      expect(body.facebookMetadata).toEqual({ placement: "story" });
+    }
+    const notThere = buildBulkRowBody({ ...BASE, row: photoRow(), platforms: ["x"], stories: { instagram: "both", facebook: "both" } });
+    expect("instagramMetadata" in notThere).toBe(false);
+    expect("facebookMetadata" in notThere).toBe(false);
+  });
+
+  it("refuses a video too long for a Story on the row, before sending", () => {
+    const stories = { instagram: "both" as const, facebook: false };
+    expect(rowStoryRefusal({ mimeType: "video/mp4", durationSec: 75, platforms: ["instagram"], stories })).toBe(
+      storyVideoLengthRefusal("instagram", 75),
+    );
+    expect(
+      bulkExtrasBlock({ mimeType: "video/mp4", durationSec: 75, platforms: ["instagram"], stories, googleError: null }),
+    ).toBe(storyVideoLengthRefusal("instagram", 75));
+    expect(rowStoryRefusal({ mimeType: "video/mp4", durationSec: 30, platforms: ["instagram"], stories })).toBeNull();
+  });
+
+  it("names the row result", () => {
+    const both = { storyPostJobId: "job-s" };
+    expect(bulkRowResultText({ heldForApproval: false, mode: "schedule", body: both })).toBe("Scheduled (feed and Story)");
+    expect(bulkRowResultText({ heldForApproval: false, mode: "draft", body: both })).toBe("Saved as drafts (feed and Story)");
+    expect(bulkRowResultText({ heldForApproval: true, mode: "schedule", body: both })).toBe("Sent for approval");
+    // Without a Story job, today's words.
+    expect(bulkRowResultText({ heldForApproval: false, mode: "schedule", body: {} })).toBe("Scheduled");
+    expect(bulkRowResultText({ heldForApproval: false, mode: "draft", body: null })).toBe("Saved as a draft");
+    expect(bulkRowResultText({ heldForApproval: true, mode: "draft", body: {} })).toBe("Sent for approval");
+  });
+});
+
+describe("bulkStoryChoice (the batch control to the row's choice)", () => {
+  it("Feed, Story, Feed and Story", () => {
+    expect(bulkStoryChoice("feed")).toBe(false);
+    expect(bulkStoryChoice("story")).toBe(true);
+    expect(bulkStoryChoice("both")).toBe("both");
   });
 });

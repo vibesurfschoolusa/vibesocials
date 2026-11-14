@@ -67,4 +67,20 @@ describe("StoryPlacementSettings", () => {
     );
     expect(render("instagram", FEED_CHOICE, 1, 75)).not.toContain("Stories take videos up to");
   });
+
+  it("offers Feed and Story as a third choice, refused like Story with two or more photos (Q1)", () => {
+    const one = render("instagram", FEED_CHOICE, 1);
+    expect(input(one, "both")).not.toBe("");
+    expect(input(one, "both")).not.toContain('disabled=""');
+    expect(one).toContain("Feed and Story");
+    expect(input(render("instagram", FEED_CHOICE, 2), "both")).toContain('disabled=""');
+  });
+
+  it("with Feed and Story chosen, it is checked and the length note shows as for a Story (Q1)", () => {
+    const both: PlacementChoice = { placement: "both", returnedToFeed: false };
+    expect(input(render("facebook_page", both, 1), "both")).toContain('checked=""');
+    expect(render("instagram", both, 1, 75)).toContain(
+      "Instagram Stories take videos up to 60 seconds. This one is 75 seconds.",
+    );
+  });
 });

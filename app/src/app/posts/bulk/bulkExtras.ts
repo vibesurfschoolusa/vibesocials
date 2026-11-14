@@ -10,7 +10,7 @@ import {
   type UploadedBlob,
 } from "@/lib/createPostRequest";
 import { parseGooglePostMetadata, type GoogleButton } from "@/lib/googlePostOptions";
-import { storyVideoLengthRefusal } from "@/lib/storyPlacement";
+import { storyVideoLengthRefusal, type PlacementChoiceValue } from "@/lib/storyPlacement";
 import type { coverRequestFields } from "@/lib/videoCover";
 import type { GoogleBusinessPostMetadata, YouTubePostMetadata } from "@/server/platforms/types";
 
@@ -167,10 +167,35 @@ export function autoCaptionRequestBody(
   };
 }
 
-/** The batch's Feed or Story choice, per platform. */
+/**
+ * The batch's choice, per platform: false for Feed, true for Story, "both"
+ * for Feed and Story (Q1). The Story rules apply to true and "both" alike.
+ */
 export interface BulkStories {
-  instagram: boolean;
-  facebook: boolean;
+  instagram: boolean | "both";
+  facebook: boolean | "both";
+}
+
+/** The batch's placement choice as BulkStories holds it. */
+export function bulkStoryChoice(placement: PlacementChoiceValue): boolean | "both" {
+  return placement === "both" ? "both" : placement === "story";
+}
+
+/** A row's request field for its batch choice. */
+function storyField(choice: boolean | "both"): { placement: "story" | "both" } {
+  return { placement: choice === "both" ? "both" : "story" };
+}
+
+/**
+ * What a created row says. A Feed and Story row (the answer names its Story
+ * job) says so; a held row says "Sent for approval" whatever it holds.
+ */
+export function bulkRowResultText(input: { heldForApproval: boolean; mode: "schedule" | "draft"; body: unknown }): string {
+  if (input.heldForApproval) return "Sent for approval";
+  const storyPostJobId = (input.body as { storyPostJobId?: unknown } | null)?.storyPostJobId;
+  const feedAndStory = typeof storyPostJobId === "string" && storyPostJobId !== "";
+  if (input.mode === "draft") return feedAndStory ? "Saved as drafts (feed and Story)" : "Saved as a draft";
+  return feedAndStory ? "Scheduled (feed and Story)" : "Scheduled";
 }
 
 interface StoryRowInput {
@@ -241,8 +266,8 @@ export interface BulkRowBodyInput {
 /** One row's body: Create's upload or reuse body plus the fields Create adds beside it. */
 export type BulkRowBody = (CreatePostRequest | CreatePostReuseRequest) & {
   altText?: string;
-  instagramMetadata?: { placement: "story" };
-  facebookMetadata?: { placement: "story" };
+  instagramMetadata?: { placement: "story" | "both" };
+  facebookMetadata?: { placement: "story" | "both" };
 } & ReturnType<typeof coverRequestFields>;
 
 /**
@@ -271,10 +296,10 @@ export function buildBulkRowBody(input: BulkRowBodyInput): BulkRowBody {
   return {
     ...withPhotoDescriptions(body, isPhoto ? [row.altText] : []),
     ...(input.stories.instagram && platforms.includes("instagram")
-      ? { instagramMetadata: { placement: "story" as const } }
+      ? { instagramMetadata: storyField(input.stories.instagram) }
       : {}),
     ...(input.stories.facebook && platforms.includes("facebook_page")
-      ? { facebookMetadata: { placement: "story" as const } }
+      ? { facebookMetadata: storyField(input.stories.facebook) }
       : {}),
     ...(isVideo ? input.coverFields : {}),
   };

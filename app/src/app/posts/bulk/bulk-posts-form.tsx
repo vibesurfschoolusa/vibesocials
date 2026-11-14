@@ -78,6 +78,8 @@ import {
   buildBulkRowBody,
   bulkExtrasBlock,
   bulkGoogleMetadataError,
+  bulkRowResultText,
+  bulkStoryChoice,
   captionThenDescribe,
   describePhotoOnce,
   initialBulkGoogleMetadata,
@@ -598,11 +600,11 @@ export function BulkPostsForm({
     updateRow(id, { uncertain: false });
   }
 
-  // Feed or Story for the batch. Every row is one file, so the one-file rule
-  // always holds; a video too long for a Story says so on its row.
+  // Feed, Story, or Feed and Story for the batch. Every row is one file, so the
+  // one-file rule always holds; a video too long for a Story says so on its row.
   const stories = {
-    instagram: selectedPlatforms.includes("instagram") && instagramPlacement.placement === "story",
-    facebook: selectedPlatforms.includes("facebook_page") && facebookPlacement.placement === "story",
+    instagram: selectedPlatforms.includes("instagram") && bulkStoryChoice(instagramPlacement.placement),
+    facebook: selectedPlatforms.includes("facebook_page") && bulkStoryChoice(facebookPlacement.placement),
   };
   const googleShown = selectedPlatforms.includes("google_business_profile");
   const googleError = googleShown ? bulkGoogleMetadataError(googleMetadata) : null;
@@ -695,7 +697,11 @@ export function BulkPostsForm({
             sending: false,
             // With a post id the row's time is locked (rowTimeLocked): it shows the time sent.
             postId: result.postId,
-            result: result.heldForApproval ? "Sent for approval" : mode === "draft" ? "Saved as a draft" : "Scheduled",
+            result: bulkRowResultText({
+              heldForApproval: result.heldForApproval,
+              mode,
+              body: "body" in response ? response.body : null,
+            }),
           });
         } else if (result.outcome === "refused") {
           updateRow(id, { sending: false, sendError: result.error });
