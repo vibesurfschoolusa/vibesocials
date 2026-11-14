@@ -427,7 +427,12 @@ export async function GET(request: Request) {
           seriesId: job.seriesId ?? null,
           hasCover: typeof job.coverTimeMs === "number" || Boolean(job.coverImageUrl),
           ...(job.storyOfPostJobId && pairById.has(job.storyOfPostJobId)
-            ? { storyOf: { scheduledFor: pairById.get(job.storyOfPostJobId)!.scheduledFor?.toISOString() ?? null } }
+            ? {
+                storyOf: {
+                  id: job.storyOfPostJobId,
+                  scheduledFor: pairById.get(job.storyOfPostJobId)!.scheduledFor?.toISOString() ?? null,
+                },
+              }
             : {}),
           ...(hasStory.has(job.id) ? { alsoAsStory: true } : {}),
           ...(placeByJobId.has(job.id)

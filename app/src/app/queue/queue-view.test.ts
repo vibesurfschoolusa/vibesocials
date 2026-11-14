@@ -1,8 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { PostJobDTO } from "@/lib/postsDto";
@@ -13,7 +11,6 @@ import {
   coverLabel,
   emptyCaptionMessage,
   isTextPost,
-  PairChoice,
   pairLabel,
   readQueueView,
   saveQueueView,
@@ -82,34 +79,25 @@ describe("coverLabel and coverEditNote", () => {
 
 describe("cancelRequest", () => {
   it("cancels one post through the single cancel, and the rest of a series through cancel-series", () => {
-    expect(cancelRequest(job("a", { seriesId: "s1" }), "one")).toEqual({
+    expect(cancelRequest(job("a", { seriesId: "s1" }), "one")).toMatchObject({
       url: "/api/posts/a/cancel",
       series: false,
     });
-    expect(cancelRequest(job("a", { seriesId: "s1" }), "rest")).toEqual({
+    expect(cancelRequest(job("a", { seriesId: "s1" }), "rest")).toMatchObject({
       url: "/api/posts/a/cancel-series",
       series: true,
     });
     // A post without a series can only be cancelled on its own.
-    expect(cancelRequest(job("b"), "rest")).toEqual({ url: "/api/posts/b/cancel", series: false });
+    expect(cancelRequest(job("b"), "rest")).toMatchObject({ url: "/api/posts/b/cancel", series: false });
   });
 
-  // R2-client-journey M1: both halves of a Feed and Story post in one request.
-  it("asks the single cancel to include the other half of a Feed and Story post", () => {
-    expect(cancelRequest(job("f", { alsoAsStory: true }), "one", true)).toEqual({
-      url: "/api/posts/f/cancel",
-      series: false,
-      body: { includePair: true },
+  // R3-client-journey M1: a Feed and Story card's cancel asks for both halves.
+  it("a pair card's cancel asks for both halves; another card's does not", () => {
+    expect(JSON.parse(cancelRequest({ ...job("f"), includePair: true }, "one").init.body)).toEqual({
+      includePair: true,
     });
-    expect(cancelRequest(job("f", { alsoAsStory: true }), "one", false)).toEqual({
-      url: "/api/posts/f/cancel",
-      series: false,
-    });
-    // The rest of a series goes through cancel-series, which never takes the option.
-    expect(cancelRequest(job("a", { seriesId: "s1" }), "rest", true)).toEqual({
-      url: "/api/posts/a/cancel-series",
-      series: true,
-    });
+    expect(JSON.parse(cancelRequest(job("a"), "one").init.body)).toEqual({});
+    expect(cancelRequest(job("a"), "one").init.method).toBe("POST");
   });
 });
 
@@ -194,8 +182,8 @@ describe("pairLabel", () => {
       hour: "numeric",
       minute: "2-digit",
     });
-    expect(pairLabel(job("s", { storyOf: { scheduledFor: at } }))).toBe(`Story of the post on ${formatted}`);
-    expect(pairLabel(job("s", { storyOf: { scheduledFor: null } }))).toBe("Story of a post with no time set");
+    expect(pairLabel(job("s", { storyOf: { id: "f", scheduledFor: at } }))).toBe(`Story of the post on ${formatted}`);
+    expect(pairLabel(job("s", { storyOf: { id: "f", scheduledFor: null } }))).toBe("Story of a post with no time set");
     expect(pairLabel(job("f", { alsoAsStory: true }))).toBe("Also as a Story");
   });
 
@@ -204,46 +192,8 @@ describe("pairLabel", () => {
   });
 });
 
-// R2-client-journey M1: the dialog's line and checkbox for the other half.
-describe("PairChoice", () => {
-  const option = { line: "This post also goes out as a Story, set for Fri.", label: "Also cancel the Story", keptLine: "The Story is kept and keeps its time." };
-  const render = (props: Partial<Parameters<typeof PairChoice>[0]>) =>
-    renderToStaticMarkup(
-      createElement(PairChoice, { option, loading: false, checked: true, onChange: () => {}, ...props }),
-    );
-
-  it("names the other half and offers it, checked", () => {
-    const html = render({});
-    expect(html).toContain("This post also goes out as a Story, set for Fri.");
-    expect(html).toContain("Also cancel the Story");
-    expect(html).toMatch(/type="checkbox" checked=""/);
-    expect(html).not.toContain("is kept");
-  });
-
-  it("unchecked: says the other half is kept", () => {
-    expect(render({ checked: false })).toContain("The Story is kept and keeps its time.");
-  });
-
-  it("while it is looked up, says so; with no other half, renders nothing", () => {
-    expect(render({ loading: true })).toContain("Looking up the other half of this post");
-    expect(render({ option: null })).toBe("");
-  });
-
-  it("a failed lookup: says only this post is changed, no checkbox", () => {
-    const html = render({ option: null, failedLine: "Couldn't check whether this post has a Story half. Only this post will be cancelled." });
-    expect(html).toContain("Couldn&#x27;t check whether this post has a Story half. Only this post will be cancelled.");
-    expect(html).not.toContain("checkbox");
-  });
-
-  it("an other half that cannot be included: the line only, no checkbox", () => {
-    const html = render({ option: { line: "It has already started publishing.", label: null, keptLine: null } });
-    expect(html).toContain("It has already started publishing.");
-    expect(html).not.toContain("checkbox");
-  });
-});
-
-// R2-client-journey M1 review: the cancel and delete dialogs are the shared
-// ConfirmDialog with Confirm disabled while the other half is looked up.
+// R3-client-journey M1: a Feed and Story post is one card; the dialogs that
+// asked about the other half are gone, and the shared ConfirmDialog stays.
 describe("the cancel and delete dialogs", () => {
   const queueSource = readFileSync(fileURLToPath(new URL("./queue-view.tsx", import.meta.url)), "utf8");
 
@@ -251,8 +201,8 @@ describe("the cancel and delete dialogs", () => {
     expect(queueSource).not.toContain("QueueConfirmDialog");
   });
 
-  it("keep Confirm disabled while the lookup runs", () => {
-    expect(queueSource).toContain("confirmDisabled={cancelLookup?.loading ?? false}");
-    expect(queueSource).toContain("confirmDisabled={deleteLookup?.loading ?? false}");
+  it("no longer look the other half up or offer a checkbox for it", () => {
+    expect(queueSource).not.toContain("PairChoice");
+    expect(queueSource).not.toContain("lookUpPair");
   });
 });

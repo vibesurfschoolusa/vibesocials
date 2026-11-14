@@ -227,11 +227,12 @@ export interface PostJobDTO {
   hasCover?: boolean;
   /**
    * F6: a Feed and Story post is two jobs. `storyOf` is on the Story job while
-   * its feed job exists and is not cancelled (that post's time); `alsoAsStory`
-   * is on the feed job while its Story job does. Owner actions stay per job;
-   * these only label the cards. Absent on every other job.
+   * its feed job exists and is not cancelled (that post's id and time);
+   * `alsoAsStory` is on the feed job while its Story job does. R3-client-journey
+   * M1: the Queue folds the two into one card by `storyOf.id`, and every action
+   * on that card asks for both halves. Absent on every other job.
    */
-  storyOf?: { scheduledFor: string | null };
+  storyOf?: { id: string; scheduledFor: string | null };
   alsoAsStory?: boolean;
 }
 

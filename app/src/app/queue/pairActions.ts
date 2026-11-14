@@ -1,171 +1,189 @@
-import type { PostJobStatus } from "@prisma/client";
-
+import { platformLabel } from "@/lib/platforms";
 import type { PostJobDTO } from "@/lib/postsDto";
 
 /**
- * R2-client-journey M1: a "Feed and Story" post is two Queue cards (F6). Owner
- * actions on one card used to act on that half alone while the dialog said
- * "It won't be published", so the Story still went out. The cancel and delete
- * dialogs now name the other half and its time and offer to include it
- * (checked by default); rejecting a held pair rejects both (the approval
- * route); rescheduling one half says the other keeps its time.
+ * R3-client-journey M1 (after R1 H1 and R2 M1): a "Feed and Story" post is two
+ * jobs, and each owner action used to act on one half while the other still
+ * went out. The Queue now shows the pair as ONE card, as the client review
+ * link does (reviewLink.ts foldStoryPairs), and every request about a card is
+ * built here, so a pair card always asks the server for both halves
+ * (`includePair: true`; the server's rule is api/posts/[postJobId]/pairRule.ts).
+ * The answer's `pair` says what happened to the other half, in a sentence the
+ * Queue adds to its toast.
  */
 
-/** The other half, as GET /api/posts/[id]/cancel describes it. */
-export type PairInfo = {
-  id: string;
-  /** What the other half is: this feed post's Story, or this Story's feed post. */
-  kind: "story" | "feed";
-  status: PostJobStatus;
-  scheduledFor: string | null;
+/** A Queue card: a post, and for a Feed and Story post its Story folded in. */
+export type QueueCard = PostJobDTO & {
+  /** The Story half shown on this feed post's card. */
+  story?: PostJobDTO;
+  /** Every request about this card asks for the other half too. */
+  includePair?: true;
 };
 
-type PairCard = Pick<PostJobDTO, "storyOf" | "alsoAsStory">;
+/** A card, or a bare request that never asks for a pair (a series cancel). */
+type PairFlag = QueueCard | { includePair?: true };
 
-function formatTimestamp(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-/** Either half of a Feed and Story post whose other half is live. */
-export function isPairCard(job: PairCard): boolean {
-  return Boolean(job.storyOf || job.alsoAsStory);
-}
-
-function halfName(kind: PairInfo["kind"]): string {
-  return kind === "story" ? "the Story" : "the feed post";
-}
-
-function capitalized(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-/** What happened to an other half that can no longer be changed; null while it is still a draft or scheduled. */
-function finishedPhrase(status: PostJobStatus): string | null {
-  switch (status) {
-    case "pending":
-    case "in_progress":
-      return "has already started publishing";
-    case "completed":
-      return "was already published";
-    case "failed":
-      return "did not go out";
-    default:
-      return null;
-  }
-}
-
-/** The line naming a draft or scheduled other half and its time (a passed time reads as past). */
-function pairLine(pair: PairInfo, now: number): string {
-  const time = pair.scheduledFor ? formatTimestamp(pair.scheduledFor) : null;
-  const passed = pair.scheduledFor ? new Date(pair.scheduledFor).getTime() <= now : false;
-  if (pair.kind === "story") {
-    if (!time) return "This post also goes out as a Story, with no time set.";
-    return passed
-      ? `This post also has a Story, which was set for ${time}.`
-      : `This post also goes out as a Story, set for ${time}.`;
-  }
-  if (!time) return "This is the Story of a feed post with no time set.";
-  return passed ? `This is the Story of a feed post that was set for ${time}.` : `This is the Story of a feed post set for ${time}.`;
+/** Both halves still agree on what the card shows: its state, approval and time. */
+function sameCard(feed: PostJobDTO, story: PostJobDTO): boolean {
+  return (
+    feed.status === story.status &&
+    feed.approvalState === story.approvalState &&
+    (feed.scheduledFor ?? null) === (story.scheduledFor ?? null)
+  );
 }
 
 /**
- * What the dialog says about the other half: always the line naming it; the
- * checkbox label only when it can be included (cancel: scheduled or draft;
- * delete: a draft), and the line shown when the box is cleared. Null with no
- * live other half (a cancelled one is none: the lookup leaves it out).
+ * The Queue's cards from its posts, in their order. A Story whose feed post is
+ * listed in the same state, approval and time is folded into that post's card
+ * (which takes the feed post's place). A half whose partner is not listed
+ * (it moved on, or sits on a page not loaded yet) is its own card and still
+ * asks for both halves: the server leaves a partner that moved on alone and
+ * says so. Halves that no longer agree stay two cards, each acting alone, and
+ * a post with no live partner (no pair marks) is a normal card.
  */
-export function pairOption(
-  pair: PairInfo | null,
-  action: "cancel" | "delete",
-  now: number = Date.now(),
-): { line: string; label: string | null; keptLine: string | null } | null {
-  if (!pair || pair.status === "cancelled") return null;
-  const finished = finishedPhrase(pair.status);
-  if (finished) {
-    const line =
-      pair.kind === "story"
-        ? `This post's Story ${finished}, so it is not changed.`
-        : `This is the Story of a feed post that ${finished}, so it is not changed.`;
-    return { line, label: null, keptLine: null };
+export function foldQueuePairs(jobs: readonly PostJobDTO[]): QueueCard[] {
+  const byId = new Map(jobs.map((job) => [job.id, job]));
+  const storyOfFeed = new Map<string, PostJobDTO>();
+  const listedStoryOf = new Set<string>();
+  for (const job of jobs) {
+    const feedId = job.storyOf?.id;
+    if (!feedId) continue;
+    const feed = byId.get(feedId);
+    if (!feed) continue;
+    listedStoryOf.add(feedId);
+    if (sameCard(feed, job)) storyOfFeed.set(feedId, job);
   }
-  const name = halfName(pair.kind);
-  if (action === "cancel") {
-    return { line: pairLine(pair, now), label: `Also cancel ${name}`, keptLine: `${capitalized(name)} is kept and keeps its time.` };
+  const folded = new Set(Array.from(storyOfFeed.values(), (story) => story.id));
+
+  const cards: QueueCard[] = [];
+  for (const job of jobs) {
+    if (folded.has(job.id)) continue;
+    const story = storyOfFeed.get(job.id);
+    if (story) {
+      cards.push({ ...job, story, includePair: true });
+      continue;
+    }
+    const partnerListed = job.storyOf ? byId.has(job.storyOf.id) : listedStoryOf.has(job.id);
+    const isHalf = Boolean(job.storyOf || job.alsoAsStory);
+    cards.push(isHalf && !partnerListed ? { ...job, includePair: true } : job);
   }
-  if (pair.status === "draft") {
-    return { line: pairLine(pair, now), label: `Also delete ${name}`, keptLine: `${capitalized(name)} is kept.` };
-  }
+  return cards;
+}
+
+/** "Instagram and Facebook Page". */
+function joinLabels(labels: readonly string[]): string {
+  return labels.length <= 1 ? (labels[0] ?? "") : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+}
+
+/**
+ * The line on a folded card: "Feed and Story" with each half's platforms. The
+ * feed labels are the ones the card already lists; the Story's are its own
+ * Story platforms. Null for any other card.
+ */
+export function foldedPairLine(card: QueueCard, feedLabels: readonly string[]): string | null {
+  if (!card.story) return null;
+  const targets = card.story.publish?.targetPlatforms ?? null;
+  const stories = (card.story.storyPlatforms ?? []).filter((p) => !targets || targets.includes(p));
+  const storyLabels = stories.map(platformLabel);
+  return `Feed and Story: the post goes to ${joinLabels(feedLabels)}, the Story to ${joinLabels(storyLabels) || "its platforms"}.`;
+}
+
+/** The request for an action on a card: JSON, asking for both halves on a pair card. */
+export function cardRequest(
+  card: PairFlag,
+  method: string,
+  body: Record<string, unknown> = {},
+): { method: string; headers: Record<string, string>; body: string } {
   return {
-    line: `${pairLine(pair, now)} It is scheduled, so it is not deleted; cancel it on its own card first.`,
-    label: null,
-    keptLine: null,
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(card.includePair ? { ...body, includePair: true } : body),
   };
 }
 
-/** The open dialog's lookup of the other half, as the Queue keeps it. */
-export type PairLookup = { jobId: string; pair?: PairInfo | null; failed?: boolean };
+type FetchInit = { method: string; headers: Record<string, string>; body: string };
+type FetchAnswer = { ok: boolean; status: number; json(): Promise<unknown> };
 
 /**
- * Where the dialog's lookup stands for this card: loading keeps Confirm
- * disabled (so nobody cancels one half before seeing the other); a failed
- * lookup lets Confirm act on this post alone and says so.
+ * A `fetch` for flows that make their own requests (the Edit dialog's
+ * lib/scheduleDraft.ts): on a pair card each JSON request also asks for both
+ * halves, and the last answer read is kept so its sentence about the other
+ * half can be shown.
  */
-export function pairLookupState(
-  job: { id: string },
-  lookup: PairLookup | null,
-): { loading: boolean; failed: boolean; pair: PairInfo | null } {
-  if (!lookup || lookup.jobId !== job.id) return { loading: false, failed: false, pair: null };
-  if (lookup.failed) return { loading: false, failed: true, pair: null };
-  if (lookup.pair === undefined) return { loading: true, failed: false, pair: null };
-  return { loading: false, failed: false, pair: lookup.pair };
+export function pairAwareFetch(
+  card: PairFlag,
+  fetchImpl: (url: string, init: FetchInit) => Promise<FetchAnswer>,
+): { fetchFn: (url: string, init: FetchInit) => Promise<FetchAnswer>; lastAnswer: () => unknown } {
+  let last: unknown = null;
+  const fetchFn = async (url: string, init: FetchInit): Promise<FetchAnswer> => {
+    if (!card.includePair) return fetchImpl(url, init);
+    let body: unknown = {};
+    try {
+      body = JSON.parse(init.body);
+    } catch {
+      // Not JSON: sent as it is.
+      return fetchImpl(url, init);
+    }
+    const response = await fetchImpl(url, { ...init, body: JSON.stringify({ ...(body as object), includePair: true }) });
+    return {
+      ok: response.ok,
+      status: response.status,
+      json: async () => {
+        last = await response.json();
+        return last;
+      },
+    };
+  };
+  return { fetchFn, lastAnswer: () => last };
 }
 
-/** The dialog's line when the lookup failed. */
-export function pairLookupFailedLine(job: PairCard, action: "cancel" | "delete"): string {
-  const half = job.storyOf ? "a feed post half" : "a Story half";
-  return `Couldn't check whether this post has ${half}. Only this post will be ${action === "cancel" ? "cancelled" : "deleted"}.`;
+type PairAnswer = { id: string; changed: boolean; note: string };
+
+function pairOf(data: unknown): PairAnswer | null {
+  const pair = (data as { pair?: unknown } | null)?.pair as Partial<PairAnswer> | undefined;
+  if (!pair || typeof pair.id !== "string" || typeof pair.note !== "string") return null;
+  return { id: pair.id, changed: pair.changed === true, note: pair.note };
 }
 
-/** The toast when the other half's delete found it already gone. */
-export function pairAlreadyDeletedMessage(kind: PairInfo["kind"]): string {
-  return `The draft was deleted. Its ${kind === "story" ? "Story" : "feed post"} had already been deleted.`;
+/** The posts an answer changed: this card's, and its other half's when the answer says so. */
+export function changedJobIds(card: Pick<QueueCard, "id">, data: unknown): string[] {
+  const pair = pairOf(data);
+  return pair?.changed ? [card.id, pair.id] : [card.id];
 }
 
-/** The toast after a cancel that asked to include the other half, from the answer's `pair`. */
-export function pairCancelMessage(result: unknown, kind: PairInfo["kind"]): string {
-  if (result === "cancelled") {
-    return kind === "story" ? "Post and its Story cancelled." : "Story and its feed post cancelled.";
+/**
+ * Whether the Queue reads its posts again after an action on a pair card: the
+ * other half was left alone (or is gone), so its own state must show.
+ */
+export function pairNeedsReload(card: PairFlag, data: unknown): boolean {
+  return Boolean(card.includePair) && !pairOf(data)?.changed;
+}
+
+/** The toast: the action's own message, then the answer's sentence about the other half. */
+export function withPairNote(message: string, data: unknown): string {
+  const pair = pairOf(data);
+  return pair ? `${message} ${pair.note}` : message;
+}
+
+/** The confirm dialog's line on a folded card: the Story is part of what the action does. */
+export function pairDialogLine(
+  card: QueueCard,
+  action: "cancel" | "delete" | "publish" | "submit",
+): string | null {
+  if (!card.story) return null;
+  switch (action) {
+    case "cancel":
+      return "Its Story is cancelled too.";
+    case "delete":
+      return "Its Story is deleted too.";
+    case "publish":
+      return "Its Story goes out now too.";
+    case "submit":
+      return "Its Story is sent for approval with it.";
   }
-  if (result === "not_cancelable") {
-    return `Post cancelled. Its ${kind === "story" ? "Story" : "feed post"} had already started publishing or changed, so it was not cancelled.`;
-  }
-  return "Scheduled post cancelled.";
 }
 
-/** The toast when the draft went but its other half's delete was refused. */
-export function pairDeleteFailedMessage(kind: PairInfo["kind"], error: string): string {
-  return `The draft was deleted, but its ${kind === "story" ? "Story" : "feed post"} was not: ${error}`;
-}
-
-/** Added to the reject toast when the approval route rejected the other half too. */
-export function pairRejectedNote(job: PairCard): string {
-  if (job.alsoAsStory) return " Its Story was rejected too.";
-  if (job.storyOf) return " Its feed post was rejected too.";
-  return "";
-}
-
-/** The line when one half's time changes: the other half does not move with it. */
-export function pairRescheduleNote(job: PairCard): string | null {
-  if (job.alsoAsStory) return "Its Story keeps its own time. Change it on the Story's card if it should move too.";
-  if (job.storyOf) return "The feed post keeps its own time. Change it on its card if it should move too.";
-  return null;
+/** The Edit dialog's line on a folded card. */
+export function pairEditNote(card: QueueCard): string | null {
+  return card.story ? "Changes go to the post and its Story." : null;
 }

@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { cn } from "@/lib/cn";
 import { platformLabel } from "@/lib/platforms";
-import type { PostJobDTO } from "@/lib/postsDto";
 import { editOutcome, type JobPatch } from "@/lib/queueActions";
 import {
   buildCalendarMonth,
@@ -18,7 +17,7 @@ import {
   summarizeOffCalendar,
 } from "@/lib/queueCalendar";
 import { SCHEDULE_BUFFER_MS, localTimeZoneLabel } from "@/lib/scheduling";
-import { pairRescheduleNote } from "./pairActions";
+import { cardRequest, withPairNote, type QueueCard as QueueCardPost } from "./pairActions";
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -32,7 +31,7 @@ const TIME_FORMAT = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
-function chipLabel(job: PostJobDTO): string {
+function chipLabel(job: QueueCardPost): string {
   if (job.caption?.trim()) return job.caption;
   const platforms = job.publish?.targetPlatforms;
   if (platforms?.length) return platforms.map(platformLabel).join(", ");
@@ -40,17 +39,19 @@ function chipLabel(job: PostJobDTO): string {
 }
 
 interface QueueCalendarProps {
-  jobs: PostJobDTO[];
+  /** The Queue's cards: a Feed and Story pair is one chip (R3-client-journey M1). */
+  jobs: QueueCardPost[];
   /** Switch the Queue to its list view (the same as its List toggle). */
   onShowList: () => void;
   /** Open the existing edit dialog — also the keyboard path to reschedule. */
-  onEdit: (job: PostJobDTO) => void;
+  onEdit: (job: QueueCardPost) => void;
   /**
    * Applied AFTER a successful PATCH so the list view stays in sync. The patch
    * carries the new time and, for a member under approval, the re-hold
-   * (scheduled -> pending) the server answered with.
+   * (scheduled -> pending) the server answered with; `answer` says whether a
+   * pair's other half moved too.
    */
-  onRescheduled: (id: string, patch: JobPatch) => void;
+  onRescheduled: (card: QueueCardPost, patch: JobPatch, answer: unknown) => void;
 }
 
 /**
@@ -129,23 +130,21 @@ export function QueueCalendar({ jobs, onEdit, onRescheduled, onShowList }: Queue
     }
     setSavingId(job.id);
     try {
-      const response = await fetch(`/api/posts/${job.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scheduledFor: nextIso }),
-      });
+      // A Feed and Story chip moves both halves (R3-client-journey M1).
+      const response = await fetch(`/api/posts/${job.id}`, cardRequest(job, "PATCH", { scheduledFor: nextIso }));
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
         toast.error(data?.error ?? "Couldn't reschedule this post.");
         return;
       }
-      const outcome = editOutcome(await response.json().catch(() => null));
-      onRescheduled(job.id, { scheduledFor: nextIso, ...outcome.patch });
-      // R2-client-journey M1: the other half of a Feed and Story post does not move with it.
-      const pairNote = pairRescheduleNote(job);
+      const data = await response.json().catch(() => null);
+      const outcome = editOutcome(data);
+      onRescheduled(job, { scheduledFor: nextIso, ...outcome.patch }, data);
       toast.success(
-        (outcome.patch.approvalState === "pending" ? "Rescheduled — sent back for approval." : "Post rescheduled.") +
-          (pairNote ? ` ${pairNote}` : ""),
+        withPairNote(
+          outcome.patch.approvalState === "pending" ? "Rescheduled — sent back for approval." : "Post rescheduled.",
+          data,
+        ),
       );
     } catch {
       toast.error("Couldn't reschedule this post.");

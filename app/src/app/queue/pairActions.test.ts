@@ -1,200 +1,246 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { PostJobDTO } from "@/lib/postsDto";
 
 import {
-  isPairCard,
-  pairAlreadyDeletedMessage,
-  pairCancelMessage,
-  pairDeleteFailedMessage,
-  pairLookupFailedLine,
-  pairLookupState,
-  pairOption,
-  pairRejectedNote,
-  pairRescheduleNote,
-  type PairInfo,
+  cardRequest,
+  changedJobIds,
+  foldedPairLine,
+  foldQueuePairs,
+  pairAwareFetch,
+  pairDialogLine,
+  pairEditNote,
+  pairNeedsReload,
+  withPairNote,
+  type QueueCard,
 } from "./pairActions";
 
 const AT = "2026-11-20T15:00:00.000Z";
-const formatted = new Date(AT).toLocaleString(undefined, {
-  weekday: "short",
-  month: "short",
-  day: "numeric",
-  year: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-});
 
-function pair(overrides: Partial<PairInfo> = {}): PairInfo {
-  return { id: "story-1", kind: "story", status: "scheduled", scheduledFor: AT, ...overrides };
+function job(id: string, overrides: Partial<PostJobDTO> = {}): PostJobDTO {
+  return {
+    id,
+    status: "scheduled",
+    createdAt: "2026-11-01T00:00:00.000Z",
+    updatedAt: "2026-11-01T00:00:00.000Z",
+    scheduledFor: AT,
+    caption: id,
+    platformCaptions: null,
+    results: [],
+    media: null,
+    mediaCount: 1,
+    publish: null,
+    createdBy: null,
+    approvalState: "none",
+    ...overrides,
+  };
 }
 
-type Card = Pick<PostJobDTO, "storyOf" | "alsoAsStory">;
-const feedCard: Card = { alsoAsStory: true };
-const storyCard: Card = { storyOf: { scheduledFor: AT } };
-const plainCard: Card = {};
+/** A Feed and Story post as GET /api/posts lists it: the feed job and its Story job. */
+function pair(feedOverrides: Partial<PostJobDTO> = {}, storyOverrides: Partial<PostJobDTO> = {}) {
+  const feed = job("feed-1", {
+    alsoAsStory: true,
+    publish: {
+      targetPlatforms: ["instagram", "facebook_page"],
+      youtubePrivacy: null,
+      tiktokPrivacy: null,
+      googlePostType: null,
+      googleButton: null,
+    },
+    ...feedOverrides,
+  });
+  const story = job("story-1", {
+    storyOf: { id: "feed-1", scheduledFor: feedOverrides.scheduledFor ?? AT },
+    storyPlatforms: ["instagram"],
+    publish: {
+      targetPlatforms: ["instagram"],
+      youtubePrivacy: null,
+      tiktokPrivacy: null,
+      googlePostType: null,
+      googleButton: null,
+    },
+    ...storyOverrides,
+  });
+  return { feed, story };
+}
 
-// R2-client-journey M1: the cancel and delete dialogs name the other half of a
-// Feed and Story post and its time, and offer to include it (checked by default).
-const NOW = new Date("2026-11-14T12:00:00.000Z").getTime();
-const PAST = "2026-11-10T15:00:00.000Z";
-const pastFormatted = new Date(PAST).toLocaleString(undefined, {
-  weekday: "short",
-  month: "short",
-  day: "numeric",
-  year: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
+// R3-client-journey M1: a Feed and Story post is ONE Queue card, as the client
+// review link already shows it (reviewLink.ts foldStoryPairs).
+describe("foldQueuePairs", () => {
+  it("folds a Story into its feed post's card, which asks for both halves", () => {
+    const { feed, story } = pair();
+    const cards = foldQueuePairs([feed, story, job("other")]);
+
+    expect(cards.map((card) => card.id)).toEqual(["feed-1", "other"]);
+    expect(cards[0].story?.id).toBe("story-1");
+    expect(cards[0].includePair).toBe(true);
+    expect(cards[1].story).toBeUndefined();
+    expect(cards[1].includePair).toBeUndefined();
+  });
+
+  it("keeps the feed post's place in the list, wherever the Story sorted", () => {
+    const { feed, story } = pair();
+    expect(foldQueuePairs([story, job("a"), feed]).map((card) => card.id)).toEqual(["a", "feed-1"]);
+  });
+
+  it("folds a held pair and a draft pair the same way", () => {
+    for (const fields of [
+      { status: "draft", approvalState: "pending", scheduledFor: null },
+      { status: "draft", approvalState: "none", scheduledFor: null },
+    ] as const) {
+      const { feed, story } = pair(fields, fields);
+      expect(foldQueuePairs([feed, story]).map((card) => card.id)).toEqual(["feed-1"]);
+    }
+  });
+
+  it("a lone half whose partner is cancelled or deleted (no pair marks) is a normal card", () => {
+    const cards = foldQueuePairs([job("feed-1"), job("story-9")]);
+    expect(cards.map((card) => card.id)).toEqual(["feed-1", "story-9"]);
+    expect(cards.every((card) => card.includePair === undefined && card.story === undefined)).toBe(true);
+  });
+
+  it("a half whose partner is not in the list (moved on, or on a later page) still asks for both halves", () => {
+    const { feed, story } = pair();
+    expect(foldQueuePairs([feed])[0].includePair).toBe(true);
+    expect(foldQueuePairs([story])[0].includePair).toBe(true);
+  });
+
+  it("halves that no longer agree (status, approval or time) stay two cards, each acting alone", () => {
+    for (const storyOverrides of [
+      { status: "draft" as const },
+      { approvalState: "pending" as const },
+      { scheduledFor: "2026-11-21T15:00:00.000Z" },
+    ]) {
+      const { feed, story } = pair({}, storyOverrides);
+      const cards = foldQueuePairs([feed, story]);
+      expect(cards.map((card) => card.id)).toEqual(["feed-1", "story-1"]);
+      expect(cards.every((card) => card.includePair === undefined)).toBe(true);
+    }
+  });
+
+  it("posts that are not a pair come back exactly as they were", () => {
+    const plain = job("a");
+    expect(foldQueuePairs([plain])).toEqual([plain]);
+  });
 });
 
-describe("pairOption", () => {
-  it("a feed post's cancel names its Story and its time, and offers to cancel it too", () => {
-    expect(pairOption(pair(), "cancel", NOW)).toEqual({
-      line: `This post also goes out as a Story, set for ${formatted}.`,
-      label: "Also cancel the Story",
-      keptLine: "The Story is kept and keeps its time.",
+describe("foldedPairLine", () => {
+  it("labels the card Feed and Story with the platforms of each half", () => {
+    const { feed, story } = pair();
+    const [card] = foldQueuePairs([feed, story]);
+    expect(foldedPairLine(card, ["Instagram", "Facebook Page"])).toBe(
+      "Feed and Story: the post goes to Instagram and Facebook Page, the Story to Instagram.",
+    );
+  });
+
+  it("says nothing for a card without a folded Story", () => {
+    expect(foldedPairLine(job("a"), ["Instagram"])).toBeNull();
+  });
+});
+
+describe("cardRequest", () => {
+  it("a pair card's request asks for both halves", () => {
+    const card: QueueCard = { ...job("feed-1"), includePair: true };
+    expect(cardRequest(card, "POST", { decision: "approve" })).toEqual({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision: "approve", includePair: true }),
     });
   });
 
-  it("a Story's cancel names its feed post and its time", () => {
-    expect(pairOption(pair({ kind: "feed", id: "feed-1" }), "cancel", NOW)).toEqual({
-      line: `This is the Story of a feed post set for ${formatted}.`,
-      label: "Also cancel the feed post",
-      keptLine: "The feed post is kept and keeps its time.",
+  it("any other card's request is unchanged", () => {
+    expect(cardRequest(job("a"), "DELETE")).toEqual({
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
     });
   });
+});
 
-  it("says when the other half has no time set", () => {
-    expect(pairOption(pair({ status: "draft", scheduledFor: null }), "cancel", NOW)?.line).toBe(
-      "This post also goes out as a Story, with no time set.",
-    );
-  });
-
-  // Coordinator review point 3: a time that has passed reads as past.
-  it("a time that has passed reads as past", () => {
-    expect(pairOption(pair({ status: "draft", scheduledFor: PAST }), "cancel", NOW)?.line).toBe(
-      `This post also has a Story, which was set for ${pastFormatted}.`,
-    );
-    expect(pairOption(pair({ kind: "feed", status: "draft", scheduledFor: PAST }), "cancel", NOW)?.line).toBe(
-      `This is the Story of a feed post that was set for ${pastFormatted}.`,
-    );
-  });
-
-  // Coordinator review point 3: the wording follows the other half's state.
-  it.each([
-    ["in_progress", "has already started publishing"],
-    ["pending", "has already started publishing"],
-    ["completed", "was already published"],
-    ["failed", "did not go out"],
-  ] as const)("an other half that is %s is named but not offered", (status, phrase) => {
-    expect(pairOption(pair({ status }), "cancel", NOW)).toEqual({
-      line: `This post's Story ${phrase}, so it is not changed.`,
-      label: null,
-      keptLine: null,
+describe("pairAwareFetch (the Edit dialog's two-step save)", () => {
+  it("adds includePair to each request of a pair card and keeps the last answer's note", async () => {
+    const calls: { url: string; body: unknown }[] = [];
+    const base = vi.fn(async (url: string, init: { body: string }) => {
+      calls.push({ url, body: JSON.parse(init.body) });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, pair: { id: "story-1", kind: "story", changed: true, note: "Its Story was scheduled too." } }),
+      };
     });
-    expect(pairOption(pair({ kind: "feed", status }), "delete", NOW)).toEqual({
-      line: `This is the Story of a feed post that ${phrase}, so it is not changed.`,
-      label: null,
-      keptLine: null,
+    const wrapped = pairAwareFetch({ ...job("feed-1"), includePair: true }, base);
+
+    const response = await wrapped.fetchFn("/api/posts/feed-1/publish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scheduledFor: AT }),
     });
+    await response.json();
+
+    expect(calls).toEqual([{ url: "/api/posts/feed-1/publish", body: { scheduledFor: AT, includePair: true } }]);
+    expect(wrapped.lastAnswer()).toEqual({ ok: true, pair: expect.objectContaining({ changed: true }) });
   });
 
-  it("delete offers only a draft other half; a scheduled one stays", () => {
-    expect(pairOption(pair({ status: "draft" }), "delete", NOW)?.label).toBe("Also delete the Story");
-    expect(pairOption(pair({ kind: "feed", status: "draft" }), "delete", NOW)?.label).toBe("Also delete the feed post");
-    expect(pairOption(pair({ status: "scheduled" }), "delete", NOW)).toEqual({
-      line: `This post also goes out as a Story, set for ${formatted}. It is scheduled, so it is not deleted; cancel it on its own card first.`,
-      label: null,
-      keptLine: null,
-    });
-  });
+  it("leaves another card's requests alone", async () => {
+    const base = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) }));
+    const wrapped = pairAwareFetch(job("a"), base);
+    const init = { method: "PATCH", headers: { "Content-Type": "application/json" }, body: '{"baseCaption":"x"}' };
 
-  it("no other half (none, or already cancelled): nothing to show", () => {
-    expect(pairOption(null, "cancel", NOW)).toBeNull();
-    expect(pairOption(null, "delete", NOW)).toBeNull();
+    await wrapped.fetchFn("/api/posts/a", init);
+
+    expect(base).toHaveBeenCalledWith("/api/posts/a", init);
   });
 });
 
-// Coordinator review points 1 and 2: the dialog waits for the lookup, and says when it failed.
-describe("pairLookupState", () => {
-  const card = { id: "f", alsoAsStory: true };
-  it("a card of no pair: done, no pair, never blocked", () => {
-    expect(pairLookupState({ id: "a" }, null)).toEqual({ loading: false, failed: false, pair: null });
-  });
-  it("while the lookup runs: loading (Confirm stays disabled)", () => {
-    expect(pairLookupState(card, { jobId: "f" })).toEqual({ loading: true, failed: false, pair: null });
-  });
-  it("answered: the pair, or none", () => {
-    expect(pairLookupState(card, { jobId: "f", pair: pair() })).toEqual({ loading: false, failed: false, pair: pair() });
-    expect(pairLookupState(card, { jobId: "f", pair: null })).toEqual({ loading: false, failed: false, pair: null });
-  });
-  it("failed: not loading, so Confirm works, and the dialog says so", () => {
-    expect(pairLookupState(card, { jobId: "f", failed: true })).toEqual({ loading: false, failed: true, pair: null });
-  });
-  it("a lookup for another card does not count", () => {
-    expect(pairLookupState(card, { jobId: "other", pair: pair() })).toEqual({ loading: false, failed: false, pair: null });
-  });
-});
+describe("what an answer does to the cards", () => {
+  const card: QueueCard = { ...job("feed-1"), includePair: true };
+  const changed = { pair: { id: "story-1", kind: "story", changed: true, note: "Its Story was cancelled too." } };
+  const leftAlone = {
+    pair: { id: "story-1", kind: "story", changed: false, note: "Its Story was already published, so it was not cancelled." },
+  };
 
-describe("pairLookupFailedLine", () => {
-  it("says only this post is changed", () => {
-    expect(pairLookupFailedLine({ alsoAsStory: true }, "cancel")).toBe(
-      "Couldn't check whether this post has a Story half. Only this post will be cancelled.",
+  it("changes both halves' cards once the answer says the other half changed too", () => {
+    expect(changedJobIds(card, changed)).toEqual(["feed-1", "story-1"]);
+    expect(pairNeedsReload(card, changed)).toBe(false);
+  });
+
+  it("a half left alone: only this post changes, and the Queue is read again so that half shows as it is", () => {
+    expect(changedJobIds(card, leftAlone)).toEqual(["feed-1"]);
+    expect(pairNeedsReload(card, leftAlone)).toBe(true);
+  });
+
+  it("a pair card whose other half is gone: read again too", () => {
+    expect(pairNeedsReload(card, { ok: true })).toBe(true);
+  });
+
+  it("a card that is not a pair never re-reads and changes only itself", () => {
+    expect(changedJobIds(job("a"), { ok: true })).toEqual(["a"]);
+    expect(pairNeedsReload(job("a"), { ok: true })).toBe(false);
+  });
+
+  it("the toast adds the answer's sentence about the other half", () => {
+    expect(withPairNote("Scheduled post cancelled.", leftAlone)).toBe(
+      "Scheduled post cancelled. Its Story was already published, so it was not cancelled.",
     );
-    expect(pairLookupFailedLine({ storyOf: { scheduledFor: null } }, "delete")).toBe(
-      "Couldn't check whether this post has a feed post half. Only this post will be deleted.",
-    );
+    expect(withPairNote("Draft deleted.", { ok: true })).toBe("Draft deleted.");
+    expect(withPairNote("Draft deleted.", { pair: { note: 42 } })).toBe("Draft deleted.");
   });
 });
 
-// Coordinator review point 4.
-describe("pairAlreadyDeletedMessage", () => {
-  it("says the other half was already gone", () => {
-    expect(pairAlreadyDeletedMessage("story")).toBe("The draft was deleted. Its Story had already been deleted.");
-    expect(pairAlreadyDeletedMessage("feed")).toBe("The draft was deleted. Its feed post had already been deleted.");
-  });
-});
+describe("the dialogs of a Feed and Story card", () => {
+  const { feed, story } = pair();
+  const [card] = foldQueuePairs([feed, story]);
 
-describe("isPairCard", () => {
-  it("is true for either half, false otherwise", () => {
-    expect(isPairCard(feedCard)).toBe(true);
-    expect(isPairCard(storyCard)).toBe(true);
-    expect(isPairCard(plainCard)).toBe(false);
+  it("say the Story is part of what the action does", () => {
+    expect(pairDialogLine(card, "cancel")).toBe("Its Story is cancelled too.");
+    expect(pairDialogLine(card, "delete")).toBe("Its Story is deleted too.");
+    expect(pairDialogLine(card, "publish")).toBe("Its Story goes out now too.");
+    expect(pairDialogLine(card, "submit")).toBe("Its Story is sent for approval with it.");
+    expect(pairEditNote(card)).toBe("Changes go to the post and its Story.");
   });
-});
 
-describe("pairCancelMessage", () => {
-  it("says what happened to both halves", () => {
-    expect(pairCancelMessage("cancelled", "story")).toBe("Post and its Story cancelled.");
-    expect(pairCancelMessage("cancelled", "feed")).toBe("Story and its feed post cancelled.");
-    expect(pairCancelMessage("not_cancelable", "story")).toBe(
-      "Post cancelled. Its Story had already started publishing or changed, so it was not cancelled.",
-    );
-    expect(pairCancelMessage("none", "story")).toBe("Scheduled post cancelled.");
-    expect(pairCancelMessage(undefined, "feed")).toBe("Scheduled post cancelled.");
-  });
-});
-
-describe("pairDeleteFailedMessage", () => {
-  it("says the draft went and the other half did not", () => {
-    expect(pairDeleteFailedMessage("story", "Only draft or cancelled posts can be deleted.")).toBe(
-      "The draft was deleted, but its Story was not: Only draft or cancelled posts can be deleted.",
-    );
-  });
-});
-
-describe("pairRejectedNote", () => {
-  it("names the other half that was rejected with this one", () => {
-    expect(pairRejectedNote(feedCard)).toBe(" Its Story was rejected too.");
-    expect(pairRejectedNote(storyCard)).toBe(" Its feed post was rejected too.");
-    expect(pairRejectedNote(plainCard)).toBe("");
-  });
-});
-
-describe("pairRescheduleNote", () => {
-  it("tells the owner the other half keeps its time", () => {
-    expect(pairRescheduleNote(feedCard)).toBe("Its Story keeps its own time. Change it on the Story's card if it should move too.");
-    expect(pairRescheduleNote(storyCard)).toBe("The feed post keeps its own time. Change it on its card if it should move too.");
-    expect(pairRescheduleNote(plainCard)).toBeNull();
+  it("say nothing for another card", () => {
+    expect(pairDialogLine(job("a"), "cancel")).toBeNull();
+    expect(pairEditNote(job("a"))).toBeNull();
   });
 });

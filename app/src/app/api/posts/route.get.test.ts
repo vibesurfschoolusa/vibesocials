@@ -1450,7 +1450,8 @@ describe("GET /api/posts - a Feed and Story pair", () => {
       select: { id: true, storyOfPostJobId: true, scheduledFor: true },
     });
     const byId = new Map(body.jobs.map((job) => [job.id, job]));
-    expect(byId.get("story-1")).toMatchObject({ storyOf: { scheduledFor: at.toISOString() } });
+    // R3-client-journey M1: the feed post's id too, so the Queue folds the pair into one card.
+    expect(byId.get("story-1")).toEqual(expect.objectContaining({ storyOf: { id: "feed-1", scheduledFor: at.toISOString() } }));
     expect(byId.get("story-1")).not.toHaveProperty("alsoAsStory");
     expect(byId.get("feed-1")).toMatchObject({ alsoAsStory: true });
     expect(byId.get("feed-1")).not.toHaveProperty("storyOf");
