@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { platformLabel } from "@/lib/platforms";
 import { WORKSPACE_PAUSED_CODE } from "@/lib/workspaceStatus";
 import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
+import { emailSettingsLine, workspaceLink } from "@/server/notifications/links";
 
 /**
  * Roadmap Phase 6 — post-outcome notification email (spec §7.2).
@@ -68,7 +69,11 @@ export interface BuildPostOutcomeEmailParams {
   status?: PostJobStatus;
   /** `process.env.NEXTAUTH_URL`. Omit/null to render the email with no link. */
   appBaseUrl?: string | null;
-  postJobId: string;
+  /** The post's workspace: its links open it (/go), and its name is in the subject. */
+  workspaceId: string;
+  workspaceName: string;
+  /** The post's caption; the email quotes its start so the owner knows which post it was. */
+  caption: string;
 }
 
 export interface PostOutcomeEmail {
@@ -85,7 +90,23 @@ function escapeHtml(value: string): string {
     .replace(/'/g, "&#39;");
 }
 
-function buildSubject(succeededCount: number, failedCount: number, total: number): string {
+/** Characters of the caption the email quotes (F4: instead of the internal id). */
+export const POST_OUTCOME_CAPTION_CHARS = 80;
+
+/** The first `max` characters, counted by code point so an emoji is never split. */
+function captionExcerpt(caption: string): string {
+  const chars = Array.from(caption.trim().replace(/\s+/g, " "));
+  return chars.length <= POST_OUTCOME_CAPTION_CHARS
+    ? chars.join("")
+    : `${chars.slice(0, POST_OUTCOME_CAPTION_CHARS).join("")}…`;
+}
+
+/** A subject is plain text on one line. */
+function oneLine(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").trim();
+}
+
+function buildHeadline(succeededCount: number, failedCount: number, total: number): string {
   if (total === 0) return "Your post has finished processing";
   if (failedCount === 0) {
     return total === 1
@@ -127,16 +148,29 @@ export function buildPostOutcomeEmail({
   results,
   status,
   appBaseUrl,
-  postJobId,
+  workspaceId,
+  workspaceName,
+  caption,
 }: BuildPostOutcomeEmailParams): PostOutcomeEmail {
+  const base = appBaseUrl || null;
   // Omitted cleanly (no dead link, no crash) when no base URL is available.
-  // Trim a trailing slash so a NEXTAUTH_URL like "https://host/" doesn't yield
-  // "https://host//activity" (review Minor #4). Computed once — every branch
-  // below shares it.
-  const link = appBaseUrl
-    ? `<p><a href="${escapeHtml(appBaseUrl.replace(/\/+$/, ""))}/activity">View in Activity</a></p>`
+  // Through /go, so it opens this post's workspace whichever one is active.
+  const link = base
+    ? `<p><a href="${escapeHtml(workspaceLink(workspaceId, "/activity", base))}">View in Activity</a></p>`
     : "";
-  const reference = `<p style="color:#888888;font-size:12px;">Reference: ${escapeHtml(postJobId)}</p>`;
+  const excerpt = captionExcerpt(caption);
+  // F4: which post this was, in words the owner wrote (the id meant nothing to them).
+  const about = [
+    `<p>In <strong>${escapeHtml(workspaceName)}</strong>.</p>`,
+    excerpt ? `<p>Caption: ${escapeHtml(excerpt)}</p>` : "",
+  ].join("");
+  const optOut = emailSettingsLine({
+    action: 'turn off "Email me when a post finishes"',
+    workspaceId,
+    appBaseUrl: base,
+  });
+  const subjectFor = (headline: string) =>
+    `${oneLine(workspaceName)}: ${headline.charAt(0).toLowerCase()}${headline.slice(1)}`;
 
   // Task 9 (Phase-6 review gap close): a scheduled post that fires with zero
   // eligible connections is marked `failed` with NO PostJobResult rows at
@@ -146,34 +180,36 @@ export function buildPostOutcomeEmail({
   // keeps that pre-existing neutral copy; only `failed` gets this dedicated
   // subject/body.
   if (results.length === 0 && status === "failed") {
-    const subject = "Your scheduled post couldn't be published";
+    const headline = "Your scheduled post couldn't be published";
     const html = [
       "<div>",
-      `<h1>${escapeHtml(subject)}</h1>`,
+      `<h1>${escapeHtml(headline)}</h1>`,
+      about,
       "<p>This post had no connected platforms when it ran, so nothing was published. Connect a platform in Settings, then create the post again.</p>",
       link,
-      reference,
+      optOut,
       "</div>",
     ].join("");
-    return { subject, html };
+    return { subject: subjectFor(headline), html };
   }
 
   const succeededCount = results.filter((r) => r.status === "success").length;
   const failedCount = results.filter((r) => r.status === "failed").length;
-  const subject = buildSubject(succeededCount, failedCount, results.length);
+  const headline = buildHeadline(succeededCount, failedCount, results.length);
 
   const rows = results.map(renderResultRow).join("");
 
   const html = [
     "<div>",
-    `<h1>${escapeHtml(subject)}</h1>`,
+    `<h1>${escapeHtml(headline)}</h1>`,
+    about,
     `<ul>${rows}</ul>`,
     link,
-    reference,
+    optOut,
     "</div>",
   ].join("");
 
-  return { subject, html };
+  return { subject: subjectFor(headline), html };
 }
 
 export interface DeliverPostOutcomeNotificationParams {
@@ -230,6 +266,11 @@ export async function deliverPostOutcomeNotification({
           // zero-eligible-connections `failed` job apart from any other
           // empty-results state.
           status: true,
+          // F4: the workspace (its name and /go links) and the caption the email quotes.
+          workspaceId: true,
+          baseCaption: true,
+          mediaItem: { select: { baseCaption: true } },
+          workspace: { select: { name: true } },
           results: {
             // Only what buildPostOutcomeEmail renders — externalPostId was
             // selected but never read (review Minor #3), so it's dropped.
@@ -272,7 +313,9 @@ export async function deliverPostOutcomeNotification({
       results: postJob.results,
       status: postJob.status,
       appBaseUrl: process.env.NEXTAUTH_URL || null,
-      postJobId,
+      workspaceId: postJob.workspaceId,
+      workspaceName: postJob.workspace.name,
+      caption: postJob.baseCaption ?? postJob.mediaItem?.baseCaption ?? "",
     });
 
     await sendEmail(

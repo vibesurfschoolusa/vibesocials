@@ -100,10 +100,12 @@ describe("buildProblemDigestEmail", () => {
       workspaces: [workspace({ waitingForApproval: 1 })],
       appBaseUrl: "https://vibesocials.wtf/",
     });
-    expect(email.html.match(/<a /g)).toHaveLength(1);
+    expect(email.html.match(/<a /g)).toHaveLength(2);
     expect(email.html).toContain('href="https://vibesocials.wtf/workspaces"');
     expect(email.html).not.toContain("wtf//workspaces");
-    expect(email.html).toContain("Settings, Notifications");
+    expect(email.html).toContain(
+      '<p>To stop these emails, turn off the daily summary email in <a href="https://vibesocials.wtf/go?w=ws-1&amp;to=%2Fsettings%23post-defaults">Settings, Posts and emails</a>.</p>',
+    );
   });
 
   it("renders without a link when there is no base URL", () => {

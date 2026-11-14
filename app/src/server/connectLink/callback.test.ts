@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   pendingUpdateMany: vi.fn(),
   isOwner: vi.fn(),
   getCurrentUser: vi.fn(),
+  notifyConnect: vi.fn(),
 }));
 vi.mock("@/lib/db", () => ({
   prisma: {
@@ -27,6 +28,7 @@ vi.mock("@/lib/db", () => ({
 }));
 vi.mock("@/lib/workspace", () => ({ isWorkspaceOwner: h.isOwner }));
 vi.mock("@/lib/auth", () => ({ getCurrentUser: h.getCurrentUser }));
+vi.mock("@/server/notifications/clientConnectEmail", () => ({ notifyOwnersOfClientConnect: h.notifyConnect }));
 vi.mock("@/lib/logger", () => ({ logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 
 import type { ConnectLinkFlow } from "@/lib/connectLink";
@@ -283,6 +285,30 @@ describe("withConnectLink: running the callback with the link", () => {
     expect(h.linkUpdate).toHaveBeenCalledWith({ where: { id: "link-1" }, data: { lastUsedAt: NOW } });
     expect(setCookie(res)).toMatch(/^vs_connect=;/);
     expect(setCookie(res).toLowerCase()).toContain("max-age=0");
+  });
+
+  it("success: the owners are told once, with the platform and the workspace (F4)", async () => {
+    await withConnectLink("tiktok", handlerAnswering("/settings?success=tiktok_connected"))(
+      stateRequest(linkState(), cookieFor()),
+    );
+
+    expect(h.notifyConnect).toHaveBeenCalledTimes(1);
+    expect(h.notifyConnect).toHaveBeenCalledWith({ workspaceId: WORKSPACE, platform: "tiktok" });
+  });
+
+  it("an error, a refusal or a choice still open: nobody is told (F4)", async () => {
+    await withConnectLink("tiktok", handlerAnswering("/settings?error=tiktok_token_exchange_failed"))(
+      stateRequest(linkState(), cookieFor()),
+    );
+    await withConnectLink("tiktok", handlerAnswering("/settings?success=tiktok_connected"))(
+      stateRequest(linkState(), cookieFor(), { error: "access_denied" }),
+    );
+    h.pendingUpdateMany.mockResolvedValue({ count: 1 });
+    await withConnectLink("facebook_page", handlerAnswering("/settings?choose=pending-1"))(
+      stateRequest(linkState(), cookieFor()),
+    );
+
+    expect(h.notifyConnect).not.toHaveBeenCalled();
   });
 
   it("an error: the visitor's page with the same query, lastUsedAt not set, cookie cleared", async () => {

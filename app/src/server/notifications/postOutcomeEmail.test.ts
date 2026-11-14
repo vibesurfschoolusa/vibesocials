@@ -34,6 +34,14 @@ import {
   type PostOutcomeResultSummary,
 } from "@/server/notifications/postOutcomeEmail";
 
+/** The workspace and caption every built email in these tests is for (F4). */
+const WS = { workspaceId: "ws_1", workspaceName: "Surf Co", caption: "Dawn patrol tomorrow at 6" };
+
+/** A PostJob row as deliverPostOutcomeNotification selects it. */
+function jobRow<T extends object>(fields: T) {
+  return { workspaceId: "ws_1", baseCaption: "Dawn patrol tomorrow at 6", mediaItem: null, workspace: { name: "Surf Co" }, ...fields };
+}
+
 beforeEach(() => {
   findUniqueUserMock.mockReset();
   findUniquePostJobMock.mockReset();
@@ -89,17 +97,17 @@ describe("buildPostOutcomeEmail", () => {
     const email = buildPostOutcomeEmail({
       results: mixedResults,
       appBaseUrl: null,
-      postJobId: "job-1",
+      ...WS,
     });
 
-    expect(email.subject).toBe("Your post finished: 2 of 3 platforms succeeded");
+    expect(email.subject).toBe("Surf Co: your post finished: 2 of 3 platforms succeeded");
   });
 
   it("reflects a mixed success+failure outcome in the html, including the short error", () => {
     const email = buildPostOutcomeEmail({
       results: mixedResults,
       appBaseUrl: null,
-      postJobId: "job-1",
+      ...WS,
     });
 
     expect(email.html).toContain("TikTok: Succeeded");
@@ -114,10 +122,10 @@ describe("buildPostOutcomeEmail", () => {
         { platform: "tiktok", status: "success" },
         { platform: "youtube", status: "success" },
       ],
-      postJobId: "job-2",
+      ...WS,
     });
 
-    expect(email.subject).toBe("Your post published successfully to all 2 platforms");
+    expect(email.subject).toBe("Surf Co: your post published successfully to all 2 platforms");
   });
 
   it("produces an all-failed subject when nothing succeeded", () => {
@@ -125,25 +133,25 @@ describe("buildPostOutcomeEmail", () => {
       results: [
         { platform: "tiktok", status: "failed", errorMessage: "Upload failed" },
       ],
-      postJobId: "job-3",
+      ...WS,
     });
 
-    expect(email.subject).toBe("Your post failed to publish");
+    expect(email.subject).toBe("Surf Co: your post failed to publish");
   });
 
   it("includes the Activity link when a base URL is given", () => {
     const email = buildPostOutcomeEmail({
       results: mixedResults,
       appBaseUrl: "https://app.example.com",
-      postJobId: "job-1",
+      ...WS,
     });
 
-    expect(email.html).toContain('href="https://app.example.com/activity"');
+    expect(email.html).toContain('href="https://app.example.com/go?w=ws_1&amp;to=%2Factivity"');
   });
 
   it("omits the Activity link cleanly when no base URL is given (undefined, null, or empty)", () => {
     for (const appBaseUrl of [undefined, null, ""] as const) {
-      const email = buildPostOutcomeEmail({ results: mixedResults, appBaseUrl, postJobId: "job-1" });
+      const email = buildPostOutcomeEmail({ results: mixedResults, appBaseUrl, ...WS });
       expect(email.html).not.toContain("<a href");
       expect(email.html).not.toContain("/activity");
     }
@@ -168,7 +176,7 @@ describe("buildPostOutcomeEmail", () => {
     const email = buildPostOutcomeEmail({
       results: [resultWithSecret],
       appBaseUrl: "https://app.example.com",
-      postJobId: "job-1",
+      ...WS,
     });
 
     expect(email.html).not.toContain("super-secret-token-value");
@@ -177,8 +185,8 @@ describe("buildPostOutcomeEmail", () => {
   });
 
   it("does not crash and reports a neutral subject when there are no results", () => {
-    const email = buildPostOutcomeEmail({ results: [], postJobId: "job-4" });
-    expect(email.subject).toBe("Your post has finished processing");
+    const email = buildPostOutcomeEmail({ results: [], ...WS });
+    expect(email.subject).toBe("Surf Co: your post has finished processing");
     expect(email.html).toContain("<ul></ul>");
   });
 
@@ -190,10 +198,10 @@ describe("buildPostOutcomeEmail", () => {
     const email = buildPostOutcomeEmail({
       results: [],
       status: "failed",
-      postJobId: "job-5",
+      ...WS,
     });
 
-    expect(email.subject).toBe("Your scheduled post couldn't be published");
+    expect(email.subject).toBe("Surf Co: your scheduled post couldn't be published");
     expect(email.subject).toContain("couldn't be published");
     expect(email.html).toContain("no connected platforms");
     expect(email.html).toContain("Settings");
@@ -206,10 +214,10 @@ describe("buildPostOutcomeEmail", () => {
     const email = buildPostOutcomeEmail({
       results: [],
       status: "completed",
-      postJobId: "job-6",
+      ...WS,
     });
 
-    expect(email.subject).toBe("Your post has finished processing");
+    expect(email.subject).toBe("Surf Co: your post has finished processing");
     expect(email.html).toContain("<ul></ul>");
   });
 });
@@ -234,16 +242,16 @@ describe("deliverPostOutcomeNotification", () => {
       email: "user@example.com",
       notifyOnPostComplete: true,
     });
-    findUniquePostJobMock.mockResolvedValue({
+    findUniquePostJobMock.mockResolvedValue(jobRow({
       results: [{ platform: "tiktok", status: "success", externalPostId: "ext-1", errorMessage: null }],
-    });
+    }));
 
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
 
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     const arg = sendEmailMock.mock.calls[0][0] as { to: string; subject: string; html: string };
     expect(arg.to).toBe("user@example.com");
-    expect(arg.html).toContain("https://app.example.com/activity");
+    expect(arg.html).toContain("https://app.example.com/go?w=ws_1&amp;to=%2Factivity");
   });
 
   // Team Workspaces (Task 5, verify-only): the recipient must stay the JOB'S
@@ -259,10 +267,10 @@ describe("deliverPostOutcomeNotification", () => {
       email: "member@example.com",
       notifyOnPostComplete: true,
     });
-    findUniquePostJobMock.mockResolvedValue({
+    findUniquePostJobMock.mockResolvedValue(jobRow({
       status: "completed",
       results: [{ platform: "tiktok", status: "success", errorMessage: null }],
-    });
+    }));
 
     await deliverPostOutcomeNotification({ userId: "member-1", postJobId: "job-1" });
 
@@ -285,13 +293,13 @@ describe("deliverPostOutcomeNotification", () => {
       email: "user@example.com",
       notifyOnPostComplete: true,
     });
-    findUniquePostJobMock.mockResolvedValue({ status: "failed", results: [] });
+    findUniquePostJobMock.mockResolvedValue(jobRow({ status: "failed", results: [] }));
 
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
 
     expect(sendEmailMock).toHaveBeenCalledTimes(1);
     const arg = sendEmailMock.mock.calls[0][0] as { subject: string; html: string };
-    expect(arg.subject).toBe("Your scheduled post couldn't be published");
+    expect(arg.subject).toBe("Surf Co: your scheduled post couldn't be published");
     expect(arg.html).toContain("no connected platforms");
     expect(arg.html).toContain("Settings");
   });
@@ -302,13 +310,13 @@ describe("deliverPostOutcomeNotification", () => {
   it("does not send for a job whose results were failed because the workspace was paused", async () => {
     vi.stubEnv("RESEND_API_KEY", "re_test_key");
     findUniqueUserMock.mockResolvedValue({ email: "user@example.com", notifyOnPostComplete: true });
-    findUniquePostJobMock.mockResolvedValue({
+    findUniquePostJobMock.mockResolvedValue(jobRow({
       status: "failed",
       results: [
         { platform: "x", status: "failed", errorCode: "WORKSPACE_PAUSED", errorMessage: "Not published: this workspace was paused." },
         { platform: "linkedin", status: "failed", errorCode: "WORKSPACE_PAUSED", errorMessage: "Not published: this workspace was paused." },
       ],
-    });
+    }));
 
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
 
@@ -332,7 +340,7 @@ describe("deliverPostOutcomeNotification", () => {
       { platform: "instagram", status: "failed", errorCode: "WORKSPACE_PAUSED", errorMessage: "Not published: this workspace was paused." },
       { platform: "linkedin", status: "success", errorCode: null, errorMessage: null },
     ];
-    findUniquePostJobMock.mockResolvedValue({ status: "completed", results });
+    findUniquePostJobMock.mockResolvedValue(jobRow({ status: "completed", results }));
 
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
 
@@ -343,7 +351,7 @@ describe("deliverPostOutcomeNotification", () => {
       results: results as PostOutcomeResultSummary[],
       status: "completed",
       appBaseUrl: process.env.NEXTAUTH_URL || null,
-      postJobId: "job-1",
+      ...WS,
     });
     expect(sent.subject).toBe(expected.subject);
     expect(sent.html).toBe(expected.html);
@@ -355,10 +363,10 @@ describe("deliverPostOutcomeNotification", () => {
   it("still sends for a failed job with any other error code", async () => {
     vi.stubEnv("RESEND_API_KEY", "re_test_key");
     findUniqueUserMock.mockResolvedValue({ email: "user@example.com", notifyOnPostComplete: true });
-    findUniquePostJobMock.mockResolvedValue({
+    findUniquePostJobMock.mockResolvedValue(jobRow({
       status: "failed",
       results: [{ platform: "x", status: "failed", errorCode: "CONNECTION_GONE", errorMessage: "Gone." }],
-    });
+    }));
 
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
 
@@ -371,7 +379,7 @@ describe("deliverPostOutcomeNotification", () => {
       email: "user@example.com",
       notifyOnPostComplete: false,
     });
-    findUniquePostJobMock.mockResolvedValue({ results: [] });
+    findUniquePostJobMock.mockResolvedValue(jobRow({ results: [] }));
 
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
 
@@ -381,7 +389,7 @@ describe("deliverPostOutcomeNotification", () => {
   it("does not send and does not throw when the user no longer exists", async () => {
     vi.stubEnv("RESEND_API_KEY", "re_test_key");
     findUniqueUserMock.mockResolvedValue(null);
-    findUniquePostJobMock.mockResolvedValue({ results: [] });
+    findUniquePostJobMock.mockResolvedValue(jobRow({ results: [] }));
 
     await expect(
       deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" }),
@@ -406,7 +414,7 @@ describe("deliverPostOutcomeNotification", () => {
   it("swallows a database error — logs, does not throw", async () => {
     vi.stubEnv("RESEND_API_KEY", "re_test_key");
     findUniqueUserMock.mockRejectedValue(new Error("db down"));
-    findUniquePostJobMock.mockResolvedValue({ results: [] });
+    findUniquePostJobMock.mockResolvedValue(jobRow({ results: [] }));
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect(
@@ -424,9 +432,9 @@ describe("deliverPostOutcomeNotification", () => {
       email: "user@example.com",
       notifyOnPostComplete: true,
     });
-    findUniquePostJobMock.mockResolvedValue({
+    findUniquePostJobMock.mockResolvedValue(jobRow({
       results: [{ platform: "tiktok", status: "success", externalPostId: null, errorMessage: null }],
-    });
+    }));
 
     await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
 
@@ -442,10 +450,10 @@ describe("deliverPostOutcomeNotification - retryable delivery", () => {
   const sendable = () => {
     vi.stubEnv("RESEND_API_KEY", "re_test_key");
     findUniqueUserMock.mockResolvedValue({ email: "user@example.com", notifyOnPostComplete: true });
-    findUniquePostJobMock.mockResolvedValue({
+    findUniquePostJobMock.mockResolvedValue(jobRow({
       status: "completed",
       results: [{ platform: "tiktok", status: "success", errorMessage: null }],
-    });
+    }));
   };
 
   it("passes the idempotency key and throwOnRetryable to sendEmail", async () => {
@@ -500,11 +508,94 @@ describe("deliverPostOutcomeNotification - retryable delivery", () => {
   it("still swallows a database error", async () => {
     vi.stubEnv("RESEND_API_KEY", "re_test_key");
     findUniqueUserMock.mockRejectedValue(new Error("db down"));
-    findUniquePostJobMock.mockResolvedValue({ results: [] });
+    findUniquePostJobMock.mockResolvedValue(jobRow({ results: [] }));
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect(
       deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" }),
     ).resolves.toBeUndefined();
+  });
+});
+
+// F4 (R1 M3): the owner must know which workspace and which post an email is about.
+describe("buildPostOutcomeEmail - names the workspace and the post (F4)", () => {
+  const results: PostOutcomeResultSummary[] = [{ platform: "x", status: "success" }];
+
+  it("names the workspace in the subject and the body", () => {
+    const email = buildPostOutcomeEmail({ results, appBaseUrl: null, ...WS });
+    expect(email.subject).toBe("Surf Co: your post published successfully");
+    expect(email.html).toContain("<p>In <strong>Surf Co</strong>.</p>");
+  });
+
+  it("quotes the first 80 characters of the caption instead of the internal id", () => {
+    const caption = `${"a".repeat(80)}TAIL`;
+    const email = buildPostOutcomeEmail({ results, appBaseUrl: null, ...WS, caption });
+    expect(email.html).toContain(`<p>Caption: ${"a".repeat(80)}…</p>`);
+    expect(email.html).not.toContain("TAIL");
+    expect(email.html).not.toContain("Reference");
+  });
+
+  it("quotes a short caption whole and leaves the line out for an empty one", () => {
+    expect(buildPostOutcomeEmail({ results, appBaseUrl: null, ...WS }).html).toContain(
+      "<p>Caption: Dawn patrol tomorrow at 6</p>",
+    );
+    expect(buildPostOutcomeEmail({ results, appBaseUrl: null, ...WS, caption: "  " }).html).not.toContain("Caption:");
+  });
+
+  it("escapes the workspace name and the caption", () => {
+    const email = buildPostOutcomeEmail({
+      results,
+      appBaseUrl: null,
+      ...WS,
+      workspaceName: "<b>Surf</b>",
+      caption: "<script>x()</script>",
+    });
+    expect(email.html).not.toContain("<b>Surf");
+    expect(email.html).not.toContain("<script>");
+  });
+
+  it("ends with how to turn the email off, linked through /go", () => {
+    const email = buildPostOutcomeEmail({ results, appBaseUrl: "https://app.example.com", ...WS });
+    expect(email.html).toContain(
+      '<p>To stop these emails, turn off &quot;Email me when a post finishes&quot; in <a href="https://app.example.com/go?w=ws_1&amp;to=%2Fsettings%23post-defaults">Settings, Posts and emails</a>.</p>',
+    );
+  });
+
+  it("puts the same line in the couldn't-be-published email", () => {
+    const email = buildPostOutcomeEmail({ results: [], status: "failed", appBaseUrl: null, ...WS });
+    expect(email.html).toContain("Settings, Posts and emails");
+    expect(email.html).toContain("<p>In <strong>Surf Co</strong>.</p>");
+  });
+});
+
+describe("deliverPostOutcomeNotification - workspace and caption (F4)", () => {
+  it("reads the workspace and the caption, falling back to the media item's caption", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    vi.stubEnv("NEXTAUTH_URL", "https://app.example.com");
+    findUniqueUserMock.mockResolvedValue({ email: "user@example.com", notifyOnPostComplete: true });
+    findUniquePostJobMock.mockResolvedValue(
+      jobRow({
+        workspaceId: "ws_9",
+        workspace: { name: "Kite Club" },
+        baseCaption: null,
+        mediaItem: { baseCaption: "From the library" },
+        status: "completed",
+        results: [{ platform: "x", status: "success", errorCode: null, errorMessage: null }],
+      }),
+    );
+
+    await deliverPostOutcomeNotification({ userId: "user-1", postJobId: "job-1" });
+
+    const select = findUniquePostJobMock.mock.calls[0][0].select;
+    expect(select).toMatchObject({
+      workspaceId: true,
+      baseCaption: true,
+      mediaItem: { select: { baseCaption: true } },
+      workspace: { select: { name: true } },
+    });
+    const sent = sendEmailMock.mock.calls[0][0] as { subject: string; html: string };
+    expect(sent.subject).toBe("Kite Club: your post published successfully");
+    expect(sent.html).toContain("<p>Caption: From the library</p>");
+    expect(sent.html).toContain("/go?w=ws_9&amp;to=%2Factivity");
   });
 });

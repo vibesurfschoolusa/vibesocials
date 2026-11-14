@@ -2,6 +2,7 @@ import { RetryAfterError } from "inngest";
 import { Resend } from "resend";
 
 import { logger } from "@/lib/logger";
+import { htmlToPlainText } from "@/server/notifications/plainText";
 
 /**
  * Roadmap Phase 6 — thin, fail-safe transport over Resend.
@@ -60,6 +61,8 @@ export interface SendEmailParams {
   to: string;
   subject: string;
   html: string;
+  /** The plain-text part; made from `html` when omitted, so no email goes out HTML-only. */
+  text?: string;
 }
 
 export interface SendEmailOptions {
@@ -146,7 +149,7 @@ function loggableError(error: unknown, to: string): { name: string; message: str
 }
 
 export async function sendEmail(
-  { to, subject, html }: SendEmailParams,
+  { to, subject, html, text }: SendEmailParams,
   { idempotencyKey, throwOnRetryable = false }: SendEmailOptions = {},
 ): Promise<void> {
   const apiKey = process.env.RESEND_API_KEY;
@@ -170,7 +173,7 @@ export async function sendEmail(
     return;
   }
 
-  const payload = { from, to, subject, html };
+  const payload = { from, to, subject, html, text: text ?? htmlToPlainText(html) };
   let response: Awaited<ReturnType<typeof resend.emails.send>>;
   try {
     response = idempotencyKey

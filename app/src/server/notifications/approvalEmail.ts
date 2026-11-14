@@ -1,6 +1,8 @@
 import type { Platform } from "@prisma/client";
 
 import { PLATFORM_CAPTIONS_HEADING, platformCaptionEntries, platformLabel } from "@/lib/platforms";
+import { emailDate, emailDateTime } from "@/server/notifications/emailTime";
+import { workspaceLink } from "@/server/notifications/links";
 
 /**
  * Approval workflow emails (2026-07-26 plan, Task 3). Pure builders — the
@@ -55,23 +57,15 @@ function platformCaptionsBlock(
   ].join("\n");
 }
 
-/** "Thursday, November 12, 2026 (UTC)": the server does not know the owner's zone. */
-function utcDate(date: Date): string {
-  return `${date.toLocaleDateString("en-US", {
-    timeZone: "UTC",
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-    year: "numeric",
-  })} (UTC)`;
-}
-
-/** The line a held series adds; empty for a single post. */
-function seriesLine(series: { count: number; first: Date; last: Date } | undefined): string {
+/** The line a held series adds, its days in the owner's zone (F4); empty for a single post. */
+function seriesLine(
+  series: { count: number; first: Date; last: Date } | undefined,
+  timeZone: string | null | undefined,
+): string {
   if (!series) return "";
-  return `<p>This post repeats: ${series.count} posts from ${utcDate(series.first)} to ${utcDate(
-    series.last,
-  )}. Each one needs its own approval in the Queue.</p>`;
+  return `<p>This post repeats: ${series.count} posts from ${escapeHtml(
+    emailDate(series.first, timeZone),
+  )} to ${escapeHtml(emailDate(series.last, timeZone))}. Each one needs its own approval in the Queue.</p>`;
 }
 
 /**
@@ -89,8 +83,12 @@ function alsoAsStoryLine(platforms: readonly Platform[] | undefined): string {
 /** Sent to every workspace OWNER when a member submits a post for approval. */
 export function buildApprovalRequestedEmail(params: {
   submitterName: string;
+  /** Links open this workspace through /go (F4). */
+  workspaceId: string;
   workspaceName: string;
   caption: string;
+  /** The recipient owner's User.timeZone; null shows the series days in UTC, labelled. */
+  timeZone: string | null;
   /** Per-platform overrides that will publish with the post; omit/null/empty for none. */
   platformCaptions?: Partial<Record<Platform, string>> | null;
   /** `process.env.NEXTAUTH_URL`. Omit/null to render the email with no link. */
@@ -104,7 +102,7 @@ export function buildApprovalRequestedEmail(params: {
   const workspace = escapeHtml(params.workspaceName);
   const base = normalizeBase(params.appBaseUrl);
   const cta = base
-    ? `<p><a href="${base}/queue">Review it in the Queue</a></p>`
+    ? `<p><a href="${escapeHtml(workspaceLink(params.workspaceId, "/queue", base))}">Review it in the Queue</a></p>`
     : `<p>Review it in the Queue.</p>`;
 
   return {
@@ -113,7 +111,7 @@ export function buildApprovalRequestedEmail(params: {
       `<p>${submitter} submitted a post in <strong>${workspace}</strong> and it is waiting for your approval.</p>`,
       captionBlock(params.caption),
       platformCaptionsBlock(params.platformCaptions),
-      seriesLine(params.series),
+      seriesLine(params.series, params.timeZone),
       alsoAsStoryLine(params.alsoAsStory),
       `<p>It will not publish until you approve it.</p>`,
       cta,
@@ -127,10 +125,14 @@ export function buildApprovalRequestedEmail(params: {
 /** Sent to the submitting member once an owner approves or rejects. */
 export function buildApprovalDecisionEmail(params: {
   approved: boolean;
+  /** Links open this workspace through /go (F4). */
+  workspaceId: string;
   workspaceName: string;
   caption: string;
   /** The post's scheduled time when approval scheduled it, else null. */
   scheduledFor: string | null;
+  /** The submitter's User.timeZone; null shows the time in UTC, labelled. */
+  timeZone: string | null;
   appBaseUrl: string | null;
 }): { subject: string; html: string } {
   const workspace = escapeHtml(params.workspaceName);
@@ -138,7 +140,7 @@ export function buildApprovalDecisionEmail(params: {
 
   if (!params.approved) {
     const cta = base
-      ? `<p><a href="${base}/queue">Open the Queue</a></p>`
+      ? `<p><a href="${escapeHtml(workspaceLink(params.workspaceId, "/queue", base))}">Open the Queue</a></p>`
       : `<p>Open the Queue to start another post.</p>`;
     return {
       subject: "Your post wasn't approved",
@@ -154,11 +156,11 @@ export function buildApprovalDecisionEmail(params: {
 
   const outcome = params.scheduledFor
     ? `<p>It is approved and <strong>scheduled</strong> for ${escapeHtml(
-        new Date(params.scheduledFor).toUTCString(),
+        emailDateTime(new Date(params.scheduledFor), params.timeZone),
       )}.</p>`
     : `<p>It is approved and <strong>publishing now</strong>.</p>`;
   const cta = base
-    ? `<p><a href="${base}/activity">Track it in Activity</a></p>`
+    ? `<p><a href="${escapeHtml(workspaceLink(params.workspaceId, "/activity", base))}">Track it in Activity</a></p>`
     : `<p>Track it in Activity.</p>`;
 
   return {
