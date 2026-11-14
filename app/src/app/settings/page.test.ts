@@ -2,8 +2,10 @@ import { type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getWorkspaceContextMock, planSectionMock } = vi.hoisted(() => ({
+const { getWorkspaceContextMock, planSectionMock, billing } = vi.hoisted(() => ({
   getWorkspaceContextMock: vi.fn(),
+  // Stands in for billing on/off: with it off, planSectionLabel shows no plan.
+  billing: { on: true },
   planSectionMock: vi.fn<(props: { workspaceNote?: boolean }) => null>(() => null),
 }));
 
@@ -27,13 +29,13 @@ vi.mock("@/server/account/accountDeletion", () => ({ accountDeletionPreview: asy
 vi.mock("@/server/account/deleteWorkspace", () => ({ workspaceDeletionRefusal: async () => null }));
 vi.mock("@/server/usage/workspaceUsage", () => ({ getWorkspaceUsageOrNull: async () => null }));
 vi.mock("@/server/billing/planPrices", () => ({ getPlanOffers: async () => [], getYearlyPlanOffers: async () => [] }));
-// The plan section shows for an owner with a plan; never for a member.
+// The plan section shows for an owner with a plan and billing on; never for a member.
 vi.mock("@/components/planSectionView", () => ({
   PLAN_PORTAL_ONLY_LABEL: "Plan",
   planGrowthAddsShown: () => false,
   planReturnNotice: () => null,
   planSectionActions: () => null,
-  planSectionLabel: (role: string) => (role === "owner" ? "Studio plan" : null),
+  planSectionLabel: (role: string) => (role === "owner" && billing.on ? "Studio plan" : null),
 }));
 // The sections' own contents are tested beside them; here only the page's frame.
 vi.mock("@/components/settings-form", () => ({ SettingsForm: () => null }));
@@ -46,7 +48,8 @@ vi.mock("@/components/usage-section", () => ({ UsageSection: () => null }));
 vi.mock("@/components/workspace-logo-control", () => ({ WorkspaceLogoControl: () => null }));
 vi.mock("@/components/plan-section", () => ({ PlanSection: planSectionMock }));
 
-import SettingsPage from "./page";
+import SettingsPage, { metadata } from "./page";
+import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 
 function context(role: "owner" | "member") {
   return {
@@ -82,7 +85,7 @@ async function render(role: "owner" | "member"): Promise<string> {
 
 /** The jump links under the title: [target id, link text]. */
 function jumpLinks(html: string): Array<[string, string]> {
-  const nav = /<nav aria-label="Settings sections">([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? "";
+  const nav = /<nav aria-label="Settings sections"[^>]*>([\s\S]*?)<\/nav>/.exec(html)?.[1] ?? "";
   return [...nav.matchAll(/<a href="#([^"]+)"[^>]*>([^<]+)<\/a>/g)].map((m) => [m[1], m[2]]);
 }
 
@@ -93,6 +96,7 @@ function headings(html: string): Array<[string | null, string]> {
 
 beforeEach(() => {
   getWorkspaceContextMock.mockReset();
+  billing.on = true;
 });
 
 // Go-live check 2026-11-11: Settings is 5,600 pixels long with no way to jump,
@@ -119,7 +123,8 @@ describe("SettingsPage — words and jump links", () => {
     // Every section heading has an id and a link with its name, in page order.
     expect(links).toEqual(shown.map(([id, text]) => [id, text]));
     for (const [id] of links) {
-      expect(html).toMatch(new RegExp(`<h2 id="${id}" class="[^"]*scroll-mt-20`));
+      // Below lg the sticky link row sits under the top bar too, so the margin is larger there.
+      expect(html).toMatch(new RegExp(`<h2 id="${id}" class="scroll-mt-32 lg:scroll-mt-20 [^"]*"`));
     }
   });
 
@@ -136,6 +141,19 @@ describe("SettingsPage — words and jump links", () => {
     expect(jumpLinks(await render("member")).map(([, text]) => text)).not.toContain("Plan");
   });
 
+  it.each([
+    ["owner", true, true],
+    ["owner", false, false],
+    ["member", true, false],
+    ["member", false, false],
+  ] as const)("for an %s with billing on %s: Plan link %s, matching the sections shown", async (role, on, planLink) => {
+    billing.on = on;
+    const html = await render(role);
+    const links = jumpLinks(html);
+    expect(links.map(([id]) => id).includes("plan")).toBe(planLink);
+    expect(links).toEqual(headings(html));
+  });
+
   it("keeps the anchors other pages link to", async () => {
     const html = await render("owner");
     for (const id of ["posting-times", "connections", "plan", "usage", "account"]) {
@@ -149,12 +167,28 @@ describe("SettingsPage — words and jump links", () => {
   it("renders the connect-link anchor once, on the server, for an owner", async () => {
     const html = await render("owner");
     expect(html.match(/id="connect-link"/g)).toHaveLength(1);
-    expect(html).toContain('<div id="connect-link" class="mt-4 scroll-mt-20">');
+    expect(html).toContain('<div id="connect-link" class="mt-4 scroll-mt-32 lg:scroll-mt-20">');
   });
 
-  it("lets the links wrap on a narrow screen", async () => {
+  it("puts the links in one row that scrolls sideways on a narrow screen", async () => {
     const html = await render("member");
-    expect(html).toMatch(/<nav aria-label="Settings sections"[^>]*>\s*<ul class="[^"]*flex-wrap/);
+    expect(html).toMatch(/<nav aria-label="Settings sections"[^>]*>\s*<ul class="[^"]*overflow-x-auto/);
+  });
+
+  it("marks the first section as current before the page scrolls", async () => {
+    const html = await render("owner");
+    expect(html).toMatch(/<a href="#post-defaults"[^>]*aria-current="location"/);
+    expect(html.match(/aria-current="location"/g)).toHaveLength(1);
+  });
+
+  it("uses the shared page width", async () => {
+    const html = await render("owner");
+    expect(html).toContain(`<div class="${APP_PAGE_CLASS}">`);
+    expect(html).not.toContain("max-w-4xl");
+  });
+
+  it("names the browser tab", () => {
+    expect(metadata.title).toBe("Settings | Vibe Socials");
   });
 });
 
