@@ -12,7 +12,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useConnections } from "@/hooks/useConnections";
-import { generateBlobKey } from "@/lib/blobKey";
+import { generateBlobKey, uploadSizePayload } from "@/lib/blobKey";
 import {
   BULK_DRAFTS_NOTE,
   BULK_MAX_FILES,
@@ -375,6 +375,7 @@ export function BulkPostsForm({
       const blob = await upload(generateBlobKey(prepared), prepared, {
         access: "public",
         handleUploadUrl: "/api/upload",
+        clientPayload: uploadSizePayload(prepared),
         onUploadProgress: (event) => {
           if (!settled) updateRow(id, { progress: event.percentage });
         },
@@ -532,7 +533,11 @@ export function BulkPostsForm({
             ? await captureVideoFrame(source, choice.timeMs)
             : null;
       if (!file) return null;
-      const blob = await upload(coverBlobPathname(workspaceId), file, { access: "public", handleUploadUrl: "/api/upload" });
+      const blob = await upload(coverBlobPathname(workspaceId), file, {
+        access: "public",
+        handleUploadUrl: "/api/upload",
+        clientPayload: uploadSizePayload(file),
+      });
       return { url: blob.url, mimeType: file.type, sizeBytes: file.size };
     } catch (error: unknown) {
       console.error("[Add many] Cover upload failed", error);

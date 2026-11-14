@@ -12,6 +12,13 @@ import { logoAddressRefusal } from "@/lib/workspaceLogo";
 import { accessBlockResponse } from "@/lib/workspaceStatus";
 import { checkStorageLimit } from "@/server/usage/workspaceUsage";
 
+import {
+  UPLOAD_BYTES_LIMIT_MESSAGE,
+  consumeUploadDayBytes,
+  declaredUploadSize,
+  releaseUploadDayBytes,
+} from "./uploadBudget";
+
 /**
  * GET /api/upload — why the active workspace cannot upload, if it cannot.
  * `upload()` from @vercel/blob/client drops the body of a refused token request
@@ -92,13 +99,17 @@ export async function POST(request: Request): Promise<NextResponse> {
     return invalidJsonBodyResponse();
   }
 
+  // R2 M1: the bytes this token request counted against the person's day, given
+  // back when signing then fails. The same size is the token's maximum.
+  let countedBytes = 0;
+
   // Usage limits (2026-11-10): no new token once the workspace's media is at or
   // over its storage limit. Checked before the file exists, so one upload can
   // take it over the limit; that is accepted.
   if (body.type === "blob.generate-client-token") {
     // logos/ holds the server's own workspace logos (lib/workspaceLogo.ts):
     // no client token may write there.
-    const payload = body.payload as { pathname?: unknown } | null | undefined;
+    const payload = body.payload as { pathname?: unknown; clientPayload?: unknown } | null | undefined;
     const pathname = payload && typeof payload.pathname === "string" ? payload.pathname : "";
     const logoRefusal = logoAddressRefusal(pathname);
     if (logoRefusal) {
@@ -113,29 +124,44 @@ export async function POST(request: Request): Promise<NextResponse> {
     if (!isSignablePathname(pathname, context.workspace.id)) {
       return NextResponse.json({ error: UPLOAD_PATH_REFUSED_MESSAGE }, { status: 400 });
     }
+    const declared = declaredUploadSize(payload?.clientPayload);
+    if (!declared.ok) {
+      return NextResponse.json({ error: declared.error }, { status: 400 });
+    }
     const refusal = await checkStorageLimit(context.workspace.id);
     if (refusal) {
       return NextResponse.json({ error: refusal.error, code: refusal.code }, { status: 403 });
     }
+    const day = await consumeUploadDayBytes(user.id, declared.size);
+    if (!day.allowed) {
+      return NextResponse.json(
+        { error: UPLOAD_BYTES_LIMIT_MESSAGE, retryAfterSeconds: day.retryAfterSeconds },
+        { status: 429, headers: { "Retry-After": String(day.retryAfterSeconds ?? 60) } },
+      );
+    }
+    countedBytes = declared.size;
   }
 
   try {
     const jsonResponse = await handleUpload({
       body: body as unknown as HandleUploadBody,
       request,
-      onBeforeGenerateToken: async (pathname) => {
-        // Belt and braces: the check above read the same body field.
+      onBeforeGenerateToken: async (pathname, clientPayload) => {
+        // Belt and braces: the checks above read the same body fields.
         if (!isSignablePathname(pathname, context.workspace.id)) {
           throw new Error(UPLOAD_PATH_REFUSED_MESSAGE);
+        }
+        const declared = declaredUploadSize(clientPayload);
+        if (!declared.ok || declared.size !== countedBytes) {
+          throw new Error(declared.ok ? "The upload's size changed while it was signed." : declared.error);
         }
         logger.info("[Upload] Generating token", { pathname, userId: user.id });
 
         return {
           allowedContentTypes: [...UPLOAD_ALLOWED_CONTENT_TYPES],
-          // Blob store cap for a single upload. Matches the largest media any
-          // connected platform accepts in practice; the platforms themselves
-          // enforce their own stricter limits at publish time.
-          maximumSizeInBytes: 512 * 1024 * 1024,
+          // The declared size, at most 512 MB (declaredUploadSize): the store
+          // refuses a larger file, so what was counted is what can be stored.
+          maximumSizeInBytes: declared.size,
           tokenPayload: JSON.stringify({
             userId: user.id,
             uploadedAt: new Date().toISOString(),
@@ -150,6 +176,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json(jsonResponse);
   } catch (error) {
     logger.error("[Upload] Error", { error });
+    if (countedBytes > 0) await releaseUploadDayBytes(user.id, countedBytes);
     return NextResponse.json(
       { error: (error as Error).message },
       { status: 400 },

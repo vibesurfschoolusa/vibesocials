@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { generateBlobKey, isSignedInUploadKey } from "./blobKey";
+import { generateBlobKey, isSignedInUploadKey, uploadSizePayload } from "./blobKey";
 
 function file(name: string): File {
   return new File(["x"], name, { type: "image/jpeg" });
@@ -38,5 +38,11 @@ describe("isSignedInUploadKey", () => {
     ]) {
       expect(isSignedInUploadKey(pathname), pathname).toBe(false);
     }
+  });
+});
+
+describe("uploadSizePayload", () => {
+  it("tells /api/upload the file's size, which the token then holds the upload to", () => {
+    expect(JSON.parse(uploadSizePayload(new File(["abc"], "a.jpg")))).toEqual({ size: 3 });
   });
 });

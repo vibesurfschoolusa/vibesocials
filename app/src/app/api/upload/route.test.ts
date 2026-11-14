@@ -2,26 +2,40 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeWorkspaceContext } from "../__test-helpers__/workspaceContextMock";
 
-const { getWorkspaceContextMock, checkRateLimitMock, handleUploadMock, checkStorageLimitMock } = vi.hoisted(
-  () => ({
-    getWorkspaceContextMock: vi.fn(),
-    checkRateLimitMock: vi.fn(),
-    handleUploadMock: vi.fn(),
-    checkStorageLimitMock: vi.fn(),
-  }),
-);
+const {
+  getWorkspaceContextMock,
+  checkRateLimitMock,
+  handleUploadMock,
+  checkStorageLimitMock,
+  consumeDayBytesMock,
+  releaseDayBytesMock,
+} = vi.hoisted(() => ({
+  getWorkspaceContextMock: vi.fn(),
+  checkRateLimitMock: vi.fn(),
+  handleUploadMock: vi.fn(),
+  checkStorageLimitMock: vi.fn(),
+  consumeDayBytesMock: vi.fn(),
+  releaseDayBytesMock: vi.fn(),
+}));
 
 vi.mock("@/lib/workspace", () => ({ getWorkspaceContext: getWorkspaceContextMock }));
 vi.mock("@/lib/rateLimit", () => ({ checkRateLimit: checkRateLimitMock }));
 vi.mock("@vercel/blob/client", () => ({ handleUpload: handleUploadMock }));
 // Usage limits (2026-11-10): the storage sum has its own suite (workspaceUsage.test.ts).
 vi.mock("@/server/usage/workspaceUsage", () => ({ checkStorageLimit: checkStorageLimitMock }));
+// The day's byte counter has its own suite (uploadBudget.test.ts); the size reader is real.
+vi.mock("./uploadBudget", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./uploadBudget")>()),
+  consumeUploadDayBytes: consumeDayBytesMock,
+  releaseUploadDayBytes: releaseDayBytesMock,
+}));
 
 import { COVER_ADDRESS_REFUSED_MESSAGE } from "@/lib/coverBlobPath";
 import { UPLOAD_PATH_REFUSED_MESSAGE } from "@/lib/blobKey";
 import { LOGO_ADDRESS_RESERVED_MESSAGE } from "@/lib/workspaceLogo";
 
 import { GET, POST } from "./route";
+import { UPLOAD_BYTES_LIMIT_MESSAGE, UPLOAD_SIZE_MISSING_MESSAGE } from "./uploadBudget";
 
 const FULL =
   "This workspace's media storage is full (5.0 GB). Delete media you no longer need on the Media page, then upload again.";
@@ -32,13 +46,16 @@ function tokenRequest(): Request {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       type: "blob.generate-client-token",
-      payload: { pathname: SIGNED_IN_KEY, clientPayload: null, multipart: false },
+      payload: { pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false },
     }),
   });
 }
 
 /** A key in the shape lib/blobKey.ts makes for Create, Add many and Media. */
 const SIGNED_IN_KEY = "1731600000000-ab12cd34-cat.png";
+const MB = 1024 * 1024;
+/** What the pages send with each token request (lib/blobKey.ts uploadSizePayload). */
+const SIZE_PAYLOAD = JSON.stringify({ size: 2 * MB });
 
 beforeEach(() => {
   getWorkspaceContextMock.mockReset();
@@ -53,6 +70,10 @@ beforeEach(() => {
   checkRateLimitMock.mockResolvedValue({ allowed: true });
   handleUploadMock.mockResolvedValue({ type: "blob.generate-client-token", clientToken: "tok" });
   checkStorageLimitMock.mockResolvedValue(null);
+  consumeDayBytesMock.mockReset();
+  releaseDayBytesMock.mockReset();
+  consumeDayBytesMock.mockResolvedValue({ allowed: true });
+  releaseDayBytesMock.mockResolvedValue(undefined);
 });
 
 describe("POST /api/upload — storage limit (usage limits)", () => {
@@ -92,7 +113,7 @@ describe("POST /api/upload — the logos/ prefix is reserved", () => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             type: "blob.generate-client-token",
-            payload: { pathname, clientPayload: null, multipart: false },
+            payload: { pathname, clientPayload: SIZE_PAYLOAD, multipart: false },
           }),
         }),
       );
@@ -112,7 +133,7 @@ describe("POST /api/upload — the covers/ folder is the workspace's own", () =>
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           type: "blob.generate-client-token",
-          payload: { pathname, clientPayload: null, multipart: false },
+          payload: { pathname, clientPayload: SIZE_PAYLOAD, multipart: false },
         }),
       }),
     );
@@ -144,7 +165,7 @@ describe("POST /api/upload — only the app's key shapes", () => {
     );
 
   it("signs a signed-in upload key and hands that pathname to the signer", async () => {
-    const res = await tokenFor({ pathname: SIGNED_IN_KEY, clientPayload: null, multipart: false });
+    const res = await tokenFor({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false });
     expect(res.status).toBe(200);
     expect(handleUploadMock).toHaveBeenCalledTimes(1);
   });
@@ -157,7 +178,7 @@ describe("POST /api/upload — only the app's key shapes", () => {
       "1731600000000-ab12cd34-x/y.png",
       "",
     ]) {
-      const res = await tokenFor({ pathname, clientPayload: null, multipart: false });
+      const res = await tokenFor({ pathname, clientPayload: SIZE_PAYLOAD, multipart: false });
       expect(res.status, pathname).toBe(400);
       await expect(res.json()).resolves.toEqual({ error: UPLOAD_PATH_REFUSED_MESSAGE });
     }
@@ -180,9 +201,116 @@ describe("POST /api/upload — only the app's key shapes", () => {
       await signerAnswer;
       return { type: "blob.generate-client-token", clientToken: "tok" };
     });
-    const res = await tokenFor({ pathname: SIGNED_IN_KEY, clientPayload: null, multipart: false });
+    const res = await tokenFor({ pathname: SIGNED_IN_KEY, clientPayload: SIZE_PAYLOAD, multipart: false });
     expect(res.status).toBe(400);
     await expect(signerAnswer).rejects.toThrow();
+  });
+});
+
+// The size the page declares is binding (the token's maximum) and counted
+// against the person's day, so neither a 1-byte claim nor many tokens can fill
+// storage that is never counted.
+describe("POST /api/upload — declared size and the day's bytes", () => {
+  const tokenWith = (clientPayload: unknown, pathname = SIGNED_IN_KEY) =>
+    POST(
+      new Request("http://localhost/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "blob.generate-client-token",
+          payload: { pathname, clientPayload, multipart: false },
+        }),
+      }),
+    );
+
+  /** What onBeforeGenerateToken answered for the signed pathname. */
+  function captureTokenOptions() {
+    const captured: { options?: Record<string, unknown> } = {};
+    handleUploadMock.mockImplementation(
+      async (opts: { body: { payload: { pathname: string; clientPayload: string | null } }; onBeforeGenerateToken: (p: string, c: string | null) => Promise<Record<string, unknown>> }) => {
+        captured.options = await opts.onBeforeGenerateToken(opts.body.payload.pathname, opts.body.payload.clientPayload);
+        return { type: "blob.generate-client-token", clientToken: "tok" };
+      },
+    );
+    return captured;
+  }
+
+  it("signs a declared 2 MB file with a 2 MB maximum and counts 2 MB against the person's day", async () => {
+    const captured = captureTokenOptions();
+    const res = await tokenWith(JSON.stringify({ size: 2 * MB }));
+
+    expect(res.status).toBe(200);
+    expect(captured.options?.maximumSizeInBytes).toBe(2 * MB);
+    expect(consumeDayBytesMock).toHaveBeenCalledWith("user-1", 2 * MB);
+    expect(releaseDayBytesMock).not.toHaveBeenCalled();
+  });
+
+  it("binds a cover upload to its declared size too", async () => {
+    const captured = captureTokenOptions();
+    const res = await tokenWith(JSON.stringify({ size: 300_000 }), "covers/ws-1/1731600000000-ab12cd34-cover.jpg");
+
+    expect(res.status).toBe(200);
+    expect(captured.options?.maximumSizeInBytes).toBe(300_000);
+  });
+
+  it("refuses a token request with no size, before anything is counted or signed", async () => {
+    for (const clientPayload of [null, "{}", "not json", JSON.stringify({ size: "big" })]) {
+      const res = await tokenWith(clientPayload);
+      expect(res.status, String(clientPayload)).toBe(400);
+      await expect(res.json()).resolves.toEqual({ error: UPLOAD_SIZE_MISSING_MESSAGE });
+    }
+    expect(consumeDayBytesMock).not.toHaveBeenCalled();
+    expect(handleUploadMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a size over 512 MB", async () => {
+    const res = await tokenWith(JSON.stringify({ size: 600 * MB }));
+    expect(res.status).toBe(400);
+    expect(consumeDayBytesMock).not.toHaveBeenCalled();
+    expect(handleUploadMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses with a plain sentence once the person's day is used up, signing nothing", async () => {
+    consumeDayBytesMock.mockResolvedValue({ allowed: false, retryAfterSeconds: 32_400 });
+
+    const res = await tokenWith(SIZE_PAYLOAD);
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe("32400");
+    await expect(res.json()).resolves.toEqual({ error: UPLOAD_BYTES_LIMIT_MESSAGE, retryAfterSeconds: 32_400 });
+    expect(handleUploadMock).not.toHaveBeenCalled();
+  });
+
+  it("counts nothing when the workspace's storage is full", async () => {
+    checkStorageLimitMock.mockResolvedValue({ error: FULL, code: "WORKSPACE_STORAGE_FULL" });
+
+    const res = await tokenWith(SIZE_PAYLOAD);
+
+    expect(res.status).toBe(403);
+    expect(consumeDayBytesMock).not.toHaveBeenCalled();
+  });
+
+  it("gives the bytes back when signing then fails", async () => {
+    handleUploadMock.mockRejectedValue(new Error("store said no"));
+
+    const res = await tokenWith(SIZE_PAYLOAD);
+
+    expect(res.status).toBe(400);
+    expect(releaseDayBytesMock).toHaveBeenCalledWith("user-1", 2 * MB);
+  });
+
+  it("counts nothing for the storage's upload-completed callback", async () => {
+    handleUploadMock.mockResolvedValue({ type: "blob.upload-completed", response: "ok" });
+    const res = await POST(
+      new Request("http://localhost/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "blob.upload-completed", payload: { blob: {}, tokenPayload: "{}" } }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(consumeDayBytesMock).not.toHaveBeenCalled();
   });
 });
 

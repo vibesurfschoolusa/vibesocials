@@ -19,3 +19,11 @@ export function isSignedInUploadKey(pathname: string): boolean {
 /** /api/upload's 400 for a pathname the app does not make. */
 export const UPLOAD_PATH_REFUSED_MESSAGE =
   "This upload was not started by Vibe Socials. Reload the page and upload the file again.";
+
+/**
+ * The token request's clientPayload for every signed-in upload: /api/upload
+ * counts this size against the person's day and signs it as the file's maximum.
+ */
+export function uploadSizePayload(file: Blob): string {
+  return JSON.stringify({ size: file.size });
+}

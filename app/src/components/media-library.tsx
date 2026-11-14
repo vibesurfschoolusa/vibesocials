@@ -34,7 +34,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
-import { generateBlobKey } from "@/lib/blobKey";
+import { generateBlobKey, uploadSizePayload } from "@/lib/blobKey";
 import { bulkHandoffHref, toggleMediaSelection } from "@/lib/bulkMedia";
 import { BULK_MAX_FILES } from "@/lib/bulkPosts";
 import { captionCounter, captionTooLongMessage } from "@/lib/captionLimits";
@@ -699,6 +699,7 @@ export function MediaLibrary({ workspaceId }: { workspaceId: string }) {
       const blob = await upload(generateBlobKey(prepared), prepared, {
         access: "public",
         handleUploadUrl: "/api/upload",
+        clientPayload: uploadSizePayload(prepared),
         onUploadProgress: (progressEvent) => setUploadProgress(progressEvent.percentage),
       }).catch(async (uploadError: unknown) => {
         throw await explainUploadFailure(uploadError);
