@@ -228,8 +228,16 @@ export function fitInstagramTags(caption: string): {
 } {
   let text = caption;
 
-  const extraTags = [...text.matchAll(HASHTAG_PATTERN)].slice(INSTAGRAM_MAX_HASHTAGS);
-  const droppedHashtags = [...new Set(extraTags.map((match) => match[0]))];
+  const allTags = [...text.matchAll(HASHTAG_PATTERN)];
+  const extraTags = allTags.slice(INSTAGRAM_MAX_HASHTAGS);
+  // Named once each, ignoring case, and never a tag the post still carries.
+  const kept = new Set(allTags.slice(0, INSTAGRAM_MAX_HASHTAGS).map((match) => match[0].toLowerCase()));
+  const droppedHashtags: string[] = [];
+  for (const match of extraTags) {
+    const key = match[0].toLowerCase();
+    if (kept.has(key) || droppedHashtags.some((tag) => tag.toLowerCase() === key)) continue;
+    droppedHashtags.push(match[0]);
+  }
   if (extraTags.length > 0) {
     // From the end, so earlier indices stay valid. Each tag goes with the spaces
     // before it, so no double space or trailing blank is left behind.

@@ -2914,6 +2914,15 @@ ${tags(32, 33)} #tag32`;
     expect(fitInstagramTags(`Surf ${tags(1, 30)}`).droppedHashtags).toEqual([]);
   });
 
+  // H2 review: a repeat of a tag that is still in the post is not "left out",
+  // and #Surf / #surf are the same tag.
+  it("does not name a dropped repeat of a tag the post still has, ignoring case", () => {
+    const caption = `Surf ${tags(1, 30)}
+
+#TAG5 #tag31 #Tag31`;
+    expect(fitInstagramTags(caption).droppedHashtags).toEqual(["#tag31"]);
+  });
+
   it("does not count # inside a word or an HTML entity", () => {
     const caption = `${tags(1, 30)} C# and issue#4 and &#39;`;
     expect(fitInstagramTags(caption).caption).toBe(caption);
