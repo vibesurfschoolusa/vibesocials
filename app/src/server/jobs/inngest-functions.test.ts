@@ -3296,7 +3296,7 @@ describe("chunked uploads - continuation steps (jobs)", () => {
       expect(failedWrites()[0]).toMatchObject({ errorMessage: "Reconnect X in Settings, then retry." });
     });
 
-    it("reads try again later for a refresh failure that left the connection healthy (invalid_client)", async () => {
+    it("reads try later, then reconnect, for a refresh refusal that left the connection healthy (invalid_client)", async () => {
       platformCalls({
         x: () => {
           throw Object.assign(new Error("Token refresh failed (status 401)"), { code: "X_TOKEN_REFRESH_FAILED", status: 401 });
@@ -3305,7 +3305,9 @@ describe("chunked uploads - continuation steps (jobs)", () => {
 
       await publishRun(["x"]);
 
-      expect(failedWrites()[0]).toMatchObject({ errorMessage: "X had a problem on its side. Try again later." });
+      expect(failedWrites()[0]).toMatchObject({
+        errorMessage: "X didn't renew the connection. Try again later; if it keeps happening, reconnect X in Settings.",
+      });
     });
 
     // Review round 2, item 3: the error's HTTP status reaches the mapping.
