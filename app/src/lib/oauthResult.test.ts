@@ -186,7 +186,6 @@ describe("describeOAuthResult — real callback-route codes", () => {
       "x_connect_failed",
       "x_session_expired",
       "youtube_connect_failed",
-      "youtube_no_channel",
       "linkedin_config_missing",
       "linkedin_token_exchange_failed",
       "google_business_profile_connect_failed",
@@ -195,6 +194,29 @@ describe("describeOAuthResult — real callback-route codes", () => {
       expect(result?.variant).toBe("danger");
       expect(result?.message).toContain("couldn't be connected");
     }
+  });
+
+  // R5 new-customer M1: these three are fixed on the platform's side, so a
+  // bare "try again" would only repeat the same failure.
+  it("names the cause and the next step when the account has no Page, Instagram account or channel", () => {
+    expect(describeOAuthResult({ error: "facebook_page_no_pages", success: null })).toMatchObject({
+      variant: "danger",
+      platform: "facebook_page",
+      message:
+        "This Facebook account doesn't manage a Facebook Page. Sign in to Facebook with an account that manages your Page, then click Connect again.",
+    });
+    expect(describeOAuthResult({ error: "instagram_no_instagram_account", success: null })).toMatchObject({
+      variant: "danger",
+      platform: "instagram",
+      message:
+        "None of the Facebook Pages on this account has an Instagram professional account linked to it. Link your Instagram account to your Facebook Page, then click Connect again.",
+    });
+    expect(describeOAuthResult({ error: "youtube_no_channel", success: null })).toMatchObject({
+      variant: "danger",
+      platform: "youtube",
+      message:
+        "This Google account has no YouTube channel. Create a channel on YouTube, or sign in with the Google account that owns your channel, then click Connect again.",
+    });
   });
 
   // LinkedIn's own "user declined the authorization" redirect uses a fixed
