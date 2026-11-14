@@ -221,7 +221,7 @@ releases.
 2. **Before promoting a deploy that changes Inngest functions:**
    - Pause `scheduled-post-scanner` in the Inngest dashboard a couple of minutes
      ahead. If you cannot pause it, confirm that no scanner run is active and
-     that no post is due within about 5 minutes.
+     that no post is due within about 10 minutes (the scanner's interval).
    - After pausing, open the runs list of `scheduled-post-scanner` and confirm
      that **no run is Running or Paused** before you promote. Inngest's pause
      can hold or cancel a run that is already active, so a run that is still
@@ -263,11 +263,13 @@ releases.
    The free plan also caps **executions** at 50,000 a month, counting one per
    run plus one per step. At the cap Inngest starts no new run of any function,
    scheduled or event-triggered, until the month ends, so publishing stops.
-   With nobody posting, the crons use about 750 a day, about 23,000 a month:
-   `scheduled-post-scanner` runs every 5 minutes at 2 per idle tick (576 a
+   With nobody posting, the crons use about 460 a day, about 14,300 a month:
+   `scheduled-post-scanner` runs every 10 minutes at 2 per idle tick (288 a
    day), and the hourly sweeps use most of the rest. Each published post adds
    its own runs and steps. Until 2026-11-07 the scanner ran every minute with
-   two steps (4,320 a day), which would have hit the cap mid-month. After any
+   two steps (4,320 a day), which would have hit the cap mid-month; until
+   2026-11-14 it ran every 5 minutes (576 a day), which with real use put
+   November near 47,700. After any
    change to a cron, or to the steps a cron function runs when idle, check
    Billing → Usage in the Inngest dashboard the next day.
 4. **Rollback.**
