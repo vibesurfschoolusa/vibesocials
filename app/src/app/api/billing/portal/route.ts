@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 
 import { stripeReachable } from "@/lib/billing";
 import { adminNotFoundResponse, adminOtherMethods } from "@/lib/operator";
+import { readJsonObject } from "@/lib/http";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requireOwnerContext } from "@/lib/workspace";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import { openPortal } from "@/server/billing/checkout";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +38,10 @@ export async function POST(request: Request) {
       { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds ?? 60) } },
     );
   }
+
+  // F3: the workspace the Plan section was rendered for (one cookie for every tab).
+  const refusal = renderedWorkspaceRefusal((await readJsonObject(request))?.workspaceId, context.workspace.id);
+  if (refusal) return refusal;
 
   const result = await openPortal({
     workspaceId: context.workspace.id,

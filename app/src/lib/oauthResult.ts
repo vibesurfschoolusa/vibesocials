@@ -73,6 +73,17 @@ function describeCode(params: {
           "This Pinterest account has no board we can post to, and every Pin goes on a board. Create a board on Pinterest (not a secret one), then click Connect again.",
       };
     }
+    // F3 (2026-11-14 review): the Connect was clicked in a tab rendered for
+    // another workspace, so the start refused it before going to the platform
+    // (lib/workspace.ts requireOwnerContextForOAuthStart). This page was
+    // loaded fresh, so it already shows the workspace that is active now.
+    if (error.endsWith("_workspace_changed")) {
+      return {
+        variant: "danger",
+        message:
+          "That tab was for another workspace, so nothing was connected. This page shows the workspace you are in now: click Connect again to connect it here.",
+      };
+    }
     const label = labelFromCode(error);
     // LinkedIn's own "user declined" redirect uses a fixed linkedin_auth_failed
     // code rather than a "*_denied" one — catch it too so it reads as a

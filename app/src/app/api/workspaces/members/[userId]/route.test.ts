@@ -75,11 +75,19 @@ function ctx(userId: string) {
   return { params: Promise.resolve({ userId }) };
 }
 
-function patchReq(role: unknown) {
+/** The Team card sends the workspace its page was rendered for (F3). */
+function patchReq(role: unknown, workspaceId: unknown = "ws-1") {
   return new Request("http://localhost", {
     method: "PATCH",
-    body: JSON.stringify({ role }),
+    body: JSON.stringify({ role, workspaceId }),
     headers: { "content-type": "application/json" },
+  });
+}
+
+function deleteReq(body: unknown = { workspaceId: "ws-1" }) {
+  return new Request("http://localhost", {
+    method: "DELETE",
+    ...(body === null ? {} : { body: JSON.stringify(body), headers: { "content-type": "application/json" } }),
   });
 }
 
@@ -112,7 +120,7 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
       NextResponse.json({ error: "Unauthorized" }, { status: 401 }),
     );
 
-    const response = await DELETE(new Request("http://localhost"), ctx("user-2"));
+    const response = await DELETE(deleteReq(), ctx("user-2"));
 
     expect(response.status).toBe(401);
     expect(deleteManyMock).not.toHaveBeenCalled();
@@ -123,7 +131,7 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
       NextResponse.json({ error: "Only the workspace owner can do that." }, { status: 403 }),
     );
 
-    const response = await DELETE(new Request("http://localhost"), ctx("user-2"));
+    const response = await DELETE(deleteReq(), ctx("user-2"));
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
@@ -133,7 +141,7 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
   });
 
   it("returns 400 and never deletes when the owner tries to remove themselves", async () => {
-    const response = await DELETE(new Request("http://localhost"), ctx("user-1"));
+    const response = await DELETE(deleteReq(), ctx("user-1"));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
@@ -146,7 +154,7 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
   it("returns 400 and never deletes when the target membership is an owner (review fix round 1 — future-proofs multi-owner states)", async () => {
     findFirstMock.mockResolvedValue({ role: "owner" });
 
-    const response = await DELETE(new Request("http://localhost"), ctx("user-2"));
+    const response = await DELETE(deleteReq(), ctx("user-2"));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({
@@ -158,7 +166,7 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
   it("returns 404 when the target isn't a member of the active workspace", async () => {
     findFirstMock.mockResolvedValue(null);
 
-    const response = await DELETE(new Request("http://localhost"), ctx("user-ghost"));
+    const response = await DELETE(deleteReq(), ctx("user-ghost"));
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: "Not found" });
@@ -170,7 +178,7 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
   });
 
   it("deletes via an atomic role-guarded delete scoped to the active workspace and target user, returns 200 { ok: true }", async () => {
-    const response = await DELETE(new Request("http://localhost"), ctx("user-2"));
+    const response = await DELETE(deleteReq(), ctx("user-2"));
     const body = await response.json();
 
     expect(response.status).toBe(200);
@@ -186,7 +194,7 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
   it("returns 404 when the atomic delete matches nothing (membership raced away) and revokes NO invites", async () => {
     deleteManyMock.mockResolvedValue({ count: 0 });
 
-    const response = await DELETE(new Request("http://localhost"), ctx("user-2"));
+    const response = await DELETE(deleteReq(), ctx("user-2"));
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: "Not found" });
@@ -197,7 +205,7 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
     it("revokes every active (unrevoked) invite of the active workspace and reports how many", async () => {
       inviteUpdateManyMock.mockResolvedValue({ count: 2 });
 
-      const response = await DELETE(new Request("http://localhost"), ctx("user-2"));
+      const response = await DELETE(deleteReq(), ctx("user-2"));
 
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual({ ok: true, invitesRevoked: 2 });
@@ -211,7 +219,7 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
     it("reports invitesRevoked: 0 when there was no active invite", async () => {
       inviteUpdateManyMock.mockResolvedValue({ count: 0 });
 
-      const response = await DELETE(new Request("http://localhost"), ctx("user-2"));
+      const response = await DELETE(deleteReq(), ctx("user-2"));
 
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual({ ok: true, invitesRevoked: 0 });
@@ -228,18 +236,18 @@ describe("DELETE /api/workspaces/members/[userId]", () => {
         return { count: 1 };
       });
 
-      await DELETE(new Request("http://localhost"), ctx("user-2"));
+      await DELETE(deleteReq(), ctx("user-2"));
 
       expect(transactionSpy).toHaveBeenCalledTimes(1);
       expect(order).toEqual(["delete-member", "revoke-invites"]);
     });
 
     it("does NOT revoke invites when the removal is refused (self / owner target / not a member)", async () => {
-      await DELETE(new Request("http://localhost"), ctx("user-1")); // self
+      await DELETE(deleteReq(), ctx("user-1")); // self
       findFirstMock.mockResolvedValueOnce({ role: "owner" });
-      await DELETE(new Request("http://localhost"), ctx("user-9")); // owner target
+      await DELETE(deleteReq(), ctx("user-9")); // owner target
       findFirstMock.mockResolvedValueOnce(null);
-      await DELETE(new Request("http://localhost"), ctx("user-ghost")); // non-member
+      await DELETE(deleteReq(), ctx("user-ghost")); // non-member
 
       expect(inviteUpdateManyMock).not.toHaveBeenCalled();
     });
@@ -481,5 +489,53 @@ describe("PATCH /api/workspaces/members/[userId]", () => {
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: "Not found" });
+  });
+});
+
+// F3 (2026-11-14 review): the active workspace is one cookie for every tab,
+// and one person can be a member of both workspaces, so a Remove, Promote or
+// Demote clicked in a tab left on workspace A must not act in workspace B.
+describe("members/[userId] and the rendered workspace", () => {
+  function nothingChanged() {
+    expect(findFirstMock).not.toHaveBeenCalled();
+    expect(deleteManyMock).not.toHaveBeenCalled();
+    expect(updateManyMock).not.toHaveBeenCalled();
+    expect(inviteUpdateManyMock).not.toHaveBeenCalled();
+  }
+
+  it("DELETE 409s another workspace's id, and removes nobody", async () => {
+    const response = await DELETE(deleteReq({ workspaceId: "ws-2" }), ctx("user-2"));
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED" });
+    nothingChanged();
+  });
+
+  it.each([
+    ["no body", null],
+    ["a body without the id", {}],
+  ])("DELETE 400s %s, and removes nobody", async (_label, body) => {
+    const response = await DELETE(deleteReq(body), ctx("user-2"));
+    expect(response.status).toBe(400);
+    nothingChanged();
+  });
+
+  it.each(["owner", "member"])("PATCH to %s 409s another workspace's id, and changes no role", async (role) => {
+    const response = await PATCH(patchReq(role, "ws-2"), ctx("user-2"));
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "WORKSPACE_CHANGED" });
+    nothingChanged();
+  });
+
+  it("PATCH 400s a body without the id, and changes no role", async () => {
+    const response = await PATCH(
+      new Request("http://localhost", {
+        method: "PATCH",
+        body: JSON.stringify({ role: "owner" }),
+        headers: { "content-type": "application/json" },
+      }),
+      ctx("user-2"),
+    );
+    expect(response.status).toBe(400);
+    nothingChanged();
   });
 });

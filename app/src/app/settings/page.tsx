@@ -300,6 +300,7 @@ export default async function SettingsPage({
                 </p>
               </div>
               <PlanSection
+                workspaceId={context.workspace.id}
                 label={planLabel}
                 usage={usage}
                 notice={planNotice}

@@ -143,7 +143,7 @@ export function ConnectionsSection({
         <Suspense fallback={null}>
           <LinkedInSetupDialog workspaceId={workspaceId} />
           {/* ?choose=<id>: a connect found several Pages/accounts to pick from. */}
-          <PendingConnectionDialog />
+          <PendingConnectionDialog workspaceId={workspaceId} />
         </Suspense>
       ) : null}
 

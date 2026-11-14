@@ -4,6 +4,7 @@ import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { requireOwnerContext, type WorkspaceContext } from "@/lib/workspace";
+import { renderedWorkspaceRefusal } from "@/lib/workspaceChanged";
 import {
   connectPendingCandidate,
   deletePendingConnection,
@@ -23,7 +24,9 @@ interface PendingRouteContext {
  *
  * Owner-only, like every connect. A pending connect is visible only to the
  * user who started it, in the workspace it was started for, while it is
- * unexpired: anything else is a 404.
+ * unexpired: anything else is a 404. POST and DELETE also carry
+ * `{ workspaceId }`, the workspace the Settings page was rendered for (F3), so
+ * a stale tab is told to reload instead of "This choice expired".
  */
 
 function notFound(): NextResponse {
@@ -104,6 +107,10 @@ export async function POST(request: Request, { params }: PendingRouteContext) {
   if (!body) {
     return invalidJsonBodyResponse();
   }
+  const refusal = renderedWorkspaceRefusal(body.workspaceId, contextOrError.workspace.id);
+  if (refusal) {
+    return refusal;
+  }
 
   const { candidateId } = body;
   if (typeof candidateId !== "string" || !candidateId) {
@@ -145,10 +152,14 @@ export async function POST(request: Request, { params }: PendingRouteContext) {
 }
 
 /** DELETE → cancels the pending connect. */
-export async function DELETE(_request: Request, { params }: PendingRouteContext) {
+export async function DELETE(request: Request, { params }: PendingRouteContext) {
   const contextOrError = await requireOwnerContext();
   if (contextOrError instanceof NextResponse) {
     return contextOrError;
+  }
+  const refusal = renderedWorkspaceRefusal((await readJsonObject(request))?.workspaceId, contextOrError.workspace.id);
+  if (refusal) {
+    return refusal;
   }
 
   const { id } = await params;

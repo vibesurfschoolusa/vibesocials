@@ -30,10 +30,11 @@ const OWNER = {
   role: "owner",
 };
 
-const post = (path: string, body?: unknown) =>
+/** The Plan section sends the workspace its page was rendered for (F3). */
+const post = (path: string, body: Record<string, unknown> = {}) =>
   new Request(`https://app.example${path}`, {
     method: "POST",
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: JSON.stringify({ workspaceId: "ws_1", ...body }),
     headers: { "Content-Type": "application/json" },
   });
 

@@ -91,7 +91,7 @@ interface TeamSectionProps {
  */
 export function TeamSection({ workspaceId, role, workspaceName, deletion }: TeamSectionProps) {
   if (role !== "owner") {
-    return <MemberView workspaceName={workspaceName} />;
+    return <MemberView workspaceId={workspaceId} workspaceName={workspaceName} />;
   }
   return <OwnerView workspaceId={workspaceId} workspaceName={workspaceName} deletion={deletion ?? null} />;
 }
@@ -107,7 +107,7 @@ export function TeamSection({ workspaceId, role, workspaceName, deletion }: Team
  * owner never sees this view at all, so the sole-owner-can't-leave rule
  * needs no UI check here, only the API's own 400).
  */
-function MemberView({ workspaceName }: { workspaceName: string }) {
+function MemberView({ workspaceId, workspaceName }: { workspaceId: string; workspaceName: string }) {
   const router = useRouter();
   const toast = useToast();
   const [leaveOpen, setLeaveOpen] = useState(false);
@@ -144,7 +144,11 @@ function MemberView({ workspaceName }: { workspaceName: string }) {
   // error is already surfaced via toast here, mirrors revokeInvite/
   // confirmRemove below).
   const handleLeave = useCallback(async () => {
-    const response = await fetch("/api/workspaces/leave", { method: "POST" });
+    const response = await fetch("/api/workspaces/leave", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId }),
+    });
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
       toast.error(data?.error ?? "Couldn't leave the workspace.");
@@ -152,7 +156,7 @@ function MemberView({ workspaceName }: { workspaceName: string }) {
     }
     toast.success("Left the workspace.");
     router.refresh();
-  }, [router, toast]);
+  }, [router, toast, workspaceId]);
 
   return (
     <Card className="p-6">
@@ -387,6 +391,8 @@ function OwnerView({
     if (!removeTarget) return;
     const response = await fetch(`/api/workspaces/members/${removeTarget.userId}`, {
       method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId }),
     });
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -407,7 +413,7 @@ function OwnerView({
     if (outcome.notice) {
       toast.info(outcome.notice);
     }
-  }, [removeTarget, toast]);
+  }, [removeTarget, toast, workspaceId]);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure. Promote
   // member -> owner only ever ADDS an owner, so patch local state in place
@@ -418,7 +424,7 @@ function OwnerView({
     const response = await fetch(`/api/workspaces/members/${promoteTarget.userId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role: "owner" }),
+      body: JSON.stringify({ role: "owner", workspaceId }),
     });
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -431,7 +437,7 @@ function OwnerView({
         : prev,
     );
     toast.success("Role updated.");
-  }, [promoteTarget, toast]);
+  }, [promoteTarget, toast, workspaceId]);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure. Demote
   // owner -> member. Demoting YOURSELF drops you out of OwnerView, so on that
@@ -444,7 +450,7 @@ function OwnerView({
     const response = await fetch(`/api/workspaces/members/${demoteTarget.userId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role: "member" }),
+      body: JSON.stringify({ role: "member", workspaceId }),
     });
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -461,14 +467,18 @@ function OwnerView({
         ? prev.map((m): Member => (m.userId === demoteTarget.userId ? { ...m, role: "member" } : m))
         : prev,
     );
-  }, [demoteTarget, currentUserId, router, toast]);
+  }, [demoteTarget, currentUserId, router, toast, workspaceId]);
 
   // ConfirmDialog contract: throw to keep the dialog open on failure. Verbatim
   // MemberView.handleLeave — an owner may leave once another owner remains (the
   // Leave control is disabled below until then; the server backstops with a
   // 400 either way).
   const handleLeave = useCallback(async () => {
-    const response = await fetch("/api/workspaces/leave", { method: "POST" });
+    const response = await fetch("/api/workspaces/leave", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId }),
+    });
     if (!response.ok) {
       const data = (await response.json().catch(() => null)) as { error?: string } | null;
       toast.error(data?.error ?? "Couldn't leave the workspace.");
@@ -476,7 +486,7 @@ function OwnerView({
     }
     toast.success("Left the workspace.");
     router.refresh();
-  }, [router, toast]);
+  }, [router, toast, workspaceId]);
 
   // Derived from the loaded roster each render, so it stays fresh after every
   // local-state role change above. Gates the last-owner demote/leave guards.

@@ -34,12 +34,13 @@ export const WORKSPACE_CHANGED_SAVE_MESSAGE =
 
 /**
  * The refusal for a write whose `sent` workspace id is not the active
- * workspace, or null when it may go on: 400 when it is absent or not text,
+ * workspace, or null when it may go on: 400 when it is absent or not text
+ * (JSON null counts as not text, as in POST /api/posts),
  * 409 WORKSPACE_CHANGED when it names another workspace. A plain `Response`,
  * so this file stays importable from client code.
  */
 export function renderedWorkspaceRefusal(sent: unknown, activeWorkspaceId: string): Response | null {
-  if (sent === undefined || sent === null || sent === "") {
+  if (sent === undefined || sent === "") {
     return Response.json({ error: MISSING_WORKSPACE_ID_MESSAGE, code: MISSING_WORKSPACE_ID_CODE }, { status: 400 });
   }
   if (typeof sent !== "string") {

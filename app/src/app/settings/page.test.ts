@@ -8,7 +8,7 @@ const { getWorkspaceContextMock, planSectionMock, billing, sectionProps } = vi.h
   sectionProps: {} as Record<string, Record<string, unknown>>,
   // Stands in for billing on/off: with it off, planSectionLabel shows no plan.
   billing: { on: true },
-  planSectionMock: vi.fn<(props: { workspaceNote?: boolean }) => null>(() => null),
+  planSectionMock: vi.fn<(props: { workspaceNote?: boolean; workspaceId?: string }) => null>(() => null),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -243,5 +243,11 @@ describe("SettingsPage — the rendered workspace", () => {
     for (const name of ["SettingsForm", "PostingSlotsForm", "ConnectionsSection", "TeamSection"]) {
       expect(sectionProps[name]?.workspaceId, name).toBe("ws-1");
     }
+  });
+
+  it("gives the Plan section the page's workspace id, for its Stripe buttons", async () => {
+    planSectionMock.mockClear();
+    await render("owner");
+    expect(planSectionMock.mock.calls.at(-1)?.[0]).toMatchObject({ workspaceId: "ws-1" });
   });
 });

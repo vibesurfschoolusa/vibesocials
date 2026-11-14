@@ -26,7 +26,7 @@ describe("renderedWorkspaceRefusal", () => {
     });
   });
 
-  it.each([undefined, null, ""])("400s a missing id (%s): the page is from before the id was sent", async (sent) => {
+  it.each([undefined, ""])("400s a missing id (%s): the page is from before the id was sent", async (sent) => {
     const refusal = renderedWorkspaceRefusal(sent, "ws-1");
     expect(refusal?.status).toBe(400);
     await expect(refusal?.json()).resolves.toEqual({
@@ -35,7 +35,8 @@ describe("renderedWorkspaceRefusal", () => {
     });
   });
 
-  it.each([7, true, ["ws-1"], { id: "ws-1" }])("400s an id that is not text (%j)", async (sent) => {
+  // JSON null is a value sent, as POST /api/posts treats it.
+  it.each([null, 7, true, ["ws-1"], { id: "ws-1" }])("400s an id that is not text (%j)", async (sent) => {
     const refusal = renderedWorkspaceRefusal(sent, "ws-1");
     expect(refusal?.status).toBe(400);
     await expect(refusal?.json()).resolves.toMatchObject({ code: INVALID_WORKSPACE_ID_CODE });
