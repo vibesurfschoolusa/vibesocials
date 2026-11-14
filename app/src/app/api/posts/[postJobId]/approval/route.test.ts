@@ -1006,6 +1006,85 @@ describe("POST /api/posts/[postJobId]/approval - a Feed and Story card", () => {
     ]);
   });
 
+  // R4 lows, item 4: an old tab's reject asked about no other half, so the
+  // answer names one only when it was rejected too.
+  it("a reject without includePair whose other half is cancelled, or not held, says nothing about it", async () => {
+    for (const other of [storyRow({ status: "cancelled" }), storyRow({ status: "scheduled", approvedAt: SUBMITTED })]) {
+      findFirstMock.mockReset();
+      updateManyMock.mockClear();
+      findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null })).mockResolvedValueOnce(other);
+
+      const res = await POST(req({ decision: "reject" }), ctx("job-1"));
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.otherHalf, other.status).toBeUndefined();
+      expect(body.pairRejected, other.status).toBeUndefined();
+      expect(updateManyMock, other.status).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("a reject with includePair still names a cancelled other half it left alone", async () => {
+    findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow({ status: "cancelled" }));
+
+    const res = await POST(req({ decision: "reject", includePair: true }), ctx("job-1"));
+
+    expect((await res.json()).otherHalf).toEqual(expect.objectContaining({ changed: false }));
+  });
+
+  // R4 lows, item 3: the member's email describes the feed post and names the
+  // Story, whichever half the owner decided from.
+  it("deciding from the Story: the member's email shows the feed post's caption and names the Story", async () => {
+    for (const decision of ["approve", "reject"] as const) {
+      findFirstMock.mockReset();
+      sendEmailMock.mockClear();
+      findFirstMock
+        .mockResolvedValueOnce(
+          pendingJob({
+            storyOfPostJobId: "feed-1",
+            scheduledFor: FUTURE,
+            baseCaption: "Story's own copy",
+            publishMetadata: { targetPlatforms: ["instagram"], instagram: { placement: "story" } },
+          }),
+        )
+        .mockResolvedValueOnce(
+          storyRow({
+            id: "feed-1",
+            storyOfPostJobId: null,
+            scheduledFor: FUTURE,
+            baseCaption: "Feed caption",
+            publishMetadata: { targetPlatforms: ["instagram", "facebook_page"] },
+          }),
+        );
+
+      await POST(req({ decision, includePair: true }), ctx("job-1"));
+
+      expect(sendEmailMock, decision).toHaveBeenCalledTimes(1);
+      const html = sendEmailMock.mock.calls[0][0].html as string;
+      expect(html, decision).toContain("Feed caption");
+      expect(html, decision).not.toContain("Story's own copy");
+      expect(html, decision).toContain(decision === "approve" ? "Its Story on Instagram was approved too." : "Its Story on Instagram will not be published either.");
+    }
+  });
+
+  // R4 lows, item 5: a failed send is "try again", even when this post had nothing sendable.
+  it("approved to publish now, this post had nothing sendable, its Story was prepared and the send failed: 503 try again", async () => {
+    findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+    prepareDispatchMock.mockImplementation(async (id: string) =>
+      id === "job-1"
+        ? { ok: false, reason: "NO_CONNECTIONS" }
+        : { ok: true, event: { postJobId: id, userId: "member-1", workspaceId: "ws-1", mediaItemId: "m1", baseCaption: "c", perPlatformOverrides: null } },
+    );
+    inngestSendMock.mockRejectedValue(new Error("inngest down"));
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await POST(req({ decision: "approve", includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(503);
+    expect((await res.json()).code).toBe("DISPATCH_FAILED");
+    consoleSpy.mockRestore();
+  });
+
   it("a reject without includePair of a post that is not a pair: one write, no pairRejected", async () => {
     findFirstMock.mockResolvedValueOnce(pendingJob({ storyOfPostJobId: null })).mockResolvedValueOnce(null);
 

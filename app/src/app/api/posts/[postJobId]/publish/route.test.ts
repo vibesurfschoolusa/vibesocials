@@ -1319,6 +1319,59 @@ describe("POST /api/posts/[postJobId]/publish - a Feed and Story card", () => {
     expect(inngestSendMock).not.toHaveBeenCalled();
   });
 
+  // R4 lows, item 3: the owners' email describes the feed post, whichever half the submit came from.
+  it("member submit sent from the Story: the email lists the feed post's platforms and texts, with the Story line", async () => {
+    getWorkspaceContextMock.mockResolvedValue(memberInApprovalWorkspace());
+    findFirstMock
+      .mockResolvedValueOnce(
+        jobRow({
+          storyOfPostJobId: "feed-1",
+          perPlatformOverrides: null,
+          publishMetadata: { targetPlatforms: ["instagram"], instagram: { placement: "story" } },
+          mediaItem: null,
+        }),
+      )
+      .mockResolvedValueOnce(
+        storyRow({
+          id: "feed-1",
+          storyOfPostJobId: null,
+          baseCaption: "Feed caption",
+          perPlatformOverrides: { facebook_page: "Feed Facebook" },
+          publishMetadata: { targetPlatforms: ["instagram", "facebook_page"] },
+        }),
+      );
+
+    const res = await POST(req({ includePair: true }), ctx("story-1"));
+
+    expect(res.status).toBe(202);
+    expect(notifyOwnersMock).toHaveBeenCalledTimes(1);
+    expect(notifyOwnersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caption: "Feed caption",
+        platformCaptions: { facebook_page: "Feed Facebook" },
+        alsoAsStory: ["instagram"],
+      }),
+    );
+  });
+
+  // R4 lows, item 5: a failed send is "try again", even when this post had nothing sendable.
+  it("this post had nothing sendable, the other half was prepared, and the send failed: 503 try again, not reconnect", async () => {
+    findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());
+    prepareDispatchMock.mockImplementation(async (id: string) =>
+      id === "job-1"
+        ? { ok: false, reason: "NO_CONNECTIONS" }
+        : { ok: true, event: { postJobId: id, userId: "user-1", workspaceId: "ws-1", mediaItemId: "m1", baseCaption: "c", perPlatformOverrides: null } },
+    );
+    inngestSendMock.mockRejectedValue(new Error("inngest down"));
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const res = await POST(req({ includePair: true }), ctx("job-1"));
+
+    expect(res.status).toBe(503);
+    expect((await res.json()).code).toBe("DISPATCH_FAILED");
+    consoleSpy.mockRestore();
+  });
+
   it("member submit with a time gives both halves that time", async () => {
     getWorkspaceContextMock.mockResolvedValue(memberInApprovalWorkspace());
     findFirstMock.mockResolvedValueOnce(jobRow({ storyOfPostJobId: null })).mockResolvedValueOnce(storyRow());

@@ -27,6 +27,7 @@ import {
   partialSendMessage,
   pairStoryPlatforms,
   readPairHalf,
+  takenFeedHalf,
   wantsPair,
   type PairHalf,
 } from "../pairRule";
@@ -204,10 +205,11 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // decision takes both halves; only a half still awaiting a decision. A reject
   // takes it even without includePair, as R2 did, so a tab still running the
   // old Queue never rejects one half alone.
+  const askedForPair = wantsPair(parsedBody);
   const half = await readPairHalf(
     workspaceId,
     { id: postJobId, storyOfPostJobId: job.storyOfPostJobId ?? null },
-    wantsPair(parsedBody) || !approving,
+    askedForPair || !approving,
   );
   const blocker = (other: PairHalf) => (isAwaitingApprovalDecision(other) ? null : "is not waiting for approval");
 
@@ -284,7 +286,9 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       { status: 409 },
     );
   }
-  let pair = result.pair;
+  // R4 lows, item 4: an old tab's reject asked about no other half, so the
+  // answer names one only when it was rejected too.
+  let pair = askedForPair || result.pair?.changed ? result.pair : null;
   const pairDecided = Boolean(half && pair?.changed);
   // One half went out and the other had nothing to send: a success that says both.
   let partial: string | null = null;
@@ -297,6 +301,17 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
     });
     if (pair && dispatch.notSent.has(pair.id)) pair = { ...pair, note: notSentNote(pair.kind) };
     partial = partialSendMessage(postJobId, half, dispatch);
+    // Same contract as the publish route: if the events can't be handed to
+    // Inngest, the pending results are failed (job → failed) rather than left
+    // "publishing" forever. The approval itself stands. Checked first (R4 lows,
+    // item 5): when this post had nothing sendable but its other half was
+    // prepared, a failed send is still "try again", not "reconnect".
+    if (dispatch.sendFailed) {
+      return NextResponse.json(
+        { code: DISPATCH_FAILURE.errorCode, error: DISPATCH_FAILURE.errorMessage },
+        { status: 503 },
+      );
+    }
     if (dispatch.notSent.has(postJobId) && !partial) {
       // No chosen platform is connected (F1 H1): `prepare` gave each one a
       // failed result with its sentence and marked the job failed, so it never
@@ -309,15 +324,6 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
           ...(pair ? { otherHalf: pair } : {}),
         },
         { status: 409 },
-      );
-    }
-    // Same contract as the publish route: if the events can't be handed to
-    // Inngest, the pending results are failed (job → failed) rather than left
-    // "publishing" forever. The approval itself stands.
-    if (dispatch.sendFailed) {
-      return NextResponse.json(
-        { code: DISPATCH_FAILURE.errorCode, error: DISPATCH_FAILURE.errorMessage },
-        { status: 503 },
       );
     }
   }
@@ -340,7 +346,8 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         approved: approving,
         workspaceId,
         workspaceName: workspaceContext.workspace.name,
-        caption: job.baseCaption ?? "",
+        // R4 lows, item 3: decided from a Story, the email shows its feed post.
+        caption: (takenFeedHalf(half, pair) ?? job).baseCaption ?? "",
         scheduledFor: scheduledForIso,
         timeZone: submitter.timeZone ?? null,
         appBaseUrl: process.env.NEXTAUTH_URL || null,

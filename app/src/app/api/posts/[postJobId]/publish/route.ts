@@ -29,6 +29,7 @@ import {
   partialSendMessage,
   pairStoryPlatforms,
   readPairHalf,
+  takenFeedHalf,
   wantsPair,
   type PairHalf,
 } from "../pairRule";
@@ -240,15 +241,17 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
       );
     }
 
+    // R4 lows, item 3: submitted from a Story, the email describes its feed post.
+    const described = takenFeedHalf(half, result.pair) ?? job;
     await notifyOwnersOfApprovalRequest({
       workspaceId,
       workspaceName: workspaceContext.workspace.name,
       submitter: workspaceContext.user,
-      caption: job.baseCaption ?? "",
+      caption: described.baseCaption ?? "",
       // A Story publishes no caption: its platform reads "Story, no caption" (2026-11-10).
       platformCaptions: withStoryCaptions(
-        resolvePlatformCaptions(job, job.mediaItem),
-        storyPlatformsOf(job.publishMetadata),
+        resolvePlatformCaptions(described, described.mediaItem),
+        storyPlatformsOf(described.publishMetadata),
       ),
       // One email for the pair: it says the post also goes out as a Story.
       ...(half && result.pair?.changed ? { alsoAsStory: pairStoryPlatforms(job.publishMetadata, half) } : {}),
@@ -477,6 +480,18 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
   // One half went out and the other had nothing to send: a success that says both.
   const partial = partialSendMessage(postJobId, half, dispatch);
 
+  // The job is already committed `in_progress` with pending results: if the
+  // event can't be handed to Inngest, those results were failed (job → failed)
+  // so it can't hang "publishing"; tell the caller to try again. Checked first
+  // (R4 lows, item 5): when this post had nothing sendable but its other half
+  // was prepared, a failed send is still "try again", not "reconnect".
+  if (dispatch.sendFailed) {
+    return NextResponse.json(
+      { code: DISPATCH_FAILURE.errorCode, error: DISPATCH_FAILURE.errorMessage },
+      { status: 503 },
+    );
+  }
+
   if (dispatch.notSent.has(postJobId) && !partial) {
     // No chosen platform is connected (F1 H1): prepare gave each one a failed
     // result with its own sentence and marked the job `failed`, so it never
@@ -488,16 +503,6 @@ export async function POST(request: NextRequest, context: PostJobRouteContext) {
         ...pairAnswer,
       },
       { status: 409 },
-    );
-  }
-
-  // The job is already committed `in_progress` with pending results: if the
-  // event can't be handed to Inngest, those results were failed (job → failed)
-  // so it can't hang "publishing"; tell the caller to try again.
-  if (dispatch.sendFailed) {
-    return NextResponse.json(
-      { code: DISPATCH_FAILURE.errorCode, error: DISPATCH_FAILURE.errorMessage },
-      { status: 503 },
     );
   }
 
