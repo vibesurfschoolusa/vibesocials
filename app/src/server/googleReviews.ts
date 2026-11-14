@@ -194,14 +194,108 @@ export function reviewsErrorBody(
 }
 
 /**
- * A review's full resource name, `accounts/{a}/locations/{l}/reviews/{r}`, and
- * nothing more: the reply is sent to `<name>/reply`, so an extra segment, a dot
- * segment, an escape or a query would point the request somewhere else. The ids
+ * The `accounts/{a}/locations/{l}` of a review's full resource name,
+ * `accounts/{a}/locations/{l}/reviews/{r}` and nothing more, else null. The
+ * reply is sent to `<name>/reply`, so an extra segment, a dot segment, an
+ * escape or a query would point the request somewhere else. The ids
  * themselves are Google's, so any other character is left to Google to judge.
  */
-export function isReviewResourceName(name: string): boolean {
-  const match = /^accounts\/([^/?#%\s]+)\/locations\/([^/?#%\s]+)\/reviews\/([^/?#%\s]+)$/.exec(name);
-  return match !== null && match.slice(1).every((segment) => segment !== "." && segment !== "..");
+export function reviewLocationName(name: string): string | null {
+  const match = /^(accounts\/([^/?#%\s]+)\/locations\/([^/?#%\s]+))\/reviews\/([^/?#%\s]+)$/.exec(name);
+  if (!match) return null;
+  return match.slice(2).every((segment) => segment !== "." && segment !== "..") ? match[1] : null;
+}
+
+/** A location as GET /api/reviews/locations lists it. */
+export interface GbpListedLocation {
+  /** Full resource name: accounts/.../locations/... */
+  name: string;
+  locationName: string;
+  title: string;
+  storeCode?: string;
+}
+
+const ACCOUNT_MANAGEMENT_BASE = "https://mybusinessaccountmanagement.googleapis.com/v1";
+const BUSINESS_INFO_BASE = "https://mybusinessbusinessinformation.googleapis.com/v1";
+
+/**
+ * Every location the connection's Google account can manage, as the Reviews
+ * page lists them; the reply route checks a review's location against the same
+ * list (F7). Throws, with Google's `status`, when the accounts call fails. An
+ * account whose locations could not be read is logged and left out, and
+ * `complete` is false, so a caller can tell "not listed" from "not read".
+ */
+export async function listGbpLocations(
+  accessToken: string
+): Promise<{ locations: GbpListedLocation[]; complete: boolean }> {
+  const accountsResponse = await fetch(`${ACCOUNT_MANAGEMENT_BASE}/accounts`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!accountsResponse.ok) {
+    const errorText = await accountsResponse.text();
+    console.error("[GBP Locations] Failed to fetch accounts:", {
+      status: accountsResponse.status,
+      statusText: accountsResponse.statusText,
+      body: errorText.substring(0, 500),
+    });
+    // The status decides what the page says (reviewsErrorBody).
+    throw Object.assign(new Error("Failed to fetch Google Business Profile accounts"), {
+      status: accountsResponse.status,
+    });
+  }
+
+  const accountsData = await accountsResponse.json();
+  const accounts: Array<{ name?: string }> = accountsData.accounts || [];
+  const allLocations: GbpListedLocation[] = [];
+  let complete = true;
+
+  for (const account of accounts) {
+    const accountName = account.name;
+    if (!accountName) continue;
+
+    // Use the business information API with readMask to get location details
+    const url = new URL(`${BUSINESS_INFO_BASE}/${accountName}/locations`);
+    url.searchParams.set("readMask", "name,storeCode,title");
+
+    const locationsResponse = await fetch(url.toString(), {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (locationsResponse.ok) {
+      const locationsData = await locationsResponse.json();
+      const locations = locationsData.locations || [];
+
+      for (const location of locations) {
+        // Ensure we have the full resource name (accounts/.../locations/...)
+        // The API might return just "locations/..." so we need to construct the full path
+        let fullName = location.name;
+        if (fullName && fullName.startsWith("locations/") && !fullName.includes("accounts/")) {
+          fullName = `${accountName}/${fullName}`;
+        }
+
+        allLocations.push({
+          name: fullName, // Full resource name: accounts/.../locations/...
+          locationName: location.locationName || location.title || "Unknown Location",
+          title: location.title || location.locationName || "Unknown Location",
+          storeCode: location.storeCode,
+        });
+      }
+    } else {
+      complete = false;
+      console.error("[GBP Locations] Failed to fetch locations for account", {
+        accountName,
+        status: locationsResponse.status,
+      });
+    }
+  }
+
+  console.log("[GBP Locations] Found locations:", allLocations.length);
+  return { locations: allLocations, complete };
 }
 
 /** The location id of `accounts/{a}/locations/{l}` or `locations/{l}`, or null. */

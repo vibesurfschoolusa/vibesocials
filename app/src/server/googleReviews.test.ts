@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchMock, resolveMock } = vi.hoisted(() => ({ fetchMock: vi.fn(), resolveMock: vi.fn() }));
 
@@ -16,7 +16,8 @@ import {
   fetchAllReviews,
   fetchNewReviewUri,
   fetchReviews,
-  isReviewResourceName,
+  listGbpLocations,
+  reviewLocationName,
   reviewsErrorBody,
 } from "./googleReviews";
 
@@ -227,9 +228,9 @@ describe("reviewsErrorBody", () => {
 });
 
 // F7 (R1-security L5): the reply goes to the review the name names, so it must name one.
-describe("isReviewResourceName", () => {
+describe("reviewLocationName: the shape", () => {
   it("accepts a review's full resource name", () => {
-    expect(isReviewResourceName("accounts/1/locations/2/reviews/AbC-9_x")).toBe(true);
+    expect(reviewLocationName("accounts/1/locations/2/reviews/AbC-9_x")).toBe("accounts/1/locations/2");
   });
 
   it.each([
@@ -245,6 +246,54 @@ describe("isReviewResourceName", () => {
     "accounts/1/locations/2/reviews/a b",
     "",
   ])("refuses %j", (name) => {
-    expect(isReviewResourceName(name)).toBe(false);
+    expect(reviewLocationName(name)).toBeNull();
+  });
+});
+
+describe("reviewLocationName", () => {
+  it("is the location part of a review's resource name", () => {
+    expect(reviewLocationName("accounts/1/locations/2/reviews/r1")).toBe("accounts/1/locations/2");
+  });
+
+  it("is null for anything that is not a review's resource name", () => {
+    expect(reviewLocationName("accounts/1/locations/2")).toBeNull();
+    expect(reviewLocationName("accounts/1/locations/2/reviews/../x")).toBeNull();
+  });
+});
+
+// The listing the Reviews page shows and the reply route checks against.
+describe("listGbpLocations", () => {
+  const originalFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("lists every account's locations with full resource names, complete when every account answered", async () => {
+    global.fetch = vi.fn(async (url: string | URL) =>
+      String(url).endsWith("/accounts")
+        ? json({ accounts: [{ name: "accounts/1" }] })
+        : json({ locations: [{ name: "locations/9", title: "Main Street", storeCode: "MS" }] }),
+    ) as unknown as typeof fetch;
+
+    await expect(listGbpLocations("tok")).resolves.toEqual({
+      locations: [{ name: "accounts/1/locations/9", locationName: "Main Street", title: "Main Street", storeCode: "MS" }],
+      complete: true,
+    });
+  });
+
+  it("is incomplete when an account's locations could not be read", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    global.fetch = vi.fn(async (url: string | URL) =>
+      String(url).endsWith("/accounts") ? json({ accounts: [{ name: "accounts/1" }] }) : json({}, 503),
+    ) as unknown as typeof fetch;
+
+    await expect(listGbpLocations("tok")).resolves.toEqual({ locations: [], complete: false });
+  });
+
+  it("throws with Google's status when the accounts call fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    global.fetch = vi.fn(async () => json({}, 403)) as unknown as typeof fetch;
+
+    await expect(listGbpLocations("tok")).rejects.toMatchObject({ status: 403 });
   });
 });
