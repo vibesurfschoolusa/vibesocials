@@ -29,6 +29,11 @@ import { storyPlatformsOf } from "@/lib/storyPlacement";
  * result that must not move it (the metrics syncs, the workspace heal) is a
  * raw UPDATE that leaves updatedAt alone.
  *
+ * F6: a Feed and Story post is two jobs, the Story naming its feed job
+ * (PostJob.storyOfPostJobId). When both published in the month they are one
+ * post: counted once, listed once with the feed and the Story platforms. A
+ * Story whose feed job is gone or published in another month stands alone.
+ *
  * Every query carries the workspace id, and the result queries the month's
  * range. Rows are also checked against the workspace after they are read, so
  * nothing of another workspace can reach the object even if a filter slipped.
@@ -75,14 +80,15 @@ export async function buildMonthlyReport(
       .sort((a, b) => platformIndex(a.platform) - platformIndex(b.platform))
       .map((g) => ({ platform: platformLabel(g.platform), count: g._count._all }));
 
-  const postCount = await prisma.postJob.count({
-    where: { workspaceId, results: { some: { workspaceId, status: "success", updatedAt: inMonth } } },
+  const publishedInMonth = { some: { workspaceId, status: "success" as const, updatedAt: inMonth } };
+  const jobCount = await prisma.postJob.count({
+    where: { workspaceId, results: publishedInMonth },
   });
 
   // The 200 most recently published posts. A post has at most one result per
   // platform, so the newest 200 x (number of platforms) successes always
   // contain them, and this read stays bounded however busy the month was.
-  const recent = postCount
+  const recent = jobCount
     ? await prisma.postJobResult.findMany({
         where: { workspaceId, status: "success", updatedAt: inMonth },
         orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
@@ -101,6 +107,7 @@ export async function buildMonthlyReport(
             workspaceId: true,
             baseCaption: true,
             publishMetadata: true,
+            storyOfPostJobId: true,
             // Null for a post without a file (2026-11-10): no picture, not a removed one.
             mediaItemId: true,
             mediaItem: {
@@ -120,6 +127,21 @@ export async function buildMonthlyReport(
         })
       ).filter((row) => row.workspaceId === workspaceId)
     : [];
+
+  // F6: the pairs that published in the month count once.
+  const storyRows = jobCount
+    ? await prisma.postJob.findMany({
+        where: { workspaceId, storyOfPostJobId: { not: null }, results: publishedInMonth },
+        select: { storyOfPostJobId: true },
+      })
+    : [];
+  const feedIds = Array.from(
+    new Set(storyRows.map((row) => row.storyOfPostJobId).filter((id): id is string => Boolean(id))),
+  );
+  const pairCount = feedIds.length
+    ? await prisma.postJob.count({ where: { workspaceId, id: { in: feedIds }, results: publishedInMonth } })
+    : 0;
+  const postCount = jobCount - pairCount;
 
   const published = jobs.map((row) => ({
     row,
@@ -169,13 +191,14 @@ export async function buildMonthlyReport(
       .map((row) => [metricKey(row.platform, row.externalPostId), row]),
   );
 
-  const posts: (ReportPost & { id: string })[] = published
+  const entries: (ReportPost & { id: string; storyOfPostJobId: string | null })[] = published
     .filter(({ results }) => results.length > 0)
     .map(({ row, results }) => {
       const stories = storyPlatformsOf(row.publishMetadata) as Platform[];
       const media = row.mediaItem;
       return {
         id: row.id,
+        storyOfPostJobId: row.storyOfPostJobId ?? null,
         publishedAt: new Date(Math.max(...results.map((r) => r.updatedAt.getTime()))).toISOString(),
         caption: reportCaption(row.baseCaption ?? media?.baseCaption ?? ""),
         // A file the retention sweep removed has no picture left to show.
@@ -198,7 +221,23 @@ export async function buildMonthlyReport(
           };
         }),
       };
-    })
+    });
+
+  // F6: a listed Story whose feed post is listed too joins that post's entry:
+  // each platform's feed result, then its Story; the later of the two times.
+  const entryById = new Map(entries.map((entry) => [entry.id, entry]));
+  const labelOrder = PLATFORM_ORDER.map(platformLabel);
+  const order = (p: { platform: string; story: boolean }) => labelOrder.indexOf(p.platform) * 2 + (p.story ? 1 : 0);
+  const joined = new Set<string>();
+  for (const entry of entries) {
+    const feed = entry.storyOfPostJobId ? entryById.get(entry.storyOfPostJobId) : undefined;
+    if (!feed || feed === entry) continue;
+    feed.platforms = [...feed.platforms, ...entry.platforms].sort((a, b) => order(a) - order(b));
+    if (entry.publishedAt > feed.publishedAt) feed.publishedAt = entry.publishedAt;
+    joined.add(entry.id);
+  }
+  const posts = entries
+    .filter((entry) => !joined.has(entry.id))
     .sort((a, b) => b.publishedAt.localeCompare(a.publishedAt) || a.id.localeCompare(b.id));
 
   return {

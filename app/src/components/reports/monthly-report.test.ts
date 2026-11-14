@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import type { MonthlyReport } from "@/lib/monthlyReport";
 
-import { MonthlyReportView, ReportMonthPicker } from "./monthly-report";
+import { MonthlyReportView, ReportMonthPicker, isFeedAndStory } from "./monthly-report";
 
 function report(overrides: Partial<MonthlyReport> = {}): MonthlyReport {
   return {
@@ -373,3 +373,34 @@ describe("MonthlyReportView - logoPrintOnly", () => {
   });
 });
 
+
+// F6: a Feed and Story post is listed once, with both of its placements.
+describe("MonthlyReportView - a Feed and Story post", () => {
+  const pairPost = {
+    publishedAt: "2026-10-12T10:01:00.000Z",
+    caption: "Pair",
+    media: null,
+    mediaCount: 1,
+    platforms: [
+      { platform: "Instagram", story: false, url: "https://www.instagram.com/p/abc/", numbers: {} },
+      { platform: "Instagram", story: true, url: "https://www.instagram.com/stories/x/1/", numbers: {} },
+    ],
+  };
+
+  it("is told apart by a platform that went out both as a post and as a Story", () => {
+    expect(isFeedAndStory(pairPost)).toBe(true);
+    // One post with a Story on one platform and a feed post on another is not a pair.
+    expect(isFeedAndStory(report().posts[0])).toBe(false);
+    expect(isFeedAndStory(report().posts[1])).toBe(false);
+  });
+
+  it("shows Feed and Story for it, and both Instagram rows", () => {
+    const html = render(report({ postCount: 1, posts: [pairPost] }));
+    expect(html).toContain("Feed and Story");
+    expect(html.match(/<span class="font-medium">Instagram<\/span>/g)).toHaveLength(2);
+  });
+
+  it("shows no such label on any other post", () => {
+    expect(render(report())).not.toContain("Feed and Story");
+  });
+});

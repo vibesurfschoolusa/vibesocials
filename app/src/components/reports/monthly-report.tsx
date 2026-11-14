@@ -88,6 +88,16 @@ function PostPicture({ post }: { post: ReportPost }) {
   return <MediaThumb media={post.media} />;
 }
 
+/**
+ * F6: a Feed and Story post (two jobs, listed as one by the report builder)
+ * has a platform that went out both as a post and as a Story. One job never
+ * has two results on one platform, so no other post reads as one.
+ */
+export function isFeedAndStory(post: Pick<ReportPost, "platforms">): boolean {
+  const feed = new Set(post.platforms.filter((p) => !p.story).map((p) => p.platform));
+  return post.platforms.some((p) => p.story && feed.has(p.platform));
+}
+
 function PostRow({ post }: { post: ReportPost }) {
   return (
     <li data-report-post className="rounded-[var(--radius)] border border-border bg-card p-3 text-card-foreground">
@@ -99,6 +109,9 @@ function PostRow({ post }: { post: ReportPost }) {
             {post.mediaCount > 1 ? (
               <span className="ml-2 font-normal text-muted-foreground">{`${formatNumber(post.mediaCount)} photos`}</span>
             ) : null}
+            {isFeedAndStory(post) ? (
+              <span className="ml-2 font-normal text-muted-foreground">Feed and Story</span>
+            ) : null}
           </p>
           {post.caption ? <p className="mt-1 whitespace-pre-wrap break-words text-sm">{post.caption}</p> : null}
         </div>
@@ -107,7 +120,8 @@ function PostRow({ post }: { post: ReportPost }) {
         {post.platforms.map((p) => {
           const numbers = REPORT_NUMBER_KEYS.filter((key) => typeof p.numbers[key] === "number");
           return (
-            <li key={p.platform} className="text-sm">
+            // A Feed and Story post lists a platform twice, once as its Story.
+            <li key={`${p.platform}${p.story ? ":story" : ""}`} className="text-sm">
               <span className="font-medium">{p.platform}</span>
               {p.story ? (
                 <span className="ml-2 rounded-full border border-border px-1.5 text-xs text-muted-foreground">Story</span>

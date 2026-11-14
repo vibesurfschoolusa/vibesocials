@@ -167,8 +167,8 @@ describe("buildMonthlyReport", () => {
     // Two results per post, newest first, as the query orders them.
     m.resultFindMany.mockResolvedValue(ids.flatMap((id) => [{ postJobId: id }, { postJobId: id }]));
     m.postCount.mockResolvedValue(250);
-    m.postFindMany.mockImplementation(async (args: { where: { id: { in: string[] } } }) =>
-      args.where.id.in.map((id) => {
+    m.postFindMany.mockImplementation(async (args: { where: { id?: { in: string[] } } }) =>
+      (args.where.id?.in ?? []).map((id) => {
         const n = Number(id.split("-")[1]);
         return job({ id, results: [result({ updatedAt: new Date(Date.UTC(2026, 9, 30, 0, 0, 0) - n * 60_000) })] });
       }),
@@ -388,5 +388,96 @@ describe("buildMonthlyReport: the logo by plan", () => {
     vi.stubEnv("BILLING_ENABLED", "");
     await buildMonthlyReport(WS, "2026-10", NOW);
     expect(m.workspaceFindUnique.mock.calls[0][0].select).toEqual({ name: true, logoUrl: true });
+  });
+});
+
+// F6: a Feed and Story post is two jobs; the report counts and lists it once.
+describe("buildMonthlyReport - a Feed and Story pair", () => {
+  const feedJob = () =>
+    job({
+      id: "feed-1",
+      storyOfPostJobId: null,
+      results: [result({ platform: "instagram", externalPostId: "ig-feed", updatedAt: new Date("2026-10-12T10:00:00Z") })],
+    });
+  const storyJob = () =>
+    job({
+      id: "story-1",
+      storyOfPostJobId: "feed-1",
+      publishMetadata: { instagram: { placement: "story" } },
+      results: [
+        result({
+          platform: "instagram",
+          externalPostId: "ig-story",
+          externalPostUrl: "https://www.instagram.com/stories/x/1/",
+          updatedAt: new Date("2026-10-12T10:01:00Z"),
+        }),
+      ],
+    });
+
+  beforeEach(() => {
+    m.postCount.mockImplementation(async (args: { where: { id?: unknown } }) => (args.where.id ? 1 : 2));
+    m.resultFindMany.mockResolvedValue([{ postJobId: "story-1" }, { postJobId: "feed-1" }]);
+    m.postFindMany.mockImplementation(async (args: { where: { id?: { in: string[] }; storyOfPostJobId?: unknown } }) =>
+      args.where.storyOfPostJobId ? [{ storyOfPostJobId: "feed-1" }] : [storyJob(), feedJob()],
+    );
+  });
+
+  it("counts the pair as one post", async () => {
+    const report = await buildMonthlyReport(WS, "2026-10", NOW);
+
+    expect(report.postCount).toBe(1);
+    // The Story jobs that published in the month, then their feed posts that did too.
+    const storyQuery = m.postFindMany.mock.calls.find((c) => c[0].where.storyOfPostJobId)![0];
+    expect(storyQuery).toEqual({
+      where: {
+        workspaceId: WS,
+        storyOfPostJobId: { not: null },
+        results: { some: { workspaceId: WS, status: "success", updatedAt: OCT } },
+      },
+      select: { storyOfPostJobId: true },
+    });
+    expect(m.postCount.mock.calls[1][0].where).toEqual({
+      workspaceId: WS,
+      id: { in: ["feed-1"] },
+      results: { some: { workspaceId: WS, status: "success", updatedAt: OCT } },
+    });
+  });
+
+  it("lists the pair once, with the feed and the Story platforms, at the later time", async () => {
+    const report = await buildMonthlyReport(WS, "2026-10", NOW);
+
+    expect(report.posts).toHaveLength(1);
+    expect(report.posts[0].publishedAt).toBe("2026-10-12T10:01:00.000Z");
+    expect(report.posts[0].platforms).toEqual([
+      expect.objectContaining({ platform: "Instagram", story: false }),
+      expect.objectContaining({ platform: "Instagram", story: true, url: "https://www.instagram.com/stories/x/1/" }),
+    ]);
+  });
+
+  it("lists a Story whose feed post is gone, or did not publish this month, on its own", async () => {
+    m.postCount.mockImplementation(async (args: { where: { id?: unknown } }) => (args.where.id ? 0 : 1));
+    m.resultFindMany.mockResolvedValue([{ postJobId: "story-1" }]);
+    m.postFindMany.mockImplementation(async (args: { where: { storyOfPostJobId?: unknown } }) =>
+      args.where.storyOfPostJobId ? [{ storyOfPostJobId: "feed-1" }] : [storyJob()],
+    );
+
+    const report = await buildMonthlyReport(WS, "2026-10", NOW);
+
+    expect(report.postCount).toBe(1);
+    expect(report.posts).toHaveLength(1);
+    expect(report.posts[0].platforms).toEqual([expect.objectContaining({ platform: "Instagram", story: true })]);
+  });
+
+  it("a month without Story jobs asks for no feed count", async () => {
+    m.postCount.mockReset();
+    m.postCount.mockResolvedValue(1);
+    m.postFindMany.mockImplementation(async (args: { where: { storyOfPostJobId?: unknown } }) =>
+      args.where.storyOfPostJobId ? [] : [job()],
+    );
+
+    const report = await buildMonthlyReport(WS, "2026-10", NOW);
+
+    expect(report.postCount).toBe(1);
+    expect(m.postCount).toHaveBeenCalledTimes(1);
   });
 });
