@@ -177,7 +177,7 @@ describe("POST: the visitor's choice", () => {
     const res = await POST(request("POST", { candidateId: "page-2" }), context());
 
     expect(res.status).toBe(409);
-    expect((await res.json()).error).toBe("Facebook Page is already connected. Ask Surf Co if it should be changed.");
+    expect((await res.json()).error).toBe("Facebook Page is already connected. Ask the person who sent you this link if it should be changed.");
     expect(h.saveFacebookPage).not.toHaveBeenCalled();
   });
 
