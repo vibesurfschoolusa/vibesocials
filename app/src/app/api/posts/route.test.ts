@@ -2776,7 +2776,7 @@ describe("POST /api/posts - Feed and Story (both)", () => {
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
   });
 
-  it("a member's both: each job is held for approval, one email, nothing published", async () => {
+  it("a member's scheduled both: both jobs held inside the create call, one email that names the Story", async () => {
     getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: true }));
     const response = await POST(
       jsonRequest({ ...photo(1), baseCaption: "hi", scheduledFor: LATER, platforms: ["instagram"], instagramMetadata: BOTH }),
@@ -2784,16 +2784,100 @@ describe("POST /api/posts - Feed and Story (both)", () => {
     const body = (await response.json()) as Record<string, unknown>;
 
     expect(response.status).toBe(200);
-    expect(createPostJobOnlyMock.mock.calls[0][0]).toMatchObject({ intent: "draft" });
-    expect(postJobUpdateMock).toHaveBeenCalledTimes(2);
-    const updated = postJobUpdateMock.mock.calls.map((c) => c[0] as { where: { id: string }; data: Record<string, unknown> });
-    expect(updated.map((u) => u.where.id)).toEqual(["job-1", "job-s"]);
-    for (const u of updated) {
-      expect(u.data).toEqual({ submittedForApprovalAt: expect.any(Date), scheduledFor: new Date(LATER) });
-    }
+    expect(createPostJobOnlyMock.mock.calls[0][0]).toMatchObject({
+      intent: "draft",
+      approvalHold: { submittedForApprovalAt: expect.any(Date), scheduledFor: new Date(LATER) },
+    });
+    // The hold is in the create transaction: nothing is written after it.
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
     expect(notifyOwnersMock).toHaveBeenCalledTimes(1);
+    expect(notifyOwnersMock).toHaveBeenCalledWith(expect.objectContaining({ alsoAsStory: ["instagram"] }));
     expect(inngestSendMock).not.toHaveBeenCalled();
     expect(body).toMatchObject({ awaitingApproval: true, storyPostJobId: "job-s" });
+  });
+
+  it("a member's draft both (reuse): two plain drafts, no hold and no email, as a single draft is today", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: true }));
+    const response = await POST(
+      jsonRequest({
+        mediaItemId: "media-9",
+        baseCaption: "hi",
+        draft: true,
+        platforms: ["instagram", "facebook_page"],
+        instagramMetadata: BOTH,
+        facebookMetadata: BOTH,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    // shouldHoldForApproval: a member's own draft is not held; it is held
+    // when they submit it, through the publish route, one job at a time.
+    const args = createPostJobForExistingMediaMock.mock.calls[0][0];
+    expect(args).toMatchObject({ intent: "draft" });
+    expect(args).not.toHaveProperty("approvalHold");
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
+    expect(notifyOwnersMock).not.toHaveBeenCalled();
+  });
+
+  it("a member's Post now both: both held with no time, the email names both Stories", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: true }));
+    await POST(
+      jsonRequest({
+        ...photo(1),
+        baseCaption: "hi",
+        platforms: ["instagram", "facebook_page"],
+        instagramMetadata: BOTH,
+        facebookMetadata: BOTH,
+      }),
+    );
+
+    expect(createPostJobOnlyMock.mock.calls[0][0]).toMatchObject({
+      intent: "draft",
+      approvalHold: { submittedForApprovalAt: expect.any(Date), scheduledFor: null },
+    });
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+    expect(notifyOwnersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ alsoAsStory: ["instagram", "facebook_page"] }),
+    );
+  });
+
+  it("a member's both whose held write fails: nothing created, a 500, no email", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: true }));
+    createPostJobOnlyMock.mockRejectedValue(new Error("db down"));
+    const response = await POST(
+      jsonRequest({ ...photo(1), baseCaption: "hi", scheduledFor: LATER, platforms: ["instagram"], instagramMetadata: BOTH }),
+    );
+
+    expect(response.status).toBe(500);
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
+    expect(notifyOwnersMock).not.toHaveBeenCalled();
+    expect(inngestSendMock).not.toHaveBeenCalled();
+  });
+
+  it("an owner's both: no hold", async () => {
+    await POST(
+      jsonRequest({ ...photo(1), baseCaption: "hi", scheduledFor: LATER, platforms: ["instagram"], instagramMetadata: BOTH }),
+    );
+    expect(createPostJobOnlyMock.mock.calls[0][0]).not.toHaveProperty("approvalHold");
+    expect(postJobUpdateMock).not.toHaveBeenCalled();
+    expect(notifyOwnersMock).not.toHaveBeenCalled();
+  });
+
+  it("a member's single post (no both): held exactly as today, email without a Story line", async () => {
+    getWorkspaceContextMock.mockResolvedValue(makeWorkspaceContext({ role: "member", requireApproval: true }));
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: [] });
+    await POST(
+      jsonRequest({ ...photo(1), baseCaption: "hi", scheduledFor: LATER, platforms: ["instagram"], instagramMetadata: STORY }),
+    );
+
+    expect(createPostJobOnlyMock.mock.calls[0][0]).not.toHaveProperty("approvalHold");
+    expect(postJobUpdateMock).toHaveBeenCalledTimes(1);
+    expect(postJobUpdateMock).toHaveBeenCalledWith({
+      where: { id: "job-1" },
+      data: { submittedForApprovalAt: expect.any(Date), scheduledFor: new Date(LATER) },
+    });
+    expect(notifyOwnersMock.mock.calls[0][0]).not.toHaveProperty("alsoAsStory");
   });
 
   it("the daily limit counts the Story job as a post", async () => {

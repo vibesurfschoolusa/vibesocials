@@ -68,6 +68,28 @@ export interface PostJobSchedulingParams {
    * (the route refuses a Story that repeats). Absent = one job, as before.
    */
   story?: PostStoryJobParams;
+  /**
+   * Q1 fix 1: hold a member's Feed and Story pair for approval in this
+   * helper's transaction, so both jobs are held or neither exists (the route
+   * holds a single post after the create, as before). `intent` is `draft`;
+   * `scheduledFor` is the member's chosen time, kept for the owner to honour.
+   * A series is held through `series.submittedForApprovalAt` instead.
+   */
+  approvalHold?: PostApprovalHold;
+}
+
+export interface PostApprovalHold {
+  submittedForApprovalAt: Date;
+  scheduledFor: Date | null;
+}
+
+/** The columns that hold a non-series job for approval; none without a hold. */
+function approvalHoldData(hold: PostApprovalHold | undefined) {
+  if (!hold) return {};
+  return {
+    submittedForApprovalAt: hold.submittedForApprovalAt,
+    ...(hold.scheduledFor ? { scheduledFor: hold.scheduledFor } : {}),
+  };
 }
 
 /**
@@ -397,6 +419,7 @@ export async function createPostJobOnly(
             }),
             workspaceId,
             ...seriesJobData(params.series, time),
+            ...(params.series ? {} : approvalHoldData(params.approvalHold)),
           },
         });
 
@@ -457,6 +480,7 @@ export async function createPostJobOnly(
               cover: params.cover,
             }),
             workspaceId,
+            ...approvalHoldData(params.approvalHold),
           },
         });
         if (intent === "immediate") await createResults(storyJob.id, storyConnections);
@@ -716,6 +740,7 @@ export async function createPostJobForExistingMedia(
             }),
             workspaceId,
             ...seriesJobData(params.series, time),
+            ...(params.series ? {} : approvalHoldData(params.approvalHold)),
           },
         }),
       );
@@ -760,6 +785,7 @@ export async function createPostJobForExistingMedia(
             cover: params.cover,
           }),
           workspaceId,
+          ...approvalHoldData(params.approvalHold),
         },
       });
       if (intent === "immediate") await createResults(storyJob.id, storyConnections);

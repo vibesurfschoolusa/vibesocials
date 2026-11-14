@@ -138,3 +138,10 @@ describe("notifyOwnersOfApprovalRequest - a series", () => {
     expect(sendEmailMock.mock.calls[0][0].html).toContain("This post repeats: 3 posts from");
   });
 });
+
+describe("notifyOwnersOfApprovalRequest - Feed and Story (Q1)", () => {
+  it("passes the Story platforms to the email", async () => {
+    await notifyOwnersOfApprovalRequest({ ...PARAMS, alsoAsStory: ["instagram"] });
+    expect(sendEmailMock.mock.calls[0][0].html).toContain("This post also goes out as a Story on Instagram.");
+  });
+});

@@ -1,6 +1,6 @@
 import type { Platform } from "@prisma/client";
 
-import { PLATFORM_CAPTIONS_HEADING, platformCaptionEntries } from "@/lib/platforms";
+import { PLATFORM_CAPTIONS_HEADING, platformCaptionEntries, platformLabel } from "@/lib/platforms";
 
 /**
  * Approval workflow emails (2026-07-26 plan, Task 3). Pure builders — the
@@ -74,6 +74,18 @@ function seriesLine(series: { count: number; first: Date; last: Date } | undefin
   )}. Each one needs its own approval in the Queue.</p>`;
 }
 
+/**
+ * The line a held Feed and Story post adds (Q1): its Story is a second Queue
+ * item, so the owner is told before finding it. Empty without one.
+ */
+function alsoAsStoryLine(platforms: readonly Platform[] | undefined): string {
+  if (!platforms || platforms.length === 0) return "";
+  const names = platforms.map((platform) => platformLabel(platform)).join(" and ");
+  return `<p>This post also goes out as a Story on ${escapeHtml(
+    names,
+  )}. The Story is its own item in the Queue and needs its own approval.</p>`;
+}
+
 /** Sent to every workspace OWNER when a member submits a post for approval. */
 export function buildApprovalRequestedEmail(params: {
   submitterName: string;
@@ -85,6 +97,8 @@ export function buildApprovalRequestedEmail(params: {
   appBaseUrl: string | null;
   /** A held repeating post (brief 11): how many posts, and the first and last times. */
   series?: { count: number; first: Date; last: Date };
+  /** A held Feed and Story post (Q1): the platforms its Story job goes to. */
+  alsoAsStory?: readonly Platform[];
 }): { subject: string; html: string } {
   const submitter = escapeHtml(params.submitterName);
   const workspace = escapeHtml(params.workspaceName);
@@ -100,6 +114,7 @@ export function buildApprovalRequestedEmail(params: {
       captionBlock(params.caption),
       platformCaptionsBlock(params.platformCaptions),
       seriesLine(params.series),
+      alsoAsStoryLine(params.alsoAsStory),
       `<p>It will not publish until you approve it.</p>`,
       cta,
       `<p>— Vibe Socials</p>`,

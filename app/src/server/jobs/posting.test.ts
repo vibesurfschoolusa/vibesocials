@@ -2065,3 +2065,103 @@ describe("createPostJobOnly / createPostJobForExistingMedia - a Story job beside
     expect(result.storyPostJobId).toBe("job-2");
   });
 });
+
+// Q1 fix 1: a member's Feed and Story pair is held inside the create
+// transaction, both jobs or neither.
+describe("createPostJobOnly / createPostJobForExistingMedia - an approval hold", () => {
+  const photo = {
+    storageLocation: "https://example.public.blob.vercel-storage.com/p1.jpg",
+    originalFilename: "p1.jpg",
+    mimeType: "image/jpeg",
+    sizeBytes: 101,
+  };
+  const STORY = { placement: "story" } as const;
+  const submittedAt = new Date("2026-11-14T12:00:00.000Z");
+  const when = new Date("2026-12-01T10:00:00.000Z");
+
+  beforeEach(() => {
+    mediaItemCreateMock.mockReset();
+    mediaItemUpdateMock.mockReset();
+    findUniqueMock.mockReset();
+    postJobCreateMock.mockReset();
+    postJobResultCreateMock.mockReset();
+    executeRawMock.mockReset();
+    mediaItemCreateMock.mockImplementation((args: { data: object }) =>
+      Promise.resolve(makeMediaItem({ id: "media-1", mimeType: "image/jpeg", ...args.data })),
+    );
+    let jobs = 0;
+    postJobCreateMock.mockImplementation(() => {
+      jobs += 1;
+      return Promise.resolve({ id: `job-${jobs}` });
+    });
+    mediaItemUpdateMock.mockResolvedValue(makeMediaItem());
+  });
+
+  it("a scheduled member post: both jobs are written as submitted drafts that keep the time", async () => {
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: photo,
+      baseCaption: "hi",
+      intent: "draft",
+      scheduledFor: when,
+      approvalHold: { submittedForApprovalAt: submittedAt, scheduledFor: when },
+      story: { targetPlatforms: ["instagram"], instagramMetadata: STORY },
+    });
+
+    const jobs = postJobCreateMock.mock.calls.map((c) => c[0].data);
+    expect(jobs).toHaveLength(2);
+    for (const data of jobs) {
+      expect(data).toMatchObject({ status: "draft", scheduledFor: when, submittedForApprovalAt: submittedAt });
+    }
+  });
+
+  it("a member draft with no time: both held, no time written", async () => {
+    findUniqueMock.mockResolvedValue(makeMediaItem({ workspaceId: "workspace-1", mimeType: "image/jpeg" }));
+    await createPostJobForExistingMedia({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      mediaItemId: "media-1",
+      baseCaption: "hi",
+      intent: "draft",
+      approvalHold: { submittedForApprovalAt: submittedAt, scheduledFor: null },
+      story: { targetPlatforms: ["facebook_page"], facebookMetadata: STORY },
+    });
+
+    const jobs = postJobCreateMock.mock.calls.map((c) => c[0].data);
+    expect(jobs).toHaveLength(2);
+    for (const data of jobs) {
+      expect(data).toMatchObject({ status: "draft", scheduledFor: null, submittedForApprovalAt: submittedAt });
+    }
+  });
+
+  it("the held Story job failing to write rejects the whole create", async () => {
+    postJobCreateMock.mockResolvedValueOnce({ id: "job-1" }).mockRejectedValueOnce(new Error("db down"));
+    await expect(
+      createPostJobOnly({
+        userId: "user-1",
+        workspaceId: "workspace-1",
+        media: photo,
+        baseCaption: "hi",
+        intent: "draft",
+        approvalHold: { submittedForApprovalAt: submittedAt, scheduledFor: when },
+        story: { targetPlatforms: ["instagram"], instagramMetadata: STORY },
+      }),
+    ).rejects.toThrow("db down");
+  });
+
+  it("no hold: no submission stamp", async () => {
+    await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: photo,
+      baseCaption: "hi",
+      intent: "scheduled",
+      scheduledFor: when,
+      story: { targetPlatforms: ["instagram"], instagramMetadata: STORY },
+    });
+    for (const call of postJobCreateMock.mock.calls) {
+      expect(call[0].data).not.toHaveProperty("submittedForApprovalAt");
+    }
+  });
+});

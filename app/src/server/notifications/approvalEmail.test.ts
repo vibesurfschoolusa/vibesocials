@@ -199,3 +199,32 @@ describe("buildApprovalRequestedEmail - a series", () => {
     expect(buildApprovalRequestedEmail(base).html).not.toContain("repeats");
   });
 });
+
+// Q1 fix 1: a held Feed and Story post makes a second Queue item, so the email says so.
+describe("buildApprovalRequestedEmail - Feed and Story", () => {
+  const base = { submitterName: "Sam", workspaceName: "Acme", caption: "Book your lesson", appBaseUrl: null };
+  const line = (where: string) =>
+    `<p>This post also goes out as a Story on ${where}. The Story is its own item in the Queue and needs its own approval.</p>`;
+
+  it("Instagram", () => {
+    expect(buildApprovalRequestedEmail({ ...base, alsoAsStory: ["instagram"] }).html).toContain(line("Instagram"));
+  });
+
+  it("Facebook", () => {
+    expect(buildApprovalRequestedEmail({ ...base, alsoAsStory: ["facebook_page"] }).html).toContain(
+      line("Facebook Page"),
+    );
+  });
+
+  it("both platforms", () => {
+    expect(buildApprovalRequestedEmail({ ...base, alsoAsStory: ["instagram", "facebook_page"] }).html).toContain(
+      line("Instagram and Facebook Page"),
+    );
+  });
+
+  it("no Story job: the email is unchanged", () => {
+    const before = buildApprovalRequestedEmail(base);
+    expect(buildApprovalRequestedEmail({ ...base, alsoAsStory: [] })).toEqual(before);
+    expect(before.html).not.toContain("as a Story");
+  });
+});

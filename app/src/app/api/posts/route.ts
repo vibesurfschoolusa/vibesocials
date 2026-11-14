@@ -916,7 +916,6 @@ export async function POST(request: Request) {
           ...(facebookPlacement.storyJob ? { facebookMetadata: { placement: "story" as const } } : {}),
         }
       : undefined;
-  const storyArgs = storyJob ? { story: storyJob } : {};
 
   // 2026-11-01 audit (Task 9): an EXPLICIT platform list is checked before any
   // row is written — every requested platform must be able to publish this
@@ -1050,6 +1049,18 @@ export async function POST(request: Request) {
       }
     : undefined;
 
+  // Q1: a Feed and Story pair is held the same way, inside the create
+  // transaction, so it is never half held. A single post is held after the
+  // create (below), as before.
+  const storyArgs = storyJob
+    ? {
+        story: storyJob,
+        ...(heldForApproval
+          ? { approvalHold: { submittedForApprovalAt: new Date(), scheduledFor: scheduledForDate } }
+          : {}),
+      }
+    : {};
+
   // Publishing needs no verified email (2026-11-09): only the person's own
   // platform accounts, connected through each platform's sign-in, receive it.
 
@@ -1175,18 +1186,16 @@ export async function POST(request: Request) {
     // so it is re-applied here rather than threading an extra param through
     // both helpers (and their tests).
     if (heldForApproval) {
-      // A series was held in its own transaction (above).
-      if (!series) {
-        // Q1: a Feed and Story post's Story job is held the same way.
-        for (const id of storyPostJobId ? [postJobId, storyPostJobId] : [postJobId]) {
-          await prisma.postJob.update({
-            where: { id },
-            data: {
-              submittedForApprovalAt: new Date(),
-              ...(scheduledForDate ? { scheduledFor: scheduledForDate } : {}),
-            },
-          });
-        }
+      // A series, and a Feed and Story pair, were held in the create
+      // transaction (above).
+      if (!series && !storyJob) {
+        await prisma.postJob.update({
+          where: { id: postJobId },
+          data: {
+            submittedForApprovalAt: new Date(),
+            ...(scheduledForDate ? { scheduledFor: scheduledForDate } : {}),
+          },
+        });
       }
 
       // 2026-11-01 audit: tell the owners something is waiting. Never throws.
@@ -1214,6 +1223,8 @@ export async function POST(request: Request) {
             ...(facebookMetadata ? (["facebook_page"] as const) : []),
           ],
         ),
+        // Q1: the Story job is a second item in the Queue; the email says so.
+        ...(storyPostJobId && storyJob ? { alsoAsStory: storyJob.targetPlatforms } : {}),
         ...(series
           ? {
               series: {
