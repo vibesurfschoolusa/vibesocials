@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { formatNextPostTime, needsYouRows, reviewsNeedingReply, type DashboardSummary } from "./needsYou";
+import {
+  formatNextPostTime,
+  hasGoogleListing,
+  needsYouRows,
+  needsYouView,
+  reviewsNeedingReply,
+  shouldMountNeedsYou,
+  type DashboardSummary,
+} from "./needsYou";
 
 const QUIET: DashboardSummary = {
   problemsLast7Days: 0,
@@ -123,5 +131,65 @@ describe("formatNextPostTime", () => {
         minute: "2-digit",
       }),
     );
+  });
+});
+
+describe("needsYouView", () => {
+  it("renders on the summary alone when Google is not connected", () => {
+    expect(needsYouView({ summary: "loaded", reviews: "not_asked" })).toBe("card");
+    expect(needsYouView({ summary: "loading", reviews: "not_asked" })).toBe("skeleton");
+  });
+
+  it("keeps the skeleton while the reviews call is pending, even with the summary in", () => {
+    expect(needsYouView({ summary: "loaded", reviews: "pending" })).toBe("skeleton");
+    expect(needsYouView({ summary: "loading", reviews: "pending" })).toBe("skeleton");
+  });
+
+  it("renders once the reviews call has settled, whatever its answer", () => {
+    expect(needsYouView({ summary: "loaded", reviews: "settled" })).toBe("card");
+    expect(needsYouView({ summary: "loading", reviews: "settled" })).toBe("skeleton");
+  });
+
+  it("shows nothing when the summary failed, whatever the reviews call does", () => {
+    expect(needsYouView({ summary: "failed", reviews: "not_asked" })).toBe("nothing");
+    expect(needsYouView({ summary: "failed", reviews: "pending" })).toBe("nothing");
+    expect(needsYouView({ summary: "failed", reviews: "settled" })).toBe("nothing");
+  });
+
+  it("gives the right title once settled reviews are counted (0, n, or failed as null)", () => {
+    expect(needsYouRows(QUIET, 0, "owner").title).toBe("You're all caught up");
+    expect(needsYouRows(QUIET, 4, "owner").title).toBe("Needs you");
+    const failed = needsYouRows(QUIET, null, "owner");
+    expect(failed.title).toBe("You're all caught up");
+    expect(failed.rows.map((row) => row.kind)).toEqual(["add_many"]);
+  });
+});
+
+describe("shouldMountNeedsYou", () => {
+  const settled = { connectionsLoading: false, postsLoading: false, gettingStartedShowing: false };
+
+  it("mounts once both fetches finished and Get started is not showing", () => {
+    expect(shouldMountNeedsYou(settled)).toBe(true);
+  });
+
+  it("does not mount while Get started shows", () => {
+    expect(shouldMountNeedsYou({ ...settled, gettingStartedShowing: true })).toBe(false);
+  });
+
+  it("does not mount while either fetch is still loading", () => {
+    expect(shouldMountNeedsYou({ ...settled, connectionsLoading: true })).toBe(false);
+    expect(shouldMountNeedsYou({ ...settled, postsLoading: true })).toBe(false);
+  });
+});
+
+describe("hasGoogleListing", () => {
+  it("is true only for a connected Google Business Profile", () => {
+    expect(hasGoogleListing([{ platform: "google_business_profile", connected: true }])).toBe(true);
+    expect(hasGoogleListing([{ platform: "google_business_profile", connected: false }])).toBe(false);
+    expect(hasGoogleListing([{ platform: "instagram", connected: true }])).toBe(false);
+  });
+
+  it("is false when the connections fetch failed (no Google call)", () => {
+    expect(hasGoogleListing(null)).toBe(false);
   });
 });

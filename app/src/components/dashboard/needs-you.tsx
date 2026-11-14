@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   needsYouRows,
+  needsYouView,
   reviewsNeedingReply,
   type DashboardSummary,
   type NeedsYouRowKind,
@@ -32,15 +33,19 @@ const ICONS: Record<NeedsYouRowKind, LucideIcon> = {
 };
 
 /**
- * The dashboard's "Needs you" card (N1). Mounted only once the dashboard knows
- * its connections, so `hasGoogleListing` is settled on mount: both fetches run
- * once per visit and are never polled. The reviews call reaches Google, which
- * is why it has no retry; any failure there just leaves its row out.
+ * The dashboard's "Needs you" card (N1). Mounted only once the dashboard's
+ * connections fetch has finished, so `hasGoogleListing` is settled on mount:
+ * both fetches run once per visit and are never polled. The reviews call
+ * reaches Google, which is why it has no retry; any failure there just leaves
+ * its row out.
  */
-export function NeedsYou({ hasGoogleListing }: { hasGoogleListing: boolean }) {
+export function NeedsYou({ hasGoogleListing: googleOnMount }: { hasGoogleListing: boolean }) {
+  // Read once: a later connections reload must not start a second Google call.
+  const [hasGoogleListing] = useState(googleOnMount);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [failed, setFailed] = useState(false);
   const [reviews, setReviews] = useState<number | null>(null);
+  const [reviewsSettled, setReviewsSettled] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,15 +72,22 @@ export function NeedsYou({ hasGoogleListing }: { hasGoogleListing: boolean }) {
         const count = reviewsNeedingReply(await response.json());
         if (!cancelled) setReviews(count);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setReviewsSettled(true);
+      });
     return () => {
       cancelled = true;
     };
   }, [hasGoogleListing]);
 
-  if (failed) return null;
+  const view = needsYouView({
+    summary: failed ? "failed" : summary ? "loaded" : "loading",
+    reviews: !hasGoogleListing ? "not_asked" : reviewsSettled ? "settled" : "pending",
+  });
+  if (view === "nothing") return null;
 
-  if (!summary) {
+  if (view === "skeleton" || !summary) {
     return (
       <Card>
         <CardHeader>

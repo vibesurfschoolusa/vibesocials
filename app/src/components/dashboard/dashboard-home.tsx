@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { Link2, PenSquare } from "lucide-react";
@@ -15,6 +16,7 @@ import { YouTubeMetricsSummary } from "@/components/dashboard/youtube-metrics-su
 import { PublishHealthCard } from "@/components/dashboard/publish-health-card";
 import { ListingMetricsCard } from "@/components/dashboard/listing-metrics-card";
 import { NeedsYou } from "@/components/dashboard/needs-you";
+import { hasGoogleListing, shouldMountNeedsYou } from "@/lib/needsYou";
 import { firstName } from "@/lib/accountInitials";
 import { APP_PAGE_CLASS } from "@/lib/pageLayout";
 import { useConnections } from "@/hooks/useConnections";
@@ -78,6 +80,22 @@ function Dashboard({ availablePlatforms, setup }: DashboardProps) {
   const headerLoading = connectionsState.loading || postJobs.loading;
   const cta = deriveDashboardCta(connectionsState.connections) ?? COMPOSE_CTA;
 
+  // Latched: once the card is mounted, a manual reload of posts or
+  // connections (loading flips back to true) must not unmount it and fire its
+  // one-per-visit fetches again. Set during render, React's pattern for state
+  // derived from a change.
+  const [needsYouMounted, setNeedsYouMounted] = useState(false);
+  if (
+    !needsYouMounted &&
+    shouldMountNeedsYou({
+      connectionsLoading: connectionsState.loading,
+      postsLoading: postJobs.loading,
+      gettingStartedShowing: onboarding.show,
+    })
+  ) {
+    setNeedsYouMounted(true);
+  }
+
   return (
     <div className={APP_PAGE_CLASS}>
       {/* The greeting and the CTA read from the same two fetches, so the whole
@@ -128,18 +146,13 @@ function Dashboard({ availablePlatforms, setup }: DashboardProps) {
 
       <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
-          {/* N1: what wants the owner today. Waits for `ready` so a new user
-              never meets it while the Get started checklist (its own to-do
-              list) is about to appear, and so the connections it reads are
-              known on its one mount. */}
-          {onboarding.ready && !onboarding.show ? (
-            <NeedsYou
-              hasGoogleListing={Boolean(
-                connectionsState.connections?.some(
-                  (connection) => connection.platform === "google_business_profile" && connection.connected,
-                ),
-              )}
-            />
+          {/* N1: what wants the owner today. Waits for the connections and
+              posts fetches (loaded or failed) so a new user never meets it
+              while the Get started checklist, its own to-do list, is about to
+              appear, and so the connections it reads are known on its one
+              mount. Hidden whenever the checklist shows. */}
+          {needsYouMounted && !onboarding.show ? (
+            <NeedsYou hasGoogleListing={hasGoogleListing(connectionsState.connections)} />
           ) : null}
           {/* First-run checklist — renders nothing once this person's steps
               are done (see lib/gettingStarted.ts). */}

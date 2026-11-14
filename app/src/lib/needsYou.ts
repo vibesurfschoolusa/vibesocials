@@ -119,3 +119,41 @@ export function needsYouRows(
 
   return { title, rows };
 }
+
+/**
+ * What the card shows right now. With Google connected it waits for the
+ * reviews call as well as the summary: drawing "You're all caught up" first
+ * and then flipping to "Needs you" when the reviews land would say something
+ * untrue for a moment. A failed reviews call counts as settled (no row).
+ */
+export function needsYouView(input: {
+  summary: "loading" | "loaded" | "failed";
+  reviews: "not_asked" | "pending" | "settled";
+}): "nothing" | "skeleton" | "card" {
+  if (input.summary === "failed") return "nothing";
+  if (input.summary === "loading" || input.reviews === "pending") return "skeleton";
+  return "card";
+}
+
+/**
+ * Whether the dashboard mounts the card: once its connections and posts
+ * fetches have finished, loaded or failed, so the card is never mounted and
+ * then pulled for the Get started checklist. Deliberately not
+ * `onboarding.ready`, which needs every fetch to succeed.
+ */
+export function shouldMountNeedsYou(input: {
+  connectionsLoading: boolean;
+  postsLoading: boolean;
+  gettingStartedShowing: boolean;
+}): boolean {
+  return !input.connectionsLoading && !input.postsLoading && !input.gettingStartedShowing;
+}
+
+/** A connected Google listing; false when the connections fetch failed. */
+export function hasGoogleListing(
+  connections: readonly { platform: string; connected: boolean }[] | null,
+): boolean {
+  return Boolean(
+    connections?.some((connection) => connection.platform === "google_business_profile" && connection.connected),
+  );
+}
