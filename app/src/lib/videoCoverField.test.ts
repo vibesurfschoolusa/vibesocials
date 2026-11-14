@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { COVER_IMAGE_MAX_BYTES, COVER_IMAGE_RULE } from "./videoCover";
 import { COVER_ADDRESS_REFUSED_MESSAGE } from "./coverBlobPath";
-import { parseCoverField } from "./videoCoverField";
+import { COVER_IMAGE_UNREADABLE_MESSAGE, parseCoverField, withStoredCoverFacts } from "./videoCoverField";
 
 const BLOB = "https://abc.public.blob.vercel-storage.com/covers/ws-1/1-x-cover.jpg";
 
@@ -81,5 +81,56 @@ describe("parseCoverField (POST /api/posts)", () => {
 
   it("a reused file (type unknown here) may carry a cover", () => {
     expect(parseCoverField({ timeMs: 10 }, null, "ws-1")).toEqual({ ok: true, value: { timeMs: 10 } });
+  });
+});
+
+// R3-security M1: the cover's type and size are read from storage, not taken
+// from the request, so a video parked under covers/ is not kept as a "cover".
+describe("withStoredCoverFacts (POST /api/posts)", () => {
+  const stored = (facts: { size: number; contentType: string }) => async () => facts;
+
+  it("puts the stored type and size in place of the ones the request named", async () => {
+    const result = await withStoredCoverFacts(
+      { timeMs: 5, imageUrl: BLOB, mimeType: "image/jpeg", sizeBytes: 10 },
+      "ws-1",
+      stored({ size: 400 * 1024 * 1024, contentType: "video/mp4" }),
+    );
+    expect(result).toEqual({
+      ok: true,
+      value: { timeMs: 5, imageUrl: BLOB, mimeType: "video/mp4", sizeBytes: 400 * 1024 * 1024 },
+    });
+    if (result.ok) expect(parseCoverField(result.value, "video/mp4", "ws-1")).toEqual({ ok: false, error: COVER_IMAGE_RULE });
+  });
+
+  it("a normal stored JPEG passes through to a cover", async () => {
+    const result = await withStoredCoverFacts(
+      { imageUrl: BLOB, mimeType: "image/jpeg", sizeBytes: 999 },
+      "ws-1",
+      stored({ size: 1000, contentType: "image/jpeg" }),
+    );
+    expect(result.ok && parseCoverField(result.value, "video/mp4", "ws-1")).toEqual({ ok: true, value: { imageUrl: BLOB } });
+  });
+
+  it("a cover that cannot be found in storage is refused with a plain sentence", async () => {
+    const missing = async () => {
+      throw new Error("BlobNotFoundError");
+    };
+    await expect(withStoredCoverFacts({ imageUrl: BLOB }, "ws-1", missing)).resolves.toEqual({
+      ok: false,
+      error: COVER_IMAGE_UNREADABLE_MESSAGE,
+    });
+  });
+
+  it("asks storage nothing for a frame alone, no cover, or an address that is not this workspace's", async () => {
+    let asked = 0;
+    const head = async () => {
+      asked += 1;
+      return { size: 1, contentType: "image/jpeg" };
+    };
+    for (const raw of [undefined, null, "x", { timeMs: 1 }, { imageUrl: "https://evil.example.com/a.jpg" },
+      { imageUrl: "https://abc.public.blob.vercel-storage.com/covers/ws-2/1-x-cover.jpg" }]) {
+      await expect(withStoredCoverFacts(raw, "ws-1", head)).resolves.toEqual({ ok: true, value: raw });
+    }
+    expect(asked).toBe(0);
   });
 });

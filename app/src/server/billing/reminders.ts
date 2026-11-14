@@ -54,7 +54,7 @@ const SELECT = {
   id: true,
   name: true,
   trialEndsAt: true,
-  members: { where: { role: "owner" as const }, select: { userId: true, user: { select: { email: true } } } },
+  members: { where: { role: "owner" as const }, select: { userId: true, user: { select: { email: true, timeZone: true } } } },
 };
 
 export async function runBillingReminders(
@@ -103,17 +103,18 @@ export async function runBillingReminders(
       break;
     }
 
-    const email =
-      kind === "trial-ending"
-        ? buildTrialEndingEmail({
-            workspaceId: workspace.id,
-            workspaceName: workspace.name,
-            trialEndsAt: workspace.trialEndsAt!,
-          })
-        : buildTrialEndedEmail({ workspaceId: workspace.id, workspaceName: workspace.name });
-
     let allSent = true;
     for (const owner of workspace.members) {
+      // Per owner (R3-pages L1): the end time is shown in that owner's time zone.
+      const email =
+        kind === "trial-ending"
+          ? buildTrialEndingEmail({
+              workspaceId: workspace.id,
+              workspaceName: workspace.name,
+              trialEndsAt: workspace.trialEndsAt!,
+              timeZone: owner.user.timeZone,
+            })
+          : buildTrialEndedEmail({ workspaceId: workspace.id, workspaceName: workspace.name });
       if (!first) await sleep(REMINDER_SEND_INTERVAL_MS);
       first = false;
       const send = () =>

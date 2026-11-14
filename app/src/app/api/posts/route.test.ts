@@ -140,6 +140,12 @@ function jsonRequest(sent: unknown): Request {
   remember(withDefaults);
   const media = (withDefaults as { media?: unknown } | null)?.media;
   if (Array.isArray(media)) media.forEach(remember);
+  // R3-security M1: a cover image is read from storage too.
+  const cover = (withDefaults as { cover?: unknown } | null)?.cover;
+  if (typeof cover === "object" && cover !== null) {
+    const { imageUrl, mimeType, sizeBytes } = cover as Record<string, unknown>;
+    remember({ blobUrl: imageUrl, mimeType, sizeBytes });
+  }
   return new Request("http://localhost/api/posts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2673,6 +2679,33 @@ describe("POST /api/posts — a video's cover", () => {
       }),
     );
     expect(response.status).toBe(400);
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("R3-security M1: refuses a cover whose stored file is not a JPEG image, whatever the request said", async () => {
+    const request = jsonRequest({ ...VIDEO, cover: { imageUrl: COVER_URL, mimeType: "image/jpeg", sizeBytes: 900 } });
+    storedFiles.set(COVER_URL, { size: 300 * 1024 * 1024, contentType: "video/mp4" });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "The cover must be a JPEG image of 8 MB or less." });
+    expect(headMock).toHaveBeenCalledWith(COVER_URL);
+    expect(createPostJobOnlyMock).not.toHaveBeenCalled();
+  });
+
+  it("R3-security M1: refuses a stored JPEG cover over 8 MB, and one storage cannot find", async () => {
+    const big = jsonRequest({ ...VIDEO, cover: { imageUrl: COVER_URL, mimeType: "image/jpeg", sizeBytes: 900 } });
+    storedFiles.set(COVER_URL, { size: 9 * 1024 * 1024, contentType: "image/jpeg" });
+    expect((await POST(big)).status).toBe(400);
+
+    const missing = jsonRequest({ ...VIDEO, cover: { imageUrl: COVER_URL, mimeType: "image/jpeg", sizeBytes: 900 } });
+    storedFiles.delete(COVER_URL);
+    const response = await POST(missing);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "Couldn't find the cover image in storage. Choose the cover again and post once more.",
+    });
     expect(createPostJobOnlyMock).not.toHaveBeenCalled();
   });
 

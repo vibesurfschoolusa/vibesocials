@@ -62,7 +62,6 @@ describe("xWeightedLength", () => {
     expect(xWeightedLength("surf.io/book")).toBe(23);
     expect(xWeightedLength("www.example.surf")).toBe(23);
     expect(xWeightedLength("Mr.Smith")).toBe(8);
-    expect(xWeightedLength("notes.txt")).toBe(9);
     expect(xWeightedLength("https://example.surf")).toBe(23);
   });
 
@@ -93,10 +92,25 @@ describe("xWeightedLength", () => {
     expect(xWeightedLength("www.beach.It")).toBe(23);
   });
 
-  it("still counts dotted words with an ending no domain has as characters", () => {
+  it("still counts dotted words with a capital after the dot as characters", () => {
     expect(xWeightedLength("Mr.Smith")).toBe(8);
     expect(xWeightedLength("St.Pete")).toBe(7);
-    expect(xWeightedLength("notes.txt")).toBe(9);
+  });
+
+  // R3-publishing L1: X counts a bare domain with any valid ending as 23, and no
+  // list holds every ending, so any lower-case bare domain counts at least 23:
+  // counting high only cuts a little early, counting low gets the post refused.
+  it("counts any lower-case bare domain at least 23, whatever its ending", () => {
+    expect(xWeightedLength("example.surfing")).toBe(23);
+    expect(xWeightedLength("notes.txt")).toBe(23);
+    expect(xWeightedLength("my-shop2.qq/path")).toBe(23);
+    expect(xWeightedLength("Book at example.zzz today")).toBe(8 + 23 + 6);
+    // Longer than 23 with an unlisted ending: its own length, the higher count.
+    const long = "averyveryverylongdomainname.qqq";
+    expect(long.length).toBeGreaterThan(23);
+    expect(xWeightedLength(long)).toBe(long.length);
+    // A listed ending is exactly 23 however long, as X counts it.
+    expect(xWeightedLength("averyveryverylongdomainname.com")).toBe(23);
   });
 
   it("does not read an email address or an abbreviation as a link", () => {

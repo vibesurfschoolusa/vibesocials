@@ -216,14 +216,20 @@ const MENTION_PATTERN = /(?<![\p{L}\p{N}_.@])@([A-Za-z0-9_](?:[A-Za-z0-9._]*[A-Z
 /**
  * Fit a feed caption to those limits, keeping the text in order. Hashtags past
  * the 30th are dropped: the workspace footer's hashtags come last
- * (captionFooter.ts), so they go first, then the caption's own trailing ones.
+ * (captionFooter.ts), so they go first, then the caption's own trailing ones;
+ * `droppedHashtags` names them for the result's note (R3-publishing L2).
  * Mentions past the 20th stay as plain words without the "@"; `plainMentions`
  * names them for the result's note. A caption within both is returned as is.
  */
-export function fitInstagramTags(caption: string): { caption: string; plainMentions: string[] } {
+export function fitInstagramTags(caption: string): {
+  caption: string;
+  plainMentions: string[];
+  droppedHashtags: string[];
+} {
   let text = caption;
 
   const extraTags = [...text.matchAll(HASHTAG_PATTERN)].slice(INSTAGRAM_MAX_HASHTAGS);
+  const droppedHashtags = [...new Set(extraTags.map((match) => match[0]))];
   if (extraTags.length > 0) {
     // From the end, so earlier indices stay valid. Each tag goes with the spaces
     // before it, so no double space or trailing blank is left behind.
@@ -246,7 +252,13 @@ export function fitInstagramTags(caption: string): { caption: string; plainMenti
     return name;
   });
 
-  return { caption: text, plainMentions };
+  return { caption: text, plainMentions, droppedHashtags };
+}
+
+/** The result's note for hashtags left out past the 30th, or undefined when none were. */
+function droppedHashtagsNote(tags: readonly string[]): string | undefined {
+  if (tags.length === 0) return undefined;
+  return `Instagram allows ${INSTAGRAM_MAX_HASHTAGS} hashtags in a post, so these were left out: ${tags.join(" ")}.`;
 }
 
 /** The result's note for mentions sent as plain text, or undefined when there were none. */
@@ -1111,7 +1123,8 @@ export const instagramClient: PlatformClient = {
     const story = ctx.instagramMetadata?.placement === "story";
     // G1 (R2 L3): within Instagram's hashtag and mention limits. A Story sends
     // no caption, so it has nothing to fit.
-    const fitted = story ? { caption, plainMentions: [] } : fitInstagramTags(caption);
+    const fitted = story ? { caption, plainMentions: [], droppedHashtags: [] } : fitInstagramTags(caption);
+    const tagsNote = droppedHashtagsNote(fitted.droppedHashtags);
     const mentionsNote = plainMentionsNote(fitted.plainMentions);
 
     if (ctx.mediaItems.length > 1) {
@@ -1129,7 +1142,7 @@ export const instagramClient: PlatformClient = {
         connection: socialConnection,
         username: metadata.username,
       });
-      return withNotes(carousel, mentionsNote);
+      return withNotes(carousel, tagsNote, mentionsNote);
     }
 
     console.log("[Instagram] Starting media upload", {
@@ -1268,7 +1281,7 @@ export const instagramClient: PlatformClient = {
         username: metadata.username,
         store,
       });
-      return withNotes(published, coverRefused ? INSTAGRAM_COVER_REFUSED_NOTE : undefined, mentionsNote);
+      return withNotes(published, coverRefused ? INSTAGRAM_COVER_REFUSED_NOTE : undefined, tagsNote, mentionsNote);
     } catch (error: unknown) {
       console.error("[Instagram] Publish error", error);
       throw error;

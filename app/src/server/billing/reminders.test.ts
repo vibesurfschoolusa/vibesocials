@@ -11,7 +11,7 @@ type Ws = {
   /** How many connected platforms and posts (any status) the workspace has. */
   connections: number;
   posts: number;
-  owners: Array<{ userId: string; email: string }>;
+  owners: Array<{ userId: string; email: string; timeZone?: string | null }>;
 };
 
 const m = vi.hoisted(() => ({
@@ -62,8 +62,14 @@ vi.mock("@/lib/db", () => {
   return {
     prisma: {
       workspace: {
-        findMany: async (args: { where: Where; take: number }) => {
+        findMany: async (args: {
+          where: Where;
+          take: number;
+          select?: { members?: { select?: { user?: { select?: { timeZone?: boolean } } } } };
+        }) => {
           m.findManyArgs.push(args);
+          // A column comes back only when the query selects it.
+          const withZone = args.select?.members?.select?.user?.select?.timeZone === true;
           return m.rows
             .filter((w) => matches(w, args.where))
             .sort((a, b) => (a.id < b.id ? -1 : 1))
@@ -72,7 +78,10 @@ vi.mock("@/lib/db", () => {
               id: w.id,
               name: w.name,
               trialEndsAt: w.trialEndsAt,
-              members: w.owners.map((o) => ({ userId: o.userId, user: { email: o.email } })),
+              members: w.owners.map((o) => ({
+                userId: o.userId,
+                user: { email: o.email, ...(withZone ? { timeZone: o.timeZone ?? null } : {}) },
+              })),
             }));
         },
         update: async ({ where, data }: { where: { id: string }; data: Partial<Ws> }) => {
@@ -151,6 +160,26 @@ describe("runBillingReminders", () => {
     m.sendEmail.mockClear();
     expect(await run()).toEqual({ trialEnding: 0, trialEnded: 0, sent: 0, failed: 0, left: 0 });
     expect(m.sendEmail).not.toHaveBeenCalled();
+  });
+
+  // R3-pages L1: each owner reads the end time in their own time zone.
+  it("builds the trial-ending email per owner, in that owner's time zone", async () => {
+    m.rows = [
+      ws("a", {
+        owners: [
+          { userId: "owner-ny", email: "ny@example.com", timeZone: "America/New_York" },
+          { userId: "owner-jhb", email: "jhb@example.com", timeZone: "Africa/Johannesburg" },
+          { userId: "owner-none", email: "none@example.com", timeZone: null },
+        ],
+      }),
+    ];
+    await run();
+    const html = (to: string) => m.sendEmail.mock.calls.find((call) => call[0].to === to)![0].html as string;
+    // Ends 2026-11-12 16:00 UTC: 11:00 in New York, 18:00 in Johannesburg.
+    expect(html("ny@example.com")).toMatch(/Nov 12, 2026, 11:00\s?AM/);
+    expect(html("ny@example.com")).not.toContain("UTC");
+    expect(html("jhb@example.com")).toMatch(/Nov 12, 2026, 6:00\s?PM/);
+    expect(html("none@example.com")).toMatch(/Nov 12, 2026, 4:00\s?PM UTC/);
   });
 
   it("a trial ending in more than 3 days gets nothing yet", async () => {

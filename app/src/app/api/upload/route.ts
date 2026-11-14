@@ -6,6 +6,7 @@ import { coverUploadRefusal, isWorkspaceCoverAddress } from "@/lib/coverBlobPath
 import { invalidJsonBodyResponse, readJsonObject } from "@/lib/http";
 import { logger } from "@/lib/logger";
 import { UPLOAD_ALLOWED_CONTENT_TYPES } from "@/lib/mediaInput";
+import { COVER_IMAGE_MAX_BYTES, COVER_IMAGE_RULE, COVER_IMAGE_TYPES } from "@/lib/videoCover";
 import { checkRateLimit } from "@/lib/rateLimit";
 import { getWorkspaceContext } from "@/lib/workspace";
 import { logoAddressRefusal } from "@/lib/workspaceLogo";
@@ -77,6 +78,12 @@ export async function POST(request: Request): Promise<NextResponse> {
   const blocked = accessBlockResponse(context);
   if (blocked) return blocked;
 
+  // R3-security L1: forget the last refusal before anything else is decided,
+  // so GET explains only this request's refusal (or none), never an older one
+  // that the rate limit or a full workspace below would leave in place. After
+  // the pause check, which writes nothing.
+  await clearUploadRefusal(context.user.id);
+
   const { user } = context;
 
   // Cap client upload-token issuance (each call can authorize up to 512MB).
@@ -112,6 +119,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   // R2 M1: the bytes this token request counted against the person's day, given
   // back when signing then fails. The same size is the token's maximum.
   let countedBytes = 0;
+  // R3-security M1: a cover token is signed for the cover image types and size only.
+  let coverToken = false;
 
   // Usage limits (2026-11-10): no new token once the workspace's media is at or
   // over its storage limit. Checked before the file exists, so one upload can
@@ -145,6 +154,11 @@ export async function POST(request: Request): Promise<NextResponse> {
     if (!declared.ok) {
       await recordUploadRefusal(user.id, declared.reason);
       return NextResponse.json({ error: declared.error }, { status: 400 });
+    }
+    coverToken = isWorkspaceCoverAddress(pathname, context.workspace.id);
+    if (coverToken && declared.size > COVER_IMAGE_MAX_BYTES) {
+      await recordUploadRefusal(user.id, "cover-too-large");
+      return NextResponse.json({ error: COVER_IMAGE_RULE }, { status: 400 });
     }
     const refusal = await checkStorageLimit(context.workspace.id);
     if (refusal) {
@@ -182,10 +196,11 @@ export async function POST(request: Request): Promise<NextResponse> {
         logger.info("[Upload] Generating token", { pathname, userId: user.id });
 
         return {
-          allowedContentTypes: [...UPLOAD_ALLOWED_CONTENT_TYPES],
-          // The declared size, at most 512 MB (declaredUploadSize): the store
-          // refuses a larger file, so what was counted is what can be stored.
-          maximumSizeInBytes: declared.size,
+          allowedContentTypes: coverToken ? [...COVER_IMAGE_TYPES] : [...UPLOAD_ALLOWED_CONTENT_TYPES],
+          // The declared size, at most 512 MB (declaredUploadSize), or the
+          // cover limit for a cover: the store refuses a larger file, so what
+          // was counted is what can be stored.
+          maximumSizeInBytes: coverToken ? Math.min(declared.size, COVER_IMAGE_MAX_BYTES) : declared.size,
           tokenPayload: JSON.stringify({
             userId: user.id,
             uploadedAt: new Date().toISOString(),
@@ -197,8 +212,6 @@ export async function POST(request: Request): Promise<NextResponse> {
       },
     });
 
-    // Signed: an earlier refusal no longer explains a later failure.
-    if (countedBytes > 0) await clearUploadRefusal(user.id);
     return NextResponse.json(jsonResponse);
   } catch (error) {
     logger.error("[Upload] Error", { error });
