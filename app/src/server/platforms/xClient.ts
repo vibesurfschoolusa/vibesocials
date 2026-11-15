@@ -662,7 +662,8 @@ export async function classifyXAccessError(
   return error;
 }
 
-export const X_DUPLICATE_POST_MESSAGE = "X refused this post because it is the same as a recent one.";
+export const X_DUPLICATE_POST_MESSAGE =
+  "X refused this post because it is the same as a recent one. Change the text a little, then retry.";
 
 /**
  * X refuses a post whose text matches a recent one: v2 answers 403 with "You are

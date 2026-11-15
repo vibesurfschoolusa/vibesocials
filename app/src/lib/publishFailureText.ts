@@ -43,6 +43,10 @@ function memberVariants(platform: Platform): ReadonlyMap<string, string> {
       "Could not find a Google Business Profile location for the given store code. Double-check the store code in Advanced settings.",
       "The workspace owner can check the store code for Google Business Profile; then retry.",
     ],
+    [
+      "This store code matches more than one Google Business Profile location. In Settings, choose the location from the list under Google Business Profile, or paste its full resource name under Advanced, then retry.",
+      "This store code matches more than one Google Business Profile location. The workspace owner can choose the location; then retry.",
+    ],
     [LINKEDIN_NOT_SUPER_ADMIN, linkedinNotSuperAdminMember],
     // R19 publishing L6: the Business Profile location is chosen on an owner-only page.
     [GBP_NO_LOCATION, "Google Business Profile location is not configured. The workspace owner can choose the Business Profile location; then retry."],

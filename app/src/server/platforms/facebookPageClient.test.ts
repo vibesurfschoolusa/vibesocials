@@ -595,7 +595,10 @@ describe("facebookPageClient.publishVideo — several photos (photos published=f
     const error = await failure(multiContext(photos(2)));
 
     expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
-    expect(error?.message).toBe("Facebook Page could not upload photo 2 of 2. No post was made.");
+    // R21 platform-clients L1: the 2xx without an id ends with a step.
+    expect(error?.message).toBe(
+      "Facebook Page could not upload photo 2 of 2. No post was made. Try again; if it fails again, replace photo 2.",
+    );
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -883,6 +886,19 @@ describe("facebookPageClient.publishVideo — Story", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  // R21 platform-clients L1: a 2xx upload without a photo id ends with a step.
+  it("a photo upload answered 2xx without an id publishes nothing and says what to try", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    fetchMock.mockImplementationOnce(async () => response(200, {}));
+
+    const error = await failure(photoStory());
+
+    expect(error?.message).toBe(
+      "Facebook Page could not upload the photo for the Story. No Story was made. Try again; if it fails again, use another photo.",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("an upload 5xx carries its status (nothing is visible yet, so it may be retried)", async () => {
     fetchMock.mockImplementationOnce(async () => response(503, "busy"));
 
@@ -984,6 +1000,17 @@ describe("facebookPageClient.publishVideo — Story", () => {
   });
 
   // Fix round 1: a 200 that carries a Graph error is a failed transfer.
+  // R21 platform-clients L1: a 2xx start without a video id ends with a step.
+  it("a start answered 2xx without a video id says to try again later", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    fetchMock.mockImplementationOnce(async () => response(200, { upload_url: UPLOAD_URL }));
+
+    const error = await failure(videoStory());
+
+    expect(error?.message).toBe("Facebook Page could not start the video Story. No Story was made. Try again later.");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("a transfer answered 200 with an error body fails before finish, keeping the error text out of the logs", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     fetchMock.mockImplementationOnce(async () => response(200, { video_id: "video-5", upload_url: UPLOAD_URL }));
@@ -994,7 +1021,9 @@ describe("facebookPageClient.publishVideo — Story", () => {
     const error = await failure(videoStory());
 
     expect(error?.code).toBe("FACEBOOK_PAGE_PUBLISH_FAILED");
-    expect(error?.message).toContain("No Story was made");
+    expect(error?.message).toBe(
+      "Facebook Page could not fetch the video for the Story. No Story was made. Try again; if it fails again, upload the video again.",
+    );
     expect(error?.message).not.toContain("EAAB");
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(errorSpy.mock.calls)).not.toContain("EAAB-secret-token");

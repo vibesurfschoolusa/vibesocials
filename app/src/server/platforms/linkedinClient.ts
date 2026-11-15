@@ -475,7 +475,7 @@ async function uploadImage(
     // The answer is not logged: it would hold the upload URL.
     throw linkedinCodedError(
       "LINKEDIN_IMAGE_REGISTRATION_FAILED",
-      "LinkedIn didn't return a usable upload for the image. Nothing was posted.",
+      "LinkedIn didn't return a usable upload for the image. Nothing was posted. Try again.",
     );
   }
 
@@ -697,7 +697,7 @@ async function uploadVideo(
   try {
     registerData = await registerResponse.json();
   } catch {
-    throw uploadFailed("LinkedIn didn't return a usable upload for this video. Nothing was posted.");
+    throw uploadFailed("LinkedIn didn't return a usable upload for this video. Nothing was posted. Try again.");
   }
   const upload = readVideoUpload(registerData, videoSize);
   const partCount = upload.parts.length;
@@ -728,7 +728,7 @@ async function uploadVideo(
     }
     const partId = partIdFromEtag(uploadResponse.headers.get("ETag"));
     if (!partId) {
-      throw uploadFailed(`LinkedIn didn't return an ETag for part ${index + 1} of ${partCount}. Nothing was posted.`);
+      throw uploadFailed(`LinkedIn didn't confirm part ${index + 1} of ${partCount} of the video. Nothing was posted. Try again.`);
     }
     partIds.push(partId);
   }
@@ -1089,18 +1089,18 @@ function isHttpsUrl(value: unknown): value is string {
  * enough to hold in memory? Returns what is wrong, or null.
  */
 function partsProblem(parts: LinkedInUploadPart[], totalBytes: number): string | null {
-  if (parts.length === 0) return "LinkedIn didn't return any upload parts for this video. Nothing was posted.";
+  if (parts.length === 0) return "LinkedIn didn't return any upload parts for this video. Nothing was posted. Try again.";
   let expectedFirst = 0;
   for (const part of parts) {
     if (!isHttpsUrl(part.url) || part.firstByte !== expectedFirst || part.lastByte < part.firstByte) {
-      return "LinkedIn's upload parts don't match the video. Nothing was posted.";
+      return "LinkedIn's upload parts don't match the video. Nothing was posted. Try again.";
     }
     if (part.lastByte - part.firstByte + 1 > LARGE_UPLOAD_MAX_PART_BYTES) {
-      return `LinkedIn asked for upload parts larger than this app can hold in memory (${LARGE_UPLOAD_MAX_PART_BYTES / 1_048_576} MiB). Nothing was posted.`;
+      return "LinkedIn asked for the video in pieces too large for this app. Nothing was posted. Try again; if it keeps failing, use a shorter or smaller video.";
     }
     expectedFirst = part.lastByte + 1;
   }
-  return expectedFirst === totalBytes ? null : "LinkedIn's upload parts don't match the video. Nothing was posted.";
+  return expectedFirst === totalBytes ? null : "LinkedIn's upload parts don't match the video. Nothing was posted. Try again.";
 }
 
 /** What `initializeUpload` answered for a video, ready to use. */
@@ -1122,7 +1122,7 @@ interface LinkedInVideoUpload {
  */
 function readVideoUpload(body: unknown, totalBytes: number): LinkedInVideoUpload {
   const unusable = () =>
-    uploadFailed("LinkedIn didn't return a usable upload for this video. Nothing was posted.");
+    uploadFailed("LinkedIn didn't return a usable upload for this video. Nothing was posted. Try again.");
 
   const value = asRecord(asRecord(body)?.value);
   const instructions = value?.uploadInstructions;
@@ -1297,7 +1297,7 @@ async function initializeMultipartUpload(args: {
     // A restart's answer that was cut off says nothing about the initialization: the caller
     // pauses and asks again. The first initialization fails here as it always has.
     if (restart && isTransientUploadFailure(error)) throw error;
-    throw uploadFailed("LinkedIn didn't return a usable upload for this video. Nothing was posted.");
+    throw uploadFailed("LinkedIn didn't return a usable upload for this video. Nothing was posted. Try again.");
   }
   const upload = readVideoUpload(body, totalBytes);
   return {
@@ -1671,7 +1671,7 @@ async function publishMultipart(args: {
         const etag = partIdFromEtag(response.headers.get("ETag"));
         if (!etag) {
           throw uploadFailed(
-            `LinkedIn didn't return an ETag for part ${index + 1} of ${partCount}. Nothing was posted.`,
+            `LinkedIn didn't confirm part ${index + 1} of ${partCount} of the video. Nothing was posted. Try again.`,
           );
         }
         current = {

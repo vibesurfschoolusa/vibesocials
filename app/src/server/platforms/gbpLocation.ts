@@ -139,7 +139,7 @@ export async function resolveGbpLocationName(
 
   if (candidates.length > 1) {
     const error = new Error(
-      "Store code matched multiple Google Business Profile locations. Please specify a more precise identifier.",
+      "This store code matches more than one Google Business Profile location. In Settings, choose the location from the list under Google Business Profile, or paste its full resource name under Advanced, then retry.",
     ) as Error & { code: string };
     error.code = "GBP_STORE_CODE_NOT_UNIQUE";
     throw error;

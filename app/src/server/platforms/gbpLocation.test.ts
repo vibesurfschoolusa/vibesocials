@@ -65,6 +65,27 @@ describe("resolveGbpLocationName", () => {
     expect(error?.code).toBe("GBP_STORE_CODE_NOT_FOUND");
   });
 
+  // R21 platform-clients L1: the sentence says where the location is chosen.
+  it("throws GBP_STORE_CODE_NOT_UNIQUE, saying where to choose the location, when two locations match", async () => {
+    const fetchMock = vi.fn((input: string | URL) => {
+      const url = input.toString();
+      if (url.includes("/locations")) {
+        return Promise.resolve(jsonResponse({ locations: [{ name: "locations/999", storeCode: "STORE-1" }] }));
+      }
+      return Promise.resolve(jsonResponse({ accounts: [{ name: "accounts/111" }, { name: "accounts/222" }] }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await resolveGbpLocationName("token-abc", "STORE-1")
+      .then(() => null)
+      .catch((e: unknown) => e as Error & { code?: string });
+
+    expect(error?.code).toBe("GBP_STORE_CODE_NOT_UNIQUE");
+    expect(error?.message).toBe(
+      "This store code matches more than one Google Business Profile location. In Settings, choose the location from the list under Google Business Profile, or paste its full resource name under Advanced, then retry.",
+    );
+  });
+
   it("throws sanitized GBP_ACCOUNTS_LIST_FAILED when the accounts list request fails", async () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const fetchMock = vi

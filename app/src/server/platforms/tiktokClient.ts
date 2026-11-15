@@ -1111,7 +1111,7 @@ async function requestUploadInit(args: {
   if (initErrorCode && initErrorCode !== "ok") {
     // 2026-11-02 scale audit (jobs B3): `data` holds the upload_url, so only `error` is logged.
     console.error("[TikTok] video init error payload", { error: initJson?.error });
-    const error = new Error("TikTok video init returned an error") as Error & { code: string };
+    const error = new Error("TikTok didn't start the video upload, so nothing was posted. Try again later.") as Error & { code: string };
     error.code = "TIKTOK_INIT_ERROR";
     throw error;
   }
@@ -1125,7 +1125,7 @@ async function requestUploadInit(args: {
       hasPublishId: Boolean(publishId),
       error: initJson?.error,
     });
-    const error = new Error("TikTok did not return upload_url or publish_id") as Error & { code: string };
+    const error = new Error("TikTok didn't return a usable upload for the video, so nothing was posted. Try again.") as Error & { code: string };
     error.code = "TIKTOK_INIT_MISSING_FIELDS";
     throw error;
   }
@@ -1200,7 +1200,7 @@ async function publishStreamed(args: {
       deadline,
     });
     if (!isHttpsUrl(uploadUrl)) {
-      const error = new Error("TikTok did not return a usable upload_url") as Error & { code: string };
+      const error = new Error("TikTok didn't return a usable upload for the video, so nothing was posted. Try again.") as Error & { code: string };
       error.code = "TIKTOK_INIT_MISSING_FIELDS";
       throw error;
     }

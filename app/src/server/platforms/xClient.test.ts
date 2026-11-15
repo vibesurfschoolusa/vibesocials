@@ -2945,7 +2945,7 @@ describe("xClient.publishText - a post without a photo", () => {
     const error = await failure();
 
     expect(error?.code).toBe("X_DUPLICATE_POST");
-    expect(error?.message).toBe("X refused this post because it is the same as a recent one.");
+    expect(error?.message).toBe("X refused this post because it is the same as a recent one. Change the text a little, then retry.");
   });
 
   it("refuses without a token, sending nothing", async () => {

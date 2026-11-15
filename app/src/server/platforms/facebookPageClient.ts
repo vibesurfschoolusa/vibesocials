@@ -262,7 +262,9 @@ async function publishSeveralPhotos(
     const data = (await response.json().catch(() => null)) as { id?: unknown } | null;
     if (typeof data?.id !== "string" || data.id.length === 0) {
       console.error(`[FacebookPage] Upload of ${which} answered without a photo id`);
-      throw publishFailedError(`Facebook Page could not upload ${which}. No post was made.`);
+      throw publishFailedError(
+        `Facebook Page could not upload ${which}. No post was made. Try again; if it fails again, replace photo ${index + 1}.`,
+      );
     }
     photoIds.push(data.id);
   }
@@ -386,7 +388,7 @@ async function publishStory(
     const videoId = typeof started?.video_id === "number" ? String(started.video_id) : started?.video_id;
     if (typeof videoId !== "string" || videoId.length === 0 || !isRuploadUrl(started?.upload_url)) {
       console.error("[FacebookPage] Video Story start answered without a video id or a rupload address");
-      throw publishFailedError("Facebook Page could not start the video Story. No Story was made.");
+      throw publishFailedError("Facebook Page could not start the video Story. No Story was made. Try again later.");
     }
 
     // Facebook fetches the file before it answers, so this gets the feed video's
@@ -423,7 +425,9 @@ async function publishStory(
         code: typeof graphError.code === "number" ? graphError.code : undefined,
         type: typeof graphError.type === "string" ? graphError.type : undefined,
       });
-      throw publishFailedError("Facebook Page could not fetch the video for the Story. No Story was made.");
+      throw publishFailedError(
+        "Facebook Page could not fetch the video for the Story. No Story was made. Try again; if it fails again, upload the video again.",
+      );
     }
     commitFields = { video_id: videoId, upload_phase: "finish" };
   } else {
@@ -446,7 +450,9 @@ async function publishStory(
     const uploaded = (await upload.json().catch(() => null)) as { id?: unknown } | null;
     if (typeof uploaded?.id !== "string" || uploaded.id.length === 0) {
       console.error("[FacebookPage] Story photo upload answered without a photo id");
-      throw publishFailedError("Facebook Page could not upload the photo for the Story. No Story was made.");
+      throw publishFailedError(
+        "Facebook Page could not upload the photo for the Story. No Story was made. Try again; if it fails again, use another photo.",
+      );
     }
     commitFields = { photo_id: uploaded.id };
   }

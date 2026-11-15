@@ -1647,6 +1647,35 @@ describe("tiktokClient.publishVideo", () => {
       expect(error?.code).toBe("RATE_LIMITED");
     });
 
+    // R21 platform-clients L1: a 2xx init without a usable upload ends with a step.
+    it("video/init 200 with another error code is TIKTOK_INIT_ERROR, saying nothing was posted", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      stubFetch({
+        "creator_info/query": creatorInfoOk,
+        "blob.example.com": videoBlob,
+        "video/init": () => jsonResponse({ error: { code: "internal_error", message: "x", log_id: "L" } }, 200),
+      });
+
+      const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+      expect(error?.code).toBe("TIKTOK_INIT_ERROR");
+      expect(error?.message).toBe("TikTok didn't start the video upload, so nothing was posted. Try again later.");
+    });
+
+    it("video/init 200 without upload_url or publish_id is TIKTOK_INIT_MISSING_FIELDS, saying nothing was posted", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      stubFetch({
+        "creator_info/query": creatorInfoOk,
+        "blob.example.com": videoBlob,
+        "video/init": () => jsonResponse({ data: {}, error: { code: "ok" } }, 200),
+      });
+
+      const error = await caught(tiktokClient.publishVideo(makeCtx()));
+
+      expect(error?.code).toBe("TIKTOK_INIT_MISSING_FIELDS");
+      expect(error?.message).toBe("TikTok didn't return a usable upload for the video, so nothing was posted. Try again.");
+    });
+
     it("a chunk PUT 429 -> RATE_LIMITED, not TIKTOK_UPLOAD_FAILED", async () => {
       stubFetch({
         "creator_info/query": creatorInfoOk,
@@ -2364,6 +2393,7 @@ describe("tiktokClient.publishVideo — streamed FILE_UPLOAD (jobs B3)", () => {
       const error = await failure(bigCtx(store));
 
       expect(error?.code).toBe("TIKTOK_INIT_MISSING_FIELDS");
+      expect(error?.message).toBe("TikTok didn't return a usable upload for the video, so nothing was posted. Try again.");
       expect(mocks.save).not.toHaveBeenCalled();
       expect(upload.puts()).toHaveLength(0);
       expect(everythingLogged()).not.toContain("SECRET-9");
@@ -3186,6 +3216,7 @@ describe("tiktokClient.publishVideo — streamed FILE_UPLOAD (jobs B3)", () => {
       const error = await failure(bigCtx(store));
 
       expect(error?.code).toBe("TIKTOK_INIT_MISSING_FIELDS");
+      expect(error?.message).toBe("TikTok didn't return a usable upload for the video, so nothing was posted. Try again.");
       expectNoUrl(describeError(error), everythingLogged());
     });
   });

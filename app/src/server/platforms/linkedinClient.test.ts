@@ -1353,7 +1353,23 @@ describe("linkedinClient — Posts, Images and Videos APIs", () => {
     const error = await failure(linkedinClient.publishVideo(ctx("image/jpeg")));
 
     expect(error?.code).toBe("LINKEDIN_IMAGE_REGISTRATION_FAILED");
+    // R21 platform-clients L1: the 2xx without a usable upload ends with a step.
+    expect(error?.message).toBe("LinkedIn didn't return a usable upload for the image. Nothing was posted. Try again.");
     expect(li.calls().map(([url]) => url)).toEqual([`${REST}/images?action=initializeUpload`]);
+  });
+
+  // R21 platform-clients L1: each 2xx without a usable upload ends with a step.
+  it.each([
+    ["a body that is not JSON", { videoInit: () => new Response("<html>ok</html>", { status: 200 }) }, "LinkedIn didn't return a usable upload for this video. Nothing was posted. Try again."],
+    ["no video URN", { videoInit: () => json({ value: { uploadInstructions: [] } }) }, "LinkedIn didn't return a usable upload for this video. Nothing was posted. Try again."],
+    ["a part without an ETag", { part: () => new Response(null, { status: 200 }) }, "LinkedIn didn't confirm part 1 of 3 of the video. Nothing was posted. Try again."],
+  ] as const)("a video upload answered 2xx with %s says to try again", async (_label, routes, message) => {
+    stub(routes);
+
+    const error = await failure(linkedinClient.publishVideo(ctx("video/mp4")));
+
+    expect(error?.code).toBe("LINKEDIN_VIDEO_UPLOAD_FAILED");
+    expect(error?.message).toBe(message);
   });
 
   it.each([
@@ -2515,7 +2531,10 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       const error = await failure(bigCtx(store, {}, total));
 
       expect(error?.code).toBe("LINKEDIN_VIDEO_UPLOAD_FAILED");
-      expect(error?.message).toContain("64 MiB");
+      // R21 platform-clients L1: a step the person can take, no memory jargon.
+      expect(error?.message).toBe(
+        "LinkedIn asked for the video in pieces too large for this app. Nothing was posted. Try again; if it keeps failing, use a shorter or smaller video.",
+      );
       expect(li.sequence()).toEqual(["register"]);
       expect(mocks.save).not.toHaveBeenCalled();
       expectNoCapabilityValues(describeError(error), everythingLogged());
@@ -2577,6 +2596,7 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       const error = await failure(bigCtx(store));
 
       expect(error?.code).toBe("LINKEDIN_VIDEO_UPLOAD_FAILED");
+      expect(error?.message).toMatch(/ Nothing was posted\. Try again\.$/);
       expect(li.sequence()).toEqual(["register"]);
       expect(mocks.save).not.toHaveBeenCalled();
       expectNoCapabilityValues(describeError(error), everythingLogged());
@@ -3743,7 +3763,7 @@ describe("linkedinClient.publishVideo — multipart upload across steps (jobs B3
       const error = await failure(bigCtx(store));
 
       expect(error?.code).toBe("LINKEDIN_VIDEO_UPLOAD_FAILED");
-      expect(error?.message).toContain("ETag");
+      expect(error?.message).toBe("LinkedIn didn't confirm part 2 of 3 of the video. Nothing was posted. Try again.");
       expect(saved()?.data).toMatchObject({ nextPart: 1, etags: ["e1"] });
     });
 
