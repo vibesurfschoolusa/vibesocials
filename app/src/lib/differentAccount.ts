@@ -30,21 +30,58 @@ export function differentAccountPlatform(code: string | null | undefined): Platf
   return (PLATFORM_ORDER as readonly string[]).includes(platform) ? (platform as Platform) : null;
 }
 
-/** A connection's name as Settings shows it ("Connected as ..."). */
+/**
+ * A connection's name as Settings shows it ("Connected as ..."). R8-client-
+ * journey L2: a LinkedIn connection's stored name is its company page
+ * (saveConnection.ts), and its identifier is the member's opaque profile id,
+ * so without the name it is "the connected LinkedIn page".
+ */
 export function connectedAccountName(connection: {
   platform: Platform;
   username: string | null;
   accountIdentifier: string;
 }): string {
+  if (connection.platform === "linkedin") return connection.username || "the connected LinkedIn page";
   return connection.username || connection.accountIdentifier || `the connected ${platformLabel(connection.platform)} account`;
 }
 
 /**
- * A choice among several accounts (api/connections/pending) that the save
- * refused: both names come from the platform's own answer on the server.
+ * R8-client-journey L2 / pages L1: a LinkedIn page and a Facebook Page are
+ * not signed in to; an account that manages them is. The platform's name for
+ * that account, or null where the connection is the account itself.
  */
-export function settingsDifferentAccountMessage(signedInName: string, connectedName: string): string {
-  return `You signed in to ${signedInName}, not ${connectedName}. Sign in to ${connectedName} to reconnect it, or use Switch account to change to ${signedInName}.`;
+const PAGE_ACCOUNT_LABEL: Partial<Record<Platform, string>> = { linkedin: "LinkedIn", facebook_page: "Facebook" };
+
+export function pageAccountLabel(platform: Platform): string | null {
+  return PAGE_ACCOUNT_LABEL[platform] ?? null;
+}
+
+/** "sign in to <name>", or for a page "sign in with a <platform> account that manages <name>". */
+export function signInTo(platform: Platform, name: string): string {
+  const account = PAGE_ACCOUNT_LABEL[platform];
+  return account ? `sign in with a ${account} account that manages ${name}` : `sign in to ${name}`;
+}
+
+function capitalized(sentence: string): string {
+  return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}`;
+}
+
+/** The second step of LinkedIn's Reconnect (the Settings dialog and /c). */
+export function linkedInReconnectSignInStep(pageName: string): string {
+  return `Come back here and click Continue. LinkedIn asks you to sign in: ${signInTo("linkedin", pageName)}.`;
+}
+
+/**
+ * A choice among several accounts (api/connections/pending) that the save
+ * refused, the connected one not among them: both names come from the
+ * platform's own answer on the server.
+ */
+export function settingsDifferentAccountMessage(platform: Platform, signedInName: string, connectedName: string): string {
+  const what =
+    platform === "facebook_page"
+      ? `You chose ${signedInName}, not ${connectedName}, and ${connectedName} wasn't in the list.`
+      : `You signed in to ${signedInName}, not ${connectedName}.`;
+  return `${what} ${capitalized(signInTo(platform, connectedName))} to reconnect it, or use Switch account to change to ${signedInName}.`;
 }
 
 /**
@@ -53,12 +90,15 @@ export function settingsDifferentAccountMessage(signedInName: string, connectedN
  * signing in to the right one takes a sign-out first (Reconnect shows the steps).
  */
 export function reconnectDifferentAccountMessage(platform: Platform, connectedName: string): string {
-  const label = platformLabel(platform);
-  const what = `You signed in to a different ${label} account than ${connectedName}.`;
+  const pageAccount = PAGE_ACCOUNT_LABEL[platform];
   if (platform === "linkedin") {
-    return `${what} Sign out of LinkedIn first (Reconnect shows the steps), then sign in to ${connectedName}. To use the other account instead, use Switch account.`;
+    return `LinkedIn connected a different page than ${connectedName}, so nothing changed. Sign out of LinkedIn first (Reconnect shows the steps), then ${signInTo(platform, connectedName)}. To use the other page instead, use Switch account.`;
   }
-  return `${what} Sign in to ${connectedName} to reconnect it, or use Switch account to change accounts.`;
+  if (pageAccount) {
+    return `${pageAccount} connected a different page than ${connectedName}, so nothing changed. ${capitalized(signInTo(platform, connectedName))} to reconnect it, or use Switch account to change pages.`;
+  }
+  const what = `You signed in to a different ${platformLabel(platform)} account than ${connectedName}.`;
+  return `${what} ${capitalized(signInTo(platform, connectedName))} to reconnect it, or use Switch account to change accounts.`;
 }
 
 /**
@@ -69,9 +109,9 @@ export function reconnectDifferentAccountMessage(platform: Platform, connectedNa
 export function linkDifferentAccountMessage(platform: Platform, connectedName: string): string {
   const owner = "ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.";
   if (platform === "linkedin") {
-    return `This connection belongs to ${connectedName}. If that is your account, sign out of LinkedIn first (Reconnect shows the steps), then sign in to ${connectedName}. If not, ${owner}`;
+    return `This connection posts to ${connectedName}. If you manage that page, sign out of LinkedIn first (Reconnect shows the steps), then ${signInTo(platform, connectedName)}. If not, ${owner}`;
   }
-  return `This connection belongs to ${connectedName}. ${owner.charAt(0).toUpperCase()}${owner.slice(1)}`;
+  return `This connection belongs to ${connectedName}. ${capitalized(owner)}`;
 }
 
 /**
@@ -100,7 +140,7 @@ export function choiceDifferentAccountMessage(
   }
   return platform === "linkedin"
     ? reconnectDifferentAccountMessage(platform, connectedName)
-    : settingsDifferentAccountMessage(chosenName, connectedName);
+    : settingsDifferentAccountMessage(platform, chosenName, connectedName);
 }
 
 /** The client's choice on /c, by the same rule. */

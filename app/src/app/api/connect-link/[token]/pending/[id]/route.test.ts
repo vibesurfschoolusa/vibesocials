@@ -308,6 +308,8 @@ describe("POST: a refused choice, by whether the connected one was on the list",
     expect((await res.json()).error).toBe(
       "Choose My Surf School from the list, or ask the workspace owner to disconnect it first.",
     );
+    // R8-client-journey L3: the client only picked the wrong item; the owners aren't told to disconnect the right one.
+    expect(h.notifyRefused).not.toHaveBeenCalled();
   });
 
   it("the list lacks it: the different-account sentence", async () => {
@@ -319,6 +321,9 @@ describe("POST: a refused choice, by whether the connected one was on the list",
     expect((await res.json()).error).toBe(
       "This connection belongs to My Surf School. Ask the workspace owner to disconnect it in Settings, Connections; then connect your account here.",
     );
+    // R8-client-journey L3: the connected account wasn't among the choices: the owners are told.
+    expect(h.notifyRefused).toHaveBeenCalledTimes(1);
+    expect(h.notifyRefused).toHaveBeenCalledWith({ workspaceId: "ws-1", platform: "facebook_page" });
   });
 });
 

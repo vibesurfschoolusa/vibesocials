@@ -2,7 +2,7 @@ import type { Platform } from "@prisma/client";
 
 import { toConnectionSummary } from "@/lib/connectionSummary";
 import { prisma } from "@/lib/db";
-import { connectedAccountName } from "@/lib/differentAccount";
+import { connectedAccountName, pageAccountLabel, signInTo } from "@/lib/differentAccount";
 import { logger } from "@/lib/logger";
 import { platformLabel } from "@/lib/platforms";
 import { consumeFixedWindow } from "@/lib/rateLimit";
@@ -40,15 +40,23 @@ export function buildRefusedConnectEmail(params: {
   const workspace = escapeHtml(params.workspaceName);
   const name = escapeHtml(params.connectedName);
   const base = params.appBaseUrl || null;
+  // R8-client-journey L2: a LinkedIn or Facebook page is not signed in to; an
+  // account that manages it is (lib/differentAccount.ts).
+  const pageAccount = pageAccountLabel(params.platform);
+  const signIn = escapeHtml(signInTo(params.platform, params.connectedName));
 
-  const what = `<p>Your client used your connect link for <strong>${workspace}</strong> and signed in to a different ${platform} account than the one connected (<strong>${name}</strong>). Nothing was changed.</p>`;
-  const next = `<p>If your client should post from their own account, disconnect ${name} in Settings, Connections; then they can connect theirs through the link. If ${name} is the right account, it has to be signed in to: use Reconnect in Settings, Connections, or ask your client to sign in to ${name}.</p>`;
+  const what = pageAccount
+    ? `<p>Your client used your connect link for <strong>${workspace}</strong> and signed in with a ${pageAccount} account for a different page than the one connected (<strong>${name}</strong>). Nothing was changed.</p>`
+    : `<p>Your client used your connect link for <strong>${workspace}</strong> and signed in to a different ${platform} account than the one connected (<strong>${name}</strong>). Nothing was changed.</p>`;
+  const next = pageAccount
+    ? `<p>If your client should post to their own page, disconnect ${name} in Settings, Connections; then they can connect theirs through the link. If ${name} is the right page, use Reconnect in Settings, Connections, or ask your client to ${signIn}.</p>`
+    : `<p>If your client should post from their own account, disconnect ${name} in Settings, Connections; then they can connect theirs through the link. If ${name} is the right account, it has to be signed in to: use Reconnect in Settings, Connections, or ask your client to ${signIn}.</p>`;
   const link = base
     ? `<p><a href="${escapeHtml(workspaceLink(params.workspaceId, "/settings#connections", base))}">Open Settings, Connections</a></p>`
     : "<p>Open Settings, Connections in Vibe Socials to see it.</p>";
 
   return {
-    subject: `${params.workspaceName.replace(/[\r\n]+/g, " ").trim()}: your client signed in to a different ${label} account`,
+    subject: `${params.workspaceName.replace(/[\r\n]+/g, " ").trim()}: your client signed in to ${pageAccount ? `${pageAccount} for a different page` : `a different ${label} account`}`,
     html: [what, next, link, "<p>— Vibe Socials</p>"].join("\n"),
   };
 }

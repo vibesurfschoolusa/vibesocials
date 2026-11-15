@@ -18,6 +18,7 @@ import {
   type LinkedInAccountDialogCopy,
   type LinkedInAccountDialogMode,
 } from "@/lib/linkedinAccount";
+import { linkedInReconnectSignInStep } from "@/lib/differentAccount";
 import { withWorkspaceId } from "@/lib/workspaceChanged";
 
 /**
@@ -29,15 +30,17 @@ import { withWorkspaceId } from "@/lib/workspaceChanged";
  */
 export type LinkedInDialogMode = LinkedInAccountDialogMode | "reconnect";
 
+// R8-client-journey L2: the name is the company page, so the sign-in is with
+// an account that manages it (lib/differentAccount.ts).
 function reconnectCopy(accountName: string | undefined): LinkedInAccountDialogCopy {
   const connect = linkedInAccountDialogCopy("connect");
-  const account = accountName?.trim() || "the LinkedIn account connected now";
+  const page = accountName?.trim() || "the connected LinkedIn page";
   return {
     ...connect,
     title: "Reconnect LinkedIn",
-    steps: [connect.steps[0], `Come back here and click Continue. LinkedIn asks you to sign in: sign in to ${account}.`],
+    steps: [connect.steps[0], linkedInReconnectSignInStep(page)],
     shortcut: accountName?.trim()
-      ? `Already signed in to LinkedIn as ${account}? Just click Continue.`
+      ? `Already signed in to LinkedIn with an account that manages ${page}? Just click Continue.`
       : connect.shortcut,
   };
 }
