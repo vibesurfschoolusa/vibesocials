@@ -2,7 +2,7 @@ import type { Platform, PostJobResultStatus, PostJobStatus } from "@prisma/clien
 
 import { prisma } from "@/lib/db";
 import { platformLabel } from "@/lib/platforms";
-import { reconnectSentenceFor } from "@/lib/publishFailureText";
+import { sentenceForRecipient } from "@/lib/publishFailureText";
 import { storyPlatformsOf } from "@/lib/storyPlacement";
 import { WORKSPACE_PAUSED_CODE } from "@/lib/workspaceStatus";
 import { isRetryableEmailError, sendEmail } from "@/server/notifications/email";
@@ -590,7 +590,7 @@ export async function deliverPostOutcomeNotification({
     const role = membership.role === "member" ? "member" : "owner";
     const rows = [...summaryRows(feed), ...(story ? summaryRows(story) : [])].map((result) => ({
       ...result,
-      errorMessage: reconnectSentenceFor(result.errorMessage, result.platform, role),
+      errorMessage: sentenceForRecipient(result.errorMessage, result.platform, role),
     }));
 
     // Pause (2026-11-10): a paused workspace's due posts are all failed with this

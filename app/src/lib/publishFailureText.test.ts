@@ -1,4 +1,10 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import type { Platform } from "@prisma/client";
 import { describe, expect, it } from "vitest";
+
+import { PLATFORM_LABELS } from "./platforms";
 
 import {
   connectionGoneMessage,
@@ -12,7 +18,7 @@ import {
   platformRefusedMessage,
   publishErrorMessage,
   reconnectRequiredMessage,
-  reconnectSentenceFor,
+  sentenceForRecipient,
 } from "./publishFailureText";
 
 describe("dispatch sentences (F1 H1)", () => {
@@ -274,20 +280,78 @@ describe("notSentSentence", () => {
   });
 });
 
-// R9-client-journey L4: a member can't reconnect; the owner can.
-describe("reconnectSentenceFor", () => {
-  it("gives a member the owner sentence in place of the Settings one", () => {
+// R9-client-journey L4: only an owner can connect or reconnect, so a member's
+// post emails never tell them to act in Settings.
+describe("sentenceForRecipient", () => {
+  const PLATFORMS = Object.keys(PLATFORM_LABELS) as Platform[];
+
+  it("gives a member the owner variant of each sentence this module writes", () => {
     expect(memberReconnectMessage("instagram")).toBe("The workspace owner can reconnect Instagram; then retry.");
-    expect(reconnectSentenceFor("Reconnect Instagram in Settings, then retry.", "instagram", "member")).toBe(
+    expect(sentenceForRecipient(reconnectRequiredMessage("instagram"), "instagram", "member")).toBe(
       "The workspace owner can reconnect Instagram; then retry.",
+    );
+    expect(sentenceForRecipient(connectionGoneMessage("pinterest"), "pinterest", "member")).toBe(
+      "The workspace owner can connect Pinterest; then retry.",
+    );
+    expect(sentenceForRecipient(renewalRefusedMessage("tiktok"), "tiktok", "member")).toBe(
+      "TikTok didn't renew the connection. Try again later; if it keeps happening, the workspace owner can reconnect TikTok.",
     );
   });
 
-  it("leaves an owner's sentence, and every other sentence, as stored", () => {
-    expect(reconnectSentenceFor("Reconnect Instagram in Settings, then retry.", "instagram", "owner")).toBe(
+  it("runs every owner sentence, on every platform, to a member sentence that names the owner and not Settings", () => {
+    for (const platform of PLATFORMS) {
+      for (const owner of [reconnectRequiredMessage(platform), connectionGoneMessage(platform), renewalRefusedMessage(platform)]) {
+        expect(owner).toContain("Settings");
+        const member = sentenceForRecipient(owner, platform, "member")!;
+        expect(member, owner).not.toContain("Settings");
+        expect(member, owner).toContain("workspace owner can");
+        expect(sentenceForRecipient(owner, platform, "owner")).toBe(owner);
+      }
+    }
+  });
+
+  // The sentences the publish run and the clients write themselves: every string
+  // literal under src/server/jobs and src/server/platforms that names Settings.
+  it("covers every Settings sentence the publish code writes, so none is missed", () => {
+    const roots = ["src/server/jobs", "src/server/platforms"].map((dir) => join(process.cwd(), dir));
+    const files = roots.flatMap((root) =>
+      (readdirSync(root, { recursive: true }) as string[])
+        .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
+        .map((name) => join(root, name)),
+    );
+    const literals = files.flatMap((file) =>
+      [...readFileSync(file, "utf8").matchAll(/"((?:[^"\\\n]|\\.)*Settings(?:[^"\\\n]|\\.)*)"|`([^`]*Settings[^`]*)`/g)].map(
+        (match) => (match[1] ?? match[2]).replace(/\\n/g, "\n"),
+      ),
+    );
+    expect(literals.length).toBeGreaterThan(5);
+    for (const owner of literals) {
+      const member = sentenceForRecipient(owner, "linkedin", "member")!;
+      expect(member, owner).not.toContain("Settings");
+      expect(member, owner).toContain("workspace owner can");
+    }
+  });
+
+  it("keeps what the client sentences say beside the step", () => {
+    expect(
+      sentenceForRecipient(
+        "The Pinterest board this connection posts to no longer exists. Reconnect Pinterest in Settings and choose a board.",
+        "pinterest",
+        "member",
+      ),
+    ).toBe(
+      "The Pinterest board this connection posts to no longer exists. The workspace owner can reconnect Pinterest and choose a board; then retry.",
+    );
+    expect(
+      sentenceForRecipient("This platform is no longer connected. Reconnect it in Settings and try again.", "youtube", "member"),
+    ).toBe("The workspace owner can reconnect YouTube; then retry.");
+  });
+
+  it("leaves an owner's sentence, and every sentence without Settings, as stored", () => {
+    expect(sentenceForRecipient(reconnectRequiredMessage("instagram"), "instagram", "owner")).toBe(
       "Reconnect Instagram in Settings, then retry.",
     );
-    expect(reconnectSentenceFor("X refused it.", "x", "member")).toBe("X refused it.");
-    expect(reconnectSentenceFor(null, "x", "member")).toBeNull();
+    expect(sentenceForRecipient("X refused it.", "x", "member")).toBe("X refused it.");
+    expect(sentenceForRecipient(null, "x", "member")).toBeNull();
   });
 });

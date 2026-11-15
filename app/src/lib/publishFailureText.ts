@@ -18,16 +18,53 @@ export function memberReconnectMessage(platform: Platform): string {
 }
 
 /**
- * A stored result sentence as its reader should see it: a member gets
- * {@link memberReconnectMessage} in place of the Settings one; anything else is
- * shown as stored.
+ * The member variant of each sentence a publish result can carry that tells
+ * its reader to act in Settings: this module's own, and the ones the publish
+ * run and the platform clients write (server/jobs, server/platforms; their
+ * test runs every such literal through {@link sentenceForRecipient}).
  */
-export function reconnectSentenceFor(
+function memberVariants(platform: Platform): ReadonlyMap<string, string> {
+  const label = platformLabel(platform);
+  const reconnect = memberReconnectMessage(platform);
+  const chooseBoard = `The workspace owner can reconnect ${label} and choose a board; then retry.`;
+  return new Map([
+    [reconnectRequiredMessage(platform), reconnect],
+    [connectionGoneMessage(platform), `The workspace owner can connect ${label}; then retry.`],
+    [
+      renewalRefusedMessage(platform),
+      `${label} didn't renew the connection. Try again later; if it keeps happening, the workspace owner can reconnect ${label}.`,
+    ],
+    ["This platform needs to be reconnected in Settings before publishing.", reconnect],
+    ["This platform is no longer connected. Reconnect it in Settings and try again.", reconnect],
+    [
+      "LinkedIn refused the post because the LinkedIn account you connected is not an admin of this company page. Ask a page admin to add that account as a Super admin or Content admin (Page admin tools > Manage admins), then reconnect LinkedIn in Settings.",
+      "LinkedIn refused the post because the connected LinkedIn account is not an admin of this company page. A page admin can add that account as a Super admin or Content admin (Page admin tools > Manage admins); then the workspace owner can reconnect LinkedIn.",
+    ],
+    [
+      "The Pinterest board this connection posts to no longer exists. Reconnect Pinterest in Settings and choose a board.",
+      `The Pinterest board this connection posts to no longer exists. ${chooseBoard}`,
+    ],
+    [
+      "No Pinterest board is chosen for this connection. Reconnect Pinterest in Settings and choose a board.",
+      `No Pinterest board is chosen for this connection. ${chooseBoard}`,
+    ],
+  ]);
+}
+
+/**
+ * A stored result sentence as its reader should see it (R9-client-journey L4).
+ * Only an owner can connect or reconnect, so a member gets the member variant
+ * of any sentence that sends them to Settings: the exact one above, or, for a
+ * sentence nobody wrote one for, the reconnect sentence. Owners, and sentences
+ * that don't name Settings, read it as stored.
+ */
+export function sentenceForRecipient(
   message: string | null,
   platform: Platform,
   role: "owner" | "member",
 ): string | null {
-  return role === "member" && message === reconnectRequiredMessage(platform) ? memberReconnectMessage(platform) : message;
+  if (role !== "member" || message === null || !/\bSettings\b/.test(message)) return message;
+  return memberVariants(platform).get(message.trim()) ?? memberReconnectMessage(platform);
 }
 
 /** A chosen platform with no connection at all when the post is sent (H1). */
