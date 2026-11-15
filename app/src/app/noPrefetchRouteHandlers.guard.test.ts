@@ -48,21 +48,41 @@ function files(dir: string, keep: (name: string) => boolean): string[] {
   return out;
 }
 
+/**
+ * Each route.ts as a pattern over its address, from paths relative to src/app
+ * in either separator. Sorted as Next.js matches (static, then dynamic, then
+ * catch-all; then by address), so `.find` names the route that serves an
+ * address: api/[...path] matches every /api address, and readdir's order
+ * differs between Windows and Linux (CI).
+ */
+export function patternsFromRouteFiles(relativeFiles: string[]): Array<{ route: string; pattern: RegExp }> {
+  return relativeFiles
+    .map((file) => {
+      const segments = file
+        .split(/[\\/]/)
+        .slice(0, -1)
+        .filter((segment) => segment !== "" && segment !== "." && !/^\(.*\)$/.test(segment) && !segment.startsWith("@"));
+      const catchAll = segments.filter((segment) => /^\[\[?\.\.\./.test(segment)).length;
+      const dynamic = segments.filter((segment) => /^\[.*\]$/.test(segment)).length - catchAll;
+      const body = segments
+        .map((segment) =>
+          /^\[\[?\.\.\./.test(segment) ? "(?:/.*)?" : /^\[.*\]$/.test(segment) ? "/[^/]+" : `/${segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+        )
+        .join("");
+      return { route: `/${segments.join("/")}`, pattern: new RegExp(`^${body || "/"}/?$`), catchAll, dynamic };
+    })
+    .sort((a, b) => a.catchAll - b.catchAll || a.dynamic - b.dynamic || (a.route < b.route ? -1 : a.route > b.route ? 1 : 0))
+    .map(({ route, pattern }) => ({ route, pattern }));
+}
+
 /** Each route.ts under src/app as a pattern over its address. */
 function routeHandlerPatterns(): Array<{ route: string; pattern: RegExp }> {
-  return files(APP, (name) => /^route\.tsx?$/.test(name)).map((file) => {
-    const segments = path
-      .relative(APP, path.dirname(file))
-      .split(path.sep)
-      .filter((segment) => segment !== "" && !/^\(.*\)$/.test(segment) && !segment.startsWith("@"));
-    const route = `/${segments.join("/")}`;
-    const body = segments
-      .map((segment) =>
-        /^\[\[?\.\.\./.test(segment) ? "(?:/.*)?" : /^\[.*\]$/.test(segment) ? "/[^/]+" : `/${segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
-      )
-      .join("");
-    return { route, pattern: new RegExp(`^${body || "/"}/?$`) };
-  });
+  return patternsFromRouteFiles(files(APP, (name) => /^route\.tsx?$/.test(name)).map((file) => path.relative(APP, file)));
+}
+
+/** A source file's text with LF endings, so a checkout with CRLF scans the same. */
+function readSource(file: string): string {
+  return readFileSync(file, "utf8").replace(/\r\n/g, "\n");
 }
 
 /** The text from `open` to its matching close, both included. */
@@ -166,9 +186,9 @@ describe("no client-router navigation to a route handler", () => {
   it("no file under src sends next/link or the client router to one", () => {
     const offenders: string[] = [];
     for (const file of files(SRC, (name) => /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) && !name.endsWith(".d.ts"))) {
-      for (const { kind, expression } of routerTargets(readFileSync(file, "utf8"))) {
+      for (const { kind, expression } of routerTargets(readSource(file))) {
         const hit = routeHandlerTarget(expression, patterns);
-        if (hit) offenders.push(`${path.relative(SRC, file)}: ${kind} ${expression.trim()}`);
+        if (hit) offenders.push(`${path.relative(SRC, file).split(/[\\/]/).join("/")}: ${kind} ${expression.trim()}`);
       }
     }
     expect(offenders).toEqual([]);
@@ -201,9 +221,9 @@ const WORKSPACE_CHANGES: Array<{ route: string; methods: string[] }> = [
 /** Routes that touch the cookie but are never fetched: each is reached by a full load. */
 const COOKIE_ROUTES_REACHED_BY_FULL_LOAD = ["/go"];
 
-/** Source without its comments, so a comment never counts as a call. */
+/** Source without its comments (and with LF endings), so a comment never counts as a call. */
 function withoutComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  return source.replace(/\r\n/g, "\n").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 
 /** Each fetch in a source that changes workspaces: where it is, its route and method. */
@@ -238,7 +258,7 @@ export function changesWithoutFullLoad(source: string, patterns = routeHandlerPa
 
 describe("a full page load after the workspaces change", () => {
   const patterns = routeHandlerPatterns();
-  const read = (relative: string) => readFileSync(path.join(SRC, relative), "utf8");
+  const read = (relative: string) => readSource(path.join(SRC, relative));
   /** The bodies of `async function name(` and `const name = useCallback(async () =>`, in file order. */
   const bodies = (source: string, name: string) => {
     const out: string[] = [];
@@ -250,9 +270,30 @@ describe("a full page load after the workspaces change", () => {
     return out;
   };
 
+  // CI #167: on Linux readdir listed api/[...path] first and every /api address
+  // matched it, so the scan found no call. The patterns must not depend on the
+  // separator or the order the files come in.
+  it("builds the same patterns from Linux and Windows paths, in any order", () => {
+    const linux = ["api/[...path]/route.ts", "api/invites/[token]/accept/route.ts", "api/workspaces/route.ts", "api/workspaces/leave/route.ts", "go/route.ts"];
+    const windows = [...linux].reverse().map((file) => file.split("/").join("\\"));
+    const shape = (list: Array<{ route: string; pattern: RegExp }>) => list.map(({ route, pattern }) => `${route} ${pattern.source}`);
+    expect(shape(patternsFromRouteFiles(windows))).toEqual(shape(patternsFromRouteFiles(linux)));
+    const built = patternsFromRouteFiles(windows);
+    const served = (address: string) => built.find(({ pattern }) => pattern.test(address))?.route;
+    expect(served("/api/invites/x/accept")).toBe("/api/invites/[token]/accept");
+    expect(served("/api/workspaces")).toBe("/api/workspaces");
+    expect(served("/api/workspaces/leave")).toBe("/api/workspaces/leave");
+    expect(served("/api/nothing-here")).toBe("/api/[...path]");
+    expect(served("/go")).toBe("/go");
+    // A CRLF source scans as its LF twin.
+    const lf = ['await fetch("/api/workspaces/leave", {', '  method: "POST",', "});", "// afterWorkspaceChange();", ""].join("\n");
+    expect(changesWithoutFullLoad(lf, patterns)).toEqual(["POST /api/workspaces/leave"]);
+    expect(changesWithoutFullLoad(lf.split("\n").join("\r\n"), patterns)).toEqual(["POST /api/workspaces/leave"]);
+  });
+
   it("each listed change is a route handler with that method", () => {
     for (const { route, methods } of WORKSPACE_CHANGES) {
-      const source = readFileSync(path.join(APP, ...route.split("/").filter(Boolean), "route.ts"), "utf8");
+      const source = readSource(path.join(APP, ...route.split("/").filter(Boolean), "route.ts"));
       for (const method of methods) {
         expect(source, `${method} ${route}`).toMatch(new RegExp(`export (?:async function|const) ${method}\\b`));
       }
@@ -262,8 +303,8 @@ describe("a full page load after the workspaces change", () => {
   it("every route that sets or clears the active-workspace cookie is listed", () => {
     const listed = new Set([...WORKSPACE_CHANGES.map((entry) => entry.route), ...COOKIE_ROUTES_REACHED_BY_FULL_LOAD]);
     const cookieRoutes = files(APP, (name) => /^route\.tsx?$/.test(name))
-      .filter((file) => readFileSync(file, "utf8").includes("ACTIVE_WORKSPACE_COOKIE"))
-      .map((file) => `/${path.relative(APP, path.dirname(file)).split(path.sep).join("/")}`);
+      .filter((file) => readSource(file).includes("ACTIVE_WORKSPACE_COOKIE"))
+      .map((file) => `/${path.relative(APP, path.dirname(file)).split(/[\\/]/).join("/")}`);
     expect(cookieRoutes.length).toBeGreaterThan(0);
     expect(cookieRoutes.filter((route) => !listed.has(route))).toEqual([]);
   });
@@ -292,8 +333,8 @@ describe("a full page load after the workspaces change", () => {
     const covered: string[] = [];
     const offenders: string[] = [];
     for (const file of files(SRC, (name) => /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) && !name.endsWith(".d.ts"))) {
-      const source = readFileSync(file, "utf8");
-      const relative = path.relative(SRC, file).split(path.sep).join("/");
+      const source = readSource(file);
+      const relative = path.relative(SRC, file).split(/[\\/]/).join("/");
       for (const call of workspaceChangeCalls(withoutComments(source), patterns)) {
         covered.push(`${relative}: ${call.method} ${call.route}`);
       }
