@@ -17,8 +17,6 @@ import {
   POST_RETRY_LIMIT_CODE,
   postRetryLimitMessage,
   RETRIES_PER_POST_PER_DAY,
-  RETRY_IN_PROGRESS_CODE,
-  RETRY_IN_PROGRESS_MESSAGE,
   SERVICE_DAILY_POST_LIMIT,
   SERVICE_DAILY_POST_LIMIT_CODE,
   serviceDailyPostLimitAtSendMessage,
@@ -650,11 +648,6 @@ type CrossWorkspaceCheck = {
   mode: CrossWorkspaceLimitMode;
   excludePostJobId?: string | readonly string[];
   alsoOnDay?: number;
-  /**
-   * R7 review, point 7: the run was recorded before the check (create, then
-   * check), so it is in the counts already and adds nothing more.
-   */
-  recorded?: boolean;
   /** Second look, point 1: who will read the answer, so the owner held back reads "you". */
   viewerUserId?: string;
 };
@@ -678,7 +671,7 @@ async function refusalFor(who: RunAttribution, input: CrossWorkspaceCheck, now: 
   const { day, mode } = input;
   if (who.operator) return null;
   const unit = unitIds(input.excludePostJobId);
-  const size = input.recorded ? 0 : 1 + (input.alsoOnDay ?? 0);
+  const size = 1 + (input.alsoOnDay ?? 0);
 
   if (personalPostLimitApplies(input.workspace)) {
     for (const owner of who.owners) {
@@ -700,7 +693,7 @@ async function refusalFor(who: RunAttribution, input: CrossWorkspaceCheck, now: 
 
   // A post given a later slot meets the pools when it is sent (the scanner);
   // now it meets only what has gone out on its day already.
-  const sending = input.recorded ? 0 : mode === "schedule" ? 1 : size;
+  const sending = mode === "schedule" ? 1 : size;
   const pool = await poolRefusal({ who, day, unit, size: sending, now });
   if (pool === "new") return { error: newAccountPoolMessage(mode), code: SERVICE_DAILY_POST_LIMIT_CODE };
   if (pool === "main") return { error: serviceDailyPostLimitMessage(mode), code: SERVICE_DAILY_POST_LIMIT_CODE };
@@ -746,10 +739,17 @@ export async function serviceCapRefusalAtSend(input: {
   }
 }
 
+type RetryCountClient = { usageEvent: Pick<Prisma.TransactionClient["usageEvent"], "count" | "findMany"> };
+
 /** Older per-platform retry rows (before R7-security L1) of a post today, once per request. */
-async function olderRetryRequestsToday(workspaceId: string, postJobId: string, now: Date): Promise<number> {
+async function olderRetryRequestsToday(
+  workspaceId: string,
+  postJobId: string,
+  now: Date,
+  db: RetryCountClient = prisma,
+): Promise<number> {
   const { start, end } = utcDayRange(now);
-  const older = await prisma.usageEvent.findMany({
+  const older = await db.usageEvent.findMany({
     where: {
       kind: USAGE_KIND.retry,
       workspaceId,
@@ -761,44 +761,18 @@ async function olderRetryRequestsToday(workspaceId: string, postJobId: string, n
   return new Set(older.map((row) => row.sourceId?.split(":").pop()).filter(Boolean)).size;
 }
 
-/** The retry runs of a post on the UTC day of `now`, in the order they were recorded. */
-async function retryRunsToday(postJobId: string, now: Date): Promise<Array<{ sourceId: string; createdAt: Date }>> {
-  const { start, end } = utcDayRange(now);
-  const rows = await prisma.usageEvent.findMany({
-    where: { kind: USAGE_KIND.send, sourceId: { startsWith: retryRunPrefix(postJobId) }, at: { gte: start, lt: end } },
-    select: { sourceId: true, createdAt: true },
-  });
-  return rows
-    .filter((row): row is { sourceId: string; createdAt: Date } => row.sourceId !== null)
-    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.sourceId.localeCompare(b.sourceId));
-}
-
-/** Second look, point 2: a retry recorded this close after the one ahead of it was started by a click at the same time. */
-const RETRY_JUST_STARTED_MS = 60_000;
-
-/**
- * Why the post may have no more retry runs today, or null. `requestId`: the
- * request's own run is recorded already (reserveRetry). The runs are taken
- * in the order they were recorded, so of two clicks at once exactly the
- * first fits; the other was refused only because that one just started, and
- * is told so rather than that the post was retried 3 times.
- */
-async function retryGuardRefusal(
+/** The retry runs of a post on the UTC day of `now`, older per-platform rows once per request. */
+async function retryRunsToday(
   workspaceId: string,
   postJobId: string,
   now: Date,
-  requestId: string | undefined,
-): Promise<LimitRefusal | null> {
-  const older = await olderRetryRequestsToday(workspaceId, postJobId, now);
-  const runs = await retryRunsToday(postJobId, now);
-  const own = requestId ? runs.findIndex((row) => row.sourceId === retrySourceId(postJobId, requestId)) : -1;
-  const ahead = own >= 0 ? runs.slice(0, own) : runs;
-  if (older + ahead.length < RETRIES_PER_POST_PER_DAY) return null;
-  const mine = own >= 0 ? runs[own].createdAt.getTime() : now.getTime();
-  const justStarted = ahead.some((row) => mine - row.createdAt.getTime() < RETRY_JUST_STARTED_MS);
-  return justStarted && own >= 0
-    ? { error: RETRY_IN_PROGRESS_MESSAGE, code: RETRY_IN_PROGRESS_CODE }
-    : { error: postRetryLimitMessage(RETRIES_PER_POST_PER_DAY), code: POST_RETRY_LIMIT_CODE };
+  db: RetryCountClient = prisma,
+): Promise<number> {
+  const { start, end } = utcDayRange(now);
+  const runs = await db.usageEvent.count({
+    where: { kind: USAGE_KIND.send, sourceId: { startsWith: retryRunPrefix(postJobId) }, at: { gte: start, lt: end } },
+  });
+  return runs + (await olderRetryRequestsToday(workspaceId, postJobId, now, db));
 }
 
 /**
@@ -814,25 +788,18 @@ export async function retryRefusal(input: {
   workspaceId: string;
   postJobId: string;
   now: Date;
-  /** The request whose own run is recorded already (reserveRetry) and is in the counts. */
-  recordedRequestId?: string;
   viewerUserId?: string;
 }): Promise<LimitRefusal | null> {
   const { workspaceId, postJobId, now } = input;
   try {
     const who = await runAttribution(workspaceId, now);
     if (who.operator) return null;
-    const guard = await retryGuardRefusal(workspaceId, postJobId, now, input.recordedRequestId);
-    if (guard) return guard;
+    if ((await retryRunsToday(workspaceId, postJobId, now)) >= RETRIES_PER_POST_PER_DAY) {
+      return { error: postRetryLimitMessage(RETRIES_PER_POST_PER_DAY), code: POST_RETRY_LIMIT_CODE };
+    }
     return await refusalFor(
       who,
-      {
-        workspace: await ownBillingFields(workspaceId),
-        day: now,
-        mode: "retry",
-        recorded: input.recordedRequestId !== undefined,
-        viewerUserId: input.viewerUserId,
-      },
+      { workspace: await ownBillingFields(workspaceId), day: now, mode: "retry", viewerUserId: input.viewerUserId },
       now,
     );
   } catch (error) {
@@ -841,14 +808,22 @@ export async function retryRefusal(input: {
   }
 }
 
+/** How long a retry request may wait for the post's lock, and hold it. */
+const RETRY_LOCK_TIMEOUT_MS = 10_000;
+
 /**
- * R7 review, point 7: the retry route's check, made safe against two clicks
- * at once. The request's run is recorded first, then counted with it; when
- * that is past a limit, that same row is removed and the request refused.
- * For the 3-a-day guard the runs go in the order they were recorded, so of
- * two clicks at once one goes and the other is told the first just started.
- * Null: the run stays recorded, and the caller takes it back with
- * withdrawRetry if its hand-over then fails.
+ * The retry route's check and record, one post at a time (third look of the
+ * R7 review). First the whole check (the 3-a-day guard, the per-person number
+ * and the pools). Then, inside one transaction that first takes the post's
+ * transaction lock (pg_advisory_xact_lock on its id), the post's retry runs
+ * are counted again on that transaction and, when one is still allowed, the
+ * run is recorded. A second click on the same post waits for the first's
+ * transaction to end, so it sees the true count: with 2 used it gets the 3rd
+ * only if the first did not record one, else the 3-times sentence, now true.
+ * Everything inside the lock reads through the transaction's own connection.
+ * Null: the run is recorded, and the caller takes it back with withdrawRetry
+ * if its hand-over then fails. When the lock cannot be had, it records
+ * without it (fails open, like every usage check).
  */
 export async function reserveRetry(input: {
   workspaceId: string;
@@ -857,31 +832,57 @@ export async function reserveRetry(input: {
   now: Date;
   viewerUserId?: string;
 }): Promise<LimitRefusal | null> {
-  await recordRetry({ workspaceId: input.workspaceId, postJobId: input.postJobId, requestId: input.requestId, at: input.now });
-  const refusal = await retryRefusal({
-    workspaceId: input.workspaceId,
-    postJobId: input.postJobId,
-    now: input.now,
-    recordedRequestId: input.requestId,
-    viewerUserId: input.viewerUserId,
-  });
-  if (refusal) await withdrawRetry({ postJobId: input.postJobId, requestId: input.requestId });
-  return refusal;
+  const { workspaceId, postJobId, now } = input;
+  const refusal = await retryRefusal({ workspaceId, postJobId, now, viewerUserId: input.viewerUserId });
+  if (refusal) return refusal;
+  // The operator is never refused, so only others are counted again below.
+  let operator = false;
+  try {
+    operator = (await workspaceOwners(workspaceId)).some((owner) => isOperatorUser(owner.user));
+  } catch (error) {
+    logger.error("[usage] Couldn't read the retry's owners (allowing)", { error, workspaceId });
+  }
+  const record = { workspaceId, postJobId, requestId: input.requestId, at: now };
+  const limited = { error: postRetryLimitMessage(RETRIES_PER_POST_PER_DAY), code: POST_RETRY_LIMIT_CODE };
+  try {
+    return await prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${postJobId}))`;
+        // Only the guard can have changed while this request waited.
+        if (!operator && (await retryRunsToday(workspaceId, postJobId, now, tx)) >= RETRIES_PER_POST_PER_DAY) {
+          return limited;
+        }
+        await recordRetry(record, tx);
+        return null;
+      },
+      { maxWait: RETRY_LOCK_TIMEOUT_MS, timeout: RETRY_LOCK_TIMEOUT_MS },
+    );
+  } catch (error) {
+    logger.error("[usage] Retry lock failed; recording without it", { error, postJobId });
+    await recordRetry(record);
+    return null;
+  }
 }
+
+type RetryRecordClient = { usageEvent: Pick<Prisma.TransactionClient["usageEvent"], "createMany"> };
 
 /**
  * R7-security L1: records one retry request as one run, before it is handed
- * to the background, so the next request's check sees it. withdrawRetry
- * takes it back when that hand-over fails. Never throws.
+ * to the background, so the next request's check sees it (`db`: the
+ * reserving transaction). withdrawRetry takes it back when that hand-over
+ * fails. Never throws.
  */
-export async function recordRetry(input: {
-  workspaceId: string;
-  postJobId: string;
-  requestId: string;
-  at: Date;
-}): Promise<void> {
+export async function recordRetry(
+  input: {
+    workspaceId: string;
+    postJobId: string;
+    requestId: string;
+    at: Date;
+  },
+  db: RetryRecordClient = prisma,
+): Promise<void> {
   try {
-    await prisma.usageEvent.createMany({
+    await db.usageEvent.createMany({
       data: await runRows(input.workspaceId, [retrySourceId(input.postJobId, input.requestId)], input.at),
       skipDuplicates: true,
     });

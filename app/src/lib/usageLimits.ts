@@ -306,10 +306,6 @@ export const WORKSPACES_CREATED_WINDOW_DAYS = 30;
 export const OWNER_DAILY_POST_LIMIT_CODE = "OWNER_DAILY_POST_LIMIT";
 export const SERVICE_DAILY_POST_LIMIT_CODE = "SERVICE_DAILY_POST_LIMIT";
 export const POST_RETRY_LIMIT_CODE = "POST_RETRY_LIMIT";
-/** Second look, point 2: a retry refused because another click of the same post took the place. */
-export const RETRY_IN_PROGRESS_CODE = "RETRY_IN_PROGRESS";
-export const RETRY_IN_PROGRESS_MESSAGE =
-  "Another retry of this post just started. Wait for it to finish, then try again if needed.";
 export const WORKSPACE_CREATION_LIMIT_CODE = "WORKSPACE_CREATION_LIMIT";
 
 /** The limits across workspaces also refuse a retry (R6-security M3). */

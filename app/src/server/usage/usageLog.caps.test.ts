@@ -14,6 +14,8 @@ const store = vi.hoisted(() => ({
   /** Every usage read throws while set: the checks must fail open. */
   down: false,
   events: [] as Record<string, unknown>[],
+  /** The transaction locks taken: the SQL and the key. */
+  locks: [] as Array<{ sql: string; key: unknown }>,
   posts: [] as Record<string, unknown>[],
   workspaces: [] as Array<Record<string, unknown> & { id: string; owners: Array<{ userId: string; user: unknown }> }>,
 }));
@@ -101,8 +103,34 @@ vi.mock("@/lib/db", () => {
       return { count: before - store.events.length };
     },
   };
+  // The retry route's per-post transaction lock (pg_advisory_xact_lock): a
+  // second transaction asking for the same key waits until the first ends.
+  const held = new Map<string, Promise<void>>();
+  const $transaction = async <T>(work: (tx: unknown) => Promise<T>): Promise<T> => {
+    const releases: Array<() => void> = [];
+    const tx = {
+      usageEvent,
+      $executeRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
+        store.locks.push({ sql: strings.join("?"), key: values[0] });
+        const key = String(values[0]);
+        const before = held.get(key) ?? Promise.resolve();
+        let release!: () => void;
+        const mine = new Promise<void>((resolve) => (release = resolve));
+        held.set(key, before.then(() => mine));
+        releases.push(release);
+        await before;
+        return 1;
+      },
+    };
+    try {
+      return await work(tx);
+    } finally {
+      for (const release of releases) release();
+    }
+  };
   return {
     prisma: {
+      $transaction,
       usageEvent,
       postJob: {
         findMany: async ({ where }: { where: Row }) => store.posts.filter((post) => matches(post, where)),
@@ -195,6 +223,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(NOW);
   store.events = [];
+  store.locks = [];
   store.posts = [];
   store.workspaces = [];
   store.down = false;
@@ -739,49 +768,56 @@ describe("withdrawing a send that was not handed to publishing", () => {
   });
 });
 
-// R7 review, point 7: record first, then count; a run past a limit is removed again.
-describe("create, then check", () => {
-  const minutesAgo = (n: number) => new Date(NOW.getTime() - n * 60_000);
+// R7 review, point 7: a retry counts and records under the post's lock; the
+// scanner (no lock) records first, then counts.
+describe("two at once", () => {
+  const reserve = (requestId: string) => reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId, now: NOW });
+  const THREE_TIMES =
+    "This post has been retried 3 times today, the most for one day. Try again tomorrow. Retry all failed retries every failed platform of a post at once and counts as one retry.";
 
-  async function retriedAt(requestId: string, at: Date) {
-    vi.setSystemTime(at);
-    const outcome = await reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId, now: at });
-    vi.setSystemTime(NOW);
-    return outcome;
-  }
-
-  // Second look, point 2: two clicks with 2 used: one goes, the other is told another just started.
-  it("two retry clicks at once with 2 used: one goes, the other reads the concurrent sentence", async () => {
+  // Third look: the count and the record for one post run under a per-post
+  // transaction lock, so two clicks run one after the other.
+  it("takes the post's transaction lock before counting", async () => {
     workspace("ws-1", {}, [owner("owner-1")]);
-    await retriedAt("r1", minutesAgo(30));
-    await retriedAt("r2", minutesAgo(20));
-    const outcomes = await Promise.all(
-      ["r3", "r4"].map((requestId) => reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId, now: NOW })),
-    );
+    await reserve("r1");
+    expect(store.locks).toEqual([{ sql: "SELECT pg_advisory_xact_lock(hashtext(?))", key: "post-a" }]);
+  });
+
+  it("two clicks at once with 2 used: one runs, the other reads the 3-times sentence", async () => {
+    workspace("ws-1", {}, [owner("owner-1")]);
+    await reserve("r1");
+    await reserve("r2");
+    const outcomes = await Promise.all([reserve("r3"), reserve("r4")]);
     expect(outcomes.filter((outcome) => outcome === null)).toHaveLength(1);
-    expect(outcomes.find((outcome) => outcome !== null)).toEqual({
-      code: "RETRY_IN_PROGRESS",
-      error: "Another retry of this post just started. Wait for it to finish, then try again if needed.",
-    });
-    // Never a 4th run, and the refused request leaves no row.
+    expect(outcomes.find((outcome) => outcome !== null)).toEqual({ code: "POST_RETRY_LIMIT", error: THREE_TIMES });
     expect(sendsOf("post-a")).toHaveLength(3);
   });
 
-  it("a real 4th retry, the others long started, reads the 3-times sentence and its row is removed", async () => {
+  it("a real 4th retry reads the 3-times sentence and records nothing", async () => {
     workspace("ws-1", {}, [owner("owner-1")]);
-    for (const [requestId, minutes] of [["r1", 30], ["r2", 20], ["r3", 10]] as const) {
-      await expect(retriedAt(requestId, minutesAgo(minutes))).resolves.toBeNull();
-    }
-    await expect(reserveRetry({ workspaceId: "ws-1", postJobId: "post-a", requestId: "r4", now: NOW })).resolves.toEqual({
-      code: "POST_RETRY_LIMIT",
-      error:
-        "This post has been retried 3 times today, the most for one day. Try again tomorrow. Retry all failed retries every failed platform of a post at once and counts as one retry.",
-    });
+    for (const requestId of ["r1", "r2", "r3"]) await expect(reserve(requestId)).resolves.toBeNull();
+    await expect(reserve("r4")).resolves.toEqual({ code: "POST_RETRY_LIMIT", error: THREE_TIMES });
     expect(sendsOf("post-a").map((event) => event.sourceId)).toEqual([
       "send:post-a:retry:r1",
       "send:post-a:retry:r2",
       "send:post-a:retry:r3",
     ]);
+  });
+
+  it("the first click's hand-over fails and is taken back: a later click runs", async () => {
+    workspace("ws-1", {}, [owner("owner-1")]);
+    await reserve("r1");
+    await reserve("r2");
+    await reserve("r3");
+    await withdrawRetry({ postJobId: "post-a", requestId: "r3" });
+    await expect(reserve("r4")).resolves.toBeNull();
+    expect(sendsOf("post-a")).toHaveLength(3);
+  });
+
+  it("locks only the same post: another post's retry does not wait for it", async () => {
+    workspace("ws-1", {}, [owner("owner-1")]);
+    await Promise.all([reserve("r1"), reserveRetry({ workspaceId: "ws-1", postJobId: "post-b", requestId: "s1", now: NOW })]);
+    expect(store.locks.map((lock) => lock.key).sort()).toEqual(["post-a", "post-b"]);
   });
 
   it("a reserved retry past the pool is refused and removed; within it, it stays", async () => {

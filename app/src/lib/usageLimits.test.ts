@@ -13,7 +13,6 @@ import {
   ownerDailyPostLimit,
   ownerDailyPostLimitMessage,
   isNewAccount,
-  RETRY_IN_PROGRESS_MESSAGE,
   pacificDayRange,
   personalPostLimitApplies,
   postRetryLimitMessage,
@@ -433,13 +432,6 @@ describe("limits across workspaces", () => {
     );
     expect(serviceDailyPostLimitAtSendMessage()).toBe(
       "Not sent: Vibe Socials had reached its daily limit of posts for the whole service when this post was due. Retry it tomorrow, or schedule it again.",
-    );
-  });
-
-  // Second look, point 2: a request refused because another click took the place.
-  it("the sentence for a retry that another click just started", () => {
-    expect(RETRY_IN_PROGRESS_MESSAGE).toBe(
-      "Another retry of this post just started. Wait for it to finish, then try again if needed.",
     );
   });
 
