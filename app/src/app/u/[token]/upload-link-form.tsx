@@ -33,6 +33,45 @@ function FileRow({ item, onRemove }: { item: PickedFile; onRemove?: () => void }
   return <UploadFileRow item={item} previewUrl={previewUrl} onRemove={onRemove} />;
 }
 
+/**
+ * What arrived, once every file was tried. R5-pages L9: when none arrived it is
+ * an alert, so a screen reader hears it, where before the page said nothing.
+ */
+export function UploadSummary({
+  sentCount,
+  failedCount,
+  total,
+}: {
+  sentCount: number;
+  failedCount: number;
+  total: number;
+}) {
+  if (sentCount === 0 && failedCount > 0) {
+    return (
+      <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-4">
+        <p className="text-lg font-semibold">Nothing was sent</p>
+        <p className="mt-1 text-sm">
+          {failedCount === 1
+            ? "The file didn't arrive. The reason is under it."
+            : `None of the ${failedCount} files arrived. The reason is under each file.`}{" "}
+          Check your connection, then try again with the button below.
+        </p>
+      </div>
+    );
+  }
+  if (sentCount === 0) return null;
+  return (
+    <div role="status" className="rounded-lg border border-border bg-muted p-4">
+      <p className="text-lg font-semibold">Sent</p>
+      <p className="mt-1 text-sm">
+        {sentCount === total
+          ? `${sentCount} ${sentCount === 1 ? "file" : "files"} arrived. Thank you.`
+          : `${sentCount} of ${total} files arrived. The others are marked below.`}
+      </p>
+    </div>
+  );
+}
+
 export function UploadLinkForm({ token }: { token: string }) {
   const [senderName, setSenderName] = useState("");
   const [note, setNote] = useState("");
@@ -90,15 +129,8 @@ export function UploadLinkForm({ token }: { token: string }) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      {phase === "done" && sentCount > 0 ? (
-        <div role="status" className="rounded-lg border border-border bg-muted p-4">
-          <p className="text-lg font-semibold">Sent</p>
-          <p className="mt-1 text-sm">
-            {sentCount === files.length
-              ? `${sentCount} ${sentCount === 1 ? "file" : "files"} arrived. Thank you.`
-              : `${sentCount} of ${files.length} files arrived. The others are marked below.`}
-          </p>
-        </div>
+      {phase === "done" ? (
+        <UploadSummary sentCount={sentCount} failedCount={failedCount} total={files.length} />
       ) : null}
 
       {phase !== "done" ? (
