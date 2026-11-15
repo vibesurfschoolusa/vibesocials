@@ -29,7 +29,7 @@ const plain = (value: number) => String(value);
  * `usage` is null when it could not be read: one line, and Settings still renders.
  *
  * R8-pages M1: where the per-person limit applies, an owner sees each owner's
- * count across all their workspaces (retries included) beside the workspace's
+ * count across their free workspaces (retries included) beside the workspace's
  * own line, since it is the number that binds first; a member sees only how
  * many posts the workspace can still send today and why (review of T1, item 4).
  * R9-pages L7: `timeZone` is the viewer's own (User.timeZone), so the first-day
