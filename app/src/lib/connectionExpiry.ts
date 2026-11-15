@@ -74,10 +74,12 @@ export function connectionExpiryState(
  * same end date in different zones; the row next to it shows it once. The
  * sign-out advice went too: nobody confirmed that it gets a new sign-in.
  * `_expiresAt` is unused: Settings still passes it; drop it there and here together.
+ * R10-new-customer: "after that date", since a reconnect on the end day itself
+ * is still inside the window and may get the same date back.
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- see above
 export function sameEndDateMessage(platform: Platform, _expiresAt?: Date | string): string {
-  return `${platformLabel(platform)} kept the same end date. Reconnect on or after that date to keep posting; posts due after it fail until you do.`;
+  return `${platformLabel(platform)} kept the same end date. Reconnect after that date to keep posting; posts due after it fail until you do.`;
 }
 
 /**

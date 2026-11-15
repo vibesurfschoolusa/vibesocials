@@ -246,7 +246,7 @@ describe("POST: the owners are told about the connect (F4)", () => {
 
     expect(res.status).toBe(200);
     expect(h.notifyConnect).toHaveBeenCalledTimes(1);
-    expect(h.notifyConnect).toHaveBeenCalledWith({ workspaceId: "ws-1", platform: "facebook_page" });
+    expect(h.notifyConnect).toHaveBeenCalledWith({ workspaceId: "ws-1", platform: "facebook_page", sameEnd: false });
   });
 
   it("a second submit of the same choice is a 404 and tells nobody again", async () => {
@@ -363,5 +363,7 @@ describe("POST: the same-end flag on a LinkedIn choice", () => {
     h.pendingFind.mockResolvedValue(linkedInRow(3));
     const res = await POST(request("POST", { candidateId: "111" }), context());
     expect(await res.json()).toEqual({ ok: true, platform: "linkedin", sameEnd: true });
+    // R10-client-journey L2: and the owners' email says LinkedIn kept the end date.
+    expect(h.notifyConnect).toHaveBeenCalledWith({ workspaceId: "ws-1", platform: "linkedin", sameEnd: true });
   });
 });

@@ -112,8 +112,8 @@ describe("sameEndDateMessage", () => {
   // R9-pages L2: no date of its own (the row shows it, formatted once), and no
   // unverified sign-out advice.
   it("says what to do, with no date of its own", () => {
-    expect(sameEndDateMessage("linkedin")).toBe("LinkedIn kept the same end date. Reconnect on or after that date to keep posting; posts due after it fail until you do.");
-    expect(sameEndDateMessage("linkedin", "2026-11-16T12:00:00.000Z")).toBe("LinkedIn kept the same end date. Reconnect on or after that date to keep posting; posts due after it fail until you do.");
+    expect(sameEndDateMessage("linkedin")).toBe("LinkedIn kept the same end date. Reconnect after that date to keep posting; posts due after it fail until you do.");
+    expect(sameEndDateMessage("linkedin", "2026-11-16T12:00:00.000Z")).toBe("LinkedIn kept the same end date. Reconnect after that date to keep posting; posts due after it fail until you do.");
   });
 });
 

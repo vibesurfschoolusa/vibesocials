@@ -166,11 +166,13 @@ export async function POST(request: Request, context: RouteContext) {
       });
     // F4: the owner did not make this connect, so they are told (never throws).
     // The choice is deleted above, so a second submit is a 404 and sends nothing.
-    await notifyOwnersOfClientConnect({ workspaceId: link.workspaceId, platform: pending.platform });
+    // R10-client-journey L2: with whether the sign-in kept its end date.
+    const sameEnd = pendingSignInEndsSoon(pending);
+    await notifyOwnersOfClientConnect({ workspaceId: link.workspaceId, platform: pending.platform, sameEnd });
 
     // R7 review 4: /c adds same_end to the success address, as the callback does.
     const response = NextResponse.json(
-      pendingSignInEndsSoon(pending)
+      sameEnd
         ? { ok: true, platform: pending.platform, sameEnd: true }
         : { ok: true, platform: pending.platform },
     );

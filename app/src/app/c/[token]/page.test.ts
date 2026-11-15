@@ -374,7 +374,7 @@ describe("LinkedIn on the client's page", () => {
     h.findConnection.mockResolvedValue({ expiresAt: new Date("2026-11-16T12:00:00Z") });
     const html = await render({ success: "linkedin_connected", same_end: "1" });
     // R8-pages L5: what to do next, and the row no longer asks for the Reconnect that changed nothing.
-    expect(html).toContain("LinkedIn kept the same end date. Reconnect on or after that date to keep posting; posts due after it fail until you do.");
+    expect(html).toContain("LinkedIn kept the same end date. Reconnect after that date to keep posting; posts due after it fail until you do.");
     expect(html).not.toContain("sign out of LinkedIn and reconnect");
     // R9-pages L2: the date is shown once, in the row.
     expect(html.match(/November 16, 2026/g)).toHaveLength(1);
