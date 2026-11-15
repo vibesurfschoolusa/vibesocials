@@ -60,7 +60,7 @@ vi.mock("@/server/usage/usageLog", () => ({
   sendRecorded: sendRecordedMock,
 }));
 
-import { prepareDeferredPostJobDispatch } from "./posting";
+import { deferredPostCanSend, prepareDeferredPostJobDispatch } from "./posting";
 
 function makeJob(overrides: Record<string, unknown> = {}) {
   return {
@@ -1088,5 +1088,35 @@ describe("a pair half whose run its partner recorded", () => {
 
     expect(serviceCapMock).toHaveBeenCalledWith({ workspaceId: "workspace-1", postJobIds: ["story-1"], now: NOW, recorded: true });
     expect(result).toEqual({ ok: false, reason: "LIMIT_REACHED", noticeFor: "story-1" });
+  });
+});
+
+// R8-publishing L2: the rule unsentPairHalf uses, for the limit check of a pair going out now.
+describe("deferredPostCanSend", () => {
+  it("is true when a result it would get now is pending, by the post's own targets and media", async () => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({ id: "story-1", publishMetadata: { targetPlatforms: ["instagram"] }, mediaItem: { mimeType: "image/jpeg" } }),
+    );
+    connectionFindManyMock.mockResolvedValue([{ id: "c-ig", platform: "instagram", needsReconnect: false }]);
+    await expect(deferredPostCanSend("story-1")).resolves.toBe(true);
+    expect(connectionFindManyMock).toHaveBeenCalledWith({ where: { workspaceId: "workspace-1" } });
+  });
+
+  it("is false when its platform needs reconnecting or is gone, or the post no longer exists", async () => {
+    postJobFindUniqueMock.mockResolvedValue(
+      makeJob({ id: "story-1", publishMetadata: { targetPlatforms: ["instagram"] }, mediaItem: { mimeType: "image/jpeg" } }),
+    );
+    connectionFindManyMock.mockResolvedValue([{ id: "c-ig", platform: "instagram", needsReconnect: true }]);
+    await expect(deferredPostCanSend("story-1")).resolves.toBe(false);
+    connectionFindManyMock.mockResolvedValue([{ id: "c-x", platform: "x", needsReconnect: false }]);
+    await expect(deferredPostCanSend("story-1")).resolves.toBe(false);
+    postJobFindUniqueMock.mockResolvedValue(null);
+    await expect(deferredPostCanSend("story-1")).resolves.toBe(false);
+  });
+
+  it("counts it when it cannot be read", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    postJobFindUniqueMock.mockRejectedValue(new Error("db down"));
+    await expect(deferredPostCanSend("story-1")).resolves.toBe(true);
   });
 });

@@ -7,7 +7,8 @@ const db = vi.hoisted(() => ({
   queryRaw: vi.fn(),
   memberFindMany: vi.fn(),
 }));
-const { consumeFixedWindowMock, sendEmailMock, crossWorkspaceMock, xPostsMock } = vi.hoisted(() => ({
+const { consumeFixedWindowMock, sendEmailMock, crossWorkspaceMock, xPostsMock, canSendMock } = vi.hoisted(() => ({
+  canSendMock: vi.fn(),
   consumeFixedWindowMock: vi.fn(),
   sendEmailMock: vi.fn(),
   crossWorkspaceMock: vi.fn(),
@@ -24,6 +25,8 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 vi.mock("@/lib/rateLimit", () => ({ consumeFixedWindow: consumeFixedWindowMock }));
+// R8-publishing L2: posting's fan-out rule has its own suite (deferredDispatch.test.ts).
+vi.mock("@/server/jobs/posting", () => ({ deferredPostCanSend: canSendMock }));
 vi.mock("@/server/notifications/email", () => ({ sendEmail: sendEmailMock }));
 // R5-security M1: the counts across workspaces have their own suite (usageLog.test.ts).
 vi.mock("./usageLog", async (importOriginal) => ({
@@ -62,6 +65,8 @@ beforeEach(() => {
   sendEmailMock.mockReset();
   crossWorkspaceMock.mockReset();
   crossWorkspaceMock.mockResolvedValue(null);
+  canSendMock.mockReset();
+  canSendMock.mockResolvedValue(true);
   xPostsMock.mockReset();
   xPostsMock.mockResolvedValue(0);
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -258,6 +263,44 @@ describe("checkDailyPostLimit - across workspaces", () => {
   it("fails open when they cannot be read", async () => {
     crossWorkspaceMock.mockRejectedValue(new Error("db down"));
     await expect(checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now" })).resolves.toBeNull();
+  });
+
+  // R8-publishing L2: the limits across workspaces count runs; a half with nothing to send makes none.
+  it("a pair going out now: its other half is a run only when it has something to send", async () => {
+    const pair = { workspaceId: "ws-1", day: NOW, mode: "now" as const, excludePostJobId: ["job-1", "story-1"], alsoOnDay: 1 };
+    canSendMock.mockResolvedValue(false);
+    await checkDailyPostLimit(pair);
+    expect(canSendMock).toHaveBeenCalledWith("story-1");
+    expect(crossWorkspaceMock).toHaveBeenLastCalledWith(expect.objectContaining({ alsoOnDay: 0 }));
+
+    canSendMock.mockResolvedValue(true);
+    await checkDailyPostLimit(pair);
+    expect(crossWorkspaceMock).toHaveBeenLastCalledWith(expect.objectContaining({ alsoOnDay: 1 }));
+  });
+
+  it("the half still counts as a post toward the workspace's own daily limit (its failed results are a post that day)", async () => {
+    canSendMock.mockResolvedValue(false);
+    db.postJobCount.mockResolvedValue(19);
+    const refusal = await checkDailyPostLimit({
+      workspaceId: "ws-1",
+      day: NOW,
+      mode: "now",
+      excludePostJobId: ["job-1", "story-1"],
+      alsoOnDay: 1,
+    });
+    expect(refusal?.code).toBe("WORKSPACE_DAILY_POST_LIMIT");
+  });
+
+  it("scheduling a pair counts both, whatever can send now", async () => {
+    await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "schedule", excludePostJobId: ["job-1", "story-1"], alsoOnDay: 1 });
+    expect(canSendMock).not.toHaveBeenCalled();
+    expect(crossWorkspaceMock).toHaveBeenLastCalledWith(expect.objectContaining({ alsoOnDay: 1 }));
+  });
+
+  it("Post now says itself how many of its extra posts make a run (runsAlsoOnDay)", async () => {
+    await checkDailyPostLimit({ workspaceId: "ws-1", day: NOW, mode: "now", alsoOnDay: 1, runsAlsoOnDay: 0 });
+    expect(crossWorkspaceMock).toHaveBeenLastCalledWith(expect.objectContaining({ alsoOnDay: 0 }));
+    expect(canSendMock).not.toHaveBeenCalled();
   });
 });
 

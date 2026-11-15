@@ -22,6 +22,7 @@ import {
   type UsageLimitKind,
   type WorkspaceLimits,
 } from "@/lib/usageLimits";
+import { deferredPostCanSend } from "@/server/jobs/posting";
 import { pacificDayKey } from "@/server/platforms/rateLimited";
 import { buildLimitReachedEmail } from "@/server/notifications/limitReachedEmail";
 import { sendEmail } from "@/server/notifications/email";
@@ -224,6 +225,22 @@ async function notifyOwnersOfLimitReached(args: LimitNotice): Promise<void> {
 }
 
 /**
+ * R8-publishing L2: a pair going out now (publish or approve now: `exclude` is
+ * this post, then its other half, as pairLimitArgs gives them) is one run per
+ * half that has something to send; the other half counts as a run only then.
+ * Scheduling counts both: their results are made when they are due.
+ */
+async function pairRunsAlso(
+  mode: DailyPostLimitMode,
+  exclude: string | readonly string[] | undefined,
+  alsoOnDay: number | undefined,
+): Promise<number | undefined> {
+  if (mode !== "now" || !Array.isArray(exclude) || exclude.length < 2 || !alsoOnDay) return alsoOnDay;
+  const halves = await Promise.all(exclude.slice(1).map((id) => deferredPostCanSend(id)));
+  return Math.max(0, alsoOnDay - halves.filter((canSend) => !canSend).length);
+}
+
+/**
  * Refuse a post committed to the UTC day of `day` when that day already has the
  * workspace's limit of posts. `excludePostJobId` is the post being moved or
  * published, which must not count against itself.
@@ -239,6 +256,12 @@ export async function checkDailyPostLimit(args: {
    * yet: the earlier posts of a repeating post that fall on the same day.
    */
   alsoOnDay?: number;
+  /**
+   * R8-publishing L2: of `alsoOnDay`, how many make a run now (Post now's
+   * Story only when it can send). The limits across workspaces count runs;
+   * the workspace's own limit counts posts, a failed one included.
+   */
+  runsAlsoOnDay?: number;
   /** Second look, point 1: who reads the refusal, so an owner held back by their own lower number reads "you". */
   viewerUserId?: string;
 }): Promise<LimitRefusal | null> {
@@ -256,7 +279,7 @@ export async function checkDailyPostLimit(args: {
         day,
         mode,
         excludePostJobId,
-        alsoOnDay: args.alsoOnDay,
+        alsoOnDay: args.runsAlsoOnDay ?? (await pairRunsAlso(mode, excludePostJobId, args.alsoOnDay)),
         viewerUserId: args.viewerUserId,
       });
     }

@@ -68,6 +68,7 @@ import {
   buildRetryEvent,
   createPostJobForExistingMedia,
   createPostJobOnly,
+  immediateStoryCanSend,
   MediaItemUnavailableError,
   resolvePlatformCaptions,
   resolvePostCaptionSource,
@@ -170,6 +171,37 @@ describe("assertMediaItemReusable (pure workspace/deletedAt guard)", () => {
   });
 });
 
+// R8-publishing L2: the Story of a Post now counts toward the limits only when it can send.
+describe("immediateStoryCanSend", () => {
+  const story = { targetPlatforms: ["instagram"] as Platform[], instagramMetadata: { placement: "story" as const } };
+
+  beforeEach(() => {
+    findManyConnectionsMock.mockReset();
+  });
+
+  it("is true with a healthy connection the post goes to, the rule its results are made by", async () => {
+    findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-ig", platform: "instagram" })]);
+    await expect(immediateStoryCanSend({ workspaceId: "workspace-1", story, targetPlatforms: ["instagram"] })).resolves.toBe(true);
+    await expect(immediateStoryCanSend({ workspaceId: "workspace-1", story, targetPlatforms: undefined })).resolves.toBe(true);
+    expect(findManyConnectionsMock).toHaveBeenCalledWith({ where: { workspaceId: "workspace-1" } });
+  });
+
+  it("is false when its platform needs reconnecting, is not connected, or is not chosen", async () => {
+    findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-ig", platform: "instagram", needsReconnect: true })]);
+    await expect(immediateStoryCanSend({ workspaceId: "workspace-1", story, targetPlatforms: ["instagram"] })).resolves.toBe(false);
+    findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-fb", platform: "facebook_page" })]);
+    await expect(immediateStoryCanSend({ workspaceId: "workspace-1", story, targetPlatforms: undefined })).resolves.toBe(false);
+    findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-ig", platform: "instagram" })]);
+    await expect(immediateStoryCanSend({ workspaceId: "workspace-1", story, targetPlatforms: ["facebook_page"] })).resolves.toBe(false);
+  });
+
+  it("counts the Story when the connections cannot be read (the limit errs on the safe side)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    findManyConnectionsMock.mockRejectedValue(new Error("db down"));
+    await expect(immediateStoryCanSend({ workspaceId: "workspace-1", story, targetPlatforms: ["instagram"] })).resolves.toBe(true);
+  });
+});
+
 describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
   const media = {
     storageLocation: "https://example.public.blob.vercel-storage.com/foo.mp4",
@@ -218,6 +250,51 @@ describe("createPostJobOnly (Task 7 — per-post platform targeting)", () => {
     findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-yt", platform: "youtube", needsReconnect: true })]);
     await createPostJobOnly({ userId: "user-1", workspaceId: "workspace-1", media, baseCaption: "hello" });
     expect(recordSendMock).not.toHaveBeenCalled();
+  });
+
+  // R8-publishing M1: a Post now with nothing it can send needs no publish run.
+  it("says which jobs of a Post now have nothing to send, so the route sends no event for them", async () => {
+    findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-li", platform: "linkedin" })]);
+    const nothing = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media,
+      baseCaption: "hello",
+      targetPlatforms: ["x"],
+    });
+    expect(nothing.unsent).toEqual(["job-1"]);
+
+    findManyConnectionsMock.mockResolvedValue([makeConnection({ id: "conn-yt", platform: "youtube" })]);
+    const sending = await createPostJobOnly({ userId: "user-1", workspaceId: "workspace-1", media, baseCaption: "hello" });
+    expect(sending).not.toHaveProperty("unsent");
+
+    // Feed and Story: the feed can go, the Story's only platform needs reconnecting.
+    findManyConnectionsMock.mockResolvedValue([
+      makeConnection({ id: "conn-fb", platform: "facebook_page" }),
+      makeConnection({ id: "conn-ig", platform: "instagram", needsReconnect: true }),
+    ]);
+    postJobCreateMock.mockResolvedValueOnce({ id: "job-1" }).mockResolvedValueOnce({ id: "story-1" });
+    const pair = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media: { ...media, mimeType: "image/jpeg" },
+      baseCaption: "hello",
+      targetPlatforms: ["facebook_page", "instagram"],
+      story: { targetPlatforms: ["instagram"], instagramMetadata: { placement: "story" } },
+    });
+    expect(pair).toMatchObject({ postJobId: "job-1", storyPostJobId: "story-1", unsent: ["story-1"] });
+
+    // Scheduled posts make their results when due: nothing to say yet.
+    const later = await createPostJobOnly({
+      userId: "user-1",
+      workspaceId: "workspace-1",
+      media,
+      baseCaption: "hello",
+      targetPlatforms: ["x"],
+      intent: "scheduled",
+      scheduledFor: new Date("2030-01-01T10:00:00Z"),
+    });
+    expect(later).not.toHaveProperty("unsent");
   });
 
   it("targetPlatforms narrows the fan-out to only the matching connection", async () => {

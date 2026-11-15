@@ -1,5 +1,7 @@
 import { Platform, type MediaItem, type Prisma, type SocialConnection } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
+
 import type { SavedFileInfo } from "@/server/storage";
 import type {
   FacebookPostMetadata,
@@ -267,6 +269,13 @@ export interface PostJobCreated {
    * the route to take back if handing it to publishing then fails.
    */
   sendsWritten?: WrittenSends;
+  /**
+   * R8-publishing M1: the jobs of a post going out now that have nothing to
+   * send (every result failed at creation: not connected, or needs
+   * reconnecting). The route sends no publish event for them, so they cost no
+   * run. Absent when every job has something to send.
+   */
+  unsent?: string[];
 }
 
 /** Reason a MediaItem can't be reused in a new post (Roadmap Phase 2). */
@@ -418,6 +427,55 @@ function immediateJobStatus(intent: PostJobIntent, rows: readonly FanOutResultRo
   return { status: recomputePostJobStatus(rows.map((row) => ({ status: row.status ?? "pending" }))) };
 }
 
+/** A job of a post going out now has something to send: a pending result. */
+function hasPending(rows: readonly FanOutResultRow[]): boolean {
+  return rows.some((row) => (row.status ?? "pending") === "pending");
+}
+
+/** R8-publishing M1: the jobs of a post going out now with nothing to send, for PostJobCreated.unsent. */
+function unsentImmediateJobs(
+  intent: PostJobIntent,
+  jobs: Array<[string | undefined, readonly FanOutResultRow[]]>,
+): { unsent?: string[] } {
+  if (intent !== "immediate") return {};
+  const unsent = jobs.filter(([id, rows]) => id && !hasPending(rows)).map(([id]) => id as string);
+  return unsent.length > 0 ? { unsent } : {};
+}
+
+/**
+ * R8-publishing L2: whether the Story job of a post going out now would have
+ * a result it can send (a pending one), by the rule immediateFanOut makes its
+ * rows with, so the limits count it only then. Its platforms take any photo
+ * or video the feed post was checked for. Counts it when the connections
+ * cannot be read, so the limits err on the safe side.
+ */
+export async function immediateStoryCanSend(args: {
+  workspaceId: string;
+  story: PostStoryJobParams;
+  targetPlatforms: readonly Platform[] | undefined;
+}): Promise<boolean> {
+  try {
+    const connections = await prisma.socialConnection.findMany({ where: { workspaceId: args.workspaceId } });
+    const targeted = args.targetPlatforms
+      ? connections.filter((c) => args.targetPlatforms!.includes(c.platform))
+      : connections;
+    return hasPending(
+      buildFanOutResultRows({
+        workspaceId: args.workspaceId,
+        eligible: storyJobConnections(args.story, targeted),
+        connections,
+        targetPlatforms: args.story.targetPlatforms,
+      }),
+    );
+  } catch (error) {
+    logger.error("[posting] Couldn't read the connections for a Story's limit check (counting it)", {
+      error,
+      workspaceId: args.workspaceId,
+    });
+    return true;
+  }
+}
+
 /**
  * R6 review of K2: a post going out now records its send for the day (the
  * daily caps count those), each job that has something to publish. After the
@@ -429,9 +487,7 @@ async function recordImmediateSends(
   jobs: Array<[string | undefined, readonly FanOutResultRow[]]>,
 ): Promise<WrittenSends | undefined> {
   if (intent !== "immediate") return undefined;
-  const sending = jobs
-    .filter(([id, rows]) => id && rows.some((row) => (row.status ?? "pending") === "pending"))
-    .map(([id]) => id as string);
+  const sending = jobs.filter(([id, rows]) => id && hasPending(rows)).map(([id]) => id as string);
   if (sending.length === 0) return undefined;
   const day = new Date();
   const written = (await recordSend({ workspaceId, postJobIds: sending, at: day })) ?? [];
@@ -613,10 +669,11 @@ export async function createPostJobOnly(
       return { postJob: job, postJobs: jobs, mediaItem: mediaItemRow, resultRecords: results, storyJob };
     },
   );
-  const sendsWritten = await recordImmediateSends(workspaceId, intent, [
+  const jobRows: Array<[string | undefined, readonly FanOutResultRow[]]> = [
     [postJob.id, fanOut.rows],
     [storyJob?.id, fanOut.storyRows],
-  ]);
+  ];
+  const sendsWritten = await recordImmediateSends(workspaceId, intent, jobRows);
 
   return {
     postJobId: postJob.id,
@@ -625,6 +682,7 @@ export async function createPostJobOnly(
     mediaItemId: mediaItem?.id ?? null,
     resultIds: resultRecords.map((r) => r.id),
     ...(sendsWritten ? { sendsWritten } : {}),
+    ...unsentImmediateJobs(intent, jobRows),
   };
 }
 
@@ -914,10 +972,11 @@ export async function createPostJobForExistingMedia(
 
     return { postJob: job, postJobs: jobs, resultRecords: results, storyJob };
   });
-  const sendsWritten = await recordImmediateSends(workspaceId, intent, [
+  const jobRows: Array<[string | undefined, readonly FanOutResultRow[]]> = [
     [postJob.id, fanOut.rows],
     [storyJob?.id, fanOut.storyRows],
-  ]);
+  ];
+  const sendsWritten = await recordImmediateSends(workspaceId, intent, jobRows);
 
   return {
     postJobId: postJob.id,
@@ -926,6 +985,7 @@ export async function createPostJobForExistingMedia(
     mediaItemId,
     resultIds: resultRecords.map(r => r.id),
     ...(sendsWritten ? { sendsWritten } : {}),
+    ...unsentImmediateJobs(intent, jobRows),
   };
 }
 
@@ -1185,9 +1245,31 @@ async function unsentPairHalf(
 ): Promise<string | null> {
   const other = await pairHalf(job);
   if (!other || other.status !== "in_progress" || other._count.results !== 0) return null;
-  const rows = deferredFanOutRows({ ...other, workspaceId: job.workspaceId }, connections);
-  return rows.some((row) => (row.status ?? "pending") === "pending") ? other.id : null;
+  return hasPending(deferredFanOutRows({ ...other, workspaceId: job.workspaceId }, connections)) ? other.id : null;
 }
+
+/**
+ * R8-publishing L2: whether a draft or scheduled post going out now would get
+ * a result it can send (a pending one), by the rule its results are made by
+ * and unsentPairHalf uses, so the limits count its run only then. False for a
+ * post that no longer exists; true when it cannot be read (counted, the safe
+ * side for the limits).
+ */
+export async function deferredPostCanSend(postJobId: string): Promise<boolean> {
+  try {
+    const job = await prisma.postJob.findUnique({
+      where: { id: postJobId },
+      select: { workspaceId: true, publishMetadata: true, mediaItem: { select: { mimeType: true } } },
+    });
+    if (!job) return false;
+    const connections = await prisma.socialConnection.findMany({ where: { workspaceId: job.workspaceId } });
+    return hasPending(deferredFanOutRows(job, connections));
+  } catch (error) {
+    logger.error("[posting] Couldn't read whether a post can send (counting it)", { error, postJobId });
+    return true;
+  }
+}
+
 
 /** Results failed because the workspace is paused or its plan ended, and nothing pending or published. */
 function refusedAsBlocked(results: readonly StoredResult[]): boolean {

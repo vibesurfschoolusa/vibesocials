@@ -31,8 +31,10 @@ import {
   buildPublishEvent,
   createPostJobForExistingMedia,
   createPostJobOnly,
+  immediateStoryCanSend,
   MediaItemUnavailableError,
   resolvePlatformCaptions,
+
   type PostStoryJobParams,
 } from "@/server/jobs/posting";
 import { DISPATCH_FAILURE, failPendingPostJobResults } from "@/server/jobs/failPendingResults";
@@ -1181,13 +1183,18 @@ export async function POST(request: Request) {
   // Usage limits (2026-11-10): a post committed to a day counts toward that UTC
   // day's limit. A draft (including one held for approval) is not committed yet.
   if (effectiveIntent !== "draft" && !seriesTimes) {
+    // Q1: the Story job is a second post on the same day, so Feed and Story is
+    // refused wherever two separate posts would be. R8-publishing L2: going out
+    // now, it is a second run only when it has a platform it can send to.
+    const storyRun =
+      storyJob && effectiveIntent === "immediate"
+        ? { runsAlsoOnDay: (await immediateStoryCanSend({ workspaceId: context.workspace.id, story: storyJob, targetPlatforms })) ? 1 : 0 }
+        : {};
     const refusal = await checkDailyPostLimit({
       workspaceId: context.workspace.id,
       day: scheduledForDate ?? new Date(),
       mode: effectiveIntent === "scheduled" ? "schedule" : "now",
-      // Q1: the Story job is a second post on the same day, so Feed and Story
-      // is refused wherever two separate posts would be.
-      ...(storyJob ? { alsoOnDay: 1 } : {}),
+      ...(storyJob ? { alsoOnDay: 1, ...storyRun } : {}),
       viewerUserId: context.user.id,
     });
     if (refusal) {
@@ -1278,6 +1285,8 @@ export async function POST(request: Request) {
     let mediaItemId: string | null;
     // Third review of K2: the sends the helper wrote, taken back if the hand-over fails.
     let sendsWritten: WrittenSends | undefined;
+    // R8-publishing M1: jobs with nothing they can send get no publish event.
+    let unsent: readonly string[] = [];
 
     if (textOnly) {
       // No MediaItem is written: the text lives on the job (baseCaption).
@@ -1299,6 +1308,7 @@ export async function POST(request: Request) {
       });
       postJobId = created.postJobId;
       sendsWritten = created.sendsWritten;
+      unsent = created.unsent ?? [];
       mediaItemId = null;
     } else if (usingExistingMedia) {
       // assertMediaItemReusable (posting.ts) is workspace-scoped (Task 5): any
@@ -1328,6 +1338,7 @@ export async function POST(request: Request) {
       });
       postJobId = created.postJobId;
       sendsWritten = created.sendsWritten;
+      unsent = created.unsent ?? [];
       storyPostJobId = created.storyPostJobId;
       mediaItemId = created.mediaItemId;
     } else {
@@ -1373,6 +1384,7 @@ export async function POST(request: Request) {
       });
       postJobId = created.postJobId;
       sendsWritten = created.sendsWritten;
+      unsent = created.unsent ?? [];
       storyPostJobId = created.storyPostJobId;
       mediaItemId = created.mediaItemId;
     }
@@ -1441,7 +1453,12 @@ export async function POST(request: Request) {
     }
 
     // A held post sends NO publish event — the owner's approval does that.
-    if (effectiveIntent === "immediate") {
+    // R8-publishing M1: nor does a job whose every platform failed at creation
+    // (not connected, or needs reconnecting): there is nothing for a run to do,
+    // and the answer below gives those sentences at once.
+    const mainSends = !unsent.includes(postJobId);
+    const storySends = Boolean(storyPostJobId && storyJob && !unsent.includes(storyPostJobId));
+    if (effectiveIntent === "immediate" && (mainSends || storySends)) {
       // 2026-11-01 audit: the job and its pending results are already
       // committed — if the event can't be handed to Inngest, fail those
       // results (job → failed) so it can't hang "publishing", and say so.
@@ -1467,27 +1484,25 @@ export async function POST(request: Request) {
         );
         // Q1: the Story job's event goes in the same send, so both start or
         // neither does. It carries only the Story platforms' options.
-        await inngest.send(
-          storyPostJobId && storyJob
-            ? [
-                mainEvent,
-                buildPublishEvent(
-                  {
-                    postJobId: storyPostJobId,
-                    userId: context.user.id,
-                    workspaceId: context.workspace.id,
-                    mediaItemId,
-                    baseCaption: baseCaptionRaw,
-                    location,
-                    perPlatformOverrides: perPlatformOverrides ?? null,
-                    ...(storyJob.instagramMetadata ? { instagramMetadata: storyJob.instagramMetadata } : {}),
-                    ...(storyJob.facebookMetadata ? { facebookMetadata: storyJob.facebookMetadata } : {}),
-                  },
-                  { immediate: true },
-                ),
-              ]
-            : mainEvent,
-        );
+        const storyEvent =
+          storySends && storyPostJobId && storyJob
+            ? buildPublishEvent(
+                {
+                  postJobId: storyPostJobId,
+                  userId: context.user.id,
+                  workspaceId: context.workspace.id,
+                  mediaItemId,
+                  baseCaption: baseCaptionRaw,
+                  location,
+                  perPlatformOverrides: perPlatformOverrides ?? null,
+                  ...(storyJob.instagramMetadata ? { instagramMetadata: storyJob.instagramMetadata } : {}),
+                  ...(storyJob.facebookMetadata ? { facebookMetadata: storyJob.facebookMetadata } : {}),
+                },
+                { immediate: true },
+              )
+            : null;
+        const events = [...(mainSends ? [mainEvent] : []), ...(storyEvent ? [storyEvent] : [])];
+        await inngest.send(events.length === 1 ? events[0] : events);
       } catch (dispatchError: unknown) {
         logger.error("[POST /api/posts] Couldn't dispatch the publish event", {
           error: dispatchError,

@@ -22,7 +22,9 @@ const {
   checkDailyPostLimitMock,
   headMock,
   withdrawSendMock,
+  storyCanSendMock,
 } = vi.hoisted(() => ({
+  storyCanSendMock: vi.fn(),
   headMock: vi.fn(),
   getWorkspaceContextMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
@@ -79,6 +81,8 @@ vi.mock("@/server/jobs/posting", async () => {
     ...actual,
     createPostJobOnly: createPostJobOnlyMock,
     createPostJobForExistingMedia: createPostJobForExistingMediaMock,
+    // R8-publishing L2: posting.test.ts covers the rule; here only how the route uses it.
+    immediateStoryCanSend: storyCanSendMock,
   };
 });
 
@@ -209,6 +213,8 @@ beforeEach(() => {
   checkDailyPostLimitMock.mockResolvedValue(null);
   withdrawSendMock.mockReset();
   withdrawSendMock.mockResolvedValue(undefined);
+  storyCanSendMock.mockReset();
+  storyCanSendMock.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -3023,7 +3029,29 @@ describe("POST /api/posts - Feed and Story (both)", () => {
 
   it("the daily limit counts the Story job as a post", async () => {
     await POST(jsonRequest({ ...photo(1), baseCaption: "hi", platforms: ["instagram"], instagramMetadata: BOTH }));
-    expect(checkDailyPostLimitMock).toHaveBeenCalledWith(expect.objectContaining({ mode: "now", alsoOnDay: 1 }));
+    expect(checkDailyPostLimitMock).toHaveBeenCalledWith(expect.objectContaining({ mode: "now", alsoOnDay: 1, runsAlsoOnDay: 1 }));
+    expect(storyCanSendMock).toHaveBeenCalledWith({
+      workspaceId: expect.any(String),
+      story: expect.objectContaining({ targetPlatforms: ["instagram"] }),
+      targetPlatforms: ["instagram"],
+    });
+  });
+
+  // R8-publishing L2: a Story with nothing to send makes no run, so it is not counted.
+  it("Post now: a Story that could not send is not counted; a scheduled one always is", async () => {
+    storyCanSendMock.mockResolvedValue(false);
+    await POST(jsonRequest({ ...photo(1), baseCaption: "hi", platforms: ["instagram"], instagramMetadata: BOTH }));
+    // Still a post that day for the workspace's own limit; no run for the limits across workspaces.
+    expect(checkDailyPostLimitMock.mock.calls[0][0]).toMatchObject({ mode: "now", alsoOnDay: 1, runsAlsoOnDay: 0 });
+
+    checkDailyPostLimitMock.mockClear();
+    storyCanSendMock.mockClear();
+    await POST(
+      jsonRequest({ ...photo(1), baseCaption: "hi", scheduledFor: LATER, platforms: ["instagram"], instagramMetadata: BOTH }),
+    );
+    expect(checkDailyPostLimitMock).toHaveBeenCalledWith(expect.objectContaining({ mode: "schedule", alsoOnDay: 1 }));
+    expect(checkDailyPostLimitMock.mock.calls[0][0]).not.toHaveProperty("runsAlsoOnDay");
+    expect(storyCanSendMock).not.toHaveBeenCalled();
   });
 
   it("a full day refuses both with a 429 and creates nothing", async () => {
@@ -3299,5 +3327,60 @@ describe("POST /api/posts - platforms not sent at creation", () => {
 
     expect(body).not.toHaveProperty("allFailed");
     expect(body).not.toHaveProperty("notSent");
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+  });
+
+  // R8-publishing M1: a Post now with nothing it can send starts no publish run.
+  it("LinkedIn connected, platforms [x]: no publish event; the failed result and its sentence at once", async () => {
+    createPostJobOnlyMock.mockResolvedValue({ postJobId: "job-1", mediaItemId: "media-1", resultIds: ["r1"], unsent: ["job-1"] });
+    const gone = "X is no longer connected. Connect it in Settings, then retry.";
+    postJobResultFindManyMock.mockResolvedValue([failedRow("job-1", "x", "CONNECTION_GONE", gone)]);
+
+    const response = await post({ platforms: ["x"] });
+    const body = (await response.json()) as Record<string, unknown>;
+
+    expect(response.status).toBe(200);
+    expect(inngestSendMock).not.toHaveBeenCalled();
+    expect(failPendingMock).not.toHaveBeenCalled();
+    expect(body.allFailed).toBe(true);
+    expect(body.notSent).toEqual([{ platform: "x", reason: "CONNECTION_GONE", message: gone }]);
+    expect(body.message).toBe("Nothing was sent: Connect X in Settings, then use Retry in Activity.");
+  });
+
+  it("Feed and Story, one can send and one cannot: one event, for the one that can (one run)", async () => {
+    createPostJobOnlyMock.mockResolvedValue({
+      postJobId: "job-1",
+      storyPostJobId: "job-s",
+      mediaItemId: "media-1",
+      resultIds: ["r1"],
+      unsent: ["job-s"],
+    });
+    postJobResultFindManyMock.mockImplementation(async (args: { where: { postJobId: string } }) =>
+      args.where.postJobId === "job-s"
+        ? [failedRow("job-s", "instagram", "RECONNECT_REQUIRED", "Reconnect Instagram in Settings, then retry.")]
+        : [pendingRow("job-1", "facebook_page")],
+    );
+
+    await post({ platforms: ["facebook_page", "instagram"], instagramMetadata: { placement: "both" } });
+
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    const sent = inngestSendMock.mock.calls[0][0];
+    expect(Array.isArray(sent)).toBe(false);
+    expect(sent).toMatchObject({ id: "publish-job-1", data: { postJobId: "job-1" } });
+  });
+
+  it("Feed and Story, only the Story can send: one event, the Story's", async () => {
+    createPostJobOnlyMock.mockResolvedValue({
+      postJobId: "job-1",
+      storyPostJobId: "job-s",
+      mediaItemId: "media-1",
+      resultIds: ["r1"],
+      unsent: ["job-1"],
+    });
+
+    await post({ platforms: ["facebook_page", "instagram"], instagramMetadata: { placement: "both" } });
+
+    expect(inngestSendMock).toHaveBeenCalledTimes(1);
+    expect(inngestSendMock.mock.calls[0][0]).toMatchObject({ id: "publish-job-s", data: { postJobId: "job-s" } });
   });
 });
